@@ -6,6 +6,12 @@ use crate::services::account_store::AccountStore;
 use crate::services::irc_service::IrcService;
 use crate::services::twitch_service::TwitchService;
 use anyhow::Result;
+use std::time::Duration;
+
+/// How long a user's stop waits for a chat start already running. Bounded: a
+/// start stuck on the network (the HTTP client's 30 s timeout) must not hold
+/// a close.
+const STOP_WAITS_FOR_START: Duration = Duration::from_secs(3);
 
 /// Result of a send. `message_id` is Twitch's authoritative id when the message
 /// went out over Helix (so the optimistic copy can be stamped and deleted
@@ -190,6 +196,25 @@ impl ChatService {
     ///
     /// Returns whether the connection actually went down (false = kept).
     pub async fn stop(window: &str) -> Result<bool> {
+        // A stop that lands mid-start tore the bridge from under a connection
+        // still being built (closing a chat moments after opening it), so it
+        // waits for that start first, briefly.
+        let _start_guard = match tokio::time::timeout(
+            STOP_WAITS_FOR_START,
+            crate::services::irc_service::get_start_lock().lock(),
+        )
+        .await
+        {
+            Ok(guard) => Some(guard),
+            Err(_) => {
+                crate::services::irc_service::record_lifecycle(&format!(
+                    "stop_chat from {}: a start still running after {} s; stopping anyway",
+                    window,
+                    STOP_WAITS_FOR_START.as_secs()
+                ));
+                None
+            }
+        };
         let providers = crate::services::providers::has_active_bridge_users();
         let other_windows = IrcService::held_by_other_windows(window).await;
         let held = IrcService::channels_held_by(window).await;

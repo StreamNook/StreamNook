@@ -11,6 +11,7 @@ import { rewardStatusText } from '../utils/rewardStatus';
 import { ChannelPointsIcon } from './ChannelPointsIcon';
 import { Tooltip } from './ui/Tooltip';
 import { useOutsidePress } from '../hooks/useOutsidePress';
+import { ACCENT_BUTTON, ACCENT_FILL, GLAZE_PILL } from './ui/glazeButtons';
 
 /** Opening a reward re-reads the list when it is older than this. */
 const REWARDS_STALE_MS = 30_000;
@@ -47,10 +48,12 @@ const StatusLine: React.FC<{ text: string; reason: RewardBlock | null; className
   className = '',
   title,
 }) => (
-  <span className={`flex items-start gap-1.5 min-w-0 text-xs leading-snug text-textSecondary ${className}`} role="status" title={title}>
-    <span className={`w-1.5 h-1.5 mt-[5px] rounded-full flex-shrink-0 ${statusDot(reason)}`} aria-hidden="true" />
-    <span className="line-clamp-2 break-words">{text}</span>
-  </span>
+  <Tooltip content={title} describe>
+    <span className={`flex items-start gap-1.5 min-w-0 text-xs leading-snug text-textSecondary ${className}`} role="status">
+      <span className={`w-1.5 h-1.5 mt-[5px] rounded-full flex-shrink-0 ${statusDot(reason)}`} aria-hidden="true" />
+      <span className="line-clamp-2 break-words">{text}</span>
+    </span>
+  </Tooltip>
 );
 
 /** A reward's picture standing free on a soft glow of its own colour, no tile
@@ -881,12 +884,13 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
 
                       {/* Full name on up to two lines, then why it is blocked or what it asks */}
                       <span className="min-w-0 flex-1">
-                        <span
-                          className={`text-[13px] font-semibold leading-snug line-clamp-2 break-words ${available ? 'text-textPrimary' : 'text-textSecondary'}`}
-                          title={reward.title}
-                        >
-                          {reward.title}
-                        </span>
+                        <Tooltip content={reward.title} delay={500}>
+                          <span
+                            className={`text-[13px] font-semibold leading-snug line-clamp-2 break-words ${available ? 'text-textPrimary' : 'text-textSecondary'}`}
+                          >
+                            {reward.title}
+                          </span>
+                        </Tooltip>
                         {status ? (
                           <StatusLine
                             text={status}
@@ -1026,12 +1030,8 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
               type="button"
               onClick={() => { void handleDetailAction(); }}
               disabled={!detailCanAct}
-              className={`
-                flex-shrink-0 ${isSheet ? 'px-5 py-2.5 text-sm' : 'px-4 py-1.5 text-xs'} font-semibold glass-button transition-all whitespace-nowrap
-                ${detailCanAct
-                  ? (detailKind === 'highlight' ? 'text-yellow-400 hover:text-yellow-300' : 'text-accent hover:text-accent-neon active:scale-[0.98]')
-                  : 'opacity-50 cursor-not-allowed'}
-              `}
+              className={`${ACCENT_BUTTON} flex-shrink-0 whitespace-nowrap disabled:cursor-not-allowed ${isSheet ? 'h-10 px-5 !text-sm' : 'h-7 px-4 !text-xs'}`}
+              style={ACCENT_FILL}
             >
               {detailActionLabel}
             </button>
@@ -1110,7 +1110,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
                     setModifyStep('emote');
                   }
                 }}
-                className="p-1.5 text-textSecondary hover:text-textPrimary hover:bg-glass rounded-lg transition-all"
+                className={`${GLAZE_PILL} grid h-8 w-8 place-items-center`}
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   {modifyStep === 'modifier' ? (
@@ -1276,7 +1276,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
                     setModifyStep('emote');
                   }
                 }}
-                className="px-4 py-2 text-sm font-medium text-textSecondary hover:text-textPrimary transition-colors"
+                className={`${GLAZE_PILL} h-9 px-4 text-sm`}
               >
                 {modifyStep === 'modifier' ? 'Back' : 'Cancel'}
               </button>
@@ -1284,13 +1284,8 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
                 <button
                   onClick={() => setModifyStep('modifier')}
                   disabled={!selectedModifyEmote}
-                  className={`
-                    px-4 py-2 text-sm font-semibold glass-button transition-all
-                    ${selectedModifyEmote
-                      ? 'text-accent hover:text-accent-hover active:scale-[0.98]'
-                      : 'opacity-50 cursor-not-allowed'
-                    }
-                  `}
+                  className={`${ACCENT_BUTTON} h-9 px-4 !text-sm disabled:cursor-not-allowed`}
+                  style={ACCENT_FILL}
                 >
                   Next
                 </button>
@@ -1298,13 +1293,8 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
                 <button
                   onClick={handleModifyEmoteConfirm}
                   disabled={!selectedModifier || redeemingId !== null || !modifyAvail?.redeemable}
-                  className={`
-                    px-4 py-2 text-sm font-semibold glass-button transition-all
-                    ${selectedModifier && redeemingId === null && modifyAvail?.redeemable
-                      ? 'text-accent hover:text-accent-hover active:scale-[0.98]'
-                      : 'opacity-50 cursor-not-allowed'
-                    }
-                  `}
+                  className={`${ACCENT_BUTTON} h-9 px-4 !text-sm disabled:cursor-not-allowed`}
+                  style={ACCENT_FILL}
                 >
                   {redeemingId !== null ? 'Unlocking...' : 'Confirm'}
                 </button>
@@ -1328,7 +1318,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
                   setChooseEmoteReward(null);
                   setSelectedUnlockEmote(null);
                 }}
-                className="p-1.5 text-textSecondary hover:text-textPrimary hover:bg-glass rounded-lg transition-all"
+                className={`${GLAZE_PILL} grid h-8 w-8 place-items-center`}
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -1424,20 +1414,15 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
                   setChooseEmoteReward(null);
                   setSelectedUnlockEmote(null);
                 }}
-                className="px-4 py-2 text-sm font-medium text-textSecondary hover:text-textPrimary hover:bg-glass rounded-lg transition-all"
+                className={`${GLAZE_PILL} h-9 px-4 text-sm`}
               >
                 Cancel
               </button>
               <button
                 onClick={handleChooseEmoteConfirm}
                 disabled={!selectedUnlockEmote || redeemingId !== null || !chooseAvail?.redeemable}
-                className={`
-                  px-4 py-2 text-sm font-semibold glass-button transition-all
-                  ${selectedUnlockEmote && redeemingId === null && chooseAvail?.redeemable
-                    ? 'text-accent hover:text-accent-hover active:scale-[0.98]'
-                    : 'opacity-50 cursor-not-allowed'
-                  }
-                `}
+                className={`${ACCENT_BUTTON} h-9 px-4 !text-sm disabled:cursor-not-allowed`}
+                style={ACCENT_FILL}
               >
                 {redeemingId !== null ? 'Unlocking...' : 'Unlock'}
               </button>

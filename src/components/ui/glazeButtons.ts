@@ -12,6 +12,16 @@ export const ACCENT_BUTTON =
  *  theme, including the ones whose accent is pale. */
 export const ACCENT_FILL: CSSProperties = { background: 'color-mix(in srgb, var(--color-accent) 55%, black)' };
 
+/** The same filled button for an action that can't be taken back (Ban):
+ *  the theme's red mixed into black, kept dark enough for white text. */
+export const DANGER_FILL: CSSProperties = { background: 'color-mix(in srgb, var(--color-error) 62%, black)' };
+
+/** Every other button beside it (Deny, Cancel, a timeout length, a saved
+ *  reason): the same capsule and `glaze-inset` lighting on a light film, a
+ *  step quieter than the filled one. Callers set height, padding and size. */
+export const GLAZE_PILL =
+  'glaze-inset rounded-full bg-white/[0.08] font-semibold text-textPrimary transition-[background-color,filter] hover:bg-white/[0.14] active:brightness-95 disabled:opacity-50 disabled:hover:bg-white/[0.08]';
+
 /** A banner in the chat column (the watch-streak and resub shares, over the
  *  composer): the chat header capsules' glaze and accent-lit rim. It keeps the
  *  glaze's blur, since what sits behind it is the column's own ground or a

@@ -11,7 +11,7 @@ const { invoke } = vi.hoisted(() => ({
 }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: (cmd: string, args?: unknown) => invoke(cmd, args) }));
 const leaveWindowFullscreen = ['set_window_fullscreen', { fullscreen: false }] as const;
-const state = { isPlayerFullscreen: true, isWindowFullscreen: false, playerOverlayVisible: true };
+const state = { isPlayerFullscreen: true, isWindowFullscreen: false, playerOverlayVisible: true, fsChatOpen: false };
 vi.mock('../stores/AppStore', () => ({
   useAppStore: {
     getState: () => state,
@@ -94,5 +94,36 @@ describe('the window side of full screen', () => {
     invoke.mockResolvedValueOnce(false);
     await expect(setWindowFullscreen()).resolves.toBe(false);
     expect(invoke).toHaveBeenCalledWith('set_window_fullscreen', { fullscreen: null });
+  });
+});
+
+// Full screen opens as video only; chat is brought up on demand and only a
+// player taking over an existing full screen keeps it.
+describe("chat over the player's full screen", () => {
+  beforeEach(() => {
+    state.isWindowFullscreen = false;
+    invoke.mockClear();
+  });
+
+  it('a fresh full screen starts without chat', async () => {
+    state.isPlayerFullscreen = false;
+    state.fsChatOpen = true;
+    await syncTauriWindowFullscreen(true);
+    expect(state.isPlayerFullscreen).toBe(true);
+    expect(state.fsChatOpen).toBe(false);
+  });
+
+  it('a player taking over keeps the chat the viewer brought up', async () => {
+    state.isPlayerFullscreen = true;
+    state.fsChatOpen = true;
+    await syncTauriWindowFullscreen(true);
+    expect(state.fsChatOpen).toBe(true);
+  });
+
+  it('leaving full screen puts chat away', async () => {
+    state.isPlayerFullscreen = true;
+    state.fsChatOpen = true;
+    await syncTauriWindowFullscreen(false);
+    expect(state.fsChatOpen).toBe(false);
   });
 });

@@ -9,12 +9,19 @@
 //!   broadcaster, and not a moderator unless the viewer is the broadcaster;
 //! - the four timeout lengths, which are the desktop hover dock's list
 //!   (`moderation.timeout_presets`), so one edit changes every surface, then
-//!   Ban, or Unban while a ban or timeout is in force;
+//!   Ban, or Unban while a ban or timeout is in force, then Warn when the
+//!   sign-in carries Twitch's warnings permission;
 //! - the viewer's own buttons (`moderation.card_actions`): a label and a
-//!   timeout, ban, unban or warning, with an optional saved reason.
+//!   timeout, ban, unban or warning, with an optional saved reason;
+//! - the chatter's low-trust standing as this session saw it, with the
+//!   treatments the viewer can switch to (`suspicious_users::card_view`).
 //!
-//! Each button carries the exact action `moderate_chatter` takes, so a phone
+//! Each button carries the exact action `moderate_chatter` takes, so a card
 //! passes it through without knowing what it does.
+//!
+//! The history is a Twitch call, so a card may ask without it first
+//! (`history: false`) to draw the buttons at once, then again with it, which
+//! turns Ban into Unban or Lift timeout when one is in force.
 //!
 //! The note lives in `user_notes` and the color in
 //! `chat_customization.user_overrides`, both on this device, as on desktop.
@@ -30,6 +37,13 @@ const CARD_LENGTHS: usize = 4;
 pub const MAX_CUSTOM: usize = 6;
 /// Twitch's longest timeout.
 const TWITCH_MAX_TIMEOUT: u32 = 1_209_600;
+/// The optional scope a warning needs; sign-ins from before it was asked for
+/// lack it.
+const WARN_SCOPE: &str = "moderator:manage:warnings";
+/// How long the quick first answer waits on Twitch for the scope list before
+/// leaving Warn out (the second answer waits for it).
+const QUICK_SCOPE_WAIT: std::time::Duration = std::time::Duration::from_millis(800);
+const FULL_SCOPE_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Name colors offered on the card: each reads on the dark themes, and the
 /// set covers the hues people pick. The card adds the system picker for more.
@@ -94,6 +108,8 @@ pub struct ChatterCardTools {
     pub swatches: Vec<String>,
     /// Present in a channel the viewer may moderate this chatter in.
     pub moderate: Option<Moderate>,
+    /// Present with `moderate`.
+    pub low_trust: Option<crate::services::suspicious_users::LowTrust>,
 }
 
 /// "1s", "10m", "1h", "1d": the dock's own words for a length.
@@ -155,7 +171,7 @@ fn button(id: String, label: String, kind: ButtonKind, seconds: Option<u32>, rea
         }
         ButtonKind::Ban => (json!({ "kind": "ban" }), "Ban".to_string()),
         ButtonKind::Unban => (json!({ "kind": "unban", "timeout": seconds.is_some() }), label.clone()),
-        ButtonKind::Warn => (json!({ "kind": "warn" }), "Warn".to_string()),
+        ButtonKind::Warn => (json!({ "kind": "warn" }), "Warn: they must acknowledge it before they can chat".to_string()),
     };
     CardButton {
         id,
@@ -169,9 +185,14 @@ fn button(id: String, label: String, kind: ButtonKind, seconds: Option<u32>, rea
     }
 }
 
-/// The Moderate buttons for a chatter whose ban state is `current`. Pure,
-/// for tests.
-pub fn buttons_for(lengths: &[u32], current: Option<&crate::services::mod_history::CurrentBan>) -> Vec<CardButton> {
+/// The Moderate buttons for a chatter whose ban state is `current`, with Warn
+/// last when the viewer's sign-in may warn. Ban and Unban share one slot, so
+/// a card swapping one for the other moves nothing. Pure, for tests.
+pub fn buttons_for(
+    lengths: &[u32],
+    current: Option<&crate::services::mod_history::CurrentBan>,
+    can_warn: bool,
+) -> Vec<CardButton> {
     let mut out: Vec<CardButton> = lengths
         .iter()
         .map(|&s| button(format!("t{s}"), short_length(s), ButtonKind::Timeout, Some(s), None))
@@ -181,7 +202,48 @@ pub fn buttons_for(lengths: &[u32], current: Option<&crate::services::mod_histor
         Some(_) => button("unban".into(), "Lift timeout".into(), ButtonKind::Unban, Some(0), None),
         None => button("ban".into(), "Ban".into(), ButtonKind::Ban, None, None),
     });
+    if can_warn {
+        out.push(button("warn".into(), "Warn".into(), ButtonKind::Warn, None, None));
+    }
     out
+}
+
+/// The signed-in token's answer to "may it warn", remembered per token: a
+/// new sign-in, another account or a refreshed token is a new key, so the
+/// answer never outlives the sign-in it was asked for.
+static WARN_SCOPE_CACHE: std::sync::Mutex<Option<(u64, bool)>> = std::sync::Mutex::new(None);
+
+fn token_key(token: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    token.hash(&mut h);
+    h.finish()
+}
+
+/// Whether the signed-in Twitch account may send warnings. Asks Twitch once
+/// per token, waiting at most `wait`; an answer that did not come in time is
+/// not remembered, so the next card asks again.
+async fn can_warn(wait: std::time::Duration) -> bool {
+    use crate::services::twitch_service::{lacks_scope, TwitchService};
+    let Ok(token) = TwitchService::get_token().await else {
+        return false;
+    };
+    let key = token_key(&token);
+    if let Some((k, may)) = WARN_SCOPE_CACHE.lock().ok().and_then(|c| *c) {
+        if k == key {
+            return may;
+        }
+    }
+    match tokio::time::timeout(wait, TwitchService::token_scopes(&token)).await {
+        Ok(Ok(granted)) => {
+            let may = !lacks_scope(&granted, WARN_SCOPE);
+            if let Ok(mut c) = WARN_SCOPE_CACHE.lock() {
+                *c = Some((key, may));
+            }
+            may
+        }
+        _ => false,
+    }
 }
 
 pub fn custom_buttons(actions: &[CardAction]) -> Vec<CardButton> {
@@ -226,14 +288,36 @@ pub async fn own_user_id() -> String {
     crate::services::twitch_service::TwitchService::get_user_info().await.map(|u| u.id).unwrap_or_default()
 }
 
+/// The Moderate section for a chatter: with the history when it was fetched,
+/// else with none loaded and Ban in the slot. Pure, for tests.
+pub fn moderate_for(settings: &Value, history: Option<crate::services::mod_history::ModHistory>, can_warn: bool) -> Moderate {
+    use crate::services::mod_history::HistoryStatus;
+    let history = history.unwrap_or_else(crate::services::mod_history::ModHistory::not_loaded);
+    let mut buttons = buttons_for(&lengths_from(settings), history.current.as_ref(), can_warn);
+    // Twitch would not say whether a ban is in force, so Unban stays offered
+    // beside Ban.
+    let unknown = matches!(history.status, HistoryStatus::NoAccess | HistoryStatus::SignedOut | HistoryStatus::Failed);
+    if unknown && history.current.is_none() {
+        let at = buttons.iter().position(|b| b.kind == ButtonKind::Ban).map_or(buttons.len(), |i| i + 1);
+        buttons.insert(at, button("unban".into(), "Unban".into(), ButtonKind::Unban, None, None));
+    }
+    Moderate { buttons, custom: custom_buttons(&custom_from(settings)), history }
+}
+
 /// The card's tools for `user_id` in the Twitch channel `channel` (login)
 /// whose user id is `channel_id`. Other platforms get the note and color only.
+/// `history: false` answers at once without the moderation history (its
+/// status is `not_loaded`); absent means with it. `viewer_moderates` is the
+/// shell's own reading of the viewer's badges, used while Rust has seen no
+/// USERSTATE for the room yet.
 #[tauri::command]
 pub async fn get_chatter_card_tools(
     provider: Option<String>,
     channel: Option<String>,
     channel_id: Option<String>,
     user_id: String,
+    history: Option<bool>,
+    viewer_moderates: Option<bool>,
 ) -> ChatterCardTools {
     let provider = provider.unwrap_or_else(|| "twitch".into());
     let key = crate::services::chat_row_view::override_key(&provider, &user_id);
@@ -245,6 +329,7 @@ pub async fn get_chatter_card_tools(
         color: own.color,
         swatches: SWATCHES.iter().map(|s| s.to_string()).collect(),
         moderate: None,
+        low_trust: None,
     };
     let (Some(channel), Some(room)) = (channel.filter(|c| !c.is_empty()), channel_id.filter(|c| !c.is_empty())) else {
         return tools;
@@ -252,18 +337,23 @@ pub async fn get_chatter_card_tools(
     if provider != "twitch" {
         return tools;
     }
-    let role = crate::services::chat_send_limiter::budget(&channel).role;
+    use crate::services::chat_send_limiter::Role;
+    let mut role = crate::services::chat_send_limiter::budget(&channel).role;
+    if role == Role::Viewer && viewer_moderates == Some(true) {
+        role = Role::Moderator;
+    }
     let badges = crate::services::chat_history::ChatHistory::last_look(&room, &user_id).map(|(b, _)| b).unwrap_or_default();
     if !may_moderate(role, &own_user_id().await, &user_id, &badges) {
         return tools;
     }
-    let history = crate::services::mod_history::fetch(&room, &user_id).await;
-    let settings = settings_value();
-    tools.moderate = Some(Moderate {
-        buttons: buttons_for(&lengths_from(&settings), history.current.as_ref()),
-        custom: custom_buttons(&custom_from(&settings)),
-        history,
-    });
+    let (history, warn) = if history.unwrap_or(true) {
+        let (h, w) = tokio::join!(crate::services::mod_history::fetch(&room, &user_id), can_warn(FULL_SCOPE_WAIT));
+        (Some(h), w)
+    } else {
+        (None, can_warn(QUICK_SCOPE_WAIT).await)
+    };
+    tools.moderate = Some(moderate_for(&settings_value(), history, warn));
+    tools.low_trust = Some(crate::services::suspicious_users::SuspiciousUsers::card_view(&channel, &user_id));
     tools
 }
 
@@ -337,7 +427,7 @@ mod tests {
     #[test]
     fn ban_or_unban_follows_what_is_in_force() {
         let lengths = [1, 600, 3_600, 86_400];
-        let open = buttons_for(&lengths, None);
+        let open = buttons_for(&lengths, None, false);
         assert_eq!(open.iter().map(|b| b.label.as_str()).collect::<Vec<_>>(), ["1s", "10m", "1h", "1d", "Ban"]);
         assert_eq!(open[1].action, json!({ "kind": "timeout", "seconds": 600 }));
         assert_eq!(open[0].spoken, "Purge their messages");
@@ -347,14 +437,61 @@ mod tests {
         let banned = crate::services::mod_history::CurrentBan {
             permanent: true, ends_ms: None, by: None, reason: None, label: "Banned".into(),
         };
-        let b = buttons_for(&lengths, Some(&banned));
+        let b = buttons_for(&lengths, Some(&banned), false);
         assert_eq!(b[4].label, "Unban");
         assert_eq!(b[4].action, json!({ "kind": "unban", "timeout": false }));
         let timed = crate::services::mod_history::CurrentBan { permanent: false, ends_ms: Some(1), ..banned };
-        let t = buttons_for(&lengths, Some(&timed));
+        let t = buttons_for(&lengths, Some(&timed), false);
         assert_eq!(t[4].label, "Lift timeout");
         assert_eq!(t[4].action, json!({ "kind": "unban", "timeout": true }));
         assert!(!t[4].danger);
+    }
+
+    #[test]
+    fn warn_comes_last_only_when_the_sign_in_may_warn() {
+        let lengths = [1, 600, 3_600, 86_400];
+        assert!(buttons_for(&lengths, None, false).iter().all(|b| b.kind != ButtonKind::Warn));
+        let with = buttons_for(&lengths, None, true);
+        assert_eq!(with.iter().map(|b| b.label.as_str()).collect::<Vec<_>>(), ["1s", "10m", "1h", "1d", "Ban", "Warn"]);
+        let warn = &with[5];
+        assert_eq!(warn.id, "warn");
+        assert_eq!(warn.action, json!({ "kind": "warn" }), "the shape moderate_chatter reads as ModAction::Warn");
+        assert!(warn.asks_reason, "Twitch needs a reason they will see");
+        assert!(warn.reason.is_none());
+        assert!(!warn.danger);
+        let banned = crate::services::mod_history::CurrentBan {
+            permanent: true, ends_ms: None, by: None, reason: None, label: "Banned".into(),
+        };
+        let b = buttons_for(&lengths, Some(&banned), true);
+        assert_eq!(b[4].label, "Unban", "Unban keeps Ban's slot");
+        assert_eq!(b[5].label, "Warn");
+    }
+
+    #[test]
+    fn the_quick_answer_has_ban_and_no_history() {
+        let saved = json!({ "moderation": {
+            "timeout_presets": [60, 300, 600, 1800],
+            "card_actions": [{ "label": "Spoilers", "kind": "timeout", "seconds": 1800 }]
+        } });
+        let quick = moderate_for(&saved, None, true);
+        assert_eq!(quick.history.status, crate::services::mod_history::HistoryStatus::NotLoaded);
+        assert!(quick.history.entries.is_empty());
+        assert!(quick.history.current.is_none());
+        assert!(quick.history.note.is_none());
+        assert_eq!(quick.buttons.iter().map(|b| b.label.as_str()).collect::<Vec<_>>(), ["1m", "5m", "10m", "30m", "Ban", "Warn"]);
+        assert_eq!(quick.custom.len(), 1);
+        assert_eq!(serde_json::to_value(&quick.history).unwrap()["status"], "not_loaded");
+    }
+
+    #[test]
+    fn without_an_answer_from_twitch_unban_stays_beside_ban() {
+        use crate::services::mod_history::{HistoryStatus, ModHistory};
+        let saved = json!({ "moderation": { "timeout_presets": [60, 300, 600, 1800] } });
+        let failed = ModHistory { status: HistoryStatus::Failed, entries: vec![], current: None, note: None };
+        let m = moderate_for(&saved, Some(failed), false);
+        assert_eq!(m.buttons.iter().map(|b| b.label.as_str()).collect::<Vec<_>>(), ["1m", "5m", "10m", "30m", "Ban", "Unban"]);
+        let quick = moderate_for(&saved, None, false);
+        assert!(!quick.buttons.iter().any(|b| b.label == "Unban"), "the quick answer waits for the history");
     }
 
     #[test]

@@ -14,7 +14,6 @@ import { Minus } from 'phosphor-react';
 import type * as React from 'react';
 import { useAppStore } from '../stores/AppStore';
 import { listenForSettingsUpdates } from '../utils/settingsBroadcast';
-import { TooltipManager } from '../components/ui/TooltipManager';
 import { Tooltip } from '../components/ui/Tooltip';
 import { Logger } from '../utils/logger';
 import {
@@ -210,8 +209,6 @@ export const PluginWindowHost = () => {
           </div>
         )}
       </div>
-
-      <TooltipManager />
     </div>
   );
 };

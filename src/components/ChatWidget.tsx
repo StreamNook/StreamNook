@@ -9,10 +9,14 @@ import { Zap, Filter } from 'lucide-react';
 import ChatSearchBar from './chat/ChatSearchBar';
 import { fitHeaderDensity } from './chat/fitHeaderDensity';
 import AutomodQueueStrip from './chat/AutomodQueueStrip';
+import UnbanRequestsStrip from './chat/UnbanRequestsStrip';
 import { useStreamerMode } from '../utils/streamerMode';
-import { resolveUploadTarget, encodeExtraFields } from '../utils/imageUploadHosts';
+import { firstDropOf, imagesTabOn, isDroppableImagePath, uploadIntoBox } from '../services/imageUploadService';
+import { getCurrentWebview } from '@tauri-apps/api/webview';
+import { IS_MOBILE } from '../utils/platform';
 import { registerChatSearchController } from '../keybindings/chatSearchController';
 import { Dropdown, type DropdownOption } from './ui/Dropdown';
+import { BANNER_STYLE, GLAZE_BANNER } from './ui/glazeButtons';
 
 import { useTwitchChat, type ModerationContext } from '../hooks/useTwitchChat';
 import { useChannelEmotes, ensureChannelEmotes, getChannelEmotes, emoteCacheKey, refreshChannelEmotes, useChannelChat, useChannelChatMeta, useChatConnectionStore, setChannelPaused, sliceLookupKey, injectSystemMessage, systemSourceFor, ensureChannelHistory } from '../stores/chatConnectionStore';
@@ -52,13 +56,13 @@ import { useChannelState, watchChannel, unwatchChannel, refreshChannelState } fr
 import { useProviderEmoteStore } from '../stores/providerEmoteStore';
 import { usePlatformAccountStore } from '../stores/platformAccountStore';
 import { trackEmoteUsage } from '../utils/trackEmoteUsage';
-import { EmoteText, buildEmoteNameMap } from '../utils/emoteText';
+import { EmoteText, useTextEmotes } from '../utils/emoteText';
 import { isImeComposing } from '../utils/imeComposing';
 import { syncComposerPlaceholder, trackComposerWidth } from '../utils/composerNarrow';
 import { LinkPreviewCard } from './chat/LinkPreviewCard';
 import { PinnedChatter } from './chat/PinnedChatter';
 import { SevenTvAvatar } from './SevenTvAvatar';
-import { extractPreviewUrls } from '../services/linkPreviewService';
+import { previewUrlsFromLinks, type RowLink } from '../services/linkPreviewService';
 import UserProfileCard from './UserProfileCard';
 import ErrorBoundary from './ErrorBoundary';
 import PredictionOverlay from './PredictionOverlay';
@@ -91,7 +95,7 @@ import { initializeBadgeImageCache } from '../services/badgeImageCacheService';
 import { parseMessage } from '../services/twitchChat';
 import { loadFavoriteEmotes } from '../services/favoriteEmoteService';
 import { getAppleEmojiUrl } from '../services/emojiService';
-import { useChatUserStore } from '../stores/chatUserStore';
+import { useChatUserStore, type ChatUser } from '../stores/chatUserStore';
 import { forceRefreshCosmetics } from '../services/cosmeticsCache';
 import MentionAutocomplete from './MentionAutocomplete';
 import CommandAutocomplete from './chat/CommandAutocomplete';
@@ -111,10 +115,12 @@ import {
 import {
   matchEmoteFill,
   matchEmotes,
+  matchMentions,
   rowsToTabCandidates,
   createRequestSeq,
   type EmoteMatchChannel,
   type EmoteMatchRow,
+  type MentionSuggestion,
 } from '../services/emoteMatch';
 import {
   COMMAND_DEFINITIONS,
@@ -127,7 +133,7 @@ import { applySlashOutcome, handleSlashCommand, runSlashCommand } from '../utils
 import ChatBurstStatus from './chat/ChatBurstStatus';
 import { getRemindFlowSuggestions, tokenizeRemindOverlay } from '../utils/reminderEngine';
 
-import { BackendChatMessage } from '../services/twitchChat';
+import { BackendChatMessage, type MessageSegment } from '../services/twitchChat';
 import { registerChatModController, getChatModController, type ChatModController } from '../keybindings';
 import { Tooltip } from './ui/Tooltip';
 import { RoomModeIndicator } from './chat/RoomModeIndicator';
@@ -291,6 +297,8 @@ interface ChatMessagesPanelProps {
   headerInset?: number;
   /** This channel's pinned message ids, for the scrollbar's pinned marks. */
   pinnedIds?: ReadonlySet<string>;
+  /** Filled with the list's own glide to the live bottom (ChatMessageList). */
+  scrollToBottomRef?: React.RefObject<(() => void) | null>;
 }
 
 /** How many consecutive untagged messages end the shared-chat indicator. */
@@ -333,6 +341,7 @@ const ChatMessagesPanel = ({
   headerSpaceReserved,
   headerInset,
   pinnedIds,
+  scrollToBottomRef,
 }: ChatMessagesPanelProps) => {
   const live = useChannelChat(override ? null : channelKey);
   const src: ChatMessagesPanelSource = override ?? live;
@@ -624,6 +633,7 @@ const ChatMessagesPanel = ({
             headerSpaceReserved={headerSpaceReserved}
             headerInset={headerInset}
             pinnedIds={pinnedIds}
+            scrollToBottomRef={scrollToBottomRef}
           />
         </ErrorBoundary>
       )}
@@ -1308,6 +1318,9 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   //     non-repeating transitions (channel switch, message navigation, the
   //     Resume button).
   const isPausedRef = useRef(isPaused);
+  // This pane's own list glide; a window-wide slot used to belong to whichever
+  // list mounted last, so Resume in one MultiChat pane glided another.
+  const listScrollToBottomRef = useRef<(() => void) | null>(null);
   const lastPauseToggleRef = useRef(0);
   // Filled by an effect further down, where the blend is wired. A ref because
   // `setChatPaused` is declared above that point and must not be re-created when
@@ -1334,8 +1347,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
       }
       if (!next && opts?.scrollToBottom) {
         lastResumeTimeRef.current = now;
-        (window as Window & typeof globalThis & { __chatScrollToBottom?: () => void })
-          .__chatScrollToBottom?.();
+        listScrollToBottomRef.current?.();
       }
     },
     [setBufferPaused],
@@ -1520,11 +1532,14 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   const [mentionQuery, setMentionQuery] = useState('');
   const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0);
   const [mentionStartPosition, setMentionStartPosition] = useState<number | null>(null);
+  // The @ list on screen, kept with the query it answers.
+  const [mentionAnswer, setMentionAnswer] = useState<{ query: string; users: ChatUser[] }>({ query: '', users: [] });
+  const [mentionSeq] = useState(createRequestSeq);
   // These are stable store actions (vanilla zustand never recreates them), so we
   // read them imperatively rather than subscribing. Subscribing here made the
   // whole ChatWidget re-render on every chatUserStore write, and addUser fires
   // once per chatter, so on a busy channel that was a constant re-render storm.
-  const { addUser, getMatchingUsers, clearUsers } = useChatUserStore.getState();
+  const { addUser, clearUsers } = useChatUserStore.getState();
 
   // / command autocomplete state
   const [showCommandAutocomplete, setShowCommandAutocomplete] = useState(false);
@@ -1586,6 +1601,48 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     }),
     [provider, currentStream?.user_login, currentStream?.user_id],
   );
+
+  /** Rust's @ rows, each wearing its chatter's color and paint when they have
+   *  chatted here. */
+  const mentionUsersFrom = useCallback(
+    (rows: MentionSuggestion[]): ChatUser[] => {
+      const { users } = useChatUserStore.getState();
+      return rows.map((r) => {
+        const key = provider === 'twitch' ? r.userId : `${provider}:${r.userId}`;
+        return (
+          users.get(key) ?? {
+            userId: key || r.login,
+            username: r.login,
+            displayName: r.displayName,
+            color: '',
+            lastSeen: 0,
+          }
+        );
+      });
+    },
+    [provider],
+  );
+
+  /** Ask Rust for the @ list (the streamer first, then the room's recent
+   *  chatters); a reply to an older keystroke is dropped. */
+  const askMentions = useCallback(
+    (query: string, commandArg: boolean) => {
+      const n = mentionSeq.next();
+      void matchMentions(emoteMatchTarget, query, commandArg).then((rows) => {
+        if (!mentionSeq.isCurrent(n)) return;
+        const users = mentionUsersFrom(rows);
+        setMentionAnswer({ query, users });
+        setShowMentionAutocomplete(users.length > 0);
+      });
+    },
+    [emoteMatchTarget, mentionSeq, mentionUsersFrom],
+  );
+
+  /** Close the @ list, so a reply still on its way cannot reopen it. */
+  const dropMentions = useCallback(() => {
+    mentionSeq.next();
+    setShowMentionAutocomplete(false);
+  }, [mentionSeq]);
 
   /**
    * Open (or re-query) the emote list for the text typed since `anchor`. The
@@ -1754,6 +1811,8 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     pinned_by_id: string;
     pinned_by_avatar: string;
     started_at: string;
+    /** The text as text and link segments, split in Rust (`text_spans::pin_segments`). */
+    segments?: MessageSegment[];
   }
   const [pinnedMessages, setPinnedMessages] = useState<PinnedMessage[]>([]);
   // The scrollbar's pinned marks find their rows by these ids.
@@ -1766,17 +1825,32 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   );
   const seenPinIdRef = useRef<string | null>(null);
 
-  // Name -> emote lookup for pinned-message bodies. GQL pins arrive as plain
-  // text with no emote ranges, so emotes are matched per whitespace word, with
-  // the chat's precedence: a Twitch emote wins a name, then 7TV > BTTV > FFZ.
-  const pinEmoteMap = useMemo(() => buildEmoteNameMap(emotes), [emotes]);
+  // Pinned-message bodies arrive as plain text with no emote ranges, so Rust
+  // cuts each text chunk the pin draws (its non-link segments, and the whole
+  // text for the collapsed bar) with the channel's table, as it does a chat row.
+  // The chunks must be the very ones the card renders, or the lookup misses.
+  const pinTexts = useMemo(
+    () =>
+      pinnedMessages.flatMap((pin) => [
+        pin.message_text,
+        ...(pin.segments ?? [{ type: 'text' as const, content: pin.message_text }]).flatMap((seg) =>
+          seg.type === 'link' ? [] : [seg.content],
+        ),
+      ]),
+    [pinnedMessages],
+  );
+  const pinEmotes = useTextEmotes(
+    { provider, channel: isTwitch ? currentStream?.user_login : channelOverride?.user_login },
+    pinTexts,
+    emotes,
+  );
 
   // Render a plain-text chunk of a pinned message with emote words swapped for
   // inline images. `emoteClass` sets the image size (expanded body vs collapsed bar).
   const renderPinTextWithEmotes = (text: string, keyPrefix: string, emoteClass: string) => (
     <EmoteText
       text={text}
-      emoteMap={pinEmoteMap}
+      emoteMap={pinEmotes(text)}
       keyPrefix={keyPrefix}
       imgClassName={`inline-block align-middle object-contain ${emoteClass}`}
     />
@@ -3180,6 +3254,8 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
       targetUserId: t.userId,
       targetName: t.displayName,
       action,
+      // One key press; Rust asks for a second B when Ban confirmation is on.
+      onePress: true,
     });
     // Through `moderateWithToast`, so a key ban or timeout gets the same words
     // and Undo as every other surface.
@@ -3192,7 +3268,9 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
         return;
       }
       const outcome = await moderateWithToast(request(f.t, broadcasterId, action(f.t)));
-      if (outcome && advance) {
+      // A first B with Ban confirmation on did nothing yet: focus stays put
+      // so the second B lands on the same chatter.
+      if (outcome && !outcome.confirmMs && advance) {
         const older = f.items[f.idx - 1];
         if (older) focusAt(f.items, f.idx - 1);
         else setModFocusId(null);
@@ -3700,8 +3778,19 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
 
     // Handle autocomplete navigation when visible
     if (showMentionAutocomplete) {
-      const matchingUsers = getMatchingUsers(mentionQuery);
-      
+      const matchingUsers = mentionAnswer.users;
+      // The list on screen may answer an older keystroke. Picking from it would
+      // insert the wrong name (the streamer leads nearly every broad list), so
+      // a pick then asks for the answer to what is typed now.
+      const fresh = mentionAnswer.query === mentionQuery;
+      const commandArg = mentionStartPosition !== null && messageInput.charAt(mentionStartPosition) === ' ';
+      const pickCurrent = () => {
+        void matchMentions(emoteMatchTarget, mentionQuery, commandArg).then((rows) => {
+          const first = mentionUsersFrom(rows)[0];
+          if (first) insertMention(first);
+        });
+      };
+
       if (e.key === 'ArrowUp') {
         e.preventDefault();
         setMentionSelectedIndex(prev => 
@@ -3720,21 +3809,29 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
       
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
+        if (!fresh) {
+          pickCurrent();
+          return;
+        }
         const selectedUser = matchingUsers[mentionSelectedIndex];
         if (selectedUser) {
           insertMention(selectedUser);
         }
         return;
       }
-      
+
       if (e.key === 'Escape') {
         e.preventDefault();
-        setShowMentionAutocomplete(false);
+        dropMentions();
         return;
       }
-      
+
       if (e.key === 'Tab') {
         e.preventDefault();
+        if (!fresh) {
+          pickCurrent();
+          return;
+        }
         const selectedUser = matchingUsers[mentionSelectedIndex];
         if (selectedUser) {
           insertMention(selectedUser);
@@ -3910,38 +4007,77 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   }, [messageInput]);
 
   // Handle input changes and detect @ mentions
-  // Paste an image -> upload through Rust to the configured host -> insert the
-  // link. Only when the user enabled the uploader; otherwise paste is untouched.
-  const handlePaste = useCallback(
-    async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-      const up = useAppStore.getState().settings.chat_input?.image_uploader;
-      if (!up?.enabled) return;
-      const file = Array.from(e.clipboardData?.files ?? []).find((f) => f.type.startsWith('image/'));
-      if (!file) return;
+  // The composer's insert-at-caret, for uploads that finish after a render.
+  const insertTextRef = useRef<(text: string) => void>(() => {});
+  // Paste an image -> Rust uploads it to the chosen host -> the link goes in
+  // at the caret. Only while paste upload is on; otherwise paste is untouched.
+  const handlePaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    if (!useAppStore.getState().settings.chat_input?.image_uploader?.enabled) return;
+    const file = Array.from(e.clipboardData?.files ?? []).find((f) => f.type.startsWith('image/'));
+    if (!file) return;
+    e.preventDefault();
+    void uploadIntoBox({ file }, insertTextRef);
+  }, []);
+
+  // Drop a picture on this chat: it uploads and the link goes in the box.
+  // Windows that keep Tauri's native drop handler (the main one) report drops
+  // with file paths; the rest deliver HTML5 drops (the handlers on the root).
+  // Several chats can share a window, so each takes only drops on itself, and
+  // firstDropOf drops the second copy where a window delivers both.
+  const [dropOver, setDropOver] = useState(false);
+  const dragHasImageRef = useRef(false);
+  useEffect(() => {
+    if (IS_MOBILE || !chatContainerEl) return;
+    let off: (() => void) | undefined;
+    let alive = true;
+    const inside = (pos: { x: number; y: number }) => {
+      const r = chatContainerEl.getBoundingClientRect();
+      const x = pos.x / window.devicePixelRatio;
+      const y = pos.y / window.devicePixelRatio;
+      return r.width > 0 && x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+    };
+    void getCurrentWebview()
+      .onDragDropEvent(({ payload: p }) => {
+        if (!imagesTabOn()) return;
+        if (p.type === 'enter') dragHasImageRef.current = p.paths.some(isDroppableImagePath);
+        if (p.type === 'enter' || p.type === 'over') setDropOver(dragHasImageRef.current && inside(p.position));
+        else if (p.type === 'leave') setDropOver(false);
+        else if (p.type === 'drop') {
+          setDropOver(false);
+          const path = p.paths.find(isDroppableImagePath);
+          if (path && inside(p.position) && firstDropOf(path)) void uploadIntoBox({ path }, insertTextRef);
+        }
+      })
+      .then(
+        (u) => {
+          if (alive) off = u;
+          else u();
+        },
+        () => {},
+      );
+    return () => {
+      alive = false;
+      off?.();
+    };
+  }, [chatContainerEl]);
+  const onImageDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    if (IS_MOBILE || !imagesTabOn()) return;
+    if (Array.from(e.dataTransfer.items).some((i) => i.kind === 'file' && i.type.startsWith('image/'))) {
       e.preventDefault();
-      const addToast = useAppStore.getState().addToast;
-      const target = resolveUploadTarget(up);
-      addToast(`Uploading image to ${target.label}…`, 'info');
-      try {
-        const buf = new Uint8Array(await file.arrayBuffer());
-        const link = await invoke<string>('upload_image', buf, {
-          headers: {
-            'x-upload-url': target.url,
-            'x-form-field': target.formField,
-            'x-extra-fields': encodeExtraFields(target.extraFields),
-            'x-response-path': target.responsePath,
-            'x-filename': file.name || 'image.png',
-            'x-mime': file.type || 'image/png',
-          },
-        });
-        setMessageInput((prev) => (prev && !prev.endsWith(' ') ? `${prev} ${link} ` : `${prev}${link} `));
-        addToast('Image link inserted', 'success');
-      } catch (err) {
-        addToast(typeof err === 'string' ? err : 'Image upload failed', 'error');
-      }
-    },
-    [],
-  );
+      setDropOver(true);
+    }
+  };
+  const onImageDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropOver(false);
+  };
+  const onImageDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    setDropOver(false);
+    if (IS_MOBILE || !imagesTabOn()) return;
+    const file = Array.from(e.dataTransfer.files).find((x) => x.type.startsWith('image/') || isDroppableImagePath(x.name));
+    if (!file) return;
+    e.preventDefault();
+    if (firstDropOf(file.name)) void uploadIntoBox({ file }, insertTextRef);
+  };
 
   const handleInputChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const value = e.target.value;
@@ -3998,7 +4134,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
         setCommandSelectedIndex(0);
 
         // don't show mention autocomplete
-        setShowMentionAutocomplete(false);
+        dropMentions();
         return;
       } else {
         // We've typed past the command name (there's a space).
@@ -4014,7 +4150,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
             flowReplaceFromRef.current = flow.replaceFrom;
             setShowCommandAutocomplete(true);
             setCommandSelectedIndex(0);
-            setShowMentionAutocomplete(false);
+            dropMentions();
             return;
           }
           // No suggestions for this step (e.g. typing the message body): drop the
@@ -4039,9 +4175,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
             setMentionQuery(query);
             setMentionStartPosition(firstSpaceIndex);
             setMentionSelectedIndex(0);
-            
-            const matches = getMatchingUsers(query);
-            setShowMentionAutocomplete(matches.length > 0);
+            askMentions(query, true);
             return;
           }
         }
@@ -4068,19 +4202,17 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
         setMentionQuery(query);
         setMentionStartPosition(lastAtIndex);
         setMentionSelectedIndex(0);
-        
-        // Only show autocomplete if we have matches
-        const matches = getMatchingUsers(query);
-        setShowMentionAutocomplete(matches.length > 0);
+        // Shown once Rust answers with at least one name.
+        askMentions(query, false);
         return;
       }
     }
-    
+
     // No valid @ trigger found
-    setShowMentionAutocomplete(false);
+    dropMentions();
     setMentionQuery('');
     setMentionStartPosition(null);
-  }, [getMatchingUsers, isModerator, isBroadcaster, settings.chat_commands?.user_commands, settings.reminders?.reminders, settings.chat_input?.emote_colon_search_enabled, emoteTabState, emoteList, openEmoteList, closeEmoteList]);
+  }, [askMentions, dropMentions, isModerator, isBroadcaster, settings.chat_commands?.user_commands, settings.reminders?.reminders, settings.chat_input?.emote_colon_search_enabled, emoteTabState, emoteList, openEmoteList, closeEmoteList]);
 
   // Insert a command string directly from other UI elements (like UserProfileCard)
   const preFillCommand = useCallback((cmdText: string) => {
@@ -4180,7 +4312,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     setMessageInput(newValue);
 
     // Hide autocomplete
-    setShowMentionAutocomplete(false);
+    dropMentions();
     setMentionQuery('');
     setMentionStartPosition(null);
 
@@ -4190,7 +4322,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     setTimeout(() => {
       inputRef.current?.setSelectionRange(newCursorPos, newCursorPos);
     }, 0);
-  }, [messageInput, mentionStartPosition, mentionQuery, provider]);
+  }, [messageInput, mentionStartPosition, mentionQuery, provider, dropMentions]);
 
   // At the cursor, spaced from its neighbours. The textarea keeps its caret
   // while focus is elsewhere (the emote menu, or the popped-out one in another
@@ -4213,6 +4345,9 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     el?.focus({ preventScroll: true });
     el?.setSelectionRange(caret, caret);
   };
+  useLayoutEffect(() => {
+    insertTextRef.current = insertEmote;
+  });
   // The emote menu popped out into its own window types into this chat box.
   const paletteChannel = useMemo<PaletteChannel | null>(() => {
     if (!currentStream?.user_login || (provider !== 'twitch' && provider !== 'kick' && provider !== 'youtube')) return null;
@@ -4690,7 +4825,22 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
 
   return (
     <>
-      <div ref={setChatContainerEl} className="h-full bg-secondary overflow-hidden flex flex-col relative">
+      <div
+        ref={setChatContainerEl}
+        data-chat-surface=""
+        className="h-full bg-secondary overflow-hidden flex flex-col relative"
+        onDragOver={onImageDragOver}
+        onDragLeave={onImageDragLeave}
+        onDrop={onImageDrop}
+      >
+        {dropOver && (
+          <div
+            className="pointer-events-none absolute inset-0 z-[60] flex items-center justify-center rounded-[inherit] shadow-[inset_0_0_0_2px_color-mix(in_srgb,var(--color-accent)_55%,transparent)]"
+            aria-hidden
+          >
+            <span className="glass-panel rounded-full px-4 py-2 text-[13px] font-medium text-textPrimary">Drop to upload</span>
+          </div>
+        )}
         {isMainSurface && !isMultiNookActive && <ChatDockPanel top={chromeHeight} />}
         {/* Floating cards at the top of chat. Twitch allows a poll and a
             prediction at once, so they stack in one column, laid out by Rust:
@@ -5154,7 +5304,8 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                   animate={{ opacity: 1, y: 0, scale: 1, height: 'auto' }}
                   exit={{ opacity: 0, y: -10, scale: 0.96, height: 0 }}
                   transition={{ duration: 0.3, ease: [0.175, 0.885, 0.32, 1.2] }}
-                  className="sn-popover w-full max-w-sm mt-2 pointer-events-auto overflow-hidden origin-top cursor-pointer"
+                  className={`${GLAZE_BANNER} w-full max-w-sm mt-2 pointer-events-auto overflow-hidden origin-top cursor-pointer`}
+                  style={BANNER_STYLE}
                   // Clicking the open pin folds it back to the bar, the same
                   // gesture that opened it. Interactive children (unpin, links,
                   // preview cards) keep their own click, and a drag that selected
@@ -5183,25 +5334,22 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                   // pinned message.
                   const previewsOn = settings.chat_design?.link_previews ?? true;
                   const keepLink = settings.chat_design?.link_preview_keep_link ?? false;
+                  const shortenLinks = settings.chat_design?.shorten_links ?? true;
+                  // Rust split the text into text and links, as it does a chat row.
+                  const pinParts: MessageSegment[] = pin.segments ?? [{ type: 'text', content: pin.message_text }];
+                  const pinLinks: RowLink[] = [];
+                  for (const seg of pinParts) if (seg.type === 'link') pinLinks.push(seg);
                   const previewItems = previewsOn
-                    ? extractPreviewUrls(
-                        pin.message_text,
-                        2,
-                        settings.chat_design?.link_preview_trusted_domains,
-                      )
+                    ? previewUrlsFromLinks(pinLinks, 2, settings.chat_design?.link_preview_trusted_domains)
                     : [];
                   // In "clean" mode the inline link is suppressed for any trusted
                   // (auto-carded) URL so the card is the sole representation,
                   // matching chat. Untrusted links keep their inline link.
-                  const stripTrail = (s: string) => s.replace(/[.,!?:;'")\]}>]+$/, '');
                   const suppressed = !keepLink
                     ? new Set(previewItems.filter((it) => it.trusted).map((it) => it.url))
                     : null;
-                  const textParts = pin.message_text.split(/(https?:\/\/\S+)/g);
-                  const hasVisibleBody = textParts.some((part) =>
-                    /^https?:\/\//.test(part)
-                      ? !suppressed?.has(stripTrail(part))
-                      : part.trim().length > 0,
+                  const hasVisibleBody = pinParts.some((seg) =>
+                    seg.type === 'link' ? !suppressed?.has(seg.url) : seg.content.trim().length > 0,
                   );
                   return (
                   <div
@@ -5276,22 +5424,22 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                             visible remains (e.g. a pin that's only a link). */}
                         {hasVisibleBody && (
                           <p className="text-[13.5px] text-textPrimary/95 mt-1.5 break-words font-medium" style={{ lineHeight: '1.5' }}>
-                            {textParts.map((part, index) =>
-                              /^https?:\/\//.test(part) ? (
-                                suppressed?.has(stripTrail(part)) ? null : (
+                            {pinParts.map((seg, index) =>
+                              seg.type === 'link' ? (
+                                suppressed?.has(seg.url) ? null : (
                                   <a
                                     key={index}
                                     className="text-accent/90 hover:text-accent hover:underline pointer-events-auto cursor-pointer transition-colors"
                                     onClick={() => {
-                                      import('@tauri-apps/plugin-shell').then(({ open }) => open(part));
+                                      import('@tauri-apps/plugin-shell').then(({ open }) => open(seg.url));
                                     }}
                                   >
-                                    {part.length > 50 ? part.slice(0, 50) + '…' : part}
+                                    {shortenLinks && seg.label ? seg.label : seg.content}
                                   </a>
                                 )
                               ) : (
                                 <span key={index}>
-                                  {renderPinTextWithEmotes(part, `pin-${pin.id}-${index}`, 'h-6 max-w-[112px] -my-1')}
+                                  {renderPinTextWithEmotes(seg.content, `pin-${pin.id}-${index}`, 'h-6 max-w-[112px] -my-1')}
                                 </span>
                               )
                             )}
@@ -5368,7 +5516,8 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                       setIsPinnedExpanded(true);
                       seenPinIdRef.current = pin.id;
                     }}
-                    className="sn-popover sn-popover-hover group w-full max-w-sm mt-2 pointer-events-auto overflow-hidden flex items-center gap-2.5 px-3.5 py-2.5 text-left transition-colors"
+                    className={`${GLAZE_BANNER} chrome-glaze--control group w-full max-w-sm mt-2 pointer-events-auto overflow-hidden flex items-center gap-2.5 px-3.5 py-2.5 text-left transition-colors`}
+                    style={BANNER_STYLE}
                   >
                     <svg className="w-3.5 h-3.5 text-accent flex-shrink-0" fill="currentColor" viewBox="0 0 16 16">
                       <path d="M4.146.146A.5.5 0 0 1 4.5 0h7a.5.5 0 0 1 .5.5c0 .68-.342 1.174-.646 1.479-.126.125-.25.224-.354.298v4.431l.078.048c.203.127.476.314.751.555C12.36 7.775 13 8.527 13 9.5a.5.5 0 0 1-.5.5h-4v4.5a.5.5 0 0 1-1 0V10h-4A.5.5 0 0 1 3 9.5c0-.973.64-1.725 1.17-2.189A5.921 5.921 0 0 1 5 6.708V2.277a2.77 2.77 0 0 1-.354-.298C4.342 1.674 4 1.179 4 .5a.5.5 0 0 1 .146-.354z"/>
@@ -5530,6 +5679,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
             headerSpaceReserved={blendEnabled}
             headerInset={chromeHeight}
             pinnedIds={pinnedIds}
+            scrollToBottomRef={listScrollToBottomRef}
           />
         )}
         {/* AutoMod held-message queue (moderators, Twitch). Rust owns the
@@ -5537,11 +5687,16 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
         {activeView === 'chat' && isModerator && isTwitch && panelChannelKey && (
           <AutomodQueueStrip channel={panelChannelKey} />
         )}
+        {/* Unban requests waiting on the moderators. Rust keeps the list; this
+            strip mirrors it and sends Approve / Deny to Helix. */}
+        {activeView === 'chat' && isModerator && isTwitch && panelChannelKey && currentStream?.user_id && (
+          <UnbanRequestsStrip channel={panelChannelKey} channelId={currentStream.user_id} />
+        )}
 
         {/* Chat Paused indicator - positioned above input */}
         {activeView === 'chat' && isPaused && (
           <div className="absolute bottom-[60px] left-1/2 transform -translate-x-1/2 z-50 pointer-events-auto">
-            <button onClick={handleResume} className="flex items-center gap-2 whitespace-nowrap px-4 py-2 glass-button text-white text-sm font-medium rounded-full shadow-lg">
+            <button onClick={handleResume} className="flex items-center gap-2 whitespace-nowrap px-4 py-2 chrome-glaze chrome-glaze--control chrome-glaze--frosted text-white text-sm font-medium shadow-lg">
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
               <span>Chat Paused<PausedNewCount sliceKeys={pausedCountKeys} isPaused={isPaused} /></span>
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
@@ -5571,6 +5726,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                 channelLogin={channelOverride?.user_login ?? currentStream?.user_login}
                 isLoadingEmotes={isLoadingEmotes}
                 onInsert={insertEmote}
+                images={provider !== 'tiktok'}
                 onPopOut={
                   popOutEmotes
                     ? () => {
@@ -5889,7 +6045,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                   {/* @ Mention Autocomplete */}
                   {showMentionAutocomplete && (
                     <MentionAutocomplete
-                      users={getMatchingUsers(mentionQuery)}
+                      users={mentionAnswer.users}
                       selectedIndex={mentionSelectedIndex}
                       onSelect={(user) => insertMention(user)}
                       onSelectedIndexChange={setMentionSelectedIndex}
@@ -6037,7 +6193,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                     disabled={isInputDisabled}
                     onBlur={() => {
                       // Delay hiding to allow click on autocomplete
-                      setTimeout(() => setShowMentionAutocomplete(false), 150);
+                      setTimeout(dropMentions, 150);
                       setTimeout(() => setShowCommandAutocomplete(false), 150);
                       setEmoteTabState(null);
                       // Picking a row never blurs (rows act on mousedown), so a

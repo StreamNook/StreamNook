@@ -417,6 +417,8 @@ fn prefetch_segment(index: u32) {
         url
     };
     tokio::spawn(async move {
+        // Prefetches run several at once; only one that ran alone timed the link.
+        let transfer = crate::services::link_adapt::begin_transfer(crate::services::link_adapt::SOLO);
         let fetched = match HTTP_CLIENT.get(&url).send().await {
             // The reqwest body is already one contiguous `Bytes`; store it as is.
             Ok(res) if res.status().is_success() => res.bytes().await.ok(),
@@ -424,6 +426,11 @@ fn prefetch_segment(index: u32) {
             // segment itself in a moment and that path logs properly.
             _ => None,
         };
+        // The player reads this segment from memory, so the link is measured
+        // here, where it crossed the internet.
+        if let Some(bytes) = fetched.as_ref() {
+            transfer.finish(bytes.len() as u64);
+        }
         if let Ok(mut m) = pseg_map().lock() {
             m.inflight.remove(&index);
             if let Some(bytes) = fetched {
@@ -648,6 +655,44 @@ pub fn emit_playback_adapt(event: &crate::services::link_adapt::AdaptEvent) {
     }
 }
 
+/// The solo live Twitch stream as `link_adapt` moves it: spliced or restarted
+/// by `adapt_upstream`. Its player's segments come straight from the CDN
+/// (a `vseg/` redirect) unless the parts origin serves them over loopback.
+struct SoloTwitchRoute;
+
+impl crate::services::link_adapt::Route for SoloTwitchRoute {
+    fn switch(&self, to: crate::services::link_adapt::Rung, same_decoder: bool) -> crate::services::link_adapt::SwitchFuture {
+        Box::pin(async move { adapt_upstream(&to.url, same_decoder).await })
+    }
+
+    fn player_measures_link(&self) -> bool {
+        !crate::services::ll_origin::is_active()
+    }
+
+    fn seamless(&self) -> bool {
+        solo_can_splice()
+    }
+
+    fn segment_secs(&self) -> Option<f64> {
+        Some(crate::services::link_adapt::TWITCH_SEGMENT_SECS)
+    }
+
+    fn ads_playing(&self) -> bool {
+        ad_state().ads_present
+    }
+}
+
+/// Whether a rendition switch would splice into the playlist the solo player
+/// reads now: a stabilized whole-segment playlist with the parts origin off.
+/// Everywhere else a switch restarts the relay and reloads the player.
+pub fn solo_can_splice() -> bool {
+    SOLO_STABILIZED.load(std::sync::atomic::Ordering::Relaxed) && !crate::services::ll_origin::is_active()
+}
+
+pub fn solo_twitch_route() -> std::sync::Arc<dyn crate::services::link_adapt::Route> {
+    std::sync::Arc::new(SoloTwitchRoute)
+}
+
 /// Move the live solo stream to another rendition of the same broadcast.
 ///
 /// On the whole-segment path the switch is spliced into the playlist the
@@ -661,9 +706,7 @@ pub async fn adapt_upstream(playlist_url: &str, same_decoder: bool) -> Result<Op
     if !solo_session_active() {
         anyhow::bail!("no live solo relay session");
     }
-    let splice = same_decoder
-        && SOLO_STABILIZED.load(std::sync::atomic::Ordering::Relaxed)
-        && !crate::services::ll_origin::is_active();
+    let splice = same_decoder && solo_can_splice();
     if splice {
         crate::services::hls_projection::begin_switch(SOLO_STREAM_ID);
         *PROXY_URL.lock().await = Some(playlist_url.to_string());
@@ -1040,11 +1083,13 @@ impl StreamServer {
                 warn!("[StreamServer] refused a segment url that is not an https CDN host");
                 return Ok(empty_cors(403));
             }
+            let transfer = crate::services::link_adapt::begin_transfer(crate::services::link_adapt::SOLO);
             return Ok(match HTTP_CLIENT.get(&target).send().await {
                 Ok(res) if res.status().is_success() => match res.bytes().await {
                     // `media_response` sniffs TS vs fMP4 and carries the CORS
                     // headers — the reason this detour exists at all.
                     Ok(bytes) => {
+                        transfer.finish(bytes.len() as u64);
                         // Keep it: hls.js re-requests a segment after a recovered
                         // error, and a second surface on the same stream would
                         // otherwise pay for the same download again. The clone is
@@ -1201,10 +1246,16 @@ impl StreamServer {
                 let is_live = crate::services::hls_kind::classify(text)
                     == crate::services::hls_kind::PlaylistKind::Live;
                 // `plain.m3u8` never meets the engine's `seg/` scheme, so it
-                // stabilizes even while the engine runs.
+                // stabilizes even while the engine runs. So does a live playlist
+                // the parts origin did not take (a normal-latency channel with
+                // the engine on): nothing serves `seg/` for it, and stable paths
+                // are what let "Auto" splice a rendition switch in without a
+                // reload.
                 let plain = request_path == PLAIN_PLAYLIST;
-                let stabilize_ok =
-                    is_live && (plain || crate::services::ll_origin::engine_disabled());
+                let stabilize_ok = is_live
+                    && (plain
+                        || crate::services::ll_origin::engine_disabled()
+                        || !crate::services::ll_origin::is_active());
                 let mut work: String = crate::services::ad_detect::retarget_playlist(text)
                     .unwrap_or_else(|| text.to_string());
                 // `promote=1`: AVPlayer on the whole-segment path rides the
@@ -1226,7 +1277,7 @@ impl StreamServer {
                     } else {
                         AUTO_PLAIN_GAP_SECS
                     });
-                    work = with_plain_hold_back(&work, gap, crate::services::link_adapt::extra_cushion());
+                    work = with_plain_hold_back(&work, gap, crate::services::link_adapt::extra_cushion(crate::services::link_adapt::SOLO));
                 }
                 if plain && crate::services::relay_probe::is_active() {
                     // The newest listed sequence number, comparable with `vseg`.
@@ -1364,7 +1415,7 @@ impl StreamServer {
         *CURRENT_PORT.lock().await = None;
         reset_ad_state();
         set_solo_session(None);
-        crate::services::link_adapt::end();
+        crate::services::link_adapt::end(crate::services::link_adapt::SOLO);
         Ok(())
     }
 

@@ -12,6 +12,11 @@
 //! badges; rows parsed before they land use the home table and are re-stamped
 //! once they do, so nothing waits.
 //!
+//! A set whose 7TV channel lookup failed is partial: it is used only while the
+//! room has nothing better, rows parsed with it stay queued, and it is fetched
+//! again in the background (`table_repair::DELAYS`) while a chat shows the
+//! room, until a whole set lands and those rows are re-stamped with it.
+//!
 //! A room's set lives while a chat that showed it is open, and at most
 //! `MAX_ROOMS` rooms are held.
 
@@ -21,6 +26,7 @@ use std::time::{Duration, Instant};
 
 use crate::services::emote_service::EmoteSet;
 use crate::services::irc_service::EmoteLookup;
+use crate::services::providers::table_repair::{self, Retrying};
 
 /// The most partner rooms held at once (a session is two to six channels).
 const MAX_ROOMS: usize = 16;
@@ -29,9 +35,17 @@ const MAX_PENDING: usize = 300;
 /// How long after a failed fetch the next row may ask again.
 const RETRY_AFTER: Duration = Duration::from_secs(60);
 
+/// One background retry loop per room while its set is partial.
+static RETRYING: Retrying = Retrying::new();
+
 #[derive(Default)]
 struct Room {
     lookup: Option<Arc<EmoteLookup>>,
+    /// Whether `lookup` came from a whole answer (the 7TV channel lookup answered).
+    whole: bool,
+    /// The partial table a whole one replaced, which the rows queued under it
+    /// were parsed with.
+    replaced: Option<Arc<EmoteLookup>>,
     /// Home channels whose chat showed this room's rows.
     homes: HashSet<String>,
     fetching: bool,
@@ -55,6 +69,8 @@ pub(crate) fn partner_room<'a>(source_room_id: Option<&'a str>, room_id: Option<
 /// The table a row from `room_id`, arriving in `home`, parses with. None until
 /// that room's set has landed: the caller parses with the home table, and the
 /// row (`raw`) is queued for a re-stamp. The first such row starts the fetch.
+/// While the room's set is partial the row parses with it and is queued too,
+/// for the whole set its retry loop is fetching.
 pub(crate) fn lookup_for(home: &str, room_id: &str, raw: &str) -> Option<Arc<EmoteLookup>> {
     let start = {
         let Ok(mut map) = rooms().lock() else { return None };
@@ -64,14 +80,20 @@ pub(crate) fn lookup_for(home: &str, room_id: &str, raw: &str) -> Option<Arc<Emo
         let room = map.entry(room_id.to_string()).or_default();
         room.homes.insert(home.to_string());
         room.used = Some(Instant::now());
-        if let Some(lookup) = &room.lookup {
-            return Some(lookup.clone());
+        if room.whole {
+            if let Some(lookup) = &room.lookup {
+                return Some(lookup.clone());
+            }
         }
         if room.pending.len() < MAX_PENDING && !room.pending.iter().any(|(h, r)| h == home && r == raw) {
             room.pending.push_back((home.to_string(), raw.to_string()));
         }
+        if let Some(lookup) = &room.lookup {
+            return Some(lookup.clone());
+        }
         let may_retry = room.failed_at.map_or(true, |at| at.elapsed() >= RETRY_AFTER);
-        let start = !room.fetching && may_retry;
+        // A running retry loop fetches it on its own schedule.
+        let start = !room.fetching && may_retry && !RETRYING.running(room_id);
         if start {
             room.fetching = true;
         }
@@ -103,14 +125,73 @@ fn evict_for_new_room(map: &mut HashMap<String, Room>) {
 }
 
 async fn fetch(room_id: String) {
-    let (set, badges_ok) = tokio::join!(fetch_set(&room_id), fetch_badges(&room_id));
-    if set.is_none() {
-        log::warn!("[SharedChat] emote set for room {room_id} did not load; partner rows keep the home set");
+    if !fetch_once(&room_id).await {
+        spawn_retries(room_id);
     }
-    let Some((lookup, pending)) = install(&room_id, set.as_ref(), badges_ok) else { return };
+}
+
+/// One fetch of the room's set and channel badges, put in place, with the rows
+/// waiting for them re-stamped. True when the set was whole.
+async fn fetch_once(room_id: &str) -> bool {
+    let (set, badges_ok) = tokio::join!(fetch_set(room_id), fetch_badges(room_id));
+    match &set {
+        None => log::warn!("[SharedChat] emote set for room {room_id} did not load; partner rows keep the home set"),
+        Some((_, false)) => {
+            log::warn!("[SharedChat] 7TV set for room {room_id} did not resolve; partner rows use what loaded until it does")
+        }
+        Some((_, true)) => {}
+    }
+    let whole = set.as_ref().is_some_and(|(_, whole)| *whole);
+    let Some((lookup, pending)) = install(room_id, set.as_ref().map(|(s, w)| (s, *w)), badges_ok) else {
+        return whole;
+    };
     if !pending.is_empty() {
-        crate::services::irc_service::IrcService::restamp_partner_rows(&room_id, lookup.as_deref(), pending).await;
+        crate::services::irc_service::IrcService::restamp_partner_rows(room_id, lookup.as_deref(), pending).await;
     }
+    whole
+}
+
+/// While a chat shows the room, fetches its partial (or failed) set again
+/// until a whole one lands.
+fn spawn_retries(room_id: String) {
+    let open = room_id.clone();
+    let key = room_id.clone();
+    table_repair::spawn(&RETRYING, key, move || room_open(&open), move || {
+        let room_id = room_id.clone();
+        async move {
+            if !begin_retry(&room_id) {
+                return false;
+            }
+            invalidate(&room_id).await;
+            fetch_once(&room_id).await
+        }
+    });
+}
+
+/// Whether a chat still shows the room.
+fn room_open(room_id: &str) -> bool {
+    rooms().lock().map(|m| m.get(room_id).is_some_and(|r| !r.homes.is_empty())).unwrap_or(false)
+}
+
+/// Marks a retry fetch as running; false when the room is gone or a fetch
+/// already runs.
+fn begin_retry(room_id: &str) -> bool {
+    let Ok(mut map) = rooms().lock() else { return false };
+    let Some(room) = map.get_mut(room_id) else { return false };
+    if room.fetching {
+        return false;
+    }
+    room.fetching = true;
+    true
+}
+
+/// Drops the emote service's cached answer for the room, so the retry fetches
+/// rather than reading back the partial answer it cached a moment ago.
+async fn invalidate(room_id: &str) {
+    use tauri::Manager;
+    let Some(app) = crate::services::providers::app_handle() else { return };
+    let service = app.state::<crate::models::settings::AppState>().emote_service.read().await.clone();
+    service.invalidate_channel(room_id).await;
 }
 
 /// Reads the room's channel badges into the art every row view draws from.
@@ -124,14 +205,16 @@ async fn fetch_badges(room_id: &str) -> bool {
     }
 }
 
-async fn fetch_set(room_id: &str) -> Option<EmoteSet> {
+/// The room's set and whether it is whole: false when its 7TV channel lookup
+/// failed (the service then hands back what it held, or the globals).
+async fn fetch_set(room_id: &str) -> Option<(EmoteSet, bool)> {
     use tauri::Manager;
     let app = crate::services::providers::app_handle()?;
     let service = app.state::<crate::models::settings::AppState>().emote_service.read().await.clone();
     // By id alone: every provider's channel set is keyed by the Twitch id, and the
     // service's cache is too, so a partner open in another chat is not fetched again.
     match service.fetch_channel_emotes_checked(None, Some(room_id.to_string()), None, None).await {
-        Ok((set, _)) => Some(set),
+        Ok((set, seven_tv_ok)) => Some((set, seven_tv_ok)),
         Err(e) => {
             log::debug!("[SharedChat] room {room_id}: {e}");
             None
@@ -139,29 +222,41 @@ async fn fetch_set(room_id: &str) -> Option<EmoteSet> {
     }
 }
 
-/// Puts what a room fetch brought in place (its emote set, when it loaded, and
-/// whether its channel badges did); answers the room's lookup and, when
-/// anything landed, the rows waiting for it. A set smaller than the one already
-/// held does not replace it, and a failed set fetch may be retried later.
+/// Puts what a room fetch brought in place (its emote set with whether it is
+/// whole, when it loaded, and whether its channel badges did); answers the
+/// room's lookup and, when anything landed, the rows to re-stamp. A whole set
+/// always replaces what is held; a partial one only while the room has nothing
+/// better (`table_repair::decide`). Rows queued under a partial set stay queued
+/// for the whole one. A failed set fetch may be retried later.
 pub(crate) fn install(
     room_id: &str,
-    set: Option<&EmoteSet>,
+    set: Option<(&EmoteSet, bool)>,
     badges_landed: bool,
 ) -> Option<(Option<Arc<EmoteLookup>>, Vec<(String, String)>)> {
     let mut map = rooms().lock().ok()?;
     let room = map.get_mut(room_id)?;
     room.fetching = false;
     match set {
-        Some(set) => {
+        Some((set, whole)) => {
             room.failed_at = None;
             let lookup = EmoteLookup::build(set);
-            if room.lookup.as_ref().map_or(true, |held| held.len() <= lookup.len()) {
+            let standing = if room.whole { table_repair::Standing::Whole } else { table_repair::Standing::Partial };
+            let held = room.lookup.as_ref().map(|l| (standing, l.len()));
+            if table_repair::decide(held, whole, lookup.len()) != table_repair::Install::Keep {
+                room.replaced = if whole && !room.whole { room.lookup.take() } else { None };
                 room.lookup = Some(lookup);
+                room.whole = whole;
             }
         }
         None => room.failed_at = Some(Instant::now()),
     }
-    let pending = if set.is_some() || badges_landed { room.pending.drain(..).collect() } else { Vec::new() };
+    let pending = if set.is_none() && !badges_landed {
+        Vec::new()
+    } else if room.whole {
+        room.pending.drain(..).collect()
+    } else {
+        room.pending.iter().cloned().collect()
+    };
     Some((room.lookup.clone(), pending))
 }
 
@@ -211,13 +306,24 @@ pub(crate) fn release_all() {
 }
 
 /// Whether a row with these words parses differently with the partner's table
-/// than with the home table it was first parsed with.
+/// than with the table it was first parsed with: the home table, or the
+/// partial partner table this one replaced.
 pub(crate) fn words_change(text: &str, partner: &EmoteLookup, home: Option<&EmoteLookup>) -> bool {
+    let replaced = replaced_by(partner);
     text.split_whitespace().any(|word| {
         let now = partner.get(word).map(|e| e.id.as_str());
         let before = home.and_then(|h| h.get(word)).map(|e| e.id.as_str());
-        now != before
+        let before_partial = replaced.as_deref().map(|r| r.get(word).map(|e| e.id.as_str()));
+        now != before || before_partial.is_some_and(|b| b != now)
     })
+}
+
+/// The partial table `partner` replaced in its room, if it did.
+fn replaced_by(partner: &EmoteLookup) -> Option<Arc<EmoteLookup>> {
+    let map = rooms().lock().ok()?;
+    map.values()
+        .find(|room| room.lookup.as_ref().is_some_and(|l| std::ptr::eq(Arc::as_ptr(l), partner)))
+        .and_then(|room| room.replaced.clone())
 }
 
 #[cfg(test)]
@@ -305,7 +411,7 @@ mod tests {
         assert_eq!(pending_for_test("990").map(|(_, waiting)| waiting), Some(1));
 
         // It lands: the queued row is handed back, and new rows parse with it.
-        let (_, waiting) = install("990", Some(&partner), false).expect("room known");
+        let (_, waiting) = install("990", Some((&partner, true)), false).expect("room known");
         assert_eq!(waiting.len(), 1);
         let rows = IrcService::parse_historical_messages(vec![line(
             "b",
@@ -365,6 +471,72 @@ mod tests {
         assert!(words_change("homeEmote was wrong", &partner, Some(&home)));
         assert!(!words_change("globalEmote only", &partner, Some(&home)));
         assert!(!words_change("no emotes at all", &partner, Some(&home)));
+    }
+
+    #[test]
+    fn a_partial_set_serves_only_until_a_whole_one_lands_and_its_rows_stay_queued() {
+        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset_for_test();
+        let globals = set(&[("g1", "globalEmote")]);
+        let whole = set(&[("p1", "partnerEmote"), ("g1", "globalEmote")]);
+
+        // No runtime here, so no fetch starts; the row is queued for the room.
+        assert!(lookup_for("homep", "880", "row1").is_none());
+        // The 7TV channel lookup failed: the globals serve, the row stays queued.
+        let (lookup, restamp) = install("880", Some((&globals, false)), false).expect("room known");
+        assert_eq!(lookup.map(|l| l.len()), Some(1));
+        assert_eq!(restamp.len(), 1, "re-stamped with what loaded");
+        assert_eq!(pending_for_test("880").map(|(_, n)| n), Some(1), "and still waiting for the whole set");
+        // New rows parse with the partial set and wait for the whole one too.
+        assert!(lookup_for("homep", "880", "row2").is_some());
+        assert_eq!(pending_for_test("880").map(|(_, n)| n), Some(2));
+        // A partial answer that is no fuller changes nothing.
+        let (lookup, _) = install("880", Some((&set(&[]), false)), false).expect("room known");
+        assert_eq!(lookup.map(|l| l.len()), Some(1));
+
+        // The whole set lands: every queued row is re-stamped and let go.
+        let (lookup, restamp) = install("880", Some((&whole, true)), false).expect("room known");
+        assert_eq!(lookup.map(|l| l.len()), Some(2));
+        assert_eq!(restamp.len(), 2);
+        assert_eq!(pending_for_test("880").map(|(_, n)| n), Some(0));
+        // A later partial answer never replaces it, and rows no longer queue.
+        let (lookup, _) = install("880", Some((&globals, false)), false).expect("room known");
+        assert_eq!(lookup.map(|l| l.len()), Some(2));
+        assert!(lookup_for("homep", "880", "row3").is_some());
+        assert_eq!(pending_for_test("880").map(|(_, n)| n), Some(0));
+        reset_for_test();
+    }
+
+    #[test]
+    fn a_row_parsed_with_the_partial_set_is_patched_even_when_the_home_set_agrees() {
+        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset_for_test();
+        // Both channels carry the same 7TV emote; the partner's partial set lacked it.
+        let home = EmoteLookup::build(&set(&[("s1", "sharedEmote")]));
+        lookup_for("homeq", "881", "row");
+        install("881", Some((&set(&[("g1", "globalEmote")]), false)), false);
+        let (lookup, _) =
+            install("881", Some((&set(&[("s1", "sharedEmote"), ("g1", "globalEmote")]), true)), false).expect("room known");
+        let whole = lookup.expect("whole set");
+        assert!(words_change("sharedEmote", &whole, Some(&home)), "it was text under the partial set");
+        assert!(!words_change("plain words", &whole, Some(&home)));
+        reset_for_test();
+    }
+
+    #[test]
+    fn the_retry_loop_stops_once_no_chat_shows_the_room() {
+        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset_for_test();
+        lookup_for("homer", "882", "row");
+        assert!(room_open("882"));
+        assert!(!begin_retry("882"), "a fetch is already marked running");
+        install("882", None, false);
+        assert!(begin_retry("882"), "a retry may fetch once nothing else does");
+        install("882", None, false);
+        release_home("homer");
+        assert!(!room_open("882"));
+        assert!(!begin_retry("882"), "the room is gone");
+        reset_for_test();
     }
 
     #[test]

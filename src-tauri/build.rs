@@ -67,6 +67,8 @@ fn main() {
 
     ensure_potoken_bundle(&manifest_dir);
 
+    declare_ios_fixtures(project_root);
+
     link_common_controls_v6_for_tests();
 
     link_cef_next_to_the_executable();
@@ -94,6 +96,21 @@ fn declare_ios_cfg_aliases() {
     println!("cargo:rustc-check-cfg=cfg(mobile)");
     println!("cargo:rustc-check-cfg=cfg(dev)");
     println!("cargo:rustc-cfg=mobile");
+}
+
+/// `sn_ios_fixtures` is set when the iPhone app's chat fixtures are in this tree.
+///
+/// The chat fixture test in `irc_service.rs` embeds
+/// `ios/Tests/Fixtures/chat-inputs.json` with `include_str!`. The phone tree
+/// carries `ios/`; the desktop repo does not, and without this the whole lib
+/// test build fails on the missing file instead of skipping one module.
+fn declare_ios_fixtures(project_root: &Path) {
+    println!("cargo:rustc-check-cfg=cfg(sn_ios_fixtures)");
+    let inputs = project_root.join("ios").join("Tests").join("Fixtures").join("chat-inputs.json");
+    if inputs.exists() {
+        println!("cargo:rustc-cfg=sn_ios_fixtures");
+        println!("cargo:rerun-if-changed=../ios/Tests/Fixtures/chat-inputs.json");
+    }
 }
 
 /// Linux only: let the executable find `libcef.so` in its own directory.

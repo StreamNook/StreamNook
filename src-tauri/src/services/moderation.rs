@@ -104,6 +104,13 @@ pub struct ModRequest {
     /// With a Timeout action they set its length and reason (`typed_timeout`).
     #[serde(default)]
     pub typed: Option<String>,
+    /// One press of a button or key (a card's Ban, the hover dock, a line
+    /// button, the B key). With "Ban confirmation" on, such a Ban arms on the
+    /// first press and runs on a second within `BAN_CONFIRM_MS`. Gestures (the
+    /// slider, the phone's swipe and hold menu), the reason picker and typed
+    /// commands leave it off.
+    #[serde(default)]
+    pub one_press: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -111,10 +118,14 @@ pub struct ModRequest {
 pub struct ModOutcome {
     /// The timeout the platform really applied, in seconds.
     pub applied_seconds: Option<u32>,
-    /// What happened, ready for a toast.
+    /// What happened, ready for a toast. Empty for a press too soon after the
+    /// first, which has nothing new to say.
     pub message: String,
     /// A ban or timeout, which an Unban reverses.
     pub undoable: bool,
+    /// Set when nothing happened yet: the ban runs on a second press within
+    /// this many milliseconds.
+    pub confirm_ms: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -354,6 +365,73 @@ fn saved_reason() -> Option<String> {
     .flatten()
 }
 
+/// How long a first press on Ban waits for the second.
+pub const BAN_CONFIRM_MS: u32 = 3_000;
+/// A second press sooner than this is the same press: 500 ms is Windows'
+/// default double-click time, so a habitual double-click never confirms.
+pub const BAN_CONFIRM_MIN_MS: u32 = 500;
+
+/// "Ban confirmation" in Moderation settings; off unless turned on.
+fn confirm_bans_on() -> bool {
+    crate::services::providers::setting(|s| {
+        s.extra
+            .get("moderation")
+            .and_then(|m| m.get("confirm_bans"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    })
+    .unwrap_or(false)
+}
+
+/// First presses waiting for their second, by platform, channel and chatter.
+/// Rust holds them so the card, the dock, the line buttons, the B key and a
+/// popout all count toward the same ban.
+static ARMED_BANS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, i64>>> =
+    std::sync::OnceLock::new();
+
+/// What one press on a one-press Ban means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BanPress {
+    /// The first press: nothing happens yet.
+    Armed,
+    /// Within `BAN_CONFIRM_MIN_MS` of the first: still the same press.
+    TooSoon { left_ms: u32 },
+    /// The second press inside the window: ban.
+    Confirmed,
+}
+
+/// Read one press against the presses waiting in `armed`. Pure over the map,
+/// for tests.
+pub fn press_ban(armed: &mut std::collections::HashMap<String, i64>, key: &str, now_ms: i64) -> BanPress {
+    let window = i64::from(BAN_CONFIRM_MS);
+    armed.retain(|_, at| now_ms - *at <= window);
+    match armed.get(key).copied() {
+        Some(at) if now_ms - at < i64::from(BAN_CONFIRM_MIN_MS) => {
+            BanPress::TooSoon { left_ms: (window - (now_ms - at)).max(0) as u32 }
+        }
+        Some(_) => {
+            armed.remove(key);
+            BanPress::Confirmed
+        }
+        None => {
+            armed.insert(key.to_string(), now_ms);
+            BanPress::Armed
+        }
+    }
+}
+
+/// The answer to a press that has not banned yet. `say` is false for a press
+/// too soon after the first, which leaves the first prompt to speak.
+pub fn confirm_outcome(platform: Platform, name: &str, left_ms: u32, say: bool) -> ModOutcome {
+    let what = if platform == Platform::YouTube { format!("hide {name} from chat") } else { format!("ban {name}") };
+    ModOutcome {
+        applied_seconds: None,
+        message: if say { format!("Press again within {} seconds to {what}", BAN_CONFIRM_MS / 1000) } else { String::new() },
+        undoable: false,
+        confirm_ms: Some(left_ms),
+    }
+}
+
 /// The steps for `provider`, from `presets` when given, else the saved list.
 pub fn steps_for(provider: Option<&str>, presets: Option<Vec<u32>>) -> Vec<ModStep> {
     let list = presets.unwrap_or_else(saved_presets);
@@ -378,6 +456,7 @@ pub fn outcome_for(platform: Platform, action: &ModAction, name: &str) -> ModOut
                 applied_seconds: Some(applied),
                 message: format!("Timed out {} for {}", name, duration_label(applied)),
                 undoable: true,
+                confirm_ms: None,
             }
         }
         // YouTube calls its ban "hide user from channel".
@@ -389,6 +468,7 @@ pub fn outcome_for(platform: Platform, action: &ModAction, name: &str) -> ModOut
                 format!("Banned {}", name)
             },
             undoable: true,
+            confirm_ms: None,
         },
         ModAction::Unban { timeout } => ModOutcome {
             applied_seconds: None,
@@ -400,6 +480,7 @@ pub fn outcome_for(platform: Platform, action: &ModAction, name: &str) -> ModOut
                 format!("Unbanned {}", name)
             },
             undoable: false,
+            confirm_ms: None,
         },
         ModAction::Delete { .. } => ModOutcome {
             applied_seconds: None,
@@ -409,11 +490,13 @@ pub fn outcome_for(platform: Platform, action: &ModAction, name: &str) -> ModOut
                 format!("Deleted a message from {}", name)
             },
             undoable: false,
+            confirm_ms: None,
         },
         ModAction::Warn => ModOutcome {
             applied_seconds: None,
             message: format!("Warned {}", name),
             undoable: false,
+            confirm_ms: None,
         },
     }
 }
@@ -466,6 +549,27 @@ fn settle_typed(req: &mut ModRequest) {
 pub async fn moderate(mut req: ModRequest) -> Result<ModOutcome> {
     settle_typed(&mut req);
     let platform = Platform::from_provider(req.provider.as_deref());
+    if matches!(req.action, ModAction::Ban) && req.one_press && confirm_bans_on() {
+        let key = format!(
+            "{platform:?}|{}|{}",
+            req.broadcaster_id.as_deref().or(req.channel.as_deref()).unwrap_or(""),
+            req.target_user_id.as_deref().unwrap_or("")
+        );
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        // Scoped, so the lock is gone before any await below.
+        let press = {
+            let mut armed = ARMED_BANS.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+            press_ban(&mut armed, &key, now)
+        };
+        match press {
+            BanPress::Armed => return Ok(confirm_outcome(platform, &name_of(&req), BAN_CONFIRM_MS, true)),
+            BanPress::TooSoon { left_ms } => return Ok(confirm_outcome(platform, &name_of(&req), left_ms, false)),
+            BanPress::Confirmed => {}
+        }
+    }
     let reason = req
         .reason
         .as_deref()
@@ -647,6 +751,40 @@ mod tests {
         assert!(!out.undoable);
     }
 
+    #[test]
+    fn a_ban_arms_ignores_a_double_click_and_confirms_on_a_real_second_press() {
+        let mut armed = std::collections::HashMap::new();
+        assert_eq!(press_ban(&mut armed, "k", 1_000), BanPress::Armed);
+        assert_eq!(press_ban(&mut armed, "k", 1_200), BanPress::TooSoon { left_ms: 2_800 }, "a double-click is one press");
+        assert_eq!(press_ban(&mut armed, "k", 1_900), BanPress::Confirmed);
+        assert_eq!(press_ban(&mut armed, "k", 2_000), BanPress::Armed, "a confirmed press is used up");
+        assert_eq!(press_ban(&mut armed, "other", 2_100), BanPress::Armed, "each chatter arms on its own");
+        assert_eq!(press_ban(&mut armed, "k", 2_000 + 3_001), BanPress::Armed, "too late arms again");
+    }
+
+    #[test]
+    fn a_first_press_says_what_the_second_will_do() {
+        let first = confirm_outcome(Platform::Twitch, "gus", BAN_CONFIRM_MS, true);
+        assert_eq!(first.message, "Press again within 3 seconds to ban gus");
+        assert_eq!(first.confirm_ms, Some(BAN_CONFIRM_MS));
+        assert!(!first.undoable);
+        assert_eq!(
+            confirm_outcome(Platform::YouTube, "bo", BAN_CONFIRM_MS, true).message,
+            "Press again within 3 seconds to hide bo from chat"
+        );
+        assert_eq!(confirm_outcome(Platform::Twitch, "gus", 2_800, false).message, "", "too soon says nothing new");
+        assert_eq!(outcome_for(Platform::Twitch, &ModAction::Ban, "gus").confirm_ms, None);
+    }
+
+    #[test]
+    fn one_press_is_off_unless_a_surface_says_so() {
+        let req: ModRequest = serde_json::from_value(serde_json::json!({ "action": { "kind": "ban" } })).unwrap();
+        assert!(!req.one_press);
+        let req: ModRequest =
+            serde_json::from_value(serde_json::json!({ "action": { "kind": "ban" }, "onePress": true })).unwrap();
+        assert!(req.one_press);
+    }
+
     #[tokio::test]
     async fn a_warning_without_a_reason_or_off_twitch_is_refused_before_any_call() {
         let req = |provider: &str, reason: Option<&str>| ModRequest {
@@ -659,6 +797,7 @@ mod tests {
             reason: reason.map(str::to_string),
             use_saved_reason: false,
             typed: None,
+            one_press: false,
         };
         assert!(moderate(req("twitch", Some("  "))).await.unwrap_err().to_string().contains("needs a reason"));
         assert!(moderate(req("kick", Some("spam"))).await.unwrap_err().to_string().contains("Twitch feature"));

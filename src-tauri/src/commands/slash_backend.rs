@@ -66,6 +66,7 @@ async fn moderate(a: &Value, action: ModAction) -> Result<Value, String> {
         reason: os(a, "reason"),
         use_saved_reason: false,
         typed: None,
+        one_press: false,
     };
     to(crate::services::moderation::moderate(request).await.map_err(|e| e.to_string()))
 }
@@ -169,7 +170,16 @@ impl TauriBackend {
             "slash_role_list" => to(sl::slash_role_list(self.state(), s(&a, "channel"), s(&a, "role")).await),
             "get_channel_chatters" => tw::get_channel_chatters(self.state(), s(&a, "broadcasterId"), s(&a, "channelLogin")).await,
             "update_suspicious_user_status" => {
-                unit(tw::update_suspicious_user_status(s(&a, "broadcasterId"), s(&a, "targetUserId"), s(&a, "status")).await)
+                unit(
+                    tw::update_suspicious_user_status(
+                        self.app.clone(),
+                        s(&a, "broadcasterId"),
+                        s(&a, "targetUserId"),
+                        s(&a, "status"),
+                        os(&a, "channel"),
+                    )
+                    .await,
+                )
             }
             "warn_chat_user" => unit(tw::warn_chat_user(s(&a, "broadcasterId"), s(&a, "targetUserId"), s(&a, "reason")).await),
             "update_shield_mode" => {

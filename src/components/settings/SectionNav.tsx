@@ -16,6 +16,7 @@
 
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import { motion } from 'framer-motion';
+import { Tooltip } from '../ui/Tooltip';
 
 interface SectionNavProps {
   containerRef: RefObject<HTMLDivElement | null>;
@@ -170,17 +171,18 @@ export default function SectionNav({ containerRef, tabKey, hidden = false, minSe
                     transition={{ type: 'spring', stiffness: 460, damping: 36, mass: 0.6 }}
                   />
                 )}
-                <button
-                  type="button"
-                  onClick={() => jump(e.id)}
-                  aria-current={active ? 'location' : undefined}
-                  className={`block w-full truncate py-[5px] text-left text-[11.5px] leading-snug transition-[color,transform] duration-200 ${
-                    active ? 'translate-x-0.5 font-medium text-textPrimary' : 'text-textMuted hover:text-textSecondary'
-                  }`}
-                  title={e.label}
-                >
-                  {e.label}
-                </button>
+                <Tooltip content={e.label}>
+                  <button
+                    type="button"
+                    onClick={() => jump(e.id)}
+                    aria-current={active ? 'location' : undefined}
+                    className={`block w-full truncate py-[5px] text-left text-[11.5px] leading-snug transition-[color,transform] duration-200 ${
+                      active ? 'translate-x-0.5 font-medium text-textPrimary' : 'text-textMuted hover:text-textSecondary'
+                    }`}
+                  >
+                    {e.label}
+                  </button>
+                </Tooltip>
               </li>
             );
           })}

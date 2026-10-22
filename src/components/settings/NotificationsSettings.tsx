@@ -20,6 +20,7 @@ import { SoundVolume } from './SoundControls';
 import { useSettingReset } from './settingReset';
 import { InlineSlider, SubControl, SubControls } from '../plugins/settingsPageKit';
 import { useSoundOptions } from '../../hooks/useSoundOptions';
+import { playTestNotificationSound } from '../../utils/notificationSound';
 import { grantAccolade } from '../../services/supabaseService';
 import {
   RESTLESS_ACCOLADE_ID,
@@ -263,6 +264,9 @@ const NotificationsSettings = () => {
   };
 
   const handleTestNotification = async () => {
+    // Played inside the press itself: a gesture-started sound plays under any
+    // webview's audio policy, and it plays even if the sample fails to send.
+    playTestNotificationSound(liveNotifications);
     // Snap to green, then let it fade back to the glass surface (the fade-back
     // lives on the glass-button class transition). Brief hold so it reads as a flash.
     setTestFlash(true);

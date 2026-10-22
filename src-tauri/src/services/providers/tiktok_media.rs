@@ -348,7 +348,7 @@ fn select_tier(
         }
     };
 
-    if req.is_empty() || req == "best" || req == "source" {
+    if req.is_empty() || req == "best" || req == "source" || req == "auto" {
         // Best PLAYABLE, not merely best. Rows are already sorted best first.
         let idx = menu
             .iter()

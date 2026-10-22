@@ -21,7 +21,7 @@ import { shareLinkFor } from '../../utils/shareLink';
 import { Logger } from '../../utils/logger';
 
 const ROW =
-  'flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-textSecondary transition-all hover:bg-glass-hover hover:text-white';
+  'flex w-full items-center gap-2 rounded-lg px-2 py-2 text-sm font-medium text-textSecondary transition-all hover:bg-white/[0.06] hover:text-white';
 
 /**
  * Right-click menu for one MultiNook tile.
@@ -191,7 +191,7 @@ export const MultiNookTileMenu: React.FC = () => {
     >
       <div
         ref={menuRef}
-        className={`absolute w-[210px] glass-panel rounded-xl flex flex-col p-1 shadow-2xl overflow-y-auto scrollbar-thin animate-in fade-in zoom-in-95 duration-150 ${transformOrigin}`}
+        className={`absolute w-[210px] glass-flyout rounded-xl flex flex-col overflow-y-auto scrollbar-thin animate-in fade-in zoom-in-95 duration-150 ${transformOrigin}`}
         style={placement}
         onPointerDown={(e) => e.stopPropagation()}
         onContextMenu={(e) => {
@@ -202,7 +202,7 @@ export const MultiNookTileMenu: React.FC = () => {
         {/* Which tile this is acting on, and the way to the channel's profile. */}
         <button
           onClick={run(() => useAppStore.getState().setProfileModalUser(stream))}
-          className="group mb-1 flex w-full items-center justify-between rounded-t-lg border-b border-borderSubtle px-3 py-2 text-left transition-colors hover:bg-glass-hover"
+          className="group mb-1 flex w-full items-center justify-between rounded-t-lg border-b border-white/[0.06] px-2 py-2 text-left transition-colors hover:bg-white/[0.06]"
         >
           <div className="min-w-0">
             <span className="block truncate text-xs font-semibold text-textPrimary transition-colors group-hover:text-accent">
@@ -231,7 +231,7 @@ export const MultiNookTileMenu: React.FC = () => {
           </span>
         </button>
 
-        <div className="mx-2 my-1 h-px bg-borderSubtle" />
+        <div className="mx-2 my-1 h-px bg-white/[0.06]" />
 
         {/* Tile actions, mirroring the hover overlay so neither surface has
             something the other lacks. Spotlight and dock are meaningless on a
@@ -271,7 +271,7 @@ export const MultiNookTileMenu: React.FC = () => {
           </button>
         )}
 
-        <div className="mx-2 my-1 h-px bg-borderSubtle" />
+        <div className="mx-2 my-1 h-px bg-white/[0.06]" />
 
         <button onClick={handlePopOutChat} className={`${ROW} hover:!text-accent`}>
           <MessageSquarePlus size={16} />
@@ -315,7 +315,7 @@ export const MultiNookTileMenu: React.FC = () => {
           )}
         </button>
 
-        <div className="mx-2 my-1 h-px bg-borderSubtle" />
+        <div className="mx-2 my-1 h-px bg-white/[0.06]" />
 
         <button
           onClick={run(() => void removeSlot(slotId))}

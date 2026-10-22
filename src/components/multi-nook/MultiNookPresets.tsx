@@ -21,6 +21,7 @@ import {
   Square,
 } from 'lucide-react';
 import { Tooltip } from '../ui/Tooltip';
+import { ACCENT_BUTTON, ACCENT_FILL, DANGER_FILL, GLAZE_PILL } from '../ui/glazeButtons';
 import { useMultiNookPresetsStore, slotToPresetChannel } from '../../stores/multiNookPresetsStore';
 import { currentNookLayout, usemultiNookStore } from '../../stores/multiNookStore';
 import { MultiNookLayout, MultiNookPreset, MultiNookPresetChannel, MultiNookPresetIcon } from '../../types';
@@ -187,10 +188,7 @@ const MultiNookPresets: React.FC = () => {
             view.mode === 'editor' ? 'w-[30rem]' : 'w-80'
           }`}
         >
-          <div
-            className="liquid-glass-panel overflow-hidden"
-            style={{ backgroundColor: 'color-mix(in srgb, rgb(16 16 20) 92%, var(--glass-under, transparent))' }}
-          >
+          <div className="glass-flyout no-live-blur rounded-xl !p-0 overflow-hidden">
             {view.mode === 'list' ? (
               <PresetListView
                 presets={presets}
@@ -240,14 +238,14 @@ const PresetListView: React.FC<{
       <div className="flex items-center justify-between px-3 pt-2.5 pb-2">
         <div className="flex items-center gap-1.5">
           <Bookmark size={12} className="text-accent" />
-          <span className="text-[10px] font-bold uppercase tracking-wider text-textMuted">
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-white/50">
             Presets{presets.length > 0 ? ` · ${presets.length}` : ''}
           </span>
         </div>
         <Tooltip content="New preset" delay={200} side="bottom">
           <button
             onClick={onNew}
-            className="w-6 h-6 flex items-center justify-center rounded-md glass-button text-textSecondary hover:text-accent"
+            className={`${GLAZE_PILL} w-6 h-6 flex items-center justify-center hover:text-accent`}
           >
             <Plus size={13} />
           </button>
@@ -278,7 +276,7 @@ const PresetListView: React.FC<{
             <Tooltip content="Stop preset (close all its streams, keep it saved)" delay={250} side="bottom">
               <button
                 onClick={onStop}
-                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg glass-button text-textSecondary hover:text-red-400 text-xs font-semibold shrink-0"
+                className={`${GLAZE_PILL} flex items-center gap-1.5 px-2.5 py-1.5 hover:text-red-400 text-xs shrink-0`}
               >
                 <Square size={11} className="fill-current" /> Stop
               </button>
@@ -321,7 +319,7 @@ const PresetListView: React.FC<{
           <button
             onClick={onSaveCurrent}
             disabled={!hasGrid}
-            className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg glass-button text-textSecondary hover:text-accent transition-colors disabled:opacity-40 disabled:cursor-not-allowed text-[13px] font-semibold"
+            className={`${GLAZE_PILL} w-full flex items-center justify-center gap-2 px-3 py-2 hover:text-accent disabled:cursor-not-allowed text-[13px]`}
           >
             <BookmarkPlus size={14} />
             Save current grid
@@ -347,8 +345,8 @@ const PresetRow: React.FC<{
 
   return (
     <div
-      className={`group flex items-center gap-2 rounded-lg pl-1.5 pr-1 py-1.5 transition-colors ${
-        isActive ? 'bg-accent/[0.08]' : 'hover:bg-white/[0.05]'
+      className={`group flex items-center gap-2 rounded-lg pl-2 pr-1 py-2 transition-colors ${
+        isActive ? 'bg-white/[0.08]' : 'hover:bg-white/[0.06]'
       }`}
     >
       {/* Load (replace). The primary action covers the avatar+name area */}
@@ -407,7 +405,7 @@ const PresetRow: React.FC<{
         <div className="flex-1 min-w-0">
           <span
             className={`block text-[13px] font-semibold truncate leading-tight transition-colors ${
-              isActive ? 'text-accent' : 'text-textPrimary group-hover:text-accent'
+              isActive ? 'text-textPrimary' : 'text-textPrimary group-hover:text-accent'
             }`}
           >
             {preset.name}
@@ -431,7 +429,8 @@ const PresetRow: React.FC<{
           <Tooltip content="Confirm delete" delay={150} side="bottom">
             <button
               onClick={() => deletePreset(preset.id)}
-              className="w-6 h-6 flex items-center justify-center rounded-md text-red-400 hover:bg-red-500/15 transition-colors"
+              className={`${ACCENT_BUTTON} w-6 h-6 flex items-center justify-center`}
+              style={DANGER_FILL}
             >
               <Check size={13} />
             </button>
@@ -439,7 +438,7 @@ const PresetRow: React.FC<{
           <Tooltip content="Cancel" delay={150} side="bottom">
             <button
               onClick={() => setConfirmingDelete(false)}
-              className="w-6 h-6 flex items-center justify-center rounded-md text-textMuted hover:text-textPrimary transition-colors"
+              className={`${GLAZE_PILL} w-6 h-6 flex items-center justify-center`}
             >
               <X size={13} />
             </button>
@@ -450,7 +449,7 @@ const PresetRow: React.FC<{
           <Tooltip content="Load (replace grid)" delay={200} side="bottom">
             <button
               onClick={() => onLoad(preset.id, 'replace')}
-              className="w-6 h-6 flex items-center justify-center rounded-md text-textSecondary hover:text-accent hover:bg-accent/10 transition-colors"
+              className={`${GLAZE_PILL} w-6 h-6 flex items-center justify-center hover:text-accent`}
             >
               <Play size={12} />
             </button>
@@ -458,7 +457,7 @@ const PresetRow: React.FC<{
           <Tooltip content="Add to current grid" delay={200} side="bottom">
             <button
               onClick={() => onLoad(preset.id, 'append')}
-              className="w-6 h-6 flex items-center justify-center rounded-md text-textSecondary hover:text-accent hover:bg-accent/10 transition-colors"
+              className={`${GLAZE_PILL} w-6 h-6 flex items-center justify-center hover:text-accent`}
             >
               <ListPlus size={13} />
             </button>
@@ -466,7 +465,7 @@ const PresetRow: React.FC<{
           <Tooltip content="Edit" delay={200} side="bottom">
             <button
               onClick={() => onEdit(preset)}
-              className="w-6 h-6 flex items-center justify-center rounded-md text-textSecondary hover:text-accent hover:bg-accent/10 transition-colors"
+              className={`${GLAZE_PILL} w-6 h-6 flex items-center justify-center hover:text-accent`}
             >
               <Pencil size={12} />
             </button>
@@ -474,7 +473,7 @@ const PresetRow: React.FC<{
           <Tooltip content="Duplicate" delay={200} side="bottom">
             <button
               onClick={() => duplicatePreset(preset.id)}
-              className="w-6 h-6 flex items-center justify-center rounded-md text-textSecondary hover:text-accent hover:bg-accent/10 transition-colors"
+              className={`${GLAZE_PILL} w-6 h-6 flex items-center justify-center hover:text-accent`}
             >
               <Copy size={12} />
             </button>
@@ -482,7 +481,7 @@ const PresetRow: React.FC<{
           <Tooltip content="Delete" delay={200} side="bottom">
             <button
               onClick={() => setConfirmingDelete(true)}
-              className="w-6 h-6 flex items-center justify-center rounded-md text-textSecondary hover:text-red-400 hover:bg-red-500/10 transition-colors"
+              className={`${GLAZE_PILL} w-6 h-6 flex items-center justify-center hover:text-red-400`}
             >
               <Trash2 size={12} />
             </button>
@@ -655,7 +654,7 @@ const PresetEditorView: React.FC<{
         >
           <ChevronLeft size={15} />
         </button>
-        <span className="text-[10px] font-bold uppercase tracking-wider text-textMuted">
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-white/50">
           {editingId ? 'Edit preset' : 'New preset'}
         </span>
       </div>
@@ -666,7 +665,7 @@ const PresetEditorView: React.FC<{
           <Tooltip content="Set preset icon" delay={300} side="bottom">
             <button
               onClick={() => setSubView('icon')}
-              className="w-9 h-9 shrink-0 rounded-lg glass-button flex items-center justify-center overflow-hidden text-textSecondary hover:text-accent"
+              className={`${GLAZE_PILL} w-9 h-9 shrink-0 flex items-center justify-center overflow-hidden hover:text-accent`}
             >
               {icon ? (
                 <img
@@ -737,7 +736,7 @@ const PresetEditorView: React.FC<{
               <>
                 <div className="px-1 pt-1 pb-1 flex items-center gap-1.5">
                   <Radio size={11} className="text-red-500" />
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-textMuted">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-white/50">
                     {query ? 'Following · live' : 'Live now'}
                   </span>
                 </div>
@@ -761,7 +760,7 @@ const PresetEditorView: React.FC<{
               <>
                 <div className="px-1 pt-2 pb-1 flex items-center gap-1.5">
                   <Search size={11} className="text-textMuted" />
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-textMuted">All channels</span>
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-white/50">All channels</span>
                   {isSearching && <Loader2 size={11} className="text-accent animate-spin ml-auto" />}
                 </div>
                 <div className="space-y-0.5">
@@ -799,7 +798,7 @@ const PresetEditorView: React.FC<{
           </div>
         )}
 
-        <div className="text-[10px] font-bold uppercase tracking-wider text-textMuted px-1 pt-0.5 pb-1">
+        <div className="text-[11px] font-semibold uppercase tracking-wider text-white/50 px-1 pt-0.5 pb-1">
           In this preset{channels.length > 0 ? ` · ${channels.length}` : ''}
         </div>
         {channels.length === 0 ? (
@@ -809,7 +808,7 @@ const PresetEditorView: React.FC<{
             {channels.map((ch) => (
               <div
                 key={makeKey(ch.provider ?? 'twitch', ch.channelLogin)}
-                className="group flex items-center gap-2.5 rounded-lg px-1.5 py-1.5 hover:bg-white/[0.05] transition-colors"
+                className="group flex items-center gap-2.5 rounded-lg px-1.5 py-1.5 hover:bg-white/[0.06] transition-colors"
               >
                 <SevenTvAvatar
                   cosmeticsId={slotSevenTvId(ch)}
@@ -829,7 +828,7 @@ const PresetEditorView: React.FC<{
                 <Tooltip content="Remove" delay={200} side="bottom">
                   <button
                     onClick={() => removeChannel(ch)}
-                    className="w-6 h-6 flex items-center justify-center rounded-md text-textMuted hover:text-red-400 hover:bg-red-500/10 transition-colors shrink-0"
+                    className={`${GLAZE_PILL} w-6 h-6 flex items-center justify-center hover:text-red-400 shrink-0`}
                   >
                     <X size={13} />
                   </button>
@@ -844,14 +843,15 @@ const PresetEditorView: React.FC<{
       <div className="flex items-center gap-2 px-2.5 py-2.5 border-t border-white/[0.06] shrink-0">
         <button
           onClick={onDone}
-          className="flex-1 px-3 py-2 rounded-lg glass-button text-textSecondary hover:text-white text-[13px] font-semibold transition-colors"
+          className={`${GLAZE_PILL} flex-1 px-3 py-2 text-[13px]`}
         >
           Cancel
         </button>
         <button
           onClick={handleSave}
           disabled={!canSave}
-          className="flex-1 px-3 py-2 rounded-lg glass-input text-accent hover:text-white text-[13px] font-bold transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
+          className={`${ACCENT_BUTTON} flex-1 px-3 py-2 disabled:cursor-not-allowed flex items-center justify-center gap-1.5`}
+          style={ACCENT_FILL}
         >
           {saving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
           {editingId ? 'Save' : 'Create'}
@@ -930,11 +930,11 @@ const PresetIconPicker: React.FC<{
     };
   }, [gameQuery]);
 
-  // Active tab is a raised, accented pill inside the recessed glass-input track, so
-  // the selected source reads clearly at a glance; inactive tabs stay flat + muted.
+  // The chosen source is the filled capsule, so it reads clearly at a glance;
+  // the other stays a quiet glazed pill.
   const tabClass = (active: boolean) =>
-    `flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-[12px] font-semibold transition-all ${
-      active ? 'glass-button text-accent' : 'text-textMuted hover:text-textPrimary'
+    `flex-1 flex items-center justify-center gap-1.5 py-1.5 ${
+      active ? `${ACCENT_BUTTON} !text-[12px]` : `${GLAZE_PILL} text-[12px]`
     }`;
 
   return (
@@ -949,11 +949,11 @@ const PresetIconPicker: React.FC<{
         >
           <ChevronLeft size={15} />
         </button>
-        <span className="flex-1 text-[10px] font-bold uppercase tracking-wider text-textMuted">Choose icon</span>
+        <span className="flex-1 text-[11px] font-semibold uppercase tracking-wider text-white/50">Choose icon</span>
         {current && (
           <button
             onClick={() => onPick(null)}
-            className="text-[11px] font-semibold text-textMuted hover:text-red-400 transition-colors"
+            className={`${GLAZE_PILL} h-6 px-2.5 text-[11px] hover:text-red-400`}
           >
             Use default
           </button>
@@ -962,11 +962,11 @@ const PresetIconPicker: React.FC<{
 
       {/* Source tabs */}
       <div className="px-2.5 pb-2 shrink-0">
-        <div className="flex items-center gap-1 p-1 rounded-lg glass-input">
-          <button onClick={() => setTab('game')} className={tabClass(tab === 'game')}>
+        <div className="flex items-center gap-1">
+          <button onClick={() => setTab('game')} className={tabClass(tab === 'game')} style={tab === 'game' ? ACCENT_FILL : undefined}>
             <Gamepad2 size={13} /> Game
           </button>
-          <button onClick={() => setTab('channel')} className={tabClass(tab === 'channel')}>
+          <button onClick={() => setTab('channel')} className={tabClass(tab === 'channel')} style={tab === 'channel' ? ACCENT_FILL : undefined}>
             <Users size={13} /> Channel
           </button>
         </div>
@@ -999,7 +999,7 @@ const PresetIconPicker: React.FC<{
                       key={g.id}
                       onClick={() => onPick({ type: 'game', imageUrl: art, label: g.name })}
                       className={`group flex flex-col items-center gap-1 rounded-lg p-1 transition-colors ${
-                        selected ? 'bg-accent/15' : 'hover:bg-white/[0.06]'
+                        selected ? 'bg-white/[0.08]' : 'hover:bg-white/[0.06]'
                       }`}
                     >
                       <div className="w-full aspect-[3/4] rounded-md overflow-hidden bg-black/30 ring-1 ring-white/10">
@@ -1013,7 +1013,7 @@ const PresetIconPicker: React.FC<{
                       </div>
                       <span
                         className={`w-full text-[10px] font-medium text-center truncate ${
-                          selected ? 'text-accent' : 'text-textSecondary group-hover:text-textPrimary'
+                          selected ? 'text-textPrimary' : 'text-textSecondary group-hover:text-textPrimary'
                         }`}
                       >
                         {g.name}
@@ -1045,7 +1045,7 @@ const PresetIconPicker: React.FC<{
                     key={ch.channelLogin}
                     onClick={() => onPick({ type: 'channel', imageUrl: avatar, label: ch.channelName || ch.channelLogin })}
                     className={`group flex flex-col items-center gap-1 rounded-lg p-1.5 transition-colors ${
-                      selected ? 'bg-accent/15' : 'hover:bg-white/[0.06]'
+                      selected ? 'bg-white/[0.08]' : 'hover:bg-white/[0.06]'
                     }`}
                   >
                     <img
@@ -1061,7 +1061,7 @@ const PresetIconPicker: React.FC<{
                     />
                     <span
                       className={`w-full text-[10px] font-medium text-center truncate ${
-                        selected ? 'text-accent' : 'text-textSecondary group-hover:text-textPrimary'
+                        selected ? 'text-textPrimary' : 'text-textSecondary group-hover:text-textPrimary'
                       }`}
                     >
                       {ch.channelName || ch.channelLogin}

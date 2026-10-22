@@ -40,6 +40,8 @@ pub(crate) fn sort_qualities_descending(qualities: &mut [String]) {
             return (0, u32::MAX - h, u32::MAX - fps, String::new());
         }
         match lower.as_str() {
+            // Auto leads the menu, ahead of every fixed rendition.
+            "auto" => (0, 0, 0, String::new()),
             "best" | "source" => (1, 0, 0, String::new()),
             "audio_only" | "audio-only" | "audio" => (2, 0, 0, String::new()),
             "worst" => (3, 0, 0, String::new()),

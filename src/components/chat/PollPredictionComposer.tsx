@@ -7,6 +7,8 @@ import { BannerStatus, OverlayBanner, ShareRow } from './OverlayBanner';
 import { ChannelPointsIcon } from '../ChannelPointsIcon';
 import { Logger } from '../../utils/logger';
 import { useOutsidePress } from '../../hooks/useOutsidePress';
+import { ACCENT_BUTTON, ACCENT_FILL, GLAZE_PILL } from '../ui/glazeButtons';
+import { IS_MOBILE } from '../../utils/platform';
 
 /**
  * Builder for a Twitch poll or prediction, anchored above the chat input.
@@ -186,7 +188,7 @@ export function PollPredictionComposer({
       className={
         inline
           ? 'flex flex-col'
-          : 'sn-popover absolute bottom-full left-0 right-0 mb-2 z-50 flex flex-col max-h-[70vh] overflow-hidden'
+          : 'glass-flyout rounded-xl !p-0 absolute bottom-full left-0 right-0 mb-2 z-50 flex flex-col max-h-[70vh] overflow-hidden'
       }
     >
       {/* Kind switch */}
@@ -198,11 +200,10 @@ export function PollPredictionComposer({
             <button
               key={k}
               onClick={() => switchKind(k)}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-semibold rounded-md transition-colors ${
-                active
-                  ? 'glass-button-active text-textPrimary'
-                  : 'text-textSecondary hover:text-textPrimary'
+              className={`flex-1 flex h-7 items-center justify-center gap-1.5 ${
+                active ? `${ACCENT_BUTTON} !text-xs` : `${GLAZE_PILL} text-xs`
               }`}
+              style={active ? ACCENT_FILL : undefined}
             >
               <Icon size={14} />
               {k === 'poll' ? 'Poll' : 'Prediction'}
@@ -214,7 +215,7 @@ export function PollPredictionComposer({
           <Tooltip content="Close" side="top">
             <button
               onClick={onClose}
-              className="p-1.5 text-textSecondary hover:text-textPrimary transition-colors"
+              className={`${GLAZE_PILL} grid h-7 w-7 flex-shrink-0 place-items-center`}
               aria-label="Close"
             >
               <X size={14} />
@@ -227,7 +228,7 @@ export function PollPredictionComposer({
         {/* Title */}
         <div>
           <div className="flex items-baseline justify-between mb-1">
-            <label className="text-[11px] font-semibold uppercase tracking-[0.14em] text-textSecondary">
+            <label className="text-[11px] font-semibold uppercase tracking-wider text-white/50">
               {kind === 'poll' ? 'Question' : 'Prediction'}
             </label>
             <div className="flex items-center gap-2">
@@ -261,7 +262,7 @@ export function PollPredictionComposer({
                 <button
                   key={`${r.title}-${i}`}
                   onClick={() => applyRecent(r)}
-                  className="w-full text-left px-2.5 py-1.5 hover:bg-surface-hover transition-colors"
+                  className="w-full text-left px-2.5 py-1.5 hover:bg-white/[0.06] transition-colors"
                 >
                   <span className="block text-xs text-textPrimary truncate">{r.title}</span>
                   <span className="block text-[10px] text-textSecondary truncate">
@@ -276,7 +277,7 @@ export function PollPredictionComposer({
         {/* Options */}
         <div>
           <div className="flex items-baseline justify-between mb-1">
-            <label className="text-[11px] font-semibold uppercase tracking-[0.14em] text-textSecondary">
+            <label className="text-[11px] font-semibold uppercase tracking-wider text-white/50">
               {kind === 'poll' ? 'Choices' : 'Outcomes'}
             </label>
             <span className="text-[10px] tabular-nums text-textSecondary">
@@ -325,7 +326,7 @@ export function PollPredictionComposer({
           {options.length < limits.max && (
             <button
               onClick={() => setOptions((p) => [...p, ''])}
-              className="glass-button-secondary mt-1.5 w-full py-1.5 text-xs font-semibold text-textSecondary hover:text-textPrimary flex items-center justify-center gap-1.5"
+              className={`${GLAZE_PILL} mt-1.5 w-full flex items-center justify-center gap-1.5 ${IS_MOBILE ? 'min-h-[44px] text-[15px]' : 'h-7 text-xs'}`}
             >
               <Plus size={12} />
               Add {kind === 'poll' ? 'choice' : 'outcome'}
@@ -335,7 +336,7 @@ export function PollPredictionComposer({
 
         {/* Duration */}
         <div>
-          <label className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-textSecondary mb-1">
+          <label className="block text-[11px] font-semibold uppercase tracking-wider text-white/50 mb-1">
             Runs for {durationLabel}
           </label>
           <div className="flex gap-1">
@@ -344,11 +345,10 @@ export function PollPredictionComposer({
                 <button
                   key={d.value}
                   onClick={() => setDuration(d.value)}
-                  className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-colors ${
-                    duration === d.value
-                      ? 'glass-button-active text-textPrimary'
-                      : 'text-textSecondary hover:text-textPrimary'
+                  className={`flex-1 h-7 ${
+                    duration === d.value ? `${ACCENT_BUTTON} !text-xs` : `${GLAZE_PILL} text-xs`
                   }`}
+                  style={duration === d.value ? ACCENT_FILL : undefined}
                 >
                   {d.label}
                 </button>
@@ -360,7 +360,7 @@ export function PollPredictionComposer({
         {/* Poll-only: extra votes bought with points */}
         {kind === 'poll' && (
           <div>
-            <label className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-textSecondary mb-1">
+            <label className="block text-[11px] font-semibold uppercase tracking-wider text-white/50 mb-1">
               Extra votes with channel points
             </label>
             <div className="flex items-center gap-2">
@@ -381,7 +381,7 @@ export function PollPredictionComposer({
 
         {/* Live preview: the real banner, not a mock */}
         <div>
-          <label className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-textSecondary mb-1">
+          <label className="block text-[11px] font-semibold uppercase tracking-wider text-white/50 mb-1">
             Preview
           </label>
           <div className="pointer-events-none opacity-95">
@@ -416,7 +416,8 @@ export function PollPredictionComposer({
         <button
           onClick={submit}
           disabled={!!problem || busy}
-          className="glass-button w-full py-2 text-sm font-semibold text-textPrimary disabled:opacity-50 disabled:cursor-not-allowed"
+          className={`${ACCENT_BUTTON} w-full disabled:cursor-not-allowed ${IS_MOBILE ? 'min-h-[44px] !text-[15px]' : 'h-9 !text-sm'}`}
+          style={ACCENT_FILL}
         >
           {busy
             ? 'Starting…'

@@ -5,6 +5,7 @@ import { isHiddenEvent } from '../utils/chatEvents';
 import { EmoteSet } from '../services/emoteService';
 import { BackendChatMessage } from '../services/twitchChat';
 import { ModerationContext } from '../hooks/useTwitchChat';
+import { sameModerationContext } from './chat/moderationTagText';
 import { useAppStore } from '../stores/AppStore';
 import { useStreamerMode } from '../utils/streamerMode';
 import { useChatUserStore } from '../stores/chatUserStore';
@@ -116,8 +117,7 @@ const messageRowAreEqual = (prev: MessageRowProps, next: MessageRowProps): boole
     if (prev.message.automodHeld !== next.message.automodHeld) return false;
   }
   if (prev.isHighlighted !== next.isHighlighted) return false;
-  if (prev.moderationContext?.type !== next.moderationContext?.type ||
-      prev.moderationContext?.duration !== next.moderationContext?.duration) return false;
+  if (!sameModerationContext(prev.moderationContext, next.moderationContext)) return false;
   if (prev.emotes !== next.emotes) return false;
   if (prev.isModerator !== next.isModerator) return false;
   if (prev.broadcasterId !== next.broadcasterId) return false;
@@ -270,6 +270,9 @@ interface ChatMessageListProps {
   headerInset?: number;
   /** Ids of this channel's pinned messages, for the scrollbar's pinned marks. */
   pinnedIds?: ReadonlySet<string>;
+  /** Filled with this list's eased scroll to the live bottom. Call it in the
+   *  same handler that un-pauses, before the re-render pins the list. */
+  scrollToBottomRef?: React.RefObject<(() => void) | null>;
 }
 
 /**
@@ -309,6 +312,7 @@ const ChatMessageList = memo(function ChatMessageList({
   headerSpaceReserved,
   headerInset = 40,
   pinnedIds,
+  scrollToBottomRef,
 }: ChatMessageListProps) {
   // While a moderator points where a mod action starts (the hover effect
   // below), or presses a row to slide or drag it, the list keeps drawing the
@@ -857,14 +861,17 @@ const ChatMessageList = memo(function ChatMessageList({
   // Cancel a glide in flight if the list unmounts.
   useEffect(() => () => cancelResumeAnimation(), [cancelResumeAnimation]);
 
-  // Expose scrollToBottom to parent via ref callback pattern
+  // Hand this list's own glide to its parent. One window-wide slot used to
+  // serve every list, so in a window with several (MultiChat tabs and splits,
+  // docked chats) Resume glided whichever list mounted last while the visible
+  // one snapped to the bottom.
   useEffect(() => {
-    // This makes the scroll function available outside
-    (window as Window & typeof globalThis & { __chatScrollToBottom?: () => void }).__chatScrollToBottom = scrollToBottom;
+    if (!scrollToBottomRef) return;
+    scrollToBottomRef.current = scrollToBottom;
     return () => {
-      delete (window as Window & typeof globalThis & { __chatScrollToBottom?: () => void }).__chatScrollToBottom;
+      if (scrollToBottomRef.current === scrollToBottom) scrollToBottomRef.current = null;
     };
-  }, [scrollToBottom]);
+  }, [scrollToBottom, scrollToBottomRef]);
 
   const emoteScale = chatDesign?.emote_scale ?? 1;
   const emoteMargin = chatDesign?.emote_margin ?? 0.125;

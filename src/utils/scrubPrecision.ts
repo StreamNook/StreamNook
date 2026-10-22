@@ -1,5 +1,6 @@
-// Fine control for the broadcast timeline, whose compressed scale makes a
-// pixel worth more time the further left it sits (16x at the far left). Two
+// Fine control for the seek bars. The broadcast timeline's compressed scale
+// makes a pixel worth more time the further left it sits (16x at the far
+// left), and on a long VOD's linear bar a pixel is tens of seconds. Two
 // gestures give back precision without changing the scale:
 //
 // - Slow scrub: while dragging, pulling the pointer away from the bar
@@ -11,6 +12,10 @@
 //   number of seconds, whatever section it is in.
 
 import type { BroadcastScale } from './broadcastScale';
+
+/** A wheel nudge settles (lands, or hands the tooltip back to the pointer)
+ *  this long after the last notch. */
+export const NUDGE_SETTLE_MS = 600;
 
 /** Vertical distance (px from the bar's centre line) past which a drag slows. */
 export const FINE_PX = 28;
@@ -36,11 +41,28 @@ export interface WheelLike {
   ctrlKey: boolean;
 }
 
+/** The bar fraction a drag reaches after the pointer moves `dxPx`, at
+ *  `divisor` pointer pixels per bar pixel, clamped to the bar. A drag is
+ *  integrated from these deltas rather than read off the pointer, so once
+ *  slowed the thumb stops sitting under the pointer. */
+export function dragFrac(fromFrac: number, dxPx: number, widthPx: number, divisor: number): number {
+  if (!(widthPx > 0)) return fromFrac;
+  return Math.min(1, Math.max(0, fromFrac + dxPx / widthPx / divisor));
+}
+
 /** Seconds a wheel event nudges by: +forward / -back, 0 for a null event.
  *  Wheel up (or right) goes forward in time, Shift makes it a minute, Ctrl a
- *  second. One notch is one step whatever the device's delta size. */
+ *  second. One notch is one step whatever the device's delta size.
+ *  Chromium turns Shift + wheel into a horizontal scroll (wheel up arrives as
+ *  left), so with Shift held and no vertical delta the horizontal one is read
+ *  as the wheel it came from; otherwise Shift + wheel up went back a minute. */
 export function wheelStepSecs(e: WheelLike): number {
-  const primary = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : -e.deltaY;
+  const primary =
+    e.shiftKey && e.deltaY === 0
+      ? -e.deltaX
+      : Math.abs(e.deltaX) > Math.abs(e.deltaY)
+        ? e.deltaX
+        : -e.deltaY;
   if (!primary) return 0;
   const size = e.shiftKey ? 60 : e.ctrlKey ? 1 : 10;
   return Math.sign(primary) * size;

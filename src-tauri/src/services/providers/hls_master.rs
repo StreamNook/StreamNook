@@ -108,7 +108,7 @@ pub fn select(qualities: &[PlaybackQuality], requested: &str) -> Option<(usize, 
     }
     let req = requested.trim().to_ascii_lowercase();
 
-    if req.is_empty() || req == "best" || req == "source" {
+    if req.is_empty() || req == "best" || req == "source" || req == "auto" {
         return Some((0, qualities[0].name.clone()));
     }
     if req == "worst" {

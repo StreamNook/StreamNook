@@ -7,6 +7,8 @@ import { Tooltip } from '../ui/Tooltip';
 import { ChannelPointsIcon } from '../ChannelPointsIcon';
 import { useOutsidePress } from '../../hooks/useOutsidePress';
 import { isImeComposing } from '../../utils/imeComposing';
+import { IS_MOBILE } from '../../utils/platform';
+import { ACCENT_BUTTON, ACCENT_FILL, GLAZE_PILL } from '../ui/glazeButtons';
 import {
   checkStreamInfo,
   countdown,
@@ -41,7 +43,9 @@ interface Props {
   onClose: () => void;
 }
 
-const LABEL = 'text-[11px] font-semibold uppercase tracking-[0.14em] text-textSecondary';
+const LABEL = 'text-[11px] font-semibold uppercase tracking-wider text-white/50';
+/** A full-size action's height and text: finger-sized in the phone's sheet. */
+const BIG = IS_MOBILE ? 'min-h-[44px] !text-[15px]' : 'h-9 !text-sm';
 
 export const TITLES: Record<ManagerPanelKind, { title: string; icon: ReactNode }> = {
   info: { title: 'Stream info', icon: <Pencil size={14} /> },
@@ -126,13 +130,13 @@ export function StreamManagerPanel({ kind, view, queue, onQueue, onOutcome, onCl
     <div
       ref={rootRef}
       onPointerDownCapture={markInside}
-      className="sn-popover absolute bottom-full left-0 right-0 mb-2 z-50 flex flex-col max-h-[70vh] overflow-hidden"
+      className="glass-flyout rounded-xl !p-0 absolute bottom-full left-0 right-0 mb-2 z-50 flex flex-col max-h-[70vh] overflow-hidden"
     >
       <div className="flex items-center gap-2 px-3 py-2.5">
         <span className="flex items-center justify-center text-textSecondary">{head.icon}</span>
         <span className="flex-1 text-sm font-semibold text-textPrimary">{head.title}</span>
         <Tooltip content="Close" side="top">
-          <button onClick={onClose} className="p-1 text-textSecondary hover:text-textPrimary transition-colors" aria-label="Close">
+          <button onClick={onClose} className={`${GLAZE_PILL} grid h-6 w-6 place-items-center`} aria-label="Close">
             <X size={14} />
           </button>
         </Tooltip>
@@ -265,7 +269,7 @@ function InfoForm({ view, busy, act }: FormProps) {
                       setDraft((d) => ({ ...d, category: c }));
                       setCatQuery(null);
                     }}
-                    className="w-full flex items-center gap-2.5 px-2.5 py-1.5 text-left hover:bg-surface-hover transition-colors"
+                    className="w-full flex items-center gap-2.5 px-2.5 py-1.5 text-left hover:bg-white/[0.06] transition-colors"
                   >
                     <img src={boxArt(c)} alt="" className="w-[18px] h-[24px] rounded-sm object-cover flex-shrink-0" />
                     <span className="text-sm text-textPrimary truncate">{c.name}</span>
@@ -365,7 +369,8 @@ function InfoForm({ view, busy, act }: FormProps) {
       <button
         onClick={() => void act({ kind: 'save_info', draft }, true)}
         disabled={busy || !check?.ok || !check.changed}
-        className="glass-button w-full py-2 text-sm font-semibold text-textPrimary disabled:opacity-50 disabled:cursor-not-allowed"
+        className={`${ACCENT_BUTTON} w-full ${BIG} disabled:cursor-not-allowed`}
+        style={ACCENT_FILL}
       >
         {busy ? 'Saving…' : check && !check.changed ? 'No changes' : 'Save'}
       </button>
@@ -412,14 +417,15 @@ function RaidForm({ view, busy, act }: FormProps) {
           <button
             onClick={() => void act({ kind: 'cancel_raid' })}
             disabled={busy}
-            className="flex-1 py-2 text-sm font-semibold rounded-md bg-red-500/15 hover:bg-red-500/25 text-red-300 transition-colors disabled:opacity-50"
+            className={`${GLAZE_PILL} flex-1 ${BIG}`}
           >
             Cancel raid
           </button>
           <button
             onClick={() => void act({ kind: 'raid_now' }, true)}
             disabled={busy}
-            className="glass-button flex-1 py-2 text-sm font-semibold text-textPrimary disabled:opacity-50"
+            className={`${ACCENT_BUTTON} flex-1 ${BIG}`}
+            style={ACCENT_FILL}
           >
             Raid now
           </button>
@@ -442,7 +448,7 @@ function RaidForm({ view, busy, act }: FormProps) {
           key={t.id}
           disabled={busy || !t.live}
           onClick={() => void act({ kind: 'raid', target_id: t.id, target_login: t.login, target_name: t.name })}
-          className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-md text-left hover:bg-white/5 transition-colors disabled:opacity-50 disabled:hover:bg-transparent"
+          className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-left hover:bg-white/[0.06] transition-colors disabled:opacity-50 disabled:hover:bg-transparent"
         >
           {t.avatar_url ? (
             <img src={t.avatar_url} alt="" className="w-7 h-7 rounded-full flex-shrink-0" />
@@ -483,9 +489,8 @@ function AdsForm({ view, busy, act }: FormProps) {
             <button
               key={l.value}
               onClick={() => setSeconds(l.value)}
-              className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-colors ${
-                seconds === l.value ? 'glass-button-active text-textPrimary' : 'text-textSecondary hover:text-textPrimary'
-              }`}
+              className={`flex-1 h-7 ${seconds === l.value ? `${ACCENT_BUTTON} !text-xs` : `${GLAZE_PILL} text-xs`}`}
+              style={seconds === l.value ? ACCENT_FILL : undefined}
             >
               {l.label}
             </button>
@@ -497,7 +502,7 @@ function AdsForm({ view, busy, act }: FormProps) {
           <button
             onClick={() => void act({ kind: 'snooze_ad' })}
             disabled={busy}
-            className="glass-button-secondary flex-1 py-2 text-sm font-semibold text-textPrimary disabled:opacity-50"
+            className={`${GLAZE_PILL} flex-1 ${BIG}`}
           >
             Snooze next ad
           </button>
@@ -505,7 +510,8 @@ function AdsForm({ view, busy, act }: FormProps) {
         <button
           onClick={() => void act({ kind: 'run_ad', seconds }, true)}
           disabled={busy}
-          className="glass-button flex-1 py-2 text-sm font-semibold text-textPrimary disabled:opacity-50"
+          className={`${ACCENT_BUTTON} flex-1 ${BIG}`}
+          style={ACCENT_FILL}
         >
           {busy ? 'Starting…' : 'Run ad break'}
         </button>
@@ -554,7 +560,7 @@ function RewardsQueue({
             <button
               onClick={() => void act({ kind: 'reward', reward_id: g.reward_id, paused: !g.paused })}
               disabled={busy}
-              className="sm-btn sm-head px-2 py-0.5 text-[11px] font-semibold rounded bg-white/10 hover:bg-white/20 text-textPrimary transition-colors disabled:opacity-50"
+              className={`${GLAZE_PILL} sm-btn sm-head h-5 px-2.5 text-[11px]`}
             >
               {g.paused ? 'Resume' : 'Pause'}
             </button>
@@ -562,7 +568,7 @@ function RewardsQueue({
               <button
                 onClick={() => void act({ kind: 'reward_queue', reward_id: g.reward_id, fulfill: true })}
                 disabled={busy}
-                className="sm-btn sm-head px-2 py-0.5 text-[11px] font-semibold rounded bg-white/10 hover:bg-white/20 text-textPrimary transition-colors disabled:opacity-50"
+                className={`${GLAZE_PILL} sm-btn sm-head h-5 px-2.5 text-[11px]`}
               >
                 Complete all
               </button>
@@ -584,7 +590,8 @@ function RewardsQueue({
                   <button
                     onClick={() => void act({ kind: 'redemptions', ids: [r.id], fulfill: true })}
                     disabled={busy}
-                    className="sm-btn px-2 py-1 text-[11px] font-semibold rounded bg-success/15 hover:bg-success/25 text-success transition-colors disabled:opacity-50"
+                    className={`${ACCENT_BUTTON} sm-btn h-6 px-2.5 ${IS_MOBILE ? '' : '!text-[11px]'}`}
+                    style={ACCENT_FILL}
                   >
                     Complete
                   </button>
@@ -592,7 +599,7 @@ function RewardsQueue({
                     <button
                       onClick={() => void act({ kind: 'redemptions', ids: [r.id], fulfill: false })}
                       disabled={busy}
-                      className="sm-btn px-2 py-1 text-[11px] font-semibold rounded bg-red-500/15 hover:bg-red-500/25 text-red-300 transition-colors disabled:opacity-50"
+                      className={`${GLAZE_PILL} sm-btn h-6 px-2.5 text-[11px]`}
                     >
                       Reject
                     </button>
@@ -660,7 +667,8 @@ function AnnounceForm({ view, busy, act }: FormProps) {
         <button
           onClick={() => void send()}
           disabled={busy || !text.trim()}
-          className="glass-button ml-auto px-4 py-1.5 text-sm font-semibold text-textPrimary disabled:opacity-50"
+          className={`${ACCENT_BUTTON} ml-auto px-4 ${IS_MOBILE ? 'min-h-[44px] !text-[15px]' : 'h-8 !text-sm'}`}
+          style={ACCENT_FILL}
         >
           Announce
         </button>

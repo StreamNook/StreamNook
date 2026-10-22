@@ -123,11 +123,13 @@ mod tests {
     fn every_aliased_batch_fits_the_cap() {
         let all = ids(100);
 
-        let collab: Vec<String> = all
-            .chunks(crate::services::collaboration::BATCH)
-            .map(|c| TwitchService::collaborations_body(c)["query"].as_str().unwrap().to_string())
-            .collect();
-        check("collaborations", collab, all.len());
+        // Stream Together sends its ids in one list argument, so a full batch
+        // carries no root aliases at all.
+        for c in all.chunks(crate::services::collaboration::BATCH) {
+            let body = TwitchService::collaborations_body(c);
+            assert_eq!(root_aliases(body["query"].as_str().unwrap()), 0, "collaborations: aliases");
+            assert_eq!(body["variables"]["ids"].as_array().unwrap().len(), c.len());
+        }
 
         let faces: Vec<String> = all
             .chunks(crate::services::shared_chat::FACES_BATCH)

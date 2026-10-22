@@ -50,10 +50,10 @@ const MentionUserItem: React.FC<{
   return (
     <button
       ref={itemRef}
-      className={`w-full px-3 py-2 flex items-center gap-2 text-left transition-colors ${
+      className={`w-full rounded-lg px-3 py-2 flex items-center gap-2 text-left transition-colors ${
         isSelected
-          ? 'bg-accent/20'
-          : 'hover:bg-white/5'
+          ? 'bg-white/[0.08]'
+          : 'hover:bg-white/[0.06]'
       }`}
       onClick={onSelect}
       onMouseEnter={onHover}
@@ -118,10 +118,9 @@ const MentionAutocomplete: React.FC<MentionAutocompleteProps> = ({
       animate={{ opacity: 1, y: 0, scale: 1 }}
       exit={{ opacity: 0, y: 6, scale: 0.98 }}
       transition={{ duration: 0.15, ease: "easeOut" }}
-      // The popover itself never scrolls: its rim light is an absolutely
-      // positioned layer that scrolled away with the rows (under a sticky,
-      // separately blurred header) when it did. Only the list body scrolls.
-      className="sn-popover absolute z-[60] w-full flex flex-col overflow-hidden origin-bottom"
+      // The popover itself never scrolls, so its header stays put. Only the
+      // list body scrolls.
+      className="glass-flyout rounded-xl !p-0 absolute z-[60] w-full flex flex-col overflow-hidden origin-bottom"
       style={{
         bottom: '100%',
         left: 0,
@@ -130,13 +129,13 @@ const MentionAutocomplete: React.FC<MentionAutocompleteProps> = ({
       }}
     >
       {/* Header */}
-      <div className="px-3 py-1.5 border-b border-white/5">
-        <span className="text-[10px] font-medium text-white/50 uppercase tracking-wide">
+      <div className="px-3 py-1.5 border-b border-white/[0.06]">
+        <span className="text-[11px] font-semibold text-white/50 uppercase tracking-wider">
           Mention User
         </span>
       </div>
       {/* User list */}
-      <div ref={listRef} className="py-1 max-h-[190px] overflow-y-auto custom-scrollbar">
+      <div ref={listRef} className="p-1 max-h-[190px] overflow-y-auto custom-scrollbar">
         {users.map((user, index) => (
           <MentionUserItem
             key={user.userId}

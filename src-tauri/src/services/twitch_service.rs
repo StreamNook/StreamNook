@@ -2895,6 +2895,11 @@ impl TwitchService {
                 "message_id": node.pointer("/pinnedMessage/id").and_then(|v| v.as_str()).unwrap_or(""),
                 "type": node.get("type").and_then(|v| v.as_str()).unwrap_or("MOD"),
                 "message_text": node.pointer("/pinnedMessage/content/text").and_then(|v| v.as_str()).unwrap_or(""),
+                // The same text split into text and links as a chat row is, so the
+                // page runs no link pattern of its own.
+                "segments": crate::services::text_spans::pin_segments(
+                    node.pointer("/pinnedMessage/content/text").and_then(|v| v.as_str()).unwrap_or(""),
+                ),
                 "sender_id": sender_id,
                 "sender_name": sender_name,
                 "sender_login": sender_login,
@@ -4175,35 +4180,32 @@ impl TwitchService {
         Ok(resp.pointer("/data/game/id").and_then(|v| v.as_str()).filter(|id| !id.is_empty()).map(String::from))
     }
 
-    /// Shared Viewership for a batch of Twitch channel ids, one aliased
-    /// request: each `cN` alias answers with the stream's own and combined
-    /// counts and the channel's collaboration group (null when it is not in
-    /// one). Anonymous on the Android client id. The raw `data` object comes
-    /// back for `services::collaboration` to read per alias.
-    /// Callers send at most `twitch_limits::GQL_MAX_ALIASES` ids.
-    pub async fn get_collaborations(ids: &[String]) -> Result<serde_json::Value> {
+    /// Shared Viewership (Stream Together) for many Twitch channel ids in one
+    /// anonymous request on the Android client id: the list field twitch.tv
+    /// itself reads for the channels on its screen. One row per channel, its
+    /// `session` null when it is not in a group; the host leads, and every
+    /// guest carries its own viewers and the group's combined count. One list
+    /// argument rather than an alias per channel, so Twitch's cap on aliases
+    /// per request never applies. The rows come back for
+    /// `services::collaboration` to read.
+    pub async fn get_collaborations(ids: &[String]) -> Result<Vec<serde_json::Value>> {
         let resp = Self::gql_public_read(Self::collaborations_body(ids)).await?;
-        Ok(resp.get("data").cloned().unwrap_or(serde_json::Value::Null))
+        resp.pointer("/data/guestStarChannelCollaboration")
+            .and_then(|rows| rows.as_array())
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no Stream Together rows in the answer"))
     }
 
-    /// The request `get_collaborations` sends: one `cN` alias per id.
+    /// The request `get_collaborations` sends: every id in one list argument,
+    /// no root aliases.
     pub(crate) fn collaborations_body(ids: &[String]) -> serde_json::Value {
-        let mut vars = serde_json::Map::new();
-        let mut params = Vec::with_capacity(ids.len());
-        let mut fields = String::new();
-        for (i, id) in ids.iter().enumerate() {
-            params.push(format!("$i{i}: ID!"));
-            vars.insert(format!("i{i}"), serde_json::Value::String(id.clone()));
-            fields.push_str(&format!(
-                "c{i}: user(id: $i{i}) {{ id stream {{ viewersCount collaborationViewersCount }} \
-                 channel {{ collaboration {{ collaborators {{ role status user {{ id login displayName \
-                 profileImageURL(width: 70) stream {{ viewersCount }} }} }} }} }} }}\n"
-            ));
-        }
         serde_json::json!({
             "operationName": "StreamNookCollaborations",
-            "query": format!("query StreamNookCollaborations({}) {{\n{fields}}}", params.join(", ")),
-            "variables": vars,
+            "query": "query StreamNookCollaborations($ids: [ID!]!) { \
+                guestStarChannelCollaboration(options: { channelIDs: $ids }) { id \
+                session { host { id } guests { user { id login displayName profileImageURL(width: 70) \
+                stream { viewersCount collaborationViewersCount } } } } } }",
+            "variables": { "ids": ids },
         })
     }
 
@@ -6405,52 +6407,89 @@ impl TwitchService {
     /// Remove a blocked term by its phrase.
     ///
     /// The delete endpoint only takes the term's id, so this looks the phrase up
-    /// first. Matching is case-insensitive because Twitch stores terms lowercased
-    /// but echoes back whatever case they were added in.
+    /// first, across every page of the list. Matching is case-insensitive
+    /// because Twitch stores terms lowercased but echoes back whatever case
+    /// they were added in.
     pub async fn remove_blocked_term(broadcaster_id: &str, text: &str) -> Result<()> {
+        let terms = Self::fetch_blocked_terms(broadcaster_id).await?;
+        let id = blocked_term_id_for(&terms, text)
+            .ok_or_else(|| anyhow::anyhow!("\"{}\" is not in the blocked terms list", text.trim()))?;
+        Self::remove_blocked_term_by_id(broadcaster_id, &id).await
+    }
+
+    /// Remove one blocked term by its id. Twitch answers 204 even for an id it
+    /// no longer has, so removing a term twice is not an error.
+    pub async fn remove_blocked_term_by_id(broadcaster_id: &str, id: &str) -> Result<()> {
         let token = Self::get_token().await?;
         let moderator_id = Self::get_user_info().await?.id;
         let client = crate::services::http::client().clone();
-
-        let list_url = format!(
-            "https://api.twitch.tv/helix/moderation/blocked_terms?broadcaster_id={}&moderator_id={}&first=100",
-            broadcaster_id, moderator_id
-        );
-        let listed = client
-            .get(&list_url)
-            .header("Client-Id", CLIENT_ID)
-            .header(AUTHORIZATION, format!("Bearer {}", token))
-            .send()
-            .await?;
-        let value = Self::helix_json_result(listed, "list blocked terms").await?;
-
-        let wanted = text.trim().to_lowercase();
-        let id = value["data"]
-            .as_array()
-            .and_then(|rows| {
-                rows.iter().find(|r| {
-                    r["text"].as_str().map(|t| t.trim().to_lowercase()) == Some(wanted.clone())
-                })
-            })
-            .and_then(|r| r["id"].as_str().map(String::from))
-            .ok_or_else(|| anyhow::anyhow!("\"{}\" is not in the blocked terms list", text.trim()))?;
-
-        let del_url = format!(
-            "https://api.twitch.tv/helix/moderation/blocked_terms?broadcaster_id={}&moderator_id={}&id={}",
-            broadcaster_id, moderator_id, id
-        );
         let response = client
-            .delete(&del_url)
+            .delete("https://api.twitch.tv/helix/moderation/blocked_terms")
+            .query(&[
+                ("broadcaster_id", broadcaster_id),
+                ("moderator_id", moderator_id.as_str()),
+                ("id", id),
+            ])
             .header("Client-Id", CLIENT_ID)
             .header(AUTHORIZATION, format!("Bearer {}", token))
             .send()
             .await?;
         if !response.status().is_success() {
+            let status = response.status().as_u16();
             let body = response.text().await.unwrap_or_default();
-            error!("[TwitchService] Failed to remove blocked term: {}", body);
-            return Err(anyhow::anyhow!("Could not remove that blocked term"));
+            error!("[TwitchService] Failed to remove blocked term: {} {}", status, body);
+            return Err(anyhow::anyhow!(blocked_terms_refusal(status, &body)));
         }
         Ok(())
+    }
+
+    /// Every blocked term in the channel, newest first, in the words the
+    /// moderation sheets show. Needs `moderator:read:blocked_terms`.
+    pub async fn list_blocked_terms(broadcaster_id: &str) -> Result<Vec<BlockedTermRow>> {
+        let terms = Self::fetch_blocked_terms(broadcaster_id).await?;
+        Ok(blocked_term_rows(terms, Utc::now().timestamp_millis()))
+    }
+
+    /// The channel's blocked terms as Twitch lists them. Helix gives at most
+    /// 100 a page, so this follows the cursor, up to `BLOCKED_TERM_PAGES`.
+    async fn fetch_blocked_terms(broadcaster_id: &str) -> Result<Vec<RawBlockedTerm>> {
+        let token = Self::get_token().await?;
+        let moderator_id = Self::get_user_info().await?.id;
+        let client = crate::services::http::client().clone();
+        let mut terms = Vec::new();
+        let mut after: Option<String> = None;
+        for _ in 0..BLOCKED_TERM_PAGES {
+            let mut query = vec![
+                ("broadcaster_id", broadcaster_id.to_string()),
+                ("moderator_id", moderator_id.clone()),
+                ("first", "100".to_string()),
+            ];
+            if let Some(cursor) = after.take() {
+                query.push(("after", cursor));
+            }
+            let response = client
+                .get("https://api.twitch.tv/helix/moderation/blocked_terms")
+                .query(&query)
+                .header("Client-Id", CLIENT_ID)
+                .header(AUTHORIZATION, format!("Bearer {}", token))
+                .send()
+                .await?;
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            if !status.is_success() {
+                error!("[TwitchService] Failed to list blocked terms: {} {}", status, body);
+                return Err(anyhow::anyhow!(blocked_terms_refusal(status.as_u16(), &body)));
+            }
+            let page = serde_json::from_str::<serde_json::Value>(&body).unwrap_or(serde_json::Value::Null);
+            let (mut rows, cursor) = blocked_terms_page(&page);
+            let last = rows.is_empty() || cursor.is_none();
+            terms.append(&mut rows);
+            if last {
+                break;
+            }
+            after = cursor;
+        }
+        Ok(terms)
     }
 
     /// The channel's currently-running poll, if any.
@@ -6999,6 +7038,131 @@ fn prediction_end_plan(
                 .ok_or_else(|| format!("No outcome matches \"{wanted}\""))?;
             Ok(("RESOLVED", Some(id.to_string())))
         }
+    }
+}
+
+/// How many pages of blocked terms one listing reads before it stops: 5,000
+/// terms, far past any real channel's list.
+const BLOCKED_TERM_PAGES: usize = 50;
+
+/// One blocked term as the moderation sheets list it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BlockedTermRow {
+    pub id: String,
+    pub text: String,
+    /// "Added 3 days ago"; empty when Twitch gave no time.
+    pub added: String,
+    /// "Expires in 3d" for AutoMod's temporary terms; `None` for terms that stay.
+    pub expires: Option<String>,
+    pub created_at_ms: i64,
+    pub expires_at_ms: Option<i64>,
+}
+
+/// A blocked term as Helix lists it, before it is put into words.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RawBlockedTerm {
+    id: String,
+    text: String,
+    created_at_ms: i64,
+    expires_at_ms: Option<i64>,
+}
+
+/// One Helix blocked-terms page: its terms and the cursor to the next page.
+fn blocked_terms_page(page: &serde_json::Value) -> (Vec<RawBlockedTerm>, Option<String>) {
+    let ms = |v: &serde_json::Value| {
+        v.as_str()
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|d| d.timestamp_millis())
+    };
+    let terms: Vec<RawBlockedTerm> = page["data"]
+        .as_array()
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|r| {
+                    let id = r["id"].as_str().filter(|s| !s.is_empty())?;
+                    let text = r["text"].as_str()?;
+                    Some(RawBlockedTerm {
+                        id: id.to_string(),
+                        text: text.to_string(),
+                        created_at_ms: ms(&r["created_at"]).unwrap_or(0),
+                        expires_at_ms: ms(&r["expires_at"]),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let cursor = page["pagination"]["cursor"]
+        .as_str()
+        .filter(|c| !c.is_empty())
+        .map(String::from);
+    (terms, cursor)
+}
+
+/// The listed terms as rows, newest first, each id once.
+fn blocked_term_rows(terms: Vec<RawBlockedTerm>, now_ms: i64) -> Vec<BlockedTermRow> {
+    let mut seen = std::collections::HashSet::new();
+    let mut rows: Vec<BlockedTermRow> = terms
+        .into_iter()
+        .filter(|t| seen.insert(t.id.clone()))
+        .map(|t| BlockedTermRow {
+            added: blocked_term_added_words(t.created_at_ms, now_ms),
+            expires: t.expires_at_ms.map(|at| blocked_term_expiry_words(at, now_ms)),
+            created_at_ms: t.created_at_ms,
+            expires_at_ms: t.expires_at_ms,
+            id: t.id,
+            text: t.text,
+        })
+        .collect();
+    rows.sort_by(|a, b| {
+        b.created_at_ms
+            .cmp(&a.created_at_ms)
+            .then_with(|| a.text.to_lowercase().cmp(&b.text.to_lowercase()))
+    });
+    rows
+}
+
+/// "Added 3 days ago", or nothing when Twitch gave no time.
+fn blocked_term_added_words(created_at_ms: i64, now_ms: i64) -> String {
+    let ago = crate::services::mod_history::ago(created_at_ms, now_ms);
+    if ago.is_empty() {
+        ago
+    } else {
+        format!("Added {ago}")
+    }
+}
+
+/// How long until AutoMod lets a temporary term go: "Expires in 3d", "in 5h",
+/// "in 12m". Days and hours round down; minutes round up, so the last
+/// seconds still read as a minute and the last minute of an hour as "1h".
+fn blocked_term_expiry_words(expires_at_ms: i64, now_ms: i64) -> String {
+    let secs = (expires_at_ms - now_ms) / 1000;
+    match secs {
+        s if s <= 0 => "Expiring now".to_string(),
+        s if s < 3_600 => match (s + 59) / 60 {
+            60 => "Expires in 1h".to_string(),
+            m => format!("Expires in {m}m"),
+        },
+        s if s < 86_400 => format!("Expires in {}h", s / 3_600),
+        s => format!("Expires in {}d", s / 86_400),
+    }
+}
+
+/// The id of the listed term matching `text`, ignoring case and outer spaces.
+fn blocked_term_id_for(terms: &[RawBlockedTerm], text: &str) -> Option<String> {
+    let wanted = text.trim().to_lowercase();
+    terms
+        .iter()
+        .find(|t| t.text.trim().to_lowercase() == wanted)
+        .map(|t| t.id.clone())
+}
+
+/// A refused blocked-terms call as a sentence the sheets can show as is.
+fn blocked_terms_refusal(status: u16, body: &str) -> String {
+    let reason = helix_refusal_text(status, body);
+    let mut chars = reason.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
     }
 }
 
@@ -7941,5 +8105,114 @@ mod refresh_failure_tests {
     #[test]
     fn a_failure_of_unknown_kind_still_signs_out() {
         assert_eq!(refresh_failure_kind(&anyhow::anyhow!("token response was not JSON")), RefreshFailure::Refused);
+    }
+}
+
+#[cfg(test)]
+mod blocked_term_tests {
+    use super::{
+        blocked_term_expiry_words, blocked_term_id_for, blocked_term_rows, blocked_terms_page,
+        blocked_terms_refusal, RawBlockedTerm,
+    };
+
+    const DAY_MS: i64 = 86_400_000;
+
+    fn raw(id: &str, text: &str, created_at_ms: i64, expires_at_ms: Option<i64>) -> RawBlockedTerm {
+        RawBlockedTerm { id: id.into(), text: text.into(), created_at_ms, expires_at_ms }
+    }
+
+    #[test]
+    fn a_page_reads_its_terms_and_cursor() {
+        let page = serde_json::json!({
+            "data": [
+                { "id": "a1", "text": "bad", "moderator_id": "9", "created_at": "2026-10-01T12:00:00Z",
+                  "updated_at": "2026-10-01T12:00:00Z", "expires_at": null },
+                { "id": "a2", "text": "worse*", "created_at": "2026-10-02T12:00:00Z",
+                  "expires_at": "2026-10-05T12:00:00Z" },
+                { "id": "", "text": "no id" },
+                { "id": "a3" }
+            ],
+            "pagination": { "cursor": "eyJiIjpudWxsfQ==" }
+        });
+        let (terms, cursor) = blocked_terms_page(&page);
+        assert_eq!(cursor.as_deref(), Some("eyJiIjpudWxsfQ=="));
+        assert_eq!(terms.len(), 2, "rows without an id or text are skipped");
+        assert_eq!(terms[0].id, "a1");
+        assert_eq!(terms[0].expires_at_ms, None);
+        assert_eq!(terms[0].created_at_ms, 1_790_856_000_000);
+        assert_eq!(terms[1].expires_at_ms, Some(1_790_856_000_000 + 4 * DAY_MS));
+    }
+
+    #[test]
+    fn the_last_page_has_no_cursor() {
+        let (terms, cursor) = blocked_terms_page(&serde_json::json!({ "data": [], "pagination": {} }));
+        assert!(terms.is_empty());
+        assert_eq!(cursor, None);
+        let (_, cursor) = blocked_terms_page(&serde_json::json!({ "data": [], "pagination": { "cursor": "" } }));
+        assert_eq!(cursor, None);
+        let (terms, cursor) = blocked_terms_page(&serde_json::Value::Null);
+        assert!(terms.is_empty() && cursor.is_none());
+    }
+
+    #[test]
+    fn rows_are_newest_first_with_each_id_once() {
+        let now = 10 * DAY_MS;
+        let rows = blocked_term_rows(
+            vec![
+                raw("old", "old", 2 * DAY_MS, None),
+                raw("new", "new", 9 * DAY_MS, Some(now + 3 * DAY_MS)),
+                raw("new", "new", 9 * DAY_MS, Some(now + 3 * DAY_MS)),
+                raw("b", "Beta", 5 * DAY_MS, None),
+                raw("a", "alpha", 5 * DAY_MS, None),
+            ],
+            now,
+        );
+        let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, ["new", "a", "b", "old"]);
+        assert_eq!(rows[0].added, "Added 1 day ago");
+        assert_eq!(rows[0].expires.as_deref(), Some("Expires in 3d"));
+        assert_eq!(rows[3].added, "Added 1 week ago");
+        assert_eq!(rows[3].expires, None);
+    }
+
+    #[test]
+    fn a_term_without_a_time_says_nothing_about_when() {
+        let rows = blocked_term_rows(vec![raw("x", "x", 0, None)], DAY_MS);
+        assert_eq!(rows[0].added, "");
+    }
+
+    #[test]
+    fn expiry_reads_in_whole_units() {
+        let now = 1_000_000_000;
+        let at = |secs: i64| blocked_term_expiry_words(now + secs * 1000, now);
+        assert_eq!(at(-5), "Expiring now");
+        assert_eq!(at(0), "Expiring now");
+        assert_eq!(at(20), "Expires in 1m");
+        assert_eq!(at(12 * 60), "Expires in 12m");
+        assert_eq!(at(59 * 60 + 30), "Expires in 1h");
+        assert_eq!(at(3_600), "Expires in 1h");
+        assert_eq!(at(5 * 3_600 + 1_800), "Expires in 5h");
+        assert_eq!(at(86_400), "Expires in 1d");
+        assert_eq!(at(3 * 86_400 + 7_200), "Expires in 3d");
+    }
+
+    #[test]
+    fn a_phrase_is_found_on_any_page_ignoring_case() {
+        // 150 terms, as two pages would list them: the match sits past the first 100.
+        let terms: Vec<RawBlockedTerm> = (0..150)
+            .map(|i| raw(&format!("id{i}"), &format!("term {i}"), i, None))
+            .collect();
+        assert_eq!(blocked_term_id_for(&terms, "  TERM 142 ").as_deref(), Some("id142"));
+        assert_eq!(blocked_term_id_for(&terms, "term 999"), None);
+    }
+
+    #[test]
+    fn refusals_start_with_a_capital() {
+        let body = serde_json::json!({
+            "message": "The user in moderator_id is not one of the broadcaster's moderators."
+        })
+        .to_string();
+        assert_eq!(blocked_terms_refusal(403, &body), "You are not a moderator in this channel");
+        assert_eq!(blocked_terms_refusal(502, ""), "Twitch answered HTTP 502");
     }
 }

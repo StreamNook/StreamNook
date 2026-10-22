@@ -107,6 +107,12 @@ const FIELDS: &[(&str, Kind)] = &[
     ("textShadowColor", Kind::Color { allow_empty: false }),
     ("textShadowSize", Kind::Num { min: 0.0, max: 12.0, step: 0.0 }),
     ("textShadowOpacity", Kind::Num { min: 0.0, max: 1.0, step: 0.0 }),
+    ("shadowOnText", Kind::Bool),
+    ("shadowOnNames", Kind::Bool),
+    ("shadowOnBadges", Kind::Bool),
+    ("shadowDarkText", Kind::Bool),
+    ("shadowDarkNames", Kind::Bool),
+    ("shadowDarkBadges", Kind::Bool),
     ("textAlign", Kind::Choice(ALIGNS)),
     ("fontWeight", Kind::Num { min: 300.0, max: 700.0, step: 100.0 }),
     ("textItalic", Kind::Bool),
@@ -166,6 +172,9 @@ const FIELDS: &[(&str, Kind)] = &[
     ("giantEmoteAlign", Kind::Choice(&["left", "center", "right", "inline"])),
     ("showGifs", Kind::Bool),
     ("gifScale", Kind::Num { min: 0.5, max: 2.0, step: 0.0 }),
+    ("showUploadedImages", Kind::Bool),
+    ("uploadedImageScale", Kind::Num { min: 0.5, max: 3.0, step: 0.0 }),
+    ("uploadedImagesFrom", Kind::Choice(&["trusted", "everyone"])),
 ];
 
 fn has_control(s: &str) -> bool {

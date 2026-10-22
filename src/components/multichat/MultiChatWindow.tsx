@@ -65,8 +65,9 @@ import ErrorBoundary from '../ErrorBoundary';
 import ChatOnlySettingsModal from './ChatOnlySettingsModal';
 import MultiChatToasts from './MultiChatToasts';
 import ViewerCounter from './ViewerCounter';
-import { useMultiChatLive } from './useMultiChatLive';
-import { liveWord, type SourceLive } from './multiChatLive';
+import { useTabLive } from '../../hooks/useTabLive';
+import { liveWord, type SourceLive } from '../../utils/tabLive';
+import { TabLiveLabel } from '../chat/TabLiveLabel';
 import { isImeComposing } from '../../utils/imeComposing';
 import { useOutsidePress } from '../../hooks/useOutsidePress';
 import CommandPalette from '../CommandPalette';
@@ -78,7 +79,6 @@ import { usePlatformAccountSync } from '../../hooks/usePlatformAccountSync';
 import { useKeybindings } from '../../keybindings';
 import { startSnippetSync } from '../../stores/snippetStore';
 import PluginUiHost from '../../plugins-ui/PluginUiHost';
-import { TooltipManager } from '../ui/TooltipManager';
 import {
   acquireChannel,
   releaseChannel,
@@ -103,6 +103,7 @@ import { listenForSettingsUpdates } from '../../utils/settingsBroadcast';
 import { MULTICHAT_BASE_WIDTH, openMultiChatWindow } from '../../utils/multichatWindow';
 import { Tooltip } from '../ui/Tooltip';
 import { TabScroller } from '../ui/TabScroller';
+import { ACCENT_BUTTON, ACCENT_FILL } from '../ui/glazeButtons';
 import { Logger } from '../../utils/logger';
 import type { MentionEntry, TwitchStream } from '../../types';
 import streamNookLogoUrl from '../../assets/streamnook-logo-128.webp';
@@ -547,7 +548,7 @@ export default function MultiChatWindow() {
   const [channels, setChannels] = useState<ChannelEntry[]>(initial.channels);
   // Live state per open source, read from Rust: the title bar's viewer total
   // and the tab strip's live dots share this one reader.
-  const sourceLive = useMultiChatLive(channels);
+  const sourceLive = useTabLive('multichat', channels);
   const [layoutMode, setLayoutMode] = useState<LayoutMode>(initial.layoutMode);
   const [isBlendedMode, setIsBlendedMode] = useState(initial.isBlendedMode);
   const [isMentionsMode, setIsMentionsMode] = useState(initial.isMentionsMode);
@@ -1874,7 +1875,7 @@ export default function MultiChatWindow() {
     const login = currentUser?.login?.toLowerCase();
     if (login) {
       setChannels([
-        { channel: login, channelId: null, channelName: currentUser?.display_name || login, provider: 'twitch' },
+        { channel: login, channelId: currentUser?.user_id || null, channelName: currentUser?.display_name || login, provider: 'twitch' },
       ]);
       setActiveKey(makeKey('twitch', login));
     }
@@ -2449,13 +2450,7 @@ export default function MultiChatWindow() {
         )}
       </div>
 
-      {/* Tooltips render via portal to document.body, but they need a
-          TooltipManager instance mounted in *this* window's React tree to
-          observe the (window-local) TooltipStore. Without this mount,
-          hovering a chat badge or any other tooltip-bearing element in the
-          popout produces no UI. */}
-      <TooltipManager />
-      {/* Same reason as TooltipManager: the popout is its own React tree, so
+      {/* The popout is its own React tree, so
           without a mount here right-clicking the composer falls through to the
           OS menu instead of StreamNook's (cut/copy/paste + spelling). */}
       <InputContextMenuHost />
@@ -2547,14 +2542,11 @@ function GoLiveControl({
       ref={wrapRef}
       onPointerDownCapture={markInside}
       data-tauri-drag-region="false"
-      // Same glass treatment as the channel tabs + add button it sits beside, so
-      // the live control reads as part of the strip instead of a flat one-off.
-      // Live tints the whole pill red. No live backdrop-blur (compositing fix).
-      className={`glass-button flex flex-shrink-0 items-center overflow-hidden ${live ? '!bg-red-500/15' : ''}`}
+      // Same glaze as the channel tabs + add button it sits beside, so the live
+      // control reads as part of the strip instead of a flat one-off. Live tints
+      // the whole pill red. `--flat`: no live backdrop-blur (compositing fix).
+      className={`chrome-glaze chrome-glaze--flat flex flex-shrink-0 items-center overflow-hidden ${live ? '!bg-red-500/15' : ''}`}
       style={{
-        borderRadius: '8px',
-        backdropFilter: 'none',
-        WebkitBackdropFilter: 'none',
         transition: 'color 0.2s ease, box-shadow 0.2s ease',
       }}
     >
@@ -2602,9 +2594,8 @@ function GoLiveControl({
       </Tooltip>
       {open && pos && createPortal(
           <div
-            className="glass-panel fixed z-[1001] w-56 rounded-lg border border-borderLight p-1 shadow-xl"
-            // Opaque themed surface: a live backdrop-blur flickers over the chat.
-            style={{ top: pos.top, left: pos.left, backgroundColor: 'var(--color-background-tertiary)' }}
+            className="glass-flyout fixed z-[1001] w-56 rounded-xl"
+            style={{ top: pos.top, left: pos.left }}
           >
             {view === 'edit' ? (
               <div>
@@ -2619,7 +2610,7 @@ function GoLiveControl({
                       <path d="M15 18l-6-6 6-6" />
                     </svg>
                   </button>
-                  <span className="text-[10px] font-semibold uppercase tracking-wide text-textMuted">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-white/50">
                     Edit sources
                   </span>
                 </div>
@@ -2627,7 +2618,7 @@ function GoLiveControl({
                   <div className="px-2 py-2 text-[11px] text-textMuted">No sources saved yet.</div>
                 ) : (
                   savedSources.map((s) => (
-                    <div key={entryKey(s)} className="flex items-center gap-2 rounded px-2 py-1.5 text-xs">
+                    <div key={entryKey(s)} className="flex items-center gap-2 rounded-lg px-2 py-2 text-xs">
                       <ProviderLogo provider={s.provider ?? 'twitch'} size={14} />
                       <span className="min-w-0 flex-1 truncate text-textSecondary">{s.channelName || s.channel}</span>
                       <button
@@ -2645,7 +2636,7 @@ function GoLiveControl({
                 )}
                 {addable.length > 0 ? (
                   <>
-                    <div className="mt-1 px-2 pb-0.5 pt-1.5 text-[10px] font-semibold uppercase tracking-wide text-textMuted">
+                    <div className="mt-1 px-2 pb-0.5 pt-1.5 text-[11px] font-semibold uppercase tracking-wider text-white/50">
                       Add from open chats
                     </div>
                     {addable.map((c) => (
@@ -2653,7 +2644,7 @@ function GoLiveControl({
                         key={entryKey(c)}
                         type="button"
                         onClick={() => addSource(c)}
-                        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-textSecondary transition-colors hover:bg-white/5"
+                        className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-xs text-textSecondary transition-colors hover:bg-white/[0.06]"
                       >
                         <ProviderLogo provider={c.provider ?? 'twitch'} size={14} />
                         <span className="min-w-0 flex-1 truncate">{c.channelName || c.channel}</span>
@@ -2671,7 +2662,7 @@ function GoLiveControl({
               </div>
             ) : (
               <>
-                <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-textMuted">
+                <div className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-white/50">
                   Go Live setup
                 </div>
                 <button
@@ -2681,7 +2672,7 @@ function GoLiveControl({
                     onLoad();
                     setOpen(false);
                   }}
-                  className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-textSecondary transition-colors hover:bg-white/5 disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent"
+                  className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-xs text-textSecondary transition-colors hover:bg-white/[0.06] disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent"
                 >
                   <svg width={13} height={13} viewBox="0 0 24 24" fill="currentColor">
                     <path d="M8 5v14l11-7z" />
@@ -2695,7 +2686,7 @@ function GoLiveControl({
                     onSave();
                     setOpen(false);
                   }}
-                  className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-textSecondary transition-colors hover:bg-white/5 disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent"
+                  className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-xs text-textSecondary transition-colors hover:bg-white/[0.06] disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent"
                 >
                   <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
                     <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
@@ -2708,7 +2699,7 @@ function GoLiveControl({
                   type="button"
                   disabled={!hasProfile && openChannels.length === 0}
                   onClick={openEdit}
-                  className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-textSecondary transition-colors hover:bg-white/5 disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent"
+                  className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-xs text-textSecondary transition-colors hover:bg-white/[0.06] disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent"
                 >
                   <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
                     <path d="M12 20h9" />
@@ -3075,7 +3066,7 @@ function LayoutIcon({ mode }: { mode: LayoutMode }) {
 
 interface TabStripProps {
   channels: ChannelEntry[];
-  /** Each tab's live state by its key, from useMultiChatLive. */
+  /** Each tab's live state by its key, from useTabLive. */
   liveByKey: Map<string, SourceLive>;
   active: string | null;
   visibleSet: Set<string>;
@@ -3110,10 +3101,10 @@ interface TabContextMenuState {
   y: number;
 }
 
-// Tab strip mirrors `MultiNookChatSwitcher`'s glass-button / glass-input
-// pattern so the popout's channel switcher looks and feels identical to the
-// in-app MultiNook switcher. Active tab: `glass-input` + accent text;
-// inactive: `glass-button` + secondary text → primary on hover.
+// Tab strip mirrors `MultiNookChatSwitcher`'s chips so the popout's channel
+// switcher looks and feels identical to the in-app MultiNook switcher. Active
+// tab: the filled accent capsule; inactive: the flat chrome glaze (the title
+// bar's material) with secondary text → primary on hover.
 
 function TabStrip({
   channels,
@@ -3244,11 +3235,8 @@ function TabStrip({
             type="button"
             onClick={onNewWindow}
             aria-label="New MultiChat window"
-            className="glass-button flex h-8 w-8 portrait:h-9 portrait:w-9 items-center justify-center text-textSecondary hover:text-accent"
+            className="chrome-glaze chrome-glaze--flat chrome-glaze--control flex h-8 w-8 portrait:h-9 portrait:w-9 items-center justify-center text-textSecondary hover:text-accent"
             style={{
-              borderRadius: '8px',
-              backdropFilter: 'none',
-              WebkitBackdropFilter: 'none',
               transition: 'color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease',
             }}
           >
@@ -3262,13 +3250,10 @@ function TabStrip({
           type="button"
           onClick={onAddClick}
           aria-label="Add channel"
-          className="glass-button flex h-8 w-8 portrait:h-9 portrait:w-9 items-center justify-center text-textSecondary hover:text-accent"
-          // Same glass blur-compositing fix as the tabs: no live backdrop-filter,
-          // and transition only cheap properties (never `all`, which animates blur).
+          className="chrome-glaze chrome-glaze--flat chrome-glaze--control flex h-8 w-8 portrait:h-9 portrait:w-9 items-center justify-center text-textSecondary hover:text-accent"
+          // Same blur-compositing fix as the tabs: `--flat` has no live
+          // backdrop-filter, and transition only cheap properties (never `all`).
           style={{
-            borderRadius: '8px',
-            backdropFilter: 'none',
-            WebkitBackdropFilter: 'none',
             transition: 'color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease',
           }}
         >
@@ -3386,19 +3371,17 @@ function TabButton({
         onContextMenu={onContextMenu}
         className={`relative flex items-center justify-center px-7 py-2 portrait:py-2.5 text-xs portrait:text-sm font-bold tracking-wide ${
           isActive
-            ? 'glass-input text-accent font-extrabold'
-            : 'glass-button text-textSecondary hover:text-textPrimary'
+            ? `${ACCENT_BUTTON} !text-xs portrait:!text-sm font-extrabold`
+            : 'chrome-glaze chrome-glaze--flat chrome-glaze--control text-textSecondary hover:text-textPrimary'
         }`}
-        // The glass classes apply a live `backdrop-filter: blur()`. Above the
-        // scrolling chat, Chromium/WebView2 re-composites that blur as content
-        // repaints behind the tab and produces intermittent seam/flicker artifacts
-        // ("lines through the tabs"). Drop the live blur on the pills (keep the
-        // glass color + bevel) to kill it, and only transition cheap properties.
+        // A live `backdrop-filter: blur()` above the scrolling chat makes
+        // Chromium/WebView2 re-composite as content repaints behind the tab and
+        // produces intermittent seam/flicker artifacts ("lines through the
+        // tabs"). `--flat` glaze has no live blur, and only cheap properties
+        // transition.
         style={{
-          borderRadius: '8px',
+          ...(isActive ? ACCENT_FILL : null),
           userSelect: 'none',
-          backdropFilter: 'none',
-          WebkitBackdropFilter: 'none',
           transition: 'color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease',
         }}
       >
@@ -3409,12 +3392,7 @@ function TabButton({
         />
         {/* The dot hangs off the label's top-right corner inside the tab's
             padding, so a channel going live or offline never moves its name. */}
-        <span className="relative min-w-0">
-          <span className="block truncate text-center">{label}</span>
-          {isLive && (
-            <span className="blend-live-dot pointer-events-none absolute -right-1.5 -top-0.5" aria-hidden />
-          )}
-        </span>
+        <TabLiveLabel label={label} isLive={isLive} className="text-center" />
         {/* The unread count sits in the right padding, in the remove
             button's slot (it gives way to it on hover), so it never covers
             the name. Centered a little right of the slot so a "9+" clears
@@ -3504,17 +3482,17 @@ function TabContextMenu({
       }}
     >
       <div
-        className="absolute w-48 glass-panel rounded-xl flex flex-col p-1 shadow-2xl animate-in fade-in zoom-in-95 duration-150"
+        className="absolute w-48 glass-flyout rounded-xl flex flex-col animate-in fade-in zoom-in-95 duration-150"
         style={{ top: y, left: x }}
         onPointerDown={(e) => e.stopPropagation()}
       >
-        <div className="px-3 py-2 border-b border-borderSubtle mb-1 text-[10px] uppercase tracking-wider text-textMuted">
+        <div className="px-2 py-2 border-b border-white/[0.06] mb-1 text-[11px] font-semibold uppercase tracking-wider text-white/50">
           {channelName}
         </div>
         <button
           type="button"
           onClick={onWatchInMain}
-          className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-textSecondary hover:text-accent hover:bg-glass-hover transition-all"
+          className="flex items-center gap-2 px-2 py-2 rounded-lg text-sm font-medium text-textSecondary hover:text-accent hover:bg-white/[0.06] transition-colors"
         >
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
             <polygon points="6 4 12 8 6 12 6 4" fill="currentColor" />
@@ -3525,7 +3503,7 @@ function TabContextMenu({
           <button
             type="button"
             onClick={onMoveToNewWindow}
-            className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-textSecondary hover:text-accent hover:bg-glass-hover transition-all"
+            className="flex items-center gap-2 px-2 py-2 rounded-lg text-sm font-medium text-textSecondary hover:text-accent hover:bg-white/[0.06] transition-colors"
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
               <rect x="3" y="5" width="13" height="13" rx="2" />
@@ -3537,7 +3515,7 @@ function TabContextMenu({
         <button
           type="button"
           onClick={onRemove}
-          className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-textSecondary hover:text-error hover:bg-glass-hover transition-all"
+          className="flex items-center gap-2 px-2 py-2 rounded-lg text-sm font-medium text-textSecondary hover:text-error hover:bg-white/[0.06] transition-colors"
         >
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
             <line x1="4" y1="4" x2="12" y2="12" />
@@ -3787,8 +3765,7 @@ function AddChannelPanel({
           type="button"
           onClick={onCancel}
           disabled={busy}
-          className="glass-button px-2.5 py-1.5 text-xs text-textSecondary transition-colors hover:text-textPrimary"
-          style={{ borderRadius: '8px' }}
+          className="chrome-glaze chrome-glaze--flat chrome-glaze--control px-2.5 py-1.5 text-xs text-textSecondary transition-colors hover:text-textPrimary"
         >
           Cancel
         </button>

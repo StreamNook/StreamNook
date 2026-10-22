@@ -306,13 +306,12 @@ export function GamePicker({
         )}
         {open &&
           createPortal(
-            // The app's menu surface: its tint and frost ride the Glassiness
-            // slider, solid with no blur at 0%.
-            <div ref={menuRef} style={menuStyle} className="sn-popover flex flex-col overflow-hidden p-1.5">
+            // The menu glass: near-opaque at every Glassiness, solid at 0%.
+            <div ref={menuRef} style={menuStyle} className="glass-flyout rounded-xl flex flex-col overflow-hidden">
               {shown.length > 0 ? (
                 <>
                   {!query.trim() && (
-                    <div className="flex items-center justify-between px-2 pb-1 pt-1 text-[10.5px] font-semibold uppercase tracking-wider text-textMuted">
+                    <div className="flex items-center justify-between px-2 pb-1 pt-1 text-[11px] font-semibold uppercase tracking-wider text-white/50">
                       <span>Running drops now</span>
                       <span className="tabular-nums">{shown.length}</span>
                     </div>
@@ -329,7 +328,7 @@ export function GamePicker({
                           onMouseEnter={() => setActive(i)}
                           onMouseDown={(e) => e.preventDefault()}
                           onClick={() => pick(g)}
-                          className={`flex w-full items-center gap-3 rounded-md px-2 py-1.5 text-left transition-colors ${
+                          className={`flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left transition-colors ${
                             i === active ? 'bg-white/[0.08]' : ''
                           }`}
                         >

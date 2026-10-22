@@ -473,6 +473,8 @@ pub async fn kick_chat_history(
             } else {
                 m.metadata.from_backfill = true;
                 crate::services::chat_row_view::stamp(&mut m);
+                // Patched in later if the channel's whole 7TV table is not in yet.
+                crate::services::providers::kick_emotes::hold_row(&m);
                 Some(m)
             }
         })
@@ -1050,6 +1052,13 @@ pub async fn load_channel_history(
     // providers answer. It shows now and is re-stamped when the table lands
     // (`spawn_history_restamp`), rather than waiting for a slow provider.
     let restamp_lines = (!seeded).then(|| raw.clone());
+    // Remembered with the live lines, so a table that lands or changes later
+    // (a partial first answer, an emote added since) repairs these rows too.
+    if !windowed {
+        for line in &raw {
+            crate::services::emote_restamp::remember(&key, line);
+        }
+    }
     let parsed = IrcService::parse_historical_messages(raw.clone()).await;
     // A native shell draws each row from its stamped view and only has these
     // rows once this answer returns, so the backlog waits briefly for its

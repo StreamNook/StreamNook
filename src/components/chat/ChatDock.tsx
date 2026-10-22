@@ -39,6 +39,8 @@ import {
   type HeldEntry,
 } from '../../stores/chatConnectionStore';
 import { useChannelState } from '../../stores/channelStateStore';
+import { useTabLiveStore } from '../../stores/tabLiveStore';
+import { useShallow } from 'zustand/react/shallow';
 import { nameFloor, useCapsuleName, useDockView } from '../../hooks/useChatDock';
 import { useOutsidePress } from '../../hooks/useOutsidePress';
 import { formatViewerCount } from '../../utils/streamStats';
@@ -221,7 +223,9 @@ interface RowProps {
 function useDockedLine(chat: DockedChat) {
   const isTwitch = chat.provider === 'twitch';
   const state = useChannelState(isTwitch ? chat.login : null);
-  const other = useChatDockStore((s) => (isTwitch ? undefined : s.live[chatKey(chat)]));
+  // Shallow: every update sends a fresh map, and an unchanged row must not
+  // re-render its tab.
+  const other = useTabLiveStore(useShallow((s) => (isTwitch ? undefined : s.live[chatKey(chat)])));
   return isTwitch
     ? state?.viewers_at != null
       ? { live: !!state.started_at, category: state.game_name, title: state.title, viewers: state.viewer_count }
@@ -828,54 +832,55 @@ function DockTab({
   const key = chatKey(chat);
   const live = !!useDockedLine(chat)?.live;
   return (
-    <div
-      role="tab"
-      aria-selected={active}
-      aria-label={`${name} on ${platformName(chat.provider)}`}
-      title={`${name} on ${platformName(chat.provider)}`}
-      data-tab-key={key}
-      draggable
-      onDragStart={(e) => {
-        e.dataTransfer.effectAllowed = 'move';
-        onDragStart();
-      }}
-      onDragOver={(e) => {
-        e.preventDefault();
-        setOver(true);
-      }}
-      onDragLeave={() => setOver(false)}
-      onDrop={(e) => {
-        e.preventDefault();
-        setOver(false);
-        onDropOn();
-      }}
-      onClick={() => void showDockedChat(key)}
-      onAuxClick={(e) => {
-        // Middle click closes, as on any tab.
-        if (e.button === 1) void undockChat(key);
-      }}
-      className={`${TAB} ${tabTone(active, fresh || mentions > 0)}`}
-    >
-      {over && <span aria-hidden className="absolute -left-0.5 top-1 bottom-1 w-0.5 rounded-full bg-accent" />}
-      <TabFace src={chat.avatar_url} name={name} live={live} provider={showPlatform ? chat.provider : undefined} sevenTvId={dockSevenTvId(chat)} />
-      {/* The mark, or a close button in its place while hovered, in one
-          fixed-width slot: a tab that grew on hover reflowed every tab after
-          it out from under the cursor. */}
-      <span className="flex w-4 flex-shrink-0 items-center justify-center">
-        <Mark mentions={mentions} fresh={fresh} className="group-hover:hidden" />
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            void undockChat(key);
-          }}
-          className="hidden h-4 w-4 place-items-center rounded-full text-textSecondary hover:bg-white/10 hover:text-error group-hover:grid"
-          aria-label={`Close ${name}`}
-        >
-          <X size={10} weight="bold" />
-        </button>
-      </span>
-    </div>
+    <Tooltip content={`${name} on ${platformName(chat.provider)}`}>
+      <div
+        role="tab"
+        aria-selected={active}
+        aria-label={`${name} on ${platformName(chat.provider)}`}
+        data-tab-key={key}
+        draggable
+        onDragStart={(e) => {
+          e.dataTransfer.effectAllowed = 'move';
+          onDragStart();
+        }}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setOver(true);
+        }}
+        onDragLeave={() => setOver(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setOver(false);
+          onDropOn();
+        }}
+        onClick={() => void showDockedChat(key)}
+        onAuxClick={(e) => {
+          // Middle click closes, as on any tab.
+          if (e.button === 1) void undockChat(key);
+        }}
+        className={`${TAB} ${tabTone(active, fresh || mentions > 0)}`}
+      >
+        {over && <span aria-hidden className="absolute -left-0.5 top-1 bottom-1 w-0.5 rounded-full bg-accent" />}
+        <TabFace src={chat.avatar_url} name={name} live={live} provider={showPlatform ? chat.provider : undefined} sevenTvId={dockSevenTvId(chat)} />
+        {/* The mark, or a close button in its place while hovered, in one
+            fixed-width slot: a tab that grew on hover reflowed every tab after
+            it out from under the cursor. */}
+        <span className="flex w-4 flex-shrink-0 items-center justify-center">
+          <Mark mentions={mentions} fresh={fresh} className="group-hover:hidden" />
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              void undockChat(key);
+            }}
+            className="hidden h-4 w-4 place-items-center rounded-full text-textSecondary hover:bg-white/10 hover:text-error group-hover:grid"
+            aria-label={`Close ${name}`}
+          >
+            <X size={10} weight="bold" />
+          </button>
+        </span>
+      </div>
+    </Tooltip>
   );
 }
 
@@ -888,18 +893,19 @@ function WatchingTab({ active, showPlatform }: { active: boolean; showPlatform: 
   if (!stream) return null;
   const name = stream.user_name || stream.user_login;
   return (
-    <div
-      role="tab"
-      aria-selected={active}
-      data-tab-key="watching"
-      aria-label={`${name} on ${platformName(provider)}, the stream you are watching`}
-      title={`${name} on ${platformName(provider)}, the stream you are watching`}
-      onClick={() => void showDockedChat(null)}
-      className={`${TAB} ${tabTone(active, activity >= 1 || mentions > 0)}`}
-    >
-      <TabFace src={stream.profile_image_url} name={name} live provider={showPlatform ? provider : undefined} sevenTvId={sevenTvIdForStream(stream)} />
-      <Mark mentions={mentions} fresh={activity >= 1} />
-    </div>
+    <Tooltip content={`${name} on ${platformName(provider)}, the stream you are watching`}>
+      <div
+        role="tab"
+        aria-selected={active}
+        data-tab-key="watching"
+        aria-label={`${name} on ${platformName(provider)}, the stream you are watching`}
+        onClick={() => void showDockedChat(null)}
+        className={`${TAB} ${tabTone(active, activity >= 1 || mentions > 0)}`}
+      >
+        <TabFace src={stream.profile_image_url} name={name} live provider={showPlatform ? provider : undefined} sevenTvId={sevenTvIdForStream(stream)} />
+        <Mark mentions={mentions} fresh={activity >= 1} />
+      </div>
+    </Tooltip>
   );
 }
 

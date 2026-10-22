@@ -3,11 +3,12 @@ import { useSortable } from '@dnd-kit/sortable';
 import { AnimatePresence, motion } from 'framer-motion';
 import { invoke } from '@tauri-apps/api/core';
 import { MultiNookSlot, type AudioBoostSettings } from '../../types';
-import { useMultiNookPlayer } from './useMultiNookPlayer';
+import { CODEC_UNPLAYABLE, useMultiNookPlayer } from './useMultiNookPlayer';
 import { usemultiNookStore } from '../../stores/multiNookStore';
 import { useContextMenuStore } from '../../stores/contextMenuStore';
 import { useAppStore } from '../../stores/AppStore';
 import { buildProviderUrl } from '../../utils/streamProvider';
+import { qualityLabel } from '../../utils/quality';
 import { useMediaGlow } from '../../utils/mediaGlow';
 import { useChannelSocial } from '../../hooks/useChannelSocial';
 import {
@@ -27,7 +28,7 @@ import { TwitchVerifiedMark } from '../ui/TwitchGlyph';
 import { ProviderLogo } from '../ProviderLogo';
 import { OfflineCard } from '../OfflineRoomScreen';
 import { useOfflineRoom } from '../../hooks/useOfflineRoom';
-import { ArrowLeftRight, GripHorizontal, Undo2, Loader2, Maximize2, Minimize2, Plus, Check, Radio } from 'lucide-react';
+import { ArrowLeftRight, GripHorizontal, Undo2, Loader2, Maximize2, Minimize2, Plus, Check, Radio, CircleAlert } from 'lucide-react';
 import type { SizeTier } from './nookLayout';
 import { Heart, HeartBreak, X as XIcon } from 'phosphor-react';
 import { Logger } from '../../utils/logger';
@@ -40,6 +41,7 @@ import {
   resolveAudioBoost,
 } from '../../utils/audioBoost';
 import { injectPlyrControl } from '../../utils/plyrControls';
+import { mountFullscreenChatButton } from '../../utils/fullscreenChatButton';
 import { AudioBoostControls } from '../AudioBoostFaders';
 import { canGridProvider, PROVIDER_WATCH, type ProviderId } from '../../types/providers';
 import { SevenTvAvatar } from '../SevenTvAvatar';
@@ -288,7 +290,8 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
     if (!settingsHome) return;
 
     const displayedQuality = slot.quality || 'best';
-    const cap = (q: string) => q.charAt(0).toUpperCase() + q.slice(1);
+    // "Auto" names the rendition Rust's link governor has this tile on.
+    const autoNow = usemultiNookStore.getState().tileAutoQuality[id];
     // A small tile under the small-tile cap plays below the quality it keeps
     // for when it is large again; say so rather than show a quality it is not
     // playing.
@@ -299,7 +302,7 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
     qualityMenuItem.setAttribute('data-plyr', 'quality');
     qualityMenuItem.setAttribute('type', 'button');
     qualityMenuItem.setAttribute('role', 'menuitem');
-    qualityMenuItem.innerHTML = `<span>Quality<span class="plyr__menu__value">${cap(displayedQuality)}${capNote}</span></span>`;
+    qualityMenuItem.innerHTML = `<span>Quality<span class="plyr__menu__value">${qualityLabel(displayedQuality, autoNow)}${capNote}</span></span>`;
     qualityMenuItem.addEventListener('click', () => {
       const submenu = settingsMenu.querySelector('[data-quality-menu]');
       if (submenu) {
@@ -333,7 +336,7 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
           role="menuitemradio"
           aria-checked="${quality.toLowerCase() === displayedQuality.toLowerCase() ? 'true' : 'false'}"
         >
-          <span>${cap(quality)}</span>
+          <span>${qualityLabel(quality)}</span>
         </button>`
         )
         .join('')}
@@ -359,7 +362,7 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
         btn.setAttribute('aria-checked', 'true');
 
         const valueSpan = settingsHome.querySelector('[data-plyr="quality"] .plyr__menu__value');
-        if (valueSpan) valueSpan.textContent = cap(selected);
+        if (valueSpan) valueSpan.textContent = qualityLabel(selected);
 
         qualitySubmenu.setAttribute('hidden', '');
         settingsHome.removeAttribute('hidden');
@@ -368,6 +371,17 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
       });
     });
   }, [availableQualities, slot.quality, slot.startedCap, id, changeSlotQuality, playerRef]);
+
+  // Rust moved this tile's "Auto" to another rendition: only the label
+  // changes, so an open menu stays where it is.
+  const tileAuto = usemultiNookStore((s) => s.tileAutoQuality[id]);
+  useEffect(() => {
+    const player = playerRef.current as unknown as { elements?: { container?: HTMLElement } } | null;
+    const value = player?.elements?.container?.querySelector('[data-plyr="quality"] .plyr__menu__value');
+    if (!value) return;
+    const capNote = slot.startedCap ? ` · ${slot.startedCap}p while small` : '';
+    value.textContent = `${qualityLabel(slot.quality || 'best', tileAuto)}${capNote}`;
+  }, [tileAuto, slot.quality, slot.startedCap, playerRef]);
 
   // Add the quality submenu once this tile knows its qualities.
   useEffect(() => {
@@ -406,6 +420,16 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
     });
     // isPlaying/streamUrl re-trigger after the player (re)initialises
   }, [audioBoostOn, isPlaying, streamUrl, playerRef]);
+
+  // The chat button, the same one the solo player has: shown only while this
+  // tile is full screen, it brings the grid's chat up over the video.
+  useEffect(() => {
+    const container = (playerRef.current as unknown as { elements?: { container?: HTMLElement } } | null)?.elements
+      ?.container;
+    if (!container) return;
+    return mountFullscreenChatButton(container);
+    // isPlaying/streamUrl re-trigger after the player (re)initialises
+  }, [isPlaying, streamUrl, playerRef]);
 
   // Close the panel on Escape or a press outside it (the button itself toggles).
   // Capture phase so it runs before the tile's own pointer handlers.
@@ -577,7 +601,7 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
     );
   };
 
-  const glassButton = `flex items-center justify-center ${full ? 'p-1.5' : 'p-1'} glass-button rounded-lg`;
+  const glassButton = `flex items-center justify-center ${full ? 'p-1.5' : 'p-1'} aspect-square chrome-glaze chrome-glaze--control chrome-glaze--frosted`;
 
   return (
     <motion.div
@@ -636,7 +660,7 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
       {/* Loading & Error States */}
       {(isLoading || isBuffering) && !error && !loadError && !raid && (
         <div className="absolute inset-0 flex items-center justify-center bg-black/50 backdrop-blur-sm z-10 pointer-events-none">
-          <i className="ri-loader-4-line text-4xl text-white animate-spin"></i>
+          <Loader2 className="h-8 w-8 animate-spin text-white/80" strokeWidth={2.25} />
         </div>
       )}
 
@@ -659,10 +683,24 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
         )}
       </AnimatePresence>
 
+      {/* A card, not a veil over the whole tile: the control bar stays
+          uncovered, so the Quality menu is still there to pick another tier.
+          With the bar showing, the card centers on the picture above it. */}
       {error && !raid && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 z-10 text-rose-500 pointer-events-none">
-          <i className="ri-error-warning-fill text-4xl mb-2"></i>
-          <p className="text-sm font-medium">{error}</p>
+        <div className="absolute inset-0 z-10 flex items-center justify-center px-2 pointer-events-none [.video-player-container:has(.plyr)_&]:pb-[52px]">
+          <div
+            className={`flex max-w-full flex-col items-center rounded-xl bg-glass-ink/85 text-center backdrop-blur-md ${
+              full ? 'px-3.5 py-2' : 'px-2.5 py-1.5'
+            }`}
+          >
+            <div className={`flex items-center gap-1.5 font-medium text-rose-400 ${full ? 'text-sm' : mini ? 'text-[11px]' : 'text-xs'}`}>
+              <CircleAlert className={`shrink-0 ${full ? 'h-4 w-4' : 'h-3.5 w-3.5'}`} strokeWidth={2.25} />
+              <p>{error}</p>
+            </div>
+            {full && error === CODEC_UNPLAYABLE && (
+              <p className="mt-0.5 text-xs text-white/60">Pick another from the gear</p>
+            )}
+          </div>
         </div>
       )}
 
@@ -708,7 +746,7 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
                   }
                 }}
                 disabled={addingRaidTarget}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg glass-button text-accent hover:text-white text-xs font-semibold disabled:opacity-60"
+                className="flex items-center gap-1.5 px-3 py-1.5 chrome-glaze chrome-glaze--control chrome-glaze--frosted text-accent hover:text-white text-xs font-semibold disabled:opacity-60"
               >
                 {addingRaidTarget ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
                 Add to MultiNook
@@ -717,7 +755,7 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
             <Tooltip content="Show this tile's stream again" delay={300} side="bottom">
               <button
                 onClick={() => dismissSlotRaid(id)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg glass-button text-textSecondary hover:text-white text-xs font-semibold"
+                className="flex items-center gap-1.5 px-3 py-1.5 chrome-glaze chrome-glaze--control chrome-glaze--frosted text-textSecondary hover:text-white text-xs font-semibold"
               >
                 Dismiss
               </button>
@@ -739,8 +777,8 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
             <div className="absolute left-1/2 -translate-x-1/2 top-1.5 z-20">
               <Tooltip content="Drag to reposition stream" delay={500} side="top">
                 <div
-                  className={`cursor-grab active:cursor-grabbing flex items-center justify-center ${full ? 'px-3 py-1' : 'px-2 py-0.5'} glass-button rounded-lg text-emerald-300 hover:text-emerald-200 active:scale-95 [&_*]:cursor-grab`}
-                  style={{ backgroundColor: 'color-mix(in srgb, rgb(16 185 129) 20%, var(--glass-under, transparent))', backdropFilter: 'blur(16px)' }}
+                  className={`cursor-grab active:cursor-grabbing flex items-center justify-center ${full ? 'px-3 py-1' : 'px-2 py-0.5'} chrome-glaze chrome-glaze--control chrome-glaze--frosted text-emerald-300 hover:text-emerald-200 active:scale-95 [&_*]:cursor-grab`}
+                  style={{ backgroundImage: 'linear-gradient(rgb(16 185 129 / 0.2), rgb(16 185 129 / 0.2))' }}
                   {...attributes}
                   {...listeners}
                 >
@@ -827,7 +865,6 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
                     onClick={handleFollowClick}
                     disabled={followLoading || checkingFollowStatus}
                     className={`${glassButton} ${followLoading || checkingFollowStatus ? 'opacity-60 cursor-wait' : ''}`}
-                    style={{ backdropFilter: 'blur(16px)' }}
                   >
                     {followLoading || checkingFollowStatus ? (
                       <Loader2 className="w-4 h-4 animate-spin text-textSecondary" />
@@ -856,7 +893,6 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
                   <button
                     onClick={handleSubscribeClick}
                     className={glassButton}
-                    style={{ backdropFilter: 'blur(16px)' }}
                   >
                     {subscriberBadgeUrl ? (
                       <img
@@ -880,7 +916,6 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
                 <button
                   onClick={() => makeMainSlot(id)}
                   className={glassButton}
-                  style={{ backdropFilter: 'blur(16px)' }}
                   aria-label="Make main"
                 >
                   <ArrowLeftRight className={`${full ? 'w-4 h-4' : 'w-3.5 h-3.5'} text-white`} />
@@ -894,7 +929,6 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
               <button
                 onClick={() => toggleMaximizeSlot(id)}
                 className={glassButton}
-                style={{ backdropFilter: 'blur(16px)' }}
               >
                 {isMaximized ? (
                   <Minimize2 className="w-4 h-4 text-white" />
@@ -911,7 +945,6 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
                 <button
                   onClick={() => dockSlot(id)}
                   className={glassButton}
-                  style={{ backdropFilter: 'blur(16px)' }}
                 >
                   <Undo2 className="w-4 h-4 text-white" />
                 </button>
@@ -923,7 +956,7 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
               <button
                 onClick={() => removeSlot(id)}
                 className={glassButton}
-                style={{ backgroundColor: 'color-mix(in srgb, rgb(239 68 68) 25%, var(--glass-under, transparent))', backdropFilter: 'blur(16px)' }}
+                style={{ backgroundImage: 'linear-gradient(rgb(239 68 68 / 0.25), rgb(239 68 68 / 0.25))' }}
               >
                 <XIcon weight="bold" className="w-4 h-4 text-red-400" />
               </button>
@@ -952,7 +985,7 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
               e.stopPropagation();
             }}
             data-no-wheel-volume
-            className="tile-audio-boost-panel liquid-glass-panel absolute bottom-14 right-2 z-[60] overflow-y-auto rounded-xl p-4 cursor-default"
+            className="tile-audio-boost-panel glass-flyout absolute bottom-14 right-2 z-[60] overflow-y-auto rounded-xl !p-4 cursor-default"
             style={{ width: 'min(460px, calc(100% - 16px))', maxHeight: 'calc(100% - 64px)' }}
           >
             <AudioBoostControls

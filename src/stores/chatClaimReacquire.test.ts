@@ -34,6 +34,8 @@ vi.mock('../services/twitchBadges', () => ({
 }));
 vi.mock('../utils/platform', () => ({ IS_MOBILE: false }));
 
+const DEAD_PORT = 1111;
+
 class FakeSocket {
   static readonly CONNECTING = 0;
   static readonly OPEN = 1;
@@ -46,6 +48,11 @@ class FakeSocket {
   onerror: ((e: unknown) => void) | null = null;
   onclose: ((e: unknown) => void) | null = null;
   constructor(public url: string) {
+    // A bridge a stop already took down: the socket never opens.
+    if (url.endsWith(`:${DEAD_PORT}`)) {
+      setTimeout(() => this.onerror?.({}), 0);
+      return;
+    }
     setTimeout(() => {
       this.readyState = FakeSocket.OPEN;
       FakeSocket.opened.push(this);
@@ -156,6 +163,37 @@ describe("a window's Twitch claim survives a release and re-acquire", () => {
 
     expect(useChatConnectionStore.getState().channels.size).toBe(0);
     expect(rustHolds('caseoh_')).toBe(false);
+  });
+
+  it('a reopen right after a close does not wait out retries against a dead bridge', async () => {
+    const { acquireChannel, releaseChannel, useChatConnectionStore } = await import('./chatConnectionStore');
+    // The first start hands out the port of a bridge the close then took down.
+    let starts = 0;
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'start_chat') return (starts += 1) === 1 ? DEAD_PORT : 4242;
+      if (command === 'chat_bridge_port') return 4242;
+      if (command === 'load_channel_history') return [];
+      return undefined;
+    });
+    const startCalls = () => invokeMock.mock.calls.filter(([c]) => c === 'start_chat').length;
+
+    // Opened, then closed while its socket is still failing to open.
+    const opened = acquireChannel('xqc', '71092938', 'twitch');
+    await vi.advanceTimersByTimeAsync(10);
+    const closed = releaseChannel('xqc', 'twitch');
+    // Opened again at once.
+    const reopened = acquireChannel('xqc', '71092938', 'twitch');
+    await vi.advanceTimersByTimeAsync(300);
+
+    // The reopen ran its own connect without waiting for the dead one's
+    // retries (about 7 s), and holds the channel on a live socket.
+    expect(startCalls()).toBe(2);
+    expect(FakeSocket.opened).toHaveLength(1);
+    expect(FakeSocket.opened[0].url).toBe('ws://localhost:4242');
+    await settle();
+    await Promise.all([opened, closed, reopened]);
+    expect(useChatConnectionStore.getState().channels.get('xqc')?.refCount).toBe(1);
+    expect(rustHolds('xqc')).toBe(true);
   });
 });
 

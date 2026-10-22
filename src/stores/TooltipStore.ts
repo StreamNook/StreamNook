@@ -15,6 +15,9 @@ export interface TooltipState {
   /** Run `fire` after `delayMs` unless cancelled; one pending timer per id. */
   scheduleShow: (id: string, delayMs: number, fire: () => void) => void;
   cancelShow: (id: string) => void;
+  /** Swap the text of the tooltip on screen when `id` owns it (a toggle's
+   *  label right after its click). Does nothing for any other tooltip. */
+  updateContent: (id: string, content: React.ReactNode | string) => void;
   /** Whether `id` has a show pending or is the tooltip on screen now. */
   isArmed: (id: string) => boolean;
   // A unique ID or ref to track which element triggered the tooltip
@@ -56,6 +59,10 @@ export const useTooltipStore = create<TooltipState>((set, get) => ({
       pendingShows.delete(id);
     }
   },
+  updateContent: (id, content) =>
+    set((state) =>
+      state.isVisible && state.triggerId === id && state.content !== content ? { content } : state,
+    ),
   isArmed: (id) => pendingShows.has(id) || (get().isVisible && get().triggerId === id),
   hideTooltip: (id?: string) => set((state) => {
     // If an ID is provided, only hide if it matches the currently active triggerId.

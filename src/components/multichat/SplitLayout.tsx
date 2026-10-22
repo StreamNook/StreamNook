@@ -80,20 +80,21 @@ function Branch({ branch, ...ctx }: SplitLayoutProps & { branch: SplitBranch }) 
       <div className="flex min-h-0 min-w-0" style={{ flex: `${branch.ratio} 1 0%` }}>
         <Node node={branch.a} {...ctx} />
       </div>
-      <div
-        role="separator"
-        aria-orientation={isRow ? 'vertical' : 'horizontal'}
-        onPointerDown={onDividerDown}
-        onDoubleClick={() => ctx.onChange(setRatio(ctx.tree, branch.id, 0.5))}
-        className={`group relative z-10 flex flex-shrink-0 items-center justify-center ${
-          isRow ? 'w-1 cursor-col-resize' : 'h-1 cursor-row-resize'
-        }`}
-        title="Drag to resize, double-click to even out"
-      >
+      <Tooltip content="Drag to resize, double-click to even out" delay={500}>
         <div
-          className={`${isRow ? 'h-full w-px' : 'h-px w-full'} bg-borderSubtle transition-colors group-hover:bg-accent group-active:bg-accent`}
-        />
-      </div>
+          role="separator"
+          aria-orientation={isRow ? 'vertical' : 'horizontal'}
+          onPointerDown={onDividerDown}
+          onDoubleClick={() => ctx.onChange(setRatio(ctx.tree, branch.id, 0.5))}
+          className={`group relative z-10 flex flex-shrink-0 items-center justify-center ${
+            isRow ? 'w-1 cursor-col-resize' : 'h-1 cursor-row-resize'
+          }`}
+        >
+          <div
+            className={`${isRow ? 'h-full w-px' : 'h-px w-full'} bg-borderSubtle transition-colors group-hover:bg-accent group-active:bg-accent`}
+          />
+        </div>
+      </Tooltip>
       <div className="flex min-h-0 min-w-0" style={{ flex: `${1 - branch.ratio} 1 0%` }}>
         <Node node={branch.b} {...ctx} />
       </div>

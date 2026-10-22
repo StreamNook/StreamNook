@@ -50,6 +50,10 @@ pub async fn handle_host_method(
             // Route to the matching relay session: the solo player's session
             // (stream id "solo") or a MultiNook tile by its id. The swap keeps
             // the local port and tells the player to reload onto it.
+            // A plugin hands over one playlist, not a ladder: "Auto" stays on
+            // it until the next start, rather than stepping back onto the
+            // upstream the plugin just moved away from.
+            crate::services::link_adapt::end(stream_id);
             if stream_id == crate::services::stream_server::SOLO_STREAM_ID {
                 if !crate::services::stream_server::solo_session_active() {
                     return Err(RpcErr::unknown_stream(stream_id));

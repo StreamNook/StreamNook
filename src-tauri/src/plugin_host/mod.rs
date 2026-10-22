@@ -119,9 +119,17 @@ impl HostInner {
             return;
         };
         let settings = state.drops_service.lock().await.get_settings().await;
-        let Ok(values) = serde_json::to_value(&settings) else {
+        let Ok(mut values) = serde_json::to_value(&settings) else {
             return;
         };
+        // Not a setting: what each evolved badge evolves from, so the engine
+        // works a Pokémon line in order. Twitch lists a line's stages in none.
+        if let Some(map) = values.as_object_mut() {
+            map.insert(
+                "evolution_bases".into(),
+                json!(crate::services::evolution::evolution_bases().await),
+            );
+        }
         for tx in targets {
             let (reply, rx) = oneshot::channel();
             let sent = tx.send(SupCmd::Request {

@@ -377,6 +377,9 @@ pub struct LlOrigin {
     /// PART-TARGET of the Apple playlist, fixed by the first one served for
     /// this stream (see `APPLE_PART_TARGET_HEADROOM`).
     apple_part_target: Mutex<Option<f64>>,
+    /// The stream `link_adapt` knows this origin by (`solo` or a tile id): its
+    /// lost tails and its own segment downloads are reported under it.
+    adapt_id: Mutex<String>,
 }
 
 /// Hard kill switch: when true, no origin activates and the relays fall back to the
@@ -978,7 +981,17 @@ impl LlOrigin {
             cmaf_video: Mutex::new(None),
             retired: Mutex::new(VecDeque::new()),
             apple_part_target: Mutex::new(None),
+            adapt_id: Mutex::new(String::new()),
         })
+    }
+
+    /// Name the stream this origin serves, for `link_adapt`.
+    pub(crate) fn set_adapt_id(&self, id: &str) {
+        *self.adapt_id.lock().unwrap() = id.to_string();
+    }
+
+    fn adapt_id(&self) -> String {
+        self.adapt_id.lock().unwrap().clone()
     }
 
     fn window(&self) -> usize {
@@ -1185,7 +1198,17 @@ impl LlOrigin {
         for (sn, pdt, url) in backfill {
             match client.get(&url).timeout(FETCH_TIMEOUT).send().await.ok() {
                 Some(resp) => {
+                    // Timed from the response, so the connection's setup (and
+                    // the first one's handshake) is left out.
+                    let t0 = std::time::Instant::now();
                     let bytes = resp.bytes().await.map(|b| b.to_vec()).unwrap_or_default();
+                    // A whole published segment at the link's full rate: the
+                    // parts path's best measure of it, and the start pick's.
+                    crate::services::link_adapt::note_throughput(
+                        &self.adapt_id(),
+                        bytes.len() as u64,
+                        t0.elapsed().as_secs_f64(),
+                    );
                     let parts = self.convert_parts(split_complete(&bytes, container));
                     if !parts.is_empty() {
                         segments.push_back(make_segment(sn, pdt, true, parts));
@@ -1737,6 +1760,7 @@ async fn fetch_published(
     url: &str,
     origin: &LlOrigin,
 ) -> Option<Segment> {
+    let t0 = std::time::Instant::now();
     let resp = match client.get(url).timeout(FETCH_TIMEOUT).send().await {
         Ok(r) => r,
         Err(e) => {
@@ -1751,6 +1775,7 @@ async fn fetch_published(
             return None;
         }
     };
+    crate::services::link_adapt::note_throughput(&origin.adapt_id(), bytes.len() as u64, t0.elapsed().as_secs_f64());
     let parts = origin.convert_parts(split_complete(&bytes, origin.container()));
     if parts.is_empty() {
         warn!("[LLOrigin] catch-up segment sn {sn} produced no parts");
@@ -1799,7 +1824,8 @@ async fn stream_response(
     // On a phone that has been stalling, the player keeps more distance from
     // the edge (`link_adapt`), so a late tail can still arrive in time: the
     // deadline and the silence limit widen with that cushion. Zero otherwise.
-    let cushion = crate::services::link_adapt::extra_cushion();
+    let adapt_id = origin.adapt_id();
+    let cushion = crate::services::link_adapt::extra_cushion(&adapt_id);
     let deadline_secs = origin.expected_segment_secs() + SEGMENT_DEADLINE_GRACE + cushion;
     let midstream_timeout = MIDSTREAM_CHUNK_TIMEOUT + Duration::from_secs_f64(cushion / 2.0);
     let mut received: u64 = 0;
@@ -1823,7 +1849,7 @@ async fn stream_response(
                 let remaining = (deadline_secs - t0.elapsed().as_secs_f64()).max(0.0);
                 if remaining <= 0.0 {
                     warn!("[LLOrigin] sn {sn} exceeded its delivery deadline; abandoning the tail");
-                    crate::services::link_adapt::note_tail_loss();
+                    crate::services::link_adapt::note_tail_loss(&adapt_id);
                     break;
                 }
                 midstream_timeout.min(Duration::from_secs_f64(remaining))
@@ -1928,7 +1954,7 @@ async fn stream_response(
                 // may take longer than 1.5 s to arrive, so it gets whatever is
                 // left of the delivery deadline.
                 let budget = match first_chunk_at {
-                    Some(t0) if crate::services::link_adapt::enabled() => {
+                    Some(t0) if crate::services::link_adapt::phone_rules() => {
                         (deadline_secs - t0.elapsed().as_secs_f64()).max(1.5)
                     }
                     _ => 1.5,
@@ -1947,7 +1973,7 @@ async fn stream_response(
         warn!(
             "[LLOrigin] in-progress {why} for sn {sn} after {received} bytes / {parts} parts; abandoning the tail"
         );
-        crate::services::link_adapt::note_tail_loss();
+        crate::services::link_adapt::note_tail_loss(&adapt_id);
         crate::services::ll_diagnostics::event(&format!(
             "\"ev\":\"o_abandon\",\"sn\":{sn},\"why\":\"{}\",\"received\":{received},\"parts\":{parts},\"pending\":{}",
             why.replace('"', "'"),
@@ -2683,7 +2709,7 @@ impl LlOrigin {
             base,
             target,
             hold_parts,
-            crate::services::link_adapt::extra_cushion() + apple_gap_adjust(target, hold_parts),
+            crate::services::link_adapt::extra_cushion(&self.adapt_id()) + apple_gap_adjust(target, hold_parts),
         ))
     }
 
@@ -2775,7 +2801,11 @@ impl LlOrigin {
 /// The solo player's shared instance (one solo stream at a time). MultiNook tiles
 /// each construct their own origin via `LlOrigin::new`; these functions keep the
 /// solo relay's call sites on a single global origin.
-static SOLO: Lazy<Arc<LlOrigin>> = Lazy::new(|| LlOrigin::new(MAX_SEGMENTS));
+static SOLO: Lazy<Arc<LlOrigin>> = Lazy::new(|| {
+    let origin = LlOrigin::new(MAX_SEGMENTS);
+    origin.set_adapt_id(crate::services::link_adapt::SOLO);
+    origin
+});
 
 /// Whether the upstream playlist probed at the last `start()` carried
 /// `#EXT-X-TWITCH-PREFETCH` hints: a low-latency broadcast, whether or not

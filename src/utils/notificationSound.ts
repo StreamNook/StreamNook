@@ -292,6 +292,15 @@ export function playNotificationSound(soundId: SoundRef | undefined | null, volu
   playSound(soundId || 'boop', volume);
 }
 
+/** The settings Test button's sound: the picked tone at the picked volume on
+ *  every press, outside the shared notification gate. */
+export function playTestNotificationSound(
+  prefs: { play_sound?: boolean; sound_type?: string | null; sound_volume?: number | null } | undefined,
+): void {
+  if (!prefs?.play_sound) return;
+  playSound(prefs.sound_type || 'boop', prefs.sound_volume);
+}
+
 // Per-key cooldown tracking. Skipping plays inside the cooldown window avoids
 // audio spam in fast chats where the same phrase matches many messages in a
 // row. The key is caller-defined (typically a phrase id) so different keys

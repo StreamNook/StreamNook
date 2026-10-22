@@ -90,7 +90,7 @@ fn classify_refusal(status: u16, body: &str) -> SubscribeError {
     let message = format!("Failed to subscribe ({}): {}", status, body);
     match status {
         401 | 403 => SubscribeError::Refused(message),
-        429 if body.to_ascii_lowercase().contains("transport") => SubscribeError::OverBudget(message),
+        _ if crate::services::eventsub_budget::is_transport_limit(status, body) => SubscribeError::OverBudget(message),
         _ => SubscribeError::Retry(message),
     }
 }
@@ -198,18 +198,25 @@ async fn listen(user_id: String, app_handle: AppHandle) {
             return;
         }
         let (wait, after) = next_wait(retry, &ended);
-        if matches!(ended, Ended::OverBudget) {
-            warn!(
-                "[WhisperService] Twitch's socket limit for this account is reached (3 per account, shared with other devices signed in as it); retrying in {}s",
-                wait
-            );
+        let over_budget = matches!(ended, Ended::OverBudget);
+        if over_budget {
+            if crate::services::eventsub_budget::note_over_budget(SocketOwner::Whispers) {
+                crate::services::eventsub_budget::log_episode("whispers", wait);
+            }
         } else {
             debug!("[WhisperService] Reconnecting in {}s", wait);
         }
-        // Coming back to the app cuts the wait short.
+        // Coming back to the app cuts the wait short, and so does another
+        // socket of this app freeing its slot while this one waits out the
+        // account's socket limit.
         tokio::select! {
             _ = sleep(Duration::from_secs(wait)) => {}
             _ = WAKE.notified() => debug!("[WhisperService] App resumed, reconnecting now"),
+            woke = crate::services::eventsub_budget::wait(wait), if over_budget => {
+                if woke {
+                    debug!("[WhisperService] A socket slot may have freed, reconnecting now");
+                }
+            }
         }
         retry = after;
     }
@@ -232,7 +239,13 @@ async fn run_session(user_id: &str, token: &str, app_handle: &AppHandle) -> Ende
     let mut live = LiveSession::open(SocketOwner::Whispers, &session_id);
 
     match subscribe_to_whispers(&session_id, user_id, token).await {
-        Ok(()) => debug!("[WhisperService] Successfully subscribed to whisper events"),
+        Ok(()) => {
+            debug!("[WhisperService] Successfully subscribed to whisper events");
+            live.mark_subscribed();
+            if crate::services::eventsub_budget::note_room(SocketOwner::Whispers) {
+                crate::services::eventsub_budget::log_room("whispers");
+            }
+        }
         Err(SubscribeError::Refused(e)) => {
             error!("[WhisperService] Failed to subscribe to whispers: {}", e);
             return Ended::Refused;
@@ -266,10 +279,7 @@ async fn run_session(user_id: &str, token: &str, app_handle: &AppHandle) -> Ende
                         keepalive_secs = session.keepalive_timeout_seconds.unwrap_or(keepalive_secs);
                         if session.id != session_id {
                             // Register the new id before the old guard drops.
-                            drop(std::mem::replace(
-                                &mut live,
-                                LiveSession::open(SocketOwner::Whispers, &session.id),
-                            ));
+                            live = live.moved(SocketOwner::Whispers, &session.id);
                             session_id = session.id;
                         }
                         debug!("[WhisperService] Moved to the reconnect URL, subscription carried over");

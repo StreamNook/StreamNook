@@ -113,6 +113,11 @@ impl Order {
     }
 }
 
+/// Which provider keeps a name two of them define, the order chat draws them
+/// in (`EmoteLookup::build`): Twitch first (a name Twitch would tag in the sent
+/// message is Twitch's emote), then the 7TV extension's 7TV > FFZ > BetterTTV.
+const PRECEDENCE: [Slot; Slot::COUNT] = [Slot::Twitch, Slot::SevenTv, Slot::Ffz, Slot::Bttv, Slot::Kick, Slot::YouTube];
+
 /// The emote fill menu's row cap.
 pub const FILL_LIMIT: usize = 150;
 
@@ -255,7 +260,9 @@ pub fn chatter_rows(
     }
     let at = word.starts_with('@');
     let needle = word.trim_start_matches('@').to_lowercase();
-    if needle.is_empty() {
+    // A bare `@` lists the room's chatters, the streamer first; any other empty
+    // word lists none.
+    if needle.is_empty() && !at {
         return Vec::new();
     }
     let nicks = nicknames().read().map(|g| g.clone()).unwrap_or_default();
@@ -304,6 +311,88 @@ pub fn chatter_rows(
         });
     }
     out
+}
+
+/// The history ring a room's rows are filed under: a Twitch room by its login,
+/// any other platform by its composite key (`kick:slug`), as its rows carry it.
+pub fn history_room(provider: &str, channel: &str) -> String {
+    let channel = channel.trim().trim_start_matches('#');
+    if provider == "twitch" || channel.contains(':') {
+        channel.to_string()
+    } else {
+        crate::services::providers::key::make_key(provider, channel)
+    }
+}
+
+/// The room's streamer among `recent` chatters: the row with the room's login,
+/// or with the room's id (a YouTube room is keyed by its channel id).
+pub fn find_owner(
+    login: &str,
+    channel_id: Option<&str>,
+    recent: &[(String, String, String)],
+) -> Option<(String, String, String)> {
+    recent
+        .iter()
+        .find(|(l, id, _)| l.eq_ignore_ascii_case(login) || channel_id.is_some_and(|c| !c.is_empty() && c == id))
+        .cloned()
+}
+
+/// `recent` with the room's streamer at the front (moved there when they have
+/// chatted, never listed twice), so every chatter list leads with them.
+pub fn owner_first(
+    owner: Option<(String, String, String)>,
+    recent: Vec<(String, String, String)>,
+) -> Vec<(String, String, String)> {
+    let Some(owner) = owner else { return recent };
+    let (login, id) = (owner.0.clone(), owner.1.clone());
+    let mut out = Vec::with_capacity(recent.len() + 1);
+    out.push(owner);
+    out.extend(
+        recent
+            .into_iter()
+            .filter(|(l, i, _)| !(l.eq_ignore_ascii_case(&login) || (!id.is_empty() && *i == id))),
+    );
+    out
+}
+
+/// One name in the composer's `@` list.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct MentionRow {
+    pub login: String,
+    pub user_id: String,
+    pub display: String,
+}
+
+/// The most names the `@` list shows.
+pub const MENTION_LIMIT: usize = 5;
+
+/// The composer's `@` list: `chatters` in order (the streamer first, see
+/// `owner_first`) whose login, shown name or nickname starts with `query`, a
+/// leading `@` set aside. An empty query lists them all. At most `limit`.
+/// Nicknames off Twitch are saved under the namespaced chatter id
+/// (`kick:<id>`), as the chat rows key them.
+pub fn mention_rows(
+    provider: &str,
+    query: &str,
+    chatters: &[(String, String, String)],
+    limit: usize,
+) -> Vec<MentionRow> {
+    let needle = query.trim_start_matches('@').to_lowercase();
+    let nicks = nicknames().read().map(|g| g.clone()).unwrap_or_default();
+    let hit = |s: &str| s.to_lowercase().starts_with(&needle);
+    let nick_key = |id: &str| if provider == "twitch" { id.to_string() } else { format!("{provider}:{id}") };
+    chatters
+        .iter()
+        .filter(|(login, user_id, display)| {
+            hit(login) || hit(display) || nicks.get(&nick_key(user_id)).map(String::as_str).is_some_and(hit)
+        })
+        .take(limit)
+        .map(|(login, user_id, display)| MentionRow {
+            login: login.clone(),
+            user_id: user_id.clone(),
+            display: if display.is_empty() { login.clone() } else { display.clone() },
+        })
+        .collect()
 }
 
 pub fn contains_mode() -> bool {
@@ -693,17 +782,24 @@ impl<'a> Collector<'a> {
             .filter(|h| h.is_personal())
             .map(|h| (h.name.clone(), h.seed.id.clone()))
             .collect();
+        // Chat draws a channel's own emote over a global of the same name
+        // whatever the provider (the 7TV extension's order), so the menu
+        // offers that one too rather than previewing art that never appears.
+        let channel_names: HashSet<String> = hits
+            .iter()
+            .flatten()
+            .filter(|h| h.shadowable() && !h.is_personal() && !h.seed.global)
+            .map(|h| h.name.clone())
+            .collect();
         let mut replaced: HashSet<String> = HashSet::new();
         let mut seen: HashSet<String> = HashSet::new();
         let mut merged: Vec<Ranked> = Vec::new();
         let slots = order.slots();
         let tier_of = |slot: Slot| slots.iter().position(|s| *s == slot).unwrap_or(0) as u8;
-        // The first provider walked keeps a name two of them define. Twitch
-        // goes first whatever the ranking order: a name Twitch would tag in the
-        // sent message is Twitch's emote, so a third-party row of the same name
-        // would preview art that never appears. Then the ranking order decides.
-        let walk = std::iter::once(Slot::Twitch).chain(slots.into_iter().filter(|s| *s != Slot::Twitch));
-        for slot in walk {
+        // The first provider walked keeps a name two of them define, in the
+        // order chat draws them (`PRECEDENCE`), so the menu never previews art
+        // that never appears. The ranking order only sorts the rows.
+        for slot in PRECEDENCE {
             for hit in std::mem::take(&mut hits[slot.index()]) {
                 if hit.shadowable() && !hit.is_personal() {
                     if let Some(mine) = personal.get(&hit.name) {
@@ -711,6 +807,9 @@ impl<'a> Collector<'a> {
                         if *mine != hit.seed.id {
                             replaced.insert(hit.name);
                         }
+                        continue;
+                    }
+                    if hit.seed.global && channel_names.contains(&hit.name) {
                         continue;
                     }
                 }
@@ -1104,6 +1203,44 @@ mod tests {
         // emotes, each beside the 7TV name it differs from only by case; the
         // variant typed in the same case ("lo") leads its pair.
         assert_eq!(names(&rows), vec!["Loading", "LOADING", "lol", "LoL"]);
+    }
+
+    #[test]
+    fn a_channel_emote_beats_a_global_of_the_same_name() {
+        // Chat draws the channel's BetterTTV EZ over 7TV's global EZ (the 7TV
+        // extension's order), so the menu offers that one.
+        let mut s = EmoteSet::new();
+        s.seven_tv = vec![emote(EmoteProvider::SevenTV, "g-EZ", "EZ", Some(GLOBAL_EMOTE_TYPE), None)];
+        s.bttv = vec![emote(EmoteProvider::BTTV, "b-EZ", "EZ", None, None)];
+        let favorites = HashSet::new();
+        let globals: HashSet<String> = ["g-EZ".to_string()].into_iter().collect();
+        let mut c = Collector::new(
+            Spec { query: "EZ", profile: Profile::Search, order: Order::Default, contains: false, limit: 50 },
+            Context { channel_id: Some("42"), favorites: &favorites, seventv_globals: &globals, ffz_subwoofer: false },
+        );
+        c.offer_set(&s);
+        let rows = c.finish().0;
+        assert_eq!(rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), vec!["b-EZ"]);
+    }
+
+    #[test]
+    fn ffz_keeps_a_name_betterttv_also_has() {
+        // Chat draws FFZ over BetterTTV (the 7TV extension's order), in every
+        // ranking order, so the menu offers FFZ's emote.
+        let mut s = EmoteSet::new();
+        s.bttv = vec![emote(EmoteProvider::BTTV, "b-Dup", "Dup", None, None)];
+        s.ffz = vec![emote(EmoteProvider::FFZ, "f-Dup", "Dup", None, None)];
+        let favorites = HashSet::new();
+        let globals = HashSet::new();
+        for order in [Order::Default, Order::TwitchFirst] {
+            let mut c = Collector::new(
+                Spec { query: "Dup", profile: Profile::Search, order, contains: false, limit: 50 },
+                Context { channel_id: Some("42"), favorites: &favorites, seventv_globals: &globals, ffz_subwoofer: false },
+            );
+            c.offer_set(&s);
+            let rows = c.finish().0;
+            assert_eq!(rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), vec!["f-Dup"]);
+        }
     }
 
     fn case_pair(extra_7tv: &[&str]) -> EmoteSet {
@@ -1603,7 +1740,39 @@ mod tests {
         assert_eq!(rows[0].name, "@Lulu");
         assert_eq!(rows[0].insert_text.as_deref(), Some("@Lulu"));
         assert!(chatter_rows(":lu", &[], false, &recent).is_empty());
-        assert!(chatter_rows("@", &[], false, &recent).is_empty());
+        assert_eq!(chatter_rows("@", &[], false, &recent)[0].name, "@Lulu");
+        assert!(chatter_rows("", &[], false, &recent).is_empty());
+    }
+
+    #[test]
+    fn the_streamer_leads_every_chatter_list() {
+        let owner = chatter("kaileymae", "9", "KaileyMae");
+        let recent = vec![chatter("knutzz", "1", "knutzz"), chatter("koki_v2", "2", "koki_v2")];
+        let list = owner_first(Some(owner.clone()), recent.clone());
+        let cycle: Vec<_> = chatter_rows("@k", &[], false, &list).into_iter().map(|r| r.name).collect();
+        assert_eq!(cycle, vec!["@KaileyMae", "@knutzz", "@koki_v2"]);
+        let at: Vec<_> = mention_rows("twitch", "", &list, MENTION_LIMIT).into_iter().map(|r| r.login).collect();
+        assert_eq!(at, vec!["kaileymae", "knutzz", "koki_v2"]);
+        assert_eq!(mention_rows("twitch", "KAI", &list, MENTION_LIMIT).len(), 1);
+        assert!(mention_rows("twitch", "z", &list, MENTION_LIMIT).is_empty());
+        // A streamer who chatted is moved to the front, not listed twice.
+        let chatted = vec![chatter("knutzz", "1", "knutzz"), owner.clone()];
+        let found = find_owner("kaileymae", Some("9"), &chatted);
+        assert_eq!(found.as_ref(), Some(&owner));
+        let moved: Vec<_> = owner_first(found, chatted).into_iter().map(|c| c.0).collect();
+        assert_eq!(moved, vec!["kaileymae", "knutzz"]);
+        // A room keyed by id (YouTube) finds its streamer by id.
+        let yt = vec![chatter("some one", "UCabc", "Some One")];
+        assert!(find_owner("handle", Some("UCabc"), &yt).is_some());
+        assert_eq!(owner_first(None, recent.clone()), recent);
+    }
+
+    #[test]
+    fn each_platform_reads_its_own_ring() {
+        assert_eq!(history_room("twitch", "#Forsen"), "Forsen");
+        assert_eq!(history_room("kick", "XQC"), "kick:xqc");
+        assert_eq!(history_room("youtube", "UCabc"), "youtube:UCabc");
+        assert_eq!(history_room("kick", "kick:xqc"), "kick:xqc");
     }
 
     #[test]

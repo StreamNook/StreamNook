@@ -188,6 +188,7 @@ export default function EmotePaletteWindow() {
           channelLogin={channel.login}
           isLoadingEmotes={!emotes}
           onInsert={insert}
+          images
           className={PANEL_CLASS}
         />
       )}

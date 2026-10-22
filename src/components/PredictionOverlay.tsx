@@ -7,11 +7,12 @@ import { BannerStatus, OverlayBanner, StackCardPresence, ShareRow } from './chat
 import { useStackPresence, type StackCardControl } from './chat/chatTopStack';
 import { useAppStore } from '../stores/AppStore';
 import { useChannelEmotes } from '../stores/chatConnectionStore';
-import { buildEmoteNameMap, EmoteText } from '../utils/emoteText';
+import { EmoteText, useTextEmotes } from '../utils/emoteText';
 import { useDeadlineClock } from '../utils/deadlineClock';
 import { Logger } from '../utils/logger';
 import { ACCENT_BUTTON, ACCENT_FILL } from './ui/glazeButtons';
 import type { BetView, PredictionPush, PredictionView, PredictOutcome, ResultView } from '../types';
+import { Tooltip } from './ui/Tooltip';
 
 /**
  * The prediction card. Rust (services/predictions.rs) decides everything on
@@ -67,10 +68,11 @@ const PredictionOverlay = ({ channelId, channelLogin, stack }: PredictionOverlay
   // shows as one line in the card and goes once the side or amount changes.
   const [failure, setFailure] = useState<{ key: string; line: string } | null>(null);
 
-  // Outcome titles are plain text with no emote ranges, so match emote names
-  // against the channel's set the same way pinned messages do.
+  // Outcome titles are plain text with no emote ranges, so Rust cuts them with
+  // the channel's table the same way it does pinned messages.
   const channelEmotes = useChannelEmotes(currentChannelLogin, currentChannelId, 'twitch');
-  const emoteMap = useMemo(() => buildEmoteNameMap(channelEmotes), [channelEmotes]);
+  const outcomeTitles = useMemo(() => view?.outcomes.map((o) => o.title) ?? [], [view]);
+  const outcomeEmotes = useTextEmotes({ provider: 'twitch', channel: currentChannelLogin }, outcomeTitles, channelEmotes);
 
   // Follow Rust's card for this channel: the getter covers a prediction
   // already running, the push every change after. A push that lands while the
@@ -235,7 +237,7 @@ const PredictionOverlay = ({ channelId, channelLogin, stack }: PredictionOverlay
               }`}
             >
               <ShareRow
-                title={<EmoteText text={outcome.title} emoteMap={emoteMap} keyPrefix={`pred-${outcome.id}`} />}
+                title={<EmoteText text={outcome.title} emoteMap={outcomeEmotes(outcome.title)} keyPrefix={`pred-${outcome.id}`} />}
                 strong={isChosen || outcome.winner || outcome.mine}
                 percent={outcome.percent}
                 barClass={style.bar}
@@ -366,14 +368,15 @@ const PredictionOverlay = ({ channelId, channelLogin, stack }: PredictionOverlay
                 </div>
                 {/* What there is to spend, at the end of the amount row. */}
                 {bet?.balance_line && (
-                  <span
-                    className="ml-auto flex items-center gap-1 text-xs font-medium text-textPrimary tabular-nums"
-                    title={`Your points: ${bet.balance_line}`}
-                    aria-label={`Your points: ${bet.balance_line}`}
-                  >
-                    {pointsIcon('text-textSecondary')}
-                    {bet.balance_line.split(' ')[0]}
-                  </span>
+                  <Tooltip content={`Your points: ${bet.balance_line}`}>
+                    <span
+                      className="ml-auto flex items-center gap-1 text-xs font-medium text-textPrimary tabular-nums"
+                      aria-label={`Your points: ${bet.balance_line}`}
+                    >
+                      {pointsIcon('text-textSecondary')}
+                      {bet.balance_line.split(' ')[0]}
+                    </span>
+                  </Tooltip>
                 )}
               </div>
               {failureLine && (

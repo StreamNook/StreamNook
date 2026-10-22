@@ -14,6 +14,7 @@ pub mod kick_emotes;
 pub mod kick_media;
 pub mod kick_profile;
 pub mod source;
+pub mod table_repair;
 pub mod tiktok;
 pub mod tiktok_feed;
 pub mod tiktok_following;
@@ -276,6 +277,13 @@ pub async fn publish_chat_message(msg: &ChatMessage) {
     // A native shell draws the row Rust laid out, as on the Twitch lane.
     crate::services::chat_row_view::stamp(&mut evaluated);
     let msg = &evaluated;
+    // A row parsed before its channel's whole 7TV table landed is kept so its
+    // 7TV words can be patched in once it does.
+    match msg.provider.as_str() {
+        "kick" => kick_emotes::hold_row(msg),
+        "youtube" => youtube_emotes::hold_row(msg),
+        _ => {}
+    }
     if let Ok(json) = serde_json::to_string(msg) {
         let frame = crate::services::chat_bridge_route::BridgeFrame::row(
             &msg.channel,

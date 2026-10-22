@@ -6,6 +6,7 @@ import { VOD_FALLBACK_THUMB, type MediaKind } from '../utils/vodProgress';
 import { glowThumbProps } from '../utils/mediaGlow';
 import type { VodProgressSummary } from '../types';
 import { SevenTvAvatar } from './SevenTvAvatar';
+import { Tooltip } from './ui/Tooltip';
 
 /**
  * The one card every clip and VOD in the app is drawn with: Home's Continue
@@ -166,12 +167,13 @@ export function MediaCard({
         {/* One line, always: the title is the least stable thing on the card,
             and letting it wrap is what used to push the category off. The
             full title is a hover away. */}
-        <h3
-          title={title}
-          className="truncate text-[13px] font-medium leading-5 text-textPrimary transition-colors group-hover/card:text-accent"
-        >
-          {title}
-        </h3>
+        <Tooltip content={title} delay={500}>
+          <h3
+            className="truncate text-[13px] font-medium leading-5 text-textPrimary transition-colors group-hover/card:text-accent"
+          >
+            {title}
+          </h3>
+        </Tooltip>
         <div className="mt-1 flex items-center gap-1.5 text-[12px] text-textSecondary">
           {channel.avatarUrl && (
             <SevenTvAvatar

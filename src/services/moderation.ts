@@ -38,13 +38,25 @@ export interface ModRequest {
   /** The words after the name in a typed `/timeout`; Rust reads the length
    *  and reason from them. */
   typed?: string | null;
+  /** One press of a button or key (a card's Ban, the hover dock, a line
+   *  button, the B key). With "Ban confirmation" on, Rust arms such a Ban on
+   *  the first press and runs it on the second. */
+  onePress?: boolean;
 }
 
 export interface ModOutcome {
   appliedSeconds: number | null;
+  /** Empty for a press too soon after the first: nothing new to say. */
   message: string;
   undoable: boolean;
+  /** Set when nothing happened yet: the ban runs on a second press within
+   *  this many milliseconds. */
+  confirmMs?: number | null;
 }
+
+/** How long a surface shows a Ban as armed: Rust's window, ending a little
+ *  early since Rust started counting before the answer arrived. */
+export const armedFor = (outcome: ModOutcome): number => Math.max(0, (outcome.confirmMs ?? 0) - 100);
 
 export interface ModStep {
   action: 'delete' | 'timeout' | 'ban';
@@ -119,6 +131,17 @@ export async function moderateWithToast(
   const { addToast } = useAppStore.getState();
   try {
     const outcome = await moderateChatter(request);
+    // A first press on Ban with "Ban confirmation" on: nothing happened yet.
+    // The prompt always shows (it is the only word the line buttons and the
+    // B key give) and leaves when the window closes, so it never goes stale.
+    if (outcome.confirmMs) {
+      if (outcome.message) {
+        const id = Date.now() + Math.random();
+        addToast(outcome.message, 'info', undefined, { alwaysShow: true, skipIsland: true, id });
+        setTimeout(() => useAppStore.getState().removeToast(id), outcome.confirmMs);
+      }
+      return outcome;
+    }
     if (!opts.quietSuccess) {
       const undo = outcome.undoable
         ? {

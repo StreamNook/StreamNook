@@ -7,6 +7,7 @@ import { useAppStore } from '../stores/AppStore';
 import { getAppleEmojiUrl } from '../services/emojiService';
 import WhisperImportWizard from './WhisperImportWizard';
 import { Tooltip } from './ui/Tooltip';
+import { ACCENT_BUTTON, ACCENT_FILL, GLAZE_PILL } from './ui/glazeButtons';
 import SpellcheckUnderlay from './chat/SpellcheckUnderlay';
 import { useSpellcheck } from '../hooks/useSpellcheck';
 import { warmSpellcheck } from '../utils/spellcheck';
@@ -315,7 +316,7 @@ const WhispersWidget = ({ isOpen, onClose }: WhispersWidgetProps) => {
     // Play notification sound. Shared gate, so a whisper that also raises a
     // notification-center entry pings once rather than twice.
     const playNotificationSound = useCallback(() => {
-        playGatedNotificationSound('whisper');
+        playGatedNotificationSound('whisper', useAppStore.getState().settings.live_notifications?.sound_volume);
     }, []);
 
     // Whispers are recorded by Rust as they arrive (sent ones too); each change
@@ -723,14 +724,14 @@ const WhispersWidget = ({ isOpen, onClose }: WhispersWidgetProps) => {
                                 <ChevronDown size={14} className={`transition-transform ${showSortMenu ? 'rotate-180' : ''}`} />
                             </button>
                             {showSortMenu && (
-                                <div className="absolute top-full left-0 mt-1 glass-panel z-10 py-1 min-w-[120px]">
-                                    <button onClick={() => { setSortOption('recent'); setShowSortMenu(false); }} className={`w-full px-3 py-1.5 text-left text-xs hover:bg-surface-hover transition-colors flex items-center gap-2 ${sortOption === 'recent' ? 'text-accent font-medium' : 'text-textSecondary'}`}>
+                                <div className="absolute top-full left-0 mt-1 glass-flyout no-live-blur rounded-xl z-10 min-w-[120px]">
+                                    <button onClick={() => { setSortOption('recent'); setShowSortMenu(false); }} className={`w-full rounded-lg px-2 py-2 text-left text-xs hover:bg-white/[0.06] transition-colors flex items-center gap-2 ${sortOption === 'recent' ? 'bg-white/[0.08] text-textPrimary font-medium' : 'text-textSecondary'}`}>
                                         <Clock size={12} /> Recent
                                     </button>
-                                    <button onClick={() => { setSortOption('name'); setShowSortMenu(false); }} className={`w-full px-3 py-1.5 text-left text-xs hover:bg-surface-hover transition-colors flex items-center gap-2 ${sortOption === 'name' ? 'text-accent font-medium' : 'text-textSecondary'}`}>
+                                    <button onClick={() => { setSortOption('name'); setShowSortMenu(false); }} className={`w-full rounded-lg px-2 py-2 text-left text-xs hover:bg-white/[0.06] transition-colors flex items-center gap-2 ${sortOption === 'name' ? 'bg-white/[0.08] text-textPrimary font-medium' : 'text-textSecondary'}`}>
                                         <User size={12} /> Name
                                     </button>
-                                    <button onClick={() => { setSortOption('unread'); setShowSortMenu(false); }} className={`w-full px-3 py-1.5 text-left text-xs hover:bg-surface-hover transition-colors flex items-center gap-2 ${sortOption === 'unread' ? 'text-accent font-medium' : 'text-textSecondary'}`}>
+                                    <button onClick={() => { setSortOption('unread'); setShowSortMenu(false); }} className={`w-full rounded-lg px-2 py-2 text-left text-xs hover:bg-white/[0.06] transition-colors flex items-center gap-2 ${sortOption === 'unread' ? 'bg-white/[0.08] text-textPrimary font-medium' : 'text-textSecondary'}`}>
                                         <MessageCircle size={12} /> Unread
                                     </button>
                                 </div>
@@ -931,8 +932,8 @@ const WhispersWidget = ({ isOpen, onClose }: WhispersWidgetProps) => {
                             <div className="shrink-0 p-4 relative bg-glass-hover/20 backdrop-blur-md border-t border-borderSubtle">
                                 {/* Emoji Picker */}
                                 {showEmojiPicker && (
-                                    <div ref={emojiPickerRef} onPointerDownCapture={markInsideEmojiPicker} className="absolute bottom-full left-4 right-4 mb-2 glass-panel shadow-xl overflow-hidden" style={{ height: '320px' }}>
-                                        <div className="p-3 border-b border-borderSubtle">
+                                    <div ref={emojiPickerRef} onPointerDownCapture={markInsideEmojiPicker} className="absolute bottom-full left-4 right-4 mb-2 glass-flyout no-live-blur rounded-xl !p-0 overflow-hidden" style={{ height: '320px' }}>
+                                        <div className="p-3 border-b border-white/[0.06]">
                                             <input
                                                 type="text"
                                                 value={emojiSearchQuery}
@@ -945,7 +946,8 @@ const WhispersWidget = ({ isOpen, onClose }: WhispersWidgetProps) => {
                                                     <button
                                                         key={category}
                                                         onClick={() => { setSelectedEmojiCategory(category); setEmojiSearchQuery(''); }}
-                                                        className={`px-3 py-1.5 text-xs font-medium rounded-md whitespace-nowrap transition-colors ${selectedEmojiCategory === category ? 'bg-accent/20 text-accent border border-transparent shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--color-accent)_35%,transparent)]' : 'bg-transparent text-textSecondary hover:bg-surface-hover border border-transparent'}`}
+                                                        className={`px-3 py-1.5 whitespace-nowrap ${selectedEmojiCategory === category ? `${ACCENT_BUTTON} !text-xs` : `${GLAZE_PILL} text-xs`}`}
+                                                        style={selectedEmojiCategory === category ? ACCENT_FILL : undefined}
                                                     >
                                                         {category}
                                                     </button>
@@ -958,7 +960,7 @@ const WhispersWidget = ({ isOpen, onClose }: WhispersWidgetProps) => {
                                                     <Tooltip key={`${emoji}-${idx}`} content={emoji} side="top">
                                                     <button
                                                         onClick={() => insertEmoji(emoji)}
-                                                        className="flex items-center justify-center p-2 hover:bg-surface-hover rounded-lg transition-colors"
+                                                        className="flex items-center justify-center p-2 hover:bg-white/[0.06] rounded-lg transition-colors"
                                                     >
                                                         <img src={getAppleEmojiUrl(emoji)} alt={emoji} className="w-6 h-6 object-contain" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; (e.target as HTMLImageElement).insertAdjacentText('afterend', emoji); }} />
                                                     </button>

@@ -394,6 +394,9 @@ async fn follow(app: AppHandle, ticket: u64, login: String, row: TwitchStream) {
         },
     )
     .await;
+    // Playback resolved, so the channel is live even where Helix does not list
+    // it yet: the chat's live-only rewards follow at once.
+    crate::services::channel_state::note_live(&row).await;
     log::info!("[WatchStart] {login}: drops, points and the watch session follow it");
     // Can this broadcast be rewound, and where did the viewer leave its recording: the
     // cached lookup also files the archive for the live bookmark. Every app shares it here;

@@ -145,6 +145,92 @@ fn extract_prose_window(text: &str) -> Option<String> {
     None
 }
 
+/// The "Event duration" line for a relay drop's copy: the campaign window on the
+/// enrichment, else the ISO range in the drop's `date_info` (the bot reads it off
+/// badgebase's copy; otherwise it carries a date added, which is no window), else
+/// a range recovered from our own prose. The `date_info` range is used only
+/// beside a writeup: an entry holding just the dates would win over badgebase's
+/// fuller copy for good.
+fn duration_line(
+    start: Option<&str>,
+    end: Option<&str>,
+    date_info: Option<&str>,
+    body: Option<&str>,
+) -> Option<String> {
+    match (start, end) {
+        (Some(s), Some(e)) => Some(format!(
+            "Event duration: {} - {}",
+            normalize_iso(s),
+            normalize_iso(e)
+        )),
+        (Some(s), None) => Some(format!("Event duration: from {}", normalize_iso(s))),
+        (None, Some(e)) => Some(format!("Event duration: until {}", normalize_iso(e))),
+        (None, None) => {
+            if let Some((s, e)) = body
+                .and(date_info)
+                .and_then(crate::services::badge_window::iso_range)
+            {
+                return Some(format!(
+                    "Event duration: {} - {}",
+                    normalize_iso(&s),
+                    normalize_iso(&e)
+                ));
+            }
+            // No authoritative window; recover one from our own prose (e.g. "July
+            // 23 through July 25") so the app can still place the badge in time.
+            body.and_then(extract_prose_window)
+                .map(|window| format!("Event duration: {}", window))
+        }
+    }
+}
+
+/// A badge's More Info without the relay's written-up paragraph. Copies stored
+/// before the paragraph was dropped open with it (`how_to_earn`, first in the
+/// composed text); what shows is the action in its place, then the conditions
+/// and the window, which are the information.
+pub(crate) fn without_blurb(more_info: &str, enrichment: Option<&serde_json::Value>) -> String {
+    let text = |key: &str| {
+        enrichment
+            .and_then(|e| e.get(key))
+            .and_then(|v| v.as_str())
+            .map(clean_text)
+            .filter(|s| !s.is_empty())
+    };
+    let Some(blurb) = text("how_to_earn") else {
+        return more_info.to_string();
+    };
+    let Some(rest) = more_info.strip_prefix(blurb.as_str()) else {
+        return more_info.to_string();
+    };
+    let rest = rest.trim_start_matches('\n');
+    match text("action").filter(|a| !rest.contains(a.as_str())) {
+        Some(action) if rest.is_empty() => action,
+        Some(action) => format!("{action}\n\n{rest}"),
+        None => rest.to_string(),
+    }
+}
+
+/// The duration line `store_enrichment_metadata` writes for a drop, if any.
+pub(crate) fn enrichment_duration_line(
+    enrichment: &serde_json::Value,
+    date_info: Option<&str>,
+) -> Option<String> {
+    let field = |k: &str| {
+        enrichment
+            .get(k)
+            .and_then(|v| v.as_str())
+            .map(clean_text)
+            .filter(|s| !s.is_empty())
+    };
+    let body = field("how_to_earn").or_else(|| field("action"));
+    duration_line(
+        field("starts_utc").as_deref(),
+        field("ends_utc").as_deref(),
+        date_info,
+        body.as_deref(),
+    )
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct BadgeMetadata {
     pub date_added: Option<String>,
@@ -190,10 +276,14 @@ pub async fn fetch_badge_metadata(
     if let Ok(Some(cached)) = get_cached_item(CacheType::Badge, &cache_key).await {
         if cached.metadata.source == ENRICHMENT_SOURCE {
             if let Ok(cached_info) = serde_json::from_value::<BadgeMetadataCached>(cached.data) {
+                let more_info = cached_info
+                    .more_info
+                    .map(|m| without_blurb(&m, cached_info.enrichment.as_ref()))
+                    .filter(|m| !m.trim().is_empty());
                 return Ok(BadgeMetadata {
                     date_added: cached_info.date_added,
                     usage_stats: cached_info.usage_stats,
-                    more_info: cached_info.more_info,
+                    more_info,
                     enrichment: cached_info.enrichment,
                     info_url: url,
                 });
@@ -304,11 +394,13 @@ pub async fn fetch_badge_metadata(
 /// reads, marked `ENRICHMENT_SOURCE` so a badgebase re-scrape never overwrites
 /// it. The window is emitted as ISO timestamps so the panel highlights it and
 /// derives Available / Coming Soon / Expired. Best-effort; a no-content
-/// enrichment is skipped so the panel falls back to badgebase.
+/// enrichment is skipped so the panel falls back to badgebase. `date_info` is
+/// the drop's own date line, read for a window the enrichment lacks.
 pub async fn store_enrichment_metadata(
     badge_set_id: &str,
     badge_version: &str,
     enrichment: &serde_json::Value,
+    date_info: Option<&str>,
 ) {
     let field = |k: &str| {
         enrichment
@@ -319,7 +411,9 @@ pub async fn store_enrichment_metadata(
     };
 
     let mut parts: Vec<String> = Vec::new();
-    let body = field("how_to_earn").or_else(|| field("action"));
+    // The action, never the relay's written-up paragraph: More Info is the
+    // information (how to earn it, the conditions, when), not colour.
+    let body = field("action");
     let body_lc = body.as_deref().unwrap_or("").to_lowercase();
     if let Some(b) = &body {
         parts.push(b.clone());
@@ -341,23 +435,8 @@ pub async fn store_enrichment_metadata(
     }
     // distribution/footnote intentionally omitted: low-value on desktop and they
     // render as orphan fragments (a bare "Twitch Drops" line).
-    let start = field("starts_utc");
-    let end = field("ends_utc");
-    match (&start, &end) {
-        (Some(s), Some(e)) => parts.push(format!(
-            "Event duration: {} - {}",
-            normalize_iso(s),
-            normalize_iso(e)
-        )),
-        (Some(s), None) => parts.push(format!("Event duration: from {}", normalize_iso(s))),
-        (None, Some(e)) => parts.push(format!("Event duration: until {}", normalize_iso(e))),
-        (None, None) => {
-            // No authoritative window; recover one from our own prose (e.g. "July
-            // 23 through July 25") so the app can still place the badge in time.
-            if let Some(window) = body.as_deref().and_then(extract_prose_window) {
-                parts.push(format!("Event duration: {}", window));
-            }
-        }
+    if let Some(line) = enrichment_duration_line(enrichment, date_info) {
+        parts.push(line);
     }
     // Siblings LAST so the panel can split them off for chips while the date pills
     // stay in the paragraph. Newline-separated, may carry Discord emoji markup.
@@ -670,4 +749,60 @@ fn decode_html_entities(text: &str) -> String {
         .replace("&trade;", "\u{2122}"); // trademark
 
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    const RANGE: &str = "2026-10-20T19:00:00Z - 2026-11-03T07:59:00Z";
+
+    #[test]
+    fn the_campaign_window_wins_over_date_info() {
+        let e = json!({
+            "how_to_earn": "Subscribe in the category.",
+            "starts_utc": "2026-10-01T08:00:00.000Z",
+            "ends_utc": "2026-10-29T07:59:00.000Z",
+        });
+        assert_eq!(
+            enrichment_duration_line(&e, Some(RANGE)).as_deref(),
+            Some("Event duration: 2026-10-01T08:00:00Z - 2026-10-29T07:59:00Z")
+        );
+    }
+
+    #[test]
+    fn date_info_fills_a_window_the_enrichment_lacks() {
+        let e = json!({ "how_to_earn": "Subscribe to any streamer.", "starts_utc": null, "ends_utc": null });
+        assert_eq!(
+            enrichment_duration_line(&e, Some(RANGE)).as_deref(),
+            Some("Event duration: 2026-10-20T19:00:00Z - 2026-11-03T07:59:00Z")
+        );
+        // The bot's fallback is the date the badge was added: no window.
+        assert_eq!(enrichment_duration_line(&e, Some("7 October 2026")), None);
+        assert_eq!(enrichment_duration_line(&e, None), None);
+    }
+
+    #[test]
+    fn a_stored_copy_shows_without_the_written_up_paragraph() {
+        let e = json!({
+            "how_to_earn": "A goldfish badge that arrives with a month of Apple TV is the one case where short memory actually works in your favor.",
+            "action": "Subscribe or gift a non-Prime subscription to any streamer.",
+        });
+        let stored = "A goldfish badge that arrives with a month of Apple TV is the one case where short memory actually works in your favor.\n\nEvent duration: 2026-10-20T19:00:00Z - 2026-11-03T19:59:59Z";
+        assert_eq!(
+            without_blurb(stored, Some(&e)),
+            "Subscribe or gift a non-Prime subscription to any streamer.\n\nEvent duration: 2026-10-20T19:00:00Z - 2026-11-03T19:59:59Z"
+        );
+        // A copy that never had the paragraph, or no enrichment at all, is untouched.
+        let clean = "Subscribe or gift a non-Prime subscription to any streamer.";
+        assert_eq!(without_blurb(clean, Some(&e)), clean);
+        assert_eq!(without_blurb(clean, None), clean);
+    }
+
+    #[test]
+    fn date_info_alone_never_makes_an_entry() {
+        // Stored, the bare dates would outrank badgebase's copy for good.
+        assert_eq!(enrichment_duration_line(&json!({}), Some(RANGE)), None);
+    }
 }

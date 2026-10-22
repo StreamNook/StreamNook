@@ -145,7 +145,11 @@ fn parts_for(segments: &[crate::models::chat_layout::MessageSegment]) -> Vec<Men
                 (content, Some(emote_url))
             }
             S::Cheermote { content, cheermote_url, .. } => (content, Some(cheermote_url)),
-            S::Text { content } | S::Emoji { content, .. } | S::Link { content, .. } | S::Gif { content, .. } => (content, None),
+            S::Text { content }
+            | S::Emoji { content, .. }
+            | S::Link { content, .. }
+            | S::Gif { content, .. }
+            | S::Mention { content, .. } => (content, None),
         };
         match image {
             Some(url) if !url.is_empty() => {
@@ -878,6 +882,8 @@ pub fn watch_unread() -> tokio::sync::watch::Receiver<Arc<HashMap<String, u32>>>
 }
 
 pub fn set_visible_rooms(rooms: Vec<String>) {
+    // Opening a chat keeps it watched while offline (mentions while you're away).
+    crate::services::mention_watch::client::lease_rooms(&rooms);
     let _ = with_inbox(|inbox| {
         let changed = inbox.set_visible(rooms);
         ((), changed)
@@ -1017,7 +1023,7 @@ mod tests {
                 is_personal: None,
             },
             S::Text { content: " hi ".into() },
-            S::Link { content: "x.com".into(), url: "https://x.com".into(), card: None },
+            S::Link { content: "x.com".into(), url: "https://x.com".into(), card: None, label: String::new() },
         ];
         assert_eq!(
             parts_for(&segs),

@@ -63,6 +63,7 @@ pub fn frontend_owned_defaults() -> Value {
         "moderation": {
             "timeout_presets": [1, 600, 3600, 86400],
             "card_actions": [],
+            "confirm_bans": false,
         },
         "message_repeat": {
             "mode": "off",

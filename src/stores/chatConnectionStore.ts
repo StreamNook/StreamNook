@@ -38,6 +38,7 @@ import { makeKey, parseKey, sliceLookupKey } from '../utils/providerKey';
 import { streamProvider } from '../utils/streamProvider';
 import { parseBadges } from '../services/twitchBadges';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { fetchAllEmotes, fetchKickChannelEmotes, fetchYouTubeChannelEmotes, enhanceRustEmotes, type Emote, type EmoteSet } from '../services/emoteService';
 import { Logger } from '../utils/logger';
 import { useAppStore } from './AppStore';
@@ -60,6 +61,8 @@ const CHAT_MAX_WITH_BUFFER = CHAT_HISTORY_MAX + CHAT_BUFFER_SIZE;
 // early attempts name the delay, later ones just say we are still trying.
 const RECONNECT_QUIET_ATTEMPTS = 3;
 const WS_OPEN_RETRY_ATTEMPTS = 5;
+/** How often a socket retry's wait checks whether anyone still wants it. */
+const WS_RETRY_STEP_MS = 100;
 const HEALTH_CHECK_INTERVAL_MS = 30_000;
 const STALE_WARNING_MS = 2 * 60_000;
 const STALE_RECONNECT_MS = 3 * 60_000;
@@ -86,6 +89,26 @@ export interface ModerationContext {
   type: 'timeout' | 'ban' | 'deleted';
   duration?: number;
   username?: string;
+  /** The moderator who acted, known only to moderators (EventSub). */
+  by?: string;
+  /** The moderator's reason, when one was given. */
+  reason?: string;
+}
+
+/** Mirrors Rust `room_mod_log::LogEntry`, pushed as `room-mod-log`. */
+export interface RoomModLogEntry {
+  id: string;
+  channel: string;
+  action: string;
+  moderator: string;
+  target: string | null;
+  target_id: string | null;
+  line: string;
+  quote: string | null;
+  reason?: string | null;
+  message_id?: string | null;
+  at_ms: number;
+  liftable: boolean;
 }
 
 export interface ClearedUserEntry {
@@ -1452,15 +1475,24 @@ function extractChannelFromIrc(line: string): string | null {
 
 // --- WebSocket lifecycle ----------------------------------------------------
 
-async function openWebSocketWithRetry(port: number): Promise<WebSocket> {
+/** Opens the bridge socket, retrying. Resolves null once `isStale` says
+ *  nobody wants this connect any more. */
+async function openWebSocketWithRetry(port: number, isStale: () => boolean): Promise<WebSocket | null> {
   for (let attempt = 0; attempt < WS_OPEN_RETRY_ATTEMPTS; attempt++) {
     if (attempt > 0) {
       const delay = 500 + attempt * 500;
       Logger.debug(
         `[ChatStore] Waiting ${delay}ms before WS connection attempt ${attempt + 1}/${WS_OPEN_RETRY_ATTEMPTS}`,
       );
-      await new Promise((r) => setTimeout(r, delay));
+      // In short steps, so a connect nobody wants stops within one.
+      for (let waited = 0; waited < delay && !isStale(); waited += WS_RETRY_STEP_MS) {
+        await new Promise((r) => setTimeout(r, Math.min(WS_RETRY_STEP_MS, delay - waited)));
+      }
     }
+    // The window let go of its last channel meanwhile: stop before another
+    // attempt, so a channel opened right after never waits out retries
+    // against a bridge a stop already took down.
+    if (isStale()) return null;
     let socket: WebSocket | null = null;
     try {
       socket = new WebSocket(`ws://localhost:${port}`);
@@ -1915,17 +1947,19 @@ async function connectBridgeInner(
     useChatConnectionStore.setState({ wsPort: port });
 
     const tBeforeWs = performance.now();
-    const socket = await openWebSocketWithRetry(port);
-    Logger.info(`[ChatPerf] WS bridge open took ${Math.round(performance.now() - tBeforeWs)}ms (connect total ${Math.round(performance.now() - chatConnectStartedAt)}ms)`);
+    const socket = await openWebSocketWithRetry(port, () => gen !== connectGeneration);
+    if (socket) {
+      Logger.info(`[ChatPerf] WS bridge open took ${Math.round(performance.now() - tBeforeWs)}ms (connect total ${Math.round(performance.now() - chatConnectStartedAt)}ms)`);
+    }
     // The teardown may have run while this connect was still awaiting. Installing
     // anyway re-armed the 30s watchdog with zero channels and left an unowned
     // socket open for good; the next acquire would then overwrite `ws` and the
     // abandoned one kept feeding duplicate frames (and kept the stale-timer clock
     // fresh) with its handlers still attached.
-    if (gen !== connectGeneration || useChatConnectionStore.getState().channels.size === 0) {
-      Logger.debug('[ChatStore] Discarding a bridge connect that is no longer wanted');
+    if (!socket || gen !== connectGeneration || useChatConnectionStore.getState().channels.size === 0) {
+      Logger.info(`[ChatStore] dropped a bridge connect for ${channel} that nobody wants any more`);
       try {
-        socket.close(1000, 'Superseded');
+        socket?.close(1000, 'Superseded');
       } catch {
         // ignore
       }
@@ -2486,18 +2520,23 @@ function handleWsMessage(raw: string) {
           }
         }
         if (showModMsgs && ch) {
+          const joinKey = modJoinKey(ch, 'msg', String(parsed.target_msg_id));
+          const named = takePendingModEntry(joinKey);
           const who = delLogin ?? 'a user';
           // Kick's auto-mod deletes name the rule that was violated; saying so
           // beats "by a moderator" when no human was involved.
           const why = (parsed.reason as string) || '';
-          injectSystemMessage(
+          const rowId = injectSystemMessage(
             ch,
-            why
-              ? `${who}'s message was deleted (${why}).`
-              : `${who}'s message was deleted by a moderator.`,
+            named
+              ? namedModLine(named)
+              : why
+                ? `${who}'s message was deleted (${why}).`
+                : `${who}'s message was deleted by a moderator.`,
             undefined,
             systemSourceFor(ch),
           );
+          if (!named) noteModJoin(joinKey, rowId);
         }
         // Moderator log: message deletions are broadcast to every viewer over IRC,
         // so this populates the log even when you're not a mod. The EventSub feed
@@ -2526,6 +2565,18 @@ function handleWsMessage(raw: string) {
         const modSettings = useAppStore.getState().settings.moderation;
         const ignoreClear = modSettings?.ignore_clear_chat ?? false;
         const showModMsgs = modSettings?.show_mod_messages ?? false;
+        // A moderator's EventSub entry for this same action may have landed
+        // first; it names who acted and why.
+        const joinKey = ch
+          ? parsed.target_user_id
+            ? modJoinKey(
+                ch,
+                parsed.ban_duration !== undefined && parsed.ban_duration !== null ? 'timeout' : 'ban',
+                String(parsed.target_user_id),
+              )
+            : modJoinKey(ch, 'clear')
+          : null;
+        const named = joinKey ? takePendingModEntry(joinKey) : null;
         const apply = (slice: ChannelSlice) => {
           if (!parsed.target_user_id) return; // full chat clear — UI doesn't track this today
           if (ignoreClear) return; // user opted out of moderation strikethrough overlays
@@ -2548,13 +2599,17 @@ function handleWsMessage(raw: string) {
               type: modType,
               duration: parsed.ban_duration,
               username: parsed.target_user,
+              ...namedContext(named),
             },
             affectedMessageIds: affected,
           });
         };
         if (ch) withSlice(ch, apply);
         else for (const s of useChatConnectionStore.getState().channels.values()) apply(s);
-        if (showModMsgs && ch && parsed.target_user_id) {
+        let modRowId: string | null = null;
+        if (showModMsgs && ch && named) {
+          modRowId = injectSystemMessage(ch, namedModLine(named));
+        } else if (showModMsgs && ch && parsed.target_user_id) {
           const who = parsed.target_user ?? 'A user';
           let line: string;
           if (parsed.ban_duration !== undefined && parsed.ban_duration !== null) {
@@ -2568,10 +2623,12 @@ function handleWsMessage(raw: string) {
           } else {
             line = `${who} was banned.`;
           }
-          injectSystemMessage(ch, line);
+          modRowId = injectSystemMessage(ch, line);
         } else if (showModMsgs && ch && !parsed.target_user_id) {
-          injectSystemMessage(ch, 'Chat was cleared by a moderator.');
+          modRowId = injectSystemMessage(ch, 'Chat was cleared by a moderator.');
         }
+        // IRC first: keep the struck rows and the line ready for the name.
+        if (joinKey && !named) noteModJoin(joinKey, modRowId);
         // Moderator log: timeouts/bans/clears are broadcast to every viewer over
         // IRC (anonymized — no acting moderator). This is the baseline feed that
         // works in any channel, live or offline, main or multi. The EventSub
@@ -3414,6 +3471,7 @@ export async function acquireChannel(
   // and then miss its own slice for every mixed-case YouTube id, so the ref count
   // never rose and each acquire silently replaced the previous slice.
   const key = sliceLookupKey(provider, channel);
+  if (provider === 'twitch') ensureRoomModLogListener();
   const state = useChatConnectionStore.getState();
   const existing = state.channels.get(key);
 
@@ -3580,6 +3638,10 @@ async function finishRelease(key: string, channel: string, provider: ProviderId)
   // sibling MultiChat popouts) may still be using it. Tearing down here
   // would kill chat for every other consumer in the process.
   removeSlice(key);
+  // The window's last channel: a first connect still in flight is for nobody
+  // now. Retired here rather than after the PART below, so a channel opened
+  // meanwhile never queues behind a connect retrying a bridge that is gone.
+  if (useChatConnectionStore.getState().channels.size === 0) connectGeneration += 1;
   sendRoute(`UNSUB:${key}`);
   clearChannelRetry(key);
   // Free per-channel state the slice didn't own: the pending flush queue and the
@@ -3854,7 +3916,7 @@ export function injectSystemMessage(
   // A 7TV emote set change, carried whole so a stream overlay can draw it as
   // a 7TV event instead of reading this row's text.
   seventvEmoteChange?: SeventvEmoteChange,
-): void {
+): string {
   const sysMsgId = `sys-cmd-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
   withSlice(channel, (slice) => {
     pushMessage(slice, {
@@ -3881,6 +3943,159 @@ export function injectSystemMessage(
     });
     slice.seenMessageIds.add(sysMsgId);
   });
+  return sysMsgId;
+}
+
+/** Reword a system row already on screen. The row gets a new segments array,
+ *  which is what makes its memoized line repaint. */
+export function replaceSystemMessage(channel: string, rowId: string, message: string): boolean {
+  let replaced = false;
+  withSlice(channel, (slice) => {
+    replaced = replaceSystemRow(slice, rowId, message);
+  });
+  return replaced;
+}
+
+function replaceSystemRow(slice: ChannelSlice, rowId: string, message: string): boolean {
+  const i = slice.messages.findIndex((m) => typeof m !== 'string' && m?.id === rowId);
+  if (i < 0) return false;
+  const next = slice.messages.slice();
+  next[i] = { ...slice.messages[i], content: message, segments: [{ type: 'text', content: message }] };
+  slice.messages = next;
+  return true;
+}
+
+// --- Moderator names on moderation (EventSub room-mod-log) -------------------
+//
+// IRC tells every viewer that a chatter was timed out, banned or had a message
+// deleted, but not by whom. A moderator's EventSub feed (Rust room_mod_log.rs,
+// pushed as `room-mod-log` to every window) names the moderator and the reason.
+// The two arrive in either order, so whichever lands first waits here briefly
+// for the other: an IRC action keeps the id of the line it wrote, an EventSub
+// entry waits to be read when its IRC action lands.
+
+/** How long either half waits for the other. */
+const MOD_JOIN_WINDOW_MS = 10_000;
+
+/** IRC landed first: when, and the system line it wrote (if any). */
+const seenModActions = new Map<string, { at: number; rowId: string | null }>();
+/** EventSub landed first. */
+const pendingModEntries = new Map<string, { at: number; entry: RoomModLogEntry }>();
+
+/** Actions only EventSub reports, which get a row of their own. Mode changes
+ *  are left out: Twitch's NOTICE already writes a row for each. */
+const EVENTSUB_ONLY_ROWS = new Set([
+  'warn',
+  'unban',
+  'untimeout',
+  'shared_chat_unban',
+  'shared_chat_untimeout',
+  'approve_unban_request',
+  'deny_unban_request',
+]);
+
+type ModJoinKind = 'timeout' | 'ban' | 'msg' | 'clear';
+
+function modJoinKey(channel: string, kind: ModJoinKind, id = ''): string {
+  return `${channel.toLowerCase()}|${kind}|${id}`;
+}
+
+function pruneModJoins(now: number): void {
+  for (const [k, v] of seenModActions) if (now - v.at > MOD_JOIN_WINDOW_MS) seenModActions.delete(k);
+  for (const [k, v] of pendingModEntries) if (now - v.at > MOD_JOIN_WINDOW_MS) pendingModEntries.delete(k);
+}
+
+/** The EventSub entry waiting for this IRC action, taken so it applies once. */
+function takePendingModEntry(key: string, now = Date.now()): RoomModLogEntry | null {
+  pruneModJoins(now);
+  const hit = pendingModEntries.get(key);
+  if (!hit) return null;
+  pendingModEntries.delete(key);
+  return hit.entry;
+}
+
+function noteModJoin(key: string, rowId: string | null, now = Date.now()): void {
+  pruneModJoins(now);
+  seenModActions.set(key, { at: now, rowId });
+}
+
+/** The IRC action this entry names, or null when IRC never reports it. */
+function modJoinKeyFor(entry: RoomModLogEntry): string | null {
+  const kind = entry.action.replace(/^shared_chat_/, '');
+  if ((kind === 'timeout' || kind === 'ban') && entry.target_id) {
+    return modJoinKey(entry.channel, kind, entry.target_id);
+  }
+  if (kind === 'delete' && entry.message_id) return modJoinKey(entry.channel, 'msg', entry.message_id);
+  if (entry.action === 'clear') return modJoinKey(entry.channel, 'clear');
+  return null;
+}
+
+/** Rust's line, with the reason after it when there is one. */
+function namedModLine(entry: RoomModLogEntry): string {
+  return entry.reason ? `${entry.line}: ${entry.reason}` : entry.line;
+}
+
+function namedContext(entry: RoomModLogEntry | null): Pick<ModerationContext, 'by' | 'reason'> {
+  if (!entry) return {};
+  return {
+    ...(entry.moderator ? { by: entry.moderator } : {}),
+    ...(entry.reason ? { reason: entry.reason } : {}),
+  };
+}
+
+/** One `room-mod-log` entry: name the struck rows and the line IRC already
+ *  wrote, wait for IRC, or write the row IRC never will. Exported for tests. */
+export function applyRoomModLog(entry: RoomModLogEntry, now = Date.now()): void {
+  if (!entry?.channel || !entry.action) return;
+  pruneModJoins(now);
+  const channel = entry.channel.toLowerCase();
+  const key = modJoinKeyFor(entry);
+  if (key) {
+    const seen = seenModActions.get(key);
+    if (!seen) {
+      pendingModEntries.set(key, { at: now, entry });
+      return;
+    }
+    seenModActions.delete(key);
+    const struck = /(^|_)(ban|timeout)$/.test(entry.action);
+    withSlice(channel, (slice) => {
+      const targetId = entry.target_id;
+      const cleared = struck && targetId ? slice.clearedUserContexts.get(targetId) : undefined;
+      if (targetId && cleared) {
+        slice.clearedUserContexts = new Map(slice.clearedUserContexts).set(targetId, {
+          ...cleared,
+          context: { ...cleared.context, ...namedContext(entry) },
+        });
+      }
+      if (seen.rowId) replaceSystemRow(slice, seen.rowId, namedModLine(entry));
+    });
+    return;
+  }
+  const showModMsgs = useAppStore.getState().settings.moderation?.show_mod_messages ?? false;
+  if (showModMsgs && EVENTSUB_ONLY_ROWS.has(entry.action)) {
+    injectSystemMessage(channel, namedModLine(entry));
+  }
+}
+
+let roomModLogListening = false;
+
+/** Listen for `room-mod-log` once per window. Every window's chat runs on
+ *  this store, so the first channel it opens starts the listener. */
+function ensureRoomModLogListener(): void {
+  if (roomModLogListening) return;
+  roomModLogListening = true;
+  void Promise.resolve()
+    .then(() => listen<RoomModLogEntry>('room-mod-log', (e) => applyRoomModLog(e.payload)))
+    .catch((e) => {
+      roomModLogListening = false;
+      Logger.debug('[ChatStore] room-mod-log listener unavailable:', e);
+    });
+}
+
+/** Test seam: forget both halves of every join. */
+export function resetModJoinsForTest(): void {
+  seenModActions.clear();
+  pendingModEntries.clear();
 }
 
 export function setChannelPaused(channel: string, paused: boolean): void {

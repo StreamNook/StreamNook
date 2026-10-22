@@ -75,9 +75,11 @@ const CustomSoundsSettings = () => {
                 spellCheck={false}
                 aria-label="Sound name"
               />
-              <div className="truncate text-[11px] text-textSecondary" title={s.path}>
-                {s.path}
-              </div>
+              <Tooltip content={s.path}>
+                <div className="truncate text-[11px] text-textSecondary">
+                  {s.path}
+                </div>
+              </Tooltip>
             </div>
             <Tooltip content="Play" side="top">
               <button

@@ -789,9 +789,9 @@ export const ActivityFeedWidget = memo(function ActivityFeedWidget({
         <>
           <div className="fixed inset-0 z-[1000]" onClick={() => setCurrencyOpen(false)} />
           <div
-            className="glass-panel fixed z-[1001] max-h-[60vh] w-28 overflow-y-auto rounded-lg border border-borderLight p-1 shadow-xl scrollbar-thin"
-            // Opaque themed surface: a live backdrop-blur flickers over the feed.
-            style={{ right: currencyPos.right, bottom: currencyPos.bottom, backgroundColor: 'var(--color-background-tertiary)', backdropFilter: 'none', WebkitBackdropFilter: 'none' }}
+            // The menu glass without its live blur, which flickers over the feed.
+            className="glass-flyout no-live-blur fixed z-[1001] max-h-[60vh] w-28 overflow-y-auto rounded-xl scrollbar-thin"
+            style={{ right: currencyPos.right, bottom: currencyPos.bottom }}
           >
             {['', ...CURRENCY_OPTIONS].map((c) => {
               const selected = targetCurrency === c;
@@ -808,8 +808,8 @@ export const ActivityFeedWidget = memo(function ActivityFeedWidget({
                     }
                     setCurrencyOpen(false);
                   }}
-                  className={`flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-left text-xs transition-colors ${
-                    selected ? 'bg-accent/20 text-accent' : 'text-textSecondary hover:bg-white/5 hover:text-textPrimary'
+                  className={`flex w-full items-center justify-between gap-2 rounded-lg px-2 py-2 text-left text-xs transition-colors ${
+                    selected ? 'bg-white/[0.08] text-textPrimary' : 'text-textSecondary hover:bg-white/[0.06] hover:text-textPrimary'
                   }`}
                 >
                   <span className="font-semibold uppercase tracking-wide">{c || 'Orig'}</span>
@@ -825,11 +825,11 @@ export const ActivityFeedWidget = memo(function ActivityFeedWidget({
         <>
           <div className="fixed inset-0 z-[1000]" onClick={() => setFilterOpen(false)} />
           <div
-            className="glass-panel fixed z-[1001] max-h-[60vh] w-56 overflow-y-auto rounded-lg border border-borderLight p-2 shadow-xl scrollbar-thin"
-            // Opaque themed surface: a live backdrop-blur flickers over the feed.
-            style={{ right: filterPos.right, bottom: filterPos.bottom, backgroundColor: 'var(--color-background-tertiary)', backdropFilter: 'none', WebkitBackdropFilter: 'none' }}
+            // The menu glass without its live blur, which flickers over the feed.
+            className="glass-flyout no-live-blur fixed z-[1001] max-h-[60vh] w-56 overflow-y-auto rounded-xl scrollbar-thin"
+            style={{ right: filterPos.right, bottom: filterPos.bottom }}
           >
-            <div className="mb-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-textMuted">
+            <div className="mb-1 px-1 text-[11px] font-semibold uppercase tracking-wider text-white/50">
               Show in activity
             </div>
             {openProviders.map((p) => (
@@ -847,7 +847,7 @@ export const ActivityFeedWidget = memo(function ActivityFeedWidget({
                       key={kind}
                       type="button"
                       onClick={() => toggleHidden(p, kind)}
-                      className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs hover:bg-white/5"
+                      className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-xs hover:bg-white/[0.06]"
                     >
                       <span
                         className={`flex h-3.5 w-3.5 flex-shrink-0 items-center justify-center rounded-sm border ${

@@ -1015,6 +1015,12 @@ export const LinkPreviewCard = memo(function LinkPreviewCard({
 
   // --- Direct image ---------------------------------------------------------
   if (preview.kind === 'image' && preview.image && !imageFailed) {
+    // Drawn at its final size from the first frame when the backend read the
+    // picture's size, so the row grows once (not again when it decodes).
+    const pw = preview.width ?? 0;
+    const ph = preview.height ?? 0;
+    const h = pw && ph ? Math.min(288, ph) : 0;
+    const w = h ? Math.round((pw / ph) * h) : 0;
     return wrap(
       <div
         {...cardProps}
@@ -1025,7 +1031,8 @@ export const LinkPreviewCard = memo(function LinkPreviewCard({
           alt="Linked image"
           loading="lazy"
           referrerPolicy="no-referrer"
-          className="max-h-72 w-auto object-contain"
+          className={h ? 'block object-contain' : 'max-h-72 w-auto object-contain'}
+          style={h ? { width: w, maxWidth: '100%', height: 'auto', aspectRatio: `${pw} / ${ph}` } : undefined}
           onError={() => setImageFailed(true)}
         />
       </div>,

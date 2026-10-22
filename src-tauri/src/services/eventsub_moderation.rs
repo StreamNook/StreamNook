@@ -136,19 +136,32 @@ enum SubOutcome {
     Created(String),
     Forbidden, // not a mod (403) or missing scope (401): don't retry this channel
     Transient, // network / 5xx / parse: leave tracked, retry on reconnect
+    /// The account's socket limit (429 "websocket transports"): nothing more
+    /// is posted, and the socket waits out the limit (`eventsub_budget`).
+    OverBudget,
+}
+
+/// How one moderation connection ended.
+#[derive(Debug, PartialEq, Eq)]
+enum ModEnded {
+    Closed,
+    OverBudget,
 }
 
 /// Every topic subscribed per moderated channel. `channel.moderate` is the
 /// gate: a 403 there means "not a mod" and prunes the channel. The others
 /// need scopes older tokens may lack (`moderator:manage:automod`,
-/// `moderator:read:suspicious_users`); a 401/403 on them skips the topic
-/// for this session without touching the channel.
+/// `moderator:read:suspicious_users`, `moderator:manage:unban_requests`); a
+/// 401/403 on them skips the topic for this session without touching the
+/// channel. Unban requests subscribe only `create`: `channel.moderate`
+/// already reports approve / deny, which saves a subscription per channel.
 const TOPICS: &[(&str, &str)] = &[
     ("channel.moderate", "2"),
     ("automod.message.hold", "2"),
     ("automod.message.update", "2"),
     ("channel.suspicious_user.message", "1"),
     ("channel.suspicious_user.update", "1"),
+    ("channel.unban_request.create", "1"),
 ];
 
 /// Subscribe every topic for one channel. Returns the created ids, or
@@ -162,6 +175,7 @@ async fn subscribe_all(
     for (i, (topic, version)) in TOPICS.iter().enumerate() {
         match create_subscription(topic, version, broadcaster_id, moderator_user_id, session_id).await {
             SubOutcome::Created(id) => ids.push(id),
+            SubOutcome::OverBudget => return Err(SubOutcome::OverBudget),
             SubOutcome::Forbidden if i == 0 => return Err(SubOutcome::Forbidden),
             SubOutcome::Transient if i == 0 => return Err(SubOutcome::Transient),
             _ => {} // optional topic unavailable (scope); keep going
@@ -225,6 +239,12 @@ async fn create_subscription(
             }
             None => SubOutcome::Transient,
         }
+    } else if status == 429 && {
+        let body = resp.text().await.unwrap_or_default();
+        crate::services::eventsub_budget::is_transport_limit(status, &body)
+    } {
+        debug!("[EventSub Mod] {} for {} refused by the socket limit", sub_type, broadcaster_id);
+        SubOutcome::OverBudget
     } else if status == 403 || status == 401 {
         debug!(
             "[EventSub Mod] {} not authorized for {} (HTTP {}), skipping",
@@ -262,6 +282,7 @@ async fn connection_loop(
     subs: Arc<RwLock<HashMap<String, ChannelSub>>>,
     mut cmd_rx: mpsc::UnboundedReceiver<Cmd>,
 ) {
+    let mut budget_retry = crate::services::eventsub_budget::OVER_BUDGET_MIN_SECS;
     loop {
         // Don't hold an idle socket: Twitch closes a subscription-less session
         // ~10s after welcome. Wait for the first channel before connecting.
@@ -276,9 +297,40 @@ async fn connection_loop(
             }
         }
 
-        if let Err(e) = connect_and_run(&app_handle, &subs, &mut cmd_rx).await {
-            error!("[EventSub Mod] connection ended: {}", e);
+        let ended = match connect_and_run(&app_handle, &subs, &mut cmd_rx).await {
+            Ok(ended) => ended,
+            Err(e) => {
+                error!("[EventSub Mod] connection ended: {}", e);
+                ModEnded::Closed
+            }
+        };
+
+        if ended == ModEnded::OverBudget {
+            let (wait, next) = crate::services::eventsub_budget::over_budget_wait(budget_retry);
+            budget_retry = next;
+            if crate::services::eventsub_budget::note_over_budget(SocketOwner::Moderation) {
+                crate::services::eventsub_budget::log_episode("moderation", wait);
+            }
+            // Chats opening or closing meanwhile only change what the next
+            // attempt subscribes; the last one closing ends the wait.
+            let waited = crate::services::eventsub_budget::wait(wait);
+            tokio::pin!(waited);
+            loop {
+                tokio::select! {
+                    _ = &mut waited => break,
+                    cmd = cmd_rx.recv() => {
+                        if cmd.is_none() {
+                            return;
+                        }
+                        if subs.read().await.is_empty() {
+                            break;
+                        }
+                    }
+                }
+            }
+            continue;
         }
+        budget_retry = crate::services::eventsub_budget::OVER_BUDGET_MIN_SECS;
 
         // Only reconnect if channels still want coverage.
         if !subs.read().await.is_empty() {
@@ -292,7 +344,7 @@ async fn connect_and_run(
     app_handle: &AppHandle,
     subs: &Arc<RwLock<HashMap<String, ChannelSub>>>,
     cmd_rx: &mut mpsc::UnboundedReceiver<Cmd>,
-) -> Result<()> {
+) -> Result<ModEnded> {
     let (ws, session) = EventSubService::open_session(EVENTSUB_URL.to_string()).await?;
     let (mut write, mut read) = ws.split();
     let mut session_id = session.id;
@@ -323,15 +375,27 @@ async fn connect_and_run(
                 Err(SubOutcome::Forbidden) => {
                     subs.write().await.remove(&sub.channel_name);
                 }
+                // The socket limit: the rest would meet it too. Closed now
+                // rather than left for Twitch to drop, subscription-less.
+                Err(SubOutcome::OverBudget) if active.is_empty() => {
+                    let _ = write.send(Message::Close(None)).await;
+                    return Ok(ModEnded::OverBudget);
+                }
                 Err(_) => {}
             }
+        }
+    }
+    if !active.is_empty() {
+        live.mark_subscribed();
+        if crate::services::eventsub_budget::note_room(SocketOwner::Moderation) {
+            crate::services::eventsub_budget::log_room("moderation");
         }
     }
 
     // If nothing is (or can be) subscribed, drop the socket rather than let
     // Twitch close it on the idle timeout.
     if active.is_empty() && subs.read().await.is_empty() {
-        return Ok(());
+        return Ok(ModEnded::Closed);
     }
 
     // The new connection Twitch asked for, opening while this one keeps
@@ -347,9 +411,9 @@ async fn connect_and_run(
                 match read_res {
                     Err(_) => {
                         warn!("[EventSub Mod] no frames in {}s, reconnecting", read_timeout.as_secs());
-                        return Ok(());
+                        return Ok(ModEnded::Closed);
                     }
-                    Ok(None) => return Ok(()),
+                    Ok(None) => return Ok(ModEnded::Closed),
                     Ok(Some(Ok(Message::Text(txt)))) => {
                         if let Some(url) = handle_text(&txt, app_handle, &mut seen) {
                             if migrating.is_none() {
@@ -361,7 +425,7 @@ async fn connect_and_run(
                     Ok(Some(Ok(Message::Ping(d)))) => {
                         write.send(Message::Pong(d)).await?;
                     }
-                    Ok(Some(Ok(Message::Close(_)))) => return Ok(()),
+                    Ok(Some(Ok(Message::Close(_)))) => return Ok(ModEnded::Closed),
                     Ok(Some(Err(e))) => return Err(e.into()),
                     Ok(Some(Ok(_))) => {}
                 }
@@ -375,10 +439,7 @@ async fn connect_and_run(
                         keepalive_secs = session.keepalive_timeout_seconds.unwrap_or(keepalive_secs);
                         if session.id != session_id {
                             // Register the new id before the old guard drops.
-                            drop(std::mem::replace(
-                                &mut live,
-                                LiveSession::open(SocketOwner::Moderation, &session.id),
-                            ));
+                            live = live.moved(SocketOwner::Moderation, &session.id);
                             session_id = session.id;
                         }
                         debug!("[EventSub Mod] moved to the reconnect URL, subscriptions carried over");
@@ -393,7 +454,12 @@ async fn connect_and_run(
                     Some(Cmd::Subscribe(sub)) => {
                         if !active.contains_key(&sub.channel_name) {
                             match subscribe_all(&sub.broadcaster_id, &moderator_user_id, &session_id).await {
-                                Ok(ids) => { active.insert(sub.channel_name.clone(), ids); }
+                                Ok(ids) => {
+                                    if active.is_empty() {
+                                        live.mark_subscribed();
+                                    }
+                                    active.insert(sub.channel_name.clone(), ids);
+                                }
                                 Err(SubOutcome::Forbidden) => { subs.write().await.remove(&sub.channel_name); }
                                 Err(_) => {}
                             }
@@ -406,10 +472,10 @@ async fn connect_and_run(
                             }
                         }
                         if subs.read().await.is_empty() {
-                            return Ok(()); // no channels left; drop the socket
+                            return Ok(ModEnded::Closed); // no channels left; drop the socket
                         }
                     }
-                    None => return Ok(()),
+                    None => return Ok(ModEnded::Closed),
                 }
             }
         }
@@ -447,6 +513,11 @@ fn handle_text(txt: &str, app_handle: &AppHandle, seen: &mut SeenMessages) -> Op
                     let _ = app_handle.emit("eventsub://channel-moderate", event);
                     // The phones' Moderation sheet reads the room's log from Rust.
                     crate::services::room_mod_log::on_moderate_event(event);
+                    // An approve, deny or unban settles a pending unban request.
+                    crate::services::unban_requests::on_moderate(event);
+                }
+                "channel.unban_request.create" => {
+                    crate::services::unban_requests::on_create(event);
                 }
                 "automod.message.hold" => {
                     if let Some(row) = crate::services::automod_queue::AutomodQueue::from_hold_event(event) {

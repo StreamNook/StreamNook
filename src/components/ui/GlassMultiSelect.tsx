@@ -120,9 +120,9 @@ export const GlassMultiSelect = ({
                             animate={{ opacity: 1, y: 0, scale: 1 }}
                             exit={{ opacity: 0, y: -4, scale: 0.97 }}
                             transition={{ duration: 0.14, ease: 'easeOut' }}
-                            className="rounded-lg bg-glass-ink/90 backdrop-blur-3xl shadow-[0_8px_32px_rgba(0,0,0,0.6)] border border-white/10 overflow-hidden"
+                            className="glass-flyout rounded-xl !p-0 overflow-hidden"
                         >
-                            <div className="py-1 flex flex-col w-full max-h-72 overflow-y-auto scrollbar-thin">
+                            <div className="p-1.5 flex flex-col w-full max-h-72 overflow-y-auto scrollbar-thin">
                                 <button
                                     role="option"
                                     aria-selected={values.length === 0}
@@ -130,10 +130,10 @@ export const GlassMultiSelect = ({
                                         onChange([]);
                                         setIsOpen(false);
                                     }}
-                                    className={`w-full text-left px-3 py-2 text-sm flex items-center justify-between transition-colors outline-none
+                                    className={`w-full text-left rounded-lg px-2 py-2 text-sm text-textPrimary flex items-center justify-between transition-colors outline-none
                                         ${values.length === 0
-                                            ? 'text-accent font-bold bg-white/5'
-                                            : 'text-textPrimary hover:bg-white/10 hover:text-white focus:bg-white/10'
+                                            ? 'bg-white/[0.08]'
+                                            : 'hover:bg-white/[0.06] focus:bg-white/[0.06]'
                                         }
                                     `}
                                 >
@@ -148,10 +148,10 @@ export const GlassMultiSelect = ({
                                             role="option"
                                             aria-selected={isSelected}
                                             onClick={() => toggle(option.value)}
-                                            className={`w-full text-left px-3 py-2 text-sm flex items-center justify-between transition-colors outline-none
+                                            className={`w-full text-left rounded-lg px-2 py-2 text-sm text-textPrimary flex items-center justify-between transition-colors outline-none
                                                 ${isSelected
-                                                    ? 'text-accent font-bold bg-white/5'
-                                                    : 'text-textPrimary hover:bg-white/10 hover:text-white focus:bg-white/10'
+                                                    ? 'bg-white/[0.08]'
+                                                    : 'hover:bg-white/[0.06] focus:bg-white/[0.06]'
                                                 }
                                             `}
                                         >

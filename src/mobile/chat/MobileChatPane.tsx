@@ -469,16 +469,15 @@ export const MobileChatPane: React.FC<{
   );
 
   // Returning to live: unpause, then let the list glide smoothly to the bottom
-  // (ChatMessageList exposes its eased scroll for exactly this).
+  // (ChatMessageList fills this ref with its eased scroll for exactly this).
+  const listScrollToBottomRef = useRef<(() => void) | null>(null);
   const resumeLive = useCallback(() => {
     // `force`: this is an explicit tap on the Resume control, so it must never
     // be swallowed by the settle window the way a stray scroll report should be.
     pause(false, { force: true });
-    requestAnimationFrame(() => {
-      (
-        window as Window & typeof globalThis & { __chatScrollToBottom?: () => void }
-      ).__chatScrollToBottom?.();
-    });
+    // Same tick as the unpause: a frame later the re-render has already pinned
+    // the list to the bottom and the glide finds nothing left to cover.
+    listScrollToBottomRef.current?.();
   }, [pause]);
 
   // Tapping the "replying to" line jumps to the message being replied to.
@@ -922,6 +921,7 @@ export const MobileChatPane: React.FC<{
         data-tap-reply={isPaused && !noSend ? 'true' : undefined}
       >
         <ChatMessageList
+          scrollToBottomRef={listScrollToBottomRef}
           messages={shownMessages}
           emptyNote={replayOn ? replayError : historyLoaded ? 'No recent messages' : null}
           renderToken={renderToken}

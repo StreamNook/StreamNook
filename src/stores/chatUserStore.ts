@@ -6,7 +6,8 @@ import { resolveMemberIds } from '../services/memberAliasService';
 import {
   getCosmeticsFromMemoryCache,
   getCosmeticsWithFallback,
-  isUserCosmeticsHardFailed,
+  isUserCosmeticsRecheckDue,
+  isUserCosmeticsUsable,
   subscribeToCosmetics,
 } from '../services/cosmeticsCache';
 import { invoke } from '@tauri-apps/api/core';
@@ -29,7 +30,6 @@ import {
   resolveBttvProUrl,
   withBttvPro,
 } from '../services/bttvProBadge';
-import { snapshotOverrides } from '../utils/userChatOverrides';
 import { onePerCategory } from '../utils/chatterBadges';
 import { IS_MOBILE } from '../utils/platform';
 
@@ -96,10 +96,7 @@ interface ChatUserStore {
   
   /** Get a user by username (case-insensitive) */
   getUserByUsername: (username: string, provider?: ProviderId) => ChatUser | undefined;
-  
-  /** Get users matching a search query (prefix match on username/displayName) */
-  getMatchingUsers: (query: string, limit?: number) => ChatUser[];
-  
+
   /** Clear all users (call when switching channels) */
   clearUsers: () => void;
 }
@@ -655,22 +652,6 @@ function pushCologne(memberId: string, chatKey: string, cosmetics: CologneCosmet
 // clone volume proportionally. Desktop keeps 8000 unchanged.
 const MAX_TRACKED_USERS = IS_MOBILE ? 1500 : 8000;
 const USER_EVICT_SLACK = 1000;
-const MATCH_SCAN_CAP = 200;
-
-// Lowercased name pairs, keyed by user-object identity. Identity changes
-// (rename, color) replace the ChatUser object via the identity coalescer, so a
-// stale entry can never be served; the in-place lastSeen bump never touches
-// names. Kills the 2-per-user toLowerCase() allocations the autocomplete scan
-// paid on every keystroke.
-const lowerNameCache = new WeakMap<ChatUser, { u: string; d: string }>();
-function lowerNames(user: ChatUser): { u: string; d: string } {
-  let l = lowerNameCache.get(user);
-  if (!l) {
-    l = { u: user.username.toLowerCase(), d: user.displayName.toLowerCase() };
-    lowerNameCache.set(user, l);
-  }
-  return l;
-}
 
 function evictStaleUsers(
   users: Map<string, ChatUser>,
@@ -728,6 +709,11 @@ export const useChatUserStore = create<ChatUserStore>((set, get) => ({
       existingUser !== undefined &&
       (existingUser.paint !== undefined || existingUser.seventvBadge !== undefined);
     if (cosmeticsResolved) {
+      // A kept answer, drawn while 7TV was failing, is asked about again once
+      // its retry window passes; 7TV's answer repaints through the bridge below.
+      if (isUserCosmeticsRecheckDue(user.userId)) {
+        getCosmeticsWithFallback(user.userId).catch(() => {});
+      }
       const identityChanged =
         existingUser!.username !== user.username ||
         existingUser!.displayName !== user.displayName ||
@@ -742,7 +728,7 @@ export const useChatUserStore = create<ChatUserStore>((set, get) => ({
         return;
       }
       // Metadata-only bump. lastSeen has NO reactive readers (only call-time
-      // sorts: eviction, @-autocomplete, command palette), so mutate in place —
+      // sorts: eviction, command palette), so mutate in place —
       // no Map clones, no subscriber fan-out. This bypassing of setState is
       // deliberate; do not "fix" it back into a store update.
       existingUser!.lastSeen = Date.now();
@@ -798,8 +784,10 @@ export const useChatUserStore = create<ChatUserStore>((set, get) => ({
       // UC channel id, so those chatters wear their real paints and badges.
       enqueueCosmeticUpdate(user.userId, null, null);
     } else {
+      // A hard failure that carries the chatter's kept answer is drawn; the fast
+      // path above asks 7TV again once its retry window passes.
       const cachedCosmetics = getCosmeticsFromMemoryCache(user.userId);
-      if (cachedCosmetics && !isUserCosmeticsHardFailed(user.userId)) {
+      if (cachedCosmetics && isUserCosmeticsUsable(user.userId)) {
         applyCosmetics(cachedCosmetics);
       } else {
         // The fetch records (or clears) the hard-fail mark before it resolves, so
@@ -807,7 +795,7 @@ export const useChatUserStore = create<ChatUserStore>((set, get) => ({
         // unresolved so the next message retries once the 30s window elapses.
         getCosmeticsWithFallback(user.userId)
           .then(() => {
-            if (isUserCosmeticsHardFailed(user.userId)) return;
+            if (!isUserCosmeticsUsable(user.userId)) return;
             const resolved = getCosmeticsFromMemoryCache(user.userId);
             if (resolved) applyCosmetics(resolved);
           })
@@ -845,37 +833,6 @@ export const useChatUserStore = create<ChatUserStore>((set, get) => ({
       if (other) return users.get(other);
     }
     return undefined;
-  },
-  
-  getMatchingUsers: (query: string, limit = 5) => {
-    const { users } = get();
-    const queryLower = query.toLowerCase();
-    const overrides = snapshotOverrides();
-
-    // Filter users whose username, displayName, or (user-set) nickname starts
-    // with the query. Inserting an @mention still uses user.username (the real
-    // Twitch login) because Twitch IRC doesn't resolve nicknames.
-    const matches: ChatUser[] = [];
-    for (const user of users.values()) {
-      const nick = overrides[user.userId]?.nickname?.toLowerCase();
-      const lower = lowerNames(user);
-      if (
-        lower.u.startsWith(queryLower) ||
-        lower.d.startsWith(queryLower) ||
-        (nick && nick.startsWith(queryLower))
-      ) {
-        matches.push(user);
-        // Runs per keystroke over up to ~9k users. Cap the collect: past this
-        // many matches (single-letter queries), the top-`limit` by recency is
-        // close enough for autocomplete and the full sort isn't worth it.
-        if (matches.length >= MATCH_SCAN_CAP) break;
-      }
-    }
-
-    // Sort by recency (most recent first)
-    matches.sort((a, b) => b.lastSeen - a.lastSeen);
-
-    return matches.slice(0, limit);
   },
   
   clearUsers: () => {
@@ -936,7 +893,7 @@ void listen<MemberTheme>('member-theme-changed', (event) => {
 // we refresh the matching user's paint/badge in the store so their chat
 // row repaints. Without this bridge a transient empty result earlier in
 // the session stays stuck on screen even after a later fetch succeeded.
-subscribeToCosmetics((userId, cosmetics, hardFail) => {
+subscribeToCosmetics((userId, cosmetics, hardFail, stale) => {
   const state = useChatUserStore.getState();
   const existing = state.users.get(userId);
   if (!existing) return;
@@ -944,7 +901,8 @@ subscribeToCosmetics((userId, cosmetics, hardFail) => {
   // A hard failure isn't a real answer. Don't stamp a null paint (which would
   // flip the addUser fast-path's cosmeticsResolved sentinel and stop retries);
   // leave whatever's already on the row so a later success can repaint it.
-  if (hardFail) return;
+  // One carrying the chatter's kept answer is drawn: the fast path re-asks it.
+  if (hardFail && !stale) return;
 
   const nextPaint = cosmetics?.paints?.find((p: any) => p.selected) ?? null;
   const nextBadge = cosmetics?.badges?.find((b: any) => b.selected) ?? null;

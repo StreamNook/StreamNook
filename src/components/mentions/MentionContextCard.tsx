@@ -4,6 +4,8 @@
 
 import type { MentionEntry, MentionKind } from '../../types';
 import { agoLabel } from '../../utils/lastLive';
+import { BANNER_STYLE, GLAZE_BANNER, GLAZE_PILL } from '../ui/glazeButtons';
+import { Tooltip } from '../ui/Tooltip';
 
 const KIND_WORDS: Record<MentionKind, string> = {
   mention: 'mentioned you',
@@ -16,7 +18,7 @@ export function MentionContextCard({ entry, onDismiss }: { entry: MentionEntry; 
   const color = entry.sender_color || undefined;
   const ago = agoLabel(new Date(entry.at_ms).toISOString());
   return (
-    <div className="sn-popover pointer-events-auto mt-2 w-full max-w-sm overflow-hidden p-3.5" data-mention-context={entry.id}>
+    <div className={`${GLAZE_BANNER} pointer-events-auto mt-2 w-full max-w-sm overflow-hidden p-3.5`} style={BANNER_STYLE} data-mention-context={entry.id}>
       <div className="flex h-5 items-center justify-between gap-3">
         <span className="text-[11px] font-medium uppercase tracking-wide text-textSecondary">
           Older than chat history
@@ -24,7 +26,7 @@ export function MentionContextCard({ entry, onDismiss }: { entry: MentionEntry; 
         <button
           type="button"
           onClick={onDismiss}
-          className="-mr-1.5 h-6 rounded-md px-1.5 text-[12px] font-medium text-textMuted transition-colors hover:bg-white/[0.06] hover:text-textPrimary"
+          className={`${GLAZE_PILL} h-6 px-2.5 text-[12px]`}
         >
           Dismiss
         </button>
@@ -37,9 +39,11 @@ export function MentionContextCard({ entry, onDismiss }: { entry: MentionEntry; 
       {entry.removed ? (
         <p className="mt-1 text-[13px] italic leading-snug text-textMuted">Message deleted by a moderator</p>
       ) : (
-        <p className="mt-1 line-clamp-4 break-words text-[13px] leading-snug text-textPrimary" title={entry.text}>
-          {entry.text}
-        </p>
+        <Tooltip content={entry.text} delay={500}>
+          <p className="mt-1 line-clamp-4 break-words text-[13px] leading-snug text-textPrimary">
+            {entry.text}
+          </p>
+        </Tooltip>
       )}
     </div>
   );

@@ -177,7 +177,7 @@ const PanelChannelList = ({
           </div>
         )}
         {menuOpen && createPortal(
-          <div ref={menuRef} style={menuStyle} className="glass-panel flex flex-col overflow-hidden">
+          <div ref={menuRef} style={menuStyle} className="glass-flyout rounded-xl flex flex-col overflow-hidden">
             {searching && results.length === 0 ? (
               <div className="p-3 text-center text-[12px] italic text-textSecondary">Searching...</div>
             ) : results.length > 0 ? (
@@ -191,7 +191,7 @@ const PanelChannelList = ({
                       key={r.user_id || r.id}
                       type="button"
                       onClick={() => add(r)}
-                      className="group flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-white/[0.06]"
+                      className="group flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left transition-colors hover:bg-white/[0.06]"
                     >
                       {avatar ? (
                         <SevenTvAvatar

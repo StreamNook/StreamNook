@@ -20,6 +20,12 @@
     "textShadowColor": "#123456",
     "textShadowSize": 7.5,
     "textShadowOpacity": 0.35,
+    "shadowOnText": false,
+    "shadowOnNames": false,
+    "shadowOnBadges": true,
+    "shadowDarkText": true,
+    "shadowDarkNames": true,
+    "shadowDarkBadges": true,
     "textAlign": "center",
     "fontWeight": 700,
     "textItalic": true,
@@ -128,7 +134,10 @@
     "giantEmotes": false,
     "giantEmoteAlign": "inline",
     "showGifs": false,
-    "gifScale": 1.5
+    "gifScale": 1.5,
+    "showUploadedImages": true,
+    "uploadedImageScale": 2,
+    "uploadedImagesFrom": "everyone"
   },
   "variants": [
     {
@@ -181,6 +190,7 @@
       "messageGap": 0,
       "emoteScale": 0.5,
       "gifScale": 0.5,
+      "uploadedImageScale": 0.5,
       "badgeScale": 0.5,
       "textShadowSize": 0,
       "textShadowOpacity": 0,
@@ -199,6 +209,7 @@
       "messageGap": 28,
       "emoteScale": 3,
       "gifScale": 2,
+      "uploadedImageScale": 3,
       "badgeScale": 2.5,
       "textShadowSize": 12,
       "textShadowOpacity": 1,

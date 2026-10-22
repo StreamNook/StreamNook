@@ -225,3 +225,36 @@ export function createRequestSeq() {
     isCurrent: (n: number) => n === seq,
   };
 }
+
+/** One name in the composer's @ list, in Rust's order (the streamer first). */
+export interface MentionSuggestion {
+  login: string;
+  userId: string;
+  displayName: string;
+}
+
+/**
+ * The composer's @ list, ranked in Rust (`mention_suggestions`): the room's
+ * streamer first, then its recent chatters whose name starts with `query`.
+ * `commandArg`: the username argument of a slash command (/ban, /timeout),
+ * which keeps plain recency instead of leading with the streamer.
+ */
+export async function matchMentions(
+  target: EmoteMatchChannel,
+  query: string,
+  commandArg = false,
+): Promise<MentionSuggestion[]> {
+  if (!target.channel) return [];
+  try {
+    const rows = await invoke<{ login: string; user_id: string; display: string }[]>('mention_suggestions', {
+      provider: target.provider,
+      channel: target.channel,
+      channelId: target.channelId || null,
+      query,
+      commandArg,
+    });
+    return rows.map((r) => ({ login: r.login, userId: r.user_id, displayName: r.display || r.login }));
+  } catch {
+    return [];
+  }
+}

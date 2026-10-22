@@ -151,7 +151,8 @@ export interface OverlayStyle {
 
   /** Color for plain message body text. Usernames keep their own color/paint. */
   bodyTextColor: string;
-  /** Drop a subtle dark outline behind text so it stays legible over any scene. */
+  /** Drop a shadow so the overlay stays legible over any scene. The shadowOn*
+   *  switches pick what it sits behind; color, size, strength and style are shared. */
   textShadow: boolean;
   /** Text shadow color. Used when textShadow is on. */
   textShadowColor: string;
@@ -159,6 +160,20 @@ export interface OverlayStyle {
   textShadowSize: number;
   /** Text shadow strength, 0 to 1. */
   textShadowOpacity: number;
+  /** The shadow sits behind message and event text. */
+  shadowOnText: boolean;
+  /** The shadow sits behind usernames and their colon, 7TV paints included. */
+  shadowOnNames: boolean;
+  /** The shadow sits behind badges (platform, add-on and StreamNook), shaped to
+   *  the badge art. */
+  shadowOnBadges: boolean;
+  /** A heavier, darker shadow behind text: a tight outline plus the stacked
+   *  layers a 7TV paint's shadow casts. */
+  shadowDarkText: boolean;
+  /** A heavier, darker shadow behind names. */
+  shadowDarkNames: boolean;
+  /** A heavier, darker shadow behind badges. */
+  shadowDarkBadges: boolean;
 
   /** Horizontal justification of message and event text. */
   textAlign: OverlayTextAlign;
@@ -343,6 +358,14 @@ export interface OverlayStyle {
   /** Chat GIF size multiplier on top of the gigantified size (which already
    *  follows emoteScale). 1 = the size GIFs have always drawn at. */
   gifScale: number;
+  /** Pictures linked from StreamNook's upload hosts (uploadedImage.ts) draw in
+   *  the message in place of their link. Off (default) keeps every link text. */
+  showUploadedImages: boolean;
+  /** Uploaded picture height multiplier. 1 = 6em tall at most. */
+  uploadedImageScale: number;
+  /** Whose uploaded pictures draw: the channel's roles and subscribers
+   *  (isTrustedSender), or every chatter. */
+  uploadedImagesFrom: 'trusted' | 'everyone';
 }
 
 // ---------------------------------------------------------------------------
@@ -670,6 +693,12 @@ export const DEFAULT_OVERLAY_STYLE: OverlayStyle = {
   textShadowColor: '#000000',
   textShadowSize: 2,
   textShadowOpacity: 0.85,
+  shadowOnText: true,
+  shadowOnNames: true,
+  shadowOnBadges: false,
+  shadowDarkText: false,
+  shadowDarkNames: false,
+  shadowDarkBadges: false,
   textAlign: 'left',
   fontWeight: 400,
   textItalic: false,
@@ -730,6 +759,9 @@ export const DEFAULT_OVERLAY_STYLE: OverlayStyle = {
   giantEmoteAlign: 'center',
   showGifs: true,
   gifScale: 1,
+  showUploadedImages: false,
+  uploadedImageScale: 1,
+  uploadedImagesFrom: 'trusted',
 };
 
 // Clamp ranges so a builder (or a hand-edited saved config) can't produce a
@@ -745,6 +777,7 @@ export const OVERLAY_LIMITS = {
   messageGap: { min: 0, max: 28 },
   emoteScale: { min: 0.5, max: 3 },
   gifScale: { min: 0.5, max: 2 },
+  uploadedImageScale: { min: 0.5, max: 3 },
   badgeScale: { min: 0.5, max: 2.5 },
   fontWeight: { min: 300, max: 700 },
   textShadowSize: { min: 0, max: 12 },
@@ -755,6 +788,29 @@ export const OVERLAY_LIMITS = {
   maxMessageAgeSec: { min: 0, max: 600 },
   maxMessageLines: { min: 0, max: 6 },
 } as const;
+
+/** Digits after the point in a number as written (0.05 → 2, 10 → 0). */
+export const decimalsOf = (n: number): number => {
+  const s = String(+n.toFixed(6));
+  const dot = s.indexOf('.');
+  return dot < 0 ? 0 : s.length - dot - 1;
+};
+
+/**
+ * A number typed into a builder slider's value, clamped to the range and
+ * snapped to the step the way the slider itself would land. `scale` turns what
+ * the field shows back into the stored value (a 0 to 1 strength shown as 85%
+ * types as 85). Null for text that is not a number, so the field reverts.
+ */
+export function parseSliderInput(text: string, opts: { min: number; max: number; step: number; scale?: number }): number | null {
+  const n = parseFloat(text.trim().replace(',', '.'));
+  if (!Number.isFinite(n)) return null;
+  const { min, max, step } = opts;
+  const scale = opts.scale ?? 1;
+  const clamp = (v: number) => Math.min(max, Math.max(min, v));
+  const snapped = min + Math.round((clamp(n / scale) - min) / step) * step;
+  return clamp(+snapped.toFixed(decimalsOf(step)));
+}
 
 /** Longest hidden phrase or command filter the builder accepts as a new entry. */
 export const OVERLAY_TEXT_ENTRY_MAX = 200;
@@ -801,6 +857,31 @@ export function sanitizeCommandFilters(raw: unknown): { value: string; mode: 'pr
   return out;
 }
 
+// Shadow keys an earlier build saved: the separate badge and name shadows (the
+// one shadow and its shadowOn* switches replaced them) and the shared Soft /
+// Thick choice (shadowDark* replaced it). A save drops them.
+const RETIRED_SHADOW_KEYS = [
+  'badgeShadow', 'badgeShadowColor', 'badgeShadowSize', 'badgeShadowOpacity',
+  'nameShadow', 'nameShadowColor', 'nameShadowSize', 'nameShadowOpacity', 'nameShadowStyle',
+  'textShadowStyle',
+] as const;
+
+// What the shadow sits behind. A config saved before the switches existed drew
+// the text shadow behind text and names, plus badges or names on their own
+// switch: fold those in, and where a part had its own shadow while the text
+// shadow was off, turn the shadow on for just that part, so the overlay draws
+// the shadows it drew.
+const shadowParts = (s: OverlayStyle): Pick<OverlayStyle, 'textShadow' | 'shadowOnText' | 'shadowOnNames' | 'shadowOnBadges'> => {
+  if (typeof s.shadowOnText === 'boolean') {
+    return { textShadow: s.textShadow, shadowOnText: s.shadowOnText, shadowOnNames: s.shadowOnNames !== false, shadowOnBadges: s.shadowOnBadges === true };
+  }
+  const old = s as { badgeShadow?: unknown; nameShadow?: unknown };
+  const badges = old.badgeShadow === true;
+  const names = old.nameShadow === true;
+  const partOnly = s.textShadow === false && (badges || names);
+  return { textShadow: partOnly ? true : s.textShadow, shadowOnText: !partOnly, shadowOnNames: partOnly ? names : true, shadowOnBadges: badges };
+};
+
 export const clampOverlayStyle = (s: OverlayStyle): OverlayStyle => {
   const clamp = (v: number, lo: number, hi: number) =>
     Math.min(hi, Math.max(lo, v));
@@ -829,8 +910,10 @@ export const clampOverlayStyle = (s: OverlayStyle): OverlayStyle => {
       if ((cats ?? []).includes(cat as EventCategory)) providerEvents.add(`${provider}:${cat}`);
     }
   }
+  const kept: OverlayStyle & Record<string, unknown> = { ...s };
+  for (const key of RETIRED_SHADOW_KEYS) delete kept[key];
   return {
-    ...s,
+    ...kept,
     commandFilters: sanitizeCommandFilters(s.commandFilters),
     hidePhrases: phrases,
     hiddenEvents: [],
@@ -873,6 +956,15 @@ export const clampOverlayStyle = (s: OverlayStyle): OverlayStyle => {
       OVERLAY_LIMITS.gifScale.min,
       OVERLAY_LIMITS.gifScale.max,
     ),
+    // Absent on configs saved before uploaded pictures existed: off, so every
+    // link stays text as it always did.
+    showUploadedImages: s.showUploadedImages === true,
+    uploadedImageScale: clamp(
+      Number.isFinite(s.uploadedImageScale) ? s.uploadedImageScale : 1,
+      OVERLAY_LIMITS.uploadedImageScale.min,
+      OVERLAY_LIMITS.uploadedImageScale.max,
+    ),
+    uploadedImagesFrom: s.uploadedImagesFrom === 'everyone' ? 'everyone' : 'trusted',
     textAlign: s.textAlign === 'center' || s.textAlign === 'right' ? s.textAlign : 'left',
     cheerDisplay: s.cheerDisplay === 'event' ? 'event' : 'message',
     fontWeight:
@@ -882,6 +974,11 @@ export const clampOverlayStyle = (s: OverlayStyle): OverlayStyle => {
     textShadowColor: (s.textShadowColor || '').trim() || '#000000',
     textShadowSize: clamp(s.textShadowSize ?? 2, OVERLAY_LIMITS.textShadowSize.min, OVERLAY_LIMITS.textShadowSize.max),
     textShadowOpacity: clamp(s.textShadowOpacity ?? 0.85, OVERLAY_LIMITS.textShadowOpacity.min, OVERLAY_LIMITS.textShadowOpacity.max),
+    // Dark replaced a shared Soft / Thick choice, which only changed text and names.
+    shadowDarkText: typeof s.shadowDarkText === 'boolean' ? s.shadowDarkText : (s as { textShadowStyle?: unknown }).textShadowStyle === 'thick',
+    shadowDarkNames: typeof s.shadowDarkNames === 'boolean' ? s.shadowDarkNames : (s as { textShadowStyle?: unknown }).textShadowStyle === 'thick',
+    shadowDarkBadges: s.shadowDarkBadges === true,
+    ...shadowParts(s),
     // Reply rendering moved from a boolean to a three-way. A config saved before
     // replyStyle existed only knows showReplies, so read that: false → 'off',
     // anything else → the context line it used to draw. Idempotent once migrated.

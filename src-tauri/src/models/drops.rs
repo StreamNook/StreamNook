@@ -462,6 +462,11 @@ pub struct DropsSettings {
     /// global badge the account is missing and can earn by watching now.
     #[serde(default = "default_true")]
     pub prefer_missing_badges: bool,
+    /// When true and no Pokémon is equipped to evolve, automation equips a
+    /// line the account can evolve and moves to the next when one finishes.
+    /// A line the viewer picked is always followed.
+    #[serde(default = "default_true")]
+    pub auto_pick_evolution: bool,
     // Recovery settings
     #[serde(default)]
     pub recovery_settings: RecoverySettings,
@@ -504,6 +509,8 @@ impl Default for DropsSettings {
             prefer_favorites: false,
             // Missing badges first, on by default: it only reorders campaigns
             prefer_missing_badges: true,
+            // Pick an evolution line when none is equipped, on by default
+            auto_pick_evolution: true,
             // Recovery defaults
             recovery_settings: RecoverySettings::default(),
         }

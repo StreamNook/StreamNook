@@ -1081,7 +1081,7 @@ const TitleBar = () => {
                 >
                   <button
                     onClick={handleStartUpdate}
-                    className="update-pill flex items-center gap-1.5 h-[26px] pl-2.5 pr-3 rounded-full whitespace-nowrap"
+                    className="update-pill chrome-glaze chrome-glaze--control flex items-center gap-1.5 h-[26px] pl-2.5 pr-3 whitespace-nowrap"
                   >
                     <Download size={13} strokeWidth={2.5} />
                     <span className="text-xs font-semibold tracking-wide">
@@ -1235,13 +1235,21 @@ const TitleBar = () => {
           {IS_MAC ? (
             <PenroseLogo onClick={() => setShowAbout(true)} />
           ) : (
-          // Either full screen reads as full screen here. The player's one is
-          // left through the player, so Plyr and the window stay in step.
-          <Tooltip content={anyFullscreen ? "Exit full screen (F11)" : "Full screen (F11)"} delay={200}>
+          // This button is Theater mode (the window full screen). In the
+          // player's own full screen it leaves that instead, through the
+          // player, so Plyr and the window stay in step.
+          <Tooltip
+            content={
+              playerFullscreen
+                ? 'Exit full screen'
+                : `${anyFullscreen ? 'Exit theater mode' : 'Theater mode'} (${IS_MAC ? 'Ctrl+Cmd+F' : 'F11'})`
+            }
+            delay={200}
+          >
             <button
               onClick={() => (playerFullscreen ? exitPlayerFullscreen() : toggleWindowFullscreen())}
               className="titlebar-window-btn"
-              aria-label={anyFullscreen ? "Exit full screen" : "Full screen"}
+              aria-label={playerFullscreen ? 'Exit full screen' : anyFullscreen ? 'Exit theater mode' : 'Theater mode'}
             >
               {anyFullscreen ? (
                 <ArrowsIn size={14} />
@@ -1254,9 +1262,9 @@ const TitleBar = () => {
           {/* Minimise / zoom / close are AppKit's job on macOS: the window is
               decorated with an Overlay title bar, so the real traffic lights are
               already floating at the leading edge. Drawing our own cluster next
-              to them would give the window two of every control. The full-screen
-              button above stays on both platforms because it drives StreamNook's
-              own theatre mode, not the window zoom. */}
+              to them would give the window two of every control. The Theater
+              mode button above stays on both platforms because it drives
+              StreamNook's own window full screen, not the window zoom. */}
           {!IS_MAC && (
             <>
           <Tooltip content="Minimize" delay={200}>

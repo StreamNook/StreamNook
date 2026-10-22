@@ -17,7 +17,8 @@
 //!
 //! The same pass records whether any window is on screen at all, so Rust
 //! pollers that only feed the UI can sleep while everything is minimized or
-//! in the tray (`all_hidden`).
+//! in the tray (`all_hidden`), and the ones that skipped a turn catch up the
+//! moment something is back on screen.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -38,6 +39,19 @@ static ANY_ON_SCREEN: AtomicBool = AtomicBool::new(true);
 /// Every window is minimized or hidden to the tray: nobody can see the UI.
 pub fn all_hidden() -> bool {
     !ANY_ON_SCREEN.load(Ordering::Relaxed)
+}
+
+/// Record whether anything is on screen. Coming back (the reveal after a
+/// boot's first paint, a restore from the tray or a minimize) catches up the
+/// reads that sleep while nobody can see them, since their next tick can be a
+/// minute away.
+fn set_on_screen(on_screen: bool) {
+    let was = ANY_ON_SCREEN.swap(on_screen, Ordering::Relaxed);
+    if on_screen && !was {
+        debug!("[WindowVisibility] back on screen");
+        crate::services::home_snapshot::note_ui_on_screen();
+        crate::services::channel_state::note_ui_on_screen();
+    }
 }
 
 /// Some surface exists that can show what the UI pollers fetch: a webview
@@ -75,7 +89,7 @@ pub fn window_open(app: &AppHandle, label: &str) -> bool {
 /// Its shell has no window for the poller below to read, so it says so itself.
 #[cfg(target_os = "ios")]
 pub fn set_native_shell_shown(shown: bool) {
-    ANY_ON_SCREEN.store(shown, Ordering::Relaxed);
+    set_on_screen(shown);
 }
 
 #[derive(Serialize, Clone)]
@@ -119,7 +133,7 @@ pub fn start(app: AppHandle) {
                     }
                 }
             }
-            ANY_ON_SCREEN.store(on_screen, Ordering::Relaxed);
+            set_on_screen(on_screen);
         }
     });
 }

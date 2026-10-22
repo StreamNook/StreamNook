@@ -2,6 +2,7 @@ import { useState, type CSSProperties } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../stores/AppStore';
 import { IS_MOBILE } from '../utils/platform';
+import { Tooltip } from './ui/Tooltip';
 
 /**
  * Twitch sign-in by code: approve on any device where you are signed in to
@@ -93,9 +94,11 @@ export default function DeviceLoginOverlay() {
             : 'On your phone or any browser where you’re signed in to Twitch, go to twitch.tv/activate and enter this code.'}
         </div>
 
-        <div style={codeBox} onClick={copyCode} title={IS_MOBILE ? 'Tap to copy' : 'Click to copy'}>
-          {info.userCode}
-        </div>
+        <Tooltip content={IS_MOBILE ? 'Tap to copy' : 'Click to copy'} describe>
+          <div style={codeBox} onClick={copyCode}>
+            {info.userCode}
+          </div>
+        </Tooltip>
         <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.4)', minHeight: 16 }}>
           {copied ? 'Copied' : IS_MOBILE ? 'Tap the code to copy' : 'Click the code to copy'}
         </div>

@@ -14,6 +14,11 @@ import { barClickExitsPlayerFullscreen } from './titleBarTuck';
  * restores it on the way in and maximizes it again on the way out (never on
  * macOS, where AppKit owns an animated transition that refuses a zoom).
  */
+/** Plyr's tooltip wording for its full screen button, in the app's words
+ *  ("full screen", the same as the title bar and Settings). Merged into every
+ *  player's Plyr options. */
+export const PLYR_FULLSCREEN_I18N = { enterFullscreen: 'Full screen', exitFullscreen: 'Exit full screen' };
+
 export const setWindowFullscreen = (fullscreen?: boolean): Promise<boolean> =>
   invoke<boolean>('set_window_fullscreen', { fullscreen: fullscreen ?? null });
 
@@ -32,7 +37,15 @@ export const syncTauriWindowFullscreen = async (entering: boolean): Promise<void
   // flip in the same frame Plyr swaps its fullscreen class.
   try {
     const { useAppStore } = await import('../stores/AppStore');
-    useAppStore.setState({ isPlayerFullscreen: entering, playerOverlayVisible: true });
+    // A fresh full screen starts as video only; chat is brought up on demand.
+    // A player taking over an existing full screen (a raid, a quality change)
+    // keeps whatever the viewer had.
+    const fresh = entering && !useAppStore.getState().isPlayerFullscreen;
+    useAppStore.setState({
+      isPlayerFullscreen: entering,
+      playerOverlayVisible: true,
+      ...(fresh || !entering ? { fsChatOpen: false } : {}),
+    });
   } catch {
     /* store not ready: nothing to overlay yet */
   }

@@ -10,6 +10,7 @@ import type { OfflineRoom, TwitchStream } from '../types';
 import { agoLabel, durationLabel, lastLiveLabel, nextStreamLabel } from '../utils/lastLive';
 import { formatVodTime } from '../utils/vodProgress';
 import { SevenTvAvatar } from './SevenTvAvatar';
+import { Tooltip } from './ui/Tooltip';
 
 /** Until a room answers (or for a channel with no room, like a Kick tile):
  *  the same FFZ emotes Rust falls back to. */
@@ -211,31 +212,32 @@ export function OfflineCard({
       {/* The latest broadcast is one action, not a preview: it plays in the
           player this card sits in. */}
       {state !== 'joining' && vod && onPlayVod && (
-        <button
-          type="button"
-          onClick={onPlayVod}
-          disabled={vodBusy}
-          title={vod.title || undefined}
-          className="glass-button relative flex h-9 items-center gap-2 overflow-hidden rounded-lg px-3 text-left text-xs font-medium text-textPrimary disabled:cursor-wait"
-        >
-          <Play size={13} fill="currentColor" className="shrink-0" />
-          <span className="min-w-0 flex-1 truncate">
-            {vod.resume_secs != null ? 'Resume' : 'Watch'} the {vod.category ? `${vod.category} ` : ''}stream from{' '}
-            {agoLabel(vod.created_at) ?? 'last time'}
-          </span>
-          <span className="shrink-0 tabular-nums text-textSecondary">
-            {vod.resume_secs != null ? `at ${formatVodTime(vod.resume_secs)}` : durationLabel(vod.length_seconds)}
-          </span>
-          {/* How far in, the same bar a VOD card carries. Rust picked the
-              position; the room starts the VOD there. */}
-          {vod.resume_secs != null && vod.length_seconds > 0 && (
-            <span
-              aria-hidden
-              className="pointer-events-none absolute bottom-0 left-0 h-[2px] bg-accent"
-              style={{ width: `${Math.min(100, (vod.resume_secs / vod.length_seconds) * 100)}%` }}
-            />
-          )}
-        </button>
+        <Tooltip content={vod.title} describe>
+          <button
+            type="button"
+            onClick={onPlayVod}
+            disabled={vodBusy}
+            className="glass-button relative flex h-9 items-center gap-2 overflow-hidden rounded-lg px-3 text-left text-xs font-medium text-textPrimary disabled:cursor-wait"
+          >
+            <Play size={13} fill="currentColor" className="shrink-0" />
+            <span className="min-w-0 flex-1 truncate">
+              {vod.resume_secs != null ? 'Resume' : 'Watch'} the {vod.category ? `${vod.category} ` : ''}stream from{' '}
+              {agoLabel(vod.created_at) ?? 'last time'}
+            </span>
+            <span className="shrink-0 tabular-nums text-textSecondary">
+              {vod.resume_secs != null ? `at ${formatVodTime(vod.resume_secs)}` : durationLabel(vod.length_seconds)}
+            </span>
+            {/* How far in, the same bar a VOD card carries. Rust picked the
+                position; the room starts the VOD there. */}
+            {vod.resume_secs != null && vod.length_seconds > 0 && (
+              <span
+                aria-hidden
+                className="pointer-events-none absolute bottom-0 left-0 h-[2px] bg-accent"
+                style={{ width: `${Math.min(100, (vod.resume_secs / vod.length_seconds) * 100)}%` }}
+              />
+            )}
+          </button>
+        </Tooltip>
       )}
 
       {/* The channel's videos and clips, where the phone has a sheet for them. */}
@@ -270,10 +272,12 @@ export function OfflineCard({
           </p>
           {/* Waiting buddies: everyone else in the chat right now. */}
           {waiting > 0 && (
-            <span className="flex shrink-0 items-center gap-1 tabular-nums" title="In the chat right now, waiting with you">
-              <Users size={13} className="shrink-0" />
-              {formatShortCount(waiting)} waiting
-            </span>
+            <Tooltip content="In the chat right now, waiting with you" describe>
+              <span className="flex shrink-0 items-center gap-1 tabular-nums">
+                <Users size={13} className="shrink-0" />
+                {formatShortCount(waiting)} waiting
+              </span>
+            </Tooltip>
           )}
         </div>
       )}

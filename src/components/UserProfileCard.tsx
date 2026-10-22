@@ -59,7 +59,7 @@ import {
   subscribeIdentityVersion,
   getIdentityVersion,
 } from '../services/identityService';
-import { EmoteText, buildEmoteNameMap } from '../utils/emoteText';
+import { EmoteText, useTextEmotes } from '../utils/emoteText';
 import { useChannelEmotes } from '../stores/chatConnectionStore';
 import { historyKey } from '../utils/chatterIdentity';
 import { isChannelScopedTwitchBadge } from '../utils/badgeOrder';
@@ -67,7 +67,8 @@ import { usePlatformAccountStore } from '../stores/platformAccountStore';
 import { isImeComposing } from '../utils/imeComposing';
 import { openBadgeSpotlight } from '../stores/badgeSpotlightStore';
 import { thirdPartyBadgeRef } from '../utils/badgeSpotlight';
-import { moderateChatter, moderateWithToast } from '../services/moderation';
+import { armedFor, moderateWithToast } from '../services/moderation';
+import { TwitchCardModerate } from './profile/TwitchCardModerate';
 
 // messageHistory arrives from two sources:
 //   1. The frontend's in-session userMessageHistory Map (full ParsedMessage shape
@@ -708,6 +709,8 @@ const UserProfileCard = ({
   // Per-platform card data. Only one is ever populated; the shell is shared.
   const [kickProfile, setKickProfile] = useState<KickProfile | null>(null);
   const [youtubeProfile, setYoutubeProfile] = useState<YouTubeProfile | null>(null);
+  // Kick or YouTube Ban / Hide waiting for its second press (Ban confirmation on).
+  const [providerBanArmed, setProviderBanArmed] = useState(false);
   const [cachedProfile, setCachedProfile] = useState<CachedProfile | null>(null);
   // Pieces Rust sends ahead of the whole profile (see ProfilePart in
   // user_profile.rs): Helix answers in ~200 ms, well before IVR and the badge
@@ -842,9 +845,6 @@ const UserProfileCard = ({
           )
         : false;
 
-  // First saved reason is the one we prefill; the rest are just there to copy.
-  const savedBanReasons = useAppStore((s) => s.settings.moderation?.saved_ban_reasons);
-  const defaultBanReason = savedBanReasons?.[0]?.trim() || '';
   // In-session messages that arrive WHILE the card is open, polled from the Rust
   // history service so the timeline stays live (works across the popout-window
   // boundary — the service is a shared backend singleton). Same shape as the
@@ -1026,15 +1026,19 @@ const UserProfileCard = ({
   // Channel emote set (Twitch native + FFZ/BTTV/7TV), reused from the shared
   // cache the chat renderer fills. In the popout window that cache starts empty,
   // so the hook lazily fetches and re-renders when it lands — emotes pop in.
-  // buildEmoteNameMap gives the name -> emote lookup EmoteText needs to swap
-  // emote words for images in the message timeline.
+  // useTextEmotes has Rust cut each timeline message with the channel's table,
+  // as it does a chat row, for EmoteText to swap emote words for images.
   const { channelId: emoteChannelId, channelName: emoteChannelName } = getChannelContext();
   // The provider travels with the channel: `getChannelContext` falls back to the
   // current stream, which on YouTube/Kick yields that platform's id, and the hook
   // would otherwise default to Twitch and look it up on Helix.
   const emoteProvider = streamProvider(useAppStore.getState().currentStream);
   const channelEmotes = useChannelEmotes(emoteChannelName, emoteChannelId, emoteProvider);
-  const emoteNameMap = useMemo(() => buildEmoteNameMap(channelEmotes), [channelEmotes]);
+  const timelineTexts = useMemo(
+    () => [...historicalMessages, ...messageHistory, ...liveMessages].map((m) => m.content ?? ''),
+    [historicalMessages, messageHistory, liveMessages],
+  );
+  const timelineEmotes = useTextEmotes({ provider: emoteProvider, channel: emoteChannelName }, timelineTexts, channelEmotes);
 
   // Load cached cosmetics INSTANTLY (synchronous), then fetch fresh data
   useEffect(() => {
@@ -2299,7 +2303,7 @@ const UserProfileCard = ({
                                     <span className="text-[13px] text-textPrimary break-words leading-snug min-w-0">
                                       <EmoteText
                                         text={e.content}
-                                        emoteMap={emoteNameMap}
+                                        emoteMap={timelineEmotes(e.content)}
                                         keyPrefix={`hist-${g.key}-${idx}`}
                                         imgClassName="inline-block align-middle object-contain h-[18px] max-h-[18px]"
                                       />
@@ -2628,7 +2632,13 @@ const UserProfileCard = ({
                                 : action.kind === 'ban'
                                   ? { kind: 'ban' }
                                   : { kind: 'unban' },
+                            onePress: true,
                           });
+                          if (done?.confirmMs) {
+                            setProviderBanArmed(true);
+                            window.setTimeout(() => setProviderBanArmed(false), armedFor(done));
+                            return;
+                          }
                           if (done) onClose();
                         }}
                         className={`w-full py-1.5 glass-button text-xs font-semibold text-white/70 hover:text-white rounded flex items-center justify-center transition-colors border ${
@@ -2637,7 +2647,7 @@ const UserProfileCard = ({
                             : 'hover:bg-warning/20 hover:border-warning/30'
                         }`}
                       >
-                        {action.label}
+                        {providerBanArmed && action.kind === 'ban' ? 'Press again to hide' : action.label}
                       </button>
                     </Tooltip>
                   ))}
@@ -2676,7 +2686,13 @@ const UserProfileCard = ({
                                 : action.minutes === null
                                   ? { kind: 'ban' }
                                   : { kind: 'timeout', seconds: action.minutes * 60 },
+                            onePress: true,
                           });
+                          if (done?.confirmMs) {
+                            setProviderBanArmed(true);
+                            window.setTimeout(() => setProviderBanArmed(false), armedFor(done));
+                            return;
+                          }
                           if (done) onClose();
                         }}
                         className={`w-full py-1.5 glass-button text-xs font-semibold text-white/70 hover:text-white rounded flex items-center justify-center transition-colors border ${
@@ -2685,7 +2701,7 @@ const UserProfileCard = ({
                             : 'hover:bg-warning/20 hover:border-warning/30'
                         }`}
                       >
-                        {action.label}
+                        {providerBanArmed && action.danger ? 'Press again to ban' : action.label}
                       </button>
                     </Tooltip>
                   ))}
@@ -2693,141 +2709,51 @@ const UserProfileCard = ({
               </div>
             )}
 
-            {/* Mod zone. Kept inside body container; red top border is the only divider we keep, as a semantic danger-zone signal */}
+            {/* Twitch mod zone: Rust decides the buttons, the low-trust line and
+                the history (TwitchCardModerate). The broadcaster's Mod and VIP
+                toggles ride along under the buttons. */}
             {isModerator && broadcasterId && provider === 'twitch' && (
-              <div className="pt-3 border-t border-error/20">
-                <div className="flex items-center gap-1.5 mb-2.5">
-                  <svg className="w-3.5 h-3.5 text-error" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
-                  <span className="text-[10px] uppercase font-bold text-error tracking-wider">Moderator Actions</span>
-                </div>
-                {blockedTarget && (
-                  <p className="mb-2.5 text-[11px] text-textSecondary">
-                    {targetIsBroadcaster
+              <TwitchCardModerate
+                key={`${broadcasterId}:${userId}`}
+                userId={userId}
+                login={login}
+                displayName={displayName}
+                channel={getChannelContext().channelName}
+                broadcasterId={broadcasterId}
+                blockedNote={
+                  blockedTarget
+                    ? targetIsBroadcaster
                       ? "This is the channel's owner, so there's nothing to action here."
-                      : 'Twitch does not let one moderator action another. Only the broadcaster can.'}
-                  </p>
-                )}
-                {!blockedTarget && (
-                <div className="grid grid-cols-4 gap-2">
-                  <Tooltip content="Purge recent messages" side="top">
-                    <button
-                      onClick={async () => {
-                        if (onPreFillCommand) { onPreFillCommand(`/timeout ${login} 1 Purge`); onClose(); return; }
-                        // A 1-second timeout is how Twitch clears someone's
-                        // messages, so the words say purge rather than timeout.
-                        try {
-                          await moderateChatter({
-                            broadcasterId,
-                            targetUserId: userId,
-                            targetName: login,
-                            action: { kind: 'timeout', seconds: 1 },
-                            reason: 'Purge',
-                          });
-                          useAppStore.getState().addToast(`Purged messages for ${login}`, 'success');
-                        } catch (err) {
-                          Logger.error('[UserProfileCard] Failed to purge:', err);
-                          useAppStore.getState().addToast(String(err), 'error');
-                        }
-                      }}
-                      className="py-1.5 glass-button text-xs font-semibold text-white/70 hover:text-white hover:bg-warning/20 border hover:border-warning/30 rounded flex items-center justify-center transition-colors"
-                    >
-                      Purge
-                    </button>
-                  </Tooltip>
-                  <Tooltip content="Timeout for 10 minutes" side="top">
-                    <button
-                      onClick={async () => {
-                        if (onPreFillCommand) { onPreFillCommand(`/timeout ${login} 600 ${defaultBanReason}`); onClose(); return; }
-                        await moderateWithToast({
-                          broadcasterId,
-                          targetUserId: userId,
-                          targetName: login,
-                          action: { kind: 'timeout', seconds: 600 },
-                        });
-                      }}
-                      className="py-1.5 glass-button text-xs font-semibold text-white/70 hover:text-white hover:bg-warning/20 border hover:border-yellow-500/30 rounded flex items-center justify-center transition-colors"
-                    >
-                      10m
-                    </button>
-                  </Tooltip>
-                  <Tooltip content="Timeout for 24 hours" side="top">
-                    <button
-                      onClick={async () => {
-                        if (onPreFillCommand) { onPreFillCommand(`/timeout ${login} 86400 ${defaultBanReason}`); onClose(); return; }
-                        await moderateWithToast({
-                          broadcasterId,
-                          targetUserId: userId,
-                          targetName: login,
-                          action: { kind: 'timeout', seconds: 86400 },
-                        });
-                      }}
-                      className="py-1.5 glass-button text-xs font-semibold text-white/70 hover:text-white hover:bg-warning/25 border hover:border-warning/35 rounded flex items-center justify-center transition-colors"
-                    >
-                      24h
-                    </button>
-                  </Tooltip>
-                  <Tooltip content="Permanently Ban User" side="top">
-                    <button
-                      onClick={async () => {
-                        if (onPreFillCommand) { onPreFillCommand(`/ban ${login} ${defaultBanReason}`); onClose(); return; }
-                        if (window.confirm(`Are you sure you want to permanently ban ${login}?`)) {
-                          const done = await moderateWithToast({
-                            broadcasterId,
-                            targetUserId: userId,
-                            targetName: login,
-                            action: { kind: 'ban' },
-                          });
-                          if (done) onClose();
-                        }
-                      }}
-                      className="py-1.5 text-xs font-semibold text-red-200 bg-red-900/50 hover:bg-red-600 border border-red-500/30 rounded flex items-center justify-center transition-colors shadow-lg"
-                    >
-                      Ban
-                    </button>
-                  </Tooltip>
-                </div>
-                )}
-                {/* Role controls. Twitch restricts these to the channel owner,
-                    so they only appear for the broadcaster. The commands and
-                    scopes already existed; this is the button surface. */}
-                {viewerIsBroadcaster && !targetIsBroadcaster && (
-                  <div className="mt-2 grid grid-cols-2 gap-2">
-                    <RoleActionButton
-                      label={targetIsModerator ? 'Unmod' : 'Mod'}
-                      tooltip={targetIsModerator ? `Remove ${login} as a moderator` : `Make ${login} a moderator`}
-                      command={targetIsModerator ? 'remove_channel_moderator' : 'add_channel_moderator'}
-                      broadcasterId={broadcasterId}
-                      userId={userId}
-                      successText={targetIsModerator ? `Removed ${login} as moderator` : `${login} is now a moderator`}
-                    />
-                    <RoleActionButton
-                      label={ivrData?.is_vip ? 'Remove VIP' : 'VIP'}
-                      tooltip={ivrData?.is_vip ? `Remove VIP from ${login}` : `Give ${login} VIP`}
-                      command={ivrData?.is_vip ? 'remove_channel_vip' : 'add_channel_vip'}
-                      broadcasterId={broadcasterId}
-                      userId={userId}
-                      successText={ivrData?.is_vip ? `Removed VIP from ${login}` : `${login} is now a VIP`}
-                    />
-                  </div>
-                )}
-                <div className="mt-2 text-right">
-                  <button
-                    onClick={async () => {
-                      if (window.confirm(`Unban ${login}?`)) {
-                        await moderateWithToast({
-                          broadcasterId,
-                          targetUserId: userId,
-                          targetName: login,
-                          action: { kind: 'unban' },
-                        });
-                      }
-                    }}
-                    className="text-[10px] font-medium text-textSecondary hover:text-white hover:underline cursor-pointer"
-                  >
-                    Unban User
-                  </button>
-                </div>
-              </div>
+                      : 'Twitch does not let one moderator action another. Only the broadcaster can.'
+                    : null
+                }
+                onPreFillCommand={onPreFillCommand}
+                onClose={onClose}
+                roleControls={
+                  // Role controls. Twitch restricts these to the channel owner,
+                  // so they only appear for the broadcaster.
+                  viewerIsBroadcaster && !targetIsBroadcaster ? (
+                    <div className="mt-2 grid grid-cols-2 gap-2">
+                      <RoleActionButton
+                        label={targetIsModerator ? 'Unmod' : 'Mod'}
+                        tooltip={targetIsModerator ? `Remove ${login} as a moderator` : `Make ${login} a moderator`}
+                        command={targetIsModerator ? 'remove_channel_moderator' : 'add_channel_moderator'}
+                        broadcasterId={broadcasterId}
+                        userId={userId}
+                        successText={targetIsModerator ? `Removed ${login} as moderator` : `${login} is now a moderator`}
+                      />
+                      <RoleActionButton
+                        label={ivrData?.is_vip ? 'Remove VIP' : 'VIP'}
+                        tooltip={ivrData?.is_vip ? `Remove VIP from ${login}` : `Give ${login} VIP`}
+                        command={ivrData?.is_vip ? 'remove_channel_vip' : 'add_channel_vip'}
+                        broadcasterId={broadcasterId}
+                        userId={userId}
+                        successText={ivrData?.is_vip ? `Removed VIP from ${login}` : `${login} is now a VIP`}
+                      />
+                    </div>
+                  ) : null
+                }
+              />
             )}
 
                   </motion.div>

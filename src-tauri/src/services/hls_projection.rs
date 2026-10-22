@@ -475,4 +475,178 @@ mod tests {
         assert_eq!(redirect_target("sw2", 4).as_deref(), Some("https://cdn/c/4.ts?s=2"));
         clear("sw2");
     }
+
+    // ── Continuity: a switch or a resync never drops or repeats a segment ──
+
+    /// A live window whose segments carry programme dates two seconds apart:
+    /// sequence number `sn` starts at second `2 * sn` of the hour.
+    fn dated_window(first: u64, n: u64, tag: &str) -> String {
+        let mut pl = format!("#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:{first}\n");
+        for sn in first..first + n {
+            let at = sn * 2;
+            pl.push_str(&format!(
+                "#EXT-X-PROGRAM-DATE-TIME:2026-10-20T00:{:02}:{:02}.000Z\n#EXTINF:2.000,live\nhttps://cdn/{tag}/{sn}.ts\n",
+                (at / 60) % 60,
+                at % 60
+            ));
+        }
+        pl
+    }
+
+    /// The (sn, programme second, synthetic path) of every segment a served
+    /// playlist lists.
+    fn listed(playlist: &str) -> Vec<(u64, u64, String)> {
+        let mut out = Vec::new();
+        let mut sn: u64 = 0;
+        let mut at: Option<u64> = None;
+        let mut expect = false;
+        for line in playlist.lines().map(str::trim) {
+            if let Some(v) = line.strip_prefix("#EXT-X-MEDIA-SEQUENCE:") {
+                sn = v.parse().unwrap();
+            } else if let Some(v) = line.strip_prefix("#EXT-X-PROGRAM-DATE-TIME:") {
+                // ...T00:MM:SS.000Z
+                let time = v.split('T').nth(1).unwrap().trim_end_matches('Z');
+                let mut fields = time.split(':');
+                let _hour = fields.next();
+                let minutes: u64 = fields.next().unwrap().parse().unwrap();
+                let seconds: f64 = fields.next().unwrap().parse().unwrap();
+                at = Some(minutes * 60 + seconds as u64);
+            } else if line.starts_with("#EXTINF:") {
+                expect = true;
+            } else if expect && !line.is_empty() && !line.starts_with('#') {
+                expect = false;
+                out.push((sn, at.take().unwrap(), line.to_string()));
+                sn += 1;
+            }
+        }
+        out
+    }
+
+    /// hls.js's order of play over a run of served playlists: it starts at the
+    /// first listed segment, fetches up to `per_poll` new ones after each poll,
+    /// and resyncs to the newest listed one when it fell out of the window.
+    /// Every fetch goes through the redirect, as the player's does.
+    struct Player {
+        next: Option<u64>,
+        /// What played: (sn, programme second, real URL).
+        played: Vec<(u64, u64, String)>,
+        resyncs: usize,
+    }
+
+    impl Player {
+        fn new() -> Self {
+            Self { next: None, played: Vec::new(), resyncs: 0 }
+        }
+
+        fn poll(&mut self, sid: &str, served: &str, per_poll: usize) {
+            let segs = listed(served);
+            let first = segs.first().expect("a live window").0;
+            let next = match self.next {
+                None => first,
+                Some(n) if n < first => {
+                    self.resyncs += 1;
+                    segs.last().unwrap().0
+                }
+                Some(n) => n,
+            };
+            self.next = Some(next);
+            for (sn, at, path) in segs.iter().filter(|s| s.0 >= next).take(per_poll) {
+                let (psid, psn) = parse_vseg_path(path).unwrap();
+                assert_eq!((psid.as_str(), psn), (sid, *sn), "the path names its own segment");
+                let url = redirect_target(sid, *sn).expect("every listed segment resolves");
+                self.played.push((*sn, *at, url));
+                self.next = Some(sn + 1);
+            }
+        }
+    }
+
+    /// No segment repeated or dropped, by sequence number and programme date,
+    /// except across a counted resync, where the date jumps with the number.
+    fn assert_continuous(played: &[(u64, u64, String)], resyncs: usize) {
+        let mut jumps = 0;
+        for pair in played.windows(2) {
+            let (a, b) = (&pair[0], &pair[1]);
+            assert!(b.0 > a.0, "segment {} played again after {}", b.0, a.0);
+            assert_eq!(b.1 - a.1, (b.0 - a.0) * 2, "programme date and sequence disagree at {}", b.0);
+            if b.0 != a.0 + 1 {
+                jumps += 1;
+            }
+        }
+        assert_eq!(jumps, resyncs, "a segment was dropped outside a resync");
+    }
+
+    #[test]
+    fn a_switch_drops_and_repeats_nothing() {
+        let sid = "cont-switch";
+        clear(sid);
+        let mut player = Player::new();
+        let mut first = 100;
+        for _ in 0..2 {
+            let served = stabilize(sid, &dated_window(first, 5, "hi"), "https://cdn/");
+            player.poll(sid, &served, 1);
+            first += 1;
+        }
+        begin_switch(sid);
+        for _ in 0..12 {
+            let served = stabilize(sid, &dated_window(first, 5, "lo"), "https://cdn/");
+            player.poll(sid, &served, 1);
+            first += 1;
+        }
+        assert_continuous(&player.played, player.resyncs);
+        assert_eq!(player.resyncs, 0);
+        assert_eq!(player.played.len(), 14);
+        // The old rendition up to the switch, the new one after it, never back.
+        let tags: Vec<&str> = player
+            .played
+            .iter()
+            .map(|p| if p.2.contains("/hi/") { "hi" } else { "lo" })
+            .collect();
+        let flip = tags.iter().position(|t| *t == "lo").expect("it switched");
+        assert_eq!(flip, 2, "the first segment after the last one fetched");
+        assert!(tags[flip..].iter().all(|t| *t == "lo"));
+        clear(sid);
+    }
+
+    #[test]
+    fn a_resync_then_a_switch_drop_and_repeat_nothing_more() {
+        let sid = "cont-resync";
+        clear(sid);
+        let mut player = Player::new();
+        let served = stabilize(sid, &dated_window(200, 4, "hi"), "https://cdn/");
+        player.poll(sid, &served, 1);
+        // The player stalled while the window moved past it, and resyncs.
+        let served = stabilize(sid, &dated_window(220, 4, "hi"), "https://cdn/");
+        player.poll(sid, &served, 1);
+        assert_eq!(player.resyncs, 1);
+        begin_switch(sid);
+        let mut first = 221;
+        for _ in 0..8 {
+            let served = stabilize(sid, &dated_window(first, 4, "lo"), "https://cdn/");
+            player.poll(sid, &served, 1);
+            first += 1;
+        }
+        assert_continuous(&player.played, player.resyncs);
+        // The resync point keeps the rendition it was fetched from; the switch
+        // starts right after it.
+        assert!(player.played.iter().any(|p| p.0 == 223 && p.2.contains("/hi/")));
+        assert!(player.played.iter().filter(|p| p.0 > 223).all(|p| p.2.contains("/lo/")));
+        assert_eq!(player.played.iter().filter(|p| p.0 > 223).count(), 8);
+        clear(sid);
+    }
+
+    #[test]
+    fn a_new_broadcast_forgets_the_switch_point() {
+        let sid = "cont-restart";
+        clear(sid);
+        stabilize(sid, &dated_window(500, 4, "hi"), "https://cdn/");
+        redirect_target(sid, 502);
+        begin_switch(sid);
+        // The broadcast restarted: its sequence begins again, and an old
+        // recorded segment must never shadow a new one.
+        stabilize(sid, &dated_window(3, 4, "new"), "https://cdn/");
+        for sn in 3..7 {
+            assert!(redirect_target(sid, sn).unwrap().contains("/new/"));
+        }
+        clear(sid);
+    }
 }

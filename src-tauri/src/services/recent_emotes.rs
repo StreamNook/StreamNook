@@ -66,8 +66,8 @@ fn lookup(set: &EmoteSet, word: &str) -> Option<RecentEmote> {
     set.twitch
         .iter()
         .chain(&set.seven_tv)
-        .chain(&set.bttv)
         .chain(&set.ffz)
+        .chain(&set.bttv)
         .chain(&set.kick)
         .find(|e: &&Emote| e.name == word)
         .map(|e| RecentEmote { id: e.id.clone(), name: e.name.clone() })

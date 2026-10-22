@@ -1,3 +1,97 @@
+## [8.8.15] - 2026-10-21
+
+## 🎉 New: Send pictures in chat
+> The emote menu has a new Images tab. Pick a picture and it uploads to the host you choose, then its link lands in your message box. You can also drop a picture onto chat, or paste one with paste upload turned on. StreamNook asks once before your first upload to a host and removes location and camera details before a picture leaves your PC.
+
+---
+
+### ✨ Features
+- The Images tab keeps your uploads, grouped by host, as a grid or a list. Each one shows when its link expires, and you can send it again for a fresh link, copy it or delete it (on kappa.lol, deleting removes the file too). kappa.lol and imgdrip.com are new hosts, and picture links in chat show at their full size as soon as they arrive.
+- Evolve your Pokémon badges from StreamNook. The Badges page lists each evolution line with its next stage and your days of progress, and you can pick a line and claim it without opening twitch.tv.
+- Typing @ puts the streamer at the top of the list, even before they've said anything.
+- Moderators get a full user card on desktop with the chatter's moderation history, their low trust status (monitor, restrict or clear it) and Warn when your sign-in allows it. Card buttons act on the first click, and Shift-click puts the command in the chat box instead.
+- Unban requests show up in chat, where moderators can approve or deny them with an optional reply.
+- The channel tools menu has a Blocked terms page that lists every blocked term, with search, and lets you add or remove them.
+- Timed-out and deleted messages name the moderator and the length, with the reason on hover. Actions from a Shared Chat partner say whose chat they happened in.
+- Alt-click Ban or a timeout on the hover buttons to pick a saved reason. The mod log offers Unban or Lift timeout on each chatter's latest ban.
+- Ban confirmation (Settings > Moderation) makes Ban ask for a second press, so a slip never bans anyone.
+- Menus and popovers across the app use the same glass as the title bar, and so does the update button. When the window loses focus the glass dims instead of disappearing.
+
+### 🐛 Bug Fixes
+- Badges you can earn right now show in Available Now, including the Apple TV badges, the Pokémon evolutions and reward campaign badges, and a badge's page shows the same dates as the gallery. An evolved badge waits until you own the one it evolves from, and a badge no longer shows another badge's earn steps.
+- Custom commands that run another command, like /tt for /timeout, now run it.
+- When two providers have an emote with the same name, the emote menu, reply previews and Kick and YouTube messages pick the one chat shows.
+- An emote with a zero-width emote on top keeps its full size.
+- Tooltips look the same everywhere. They show on turned-off buttons (often the ones explaining why) and in popped-out windows like the emote palette and the chat overlay, and screen readers keep each button's visible name.
+- Tab completion of chatter names works in Kick, YouTube and TikTok chats.
+- Removing a blocked term works in channels with more than 100 of them.
+- The command list keeps its category heading pinned while you scroll.
+
+### 🔧 Maintenance
+- Updated the list of trusted security certificates, removing one whose key was compromised.
+
+## [8.8.14] - 2026-10-20
+
+### ✨ Features
+- Full screen now opens as just the video. The new chat button in the player (or C) brings chat in over it without leaving full screen, on the main player and on MultiNook tiles. The F11 window mode is now called Theater mode.
+- Click the category under a stream's title to browse other streams in it, on Twitch and Kick.
+- Chat tabs in MultiChat and MultiNook show a red dot on channels that are live.
+- The OBS chat overlay has sharper badges, one Shadow setting with switches for text, names and badges, and slider values you can type. Emotes and badges keep loading while 7TV or another provider is down.
+
+### 🐛 Bug Fixes
+- When an emote provider is slow or briefly down, chat fills in the missing emotes on its own, and a channel's own emote wins over a global one with the same name. Kick, YouTube and Shared Chat emotes recover from a failed load too.
+- 7TV paints and badges stay on chatters while 7TV is down.
+- Names with spaces (like Call of Duty) show correctly and light up as one mention, and short links like test.fr are clickable.
+- Resume in a popped-out MultiChat glides down to the newest messages instead of jumping.
+- The Notifications Test button always plays your chosen sound, and the Volume setting now applies to go-live and whisper sounds.
+- Mod tools show in chat tabs you aren't looking at.
+- Channel point rewards that need a live stream unlock as soon as the stream starts, and closing a stream and quickly reopening it no longer leaves chat empty.
+
+## [8.8.13] - 2026-10-20
+
+## 🎉 New: Run your channel from chat
+> The Tools button in the chat box now opens a stream manager. Change your title, category and tags with a preview, start polls and predictions, raid a channel, run or snooze an ad break, and work through your rewards queue one redemption at a time or a whole reward at once. Shield Mode joins the chat modes (it asks first, since it can clear chat) and Announce joins moderation. Moderators and editors get the parts Twitch lets them use.
+
+---
+
+### ✨ Features
+- Auto is now its own choice in the quality menu, and new installs start on it. On a slow connection, Auto picks a quality the connection can carry before the first frame. A quality you already picked, Best and Source included, stays exactly as it was.
+- Mentions live in the Dynamic Island's notification history, and a new one shows in the island as it arrives. Clicking a mention opens the chat at that message. Your name without the @ and your display name count as mentions (each can be turned off under Settings > Notifications > Mentions), Kick and YouTube mentions notify like Twitch ones, and Muted chats keeps the channels you pick quiet.
+- Mentions while you're away: turn it on under Settings > Notifications > Mentions and mentions and replies from live channels you follow are saved while StreamNook is closed. They're waiting in the island when you come back.
+- Settings > Notifications is rebuilt around one Notify me about list with a switch for each kind of notification, and the setup wizard asks about each one. On macOS, StreamNook asks for permission only once you turn one on. Whispers don't notify for the conversation you already have open, and a whisper that fails to send shows Twitch's reason.
+- Watch streak and resub banners have a new look with one Share button. Share goes out with your next message, and the message box says so. The banner only says shared once Twitch confirms it; if it didn't go through, the banner stays with a short note and your text is kept.
+- The wallet button shows the channel's points icon and the Bits gem as one split icon, and turns into an amber chest when a bonus is waiting. The channel points menu leaves out rewards you can't redeem on this stream (paused, sold out, or at your limit). They come back when the next stream starts.
+- Your prediction bet stays in view: the amount and the button stay pinned to the bottom of the card while the outcomes scroll, with your balance beside the amount. StreamNook asks before placing a bet, and a refused bet shows as one line in the card. Polls, predictions and drops stack at the top of chat without covering each other and take at most 40% of its height.
+- On Windows, channel points notifications show the channel's picture with its own points icon, the currency name, what the points were for and your balance. Gains from several channels share one notification, and everyday watch points update quietly in the notification center. Settings > Notifications can add a Rewards button, a bar toward your next reward, and a notification when a prediction starts.
+- The mod slider replaces dragging messages onto tiles. Grab the handle at a message's left edge and pull right through Delete, your timeout lengths and Ban, then let go. Under Settings > Moderation > Message edge you can pick its look (Preview, Rail or Capsule), its steps and their spacing, and type any timeout length, like "1h30m" or "2d". Chat holds still while you're on a message, Ban waits for you to rest on it, and Escape or letting go off the message cancels.
+- Line buttons put Delete, a timeout and Ban at the start of each line for one-click moderation (Settings > Moderation > Message edge > Line buttons). They can show on hover or all the time, and scrolling over the timeout changes its length before you click. The hover buttons have a live preview in settings.
+- The emote menu searches every emote provider at once with a count on each tab, emoji search matches keywords, and Favorites starts with the emotes you used most recently. A colon and one letter brings up emote suggestions. Hovering an emote names its creator, and clicking it opens a card that links to them.
+- Hover a chat badge for a large preview. Click it to open its page, or a card with its description and how many people have it. Right-click anywhere on a message to reply to it, and every chat menu closes when you click outside it.
+- Link previews hold their size from the moment a message lands, so chat no longer jumps when a card loads, and every YouTube link gets its card. Reddit links get a card with the post's title, author and picture, and links to Reddit images show the image.
+- Member numbers with a story get their own name on the accolade, like "Six Seven" for #67. Accolades nobody can earn anymore only show for people who already have them, and Completionist counts only the ones still in reach.
+- VOD seek bars get the live timeline's fine control. While dragging, move the pointer away from the bar to slow the drag, or scroll over the bar to move 10 seconds (Shift for a minute, Ctrl for a second). A seek lands exactly where the thumb is at any display scale.
+- One Languages setting under Settings > Interface > Discover covers Discover and Kick browsing. Until you pick some it follows your PC's language, and Any language shows everything. Category search lists the exact name first and ignores accents, so "pokemon" finds Pokémon, and categories show Twitch's own live viewer totals, which used to come out low for big categories.
+- Softer text and calmer neon in Frosted Glass, Prism, OLED, Ayu Dark, Monokai, Synthwave '84, One Dark and Solarized Dark, and secondary text is readable on every theme, custom ones included. Text weight now changes message text, and the Twitch font draws chat at the weight Twitch uses. With blur off, menus and popovers are solid, and Prism no longer shows a seam along its borders.
+
+### 🐛 Bug Fixes
+- When your PC can't decode a channel's stream in one codec, StreamNook switches that channel to a codec it can play.
+- Signed in on your phone and PC at the same time, StreamNook still follows raids and keeps titles and live status current. When Twitch has no room for another connection, it waits quietly instead of retrying every few seconds.
+- A slow connection when StreamNook starts no longer shows the sign-in screen. You stay signed in, your profile fills in once Twitch answers, and a message you send before then stays in the box with a note saying why. Settings restored onto a new PC run the setup wizard there, and its last page names each platform with its logo.
+- A chat you can't send to, like a VOD's recorded chat, shows no message box. A platform you haven't connected keeps the box and asks you to sign in, and a slash command a platform doesn't run says it works in Twitch chats only. GIFs show only in channels that have them turned on, a failed GIF load offers Try again, and an expired YouTube or TikTok sign-in offers Reconnect.
+- Opening StreamNook from the tray shows an available update again, and the update notification arrives when the window opens.
+- Badges that dropped out of the cache show again, and the log no longer fills with thousands of errors an hour. StreamNook badges no longer go missing for a session when they finish loading during startup, they're saved to disk with atmospheres so a network that blocks them still shows them after the first load, and a badge that can't load shows a faint StreamNook mark. Available drop badges keep their dates, earned badges on profiles stay in Twitch's order, earn steps come from the Drops campaign when a badge lists none, and long badge names stay inside their cards.
+- Stream Together and Shared Chat show on stream cards again, right after StreamNook starts or comes back from the tray. Twitch began refusing requests that ask about too many channels at once, which also emptied favorite categories, Continue Watching and drop eligibility for long lists. Search no longer shows ended streams as live with 0 viewers, and while signed out, categories, search and the end of Discover fill in.
+- In Shared Chat, messages from a partner channel start with that channel's picture and show its own sub and channel badges and its 7TV, BTTV and FFZ emotes.
+- `/mods` lists a channel's moderators again, moderators show as moderators in the viewer list, and Bypass duplicate works past the second repeat. `/warn` works (signing in to Twitch again once grants its permission, and StreamNook tells you when that's needed), and a typed `/timeout` reads lengths like `10m` on Kick and YouTube too. Commands like `/mod`, `/vip`, `/raid` and `/announce` show Twitch's own reason when refused, `/uptime`, `/endpoll`, `/chatters` and `/nuke` say what actually failed, `/color` takes names like SpringGreen and hex values, moderators aren't offered broadcaster-only commands, and custom commands fill in the chat you typed them in.
+- The slow-mode countdown on the send button no longer shows a giant number, and counts, timers and balances fit their space everywhere, from the hype train strip to MultiChat unread badges. Chat history shows a channel's custom moderator and VIP badges, Kick replies in history show what they reply to, and StreamNook members wear their badge and look on Kick and YouTube messages. A chat with no recent messages says so, hiding channel points redemptions hides all of them, and the follow and subscribe buttons in chat menus are ready as soon as the chat opens.
+- A drop ready to claim is announced once instead of at every stream start, categories opened right after launch show their Drops tags, and opening an offline room stops drops and points for the channel you watched before.
+
+### 🔧 Maintenance
+- If your settings file gets damaged, StreamNook restores it from one of its daily copies so you keep your setup.
+
+### ⚡ Performance
+- Streams start without waiting for drops, channel points and watch tracking to get going, and chat history appears as soon as you join.
+
 ## [8.8.12] - 2026-10-15
 
 ### ✨ Features

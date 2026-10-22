@@ -133,7 +133,7 @@ export function BlendSourcesButton({
             onPointerDownCapture={markInside}
             role="menu"
             aria-label="Combined chat sources"
-            className="glass-flyout fixed z-[70] w-[248px] rounded-xl p-1.5"
+            className="glass-flyout fixed z-[calc(var(--sn-z-over-player-lift,0)_+_70)] w-[248px] rounded-xl p-1.5"
             style={{ left: place.left, top: place.top }}
           >
             <div className="px-2 pb-1 pt-0.5 text-[10px] font-semibold uppercase tracking-wider text-textMuted">

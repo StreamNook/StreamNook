@@ -53,10 +53,10 @@ const CommandItem: React.FC<{
   return (
     <button
       ref={itemRef}
-      className={`relative w-full px-4 py-2.5 my-0.5 flex flex-col text-left transition-all duration-200 rounded-lg border overflow-hidden ${
+      className={`relative w-full px-4 py-2.5 my-0.5 flex flex-col text-left transition-colors duration-200 rounded-lg border border-transparent overflow-hidden ${
         isSelected
-          ? 'bg-white/5 border-white/10 shadow-[inset_0_0_20px_rgba(255,255,255,0.02)]'
-          : 'border-transparent hover:bg-white/[0.03]'
+          ? 'bg-white/[0.08]'
+          : 'hover:bg-white/[0.06]'
       }`}
       onClick={onSelect}
       onMouseEnter={onHover}
@@ -121,11 +121,11 @@ const CommandAutocomplete: React.FC<CommandAutocompleteProps> = ({
       animate={{ opacity: 1, y: 0, scale: 1 }}
       exit={{ opacity: 0, y: 6, scale: 0.98 }}
       transition={{ duration: 0.15, ease: "easeOut" }}
-      className="sn-popover absolute z-[60] bottom-full left-0 right-0 mb-2 h-[520px] max-h-[calc(100vh-120px)] flex flex-col overflow-hidden origin-bottom"
+      className="glass-flyout rounded-xl !p-0 absolute z-[60] bottom-full left-0 right-0 mb-2 h-[520px] max-h-[calc(100vh-120px)] flex flex-col overflow-hidden origin-bottom"
       ref={listRef as any}
     >
       {/* Header */}
-      <div className="px-4 py-3 border-b border-white/5 flex justify-between items-center bg-glass-base/50 backdrop-blur-md shadow-sm z-10 relative">
+      <div className="px-4 py-3 border-b border-white/[0.06] flex justify-between items-center z-10 relative">
         <span className="text-[11px] font-semibold text-white/50 uppercase tracking-wider">
           Chat Commands
         </span>

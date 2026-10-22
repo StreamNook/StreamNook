@@ -8,6 +8,7 @@ import { useAppStore, type WhisperImportProgress, type SettingsTab } from './sto
 import { listenForSettingsUpdates } from './utils/settingsBroadcast';
 import { trackPresence, isSupabaseConfigured, incrementStat, subscribeToStreamNookRegistry, subscribeToCosmeticsRegistry, subscribeToAtmospheresRegistry, refreshEntitlementRegistries } from './services/supabaseService';
 import { primeClientConfig } from './services/clientConfig';
+import { lastUpdateStatus, type BundleUpdateStatus } from './services/updateStatus';
 import TitleBar from './components/TitleBar';
 import DynamicIsland from './components/DynamicIsland';
 import ChannelAboutReveal from './components/ChannelAboutReveal';
@@ -36,12 +37,12 @@ import PluginUiHost from './plugins-ui/PluginUiHost';
 import PluginUpdatesChecker from './components/plugins/PluginUpdatesChecker';
 import PluginOverlayOutlet from './plugins-ui/PluginOverlayOutlet';
 import { usemultiNookStore } from './stores/multiNookStore';
+import { isSoloAdapt, type PlaybackAdapt } from './utils/linkAdapt';
 import LoadingWidget from './components/LoadingWidget';
 import ToastManager from './components/ToastManager';
 import DeviceLoginOverlay from './components/DeviceLoginOverlay';
 import EntitlementUnlockNote from './components/EntitlementUnlockNote';
 import AnnouncementsBanner from './components/AnnouncementsBanner';
-import { TooltipManager } from './components/ui/TooltipManager';
 import { Tooltip } from './components/ui/Tooltip';
 import DropProgressController from './components/plugins/DropProgressController';
 import EmoteSpotlight from './components/EmoteSpotlight';
@@ -376,21 +377,111 @@ function App() {
   const chatAutoHide = settings.chat_auto_hide ?? false;
   const isSideChat = chatPlacement === 'right' || chatPlacement === 'left';
   const autoHideActive = chatAutoHide && isSideChat;
-  // Fullscreen chat overlay: while Plyr is in CSS fullscreen the docked chat
-  // panel is lifted above the fullscreen layer as a translucent fixed column
-  // (globals.css .chat-fullscreen-overlay). Same DOM node, no remount, no
-  // second WebView. Hidden with the player controls unless hovered/focused.
+  const isMultiNookActive = usemultiNookStore((s) => s.isMultiNookActive);
+  const isChatHidden = usemultiNookStore((s) => s.isChatHidden);
+  // Whether the chat panel is on screen at all: a placement other than Hidden,
+  // something with chat (live, offline chat, a replay with a channel, or a
+  // MultiNook grid), and not owned by a MultiChat popout. A channel open in a
+  // popout makes the popout its only chat surface, so the in-app panel
+  // collapses (no duplicate chat across windows). 'video' and 'clip' carry chat
+  // REPLAY; both are guarded on user_login, which playMedia only sets when
+  // there is a channel to replay, so a clip with no surviving source VOD gets
+  // no empty panel.
+  const chatPanelShown =
+    chatPlacement !== 'hidden' &&
+    (currentMediaType === 'live' ||
+      currentMediaType === 'offline_chat' ||
+      ((currentMediaType === 'video' || currentMediaType === 'clip') && !!currentStream?.user_login) ||
+      isMultiNookActive) &&
+    !activeChatChannelInPopout;
+  // Full-screen chat: the player's full screen opens as video only, and the
+  // chat button (or C) brings the docked chat panel up over it as a
+  // translucent fixed column (globals.css .chat-fullscreen-overlay). Same DOM
+  // node, no remount, no second WebView. While it is down the panel stays
+  // mounted in its usual place under the video, so it comes up instantly.
   const isPlayerFullscreen = useAppStore((s) => s.isPlayerFullscreen);
   const playerOverlayVisible = useAppStore((s) => s.playerOverlayVisible);
+  const fsChatOpen = useAppStore((s) => s.fsChatOpen);
   const fsChat = settings.fullscreen_chat;
-  const fsOverlayActive = isPlayerFullscreen && (fsChat?.mode ?? 'overlay') === 'overlay';
-  const [fsChatHeld, setFsChatHeld] = useState(false);
+  const fsChatAvailable = isPlayerFullscreen && chatPanelShown && !(isMultiNookActive && isChatHidden);
+  const fsOverlayActive = fsChatAvailable && fsChatOpen;
   const fsChatSide: 'left' | 'right' =
     fsChat?.side && fsChat.side !== 'auto' ? fsChat.side : chatPlacement === 'left' ? 'left' : 'right';
-  const fsChatHidden = fsOverlayActive && (fsChat?.auto_hide ?? true) && !playerOverlayVisible && !fsChatHeld;
+  const fsChatWidth = Math.max(240, Math.min(640, fsChat?.width ?? 340));
+  // Auto-hide keeps the column up while the pointer is on it or anything in
+  // it has focus (typing a message), and otherwise fades it with the player
+  // controls.
+  const [fsChatHovered, setFsChatHovered] = useState(false);
+  const [fsChatFocused, setFsChatFocused] = useState(false);
+  const fsChatHidden =
+    fsOverlayActive && (fsChat?.auto_hide ?? false) && !playerOverlayVisible && !fsChatHovered && !fsChatFocused;
+  // Put away, the column forgets the pointer and focus it had, so the next
+  // time it comes up auto-hide starts fresh. Reset during render (the
+  // StrictMode-safe way, like the latches below), not in an effect.
+  const [fsWasActive, setFsWasActive] = useState(fsOverlayActive);
+  if (fsWasActive !== fsOverlayActive) {
+    setFsWasActive(fsOverlayActive);
+    if (!fsOverlayActive) {
+      setFsChatHovered(false);
+      setFsChatFocused(false);
+    }
+  }
+  // Page-level marks: data-player-fullscreen lifts the menus chat opens over
+  // the video, and data-fs-chat-available shows the chat button.
   useEffect(() => {
-    if (!isPlayerFullscreen) setFsChatHeld(false);
-  }, [isPlayerFullscreen]);
+    const root = document.documentElement;
+    root.toggleAttribute('data-player-fullscreen', isPlayerFullscreen);
+    root.toggleAttribute('data-fs-chat-available', fsChatAvailable);
+  }, [isPlayerFullscreen, fsChatAvailable]);
+  // The column ends just above the player's control bar (--fs-chat-bottom),
+  // so the bar keeps its full width and its buttons, the chat button among
+  // them, never move when chat comes up or goes away. Measured, because the
+  // bar's height differs between the solo player and a MultiNook tile;
+  // offsetHeight ignores the slide Plyr hides the bar with. Re-attached on a
+  // stream switch, which builds a new bar.
+  useEffect(() => {
+    if (!fsOverlayActive) return;
+    const root = document.documentElement;
+    let observer: ResizeObserver | null = null;
+    let timer = 0;
+    const attach = (tries: number) => {
+      const bar = document.querySelector<HTMLElement>('.plyr--fullscreen-fallback .plyr__controls');
+      if (!bar) {
+        if (tries > 0) timer = window.setTimeout(() => attach(tries - 1), 200);
+        return;
+      }
+      const write = () => root.style.setProperty('--fs-chat-bottom', `${bar.offsetHeight}px`);
+      write();
+      observer = new ResizeObserver(write);
+      observer.observe(bar);
+    };
+    attach(25);
+    return () => {
+      window.clearTimeout(timer);
+      observer?.disconnect();
+      root.style.removeProperty('--fs-chat-bottom');
+    };
+  }, [fsOverlayActive, streamUrl]);
+  // What lifts a chat panel node into the column. Shared by the docked panel
+  // and the hover-reveal panel, so chat comes up the same way from either.
+  const fsPanelLift = fsOverlayActive
+    ? {
+        'data-fs-hidden': fsChatHidden ? 'true' : undefined,
+        onMouseEnter: () => setFsChatHovered(true),
+        onMouseLeave: () => setFsChatHovered(false),
+        onFocusCapture: () => setFsChatFocused(true),
+        onBlurCapture: (e: React.FocusEvent<HTMLDivElement>) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setFsChatFocused(false);
+        },
+      }
+    : {};
+  const fsPanelClass = fsOverlayActive ? `chat-fullscreen-overlay chat-fullscreen-overlay--${fsChatSide}` : '';
+  const fsPanelVars = fsOverlayActive
+    ? ({
+        '--fs-chat-width': `${fsChatWidth}px`,
+        '--fs-chat-opacity': `${Math.max(0, Math.min(100, fsChat?.opacity ?? 55))}%`,
+      } as React.CSSProperties)
+    : undefined;
   const [chatRevealed, setChatRevealed] = useState(false);
   const chatRevealTimer = useRef<number | null>(null);
   // A streamnook:// deep link that landed while the app was still booting. Played
@@ -409,7 +500,6 @@ function App() {
     if (!autoHideActive) setChatRevealed(false);
     return () => { if (chatRevealTimer.current) window.clearTimeout(chatRevealTimer.current); };
   }, [autoHideActive]);
-  const isMultiNookActive = usemultiNookStore((s) => s.isMultiNookActive);
   // Stream-only full screen or "Title bar auto-hide": nothing reserves the
   // title bar's row, so the stream area runs to the top edge.
   const titleBarAutoHides = useTitleBarAutoHide();
@@ -420,7 +510,6 @@ function App() {
   // surface renders; ChatWidget still synthesizes the Twitch case itself.
   const multiNookSlots = usemultiNookStore((s) => s.slots);
   const activeChatChannelId = usemultiNookStore((s) => s.activeChatChannelId);
-  const isChatHidden = usemultiNookStore((s) => s.isChatHidden);
   const slots = usemultiNookStore((s) => s.slots);
   const visibleSlotsLength = slots.filter((s) => !s.isMinimized).length;
   const [isResizing, setIsResizing] = useState(false);
@@ -693,6 +782,19 @@ function App() {
         if (url) useAppStore.getState().applyAdPivot(url, region);
       }
     );
+    return () => {
+      unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, []);
+
+  // Rust's link governor moved a stream in "Auto" (`link_adapt`): the solo
+  // player or one grid tile names the rendition it plays, and reloads when
+  // its relay restarted on another one.
+  useEffect(() => {
+    const unlistenPromise = listen<PlaybackAdapt>('playback-adapt', (event) => {
+      if (isSoloAdapt(event.payload)) useAppStore.getState().applyLinkAdapt(event.payload);
+      else usemultiNookStore.getState().applyTileAdapt(event.payload);
+    });
     return () => {
       unlistenPromise.then((unlisten) => unlisten());
     };
@@ -1803,26 +1905,35 @@ function App() {
 
   // The title-bar update indicator follows Rust's periodic check
   // (services/update_watch.rs): shortly after start, then every half hour.
+  // This window may have mounted after a check went out (reopened from the
+  // tray, a slow start), so it also reads the last answer Rust kept; an event
+  // that arrives first is newer and wins.
   useEffect(() => {
     let active = true;
+    let heard = false;
     let unlisten: (() => void) | undefined;
-    void listen<{ status: { update_available: boolean; current_version: string; latest_version: string; releases_behind?: number | null } }>(
-      'update://status',
-      (event) => {
-        const { status } = event.payload;
-        useAppStore.getState().setUpdateInfo(
-          status.update_available
-            ? {
-                current_version: status.current_version,
-                latest_version: status.latest_version,
-                releases_behind: status.releases_behind ?? null,
-              }
-            : null,
-        );
-      },
-    ).then((fn) => {
-      if (active) unlisten = fn;
-      else fn();
+    const show = (status: BundleUpdateStatus) => {
+      useAppStore.getState().setUpdateInfo(
+        status.update_available
+          ? {
+              current_version: status.current_version,
+              latest_version: status.latest_version,
+              releases_behind: status.releases_behind ?? null,
+            }
+          : null,
+      );
+    };
+    void listen<{ status: BundleUpdateStatus }>('update://status', (event) => {
+      heard = true;
+      show(event.payload.status);
+    }).then(async (fn) => {
+      if (!active) {
+        fn();
+        return;
+      }
+      unlisten = fn;
+      const last = await lastUpdateStatus(false);
+      if (active && !heard && last) show(last.status);
     });
     return () => {
       active = false;
@@ -2151,19 +2262,8 @@ function App() {
                       )}
                     </AnimatePresence>
                   </ChannelAboutReveal>
-                  {/* Chat — gated on whether this channel is currently owned
-                      by a StreamNook MultiChat popout. When it is, the popout
-                      becomes the sole chat surface and we collapse the in-app
-                      chat panel entirely (no duplicate chat across windows). */}
-                  {/* 'video' and 'clip' carry chat REPLAY, so they get the panel too. They
-                      were missing here while the resize gate directly above already listed
-                      'video', which is why a VOD opened from the Watch VOD button (media
-                      type 'offline_chat') showed chat but the exact same VOD opened from a
-                      profile's Videos tab (media type 'video') did not. Both replay types
-                      are guarded on user_login, which playMedia only sets when there is a
-                      channel to replay — so a clip with no surviving source VOD still gets
-                      no empty panel. */}
-                  {chatPlacement !== 'hidden' && (currentMediaType === 'live' || currentMediaType === 'offline_chat' || ((currentMediaType === 'video' || currentMediaType === 'clip') && !!currentStream?.user_login) || isMultiNookActive) && !activeChatChannelInPopout && (
+                  {/* Chat (see chatPanelShown for what puts it on screen). */}
+                  {chatPanelShown && (
                     autoHideActive ? (
                       // Reveal-on-hover (side docks only): a thin edge handle is
                       // always visible; hovering the wrapper slides the chat out
@@ -2208,7 +2308,11 @@ function App() {
                           transition={{ type: 'spring', stiffness: 350, damping: 30 }}
                           className="h-full flex-shrink-0 overflow-hidden bg-background"
                         >
-                          <div className="h-full flex flex-col" style={{ width: `${chatSize}px` }}>
+                          <div
+                            {...fsPanelLift}
+                            className={`h-full flex flex-col ${fsPanelClass}`}
+                            style={fsPanelVars ?? { width: `${chatSize}px` }}
+                          >
                             {isMultiNookActive && <Suspense fallback={null}><MultiNookChatSwitcher /></Suspense>}
                             <div className="flex-1 overflow-hidden relative">
                               <ErrorBoundary componentName="Chat" reportToLogService resetKeys={[streamUrl, currentMediaType]}>
@@ -2262,21 +2366,9 @@ function App() {
                       </Tooltip>
                       <div
                         data-chat-panel="true"
-                        data-fs-hidden={fsChatHidden ? 'true' : undefined}
-                        onMouseEnter={fsOverlayActive ? () => setFsChatHeld(true) : undefined}
-                        onMouseLeave={fsOverlayActive ? () => setFsChatHeld(false) : undefined}
-                        onFocusCapture={fsOverlayActive ? () => setFsChatHeld(true) : undefined}
-                        className={`flex-shrink-0 flex flex-col h-full overflow-hidden bg-background ${
-                          fsOverlayActive ? `chat-fullscreen-overlay chat-fullscreen-overlay--${fsChatSide}` : ''
-                        }`}
-                        style={
-                          fsOverlayActive
-                            ? ({
-                                '--fs-chat-width': `${Math.max(240, Math.min(640, fsChat?.width ?? 340))}px`,
-                                '--fs-chat-opacity': `${Math.max(0, Math.min(100, fsChat?.opacity ?? 55))}%`,
-                              } as React.CSSProperties)
-                            : { [isSideChat ? 'width' : 'height']: `${chatSize}px` }
-                        }
+                        {...fsPanelLift}
+                        className={`flex-shrink-0 flex flex-col h-full overflow-hidden bg-background ${fsPanelClass}`}
+                        style={fsPanelVars ?? { [isSideChat ? 'width' : 'height']: `${chatSize}px` }}
                       >
                         {isMultiNookActive && <Suspense fallback={null}><MultiNookChatSwitcher /></Suspense>}
                         <div className="flex-1 overflow-hidden relative">
@@ -2443,7 +2535,6 @@ function App() {
       <ToastManager />
       <DeviceLoginOverlay />
       <EntitlementUnlockNote />
-      <TooltipManager />
       {commandPaletteEverOpened && <Suspense fallback={null}><CommandPalette /></Suspense>}
       <InputContextMenuHost />
       {clipModalEverOpened && <Suspense fallback={null}><ClipModal /></Suspense>}

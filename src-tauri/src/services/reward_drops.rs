@@ -48,6 +48,7 @@ const SELF_FIELDS: &str = "self { status currentMinutesWatched currentSubs grant
 
 static CACHE: Lazy<Mutex<Option<(Instant, Vec<DropCampaign>)>>> = Lazy::new(|| Mutex::new(None));
 static TRACKER: Lazy<Mutex<HashMap<String, Rise>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+static TRACK_GROUPS: Lazy<Mutex<Vec<TrackGroup>>> = Lazy::new(|| Mutex::new(Vec::new()));
 
 /// The last minutes seen for a reward tier and when they last went up.
 #[derive(Clone, Debug, Default)]
@@ -442,6 +443,53 @@ pub fn build(
     out
 }
 
+/// A reward group that sits on a progression track: the Pokémon evolutions,
+/// where only the equipped lane (one per evolution line, shared by its
+/// stages) earns progress. The balls are on a track of their own with no lane.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TrackGroup {
+    pub campaign_id: String,
+    pub campaign_name: String,
+    pub end_at: DateTime<Utc>,
+    pub group_id: String,
+    pub track: String,
+    pub lane: Option<String>,
+}
+
+/// Every running campaign's track groups, in Twitch's order. Pure, from the
+/// same answers `build` reads.
+pub fn track_groups_from(list: &[Value], details: &Value, now: DateTime<Utc>) -> Vec<TrackGroup> {
+    let mut out = Vec::new();
+    for (i, item) in list.iter().enumerate() {
+        let detail = &details[format!("c{i}")];
+        let Some(id) = text(item, "id") else { continue };
+        let (Some(start_at), Some(end_at)) = (parse_time(&item["startsAt"]), parse_time(&item["endsAt"]))
+        else {
+            continue;
+        };
+        if detail.is_null() || start_at > now || end_at < now {
+            continue;
+        }
+        for g in detail["rewardGroups"].as_array().into_iter().flatten() {
+            let (Some(group_id), Some(track)) = (text(g, "id"), text(g, "track")) else { continue };
+            out.push(TrackGroup {
+                campaign_id: id.to_string(),
+                campaign_name: text(item, "name").unwrap_or(id).to_string(),
+                end_at,
+                group_id: group_id.to_string(),
+                track: track.to_string(),
+                lane: text(g, "lane").map(str::to_string),
+            });
+        }
+    }
+    out
+}
+
+/// The track groups from the last fetch.
+pub fn track_groups() -> Vec<TrackGroup> {
+    TRACK_GROUPS.lock().map(|g| g.clone()).unwrap_or_default()
+}
+
 /// "Great Ball", "Great Ball", "Great Ball" become "Great Ball 1", "2", "3".
 fn number_repeats(drops: &mut [TimeBasedDrop]) {
     let mut totals: HashMap<String, usize> = HashMap::new();
@@ -490,7 +538,7 @@ pub(crate) fn detail_chunks(count: usize) -> Vec<std::ops::Range<usize>> {
 /// (unaliased, so free under the cap; `merge_details` keeps the first).
 pub(crate) fn details_query(count: usize) -> String {
     let group = format!(
-        "rewardGroups {{ id name progressCriteria {{ requirementType requirements {{ minutesWatched subs }} repeatableConfig {{ repeatableTimes }} categories {{ id }} }} {SELF_FIELDS} rewards {{ id name thumbnailURL pool {{ rewards {{ id name thumbnailURL }} }} }} }}"
+        "rewardGroups {{ id name track lane progressCriteria {{ requirementType requirements {{ minutesWatched subs }} repeatableConfig {{ repeatableTimes }} categories {{ id }} }} {SELF_FIELDS} rewards {{ id name thumbnailURL pool {{ rewards {{ id name thumbnailURL }} }} }} }}"
     );
     let vars: Vec<String> = (0..count).map(|i| format!("$id{i}: ID!")).collect();
     let fields: Vec<String> = (0..count)
@@ -564,6 +612,9 @@ pub async fn fetch(client: &reqwest::Client, token: &str, device_id: &str, sessi
         let chunks = futures::future::try_join_all(requests).await?;
         let details = merge_details(&chunks);
         let now = Utc::now();
+        if let Ok(mut groups) = TRACK_GROUPS.lock() {
+            *groups = track_groups_from(&items, &details, now);
+        }
         let mut tracker = TRACKER.lock().map_err(|_| anyhow!("tracker poisoned"))?;
         build(&items, &details, &mut tracker, now)
     };
@@ -715,6 +766,41 @@ mod tests {
         assert_eq!(d.benefit_edges[0].name, "Pichu");
         assert_eq!(d.benefit_edges[0].image_url, "https://art/Pichu.png");
         assert_eq!(d.random_of, None);
+    }
+
+    #[test]
+    fn evolution_groups_keep_their_track_and_lane_and_balls_have_no_lane() {
+        // As Twitch answered on 2026-10-21: one track for every evolution, one
+        // lane per line shared by its stages, the balls on a track with no lane.
+        let list = vec![json!({ "id": "evo", "name": "Pokemon Evolutions", "brand": "Pokemon",
+                                "startsAt": "2026-10-16T17:00:00Z", "endsAt": "2027-01-30T22:59:59.999Z", "game": null })];
+        let details = json!({
+            "c0": { "id": "evo", "rewardGroups": [
+                { "id": "g-haunter", "name": "Haunter", "track": "pokemon#t", "lane": "lane-gastly" },
+                { "id": "g-gengar", "name": "Gengar", "track": "pokemon#t", "lane": "lane-gastly" },
+                { "id": "g-pikachu", "name": "Pikachu", "track": "pokemon#t", "lane": "lane-pichu" },
+                { "id": "g-ball", "name": "Gastly", "track": "balls#b", "lane": null },
+                { "id": "g-plain", "name": "Sierra Helmet" }
+            ] },
+            "currentUser": { "id": "u1" }
+        });
+        let at = DateTime::parse_from_rfc3339("2026-10-21T12:00:00Z").unwrap().with_timezone(&Utc);
+        let groups = track_groups_from(&list, &details, at);
+        let seen: Vec<(&str, &str, Option<&str>)> =
+            groups.iter().map(|g| (g.group_id.as_str(), g.track.as_str(), g.lane.as_deref())).collect();
+        assert_eq!(
+            seen,
+            vec![
+                ("g-haunter", "pokemon#t", Some("lane-gastly")),
+                ("g-gengar", "pokemon#t", Some("lane-gastly")),
+                ("g-pikachu", "pokemon#t", Some("lane-pichu")),
+                ("g-ball", "balls#b", None),
+            ]
+        );
+        assert_eq!(groups[0].campaign_name, "Pokemon Evolutions");
+        // A campaign that has ended has no track groups.
+        let later = DateTime::parse_from_rfc3339("2027-02-01T00:00:00Z").unwrap().with_timezone(&Utc);
+        assert!(track_groups_from(&list, &details, later).is_empty());
     }
 
     #[test]

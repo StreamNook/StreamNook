@@ -74,7 +74,8 @@ export function Dropdown<T extends string | number>({
             top: Math.round(r.bottom + 6),
             left: Math.round(left),
             width: Math.round(width),
-            zIndex: 9999,
+            // Lifted over the player's full screen (globals.css --sn-z-over-player-lift).
+            zIndex: 'calc(var(--sn-z-over-player-lift, 0) + 9999)',
         });
     };
 
@@ -152,7 +153,7 @@ export function Dropdown<T extends string | number>({
                         animate={{ opacity: 1, y: 0, scale: 1 }}
                         exit={{ opacity: 0, y: -4, scale: 0.97 }}
                         transition={{ duration: 0.14, ease: 'easeOut' }}
-                        className="glass-panel border border-borderLight rounded-lg p-1 shadow-xl max-h-72 overflow-y-auto custom-scrollbar"
+                        className="glass-flyout rounded-xl p-1.5 max-h-72 overflow-y-auto custom-scrollbar"
                     >
                         {options.map(opt => {
                             const active = opt.value === value;
@@ -167,13 +168,13 @@ export function Dropdown<T extends string | number>({
                                         onChange(opt.value);
                                         setOpen(false);
                                     }}
-                                    className={`w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-md text-sm text-left transition-colors ${active ? 'bg-accent/20 text-accent' : 'text-textPrimary hover:bg-glass-hover'}`}
+                                    className={`w-full flex items-center justify-between gap-2 px-2 py-2 rounded-lg text-sm text-left text-textPrimary transition-colors ${active ? 'bg-white/[0.08]' : 'hover:bg-white/[0.06]'}`}
                                 >
                                     <span className="flex items-center gap-2 min-w-0">
                                         {opt.icon && <span className="shrink-0 flex items-center">{opt.icon}</span>}
                                         <span className="truncate">{opt.label}</span>
                                     </span>
-                                    {active && <Check size={14} className="shrink-0" />}
+                                    {active && <Check size={14} className="shrink-0 text-accent" />}
                                 </button>
                             );
                         })}

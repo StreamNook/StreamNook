@@ -48,6 +48,9 @@ const POINTS_PERIOD: Duration = Duration::from_secs(60);
 const PINNED_PERIOD: Duration = Duration::from_secs(30);
 /// Follows and subs change through this app (set at once) or rarely elsewhere.
 const RELATIONSHIP_PERIOD: Duration = Duration::from_secs(10 * 60);
+/// How long a live answer from the watch session holds while Helix, which
+/// lists a new stream a minute or more late, still leaves the channel out.
+const LIVE_HINT_GRACE: Duration = Duration::from_secs(5 * 60);
 
 /// A rise in one of the viewer's balances here, for the wallet's "+N".
 #[derive(Serialize, Clone, PartialEq, Debug)]
@@ -172,6 +175,10 @@ pub struct ChannelState {
     /// start, and without it the view could never tell offline from unknown.
     #[serde(skip)]
     answered: bool,
+    /// Until when (unix secs) a live answer from the watch session holds while
+    /// Helix has not listed the stream yet. 0 when none.
+    #[serde(skip)]
+    live_hint_until: u64,
 }
 
 #[derive(Serialize, Clone)]
@@ -226,6 +233,10 @@ struct Inner {
     app: AppHandle,
     watched: RwLock<HashMap<String, Watched>>,
     state: RwLock<HashMap<String, ChannelState>>,
+    /// Live answers from the watch session, by login, with the time they hold
+    /// until. Kept apart from `state`: a channel opened again right after its
+    /// go-live is watched from nothing, and must start out live.
+    hints: RwLock<HashMap<String, (Live, u64)>>,
 }
 
 static SERVICE: OnceLock<Arc<Inner>> = OnceLock::new();
@@ -249,6 +260,7 @@ pub fn start(app: AppHandle) {
         app,
         watched: RwLock::new(HashMap::new()),
         state: RwLock::new(HashMap::new()),
+        hints: RwLock::new(HashMap::new()),
     });
     if SERVICE.set(inner.clone()).is_err() {
         return;
@@ -302,30 +314,7 @@ pub async fn watch(login: &str, channel_id: &str, live_only: bool) -> ChannelSta
     let Some(inner) = SERVICE.get() else {
         return ChannelState { login, channel_id: channel_id.to_string(), ..Default::default() };
     };
-    let full = usize::from(!live_only);
-    let (first, first_full) = {
-        let mut watched = inner.watched.write().await;
-        match watched.get_mut(&login) {
-            Some(w) => {
-                w.refs += 1;
-                w.full_refs += full;
-                (false, full == 1 && w.full_refs == 1)
-            }
-            None => {
-                watched.insert(
-                    login.clone(),
-                    Watched { channel_id: channel_id.to_string(), refs: 1, full_refs: full },
-                );
-                (true, full == 1)
-            }
-        }
-    };
-    if first {
-        inner.state.write().await.insert(
-            login.clone(),
-            ChannelState { login: login.clone(), channel_id: channel_id.to_string(), ..Default::default() },
-        );
-    }
+    let (first, first_full) = register(inner, &login, channel_id, live_only).await;
     if first_full {
         // On its own task: three lookups that the other sections need not wait for.
         let inner = inner.clone();
@@ -347,6 +336,60 @@ pub async fn watch(login: &str, channel_id: &str, live_only: bool) -> ChannelSta
         });
     }
     inner.state.read().await.get(&login).cloned().unwrap_or_default()
+}
+
+/// Live-only watches on several channels at once (a chat tab strip's): one
+/// viewer refresh for all of them, where a `watch` apiece started one each,
+/// and every refresh also asks for each live channel's collaboration.
+pub async fn watch_live_many(channels: &[(String, String)]) {
+    let Some(inner) = SERVICE.get() else { return };
+    let mut any_first = false;
+    for (login, id) in channels {
+        any_first |= register(inner, &login.to_lowercase(), id, true).await.0;
+    }
+    if any_first {
+        let inner = inner.clone();
+        tauri::async_runtime::spawn(async move { refresh_viewers(&inner).await });
+    }
+}
+
+/// Counts one watcher of `login` (lowercased) and, for its first, seeds the
+/// state: live at once when the watch session just saw it go live. Returns
+/// whether this was the first watcher, and the first that wants every section.
+async fn register(inner: &Inner, login: &str, channel_id: &str, live_only: bool) -> (bool, bool) {
+    let full = usize::from(!live_only);
+    let (first, first_full) = {
+        let mut watched = inner.watched.write().await;
+        match watched.get_mut(login) {
+            Some(w) => {
+                w.refs += 1;
+                w.full_refs += full;
+                (false, full == 1 && w.full_refs == 1)
+            }
+            None => {
+                watched.insert(
+                    login.to_string(),
+                    Watched { channel_id: channel_id.to_string(), refs: 1, full_refs: full },
+                );
+                (true, full == 1)
+            }
+        }
+    };
+    if first {
+        // A channel the watch session saw go live a moment ago starts out live:
+        // Helix may not list it yet, and the first poll would read it offline.
+        let at = now_secs();
+        let hint = inner.hints.read().await.get(login).filter(|(_, until)| *until > at).cloned();
+        let mut fresh = ChannelState { login: login.to_string(), channel_id: channel_id.to_string(), ..Default::default() };
+        if let Some((live, until)) = &hint {
+            apply_live_hint(&mut fresh, live, *until, at);
+        }
+        inner.state.write().await.insert(login.to_string(), fresh);
+        if hint.is_some() {
+            crate::services::channel_rewards::note_live_changed(login);
+        }
+    }
+    (first, first_full)
 }
 
 /// A window stopped showing chat for `login`. The last watcher drops the state.
@@ -391,6 +434,38 @@ pub async fn is_live(login: &str) -> Option<bool> {
     s.answered.then_some(s.viewer_count.is_some())
 }
 
+/// The watch session saw `row`'s channel live: its `stream.online`, confirmed
+/// listed, or a live start that resolved playback. Helix lists a new stream a
+/// minute or more late, so the viewer poll alone kept a channel that had just
+/// gone live reading offline, and rewards that need a stream stayed shut. A
+/// watched channel the poll still shows offline turns live now; one watched
+/// later starts out live while the answer holds.
+pub async fn note_live(row: &TwitchStream) {
+    if row.started_at.is_empty() {
+        return;
+    }
+    let Some(inner) = SERVICE.get() else { return };
+    let login = row.user_login.to_lowercase();
+    let at = now_secs();
+    let until = at + LIVE_HINT_GRACE.as_secs();
+    let live = live_of(row);
+    {
+        let mut hints = inner.hints.write().await;
+        hints.retain(|_, (_, u)| *u > at);
+        hints.insert(login.clone(), (live.clone(), until));
+    }
+    let applied = match inner.state.write().await.get_mut(&login) {
+        Some(s) => apply_live_hint(s, &live, until, at),
+        None => false,
+    };
+    if !applied {
+        return;
+    }
+    crate::services::channel_rewards::note_live_changed(&login);
+    crate::services::channel_rewards::note_stream_seen(&login, &row.started_at);
+    publish_viewers(&inner.app, login, live, at);
+}
+
 /// Manual refresh of one section (`viewers`, `points`, `pinned`, `bits`,
 /// `relationship`) for a watched channel: after a pin, a claim, a spend.
 pub async fn refresh(login: &str, section: &str) -> Result<(), String> {
@@ -418,6 +493,59 @@ struct Live {
     started_at: Option<String>,
     title: Option<String>,
     game_name: Option<String>,
+}
+
+/// A live row as the state stores it; empty fields read as unknown.
+fn live_of(row: &TwitchStream) -> Live {
+    let some = |v: &String| Some(v.clone()).filter(|v| !v.is_empty());
+    Live {
+        viewer_count: Some(row.viewer_count as u64),
+        started_at: some(&row.started_at),
+        title: some(&row.title),
+        game_name: some(&row.game_name),
+    }
+}
+
+/// Writes a live answer from the watch session into a channel's state, held
+/// until `until`. False, and nothing written, when it already reads live.
+fn apply_live_hint(s: &mut ChannelState, live: &Live, until: u64, at: u64) -> bool {
+    if s.viewer_count.is_some() {
+        return false;
+    }
+    s.answered = true;
+    s.offline_misses = 0;
+    s.live_hint_until = until;
+    s.viewer_count = live.viewer_count;
+    s.started_at = live.started_at.clone();
+    s.title = live.title.clone();
+    s.game_name = live.game_name.clone();
+    s.viewers_at = Some(at);
+    true
+}
+
+/// Whether a poll that missed the channel keeps it live because the watch
+/// session saw it go live and Helix has not listed it yet.
+fn held_by_hint(live_now: bool, shown_live: bool, hint_until: u64, at: u64) -> bool {
+    !live_now && shown_live && hint_until > at
+}
+
+/// Tell the views, the phones' chat list and the tab strips' live dots a
+/// channel's live section moved.
+fn publish_viewers(app: &AppHandle, login: String, l: Live, at: u64) {
+    #[cfg(mobile)]
+    crate::commands::chat_tabs::note_live(&login, l.viewer_count.is_some(), l.viewer_count);
+    crate::services::chat_dock_live::note_twitch(app, &login, l.viewer_count, l.game_name.clone(), l.title.clone());
+    emit(
+        app,
+        ChannelUpdate::Viewers {
+            login,
+            viewer_count: l.viewer_count,
+            started_at: l.started_at,
+            title: l.title,
+            game_name: l.game_name,
+            at,
+        },
+    );
 }
 
 /// Whether to keep showing a channel as live although this poll missed it,
@@ -458,22 +586,14 @@ async fn refresh_viewers(inner: &Inner) {
         },
     };
     let rows: HashMap<String, TwitchStream> = streams.into_iter().map(|s| (s.user_id.clone(), s)).collect();
-    let live: HashMap<String, Live> = rows
-        .iter()
-        .map(|(id, s)| {
-            let some = |v: &String| Some(v.clone()).filter(|v| !v.is_empty());
-            let live = Live {
-                viewer_count: Some(s.viewer_count as u64),
-                started_at: some(&s.started_at),
-                title: some(&s.title),
-                game_name: some(&s.game_name),
-            };
-            (id.clone(), live)
-        })
-        .collect();
+    let live: HashMap<String, Live> = rows.iter().map(|(id, s)| (id.clone(), live_of(s))).collect();
     let at = now_secs();
     let mut changed: Vec<(String, Live)> = Vec::new();
     let mut went_live: Vec<TwitchStream> = Vec::new();
+    // Live channels whose title or category moved, and channels confirmed
+    // offline: the watch session's stand-ins while its socket has no slot.
+    let mut retitled: Vec<TwitchStream> = Vec::new();
+    let mut went_offline: Vec<(String, String)> = Vec::new();
     // Channels whose live/offline answer changed, or arrived for the first time.
     let mut live_flipped: Vec<String> = Vec::new();
     // Live channels and the start of the stream they are in.
@@ -483,6 +603,13 @@ async fn refresh_viewers(inner: &Inner) {
         for (login, id) in &by_login {
             let now = live.get(id).cloned().unwrap_or_default();
             if let Some(s) = state.get_mut(login) {
+                if now.viewer_count.is_some() {
+                    s.live_hint_until = 0;
+                } else if held_by_hint(false, s.viewer_count.is_some(), s.live_hint_until, at) {
+                    // Live by the watch session's word; Helix has not listed it yet.
+                    s.viewers_at = Some(at);
+                    continue;
+                }
                 let (hold, misses) = hold_live(s.viewer_count.is_some(), now.viewer_count.is_some(), s.offline_misses);
                 s.offline_misses = misses;
                 if hold {
@@ -509,6 +636,17 @@ async fn refresh_viewers(inner: &Inner) {
                         went_live.push(row.clone());
                     }
                 }
+                if s.answered && before.viewer_count.is_some() && now.viewer_count.is_none() {
+                    went_offline.push((id.clone(), login.clone()));
+                }
+                if s.answered
+                    && now.viewer_count.is_some()
+                    && (before.title != now.title || before.game_name != now.game_name)
+                {
+                    if let Some(row) = rows.get(id) {
+                        retitled.push(row.clone());
+                    }
+                }
                 s.answered = true;
                 s.viewer_count = now.viewer_count;
                 s.started_at = now.started_at;
@@ -528,36 +666,66 @@ async fn refresh_viewers(inner: &Inner) {
         crate::services::channel_rewards::note_stream_seen(&login, &start);
     }
     for (login, l) in changed {
-        #[cfg(mobile)]
-        crate::commands::chat_tabs::note_live(&login, l.viewer_count.is_some(), l.viewer_count);
-        emit(
-            &inner.app,
-            ChannelUpdate::Viewers {
-                login,
-                viewer_count: l.viewer_count,
-                started_at: l.started_at,
-                title: l.title,
-                game_name: l.game_name,
-                at,
-            },
-        );
+        publish_viewers(&inner.app, login, l, at);
     }
     // An offline room waiting on one of these channels starts its stream.
     for row in went_live {
         crate::services::watch_session::on_channel_live(&inner.app, row);
     }
-    let live_logins: Vec<String> = by_login
-        .iter()
-        .filter(|(_, id)| live.contains_key(*id))
-        .map(|(login, _)| login.clone())
-        .collect();
+    for row in &retitled {
+        crate::services::watch_session::on_polled_update(&inner.app, row);
+    }
+    for (id, login) in &went_offline {
+        crate::services::watch_session::on_polled_offline(&inner.app, id, login);
+    }
+    let live_logins = live_logins(&*inner.state.read().await, &by_login);
     refresh_collab(inner, &by_login, &live_logins).await;
 }
 
+/// The watched channels that read live, one held through a single missed
+/// poll included: it still shows as live, so it keeps its group too.
+fn live_logins(state: &HashMap<String, ChannelState>, watched: &HashMap<String, String>) -> Vec<String> {
+    watched
+        .keys()
+        .filter(|login| state.get(*login).is_some_and(|s| s.viewer_count.is_some()))
+        .cloned()
+        .collect()
+}
+
+/// Something is back on screen after nothing was. Shared Viewership was not
+/// read meanwhile, so the groups of the watched channels the viewer poll has
+/// answered for are read now instead of on its next tick, up to a minute
+/// away. A channel still waiting for its first answer gets its group with it.
+pub fn note_ui_on_screen() {
+    let Some(inner) = SERVICE.get() else { return };
+    let inner = inner.clone();
+    tauri::async_runtime::spawn(async move {
+        let watched: HashMap<String, String> = inner
+            .watched
+            .read()
+            .await
+            .iter()
+            .map(|(login, w)| (login.clone(), w.channel_id.clone()))
+            .collect();
+        let (by_login, live) = {
+            let state = inner.state.read().await;
+            let by_login: HashMap<String, String> = watched
+                .into_iter()
+                .filter(|(login, _)| state.get(login).is_some_and(|s| s.answered))
+                .collect();
+            let live = live_logins(&state, &by_login);
+            (by_login, live)
+        };
+        if !by_login.is_empty() {
+            refresh_collab(&inner, &by_login, &live).await;
+        }
+    });
+}
+
 /// Shared Viewership for every watched live channel, in batched requests.
-/// Skipped while no window is on screen, since only the UI reads it; the first
-/// tick after a window returns catches up. A channel that went offline drops
-/// its group; a failed batch keeps what its channels last had.
+/// Skipped while no window is on screen, since only the UI reads it;
+/// `note_ui_on_screen` catches up when one returns. A channel that went
+/// offline drops its group; a failed batch keeps what its channels last had.
 async fn refresh_collab(inner: &Inner, watched: &HashMap<String, String>, live_logins: &[String]) {
     if crate::services::window_visibility::all_hidden() {
         return;
@@ -1054,6 +1222,66 @@ mod tests {
         assert_eq!(hold_live(true, true, 1), (false, 0), "back in the answer resets");
         assert_eq!(hold_live(false, false, 0), (false, 0), "an offline channel stays offline");
         assert_eq!(hold_live(false, true, 0), (false, 0), "going live shows at once");
+    }
+
+    fn live_row() -> Live {
+        Live {
+            viewer_count: Some(3),
+            started_at: Some("2026-10-20T18:00:03Z".into()),
+            title: Some("back".into()),
+            game_name: Some("Just Chatting".into()),
+        }
+    }
+
+    #[test]
+    fn a_live_hint_writes_only_over_an_offline_reading() {
+        let mut offline = ChannelState { answered: true, offline_misses: 1, ..Default::default() };
+        assert!(apply_live_hint(&mut offline, &live_row(), 400, 100));
+        assert!(offline.answered);
+        assert_eq!(offline.viewer_count, Some(3));
+        assert_eq!(offline.started_at.as_deref(), Some("2026-10-20T18:00:03Z"));
+        assert_eq!(offline.live_hint_until, 400);
+        assert_eq!(offline.offline_misses, 0);
+
+        // Never answered yet (a channel watched again from nothing) counts too.
+        let mut fresh = ChannelState::default();
+        assert!(apply_live_hint(&mut fresh, &live_row(), 400, 100));
+        assert!(fresh.answered);
+
+        // The poll already shows it live: its own reading stays.
+        let mut live = ChannelState { answered: true, viewer_count: Some(900), ..Default::default() };
+        assert!(!apply_live_hint(&mut live, &live_row(), 400, 100));
+        assert_eq!(live.viewer_count, Some(900));
+        assert_eq!(live.live_hint_until, 0);
+    }
+
+    #[test]
+    fn a_session_live_hint_holds_until_helix_lists_it() {
+        assert!(held_by_hint(false, true, 400, 100), "Helix has not listed it yet");
+        assert!(!held_by_hint(false, true, 400, 400), "the hint ran out");
+        assert!(!held_by_hint(true, true, 400, 100), "Helix lists it: the poll answers");
+        assert!(!held_by_hint(false, false, 400, 100), "nothing shown live, nothing held");
+        assert!(!held_by_hint(false, true, 0, 100), "no hint");
+    }
+
+    #[test]
+    fn a_channel_held_through_one_miss_keeps_its_group() {
+        let watched: HashMap<String, String> = [("held", "1"), ("live", "2"), ("offline", "3"), ("unwatched", "4")]
+            .into_iter()
+            .map(|(login, id)| (login.to_string(), id.to_string()))
+            .collect();
+        let state: HashMap<String, ChannelState> = [
+            // Left out of this poll's answer, still shown as live.
+            ("held", ChannelState { viewer_count: Some(40), offline_misses: 1, answered: true, ..Default::default() }),
+            ("live", ChannelState { viewer_count: Some(10), answered: true, ..Default::default() }),
+            ("offline", ChannelState { answered: true, ..Default::default() }),
+        ]
+        .into_iter()
+        .map(|(login, s)| (login.to_string(), s))
+        .collect();
+        let mut live = live_logins(&state, &watched);
+        live.sort();
+        assert_eq!(live, ["held", "live"]);
     }
 
     #[test]

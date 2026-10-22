@@ -2271,6 +2271,24 @@
   {
    "page": "notifications",
    "section": "Notify me about",
+   "title": "Whispers",
+   "paths": [
+    "live_notifications.show_whisper_notifications"
+   ],
+   "nested": false,
+   "detail": "When someone whispers you",
+   "logo": null,
+   "aliases": [
+    "whispers",
+    "direct messages",
+    "dms",
+    "whisper notifications"
+   ],
+   "needs": "alert:whispers"
+  },
+  {
+   "page": "notifications",
+   "section": "Notify me about",
    "title": "Drops",
    "paths": [
     "live_notifications.show_drops_notifications"
@@ -2481,6 +2499,55 @@
     "mp3"
    ],
    "hidden_on_ios": true
+  },
+  {
+   "page": "chat",
+   "section": "Image Uploads",
+   "title": "Images tab",
+   "paths": [
+    "chat_input.image_uploader.show_in_menu"
+   ],
+   "nested": false,
+   "logo": null,
+   "detail": "The Images tab in the emote menu, for choosing a picture to send.",
+   "aliases": [
+    "photo",
+    "picture",
+    "upload",
+    "attach",
+    "send image"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Image Uploads",
+   "title": "Where images go",
+   "paths": [
+    "chat_input.image_uploader.preset"
+   ],
+   "nested": false,
+   "logo": null,
+   "detail": "The host your pictures are sent to. Anyone with a link can see the picture.",
+   "aliases": [
+    "image host",
+    "nuuls",
+    "kappa",
+    "kappa.lol",
+    "imgdrip",
+    "catbox",
+    "litterbox",
+    "uguu"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Image Uploads",
+   "title": "Test upload",
+   "paths": [],
+   "nested": false,
+   "logo": null,
+   "detail": "Sends a 1-pixel test image to the host you picked and shows the link it came back with.",
+   "aliases": []
   },
   {
    "page": "chat",

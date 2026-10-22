@@ -8,6 +8,7 @@ import { makeKey, parseKey } from '../utils/providerKey';
 import { canGridProvider, gridRefusal } from '../types/providers';
 import { buildProviderUrl } from '../utils/streamProvider';
 import { Logger } from '../utils/logger';
+import type { PlaybackAdapt } from '../utils/linkAdapt';
 
 /** Slot ids whose proxy start is currently in flight. The loader effect re-fires
  *  on every slots change, so this guards against re-invoking start_multi_nook for
@@ -185,6 +186,9 @@ interface MultiNookState {
    *  without touching per-slot muted state, so lifting it restores exactly the
    *  focus/mute mix that was playing before. Ephemeral: never persisted. */
   isAllMuted: boolean;
+  /** The rendition each tile's "Auto" plays right now, by tile id, as Rust's
+   *  link governor reports it. Ephemeral: never persisted. */
+  tileAutoQuality: Record<string, string>;
   slots: MultiNookSlot[];
   flyingAnimation: { x: number; y: number; id: number } | null;
   /** Composite key (makeKey) of the card playing the suck-up animation. */
@@ -210,6 +214,9 @@ interface MultiNookState {
   /** This tile's own Audio Boost; undefined hands it back to the player's. */
   setSlotAudioBoost: (id: string, boost: AudioBoostSettings | undefined) => void;
   retrySlot: (id: string) => void;
+  /** Follow Rust's link governor for one tile: name the rendition "Auto"
+   *  plays, and reload the tile's player in place when its relay restarted. */
+  applyTileAdapt: (adapt: PlaybackAdapt) => void;
   /** Cover every Twitch tile of the raiding channel with the raid card. The
    *  tile itself is never replaced: the user put that channel in the grid. */
   markSlotsRaided: (raid: MultiNookRaid) => void;
@@ -286,6 +293,7 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
   activePresetId: null,
   maximizedSlotId: null,
   isAllMuted: false,
+  tileAutoQuality: {},
   slots: [],
   flyingAnimation: null,
   suckUpKey: null,
@@ -719,6 +727,22 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
     const { slots } = get();
     if (!slots.some((s) => s.id === id && s.raid)) return;
     set({ slots: slots.map((s) => (s.id === id ? { ...s, raid: undefined } : s)) });
+  },
+
+  applyTileAdapt: (adapt) => {
+    const id = adapt.streamId;
+    if (!id) return;
+    const next = { ...get().tileAutoQuality };
+    if (adapt.auto && adapt.quality) next[id] = adapt.quality;
+    else delete next[id];
+    set({ tileAutoQuality: next });
+    // The relay restarted on another rendition under the same port: a fresh
+    // URL rebuilds this tile's player on it, with nothing resolved again.
+    const slot = get().slots.find((s) => s.id === id);
+    if (adapt.url && slot?.streamUrl) {
+      Logger.info(`[MultiNook-${id}] ${adapt.quality} (${adapt.reason}), reloading`);
+      get().updateSlot(id, { streamUrl: adapt.url });
+    }
   },
 
   retrySlot: (id: string) => {

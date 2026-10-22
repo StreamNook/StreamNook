@@ -207,12 +207,8 @@ export function BlendedChatPane({
   useEffect(() => {
     mountTimeRef.current = Date.now();
   }, []);
-  const scrollPaneToBottom = useCallback(() => {
-    requestAnimationFrame(() => {
-      const c = paneRef.current?.querySelector('.overflow-y-auto') as HTMLElement | null;
-      if (c) c.scrollTo({ top: c.scrollHeight, behavior: 'smooth' });
-    });
-  }, []);
+  // The merged list's own glide to the live bottom (ChatMessageList fills it).
+  const listScrollToBottomRef = useRef<(() => void) | null>(null);
   const setChatPaused = useCallback(
     (next: boolean, opts?: { force?: boolean; scrollToBottom?: boolean }) => {
       if (pausedRef.current === next) return;
@@ -224,13 +220,16 @@ export function BlendedChatPane({
       setPaused(next);
       if (!next && opts?.scrollToBottom) {
         lastResumeTimeRef.current = now;
-        scrollPaneToBottom();
+        // Same tick as the unpause: the glide must be running before the
+        // re-render's bottom pin, or that pin snaps first and leaves nothing
+        // to glide.
+        listScrollToBottomRef.current?.();
       }
     },
     // seqRef is a ref, so its identity never changes; listing it satisfies the
     // exhaustive-deps rule without affecting the callback's own stability, which
     // is what keeps the row memo intact.
-    [scrollPaneToBottom, seqRef],
+    [seqRef],
   );
 
   // Reply jump. Normal panes get this from ChatWidget; the blended pane wires its
@@ -565,6 +564,7 @@ export function BlendedChatPane({
           emotes={null}
           getMessageId={getMessageId}
           showSource={channels.length > 1}
+          scrollToBottomRef={listScrollToBottomRef}
         />
         {/* Identical to the core app's paused indicator (ChatWidget) so the resume
             affordance reads the same everywhere. */}
@@ -573,7 +573,7 @@ export function BlendedChatPane({
             <button
               type="button"
               onClick={handleResume}
-              className="flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium text-white shadow-lg glass-button"
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white shadow-lg chrome-glaze chrome-glaze--control chrome-glaze--frosted"
             >
               <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
@@ -643,9 +643,9 @@ export function BlendedChatPane({
             {pickerOpen && (
               <>
                 <div
-                  className="glass-panel absolute bottom-full z-50 mb-1 max-h-64 w-56 overflow-y-auto rounded-lg border border-borderLight py-1 shadow-2xl scrollbar-thin"
-                  // Opaque themed surface: a live backdrop-blur flickers over chat.
-                  style={{ backgroundColor: 'var(--color-background-tertiary)', backdropFilter: 'none', WebkitBackdropFilter: 'none' }}
+                  className="glass-flyout no-live-blur absolute bottom-full z-50 mb-1 max-h-64 w-56 overflow-y-auto rounded-xl scrollbar-thin"
+                  // No live blur: it flickers over chat. The flyout's base is near-opaque on its own.
+                  style={{ backdropFilter: 'none', WebkitBackdropFilter: 'none' }}
                 >
                   {groups.map((g) => {
                     const allOn = g.chans.every(isOn);
@@ -655,7 +655,7 @@ export function BlendedChatPane({
                         <button
                           type="button"
                           onClick={() => toggleProvider(g.provider)}
-                          className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs font-semibold text-textPrimary transition-colors hover:bg-white/5"
+                          className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-xs font-semibold text-textPrimary transition-colors hover:bg-white/[0.06]"
                         >
                           <Check checked={allOn} indeterminate={!allOn && someOn} />
                           <ProviderLogo provider={g.provider} size={14} />
@@ -666,7 +666,7 @@ export function BlendedChatPane({
                           return (
                             <div
                               key={sourceKey(c)}
-                              className="flex w-full items-center gap-2 py-1.5 pl-8 pr-2.5 text-xs transition-colors hover:bg-white/5"
+                              className="flex w-full items-center gap-2 rounded-lg py-2 pl-8 pr-2 text-xs transition-colors hover:bg-white/[0.06]"
                             >
                               <button
                                 type="button"

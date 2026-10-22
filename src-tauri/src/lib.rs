@@ -37,7 +37,11 @@ use commands::chat_query::{
 use commands::moderation_tools::{
     get_automod_queue, get_mod_slider_steps, get_mod_timeout_steps, get_streamer_mode_state, get_user_note,
     get_user_pronouns, moderate_chatter, parse_mod_timeout, resolve_automod_message, set_user_note,
-    update_channel_info, upload_image,
+    update_channel_info,
+};
+use commands::image_upload::{
+    accept_image_upload_host, delete_image_upload, image_upload_hosts, image_upload_panel, open_image_uploads_folder,
+    reupload_image, test_image_upload, upload_chat_image,
 };
 use commands::stream_manager::{
     check_stream_info, get_reward_queue, get_stream_manager, search_raid_targets, stream_manager_act,
@@ -51,7 +55,7 @@ use commands::{
     profile_cache::*, provider_browse::*,
     resub::*, session::*, settings::*, settings_fields::*, settings_lists::*, settings_extras::*, seventv::*, seventv_cosmetics::*,
     seventv_cosmetics_fetch::*, sn_cosmetics::*, song_id::*, spellcheck::*, streamnook_api::*, streaming::*, subscriptions::*,
-    twitch::*,
+    text_segments::*, twitch::*,
     universal_cache::*,
     user_profile::*, vod_progress::*, watch_session::*, watch_streak::*, whisper_storage::*, mention_inbox::*, window_state::*,
 };
@@ -1504,8 +1508,8 @@ pub fn run() {
             // cards. Replaces three JS timers per mounted chat and a 2.5 s poll
             // per open card. See services::channel_state.
             services::channel_state::start(app_handle.clone());
-            // Live line for the chat dock's (desktop) and the phone chats'
-            // Kick / YouTube / TikTok rooms; Twitch ones ride channel_state.
+            // Live line for every chat tab strip (dock, phones, MultiChat,
+            // MultiNook); Twitch rides channel_state.
             // See services::chat_dock_live.
             services::chat_dock_live::start(app_handle.clone());
             // Minimized-window signal: the page cannot see it (native occlusion
@@ -1794,6 +1798,8 @@ pub fn run() {
             #[cfg(desktop)]
             services::chat_dock_live::get_chat_dock_live,
             #[cfg(desktop)]
+            services::chat_dock_live::set_tab_live_channels,
+            #[cfg(desktop)]
             open_plugin_window,
             #[cfg(desktop)]
             close_main_window,
@@ -1931,9 +1937,7 @@ pub fn run() {
             // would just be a command the ACL denies.
             #[cfg(mobile)]
             set_max_video_height,
-            #[cfg(mobile)]
             report_playback_health,
-            #[cfg(mobile)]
             get_live_edge_cushion,
             start_ll_diag,
             append_ll_diag,
@@ -1971,6 +1975,8 @@ pub fn run() {
             promote_multi_nook_tile,
             #[cfg(desktop)]
             get_multi_nook_tile_qualities,
+            #[cfg(desktop)]
+            report_multi_nook_tile_codec_failure,
             #[cfg(desktop)]
             set_multi_nook_raid_channels,
             #[cfg(desktop)]
@@ -2015,7 +2021,14 @@ pub fn run() {
             get_user_pronouns,
             get_user_note,
             set_user_note,
-            upload_image,
+            upload_chat_image,
+            image_upload_panel,
+            accept_image_upload_host,
+            image_upload_hosts,
+            test_image_upload,
+            reupload_image,
+            delete_image_upload,
+            open_image_uploads_folder,
             start_multi_chat,
             provider_chat_connect,
             chat_bridge_port,
@@ -2114,6 +2127,8 @@ pub fn run() {
             cancel_raid,
             add_blocked_term,
             remove_blocked_term,
+            list_blocked_terms,
+            remove_blocked_term_by_id,
             create_poll,
             get_active_poll,
             end_poll,
@@ -2217,6 +2232,8 @@ pub fn run() {
             get_badge_standing,
             get_badge_wall,
             get_badge_window,
+            get_evolution_board,
+            equip_evolution_lane,
             get_badge_drop_campaign,
             get_badge_earn_guide,
             // Badge Metadata commands
@@ -2334,6 +2351,7 @@ pub fn run() {
             get_local_component_versions,
             get_remote_component_versions,
             check_for_bundle_update,
+            get_update_status,
             extract_bundled_components,
             download_and_install_bundle,
             restart_to_apply_update,
@@ -2436,8 +2454,10 @@ pub fn run() {
             fetch_channel_emotes,
             get_emote_by_name,
             match_emote_tokens,
+            mention_suggestions,
             emote_credit,
             personal_emote_overrides,
+            parse_text_segments,
             emote_picker,
             clear_emote_cache,
             get_gif_picker_status,
@@ -2654,6 +2674,8 @@ pub fn run() {
             services::touch_mod_slider::get_touch_mod_slider,
             services::touch_mod_slider::edit_mod_slider_timeouts,
             services::room_mod_log::get_room_mod_log,
+            services::unban_requests::get_unban_requests,
+            services::unban_requests::resolve_unban_request,
             #[cfg(desktop)]
             save_stream_screenshot,
             // Screen capture (Profile share) — desktop-only
@@ -2734,6 +2756,8 @@ pub fn run() {
                 // recommended poll and the Discover lists running after Go Live,
                 // or a close to the tray, destroyed the main window.
                 services::home_snapshot::release_window(&label);
+                // And its chat tab strips' live watches.
+                services::chat_dock_live::release_window(&app_handle, &label);
                 // The emote menu closes with the chat window it types into.
                 commands::emote_palette::on_window_gone(&app_handle, &label);
                 // Tell popouts the main window is gone so their Go Live control

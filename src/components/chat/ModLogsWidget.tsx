@@ -15,6 +15,17 @@ import { invoke } from '@tauri-apps/api/core';
 import { parseKey } from '../../utils/providerKey';
 import { ProviderLogo } from '../ProviderLogo';
 import type { ProviderId } from '../../types/providers';
+import { moderateWithToast } from '../../services/moderation';
+import { isCachedModerator } from '../../services/modRoomService';
+import { badgesModerate, liftActions, nextLiftExpiry, type LiftKind } from './modLogLift';
+import { GLAZE_PILL } from '../ui/glazeButtons';
+
+/** An entry's Unban or Lift timeout, when it offers one. */
+interface RowLift {
+  kind: LiftKind;
+  busy: boolean;
+  run: () => void;
+}
 
 // Newest entries are prepended at the top. Keep the view pinned to the top (so
 // the newest is always visible and older entries slide down beneath it) while
@@ -130,7 +141,8 @@ const ModLogRow: React.FC<{
   /** Resolved source identity for the per-entry chip in the combined view: provider
    *  (for the logo), normalized display name, and avatar url (non-Twitch). */
   channelMeta?: { provider: ProviderId; name: string; avatarUrl?: string };
-}> = ({ log, colors, highlightStyle, showChannel, channelMeta }) => {
+  lift?: RowLift;
+}> = ({ log, colors, highlightStyle, showChannel, channelMeta, lift }) => {
   const color = colorForAction(log.action, colors);
   const { label, detail } = labelForAction(log);
 
@@ -186,9 +198,11 @@ const ModLogRow: React.FC<{
       exit={{ opacity: 0 }}
       transition={{ layout: { type: 'spring', stiffness: 500, damping: 40 }, opacity: { duration: 0.2 } }}
       style={highlightContainerStyle(highlightStyle, color)}
-      className="rounded-md px-2.5 py-2 bg-secondary/60 border border-borderSubtle"
+      className="group rounded-md px-2.5 py-2 bg-secondary/60 border border-borderSubtle"
     >
-      {/* Header: severity dot + action label, time on the right */}
+      {/* Header: severity dot + action label, time on the right; an undo
+          for a ban or running timeout shows beside the time on hover or
+          focus, its room always kept so nothing shifts. */}
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
           <span className="h-2 w-2 rounded-full flex-shrink-0" style={{ backgroundColor: color }} />
@@ -200,7 +214,22 @@ const ModLogRow: React.FC<{
             {detail && <span className="font-normal opacity-80"> · {detail}</span>}
           </span>
         </div>
-        <time className="text-[11px] text-textSecondary tabular-nums flex-shrink-0">{time}</time>
+        <div className="flex flex-shrink-0 items-center gap-2.5">
+          {lift && (
+            <button
+              type="button"
+              onClick={lift.run}
+              disabled={lift.busy}
+              aria-label={`${lift.kind === 'unban' ? 'Unban' : 'Lift the timeout on'} ${targetName ?? 'this chatter'}`}
+              className={`${GLAZE_PILL} -my-0.5 h-6 px-2.5 text-xs !transition-[opacity,background-color,filter] focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent ${
+                lift.busy ? 'opacity-60' : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
+              }`}
+            >
+              {lift.kind === 'unban' ? 'Unban' : 'Lift timeout'}
+            </button>
+          )}
+          <time className="text-[11px] text-textSecondary tabular-nums">{time}</time>
+        </div>
       </div>
 
       {/* Who did it / to whom — moderator pfp + name, then target */}
@@ -292,7 +321,8 @@ const ModLogColumn: React.FC<{
   colors?: Record<string, string>;
   highlightStyle: HighlightStyleKey;
   isFirst: boolean;
-}> = ({ channel, avatarUrl, logs, colors, highlightStyle, isFirst }) => {
+  liftFor: (log: ModLogEvent) => RowLift | undefined;
+}> = ({ channel, avatarUrl, logs, colors, highlightStyle, isFirst, liftFor }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const el = scrollRef.current;
@@ -337,6 +367,7 @@ const ModLogColumn: React.FC<{
                 colors={colors}
                 highlightStyle={highlightStyle}
                 showChannel={false}
+                lift={liftFor(log)}
               />
             ))}
           </AnimatePresence>
@@ -419,6 +450,72 @@ export const ModLogsWidget: React.FC<{
     () => modLogs.filter((l) => l.channel && activeSet.has(l.channel.toLowerCase())),
     [modLogs, activeSet],
   );
+
+  // Twitch channels the viewer moderates, as `key=broadcasterId`: their own
+  // badges there once USERSTATE lands, the remembered answer until then. Kick
+  // and YouTube keep their moderator answer inside the chat pane, so their
+  // entries stay read-only here.
+  const moderatedKey = useChatConnectionStore((s) => {
+    const out: string[] = [];
+    for (const [key, slice] of s.channels) {
+      if (slice.provider !== 'twitch' || !slice.channelId) continue;
+      const badges = slice.userBadges ?? slice.userBadgesFromIrc;
+      const mod = badges == null ? isCachedModerator(slice.channelId) : badgesModerate(badges);
+      if (mod) out.push(`${key.toLowerCase()}=${slice.channelId}`);
+    }
+    return out.sort().join(',');
+  });
+  const moderated = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const part of moderatedKey.split(',')) {
+      const at = part.indexOf('=');
+      if (at > 0) m.set(part.slice(0, at), part.slice(at + 1));
+    }
+    return m;
+  }, [moderatedKey]);
+
+  // Unban / Lift timeout on the entries that can still be undone. A lift
+  // that went through hides its button at once, since an IRC-only feed never
+  // logs the unban that would.
+  const [liftNow, setLiftNow] = useState(() => Date.now());
+  const [liftBusy, setLiftBusy] = useState<ReadonlySet<string>>(() => new Set());
+  const [liftDone, setLiftDone] = useState<ReadonlySet<string>>(() => new Set());
+  const lifts = useMemo(
+    () => liftActions(visibleLogs, liftNow, (ch) => moderated.has(ch)),
+    [visibleLogs, liftNow, moderated],
+  );
+  // A Lift timeout goes away when its timeout runs out.
+  useEffect(() => {
+    const at = nextLiftExpiry(visibleLogs, lifts);
+    if (at == null) return;
+    const t = window.setTimeout(() => setLiftNow(Date.now()), Math.max(0, at - Date.now()) + 50);
+    return () => window.clearTimeout(t);
+  }, [visibleLogs, lifts]);
+  const runLift = async (log: ModLogEvent, kind: LiftKind) => {
+    const channel = (log.channel || '').toLowerCase();
+    const broadcasterId = moderated.get(channel);
+    if (!broadcasterId || !log.target_user_id) return;
+    setLiftBusy((s) => new Set(s).add(log.id));
+    const outcome = await moderateWithToast({
+      provider: 'twitch',
+      broadcasterId,
+      channel,
+      targetUserId: log.target_user_id,
+      targetName: log.target_user_name || log.target_user_login || null,
+      action: { kind: 'unban', timeout: kind === 'untimeout' },
+    });
+    setLiftBusy((s) => {
+      const next = new Set(s);
+      next.delete(log.id);
+      return next;
+    });
+    if (outcome) setLiftDone((s) => new Set(s).add(log.id));
+  };
+  const liftFor = (log: ModLogEvent): RowLift | undefined => {
+    const kind = lifts.get(log.id);
+    if (!kind || liftDone.has(log.id)) return undefined;
+    return { kind, busy: liftBusy.has(log.id), run: () => void runLift(log, kind) };
+  };
 
   // With more than one channel visible (combined modding), each entry shows its
   // own channel; with one, the header carries it so entries stay clean.
@@ -679,6 +776,7 @@ export const ModLogsWidget: React.FC<{
               colors={modColors}
               highlightStyle={highlightStyle}
               isFirst={i === 0}
+              liftFor={liftFor}
             />
           ))
         ) : (
@@ -705,6 +803,7 @@ export const ModLogsWidget: React.FC<{
                     highlightStyle={highlightStyle}
                     showChannel={showChannelPerEntry}
                     channelMeta={channelMeta[(log.channel || '').toLowerCase()]}
+                    lift={liftFor(log)}
                   />
                 ))
               )}

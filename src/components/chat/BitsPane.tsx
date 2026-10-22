@@ -15,6 +15,7 @@ import {
   type CheermoteChoice,
 } from '../../services/bitsService';
 import { Logger } from '../../utils/logger';
+import { ACCENT_BUTTON, ACCENT_FILL, GLAZE_PILL } from '../ui/glazeButtons';
 
 interface Props {
   state: BitsState;
@@ -81,7 +82,7 @@ export function BitsPane({ state, onInsert }: Props) {
         <button
           type="button"
           onClick={() => void openBitsWindow().catch((err) => Logger.warn('[Bits] Get Bits failed:', err))}
-          className="glass-button ml-auto flex-shrink-0 rounded-lg px-3 py-1 text-[12px] text-textPrimary"
+          className={`${GLAZE_PILL} ml-auto h-6 flex-shrink-0 px-3 text-[12px]`}
         >
           Get bits
         </button>
@@ -94,7 +95,7 @@ export function BitsPane({ state, onInsert }: Props) {
         <>
           <div className="border-b border-white/[0.06] px-3 pb-2.5 pt-2.5">
             <div className="flex items-center gap-1.5">
-              <label className="glass-button flex flex-shrink-0 cursor-text items-center gap-1 rounded-lg py-1 pl-1.5 pr-2">
+              <label className="glass-input flex flex-shrink-0 cursor-text items-center gap-1 rounded-full py-1 pl-1.5 pr-2 focus-within:border-white/20">
                 <img src={bitsIcon(state.icons, amount ?? min) ?? undefined} alt="" className="h-4 w-4 object-contain" />
                 <input
                   type="number"
@@ -123,8 +124,9 @@ export function BitsPane({ state, onInsert }: Props) {
                     type="button"
                     onClick={() => setText(String(a))}
                     className={`${
-                      a === amount ? 'glass-button-active text-textPrimary' : 'glass-button text-textSecondary hover:text-textPrimary'
-                    } min-w-0 rounded-md px-1.5 py-1 text-[11px] tabular-nums`}
+                      a === amount ? `${ACCENT_BUTTON} !text-[11px]` : `${GLAZE_PILL} text-[11px]`
+                    } h-6 min-w-0 px-2 tabular-nums`}
+                    style={a === amount ? ACCENT_FILL : undefined}
                   >
                     {shortBits(a)}
                   </button>

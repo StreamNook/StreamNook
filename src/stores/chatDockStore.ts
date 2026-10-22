@@ -13,6 +13,7 @@ import { listen } from '@tauri-apps/api/event';
 import type { ProviderId } from '../types/providers';
 import { makeKey } from '../utils/providerKey';
 import { Logger } from '../utils/logger';
+import { startTabLive } from './tabLiveStore';
 
 export interface DockedChat {
   provider: ProviderId;
@@ -30,38 +31,25 @@ interface ChatDockMirror {
   active: string | null;
 }
 
-/** A docked Kick / YouTube / TikTok chat's live line, from Rust
- *  (services/chat_dock_live.rs); Twitch ones read channel state. */
-export interface DockLive {
-  live: boolean;
-  viewer_count: number | null;
-  category: string | null;
-  title: string | null;
-}
-
 interface ChatDockState extends ChatDockMirror {
   /** The chat list is open. */
   panelOpen: boolean;
-  /** By `makeKey`, for docked chats on platforms other than Twitch. */
-  live: Record<string, DockLive>;
 }
 
-export const useChatDockStore = create<ChatDockState>(() => ({ chats: [], active: null, panelOpen: false, live: {} }));
+export const useChatDockStore = create<ChatDockState>(() => ({ chats: [], active: null, panelOpen: false }));
 
 let started = false;
 
-/** Load the dock and follow Rust's updates. Main window only, once. */
+/** Load the dock and follow Rust's updates. Main window only, once. Docked
+ *  Kick / YouTube / TikTok chats' live lines live in `tabLiveStore`. */
 export function startChatDock(): void {
   if (started) return;
   started = true;
   void listen<ChatDockMirror>('chat-dock', (event) => useChatDockStore.setState(event.payload));
-  void listen<Record<string, DockLive>>('chat-dock-live', (event) => useChatDockStore.setState({ live: event.payload }));
   invoke<ChatDockMirror>('get_chat_dock')
     .then((s) => useChatDockStore.setState(s))
     .catch((e: unknown) => Logger.warn('[ChatDock] load failed:', e));
-  invoke<Record<string, DockLive>>('get_chat_dock_live')
-    .then((live) => useChatDockStore.setState({ live }))
-    .catch((e: unknown) => Logger.warn('[ChatDock] live load failed:', e));
+  startTabLive();
 }
 
 function apply(promise: Promise<ChatDockMirror>): Promise<void> {

@@ -18,6 +18,9 @@ import { Tooltip } from './ui/Tooltip';
  *
  *      browse  <->  category  <->  (Home)  <->  stream
  *
+ *  Another platform's category (Kick), drilled into on its Categories tab, is
+ *  the category step too.
+ *
  *  Back always steps out, forward always steps back in, and the two retrace
  *  the same route. The rules live in `navigateBack` / `navigateForward` on the
  *  store rather than here, because Home owns the category and the player owns
@@ -30,21 +33,34 @@ const NavFlipper = () => {
   // Actions are stable for the store's lifetime, so take them without
   // subscribing; state goes through a shallow-compared selector.
   const { navigateBack, navigateForward } = useAppStore.getState();
-  const { isHomeActive, streamUrl, homeActiveTab, selectedCategory, lastExitedCategory } = useAppStore(
+  const {
+    isHomeActive,
+    streamUrl,
+    homeActiveTab,
+    selectedCategory,
+    lastExitedCategory,
+    providerCategory,
+    lastExitedProviderCategory,
+  } = useAppStore(
     useShallow((s) => ({
       isHomeActive: s.isHomeActive,
       streamUrl: s.streamUrl,
       homeActiveTab: s.homeActiveTab,
       selectedCategory: s.homeSelectedCategory,
       lastExitedCategory: s.homeLastExitedCategory,
+      providerCategory: s.homeProviderCategory,
+      lastExitedProviderCategory: s.homeLastExitedProviderCategory,
     })),
   );
 
   const watching = !isHomeActive && !!streamUrl;
-  const inCategory = homeActiveTab === 'category' && !!selectedCategory;
+  const inCategory =
+    (homeActiveTab === 'category' && !!selectedCategory) || (homeActiveTab === 'browse' && !!providerCategory);
   const canBack = watching || inCategory;
-  const canForward =
-    isHomeActive && ((homeActiveTab === 'browse' && !!lastExitedCategory) || !!streamUrl);
+  // Same order as navigateForward: Twitch's step, then the platform's, then the stream.
+  const reenter =
+    homeActiveTab === 'browse' ? lastExitedCategory ?? (providerCategory ? null : lastExitedProviderCategory) : null;
+  const canForward = isHomeActive && (!!reenter || !!streamUrl);
 
   // Nowhere to go in either direction means the control has no job. It is the
   // one moment it should be absent rather than merely dim: two dead halves
@@ -52,10 +68,7 @@ const NavFlipper = () => {
   if (!canBack && !canForward) return null;
 
   const backLabel = watching ? 'Keep browsing' : 'Back to browse';
-  const forwardLabel =
-    homeActiveTab === 'browse' && lastExitedCategory
-      ? `Back to ${lastExitedCategory.name}`
-      : 'Return to stream';
+  const forwardLabel = reenter ? `Back to ${reenter.name}` : 'Return to stream';
 
   return (
     <div className="chrome-glaze nav-flipper">

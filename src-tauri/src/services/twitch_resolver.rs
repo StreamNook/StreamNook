@@ -30,17 +30,39 @@ use std::time::{Duration, Instant};
 /// returns a codec outside this list, and H.264 is always kept in it.
 static CODEC_PREF: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
-/// Codec families the player failed to decode this session although the probe
-/// said it could. Kept out of `CODEC_PREF` across re-reports, so a settings
-/// save never brings a failing codec back.
-static FAILED_CODECS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+/// Codec families a player could not play on a channel this session although
+/// the probe said this machine decodes them, as (channel, family). Scoped to
+/// the channel: one broadcast's bad encode says nothing about the codec on
+/// every other channel, so selection drops it there alone.
+static FAILED_CODECS: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
 
 /// Set the allowed/decodable video codec families ("av1" | "hevc" | "h264"),
 /// most-preferred first. H.264 is always appended so an undecodable codec can never
 /// be the only eligible option. Called from the `set_codec_preference` command.
 pub fn set_codec_preference(prefs: Vec<String>) {
-    let failed = FAILED_CODECS.lock().unwrap().clone();
-    *CODEC_PREF.lock().unwrap() = allowed_codecs(prefs, &failed);
+    *CODEC_PREF.lock().unwrap() = allowed_codecs(prefs, &[]);
+}
+
+/// Whether the player has reported what this machine decodes yet.
+fn codec_pref_reported() -> bool {
+    !CODEC_PREF.lock().unwrap().is_empty()
+}
+
+/// The codec families that failed to play on `channel` this session.
+fn failed_for(channel: &str) -> Vec<String> {
+    FAILED_CODECS
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(c, _)| c.eq_ignore_ascii_case(channel))
+        .map(|(_, f)| f.clone())
+        .collect()
+}
+
+/// The selection preference on `channel`: what this machine decodes, less
+/// what failed to play on that channel.
+fn pref_for(channel: &str) -> Vec<String> {
+    allowed_codecs(effective_codec_pref(), &failed_for(channel))
 }
 
 /// `prefs` limited to known families and stripped of every `failed` one, with
@@ -66,34 +88,34 @@ pub fn avoidable_codec_family(codecs: &str) -> Option<&'static str> {
         })
 }
 
-/// A player could not decode what it was given: the failed SourceBuffer type
-/// when it got that far (`mime_type`), else the codecs it was serving. The
-/// family named there leaves selection for the session; returned so the caller
-/// can decide whether a restart gets away from it. None for H.264, audio or
-/// nothing known: there is nothing better to fall back to.
-pub fn fail_codec(mime_type: Option<&str>, serving: Option<&str>) -> Option<&'static str> {
+/// A player on `channel` could not play the codec it was given: the failed
+/// SourceBuffer type when it got that far (`mime_type`), else the codecs it
+/// was serving. The family named there leaves selection on that channel for
+/// the session; returned so the caller can decide whether a restart gets away
+/// from it. None for H.264, audio or nothing known: there is nothing better to
+/// fall back to.
+pub fn fail_codec(channel: &str, mime_type: Option<&str>, serving: Option<&str>) -> Option<&'static str> {
     let family = match mime_type {
         Some(mime) => avoidable_codec_family(mime),
         None => serving.and_then(avoidable_codec_family),
     }?;
-    avoid_codec_family(family);
+    avoid_codec_family(channel, family);
     Some(family)
 }
 
-/// Stop selecting `family` for the rest of the session: the player could not
-/// decode it here. H.264 is never dropped.
-pub fn avoid_codec_family(family: &str) {
+/// Stop selecting `family` on `channel` for the rest of the session: the
+/// player could not play it there. H.264 is never dropped, and no other
+/// channel is touched.
+pub fn avoid_codec_family(channel: &str, family: &str) {
     if family == "h264" {
         return;
     }
+    let channel = channel.to_ascii_lowercase();
     let mut failed = FAILED_CODECS.lock().unwrap();
-    if !failed.iter().any(|f| f == family) {
-        failed.push(family.to_string());
-        log::warn!("[Resolver] {family} failed to decode here; not selecting it again this session");
+    if !failed.iter().any(|(c, f)| *c == channel && f == family) {
+        failed.push((channel.clone(), family.to_string()));
+        log::warn!("[Resolver] {family} failed to play on {channel}; not selecting it there again this session");
     }
-    let mut pref = CODEC_PREF.lock().unwrap();
-    let kept = allowed_codecs(pref.clone(), &failed);
-    *pref = kept;
 }
 
 /// A selection preference from the codecs a phone decodes in hardware, as its
@@ -146,10 +168,17 @@ fn decodable(v: &Variant, pref: &[String]) -> bool {
 /// codec it decodes and the AV1 & h265 setting allows. StreamNook serves one
 /// rendition with no player-side fallback, so a tier outside that list is a
 /// black picture; it never reaches `best`, a quality pick or the quality menu.
-/// Twitch serves its 1440p tier in HEVC, so a device without an HEVC decoder
+/// Twitch serves its 1440p tier in HEVC, so a machine or phone without an HEVC decoder
 /// plays the 1080p H.264 tier as `best` instead of failing on 1440p.
-pub fn playable_variants(master: &str) -> Vec<Variant> {
-    retain_playable(parse_master(master), &effective_codec_pref())
+///
+/// Until the player reports what this machine decodes (and while nothing has
+/// failed on `channel`), every tier stays, exactly as before the filter
+/// existed; `best` still picks with the H.264-first default.
+pub fn playable_variants(master: &str, channel: &str) -> Vec<Variant> {
+    if !codec_pref_reported() && failed_for(channel).is_empty() {
+        return parse_master(master);
+    }
+    retain_playable(parse_master(master), &pref_for(channel))
 }
 
 /// `variants` without the video tiers `pref` rules out. A master with no
@@ -196,16 +225,29 @@ fn effective_max_height() -> Option<u32> {
     if h == 0 { None } else { Some(h.max(360)) }
 }
 
-/// Classify a `CODECS="..."` attribute's first (video) codec into a family name.
-/// An empty/missing codec is treated as H.264 (the safe, universally-decodable
-/// default).
+/// Whether one `CODECS` entry names an audio codec.
+pub(crate) fn is_audio_codec(codec: &str) -> bool {
+    let c = codec.trim().to_ascii_lowercase();
+    ["mp4a", "ac-3", "ec-3", "opus", "flac", "alac", "mp3"]
+        .iter()
+        .any(|a| c.starts_with(a))
+}
+
+/// Classify a `CODECS="..."` attribute's video codec into a family name: the
+/// first entry that is not audio, wherever it sits in the list. An empty or
+/// missing codec is treated as H.264 (the safe, universally-decodable default).
 fn codec_family(codecs: Option<&str>) -> &'static str {
-    let first = codecs.and_then(|c| c.split(',').next()).unwrap_or("").trim();
-    if first.starts_with("av01") {
+    let video = codecs
+        .into_iter()
+        .flat_map(|c| c.split(','))
+        .map(str::trim)
+        .find(|c| !c.is_empty() && !is_audio_codec(c))
+        .unwrap_or("");
+    if video.starts_with("av01") {
         "av1"
-    } else if first.starts_with("hev1") || first.starts_with("hvc1") {
+    } else if video.starts_with("hev1") || video.starts_with("hvc1") {
         "hevc"
-    } else if first.starts_with("avc1") || first.starts_with("avc3") || first.is_empty() {
+    } else if video.starts_with("avc1") || video.starts_with("avc3") || video.is_empty() {
         "h264"
     } else {
         "other"
@@ -478,6 +520,11 @@ pub fn quality_names(variants: &[Variant]) -> Vec<String> {
     if !names.iter().any(|n| n.eq_ignore_ascii_case("worst")) {
         names.push("worst".to_string());
     }
+    // The desktop offers Auto as its own choice beside the fixed source
+    // ("best"); on the phones "best" is their Auto.
+    if !cfg!(mobile) && !names.iter().any(|n| n.eq_ignore_ascii_case("auto")) {
+        names.push("auto".to_string());
+    }
     sort_qualities_descending(&mut names);
     names
 }
@@ -485,18 +532,32 @@ pub fn quality_names(variants: &[Variant]) -> Vec<String> {
 /// Map a requested quality to a variant index plus the label actually served.
 ///
 /// Mirrors Streamlink's behavior: `best`/`source` → the source ("chunked")
-/// rendition (highest), `worst` → lowest video, `audio_only` → the audio
-/// rendition, and a numeric request goes through `pick_closest_quality` so the
-/// two Twitch naming shapes ("480p" vs "480p30") reconcile against the user's
-/// saved preference. Returns `(index, label_to_report)`.
+/// rendition (highest), `auto` → the same rendition to start on (the link
+/// decides from there, `link_adapt`), `worst` → lowest video, `audio_only` →
+/// the audio rendition, and a numeric request goes through
+/// `pick_closest_quality` so the two Twitch naming shapes ("480p" vs "480p30")
+/// reconcile against the user's saved preference. Returns
+/// `(index, label_to_report)`.
 pub fn select_variant(variants: &[Variant], requested: &str) -> Option<(usize, String)> {
+    select_variant_with(variants, requested, &effective_codec_pref())
+}
+
+/// `select_variant` on `channel`: never a codec that failed to play there.
+pub fn select_variant_for(variants: &[Variant], requested: &str, channel: &str) -> Option<(usize, String)> {
+    select_variant_with(variants, requested, &pref_for(channel))
+}
+
+fn select_variant_with(variants: &[Variant], requested: &str, pref: &[String]) -> Option<(usize, String)> {
     if variants.is_empty() {
         return None;
     }
     let req = requested.trim().to_lowercase();
 
     if req == "best" || req == "source" {
-        return best_index(variants).map(|i| (i, "best".to_string()));
+        return best_index_with(variants, pref).map(|i| (i, "best".to_string()));
+    }
+    if req == "auto" {
+        return best_index_with(variants, pref).map(|i| (i, "auto".to_string()));
     }
     if req == "worst" {
         return worst_index(variants).map(|i| (i, "worst".to_string()));
@@ -504,7 +565,7 @@ pub fn select_variant(variants: &[Variant], requested: &str) -> Option<(usize, S
     if req == "audio_only" || req == "audio-only" || req == "audio" {
         return audio_index(variants)
             .map(|i| (i, "audio_only".to_string()))
-            .or_else(|| best_index(variants).map(|i| (i, "best".to_string())));
+            .or_else(|| best_index_with(variants, pref).map(|i| (i, "best".to_string())));
     }
 
     // Numeric request: reuse the exact matching the Streamlink path used.
@@ -515,8 +576,7 @@ pub fn select_variant(variants: &[Variant], requested: &str) -> Option<(usize, S
         .position(|v| v.name.eq_ignore_ascii_case(&chosen))?;
     // At the matched resolution, prefer the most-efficient decodable codec (same
     // capability gate as "best"); keep the matched rendition when none is preferable.
-    let pref = effective_codec_pref();
-    let idx = prefer_codec_at(variants, variants[idx].height, variants[idx].fps, &pref).unwrap_or(idx);
+    let idx = prefer_codec_at(variants, variants[idx].height, variants[idx].fps, pref).unwrap_or(idx);
     Some((idx, variants[idx].name.clone()))
 }
 
@@ -815,7 +875,7 @@ fn build(
     status: PlaybackStatus,
     quality: &str,
 ) -> Result<ResolvedLive> {
-    let variants = playable_variants(&master);
+    let variants = playable_variants(&master, &channel);
     if variants.is_empty() {
         // Log enough to tell apart the failure modes (empty body, error page,
         // unrecognized master shape) without dumping the whole playlist.
@@ -829,7 +889,7 @@ fn build(
         );
         return Err(anyhow!("{}: master playlist had no variants", channel));
     }
-    let (idx, label) = select_variant(&variants, quality)
+    let (idx, label) = select_variant_for(&variants, quality, &channel)
         .ok_or_else(|| anyhow!("{}: no variant matched '{}'", channel, quality))?;
     let available = quality_names(&variants);
     Ok(ResolvedLive {
@@ -978,7 +1038,7 @@ pub async fn resolve_vod(
     quality: &str,
 ) -> Result<ResolvedMedia> {
     let master = fetch_vod_master(vod_id, oauth_token).await?;
-    let variants = playable_variants(&master);
+    let variants = playable_variants(&master, "");
     if variants.is_empty() {
         return Err(anyhow!("VOD {}: master playlist had no variants", vod_id));
     }
@@ -999,7 +1059,11 @@ fn pick_clip_quality(requested: &str, names: &[String]) -> Option<String> {
     let mut sorted = names.to_vec();
     sort_qualities_descending(&mut sorted);
     match requested.trim().to_lowercase().as_str() {
-        "best" | "source" => sorted.first().cloned(),
+        "best" | "source" | "auto" => sorted
+            .iter()
+            .find(|q| crate::services::quality::parse_quality_height(q).is_some())
+            .or(sorted.first())
+            .cloned(),
         "worst" => sorted.last().cloned(),
         _ => pick_closest_quality(requested, names),
     }
@@ -1268,7 +1332,11 @@ https://euc11.playlist.ttvnw.net/160.m3u8\n";
     fn quality_menu_includes_aliases_sorted() {
         let v = parse();
         let names = quality_names(&v);
-        assert_eq!(names.first().map(String::as_str), Some("1080p60"));
+        // The desktop's Auto leads the menu; the phones' "best" is their Auto.
+        let first = if cfg!(mobile) { "1080p60" } else { "auto" };
+        assert_eq!(names.first().map(String::as_str), Some(first));
+        let first_tier = names.iter().find(|n| n.as_str() != "auto").map(String::as_str);
+        assert_eq!(first_tier, Some("1080p60"));
         assert!(names.iter().any(|n| n == "best"));
         assert!(names.iter().any(|n| n == "worst"));
         assert!(names.iter().any(|n| n == "audio_only"));
@@ -1590,9 +1658,54 @@ https://x/1440.m3u8\n";
 
     #[test]
     fn a_failure_on_h264_or_nothing_known_drops_no_codec() {
-        assert_eq!(fail_codec(Some("video/mp4;codecs=avc1.64002A"), Some("hvc1")), None, "the failed type wins");
-        assert_eq!(fail_codec(None, Some("avc1")), None);
-        assert_eq!(fail_codec(None, None), None);
+        assert_eq!(
+            fail_codec("test-h264-floor", Some("video/mp4;codecs=avc1.64002A"), Some("hvc1")),
+            None,
+            "the failed type wins"
+        );
+        assert_eq!(fail_codec("test-h264-floor", None, Some("avc1")), None);
+        assert_eq!(fail_codec("test-h264-floor", None, None), None);
+        assert!(failed_for("test-h264-floor").is_empty());
+    }
+
+    #[test]
+    fn a_codec_failure_is_scoped_to_its_channel() {
+        assert_eq!(fail_codec("Test-Banned-Here", None, Some("hvc1.1.6.L150.90")), Some("hevc"));
+        assert_eq!(failed_for("test-banned-here"), ["hevc"]);
+        assert!(failed_for("test-somewhere-else").is_empty());
+        let pref = allowed_codecs(s(&["hevc", "h264"]), &failed_for("test-banned-here"));
+        assert_eq!(pref, ["h264"]);
+        // Reported twice, kept once.
+        fail_codec("test-banned-here", Some("video/mp4;codecs=hev1.1.6.L150.90"), None);
+        assert_eq!(failed_for("test-banned-here").len(), 1);
+    }
+
+    #[test]
+    fn before_the_device_reports_every_tier_stays() {
+        // Nothing reported and nothing failed on this channel: the whole ladder,
+        // HEVC source included, as every release before the filter served.
+        if codec_pref_reported() {
+            return; // another test holds a preference right now
+        }
+        let v = playable_variants(MASTER_REGION_UNLOCKED, "test-unreported");
+        assert!(v.iter().any(|x| x.name == "1440p60"));
+    }
+
+    #[test]
+    fn auto_starts_where_best_would() {
+        let v = parse();
+        let (bi, best) = select_variant(&v, "best").unwrap();
+        let (ai, auto) = select_variant(&v, "auto").unwrap();
+        assert_eq!((ai, auto.as_str()), (bi, "auto"));
+        assert_eq!(best, "best");
+    }
+
+    #[test]
+    fn the_codec_family_is_the_video_entry_wherever_it_sits() {
+        assert_eq!(codec_family(Some("mp4a.40.2,hev1.1.6.L93.B0")), "hevc");
+        assert_eq!(codec_family(Some("ec-3,av01.0.08M.08")), "av1");
+        assert_eq!(codec_family(Some("mp4a.40.2, avc1.4D402A")), "h264");
+        assert_eq!(codec_family(Some("mp4a.40.2")), "h264");
     }
 
     #[test]

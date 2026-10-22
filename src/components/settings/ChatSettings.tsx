@@ -748,8 +748,8 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         <SettingsRow
           title="Position"
           onReset={resetFor('chat_placement')}
-          description="Dock chat to the left, right, or bottom of the player, or hide it to give the video the whole window."
-          help="Hover reveal (left or right only) keeps chat tucked against its edge and slides it out when you move toward that side. The player shrinks to make room, the same as dragging the chat open."
+          description="Dock chat to the left, right, or bottom of the player, or hide it to give the video the whole window. Applies in the window and in Theater mode."
+          help="Hover reveal (left or right only) keeps chat tucked against its edge and slides it out when you move toward that side. The player shrinks to make room, the same as dragging the chat open. The player's own full screen has its own chat, under Full Screen Chat below."
         >
           <SegmentedSelect<'left' | 'right' | 'bottom' | 'hidden'>
             value={settings.chat_placement as 'left' | 'right' | 'bottom' | 'hidden'}
@@ -780,109 +780,90 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         </SettingsRow>
       </SettingsSection>
 
+      {/* The player's own full screen opens as video only; the chat button in
+          its controls (or C) brings chat up over it. These rows only style
+          that column, so they are plain rows, not options under a switch. */}
       <SettingsSection
-        label="Fullscreen Chat"
-        description="Keep chatting while the stream fills the screen."
+        label="Full Screen Chat"
+        description={
+          settings.chat_placement === 'hidden'
+            ? 'Chat Placement is Hidden, so there is no chat to bring up in full screen.'
+            : "Bring chat up without leaving the player's full screen: press the chat button in the player's controls, or C."
+        }
       >
         <SettingsRow
-          title="Overlay"
-          onReset={resetFor(['fullscreen_chat.mode', 'overlay'])}
-          description="The chat panel floats over fullscreen video as a translucent column. No extra window."
-          help="Auto-hide fades the column out with the player controls and brings it back when you move the mouse; hovering the chat or typing keeps it up. Opacity is how solid the column is. Width runs from 240 to 640 pixels. Side on Auto follows the chat placement, so a bottom-docked chat floats on the right."
+          title="Background"
+          onReset={resetFor(['fullscreen_chat.opacity', 55])}
+          description="How solid the column is behind the messages. Lower lets more of the video show through; the messages stay sharp."
+          control={
+            <InlineSlider
+              value={settings.fullscreen_chat?.opacity ?? 55}
+              min={0}
+              max={100}
+              step={5}
+              label="Full screen chat background"
+              format={(v) => `${v}%`}
+              onChange={(opacity) =>
+                updateSettings({ ...settings, fullscreen_chat: { ...settings.fullscreen_chat, opacity } })
+              }
+            />
+          }
+        />
+        <SettingsRow
+          title="Width"
+          onReset={resetFor(['fullscreen_chat.width', 340])}
+          description="How wide the chat column is over the video."
+          control={
+            <InlineSlider
+              value={Math.max(240, Math.min(640, settings.fullscreen_chat?.width ?? 340))}
+              min={240}
+              max={640}
+              step={20}
+              label="Full screen chat width"
+              format={(v) => `${v}px`}
+              onChange={(width) =>
+                updateSettings({ ...settings, fullscreen_chat: { ...settings.fullscreen_chat, width } })
+              }
+            />
+          }
+        />
+        <SettingsRow
+          title="Side"
+          onReset={resetFor(['fullscreen_chat.side', 'auto'])}
+          description="Which edge of the screen chat comes up on. Auto follows Chat Placement; a bottom-docked chat comes up on the right."
+        >
+          <SegmentedSelect<'auto' | 'left' | 'right'>
+            value={settings.fullscreen_chat?.side ?? 'auto'}
+            onChange={(side) =>
+              updateSettings({ ...settings, fullscreen_chat: { ...settings.fullscreen_chat, side } })
+            }
+            options={[
+              { value: 'auto', label: 'Auto' },
+              { value: 'left', label: 'Left' },
+              { value: 'right', label: 'Right' },
+            ]}
+          />
+        </SettingsRow>
+        <SettingsRow
+          title="Auto-hide"
+          onReset={resetFor(['fullscreen_chat.auto_hide', false])}
+          description="Chat fades out with the player controls and comes back when you move the mouse. Off, it stays up until you put it away."
+          help="Pointing at chat or typing in it keeps it up either way."
           control={
             <Toggle
-              enabled={(settings.fullscreen_chat?.mode ?? 'overlay') === 'overlay'}
+              enabled={settings.fullscreen_chat?.auto_hide ?? false}
               onChange={() =>
                 updateSettings({
                   ...settings,
                   fullscreen_chat: {
                     ...settings.fullscreen_chat,
-                    mode: (settings.fullscreen_chat?.mode ?? 'overlay') === 'overlay' ? 'hidden' : 'overlay',
+                    auto_hide: !(settings.fullscreen_chat?.auto_hide ?? false),
                   },
                 })
               }
             />
           }
-        >
-          {(settings.fullscreen_chat?.mode ?? 'overlay') === 'overlay' && (
-            <SubControls>
-              <SubControl
-                title="Auto-hide"
-                onReset={resetFor(['fullscreen_chat.auto_hide', true])}
-                control={
-                  <Toggle
-                    enabled={settings.fullscreen_chat?.auto_hide ?? true}
-                    onChange={() =>
-                      updateSettings({
-                        ...settings,
-                        fullscreen_chat: {
-                          ...settings.fullscreen_chat,
-                          auto_hide: !(settings.fullscreen_chat?.auto_hide ?? true),
-                        },
-                      })
-                    }
-                  />
-                }
-              />
-              <SubControl
-                title="Opacity"
-                onReset={resetFor(['fullscreen_chat.opacity', 55])}
-                control={
-                  <InlineSlider
-                    value={settings.fullscreen_chat?.opacity ?? 55}
-                    min={0}
-                    max={100}
-                    step={5}
-                    label="Fullscreen chat opacity"
-                    format={(v) => `${v}%`}
-                    onChange={(opacity) =>
-                      updateSettings({ ...settings, fullscreen_chat: { ...settings.fullscreen_chat, opacity } })
-                    }
-                  />
-                }
-              />
-              <SubControl
-                title="Width"
-                onReset={resetFor(['fullscreen_chat.width', 340])}
-                control={
-                  <input
-                    type="number"
-                    min={240}
-                    max={640}
-                    step={10}
-                    aria-label="Fullscreen chat width in pixels"
-                    value={settings.fullscreen_chat?.width ?? 340}
-                    onChange={(e) => {
-                      const n = Math.max(240, Math.min(640, Math.round(Number(e.target.value) || 340)));
-                      updateSettings({
-                        ...settings,
-                        fullscreen_chat: { ...settings.fullscreen_chat, width: n },
-                      });
-                    }}
-                    className="glass-input w-24 px-2.5 py-1.5 text-sm text-textPrimary"
-                  />
-                }
-              />
-              <SubControl
-                title="Side"
-                onReset={resetFor(['fullscreen_chat.side', 'auto'])}
-                control={
-                  <SegmentedSelect<'auto' | 'left' | 'right'>
-                    value={settings.fullscreen_chat?.side ?? 'auto'}
-                    onChange={(side) =>
-                      updateSettings({ ...settings, fullscreen_chat: { ...settings.fullscreen_chat, side } })
-                    }
-                    options={[
-                      { value: 'auto', label: 'Auto' },
-                      { value: 'left', label: 'Left' },
-                      { value: 'right', label: 'Right' },
-                    ]}
-                  />
-                }
-              />
-            </SubControls>
-          )}
-        </SettingsRow>
+        />
       </SettingsSection>
       </>
       )}
@@ -2729,10 +2710,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
 
       </SettingsSection>
 
-      {/* Desktop only: the paste-to-upload flow lives in the desktop composer;
-          the phone composer has no uploader, so this section would configure
-          nothing there. */}
-      {!IS_MOBILE && <ImageUploadSettings />}
+      <ImageUploadSettings />
 
       {/* Shown on both now. It used to be hidden on the phone because the
           feature was Tab-driven and there is no Tab key; the phone composer
@@ -3165,17 +3143,17 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
                         <span className="text-[12px] text-textMuted">Using the default: anything starting with !</span>
                       )}
                       {commandFilters.map((f, i) => (
-                        <button
-                          key={`${f.mode}:${f.value}:${i}`}
-                          type="button"
-                          onClick={() => removeCommandFilter(i)}
-                          title="Remove"
-                          className="glass-button-static px-2.5 py-1 rounded-full text-[12px] text-textPrimary flex items-center gap-1.5"
-                        >
-                          <span className="font-mono">{f.value}</span>
-                          <span className="text-textMuted">{f.mode === 'exact' ? 'exact' : 'prefix'}</span>
-                          <X size={12} className="text-textMuted" />
-                        </button>
+                        <Tooltip key={`${f.mode}:${f.value}:${i}`} content="Remove" describe>
+                          <button
+                            type="button"
+                            onClick={() => removeCommandFilter(i)}
+                            className="glass-button-static px-2.5 py-1 rounded-full text-[12px] text-textPrimary flex items-center gap-1.5"
+                          >
+                            <span className="font-mono">{f.value}</span>
+                            <span className="text-textMuted">{f.mode === 'exact' ? 'exact' : 'prefix'}</span>
+                            <X size={12} className="text-textMuted" />
+                          </button>
+                        </Tooltip>
                       ))}
                     </div>
                     <div className="flex items-center gap-2">

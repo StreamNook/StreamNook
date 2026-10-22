@@ -1,6 +1,6 @@
 [package]
 name = "StreamNook"
-version = "8.8.12"
+version = "8.8.15"
 description = "StreamNook"
 authors = ["Brandon Winters"]
 license = "PolyForm-Noncommercial-1.0.0"
@@ -30,7 +30,7 @@ sn-mention-rule = { path = "crates/sn-mention-rule" }
 # (CEF) and the feature set that picks the runtime cannot be expressed in one
 # line. Every other dependency is runtime-agnostic and stays here. The
 # tauri-plugin-* crates sit in the table below that leaves out iOS.
-serde ={ version = "1.0.228", features = ["derive"] }
+serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 tokio = { version = "1.48.0", features = ["full"] }
 cookie_store = "0.22.0"
@@ -77,6 +77,13 @@ cosmic-text = "0.19.0"
 scopeguard = "1.2"
 phf = { version = "0.14", features = ["macros"] }
 lru = "0.18"
+# Decoding and re-encoding pictures: screen capture and media glow on the
+# desktop, and chat image uploads on every target (services/image_upload;
+# gif and webp decode only, for the small pictures of uploads).
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+# Sniffs and sizes images from their first bytes (chat image uploads and the
+# size an image link card is drawn at). Header parsing only, no decoders.
+imagesize = { version = "0.14", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp", "heif"] }
 
 # TikTok LIVE webcast reader (vendored in-tree, see vendor/tiktok-live). Pure-Rust
 # ttwid-only connector (no signing service / no Python); deps pinned to match ours
@@ -219,7 +226,6 @@ discord-rich-presence = "1.0.0"
 # Unlike keyring 3 (which silently fell back to an in-memory mock when no backend
 # feature was on), an entry with no store is an error.
 keyring-core = "1"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 webp-animation = "0.10"
 
 # Transport stack is split per platform: desktop keeps the OS TLS it shipped
@@ -250,7 +256,8 @@ tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots"]
 # same rustls + bundled roots the WebSocket uses. Both already in the tree
 # under tokio-tungstenite; default-features = false keeps aws-lc-rs out.
 tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring"] }
-webpki-roots = "1.0.6"
+# 1.0.10 drops emSign ECC Root CA - G3 (eMudhra key compromise, 2026-10).
+webpki-roots = "1.0.10"
 # http2 is load-bearing for Kick: its edge answers rustls over h1 with a 403
 # and rustls over h2 with a 200 (see HTTP_RESOLVE in providers/kick.rs).
 # default-features = false drops it, so it is named here.
@@ -269,7 +276,8 @@ uniffi = { version = "0.32.2", default-features = false }
 tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots"] }
 # Chat's raw IRC over TLS route, the same rustls + bundled roots as Android.
 tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring"] }
-webpki-roots = "1.0.6"
+# 1.0.10 drops emSign ECC Root CA - G3 (eMudhra key compromise, 2026-10).
+webpki-roots = "1.0.10"
 reqwest = { version = "0.12.24", default-features = false, features = ["json", "gzip", "cookies", "multipart", "rustls-tls", "http2"] }
 
 # webview2-com powers services/twitch_auth_service.rs (CookieManager).

@@ -2702,15 +2702,33 @@ pub async fn remove_channel_vip(
         .map_err(|e| e.to_string())
 }
 
+/// `channel` (the room's login) lets the change show at once: Twitch's own
+/// update event can lag, so it is recorded and announced here too.
 #[tauri::command]
 pub async fn update_suspicious_user_status(
+    app: AppHandle,
     broadcaster_id: String,
     target_user_id: String,
     status: String,
+    channel: Option<String>,
 ) -> Result<(), String> {
     TwitchService::update_suspicious_user_status(&broadcaster_id, &target_user_id, &status)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    let channel = channel.map(|c| c.trim_start_matches('#').to_lowercase()).filter(|c| !c.is_empty());
+    if let Some(channel) = channel {
+        let now = crate::services::suspicious_users::SuspiciousUsers::note(&serde_json::json!({
+            "broadcaster_user_login": channel,
+            "user_id": target_user_id,
+            "low_trust_status": status.to_lowercase(),
+        }));
+        use tauri::Emitter;
+        let _ = app.emit(
+            "eventsub://suspicious-user-update",
+            serde_json::json!({ "channel": channel, "user_id": target_user_id, "status": now }),
+        );
+    }
+    Ok(())
 }
 
 /// A user's Twitch bio; empty when they have none.
@@ -3038,6 +3056,23 @@ pub async fn add_blocked_term(
 #[tauri::command]
 pub async fn remove_blocked_term(broadcaster_id: String, text: String) -> Result<(), String> {
     TwitchService::remove_blocked_term(&broadcaster_id, &text)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Every blocked term in the channel, newest first, with its words ready.
+#[tauri::command]
+pub async fn list_blocked_terms(
+    broadcaster_id: String,
+) -> Result<Vec<crate::services::twitch_service::BlockedTermRow>, String> {
+    TwitchService::list_blocked_terms(&broadcaster_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn remove_blocked_term_by_id(broadcaster_id: String, id: String) -> Result<(), String> {
+    TwitchService::remove_blocked_term_by_id(&broadcaster_id, &id)
         .await
         .map_err(|e| e.to_string())
 }

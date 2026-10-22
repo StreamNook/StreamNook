@@ -25,6 +25,7 @@ import { sectionIdFromLabel } from '../components/settings/sectionId';
 import { useChatUserStore } from '../stores/chatUserStore';
 import { useFollowsStore } from '../stores/followsStore';
 import { favoriteIdOf, favoriteMetaOf } from './favorites';
+import { currentCategoryTarget } from './streamCategory';
 import { sevenTvIdForStream } from '../services/sevenTvPictures';
 import { useSnippetStore } from '../stores/snippetStore';
 import { WATCHABLE_PROVIDERS, providerLabel, type ProviderId } from '../types/providers';
@@ -281,8 +282,8 @@ function buildQuickActions(): PaletteItem[] {
     {
       id: 'window.toggleFullscreen',
       section: 'Quick Actions',
-      title: 'Toggle full screen',
-      subtitle: 'Fill the whole screen (over the taskbar) with the app, chat and all',
+      title: 'Theater mode',
+      subtitle: 'Fill the whole screen (over the taskbar) with the stream and its docked chat',
       keywords: 'fullscreen full screen borderless taskbar immersive window maximize theater theatre cinema',
       run: () => useAppStore.getState().toggleWindowFullscreen(),
     },
@@ -400,9 +401,9 @@ function buildQuickActions(): PaletteItem[] {
     {
       id: 'cs.toggleTheatre',
       section: 'Current Stream',
-      title: 'Toggle theatre mode',
-      subtitle: 'Hide sidebar + chat for full-window video',
-      keywords: 'theatre theater mode hide sidebar',
+      title: 'Compact View',
+      subtitle: 'Shrink the window to the small player, without chat',
+      keywords: 'compact view mini small player shrink window hide sidebar chat',
       run: () => useAppStore.getState().toggleTheaterMode(),
     },
     {
@@ -501,13 +502,16 @@ function buildQuickActions(): PaletteItem[] {
       title: 'Browse other streams of this game',
       subtitle: "Jump to the Home category page for this stream's game",
       keywords: 'browse current game category other streams',
-      run: async () => {
+      run: () => {
         const stream = requireStream();
-        if (!stream?.game_name) {
+        if (!stream) return;
+        // The player's own rule: a Kick stream opens Kick's category, a clip opens nothing.
+        const target = currentCategoryTarget(stream, useAppStore.getState().currentMediaType);
+        if (!target) {
           useAppStore.getState().addToast('No game category on current stream', 'warning');
           return;
         }
-        await useAppStore.getState().navigateToCategoryByName(stream.game_name);
+        useAppStore.getState().openStreamCategory(target);
       },
     },
   );
@@ -835,7 +839,7 @@ const SETTINGS_CATALOG: SettingsEntry[] = [
   // Chat
   { tab: 'Chat', keywords: 'chat placement design fonts dividers timestamps mentions emotes logging channel points highlights commands reminders' },
   { tab: 'Chat', section: 'Chat Placement', keywords: 'chat placement position where chat sits right left bottom hidden hover reveal reveal on hover slide out' },
-  { tab: 'Chat', section: 'Fullscreen Chat', keywords: 'fullscreen chat overlay chat over fullscreen video auto-hide hide with the player controls opacity width side translucent column' },
+  { tab: 'Chat', section: 'Full Screen Chat', keywords: 'full screen chat fullscreen chat button c key bring up chat over full screen video overlay auto-hide hide with the player controls background opacity see-through width side translucent column' },
   { tab: 'Chat', section: 'Channel Points', keywords: 'channel points bonus chests auto-claim bonus chests auto claim bonus chest reward collect points' },
   { tab: 'Chat', section: 'YouTube Chat', sectionId: 'settings-section-youtube-chat', label: 'YouTube chat feed', keywords: 'youtube chat feed which chat to read view live chat top chat filtered firehose every message flooding flood too fast too many messages slow down readable quality filter' },
   { tab: 'Chat', section: 'YouTube Chat', sectionId: 'settings-section-youtube-chat', label: 'Super Chat currency', keywords: 'youtube super chat superchat super sticker currency amount money donation dollars euros convert local original' },
@@ -916,7 +920,7 @@ const SETTINGS_CATALOG: SettingsEntry[] = [
   { tab: 'Overlay', section: 'Messages', label: 'Bubbles', keywords: 'overlay message bubbles bubble pill speech messenger shape corner radius background rounded color opacity chat box bubbles message bubbles shape bubble shape bubble color bubble opacity' },
   { tab: 'Overlay', section: 'Messages', label: 'Max lines', keywords: 'overlay max lines truncate clamp long message copypasta ellipsis wall of text limit max lines per message' },
   { tab: 'Overlay', section: 'Behavior', label: 'Lifetime', keywords: 'overlay remove expire auto clear stale old messages seconds lifetime hide after inactivity lifetime remove messages after' },
-  { tab: 'Overlay', section: 'Behavior', label: 'Restore on reload', keywords: 'overlay restore keep clear chat on reload obs refresh restart stream start buffer persist blank empty last messages restore on reload restore chat on reload' },
+  { tab: 'Overlay', section: 'Behavior', label: 'Restore on reload', keywords: 'overlay restore keep clear chat on reload obs refresh restart stream start buffer persist blank empty last messages restore on reload restore chat on reload scene switch mid-stream' },
   { tab: 'Overlay', section: 'Behavior', label: 'Recent chat', keywords: 'overlay recent chat history backlog previous messages load history start fill empty twitch recent chat on start' },
   { tab: 'Overlay', section: 'Behavior', label: 'Mod commands', keywords: 'overlay mod commands chat command refreshoverlay clearoverlay reload refresh clear moderator broadcaster obs' },
   { tab: 'Overlay', section: 'Filters', label: 'Hidden phrases', keywords: 'overlay hide messages containing words phrases profanity filter banned blocklist spoiler swear phrases hide messages containing' },
@@ -931,7 +935,7 @@ const SETTINGS_CATALOG: SettingsEntry[] = [
   { tab: 'Interface', section: 'Discover', sectionId: 'settings-section-discover', label: 'Personalized recommendations', keywords: 'discover feed personalized recommendations anonymous privacy tracking account tailored opt in' },
   { tab: 'Interface', section: 'Motion', sectionId: 'settings-section-motion', keywords: 'motion amount how much the interface animates animations reduce motion accessibility performance disable transitions full reduced off snappy' },
   { tab: 'Interface', section: 'Window', sectionId: 'settings-section-window', label: 'Close button', keywords: 'close button closing the window what the close button does minimize to tray system tray close to tray quit exit x button background keep running notification area popouts' },
-  { tab: 'Interface', section: 'Window', sectionId: 'settings-section-window', label: 'Full screen', keywords: 'full screen show only the stream and chat fullscreen f11 theatre theater hide title bar top bar sidebar only stream and chat immersive borderless chromeless' },
+  { tab: 'Interface', section: 'Window', sectionId: 'settings-section-window', label: 'Theater mode', keywords: 'theater mode theatre full screen show only the stream and chat fullscreen f11 hide title bar top bar sidebar only stream and chat immersive borderless chromeless' },
   { tab: 'Interface', section: 'Compact View', sectionId: 'settings-section-compact', label: 'Keep on top', keywords: 'keep on top in compact view always on top pin keep window above float stay in front overlay floating player behind browser buried sinks disappears compact view mini player picture in picture alternative' },
   { tab: 'Interface', section: 'Window', sectionId: 'settings-section-window', label: 'Centered settings', keywords: 'settings window keep settings in a centered window compact centered full page layout fills app' },
   { tab: 'Interface', section: 'Compact View', sectionId: 'settings-section-compact', keywords: 'compact view mini small window size second monitor preset' },
@@ -1078,7 +1082,7 @@ function buildPlayerControlItems(): PaletteItem[] {
   return [
     { id: 'player.playPause', section: 'Current Stream', title: 'Play / pause', keywords: 'play pause resume video player', run: () => pc()?.togglePlay() },
     { id: 'player.mute', section: 'Current Stream', title: 'Mute / unmute', keywords: 'mute unmute audio sound volume', run: () => pc()?.toggleMute() },
-    { id: 'player.fullscreen', section: 'Current Stream', title: 'Toggle fullscreen', keywords: 'fullscreen full screen video', run: () => pc()?.toggleFullscreen() },
+    { id: 'player.fullscreen', section: 'Current Stream', title: 'Full screen', keywords: 'fullscreen full screen video player', run: () => pc()?.toggleFullscreen() },
     { id: 'player.pip', section: 'Current Stream', title: 'Picture-in-picture', keywords: 'pip picture in picture mini player', run: () => pc()?.togglePip() },
     { id: 'player.volumeUp', section: 'Current Stream', title: 'Volume up', keywords: 'volume up louder increase', run: () => pc()?.volumeUp() },
     { id: 'player.volumeDown', section: 'Current Stream', title: 'Volume down', keywords: 'volume down quieter decrease', run: () => pc()?.volumeDown() },

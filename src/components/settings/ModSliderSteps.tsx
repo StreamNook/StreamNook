@@ -12,6 +12,7 @@ import {
 } from '../../services/moderation';
 import { Dropdown } from '../ui/Dropdown';
 import { fitHeaderDensity } from '../chat/fitHeaderDensity';
+import { Tooltip } from '../ui/Tooltip';
 
 /** More timeouts than this stop fitting a narrow chat. */
 const MAX_TIMEOUTS = 8;
@@ -72,25 +73,26 @@ function AddTimeoutChip({ taken, onAdd }: { taken: number[]; onAdd: (seconds: nu
 
   if (typing) {
     return (
-      <input
-        ref={inputRef}
-        autoFocus
-        value={text}
-        onChange={(e) => {
-          setText(e.target.value);
-          setError(null);
-        }}
-        onKeyDown={onKeyDown}
-        onBlur={() => void submit(true)}
-        placeholder="45m"
-        aria-label="Custom timeout length"
-        aria-invalid={error ? true : undefined}
-        title={error ?? 'Type a length like 45m, 2h or 3d, then press Enter'}
-        spellCheck={false}
-        className={`${chipBase} w-[76px] bg-transparent px-2.5 text-textPrimary outline-none placeholder:text-textMuted ${
-          error ? 'border-error' : 'border-white/25 focus:border-white/40'
-        }`}
-      />
+      <Tooltip content={error ?? 'Type a length like 45m, 2h or 3d, then press Enter'} describe>
+        <input
+          ref={inputRef}
+          autoFocus
+          value={text}
+          onChange={(e) => {
+            setText(e.target.value);
+            setError(null);
+          }}
+          onKeyDown={onKeyDown}
+          onBlur={() => void submit(true)}
+          placeholder="45m"
+          aria-label="Custom timeout length"
+          aria-invalid={error ? true : undefined}
+          spellCheck={false}
+          className={`${chipBase} w-[76px] bg-transparent px-2.5 text-textPrimary outline-none placeholder:text-textMuted ${
+            error ? 'border-error' : 'border-white/25 focus:border-white/40'
+          }`}
+        />
+      </Tooltip>
     );
   }
   const presets = TIMEOUT_LENGTH_CHOICES.filter((c) => !taken.includes(c.value));
@@ -150,21 +152,22 @@ export function ModSliderStepsEditor({ list = 'slider' }: { list?: keyof typeof 
   const full = config.timeouts.length >= MAX_TIMEOUTS;
 
   const toggleChip = (on: boolean, label: string, icon: ReactNode, onToggle: () => void) => (
-    <button
-      type="button"
-      aria-pressed={on}
-      aria-label={label}
-      title={label}
-      onClick={onToggle}
-      className={`${chipBase} sn-step-toggle px-2.5 ${
-        on
-          ? 'border-white/[0.12] bg-white/[0.08] text-textPrimary hover:bg-white/[0.12]'
-          : 'border-dashed border-white/15 text-textMuted hover:text-textSecondary'
-      }`}
-    >
-      {icon}
-      <span className="sn-step-word">{label}</span>
-    </button>
+    <Tooltip content={label}>
+      <button
+        type="button"
+        aria-pressed={on}
+        aria-label={label}
+        onClick={onToggle}
+        className={`${chipBase} sn-step-toggle px-2.5 ${
+          on
+            ? 'border-white/[0.12] bg-white/[0.08] text-textPrimary hover:bg-white/[0.12]'
+            : 'border-dashed border-white/15 text-textMuted hover:text-textSecondary'
+        }`}
+      >
+        {icon}
+        <span className="sn-step-word">{label}</span>
+      </button>
+    </Tooltip>
   );
 
   return (

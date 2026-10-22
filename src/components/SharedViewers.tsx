@@ -7,7 +7,7 @@ import { usemultiNookStore } from '../stores/multiNookStore';
 import { makeKey } from '../utils/providerKey';
 import { collabLabel, groupWord, isTogether, type ChannelGroup } from '../utils/sharedViewers';
 import { collabMissingFromGrid, watchCollabInMultiNook } from '../utils/collabMultiNook';
-import { ACCENT_BUTTON, ACCENT_FILL } from './ui/glazeButtons';
+import { ACCENT_BUTTON, ACCENT_FILL, GLAZE_PILL } from './ui/glazeButtons';
 import { SevenTvAvatar } from './SevenTvAvatar';
 
 // Twitch's Shared Viewership, presented as its own thing rather than folded
@@ -177,8 +177,7 @@ function MultiNookActions({ collab, onDone }: { collab: ChannelGroup; onDone: ()
     void watchCollabInMultiNook(collab, mode);
   };
   const primary = `${ACCENT_BUTTON} flex flex-1 items-center justify-center gap-2 whitespace-nowrap px-3 py-2 !text-xs`;
-  const secondary =
-    'glass-button-secondary !rounded-full flex items-center justify-center whitespace-nowrap px-3 py-2 text-xs font-semibold text-textPrimary';
+  const secondary = `${GLAZE_PILL} flex items-center justify-center whitespace-nowrap px-3 py-2 text-xs`;
 
   if (slots.length === 0) {
     return (
@@ -396,7 +395,7 @@ export function TogetherChip({
             onClick={(e) => e.stopPropagation()}
             onContextMenu={(e) => e.stopPropagation()}
             onMouseDown={(e) => e.stopPropagation()}
-            className="sn-popover fixed z-[300] p-1.5"
+            className="glass-flyout rounded-xl fixed z-[300]"
             style={{ ...placement, width: POPOVER_WIDTH }}
           >
             <TogetherPanel

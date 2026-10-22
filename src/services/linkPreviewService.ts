@@ -43,6 +43,9 @@ export interface LinkPreview {
   // "discord" kind only: live online + total member counts.
   online_count: number | null;
   member_count: number | null;
+  // "image" kind: the picture's pixel size, when the backend could read it.
+  width?: number | null;
+  height?: number | null;
 }
 
 // Registrable domains we auto-expand (the same list as TRUSTED_BASE_DOMAINS in
@@ -76,11 +79,13 @@ export const TRUSTED_BASE_DOMAINS: readonly string[] = [
   'steampowered.com',
   'steamcommunity.com',
   'instagram.com',
-  // Image hosts StreamNook can upload to (utils/imageUploadHosts): their
+  // Image hosts StreamNook can upload to (services/image_upload.rs): their
   // links must render as image cards, for the sender and everyone else.
   'nuuls.com',
   'catbox.moe',
   'uguu.se',
+  'kappa.lol',
+  'imgdrip.com',
   // Widened to auto-expand as a generic card (OG-friendly, well-known).
   'bsky.app',
   'vimeo.com',
@@ -130,30 +135,35 @@ export interface PreviewUrl {
   trusted: boolean;
 }
 
-// Extract previewable URLs from a message body, each tagged trusted/untrusted.
-// Trusted and untrusted are capped independently (default 2 each) so neither a
-// wall of links nor a run of untrusted links can crowd out the other or spawn a
-// wall of cards. Dedupes and strips trailing sentence punctuation that the
-// greedy match would otherwise swallow into the URL. Preserves message order.
-export function extractPreviewUrls(
-  text: string,
+/** One link Rust found in a row: its visible text and its href. */
+export interface RowLink {
+  content: string;
+  url: string;
+}
+
+// The previewable links of a row, each tagged trusted/untrusted, from the links
+// Rust already found in it (its `link` segments, in message order; the page
+// runs no URL pattern of its own). The trust split stays on the page because it
+// follows the trusted-domains setting live on rows already drawn. Trusted and
+// untrusted are capped independently (default 2 each) so neither a wall of
+// links nor a run of untrusted links can crowd out the other or spawn a wall of
+// cards. A bare domain ("main.rs", "test.fr") only expands when it is trusted:
+// offering a load chip under every word that happens to end in a TLD would be
+// noise.
+export function previewUrlsFromLinks(
+  links: readonly RowLink[],
   max = 2,
   userTrusted: readonly string[] = [],
 ): PreviewUrl[] {
-  if (!text) return [];
-  // Fast path: almost every chat line has no link. Skip the regex + URL parsing
-  // (and the array work) entirely unless the text could plausibly contain one.
-  if (!text.includes('http') && !text.includes('www.')) return [];
-  const re = /(?:https?:\/\/|www\.)[^\s]+/gi;
+  if (links.length === 0) return [];
   const out: PreviewUrl[] = [];
   const seen = new Set<string>();
   let trustedCount = 0;
   let untrustedCount = 0;
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(text)) !== null) {
+  for (const link of links) {
     if (trustedCount >= max && untrustedCount >= max) break;
-    const raw = match[0].replace(/[.,!?:;'")\]}>]+$/, '');
-    const url = raw.startsWith('http') ? raw : `https://${raw}`;
+    const url = link.url;
+    const explicit = /^(?:https?:\/\/|www\.)/i.test(link.content);
     let host: string;
     try {
       host = new URL(url).hostname;
@@ -162,6 +172,7 @@ export function extractPreviewUrls(
     }
     if (seen.has(url)) continue;
     const trusted = isTrustedHost(host, userTrusted);
+    if (!trusted && !explicit) continue;
     if (trusted ? trustedCount >= max : untrustedCount >= max) continue;
     seen.add(url);
     if (trusted) trustedCount++;

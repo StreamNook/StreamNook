@@ -7,9 +7,10 @@ import Plyr from 'plyr';
 // a second unlayered copy here would beat the app's control-bar overrides.
 import { motion, AnimatePresence } from 'framer-motion';
 import { Loader2, RefreshCcw, LayoutGrid, Shield, ShieldCheck, ShieldAlert, Clapperboard, Music, Share2, Check, VolumeX } from 'lucide-react';
-import { Heart, HeartBreak, ArrowLeft, X as XIcon } from 'phosphor-react';
+import { Heart, HeartBreak, ArrowLeft, CaretRight, X as XIcon } from 'phosphor-react';
 import { useAppStore } from '../stores/AppStore';
 import { streamProvider } from '../utils/streamProvider';
+import { currentCategoryTarget } from '../utils/streamCategory';
 import { makeKey } from '../utils/providerKey';
 import { useMediaGlow } from '../utils/mediaGlow';
 import { useContentZoom } from '../utils/contentZoom';
@@ -27,9 +28,11 @@ import { useVodProgressReporter } from '../hooks/useVodProgressReporter';
 import { useMutedSegmentNotice } from '../hooks/useMutedSegmentNotice';
 import { formatVodTime } from '../utils/vodProgress';
 import { createLiveEdgeTracker } from '../utils/liveEdge';
+import { isCodecFailure } from '../utils/codecFailure';
 import BroadcastTimeline from './BroadcastTimeline';
 import VodMutedMarks from './VodMutedMarks';
-import { injectPlyrControl } from '../utils/plyrControls';
+import { exactSeekPointer, injectPlyrControl } from '../utils/plyrControls';
+import { attachFineScrub } from '../utils/plyrFineScrub';
 import { pickStoryboardVariant, storyboardToPlyrThumbnails, type PlyrThumbnailSet } from '../utils/storyboard';
 import { useCurrentChapter } from '../hooks/useCurrentChapter';
 import VodChapterMarks from './VodChapterMarks';
@@ -37,10 +40,12 @@ import VodChaptersMenu from './VodChaptersMenu';
 import { Tooltip } from './ui/Tooltip';
 import { TwitchVerifiedMark } from './ui/TwitchGlyph';
 import { registerPlayerControls, type PlayerControls } from '../keybindings';
-import { qualitiesEquivalent } from '../utils/quality';
+import { qualitiesEquivalent, qualityLabel } from '../utils/quality';
+import { createStallReporter, reportSegment } from '../utils/linkAdapt';
 
 import { Logger } from '../utils/logger';
-import { claimPlayerFullscreen, handOffPlayerFullscreen, syncTauriWindowFullscreen } from '../utils/windowFullscreen';
+import { claimPlayerFullscreen, handOffPlayerFullscreen, PLYR_FULLSCREEN_I18N, syncTauriWindowFullscreen } from '../utils/windowFullscreen';
+import { mountFullscreenChatButton } from '../utils/fullscreenChatButton';
 import { startLatencyGovernor, DEFAULT_LATENCY_BAND } from '../utils/liveLatencyGovernor';
 import { behindLiveFromEdge, edgeTargetForGap, resolveLiveEdgeGap, type LivePath } from '../utils/latency';
 import { startLLDiagnostics, stopLLDiagnostics, llDiagNote, isLLDiagEnabled } from '../utils/llDiagnostics';
@@ -201,7 +206,7 @@ const VideoPlayer = () => {
   // subscribing; state goes through a shallow-compared selector. This component
   // is mounted for the whole session, and a bare `useAppStore()` re-rendered it
   // on every unrelated store tick (toasts, mod logs, drops polling).
-  const { getAvailableQualities, changeStreamQuality, handleStreamOffline, reloadStreamAndChat, restartStream, exitStream, toggleHome, setHomeActiveTab, setHomeSelectedCategory, createClip, openStreamerMedia, leaveOfflineRoomVod } = useAppStore.getState();
+  const { getAvailableQualities, changeStreamQuality, handleStreamOffline, reloadStreamAndChat, restartStream, exitStream, toggleHome, setHomeActiveTab, setHomeSelectedCategory, createClip, openStreamerMedia, leaveOfflineRoomVod, openStreamCategory } = useAppStore.getState();
   const { streamUrl, settings, activeQuality, adSource, isAutoSwitching, currentStream, isRestartingStream, isHomeActive, streamOriginCategory, isAuthenticated, currentMediaType, isCreatingClip, originalMediaUrl, vodPlayback, liveRewind, liveRewindAvailable, liveRewindAnchor, liveLeftOffSecs } = useAppStore(
     useShallow((s) => ({
       streamUrl: s.streamUrl,
@@ -440,6 +445,15 @@ const VideoPlayer = () => {
     };
   }, [playerReady]);
 
+  // The chat button, just before the full screen button. Shown only in the
+  // player's full screen (globals.css); brings chat up over the video.
+  useEffect(() => {
+    if (!playerReady) return;
+    const container = containerRef.current;
+    if (!container) return;
+    return mountFullscreenChatButton(container);
+  }, [playerReady]);
+
   // Keep the injected toggle's color, tooltip and pressed state in sync whenever
   // Audio Boost is flipped (from this button, the settings panel, or anywhere).
   useEffect(() => {
@@ -548,6 +562,8 @@ const VideoPlayer = () => {
   const onFirstPlayingRef = useRef<(() => void) | null>(null);
   const onPlayingFlagRef = useRef<(() => void) | null>(null);
   const onTimeUpdateRef = useRef<(() => void) | null>(null);
+  // What this player tells Rust's link governor (stalls), torn down with it.
+  const linkReportRef = useRef<{ stalls: ReturnType<typeof createStallReporter>; listeners: AbortController } | null>(null);
   const lastPlayheadRef = useRef<number>(0);
 
   // Follow + subscribe state and actions for the current channel. Shared with
@@ -681,7 +697,10 @@ const VideoPlayer = () => {
     // not the saved preference (settings.quality). They diverge whenever the
     // resolver fell back to the closest available quality because the
     // saved preference wasn't offered for this stream.
-    const displayedQuality = activeQuality ?? settings.quality;
+    // "Auto" adapting to the link is still "auto" in the menu, whatever
+    // rendition it plays right now (Rust names that in `autoQuality`).
+    const autoNow = useAppStore.getState().autoQuality;
+    const displayedQuality = autoNow ? 'auto' : (activeQuality ?? settings.quality);
 
     Logger.debug('[Quality] Setting up menu with available qualities:', availableQualities);
     Logger.debug('[Quality] Active quality:', activeQuality, 'saved preference:', settings.quality);
@@ -713,7 +732,7 @@ const VideoPlayer = () => {
       }
 
       // Determine the display value - use the actual quality being streamed
-      const currentQualityDisplay = displayedQuality.charAt(0).toUpperCase() + displayedQuality.slice(1);
+      const currentQualityDisplay = qualityLabel(displayedQuality, autoNow);
 
       // Create quality menu item in main settings
       const settingsHome = settingsMenu.querySelector('[role="menu"]');
@@ -760,7 +779,7 @@ const VideoPlayer = () => {
               role="menuitemradio"
               aria-checked="${quality.toLowerCase() === displayedQuality.toLowerCase() ? 'true' : 'false'}"
             >
-              <span>${quality.charAt(0).toUpperCase() + quality.slice(1)}</span>
+              <span>${qualityLabel(quality)}</span>
             </button>
           `).join('')}
         `;
@@ -798,7 +817,7 @@ const VideoPlayer = () => {
             // Update value in main menu (with capitalization)
             const qualityValueSpan = settingsHome.querySelector('[data-plyr="quality"] .plyr__menu__value');
             if (qualityValueSpan) {
-              qualityValueSpan.textContent = selectedQuality.charAt(0).toUpperCase() + selectedQuality.slice(1);
+              qualityValueSpan.textContent = qualityLabel(selectedQuality);
             }
 
             // Close menu
@@ -1618,6 +1637,7 @@ const VideoPlayer = () => {
             // to the window viewport instead of the screen. We bridge Plyr's
             // enter/exit events to the Tauri window's true OS fullscreen below.
             fullscreen: { enabled: true, fallback: 'force', iosNative: false },
+            i18n: PLYR_FULLSCREEN_I18N,
             // Disable Plyr's built-in localStorage - we manage settings via Tauri backend
             storage: { enabled: false },
             // Plyr's typings only know the VTT-url form; a function source is
@@ -1727,6 +1747,15 @@ const VideoPlayer = () => {
         }
       });
 
+      // A codec the probe passed can still fail here. Rust then drops it from
+      // selection and says whether restarting gets away from it, so the stream
+      // comes back on a tier this device plays instead of looping on the
+      // error. hls.js names the failed type only in the non-fatal add-codec
+      // error just before the fatal one. Asked once per start; Rust refuses a
+      // second restart for the same codec on one channel, so this cannot loop.
+      let failedCodecMime: string | null = null;
+      let codecReported = false;
+
       hls.on(Hls.Events.ERROR, (_event, data) => {
         Logger.error('[HLS] Error:', JSON.stringify({ type: data.type, details: data.details, fatal: data.fatal }));
         // hls.js packs the precise reason into data.error.message — for a
@@ -1740,6 +1769,9 @@ const VideoPlayer = () => {
 
         // Handle non-fatal errors with improved recovery
         if (!data.fatal) {
+          if (data.details === Hls.ErrorDetails.BUFFER_ADD_CODEC_ERROR && data.sourceBufferName !== 'audio') {
+            failedCodecMime = data.mimeType ?? null;
+          }
           const now = Date.now();
 
           // Handle buffer stalled errors with active recovery
@@ -1909,6 +1941,23 @@ const VideoPlayer = () => {
             return;
           }
 
+          if (data.type === Hls.ErrorTypes.MEDIA_ERROR && !codecReported && isCodecFailure(data.details)) {
+            codecReported = true;
+            invoke<boolean>('report_solo_codec_failure', { mimeType: failedCodecMime })
+              .catch(() => false)
+              .then(async (restart) => {
+                if (hlsRef.current !== hls) return; // the stream moved on meanwhile
+                if (!restart) {
+                  hls.recoverMediaError();
+                  return;
+                }
+                Logger.warn('[HLS] codec failed to decode; restarting on a tier this device plays');
+                await useAppStore.getState().restartStream({ quiet: true });
+                useAppStore.getState().addToast('Switched to a quality this device can play', 'info');
+              });
+            return;
+          }
+
           const now = Date.now();
 
           // Reset error count if enough time has passed since last error
@@ -2005,6 +2054,21 @@ const VideoPlayer = () => {
           Logger.debug(`[HLS] Fragment loaded: sn=${data.frag.sn} dur=${data.frag.duration.toFixed(1)}s`);
         }
       });
+
+      // Rust's link governor ("Auto" on a struggling connection) judges the
+      // link by the whole segments this player downloads and the stalls it
+      // sees. Parts come from the relay over loopback and say nothing about
+      // the link, so the parts path reports stalls only.
+      if (!isVodPlayback && !isLowLatencyChannel) {
+        hls.on(Hls.Events.FRAG_LOADED, (_event, data) => {
+          if (data.part || hlsRef.current !== hls) return;
+          const { loaded, loading } = data.frag.stats;
+          reportSegment(loaded, loading.end - loading.start, undefined, {
+            cc: data.frag.cc,
+            durationMs: data.frag.duration * 1000,
+          });
+        });
+      }
 
       // ──── Cold-Start Buffer Gate + live-sync snap ────
       // Twitch segments are ~2s. Wait for a little buffer so a cold start doesn't
@@ -2226,6 +2290,24 @@ const VideoPlayer = () => {
       video.addEventListener('waiting', onWaiting);
       video.addEventListener('playing', onPlayingFlag);
 
+      // Stalls for the link governor: a freeze while playing, not a pause, a
+      // seek or the cold start.
+      linkReportRef.current?.listeners.abort();
+      linkReportRef.current?.stalls.cancel();
+      linkReportRef.current = null;
+      if (!isVodPlayback) {
+        const stalls = createStallReporter();
+        const listeners = new AbortController();
+        const opts = { signal: listeners.signal };
+        video.addEventListener('waiting', () => {
+          if (!video.paused && !video.seeking && video.currentTime > 0) stalls.begin();
+        }, opts);
+        video.addEventListener('playing', () => stalls.end(), opts);
+        video.addEventListener('pause', () => stalls.cancel(), opts);
+        video.addEventListener('seeking', () => stalls.cancel(), opts);
+        linkReportRef.current = { stalls, listeners };
+      }
+
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
       // Native HLS support (Safari)
       Logger.debug('[HLS] Using native HLS support');
@@ -2268,6 +2350,7 @@ const VideoPlayer = () => {
         // See note in the HLS.js path above — force CSS-only fullscreen so we
         // can promote it to a real OS window fullscreen via Tauri.
         fullscreen: { enabled: true, fallback: 'force', iosNative: false },
+        i18n: PLYR_FULLSCREEN_I18N,
         // Disable Plyr's built-in localStorage - we manage settings via Tauri backend
         storage: { enabled: false },
         ...(previewSets.length > 0
@@ -2471,6 +2554,9 @@ const VideoPlayer = () => {
         if (waitingHandler) videoElement.removeEventListener('waiting', waitingHandler);
         if (playingFlagHandler) videoElement.removeEventListener('playing', playingFlagHandler);
       }
+      linkReportRef.current?.listeners.abort();
+      linkReportRef.current?.stalls.cancel();
+      linkReportRef.current = null;
       const debouncer = volumeDebounceRef.current;
       const gateTimeout = bufferGateTimeoutRef.current;
       if (debouncer) clearTimeout(debouncer);
@@ -2694,6 +2780,15 @@ const VideoPlayer = () => {
     };
   }, [showOsd]);
 
+  // Plyr's seek bar reads whole-pixel mouse coordinates; hand it the exact
+  // pointer so a drop lands on the thumb at every display scale. On the
+  // container, so it outlives every player rebuild.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    return exactSeekPointer(container);
+  }, []);
+
   // Build the quality menu once BOTH the quality list and the player are ready,
   // in whichever order they arrive. `playerReady` is state, so this re-runs when
   // Plyr is created (a ref wouldn't), and the list can now arrive instantly.
@@ -2702,6 +2797,15 @@ const VideoPlayer = () => {
       updateQualityMenu();
     }
   }, [availableQualities, playerReady, updateQualityMenu]);
+
+  // Rust moved "Auto" to another rendition: only the label changes, so an
+  // open menu stays where it is.
+  const autoQuality = useAppStore((s) => s.autoQuality);
+  useEffect(() => {
+    const value = containerRef.current?.querySelector('[data-plyr="quality"] .plyr__menu__value');
+    if (!value) return;
+    value.textContent = qualityLabel(autoQuality ? 'auto' : (activeQuality ?? settings.quality), autoQuality);
+  }, [autoQuality, activeQuality, settings.quality]);
 
   // Inject a "Stats" toggle into the Plyr settings (gear) menu, alongside Quality
   // and Speed, so the latency panel is opened from there (not a floating button).
@@ -2754,22 +2858,28 @@ const VideoPlayer = () => {
     () => !!containerRef.current?.querySelector('.plyr__menu [aria-expanded="true"]'),
     [],
   );
+  // The seek bar is held: a fine drag on a VOD, or Plyr's own range mid-drag.
+  // Someone holding still to read a frame has not walked away.
+  const isSeekHeld = useCallback(
+    () => !!containerRef.current?.querySelector('.plyr__progress.sn-scrubbing, .plyr__progress input:active'),
+    [],
+  );
 
   const startOverlayHideTimer = useCallback(() => {
     if (overlayTimerRef.current) {
       clearTimeout(overlayTimerRef.current);
     }
     overlayTimerRef.current = setTimeout(() => {
-      // Never time the overlay out from under an open menu: the menu lives
-      // inside the overlay, so hiding it mid-interaction cancels whatever the
-      // user was in the middle of choosing.
-      if (isPlayerMenuOpen()) {
+      // Never time the overlay out from under an open menu or a held seek
+      // bar: both live inside the overlay, so hiding it mid-interaction
+      // cancels whatever the user was in the middle of choosing.
+      if (isPlayerMenuOpen() || isSeekHeld()) {
         startOverlayHideTimer();
         return;
       }
       setShowOverlay(false);
     }, OVERLAY_HIDE_DELAY);
-  }, [isPlayerMenuOpen]);
+  }, [isPlayerMenuOpen, isSeekHeld]);
 
   // Snap the playhead back to the live edge (used by the stats panel's "Go Live"
   // button and after scrubbing into the DVR window). Never seek to an unbuffered
@@ -2901,6 +3011,14 @@ const VideoPlayer = () => {
   // One "Resumed from" toast per VOD: StrictMode runs mount effects twice.
   const resumeToastedRef = useRef<string | null>(null);
   const timelineAnchor = liveRewindAnchor ?? currentStream?.started_at ?? null;
+
+  // Fine scrubbing on a VOD's bar (slowed drag, wheel nudge), the live
+  // timeline's two gestures. Re-attached to every bar Plyr rebuilds.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!timelineHost || !isVodTimeline || !video) return;
+    return attachFineScrub(timelineHost, video);
+  }, [timelineHost, isVodTimeline]);
 
   const goLive = useCallback(() => {
     const hls = hlsRef.current;
@@ -3063,6 +3181,19 @@ const VideoPlayer = () => {
         backgroundColor: 'var(--color-background)',
         backgroundImage: 'linear-gradient(var(--color-background-secondary), var(--color-background-secondary))',
       };
+
+  // What the category under the title opens, if anything (utils/streamCategory).
+  const categoryLink = currentCategoryTarget(currentStream, currentMediaType);
+  const fmtDate = (iso: string) =>
+    new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  // What follows the category: nothing live, the date for the offline room's
+  // broadcast (it carries no view count), views and date for clips and VODs.
+  const categorySuffix =
+    !currentStream || currentMediaType === 'live' || streamUrl === 'offline'
+      ? null
+      : currentMediaType === 'offline_chat'
+        ? currentStream.started_at ? `• ${fmtDate(currentStream.started_at)}` : null
+        : `• ${currentStream.viewer_count?.toLocaleString() || 0} Views • ${fmtDate(currentStream.started_at)}`;
 
   return (
     <div
@@ -3235,8 +3366,7 @@ const VideoPlayer = () => {
                 <Tooltip content={`Back to ${currentStream.user_name || currentStream.user_login}'s chat`} side="bottom" delay={200}>
                   <button
                     onClick={() => void leaveOfflineRoomVod()}
-                    className="shrink-0 mt-0.5 p-2 glass-button rounded-lg pointer-events-auto"
-                    style={{ backdropFilter: 'blur(16px)' }}
+                    className="shrink-0 mt-0.5 flex items-center justify-center p-2 aspect-square chrome-glaze chrome-glaze--control chrome-glaze--frosted pointer-events-auto"
                   >
                     <ArrowLeft size={16} weight="bold" className="text-white" />
                   </button>
@@ -3255,8 +3385,7 @@ const VideoPlayer = () => {
                       }
                       await exitStream();
                     }}
-                    className="shrink-0 mt-0.5 p-2 glass-button rounded-lg pointer-events-auto"
-                    style={{ backdropFilter: 'blur(16px)' }}
+                    className="shrink-0 mt-0.5 flex items-center justify-center p-2 aspect-square chrome-glaze chrome-glaze--control chrome-glaze--frosted pointer-events-auto"
                   >
                     <ArrowLeft size={16} weight="bold" className="text-white" />
                   </button>
@@ -3269,8 +3398,7 @@ const VideoPlayer = () => {
                       setHomeSelectedCategory(streamOriginCategory);
                       toggleHome();
                     }}
-                    className="shrink-0 mt-0.5 p-2 glass-button rounded-lg pointer-events-auto"
-                    style={{ backdropFilter: 'blur(16px)' }}
+                    className="shrink-0 mt-0.5 flex items-center justify-center p-2 aspect-square chrome-glaze chrome-glaze--control chrome-glaze--frosted pointer-events-auto"
                   >
                     <ArrowLeft size={16} weight="bold" className="text-white" />
                   </button>
@@ -3326,15 +3454,44 @@ const VideoPlayer = () => {
                 </Tooltip>
               )}
               {currentStream.game_name && (
-                <p className="text-white/70 text-xs mt-0.5 drop-shadow-md">
-                  {currentMediaType === 'live' 
-                    ? currentStream.game_name 
-                    : streamUrl === 'offline' 
-                      ? currentStream.game_name
-                      : currentMediaType === 'offline_chat'
-                        // The room's latest broadcast carries no view count.
-                        ? [currentStream.game_name, currentStream.started_at && new Date(currentStream.started_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })].filter(Boolean).join(' • ')
-                        : `${currentStream.game_name} • ${currentStream.viewer_count?.toLocaleString() || 0} Views • ${new Date(currentStream.started_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`}
+                // With the chip the line is a flex row, so the date beside it
+                // centers on the chip instead of riding its text baseline.
+                <p className={`text-white/70 text-xs drop-shadow-md ${categoryLink ? 'mt-1 flex items-center gap-1.5 min-w-0' : 'mt-0.5'}`}>
+                  {categoryLink ? (
+                    // A quiet chip, so it reads as something to press without a
+                    // link's underline. The dark fill matches the back button's
+                    // glass and holds on bright video. Padding is even at rest;
+                    // the arrow's slot opens on hover rather than sitting empty.
+                    // Named group: the player root is a `group` too, and would
+                    // open the arrow from anywhere over the video.
+                    <button
+                      type="button"
+                      aria-label={`Browse ${currentStream.game_name}`}
+                      onClick={(e) => {
+                        // Focus left here would let Space reopen it after coming back.
+                        e.currentTarget.blur();
+                        openStreamCategory(categoryLink);
+                      }}
+                      className="group/cat pointer-events-auto cursor-pointer inline-flex shrink-0 items-center px-2 py-0.5 rounded-full bg-black/30 border border-white/15 text-white/85 transition-colors hover:bg-black/45 hover:border-white/30 hover:text-white focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/60"
+                    >
+                      <span className="truncate max-w-[220px]">{currentStream.game_name}</span>
+                      <span
+                        aria-hidden="true"
+                        className="grid grid-cols-[0fr] transition-[grid-template-columns] duration-150 ease-out group-hover/cat:grid-cols-[1fr] group-focus-visible/cat:grid-cols-[1fr]"
+                      >
+                        <span className="flex min-w-0 items-center overflow-hidden">
+                          <CaretRight
+                            size={10}
+                            weight="bold"
+                            className="ml-1 shrink-0 opacity-0 transition-opacity duration-150 group-hover/cat:opacity-100 group-focus-visible/cat:opacity-100"
+                          />
+                        </span>
+                      </span>
+                    </button>
+                  ) : (
+                    currentStream.game_name
+                  )}
+                  {categorySuffix && (categoryLink ? <span className="truncate">{categorySuffix}</span> : ` ${categorySuffix}`)}
                 </p>
               )}
             </div>
@@ -3452,11 +3609,10 @@ const VideoPlayer = () => {
           <button
             onClick={handleFollowClick}
             disabled={followLoading || checkingFollowStatus}
-            className={`flex items-center justify-center p-2 glass-button rounded-lg ${followLoading || checkingFollowStatus
+            className={`flex items-center justify-center p-2 aspect-square chrome-glaze chrome-glaze--control chrome-glaze--frosted ${followLoading || checkingFollowStatus
               ? 'opacity-60 cursor-wait'
               : ''
               }`}
-            style={{ backdropFilter: 'blur(16px)' }}
           >
             {followLoading || checkingFollowStatus ? (
               <Loader2 className="w-4 h-4 animate-spin text-textSecondary" />
@@ -3496,8 +3652,7 @@ const VideoPlayer = () => {
                   : `${terms.paid} ${currentStream.user_name}`} side="bottom">
           <button
             onClick={handleSubscribeClick}
-            className="flex items-center gap-2 px-4 py-2 glass-button text-white text-sm font-semibold transition-all duration-200"
-            style={{ backdropFilter: 'blur(16px)' }}
+            className="flex items-center gap-2 px-4 py-2 chrome-glaze chrome-glaze--control chrome-glaze--frosted text-white text-sm font-semibold"
           >
             <span>
               {isSubscribed ? terms.paidGift : hasSubHistory ? terms.paidAgain : terms.paid}
@@ -3525,10 +3680,9 @@ const VideoPlayer = () => {
             <button
               onClick={() => createClip()}
               disabled={isCreatingClip}
-              className={`flex items-center justify-center p-2 glass-button rounded-lg ${
+              className={`flex items-center justify-center p-2 aspect-square chrome-glaze chrome-glaze--control chrome-glaze--frosted ${
                 isCreatingClip ? 'cursor-wait opacity-70' : ''
               }`}
-              style={{ backdropFilter: 'blur(16px)' }}
             >
               {isCreatingClip ? (
                 <Loader2 className="w-4 h-4 text-accent animate-spin" />
@@ -3549,10 +3703,9 @@ const VideoPlayer = () => {
             <button
               onClick={() => handleIdentifySong()}
               disabled={isIdentifyingSong || !AUDIO_GRAPH_SUPPORTED}
-              className={`flex items-center justify-center p-2 glass-button rounded-lg ${
+              className={`flex items-center justify-center p-2 aspect-square chrome-glaze chrome-glaze--control chrome-glaze--frosted ${
                 isIdentifyingSong ? 'cursor-wait opacity-70' : ''
               } ${!AUDIO_GRAPH_SUPPORTED ? 'opacity-40 cursor-default' : ''}`}
-              style={{ backdropFilter: 'blur(16px)' }}
             >
               {isIdentifyingSong ? (
                 <Loader2 className="w-4 h-4 text-accent animate-spin" />
@@ -3569,8 +3722,7 @@ const VideoPlayer = () => {
             <Tooltip content={shareCopied ? 'Link copied!' : `Share ${currentStream.user_name}`} side="bottom">
             <button
               onClick={handleSharePlayer}
-              className="flex items-center justify-center p-2 glass-button rounded-lg"
-              style={{ backdropFilter: 'blur(16px)' }}
+              className="flex items-center justify-center p-2 aspect-square chrome-glaze chrome-glaze--control chrome-glaze--frosted"
             >
               <span key={shareCopied ? 'copied' : 'share'} className="inline-flex animate-in zoom-in-50 duration-200">
                 {shareCopied ? (
@@ -3590,8 +3742,7 @@ const VideoPlayer = () => {
           {overlayButtonOn('clipsvods') && isTwitchStream && currentStream && currentStream.user_id && (
             <button
               onClick={() => openStreamerMedia(currentStream)}
-              className="flex items-center justify-center px-3 py-2 glass-button rounded-lg text-sm font-semibold text-white hover:text-accent transition-colors duration-200"
-              style={{ backdropFilter: 'blur(16px)' }}
+              className="flex items-center justify-center px-3 py-2 chrome-glaze chrome-glaze--control chrome-glaze--frosted text-sm font-semibold text-white hover:text-accent"
             >
               Clips &amp; VODs
             </button>
@@ -3615,8 +3766,7 @@ const VideoPlayer = () => {
             <button
               onClick={handleAddToMultiNook}
               disabled={!canGridProvider(streamProvider(currentStream))}
-              className="flex items-center justify-center p-2 glass-button rounded-lg disabled:opacity-40 disabled:cursor-default"
-              style={{ backdropFilter: 'blur(16px)' }}
+              className="flex items-center justify-center p-2 aspect-square chrome-glaze chrome-glaze--control chrome-glaze--frosted disabled:opacity-40 disabled:cursor-default"
             >
               <LayoutGrid className="w-4 h-4 text-white hover:text-accent transition-colors duration-200" />
             </button>
@@ -3637,10 +3787,9 @@ const VideoPlayer = () => {
                 }
               }}
               disabled={isRestarting}
-              className={`flex items-center justify-center p-2 glass-button rounded-lg ${
+              className={`flex items-center justify-center p-2 aspect-square chrome-glaze chrome-glaze--control chrome-glaze--frosted ${
                 isRestarting ? 'cursor-wait opacity-70' : ''
               }`}
-              style={{ backdropFilter: 'blur(16px)' }}
             >
               {isRestarting ? (
                 <Loader2 className="w-4 h-4 text-accent animate-spin" />
@@ -3656,8 +3805,8 @@ const VideoPlayer = () => {
           <Tooltip content="Close Stream" side="bottom">
           <button
             onClick={() => exitStream()}
-            className="flex items-center justify-center p-2 glass-button rounded-lg"
-            style={{ backgroundColor: 'color-mix(in srgb, rgb(239 68 68) 25%, var(--glass-under, transparent))', backdropFilter: 'blur(16px)' }}
+            className="flex items-center justify-center p-2 aspect-square chrome-glaze chrome-glaze--control chrome-glaze--frosted"
+            style={{ backgroundImage: 'linear-gradient(rgb(239 68 68 / 0.25), rgb(239 68 68 / 0.25))' }}
           >
             <XIcon weight="bold" className="w-4 h-4 text-red-400" />
           </button>
@@ -3684,7 +3833,7 @@ const VideoPlayer = () => {
             onMouseDown={(e) => e.stopPropagation()}
             onContextMenu={(e) => e.preventDefault()}
             data-no-wheel-volume
-            className="player-fs-popover liquid-glass-panel absolute bottom-16 right-3 z-[60] rounded-xl p-4"
+            className="player-fs-popover glass-flyout absolute bottom-16 right-3 z-[60] rounded-xl !p-4"
             style={{ width: 'min(460px, calc(100% - 24px))' }}
           >
             <AudioBoostControls

@@ -58,11 +58,11 @@ export const GlassSelect = ({ value, onChange, options, className = '', placemen
                         animate={{ opacity: 1, scale: 1, y: 0 }}
                         exit={{ opacity: 0, scale: 0.95, y: placement === 'top' ? 5 : -5 }}
                         transition={{ duration: 0.15, ease: 'easeOut' }}
-                        className={`absolute right-0 z-[100] w-full min-w-[150px] rounded-lg bg-glass-ink/90 backdrop-blur-3xl shadow-[0_8px_32px_rgba(0,0,0,0.6)] border border-white/10 overflow-hidden ${
+                        className={`glass-flyout absolute right-0 z-[100] w-full min-w-[150px] rounded-xl p-1.5 overflow-hidden ${
                             placement === 'top' ? 'bottom-full mb-1 origin-bottom-right' : 'mt-1 origin-top-right'
                         }`}
                     >
-                        <div className="py-1 flex flex-col w-full">
+                        <div className="flex flex-col w-full">
                             {options.map((option) => (
                                 <button
                                     key={option.value}
@@ -70,10 +70,10 @@ export const GlassSelect = ({ value, onChange, options, className = '', placemen
                                         onChange(option.value);
                                         setIsOpen(false);
                                     }}
-                                    className={`w-full text-left px-3 py-2 text-sm flex items-center justify-between transition-colors outline-none
-                                        ${value === option.value 
-                                            ? 'text-accent font-bold bg-white/5' 
-                                            : 'text-textPrimary hover:bg-white/10 hover:text-white focus:bg-white/10'
+                                    className={`w-full text-left rounded-lg px-2 py-2 text-sm text-textPrimary flex items-center justify-between transition-colors outline-none
+                                        ${value === option.value
+                                            ? 'bg-white/[0.08]'
+                                            : 'hover:bg-white/[0.06] focus:bg-white/[0.06]'
                                         }
                                     `}
                                 >

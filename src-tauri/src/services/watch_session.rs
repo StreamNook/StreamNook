@@ -65,6 +65,9 @@ const VERIFY_INTERVAL: Duration = Duration::from_secs(5);
 const VERIFY_CONSECUTIVE_OFFLINE: usize = 2;
 /// A raid redirect wins over an auto-switch triggered just after it.
 const RAID_COOLDOWN_MS: i64 = 15_000;
+/// The same raid announced twice (PubSub and `channel.raid` both carrying it
+/// for a moment as the watch socket gets its slot back) is followed once.
+const RAID_REPEAT_MS: i64 = 120_000;
 const SWITCH_CANDIDATES: u32 = 10;
 
 /// Stands in for `stream.offline` on platforms without EventSub.
@@ -111,6 +114,8 @@ struct Session {
     target: WatchTarget,
     tasks: Vec<tauri::async_runtime::JoinHandle<()>>,
     last_raid_ms: i64,
+    /// The last raid followed: its target id and when.
+    last_raid_to: Option<(String, i64)>,
     resolving: bool,
     /// An offline room already announced its channel going live.
     live_sent: bool,
@@ -284,11 +289,13 @@ pub async fn start(app: AppHandle, target: WatchTarget) {
         // still reports offline, and that must not auto-switch away from the
         // raid target.
         let last_raid_ms = s.as_ref().map(|p| p.last_raid_ms).unwrap_or(0);
+        let last_raid_to = s.as_ref().and_then(|p| p.last_raid_to.clone());
         s.replace(Session {
             seq,
             target: target.clone(),
             tasks: Vec::new(),
             last_raid_ms,
+            last_raid_to,
             resolving: false,
             live_sent: false,
         })
@@ -326,6 +333,7 @@ pub async fn start(app: AppHandle, target: WatchTarget) {
     // This channel's EventSub, unless MultiNook's focused tile holds the
     // socket. A Twitch subscription must not keep firing over a Kick stream.
     aim_watch_socket(&app).await;
+    refresh_raid_fallback(&app);
 
     let mut tasks = Vec::new();
     if target.provider == "twitch" {
@@ -391,6 +399,7 @@ pub async fn stop(app: AppHandle, preserve_backend: bool) {
     }
     // Down, unless MultiNook's focused tile holds the socket.
     aim_watch_socket(&app).await;
+    refresh_raid_fallback(&app);
     let state = app.state::<AppState>();
     if let Err(e) = discord::idle(&state).await {
         log::debug!("[WatchSession] Could not set idle Discord presence: {e}");
@@ -555,6 +564,7 @@ pub fn set_grid_focus(app: AppHandle, focus: Option<GridFocus>) {
             tokio::time::sleep(GRID_SETTLE).await;
             if GRID_SEQ.load(Ordering::Acquire) == seq {
                 aim_watch_socket(&app).await;
+                refresh_raid_fallback(&app);
             }
         });
         return;
@@ -592,6 +602,7 @@ pub fn set_grid_focus(app: AppHandle, focus: Option<GridFocus>) {
         });
         let Some(moved) = moved else { return };
         aim_watch_socket(&app).await;
+        refresh_raid_fallback(&app);
         if moved {
             crate::commands::drops::monitor_watched_channel(&app, channel.id.clone(), channel.login.clone()).await;
         }
@@ -606,6 +617,42 @@ pub fn set_grid_focus(app: AppHandle, focus: Option<GridFocus>) {
     });
 }
 
+// ---- The solo player's raids while the watch socket has no slot --------------------
+
+/// The channel whose raids PubSub carries for the solo player
+/// (`multi_nook_raids::set_solo`): the watched live Twitch channel, only while
+/// the watch socket aimed at it cannot subscribe for the account's socket
+/// limit. Otherwise the socket's `channel.raid` has its raids, so only one
+/// raid path is ever active; and while MultiNook's focused tile holds the
+/// socket, the solo channel's raids are not followed at all, as before.
+fn raid_fallback_channel(session: Option<&WatchTarget>, grid_holds_socket: bool, watch_over_budget: bool) -> Option<String> {
+    if !watch_over_budget || grid_holds_socket {
+        return None;
+    }
+    session
+        .filter(|t| t.provider == "twitch" && !t.offline && !t.user_id.is_empty())
+        .map(|t| t.user_id.clone())
+}
+
+/// Point the PubSub raid fallback at what it should carry now. Called when the
+/// session, the grid's focus or the watch socket's budget changes.
+pub fn refresh_raid_fallback(app: &AppHandle) {
+    let session = with_session(|s| s.as_ref().map(|s| s.target.clone()));
+    let grid_holds_socket = with_grid(|g| g.as_ref().is_some_and(|g| g.twitch.is_some()));
+    let over = crate::services::eventsub_budget::over_budget(crate::services::eventsub_service::SocketOwner::Watch);
+    let channel = raid_fallback_channel(session.as_ref(), grid_holds_socket, over);
+    // The PubSub raid connection is MultiNook's, which only the desktop has.
+    #[cfg(desktop)]
+    crate::services::multi_nook_raids::set_solo(app, channel);
+    #[cfg(not(desktop))]
+    let _ = (app, channel);
+}
+
+/// Whether a raid to `target_id` at `now_ms` repeats the one followed last.
+fn repeats_last_raid(last: Option<&(String, i64)>, target_id: &str, now_ms: i64) -> bool {
+    last.is_some_and(|(to, at)| !target_id.is_empty() && to == target_id && now_ms - at < RAID_REPEAT_MS)
+}
+
 // ---- EventSub, as it concerns the watched channel ----------------------------------
 
 pub fn on_raid(app: &AppHandle, raid: &RaidEvent) {
@@ -613,6 +660,15 @@ pub fn on_raid(app: &AppHandle, raid: &RaidEvent) {
     else {
         return;
     };
+    let now = now_ms();
+    let repeat = with_session(|s| {
+        s.as_ref()
+            .is_some_and(|s| repeats_last_raid(s.last_raid_to.as_ref(), &raid.to_broadcaster_user_id, now))
+    });
+    if repeat {
+        log::debug!("[WatchSession] raid to {} already followed", raid.to_broadcaster_user_login);
+        return;
+    }
     let follow = app
         .state::<AppState>()
         .settings
@@ -624,7 +680,8 @@ pub fn on_raid(app: &AppHandle, raid: &RaidEvent) {
     }
     with_session(|s| {
         if let Some(session) = s.as_mut().filter(|s| s.seq == seq) {
-            session.last_raid_ms = now_ms();
+            session.last_raid_ms = now;
+            session.last_raid_to = Some((raid.to_broadcaster_user_id.clone(), now));
         }
     });
     // The TV follows the raid itself rather than waiting for the view: a locked
@@ -667,6 +724,35 @@ pub fn on_offline(app: &AppHandle, broadcaster_id: &str, login: &str) {
     if is_current_broadcaster(broadcaster_id, login).is_some() {
         let _ = app.emit(OFFLINE_EVENT, json!({ "provider": "twitch", "login": login }));
     }
+}
+
+/// The batched viewer poll confirmed the watched channel offline (two polls in
+/// a row). Stands in for `stream.offline` only while the watch socket cannot
+/// subscribe for the account's socket limit; with a slot, the event is the
+/// signal and this changes nothing.
+pub fn on_polled_offline(app: &AppHandle, broadcaster_id: &str, login: &str) {
+    if crate::services::eventsub_budget::over_budget(crate::services::eventsub_service::SocketOwner::Watch) {
+        on_offline(app, broadcaster_id, login);
+    }
+}
+
+/// The batched viewer poll read a new title or category for a live channel.
+/// Stands in for `channel.update` on the watched channel the same way.
+pub fn on_polled_update(app: &AppHandle, row: &TwitchStream) {
+    if !crate::services::eventsub_budget::over_budget(crate::services::eventsub_service::SocketOwner::Watch) {
+        return;
+    }
+    let update = ChannelUpdateEvent {
+        broadcaster_user_id: row.user_id.clone(),
+        broadcaster_user_login: row.user_login.clone(),
+        broadcaster_user_name: row.user_name.clone(),
+        title: row.title.clone(),
+        language: String::new(),
+        category_id: row.game_id.clone(),
+        category_name: row.game_name.clone(),
+        content_classification_labels: Vec::new(),
+    };
+    on_channel_update(app, &update);
 }
 
 /// `stream.online` for the watched channel. Only an offline room acts on it,
@@ -733,6 +819,9 @@ fn announce_live(app: &AppHandle, seq: u64, row: TwitchStream) {
     if !first {
         return;
     }
+    // Rewards that need a live stream open now, not when Helix lists it.
+    let seen = row.clone();
+    tauri::async_runtime::spawn(async move { crate::services::channel_state::note_live(&seen).await });
     let _ = app.emit(WENT_LIVE_EVENT, json!({ "stream": row }));
 }
 
@@ -810,6 +899,7 @@ async fn poll_provider_live(app: AppHandle, seq: u64) {
                             "viewer_count": row.viewer_count,
                             "title": row.title,
                             "game_name": row.game_name,
+                            "game_id": row.game_id,
                         }),
                     );
                 }
@@ -1217,6 +1307,47 @@ mod tests {
         .expect("minimal stream row")
     }
 
+    fn watched(offline: bool) -> WatchTarget {
+        WatchTarget {
+            provider: "twitch".into(),
+            login: "chan".into(),
+            user_id: "123".into(),
+            user_name: "Chan".into(),
+            title: String::new(),
+            game_id: None,
+            game_name: String::new(),
+            started_at: String::new(),
+            authenticated: true,
+            offline,
+        }
+    }
+
+    #[test]
+    fn pubsub_carries_the_solo_raids_only_while_the_watch_socket_has_no_slot() {
+        let live = watched(false);
+        // With room, channel.raid has them: one raid path.
+        assert_eq!(raid_fallback_channel(Some(&live), false, false), None);
+        // Over budget: PubSub carries the watched channel.
+        assert_eq!(raid_fallback_channel(Some(&live), false, true), Some("123".to_string()));
+        // MultiNook's focused tile holds the socket: no solo raid follow, as before.
+        assert_eq!(raid_fallback_channel(Some(&live), true, true), None);
+        // An offline room has no raid to follow; nothing watched, nothing carried.
+        assert_eq!(raid_fallback_channel(Some(&watched(true)), false, true), None);
+        assert_eq!(raid_fallback_channel(None, false, true), None);
+        let kick = WatchTarget { provider: "kick".into(), ..watched(false) };
+        assert_eq!(raid_fallback_channel(Some(&kick), false, true), None);
+    }
+
+    #[test]
+    fn a_raid_announced_twice_is_followed_once() {
+        let last = Some(("999".to_string(), 1_000_000));
+        assert!(repeats_last_raid(last.as_ref(), "999", 1_000_000 + 5_000), "PubSub and EventSub both carried it");
+        assert!(!repeats_last_raid(last.as_ref(), "999", 1_000_000 + RAID_REPEAT_MS), "a later raid to the same channel");
+        assert!(!repeats_last_raid(last.as_ref(), "777", 1_000_001), "another target");
+        assert!(!repeats_last_raid(None, "999", 1));
+        assert!(!repeats_last_raid(last.as_ref(), "", 1_000_001));
+    }
+
     #[test]
     fn the_ended_stream_is_never_the_target() {
         let picked = pick_target(vec![stream("Ended", 900), stream("next", 10)], "ended", false);
@@ -1256,6 +1387,7 @@ mod tests {
                 },
                 tasks: Vec::new(),
                 last_raid_ms: 0,
+                last_raid_to: None,
                 resolving: false,
                 live_sent: false,
             })

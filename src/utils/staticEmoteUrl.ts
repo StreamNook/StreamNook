@@ -28,9 +28,15 @@ export function staticEmoteUrl(url: string): string {
   return url;
 }
 
+/** 7TV density srcSet in one format, animated or the static first frame. */
+export function sevenTvSrcSet(emoteId: string, ext: 'avif' | 'webp', still = false): string {
+  const suffix = still ? '_static' : '';
+  return [1, 2, 3, 4]
+    .map((n) => `https://cdn.7tv.app/emote/${emoteId}/${n}x${suffix}.${ext} ${n}x`)
+    .join(', ');
+}
+
 /** srcSet for a 7TV emote in static mode, mirroring the animated one. */
 export function static7tvSrcSet(emoteId: string): string {
-  return [1, 2, 3, 4]
-    .map((n) => `https://cdn.7tv.app/emote/${emoteId}/${n}x_static.avif ${n}x`)
-    .join(', ');
+  return sevenTvSrcSet(emoteId, 'avif', true);
 }

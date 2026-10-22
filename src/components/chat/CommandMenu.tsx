@@ -42,6 +42,7 @@ import type { CommandDefinition } from '../../utils/chatCommands';
 import { renderCommandUsage } from './CommandAutocomplete';
 import { Tooltip } from '../ui/Tooltip';
 import { isImeComposing } from '../../utils/imeComposing';
+import { ACCENT_BUTTON, ACCENT_FILL, GLAZE_PILL } from '../ui/glazeButtons';
 
 type Category = CommandDefinition['category'];
 type RailKey = 'all' | Category;
@@ -164,6 +165,17 @@ export const CommandBrowser = ({
     const pool = q || rail === 'all' ? commands : commands.filter((c) => c.category === rail);
     return CATEGORY_ORDER.flatMap((cat) => pool.filter((c) => c.category === cat && matches(c, q)));
   }, [commands, rail, q]);
+  // Runs of one category, each row keeping its index in `visible` (selection
+  // and the row refs are by that index).
+  const sections = useMemo(() => {
+    const out: { category: (typeof visible)[number]['category']; rows: { cmd: (typeof visible)[number]; index: number }[] }[] = [];
+    visible.forEach((cmd, index) => {
+      const last = out[out.length - 1];
+      if (last && last.category === cmd.category) last.rows.push({ cmd, index });
+      else out.push({ category: cmd.category, rows: [{ cmd, index }] });
+    });
+    return out;
+  }, [visible]);
 
   useEffect(() => {
     const t = setTimeout(() => inputRef.current?.focus({ preventScroll: true }), 30);
@@ -228,7 +240,7 @@ export const CommandBrowser = ({
   const grouped = q || rail === 'all';
 
   const searchBar = (
-    <div className="relative z-10 flex items-center gap-2 border-b border-white/5 px-3 py-2.5">
+    <div className="relative z-10 flex items-center gap-2 border-b border-white/[0.06] px-3 py-2.5">
       <Search size={14} className="flex-shrink-0 text-white/40" />
       <input
         ref={inputRef}
@@ -247,7 +259,7 @@ export const CommandBrowser = ({
           type="button"
           onClick={toggleExpanded}
           aria-label={expanded ? 'Shrink the command menu' : 'Expand the command menu'}
-          className="flex h-6 w-6 items-center justify-center rounded-md text-white/45 transition-colors hover:bg-white/[0.06] hover:text-white/90"
+          className={`${GLAZE_PILL} flex h-6 w-6 items-center justify-center`}
         >
           {expanded ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
         </button>
@@ -257,7 +269,7 @@ export const CommandBrowser = ({
           type="button"
           onClick={onClose}
           aria-label="Close"
-          className="flex h-6 w-6 items-center justify-center rounded-md text-white/45 transition-colors hover:bg-white/[0.06] hover:text-white/90"
+          className={`${GLAZE_PILL} flex h-6 w-6 items-center justify-center`}
         >
           <X size={14} />
         </button>
@@ -269,7 +281,7 @@ export const CommandBrowser = ({
 
   const railColumn = (
     <div
-      className={`relative flex flex-shrink-0 flex-col border-r border-white/5 py-2 ${
+      className={`relative flex flex-shrink-0 flex-col border-r border-white/[0.06] py-2 ${
         expanded ? 'w-44 gap-0.5 px-2' : 'w-11 items-center gap-1'
       }`}
     >
@@ -323,7 +335,7 @@ export const CommandBrowser = ({
   const list = (
     <div
       ref={listRef}
-      className={`custom-scrollbar min-w-0 overflow-y-auto px-2 pb-2 ${expanded ? 'w-[300px] flex-shrink-0 border-r border-white/5' : 'flex-1'}`}
+      className={`custom-scrollbar min-w-0 overflow-y-auto px-2 pb-2 ${expanded ? 'w-[300px] flex-shrink-0 border-r border-white/[0.06]' : 'flex-1'}`}
     >
       {!q && <div className="px-2 pb-1 pt-2.5 text-[11px] leading-snug text-white/45">{railBlurb}</div>}
       {visible.length === 0 && (
@@ -331,123 +343,128 @@ export const CommandBrowser = ({
           Nothing matches. Try a word from what you want to do, like ban, slow or reminder.
         </div>
       )}
-      {visible.map((cmd, index) => {
-        const first = index === 0 || visible[index - 1].category !== cmd.category;
-        const isSel = index === selected;
-        const lock = lockFor(cmd, isModerator, isBroadcaster);
-        return (
-          <div key={`${cmd.category}:${cmd.name}`}>
-            {first && grouped && (
-              <div
-                className="sticky top-0 z-[1] -mx-2 mb-0.5 mt-1.5 px-4 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/40 backdrop-blur-md"
-                // Rides the Glassiness slider like the panel under it: rows
-                // scroll beneath this header, and at Glassiness 0 the blur is
-                // stripped globally, so a fixed 88% would ghost them through.
-                style={{
-                  backgroundColor:
-                    'color-mix(in srgb, var(--color-background) calc(88% + (1 - var(--glass-strength)) * 12%), transparent)',
-                }}
-              >
-                {RAIL.find((r) => r.key === cmd.category)?.label ?? cmd.category}
-              </div>
-            )}
+      {sections.map((section) => (
+        // One block per category, so its heading stays pinned while any of the
+        // category's rows are on screen and the next heading then takes over.
+        <div key={section.category}>
+          {grouped && (
             <div
-              ref={(el) => {
-                rowRefs.current[index] = el;
+              className="sticky top-0 z-[1] -mx-2 mb-0.5 mt-1.5 px-4 py-1 text-[11px] font-semibold uppercase tracking-wider text-white/50 backdrop-blur-md"
+              // Rides the Glassiness slider like the panel under it: rows
+              // scroll beneath this header, and at Glassiness 0 the blur is
+              // stripped globally, so a fixed 88% would ghost them through.
+              // Inside a flyout it takes the flyout's own fill instead.
+              style={{
+                background:
+                  'var(--flyout-heading-fill, color-mix(in srgb, var(--color-background) calc(88% + (1 - var(--glass-strength)) * 12%), transparent))',
               }}
-              role="option"
-              aria-selected={isSel}
-              tabIndex={-1}
-              onMouseEnter={() => setSelected(index)}
-              onClick={() => (lock ? setSelected(index) : onPick(cmd))}
-              className={`my-0.5 rounded-lg border px-3 py-2 transition-colors ${lock ? 'cursor-default' : 'cursor-pointer'} ${
-                isSel
-                  ? 'border-white/10 bg-white/[0.06] shadow-[inset_0_0_20px_rgba(255,255,255,0.02)]'
-                  : 'border-transparent hover:bg-white/[0.03]'
-              }`}
             >
-              <div className="flex items-start justify-between gap-2">
-                <span
-                  className={`min-w-0 flex-1 whitespace-normal break-words text-[13px] font-semibold leading-5 ${
-                    lock ? 'text-white/90 opacity-50' : 'text-white/90'
-                  }`}
-                >
-                  {renderCommandUsage(cmd.usage)}
-                </span>
-                {lock && (
-                  <span className="mt-0.5 inline-flex flex-shrink-0 items-center gap-1 rounded-md border border-amber-400/35 bg-amber-400/[0.06] px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-amber-200/80">
-                    <Lock size={9} />
-                    {lock.tag}
-                  </span>
-                )}
-                {!lock && cmd.local && (
-                  <span className="mt-0.5 flex-shrink-0 rounded-md bg-white/[0.06] px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-white/45">
-                    StreamNook
-                  </span>
-                )}
-              </div>
-              <div
-                className={`mt-0.5 text-[11.5px] leading-snug ${lock ? 'text-white/35' : 'text-textSecondary'} ${expanded ? 'line-clamp-2' : ''}`}
-              >
-                {cmd.description}
-              </div>
-              {!expanded && (
-                <AnimatePresence initial={false}>
-                  {isSel && (
-                    <motion.div
-                      key="more"
-                      initial={{ height: 0, opacity: 0 }}
-                      animate={{ height: 'auto', opacity: 1 }}
-                      exit={{ height: 0, opacity: 0 }}
-                      transition={{ duration: 0.16, ease: 'easeOut' }}
-                      className="overflow-hidden"
-                    >
-                      <div className="mt-2 flex flex-col gap-2 border-t border-white/[0.06] pt-2">
-                        {cmd.details && <div className="text-[11.5px] leading-snug text-white/70">{cmd.details}</div>}
-                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10.5px] text-white/45">
-                          <span>{WHO[cmd.category]}</span>
-                          <span>{cmd.local ? 'Runs in StreamNook only, nothing is sent to chat' : 'Sent to Twitch'}</span>
-                        </div>
-                        {cmd.examples && cmd.examples.length > 0 && (
-                          <div className="flex flex-wrap gap-1.5">
-                            {cmd.examples.map((ex) =>
-                              lock ? (
-                                <code
-                                  key={ex}
-                                  className="rounded-md border border-white/[0.06] px-2 py-1 font-mono text-[11px] text-white/45"
-                                >
-                                  {ex}
-                                </code>
-                              ) : (
-                                <button
-                                  key={ex}
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    onInsertText(ex);
-                                  }}
-                                  className="glass-button rounded-md px-2 py-1 font-mono text-[11px] text-textPrimary"
-                                  title="Put this in the chat box"
-                                >
-                                  {ex}
-                                </button>
-                              ),
-                            )}
-                          </div>
-                        )}
-                        <div className="flex items-center gap-1.5 text-[10.5px] text-white/40">
-                          {lock ? <Lock size={11} className="text-amber-300/80" /> : <CornerDownLeft size={11} />}
-                          <span>{lock ? lock.line : `Enter or click puts /${cmd.name} in the box`}</span>
-                        </div>
-                      </div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              )}
+              {RAIL.find((r) => r.key === section.category)?.label ?? section.category}
             </div>
-          </div>
-        );
-      })}
+          )}
+          {section.rows.map(({ cmd, index }) => {
+            const isSel = index === selected;
+            const lock = lockFor(cmd, isModerator, isBroadcaster);
+            return (
+              <div
+                key={`${cmd.category}:${cmd.name}`}
+                ref={(el) => {
+                  rowRefs.current[index] = el;
+                }}
+                role="option"
+                aria-selected={isSel}
+                tabIndex={-1}
+                onMouseEnter={() => setSelected(index)}
+                onClick={() => (lock ? setSelected(index) : onPick(cmd))}
+                className={`my-0.5 rounded-lg border px-3 py-2 transition-colors ${lock ? 'cursor-default' : 'cursor-pointer'} ${
+                  isSel
+                    ? 'border-transparent bg-white/[0.08]'
+                    : 'border-transparent hover:bg-white/[0.06]'
+                }`}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <span
+                    className={`min-w-0 flex-1 whitespace-normal break-words text-[13px] font-semibold leading-5 ${
+                      lock ? 'text-white/90 opacity-50' : 'text-white/90'
+                    }`}
+                  >
+                    {renderCommandUsage(cmd.usage)}
+                  </span>
+                  {lock && (
+                    <span className="mt-0.5 inline-flex flex-shrink-0 items-center gap-1 rounded-md border border-amber-400/35 bg-amber-400/[0.06] px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-amber-200/80">
+                      <Lock size={9} />
+                      {lock.tag}
+                    </span>
+                  )}
+                  {!lock && cmd.local && (
+                    <span className="mt-0.5 flex-shrink-0 rounded-md bg-white/[0.06] px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-white/45">
+                      StreamNook
+                    </span>
+                  )}
+                </div>
+                <div
+                  className={`mt-0.5 text-[11.5px] leading-snug ${lock ? 'text-white/35' : 'text-textSecondary'} ${expanded ? 'line-clamp-2' : ''}`}
+                >
+                  {cmd.description}
+                </div>
+                {!expanded && (
+                  <AnimatePresence initial={false}>
+                    {isSel && (
+                      <motion.div
+                        key="more"
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: 'auto', opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        transition={{ duration: 0.16, ease: 'easeOut' }}
+                        className="overflow-hidden"
+                      >
+                        <div className="mt-2 flex flex-col gap-2 border-t border-white/[0.06] pt-2">
+                          {cmd.details && <div className="text-[11.5px] leading-snug text-white/70">{cmd.details}</div>}
+                          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10.5px] text-white/45">
+                            <span>{WHO[cmd.category]}</span>
+                            <span>{cmd.local ? 'Runs in StreamNook only, nothing is sent to chat' : 'Sent to Twitch'}</span>
+                          </div>
+                          {cmd.examples && cmd.examples.length > 0 && (
+                            <div className="flex flex-wrap gap-1.5">
+                              {cmd.examples.map((ex) =>
+                                lock ? (
+                                  <code
+                                    key={ex}
+                                    className="rounded-md border border-white/[0.06] px-2 py-1 font-mono text-[11px] text-white/45"
+                                  >
+                                    {ex}
+                                  </code>
+                                ) : (
+                                  <Tooltip key={ex} content="Put this in the chat box" describe>
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        onInsertText(ex);
+                                      }}
+                                      className={`${GLAZE_PILL} h-6 px-2.5 font-mono text-[11px]`}
+                                    >
+                                      {ex}
+                                    </button>
+                                  </Tooltip>
+                                ),
+                              )}
+                            </div>
+                          )}
+                          <div className="flex items-center gap-1.5 text-[10.5px] text-white/40">
+                            {lock ? <Lock size={11} className="text-amber-300/80" /> : <CornerDownLeft size={11} />}
+                            <span>{lock ? lock.line : `Enter or click puts /${cmd.name} in the box`}</span>
+                          </div>
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ))}
     </div>
   );
 
@@ -456,7 +473,7 @@ export const CommandBrowser = ({
     <div className="custom-scrollbar flex min-w-0 flex-1 flex-col gap-4 overflow-y-auto px-6 py-5">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-white/40">
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-white/50">
             {RAIL.find((r) => r.key === current.category)?.label ?? current.category}
           </div>
           <div className="mt-1 whitespace-normal break-words text-[19px] font-semibold leading-7 text-textPrimary">
@@ -472,7 +489,8 @@ export const CommandBrowser = ({
           <button
             type="button"
             onClick={() => onPick(current)}
-            className="glass-button inline-flex flex-shrink-0 items-center gap-2 rounded-lg px-3 py-1.5 text-[12.5px] font-medium text-textPrimary"
+            className={`${ACCENT_BUTTON} inline-flex h-8 flex-shrink-0 items-center gap-2 px-3.5 !text-[12.5px]`}
+            style={ACCENT_FILL}
           >
             <CornerDownLeft size={13} />
             Put /{current.name} in the box
@@ -491,12 +509,12 @@ export const CommandBrowser = ({
       </dl>
       {current.examples && current.examples.length > 0 && (
         <div className="flex flex-col gap-1.5">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-white/40">
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-white/50">
             {currentLock ? 'Examples' : 'Try one'}
           </div>
           {current.examples.map((ex) =>
             currentLock ? (
-              <div key={ex} className="glass-tile flex items-center gap-3 px-3 py-2 opacity-70">
+              <div key={ex} className="flex items-center gap-3 rounded-lg border border-white/[0.06] px-3 py-2 opacity-70">
                 <code className="min-w-0 flex-1 break-all font-mono text-[12px] text-white/60">{ex}</code>
               </div>
             ) : (
@@ -504,7 +522,7 @@ export const CommandBrowser = ({
                 key={ex}
                 type="button"
                 onClick={() => onInsertText(ex)}
-                className="glass-tile flex items-center justify-between gap-3 px-3 py-2 text-left transition-colors hover:bg-white/[0.04]"
+                className={`${GLAZE_PILL} flex items-center justify-between gap-3 px-4 py-2 text-left`}
               >
                 <code className="min-w-0 flex-1 break-all font-mono text-[12px] text-textPrimary">{ex}</code>
                 <span className="flex-shrink-0 text-[10.5px] text-white/40">Insert</span>
@@ -521,7 +539,7 @@ export const CommandBrowser = ({
   );
 
   const footer = (
-    <div className="flex items-center justify-between gap-2 border-t border-white/5 px-3 py-2 text-[10.5px] text-white/40">
+    <div className="flex items-center justify-between gap-2 border-t border-white/[0.06] px-3 py-2 text-[10.5px] text-white/40">
       <span className="tabular-nums">
         {visible.length} {visible.length === 1 ? 'command' : 'commands'}
         {q ? ' match' : ''}
@@ -546,7 +564,7 @@ export const CommandBrowser = ({
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
         transition={{ duration: 0.15 }}
-        className="fixed inset-0 z-[200] flex items-center justify-center bg-black/45 p-6"
+        className="fixed inset-0 z-[calc(var(--sn-z-over-player-lift,0)_+_200)] flex items-center justify-center bg-black/45 p-6"
       >
         <motion.div
           ref={panelRef}
@@ -557,7 +575,7 @@ export const CommandBrowser = ({
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: 10, scale: 0.98 }}
           transition={{ duration: 0.18, ease: 'easeOut' }}
-          className="sn-popover flex h-[min(680px,90vh)] w-[min(960px,96vw)] flex-col overflow-hidden"
+          className="glass-flyout rounded-xl !p-0 flex h-[min(680px,90vh)] w-[min(960px,96vw)] flex-col overflow-hidden"
         >
           {searchBar}
           <div className="flex min-h-0 flex-1">

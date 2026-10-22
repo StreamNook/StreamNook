@@ -6,6 +6,8 @@
 //! person reads ("kay_lee timed out gus for 10m: spoilers"), and pushed as
 //! `room-mod-log` so an open sheet follows along. A ban or timeout carries
 //! the chatter's id, so the sheet can offer Unban through `moderate_chatter`.
+//! Chat in every window reads the same event to name the moderator and the
+//! reason on a struck message.
 //!
 //! In memory only: the log is the room's live picture while the app runs.
 
@@ -24,6 +26,7 @@ pub struct LogEntry {
     pub channel: String,
     /// Twitch's action name: "ban", "timeout", "unban", "untimeout", "delete",
     /// "warn", "clear", "slow", "followers", "emoteonly", "subscribers", ...
+    /// and the shared chat twins ("shared_chat_ban", "shared_chat_timeout", ...).
     pub action: String,
     pub moderator: String,
     /// The chatter acted on, when there is one.
@@ -33,6 +36,11 @@ pub struct LogEntry {
     pub line: String,
     /// The reason or the deleted message, quoted under the line.
     pub quote: Option<String>,
+    /// The moderator's reason alone (ban, timeout, warn), never deleted text,
+    /// so chat can name it beside a struck message.
+    pub reason: Option<String>,
+    /// The deleted message's id, for a delete.
+    pub message_id: Option<String>,
     pub at_ms: i64,
     /// A ban or timeout that Unban would lift.
     pub liftable: bool,
@@ -66,11 +74,21 @@ pub fn entry_from(event: &Value, at_ms: i64) -> Option<LogEntry> {
     let moderator = name(event, "moderator_user").unwrap_or_else(|| "A moderator".to_string());
     // The action's own object carries the chatter and the details.
     let detail = event.get(action.as_str()).filter(|d| d.is_object());
+    // A shared chat action carries the same object as its plain twin and
+    // happened in another channel of the session.
+    let shared = action.strip_prefix("shared_chat_");
+    let kind = shared.unwrap_or(action.as_str());
     let target = detail.and_then(|d| name(d, "user"));
     let target_id = detail.and_then(|d| s(d, "user_id")).map(str::to_string);
     let reason = detail.and_then(|d| s(d, "reason")).map(str::to_string);
+    let reason_only = if matches!(kind, "ban" | "timeout" | "warn") { reason.clone() } else { None };
+    let message_id = if kind == "delete" {
+        detail.and_then(|d| s(d, "message_id")).map(str::to_string)
+    } else {
+        None
+    };
     let who = target.clone().unwrap_or_else(|| "someone".to_string());
-    let (line, quote, liftable) = match action.as_str() {
+    let (line, quote, liftable) = match kind {
         "ban" => (format!("{moderator} banned {who}"), reason, true),
         "timeout" => {
             let length = detail
@@ -141,6 +159,13 @@ pub fn entry_from(event: &Value, at_ms: i64) -> Option<LogEntry> {
         "deny_unban_request" => (format!("{moderator} denied {who}\u{2019}s unban request"), None, false),
         other => (format!("{moderator}: {}", other.replace('_', " ")), None, false),
     };
+    let is_shared = shared.is_some();
+    // Unban here would not lift a ban made in another channel.
+    let liftable = liftable && !is_shared;
+    let line = match (is_shared, name(event, "source_broadcaster_user")) {
+        (true, Some(source)) => format!("{line} in {source}\u{2019}s chat"),
+        _ => line,
+    };
     Some(LogEntry {
         id: format!("{channel}-{at_ms}-{action}-{}", target_id.as_deref().unwrap_or("")),
         channel,
@@ -150,6 +175,8 @@ pub fn entry_from(event: &Value, at_ms: i64) -> Option<LogEntry> {
         target_id,
         line,
         quote,
+        reason: reason_only,
+        message_id,
         at_ms,
         liftable,
     })
@@ -237,9 +264,52 @@ mod tests {
         assert_eq!(t.line, "Kay blocked a phrase");
         assert_eq!(t.quote.as_deref(), Some("bad, worse"));
 
-        let odd = json!({ "broadcaster_user_login": "c", "action": "shared_chat_ban" });
-        assert_eq!(entry_from(&odd, AT).unwrap().line, "A moderator: shared chat ban");
+        let odd = json!({ "broadcaster_user_login": "c", "action": "brand_new_thing" });
+        assert_eq!(entry_from(&odd, AT).unwrap().line, "A moderator: brand new thing");
         assert!(entry_from(&json!({ "action": "ban" }), AT).is_none(), "no channel, nothing kept");
+    }
+
+    #[test]
+    fn the_reason_stands_apart_from_deleted_text() {
+        let ban = json!({ "broadcaster_user_login": "c", "moderator_user_name": "Kay", "action": "ban",
+                          "ban": { "user_id": "42", "user_login": "gus", "reason": "spam" } });
+        let b = entry_from(&ban, AT).unwrap();
+        assert_eq!(b.reason.as_deref(), Some("spam"));
+        assert_eq!(b.quote.as_deref(), Some("spam"));
+        assert_eq!(b.message_id, None);
+
+        let warn = json!({ "broadcaster_user_login": "c", "moderator_user_name": "Kay", "action": "warn",
+                           "warn": { "user_id": "42", "user_login": "gus", "reason": "be nice" } });
+        assert_eq!(entry_from(&warn, AT).unwrap().reason.as_deref(), Some("be nice"));
+
+        let del = json!({ "broadcaster_user_login": "c", "moderator_user_name": "Kay", "action": "delete",
+                          "delete": { "user_id": "42", "user_login": "gus", "message_id": "m-1",
+                                      "message_body": "the boss dies" } });
+        let d = entry_from(&del, AT).unwrap();
+        assert_eq!(d.reason, None, "deleted text is never a reason");
+        assert_eq!(d.quote.as_deref(), Some("the boss dies"));
+        assert_eq!(d.message_id.as_deref(), Some("m-1"));
+    }
+
+    #[test]
+    fn a_shared_chat_ban_reads_like_a_ban_in_the_other_chat() {
+        let ev = json!({
+            "broadcaster_user_login": "host", "moderator_user_name": "Kay", "action": "shared_chat_timeout",
+            "source_broadcaster_user_login": "partner", "source_broadcaster_user_name": "Partner",
+            "shared_chat_timeout": { "user_id": "42", "user_login": "gus", "reason": "spoilers",
+                                     "expires_at": iso(AT + 600_000) }
+        });
+        let e = entry_from(&ev, AT).unwrap();
+        assert_eq!(e.channel, "host");
+        assert_eq!(e.action, "shared_chat_timeout");
+        assert_eq!(e.line, "Kay timed out gus for 10m in Partner\u{2019}s chat");
+        assert_eq!(e.target_id.as_deref(), Some("42"));
+        assert_eq!(e.reason.as_deref(), Some("spoilers"));
+        assert!(!e.liftable, "Unban here would not lift it");
+
+        let ban = json!({ "broadcaster_user_login": "host", "moderator_user_name": "Kay", "action": "shared_chat_ban",
+                          "shared_chat_ban": { "user_id": "7", "user_login": "cy" } });
+        assert_eq!(entry_from(&ban, AT).unwrap().line, "Kay banned cy");
     }
 
     #[test]
