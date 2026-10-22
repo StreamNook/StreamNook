@@ -69,11 +69,16 @@ fn room_set() -> EmoteSet {
         emote(EmoteProvider::BTTV, "bc-ez", "EZ"),
         // And loses to the channel's own 7TV catJAM.
         emote(EmoteProvider::BTTV, "bc-catjam", "catJAM"),
+        // FFZ beats BetterTTV, among the channel's rows and among globals.
+        emote(EmoteProvider::BTTV, "bc-dup", "Dup"),
+        global(emote(EmoteProvider::BTTV, "bg-gdup", "GDup")),
     ];
     set.ffz = vec![
         ffz_flip,
         // A channel FFZ Clap beats 7TV's global Clap.
         emote(EmoteProvider::FFZ, "fc-clap", "Clap"),
+        emote(EmoteProvider::FFZ, "fc-dup", "Dup"),
+        global(emote(EmoteProvider::FFZ, "fg-gdup", "GDup")),
     ];
     set
 }
@@ -119,6 +124,14 @@ fn every_word_becomes_the_emote_the_7tv_extension_draws() {
             ("LULW", "bg-lul"),      // a global nobody shadows
         ])
     );
+}
+
+#[test]
+fn ffz_beats_betterttv_of_the_same_name() {
+    // The 7TV extension's order, kept on purpose (Brandon, 2026-10-21).
+    IrcService::install_parse_lookup_for_test(ROOM, &room_set());
+    let got = emotes_of(&parse(&line("g6", "1", "", "Dup GDup")));
+    assert_eq!(got, pairs(&[("Dup", "fc-dup"), ("GDup", "fg-gdup")]));
 }
 
 #[test]

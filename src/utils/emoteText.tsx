@@ -5,21 +5,22 @@ import type { Emote, EmoteSet } from '../services/emoteService';
 import type { MessageSegment } from '../services/twitchChat';
 import type { ProviderId } from '../types/providers';
 import { Tooltip } from '../components/ui/Tooltip';
+import { listsByPrecedence } from './emotePrecedence';
 
 /** Which emote each word of one text shows, by word. */
 export type EmoteWordMap = ReadonlyMap<string, Emote>;
 
 const NO_WORDS: EmoteWordMap = new Map();
 
-// Flatten an EmoteSet into a single name -> emote lookup. Insertion order is
-// reverse priority (ffz, bttv, 7tv, twitch, later wins). Only for platforms
-// Rust does not cut plain text for yet (Kick, YouTube): a Twitch text's emotes
-// come from `parse_text_segments`, through `useTextEmotes`.
+// Flatten an EmoteSet into a single name -> emote lookup, a shared name going
+// to the emote chat draws for it (listsByPrecedence, first wins). Only for
+// platforms Rust does not cut plain text for yet (Kick, YouTube): a Twitch
+// text's emotes come from `parse_text_segments`, through `useTextEmotes`.
 export function buildEmoteNameMap(emotes: EmoteSet | null | undefined): Map<string, Emote> {
   const map = new Map<string, Emote>();
   if (!emotes) return map;
-  for (const list of [emotes.ffz, emotes.bttv, emotes['7tv'], emotes.twitch]) {
-    for (const e of list) map.set(e.name, e);
+  for (const list of listsByPrecedence(emotes, { withPlatformEmotes: false })) {
+    for (const e of list) if (!map.has(e.name)) map.set(e.name, e);
   }
   return map;
 }

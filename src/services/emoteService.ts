@@ -5,6 +5,7 @@ import { convertFileSrc } from '@tauri-apps/api/core';
 import { Logger } from '../utils/logger';
 import { onAssetsCached, requestAssetCaching, setAssetCacheBurst, forgetAssetRequests } from './assetCacheQueue';
 import { IS_MOBILE } from '../utils/platform';
+import { listsByPrecedence } from '../utils/emotePrecedence';
 export interface Emote {
   id: string;
   name: string;
@@ -67,23 +68,21 @@ const cachedEmoteFiles: Map<string, string> = new Map();
 // Lazily-built per-set name indexes, keyed by set identity. Emote sets are only
 // ever replaced wholesale (never mutated in place), so a WeakMap entry lives
 // exactly as long as its set and a refresh/channel switch drops it with the
-// old object. Insertion is first-wins. Twitch's own emotes come first: a name
-// Twitch would tag is Twitch's emote, whatever a third-party set calls the
-// same name (Rust's parser applies the same rule to tagged spans), then the
-// third-party sets in 7TV > BTTV > FFZ order.
+// old object. Insertion is first-wins, in the order Rust's chat parser draws a
+// shared name (listsByPrecedence): Twitch's own emotes, then a channel's own
+// third-party emotes before any global, 7TV > FFZ > BTTV inside each.
 const emoteLookupCache = new WeakMap<
   EmoteSet,
   { byName: Map<string, Emote>; lowerNames: Set<string> }
 >();
-const LOOKUP_ORDER = ['twitch', '7tv', 'bttv', 'ffz', 'kick', 'youtube'] as const;
 
 export function getEmoteLookup(set: EmoteSet): { byName: Map<string, Emote>; lowerNames: Set<string> } {
   let entry = emoteLookupCache.get(set);
   if (!entry) {
     const byName = new Map<string, Emote>();
     const lowerNames = new Set<string>();
-    for (const provider of LOOKUP_ORDER) {
-      for (const e of set[provider] ?? []) {
+    for (const list of listsByPrecedence(set)) {
+      for (const e of list) {
         if (!byName.has(e.name)) byName.set(e.name, e);
         lowerNames.add(e.name.toLowerCase());
       }

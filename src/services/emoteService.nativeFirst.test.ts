@@ -32,24 +32,42 @@ const set: EmoteSet = {
   '7tv': [
     { id: '7tv-xqcl', name: 'xqcL', url: 'https://cdn.7tv.app/emote/7tv-xqcl/1x.avif', provider: '7tv' },
     { id: '7tv-clash', name: 'Clash', url: 'https://cdn.7tv.app/emote/7tv-clash/1x.avif', provider: '7tv' },
+    { id: '7tv-g-ez', name: 'EZ', url: 'https://cdn.7tv.app/emote/7tv-g-ez/1x.avif', provider: '7tv', emote_type: 'global' },
   ],
-  bttv: [{ id: 'bttv-clash', name: 'Clash', url: 'https://cdn.betterttv.net/emote/bttv-clash/1x', provider: 'bttv' }],
-  ffz: [{ id: 'ffz-xqcl', name: 'xqcL', url: 'https://cdn.frankerfacez.com/emote/1/1', provider: 'ffz' }],
+  bttv: [
+    { id: 'bttv-clash', name: 'Clash', url: 'https://cdn.betterttv.net/emote/bttv-clash/1x', provider: 'bttv' },
+    { id: 'bttv-ez', name: 'EZ', url: 'https://cdn.betterttv.net/emote/bttv-ez/1x', provider: 'bttv' },
+    { id: 'bttv-dup', name: 'Dup', url: 'https://cdn.betterttv.net/emote/bttv-dup/1x', provider: 'bttv' },
+    { id: 'bttv-g-dup', name: 'GDup', url: 'https://cdn.betterttv.net/emote/bttv-g-dup/1x', provider: 'bttv', emote_type: 'global' },
+  ],
+  ffz: [
+    { id: 'ffz-xqcl', name: 'xqcL', url: 'https://cdn.frankerfacez.com/emote/1/1', provider: 'ffz' },
+    { id: 'ffz-dup', name: 'Dup', url: 'https://cdn.frankerfacez.com/emote/2/1', provider: 'ffz' },
+    { id: 'ffz-g-dup', name: 'GDup', url: 'https://cdn.frankerfacez.com/emote/3/1', provider: 'ffz', emote_type: 'global' },
+  ],
   kick: [],
   youtube: [],
 };
 
-test('the chat row lookup resolves a shared name to the Twitch emote', () => {
+/** What Rust's chat parser draws for each shared name (EmoteLookup::build). */
+function expectChatOrder(lookup: (name: string) => string | undefined) {
+  assert.equal(lookup('xqcL'), '1035663');
+  // Third-party sets: 7TV > FFZ > BTTV, the 7TV extension's order.
+  assert.equal(lookup('Clash'), '7tv-clash');
+  assert.equal(lookup('Dup'), 'ffz-dup');
+  assert.equal(lookup('GDup'), 'ffz-g-dup');
+  // A channel's own emote beats any global of the same name.
+  assert.equal(lookup('EZ'), 'bttv-ez');
+}
+
+test('the chat row lookup resolves a shared name the way chat draws it', () => {
   const { byName } = getEmoteLookup(set);
-  assert.equal(byName.get('xqcL')?.id, '1035663');
-  // Third-party sets keep 7TV > BTTV > FFZ among themselves.
-  assert.equal(byName.get('Clash')?.id, '7tv-clash');
+  expectChatOrder((name) => byName.get(name)?.id);
 });
 
-test('the plain-text name map resolves a shared name to the Twitch emote', () => {
+test('the plain-text name map resolves a shared name the way chat draws it', () => {
   const map = buildEmoteNameMap(set);
-  assert.equal(map.get('xqcL')?.id, '1035663');
-  assert.equal(map.get('Clash')?.id, '7tv-clash');
+  expectChatOrder((name) => map.get(name)?.id);
 });
 
 test('a pinned message draws the emote Rust chose for each word', () => {
