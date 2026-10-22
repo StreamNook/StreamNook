@@ -14,7 +14,8 @@
 // button sends a command, we act on the element, and the element's own play /
 // pause events report the result back. State never flows the other way, so the
 // notification can never show "paused" over a stream that is still playing.
-import { isInPip, mediaSessionStart, mediaSessionStop } from '../nativeBridge';
+import { isInPip, mediaSessionPark, mediaSessionStart, mediaSessionStop } from '../nativeBridge';
+import { createStandDownWatch, surfaceLossAction } from './pausePolicy';
 import { useAppStore } from '../../stores/AppStore';
 import { Logger } from '../../utils/logger';
 
@@ -57,18 +58,44 @@ const surfaceGone = () => screenOff || document.hidden;
 
 /**
  * Whether the viewer turned Background play on (`video_player.background_mode`
- * "audio"). Picture-in-picture always comes first when leaving the app; this
- * only decides what happens once the video cannot float any more: with it on,
- * closing the PiP window keeps the audio playing behind the media
- * notification, with it off the window's X ends the stream.
+ * "audio"). PiP always comes first when leaving the app; this decides what
+ * happens when the video cannot float: on, the audio keeps going behind the
+ * media notification (PiP closed, screen locked, Home with no PiP); off,
+ * closing PiP ends the stream and locking or leaving pauses it.
  */
 export function keepsAudioAfterPip(): boolean {
   return useAppStore.getState().settings.video_player?.background_mode === 'audio';
 }
 
+// Set when a paused session has stood down (STAND_DOWN_AFTER_MS paused in the
+// background): the card and its service are gone so the OS can freeze the app.
+// A later paused report must not bring the card back; the next play does.
+let sessionParked = false;
+const standDownWatch = createStandDownWatch({
+  now: () => Date.now(),
+  schedule: (fn, ms) => {
+    const id = window.setTimeout(fn, ms);
+    return () => window.clearTimeout(id);
+  },
+  onDue: () => {
+    sessionParked = true;
+    Logger.info('[lockScreenAudio] paused in the background for 10 min; standing the media card down');
+    mediaSessionPark();
+  },
+});
+
 function pushState(playing: boolean): void {
   if (!current) return;
+  if (!playing && sessionParked) return;
+  if (playing) sessionParked = false;
   mediaSessionStart(current.title, current.artist, current.artUrl, playing);
+}
+
+/** Paused, hidden and not floating: the stand-down clock runs. Anything else stops it. */
+function reviewStandDown(): void {
+  const v = attached;
+  if (v && v.paused && !sessionParked && document.hidden && isInPip() !== true) standDownWatch.arm();
+  else standDownWatch.disarm();
 }
 
 /**
@@ -135,14 +162,35 @@ export function attachLockScreenAudio(video: HTMLVideoElement, info: NowPlaying)
     void useAppStore.getState().applyTransientQuality(q);
   };
 
+  // The player lost its surface (screen off, or hidden with no PiP).
+  // Background play decides: on keeps the audio (audio rendition), off pauses.
+  const surfaceLost = () => {
+    const v = attached;
+    const action = surfaceLossAction({
+      inPip: isInPip() === true,
+      playing: !!v && !v.paused,
+      backgroundPlay: keepsAudioAfterPip(),
+    });
+    if (action === 'downshift') {
+      downshift();
+    } else if (action === 'pause' && v) {
+      Logger.info('[lockScreenAudio] surface lost with Background play off; pausing');
+      v.pause();
+    }
+  };
+
   const onPlay = () => {
     pushState(true);
+    reviewStandDown();
     // A stream that started with no surface (raid while locked, background
     // restart) has to downshift on its first play; no screen-off event is
     // coming to do it.
     if (surfaceGone() && isInPip() !== true) downshift();
   };
-  const onPause = () => pushState(false);
+  const onPause = () => {
+    pushState(false);
+    reviewStandDown();
+  };
   // `ended` on a live stream means the broadcast stopped. Keeping a media
   // notification for a stream that is over is just litter.
   const onEnded = () => releaseLockScreenAudio();
@@ -180,24 +228,43 @@ export function attachLockScreenAudio(video: HTMLVideoElement, info: NowPlaying)
   //   - screen off/on, which can happen while the app is in the foreground.
   //   - the app being hidden, which covers backgrounding without PiP (the
   //     "minimize to audio" path) and does not fire for a screen lock in PiP.
-  const onVisibility = () => (document.hidden ? downshift() : restore());
+  // Re-check after the PiP hand-off settles: entering PiP also hides the page
+  // on some OEMs before isInPictureInPictureMode turns true.
+  let settleTimer: number | null = null;
+  const settleThenSurfaceLost = () => {
+    if (settleTimer !== null) window.clearTimeout(settleTimer);
+    settleTimer = window.setTimeout(() => {
+      settleTimer = null;
+      if (document.hidden) surfaceLost();
+    }, 600);
+  };
+  const onVisibility = () => {
+    if (document.hidden) settleThenSurfaceLost();
+    else restore();
+    reviewStandDown();
+  };
   // Closing the PiP window takes the surface away with no visibility change
   // (the app was already reported hidden while it floated). With background
   // play on the stream carries on, so it needs the audio rendition now.
   const onPipClosed = () => {
     if (keepsAudioAfterPip()) downshift();
+    reviewStandDown();
   };
-  window.addEventListener('sn:screen-off', downshift);
+  // Screen-off is unambiguous, so it acts at once (no PiP settle).
+  window.addEventListener('sn:screen-off', surfaceLost);
   window.addEventListener('sn:screen-on', restore);
   window.addEventListener('sn:pip-closed', onPipClosed);
   document.addEventListener('visibilitychange', onVisibility);
 
   detach = () => {
+    standDownWatch.disarm();
+    if (settleTimer !== null) window.clearTimeout(settleTimer);
+    settleTimer = null;
     video.removeEventListener('play', onPlay);
     video.removeEventListener('pause', onPause);
     video.removeEventListener('ended', onEnded);
     window.removeEventListener('sn:media-cmd', onCommand);
-    window.removeEventListener('sn:screen-off', downshift);
+    window.removeEventListener('sn:screen-off', surfaceLost);
     window.removeEventListener('sn:screen-on', restore);
     window.removeEventListener('sn:pip-closed', onPipClosed);
     document.removeEventListener('visibilitychange', onVisibility);
@@ -231,6 +298,8 @@ export function updateNowPlaying(info: NowPlaying): void {
  */
 export function releaseLockScreenAudio(): void {
   detach?.();
+  standDownWatch.disarm();
+  sessionParked = false;
   detach = null;
   attached = null;
   current = null;

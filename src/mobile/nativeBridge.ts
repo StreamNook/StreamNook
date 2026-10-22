@@ -29,6 +29,8 @@ interface SNBridge {
   consumePendingWhisper?(): string;
   mediaSessionStart?(title: string, artist: string, artUrl: string, playing: boolean): void;
   mediaSessionStop?(): void;
+  mediaSessionPark?(): void;
+  isPowerSaveMode?(): boolean;
   displayShortEdge?(): number;
   getScreenBrightness?(): number;
   setScreenBrightness?(level: number): void;
@@ -404,6 +406,32 @@ export function mediaSessionStop(): void {
   } catch {
     /* bridge absent */
   }
+}
+
+/**
+ * Stand a PAUSED session down after a long time in the background: the card
+ * and its service go, and the WebView gets its pause back so the OS can freeze
+ * the app. An older shell without it gets the plain stop.
+ */
+export function mediaSessionPark(): void {
+  try {
+    const b = bridge();
+    if (typeof b?.mediaSessionPark === 'function') b.mediaSessionPark();
+    else b?.mediaSessionStop?.();
+  } catch {
+    /* bridge absent */
+  }
+}
+
+/** System Battery Saver, read synchronously; null without the bridge. */
+export function isPowerSaveMode(): boolean | null {
+  try {
+    const b = bridge();
+    if (typeof b?.isPowerSaveMode === 'function') return b.isPowerSaveMode();
+  } catch {
+    /* bridge absent */
+  }
+  return null;
 }
 
 /**

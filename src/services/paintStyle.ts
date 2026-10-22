@@ -124,12 +124,18 @@ export function pickPaintLayerImage<
   return images.find((img) => img.scale === 1 && (!isAnimated || img.frameCount > 1));
 }
 
-const computeImageLayer = (layer: PaintLayer['ty'], opacity: number) => {
+const computeImageLayer = (layer: PaintLayer['ty'], opacity: number, still = false) => {
   if (layer.__typename !== 'PaintLayerTypeImage' || !layer.images) {
     return undefined;
   }
 
-  const img = pickPaintLayerImage(layer.images);
+  // Battery Saver: an animated layer draws 7TV's scale-1 `_static` still, from
+  // the CDN (the layer's cached file is the animated one). A layer that never
+  // moves keeps its ordinary pick and its cached file.
+  const goStill = still && layer.images.some((i) => i.frameCount > 1);
+  const img = goStill
+    ? (layer.images.find((i) => i.scale === 1 && i.frameCount <= 1) ?? layer.images.find((i) => i.scale === 1))
+    : pickPaintLayerImage(layer.images);
 
   if (!img) {
     return undefined;
@@ -137,7 +143,7 @@ const computeImageLayer = (layer: PaintLayer['ty'], opacity: number) => {
 
   // Use local URL if available (desktop cache); the hosted overlay falls to the
   // CDN url, which is exactly what a browser source wants.
-  const url = img.localUrl || img.url;
+  const url = goStill ? img.url : img.localUrl || img.url;
 
   return {
     opacity,
@@ -184,6 +190,7 @@ export const computePaintStyleUncached = (
   paint: PaintV4,
   userColor?: string,
   shadowMode: PaintShadowMode = 'all',
+  still = false,
 ): CSSProperties => {
   const layers = paint.data.layers
     .map((layer) => {
@@ -193,7 +200,7 @@ export const computePaintStyleUncached = (
         case 'PaintLayerTypeRadialGradient':
           return computeRadialGradientLayer(layer.ty, layer.opacity);
         case 'PaintLayerTypeImage':
-          return computeImageLayer(layer.ty, layer.opacity);
+          return computeImageLayer(layer.ty, layer.opacity, still);
         case 'PaintLayerTypeSingleColor':
           return computeSingleColorLayer(layer.ty, layer.opacity);
         default:
@@ -241,17 +248,19 @@ export const computePaintStyleUncached = (
 };
 
 // Compute the full CSS style for a paint.
-// Memoized: same (paintId, userColor, shadowMode) returns the same object ref.
+// Memoized: same (paintId, userColor, shadowMode, still) returns the same object ref.
+// `still` (Battery Saver) draws an image paint's first frame.
 export const computePaintStyle = (
   paint: PaintV4,
   userColor?: string,
   shadowMode: PaintShadowMode = 'all',
+  still = false,
 ): CSSProperties => {
   // Defensive: anonymous/test paints without an id fall through uncached.
   if (!paint?.id) {
-    return computePaintStyleUncached(paint, userColor, shadowMode);
+    return computePaintStyleUncached(paint, userColor, shadowMode, still);
   }
-  const key = `${paint.id}|${userColor ?? ''}|${shadowMode}`;
+  const key = `${paint.id}|${userColor ?? ''}|${shadowMode}|${still ? 's' : ''}`;
   const cached = paintStyleCache.get(key);
   if (cached) {
     // Touch-on-hit: re-insert to move to most-recent in Map iteration order.
@@ -259,7 +268,7 @@ export const computePaintStyle = (
     paintStyleCache.set(key, cached);
     return cached;
   }
-  const style = computePaintStyleUncached(paint, userColor, shadowMode);
+  const style = computePaintStyleUncached(paint, userColor, shadowMode, still);
   paintStyleCache.set(key, style);
   if (paintStyleCache.size > PAINT_STYLE_CACHE_MAX) {
     // Evict oldest (first key per insertion order).

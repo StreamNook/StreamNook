@@ -49,6 +49,18 @@ class MainActivity : TauriActivity() {
   @Volatile private var insetsJson: String = "{}"
   private var displayListener: DisplayManager.DisplayListener? = null
   private var screenReceiver: BroadcastReceiver? = null
+  private var powerSaveReceiver: BroadcastReceiver? = null
+
+  // What the page asked the display for (60 while a stream plays here, 0 for
+  // the system's choice) and whether Battery Saver is on. applyRefreshRate
+  // combines them: Battery Saver holds the whole window at 60 Hz, browsing too.
+  @Volatile private var webRefreshFps: Float = 0f
+  @Volatile private var powerSave: Boolean = false
+
+  // The active mode's size at the last sn:display-changed. Refresh-rate flips
+  // and rotations keep the size, so they are not reported as display changes.
+  private var lastModeW: Int = 0
+  private var lastModeH: Int = 0
 
   // Whether a stream is playing, so leaving the app enters system
   // picture-in-picture. Pushed from JS.
@@ -212,6 +224,36 @@ class MainActivity : TauriActivity() {
   }
 
   /**
+   * Push the refresh-rate request onto the window: 60 while Battery Saver is
+   * on, otherwise whatever the page asked for (60 while a stream plays, 0 for
+   * the system's choice). A concrete mode is named (the current size's mode
+   * nearest the rate) because this ROM ignored the bare rate hint; it changes
+   * cadence, never resolution. Skipped when nothing would change.
+   *
+   * Measured with a stream playing: RenderThread, the GPU process and the
+   * Viz compositor were the top three threads in the app process, together
+   * about three quarters of a core, because the phone was driving its 90 Hz
+   * mode and every frame was drawn at 90 while the video itself is 60 at
+   * most. A 60 Hz window draws a third fewer frames for the same picture.
+   * The rate hint alone registered on the window but the display director
+   * on this ROM kept its 90 Hz mode regardless (measured:
+   * `mAttrs ... preferredRefreshRate=60.0` while `mActiveModeId=7` stayed),
+   * hence the mode id. The panel goes back to whatever it prefers the moment
+   * playback ends (and Battery Saver is off).
+   */
+  private fun applyRefreshRate() {
+    runOnUiThread {
+      val fps = if (powerSave) 60f else webRefreshFps
+      val modeId = if (fps > 0f) nearestModeId(fps) else 0
+      val lp = window.attributes
+      if (lp.preferredRefreshRate == fps && lp.preferredDisplayModeId == modeId) return@runOnUiThread
+      lp.preferredRefreshRate = fps
+      lp.preferredDisplayModeId = modeId
+      window.attributes = lp
+    }
+  }
+
+  /**
    * Push the wanted bar icon colour onto the window.
    *
    * Note the inversion: the platform flag is named for the BACKGROUND it is
@@ -271,7 +313,22 @@ class MainActivity : TauriActivity() {
       // startForegroundService, not startService: from Android O a background
       // start of a plain service is illegal, and this can legitimately be called
       // while the activity is already pausing.
-      ContextCompat.startForegroundService(this@MainActivity, i)
+      try {
+        ContextCompat.startForegroundService(this@MainActivity, i)
+        // A start from the background (a raid or auto-switch after
+        // mediaSessionPark handed the WebView its pause back): onPause will not
+        // run again to undo that pause, so undo it here, as onPause would have.
+        runOnUiThread {
+          if (!lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) webView?.onResume()
+        }
+      } catch (e: Exception) {
+        // Android 12+ throws ForegroundServiceStartNotAllowedException for a
+        // start from the background (a play after the 10-minute stand-down,
+        // say). No card then, rather than a crash. A service already running
+        // (an update that failed) stays wanted.
+        if (!MediaPlaybackService.isRunning) MediaPlaybackService.webWanted = false
+        android.util.Log.w(NotifyRenderer.TAG, "media card not shown: $e")
+      }
     }
 
     /** Tear the session down when playback ends or the stream is closed. */
@@ -293,6 +350,26 @@ class MainActivity : TauriActivity() {
         startService(i)
       } catch (_: IllegalStateException) {
         /* already gone, or we are in the background with nothing running */
+      }
+    }
+
+    /**
+     * A PAUSED session left in the background (10 minutes, lockScreenAudio):
+     * drop the card and the service like mediaSessionStop, then hand the
+     * WebView back the pause wry gave it, which onPause undid only because the
+     * service was running. With no foreground service the OS can then freeze
+     * the process. Not for the ordinary stop: a raid or channel switch in the
+     * background stops and restarts the session back to back.
+     */
+    @JavascriptInterface
+    fun mediaSessionPark() {
+      mediaSessionStop()
+      runOnUiThread {
+        if (!MediaPlaybackService.wanted && !isInPictureInPictureMode &&
+          !lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+        ) {
+          webView?.onPause()
+        }
       }
     }
 
@@ -418,31 +495,25 @@ class MainActivity : TauriActivity() {
       }
     }
 
-    /**
-     * Ask the display for a refresh rate while a stream plays; 0 restores the
-     * system's choice.
-     *
-     * Measured with a stream playing: RenderThread, the GPU process and the
-     * Viz compositor were the top three threads in the app process, together
-     * about three quarters of a core, because the phone was driving its 90 Hz
-     * mode and every frame was drawn at 90 while the video itself is 60 at
-     * most. A 60 Hz window draws a third fewer frames for the same picture.
-     * The panel goes back to whatever it prefers the moment playback ends.
-     */
+    /** The page's refresh-rate request (60 while a stream plays, 0 to release).
+     *  Battery Saver can hold 60 over it; see applyRefreshRate. */
     @JavascriptInterface
     fun setPreferredRefreshRate(fps: Float) {
-      runOnUiThread {
-        val lp = window.attributes
-        lp.preferredRefreshRate = fps
-        // The rate hint alone registered on the window but the display
-        // director on this ROM kept its 90 Hz mode regardless (measured:
-        // `mAttrs ... preferredRefreshRate=60.0` while `mActiveModeId=7`
-        // stayed). Naming a concrete mode is the stronger request: the mode
-        // with the panel's CURRENT size and the nearest rate to what was
-        // asked, so this never changes resolution, only cadence. 0 clears it.
-        lp.preferredDisplayModeId = if (fps > 0f) nearestModeId(fps) else 0
-        window.attributes = lp
+      webRefreshFps = fps
+      applyRefreshRate()
+    }
+
+    /** System Battery Saver, for the page's boot read; flips arrive as sn:low-power.
+     *  A read that finds a flip the receiver missed (the process was cached)
+     *  takes it, so the window's rate follows too. */
+    @JavascriptInterface
+    fun isPowerSaveMode(): Boolean {
+      val on = (getSystemService(Context.POWER_SERVICE) as? PowerManager)?.isPowerSaveMode == true
+      if (on != powerSave) {
+        powerSave = on
+        applyRefreshRate()
       }
+      return on
     }
 
     /** Mark whether leaving the app should enter system picture-in-picture.
@@ -962,6 +1033,7 @@ class MainActivity : TauriActivity() {
     observeFoldPosture(webView)
     observeDisplayMode(webView)
     observeScreenState(webView)
+    observePowerSave(webView)
 
     // Transport controls (lock screen, shade, headset button, audio-focus loss)
     // arrive on a binder thread inside the service. Hand them to the web layer,
@@ -1080,14 +1152,59 @@ class MainActivity : TauriActivity() {
     ContextCompat.registerReceiver(this, screenReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
   }
 
+  /**
+   * System Battery Saver -> the page (sn:low-power) and the window (60 Hz).
+   * Runtime-registered like the screen receiver; NOT_EXPORTED. The page also
+   * reads isPowerSaveMode() on boot and on every return to the foreground.
+   */
+  private fun observePowerSave(webView: WebView) {
+    val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return
+    powerSave = pm.isPowerSaveMode
+    applyRefreshRate()
+    powerSaveReceiver = object : BroadcastReceiver() {
+      override fun onReceive(context: Context?, intent: Intent?) {
+        val on = pm.isPowerSaveMode
+        if (on == powerSave) return
+        powerSave = on
+        applyRefreshRate()
+        webView.post {
+          webView.evaluateJavascript(
+            "window.dispatchEvent(new CustomEvent('sn:low-power',{detail:$on}))",
+            null,
+          )
+        }
+      }
+    }
+    ContextCompat.registerReceiver(
+      this,
+      powerSaveReceiver,
+      IntentFilter(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED),
+      ContextCompat.RECEIVER_NOT_EXPORTED,
+    )
+  }
+
   private fun observeDisplayMode(webView: WebView) {
     val dm = getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager ?: return
+    fun ourDisplay() = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) display else windowManager.defaultDisplay
+    ourDisplay()?.mode?.let {
+      lastModeW = it.physicalWidth
+      lastModeH = it.physicalHeight
+    }
     displayListener = object : DisplayManager.DisplayListener {
       override fun onDisplayAdded(displayId: Int) {}
       override fun onDisplayRemoved(displayId: Int) {}
       override fun onDisplayChanged(displayId: Int) {
-        // Fires for rotation and refresh-rate changes too. Cheap and idempotent
-        // on the JS side, so it is not worth filtering to mode changes only.
+        // Fires for rotation and refresh-rate changes too, and the 60 Hz
+        // request flips the rate every time a stream starts or stops. Only a
+        // change of our display's mode SIZE matters to the page (videoCap).
+        val d = ourDisplay() ?: return
+        if (displayId != d.displayId) return
+        val mode = d.mode
+        if (mode.physicalWidth == lastModeW && mode.physicalHeight == lastModeH) return
+        lastModeW = mode.physicalWidth
+        lastModeH = mode.physicalHeight
+        // A held rate names a mode id of the OLD size; pick this size's one.
+        applyRefreshRate()
         webView.post {
           webView.evaluateJavascript(
             "window.dispatchEvent(new Event('sn:display-changed'))",
@@ -1117,6 +1234,14 @@ class MainActivity : TauriActivity() {
       }
     }
     screenReceiver = null
+    powerSaveReceiver?.let {
+      try {
+        unregisterReceiver(it)
+      } catch (_: IllegalArgumentException) {
+        /* never registered */
+      }
+    }
+    powerSaveReceiver = null
     // A finishing activity (task swiped away, or the OS finishing us for real,
     // not a configuration change) must take its playback with it. wry never
     // calls WebView.destroy(), so the Chromium WebContents and the <video> in

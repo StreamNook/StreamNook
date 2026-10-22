@@ -80,8 +80,10 @@ function useReadingAwake(on: boolean, idleSecs: number): void {
 }
 
 /** `shown`: the tab is in front. It stays mounted behind the others (see
- *  MobileApp), and while hidden it holds nothing awake and draws no rows. */
-export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => {
+ *  MobileApp), and while hidden it holds nothing awake and draws no rows.
+ *  `idle`: in front but unseen (PiP, the app in the background): the list
+ *  holds still; keep-awake is untouched. */
+export const ChatsScreen: React.FC<{ shown?: boolean; idle?: boolean }> = ({ shown = true, idle = false }) => {
   const tabs = useChatTabsStore((s) => s.tabs);
   const activeChannel = useChatTabsStore((s) => s.activeChannel);
   const connection = useChatTabsStore((s) => s.connection);
@@ -392,7 +394,7 @@ export const ChatsScreen: React.FC<{ shown?: boolean }> = ({ shown = true }) => 
               </div>
             )}
             {hasPins && <div className="shrink-0" style={{ height: pinsBox }} />}
-            <MobileChatPane strip={false} paused={!shown} surface="chats" />
+            <MobileChatPane strip={false} paused={!shown} idle={idle} surface="chats" />
           </div>
         </>
       )}

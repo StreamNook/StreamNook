@@ -121,7 +121,7 @@ describe('the kept Chats screen', () => {
 
   it('is how the shell keeps Chats', () => {
     const shell = readFileSync(resolve(__dirname, 'MobileApp.tsx'), 'utf8');
-    expect(shell).toMatch(/<KeptSurface\b[^>]*\bshown=\{chatsShown\}[^>]*>\s*<ChatsScreen shown=\{chatsShown\} \/>/);
+    expect(shell).toMatch(/<KeptSurface\b[^>]*\bshown=\{chatsShown\}[^>]*>\s*<ChatsScreen shown=\{chatsShown\}[^>]*\/>/);
   });
 
   it('never pairs a display utility with the hidden state', () => {

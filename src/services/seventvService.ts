@@ -200,12 +200,12 @@ export async function fetchUserInventory(
 // Pick the best image URL from a V4 badge's images[] for a target scale. A
 // badge's id is NOT its image id in V4, so these API-provided URLs are the only
 // reliable source. Prefers the requested scale, the animated (non-_static)
-// form, and webp > avif > png > gif.
-const pickBadgeImage = (images: BadgeImageV4[] | undefined, scale: number): string | undefined => {
+// form (the `_static` still when `still`), and webp > avif > png > gif.
+const pickBadgeImage = (images: BadgeImageV4[] | undefined, scale: number, still = false): string | undefined => {
   if (!images?.length) return undefined;
   const rank = (img: BadgeImageV4): number => {
     let s = Math.abs((img.scale ?? 1) - scale) * 10;
-    if (img.url.includes('_static')) s += 3;
+    if (img.url.includes('_static') !== still) s += 3;
     const m = img.mime ?? '';
     s += m.includes('webp') ? 0 : m.includes('avif') ? 1 : m.includes('png') ? 2 : 4;
     return s;
@@ -213,7 +213,23 @@ const pickBadgeImage = (images: BadgeImageV4[] | undefined, scale: number): stri
   return [...images].sort((a, b) => rank(a) - rank(b))[0]?.url;
 };
 
-export const getBadgeImageUrl = (badge: BadgeV4): string => {
+// Whether a badge moves: a frame count says so when the API sent one; without
+// it, an animated badge is the one publishing a `_static` still beside a
+// webp/avif that is not.
+const badgeAnimates = (images: BadgeImageV4[] | undefined): boolean => {
+  if (!images?.length) return false;
+  if (images.some((img) => img.frameCount !== undefined)) return images.some((img) => (img.frameCount ?? 1) > 1);
+  const moving = images.some((img) => !img.url.includes('_static') && /webp|avif/.test(img.mime ?? img.url));
+  return moving && images.some((img) => img.url.includes('_static'));
+};
+
+export const getBadgeImageUrl = (badge: BadgeV4, still = false): string => {
+  // Battery Saver: an animated badge's published still, from the CDN (the disk
+  // cache holds the animated file). A badge that never moves keeps its cached file.
+  if (still && badgeAnimates(badge.images)) {
+    const url = pickBadgeImage(badge.images, 4, true);
+    if (url?.includes('_static')) return url;
+  }
   if (badge.localUrl) return badge.localUrl;
   return pickBadgeImage(badge.images, 4) ?? `https://cdn.7tv.app/badge/${badge.id}/4x.webp`;
 };

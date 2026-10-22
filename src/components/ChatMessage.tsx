@@ -47,6 +47,7 @@ import type { HighlightMatch } from '../utils/chatHighlightMatcher';
 import { useStreamerMode } from '../utils/streamerMode';
 import { sevenTvSrcSet, staticEmoteUrl, static7tvSrcSet } from '../utils/staticEmoteUrl';
 import { flashTitle } from '../utils/titleFlasher';
+import { useLowPower } from '../utils/lowPower';
 import { playSoundThrottled } from '../utils/notificationSound';
 import { chatterId, chatterProvider } from '../utils/chatterIdentity';
 import type { ProviderId } from '../types/providers';
@@ -528,6 +529,8 @@ const MentionSpan: React.FC<{
   onUsernameClick?: ChatMessageProps['onUsernameClick'];
 }> = ({ username, provider, label, onUsernameClick }) => {
   const shown = label ?? `@${username}`;
+  // Battery Saver draws the paint's first frame (utils/lowPower).
+  const stillPaints = useLowPower();
   // Subscribe to the specific user from the store (reactive updates)
   const cachedUser = useChatUserStore((state) => state.getUserByUsername(username, provider));
   
@@ -592,11 +595,11 @@ const MentionSpan: React.FC<{
   );
   const nameStyle = useMemo(() => {
     if (userPaint && paintMentionsInBody) {
-      return computePaintStyle(userPaint, userColor, paintShadowMode);
+      return computePaintStyle(userPaint, userColor, paintShadowMode, stillPaints);
     }
     // Use user's Twitch chat color as fallback
     return { color: userColor };
-  }, [userPaint, userColor, paintShadowMode, paintMentionsInBody]);
+  }, [userPaint, userColor, paintShadowMode, paintMentionsInBody, stillPaints]);
   
   const handleClick = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -723,6 +726,8 @@ function UsernameWithCosmetics({
   paintShadowMode: Parameters<typeof computePaintStyle>[2];
   onUsernameClick: ChatMessageProps['onUsernameClick'];
 }) {
+  // Battery Saver draws the paint's first frame (utils/lowPower).
+  const stillPaints = useLowPower();
   const [userCosmetics, setUserCosmetics] = useState<{ badges: any[]; paints: any[] } | null>(null);
   const [userBadges] = useState<Array<{ key: string; info: any }>>([]);
 
@@ -760,8 +765,8 @@ function UsernameWithCosmetics({
     if (!userPaint) {
       return { color: recipientBaseColor };
     }
-    return computePaintStyle(userPaint, recipientBaseColor, paintShadowMode);
-  }, [userPaint, recipientBaseColor, paintShadowMode]);
+    return computePaintStyle(userPaint, recipientBaseColor, paintShadowMode, stillPaints);
+  }, [userPaint, recipientBaseColor, paintShadowMode, stillPaints]);
 
   return (
     <span className="inline-flex items-center align-middle">
@@ -1222,6 +1227,9 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   // "Animate emotes: on hover" needs a live hover flag; the other modes never
   // write it, so rows do not re-render on pointer traffic unless asked.
   const animateEmotes = chatDesign?.animate_emotes ?? 'always';
+  // System Battery Saver (phone only, utils/lowPower): emotes, 7TV badges and
+  // paints draw their first frame, whatever Animate emotes says.
+  const stillEmotes = useLowPower();
   const [rowHovering, setRowHovering] = useState(false);
   // Twitch chat GIFs: shown, or a chip that reveals on click. Reveals are
   // per row and per GIF, and follow the Animate emotes mode the same way
@@ -1352,8 +1360,8 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     }
 
     // Use the new computePaintStyle function
-    return computePaintStyle(seventvPaint, effectiveColor, paintShadowMode);
-  }, [seventvPaint, effectiveColor, paintShadowMode]);
+    return computePaintStyle(seventvPaint, effectiveColor, paintShadowMode, stillEmotes);
+  }, [seventvPaint, effectiveColor, paintShadowMode, stillEmotes]);
 
   // Username prefix styling (normal messages only; action/"/me" stay plain).
   // The separator glyph sits between the name and the message; the name style
@@ -1473,7 +1481,8 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       // every emote from the CDN.
       // Static mode: the CDN's first-frame file, bypassing the animated disk
       // cache (a static URL under the animated key would corrupt it).
-      const wantStatic = !giant && (animateEmotes === 'never' || (animateEmotes === 'hover' && !rowHovering));
+      // Battery Saver stills the gigantified emote too, the costliest one.
+      const wantStatic = stillEmotes || (!giant && (animateEmotes === 'never' || (animateEmotes === 'hover' && !rowHovering)));
       const cachedEmoteUrl = !wantStatic && segment.emoteId && (!giant || emoteProvider === '7tv')
         ? getCachedEmoteUrl(segment.emoteId, emoteProvider, emoteTier)
         : undefined;

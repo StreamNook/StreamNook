@@ -30,6 +30,7 @@ import { useMobileNavStore } from '../navStore';
 import { useRoomPins } from '../chat/useRoomPins';
 import { useChatTabsStore } from '../chat/chatTabsStore';
 import { useWindowShape } from '../ui/useWindowShape';
+import { usePageState } from '../ui/usePageState';
 import {
   readWatchLayout,
   readWatchSplit,
@@ -681,6 +682,8 @@ export const WatchScreen: React.FC = () => {
   // TV screen mode needs the screen on too: Android only shows the TV picture
   // while the app is visible, and most phones stop mirroring when it sleeps.
   const videoPaused = useLiveVideoPaused();
+  // Whether anyone can see the page at all; an unseen chat pane holds still.
+  const pageVisible = usePageState().visible;
   const keepAwake = (playingHere && !videoPaused) || tvOwns;
   useEffect(() => {
     holdScreenOn('player', keepAwake);
@@ -698,9 +701,10 @@ export const WatchScreen: React.FC = () => {
     // PiP eligibility is what makes leaving the app auto-enter a floating
     // window, and it comes first whatever Background play says: that setting
     // only decides what happens when the video cannot float (the system's PiP
-    // permission is off, the window was closed, the screen went off), where the
-    // stream drops to its audio rendition behind the media notification. The
-    // audio-only rendition has no picture, so it never floats.
+    // permission is off, the window was closed, the screen went off): on, the
+    // stream drops to its audio rendition behind the media notification; off,
+    // it pauses (lockScreenAudio). The audio-only rendition has no picture,
+    // so it never floats.
     setPipEligible(playingHere && !audioOnly);
     return () => {
       setPreferredRefreshRate(0);
@@ -1600,6 +1604,9 @@ export const WatchScreen: React.FC = () => {
 
           <MobileChatPane
             readOnly={chatOverlay}
+            // Hidden under the mini player, in PiP or a chat-less landscape, or
+            // the app in the background: the list holds still until seen.
+            idle={chatClass === 'hidden' || !pageVisible}
             top={
               // Poll + prediction cards are exactly the desktop components:
               // they self-fetch off the channel. Either can be turned off.
