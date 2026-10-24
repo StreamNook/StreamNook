@@ -21,6 +21,7 @@ use std::collections::BTreeMap;
 use std::sync::Mutex;
 use std::time::Duration;
 
+use crate::services::recent_emotes::EmoteUse;
 use crate::services::streamnook_backend as backend;
 
 /// How long counts are held before they are sent.
@@ -30,11 +31,13 @@ const FLUSH: Duration = Duration::from_secs(300);
 struct Pending {
     /// Counts waiting to be sent, keyed by member and stat.
     amounts: BTreeMap<(String, Stat), i64>,
+    /// Emote uses waiting to be sent, keyed by member and emote id.
+    emotes: BTreeMap<(String, String), EmoteUse>,
     /// Whether the timer task is alive.
     running: bool,
 }
 
-static PENDING: Mutex<Pending> = Mutex::new(Pending { amounts: BTreeMap::new(), running: false });
+static PENDING: Mutex<Pending> = Mutex::new(Pending { amounts: BTreeMap::new(), emotes: BTreeMap::new(), running: false });
 
 /// Held for the whole of a send, so the timer and the exit flush never send
 /// the same counts twice.
@@ -102,16 +105,49 @@ async fn send_one(member: &str, stat: Stat, amount: i64) -> Result<(), String> {
     }
 }
 
+/// Adds `uses` to the summed emote counts of `member`.
+fn merge_emotes(map: &mut BTreeMap<(String, String), EmoteUse>, member: &str, uses: Vec<EmoteUse>) {
+    for u in uses {
+        match map.get_mut(&(member.to_string(), u.id.clone())) {
+            Some(held) => held.count += u.count,
+            None => {
+                map.insert((member.to_string(), u.id.clone()), u);
+            }
+        }
+    }
+}
+
+/// Sends one summed emote count; the error says whether it should be kept.
+async fn send_emote(member: &str, u: &EmoteUse) -> Result<(), String> {
+    let args = json!({
+        "p_user_id": member,
+        "p_emote_id": u.id,
+        "p_emote_name": u.name,
+        "p_provider": u.provider,
+        "p_image_url": u.url,
+        "p_amount": u.count,
+    });
+    backend::rpc("increment_emote_usage", args).await.map(|_| ())
+}
+
 /// Sends everything pending, once. Entries that failed in a way worth retrying
 /// go back for the next send.
 async fn send_pending() {
     let _sending = SENDING.lock().await;
-    let taken = pending(|p| std::mem::take(&mut p.amounts));
+    let (taken, taken_emotes) = pending(|p| (std::mem::take(&mut p.amounts), std::mem::take(&mut p.emotes)));
     for ((member, stat), amount) in taken {
         if let Err(e) = send_one(&member, stat, amount).await {
             warn!("[Stats] {} +{amount} failed: {e}", stat.column());
             if worth_retrying(&e) {
                 pending(|p| *p.amounts.entry((member, stat)).or_insert(0) += amount);
+            }
+        }
+    }
+    for ((member, _), u) in taken_emotes {
+        if let Err(e) = send_emote(&member, &u).await {
+            warn!("[Stats] emote {} +{} failed: {e}", u.id, u.count);
+            if worth_retrying(&e) {
+                pending(|p| merge_emotes(&mut p.emotes, &member, vec![u]));
             }
         }
     }
@@ -122,7 +158,7 @@ async fn run() {
         tokio::time::sleep(FLUSH).await;
         send_pending().await;
         let done = pending(|p| {
-            if p.amounts.is_empty() {
+            if p.amounts.is_empty() && p.emotes.is_empty() {
                 p.running = false;
                 true
             } else {
@@ -138,7 +174,7 @@ async fn run() {
 /// Sends what is pending now, for the app quitting. The receiver fires when the
 /// send finished; None when nothing is pending, which costs no request.
 pub fn flush_on_exit() -> Option<std::sync::mpsc::Receiver<()>> {
-    if pending(|p| p.amounts.is_empty()) {
+    if pending(|p| p.amounts.is_empty() && p.emotes.is_empty()) {
         return None;
     }
     let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
@@ -162,6 +198,28 @@ pub fn count(stat: Stat, amount: i64) {
     };
     let spawn = pending(|p| {
         *p.amounts.entry((member, stat)).or_insert(0) += amount;
+        let start = !p.running;
+        p.running = true;
+        start
+    });
+    if spawn {
+        tauri::async_runtime::spawn(run());
+    }
+}
+
+/// Adds the emotes a message the signed-in member sent used, to be sent with
+/// the next batch. Nothing happens without a signed-in Twitch account or a
+/// configured backend.
+pub fn count_emotes(uses: Vec<EmoteUse>) {
+    if uses.is_empty() || !backend::configured() {
+        return;
+    }
+    let Some(member) = crate::services::account_store::AccountStore::primary().map(|a| a.user_id).filter(|id| !id.is_empty())
+    else {
+        return;
+    };
+    let spawn = pending(|p| {
+        merge_emotes(&mut p.emotes, &member, uses);
         let start = !p.running;
         p.running = true;
         start
@@ -227,6 +285,21 @@ mod tests {
         *p.amounts.entry(("2".to_string(), Stat::MessagesSent)).or_insert(0) += 1;
         assert_eq!(p.amounts.len(), 2);
         assert_eq!(p.amounts[&("1".to_string(), Stat::MessagesSent)], 5);
+    }
+
+    fn kekw(count: i64) -> EmoteUse {
+        EmoteUse { id: "1".into(), name: "KEKW".into(), provider: "7tv".into(), url: "u".into(), count }
+    }
+
+    #[test]
+    fn two_messages_with_the_same_emote_make_one_entry_with_the_sum() {
+        let mut p = Pending::default();
+        merge_emotes(&mut p.emotes, "1", vec![kekw(2)]);
+        merge_emotes(&mut p.emotes, "1", vec![kekw(3)]);
+        merge_emotes(&mut p.emotes, "2", vec![kekw(1)]);
+        assert_eq!(p.emotes.len(), 2);
+        assert_eq!(p.emotes[&("1".to_string(), "1".to_string())].count, 5);
+        assert_eq!(p.emotes[&("1".to_string(), "1".to_string())].name, "KEKW");
     }
 
     #[test]
