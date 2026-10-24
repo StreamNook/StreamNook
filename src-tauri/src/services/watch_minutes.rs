@@ -263,7 +263,17 @@ const NO_ACCOUNT_PHRASES: [&str; 4] = ["Not authenticated", "Please log in again
 /// Whether a send error means no StreamNook account is signed in, as opposed to
 /// the token lookup failing for any other reason (a network failure, say).
 fn is_no_account(error: &str) -> bool {
-    error.starts_with("no_token") && NO_ACCOUNT_PHRASES.iter().any(|phrase| error.contains(phrase))
+    error.starts_with("no_token")
+        && (NO_ACCOUNT_PHRASES.iter().any(|phrase| error.contains(phrase)) || refresh_refused_for_good(error))
+}
+
+/// Whether the text says Twitch refused a token refresh with a client error
+/// other than 429, which retrying will not change.
+fn refresh_refused_for_good(error: &str) -> bool {
+    const MARK: &str = "Twitch refused the token refresh (";
+    let Some(start) = error.find(MARK) else { return false };
+    let digits: String = error[start + MARK.len()..].chars().take_while(char::is_ascii_digit).collect();
+    digits.parse::<u16>().is_ok_and(|status| (400..500).contains(&status) && status != 429)
 }
 
 /// Whether the oldest queued minute is old enough to send the queue.
@@ -581,6 +591,13 @@ mod tests {
         ));
         assert!(!is_no_account("no_token: connect: refused"));
         assert!(!is_no_account("network: dns error"));
+    }
+
+    #[test]
+    fn a_refused_refresh_clears_unless_it_is_rate_limited_or_a_fault() {
+        assert!(is_no_account("no_token: Twitch refused the token refresh (400): invalid refresh token"));
+        assert!(!is_no_account("no_token: Twitch refused the token refresh (429): slow down"));
+        assert!(!is_no_account("no_token: Twitch refused the token refresh (503): unavailable"));
     }
 
     #[test]

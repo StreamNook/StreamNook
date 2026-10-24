@@ -286,7 +286,7 @@ pub fn start_realtime() {
         let mut pause = Duration::from_secs(2);
         loop {
             match run_socket(&ws, key, &mut joined_before, &mut pause).await {
-                Ok(()) => pause = Duration::from_secs(2),
+                Ok(()) => log::debug!("[StreamNookBackend] realtime: socket closed"),
                 Err(e) => log::debug!("[StreamNookBackend] realtime: {e}"),
             }
             tokio::time::sleep(pause).await;
@@ -300,6 +300,7 @@ async fn run_socket(ws: &str, key: &str, joined_before: &mut bool, pause: &mut D
     socket.send(Message::Text(join_message(key).into())).await.map_err(|e| e.to_string())?;
     let mut beat = tokio::time::interval(Duration::from_secs(25));
     beat.tick().await;
+    let mut joined = false;
     loop {
         tokio::select! {
             _ = beat.tick() => {
@@ -318,8 +319,11 @@ async fn run_socket(ws: &str, key: &str, joined_before: &mut bool, pause: &mut D
                         let _ = feed().send(Change::Rejoined);
                     }
                     *joined_before = true;
+                    joined = true;
                 } else if heartbeat_ok(&text) {
-                    *pause = Duration::from_secs(2);
+                    if joined {
+                        *pause = Duration::from_secs(2);
+                    }
                 } else if let Some(down) = channel_down(&text) {
                     return Err(down);
                 } else if let Some(refusal) = join_refusal(&text) {
