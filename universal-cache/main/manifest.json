@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "last_sync": 1792752730,
+  "last_sync": 1792835936,
   "entries": {
     "global_badges": {
       "id": "global_badges",
@@ -7660,10 +7660,10 @@
             }
           ]
         },
-        "cached_at": 1792752141
+        "cached_at": 1792835930
       },
       "metadata": {
-        "timestamp": 1792752141,
+        "timestamp": 1792835930,
         "expiry_days": 7,
         "source": "twitch",
         "version": 1
@@ -15918,7 +15918,7 @@
         "more_info": "FrekiFriend is a limited-time global chat badge dedicated to the launch of Dragon’s Dogma 2: Dark Arisen. To earn it, you need to subscribe or gift a subscription (Prime subs doesn’t count) to streamer in the Dragon’s Dogma 2 category. Event duration: 2026-10-08T12:00:00Z – 2026-10-31T10:58:00Z The badge is distributed via Twitch Drops and granted automatically after meeting the requirement. There is also a free badge from this campaign: TheDragonsDogma"
       },
       "metadata": {
-        "timestamp": 1792230815,
+        "timestamp": 1792835935,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
@@ -15934,7 +15934,7 @@
         "more_info": "TheDragonsDogma is a limited-time global chat badge dedicated to the launch of Dragon’s Dogma 2: Dark Arisen. To earn it, you need to watch 60 minutes of any livestream in the Dragon’s Dogma 2 category. Event duration: 2026-10-08T12:00:00Z – 2026-10-31T10:58:00Z The badge is distributed via Twitch Drops and granted automatically after meeting the requirement. There is also a paid badge from this campaign: FrekiFriend"
       },
       "metadata": {
-        "timestamp": 1792230816,
+        "timestamp": 1792835936,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
@@ -16395,10 +16395,10 @@
       "data": {
         "date_added": "16 October 2026",
         "usage_stats": null,
-        "more_info": null
+        "more_info": "Edgerunners D is a limited-time global chat badge celebrating the premiere of Cyberpunk: Edgerunners 2 , a new anime series set in the Cyberpunk 2077 universe, coming to Netflix. To earn it, you need to watch CD PROJEKT RED or CD PROJEKT RED Japan channel for 15 minutes. Event duration: 2026-10-19T22:01:00Z – 2026-10-20T22:00:00Z Streams schedule: 2026-10-19T22:01:00Z – 2026-10-19T22:30:00Z 2026-10-20T10:01:00Z – 2026-10-20T10:30:00Z 2026-10-20T19:01:00Z – 2026-10-20T19:30:00Z The badge is distributed via Twitch Drops and granted automatically after meeting the requirement. This campaign also has other free badges: Edgerunners Weak Edgerunners Talia"
       },
       "metadata": {
-        "timestamp": 1792230812,
+        "timestamp": 1792835932,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
@@ -16411,10 +16411,10 @@
       "data": {
         "date_added": "16 October 2026",
         "usage_stats": null,
-        "more_info": null
+        "more_info": "Edgerunners Talia is a limited-time global chat badge celebrating the premiere of Cyberpunk: Edgerunners 2 , a new anime series set in the Cyberpunk 2077 universe, coming to Netflix. To earn it, you need to watch CD PROJEKT RED or CD PROJEKT RED Japan channel for 15 minutes. Event duration: 2026-10-19T22:01:00Z – 2026-10-20T22:00:00Z Streams schedule: 2026-10-19T22:01:00Z – 2026-10-19T22:30:00Z 2026-10-20T10:01:00Z – 2026-10-20T10:30:00Z 2026-10-20T19:01:00Z – 2026-10-20T19:30:00Z The badge is distributed via Twitch Drops and granted automatically after meeting the requirement. This campaign also has other free badges: Edgerunners D Edgerunners Weak"
       },
       "metadata": {
-        "timestamp": 1792230813,
+        "timestamp": 1792835933,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
@@ -16427,10 +16427,10 @@
       "data": {
         "date_added": "16 October 2026",
         "usage_stats": null,
-        "more_info": null
+        "more_info": "Edgerunners Weak is a limited-time global chat badge celebrating the premiere of Cyberpunk: Edgerunners 2 , a new anime series set in the Cyberpunk 2077 universe, coming to Netflix. To earn it, you need to watch CD PROJEKT RED or CD PROJEKT RED Japan channel for 15 minutes. Event duration: 2026-10-19T22:01:00Z – 2026-10-20T22:00:00Z Streams schedule: 2026-10-19T22:01:00Z – 2026-10-19T22:30:00Z 2026-10-20T10:01:00Z – 2026-10-20T10:30:00Z 2026-10-20T19:01:00Z – 2026-10-20T19:30:00Z The badge is distributed via Twitch Drops and granted automatically after meeting the requirement. This campaign also has other free badges: Edgerunners D Edgerunners Talia"
       },
       "metadata": {
-        "timestamp": 1792230814,
+        "timestamp": 1792835934,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
