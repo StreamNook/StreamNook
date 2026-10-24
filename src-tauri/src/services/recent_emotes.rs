@@ -182,7 +182,7 @@ pub async fn used_in(channel: &str, text: &str) -> Vec<EmoteUse> {
                 .as_ref()
                 .and_then(|p| p.get(word))
                 .map(use_of)
-                .or_else(|| find_in(set, word))
+                .or_else(|| find_for_tally(set, word))
         })
     })
     .await
@@ -191,15 +191,17 @@ pub async fn used_in(channel: &str, text: &str) -> Vec<EmoteUse> {
 
 /// The emotes a message used, resolved against `set` alone.
 pub fn used_in_set(set: &EmoteSet, text: &str) -> Vec<EmoteUse> {
-    count_uses(text, |word| find_in(set, word))
+    count_uses(text, |word| find_for_tally(set, word))
 }
 
-fn find_in(set: &EmoteSet, word: &str) -> Option<EmoteUse> {
-    set.twitch
+/// Resolves a word for the usage tally when several providers share a name:
+/// 7TV first, then FFZ, BTTV, Twitch and Kick.
+fn find_for_tally(set: &EmoteSet, word: &str) -> Option<EmoteUse> {
+    set.seven_tv
         .iter()
-        .chain(&set.seven_tv)
         .chain(&set.ffz)
         .chain(&set.bttv)
+        .chain(&set.twitch)
         .chain(&set.kick)
         .find(|e: &&Emote| e.name == word)
         .map(use_of)
@@ -261,6 +263,47 @@ mod tests {
         let used = count_uses(&format!("{long} KEKW"), find);
         assert_eq!(used.len(), 1);
         assert_eq!(used[0].id, "1");
+    }
+
+    fn emote(id: &str, provider: EmoteProvider) -> Emote {
+        Emote {
+            id: id.into(),
+            name: "Same".into(),
+            url: "u".into(),
+            provider,
+            is_zero_width: None,
+            local_url: None,
+            emote_type: None,
+            owner_id: None,
+            owner_name: None,
+            original_name: None,
+            owner_ref: None,
+            width: None,
+            height: None,
+            modifier_flags: None,
+            ffz_sub_only: None,
+            animated: None,
+        }
+    }
+
+    #[test]
+    fn a_shared_name_is_credited_7tv_then_ffz_then_bttv_then_twitch() {
+        let mut set = EmoteSet {
+            twitch: vec![emote("tw", EmoteProvider::Twitch)],
+            bttv: vec![emote("bt", EmoteProvider::BTTV)],
+            seven_tv: vec![emote("7", EmoteProvider::SevenTV)],
+            ffz: vec![emote("ff", EmoteProvider::FFZ)],
+            kick: Vec::new(),
+            seven_tv_ok: true,
+        };
+        let credited = |set: &EmoteSet| used_in_set(set, "Same")[0].id.clone();
+        assert_eq!(credited(&set), "7");
+        set.seven_tv.clear();
+        assert_eq!(credited(&set), "ff");
+        set.ffz.clear();
+        assert_eq!(credited(&set), "bt");
+        set.bttv.clear();
+        assert_eq!(credited(&set), "tw");
     }
 
     #[test]
