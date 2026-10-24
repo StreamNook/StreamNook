@@ -78,8 +78,8 @@ fn added(row: Option<&Value>, stat: Stat, amount: i64) -> i64 {
 }
 
 /// Whether a failed send is worth keeping for the next one: the request never
-/// left (`connect:`), or the server answered 429, 500, 502 or 503. A request
-/// that may have landed (`landed:`), a 504, and any other refusal are not (a
+/// left (`connect:`), or the server answered 429, 500 or 503. A request that
+/// may have landed (`landed:`), a 502, a 504, and any other refusal are not (a
 /// retry could double-count or would be refused again).
 fn worth_retrying(error: &str) -> bool {
     let rest = error.split_once(": ").map_or(error, |(_, rest)| rest);
@@ -89,7 +89,7 @@ fn worth_retrying(error: &str) -> bool {
     rest.split_whitespace()
         .next()
         .and_then(|word| word.parse::<u16>().ok())
-        .is_some_and(|code| matches!(code, 429 | 500 | 502 | 503))
+        .is_some_and(|code| matches!(code, 429 | 500 | 503))
 }
 
 /// Sends one summed count; the error says whether it should be kept.
@@ -292,7 +292,7 @@ mod tests {
     fn only_a_send_that_may_not_have_landed_cleanly_is_kept() {
         assert!(worth_retrying("increment_user_stat: connect: error sending request for url (x)"));
         assert!(worth_retrying("increment_user_stat: 503 Service Unavailable"));
-        assert!(worth_retrying("increment_user_stat: 502 Bad Gateway"));
+        assert!(!worth_retrying("increment_user_stat: 502 Bad Gateway"));
         assert!(worth_retrying("increment_user_stat: 500 Internal Server Error"));
         assert!(worth_retrying("increment_user_stat: 429 Too Many Requests"));
         assert!(!worth_retrying("increment_user_stat: 504 Gateway Timeout"));

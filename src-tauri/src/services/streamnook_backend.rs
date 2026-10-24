@@ -229,6 +229,16 @@ fn joined_ok(text: &str) -> bool {
         && msg.pointer("/payload/status").and_then(Value::as_str) == Some("ok")
 }
 
+/// Whether this is the socket's answer to a heartbeat: a reply on the
+/// `phoenix` topic with status `ok`. It proves the connection stayed up, so the
+/// reconnect pause resets on it and not on the join reply.
+fn heartbeat_ok(text: &str) -> bool {
+    let Ok(msg) = serde_json::from_str::<Value>(text) else { return false };
+    msg.get("event").and_then(Value::as_str) == Some("phx_reply")
+        && msg.get("topic").and_then(Value::as_str) == Some("phoenix")
+        && msg.pointer("/payload/status").and_then(Value::as_str) == Some("ok")
+}
+
 /// The status and response of a reply that refused the join, if this is one.
 fn join_refusal(text: &str) -> Option<String> {
     let msg: Value = serde_json::from_str(text).ok()?;
@@ -308,6 +318,7 @@ async fn run_socket(ws: &str, key: &str, joined_before: &mut bool, pause: &mut D
                         let _ = feed().send(Change::Rejoined);
                     }
                     *joined_before = true;
+                } else if heartbeat_ok(&text) {
                     *pause = Duration::from_secs(2);
                 } else if let Some(down) = channel_down(&text) {
                     return Err(down);
@@ -361,6 +372,8 @@ mod tests {
         assert!(parse_change(r#"{"event":"system","payload":{"status":"ok"}}"#).is_none());
         assert!(joined_ok(r#"{"event":"phx_reply","topic":"realtime:streamnook-registries","payload":{"status":"ok","response":{}}}"#));
         assert!(!joined_ok(r#"{"event":"phx_reply","topic":"phoenix","payload":{"status":"ok"}}"#));
+        assert!(heartbeat_ok(r#"{"event":"phx_reply","topic":"phoenix","payload":{"status":"ok"}}"#));
+        assert!(!heartbeat_ok(r#"{"event":"phx_reply","topic":"realtime:streamnook-registries","payload":{"status":"ok"}}"#));
     }
 
     #[test]

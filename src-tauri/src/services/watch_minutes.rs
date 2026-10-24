@@ -165,12 +165,14 @@ pub fn set_playing(key: &str, playing: bool) {
 }
 
 /// The channel to credit for the minute: the main player first, else the first
-/// playing source by key, so the choice is stable minute to minute.
+/// playing source by key, so the choice is stable minute to minute. A source
+/// whose channel id is empty after trimming is passed over.
 fn counted_channel(s: &State) -> Option<WatchedChannel> {
+    let counts = |src: &&Source| src.playing && !src.channel.channel_id.trim().is_empty();
     s.sources
         .get(MAIN)
-        .filter(|src| src.playing)
-        .or_else(|| s.sources.values().find(|src| src.playing))
+        .filter(counts)
+        .or_else(|| s.sources.values().find(counts))
         .map(|src| src.channel.clone())
 }
 
@@ -213,20 +215,36 @@ async fn run() {
     }
 }
 
-/// The longest login the server accepts.
+/// The longest channel id the server accepts, in UTF-16 units.
+const MAX_ID: usize = 64;
+/// The longest login the server accepts, in UTF-16 units.
 const MAX_LOGIN: usize = 64;
-/// The longest display name the server accepts.
+/// The longest display name the server accepts, in UTF-16 units.
 const MAX_NAME: usize = 120;
 
-/// The channel as it is queued: None when it has no id (a tile that has not
-/// resolved its channel yet), else with the login and name cut to the lengths
-/// the server accepts.
+/// The text trimmed, then cut to whole characters whose UTF-16 length together
+/// stays within `limit` (the server measures a JavaScript string's length).
+fn cut_utf16(text: &str, limit: usize) -> String {
+    let mut used = 0;
+    text.trim()
+        .chars()
+        .take_while(|c| {
+            used += c.len_utf16();
+            used <= limit
+        })
+        .collect()
+}
+
+/// The channel as it is queued: None when its id is empty after trimming (a tile
+/// that has not resolved its channel yet), else with the id, login and name cut
+/// to the lengths the server accepts.
 fn queueable(mut channel: WatchedChannel) -> Option<WatchedChannel> {
+    channel.channel_id = cut_utf16(&channel.channel_id, MAX_ID);
     if channel.channel_id.is_empty() {
         return None;
     }
-    channel.login = channel.login.chars().take(MAX_LOGIN).collect();
-    channel.name = channel.name.chars().take(MAX_NAME).collect();
+    channel.login = cut_utf16(&channel.login, MAX_LOGIN);
+    channel.name = cut_utf16(&channel.name, MAX_NAME);
     Some(channel)
 }
 
@@ -238,10 +256,14 @@ fn rejected_index(body: &str, len: usize) -> Option<usize> {
     (index < len).then_some(index)
 }
 
+/// The words the token lookup uses when there is no usable account: nobody
+/// signed in, a refused refresh, a stored token that is gone or cannot refresh.
+const NO_ACCOUNT_PHRASES: [&str; 4] = ["Not authenticated", "Please log in again", "re-link", "No stored token"];
+
 /// Whether a send error means no StreamNook account is signed in, as opposed to
-/// the token lookup failing on the network.
+/// the token lookup failing for any other reason (a network failure, say).
 fn is_no_account(error: &str) -> bool {
-    error.starts_with("no_token") && !error.contains("network:") && !error.contains("connect:")
+    error.starts_with("no_token") && NO_ACCOUNT_PHRASES.iter().any(|phrase| error.contains(phrase))
 }
 
 /// Whether the oldest queued minute is old enough to send the queue.
@@ -518,6 +540,28 @@ mod tests {
     }
 
     #[test]
+    fn limits_count_utf16_units_and_a_blank_id_is_skipped() {
+        let mut emoji = ch("x");
+        emoji.name = "😀".repeat(70);
+        let cut = queueable(emoji).unwrap();
+        assert!(cut.name.encode_utf16().count() <= MAX_NAME);
+        assert_eq!(cut.name.chars().count(), 60);
+        let mut blank = ch("x");
+        blank.channel_id = "   ".into();
+        assert!(queueable(blank).is_none());
+    }
+
+    #[test]
+    fn a_source_without_an_id_does_not_win_the_minute() {
+        let mut s = State::default();
+        let mut blank = ch("blank");
+        blank.channel_id = " ".into();
+        s.sources.insert(MAIN.into(), Source { channel: blank, playing: true });
+        s.sources.insert("tile-b".into(), Source { channel: ch("b"), playing: true });
+        assert_eq!(counted_channel(&s).unwrap().login, "b");
+    }
+
+    #[test]
     fn a_400_names_the_entry_to_drop() {
         assert_eq!(rejected_index(r#"{"error":"bad_login","index":2}"#, 5), Some(2));
         assert_eq!(rejected_index(r#"{"error":"bad_login","index":5}"#, 5), None);
@@ -528,8 +572,13 @@ mod tests {
 
     #[test]
     fn a_network_failure_during_sign_in_is_not_a_missing_account() {
-        assert!(is_no_account("no_token: not signed in"));
-        assert!(!is_no_account("no_token: network: dns error"));
+        assert!(is_no_account("no_token: Not authenticated. Please log in to Twitch first."));
+        assert!(is_no_account("no_token: Token expired and refresh failed (x). Please log in again."));
+        assert!(is_no_account("no_token: Account 1 token expired and has no refresh token; re-link it."));
+        assert!(is_no_account("no_token: No stored token for secondary account 1"));
+        assert!(!is_no_account(
+            "no_token: Token refresh failed with a network error; the sign-in is kept and tried again (dns error)"
+        ));
         assert!(!is_no_account("no_token: connect: refused"));
         assert!(!is_no_account("network: dns error"));
     }
