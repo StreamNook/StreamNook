@@ -53,6 +53,10 @@ const ALLOWED_PATHS: &[&str] = &[
     // reporter. The server keys it on (member, minute), so a repeat or a
     // second device in the same minute counts once.
     "/api/v1/watch/minute",
+    // The watch-minute reporter's batch: up to twenty minutes in one body. The
+    // server keys each minute on (member, minute), so a minute sent here and
+    // again through the single path still counts once.
+    "/api/v1/watch/minutes",
     // The memberships this member was gifted, read by the Rust gift poll
     // (services::membership_gifts). The member comes from the token.
     "/api/v1/membership/gifts",
@@ -224,6 +228,12 @@ mod tests {
             assert!(!p.contains("://"), "{p} must not carry a scheme");
             assert!(!p.contains('*'), "{p} must be exact, not a pattern");
         }
+    }
+
+    #[test]
+    fn the_single_and_batch_watch_minute_paths_are_both_allowed() {
+        assert!(ALLOWED_PATHS.contains(&"/api/v1/watch/minute"));
+        assert!(ALLOWED_PATHS.contains(&"/api/v1/watch/minutes"));
     }
 
     #[test]

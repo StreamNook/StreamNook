@@ -1499,6 +1499,14 @@ pub(crate) fn flush_stores_before_hard_exit(app_handle: &crate::rt::AppHandle) {
     let _ = crate::services::whisper_storage_service::WhisperStorageService::flush_now();
     let _ = crate::services::vod_progress_service::flush_now();
     let _ = crate::services::chat_logger_service::ChatLoggerService::flush_all();
+    // Unsent stat counts and watch minutes go out before the process dies,
+    // bounded: both sends run together and share one 2 s deadline.
+    let stats_done = crate::services::member_stats::flush_on_exit();
+    let minutes_done = crate::services::watch_minutes::flush_on_exit();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    for done in [stats_done, minutes_done].into_iter().flatten() {
+        let _ = done.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()));
+    }
 }
 
 /// Apply a staged bundle update by restarting StreamNook. download_and_install_bundle

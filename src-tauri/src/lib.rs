@@ -2939,6 +2939,10 @@ pub fn run() {
                 // Started here so it runs alongside the plugin shutdown below;
                 // waited on after it, bounded.
                 let vod_sync_done = services::vod_sync::start_exit_sync();
+                // Unsent stat counts and watch minutes go out the same way:
+                // started now so they run alongside the plugin shutdown.
+                let stats_done = services::member_stats::flush_on_exit();
+                let minutes_done = services::watch_minutes::flush_on_exit();
                 // Ask running plugin processes to shut down before the app
                 // process dies, waiting briefly so well-behaved plugins exit
                 // gracefully (stragglers are killed with the supervisor).
@@ -2969,11 +2973,23 @@ pub fn run() {
                         warn!("[Main] plugin shutdown did not finish within 3 s; exiting anyway");
                     }
                 }
+                // Usually finished already, having run during the plugin
+                // wait. One deadline covers all three, so together they add
+                // never more than 2 s past it.
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
                 if let Some(done) = vod_sync_done {
-                    // Usually finished already, having run during the plugin
-                    // wait. Never more than 2 s past it.
-                    if done.recv_timeout(std::time::Duration::from_secs(2)).is_err() {
+                    if done.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())).is_err() {
                         warn!("[Main] VOD position sync did not finish within 2 s; exiting anyway");
+                    }
+                }
+                if let Some(done) = stats_done {
+                    if done.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())).is_err() {
+                        warn!("[Main] stat counts did not finish sending within 2 s; exiting anyway");
+                    }
+                }
+                if let Some(done) = minutes_done {
+                    if done.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())).is_err() {
+                        warn!("[Main] watch minutes did not finish sending within 2 s; exiting anyway");
                     }
                 }
                 services::app_exit::on_shutdown_complete(shutdown_started.elapsed().as_millis());

@@ -1,5 +1,7 @@
 //! StreamNook's own watch-time report: one wall-clock minute of live, playing
-//! watching, sent to `POST /api/v1/watch/minute` with the account's bearer.
+//! watching, queued and sent in batches to `POST /api/v1/watch/minutes` with
+//! the account's bearer (one at a time to `/api/v1/watch/minute` where the
+//! batch route is missing).
 //!
 //! The server owns everything after the send. It derives the member from the
 //! token, keys the minute on (member, minute) so two devices or windows in the
@@ -17,9 +19,11 @@
 //!
 //! Lifecycle: the loop is spawned when the first source appears and exits once
 //! no source is left and nothing is waiting to be sent, so a closed player costs
-//! nothing. Minutes that fail to send (offline, 5xx, 429) wait in a short queue
-//! and retry on the next tick; the server accepts minutes up to ten minutes old,
-//! so the queue holds no more than that.
+//! nothing. Each counted minute joins a queue that carries the member it
+//! belongs to. The queue is sent when its oldest minute is five minutes old,
+//! when watching stops, and when the app exits (`flush_on_exit`). Minutes that
+//! fail to send (offline, 5xx, 429) stay queued and go with the next send; the
+//! server skips minutes older than 25 minutes, so the queue drops those first.
 
 use chrono::{DateTime, DurationRound, TimeDelta, Utc};
 use log::{debug, warn};
@@ -29,9 +33,14 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 const PATH: &str = "/api/v1/watch/minute";
+const BATCH_PATH: &str = "/api/v1/watch/minutes";
 const TICK: Duration = Duration::from_secs(60);
-/// The server refuses minutes older than ten; keep a little margin.
-const MAX_PENDING: usize = 8;
+/// How old the oldest queued minute gets before the queue is sent.
+const FLUSH: Duration = Duration::from_secs(300);
+/// The server skips minutes older than this.
+const MAX_AGE: Duration = Duration::from_secs(25 * 60);
+/// The most minutes one batch carries.
+const MAX_PENDING: usize = 20;
 /// The main player's source key.
 pub const MAIN: &str = "main";
 /// Prefix of a MultiNook tile's source key; the rest is the tile's slot id.
@@ -52,6 +61,14 @@ pub struct WatchedChannel {
     pub name: String,
 }
 
+/// A counted minute waiting to be sent, with the member it counts for.
+#[derive(Clone, Debug)]
+struct Queued {
+    minute: DateTime<Utc>,
+    member: String,
+    channel: WatchedChannel,
+}
+
 #[derive(Debug)]
 struct Source {
     channel: WatchedChannel,
@@ -64,11 +81,15 @@ struct State {
     /// Playing state reported before (or without) a source, so a player that
     /// starts before its session registers is not missed.
     playing_hint: BTreeMap<String, bool>,
-    pending: VecDeque<(DateTime<Utc>, WatchedChannel)>,
+    pending: VecDeque<Queued>,
     running: bool,
 }
 
 static STATE: Lazy<Mutex<State>> = Lazy::new(|| Mutex::new(State::default()));
+
+/// Held for the whole of a send, so the timer and the exit flush never send the
+/// same minutes twice.
+static SENDING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 fn with_state<R>(f: impl FnOnce(&mut State) -> R) -> R {
     let mut guard = STATE.lock().unwrap_or_else(|e| e.into_inner());
@@ -162,13 +183,22 @@ async fn run() {
         let minute = Utc::now()
             .duration_trunc(TimeDelta::minutes(1))
             .unwrap_or_else(|_| Utc::now());
-        let done = with_state(|s| {
-            if let Some(channel) = counted_channel(s) {
-                s.pending.push_back((minute, channel));
+        let member = crate::services::account_store::AccountStore::primary()
+            .map(|a| a.user_id)
+            .filter(|id| !id.is_empty());
+        let send_now = with_state(|s| {
+            if let (Some(channel), Some(member)) = (counted_channel(s), member) {
+                s.pending.push_back(Queued { minute, member, channel });
                 while s.pending.len() > MAX_PENDING {
                     s.pending.pop_front();
                 }
             }
+            s.sources.is_empty() || flush_due(&s.pending, Utc::now())
+        });
+        if send_now {
+            flush().await;
+        }
+        let done = with_state(|s| {
             if s.sources.is_empty() && s.pending.is_empty() {
                 s.running = false;
                 s.playing_hint.clear();
@@ -180,51 +210,144 @@ async fn run() {
         if done {
             return;
         }
-        flush().await;
     }
 }
 
-/// Sends queued minutes oldest first, stopping at the first one worth retrying.
-async fn flush() {
-    loop {
-        let Some((minute, channel)) = with_state(|s| s.pending.front().cloned()) else {
-            return;
-        };
-        let body = serde_json::json!({
-            "minute": minute.to_rfc3339(),
-            "platform": channel.platform,
-            "channel_id": channel.channel_id,
-            "channel_login": channel.login,
-            "channel_name": channel.name,
-        });
-        match crate::commands::streamnook_api::post_json(PATH, &body, None).await {
+/// Whether the oldest queued minute is old enough to send the queue.
+fn flush_due(pending: &VecDeque<Queued>, now: DateTime<Utc>) -> bool {
+    pending
+        .front()
+        .is_some_and(|q| now.signed_duration_since(q.minute).to_std().is_ok_and(|age| age >= FLUSH))
+}
+
+/// Removes the minutes the server would skip as too old.
+fn drop_stale(pending: &mut VecDeque<Queued>, now: DateTime<Utc>) {
+    pending.retain(|q| now.signed_duration_since(q.minute).to_std().map_or(true, |age| age <= MAX_AGE));
+}
+
+/// Takes every queued minute of the member at the front, in order, leaving the
+/// other members' minutes in place.
+fn take_first_member(pending: &mut VecDeque<Queued>) -> Option<(String, Vec<Queued>)> {
+    let member = pending.front()?.member.clone();
+    let (mine, rest): (Vec<Queued>, Vec<Queued>) = pending.drain(..).partition(|q| q.member == member);
+    pending.extend(rest);
+    Some((member, mine))
+}
+
+/// Returns minutes that were not sent to the front of the queue, in order.
+fn put_back(pending: &mut VecDeque<Queued>, unsent: Vec<Queued>) {
+    for q in unsent.into_iter().rev() {
+        pending.push_front(q);
+    }
+}
+
+fn minute_body(q: &Queued) -> serde_json::Value {
+    serde_json::json!({
+        "minute": q.minute.to_rfc3339(),
+        "platform": q.channel.platform,
+        "channel_id": q.channel.channel_id,
+        "channel_login": q.channel.login,
+        "channel_name": q.channel.name,
+    })
+}
+
+/// What happened to the minutes of one member.
+enum Sent {
+    /// Sent, or refused in a way a retry would not change.
+    Done,
+    /// These were not sent and should wait for the next send.
+    Deferred(Vec<Queued>),
+    /// No StreamNook account is signed in: nothing can be credited.
+    NoToken,
+}
+
+/// Sends minutes one at a time, oldest first, stopping at the first one worth
+/// retrying.
+async fn send_singly(member: &str, items: Vec<Queued>) -> Sent {
+    let mut items = VecDeque::from(items);
+    while let Some(q) = items.front() {
+        match crate::commands::streamnook_api::post_json(PATH, &minute_body(q), Some(member)).await {
             Ok(resp) if resp.ok => {
-                debug!("[WatchMinutes] {} sent ({})", minute, resp.body);
+                debug!("[WatchMinutes] {} sent ({})", q.minute, resp.body);
             }
-            // Rate limited or a server fault: keep it for the next tick.
+            // Rate limited or a server fault: keep it for the next send.
             Ok(resp) if resp.status == 429 || resp.status >= 500 => {
-                warn!("[WatchMinutes] {} deferred: HTTP {}", minute, resp.status);
-                return;
+                warn!("[WatchMinutes] {} deferred: HTTP {}", q.minute, resp.status);
+                return Sent::Deferred(items.into());
             }
             // Any other refusal (stale, malformed, signed out server-side) will
             // not change on retry.
             Ok(resp) => {
-                warn!("[WatchMinutes] {} refused: HTTP {} {}", minute, resp.status, resp.body);
+                warn!("[WatchMinutes] {} refused: HTTP {} {}", q.minute, resp.status, resp.body);
             }
-            // No StreamNook account signed in: nothing can be credited.
-            Err(e) if e.starts_with("no_token") => {
-                with_state(|s| s.pending.clear());
-                return;
-            }
+            Err(e) if e.starts_with("no_token") => return Sent::NoToken,
             Err(e) => {
-                debug!("[WatchMinutes] {} deferred: {}", minute, e);
+                debug!("[WatchMinutes] {} deferred: {}", q.minute, e);
+                return Sent::Deferred(items.into());
+            }
+        }
+        items.pop_front();
+    }
+    Sent::Done
+}
+
+/// Sends one member's minutes as a single batch, falling back to one request
+/// each where the batch route is not there.
+async fn send_batch(member: &str, items: Vec<Queued>) -> Sent {
+    let body = serde_json::json!({ "minutes": items.iter().map(minute_body).collect::<Vec<_>>() });
+    match crate::commands::streamnook_api::post_json(BATCH_PATH, &body, Some(member)).await {
+        Ok(resp) if resp.ok => {
+            debug!("[WatchMinutes] {} minute(s) sent ({})", items.len(), resp.body);
+            Sent::Done
+        }
+        Ok(resp) if resp.status == 404 || resp.status == 405 => send_singly(member, items).await,
+        Ok(resp) if resp.status == 429 || resp.status >= 500 => {
+            warn!("[WatchMinutes] batch deferred: HTTP {}", resp.status);
+            Sent::Deferred(items)
+        }
+        Ok(resp) => {
+            warn!("[WatchMinutes] batch refused: HTTP {} {}", resp.status, resp.body);
+            Sent::Done
+        }
+        Err(e) if e.starts_with("no_token") => Sent::NoToken,
+        Err(e) => {
+            debug!("[WatchMinutes] batch deferred: {}", e);
+            Sent::Deferred(items)
+        }
+    }
+}
+
+/// Sends the whole queue now, member by member, whatever the age of its oldest
+/// minute. Stops at the first send that has to wait.
+async fn flush() {
+    let _sending = SENDING.lock().await;
+    with_state(|s| drop_stale(&mut s.pending, Utc::now()));
+    loop {
+        let Some((member, items)) = with_state(|s| take_first_member(&mut s.pending)) else {
+            return;
+        };
+        match send_batch(&member, items).await {
+            Sent::Done | Sent::NoToken => {}
+            Sent::Deferred(unsent) => {
+                with_state(|s| put_back(&mut s.pending, unsent));
                 return;
             }
         }
-        with_state(|s| {
-            s.pending.pop_front();
-        });
     }
+}
+
+/// Sends the queue now, for the app quitting. The receiver fires when the send
+/// finished; None when nothing is queued.
+pub fn flush_on_exit() -> Option<std::sync::mpsc::Receiver<()>> {
+    if with_state(|s| s.pending.is_empty()) {
+        return None;
+    }
+    let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+    tauri::async_runtime::spawn(async move {
+        flush().await;
+        let _ = done_tx.send(());
+    });
+    Some(done_rx)
 }
 
 #[cfg(test)]
@@ -238,6 +361,60 @@ mod tests {
             login: login.into(),
             name: login.into(),
         }
+    }
+
+    fn queued(member: &str, minute: DateTime<Utc>) -> Queued {
+        Queued { minute, member: member.into(), channel: ch("c") }
+    }
+
+    fn at(offset_min: i64) -> DateTime<Utc> {
+        DateTime::<Utc>::from_timestamp(1_800_000_000, 0).unwrap() + TimeDelta::minutes(offset_min)
+    }
+
+    #[test]
+    fn the_oldest_minute_decides_when_a_send_is_due() {
+        let mut q = VecDeque::new();
+        assert!(!flush_due(&q, at(10)));
+        q.push_back(queued("1", at(0)));
+        q.push_back(queued("1", at(4)));
+        assert!(!flush_due(&q, at(4)));
+        assert!(flush_due(&q, at(5)));
+        assert!(flush_due(&q, at(9)));
+    }
+
+    #[test]
+    fn minutes_older_than_the_server_accepts_are_dropped_before_a_send() {
+        let mut q = VecDeque::new();
+        q.push_back(queued("1", at(0)));
+        q.push_back(queued("1", at(10)));
+        q.push_back(queued("1", at(26)));
+        drop_stale(&mut q, at(30));
+        let kept: Vec<_> = q.iter().map(|x| x.minute).collect();
+        assert_eq!(kept, vec![at(10), at(26)]);
+    }
+
+    #[test]
+    fn two_members_minutes_are_sent_as_two_batches_with_their_own_ids() {
+        let mut q = VecDeque::new();
+        q.push_back(queued("a", at(0)));
+        q.push_back(queued("b", at(1)));
+        q.push_back(queued("a", at(2)));
+        let (first, items) = take_first_member(&mut q).unwrap();
+        assert_eq!(first, "a");
+        assert_eq!(items.iter().map(|x| x.minute).collect::<Vec<_>>(), vec![at(0), at(2)]);
+        let (second, items) = take_first_member(&mut q).unwrap();
+        assert_eq!(second, "b");
+        assert_eq!(items.len(), 1);
+        assert!(take_first_member(&mut q).is_none());
+    }
+
+    #[test]
+    fn a_deferred_batch_returns_to_the_front_in_order() {
+        let mut q = VecDeque::new();
+        q.push_back(queued("b", at(3)));
+        put_back(&mut q, vec![queued("a", at(0)), queued("a", at(1)), queued("a", at(2))]);
+        let order: Vec<_> = q.iter().map(|x| x.minute).collect();
+        assert_eq!(order, vec![at(0), at(1), at(2), at(3)]);
     }
 
     #[test]

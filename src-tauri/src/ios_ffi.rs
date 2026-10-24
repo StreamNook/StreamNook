@@ -153,6 +153,10 @@ pub fn lifecycle(state: String) {
             info!("[iOS] moved to the background; flushing stores");
             crate::services::window_visibility::set_native_shell_shown(false);
             crate::flush_debounced_stores();
+            // iOS keeps the process briefly after backgrounding, long enough
+            // for these sends to start; nothing waits on them here.
+            let _ = crate::services::member_stats::flush_on_exit();
+            let _ = crate::services::watch_minutes::flush_on_exit();
         }
         "terminating" => {
             info!("[iOS] terminating");
