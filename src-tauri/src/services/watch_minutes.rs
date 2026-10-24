@@ -187,7 +187,7 @@ async fn run() {
             .map(|a| a.user_id)
             .filter(|id| !id.is_empty());
         let send_now = with_state(|s| {
-            if let (Some(channel), Some(member)) = (counted_channel(s), member) {
+            if let (Some(channel), Some(member)) = (counted_channel(s).and_then(queueable), member) {
                 s.pending.push_back(Queued { minute, member, channel });
                 while s.pending.len() > MAX_PENDING {
                     s.pending.pop_front();
@@ -213,6 +213,37 @@ async fn run() {
     }
 }
 
+/// The longest login the server accepts.
+const MAX_LOGIN: usize = 64;
+/// The longest display name the server accepts.
+const MAX_NAME: usize = 120;
+
+/// The channel as it is queued: None when it has no id (a tile that has not
+/// resolved its channel yet), else with the login and name cut to the lengths
+/// the server accepts.
+fn queueable(mut channel: WatchedChannel) -> Option<WatchedChannel> {
+    if channel.channel_id.is_empty() {
+        return None;
+    }
+    channel.login = channel.login.chars().take(MAX_LOGIN).collect();
+    channel.name = channel.name.chars().take(MAX_NAME).collect();
+    Some(channel)
+}
+
+/// The index of the entry a 400 body names as the bad one, when it is a number
+/// inside the batch.
+fn rejected_index(body: &str, len: usize) -> Option<usize> {
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    let index = usize::try_from(value.get("index")?.as_u64()?).ok()?;
+    (index < len).then_some(index)
+}
+
+/// Whether a send error means no StreamNook account is signed in, as opposed to
+/// the token lookup failing on the network.
+fn is_no_account(error: &str) -> bool {
+    error.starts_with("no_token") && !error.contains("network:") && !error.contains("connect:")
+}
+
 /// Whether the oldest queued minute is old enough to send the queue.
 fn flush_due(pending: &VecDeque<Queued>, now: DateTime<Utc>) -> bool {
     pending
@@ -225,19 +256,26 @@ fn drop_stale(pending: &mut VecDeque<Queued>, now: DateTime<Utc>) {
     pending.retain(|q| now.signed_duration_since(q.minute).to_std().map_or(true, |age| age <= MAX_AGE));
 }
 
-/// Takes every queued minute of the member at the front, in order, leaving the
-/// other members' minutes in place.
+/// Takes the queued minutes of the member at the front, in order, at most one
+/// batch of them, leaving the other members' minutes (and any beyond the batch)
+/// in place.
 fn take_first_member(pending: &mut VecDeque<Queued>) -> Option<(String, Vec<Queued>)> {
     let member = pending.front()?.member.clone();
-    let (mine, rest): (Vec<Queued>, Vec<Queued>) = pending.drain(..).partition(|q| q.member == member);
+    let (mut mine, rest): (Vec<Queued>, Vec<Queued>) = pending.drain(..).partition(|q| q.member == member);
+    let extra = if mine.len() > MAX_PENDING { mine.split_off(MAX_PENDING) } else { Vec::new() };
+    pending.extend(extra);
     pending.extend(rest);
     Some((member, mine))
 }
 
-/// Returns minutes that were not sent to the front of the queue, in order.
+/// Returns minutes that were not sent to the front of the queue, in order, then
+/// drops the oldest until the queue is no longer than one batch.
 fn put_back(pending: &mut VecDeque<Queued>, unsent: Vec<Queued>) {
     for q in unsent.into_iter().rev() {
         pending.push_front(q);
+    }
+    while pending.len() > MAX_PENDING {
+        pending.pop_front();
     }
 }
 
@@ -280,7 +318,7 @@ async fn send_singly(member: &str, items: Vec<Queued>) -> Sent {
             Ok(resp) => {
                 warn!("[WatchMinutes] {} refused: HTTP {} {}", q.minute, resp.status, resp.body);
             }
-            Err(e) if e.starts_with("no_token") => return Sent::NoToken,
+            Err(e) if is_no_account(&e) => return Sent::NoToken,
             Err(e) => {
                 debug!("[WatchMinutes] {} deferred: {}", q.minute, e);
                 return Sent::Deferred(items.into());
@@ -291,30 +329,51 @@ async fn send_singly(member: &str, items: Vec<Queued>) -> Sent {
     Sent::Done
 }
 
+/// The most times one batch is sent again after the server names a bad entry.
+const MAX_PASSES: usize = 20;
+
 /// Sends one member's minutes as a single batch, falling back to one request
-/// each where the batch route is not there.
-async fn send_batch(member: &str, items: Vec<Queued>) -> Sent {
-    let body = serde_json::json!({ "minutes": items.iter().map(minute_body).collect::<Vec<_>>() });
-    match crate::commands::streamnook_api::post_json(BATCH_PATH, &body, Some(member)).await {
-        Ok(resp) if resp.ok => {
-            debug!("[WatchMinutes] {} minute(s) sent ({})", items.len(), resp.body);
-            Sent::Done
+/// each where the batch route is not there. A 400 that names a bad entry drops
+/// that entry and sends the rest again.
+async fn send_batch(member: &str, mut items: Vec<Queued>) -> Sent {
+    for _ in 0..MAX_PASSES {
+        if items.is_empty() {
+            return Sent::Done;
         }
-        Ok(resp) if resp.status == 404 || resp.status == 405 => send_singly(member, items).await,
-        Ok(resp) if resp.status == 429 || resp.status >= 500 => {
-            warn!("[WatchMinutes] batch deferred: HTTP {}", resp.status);
-            Sent::Deferred(items)
-        }
-        Ok(resp) => {
-            warn!("[WatchMinutes] batch refused: HTTP {} {}", resp.status, resp.body);
-            Sent::Done
-        }
-        Err(e) if e.starts_with("no_token") => Sent::NoToken,
-        Err(e) => {
-            debug!("[WatchMinutes] batch deferred: {}", e);
-            Sent::Deferred(items)
+        let body = serde_json::json!({ "minutes": items.iter().map(minute_body).collect::<Vec<_>>() });
+        match crate::commands::streamnook_api::post_json(BATCH_PATH, &body, Some(member)).await {
+            Ok(resp) if resp.ok => {
+                debug!("[WatchMinutes] {} minute(s) sent ({})", items.len(), resp.body);
+                return Sent::Done;
+            }
+            Ok(resp) if resp.status == 404 || resp.status == 405 => return send_singly(member, items).await,
+            Ok(resp) if resp.status == 429 || resp.status >= 500 => {
+                warn!("[WatchMinutes] batch deferred: HTTP {}", resp.status);
+                return Sent::Deferred(items);
+            }
+            Ok(resp) if resp.status == 400 => match rejected_index(&resp.body, items.len()) {
+                Some(index) => {
+                    warn!("[WatchMinutes] minute {} dropped: HTTP 400 {}", items[index].minute, resp.body);
+                    items.remove(index);
+                }
+                None => {
+                    warn!("[WatchMinutes] batch refused: HTTP {} {}", resp.status, resp.body);
+                    return Sent::Done;
+                }
+            },
+            Ok(resp) => {
+                warn!("[WatchMinutes] batch refused: HTTP {} {}", resp.status, resp.body);
+                return Sent::Done;
+            }
+            Err(e) if is_no_account(&e) => return Sent::NoToken,
+            Err(e) => {
+                debug!("[WatchMinutes] batch deferred: {}", e);
+                return Sent::Deferred(items);
+            }
         }
     }
+    warn!("[WatchMinutes] batch still refused after {MAX_PASSES} passes; dropped");
+    Sent::Done
 }
 
 /// Sends the whole queue now, member by member, whatever the age of its oldest
@@ -337,9 +396,11 @@ async fn flush() {
 }
 
 /// Sends the queue now, for the app quitting. The receiver fires when the send
-/// finished; None when nothing is queued.
+/// finished, and a send already in flight is waited for too; None when nothing
+/// is queued and nothing is being sent.
 pub fn flush_on_exit() -> Option<std::sync::mpsc::Receiver<()>> {
-    if with_state(|s| s.pending.is_empty()) {
+    let in_flight = SENDING.try_lock().is_err();
+    if !in_flight && with_state(|s| s.pending.is_empty()) {
         return None;
     }
     let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
@@ -415,6 +476,62 @@ mod tests {
         put_back(&mut q, vec![queued("a", at(0)), queued("a", at(1)), queued("a", at(2))]);
         let order: Vec<_> = q.iter().map(|x| x.minute).collect();
         assert_eq!(order, vec![at(0), at(1), at(2), at(3)]);
+    }
+
+    #[test]
+    fn a_put_back_queue_never_outgrows_one_batch() {
+        let mut q = VecDeque::new();
+        for i in 0..MAX_PENDING as i64 {
+            q.push_back(queued("a", at(100 + i)));
+        }
+        put_back(&mut q, vec![queued("a", at(0)), queued("a", at(1)), queued("a", at(2))]);
+        assert_eq!(q.len(), MAX_PENDING);
+        assert_eq!(q.front().unwrap().minute, at(100));
+        assert_eq!(q.back().unwrap().minute, at(100 + MAX_PENDING as i64 - 1));
+    }
+
+    #[test]
+    fn one_batch_takes_at_most_the_batch_size() {
+        let mut q = VecDeque::new();
+        for i in 0..(MAX_PENDING as i64 + 5) {
+            q.push_back(queued("a", at(i)));
+        }
+        q.push_back(queued("b", at(99)));
+        let (member, items) = take_first_member(&mut q).unwrap();
+        assert_eq!(member, "a");
+        assert_eq!(items.len(), MAX_PENDING);
+        assert_eq!(q.len(), 6);
+        assert_eq!(q.front().unwrap().member, "a");
+    }
+
+    #[test]
+    fn a_channel_without_an_id_is_not_queued_and_long_names_are_cut() {
+        let mut empty = ch("x");
+        empty.channel_id = String::new();
+        assert!(queueable(empty).is_none());
+        let mut long = ch("x");
+        long.login = "l".repeat(100);
+        long.name = "é".repeat(200);
+        let cut = queueable(long).unwrap();
+        assert_eq!(cut.login.chars().count(), MAX_LOGIN);
+        assert_eq!(cut.name.chars().count(), MAX_NAME);
+    }
+
+    #[test]
+    fn a_400_names_the_entry_to_drop() {
+        assert_eq!(rejected_index(r#"{"error":"bad_login","index":2}"#, 5), Some(2));
+        assert_eq!(rejected_index(r#"{"error":"bad_login","index":5}"#, 5), None);
+        assert_eq!(rejected_index(r#"{"error":"bad_login","index":-1}"#, 5), None);
+        assert_eq!(rejected_index(r#"{"error":"bad_login"}"#, 5), None);
+        assert_eq!(rejected_index("not json", 5), None);
+    }
+
+    #[test]
+    fn a_network_failure_during_sign_in_is_not_a_missing_account() {
+        assert!(is_no_account("no_token: not signed in"));
+        assert!(!is_no_account("no_token: network: dns error"));
+        assert!(!is_no_account("no_token: connect: refused"));
+        assert!(!is_no_account("network: dns error"));
     }
 
     #[test]

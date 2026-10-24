@@ -85,7 +85,7 @@ pub async fn rpc(name: &str, args: Value) -> Result<Value, String> {
         .json(&args)
         .send()
         .await
-        .map_err(|e| format!("{name}: {e}"))?;
+        .map_err(|e| format!("{name}: {} {e}", send_failure_prefix(e.is_connect())))?;
     let status = res.status();
     if !status.is_success() {
         let body = res.text().await.unwrap_or_default();
@@ -93,8 +93,19 @@ pub async fn rpc(name: &str, args: Value) -> Result<Value, String> {
     }
     // A function that returns nothing answers 200 or 204 with an empty body;
     // that is a success, not a body to decode.
-    let body = res.text().await.map_err(|e| format!("{name}: {e}"))?;
-    rpc_body(&body).map_err(|e| format!("{name}: {e}"))
+    let body = res.text().await.map_err(|e| format!("{name}: landed: {e}"))?;
+    rpc_body(&body).map_err(|e| format!("{name}: landed: {e}"))
+}
+
+/// The marker a failed send carries in its error text: `connect:` when the
+/// request never left (the server cannot have acted on it), `landed:` when it
+/// may have reached the server.
+fn send_failure_prefix(connect_failed: bool) -> &'static str {
+    if connect_failed {
+        "connect:"
+    } else {
+        "landed:"
+    }
 }
 
 fn rpc_body(body: &str) -> Result<Value, serde_json::Error> {
@@ -234,6 +245,24 @@ fn join_refusal(text: &str) -> Option<String> {
     Some(format!("{status} {response}"))
 }
 
+/// What a message says when the registry channel is gone while the socket stays
+/// open: a channel error or close, or a system error, on the registry topic.
+fn channel_down(text: &str) -> Option<String> {
+    let msg: Value = serde_json::from_str(text).ok()?;
+    if msg.get("topic").and_then(Value::as_str) != Some(format!("realtime:{TOPIC}").as_str()) {
+        return None;
+    }
+    let event = msg.get("event").and_then(Value::as_str)?;
+    match event {
+        "phx_error" | "phx_close" => Some(format!("channel down: {event}")),
+        "system" if msg.pointer("/payload/status").and_then(Value::as_str) == Some("error") => {
+            let detail = msg.pointer("/payload/message").and_then(Value::as_str).unwrap_or_default();
+            Some(format!("channel down: system error {detail}"))
+        }
+        _ => None,
+    }
+}
+
 /// Holds the realtime socket for the life of the process: joins, heartbeats every
 /// 25 s, and reconnects with a growing pause after a drop. Started once at boot.
 pub fn start_realtime() {
@@ -246,7 +275,7 @@ pub fn start_realtime() {
         let mut joined_before = false;
         let mut pause = Duration::from_secs(2);
         loop {
-            match run_socket(&ws, key, &mut joined_before).await {
+            match run_socket(&ws, key, &mut joined_before, &mut pause).await {
                 Ok(()) => pause = Duration::from_secs(2),
                 Err(e) => log::debug!("[StreamNookBackend] realtime: {e}"),
             }
@@ -256,7 +285,7 @@ pub fn start_realtime() {
     });
 }
 
-async fn run_socket(ws: &str, key: &str, joined_before: &mut bool) -> Result<(), String> {
+async fn run_socket(ws: &str, key: &str, joined_before: &mut bool, pause: &mut Duration) -> Result<(), String> {
     let (mut socket, _) = tokio_tungstenite::connect_async(ws).await.map_err(|e| e.to_string())?;
     socket.send(Message::Text(join_message(key).into())).await.map_err(|e| e.to_string())?;
     let mut beat = tokio::time::interval(Duration::from_secs(25));
@@ -279,6 +308,9 @@ async fn run_socket(ws: &str, key: &str, joined_before: &mut bool) -> Result<(),
                         let _ = feed().send(Change::Rejoined);
                     }
                     *joined_before = true;
+                    *pause = Duration::from_secs(2);
+                } else if let Some(down) = channel_down(&text) {
+                    return Err(down);
                 } else if let Some(refusal) = join_refusal(&text) {
                     let msg = format!("join refused: {refusal}");
                     let mut last = LAST_REFUSAL.lock().unwrap_or_else(|e| e.into_inner());
@@ -353,6 +385,26 @@ mod tests {
         assert_eq!(join["topic"], "realtime:streamnook-registries");
         assert_eq!(join.pointer("/payload/config/postgres_changes"), Some(&json!([])));
         assert_eq!(join.pointer("/payload/config/private"), Some(&json!(false)));
+    }
+
+    #[test]
+    fn a_failed_send_says_whether_it_may_have_landed() {
+        assert_eq!(send_failure_prefix(true), "connect:");
+        assert_eq!(send_failure_prefix(false), "landed:");
+    }
+
+    #[test]
+    fn a_dead_registry_channel_is_told_apart_from_other_traffic() {
+        let topic = "realtime:streamnook-registries";
+        let error = format!(r#"{{"event":"phx_error","topic":"{topic}","payload":{{}}}}"#);
+        let close = format!(r#"{{"event":"phx_close","topic":"{topic}","payload":{{}}}}"#);
+        let system = format!(r#"{{"event":"system","topic":"{topic}","payload":{{"status":"error","message":"boom"}}}}"#);
+        let system_ok = format!(r#"{{"event":"system","topic":"{topic}","payload":{{"status":"ok"}}}}"#);
+        assert!(channel_down(&error).is_some());
+        assert!(channel_down(&close).is_some());
+        assert!(channel_down(&system).unwrap().contains("boom"));
+        assert!(channel_down(&system_ok).is_none());
+        assert!(channel_down(r#"{"event":"phx_close","topic":"phoenix","payload":{}}"#).is_none());
     }
 
     #[test]

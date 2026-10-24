@@ -15,6 +15,7 @@
 //! concurrent add but keeps the counter moving. Watch time is not here: the
 //! watch-minute reporter (`watch_minutes`) sends that through the API.
 
+use futures::StreamExt;
 use log::{debug, warn};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -77,19 +78,18 @@ fn added(row: Option<&Value>, stat: Stat, amount: i64) -> i64 {
 }
 
 /// Whether a failed send is worth keeping for the next one: the request never
-/// reached the server, or the server was busy or faulty. A timeout after the
-/// request left, and any other refusal, are not (a retry could double-count or
-/// would be refused again).
+/// left (`connect:`), or the server answered 429, 500, 502 or 503. A request
+/// that may have landed (`landed:`), a 504, and any other refusal are not (a
+/// retry could double-count or would be refused again).
 fn worth_retrying(error: &str) -> bool {
-    let status = error
-        .split_once(": ")
-        .and_then(|(_, rest)| rest.split_whitespace().next())
-        .and_then(|word| word.parse::<u16>().ok())
-        .filter(|code| (100..600).contains(code));
-    match status {
-        Some(code) => code == 429 || code >= 500,
-        None => !error.contains("timed out") && !error.contains("timeout"),
+    let rest = error.split_once(": ").map_or(error, |(_, rest)| rest);
+    if rest.starts_with("connect:") {
+        return true;
     }
+    rest.split_whitespace()
+        .next()
+        .and_then(|word| word.parse::<u16>().ok())
+        .is_some_and(|code| matches!(code, 429 | 500 | 502 | 503))
 }
 
 /// Sends one summed count; the error says whether it should be kept.
@@ -130,21 +130,41 @@ async fn send_emote(member: &str, u: &EmoteUse) -> Result<(), String> {
     backend::rpc("increment_emote_usage", args).await.map(|_| ())
 }
 
-/// Sends everything pending, once. Entries that failed in a way worth retrying
+/// How many sends run at once.
+const PARALLEL: usize = 8;
+
+/// Sends everything pending, once: the stat counts first, then the emote
+/// counts, each a few at a time. Entries that failed in a way worth retrying
 /// go back for the next send.
 async fn send_pending() {
     let _sending = SENDING.lock().await;
     let (taken, taken_emotes) = pending(|p| (std::mem::take(&mut p.amounts), std::mem::take(&mut p.emotes)));
-    for ((member, stat), amount) in taken {
-        if let Err(e) = send_one(&member, stat, amount).await {
+    let stat_results: Vec<_> = futures::stream::iter(taken)
+        .map(|((member, stat), amount)| async move {
+            let result = send_one(&member, stat, amount).await;
+            (member, stat, amount, result)
+        })
+        .buffer_unordered(PARALLEL)
+        .collect()
+        .await;
+    for (member, stat, amount, result) in stat_results {
+        if let Err(e) = result {
             warn!("[Stats] {} +{amount} failed: {e}", stat.column());
             if worth_retrying(&e) {
                 pending(|p| *p.amounts.entry((member, stat)).or_insert(0) += amount);
             }
         }
     }
-    for ((member, _), u) in taken_emotes {
-        if let Err(e) = send_emote(&member, &u).await {
+    let emote_results: Vec<_> = futures::stream::iter(taken_emotes)
+        .map(|((member, _), u)| async move {
+            let result = send_emote(&member, &u).await;
+            (member, u, result)
+        })
+        .buffer_unordered(PARALLEL)
+        .collect()
+        .await;
+    for (member, u, result) in emote_results {
+        if let Err(e) = result {
             warn!("[Stats] emote {} +{} failed: {e}", u.id, u.count);
             if worth_retrying(&e) {
                 pending(|p| merge_emotes(&mut p.emotes, &member, vec![u]));
@@ -172,9 +192,11 @@ async fn run() {
 }
 
 /// Sends what is pending now, for the app quitting. The receiver fires when the
-/// send finished; None when nothing is pending, which costs no request.
+/// send finished, and a send already in flight is waited for too; None when
+/// nothing is pending and nothing is being sent, which costs no request.
 pub fn flush_on_exit() -> Option<std::sync::mpsc::Receiver<()>> {
-    if pending(|p| p.amounts.is_empty() && p.emotes.is_empty()) {
+    let in_flight = SENDING.try_lock().is_err();
+    if !in_flight && pending(|p| p.amounts.is_empty() && p.emotes.is_empty()) {
         return None;
     }
     let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
@@ -268,12 +290,16 @@ mod tests {
 
     #[test]
     fn only_a_send_that_may_not_have_landed_cleanly_is_kept() {
-        assert!(worth_retrying("increment_user_stat: error sending request for url (x)"));
+        assert!(worth_retrying("increment_user_stat: connect: error sending request for url (x)"));
         assert!(worth_retrying("increment_user_stat: 503 Service Unavailable"));
+        assert!(worth_retrying("increment_user_stat: 502 Bad Gateway"));
+        assert!(worth_retrying("increment_user_stat: 500 Internal Server Error"));
         assert!(worth_retrying("increment_user_stat: 429 Too Many Requests"));
+        assert!(!worth_retrying("increment_user_stat: 504 Gateway Timeout"));
+        assert!(!worth_retrying("increment_user_stat: landed: operation timed out"));
+        assert!(!worth_retrying("increment_user_stat: landed: error decoding response body"));
         assert!(!worth_retrying("increment_user_stat: 401 Unauthorized {}"));
         assert!(!worth_retrying("increment_user_stat: 400 Bad Request {}"));
-        assert!(!worth_retrying("increment_user_stat: operation timed out"));
     }
 
     #[test]
