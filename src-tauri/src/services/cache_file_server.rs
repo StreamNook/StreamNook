@@ -180,8 +180,10 @@ fn write_synced(path: &Path, text: &str) -> std::io::Result<()> {
 }
 
 /// The server's routes: `/cache/{token}/ping` and
-/// `/cache/{token}/{folder}/{file}`, reading files under `root`.
-fn routes(token: String, root: PathBuf) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
+/// `/cache/{token}/{folder}/{file}`, reading files under `root`. Every request
+/// that matches no route is answered with `status`, so each reply carries the
+/// same cache and CORS headers.
+fn routes(token: String, root: PathBuf) -> impl Filter<Extract = (impl Reply,), Error = std::convert::Infallible> + Clone {
     let file_token = token.clone();
     let ping_token = token;
     let files = warp::get()
@@ -204,7 +206,14 @@ fn routes(token: String, root: PathBuf) -> impl Filter<Extract = (impl Reply,), 
         .and(warp::path("ping"))
         .and(warp::path::end())
         .map(move |tok: String| status(if tok == ping_token { StatusCode::NO_CONTENT } else { StatusCode::NOT_FOUND }));
-    ping.or(files)
+    ping.or(files).recover(rejection_status)
+}
+
+/// The reply for a request no route took: 405 for a method other than GET, 404
+/// for anything else.
+async fn rejection_status(rejection: Rejection) -> Result<Response<bytes::Bytes>, std::convert::Infallible> {
+    let not_get = rejection.find::<warp::reject::MethodNotAllowed>().is_some();
+    Ok(status(if not_get { StatusCode::METHOD_NOT_ALLOWED } else { StatusCode::NOT_FOUND }))
 }
 
 /// A reply with no body. Never cached, so a transient miss is not remembered.
@@ -318,7 +327,8 @@ fn resolve(root: &Path, dir: &str, file: &str) -> Option<PathBuf> {
 /// The image type from its first bytes (many cached badges are `.bin` files
 /// that hold PNG; some cosmetics `.bin` files hold WebP). Bytes that give no
 /// known type in a file named `.svg` are still served as SVG, because the cache
-/// only saves that extension for SVG content.
+/// only saves that extension for SVG content. An HTML page is served as opaque
+/// bytes whatever the extension says.
 fn sniff(b: &[u8], ext: &str) -> &'static str {
     if b.starts_with(b"\x89PNG\r\n\x1a\n") {
         "image/png"
@@ -330,7 +340,10 @@ fn sniff(b: &[u8], ext: &str) -> &'static str {
         "image/webp"
     } else if b.len() >= 12 && &b[4..8] == b"ftyp" && (&b[8..12] == b"avif" || &b[8..12] == b"avis") {
         "image/avif"
-    } else if crate::services::universal_cache_service::looks_like_svg(b) ||ext.eq_ignore_ascii_case("svg") {
+    } else if crate::services::universal_cache_service::looks_like_html(b) {
+        // A page is never an image, whatever the file is named.
+        "application/octet-stream"
+    } else if crate::services::universal_cache_service::looks_like_svg(b) || ext.eq_ignore_ascii_case("svg") {
         "image/svg+xml"
     } else {
         "application/octet-stream"
@@ -386,6 +399,15 @@ mod tests {
         assert_eq!(sniff(b"not markup", "SVG"), "image/svg+xml");
         assert_eq!(sniff(b"not markup", "png"), "application/octet-stream");
         assert_eq!(sniff(b"\x89PNG\r\n\x1a\nrest", "svg"), "image/png", "known bytes win over the extension");
+    }
+
+    #[test]
+    fn an_html_page_is_never_served_as_an_image() {
+        let page = b"<!DOCTYPE html><html><body>Sign in to the network</body></html>";
+        assert_eq!(sniff(page, "svg"), "application/octet-stream");
+        assert_eq!(sniff(page, "png"), "application/octet-stream");
+        assert_eq!(sniff(page, "bin"), "application/octet-stream");
+        assert_eq!(sniff(b"<svg/>", "svg"), "image/svg+xml");
     }
 
     #[test]
@@ -546,6 +568,32 @@ mod tests {
         assert_eq!(status_of(&c, &format!("{base}/cache/{token}/emotes/missing.webp")).await, 404);
         assert_eq!(status_of(&c, &format!("{base}/cache/{token}/manifest.json/x")).await, 404, "the manifest is no folder");
         assert_eq!(status_of(&c, &format!("{base}/cache/{token}/emotes/manifest.json")).await, 404);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn every_error_reply_carries_the_loopback_headers() {
+        let root = temp_root("error-headers");
+        let (base, token) = spawn_server(root.clone()).await;
+        let c = client();
+        let urls = [
+            format!("{base}/cache/{token}/emotes"),
+            format!("{base}/cache/{token}/emotes/a/b"),
+            format!("{base}/cache/{token}/nope/a@1x.webp"),
+            format!("{base}/cache/wrong/emotes/a@1x.webp"),
+            format!("{base}/nothing"),
+        ];
+        for url in urls {
+            let res = c.get(&url).send().await.unwrap();
+            assert_eq!(res.status().as_u16(), 404, "{url}");
+            let header = |name: &str| res.headers().get(name).and_then(|v| v.to_str().ok()).map(str::to_owned);
+            assert_eq!(header("cache-control").as_deref(), Some("no-store"), "{url}");
+            assert_eq!(header("access-control-allow-origin").as_deref(), Some("*"), "{url}");
+        }
+        let post = c.post(format!("{base}/cache/{token}/emotes/a@1x.webp")).send().await.unwrap();
+        assert_eq!(post.status().as_u16(), 405);
+        assert_eq!(post.headers().get("cache-control").and_then(|v| v.to_str().ok()), Some("no-store"));
+        assert_eq!(post.headers().get("access-control-allow-origin").and_then(|v| v.to_str().ok()), Some("*"));
         let _ = std::fs::remove_dir_all(&root);
     }
 
