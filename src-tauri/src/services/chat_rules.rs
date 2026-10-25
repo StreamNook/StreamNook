@@ -905,6 +905,7 @@ struct Evaluation {
     mentioned: bool,
     name_hit: Option<NameHit>,
     reply_to_me: bool,
+    is_own: bool,
     highlight: Option<HighlightStamp>,
     built_in: Option<BuiltInStamp>,
     filter_ids: Vec<String>,
@@ -919,6 +920,7 @@ impl Evaluation {
             mentioned: false,
             name_hit: None,
             reply_to_me: false,
+            is_own: false,
             highlight: None,
             built_in: None,
             filter_ids: Vec::new(),
@@ -1221,6 +1223,7 @@ impl ChatRules {
     fn apply(msg: &mut ChatMessage, ev: Evaluation) {
         msg.metadata.is_mentioned = ev.mentioned;
         msg.metadata.is_reply_to_me = ev.reply_to_me;
+        msg.metadata.is_own = ev.is_own;
         msg.metadata.highlight = ev.highlight;
         msg.metadata.built_in = ev.built_in;
         msg.metadata.filter_ids = ev.filter_ids;
@@ -1401,6 +1404,7 @@ impl ChatRules {
             mentioned,
             name_hit,
             reply_to_me,
+            is_own,
             highlight,
             built_in,
             filter_ids,
@@ -2843,5 +2847,32 @@ mod tests {
         assert!(!ChatRules::platform_owners().iter().any(|k| k.starts_with("kick-name-")));
         ChatRules::set_platform_identity("kick", "", "", "");
         assert_eq!(ChatRules::platform_owners()[0], "youtube-UCsntester");
+    }
+
+    #[test]
+    fn own_rows_are_stamped_on_every_platform() {
+        let _own = ChatRules::own_identity_test_lock();
+        let _reset = PlatformReset::new();
+        ChatRules::set_own_identity("brandon", "999");
+        ChatRules::set_platform_identity("kick", "5550001", "snkicktester", "");
+        let rules = rules_from("{}", "{}", "{}");
+        let mut twitch = msg("brandon", "hi");
+        twitch.user_id = "999".into();
+        eval_with(&rules, &mut twitch);
+        assert!(twitch.metadata.is_own);
+        let mut kick = msg("snkicktester", "hi");
+        kick.provider = "kick".into();
+        kick.user_id = "5550001".into();
+        eval_with(&rules, &mut kick);
+        assert!(kick.metadata.is_own);
+        // Our Twitch id on a Kick row is someone else.
+        let mut other = msg("bob", "hi");
+        other.provider = "kick".into();
+        other.user_id = "999".into();
+        eval_with(&rules, &mut other);
+        assert!(!other.metadata.is_own);
+        // Omitted from the wire when false.
+        let json = serde_json::to_value(&other.metadata).unwrap();
+        assert!(json.get("is_own").is_none());
     }
 }

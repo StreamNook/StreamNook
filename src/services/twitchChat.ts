@@ -79,6 +79,8 @@ export interface MessageMetadata {
   rules_evaluated?: boolean;
   /** The message replies to one of ours. */
   is_reply_to_me?: boolean;
+  /** The signed-in account sent it, on whichever platform the row is from. */
+  is_own?: boolean;
   /** First matching highlight rule (phrase, user, or badge), if any. */
   highlight?: HighlightStamp;
   /** Built-in event tint (raid, returning chatter, first message, self). */

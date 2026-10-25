@@ -155,7 +155,7 @@ export const MobileChatPane: React.FC<{
 
   // A mention buzzes once. The flash the row paints is easy to miss on a
   // phone held at arm's length, or with the screen dimmed for a long watch.
-  // Rust stamps is_mentioned on every message, so this only has to notice
+  // Rust stamps is_mentioned and is_reply_to_me on every message, so this only has to notice
   // NEW rows: the ref remembers the newest id it has seen, and the first pass
   // for a room (or a reload's backfill) only primes it. Rows older than a few
   // seconds are history catching up, never a live mention.
@@ -179,8 +179,8 @@ export const MobileChatPane: React.FC<{
       const m = messages[i] as BackendChatMessage | string;
       if (typeof m === 'string') continue;
       if (m.id === cur.lastId) break;
-      if (!m.metadata?.is_mentioned) continue;
-      if (m.user_id && m.user_id === currentUser?.user_id) continue;
+      // Rust never flags your own rows, on any platform.
+      if (!m.metadata?.is_mentioned && !m.metadata?.is_reply_to_me) continue;
       const ts = Number(m.timestamp);
       const at = Number.isFinite(ts) ? (ts < 1e12 ? ts * 1000 : ts) : Date.parse(m.timestamp);
       if (Number.isFinite(at) && now - at > 8000) continue;
@@ -192,7 +192,7 @@ export const MobileChatPane: React.FC<{
       lastBuzzed = buzz;
       hapticCommit();
     }
-  }, [messages, activeChannel, mentionHaptic, currentUser?.user_id]);
+  }, [messages, activeChannel, mentionHaptic]);
 
   // Rebuilds the connection if it dies while the app is open. Every room rides
   // one connection, so watching the active one covers all of them.

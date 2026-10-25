@@ -258,6 +258,10 @@ pub struct MessageMetadata {
     /// The message replies to one of ours.
     #[serde(default)]
     pub is_reply_to_me: bool,
+    /// The signed-in account sent it, on whichever platform the row is from
+    /// (stamped by the rule engine). Omitted when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_own: bool,
     /// First matching user highlight rule (phrase, user, or badge), if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub highlight: Option<HighlightStamp>,

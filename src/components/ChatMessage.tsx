@@ -2261,7 +2261,11 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   const isFirstMessage =
     parsed.tags.get('first-msg') === '1' || parsed.metadata?.is_first_message === true;
   const isReturningChatter = parsed.tags.get('returning-chatter') === '1';
-  const isOwnMessage = !!currentUser?.user_id && parsed.tags.get('user-id') === currentUser.user_id;
+  // Rust stamps every evaluated row (any platform); an optimistic local row
+  // is not evaluated yet and still has the Twitch user-id tag.
+  const isOwnMessage =
+    parsed.metadata?.is_own === true ||
+    (!!currentUser?.user_id && parsed.tags.get('user-id') === currentUser.user_id);
   const isRaidNotice = parsed.tags.get('msg-id') === 'raid';
 
   // Resolve which built-in event (if any) should drive the row's tint. Order
