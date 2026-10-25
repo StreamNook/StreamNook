@@ -357,6 +357,12 @@ pub enum MessageSegment {
         /// emote came from the channel's own sets.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         is_personal: Option<bool>,
+        /// The emote's file in the disk cache at the size the page draws, when
+        /// Rust knew it as the row was handed over (`load_channel_history`
+        /// stamps history rows' 7TV emotes). The page draws that file on the
+        /// row's first paint. Absent otherwise.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        local_path: Option<String>,
     },
     Emoji {
         content: String,

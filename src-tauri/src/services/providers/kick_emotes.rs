@@ -645,6 +645,7 @@ mod tests {
                     is_zero_width: None,
                     modifier_flags: None,
                     is_personal: None,
+                    local_path: None,
                 });
             } else if let Some(e) = lookup(slug, word) {
                 if !sep.is_empty() {
@@ -657,6 +658,7 @@ mod tests {
                     is_zero_width: Some(false),
                     modifier_flags: None,
                     is_personal: None,
+                    local_path: None,
                 });
             } else {
                 segments.push(MessageSegment::Text { content: format!("{sep}{word}") });

@@ -1457,6 +1457,7 @@ mod tests {
             is_zero_width: Some(zero_width),
             modifier_flags: flags,
             is_personal: None,
+            local_path: None,
         }
     }
 

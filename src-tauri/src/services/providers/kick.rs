@@ -2035,6 +2035,7 @@ fn parse_segments(content: &str, slug: &str) -> (Vec<MessageSegment>, String) {
                     is_zero_width: None,
                     modifier_flags: None,
                     is_personal: None,
+                    local_path: None,
                 });
                 plain.push_str(name);
             } else {
@@ -2085,6 +2086,7 @@ fn push_text_run(segments: &mut Vec<MessageSegment>, plain: &mut String, text: &
                     is_zero_width: Some(e.zero_width),
                     modifier_flags: None,
                     is_personal: None,
+                    local_path: None,
                 });
             }
             None => buf.push_str(&word),

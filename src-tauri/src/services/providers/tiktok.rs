@@ -454,6 +454,7 @@ fn build_gift_message(m: &WebcastGiftMessage, channel_key: &str) -> Option<ChatM
             is_zero_width: Some(false),
             modifier_flags: None,
             is_personal: None,
+            local_path: None,
         });
         segments.push(MessageSegment::Text {
             content: format!(" {}", phrase),
@@ -848,6 +849,7 @@ fn comment_segments(comment: &str, emotes: &[EmoteData]) -> Vec<MessageSegment> 
             is_zero_width: None,
             modifier_flags: None,
             is_personal: None,
+            local_path: None,
         });
     }
     if from < chars.len() {

@@ -4395,6 +4395,7 @@ impl IrcService {
                                 is_zero_width: emote.is_zero_width,
                                 modifier_flags: emote.modifier_flags,
                                 is_personal: Some(true),
+                                local_path: None,
                             }
                         }
                         None => segment.clone(),
@@ -4559,6 +4560,7 @@ impl IrcService {
                 is_zero_width: None,
                 modifier_flags: None,
                 is_personal: None,
+                local_path: None,
             });
 
             last_char_index = emote.end + 1;
@@ -4655,6 +4657,7 @@ impl IrcService {
                     is_zero_width: emote.is_zero_width,
                     modifier_flags: emote.modifier_flags,
                     is_personal: from_personal.then_some(true),
+                    local_path: None,
                 });
             } else {
                 // Convert emoji shortcodes first

@@ -355,6 +355,7 @@ fn emote_segment(word: &str, e: Baked) -> MessageSegment {
         is_zero_width: Some(e.zero_width),
         modifier_flags: None,
         is_personal: None,
+        local_path: None,
     }
 }
 
@@ -404,6 +405,7 @@ mod tests {
             is_zero_width: Some(false),
             modifier_flags: None,
             is_personal: None,
+            local_path: None,
         }
     }
 
@@ -543,6 +545,7 @@ mod tests {
             is_zero_width: None,
             modifier_flags: None,
             is_personal: None,
+            local_path: None,
         };
         let personal = MessageSegment::Emote {
             content: "OMEGALUL".into(),
@@ -551,6 +554,7 @@ mod tests {
             is_zero_width: Some(false),
             modifier_flags: None,
             is_personal: Some(true),
+            local_path: None,
         };
         let input = vec![seventv("OMEGALUL", "oldglobal"), text(" "), kick_native.clone(), text(" "), personal.clone(), text(" "), seventv("gone", "x")];
         let out = bake(input, table);

@@ -505,6 +505,7 @@ mod tests {
                 is_zero_width: None,
                 modifier_flags: None,
                 is_personal: None,
+                local_path: None,
             },
         ];
         msg
