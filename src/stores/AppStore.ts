@@ -14,6 +14,7 @@ import { updatePresence } from '../services/supabaseService';
 import { patchSettings, settingsDiff } from '../utils/settingsBroadcast';
 import { IS_MOBILE } from '../utils/platform';
 import { makeKey, parseKey } from '../utils/providerKey';
+import { clearPauseIntent, forgetOwnChannel, holdOwnChannel } from '../utils/pausePark';
 import { isStrayYouTubeFavoriteId } from '../utils/favorites';
 import { buildProviderUrl, streamProvider } from '../utils/streamProvider';
 import { categoryNavigation, type StreamCategoryTarget } from '../utils/streamCategory';
@@ -2397,6 +2398,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   stopStream: async (options) => {
     const preserveBackend = options?.preserveBackend ?? false;
     trackActivity('Stopped stream');
+    // Stopping the stream drops the viewer's pause and the own-channel memory.
+    clearPauseIntent('main');
+    forgetOwnChannel();
     // Starts wait for this close to finish (settleStop).
     let finishStop: () => void = () => {};
     const stopping = new Promise<void>((resolve) => {
@@ -2944,6 +2948,18 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (!preResolved) logQualityFallback(requestedQuality, result.quality);
       // The row is Rust's; only the unified lists' provider marks ride along.
       const info: TwitchStream = { ...started.row, provider: seed?.provider, watch_url: seed?.watch_url };
+      // The signed-in broadcaster opening their own live channel: it opens
+      // paused, chat only (no second video pipeline on the machine that is
+      // streaming, and no echo into the stream). Once per opening; any other
+      // channel resets that.
+      const me = get().currentUser?.user_id;
+      if (me && info.user_id === me) {
+        if (holdOwnChannel(makeKey('twitch', info.user_login))) {
+          Logger.warn('[Stream] your own channel opens paused (chat only)');
+        }
+      } else {
+        forgetOwnChannel();
+      }
 
       set({ streamUrl: result.url, activeQuality: result.quality, adSource: adSourceFrom(result), availableQualities: result.available ?? [], playbackKind: 'hls', currentStream: info, currentMediaType: 'live', originalMediaUrl: null, vodPlayback: null, liveRewind: null, liveRewindAvailable: null, liveRewindAnchor: null, liveLeftOffSecs: null, offlineRoom: null, offlineRoomLive: null, offlineRoomJoining: false, isHomeActive: false });
 
