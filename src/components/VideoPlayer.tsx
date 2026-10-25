@@ -110,6 +110,7 @@ import {
 } from '../utils/pausePark';
 import { followLiveAfterResync } from '../utils/liveResync';
 import { watchStalls } from '../utils/stallWatchdog';
+import { createRecovery } from '../utils/recovery';
 import { attachPauseRoutes } from '../utils/pauseRoutes';
 import { recognizeNowPlaying, announceSong } from '../utils/songId';
 import {
@@ -1517,19 +1518,29 @@ const VideoPlayer = () => {
       }
       // One recovery per player: the resume check, the freeze watchdog and the
       // behind-live watchdog all end here, so a single freeze can restart the
-      // stream once, never while a quality change, rewind or return to live is
-      // already swapping it, and an ended stream is not restarted in a loop.
-      let recovering = false;
+      // stream once, never while a quality change, rewind, return to live or
+      // auto-switch confirmation is already swapping it, and an ended stream is
+      // not restarted in a loop. A refused call leaves the recovery unused.
       let stopFrozenWatch: (() => void) | null = null;
-      const recover = (why: string, quiet = true) => {
-        if (recovering || hlsRef.current !== hls || useAppStore.getState().isRestartingStream) return;
-        recovering = true;
-        resyncStopRef.current?.();
-        resyncStopRef.current = null;
-        stopFrozenWatch?.();
-        Logger.warn(why);
-        void useAppStore.getState().restartStream({ quiet });
-      };
+      const recover = createRecovery({
+        current: () => hlsRef.current === hls,
+        refused: () => {
+          const s = useAppStore.getState();
+          return s.isRestartingStream || s.isAutoSwitching;
+        },
+        stop: () => {
+          resyncStopRef.current?.();
+          resyncStopRef.current = null;
+          stopFrozenWatch?.();
+        },
+        restart: (why: string, quiet: boolean = true) => {
+          Logger.warn(why);
+          void useAppStore.getState().restartStream({
+            quiet,
+            ifUrl: useAppStore.getState().streamUrl ?? undefined,
+          });
+        },
+      });
       if (isLowLatencyChannel) {
         let over = 0;
         let frozen = 0;

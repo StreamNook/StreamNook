@@ -35,6 +35,7 @@ import {
 } from '../../utils/pausePark';
 import { followLiveAfterResync } from '../../utils/liveResync';
 import { watchStalls } from '../../utils/stallWatchdog';
+import { createRecovery } from '../../utils/recovery';
 
 /** Whether the tile `streamId` plays the signed-in account's own Twitch
  *  channel, compared by login the way the Own channel shortcut finds it. */
@@ -661,16 +662,19 @@ export const useMultiNookPlayer = ({
       let stopFrozenWatch: (() => void) | null = null;
       // One recovery per player: the resume check and the freeze watchdog both
       // end here, so a single freeze restarts the tile once.
-      let recovering = false;
-      const recoverTile = (why: string) => {
-        if (recovering || hlsRef.current !== hls) return;
-        recovering = true;
-        stopResync?.();
-        stopResync = null;
-        stopFrozenWatch?.();
-        Logger.warn(`[MultiNook-${streamId}] ${why}`);
-        usemultiNookStore.getState().retrySlot(streamId);
-      };
+      const recoverTile = createRecovery({
+        current: () => hlsRef.current === hls,
+        refused: () => false,
+        stop: () => {
+          stopResync?.();
+          stopResync = null;
+          stopFrozenWatch?.();
+        },
+        restart: (why: string) => {
+          Logger.warn(`[MultiNook-${streamId}] ${why}`);
+          usemultiNookStore.getState().retrySlot(streamId);
+        },
+      });
       video.addEventListener('playing', () => {
         playedHere = true;
       }, opts);

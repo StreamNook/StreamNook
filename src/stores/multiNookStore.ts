@@ -1182,6 +1182,9 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
       ),
     );
     stale.forEach((s) => inFlightStarts.delete(s.id));
+    // A tile cleared (a recovery's retry) while its quality change was running
+    // was skipped by the loader for the in-flight mark; start it now.
+    void get().batchLoadMissingStreams();
     if (restart.length > 0) {
       // Clearing the URL hands the tile to the missing-stream loader, which
       // starts it again under the cap its role now wants.

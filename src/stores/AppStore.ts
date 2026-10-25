@@ -589,8 +589,11 @@ interface AppState {
   playMedia: (type: 'clip' | 'video', url: string, info: MediaInfo) => Promise<void>;
   stopStream: (options?: { preserveBackend?: boolean }) => Promise<void>;
   /** Restart the current stream (stops and starts again). `quiet` skips the
-   *  confirmation toast, for a reload the viewer did not ask for. */
-  restartStream: (options?: { quiet?: boolean }) => Promise<void>;
+   *  confirmation toast, for a reload the viewer did not ask for. `ifUrl` makes
+   *  the restart a no-op when the stream's URL is no longer that one (a swap
+   *  replaced the stream the caller saw). A call made while a restart is
+   *  running returns that restart. */
+  restartStream: (options?: { quiet?: boolean; ifUrl?: string }) => Promise<void>;
   isRestartingStream: boolean;  // True from restart begin until the new stream URL lands; the player freezes its loader on this so it doesn't poll a dead backend
   /** Phone only: why a provider stream has no picture while its chat keeps
    *  running (it ended, is offline, or failed to start). Keyed by the stream's
@@ -1041,6 +1044,9 @@ let transientSwapInFlight: Promise<void> | null = null;
 // winning over the restore issued after it, and every one of them a full relay
 // restart and player rebuild.
 let transientSwapSeq = 0;
+// The restart that is running. A second restart asked for meanwhile is that
+// one, so two relay cycles never overlap.
+let restartInFlight: Promise<void> | null = null;
 async function settleTransientSwap(): Promise<void> {
   if (transientSwapInFlight) await transientSwapInFlight.catch(() => {});
 }
@@ -2527,6 +2533,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   restartStream: async (options) => {
+    if (restartInFlight) return restartInFlight;
     const quiet = options?.quiet ?? false;
     const { currentStream, settings, currentMediaType, isAutoSwitching } = get();
     if (!currentStream) {
@@ -2555,9 +2562,24 @@ export const useAppStore = create<AppState>((set, get) => ({
     const quality = settings.quality;
     const provider = streamProvider(currentStream);
 
+    // From here this call is the restart that is running, until it ends or
+    // hands a dead channel to the offline decision (which may restart again).
+    let release = () => {};
+    const running = new Promise<void>((resolve) => {
+      release = () => {
+        if (restartInFlight === running) restartInFlight = null;
+        resolve();
+      };
+    });
+    restartInFlight = running;
+
     // Provider streams re-resolve through their own adapter. Same shape as the
     // Twitch path below, minus the Helix repair/liveness steps it can't use.
     if (provider !== 'twitch') {
+      if (options?.ifUrl && get().streamUrl !== options.ifUrl) {
+        release();
+        return;
+      }
       try {
         set({ isRestartingStream: true });
         await invoke('stop_stream');
@@ -2581,7 +2603,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         set({ isRestartingStream: false });
         // A failed re-resolve on these platforms usually means the stream
         // ended, so check rather than retrying into a loop.
+        release();
         await get().handleStreamOffline();
+      } finally {
+        release();
       }
       return;
     }
@@ -2609,9 +2634,16 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
     }
     
+    // A swap still resolving must land before the relay is cycled under it.
+    await settleTransientSwap();
+    // The stream the caller saw has been replaced (by that swap or another):
+    // there is nothing left to recover.
+    if (options?.ifUrl && get().streamUrl !== options.ifUrl) {
+      release();
+      return;
+    }
+
     try {
-      // A swap still resolving must land before the relay is cycled under it.
-      await settleTransientSwap();
       // Freeze the running player's loader BEFORE the backend goes down: the relay
       // and its LL origin stop here, but the old hls.js instance lives until the
       // new streamUrl lands (~1-2s of resolve), and polling a dead origin in that
@@ -2649,6 +2681,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         if (!live) {
           Logger.info(`[Stream] ${channel} is offline; routing to auto-switch instead of restarting`);
           set({ isRestartingStream: false });
+          release();
           await get().handleStreamOffline();
           return;
         }
@@ -2668,6 +2701,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       // Always release the freeze; on the recovery path startStream set a fresh
       // streamUrl and the remounted player must be allowed to load.
       if (get().isRestartingStream) set({ isRestartingStream: false });
+      release();
     }
   },
 
