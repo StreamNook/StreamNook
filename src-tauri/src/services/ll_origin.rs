@@ -388,6 +388,9 @@ pub struct LlOrigin {
     /// When a player last asked for the playlist (`mono_ms`; 0 = not yet). A
     /// player that stopped loading lets the reader park the origin (`PARK_IDLE_MS`).
     last_playlist_ms: AtomicU64,
+    /// Held for the whole of `start`, so two starts on one origin run one after
+    /// the other instead of interleaving their probes and installs.
+    start_lock: tokio::sync::Mutex<()>,
 }
 
 /// Hard kill switch: when true, no origin activates and the relays fall back to the
@@ -1026,6 +1029,7 @@ impl LlOrigin {
             upstream: Mutex::new(None),
             parked: AtomicBool::new(false),
             last_playlist_ms: AtomicU64::new(0),
+            start_lock: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -1262,6 +1266,7 @@ impl LlOrigin {
     /// when the origin declined). Awaited from stream start so the player can read the
     /// result before constructing hls.js.
     pub async fn start(self: Arc<Self>, upstream_playlist_url: String) -> StartOutcome {
+        let _start = self.start_lock.lock().await;
         self.stop();
         // The experimental-low-latency kill switch (`DISABLED`, default on) gates the
         // TS parts path, which has a clean fallback (the stable whole-segment path
@@ -1423,7 +1428,7 @@ impl LlOrigin {
             }
         };
 
-        *self.live_edge.lock().unwrap() = Some(LiveEdge {
+        let edge = LiveEdge {
             init_url,
             init_bytes,
             container,
@@ -1433,22 +1438,51 @@ impl LlOrigin {
             target_duration: TARGET_DURATION,
             part_target: PART_TARGET,
             segments,
+        };
+        let installed = self.install_started(gen, edge, upstream_playlist_url.clone(), || {
+            tokio::spawn(run_reader(self.clone(), upstream_playlist_url, client, gen))
         });
-        // Query string stripped: it is most of the length and can carry signed
-        // playback params that have no business in a log people send around.
-        info!(
-            "[LLOrigin] activated ({container:?} low-latency origin) for {}",
-            upstream_playlist_url.split('?').next().unwrap_or("")
-        );
-
-        *self.upstream.lock().unwrap() = Some(upstream_playlist_url.clone());
-        self.note_playlist_request();
-        let handle = tokio::spawn(run_reader(self.clone(), upstream_playlist_url, client, gen));
-        *self.reader_task.lock().unwrap() = Some(handle);
+        if !installed {
+            debug!("[LLOrigin] start superseded by a stop; nothing installed");
+            return inactive;
+        }
         StartOutcome {
             active: true,
             has_prefetch: true,
         }
+    }
+
+    /// Take over for a start that probed as generation `gen`: set the live edge
+    /// and upstream, note the request and store the reader `spawn` makes, all under
+    /// the `reader_task` lock that `stop()` also takes. A start that a `stop()`
+    /// superseded since it began installs nothing (the transmuxer and CMAF track it
+    /// prepared are cleared) and returns false.
+    fn install_started(
+        &self,
+        gen: u64,
+        edge: LiveEdge,
+        upstream: String,
+        spawn: impl FnOnce() -> JoinHandle<()>,
+    ) -> bool {
+        let mut task = self.reader_task.lock().unwrap();
+        if self.generation.load(Ordering::SeqCst) != gen {
+            *self.transmux.lock().unwrap() = None;
+            *self.cmaf_video.lock().unwrap() = None;
+            return false;
+        }
+        let container = edge.container;
+        *self.live_edge.lock().unwrap() = Some(edge);
+        // Query string stripped: it is most of the length and can carry signed
+        // playback params that have no business in a log people send around.
+        info!(
+            "[LLOrigin] activated ({container:?} low-latency origin) for {}",
+            upstream.split('?').next().unwrap_or("")
+        );
+
+        *self.upstream.lock().unwrap() = Some(upstream);
+        self.note_playlist_request();
+        *task = Some(spawn());
+        true
     }
 }
 
@@ -4015,12 +4049,48 @@ mod tests {
         *origin.live_edge.lock().unwrap() = Some(ts_edge_with_one_segment());
         *origin.upstream.lock().unwrap() = Some("http://x/playlist.m3u8".to_string());
         assert!(origin.park());
-        origin.stop();
         let generation = origin.generation.load(Ordering::SeqCst);
+
+        // The stop takes the reader lock and the generation bump, then waits on
+        // the live edge this thread holds, so it is mid-stop while the checks run.
+        let edge_guard = origin.live_edge.lock().unwrap();
+        let stopper = {
+            let origin = origin.clone();
+            std::thread::spawn(move || origin.stop())
+        };
+        let began = std::time::Instant::now();
+        while origin.generation.load(Ordering::SeqCst) == generation {
+            assert!(began.elapsed() < Duration::from_secs(5), "the stop never began");
+            std::thread::yield_now();
+        }
+        assert!(origin.reader_task.try_lock().is_err(), "the stop holds the reader lock");
+        drop(edge_guard);
+        stopper.join().unwrap();
+
         assert!(!origin.unpark(), "a stopped origin has nothing to wake");
         assert!(origin.reader_task.lock().unwrap().is_none(), "no reader was spawned");
-        assert_eq!(origin.generation.load(Ordering::SeqCst), generation);
         assert!(!origin.is_parked());
+        assert!(!origin.is_active());
+    }
+
+    #[test]
+    fn a_start_superseded_by_a_stop_installs_nothing() {
+        let origin = LlOrigin::new(6);
+        let gen = origin.generation.load(Ordering::SeqCst);
+        origin.stop();
+        *origin.cmaf_video.lock().unwrap() = Some((1, 90_000));
+
+        let installed = origin.install_started(
+            gen,
+            ts_edge_with_one_segment(),
+            "http://x/playlist.m3u8".to_string(),
+            || -> JoinHandle<()> { panic!("a superseded start spawns no reader") },
+        );
+        assert!(!installed);
+        assert!(!origin.is_active());
+        assert!(origin.upstream.lock().unwrap().is_none());
+        assert!(origin.cmaf_video.lock().unwrap().is_none(), "the prepared track is cleared");
+        assert!(origin.reader_task.lock().unwrap().is_none());
     }
 
     const OLD_REQUEST_MS: u64 = u64::MAX / 2;
