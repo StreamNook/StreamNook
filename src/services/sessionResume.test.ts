@@ -132,6 +132,25 @@ describe('resume snapshot', () => {
     expect(restoredWhenOpened).toEqual([expect.objectContaining({ key: 'tile-a' }), true]);
   });
 
+  it('restores paused and held tiles before the stream opens', async () => {
+    let restoredWhenOpened: unknown[] = [];
+    h.app = {
+      startStream: vi.fn(async () => {
+        restoredWhenOpened = [heldPause('tile-a', 'tile-a'), isTileHeld('tile-b')];
+        h.multi.isMultiNookActive = true;
+      }),
+    };
+    h.invoke.mockResolvedValueOnce({
+      stream_login: 'streamer',
+      was_running: false,
+      multinook_active: true,
+      paused_tiles: ['tile-a'],
+      own_tiles_opened: ['tile-b'],
+    });
+    await resumePreviousSession();
+    expect(restoredWhenOpened).toEqual([expect.objectContaining({ key: 'tile-a' }), true]);
+  });
+
   it('an older snapshot without tile state restores nothing for tiles', async () => {
     h.app = { startStream: vi.fn() };
     h.invoke.mockResolvedValueOnce({ stream_login: null, was_running: false, multinook_active: true });

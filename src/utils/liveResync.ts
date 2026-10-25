@@ -18,6 +18,13 @@ const MAX_SEEK_REARMS = 3;
  *  to count as frozen. */
 const PROGRESS_SECS = 0.25;
 
+/** Seconds the playhead must have stood still, with progress already made in
+ *  the window, for the freeze timer to measure one more window. */
+const STALL_SECS = 2;
+
+/** Seconds the playhead must move past its last position to count as advancing. */
+const ADVANCE_EPSILON = 0.01;
+
 /** Whether some buffered range holds `t`. */
 function buffers(video: HTMLVideoElement, t: number): boolean {
   const b = video.buffered;
@@ -54,8 +61,12 @@ function windowStart(hls: Hls): number | null {
  * unless the playhead moved forward by playing. Any other seek of the element
  * restarts the freeze timer from where it landed, at most MAX_SEEK_REARMS
  * times; after that a seek never restarts it and the distance it jumped does not
- * count as progress. `onStuck` runs only while the video is not paused. Returns
- * the cancel.
+ * count as progress. This follower's own seek never counts against that limit.
+ * Wherever the freeze timer starts outside a seek it measures from the playhead
+ * at that moment. When a window ends with progress made but the playhead standing
+ * still for STALL_SECS or more, the freeze timer measures one more window from
+ * there (once). `onStuck` runs only while the video is not paused. Returns the
+ * cancel.
  */
 export function followLiveAfterResync(
   hls: Hls,
@@ -70,11 +81,23 @@ export function followLiveAfterResync(
   let jumped = 0; // seconds the playhead was moved by seeks that did not restart the window
   let lastPos = video.currentTime; // the playhead before the latest seek
   let rearms = 0;
+  let ownSeekTo: number | null = null; // where this follower's own seek was sent, until its event arrives
+  let lastAdvanceAt = Date.now(); // when the playhead last moved forward by playing
+  let extended = false; // the freeze timer already measured one extra window
   let dataTimer: ReturnType<typeof setTimeout> | null = null;
   let freezeTimer: ReturnType<typeof setTimeout> | null = null;
   const armFreeze = () => {
     if (freezeTimer !== null) clearTimeout(freezeTimer);
+    lastAdvanceAt = Date.now();
     freezeTimer = setTimeout(judgeFreeze, RESYNC_WINDOW_MS);
+  };
+  // The freeze window measures from the playhead as it is now, unless a seek is
+  // still landing (its own event measures from where it lands).
+  const measureFromHere = () => {
+    if (video.seeking) return;
+    baseline = video.currentTime;
+    jumped = 0;
+    lastPos = video.currentTime;
   };
   const tryMove = () => {
     if (seeked || !reloaded) return;
@@ -88,6 +111,7 @@ export function followLiveAfterResync(
     if (!Number.isFinite(target) || target <= video.currentTime + MIN_GAIN_SECS) return;
     if (target < first || !buffers(video, target)) return;
     seeked = true;
+    ownSeekTo = target;
     video.currentTime = target;
     baseline = video.currentTime;
     jumped = 0;
@@ -106,18 +130,28 @@ export function followLiveAfterResync(
     const first = windowStart(hls);
     if (first !== null && f.start + f.duration > first && !liveData) {
       liveData = true;
+      measureFromHere();
       armFreeze();
     }
   };
   const onTimeUpdate = () => {
-    if (!video.seeking) lastPos = video.currentTime;
+    if (video.seeking) return;
+    if (video.currentTime > lastPos + ADVANCE_EPSILON) lastAdvanceAt = Date.now();
+    lastPos = video.currentTime;
   };
   // Any seek, whoever made it (this follower, hls.js's own live sync, the
   // watchdog, a gap nudge), measures progress from where it landed. While the
   // freeze timer runs it restarts it, up to MAX_SEEK_REARMS times; past that
-  // the seek only adds the distance it jumped, which is not progress.
+  // the seek only adds the distance it jumped, which is not progress. This
+  // follower's own seek already measured from its target and uses no re-arm.
   const onSeeking = () => {
     const now = video.currentTime;
+    const own = ownSeekTo !== null && now === ownSeekTo;
+    ownSeekTo = null;
+    if (own) {
+      lastPos = now;
+      return;
+    }
     if (freezeTimer !== null && rearms >= MAX_SEEK_REARMS) {
       jumped += now - lastPos;
     } else {
@@ -156,13 +190,28 @@ export function followLiveAfterResync(
       if (!video.paused) onStuck();
       return;
     }
-    if (freezeTimer === null) armFreeze();
+    if (freezeTimer === null) {
+      measureFromHere();
+      armFreeze();
+    }
   }
   function judgeFreeze() {
     freezeTimer = null;
+    if (video.paused) {
+      stop();
+      return;
+    }
+    if (video.currentTime - baseline - jumped > PROGRESS_SECS) {
+      if (!extended && Date.now() - lastAdvanceAt >= STALL_SECS * 1000) {
+        extended = true;
+        measureFromHere();
+        armFreeze();
+        return;
+      }
+      stop();
+      return;
+    }
     stop();
-    if (video.paused) return;
-    if (video.currentTime - baseline - jumped > PROGRESS_SECS) return;
     onStuck();
   }
   hls.on(Hls.Events.LEVEL_UPDATED, onLevel); // before tryMove, so tryMove sees the reload

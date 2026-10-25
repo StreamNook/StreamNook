@@ -79,6 +79,15 @@ describe('followLiveAfterResync', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
+  /** The playhead plays forward in real time for `ms`, with a timeupdate each half second. */
+  const playOn = (video: ReturnType<typeof fakeVideo>, ms: number) => {
+    for (let elapsed = 0; elapsed < ms; elapsed += 500) {
+      vi.advanceTimersByTime(500);
+      video.advance(video.currentTime + 0.5);
+      video.emit('timeupdate');
+    }
+  };
+
   const start = () => {
     const hls = fakeHls();
     const video = fakeVideo();
@@ -155,7 +164,7 @@ describe('followLiveAfterResync', () => {
     video.emit('playing');
     video.advance(14);
     video.emit('timeupdate');
-    vi.advanceTimersByTime(RESYNC_WINDOW_MS * 2);
+    playOn(video, RESYNC_WINDOW_MS * 2);
     expect(onStuck).not.toHaveBeenCalled();
   });
 
@@ -209,7 +218,7 @@ describe('followLiveAfterResync', () => {
     video.emit('seeking');
     video.advance(44);
     video.emit('timeupdate');
-    vi.advanceTimersByTime(RESYNC_WINDOW_MS * 2);
+    playOn(video, RESYNC_WINDOW_MS * 2);
     expect(onStuck).not.toHaveBeenCalled();
   });
 
@@ -328,7 +337,7 @@ describe('followLiveAfterResync', () => {
     hls.fire('hlsFragBuffered', { frag: { type: 'main', start: 230, duration: 2 } });
     expect(video.seeks).toEqual([232]);
     video.advance(236);
-    vi.advanceTimersByTime(RESYNC_WINDOW_MS * 3);
+    playOn(video, RESYNC_WINDOW_MS * 3);
     expect(onStuck).not.toHaveBeenCalled();
   });
 
@@ -340,7 +349,7 @@ describe('followLiveAfterResync', () => {
     hls.fire('hlsLevelUpdated');
     expect(video.seeks).toEqual([40]);
     video.advance(44);
-    vi.advanceTimersByTime(RESYNC_WINDOW_MS * 3);
+    playOn(video, RESYNC_WINDOW_MS * 3);
     expect(onStuck).not.toHaveBeenCalled();
   });
 
@@ -391,7 +400,70 @@ describe('followLiveAfterResync', () => {
     hls.fire('hlsFragBuffered', { frag: { type: 'main', start: 228, duration: 2 } });
     video.emit('playing');
     video.advance(234);
-    vi.advanceTimersByTime(RESYNC_WINDOW_MS * 3);
+    playOn(video, RESYNC_WINDOW_MS * 3);
+    expect(onStuck).not.toHaveBeenCalled();
+  });
+
+  it('is stuck at 16 seconds when the old buffer plays 2 seconds and then freezes', () => {
+    const { hls, video, onStuck } = start();
+    hls.fire('hlsLevelUpdated'); // the window still contains the playhead; no fragment follows
+    vi.advanceTimersByTime(2000);
+    video.advance(12);
+    video.emit('timeupdate');
+    vi.advanceTimersByTime(RESYNC_WINDOW_MS * 2 - 2000 - 1);
+    expect(onStuck).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(onStuck).toHaveBeenCalledTimes(1);
+  });
+
+  it('is stuck by 17 seconds when live data the playhead cannot reach arrives and the old buffer freezes', () => {
+    const { hls, video, onStuck } = start();
+    hls.latestLevelDetails = { fragmentStart: 200 };
+    hls.fire('hlsLevelUpdated');
+    vi.advanceTimersByTime(1000);
+    video.advance(11);
+    video.emit('timeupdate');
+    hls.fire('hlsFragBuffered', { frag: { type: 'main', start: 230, duration: 2 } });
+    vi.advanceTimersByTime(2000);
+    video.advance(13);
+    video.emit('timeupdate');
+    vi.advanceTimersByTime(RESYNC_WINDOW_MS * 2 + 1000 - 3000 - 1);
+    expect(onStuck).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(onStuck).toHaveBeenCalledTimes(1);
+  });
+
+  it('is not stuck when a stall inside the window ends and the video plays on', () => {
+    const { hls, video, onStuck } = start();
+    hls.latestLevelDetails = { fragmentStart: 200 };
+    hls.fire('hlsLevelUpdated');
+    vi.advanceTimersByTime(1000);
+    video.advance(11);
+    video.emit('timeupdate');
+    hls.fire('hlsFragBuffered', { frag: { type: 'main', start: 230, duration: 2 } });
+    vi.advanceTimersByTime(2000);
+    video.advance(13);
+    video.emit('timeupdate');
+    vi.advanceTimersByTime(7000); // the first window ends in a stall
+    playOn(video, RESYNC_WINDOW_MS * 2);
+    expect(onStuck).not.toHaveBeenCalled();
+  });
+
+  it('keeps every seek re-arm for outside seeks after its own seek', () => {
+    const { hls, video, onStuck } = start();
+    hls.liveSyncPosition = 20;
+    video.setBuffered([[8, 60]]);
+    hls.fire('hlsLevelUpdated');
+    expect(video.seeks).toEqual([20]);
+    video.emit('seeking'); // the event of the follower's own seek
+    for (const landing of [30, 40, 50]) {
+      vi.advanceTimersByTime(6000);
+      video.advance(landing);
+      video.emit('seeking');
+    }
+    vi.advanceTimersByTime(6000); // frozen for 6 seconds after the last seek
+    expect(onStuck).not.toHaveBeenCalled();
+    playOn(video, RESYNC_WINDOW_MS * 2);
     expect(onStuck).not.toHaveBeenCalled();
   });
 

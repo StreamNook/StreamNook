@@ -86,6 +86,13 @@ export async function resumePreviousSession(): Promise<void> {
   }
   if (!snap) return;
 
+  // Tile state is restored before the stream reopens, so nothing that opens
+  // MultiNook while the stream starts can play a paused tile or pause a held one.
+  if (snap.multinook_active) {
+    for (const id of snap.paused_tiles ?? []) notePauseIntent(id, id);
+    for (const id of snap.own_tiles_opened ?? []) markTileHeld(id);
+  }
+
   if (snap.stream_login) {
     const { provider, channel } = parseKey(snap.stream_login);
     if (snap.paused) {
@@ -107,11 +114,6 @@ export async function resumePreviousSession(): Promise<void> {
     if (reopened && snap.was_running) {
       void replayAutomation(snap.automation_campaign_id ?? null);
     }
-  }
-
-  if (snap.multinook_active) {
-    for (const id of snap.paused_tiles ?? []) notePauseIntent(id, id);
-    for (const id of snap.own_tiles_opened ?? []) markTileHeld(id);
   }
 
   if (snap.multinook_active && !usemultiNookStore.getState().isMultiNookActive) {
