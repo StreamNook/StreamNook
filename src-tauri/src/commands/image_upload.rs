@@ -178,7 +178,15 @@ async fn fill_missing_thumbs() {
         return;
     }
     for (url, copy) in store::missing_thumbs() {
-        let local = copy.as_deref().and_then(store::copy_path).and_then(|p| std::fs::read(p).ok());
+        let local = match copy {
+            Some(copy) => tokio::task::spawn_blocking(move || {
+                store::copy_path(&copy).and_then(|p| std::fs::read(p).ok())
+            })
+            .await
+            .ok()
+            .flatten(),
+            None => None,
+        };
         let bytes = match local {
             Some(b) => b,
             None => match fetch_capped(&url).await {

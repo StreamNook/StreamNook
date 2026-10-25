@@ -110,13 +110,18 @@ struct ManifestOut<'a> {
 /// The manifest as written to disk, with the set-aside entries back in.
 fn encode_manifest(manifest: &UniversalCacheManifest) -> serde_json::Result<Vec<u8>> {
     let foreign = FOREIGN_ENTRIES.lock().unwrap_or_else(|e| e.into_inner());
+    encode_with(manifest, foreign.as_slice())
+}
+
+/// `encode_manifest` with the set-aside entries given.
+fn encode_with(manifest: &UniversalCacheManifest, foreign: &[(String, serde_json::Value)]) -> serde_json::Result<Vec<u8>> {
     if foreign.is_empty() {
         return serde_json::to_vec(manifest);
     }
     serde_json::to_vec(&ManifestOut {
         version: manifest.version,
         last_sync: manifest.last_sync,
-        entries: EntriesOut { known: &manifest.entries, foreign: foreign.as_slice() },
+        entries: EntriesOut { known: &manifest.entries, foreign },
     })
 }
 
@@ -1070,9 +1075,9 @@ pub fn clear_universal_cache() -> Result<()> {
             last_sync: None,
             entries: HashMap::new(),
         };
+        FOREIGN_ENTRIES.lock().unwrap_or_else(|e| e.into_inner()).clear();
     }
     MANIFEST_DIRTY.store(false, Ordering::Release);
-    FOREIGN_ENTRIES.lock().unwrap_or_else(|e| e.into_inner()).clear();
     if let Ok(mut verified) = VERIFIED_TYPES.lock() {
         verified.clear();
     }
@@ -1431,6 +1436,20 @@ pub fn migrate_emote_namespace_cache() -> Result<bool> {
     Ok(true)
 }
 
+/// Whether the first 1024 bytes read as SVG markup: after an optional UTF-8 BOM
+/// and whitespace, an `<svg` element, a comment, an svg doctype, or an XML
+/// declaration with an `<svg` element after it.
+fn looks_like_svg(bytes: &[u8]) -> bool {
+    let head = &bytes[..bytes.len().min(1024)];
+    let head = head.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(head);
+    let start = head.iter().position(|b| !b.is_ascii_whitespace()).unwrap_or(head.len());
+    let head = head[start..].to_ascii_lowercase();
+    if head.starts_with(b"<svg") || head.starts_with(b"<!--") || head.starts_with(b"<!doctype svg") {
+        return true;
+    }
+    head.starts_with(b"<?xml") && head.windows(4).any(|w| w == b"<svg")
+}
+
 /// Pick the correct file extension from the downloaded bytes (magic numbers,
 /// most reliable) with the response Content-Type as a fallback. Emote/badge CDNs
 /// frequently serve images from extension-less URLs (BTTV/FFZ) or misleading ones
@@ -1455,8 +1474,14 @@ fn detect_image_ext(bytes: &[u8], content_type: Option<&str>) -> &'static str {
     if bytes.starts_with(b"\xFF\xD8\xFF") {
         return "jpg";
     }
+    if looks_like_svg(bytes) {
+        return "svg";
+    }
     if let Some(ct) = content_type {
         let ct = ct.to_ascii_lowercase();
+        if ct.contains("svg") {
+            return "svg";
+        }
         if ct.contains("avif") {
             return "avif";
         }
@@ -2093,8 +2118,8 @@ pub fn manifest_len() -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::{
-        badge_date_key, is_still_paint_entry, missing_file_keys, usable_file_path, webp_is_animated, CacheMetadata,
-        CacheType, UniversalCacheEntry,
+        badge_date_key, detect_image_ext, encode_with, is_still_paint_entry, missing_file_keys, parse_manifest,
+        usable_file_path, webp_is_animated, CacheMetadata, CacheType, UniversalCacheEntry, UniversalCacheManifest,
     };
     use std::collections::{HashMap, HashSet};
     use std::ffi::OsString;
@@ -2246,6 +2271,64 @@ mod tests {
         assert!(badge_date_key("1 March 2018") > badge_date_key("March 2018"));
         assert!(badge_date_key("March 2018") > badge_date_key("28 February 2018"));
     }
+
+    #[test]
+    fn an_unknown_cache_type_is_kept_aside_and_written_back() {
+        let json = r#"{"version":1,"last_sync":null,"entries":{
+            "a":{"id":"a","cache_type":"emote","data":{},"metadata":META},
+            "b":{"id":"b","cache_type":"futuretype","data":{},"metadata":META}}}"#
+            .replace("META", r#"{"timestamp":1,"expiry_days":7,"source":"universal_file","version":1}"#);
+        let (manifest, foreign) = parse_manifest(&json).unwrap();
+        assert_eq!(manifest.entries.len(), 1);
+        assert!(manifest.entries.contains_key("a"));
+        assert_eq!(foreign.len(), 1);
+        assert_eq!(foreign[0].0, "b");
+        let bytes = encode_with(&manifest, &foreign).unwrap();
+        let out: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(out["entries"]["a"]["cache_type"], "emote");
+        assert_eq!(out["entries"]["b"]["cache_type"], "futuretype");
+        assert_eq!(out["entries"].as_object().unwrap().len(), 2);
+        // Read back: the unknown entry is still set aside, the known one still known.
+        let (again, foreign_again) = parse_manifest(std::str::from_utf8(&bytes).unwrap()).unwrap();
+        assert_eq!(again.entries.len(), 1);
+        assert_eq!(foreign_again.len(), 1);
+    }
+
+    #[test]
+    fn this_builds_entry_wins_over_a_set_aside_one_with_its_key() {
+        let manifest = UniversalCacheManifest {
+            version: 1,
+            last_sync: None,
+            entries: [("a".to_string(), file_entry(CacheType::Emote, 0))].into_iter().collect(),
+        };
+        let foreign = vec![("a".to_string(), serde_json::json!({ "cache_type": "futuretype" }))];
+        let out: serde_json::Value = serde_json::from_slice(&encode_with(&manifest, &foreign).unwrap()).unwrap();
+        assert_eq!(out["entries"].as_object().unwrap().len(), 1);
+        assert_eq!(out["entries"]["a"]["cache_type"], "emote");
+    }
+
+    #[test]
+    fn svg_art_is_typed_svg_by_its_content_or_its_content_type() {
+        assert_eq!(detect_image_ext(b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>", None), "svg");
+        assert_eq!(detect_image_ext(b"\xEF\xBB\xBF  \n<svg width=\"1\"/>", None), "svg");
+        assert_eq!(
+            detect_image_ext(b"<?xml version=\"1.0\"?>\n<svg width=\"1\"/>", None),
+            "svg"
+        );
+        assert_eq!(detect_image_ext(b"<!-- made by hand --><svg/>", None), "svg");
+        assert_eq!(detect_image_ext(b"<!DOCTYPE svg PUBLIC \"x\"><svg/>", None), "svg");
+        // An XML file that holds no svg element within the first 1024 bytes is not art.
+        let mut far = b"<?xml version=\"1.0\"?>".to_vec();
+        far.resize(far.len() + 1100, b' ');
+        far.extend_from_slice(b"<svg/>");
+        assert_eq!(detect_image_ext(&far, None), "bin");
+        assert_eq!(detect_image_ext(b"opaque bytes", Some("image/svg+xml; charset=utf-8")), "svg");
+        // A PNG stays a PNG, even when the server mislabels it.
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        png.extend_from_slice(&[0u8; 16]);
+        assert_eq!(detect_image_ext(&png, None), "png");
+        assert_eq!(detect_image_ext(&png, Some("image/svg+xml")), "png");
+    }
 }
 
 #[cfg(test)]
@@ -2385,44 +2468,5 @@ mod streamnook_art_tests {
         assert_eq!(content_range_start("bytes 16384-99999/100000"), Some((16384, Some(100000))));
         assert_eq!(content_range_start("bytes 0-9/*"), Some((0, None)));
         assert_eq!(content_range_start("items 0-9/10"), None);
-    }
-
-    #[test]
-    fn an_unknown_cache_type_is_kept_aside_and_written_back() {
-        let json = r#"{"version":1,"last_sync":null,"entries":{
-            "a":{"id":"a","cache_type":"emote","data":{},"metadata":META},
-            "b":{"id":"b","cache_type":"futuretype","data":{},"metadata":META}}}"#
-            .replace("META", r#"{"timestamp":1,"expiry_days":7,"source":"universal_file","version":1}"#);
-        let (manifest, foreign) = super::parse_manifest(&json).unwrap();
-        assert_eq!(manifest.entries.len(), 1);
-        assert!(manifest.entries.contains_key("a"));
-        assert_eq!(foreign.len(), 1);
-        assert_eq!(foreign[0].0, "b");
-        *super::FOREIGN_ENTRIES.lock().unwrap() = foreign;
-        let bytes = super::encode_manifest(&manifest).unwrap();
-        let out: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(out["entries"]["a"]["cache_type"], "emote");
-        assert_eq!(out["entries"]["b"]["cache_type"], "futuretype");
-        assert_eq!(out["entries"].as_object().unwrap().len(), 2);
-        // Read back: the unknown entry is still set aside, the known one still known.
-        let (again, foreign_again) = super::parse_manifest(std::str::from_utf8(&bytes).unwrap()).unwrap();
-        assert_eq!(again.entries.len(), 1);
-        assert_eq!(foreign_again.len(), 1);
-        super::FOREIGN_ENTRIES.lock().unwrap().clear();
-    }
-
-    #[test]
-    fn this_builds_entry_wins_over_a_set_aside_one_with_its_key() {
-        let manifest = super::UniversalCacheManifest {
-            version: 1,
-            last_sync: None,
-            entries: [("a".to_string(), file_entry(CacheType::Emote, 0))].into_iter().collect(),
-        };
-        *super::FOREIGN_ENTRIES.lock().unwrap() =
-            vec![("a".to_string(), serde_json::json!({ "cache_type": "futuretype" }))];
-        let out: serde_json::Value = serde_json::from_slice(&super::encode_manifest(&manifest).unwrap()).unwrap();
-        assert_eq!(out["entries"].as_object().unwrap().len(), 1);
-        assert_eq!(out["entries"]["a"]["cache_type"], "emote");
-        super::FOREIGN_ENTRIES.lock().unwrap().clear();
     }
 }

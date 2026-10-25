@@ -1068,7 +1068,17 @@ pub async fn load_channel_history(
     let mut parsed = crate::services::history_cosmetics::decorate(&key, &raw, parsed).await;
     // The 7TV emotes' disk files at the page's size, so the rows' first paint
     // is the disk copy (the page seeds its disk map from them).
-    super::emotes::stamp_row_emote_files(&mut parsed, super::emotes::render_tier(tier.as_deref()));
+    let tier = super::emotes::render_tier(tier.as_deref());
+    let parsed = tauri::async_runtime::spawn_blocking(move || {
+        super::emotes::stamp_row_emote_files(
+            &mut parsed,
+            tier,
+            crate::services::universal_cache_service::cached_file_paths,
+        );
+        parsed
+    })
+    .await
+    .map_err(|e| e.to_string())?;
     if let Some(lines) = restamp_lines {
         IrcService::spawn_history_restamp(&key, lines, &parsed);
     }

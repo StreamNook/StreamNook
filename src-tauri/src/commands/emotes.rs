@@ -80,8 +80,13 @@ fn stamp_row_segments(segments: &mut [MessageSegment], tier: &str, paths: &HashM
 /// parent) on its segment, at the page's `tier`, from the in-memory manifest
 /// in one read. The page seeds its disk map from these before a row's first
 /// paint (ChatMessage.tsx `fromRustSegments`), so a history batch draws cached
-/// emotes from disk instead of racing the channel's emote set.
-pub(crate) fn stamp_row_emote_files(rows: &mut [ChatMessage], tier: &str) {
+/// emotes from disk instead of racing the channel's emote set. `cached_paths`
+/// answers the manifest lookup (`cached_file_paths` in production).
+pub(crate) fn stamp_row_emote_files(
+    rows: &mut [ChatMessage],
+    tier: &str,
+    cached_paths: impl FnOnce(CacheType, &[String]) -> HashMap<String, String>,
+) {
     let mut keys = Vec::new();
     for row in rows.iter() {
         seventv_row_keys(&row.segments, tier, &mut keys);
@@ -94,7 +99,7 @@ pub(crate) fn stamp_row_emote_files(rows: &mut [ChatMessage], tier: &str) {
     }
     keys.sort_unstable();
     keys.dedup();
-    let paths = universal_cache_service::cached_file_paths(CacheType::Emote, &keys);
+    let paths = cached_paths(CacheType::Emote, &keys);
     if paths.is_empty() {
         return;
     }
@@ -131,8 +136,13 @@ pub async fn fetch_channel_emotes(
         .await
         .map_err(|e| e.to_string())?;
     drop(service);
-    stamp_set_paths(&mut set, render_tier(tier.as_deref()));
-    Ok(set)
+    let tier = render_tier(tier.as_deref());
+    tauri::async_runtime::spawn_blocking(move || {
+        stamp_set_paths(&mut set, tier);
+        set
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -802,5 +812,66 @@ mod tests {
         let wire = serde_json::to_value(&segs).unwrap();
         assert_eq!(wire[0]["local_path"], "C:/cache/universal/emotes/abc@2x.webp");
         assert!(wire[1].get("local_path").is_none());
+    }
+
+    fn row_with(segments: Vec<MessageSegment>, parent_segments: Option<Vec<MessageSegment>>) -> ChatMessage {
+        let metadata = crate::models::chat_layout::MessageMetadata {
+            reply_info: parent_segments.map(|parent| crate::models::chat_layout::ReplyInfo {
+                parent_segments: Some(parent),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        ChatMessage {
+            id: "m1".into(),
+            user_id: "1".into(),
+            username: "viewer".into(),
+            display_name: "Viewer".into(),
+            color: None,
+            badges: Vec::new(),
+            timestamp: "0".into(),
+            content: String::new(),
+            provider: "twitch".into(),
+            channel: "chan".into(),
+            emotes: Vec::new(),
+            tags: HashMap::new(),
+            layout: Default::default(),
+            segments,
+            metadata,
+        }
+    }
+
+    fn stamped(seg: &MessageSegment) -> Option<String> {
+        match seg {
+            MessageSegment::Emote { local_path, .. } => local_path.clone(),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn a_row_and_its_reply_parent_are_both_stamped() {
+        let mut rows = vec![
+            row_with(
+                vec![row_emote("abc", "https://cdn.7tv.app/emote/abc/2x.webp")],
+                Some(vec![row_emote("par", "https://cdn.7tv.app/emote/par/2x.webp")]),
+            ),
+            row_with(vec![row_emote("gone", "https://cdn.7tv.app/emote/gone/2x.webp")], None),
+        ];
+        let mut asked = Vec::new();
+        stamp_row_emote_files(&mut rows, "2x", |cache_type, keys| {
+            assert!(matches!(cache_type, CacheType::Emote));
+            asked = keys.to_vec();
+            [
+                ("abc@2x".to_string(), "C:/cache/abc@2x.webp".to_string()),
+                ("par@2x".to_string(), "C:/cache/par@2x.webp".to_string()),
+            ]
+            .into_iter()
+            .collect()
+        });
+        assert_eq!(asked, vec!["abc@2x".to_string(), "gone@2x".to_string(), "par@2x".to_string()]);
+        assert_eq!(stamped(&rows[0].segments[0]).as_deref(), Some("C:/cache/abc@2x.webp"));
+        let parent = rows[0].metadata.reply_info.as_ref().and_then(|r| r.parent_segments.as_ref()).unwrap();
+        assert_eq!(stamped(&parent[0]).as_deref(), Some("C:/cache/par@2x.webp"));
+        assert_eq!(stamped(&rows[1].segments[0]), None, "not on disk");
     }
 }

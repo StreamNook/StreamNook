@@ -15,12 +15,12 @@
 // same for shutdown paths). A crash loses nothing, and a busy moderated chat
 // costs a line per action instead of a rewrite of every channel's log.
 
-use log::debug;
+use log::{debug, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use crate::rt::AppHandle;
 use tauri::Manager;
@@ -45,6 +45,9 @@ static JOURNAL_PATH: OnceLock<PathBuf> = OnceLock::new();
 /// every fold, so a fold never empties the journal of a line its snapshot
 /// does not hold.
 static JOURNAL_LOCK: Mutex<()> = Mutex::new(());
+/// The sequence number of the last journal line written; the next line takes
+/// one more. Only advanced under `JOURNAL_LOCK`.
+static LAST_SEQ: AtomicU64 = AtomicU64::new(0);
 static FLUSH_TASK_STARTED: AtomicBool = AtomicBool::new(false);
 
 fn store() -> &'static Mutex<Option<ModLogStorage>> {
@@ -92,6 +95,11 @@ pub struct ModLogStorage {
     /// lowercase channel login -> chronological list of entries (oldest first)
     pub channels: HashMap<String, Vec<serde_json::Value>>,
     pub version: i32,
+    /// The sequence number of the last journal line this snapshot holds. A
+    /// replay applies only lines past it, so a journal that outlived its fold
+    /// (a crash between the rename and the truncate) is never applied twice.
+    #[serde(default)]
+    pub journal_seq: u64,
 }
 
 pub struct ModLogStorageService;
@@ -121,6 +129,7 @@ impl ModLogStorageService {
             let (storage, replayed) = load_storage(&path, &journal);
             let _ = STORE_PATH.set(path);
             let _ = JOURNAL_PATH.set(journal);
+            LAST_SEQ.store(storage.journal_seq, Ordering::SeqCst);
             *guard = Some(storage);
             // Actions recorded after the last fold (a crash, or a kill before the
             // exit flush): the next fold writes them into the file.
@@ -136,7 +145,7 @@ impl ModLogStorageService {
     pub fn flush_now() -> Result<(), String> {
         // Held to the end: nothing is journaled between the snapshot below and
         // the journal being emptied after the write.
-        let _journal = JOURNAL_LOCK.lock().map_err(|e| e.to_string())?;
+        let _journal = JOURNAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         if !DIRTY.swap(false, Ordering::AcqRel) {
             return Ok(());
         }
@@ -145,17 +154,19 @@ impl ModLogStorageService {
             return Ok(());
         };
         let json = {
-            let guard = match store().lock() {
+            let mut guard = match store().lock() {
                 Ok(g) => g,
                 Err(e) => {
                     DIRTY.store(true, Ordering::Release);
                     return Err(e.to_string());
                 }
             };
-            let Some(storage) = guard.as_ref() else {
+            let Some(storage) = guard.as_mut() else {
                 return Ok(());
             };
-            match serde_json::to_string(storage) {
+            // Every line journaled so far is in this snapshot.
+            storage.journal_seq = LAST_SEQ.load(Ordering::SeqCst);
+            match serde_json::to_string(&*storage) {
                 Ok(j) => j,
                 Err(e) => {
                     DIRTY.store(true, Ordering::Release);
@@ -163,16 +174,16 @@ impl ModLogStorageService {
                 }
             }
         };
-        // A sibling renamed over the file, so a crash mid-write never leaves a
-        // truncated file for the next seed to read as empty.
-        let tmp = path.with_extension("json.tmp");
-        if let Err(e) = fs::write(&tmp, json).and_then(|_| fs::rename(&tmp, path)) {
+        if let Err(e) = write_snapshot(path, &json) {
             DIRTY.store(true, Ordering::Release);
             return Err(format!("Failed to write mod logs file: {}", e));
         }
-        // Everything journaled is in the file now.
+        // Everything journaled is in the file now. A truncate that fails leaves
+        // lines the file's journal_seq already covers, which a replay skips.
         if let Some(journal) = JOURNAL_PATH.get() {
-            let _ = fs::write(journal, b"");
+            if let Err(e) = fs::write(journal, b"") {
+                warn!("[ModLogStorage] could not empty the journal after a fold: {}", e);
+            }
         }
         Ok(())
     }
@@ -207,7 +218,7 @@ impl ModLogStorageService {
             return Ok(entry);
         }
         let now_ms = chrono::Utc::now().timestamp_millis();
-        let _journal = JOURNAL_LOCK.lock().map_err(|e| e.to_string())?;
+        let _journal = JOURNAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let channel_key = key.clone();
         let (shown, changed) = Self::with_store(app_handle, move |storage| {
             merge_into(storage.channels.entry(key).or_default(), entry, now_ms)
@@ -222,7 +233,7 @@ impl ModLogStorageService {
     /// Clear one channel's persisted entries.
     pub fn clear_channel(app_handle: &AppHandle, channel: &str) -> Result<(), String> {
         let key = channel.to_lowercase();
-        let _journal = JOURNAL_LOCK.lock().map_err(|e| e.to_string())?;
+        let _journal = JOURNAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let removed =
             Self::with_store(app_handle, |storage| storage.channels.remove(&key).is_some())?;
         if removed {
@@ -245,25 +256,59 @@ enum JournalOp {
     Clear { channel: String },
 }
 
-fn append_journal(path: &Path, op: &JournalOp) -> Result<(), String> {
+/// A journal line as read: the operation and its sequence number.
+#[derive(Debug, Deserialize)]
+struct JournalLine {
+    #[serde(default)]
+    seq: u64,
+    #[serde(flatten)]
+    op: JournalOp,
+}
+
+/// A journal line as written; reads back as a `JournalLine`.
+#[derive(Serialize)]
+struct JournalLineOut<'a> {
+    seq: u64,
+    #[serde(flatten)]
+    op: &'a JournalOp,
+}
+
+/// Write `json` to `path` through a sibling that is flushed to disk and then
+/// renamed over the file, so a crash or power loss mid-write never leaves a
+/// truncated or empty file for the next seed to read.
+fn write_snapshot(path: &Path, json: &str) -> std::io::Result<()> {
     use std::io::Write;
-    let mut line = serde_json::to_string(op).map_err(|e| e.to_string())?;
+    let tmp = path.with_extension("json.tmp");
+    let mut file = fs::File::create(&tmp)?;
+    file.write_all(json.as_bytes())?;
+    file.sync_all()?;
+    drop(file);
+    fs::rename(&tmp, path)
+}
+
+/// Append one line to the journal and flush it to disk.
+fn append_journal(path: &Path, seq: u64, op: &JournalOp) -> Result<(), String> {
+    use std::io::Write;
+    let mut line = serde_json::to_string(&JournalLineOut { seq, op }).map_err(|e| e.to_string())?;
     line.push('\n');
     let mut file = fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(path)
         .map_err(|e| e.to_string())?;
-    file.write_all(line.as_bytes()).map_err(|e| e.to_string())
+    file.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
+    file.sync_data().map_err(|e| e.to_string())
 }
 
-/// Append to this session's journal. A failure is only logged: the store is
+/// Append to this session's journal. Called with `JOURNAL_LOCK` held, which is
+/// what orders the sequence numbers. A failure is only logged: the store is
 /// dirty, so the next fold writes the action anyway.
 fn journal_append(op: &JournalOp) {
     let Some(path) = JOURNAL_PATH.get() else {
         return;
     };
-    if let Err(e) = append_journal(path, op) {
+    let seq = LAST_SEQ.fetch_add(1, Ordering::SeqCst) + 1;
+    if let Err(e) = append_journal(path, seq, op) {
         debug!("[ModLogStorage] journal append failed: {}", e);
     }
 }
@@ -293,19 +338,43 @@ fn apply_journal_op(storage: &mut ModLogStorage, op: JournalOp) {
     }
 }
 
-/// The store from `snapshot` plus every readable line of `journal` (a torn last
-/// line from a crash is skipped), and how many lines it applied.
+/// Cut a torn last line (no closing newline: a crash mid-append) off the
+/// journal, so the next append starts a fresh line instead of merging into it.
+fn cut_torn_tail(journal: &Path) {
+    let Ok(bytes) = fs::read(journal) else {
+        return;
+    };
+    if bytes.is_empty() || bytes.ends_with(b"\n") {
+        return;
+    }
+    let keep = bytes.iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1);
+    let cut = fs::OpenOptions::new().write(true).open(journal).and_then(|file| {
+        file.set_len(keep as u64)?;
+        file.sync_all()
+    });
+    if let Err(e) = cut {
+        warn!("[ModLogStorage] could not cut a torn journal line: {}", e);
+    }
+}
+
+/// The store from `snapshot` plus every readable journal line past the
+/// snapshot's `journal_seq`, and how many lines it applied. A torn last line
+/// from a crash is cut off the journal first.
 fn load_storage(snapshot: &Path, journal: &Path) -> (ModLogStorage, usize) {
-    let mut storage = match fs::read_to_string(snapshot) {
+    let mut storage: ModLogStorage = match fs::read_to_string(snapshot) {
         Ok(contents) => serde_json::from_str(&contents).unwrap_or_default(),
         Err(_) => ModLogStorage::default(),
     };
+    cut_torn_tail(journal);
     let mut applied = 0;
     if let Ok(text) = fs::read_to_string(journal) {
         for line in text.lines().filter(|l| !l.trim().is_empty()) {
-            if let Ok(op) = serde_json::from_str::<JournalOp>(line) {
-                apply_journal_op(&mut storage, op);
-                applied += 1;
+            if let Ok(JournalLine { seq, op }) = serde_json::from_str::<JournalLine>(line) {
+                if seq > storage.journal_seq {
+                    apply_journal_op(&mut storage, op);
+                    storage.journal_seq = seq;
+                    applied += 1;
+                }
             }
         }
     }
@@ -484,7 +553,7 @@ mod journal_tests {
             "timestamp": "2026-10-24T00:00:00Z", "source": "irc" });
         let (shown, changed) = merge_into(live.channels.entry("chan".into()).or_default(), action, 0);
         assert!(changed);
-        append_journal(&journal, &JournalOp::Put { channel: "chan".into(), entry: shown }).unwrap();
+        append_journal(&journal, 1, &JournalOp::Put { channel: "chan".into(), entry: shown }).unwrap();
         // The next launch has no file yet, only the journal.
         let (restored, replayed) = load_storage(&snapshot, &journal);
         assert_eq!(replayed, 1);
@@ -498,11 +567,12 @@ mod journal_tests {
         let saved = ModLogStorage {
             channels: [("chan".to_string(), vec![json!({ "id": "a1", "source": "irc" })])].into_iter().collect(),
             version: 0,
+            journal_seq: 0,
         };
         fs::write(&snapshot, serde_json::to_string(&saved).unwrap()).unwrap();
-        append_journal(&journal, &JournalOp::Put { channel: "chan".into(), entry: json!({ "id": "a1", "source": "eventsub" }) }).unwrap();
-        append_journal(&journal, &JournalOp::Put { channel: "other".into(), entry: json!({ "id": "b1" }) }).unwrap();
-        append_journal(&journal, &JournalOp::Clear { channel: "other".into() }).unwrap();
+        append_journal(&journal, 1, &JournalOp::Put { channel: "chan".into(), entry: json!({ "id": "a1", "source": "eventsub" }) }).unwrap();
+        append_journal(&journal, 2, &JournalOp::Put { channel: "other".into(), entry: json!({ "id": "b1" }) }).unwrap();
+        append_journal(&journal, 3, &JournalOp::Clear { channel: "other".into() }).unwrap();
         let (restored, replayed) = load_storage(&snapshot, &journal);
         assert_eq!(replayed, 3);
         assert_eq!(restored.channels["chan"].len(), 1);
@@ -514,13 +584,69 @@ mod journal_tests {
     #[test]
     fn a_torn_last_line_is_skipped() {
         let (snapshot, journal) = temp_paths("torn");
-        append_journal(&journal, &JournalOp::Put { channel: "chan".into(), entry: json!({ "id": "a1" }) }).unwrap();
+        append_journal(&journal, 1, &JournalOp::Put { channel: "chan".into(), entry: json!({ "id": "a1" }) }).unwrap();
         let mut f = fs::OpenOptions::new().append(true).open(&journal).unwrap();
         std::io::Write::write_all(&mut f, b"{\"op\":\"put\",\"chan").unwrap();
         drop(f);
         let (restored, replayed) = load_storage(&snapshot, &journal);
         assert_eq!(replayed, 1);
         assert_eq!(restored.channels["chan"].len(), 1);
+        let _ = fs::remove_dir_all(snapshot.parent().unwrap());
+    }
+
+    #[test]
+    fn a_torn_line_never_merges_with_the_next_action() {
+        let (snapshot, journal) = temp_paths("tear-merge");
+        append_journal(&journal, 1, &JournalOp::Put { channel: "chan".into(), entry: json!({ "id": "a1" }) }).unwrap();
+        let mut f = fs::OpenOptions::new().append(true).open(&journal).unwrap();
+        std::io::Write::write_all(&mut f, b"{\"seq\":2,\"op\":\"put\",\"chan").unwrap();
+        drop(f);
+        // The seed cuts the fragment off before anything appends.
+        let (_, replayed) = load_storage(&snapshot, &journal);
+        assert_eq!(replayed, 1);
+        append_journal(&journal, 2, &JournalOp::Put { channel: "chan".into(), entry: json!({ "id": "a2" }) }).unwrap();
+        let (restored, replayed) = load_storage(&snapshot, &journal);
+        assert_eq!(replayed, 2);
+        let ids: Vec<_> = restored.channels["chan"].iter().map(|e| e["id"].clone()).collect();
+        assert_eq!(ids, vec![json!("a1"), json!("a2")]);
+        let _ = fs::remove_dir_all(snapshot.parent().unwrap());
+    }
+
+    #[test]
+    fn a_replay_after_a_fold_that_never_emptied_the_journal_applies_nothing_twice() {
+        let (snapshot, journal) = temp_paths("replay-twice");
+        // An entry with no id, an entry with one, a channel put then cleared,
+        // and enough puts on one channel that the oldest is trimmed.
+        let mut seq = 0;
+        let mut journal_op = |op: JournalOp| {
+            seq += 1;
+            append_journal(&journal, seq, &op).unwrap();
+        };
+        journal_op(JournalOp::Put { channel: "chan".into(), entry: json!({ "action": "note" }) });
+        journal_op(JournalOp::Put { channel: "chan".into(), entry: json!({ "id": "a1" }) });
+        journal_op(JournalOp::Put { channel: "other".into(), entry: json!({ "id": "b1" }) });
+        journal_op(JournalOp::Clear { channel: "other".into() });
+        for i in 0..=MAX_PER_CHANNEL {
+            journal_op(JournalOp::Put { channel: "big".into(), entry: json!({ "id": format!("e{i}") }) });
+        }
+        let (folded, first) = load_storage(&snapshot, &journal);
+        assert_eq!(first, 4 + MAX_PER_CHANNEL + 1);
+        assert_eq!(folded.channels["big"].len(), MAX_PER_CHANNEL);
+        assert_eq!(folded.channels["big"][0]["id"], "e1");
+        // The fold renamed the snapshot into place, then the process died
+        // before it emptied the journal.
+        write_snapshot(&snapshot, &serde_json::to_string(&folded).unwrap()).unwrap();
+        let (restored, again) = load_storage(&snapshot, &journal);
+        assert_eq!(again, 0);
+        assert_eq!(restored.channels, folded.channels);
+        assert_eq!(restored.channels["chan"].len(), 2);
+        assert_eq!(restored.channels["big"][0]["id"], "e1");
+        assert!(!restored.channels.contains_key("other"));
+        // Lines written after that fold still replay.
+        append_journal(&journal, restored.journal_seq + 1, &JournalOp::Put { channel: "chan".into(), entry: json!({ "id": "a2" }) }).unwrap();
+        let (latest, last) = load_storage(&snapshot, &journal);
+        assert_eq!(last, 1);
+        assert_eq!(latest.channels["chan"].len(), 3);
         let _ = fs::remove_dir_all(snapshot.parent().unwrap());
     }
 }
