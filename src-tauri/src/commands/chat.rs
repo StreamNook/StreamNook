@@ -494,22 +494,11 @@ pub async fn get_kick_channel_emotes(
     slug: String,
     tier: Option<String>,
 ) -> crate::services::emote_service::EmoteSet {
-    let set = crate::services::providers::kick_emotes::channel_emote_set(&slug).await;
-    let fallback = set.clone();
+    let mut set = crate::services::providers::kick_emotes::channel_emote_set(&slug).await;
     let tier = super::emotes::render_tier(tier.as_deref());
-    match tauri::async_runtime::spawn_blocking(move || {
-        let mut set = set;
-        super::emotes::stamp_set_paths(&mut set, tier);
-        set
-    })
-    .await
-    {
-        Ok(stamped) => stamped,
-        Err(e) => {
-            log::warn!("[Emotes] stamping disk paths failed: {}", e);
-            fallback
-        }
-    }
+    let paths = super::emotes::cached_emote_paths(super::emotes::set_cache_keys(&set, tier)).await;
+    super::emotes::stamp_set_paths(&mut set, tier, &paths);
+    set
 }
 
 /// A YouTube channel's 7TV emotes (channel set + 7TV globals) as an EmoteSet,
@@ -520,22 +509,11 @@ pub async fn get_youtube_channel_emotes(
     channel: String,
     tier: Option<String>,
 ) -> crate::services::emote_service::EmoteSet {
-    let set = crate::services::providers::youtube_emotes::channel_emote_set(&channel).await;
-    let fallback = set.clone();
+    let mut set = crate::services::providers::youtube_emotes::channel_emote_set(&channel).await;
     let tier = super::emotes::render_tier(tier.as_deref());
-    match tauri::async_runtime::spawn_blocking(move || {
-        let mut set = set;
-        super::emotes::stamp_set_paths(&mut set, tier);
-        set
-    })
-    .await
-    {
-        Ok(stamped) => stamped,
-        Err(e) => {
-            log::warn!("[Emotes] stamping disk paths failed: {}", e);
-            fallback
-        }
-    }
+    let paths = super::emotes::cached_emote_paths(super::emotes::set_cache_keys(&set, tier)).await;
+    super::emotes::stamp_set_paths(&mut set, tier, &paths);
+    set
 }
 
 #[tauri::command]
@@ -1095,16 +1073,8 @@ pub async fn load_channel_history(
     // The 7TV emotes' disk files at the page's size, so the rows' first paint
     // is the disk copy (the page seeds its disk map from them).
     let tier = super::emotes::render_tier(tier.as_deref());
-    let parsed = tauri::async_runtime::spawn_blocking(move || {
-        super::emotes::stamp_row_emote_files(
-            &mut parsed,
-            tier,
-            crate::services::universal_cache_service::cached_file_paths,
-        );
-        parsed
-    })
-    .await
-    .map_err(|e| e.to_string())?;
+    let paths = super::emotes::cached_emote_paths(super::emotes::row_cache_keys(&parsed, tier)).await;
+    super::emotes::stamp_row_emote_files(&mut parsed, tier, &paths);
     if let Some(lines) = restamp_lines {
         IrcService::spawn_history_restamp(&key, lines, &parsed);
     }

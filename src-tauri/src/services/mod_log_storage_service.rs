@@ -10,10 +10,12 @@
 //
 // Persistence: an in-memory store seeded from disk ONCE per session (the file
 // plus the journal of actions recorded since its last write), each recorded
-// action appended to the journal at once, and a background task that folds the
-// store into the file every 30 s and empties the journal (flush_now does the
-// same for shutdown paths). A crash loses nothing, and a busy moderated chat
-// costs a line per action instead of a rewrite of every channel's log.
+// action appended to the journal before its command returns, and a background
+// task that folds the store into the file every 30 s and empties the journal
+// (flush_now does the same for shutdown paths). A crash loses nothing, and a
+// busy moderated chat costs a line per action instead of a rewrite of every
+// channel's log. Actions recorded while a write is in flight queue up and go
+// to disk together, so a burst costs one sync per batch, not one per action.
 
 use log::{debug, warn};
 use serde::{Deserialize, Serialize};
@@ -21,7 +23,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Condvar, Mutex, MutexGuard, OnceLock};
 use crate::rt::AppHandle;
 use tauri::Manager;
 
@@ -41,10 +43,12 @@ static STORE: OnceLock<Mutex<Option<ModLogStorage>>> = OnceLock::new();
 static STORE_PATH: OnceLock<PathBuf> = OnceLock::new();
 static DIRTY: AtomicBool = AtomicBool::new(false);
 static JOURNAL_PATH: OnceLock<PathBuf> = OnceLock::new();
-/// Held by every journal append (with the store change it records) and by
+/// Held by every journal enqueue (with the store change it records) and by
 /// every fold, so a fold never empties the journal of a line its snapshot
-/// does not hold.
-static JOURNAL_LOCK: Mutex<()> = Mutex::new(());
+/// does not hold. It also guards the queue of lines waiting for the disk.
+static JOURNAL_LOCK: Mutex<JournalQueue> = Mutex::new(JournalQueue::new());
+/// Signaled whenever a write ends, so waiters re-check their line.
+static JOURNAL_DONE: Condvar = Condvar::new();
 /// The sequence number of the last journal line written; the next line takes
 /// one more. Only advanced under `JOURNAL_LOCK`.
 static LAST_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -145,7 +149,12 @@ impl ModLogStorageService {
     pub fn flush_now() -> Result<(), String> {
         // Held to the end: nothing is journaled between the snapshot below and
         // the journal being emptied after the write.
-        let _journal = JOURNAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut queue = JOURNAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // A write already in flight finishes first; no new one can start while
+        // this holds the lock.
+        while queue.writing {
+            queue = JOURNAL_DONE.wait(queue).unwrap_or_else(|e| e.into_inner());
+        }
         if !DIRTY.swap(false, Ordering::AcqRel) {
             return Ok(());
         }
@@ -178,8 +187,13 @@ impl ModLogStorageService {
             DIRTY.store(true, Ordering::Release);
             return Err(format!("Failed to write mod logs file: {}", e));
         }
-        // Everything journaled is in the file now. A truncate that fails leaves
-        // lines the file's journal_seq already covers, which a replay skips.
+        // Everything journaled is in the file now, including lines still
+        // waiting for the disk, whose callers are released here.
+        queue.pending.clear();
+        queue.durable_seq = LAST_SEQ.load(Ordering::SeqCst);
+        JOURNAL_DONE.notify_all();
+        // A truncate that fails leaves lines the file's journal_seq already
+        // covers, which a replay skips.
         if let Some(journal) = JOURNAL_PATH.get() {
             if let Err(e) = fs::write(journal, b"") {
                 warn!("[ModLogStorage] could not empty the journal after a fold: {}", e);
@@ -218,14 +232,17 @@ impl ModLogStorageService {
             return Ok(entry);
         }
         let now_ms = chrono::Utc::now().timestamp_millis();
-        let _journal = JOURNAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut queue = JOURNAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let channel_key = key.clone();
         let (shown, changed) = Self::with_store(app_handle, move |storage| {
             merge_into(storage.channels.entry(key).or_default(), entry, now_ms)
         })?;
         if changed {
-            journal_append(&JournalOp::Put { channel: channel_key, entry: shown.clone() });
+            let seq = journal_append(&mut queue, &JournalOp::Put { channel: channel_key, entry: shown.clone() });
             mark_dirty();
+            if let Some(seq) = seq {
+                journal_wait(queue, seq)?;
+            }
         }
         Ok(shown)
     }
@@ -233,13 +250,16 @@ impl ModLogStorageService {
     /// Clear one channel's persisted entries.
     pub fn clear_channel(app_handle: &AppHandle, channel: &str) -> Result<(), String> {
         let key = channel.to_lowercase();
-        let _journal = JOURNAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut queue = JOURNAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let removed =
             Self::with_store(app_handle, |storage| storage.channels.remove(&key).is_some())?;
         if removed {
             debug!("[ModLogStorage] cleared {}", key);
-            journal_append(&JournalOp::Clear { channel: key });
+            let seq = journal_append(&mut queue, &JournalOp::Clear { channel: key });
             mark_dirty();
+            if let Some(seq) = seq {
+                journal_wait(queue, seq)?;
+            }
         }
         Ok(())
     }
@@ -286,30 +306,126 @@ fn write_snapshot(path: &Path, json: &str) -> std::io::Result<()> {
     fs::rename(&tmp, path)
 }
 
-/// Append one line to the journal and flush it to disk.
-fn append_journal(path: &Path, seq: u64, op: &JournalOp) -> Result<(), String> {
-    use std::io::Write;
-    let mut line = serde_json::to_string(&JournalLineOut { seq, op }).map_err(|e| e.to_string())?;
-    line.push('\n');
-    let mut file = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .map_err(|e| e.to_string())?;
-    file.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
-    file.sync_data().map_err(|e| e.to_string())
+/// Journal lines waiting for the disk, and the state of the write that carries
+/// them. Guarded by `JOURNAL_LOCK`.
+struct JournalQueue {
+    /// Serialized lines (newline included) with their sequence numbers, oldest
+    /// first, not yet on disk.
+    pending: Vec<(u64, String)>,
+    /// A writer has taken a batch and has not finished with it.
+    writing: bool,
+    /// Every line up to this sequence number is on disk or in the file.
+    durable_seq: u64,
 }
 
-/// Append to this session's journal. Called with `JOURNAL_LOCK` held, which is
-/// what orders the sequence numbers. A failure is only logged: the store is
-/// dirty, so the next fold writes the action anyway.
-fn journal_append(op: &JournalOp) {
+impl JournalQueue {
+    const fn new() -> Self {
+        Self { pending: Vec::new(), writing: false, durable_seq: 0 }
+    }
+}
+
+/// One journal line as written: JSON and a closing newline.
+fn journal_line(seq: u64, op: &JournalOp) -> Result<String, String> {
+    let mut line = serde_json::to_string(&JournalLineOut { seq, op }).map_err(|e| e.to_string())?;
+    line.push('\n');
+    Ok(line)
+}
+
+/// Append `lines` to the journal with one write and one sync. A failed write
+/// cuts whatever torn line it left, so the next append starts a clean line.
+fn commit_lines(path: &Path, lines: &[(u64, String)]) -> Result<(), String> {
+    use std::io::Write;
+    let bytes: Vec<u8> = lines.iter().flat_map(|(_, line)| line.as_bytes().iter().copied()).collect();
+    let written = fs::OpenOptions::new().create(true).append(true).open(path).and_then(|mut file| {
+        file.write_all(&bytes)?;
+        file.sync_data()
+    });
+    if let Err(e) = written {
+        cut_torn_tail(path);
+        return Err(e.to_string());
+    }
+    Ok(())
+}
+
+/// Append one line to the journal and flush it to disk.
+#[cfg(test)]
+fn append_journal(path: &Path, seq: u64, op: &JournalOp) -> Result<(), String> {
+    commit_lines(path, &[(seq, journal_line(seq, op)?)])
+}
+
+/// Queue a line for this session's journal and return its sequence number.
+/// Called with `JOURNAL_LOCK` held (`queue` is what it guards), which is what
+/// orders the sequence numbers; `journal_wait` then carries the line to disk.
+/// `None` when there is no journal or the line cannot be serialized: the store
+/// is dirty, so the next fold writes the action anyway.
+fn journal_append(queue: &mut JournalQueue, op: &JournalOp) -> Option<u64> {
+    JOURNAL_PATH.get()?;
+    let seq = LAST_SEQ.load(Ordering::SeqCst) + 1;
+    match journal_line(seq, op) {
+        Ok(line) => {
+            LAST_SEQ.store(seq, Ordering::SeqCst);
+            queue.pending.push((seq, line));
+            Some(seq)
+        }
+        Err(e) => {
+            debug!("[ModLogStorage] journal line not serialized: {}", e);
+            None
+        }
+    }
+}
+
+/// Release `JOURNAL_LOCK` and return once line `seq` is on disk.
+fn journal_wait(queue: MutexGuard<'_, JournalQueue>, seq: u64) -> Result<(), String> {
     let Some(path) = JOURNAL_PATH.get() else {
-        return;
+        return Ok(());
     };
-    let seq = LAST_SEQ.fetch_add(1, Ordering::SeqCst) + 1;
-    if let Err(e) = append_journal(path, seq, op) {
-        debug!("[ModLogStorage] journal append failed: {}", e);
+    wait_durable(&JOURNAL_LOCK, &JOURNAL_DONE, path, queue, seq)
+}
+
+/// Return once line `seq` is on disk. The first caller that finds no write in
+/// flight takes every pending line and writes them with one sync, outside the
+/// lock; the others wait for it. A waiter that wakes to find no writer and its
+/// line still pending becomes the writer. A failed write puts its lines back at
+/// the front of the queue and returns the error to that writer's own caller;
+/// the lines are written by the next writer.
+fn wait_durable(
+    lock: &Mutex<JournalQueue>,
+    done: &Condvar,
+    path: &Path,
+    mut queue: MutexGuard<'_, JournalQueue>,
+    seq: u64,
+) -> Result<(), String> {
+    loop {
+        if queue.durable_seq >= seq {
+            return Ok(());
+        }
+        if queue.writing {
+            queue = done.wait(queue).unwrap_or_else(|e| e.into_inner());
+            continue;
+        }
+        let batch = std::mem::take(&mut queue.pending);
+        if batch.is_empty() {
+            // A fold took the line into the file.
+            return Ok(());
+        }
+        queue.writing = true;
+        drop(queue);
+        let written = commit_lines(path, &batch);
+        queue = lock.lock().unwrap_or_else(|e| e.into_inner());
+        queue.writing = false;
+        match &written {
+            Ok(()) => {
+                if let Some((last, _)) = batch.last() {
+                    queue.durable_seq = queue.durable_seq.max(*last);
+                }
+            }
+            Err(_) => {
+                let newer = std::mem::replace(&mut queue.pending, batch);
+                queue.pending.extend(newer);
+            }
+        }
+        done.notify_all();
+        written?;
     }
 }
 
@@ -605,6 +721,61 @@ mod journal_tests {
         let (_, replayed) = load_storage(&snapshot, &journal);
         assert_eq!(replayed, 1);
         append_journal(&journal, 2, &JournalOp::Put { channel: "chan".into(), entry: json!({ "id": "a2" }) }).unwrap();
+        let (restored, replayed) = load_storage(&snapshot, &journal);
+        assert_eq!(replayed, 2);
+        let ids: Vec<_> = restored.channels["chan"].iter().map(|e| e["id"].clone()).collect();
+        assert_eq!(ids, vec![json!("a1"), json!("a2")]);
+        let _ = fs::remove_dir_all(snapshot.parent().unwrap());
+    }
+
+    #[test]
+    fn a_burst_from_many_threads_lands_once_each_and_in_order() {
+        let (snapshot, journal) = temp_paths("burst");
+        let lock = Mutex::new(JournalQueue::new());
+        let done = Condvar::new();
+        let last_seq = AtomicU64::new(0);
+        std::thread::scope(|scope| {
+            for t in 0..8 {
+                let (lock, done, last_seq, journal) = (&lock, &done, &last_seq, &journal);
+                scope.spawn(move || {
+                    for i in 0..200 {
+                        let op = JournalOp::Put { channel: format!("t{t}"), entry: json!({ "id": format!("t{t}-{i}") }) };
+                        let mut queue = lock.lock().unwrap();
+                        let seq = last_seq.load(Ordering::SeqCst) + 1;
+                        last_seq.store(seq, Ordering::SeqCst);
+                        queue.pending.push((seq, journal_line(seq, &op).unwrap()));
+                        wait_durable(lock, done, journal, queue, seq).unwrap();
+                    }
+                });
+            }
+        });
+        let queue = lock.lock().unwrap();
+        assert!(queue.pending.is_empty());
+        assert!(!queue.writing);
+        assert_eq!(queue.durable_seq, 1600);
+        drop(queue);
+        let (restored, replayed) = load_storage(&snapshot, &journal);
+        assert_eq!(replayed, 1600);
+        for t in 0..8 {
+            let ids: Vec<_> = restored.channels[&format!("t{t}")].iter().map(|e| e["id"].clone()).collect();
+            let expected: Vec<_> = (0..200).map(|i| json!(format!("t{t}-{i}"))).collect();
+            assert_eq!(ids, expected);
+        }
+        let _ = fs::remove_dir_all(snapshot.parent().unwrap());
+    }
+
+    #[test]
+    fn a_failed_append_never_merges_into_the_next_line() {
+        let (snapshot, journal) = temp_paths("failed-append");
+        append_journal(&journal, 1, &JournalOp::Put { channel: "chan".into(), entry: json!({ "id": "a1" }) }).unwrap();
+        // A write that died partway leaves a fragment with no newline; the
+        // writer's failure path cuts it before anything else appends.
+        let mut f = fs::OpenOptions::new().append(true).open(&journal).unwrap();
+        std::io::Write::write_all(&mut f, b"{\"seq\":2,\"op\":\"put\",\"chan").unwrap();
+        drop(f);
+        cut_torn_tail(&journal);
+        let retry = journal_line(2, &JournalOp::Put { channel: "chan".into(), entry: json!({ "id": "a2" }) }).unwrap();
+        commit_lines(&journal, &[(2, retry)]).unwrap();
         let (restored, replayed) = load_storage(&snapshot, &journal);
         assert_eq!(replayed, 2);
         let ids: Vec<_> = restored.channels["chan"].iter().map(|e| e["id"].clone()).collect();
