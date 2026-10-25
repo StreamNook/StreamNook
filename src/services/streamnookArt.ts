@@ -4,7 +4,8 @@
 // it until the art ships under a new URL. This keeps the window's url -> file
 // map and tells subscribers when a file lands, so a tile whose CDN load failed
 // picks up the disk copy on its own.
-import { convertFileSrc, invoke } from '@tauri-apps/api/core';
+import { invoke } from '@tauri-apps/api/core';
+import { cacheFileUrl } from '../utils/cacheFileUrl';
 
 import { Logger } from '../utils/logger';
 import { onAssetsCached, requestAssetCaching } from './assetCacheQueue';
@@ -57,7 +58,7 @@ export function isStreamnookArtUrl(url: string): boolean {
 
 /**
  * The disk copy of a piece of art as a loadable URL, or null when there is none
- * yet. convertFileSrc leaves `(`, `)` and `'` as they are, and atmosphere CSS
+ * yet. The URL builders leave `(`, `)` and `'` as they are, and atmosphere CSS
  * puts the URL in an unquoted `url(...)`, so a profile folder like
  * "John (Work)" would end the rule early; those three are percent-encoded.
  */
@@ -65,7 +66,7 @@ function artCopy(url: string): string | null {
   listCachedArt();
   const path = files.get(url);
   return path
-    ? convertFileSrc(path).replace(/[()']/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)
+    ? cacheFileUrl(path).replace(/[()']/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)
     : null;
 }
 

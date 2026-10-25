@@ -3,10 +3,10 @@
 // Which cosmetics a chatter wears is resolved in Rust
 // (services/seventv_cosmetics_resolver.rs): one batch queue, one cache and one
 // definitions catalog for every window. What stays here is what only the
-// webview can do: point cosmetics at their on-disk copies (convertFileSrc), ask
+// webview can do: point cosmetics at their on-disk copies (cacheFileUrl), ask
 // for new ones to be cached, and pick badge image URLs.
 import { invoke } from '@tauri-apps/api/core';
-import { convertFileSrc } from '@tauri-apps/api/core';
+import { cacheFileUrl } from '../utils/cacheFileUrl';
 
 import { Logger } from '../utils/logger';
 import { forgetAssetRequests, onAssetsCached, requestAssetCaching } from './assetCacheQueue';
@@ -93,7 +93,7 @@ function applyPaintLocalFiles(paintData: any, cachedFiles: Record<string, string
     if (layer.ty?.__typename === 'PaintLayerTypeImage' && layer.ty.images) {
       const localPath = cachedFiles[layer.id];
       if (localPath) {
-        const localUrl = convertFileSrc(localPath);
+        const localUrl = cacheFileUrl(localPath);
         layer.ty.images.forEach((img: any) => {
           img.localUrl = localUrl;
         });
@@ -108,7 +108,7 @@ function applyLocalFiles(cosmetics: UserCosmeticsResponse, cachedFiles: Record<s
   for (const paint of cosmetics.paints) applyPaintLocalFiles(paint, cachedFiles);
   for (const badge of cosmetics.badges) {
     const localPath = cachedFiles[badge.id];
-    if (localPath) badge.localUrl = convertFileSrc(localPath);
+    if (localPath) badge.localUrl = cacheFileUrl(localPath);
   }
   return cosmetics;
 }

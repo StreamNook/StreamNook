@@ -1,6 +1,6 @@
 // Simplified emote service - now a thin wrapper around Rust backend
 import { invoke } from '@tauri-apps/api/core';
-import { convertFileSrc } from '@tauri-apps/api/core';
+import { cacheFileUrl } from '../utils/cacheFileUrl';
 
 import { Logger } from '../utils/logger';
 import { onAssetsCached, requestAssetCaching, setAssetCacheBurst, forgetAssetRequests } from './assetCacheQueue';
@@ -111,7 +111,7 @@ export function enhanceRustEmotes(emotes: any[], tier: EmoteTier = inlineEmoteTi
       isZeroWidth: zeroWidth,
       modifierFlags: emote.modifier_flags ?? emote.modifierFlags,
       ffzSubOnly: emote.ffz_sub_only ?? emote.ffzSubOnly,
-      localUrl: localPath ? convertFileSrc(localPath) : undefined,
+      localUrl: localPath ? cacheFileUrl(localPath) : undefined,
     } as Emote;
   });
 }
@@ -253,7 +253,7 @@ export function getCachedEmoteUrl(
     // file serves it instead of downloading and storing the image a second
     // time under `kick-<id>`.
     (provider === 'kick' ? cachedEmoteFiles.get(id) : undefined);
-  return path ? convertFileSrc(path) : undefined;
+  return path ? cacheFileUrl(path) : undefined;
 }
 
 /**

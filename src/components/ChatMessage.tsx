@@ -4,6 +4,7 @@ import { parseBadges } from '../services/twitchBadges';
 import { Tooltip } from './ui/Tooltip';
 import { parseMessage, type LinkCardShape, type MessageSegment } from '../services/twitchChat';
 import { queueEmoteForDisplayCaching, getCachedEmoteUrl, getEmoteLookup, inlineEmoteTier, sevenTvTierUrl, EmoteSet } from '../services/emoteService';
+import { isDiskCopyUrl } from '../utils/cacheFileUrl';
 import { getCachedEmojiUrl, parseEmojisSync } from '../services/emojiService';
 import { calculateHalfPadding } from '../utils/chatLayoutUtils';
 import { mentionHoldBackground } from './chat/mentionHold';
@@ -1321,7 +1322,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     // Cache 7TV Badge - use id directly (BadgeV4 interface)
     if (seventvBadge?.id && !seventvBadge.localUrl) {
       const badgeUrl = getBadgeImageUrl(seventvBadge);
-      if (badgeUrl && !badgeUrl.startsWith('asset') && !badgeUrl.includes('localhost')) {
+      if (badgeUrl && !isDiskCopyUrl(badgeUrl)) {
         queueCosmeticForCaching(seventvBadge.id, badgeUrl);
       }
     }
@@ -1477,7 +1478,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       const cachedEmoteUrl = !wantStatic && segment.emoteId && (!giant || emoteProvider === '7tv')
         ? getCachedEmoteUrl(segment.emoteId, emoteProvider, emoteTier)
         : undefined;
-      if (!wantStatic && !cachedEmoteUrl && displayUrl && !displayUrl.startsWith('asset://') && !displayUrl.includes('asset.localhost') && segment.emoteId && (!giant || emoteProvider === '7tv')) {
+      if (!wantStatic && !cachedEmoteUrl && displayUrl && !isDiskCopyUrl(displayUrl) && segment.emoteId && (!giant || emoteProvider === '7tv')) {
         queueEmoteForDisplayCaching(segment.emoteId, emoteProvider, displayUrl, emoteTier);
       }
 

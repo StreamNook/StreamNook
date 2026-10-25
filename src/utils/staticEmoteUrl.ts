@@ -7,10 +7,12 @@
 //   FFZ     .../emote/<id>/animated/1     -> .../emote/<id>/1
 //   Twitch  .../v2/<id>/default/dark/2.0  -> .../v2/<id>/static/dark/2.0
 //
-// Anything else (disk-cached asset:// files, unknown hosts) is returned as is.
+// Anything else (disk copies, unknown hosts) is returned as is.
+
+import { isDiskCopyUrl } from './cacheFileUrl';
 
 export function staticEmoteUrl(url: string): string {
-  if (!url || url.startsWith('asset://') || url.includes('asset.localhost')) return url;
+  if (!url || isDiskCopyUrl(url)) return url;
   if (url.includes('cdn.7tv.app/emote/')) {
     if (url.includes('_static.')) return url;
     return url.replace(/\/(\dx)\.(avif|webp|png|gif)(\?.*)?$/, '/$1_static.$2$3');

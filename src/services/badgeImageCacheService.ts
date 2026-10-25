@@ -8,7 +8,7 @@
  * Badges are cached at 4x resolution (72px) for maximum crispness on HiDPI displays.
  */
 import { invoke } from '@tauri-apps/api/core';
-import { convertFileSrc } from '@tauri-apps/api/core';
+import { cacheFileUrl } from '../utils/cacheFileUrl';
 
 import { Logger } from '../utils/logger';
 import { onAssetsCached, requestAssetCaching } from './assetCacheQueue';
@@ -40,7 +40,7 @@ export function queueBadgeForCaching(id: string, url: string) {
  */
 export function getCachedBadgeUrl(id: string): string | undefined {
   const path = cachedBadgeFiles.get(id);
-  return path ? convertFileSrc(path) : undefined;
+  return path ? cacheFileUrl(path) : undefined;
 }
 
 /**
