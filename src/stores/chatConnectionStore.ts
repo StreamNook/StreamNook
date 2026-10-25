@@ -670,19 +670,27 @@ export function emoteCacheKey(channel: string, provider: ProviderId = 'twitch'):
   return provider === 'twitch' ? c : `${provider}:${c}`;
 }
 
+/**
+ * `force` reloads the set even when a copy is cached (a chat tab being shown
+ * again). A fetch already in flight is awaited first, so the forced read cannot
+ * be overwritten by an older read finishing after it.
+ */
 export async function ensureChannelEmotes(
   channel: string,
   channelId: string,
   provider: ProviderId = 'twitch',
+  opts?: { force?: boolean },
 ): Promise<EmoteSet | null> {
   const key = emoteCacheKey(channel, provider);
+  const force = opts?.force === true;
   const cached = emoteCache.get(key);
-  if (cached) return cached;
+  if (cached && !force) return cached;
   const inflight = inflightEmoteFetches.get(key);
-  if (inflight) return inflight;
+  if (inflight && !force) return inflight;
 
   const promise = (async () => {
     try {
+      if (inflight) await inflight;
       // Kick and YouTube each have their own 7TV path (by platform user id);
       // Twitch keeps the full BTTV/FFZ/7TV/native fetch. TikTok has no
       // channel-emote fetch — its messages are plain text baked at parse time,
@@ -3430,9 +3438,24 @@ function reviewHold(key: string): void {
   const hold =
     slice.refCount > 0 && slice.backgroundRefs >= slice.refCount && (sliceViewers.get(key) ?? 0) === 0;
   if (hold === slice.heldBack) return;
+  const wasHeld = slice.heldBack;
   slice.heldBack = hold;
   sendRoute(hold ? `PARK:${holdCap(slice)}:${key}` : `UNPARK:${key}`);
   scheduleParkedEmoteRelease(key, hold);
+  if (wasHeld && !hold) reloadShownEmotes(slice);
+}
+
+/**
+ * A chat shown again re-reads its emote set from Rust's table, which every 7TV
+ * edit patched while it was hidden. The page's own copy may be gone (released
+ * while parked) or may predate an edit it could not apply, so it is reloaded
+ * even when present; subscribers (the picker) re-query when the set lands. A
+ * Twitch channel without its id yet has nothing to fetch with.
+ */
+function reloadShownEmotes(slice: ChannelSlice): void {
+  const { provider } = slice;
+  if (provider !== 'kick' && !slice.channelId) return;
+  void ensureChannelEmotes(parseKey(slice.channel).channel, slice.channelId ?? '', provider, { force: true });
 }
 
 /** A chat held back this long gives up its emote set. */
