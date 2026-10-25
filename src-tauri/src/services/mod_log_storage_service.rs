@@ -126,9 +126,18 @@ impl ModLogStorageService {
         app_handle: &AppHandle,
         f: impl FnOnce(&mut ModLogStorage) -> R,
     ) -> Result<R, String> {
+        Self::with_store_at(|| Self::get_storage_path(app_handle), f)
+    }
+
+    /// `with_store` with the snapshot path supplied by `resolve_path`, which
+    /// only runs when the store still has to be seeded.
+    fn with_store_at<R>(
+        resolve_path: impl FnOnce() -> Result<PathBuf, String>,
+        f: impl FnOnce(&mut ModLogStorage) -> R,
+    ) -> Result<R, String> {
         let mut guard = store().lock().map_err(|e| e.to_string())?;
         if guard.is_none() {
-            let path = Self::get_storage_path(app_handle)?;
+            let path = resolve_path()?;
             let journal = path.with_file_name(MOD_LOGS_JOURNAL);
             let (storage, replayed) = load_storage(&path, &journal);
             let _ = STORE_PATH.set(path);
@@ -229,6 +238,15 @@ impl ModLogStorageService {
         channel: &str,
         entry: serde_json::Value,
     ) -> Result<serde_json::Value, String> {
+        Self::record_at(|| Self::get_storage_path(app_handle), channel, entry)
+    }
+
+    /// `record` with the snapshot path supplied by `resolve_path`.
+    fn record_at(
+        resolve_path: impl FnOnce() -> Result<PathBuf, String>,
+        channel: &str,
+        entry: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
         let key = channel.to_lowercase();
         if key.is_empty() {
             return Ok(entry);
@@ -236,7 +254,7 @@ impl ModLogStorageService {
         let now_ms = chrono::Utc::now().timestamp_millis();
         let mut queue = JOURNAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let channel_key = key.clone();
-        let (shown, changed) = Self::with_store(app_handle, move |storage| {
+        let (shown, changed) = Self::with_store_at(resolve_path, move |storage| {
             merge_into(storage.channels.entry(key).or_default(), entry, now_ms)
         })?;
         if changed {
@@ -254,10 +272,18 @@ impl ModLogStorageService {
 
     /// Clear one channel's persisted entries.
     pub fn clear_channel(app_handle: &AppHandle, channel: &str) -> Result<(), String> {
+        Self::clear_channel_at(|| Self::get_storage_path(app_handle), channel)
+    }
+
+    /// `clear_channel` with the snapshot path supplied by `resolve_path`.
+    fn clear_channel_at(
+        resolve_path: impl FnOnce() -> Result<PathBuf, String>,
+        channel: &str,
+    ) -> Result<(), String> {
         let key = channel.to_lowercase();
         let mut queue = JOURNAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let removed =
-            Self::with_store(app_handle, |storage| storage.channels.remove(&key).is_some())?;
+            Self::with_store_at(resolve_path, |storage| storage.channels.remove(&key).is_some())?;
         if removed {
             debug!("[ModLogStorage] cleared {}", key);
             let seq = journal_append(&mut queue, &JournalOp::Clear { channel: key });
@@ -321,15 +347,17 @@ struct JournalQueue {
     writing: bool,
     /// Every line up to this sequence number is on disk or in the file.
     durable_seq: u64,
-    /// A write failed, so the journal may end in a line with no newline. The
-    /// next write starts with one, so its first line is never glued onto the
-    /// fragment. Replay skips the blank line and the fragment.
+    /// The journal may end in a line with no newline: a write failed, or a
+    /// crash left a fragment that startup could not cut. The next write starts
+    /// with a newline, so its first line is never glued onto the fragment.
+    /// Replay skips the blank line and the fragment. A new queue starts torn,
+    /// so a session's first write is safe whatever it finds.
     torn: bool,
 }
 
 impl JournalQueue {
     const fn new() -> Self {
-        Self { pending: Vec::new(), writing: false, durable_seq: 0, torn: false }
+        Self { pending: Vec::new(), writing: false, durable_seq: 0, torn: true }
     }
 }
 
@@ -717,6 +745,19 @@ mod journal_tests {
         (dir.join(MOD_LOGS_FILE), dir.join(MOD_LOGS_JOURNAL))
     }
 
+    /// Removes a test's folder when dropped, so a failed assertion leaves nothing behind.
+    struct TempDirGuard(PathBuf);
+
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn read_snapshot(snapshot: &Path) -> ModLogStorage {
+        serde_json::from_str(&fs::read_to_string(snapshot).unwrap()).unwrap()
+    }
+
     #[test]
     fn an_action_recorded_and_never_flushed_is_there_after_a_restart() {
         let (snapshot, journal) = temp_paths("kill");
@@ -945,6 +986,49 @@ mod journal_tests {
         let ids: Vec<_> = restored.channels["chan"].iter().map(|e| e["id"].clone()).collect();
         assert_eq!(ids, vec![json!("a1"), json!("a2")]);
         let _ = fs::remove_dir_all(snapshot.parent().unwrap());
+    }
+
+    #[test]
+    fn a_sessions_first_write_starts_on_a_fresh_line() {
+        let (snapshot, journal) = temp_paths("first-write");
+        let _cleanup = TempDirGuard(snapshot.parent().unwrap().to_path_buf());
+        // A crash left a good line and a fragment with no newline, and nothing
+        // cut it.
+        append_journal(&journal, 1, &JournalOp::Put { channel: "chan".into(), entry: json!({ "id": "a1" }) }).unwrap();
+        let mut f = fs::OpenOptions::new().append(true).open(&journal).unwrap();
+        std::io::Write::write_all(&mut f, b"{\"seq\":2,\"op\":\"put\",\"chan").unwrap();
+        drop(f);
+        let lock = Mutex::new(JournalQueue::new());
+        let done = Condvar::new();
+        let queue = enqueue(&lock, 2);
+        wait_durable(&lock, &done, &journal, queue, 2, commit_lines).unwrap();
+        let (restored, replayed) = load_storage(&snapshot, &journal);
+        assert_eq!(replayed, 2);
+        let ids: Vec<_> = restored.channels["chan"].iter().map(|e| e["id"].clone()).collect();
+        assert_eq!(ids, vec![json!("a1"), json!("a2")]);
+    }
+
+    // The store, the journal path and the queue are process-wide and set once,
+    // so this is the only test that goes through them; it covers both calls in
+    // sequence.
+    #[test]
+    fn record_and_clear_return_ok_when_every_journal_commit_fails() {
+        let (snapshot, journal) = temp_paths("record-clear-failing-journal");
+        let _cleanup = TempDirGuard(snapshot.parent().unwrap().to_path_buf());
+        // A directory where the journal file belongs: every commit fails.
+        fs::create_dir(&journal).unwrap();
+        let entry = json!({ "id": "a1", "action": "ban", "channel": "Chan", "target_user_name": "bob",
+            "timestamp": "2026-10-24T00:00:00Z", "source": "irc" });
+        let shown = ModLogStorageService::record_at(|| Ok(snapshot.clone()), "Chan", entry).unwrap();
+        assert_eq!(shown["id"], "a1");
+        let saved = read_snapshot(&snapshot);
+        assert_eq!(saved.journal_seq, 1);
+        assert_eq!(saved.channels["chan"].len(), 1);
+        assert_eq!(saved.channels["chan"][0]["id"], "a1");
+        ModLogStorageService::clear_channel_at(|| Ok(snapshot.clone()), "Chan").unwrap();
+        let saved = read_snapshot(&snapshot);
+        assert_eq!(saved.journal_seq, 2);
+        assert!(!saved.channels.contains_key("chan"));
     }
 
     #[test]
