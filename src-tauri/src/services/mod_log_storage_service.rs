@@ -545,9 +545,11 @@ fn load_storage(snapshot: &Path, journal: &Path) -> (ModLogStorage, usize) {
     };
     cut_torn_tail(journal);
     let mut applied = 0;
-    if let Ok(text) = fs::read_to_string(journal) {
-        for line in text.lines().filter(|l| !l.trim().is_empty()) {
-            if let Ok(JournalLine { seq, op }) = serde_json::from_str::<JournalLine>(line) {
+    // Read as bytes and split on newlines: a fragment that ends inside a
+    // multi-byte character is not valid UTF-8 and fails only its own line.
+    if let Ok(bytes) = fs::read(journal) {
+        for line in bytes.split(|b| *b == b'\n').filter(|l| !l.iter().all(|b| b.is_ascii_whitespace())) {
+            if let Ok(JournalLine { seq, op }) = serde_json::from_slice::<JournalLine>(line) {
                 if seq > storage.journal_seq {
                     apply_journal_op(&mut storage, op);
                     storage.journal_seq = seq;
@@ -715,6 +717,10 @@ mod journal_tests {
     use super::*;
     use serde_json::json;
     use std::sync::atomic::AtomicUsize;
+
+    /// Held for the whole of any test that touches the process-wide store,
+    /// `JOURNAL_PATH` or `JOURNAL_LOCK`, so such tests never run at once.
+    static GLOBALS_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     /// A commit that writes the first half of its batch and a fragment of the
     /// next line, then fails, like a disk that dies partway through a write.
@@ -1008,11 +1014,41 @@ mod journal_tests {
         assert_eq!(ids, vec![json!("a1"), json!("a2")]);
     }
 
+    /// The bytes of a journal line for entry `id` carrying `text` in `reason`,
+    /// cut `keep` bytes into the first `marker` character found in it.
+    fn line_cut_inside(seq: u64, id: &str, text: &str, marker: char, keep: usize) -> Vec<u8> {
+        let op = JournalOp::Put { channel: "chan".into(), entry: json!({ "id": id, "reason": text }) };
+        let line = journal_line(seq, &op).unwrap();
+        let start = line.find(marker).unwrap();
+        line.as_bytes()[..start + keep].to_vec()
+    }
+
+    #[test]
+    fn a_fragment_ending_inside_a_multi_byte_character_fails_only_its_own_line() {
+        for (name, text, marker, keep) in [("two-byte", "caf\u{e9}", '\u{e9}', 1), ("four-byte", "party \u{1F600}", '\u{1F600}', 2)] {
+            let (snapshot, journal) = temp_paths(&format!("torn-{name}"));
+            let _cleanup = TempDirGuard(snapshot.parent().unwrap().to_path_buf());
+            append_journal(&journal, 1, &JournalOp::Put { channel: "chan".into(), entry: json!({ "id": "a1" }) }).unwrap();
+            // A cut line, then a newline and a whole line after it.
+            let mut f = fs::OpenOptions::new().append(true).open(&journal).unwrap();
+            std::io::Write::write_all(&mut f, &line_cut_inside(2, "torn", text, marker, keep)).unwrap();
+            std::io::Write::write_all(&mut f, b"\n").unwrap();
+            drop(f);
+            append_journal(&journal, 2, &JournalOp::Put { channel: "chan".into(), entry: json!({ "id": "a2" }) }).unwrap();
+            assert!(std::str::from_utf8(&fs::read(&journal).unwrap()).is_err(), "{name}: the fragment must be invalid UTF-8");
+            let (restored, replayed) = load_storage(&snapshot, &journal);
+            assert_eq!(replayed, 2, "{name}");
+            let ids: Vec<_> = restored.channels["chan"].iter().map(|e| e["id"].clone()).collect();
+            assert_eq!(ids, vec![json!("a1"), json!("a2")], "{name}");
+        }
+    }
+
     // The store, the journal path and the queue are process-wide and set once,
     // so this is the only test that goes through them; it covers both calls in
-    // sequence.
+    // sequence. Any test that touches them takes GLOBALS_TEST_LOCK first.
     #[test]
     fn record_and_clear_return_ok_when_every_journal_commit_fails() {
+        let _globals = GLOBALS_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let (snapshot, journal) = temp_paths("record-clear-failing-journal");
         let _cleanup = TempDirGuard(snapshot.parent().unwrap().to_path_buf());
         // A directory where the journal file belongs: every commit fails.
