@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { emit } from '@tauri-apps/api/event';
+import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { playSound } from '../utils/notificationSound';
 
@@ -12,8 +12,8 @@ interface MentionPing {
 
 /** Rust's event that plays the sound, sent to one window. */
 const PING_EVENT = 'chat-mention-ping';
-/** Tells Rust whether this window can play it: `{ label, ready }`. */
-const READY_EVENT = 'mention-ping-ready';
+/** Tells Rust whether this window can play it. */
+const READY_COMMAND = 'mention_ping_ready';
 
 /**
  * Plays the mention sound Rust sends this window, and tells Rust while it
@@ -21,18 +21,17 @@ const READY_EVENT = 'mention-ping-ready';
  */
 export function startMentionPing(): () => void {
   let stopped = false;
-  let label: string | undefined;
   let unlisten: (() => void) | undefined;
   const say = (ready: boolean) => {
-    if (label) void emit(READY_EVENT, { label, ready }).catch(() => {});
+    void invoke(READY_COMMAND, { ready }).catch(() => {});
   };
   const gone = () => say(false);
   void Promise.resolve()
     .then(() => {
-      const win = getCurrentWebviewWindow();
-      label = win.label;
       // Window-scoped: a plain `listen` hears events sent to every other window too.
-      return win.listen<MentionPing>(PING_EVENT, (e) => playSound(e.payload.sound, e.payload.volume));
+      return getCurrentWebviewWindow().listen<MentionPing>(PING_EVENT, (e) =>
+        playSound(e.payload.sound, e.payload.volume),
+      );
     })
     .then((fn) => {
       if (stopped) {

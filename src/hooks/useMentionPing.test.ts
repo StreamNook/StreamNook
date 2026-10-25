@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 type Handler = (e: { payload: { channel: string; sound: string; volume: number } }) => void;
 
@@ -6,7 +6,7 @@ const m = vi.hoisted(() => ({
   handler: undefined as Handler | undefined,
   unlisten: vi.fn(),
   winListen: vi.fn(),
-  emit: vi.fn(async () => {}),
+  invoke: vi.fn(async () => {}),
   globalListen: vi.fn(),
   playSound: vi.fn(),
 }));
@@ -14,7 +14,8 @@ const m = vi.hoisted(() => ({
 vi.mock('@tauri-apps/api/webviewWindow', () => ({
   getCurrentWebviewWindow: () => ({ label: 'multichat-default', listen: m.winListen }),
 }));
-vi.mock('@tauri-apps/api/event', () => ({ emit: m.emit, listen: m.globalListen }));
+vi.mock('@tauri-apps/api/core', () => ({ invoke: m.invoke }));
+vi.mock('@tauri-apps/api/event', () => ({ listen: m.globalListen }));
 vi.mock('../utils/notificationSound', () => ({ playSound: m.playSound }));
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
@@ -27,6 +28,9 @@ describe('startMentionPing', () => {
       return m.unlisten;
     });
   });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
 
   it('listens on this window only and tells Rust while it can play', async () => {
     const { startMentionPing } = await import('./useMentionPing');
@@ -34,12 +38,12 @@ describe('startMentionPing', () => {
     await flush();
     expect(m.winListen).toHaveBeenCalledWith('chat-mention-ping', expect.any(Function));
     expect(m.globalListen).not.toHaveBeenCalled();
-    expect(m.emit).toHaveBeenCalledWith('mention-ping-ready', { label: 'multichat-default', ready: true });
+    expect(m.invoke).toHaveBeenCalledWith('mention_ping_ready', { ready: true });
     m.handler?.({ payload: { channel: 'a', sound: 'boop', volume: 40 } });
     expect(m.playSound).toHaveBeenCalledWith('boop', 40);
     stop();
     expect(m.unlisten).toHaveBeenCalledTimes(1);
-    expect(m.emit).toHaveBeenLastCalledWith('mention-ping-ready', { label: 'multichat-default', ready: false });
+    expect(m.invoke).toHaveBeenLastCalledWith('mention_ping_ready', { ready: false });
   });
 
   it('stopped before the listener lands: unlistens and never says ready', async () => {
@@ -48,6 +52,20 @@ describe('startMentionPing', () => {
     stop();
     await flush();
     expect(m.unlisten).toHaveBeenCalledTimes(1);
-    expect(m.emit).not.toHaveBeenCalled();
+    expect(m.invoke).not.toHaveBeenCalled();
+  });
+
+  it('a page going away says it stopped, and a stopped page never does', async () => {
+    const win = new EventTarget();
+    vi.stubGlobal('window', win);
+    const { startMentionPing } = await import('./useMentionPing');
+    const stop = startMentionPing();
+    await flush();
+    win.dispatchEvent(new Event('pagehide'));
+    expect(m.invoke).toHaveBeenLastCalledWith('mention_ping_ready', { ready: false });
+    stop();
+    m.invoke.mockClear();
+    win.dispatchEvent(new Event('pagehide'));
+    expect(m.invoke).not.toHaveBeenCalled();
   });
 });

@@ -13,8 +13,8 @@ use std::sync::{Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use once_cell::sync::Lazy;
-use serde::{Deserialize, Serialize};
-use tauri::{Emitter, Listener, Manager};
+use serde::Serialize;
+use tauri::{Emitter, Manager};
 
 use crate::models::chat_layout::ChatMessage;
 use crate::models::settings::Settings;
@@ -112,35 +112,34 @@ fn sent_at_ms(msg: &ChatMessage) -> Option<i64> {
     msg.tags.get("tmi-sent-ts").and_then(|v| v.parse::<i64>().ok())
 }
 
-/// A page that plays the ping says so on this event, `{ label, ready }`, when
-/// it starts and stops listening.
-pub const READY_EVENT: &str = "mention-ping-ready";
-
 const MULTICHAT_PREFIX: &str = "multichat-";
 const OVERLAY_PREFIX: &str = "overlay-";
 
 /// Windows whose page is listening for the ping right now.
 static READY: Lazy<Mutex<BTreeSet<String>>> = Lazy::new(|| Mutex::new(BTreeSet::new()));
 
-#[derive(Deserialize)]
-struct Ready {
-    label: String,
-    ready: bool,
+/// A page says whether it is listening for the ping. A command rather than an
+/// event: it is never queued, and the label is the calling window's own, so a
+/// page can only speak for itself.
+#[tauri::command]
+pub fn mention_ping_ready(webview: crate::rt::Webview, ready: bool) {
+    set_ready(webview.label(), ready);
 }
 
-/// Keep `READY` in step with the pages. Called once at setup.
-pub fn listen_ready(app: &crate::rt::AppHandle) {
-    app.listen_any(READY_EVENT, |event| {
-        let Ok(r) = serde_json::from_str::<Ready>(event.payload()) else {
-            return;
-        };
-        let mut ready = READY.lock().unwrap_or_else(|e| e.into_inner());
-        if r.ready {
-            ready.insert(r.label);
-        } else {
-            ready.remove(&r.label);
-        }
-    });
+fn set_ready(label: &str, ready: bool) {
+    let mut set = READY.lock().unwrap_or_else(|e| e.into_inner());
+    if ready {
+        set.insert(label.to_string());
+    } else {
+        set.remove(label);
+    }
+}
+
+/// The page in `label` is gone or starting over, and a page that goes never
+/// says so itself: not listening until it says so again. Called when a window
+/// is destroyed and when a page starts loading.
+pub fn forget(label: &str) {
+    set_ready(label, false);
 }
 
 /// The one window that plays the ping, so it never plays twice, chosen among
@@ -378,8 +377,13 @@ mod tests {
     }
 
     #[test]
-    fn ready_payload_reads_the_page_shape() {
-        let r: Ready = serde_json::from_str(r#"{"label":"multichat-default","ready":true}"#).unwrap();
-        assert_eq!((r.label.as_str(), r.ready), ("multichat-default", true));
+    fn forget_drops_a_window_until_it_says_ready_again() {
+        set_ready("multichat-test-forget", true);
+        assert!(READY.lock().unwrap().contains("multichat-test-forget"));
+        forget("multichat-test-forget");
+        assert!(!READY.lock().unwrap().contains("multichat-test-forget"));
+        set_ready("multichat-test-forget", true);
+        assert!(READY.lock().unwrap().contains("multichat-test-forget"));
+        forget("multichat-test-forget");
     }
 }

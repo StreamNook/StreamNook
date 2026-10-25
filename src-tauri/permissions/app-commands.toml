@@ -579,6 +579,7 @@ allow = [
   "set_visible_mention_rooms",
   "mention_watch_pull",
   "mention_push_arrived",
+  "mention_ping_ready",
   "get_ivr_user_summary",
   "get_ivr_subage_summary",
   "get_sub_standing",
