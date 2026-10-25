@@ -819,6 +819,7 @@ impl DashStream {
                     itag,
                     e
                 );
+                me.report_if_broadcast_ended(&video_id).await;
             }
         });
     }
@@ -873,6 +874,26 @@ async fn pick_url(fresh: &str, current: &str) -> String {
     // the handshake is paid here rather than on the next segment.
     probe(fresh).await;
     fresh.to_string()
+}
+
+impl DashStream {
+    /// A refresh of a grid tile's urls failed: ask where the broadcast stands,
+    /// and tell the page when it is over. Only a tile that is still this
+    /// registered stream is reported; the solo stream has no tile to end.
+    async fn report_if_broadcast_ended(self: &Arc<Self>, video_id: &str) {
+        if self.id == crate::services::stream_server::SOLO_STREAM_ID {
+            return;
+        }
+        let Some(crate::services::providers::youtube_media::Broadcast::Ended) =
+            crate::services::providers::youtube_media::broadcast_state(video_id).await
+        else {
+            return;
+        };
+        if lookup(&self.id).is_some_and(|current| Arc::ptr_eq(&current, self)) {
+            log::info!("[YouTubeDash] {}: the broadcast has ended", self.id);
+            crate::services::multi_nook_server::report_tile_ended(&self.id);
+        }
+    }
 }
 
 impl DashStream {

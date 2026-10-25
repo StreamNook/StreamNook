@@ -569,19 +569,20 @@ async fn serve_provider_playback(
         // would proxy a local server through another local server and rewrite
         // playlists that are already exactly what the player needs.
         PlaybackKind::LocalHls => {
-            // The relay is not used on this path, so a refresher registered by
-            // an EARLIER stream would otherwise stay installed for the rest of
-            // the session: `StreamServer::stop` clears the proxy url but not
-            // the refresher. Inert while nothing re-signs, and wrong the moment
-            // something does.
-            if let Some(current) = &session {
-                if !current() {
-                    return Err("the stream this switch belongs to is no longer playing"
-                        .to_string()
-                        .into());
-                }
-            }
-            crate::services::stream_server::set_manifest_refresher(None).await;
+            // The relay is not used on this path, so a profile and refresher
+            // installed by an EARLIER stream would otherwise stay in place for
+            // the rest of the session: `StreamServer::stop` clears the proxy
+            // url but not those. Installed under the start lock, with the
+            // session check, so the stream owns them from here.
+            crate::services::stream_server::install_solo_upstream_locked(
+                crate::services::stream_server::SoloUpstream {
+                    profile: crate::services::stream_server::UpstreamProfile::GenericHls,
+                    refresher: None,
+                    session,
+                },
+            )
+            .await
+            .map_err(|e| e.to_string())?;
             // The player polls the adapter's own playlists from here on, so the
             // stream reads as loading from now (`youtube_dash` notes each poll).
             crate::services::stream_server::note_solo_playlist_request();

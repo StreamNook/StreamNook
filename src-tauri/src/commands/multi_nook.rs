@@ -2,9 +2,11 @@ use crate::commands::streaming::StreamStartResult;
 use crate::models::settings::{AppState, AudioBoostSettings};
 use crate::rt::AppHandle;
 use crate::services::multi_nook_server::{
-    MultiNookServer, TileProfile, TilePromotion, TileRefresher,
+    MultiNookServer, PromotionTarget, TileProfile, TilePromotion, TileRefresher,
 };
-use crate::services::stream_server::StreamServer;
+use crate::services::stream_server::{
+    SessionCheck, SoloUpstream, StreamServer, UpstreamProfile,
+};
 use crate::services::providers::source::PlaybackKind;
 use crate::services::providers::watch_urls::WatchTarget;
 use crate::services::twitch_resolver as tr;
@@ -97,7 +99,7 @@ pub async fn start_multi_nook(
         crate::services::multi_nook_server::twitch_tile_route(&stream_id),
     );
 
-    let port = MultiNookServer::start_proxy(&stream_id, r.url.clone(), TileProfile::Twitch, None)
+    let port = MultiNookServer::start_proxy(&stream_id, r.url.clone(), TileProfile::Twitch, None, None)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -227,7 +229,9 @@ pub async fn retier_multi_nook_tile(
     if provider.as_deref().unwrap_or("twitch") != "twitch" {
         return Ok(Retier::Restart);
     }
-    let Some((_, current)) = MultiNookServer::promotion_target(&stream_id).await else {
+    let Some(PromotionTarget { promotion: current, .. }) =
+        MultiNookServer::promotion_target(&stream_id).await
+    else {
         return Ok(Retier::Restart);
     };
     let cap = cap_for(&state, small)?;
@@ -255,7 +259,7 @@ pub async fn retier_multi_nook_tile(
     // The tile may have closed while this resolved: it is then an error, and
     // the session begun above goes with it, never a new relay.
     if let Err(e) =
-        MultiNookServer::restart_existing(&stream_id, r.url.clone(), TileProfile::Twitch, None).await
+        MultiNookServer::restart_existing(&stream_id, r.url.clone(), TileProfile::Twitch, None, None).await
     {
         crate::services::link_adapt::end(&stream_id);
         return Err(e.to_string());
@@ -386,6 +390,11 @@ async fn start_provider_tile(
     cap: Option<u32>,
     auto: bool,
 ) -> Result<String, String> {
+    // A tile that starts again begins clean: its previous run's end report and
+    // any playlist request a late player of that run noted no longer count.
+    crate::services::multi_nook_server::forget_tile_ended(stream_id);
+    MultiNookServer::forget_tile_requests(stream_id);
+
     // The frontend addresses tiles by URL, so recover the channel from it rather
     // than inventing a second addressing scheme. Note NO lowercasing here: the
     // Twitch helper above folds case because Twitch logins are case-insensitive,
@@ -412,10 +421,23 @@ async fn start_provider_tile(
             channel: channel.clone(),
             cap,
             direct: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(resolved.kind == PlaybackKind::Hls)),
+            session: std::sync::atomic::AtomicU64::new(0),
         });
-        crate::services::link_adapt::begin_named(stream_id, &resolved.qualities, &resolved.quality, auto, route);
+        crate::services::link_adapt::begin_named(
+            stream_id,
+            &resolved.qualities,
+            &resolved.quality,
+            auto,
+            route.clone(),
+        );
+        // Read with no await since `begin_named`: the session this start owns,
+        // which a later switch of this route must still find current.
+        route.session.store(
+            crate::services::link_adapt::generation(stream_id).unwrap_or(0),
+            std::sync::atomic::Ordering::SeqCst,
+        );
     }
-    serve_provider_tile(stream_id, provider, &channel, quality, cap, resolved, false).await
+    serve_provider_tile(stream_id, provider, &channel, quality, cap, resolved, false, None).await
 }
 
 /// A Kick or YouTube tile as `link_adapt` moves it: the adapter resolves the
@@ -431,6 +453,9 @@ struct ProviderTileRoute {
     /// Served through the tile relay (segments straight from the CDN) rather
     /// than by the adapter's own relay. Follows each switch.
     direct: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// The `link_adapt` generation of the tile session this route belongs to
+    /// (0 until the start that made the route has read it).
+    session: std::sync::atomic::AtomicU64,
 }
 
 impl crate::services::link_adapt::Route for ProviderTileRoute {
@@ -438,6 +463,7 @@ impl crate::services::link_adapt::Route for ProviderTileRoute {
         let (id, provider, channel, cap) =
             (self.stream_id.clone(), self.provider.clone(), self.channel.clone(), self.cap);
         let direct = self.direct.clone();
+        let session = self.session.load(std::sync::atomic::Ordering::SeqCst);
         Box::pin(async move {
             let source = crate::services::providers::registry()
                 .await
@@ -446,13 +472,16 @@ impl crate::services::link_adapt::Route for ProviderTileRoute {
             let was_on_relay = direct.load(std::sync::atomic::Ordering::Relaxed);
             let resolved = source.resolve_playback(&id, &channel, &to.name).await?;
             let on_relay = resolved.kind == PlaybackKind::Hls;
-            // A tile closed while this resolved has no session left. One that
-            // moves onto the tile relay from the adapter's own is not
-            // registered there yet, so this is what tells it from a closed one.
-            if crate::services::link_adapt::current_quality(&id).is_none() {
-                return Err(anyhow::anyhow!("tile '{id}' closed during its switch"));
+            // Asked again under the tile registry's lock: a tile closed or
+            // started again while this resolved has no session, or another one,
+            // and then nothing of this switch may be installed. One that moves
+            // onto the tile relay from the adapter's own is not registered
+            // there yet, so the session is what tells it from a closed one.
+            let current = tile_session_check(&id, session);
+            if !current() {
+                return Err(anyhow::anyhow!("tile '{id}' closed or started again during its switch"));
             }
-            let url = serve_provider_tile(&id, &provider, &channel, &to.name, cap, resolved, was_on_relay)
+            let url = serve_provider_tile(&id, &provider, &channel, &to.name, cap, resolved, was_on_relay, Some(current))
                 .await
                 .map_err(|e| anyhow::anyhow!(e))?;
             direct.store(on_relay, std::sync::atomic::Ordering::Relaxed);
@@ -469,10 +498,23 @@ impl crate::services::link_adapt::Route for ProviderTileRoute {
     }
 }
 
+/// Whether the tile session with `link_adapt` generation `session` (0 = none)
+/// is still the one the tile has: false once the tile closed or started again.
+fn tile_session_check(stream_id: &str, session: u64) -> SessionCheck {
+    let id = stream_id.to_string();
+    std::sync::Arc::new(move || {
+        session != 0 && crate::services::link_adapt::generation(&id) == Some(session)
+    })
+}
+
 /// Serve a provider tile's resolved stream: on the tile relay, or as is when
 /// the adapter already serves it from localhost. `switch` is a tile that is
-/// already running moving to another rendition: it must still be registered,
-/// and a tile closed meanwhile is an error rather than a new relay.
+/// already running on the tile relay moving to another rendition: it must still
+/// be registered, and a tile closed meanwhile is an error rather than a new
+/// relay. `session` is a rendition switch's own session, which must still hold
+/// when the tile is updated: a tile closed or started again meanwhile is never
+/// updated or created by it. A switch that moves the tile from the tile relay to
+/// the adapter's own drops the relay's instance and keeps the session.
 async fn serve_provider_tile(
     stream_id: &str,
     provider: &str,
@@ -481,15 +523,16 @@ async fn serve_provider_tile(
     cap: Option<u32>,
     resolved: crate::services::providers::source::ResolvedPlayback,
     switch: bool,
+    session: Option<SessionCheck>,
 ) -> Result<String, String> {
     match resolved.kind {
         PlaybackKind::Hls => {
             let profile = TileProfile::GenericHls;
             let refresher = kick_refresher(stream_id, provider, channel, quality);
             let started = if switch {
-                MultiNookServer::restart_existing(stream_id, resolved.url, profile, refresher).await
+                MultiNookServer::restart_existing(stream_id, resolved.url, profile, refresher, session).await
             } else {
-                MultiNookServer::start_proxy(stream_id, resolved.url, profile, refresher).await
+                MultiNookServer::start_proxy(stream_id, resolved.url, profile, refresher, session).await
             };
             let port = started.map_err(|e| e.to_string())?;
             MultiNookServer::set_promotion(
@@ -528,7 +571,20 @@ async fn serve_provider_tile(
         // grid's YouTube refusal was lifted; the url already carries this tile's
         // own /s/{stream_id}/ prefix, which is what keeps two YouTube tiles from
         // serving each other's fragments.
-        PlaybackKind::LocalHls => Ok(resolved.url),
+        PlaybackKind::LocalHls => {
+            if let Some(current) = &session {
+                if !current() {
+                    return Err(format!("tile '{stream_id}' closed or started again during its switch"));
+                }
+            }
+            // A tile that moved here from the tile relay has no use for its
+            // relay instance, and an origin left behind would read as parked
+            // while the adapter's relay plays. The session goes on.
+            if switch {
+                MultiNookServer::drop_relay(stream_id).await;
+            }
+            Ok(resolved.url)
+        }
         other => Err(format!(
             "{} playback kind {:?} is not supported in the grid yet",
             provider, other
@@ -694,11 +750,67 @@ mod provider_switch_tests {
                 quality: "480p".to_string(),
                 qualities: Vec::new(),
             };
-            let served = serve_provider_tile(id, "kick", "someone", "480p", None, resolved, true).await;
+            let served = serve_provider_tile(id, "kick", "someone", "480p", None, resolved, true, None).await;
             assert!(served.is_err(), "a switch of a tile that is gone must fail");
             assert!(MultiNookServer::get_port(id).await.is_none(), "the switch recreated the tile");
             assert!(!MultiNookServer::get_active_streams().await.iter().any(|s| s == id));
         });
+    }
+
+    #[test]
+    fn a_switch_of_a_replaced_or_closed_session_creates_nothing() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let id = "test-replaced-provider-switch";
+            let resolved = || crate::services::providers::source::ResolvedPlayback {
+                kind: PlaybackKind::Hls,
+                url: "https://example.test/live.m3u8".to_string(),
+                quality: "480p".to_string(),
+                qualities: Vec::new(),
+            };
+            // No tile session at all (the tile closed) and a session that no
+            // adapter session matches: neither check holds.
+            for session in [0u64, 7] {
+                let check = tile_session_check(id, session);
+                assert!(!check(), "session {session} of a tile with no adapter session is not current");
+                let served = serve_provider_tile(
+                    id, "kick", "someone", "480p", None, resolved(), false, Some(check),
+                )
+                .await;
+                assert!(served.is_err());
+                assert!(MultiNookServer::get_port(id).await.is_none(), "the switch created the tile");
+            }
+
+            // A switch onto the adapter's own relay from a closed tile hands out
+            // no URL either.
+            let local = crate::services::providers::source::ResolvedPlayback {
+                kind: PlaybackKind::LocalHls,
+                url: "http://localhost:1/s/x/stream.m3u8".to_string(),
+                quality: "1440p".to_string(),
+                qualities: Vec::new(),
+            };
+            let served = serve_provider_tile(
+                id, "youtube", "someone", "1440p", None, local, true, Some(tile_session_check(id, 7)),
+            )
+            .await;
+            assert!(served.is_err());
+        });
+    }
+
+    #[test]
+    fn a_promoted_tile_brings_its_own_profile_and_re_signer() {
+        let own: TileRefresher = std::sync::Arc::new(|| {
+            Box::pin(async { Some("https://example.test/own.m3u8".to_string()) })
+                as futures::future::BoxFuture<'static, Option<String>>
+        });
+        let kick = promotion_upstream(TileProfile::GenericHls, Some(own));
+        assert_eq!(kick.profile, UpstreamProfile::GenericHls);
+        assert!(kick.refresher.is_some());
+        assert!(kick.session.is_none());
+
+        let twitch = promotion_upstream(TileProfile::Twitch, None);
+        assert_eq!(twitch.profile, UpstreamProfile::Twitch);
+        assert!(twitch.refresher.is_none());
     }
 
     #[test]
@@ -709,6 +821,7 @@ mod provider_switch_tests {
             channel: "someone".to_string(),
             cap: None,
             direct: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            session: std::sync::atomic::AtomicU64::new(0),
         };
         assert!(!route.parked());
     }
@@ -791,6 +904,20 @@ pub async fn stop_all_multi_nooks() -> Result<(), String> {
     MultiNookServer::stop_all().await.map_err(|e| e.to_string())
 }
 
+/// What a promoted tile puts in place on the solo relay: the profile its own
+/// upstream needs (Twitch for a Twitch tile, the generic one for any other) and
+/// the tile's re-signer, if it has one.
+fn promotion_upstream(profile: TileProfile, refresher: Option<TileRefresher>) -> SoloUpstream {
+    SoloUpstream {
+        profile: match profile {
+            TileProfile::Twitch => UpstreamProfile::Twitch,
+            TileProfile::GenericHls => UpstreamProfile::GenericHls,
+        },
+        refresher,
+        session: None,
+    }
+}
+
 /// Hand ONE grid tile to the solo player and tear the rest of the grid down.
 ///
 /// The point is that nothing is resolved again. The tile's relay is already
@@ -813,7 +940,9 @@ pub async fn stop_all_multi_nooks() -> Result<(), String> {
 pub async fn promote_multi_nook_tile(
     stream_id: String,
 ) -> Result<Option<StreamStartResult>, String> {
-    let Some((upstream, promotion)) = MultiNookServer::promotion_target(&stream_id).await else {
+    let Some(PromotionTarget { upstream, promotion, profile, refresher }) =
+        MultiNookServer::promotion_target(&stream_id).await
+    else {
         debug!(
             "[MultiNook] '{}' has no promotion target; caller falls back to a normal start",
             stream_id
@@ -838,10 +967,16 @@ pub async fn promote_multi_nook_tile(
     // The relay re-probes the low-latency origin against this upstream, so the
     // solo player picks its hls.js mode from a settled answer just as it does on
     // a cold start. Probing is skipped for a non-Twitch upstream inside the
-    // relay itself (the origin only speaks Twitch's playlist shape).
-    let port = StreamServer::start_proxy_server(upstream)
-        .await
-        .map_err(|e| e.to_string())?;
+    // relay itself (the origin only speaks Twitch's playlist shape). The tile's
+    // own profile and re-signer are installed with it, under the relay's start
+    // lock, so the promoted stream never plays under the previous solo stream's.
+    let port = StreamServer::start_proxy_server_with(
+        upstream,
+        true,
+        Some(promotion_upstream(profile, refresher)),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
 
     // The tile's rung and what it learned about the link carry over, so "Auto"
     // keeps adapting (and can climb back) on the solo player. A provider
@@ -990,7 +1125,7 @@ pub async fn report_multi_nook_tile_codec_failure(stream_id: String, mime_type: 
     // The ban is scoped to the tile's channel, never the whole app.
     let channel = MultiNookServer::promotion_target(&stream_id)
         .await
-        .and_then(|(_, p)| p.status.map(|s| s.channel))
+        .and_then(|target| target.promotion.status.map(|s| s.channel))
         .unwrap_or_else(|| stream_id.clone());
     let Some(family) = tr::fail_codec(&channel, mime_type.as_deref(), serving.as_deref()) else {
         return false;

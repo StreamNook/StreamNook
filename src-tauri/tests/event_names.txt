@@ -71,6 +71,7 @@ mirrored-notification
 mirrored-notification-activate
 multi-nook://meta
 multi-nook://raid
+multi-nook://tile-ended
 multichat-popout-closed
 my-clips://changed
 new-favorite-drops

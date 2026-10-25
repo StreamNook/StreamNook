@@ -1571,7 +1571,7 @@ async fn flv_pump(id: String, s: Arc<Session>) {
                 // Diagnostics is on, and this is the one line that says which
                 // format a room was refused for.
                 log::warn!("[TikTokRelay] '{}' cannot play @{}: {}", id, s.handle, why);
-                end_flv(&s, format!("@{} is streaming in a format StreamNook can't play", s.handle));
+                end_flv(&id, &s, format!("@{} is streaming in a format StreamNook can't play", s.handle));
                 remove_if_same(&id, &s);
                 return;
             }
@@ -1582,7 +1582,7 @@ async fn flv_pump(id: String, s: Arc<Session>) {
         failures += 1;
         if failures >= FLV_MAX_RETRIES {
             log::info!("[TikTokRelay] '{}' pull for @{} failed {} times in a row; ending", id, s.handle, failures);
-            end_flv(&s, format!("@{}'s stream stopped", s.handle));
+            end_flv(&id, &s, format!("@{}'s stream stopped", s.handle));
             remove_if_same(&id, &s);
             return;
         }
@@ -1604,9 +1604,21 @@ fn error_chain(e: &dyn std::error::Error) -> String {
     out
 }
 
-fn end_flv(s: &Session, why: String) {
-    if let Ok(mut st) = s.flv.lock() {
-        st.ended.get_or_insert(why);
+/// Record why the pull of session `s` (registered as `id`) ended. The first
+/// reason stands, and a grid tile's page is told once; a session that was
+/// stopped meanwhile has no tile left to tell.
+fn end_flv(id: &str, s: &Arc<Session>, why: String) {
+    let first = s
+        .flv
+        .lock()
+        .map(|mut st| {
+            let first = st.ended.is_none();
+            st.ended.get_or_insert(why);
+            first
+        })
+        .unwrap_or(false);
+    if first && still_registered(id, s) {
+        crate::services::multi_nook_server::report_tile_ended(id);
     }
 }
 

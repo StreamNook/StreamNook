@@ -342,6 +342,15 @@ async fn install_solo_upstream(upstream: SoloUpstream) -> Result<()> {
     Ok(())
 }
 
+/// `install_solo_upstream` for a start that serves its stream without the relay
+/// (a local HLS the adapter serves itself): takes the start lock, so the install
+/// never interleaves with a relay start, and fails when the start's session is
+/// no longer the solo one.
+pub async fn install_solo_upstream_locked(upstream: SoloUpstream) -> Result<()> {
+    let _init_guard = SOLO_START_LOCK.lock().await;
+    install_solo_upstream(upstream).await
+}
+
 /// Absolute segment URLs, addressed by a relay-local index.
 ///
 /// Twitch's media playlists use RELATIVE segment URIs, so they resolve against
@@ -1816,6 +1825,48 @@ mod relay_rewrite_tests {
 
             install_solo_upstream(SoloUpstream::twitch()).await.unwrap();
             assert!(REFRESHER.lock().await.is_none());
+        });
+    }
+
+    #[test]
+    fn a_local_hls_start_installs_its_own_upstream_under_the_start_lock() {
+        let _state = solo_state();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let own: Refresher = Arc::new(|| {
+                Box::pin(async { Some("https://example.test/own.m3u8".to_string()) })
+                    as futures::future::BoxFuture<'static, Option<String>>
+            });
+            install_solo_upstream(SoloUpstream {
+                profile: UpstreamProfile::Twitch,
+                refresher: Some(own),
+                session: None,
+            })
+            .await
+            .unwrap();
+
+            let ended: SessionCheck = Arc::new(|| false);
+            let refused = install_solo_upstream_locked(SoloUpstream {
+                profile: UpstreamProfile::GenericHls,
+                refresher: None,
+                session: Some(ended),
+            })
+            .await;
+            assert!(refused.is_err(), "a start whose session ended installs nothing");
+            assert_eq!(upstream_profile(), UpstreamProfile::Twitch);
+            assert!(REFRESHER.lock().await.is_some(), "the refused start left the relay's re-signer alone");
+
+            install_solo_upstream_locked(SoloUpstream {
+                profile: UpstreamProfile::GenericHls,
+                refresher: None,
+                session: None,
+            })
+            .await
+            .unwrap();
+            assert_eq!(upstream_profile(), UpstreamProfile::GenericHls);
+            assert!(REFRESHER.lock().await.is_none(), "the earlier stream's re-signer is gone");
+
+            install_solo_upstream(SoloUpstream::twitch()).await.unwrap();
         });
     }
 
