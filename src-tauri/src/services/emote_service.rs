@@ -183,7 +183,6 @@ pub(crate) async fn seventv_ids_store(channel_id: &str, ids: SeventvIds) {
 /// None when the read failed, so the caller does not record a set it never
 /// saw; an answer with no personal-use emotes is `Some` of an empty list.
 pub async fn fetch_personal_emote_set(set_id: &str) -> Option<Vec<Emote>> {
-    let mut out = Vec::new();
     let url = format!("https://7tv.io/v3/emote-sets/{}", set_id);
     let resp = match crate::services::http::client()
         .get(&url)
@@ -195,10 +194,19 @@ pub async fn fetch_personal_emote_set(set_id: &str) -> Option<Vec<Emote>> {
         _ => return None,
     };
     let json: serde_json::Value = resp.json().await.ok()?;
-    let Some(arr) = json.get("emotes").and_then(|v| v.as_array()) else {
-        // A set with no emotes yet answers with no list at all.
-        return Some(out);
-    };
+    // A set with no emotes yet answers with no list at all.
+    let arr = json
+        .get("emotes")
+        .and_then(|v| v.as_array())
+        .map(|a| a.as_slice())
+        .unwrap_or(&[]);
+    Some(parse_personal_emotes(arr))
+}
+
+/// The personal-use emotes of a 7TV emote set's `emotes` list, as ready-to-
+/// render emotes. Each URL follows the files the emote's `host.files` lists.
+fn parse_personal_emotes(arr: &[serde_json::Value]) -> Vec<Emote> {
+    let mut out = Vec::new();
     for active in arr {
         let data = active.get("data").unwrap_or(active);
 
@@ -240,7 +248,11 @@ pub async fn fetch_personal_emote_set(set_id: &str) -> Option<Vec<Emote>> {
             out.push(Emote {
                 id: id.to_string(),
                 name: name.to_string(),
-                url: format!("https://cdn.7tv.app/emote/{}/1x.avif", id),
+                url: format!(
+                    "https://cdn.7tv.app/emote/{}/{}",
+                    id,
+                    seventv_file_name(data)
+                ),
                 provider: EmoteProvider::SevenTV,
                 is_zero_width: Some((flags & 256) == 256),
                 local_url: None,
@@ -257,7 +269,7 @@ pub async fn fetch_personal_emote_set(set_id: &str) -> Option<Vec<Emote>> {
             });
         }
     }
-    Some(out)
+    out
 }
 
 /// Active emote-set id from a `/v3/users/:platform/:id` payload. Reads the
@@ -2636,6 +2648,38 @@ mod tests {
             parse(serde_json::json!([])),
             "https://cdn.7tv.app/emote/e1/1x.avif"
         );
+    }
+
+    #[test]
+    fn personal_emote_url_follows_the_files_the_cdn_lists() {
+        let parse = |files: serde_json::Value| {
+            let items = vec![serde_json::json!({
+                "id": "p1",
+                "name": "Mine",
+                "data": { "id": "p1", "state": ["PERSONAL"], "host": { "files": files } }
+            })];
+            parse_personal_emotes(&items).remove(0).url
+        };
+        // Only webp listed: the URL is the webp, not an avif that does not exist.
+        assert_eq!(
+            parse(serde_json::json!([{ "name": "1x.webp" }, { "name": "2x.webp" }])),
+            "https://cdn.7tv.app/emote/p1/1x.webp"
+        );
+        // Still processing: no files listed keeps the default.
+        assert_eq!(
+            parse(serde_json::json!([])),
+            "https://cdn.7tv.app/emote/p1/1x.avif"
+        );
+    }
+
+    #[test]
+    fn personal_emotes_skip_those_not_yet_approved() {
+        let items = vec![serde_json::json!({
+            "id": "p2",
+            "name": "Pending",
+            "data": { "id": "p2", "state": [], "host": { "files": [] } }
+        })];
+        assert!(parse_personal_emotes(&items).is_empty());
     }
 
     #[test]
