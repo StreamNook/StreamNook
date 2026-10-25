@@ -1524,10 +1524,24 @@ pub fn get_universal_cache_stats() -> Result<UniversalCacheStats> {
     })
 }
 
-/// Clear all universal cache data
+/// Clear all universal cache data. Waits for the start-up migrations first, so
+/// it never runs while they can write into the cache root. Call it only from a
+/// blocking thread.
 pub fn clear_universal_cache() -> Result<()> {
+    wait_for_gate(&STARTUP_GATE);
     let cache_dir = get_universal_cache_dir()?;
-    clear_cache_in(&cache_dir, &MANIFEST_MEMORY, &PENDING_DELETES)
+    clear_cache_in_with_gate(&STARTUP_GATE, &cache_dir, &MANIFEST_MEMORY, &PENDING_DELETES)
+}
+
+/// `clear_cache_in` that first waits until `gate` is open.
+fn clear_cache_in_with_gate(
+    gate: &StartupGate,
+    cache_dir: &Path,
+    memory: &StdRwLock<UniversalCacheManifest>,
+    pending: &StdMutex<Vec<PendingDelete>>,
+) -> Result<()> {
+    wait_for_gate(gate);
+    clear_cache_in(cache_dir, memory, pending)
 }
 
 /// `clear_universal_cache` of `memory`, `pending` and the folder `cache_dir`.
@@ -1588,6 +1602,19 @@ fn clear_cache_in_renaming(
         // Held while the folder is emptied: a store runs entirely before it (its
         // entry is cleared with the rest) or entirely after it.
         let _lock = MANIFEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        // The manifest on disk is emptied first and durably. Whatever then
+        // happens to the folder (a delete that stops at a held file, a crash, the
+        // folder put back after a failed recreate), the manifest left in it names
+        // nothing. When the write fails nothing has changed yet.
+        if cache_dir.exists() {
+            let empty = UniversalCacheManifest {
+                version: CACHE_VERSION,
+                last_sync: None,
+                entries: HashMap::new(),
+            };
+            write_manifest_bytes_to(&cache_dir.join("manifest.json"), &encode_with(&empty, &[])?)?;
+        }
 
         // CRITICAL: drop the in-memory manifest mirror too. Without this, stale
         // `file:<id>` entries with paths to now-deleted files (or files with the
@@ -1827,6 +1854,17 @@ const FFZ_ANIMATED_MIGRATION_TOKEN: &str = "FFZ_ANIMATED_2026_V1";
 
 pub fn migrate_ffz_animated_cache() -> Result<bool> {
     let cache_dir = get_universal_cache_dir()?;
+    migrate_ffz_animated_cache_in(&cache_dir, &MANIFEST_MEMORY, &PENDING_DELETES, persist_migrated_manifest)
+}
+
+/// `migrate_ffz_animated_cache` of `memory`, `pending` and the folder
+/// `cache_dir`, with `persist` writing the pruned manifest.
+fn migrate_ffz_animated_cache_in(
+    cache_dir: &Path,
+    memory: &StdRwLock<UniversalCacheManifest>,
+    pending: &StdMutex<Vec<PendingDelete>>,
+    persist: impl FnOnce() -> Result<()>,
+) -> Result<bool> {
     let token_file = cache_dir.join(".ffz_animated_migration");
 
     let stored_token = if token_file.exists() {
@@ -1866,14 +1904,14 @@ pub fn migrate_ffz_animated_cache() -> Result<bool> {
     let manifest_path = cache_dir.join("manifest.json");
     if manifest_path.exists() {
         // Drop the matching manifest entries so stale paths are never served...
-        if let Ok(removed) = take_entries_where(&MANIFEST_MEMORY, |_key, entry| is_ffz_emote(entry)) {
+        if let Ok(removed) = take_entries_where(memory, |_key, entry| is_ffz_emote(entry)) {
             if !removed.is_empty() {
                 // ...queue their files, which are deleted only from inside the
                 // cache and only after the manifest without them is written...
-                queue_entry_files(&PENDING_DELETES, &cache_dir, &removed);
+                queue_entry_files(pending, cache_dir, &removed);
                 // ...and write the pruned manifest now, so it survives an early
                 // exit; a failed write ends the migration before its token.
-                persist_migrated_manifest()?;
+                persist()?;
                 debug!(
                     "[UniversalCache] Purged {} FFZ emote entries from cache",
                     removed.len()
@@ -1902,6 +1940,17 @@ const PAINT_ANIMATED_MIGRATION_TOKEN: &str = "PAINT_ANIMATED_2026_V1";
 
 pub fn migrate_paint_animated_cache() -> Result<bool> {
     let cache_dir = get_universal_cache_dir()?;
+    migrate_paint_animated_cache_in(&cache_dir, &MANIFEST_MEMORY, &PENDING_DELETES, persist_migrated_manifest)
+}
+
+/// `migrate_paint_animated_cache` of `memory`, `pending` and the folder
+/// `cache_dir`, with `persist` writing the pruned manifest.
+fn migrate_paint_animated_cache_in(
+    cache_dir: &Path,
+    memory: &StdRwLock<UniversalCacheManifest>,
+    pending: &StdMutex<Vec<PendingDelete>>,
+    persist: impl FnOnce() -> Result<()>,
+) -> Result<bool> {
     let token_file = cache_dir.join(".paint_animated_migration");
 
     let stored_token = fs::read_to_string(&token_file).unwrap_or_default();
@@ -1913,7 +1962,7 @@ pub fn migrate_paint_animated_cache() -> Result<bool> {
     if manifest_path.exists() {
         // The still ones are found on a copy, since telling one reads the file's
         // head; an entry is dropped only if it is still the one that was found.
-        if let Ok(snapshot) = load_manifest() {
+        if let Ok(snapshot) = memory.read().map(|guard| guard.clone()) {
             let still: HashMap<String, serde_json::Value> = snapshot
                 .entries
                 .iter()
@@ -1924,7 +1973,7 @@ pub fn migrate_paint_animated_cache() -> Result<bool> {
             let removed = if still.is_empty() {
                 Ok(Vec::new())
             } else {
-                take_entries_where(&MANIFEST_MEMORY, |key, entry| still.get(key) == Some(&entry.data))
+                take_entries_where(memory, |key, entry| still.get(key) == Some(&entry.data))
             };
             if let Ok(removed) = removed {
                 if !removed.is_empty() {
@@ -1932,8 +1981,8 @@ pub fn migrate_paint_animated_cache() -> Result<bool> {
                     // cache and only after the manifest without them is written
                     // now, so it survives an early exit. A failed write ends the
                     // migration before its token.
-                    queue_entry_files(&PENDING_DELETES, &cache_dir, &removed);
-                    persist_migrated_manifest()?;
+                    queue_entry_files(pending, cache_dir, &removed);
+                    persist()?;
                     debug!(
                         "[UniversalCache] Purged {} still 7TV paint images for re-fetch",
                         removed.len()
@@ -2001,6 +2050,17 @@ const EMOTE_NAMESPACE_MIGRATION_TOKEN: &str = "NAMESPACE_CONTENT_EXT_2026_V1";
 
 pub fn migrate_emote_namespace_cache() -> Result<bool> {
     let cache_dir = get_universal_cache_dir()?;
+    migrate_emote_namespace_cache_in(&cache_dir, &MANIFEST_MEMORY, &PENDING_DELETES, persist_migrated_manifest)
+}
+
+/// `migrate_emote_namespace_cache` of `memory`, `pending` and the folder
+/// `cache_dir`, with `persist` writing the pruned manifest.
+fn migrate_emote_namespace_cache_in(
+    cache_dir: &Path,
+    memory: &StdRwLock<UniversalCacheManifest>,
+    pending: &StdMutex<Vec<PendingDelete>>,
+    persist: impl FnOnce() -> Result<()>,
+) -> Result<bool> {
     let token_file = cache_dir.join(".emote_namespace_migration");
 
     let stored_token = if token_file.exists() {
@@ -2016,7 +2076,7 @@ pub fn migrate_emote_namespace_cache() -> Result<bool> {
         return Ok(false);
     }
 
-    let removed = take_entries_where(&MANIFEST_MEMORY, |key, entry| {
+    let removed = take_entries_where(memory, |key, entry| {
         // Only touch cached emote FILES.
         if entry.cache_type != CacheType::Emote || !key.starts_with("file:") {
             return false;
@@ -2031,8 +2091,8 @@ pub fn migrate_emote_namespace_cache() -> Result<bool> {
             // and only after the manifest without them is written now, so it
             // survives an early exit. A failed write ends the migration before
             // its token.
-            queue_entry_files(&PENDING_DELETES, &cache_dir, &removed);
-            persist_migrated_manifest()?;
+            queue_entry_files(pending, cache_dir, &removed);
+            persist()?;
             debug!(
                 "[UniversalCache] Namespace migration: dropped {} non-7TV emote entries",
                 removed.len()
@@ -3382,16 +3442,18 @@ mod tests {
     use super::{
         all_cached_items_by_type_with_gate, assign_positions_in_with, badge_date_key, cached_file_paths_with_gate,
         cached_files_list_with_gate, cached_items_batch_with_gate, clear_cache_in, clear_cache_in_renaming,
-        clear_cache_in_with, content_addressed_file_name, delete_unnamed_files_hooked, delete_unnamed_files_with,
-        detect_image_ext, drop_expired, encode_with, flush_if_dirty_hooked, flush_if_dirty_with, in_clearing_folder,
-        is_hashed_cache_name, is_still_paint_entry, join_writers, join_writers_with, looks_like_html, looks_like_svg,
-        merge_remote_into_with, migrate_emote_cache_in, missing_file_keys, named_files_of, parse_manifest,
-        queue_entry_files, refuse_html, remove_cached_file, remove_clearing_leftovers, resolve_path, safe_id, set_gate,
-        stamp_last_sync_in, sweep_before_write, sweep_emote_leftovers, sweep_orphan_temp_files, sweep_unnamed_files,
-        take_entries_where, take_pending, usable_file_path, webp_is_animated, write_atomic_held, write_atomic_with,
-        write_file_entry_with, write_file_under_gates, writers_lock_path, CacheMetadata, CacheType, ClearingMark,
-        PendingDelete, StartupGate, StoreOutcome, UniversalCacheEntry, UniversalCacheManifest, EMOTE_LEFTOVERS_MARKER,
-        MANIFEST_LOCK, WRITERS_LOCK_FILE,
+        clear_cache_in_with, clear_cache_in_with_gate, content_addressed_file_name, delete_unnamed_files_hooked,
+        delete_unnamed_files_with, detect_image_ext, drop_expired, encode_with, flush_if_dirty_hooked,
+        flush_if_dirty_with, in_clearing_folder, is_hashed_cache_name, is_still_paint_entry, join_writers,
+        join_writers_with, looks_like_html, looks_like_svg, merge_remote_into_with, migrate_emote_cache_in,
+        migrate_emote_namespace_cache_in, migrate_ffz_animated_cache_in, migrate_paint_animated_cache_in,
+        missing_file_keys, named_files_of, parse_manifest, queue_entry_files, refuse_html, remove_cached_file,
+        remove_clearing_leftovers, resolve_path, safe_id, set_gate, stamp_last_sync_in, sweep_before_write,
+        sweep_emote_leftovers, sweep_orphan_temp_files, sweep_unnamed_files, take_entries_where, take_pending,
+        usable_file_path, webp_is_animated, write_atomic_held, write_atomic_with, write_file_entry_with,
+        write_file_under_gates, writers_lock_path, CacheMetadata, CacheType, ClearingMark, PendingDelete, StartupGate,
+        StoreOutcome, UniversalCacheEntry, UniversalCacheManifest, EMOTE_LEFTOVERS_MARKER, MANIFEST_LOCK,
+        WRITERS_LOCK_FILE,
     };
     use std::collections::{HashMap, HashSet};
     use std::ffi::OsString;
@@ -4829,6 +4891,130 @@ mod tests {
             assert!(!files[0].exists(), "the migrated entry's file is deleted");
         });
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_clear_waits_for_the_start_up_gate_and_then_empties_the_folder() {
+        let (root, files) = emote_files("clear-start-gate", &["old-aaaaaaaa.png"]);
+        let gate: StartupGate = (Mutex::new(true), Condvar::new());
+        set_gate(&gate, false);
+        let memory = RwLock::new(UniversalCacheManifest::default());
+        let pending = Mutex::new(Vec::new());
+        store_entries(&memory, &root, &pending, vec![entry_with_file("file:old", &files[0])]).unwrap();
+        let _ = take_pending(&pending);
+        let (tx, rx) = std::sync::mpsc::channel::<anyhow::Result<()>>();
+        std::thread::scope(|scope| {
+            let (gate, root, memory, pending) = (&gate, &root, &memory, &pending);
+            let clear = scope.spawn(move || {
+                tx.send(clear_cache_in_with_gate(gate, root, memory, pending)).unwrap();
+            });
+            let early = rx.recv_timeout(std::time::Duration::from_millis(100)).is_ok();
+
+            // The migration runs while the gate is closed, then the gate opens.
+            let migrated = migrate_emote_cache_in(root, memory, pending, || Ok(()));
+            set_gate(gate, true);
+            assert!(!early, "a clear finished while the gate was closed");
+            assert!(migrated.expect("the migration runs"));
+            rx.recv_timeout(std::time::Duration::from_secs(5))
+                .expect("the clear runs once the gate opens")
+                .expect("the clear works");
+            clear.join().unwrap();
+        });
+        assert!(root.is_dir(), "the folder is recreated");
+        assert!(
+            fs::read_dir(&root).unwrap().next().is_none(),
+            "the clear ran after the migration and left nothing, not even its token"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_clear_that_cannot_delete_a_held_file_fails_and_leaves_an_empty_manifest_on_disk() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let (root, files) = emote_files("clear-held", &["held-aaaaaaaa.png"]);
+        let memory = RwLock::new(manifest_of(1, 5));
+        let pending = Mutex::new(Vec::new());
+        let manifest_path = root.join("manifest.json");
+        let before = encode_with(&memory.read().unwrap(), &[]).unwrap();
+        fs::write(&manifest_path, before).unwrap();
+        // A file in the folder that nothing may delete or move.
+        let held = fs::OpenOptions::new().read(true).share_mode(0).open(&files[0]).unwrap();
+
+        let result = clear_cache_in(&root, &memory, &pending);
+
+        assert!(result.is_err(), "the clear reports the file it could not delete");
+        let left = match fs::read_to_string(&manifest_path) {
+            Ok(json) => parse_manifest(&json).unwrap().0.entries.len(),
+            Err(_) => 0,
+        };
+        assert_eq!(left, 0, "the manifest on disk names nothing");
+        assert!(memory.read().unwrap().entries.is_empty());
+        drop(held);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn every_migration_whose_manifest_write_fails_records_nothing_and_keeps_its_file_named() {
+        type Run = fn(&Path, &RwLock<UniversalCacheManifest>, &Mutex<Vec<PendingDelete>>) -> anyhow::Result<bool>;
+        let cases: [(&str, CacheType, &str, &str, Run); 3] = [
+            (
+                "ffz",
+                CacheType::Emote,
+                "https://cdn.frankerfacez.com/emote/1/1",
+                ".ffz_animated_migration",
+                |root, memory, pending| {
+                    migrate_ffz_animated_cache_in(root, memory, pending, || Err(anyhow::anyhow!("write failed")))
+                },
+            ),
+            (
+                "paint",
+                CacheType::Cosmetic,
+                "https://cdn.7tv.app/paint/1/layer_static.webp",
+                ".paint_animated_migration",
+                |root, memory, pending| {
+                    migrate_paint_animated_cache_in(root, memory, pending, || Err(anyhow::anyhow!("write failed")))
+                },
+            ),
+            (
+                "namespace",
+                CacheType::Emote,
+                "https://cdn.betterttv.net/emote/1/3x",
+                ".emote_namespace_migration",
+                |root, memory, pending| {
+                    migrate_emote_namespace_cache_in(root, memory, pending, || Err(anyhow::anyhow!("write failed")))
+                },
+            ),
+        ];
+        for (name, cache_type, url, token, run) in cases {
+            let root = scratch_dir(&format!("migrate-fails-{name}"));
+            let folder = root.join(cache_type.dir_name());
+            fs::create_dir_all(&folder).unwrap();
+            let file = folder.join("seed-aaaaaaaa.png");
+            fs::write(&file, b"x").unwrap();
+            fs::write(root.join("manifest.json"), b"{}").unwrap();
+            let mut entry = entry_with_file("file:seed", &file);
+            entry.cache_type = cache_type.clone();
+            entry.data = serde_json::json!({ "local_path": file.to_string_lossy(), "url": url });
+            let memory = RwLock::new(UniversalCacheManifest::default());
+            let pending = Mutex::new(Vec::new());
+            memory.write().unwrap().entries.insert(entry.id.clone(), entry);
+
+            let result = run(&root, &memory, &pending);
+
+            assert!(result.is_err(), "{name}: the migration reports the failed write");
+            assert!(!root.join(token).exists(), "{name}: no token was written");
+            let guard = memory.read().unwrap();
+            assert!(guard.entries.is_empty(), "{name}: the entry left the manifest in memory");
+            let queued = pending.lock().unwrap();
+            let named = named_files_of(&guard.entries, &[], &queued);
+            let key = (OsString::from(cache_type.dir_name()), file.file_name().unwrap().to_os_string());
+            assert!(named.contains(&key), "{name}: the queued file still counts as named");
+            drop(queued);
+            drop(guard);
+            let _ = fs::remove_dir_all(&root);
+        }
     }
 
     #[test]
