@@ -8,21 +8,28 @@
 // recent history from here when you open it again, instead of holding every
 // moderation event for the whole session.
 //
-// Persistence follows the universal-cache pattern: an in-memory store seeded
-// from disk ONCE per session, mutations in memory, and a debounced background
-// task that flushes dirty state to disk (plus flush_now for shutdown paths).
+// Persistence: an in-memory store seeded from disk ONCE per session (the file
+// plus the journal of actions recorded since its last write), each recorded
+// action appended to the journal at once, and a background task that folds the
+// store into the file every 30 s and empties the journal (flush_now does the
+// same for shutdown paths). A crash loses nothing, and a busy moderated chat
+// costs a line per action instead of a rewrite of every channel's log.
 
 use log::debug;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use crate::rt::AppHandle;
 use tauri::Manager;
 
 const MOD_LOGS_FILE: &str = "mod_logs.json";
+/// Actions recorded since the file's last write, one JSON line each.
+const MOD_LOGS_JOURNAL: &str = "mod_logs.journal";
+/// How often the store is folded into the file (and the journal emptied).
+const FOLD_EVERY: std::time::Duration = std::time::Duration::from_secs(30);
 // Keep at most this many entries per channel on disk. Mod actions are
 // infrequent, so this is plenty of history without unbounded growth.
 const MAX_PER_CHANNEL: usize = 500;
@@ -33,6 +40,11 @@ static STORE: OnceLock<Mutex<Option<ModLogStorage>>> = OnceLock::new();
 // Resolved once at seed time so flush paths never need an AppHandle.
 static STORE_PATH: OnceLock<PathBuf> = OnceLock::new();
 static DIRTY: AtomicBool = AtomicBool::new(false);
+static JOURNAL_PATH: OnceLock<PathBuf> = OnceLock::new();
+/// Held by every journal append (with the store change it records) and by
+/// every fold, so a fold never empties the journal of a line its snapshot
+/// does not hold.
+static JOURNAL_LOCK: Mutex<()> = Mutex::new(());
 static FLUSH_TASK_STARTED: AtomicBool = AtomicBool::new(false);
 
 fn store() -> &'static Mutex<Option<ModLogStorage>> {
@@ -57,7 +69,7 @@ fn ensure_flush_task() {
         }
         tokio::spawn(async {
             loop {
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                tokio::time::sleep(FOLD_EVERY).await;
                 if !DIRTY.load(Ordering::Acquire) {
                     continue;
                 }
@@ -105,22 +117,26 @@ impl ModLogStorageService {
         let mut guard = store().lock().map_err(|e| e.to_string())?;
         if guard.is_none() {
             let path = Self::get_storage_path(app_handle)?;
-            let storage = if path.exists() {
-                match fs::read_to_string(&path) {
-                    Ok(contents) => serde_json::from_str(&contents).unwrap_or_default(),
-                    Err(_) => ModLogStorage::default(),
-                }
-            } else {
-                ModLogStorage::default()
-            };
+            let journal = path.with_file_name(MOD_LOGS_JOURNAL);
+            let (storage, replayed) = load_storage(&path, &journal);
             let _ = STORE_PATH.set(path);
+            let _ = JOURNAL_PATH.set(journal);
             *guard = Some(storage);
+            // Actions recorded after the last fold (a crash, or a kill before the
+            // exit flush): the next fold writes them into the file.
+            if replayed > 0 {
+                debug!("[ModLogStorage] replayed {} journal lines", replayed);
+                mark_dirty();
+            }
         }
         Ok(f(guard.as_mut().expect("seeded above")))
     }
 
     /// Synchronous write-if-dirty, for shutdown paths.
     pub fn flush_now() -> Result<(), String> {
+        // Held to the end: nothing is journaled between the snapshot below and
+        // the journal being emptied after the write.
+        let _journal = JOURNAL_LOCK.lock().map_err(|e| e.to_string())?;
         if !DIRTY.swap(false, Ordering::AcqRel) {
             return Ok(());
         }
@@ -147,9 +163,16 @@ impl ModLogStorageService {
                 }
             }
         };
-        if let Err(e) = fs::write(path, json) {
+        // A sibling renamed over the file, so a crash mid-write never leaves a
+        // truncated file for the next seed to read as empty.
+        let tmp = path.with_extension("json.tmp");
+        if let Err(e) = fs::write(&tmp, json).and_then(|_| fs::rename(&tmp, path)) {
             DIRTY.store(true, Ordering::Release);
             return Err(format!("Failed to write mod logs file: {}", e));
+        }
+        // Everything journaled is in the file now.
+        if let Some(journal) = JOURNAL_PATH.get() {
+            let _ = fs::write(journal, b"");
         }
         Ok(())
     }
@@ -184,10 +207,13 @@ impl ModLogStorageService {
             return Ok(entry);
         }
         let now_ms = chrono::Utc::now().timestamp_millis();
+        let _journal = JOURNAL_LOCK.lock().map_err(|e| e.to_string())?;
+        let channel_key = key.clone();
         let (shown, changed) = Self::with_store(app_handle, move |storage| {
             merge_into(storage.channels.entry(key).or_default(), entry, now_ms)
         })?;
         if changed {
+            journal_append(&JournalOp::Put { channel: channel_key, entry: shown.clone() });
             mark_dirty();
         }
         Ok(shown)
@@ -196,14 +222,94 @@ impl ModLogStorageService {
     /// Clear one channel's persisted entries.
     pub fn clear_channel(app_handle: &AppHandle, channel: &str) -> Result<(), String> {
         let key = channel.to_lowercase();
+        let _journal = JOURNAL_LOCK.lock().map_err(|e| e.to_string())?;
         let removed =
             Self::with_store(app_handle, |storage| storage.channels.remove(&key).is_some())?;
         if removed {
             debug!("[ModLogStorage] cleared {}", key);
+            journal_append(&JournalOp::Clear { channel: key });
             mark_dirty();
         }
         Ok(())
     }
+}
+
+/// One journal line.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "lowercase")]
+enum JournalOp {
+    /// The entry to show for `channel`: a new one, or the upgrade of the entry
+    /// with its id.
+    Put { channel: String, entry: serde_json::Value },
+    /// `channel` was cleared.
+    Clear { channel: String },
+}
+
+fn append_journal(path: &Path, op: &JournalOp) -> Result<(), String> {
+    use std::io::Write;
+    let mut line = serde_json::to_string(op).map_err(|e| e.to_string())?;
+    line.push('\n');
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|e| e.to_string())?;
+    file.write_all(line.as_bytes()).map_err(|e| e.to_string())
+}
+
+/// Append to this session's journal. A failure is only logged: the store is
+/// dirty, so the next fold writes the action anyway.
+fn journal_append(op: &JournalOp) {
+    let Some(path) = JOURNAL_PATH.get() else {
+        return;
+    };
+    if let Err(e) = append_journal(path, op) {
+        debug!("[ModLogStorage] journal append failed: {}", e);
+    }
+}
+
+/// Apply one journal line: a put replaces the entry with the same id (an
+/// upgrade) or is appended and capped like `merge_into`; a clear removes the
+/// channel.
+fn apply_journal_op(storage: &mut ModLogStorage, op: JournalOp) {
+    match op {
+        JournalOp::Put { channel, entry } => {
+            let list = storage.channels.entry(channel).or_default();
+            let id = entry.get("id").cloned().filter(|v| !v.is_null());
+            match id.and_then(|id| list.iter().position(|e| e.get("id") == Some(&id))) {
+                Some(i) => list[i] = entry,
+                None => {
+                    list.push(entry);
+                    if list.len() > MAX_PER_CHANNEL {
+                        let overflow = list.len() - MAX_PER_CHANNEL;
+                        list.drain(0..overflow);
+                    }
+                }
+            }
+        }
+        JournalOp::Clear { channel } => {
+            storage.channels.remove(&channel);
+        }
+    }
+}
+
+/// The store from `snapshot` plus every readable line of `journal` (a torn last
+/// line from a crash is skipped), and how many lines it applied.
+fn load_storage(snapshot: &Path, journal: &Path) -> (ModLogStorage, usize) {
+    let mut storage = match fs::read_to_string(snapshot) {
+        Ok(contents) => serde_json::from_str(&contents).unwrap_or_default(),
+        Err(_) => ModLogStorage::default(),
+    };
+    let mut applied = 0;
+    if let Ok(text) = fs::read_to_string(journal) {
+        for line in text.lines().filter(|l| !l.trim().is_empty()) {
+            if let Ok(op) = serde_json::from_str::<JournalOp>(line) {
+                apply_journal_op(&mut storage, op);
+                applied += 1;
+            }
+        }
+    }
+    (storage, applied)
 }
 
 /// Same action inside this window = one action reported twice.
@@ -354,5 +460,67 @@ mod merge_tests {
         let (shown, changed) = merge_into(&mut list, clear("b", "CLEAR_CHAT"), NOW);
         assert!(!changed);
         assert_eq!(shown["id"], "a");
+    }
+}
+
+#[cfg(test)]
+mod journal_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn temp_paths(name: &str) -> (PathBuf, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("sn-modlog-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        (dir.join(MOD_LOGS_FILE), dir.join(MOD_LOGS_JOURNAL))
+    }
+
+    #[test]
+    fn an_action_recorded_and_never_flushed_is_there_after_a_restart() {
+        let (snapshot, journal) = temp_paths("kill");
+        // A session records one action and dies before any fold.
+        let mut live = ModLogStorage::default();
+        let action = json!({ "id": "a1", "action": "ban", "channel": "chan", "target_user_name": "bob",
+            "timestamp": "2026-10-24T00:00:00Z", "source": "irc" });
+        let (shown, changed) = merge_into(live.channels.entry("chan".into()).or_default(), action, 0);
+        assert!(changed);
+        append_journal(&journal, &JournalOp::Put { channel: "chan".into(), entry: shown }).unwrap();
+        // The next launch has no file yet, only the journal.
+        let (restored, replayed) = load_storage(&snapshot, &journal);
+        assert_eq!(replayed, 1);
+        assert_eq!(restored.channels["chan"][0]["id"], "a1");
+        let _ = fs::remove_dir_all(snapshot.parent().unwrap());
+    }
+
+    #[test]
+    fn an_upgrade_replaces_by_id_and_a_clear_removes_the_channel() {
+        let (snapshot, journal) = temp_paths("ops");
+        let saved = ModLogStorage {
+            channels: [("chan".to_string(), vec![json!({ "id": "a1", "source": "irc" })])].into_iter().collect(),
+            version: 0,
+        };
+        fs::write(&snapshot, serde_json::to_string(&saved).unwrap()).unwrap();
+        append_journal(&journal, &JournalOp::Put { channel: "chan".into(), entry: json!({ "id": "a1", "source": "eventsub" }) }).unwrap();
+        append_journal(&journal, &JournalOp::Put { channel: "other".into(), entry: json!({ "id": "b1" }) }).unwrap();
+        append_journal(&journal, &JournalOp::Clear { channel: "other".into() }).unwrap();
+        let (restored, replayed) = load_storage(&snapshot, &journal);
+        assert_eq!(replayed, 3);
+        assert_eq!(restored.channels["chan"].len(), 1);
+        assert_eq!(restored.channels["chan"][0]["source"], "eventsub");
+        assert!(!restored.channels.contains_key("other"));
+        let _ = fs::remove_dir_all(snapshot.parent().unwrap());
+    }
+
+    #[test]
+    fn a_torn_last_line_is_skipped() {
+        let (snapshot, journal) = temp_paths("torn");
+        append_journal(&journal, &JournalOp::Put { channel: "chan".into(), entry: json!({ "id": "a1" }) }).unwrap();
+        let mut f = fs::OpenOptions::new().append(true).open(&journal).unwrap();
+        std::io::Write::write_all(&mut f, b"{\"op\":\"put\",\"chan").unwrap();
+        drop(f);
+        let (restored, replayed) = load_storage(&snapshot, &journal);
+        assert_eq!(replayed, 1);
+        assert_eq!(restored.channels["chan"].len(), 1);
+        let _ = fs::remove_dir_all(snapshot.parent().unwrap());
     }
 }
