@@ -793,62 +793,6 @@ pub fn run() {
     // Streamlink-bundled build (native resolution no longer needs it).
     cleanup_legacy_streamlink_bundle();
 
-    // Migrate emote cache if app version changed (handles format changes like webp → avif)
-    // This clears stale emote files that may have the old format
-    let current_version = env!("CARGO_PKG_VERSION");
-    match services::universal_cache_service::migrate_emote_cache_on_version_change(current_version)
-    {
-        Ok(migrated) => {
-            if migrated {
-                debug!("[Main] Emote cache migrated for new version");
-            }
-        }
-        Err(e) => {
-            error!("[Main] Failed to migrate emote cache: {}", e);
-        }
-    }
-
-    // One-time, FFZ-only purge so previously cached static FFZ frames re-download
-    // as their animated variants. Targeted by source URL, so other providers'
-    // emote caches are left intact.
-    match services::universal_cache_service::migrate_ffz_animated_cache() {
-        Ok(purged) => {
-            if purged {
-                debug!("[Main] FFZ emote cache purged for animated re-fetch");
-            }
-        }
-        Err(e) => {
-            error!("[Main] Failed to purge FFZ emote cache: {}", e);
-        }
-    }
-
-    // One-time purge of cached 7TV paint images that hold a still frame, so
-    // animated paints re-download as animations.
-    match services::universal_cache_service::migrate_paint_animated_cache() {
-        Ok(purged) => {
-            if purged {
-                debug!("[Main] 7TV paint cache purged for animated re-fetch");
-            }
-        }
-        Err(e) => {
-            error!("[Main] Failed to purge 7TV paint cache: {}", e);
-        }
-    }
-
-    // One-time purge of OLD non-7TV emote files (bare-id keys + URL-derived
-    // `.0`/`.bin` extensions) so they re-cache under provider-namespaced keys with
-    // content-typed extensions. 7TV files (already correct) are kept.
-    match services::universal_cache_service::migrate_emote_namespace_cache() {
-        Ok(purged) => {
-            if purged {
-                debug!("[Main] Non-7TV emote cache purged for namespaced re-fetch");
-            }
-        }
-        Err(e) => {
-            error!("[Main] Failed to purge non-7TV emote cache: {}", e);
-        }
-    }
-
     // Forced-logout switch. Bumping FORCE_REAUTH_TOKEN in account_store signs every
     // user out on their next launch so they re-login into the current auth-storage
     // layout. It runs HERE, before the Tauri builder creates any window, so the
@@ -1155,11 +1099,69 @@ pub fn run() {
             if let Ok(s) = settings_arc.lock() {
                 services::twitch_resolver::refresh_device_codecs(&s);
             }
-            // Temp files a crashed run left in the cache folders, swept on the
-            // blocking pool. The sweep runs once per process and only while no
-            // other instance holds the cache's writers lock; a cache write that
-            // starts first waits for it.
+            // The cache migrations, then the temp files a crashed run left in the
+            // cache folders, on the blocking pool. The migrations run in order,
+            // each once per install, and edit the manifest in memory before the
+            // sweep reads which files it names. The sweep runs once per process
+            // and only while no other instance holds the cache's writers lock; a
+            // cache write that starts first waits for it.
             tauri::async_runtime::spawn_blocking(|| {
+                // Migrate emote cache if app version changed (handles format changes like webp → avif)
+                // This clears stale emote files that may have the old format
+                let current_version = env!("CARGO_PKG_VERSION");
+                match services::universal_cache_service::migrate_emote_cache_on_version_change(current_version)
+                {
+                    Ok(migrated) => {
+                        if migrated {
+                            debug!("[Main] Emote cache migrated for new version");
+                        }
+                    }
+                    Err(e) => {
+                        error!("[Main] Failed to migrate emote cache: {}", e);
+                    }
+                }
+
+                // One-time, FFZ-only purge so previously cached static FFZ frames re-download
+                // as their animated variants. Targeted by source URL, so other providers'
+                // emote caches are left intact.
+                match services::universal_cache_service::migrate_ffz_animated_cache() {
+                    Ok(purged) => {
+                        if purged {
+                            debug!("[Main] FFZ emote cache purged for animated re-fetch");
+                        }
+                    }
+                    Err(e) => {
+                        error!("[Main] Failed to purge FFZ emote cache: {}", e);
+                    }
+                }
+
+                // One-time purge of cached 7TV paint images that hold a still frame, so
+                // animated paints re-download as animations.
+                match services::universal_cache_service::migrate_paint_animated_cache() {
+                    Ok(purged) => {
+                        if purged {
+                            debug!("[Main] 7TV paint cache purged for animated re-fetch");
+                        }
+                    }
+                    Err(e) => {
+                        error!("[Main] Failed to purge 7TV paint cache: {}", e);
+                    }
+                }
+
+                // One-time purge of OLD non-7TV emote files (bare-id keys + URL-derived
+                // `.0`/`.bin` extensions) so they re-cache under provider-namespaced keys with
+                // content-typed extensions. 7TV files (already correct) are kept.
+                match services::universal_cache_service::migrate_emote_namespace_cache() {
+                    Ok(purged) => {
+                        if purged {
+                            debug!("[Main] Non-7TV emote cache purged for namespaced re-fetch");
+                        }
+                    }
+                    Err(e) => {
+                        error!("[Main] Failed to purge non-7TV emote cache: {}", e);
+                    }
+                }
+
                 if let Ok(cache_root) = services::universal_cache_service::get_universal_cache_dir() {
                     services::universal_cache_service::sweep_temp_files_once(&cache_root);
                 }
