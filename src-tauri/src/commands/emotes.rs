@@ -351,7 +351,7 @@ pub async fn match_emote_tokens(
         .map(|r| r.slot.cache_provider().map(|p| emote_cache_key(&p, &r.id, tier)))
         .collect();
     let wanted: Vec<String> = keys.iter().flatten().cloned().collect();
-    let paths = universal_cache_service::cached_file_paths(CacheType::Emote, &wanted);
+    let paths = cached_emote_paths(wanted).await;
     for (row, key) in rows.iter_mut().zip(keys) {
         row.local_path = key.and_then(|k| paths.get(&k).cloned());
     }

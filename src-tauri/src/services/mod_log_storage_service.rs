@@ -242,16 +242,11 @@ impl ModLogStorageService {
         if changed {
             let seq = journal_append(&mut queue, &JournalOp::Put { channel: channel_key, entry: shown.clone() });
             mark_dirty();
-            if let Some(seq) = seq {
+            if let (Some(seq), Some(path)) = (seq, JOURNAL_PATH.get()) {
                 // The action is in the store and the store is dirty, so a journal
                 // that cannot be written only costs the crash window: the fold
                 // saves the action, and the caller is not told it failed.
-                if let Err(e) = journal_wait(queue, seq) {
-                    warn!("[ModLogStorage] journal write failed, the next fold saves the action: {}", e);
-                    if let Err(e) = Self::flush_now() {
-                        debug!("[ModLogStorage] flush after a failed journal write failed: {}", e);
-                    }
-                }
+                wait_or_fold(&JOURNAL_LOCK, &JOURNAL_DONE, path, queue, seq, commit_lines, Self::flush_now);
             }
         }
         Ok(shown)
@@ -267,13 +262,8 @@ impl ModLogStorageService {
             debug!("[ModLogStorage] cleared {}", key);
             let seq = journal_append(&mut queue, &JournalOp::Clear { channel: key });
             mark_dirty();
-            if let Some(seq) = seq {
-                if let Err(e) = journal_wait(queue, seq) {
-                    warn!("[ModLogStorage] journal write failed, the next fold saves the clear: {}", e);
-                    if let Err(e) = Self::flush_now() {
-                        debug!("[ModLogStorage] flush after a failed journal write failed: {}", e);
-                    }
-                }
+            if let (Some(seq), Some(path)) = (seq, JOURNAL_PATH.get()) {
+                wait_or_fold(&JOURNAL_LOCK, &JOURNAL_DONE, path, queue, seq, commit_lines, Self::flush_now);
             }
         }
         Ok(())
@@ -374,7 +364,7 @@ fn append_journal(path: &Path, seq: u64, op: &JournalOp) -> Result<(), String> {
 
 /// Queue a line for this session's journal and return its sequence number.
 /// Called with `JOURNAL_LOCK` held (`queue` is what it guards), which is what
-/// orders the sequence numbers; `journal_wait` then carries the line to disk.
+/// orders the sequence numbers; `wait_or_fold` then carries the line to disk.
 /// `None` when there is no journal or the line cannot be serialized: the store
 /// is dirty, so the next fold writes the action anyway.
 fn journal_append(queue: &mut JournalQueue, op: &JournalOp) -> Option<u64> {
@@ -391,14 +381,6 @@ fn journal_append(queue: &mut JournalQueue, op: &JournalOp) -> Option<u64> {
             None
         }
     }
-}
-
-/// Release `JOURNAL_LOCK` and return once line `seq` is on disk.
-fn journal_wait(queue: MutexGuard<'_, JournalQueue>, seq: u64) -> Result<(), String> {
-    let Some(path) = JOURNAL_PATH.get() else {
-        return Ok(());
-    };
-    wait_durable(&JOURNAL_LOCK, &JOURNAL_DONE, path, queue, seq, commit_lines)
 }
 
 /// Return once line `seq` is on disk. The first caller that finds no write in
@@ -456,6 +438,28 @@ fn wait_durable<'a>(
         }
         done.notify_all();
         written?;
+    }
+}
+
+/// Wait until line `seq` is durable (`wait_durable`, which releases the journal
+/// lock). A journal that cannot be written is never an error for the caller:
+/// the store is already dirty, so the failure is logged and `fold` saves the
+/// action in the snapshot instead. `fold` runs after the journal lock is
+/// released; a fold that fails is logged too.
+fn wait_or_fold<'a>(
+    lock: &'a Mutex<JournalQueue>,
+    done: &Condvar,
+    path: &Path,
+    queue: MutexGuard<'a, JournalQueue>,
+    seq: u64,
+    commit: impl Fn(&Path, &[(u64, String)]) -> Result<(), String>,
+    fold: impl FnOnce() -> Result<(), String>,
+) {
+    if let Err(e) = wait_durable(lock, done, path, queue, seq, commit) {
+        warn!("[ModLogStorage] journal write failed, the next fold saves the action: {}", e);
+        if let Err(e) = fold() {
+            warn!("[ModLogStorage] flush after a failed journal write failed: {}", e);
+        }
     }
 }
 
@@ -941,6 +945,70 @@ mod journal_tests {
         let ids: Vec<_> = restored.channels["chan"].iter().map(|e| e["id"].clone()).collect();
         assert_eq!(ids, vec![json!("a1"), json!("a2")]);
         let _ = fs::remove_dir_all(snapshot.parent().unwrap());
+    }
+
+    #[test]
+    fn a_failed_journal_write_folds_once_and_returns_without_an_error() {
+        let (_snapshot, journal) = temp_paths("fold-on-failure");
+        let lock = Mutex::new(JournalQueue::new());
+        let done = Condvar::new();
+        let folds = AtomicUsize::new(0);
+        let queue = enqueue(&lock, 1);
+        wait_or_fold(
+            &lock,
+            &done,
+            &journal,
+            queue,
+            1,
+            |_: &Path, _: &[(u64, String)]| Err("injected write failure".to_string()),
+            || {
+                folds.fetch_add(1, Ordering::SeqCst);
+                // The journal lock is free while the fold runs.
+                assert!(lock.try_lock().is_ok());
+                Ok(())
+            },
+        );
+        assert_eq!(folds.load(Ordering::SeqCst), 1);
+        let _ = fs::remove_dir_all(journal.parent().unwrap());
+    }
+
+    #[test]
+    fn a_failed_fold_after_a_failed_journal_write_still_returns() {
+        let (_snapshot, journal) = temp_paths("fold-fails");
+        let lock = Mutex::new(JournalQueue::new());
+        let done = Condvar::new();
+        let folds = AtomicUsize::new(0);
+        let queue = enqueue(&lock, 1);
+        wait_or_fold(
+            &lock,
+            &done,
+            &journal,
+            queue,
+            1,
+            |_: &Path, _: &[(u64, String)]| Err("injected write failure".to_string()),
+            || {
+                folds.fetch_add(1, Ordering::SeqCst);
+                Err("injected fold failure".to_string())
+            },
+        );
+        assert_eq!(folds.load(Ordering::SeqCst), 1);
+        let _ = fs::remove_dir_all(journal.parent().unwrap());
+    }
+
+    #[test]
+    fn a_journal_write_that_lands_never_folds() {
+        let (_snapshot, journal) = temp_paths("no-fold-on-success");
+        let lock = Mutex::new(JournalQueue::new());
+        let done = Condvar::new();
+        let folds = AtomicUsize::new(0);
+        let queue = enqueue(&lock, 1);
+        wait_or_fold(&lock, &done, &journal, queue, 1, commit_lines, || {
+            folds.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        });
+        assert_eq!(folds.load(Ordering::SeqCst), 0);
+        assert_eq!(lock.lock().unwrap().durable_seq, 1);
+        let _ = fs::remove_dir_all(journal.parent().unwrap());
     }
 
     #[test]
