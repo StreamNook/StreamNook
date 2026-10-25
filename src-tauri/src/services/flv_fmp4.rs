@@ -545,6 +545,21 @@ impl Muxer {
         Self::default()
     }
 
+    /// Forget everything held but not yet written, and the position reached on
+    /// the pull's clock, so the next frames open a new timeline. Segment
+    /// numbering, the epoch, the announced init and the codec configurations
+    /// stay: the next segment continues the numbering and is marked as a break.
+    pub fn drop_pending(&mut self) {
+        self.open = None;
+        self.waiting.clear();
+        self.audio_queue.clear();
+        self.audio_run.clear();
+        self.last_video_dts = None;
+        self.last_audio_ts = None;
+        self.audio_clock = None;
+        self.break_next = true;
+    }
+
     pub fn push(&mut self, frame: Frame) -> Result<Vec<Output>> {
         let mut out = Vec::new();
         match frame {
@@ -1232,6 +1247,51 @@ pub(crate) mod tests {
         // Numbering carries on across the break.
         for (i, s) in segs.iter().enumerate() {
             assert_eq!(s.number, i as u64);
+        }
+    }
+
+    /// The first traf's tfdt: where the video run of a fragment starts, in
+    /// timescale ticks.
+    fn video_tfdt(seg: &[u8]) -> u64 {
+        let at = seg.windows(4).position(|w| w == b"tfdt").expect("tfdt");
+        let p = at + 8; // past type, version and flags
+        u64::from_be_bytes(seg[p..p + 8].try_into().unwrap())
+    }
+
+    #[test]
+    fn dropped_pending_media_never_comes_out_on_a_later_timeline() {
+        for gap in [40_000u32, 3_000] {
+            let mut m = Muxer::new();
+            let mut before = Vec::new();
+            for f in Demuxer::default().push(&sample_flv(10_000, 14_100)).unwrap() {
+                before.extend(m.push(f).unwrap());
+            }
+            let written = segments(&before).len();
+            assert!(written > 0, "gap {gap}: the first stretch produced segments");
+
+            m.drop_pending();
+
+            // The pull comes back later on the same clock.
+            let resume = 14_100 + gap;
+            let mut after = Vec::new();
+            for f in Demuxer::default().push(&sample_flv(resume, resume + 4_100)).unwrap() {
+                after.extend(m.push(f).unwrap());
+            }
+            let segs = segments(&after);
+            assert!(!segs.is_empty(), "gap {gap}: the later stretch produced segments");
+            for s in &segs {
+                assert!(
+                    video_tfdt(&s.bytes) >= resume as u64 * (VIDEO_TIMESCALE / 1000) as u64,
+                    "gap {gap}: segment {} starts before the later timeline",
+                    s.number
+                );
+            }
+            assert!(segs[0].discontinuity, "gap {gap}: the later timeline is a marked break");
+            assert_eq!(segs[0].number, written as u64, "gap {gap}: numbering carries on");
+            assert!(
+                after.iter().all(|o| !matches!(o, Output::Init { .. })),
+                "gap {gap}: the same configuration keeps its init"
+            );
         }
     }
 

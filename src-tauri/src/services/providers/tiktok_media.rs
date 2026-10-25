@@ -511,6 +511,17 @@ impl TikTokSource {
     }
 }
 
+/// Whether TikTok says `handle`'s room is live right now. Always a fresh scrape
+/// of the creator's page: the chat connection's cached liveness is never
+/// consulted, so a room that has ended cannot read as live because a chat
+/// socket still remembers it.
+pub(crate) async fn room_live_fresh(handle: &str) -> Result<bool> {
+    TikTokSource::new()
+        .row_for(&clean_handle(handle))
+        .await
+        .map(|row| row.is_live)
+}
+
 #[async_trait]
 impl StreamSource for TikTokSource {
     fn id(&self) -> &'static str {
