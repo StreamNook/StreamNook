@@ -1574,10 +1574,15 @@ where
     // and a sync write per file on the runtime saturates the worker threads
     // (the join-time freeze). The HTTP fetch is already async.
     let write_path = file_path.clone();
+    // The bytes land in `{name}.tmp` first and are renamed over the final name,
+    // so a reader never sees a half-written file.
+    let tmp_path = type_dir.join(format!("{file_name}.tmp"));
     tokio::task::spawn_blocking(move || -> std::io::Result<()> {
-        let mut file = fs::File::create(&write_path)?;
+        let mut file = fs::File::create(&tmp_path)?;
         std::io::copy(&mut Cursor::new(bytes), &mut file)?;
-        Ok(())
+        file.sync_all()?;
+        drop(file);
+        fs::rename(&tmp_path, &write_path)
     })
     .await
     .context("cache_file write task panicked")??;

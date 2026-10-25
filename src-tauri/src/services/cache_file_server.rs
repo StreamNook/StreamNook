@@ -29,6 +29,9 @@ const PORT_FILE: &str = "cache_server_port";
 /// The universal cache folders the page draws from (`CacheType::dir_name`).
 const CACHE_DIRS: [&str; 5] = ["badges", "emotes", "third-party-badges", "cosmetics", "streamnook-art"];
 
+/// Ports derived from the token and tried after the saved one.
+const FALLBACK_PORTS: usize = 8;
+
 /// Files read at once. A history batch asks for dozens together; reading them
 /// all at the same moment only queues them on the disk.
 const READ_PERMITS: usize = 4;
@@ -64,7 +67,7 @@ pub fn start() {
         };
         let state_dir = crate::services::cache_service::get_app_data_dir().ok();
         let token = install_token(state_dir.as_deref());
-        let listener = match bind_listener(state_dir.as_deref()).await {
+        let listener = match bind_listener(state_dir.as_deref(), &token).await {
             Ok(l) => l,
             Err(e) => {
                 log::warn!("[CacheFiles] no loopback port ({e}); cached images stay on the asset protocol");
@@ -107,23 +110,41 @@ fn install_token(dir: Option<&Path>) -> String {
     token
 }
 
-/// A loopback listener on the port saved last time, or on a free port when that
-/// one is taken or none was saved. The bound port is saved for the next launch.
-async fn bind_listener(dir: Option<&Path>) -> std::io::Result<tokio::net::TcpListener> {
+/// Ports tried after the saved one: a fixed sequence for a token, so a launch
+/// that finds the saved port taken still lands on a port it can land on again.
+fn fallback_ports(token: &str) -> [u16; FALLBACK_PORTS] {
+    // FNV-1a over the token, then a linear congruential step per port.
+    let mut state = token.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3));
+    let mut ports = [0_u16; FALLBACK_PORTS];
+    for port in &mut ports {
+        state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+        *port = 20000 + ((state >> 33) % 20000) as u16;
+    }
+    ports
+}
+
+/// A loopback listener on the port saved last time, else on one of the ports
+/// derived from the token, else on a free port the OS picks. The bound port is
+/// saved for the next launch.
+async fn bind_listener(dir: Option<&Path>, token: &str) -> std::io::Result<tokio::net::TcpListener> {
     let path = dir.map(|d| d.join(PORT_FILE));
     let saved = path
         .as_ref()
         .and_then(|p| std::fs::read_to_string(p).ok())
         .and_then(|s| s.trim().parse::<u16>().ok())
         .filter(|p| *p != 0);
-    let listener = match saved {
-        Some(port) => match tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
-            Ok(l) => l,
-            Err(e) => {
-                log::info!("[CacheFiles] port {port} is taken ({e}); picking another");
-                tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?
+    let mut bound = None;
+    for port in saved.into_iter().chain(fallback_ports(token)) {
+        match tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
+            Ok(l) => {
+                bound = Some(l);
+                break;
             }
-        },
+            Err(e) => log::info!("[CacheFiles] port {port} is taken ({e}); trying another"),
+        }
+    }
+    let listener = match bound {
+        Some(l) => l,
         None => tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?,
     };
     if let Some(p) = &path {
@@ -137,12 +158,18 @@ async fn bind_listener(dir: Option<&Path>) -> std::io::Result<tokio::net::TcpLis
     Ok(listener)
 }
 
-/// Writes `text` to `path` and flushes it to disk before returning.
+/// Writes `text` to `<path>.tmp`, flushes it to disk, then renames it onto
+/// `path`, so a crash leaves the old file or the new one, never a partial one.
 fn write_synced(path: &Path, text: &str) -> std::io::Result<()> {
     use std::io::Write;
-    let mut file = std::fs::File::create(path)?;
+    let mut tmp_name = path.as_os_str().to_owned();
+    tmp_name.push(".tmp");
+    let tmp = PathBuf::from(tmp_name);
+    let mut file = std::fs::File::create(&tmp)?;
     file.write_all(text.as_bytes())?;
-    file.sync_all()
+    file.sync_all()?;
+    drop(file);
+    std::fs::rename(&tmp, path)
 }
 
 /// The server's routes: `/cache/{token}/ping` and
@@ -156,10 +183,13 @@ fn routes(token: String, root: PathBuf) -> impl Filter<Extract = (impl Reply,), 
         .and(warp::path::param::<String>())
         .and(warp::path::param::<String>())
         .and(warp::path::end())
-        .and_then(move |tok: String, dir: String, file: String| {
+        .and(warp::header::optional::<String>("if-none-match"))
+        .and_then(move |tok: String, dir: String, file: String, if_none_match: Option<String>| {
             let allowed = tok == file_token;
             let root = root.clone();
-            async move { Ok::<_, Rejection>(if allowed { serve(root, dir, file).await } else { status(StatusCode::NOT_FOUND) }) }
+            async move {
+                Ok::<_, Rejection>(if allowed { serve(root, dir, file, if_none_match).await } else { status(StatusCode::NOT_FOUND) })
+            }
         });
     let ping = warp::get()
         .and(warp::path("cache"))
@@ -170,36 +200,90 @@ fn routes(token: String, root: PathBuf) -> impl Filter<Extract = (impl Reply,), 
     ping.or(files)
 }
 
+/// A reply with no body. Never cached, so a transient miss is not remembered.
 fn status(code: StatusCode) -> Response<bytes::Bytes> {
     Response::builder()
         .status(code)
+        .header("Cache-Control", "no-store")
         .header("Access-Control-Allow-Origin", "*")
         .body(bytes::Bytes::new())
         .unwrap_or_else(|_| Response::new(bytes::Bytes::new()))
 }
 
-async fn serve(root: PathBuf, dir: String, file: String) -> Response<bytes::Bytes> {
+/// What a file request found.
+enum Found {
+    /// The caller's validator still matches the file.
+    NotModified(String),
+    /// The file's bytes, with a validator when the folder is revalidated.
+    File { bytes: Vec<u8>, etag: Option<String> },
+}
+
+/// Folders whose files can change under the same name, so the WebView asks
+/// again before reusing its copy. The other folders are content addressed: new
+/// art is cached under a new key.
+fn revalidates(dir: &str) -> bool {
+    matches!(dir, "badges" | "third-party-badges" | "cosmetics")
+}
+
+/// A validator from the file's length and modification time.
+fn etag_of(meta: &std::fs::Metadata) -> String {
+    let mtime_ns = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_nanos());
+    format!("\"{:x}-{:x}\"", meta.len(), mtime_ns)
+}
+
+/// Whether an `If-None-Match` value names `etag` (a list of validators, weak
+/// ones included, or `*`).
+fn etag_matches(header: &str, etag: &str) -> bool {
+    header.split(',').map(str::trim).any(|v| v == "*" || v.strip_prefix("W/").unwrap_or(v) == etag)
+}
+
+async fn serve(root: PathBuf, dir: String, file: String, if_none_match: Option<String>) -> Response<bytes::Bytes> {
     let Ok(permit) = READS.acquire().await else {
         return status(StatusCode::SERVICE_UNAVAILABLE);
     };
+    let revalidate = revalidates(&dir);
     // The permit moves into the read, so a request the page cancels still
     // holds it until the file read ends.
     let read = tokio::task::spawn_blocking(move || {
         let _permit = permit;
         let path = resolve(&root, &dir, &file)?;
-        std::fs::read(path).ok()
+        let etag = if revalidate { Some(etag_of(&std::fs::metadata(&path).ok()?)) } else { None };
+        if let (Some(tag), Some(header)) = (&etag, &if_none_match) {
+            if etag_matches(header, tag) {
+                return Some(Found::NotModified(tag.clone()));
+            }
+        }
+        let bytes = std::fs::read(path).ok()?;
+        Some(Found::File { bytes, etag })
     })
     .await;
     match read {
-        Ok(Some(bytes)) => Response::builder()
-            .status(StatusCode::OK)
-            .header("Content-Type", sniff(&bytes))
-            // The file behind a URL never changes (new art is cached under a
-            // new key), so the WebView can keep its copy for good.
-            .header("Cache-Control", "private, max-age=31536000, immutable")
+        Ok(Some(Found::NotModified(etag))) => Response::builder()
+            .status(StatusCode::NOT_MODIFIED)
+            .header("Cache-Control", "no-cache")
+            .header("ETag", etag)
             .header("Access-Control-Allow-Origin", "*")
-            .body(bytes::Bytes::from(bytes))
+            .body(bytes::Bytes::new())
             .unwrap_or_else(|_| status(StatusCode::INTERNAL_SERVER_ERROR)),
+        Ok(Some(Found::File { bytes, etag })) => {
+            let builder = Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", sniff(&bytes))
+                .header("Access-Control-Allow-Origin", "*");
+            let builder = match etag {
+                // The file can be replaced under the same name, so the WebView
+                // revalidates instead of keeping its copy.
+                Some(tag) => builder.header("Cache-Control", "no-cache").header("ETag", tag),
+                // The file behind a URL never changes (new art is cached under
+                // a new key), so the WebView can keep its copy for good.
+                None => builder.header("Cache-Control", "private, max-age=31536000, immutable"),
+            };
+            builder.body(bytes::Bytes::from(bytes)).unwrap_or_else(|_| status(StatusCode::INTERNAL_SERVER_ERROR))
+        }
         _ => status(StatusCode::NOT_FOUND),
     }
 }
@@ -266,6 +350,8 @@ mod tests {
         std::fs::create_dir_all(root.join("emotes")).unwrap();
         std::fs::write(root.join("emotes").join("a@1x.webp"), b"RIFF0000WEBPVP8 ").unwrap();
         std::fs::write(root.join("manifest.json"), b"{}").unwrap();
+        std::fs::create_dir_all(root.join("other")).unwrap();
+        std::fs::write(root.join("other").join("secret.png"), b"\x89PNG\r\n\x1a\n").unwrap();
         root
     }
 
@@ -276,6 +362,7 @@ mod tests {
         assert!(resolve(&root, "emotes", "a@1x.webp").is_some());
         assert!(resolve(&root, "emotes", "missing.webp").is_none());
         assert!(resolve(&root, "manifest.json", "x").is_none(), "not an image folder");
+        assert!(resolve(&root, "other", "secret.png").is_none(), "a real folder beside the image folders is not served");
         assert!(resolve(&root, "emotes", "..%5Cmanifest.json").is_none());
         assert!(resolve(&root, "emotes", "..%2Fmanifest.json").is_none());
         assert!(resolve(&root, "emotes", "C%3A%5Cx").is_none());
@@ -388,6 +475,22 @@ mod tests {
         }
     }
 
+    /// A junction named like an image, inside an image folder, leads out of the
+    /// cache; the per-file containment check refuses it.
+    #[cfg(windows)]
+    #[test]
+    fn a_junction_named_like_an_image_does_not_resolve() {
+        let root = temp_root("junction-file");
+        let outside = std::env::temp_dir().join(format!("sn-cachefiles-junction-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&outside);
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("x.png"), b"\x89PNG\r\n\x1a\n").unwrap();
+        link_dir(&outside, &root.join("emotes").join("evil.webp")).expect(NO_SYMLINK);
+        assert!(resolve(&root, "emotes", "evil.webp").is_none(), "a junction inside an image folder that leads out of the cache");
+        let _ = std::fs::remove_dir_all(&outside);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// Serves `routes` on a loopback port the OS picks. Returns the base URL and
     /// the token it accepts.
     async fn spawn_server(root: PathBuf) -> (String, String) {
@@ -465,6 +568,66 @@ mod tests {
         assert_eq!(header("access-control-allow-origin").as_deref(), Some("*"));
         assert_eq!(res.bytes().await.unwrap().as_ref(), b"RIFF0000WEBPVP8 ");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn content_addressed_art_is_immutable_and_has_no_etag() {
+        let root = temp_root("immutable");
+        let (base, token) = spawn_server(root.clone()).await;
+        let res = client().get(format!("{base}/cache/{token}/emotes/a@1x.webp")).send().await.unwrap();
+        assert_eq!(res.status().as_u16(), 200);
+        assert_eq!(res.headers().get("cache-control").and_then(|v| v.to_str().ok()), Some("private, max-age=31536000, immutable"));
+        assert!(res.headers().get("etag").is_none(), "an immutable file has no validator");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn changeable_art_revalidates_with_an_etag() {
+        let root = temp_root("revalidate");
+        let badges = root.join("badges");
+        std::fs::create_dir_all(&badges).unwrap();
+        std::fs::write(badges.join("b.png"), b"\x89PNG\r\n\x1a\nold").unwrap();
+        let (base, token) = spawn_server(root.clone()).await;
+        let c = client();
+        let url = format!("{base}/cache/{token}/badges/b.png");
+
+        let first = c.get(&url).send().await.unwrap();
+        assert_eq!(first.status().as_u16(), 200);
+        assert_eq!(first.headers().get("cache-control").and_then(|v| v.to_str().ok()), Some("no-cache"));
+        let etag = first.headers().get("etag").and_then(|v| v.to_str().ok()).map(str::to_owned).expect("a validator");
+        assert!(etag.starts_with('"') && etag.ends_with('"'), "{etag}");
+        assert_eq!(first.bytes().await.unwrap().as_ref(), b"\x89PNG\r\n\x1a\nold");
+
+        let same = c.get(&url).header("if-none-match", &etag).send().await.unwrap();
+        assert_eq!(same.status().as_u16(), 304);
+        assert_eq!(same.headers().get("access-control-allow-origin").and_then(|v| v.to_str().ok()), Some("*"));
+        assert_eq!(same.headers().get("etag").and_then(|v| v.to_str().ok()), Some(etag.as_str()));
+        assert!(same.bytes().await.unwrap().is_empty());
+
+        std::fs::write(badges.join("b.png"), b"\x89PNG\r\n\x1a\nreplaced with more bytes").unwrap();
+        let changed = c.get(&url).header("if-none-match", &etag).send().await.unwrap();
+        assert_eq!(changed.status().as_u16(), 200);
+        assert_ne!(changed.headers().get("etag").and_then(|v| v.to_str().ok()), Some(etag.as_str()));
+        assert_eq!(changed.bytes().await.unwrap().as_ref(), b"\x89PNG\r\n\x1a\nreplaced with more bytes");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn a_folder_outside_the_allowlist_is_not_served() {
+        let root = temp_root("allowlist-wire");
+        let (base, token) = spawn_server(root.clone()).await;
+        assert_eq!(status_of(&client(), &format!("{base}/cache/{token}/other/secret.png")).await, 404);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn fallback_ports_are_stable_for_a_token() {
+        let token = "0123456789abcdef0123456789abcdef";
+        let ports = fallback_ports(token);
+        assert_eq!(ports, fallback_ports(token), "the same token gives the same ports");
+        assert_eq!(ports.len(), FALLBACK_PORTS);
+        assert!(ports.iter().all(|p| (20000..40000).contains(p)), "{ports:?}");
+        assert_ne!(ports, fallback_ports("fedcba9876543210fedcba9876543210"), "another token gives other ports");
     }
 
     #[tokio::test]
