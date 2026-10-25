@@ -592,6 +592,11 @@ async fn handle(path: String) -> Result<warp::http::Response<Bytes>, warp::Rejec
         return Ok(fail_because(404, format!("no session '{}'", id)));
     };
     session.touch();
+    // A grid tile's player polling its playlists keeps the tile from reading as
+    // parked. Only tiles are noted here, never the solo stream.
+    if tail.ends_with(".m3u8") && id != crate::services::stream_server::SOLO_STREAM_ID {
+        crate::services::multi_nook_server::note_tile_playlist_request(id);
+    }
 
     const M3U8: &str = "application/vnd.apple.mpegurl";
 

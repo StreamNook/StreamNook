@@ -132,14 +132,40 @@ pub fn twitch_tile_route(stream_id: &str) -> Arc<dyn crate::services::link_adapt
 }
 
 /// Whether nothing is being read for this tile's player: its origin is parked,
-/// or no player has asked for its playlist for the park span. False for a tile
-/// with no origin registered.
+/// or no player has asked for its playlist for the park span. A tile served by
+/// its own relay (no origin registered) is parked once its player has not asked
+/// for a playlist for the park span. False for a tile known to neither.
 pub fn tile_parked(stream_id: &str) -> bool {
-    TILE_ORIGINS
+    tile_parked_at(stream_id, ll_origin::mono_ms())
+}
+
+fn tile_parked_at(stream_id: &str, now: u64) -> bool {
+    let by_origin = TILE_ORIGINS
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .get(stream_id)
-        .is_some_and(|origin| origin.parked_or_idle())
+        .map(|origin| origin.parked_or_idle());
+    if let Some(parked) = by_origin {
+        return parked;
+    }
+    TILE_REQUESTS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(stream_id)
+        .is_some_and(|last| ll_origin::idle_for_park(*last, now, ll_origin::park_idle_ms()))
+}
+
+/// A player asked a relay of its own (YouTube's local HLS, TikTok) for this
+/// tile's playlist. The tile is not parked while these keep arriving.
+pub(crate) fn note_tile_playlist_request(stream_id: &str) {
+    note_tile_playlist_request_at(stream_id, ll_origin::mono_ms());
+}
+
+fn note_tile_playlist_request_at(stream_id: &str, ms: u64) {
+    TILE_REQUESTS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(stream_id.to_string(), ms);
 }
 
 /// Playlist fetches in a row an ended provider stream must refuse (404 or 410).
@@ -222,6 +248,11 @@ static STREAM_REGISTRY: Lazy<Arc<Mutex<HashMap<String, StreamInstance>>>> =
 /// Each registered tile's LL origin, readable without the async registry lock
 /// so a route can ask whether its tile is parked.
 static TILE_ORIGINS: Lazy<std::sync::Mutex<HashMap<String, Arc<LlOrigin>>>> =
+    Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
+
+/// When each relay-served tile's player last asked for a playlist (`mono_ms`),
+/// for the tiles that have no LL origin to say whether they are parked.
+static TILE_REQUESTS: Lazy<std::sync::Mutex<HashMap<String, u64>>> =
     Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
 
 /// Global HTTP client with optimized connection pooling
@@ -470,6 +501,10 @@ impl MultiNookServer {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(stream_id);
+        TILE_REQUESTS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(stream_id);
         if let Some(instance) = registry.remove(stream_id) {
             debug!(
                 "[MultiNook] Stopping proxy for stream '{}' on port {}",
@@ -497,6 +532,10 @@ impl MultiNookServer {
         let mut registry = STREAM_REGISTRY.lock().await;
         let count = registry.len();
         TILE_ORIGINS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        TILE_REQUESTS
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clear();
@@ -1177,6 +1216,49 @@ mod tests {
             .unwrap_or_else(|e| e.into_inner())
             .remove(id);
         assert!(!tile_parked(id), "a removed tile is not parked");
+    }
+
+    #[test]
+    fn a_relay_served_tile_is_parked_after_the_span_without_requests() {
+        let id = "test-parked-relay-tile";
+        let span = ll_origin::park_idle_ms();
+        assert!(!tile_parked_at(id, 10 * span), "a tile known to neither is not parked");
+
+        let started = 1_000;
+        note_tile_playlist_request_at(id, started);
+        assert!(!tile_parked_at(id, started + span - 1), "inside the span it is playing");
+        assert!(tile_parked_at(id, started + span), "a whole span without a request parks it");
+
+        // Requests that keep arriving keep it playing.
+        for poll in 1..=4u64 {
+            let at = started + poll * (span / 2);
+            note_tile_playlist_request_at(id, at);
+            assert!(!tile_parked_at(id, at + span - 1), "polled {poll}: still playing");
+        }
+        let last = started + 4 * (span / 2);
+        assert!(tile_parked_at(id, last + span));
+
+        TILE_REQUESTS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(id);
+    }
+
+    #[test]
+    fn stopping_a_relay_served_tile_removes_its_request_entry() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let id = "test-stopped-relay-tile";
+            note_tile_playlist_request_at(id, 1_000);
+            assert!(TILE_REQUESTS.lock().unwrap_or_else(|e| e.into_inner()).contains_key(id));
+
+            MultiNookServer::stop_instance(id).await.unwrap();
+            assert!(
+                !TILE_REQUESTS.lock().unwrap_or_else(|e| e.into_inner()).contains_key(id),
+                "a stopped tile keeps no entry"
+            );
+            assert!(!tile_parked_at(id, 1_000 + 10 * ll_origin::park_idle_ms()));
+        });
     }
 
     fn refused(at_ms: u64) -> TileFetch {

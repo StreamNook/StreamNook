@@ -941,8 +941,14 @@ async fn handle(full: String) -> Result<warp::http::Response<Bytes>, std::conver
     st.touch();
     // A player polling the solo stream's playlists is loading it, which is
     // what keeps the stream from reading as parked while it plays.
-    if id == crate::services::stream_server::SOLO_STREAM_ID && path.ends_with(".m3u8") {
-        crate::services::stream_server::note_solo_playlist_request();
+    if path.ends_with(".m3u8") {
+        if id == crate::services::stream_server::SOLO_STREAM_ID {
+            crate::services::stream_server::note_solo_playlist_request();
+        } else {
+            // A grid tile's player polling its playlists keeps the tile from
+            // reading as parked.
+            crate::services::multi_nook_server::note_tile_playlist_request(id);
+        }
     }
     // Every request goes through here, so the refresh rides the player's own
     // cadence instead of needing a timer of its own. It does not block: the
