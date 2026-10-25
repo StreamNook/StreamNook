@@ -139,7 +139,9 @@ impl ModLogStorageService {
         if guard.is_none() {
             let path = resolve_path()?;
             let journal = path.with_file_name(MOD_LOGS_JOURNAL);
-            let (storage, replayed) = load_storage(&path, &journal);
+            // A snapshot that cannot be read leaves the store unseeded and
+            // DIRTY clear, so nothing folds over it and the next call retries.
+            let (storage, replayed) = load_storage(&path, &journal)?;
             let _ = STORE_PATH.set(path);
             let _ = JOURNAL_PATH.set(journal);
             LAST_SEQ.store(storage.journal_seq, Ordering::SeqCst);
@@ -334,7 +336,46 @@ fn write_snapshot(path: &Path, json: &str) -> std::io::Result<()> {
     file.write_all(json.as_bytes())?;
     file.sync_all()?;
     drop(file);
-    fs::rename(&tmp, path)
+    rename_durable(&tmp, path)
+}
+
+/// Rename `from` over `to`, replacing an existing `to`, and return only once
+/// the rename itself is on disk, so a power loss afterwards cannot bring back
+/// the old file under a journal that was already emptied.
+#[cfg(windows)]
+fn rename_durable(from: &Path, to: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::PCWSTR;
+    use windows::Win32::Storage::FileSystem::{
+        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    };
+    let wide = |path: &Path| -> Vec<u16> {
+        path.as_os_str().encode_wide().chain(std::iter::once(0)).collect()
+    };
+    let (from_w, to_w) = (wide(from), wide(to));
+    // SAFETY: both buffers are NUL-terminated and outlive the call.
+    let moved = unsafe {
+        MoveFileExW(
+            PCWSTR(from_w.as_ptr()),
+            PCWSTR(to_w.as_ptr()),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    // A Win32 failure arrives as an HRESULT whose low 16 bits are the error code.
+    moved.map_err(|e| std::io::Error::from_raw_os_error(e.code().0 & 0xFFFF))
+}
+
+/// Rename `from` over `to`, replacing an existing `to`, and return only once
+/// the rename itself is on disk, so a power loss afterwards cannot bring back
+/// the old file under a journal that was already emptied.
+#[cfg(not(windows))]
+fn rename_durable(from: &Path, to: &Path) -> std::io::Result<()> {
+    fs::rename(from, to)?;
+    let dir = match to.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    };
+    fs::File::open(dir)?.sync_all()
 }
 
 /// Journal lines waiting for the disk, and the state of the write that carries
@@ -535,13 +576,56 @@ fn cut_torn_tail(journal: &Path) {
     }
 }
 
+/// How many times a snapshot that cannot be read right now (locked by another
+/// process, say) is read again before the seed gives up.
+const SNAPSHOT_READ_RETRIES: u32 = 3;
+const SNAPSHOT_READ_RETRY_AFTER: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// The snapshot's bytes, or `None` if there is no snapshot. Any other read
+/// error is retried, then returned.
+fn read_snapshot_bytes(snapshot: &Path) -> Result<Option<Vec<u8>>, String> {
+    let mut attempt = 0;
+    loop {
+        match fs::read(snapshot) {
+            Ok(bytes) => return Ok(Some(bytes)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) if attempt >= SNAPSHOT_READ_RETRIES => {
+                return Err(format!("Failed to read mod logs file: {}", e));
+            }
+            Err(_) => {
+                attempt += 1;
+                std::thread::sleep(SNAPSHOT_READ_RETRY_AFTER);
+            }
+        }
+    }
+}
+
+/// Move a snapshot that does not parse next to itself under a name no fold
+/// writes to, so its bytes stay recoverable.
+fn set_aside_unreadable(snapshot: &Path) -> Result<(), String> {
+    let name = snapshot.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let aside = snapshot.with_file_name(format!("{}.unreadable-{}", name, chrono::Utc::now().timestamp_millis()));
+    fs::rename(snapshot, &aside)
+        .map_err(|e| format!("Failed to move the unreadable mod logs file aside: {}", e))?;
+    warn!("[ModLogStorage] mod logs file did not parse; kept as {}", aside.display());
+    Ok(())
+}
+
 /// The store from `snapshot` plus every readable journal line past the
 /// snapshot's `journal_seq`, and how many lines it applied. A torn last line
-/// from a crash is cut off the journal first.
-fn load_storage(snapshot: &Path, journal: &Path) -> (ModLogStorage, usize) {
-    let mut storage: ModLogStorage = match fs::read_to_string(snapshot) {
-        Ok(contents) => serde_json::from_str(&contents).unwrap_or_default(),
-        Err(_) => ModLogStorage::default(),
+/// from a crash is cut off the journal first. A missing snapshot starts an
+/// empty store; one that does not parse is moved aside first; one that cannot
+/// be read, or moved aside, is an error, so no fold can overwrite it.
+fn load_storage(snapshot: &Path, journal: &Path) -> Result<(ModLogStorage, usize), String> {
+    let mut storage: ModLogStorage = match read_snapshot_bytes(snapshot)? {
+        None => ModLogStorage::default(),
+        Some(bytes) => match serde_json::from_slice(&bytes) {
+            Ok(parsed) => parsed,
+            Err(_) => {
+                set_aside_unreadable(snapshot)?;
+                ModLogStorage::default()
+            }
+        },
     };
     cut_torn_tail(journal);
     let mut applied = 0;
@@ -558,7 +642,7 @@ fn load_storage(snapshot: &Path, journal: &Path) -> (ModLogStorage, usize) {
             }
         }
     }
-    (storage, applied)
+    Ok((storage, applied))
 }
 
 /// Same action inside this window = one action reported twice.
@@ -775,7 +859,7 @@ mod journal_tests {
         assert!(changed);
         append_journal(&journal, 1, &JournalOp::Put { channel: "chan".into(), entry: shown }).unwrap();
         // The next launch has no file yet, only the journal.
-        let (restored, replayed) = load_storage(&snapshot, &journal);
+        let (restored, replayed) = load_storage(&snapshot, &journal).unwrap();
         assert_eq!(replayed, 1);
         assert_eq!(restored.channels["chan"][0]["id"], "a1");
         let _ = fs::remove_dir_all(snapshot.parent().unwrap());
@@ -793,7 +877,7 @@ mod journal_tests {
         append_journal(&journal, 1, &JournalOp::Put { channel: "chan".into(), entry: json!({ "id": "a1", "source": "eventsub" }) }).unwrap();
         append_journal(&journal, 2, &JournalOp::Put { channel: "other".into(), entry: json!({ "id": "b1" }) }).unwrap();
         append_journal(&journal, 3, &JournalOp::Clear { channel: "other".into() }).unwrap();
-        let (restored, replayed) = load_storage(&snapshot, &journal);
+        let (restored, replayed) = load_storage(&snapshot, &journal).unwrap();
         assert_eq!(replayed, 3);
         assert_eq!(restored.channels["chan"].len(), 1);
         assert_eq!(restored.channels["chan"][0]["source"], "eventsub");
@@ -808,7 +892,7 @@ mod journal_tests {
         let mut f = fs::OpenOptions::new().append(true).open(&journal).unwrap();
         std::io::Write::write_all(&mut f, b"{\"op\":\"put\",\"chan").unwrap();
         drop(f);
-        let (restored, replayed) = load_storage(&snapshot, &journal);
+        let (restored, replayed) = load_storage(&snapshot, &journal).unwrap();
         assert_eq!(replayed, 1);
         assert_eq!(restored.channels["chan"].len(), 1);
         let _ = fs::remove_dir_all(snapshot.parent().unwrap());
@@ -822,10 +906,10 @@ mod journal_tests {
         std::io::Write::write_all(&mut f, b"{\"seq\":2,\"op\":\"put\",\"chan").unwrap();
         drop(f);
         // The seed cuts the fragment off before anything appends.
-        let (_, replayed) = load_storage(&snapshot, &journal);
+        let (_, replayed) = load_storage(&snapshot, &journal).unwrap();
         assert_eq!(replayed, 1);
         append_journal(&journal, 2, &JournalOp::Put { channel: "chan".into(), entry: json!({ "id": "a2" }) }).unwrap();
-        let (restored, replayed) = load_storage(&snapshot, &journal);
+        let (restored, replayed) = load_storage(&snapshot, &journal).unwrap();
         assert_eq!(replayed, 2);
         let ids: Vec<_> = restored.channels["chan"].iter().map(|e| e["id"].clone()).collect();
         assert_eq!(ids, vec![json!("a1"), json!("a2")]);
@@ -858,7 +942,7 @@ mod journal_tests {
         assert!(!queue.writing);
         assert_eq!(queue.durable_seq, 1600);
         drop(queue);
-        let (restored, replayed) = load_storage(&snapshot, &journal);
+        let (restored, replayed) = load_storage(&snapshot, &journal).unwrap();
         assert_eq!(replayed, 1600);
         for t in 0..8 {
             let ids: Vec<_> = restored.channels[&format!("t{t}")].iter().map(|e| e["id"].clone()).collect();
@@ -920,7 +1004,7 @@ mod journal_tests {
         assert!(!queue.writing);
         assert_eq!(queue.durable_seq, 1600);
         drop(queue);
-        let (restored, replayed) = load_storage(&snapshot, &journal);
+        let (restored, replayed) = load_storage(&snapshot, &journal).unwrap();
         assert_eq!(replayed, 1600);
         for t in 0..8 {
             let ids: Vec<_> = restored.channels[&format!("t{t}")].iter().map(|e| e["id"].clone()).collect();
@@ -968,7 +1052,7 @@ mod journal_tests {
         assert!(queue.pending.is_empty());
         assert_eq!(queue.durable_seq, N as u64);
         drop(queue);
-        let (restored, replayed) = load_storage(&snapshot, &journal);
+        let (restored, replayed) = load_storage(&snapshot, &journal).unwrap();
         assert_eq!(replayed, N);
         assert_eq!(restored.channels["chan"].len(), N);
         let _ = fs::remove_dir_all(snapshot.parent().unwrap());
@@ -987,7 +1071,7 @@ mod journal_tests {
         let queue = enqueue(&lock, 2);
         wait_durable(&lock, &done, &journal, queue, 2, commit_lines).unwrap();
         assert!(!lock.lock().unwrap().torn);
-        let (restored, replayed) = load_storage(&snapshot, &journal);
+        let (restored, replayed) = load_storage(&snapshot, &journal).unwrap();
         assert_eq!(replayed, 2);
         let ids: Vec<_> = restored.channels["chan"].iter().map(|e| e["id"].clone()).collect();
         assert_eq!(ids, vec![json!("a1"), json!("a2")]);
@@ -1008,7 +1092,7 @@ mod journal_tests {
         let done = Condvar::new();
         let queue = enqueue(&lock, 2);
         wait_durable(&lock, &done, &journal, queue, 2, commit_lines).unwrap();
-        let (restored, replayed) = load_storage(&snapshot, &journal);
+        let (restored, replayed) = load_storage(&snapshot, &journal).unwrap();
         assert_eq!(replayed, 2);
         let ids: Vec<_> = restored.channels["chan"].iter().map(|e| e["id"].clone()).collect();
         assert_eq!(ids, vec![json!("a1"), json!("a2")]);
@@ -1036,7 +1120,7 @@ mod journal_tests {
             drop(f);
             append_journal(&journal, 2, &JournalOp::Put { channel: "chan".into(), entry: json!({ "id": "a2" }) }).unwrap();
             assert!(std::str::from_utf8(&fs::read(&journal).unwrap()).is_err(), "{name}: the fragment must be invalid UTF-8");
-            let (restored, replayed) = load_storage(&snapshot, &journal);
+            let (restored, replayed) = load_storage(&snapshot, &journal).unwrap();
             assert_eq!(replayed, 2, "{name}");
             let ids: Vec<_> = restored.channels["chan"].iter().map(|e| e["id"].clone()).collect();
             assert_eq!(ids, vec![json!("a1"), json!("a2")], "{name}");
@@ -1143,7 +1227,7 @@ mod journal_tests {
         cut_torn_tail(&journal);
         let retry = journal_line(2, &JournalOp::Put { channel: "chan".into(), entry: json!({ "id": "a2" }) }).unwrap();
         commit_lines(&journal, &[(2, retry)]).unwrap();
-        let (restored, replayed) = load_storage(&snapshot, &journal);
+        let (restored, replayed) = load_storage(&snapshot, &journal).unwrap();
         assert_eq!(replayed, 2);
         let ids: Vec<_> = restored.channels["chan"].iter().map(|e| e["id"].clone()).collect();
         assert_eq!(ids, vec![json!("a1"), json!("a2")]);
@@ -1167,14 +1251,14 @@ mod journal_tests {
         for i in 0..=MAX_PER_CHANNEL {
             journal_op(JournalOp::Put { channel: "big".into(), entry: json!({ "id": format!("e{i}") }) });
         }
-        let (folded, first) = load_storage(&snapshot, &journal);
+        let (folded, first) = load_storage(&snapshot, &journal).unwrap();
         assert_eq!(first, 4 + MAX_PER_CHANNEL + 1);
         assert_eq!(folded.channels["big"].len(), MAX_PER_CHANNEL);
         assert_eq!(folded.channels["big"][0]["id"], "e1");
         // The fold renamed the snapshot into place, then the process died
         // before it emptied the journal.
         write_snapshot(&snapshot, &serde_json::to_string(&folded).unwrap()).unwrap();
-        let (restored, again) = load_storage(&snapshot, &journal);
+        let (restored, again) = load_storage(&snapshot, &journal).unwrap();
         assert_eq!(again, 0);
         assert_eq!(restored.channels, folded.channels);
         assert_eq!(restored.channels["chan"].len(), 2);
@@ -1182,9 +1266,87 @@ mod journal_tests {
         assert!(!restored.channels.contains_key("other"));
         // Lines written after that fold still replay.
         append_journal(&journal, restored.journal_seq + 1, &JournalOp::Put { channel: "chan".into(), entry: json!({ "id": "a2" }) }).unwrap();
-        let (latest, last) = load_storage(&snapshot, &journal);
+        let (latest, last) = load_storage(&snapshot, &journal).unwrap();
         assert_eq!(last, 1);
         assert_eq!(latest.channels["chan"].len(), 3);
         let _ = fs::remove_dir_all(snapshot.parent().unwrap());
+    }
+
+    /// Puts the process-wide store back as it was when dropped.
+    struct StoreRestore(Option<ModLogStorage>);
+
+    impl Drop for StoreRestore {
+        fn drop(&mut self) {
+            *store().lock().unwrap_or_else(|e| e.into_inner()) = self.0.take();
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_locked_snapshot_leaves_the_store_unseeded_and_is_never_overwritten() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let _globals = GLOBALS_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (snapshot, journal) = temp_paths("locked-snapshot");
+        let _cleanup = TempDirGuard(snapshot.parent().unwrap().to_path_buf());
+        let saved = ModLogStorage {
+            channels: [("chan".to_string(), vec![json!({ "id": "a1" })])].into_iter().collect(),
+            version: 0,
+            journal_seq: 0,
+        };
+        fs::write(&snapshot, serde_json::to_string(&saved).unwrap()).unwrap();
+        let before = fs::read(&snapshot).unwrap();
+        // The store is unseeded for the length of this test.
+        let _restore = StoreRestore(store().lock().unwrap_or_else(|e| e.into_inner()).take());
+        // Held the way another process would hold it: open, sharing nothing.
+        let held = fs::OpenOptions::new().read(true).share_mode(0).open(&snapshot).unwrap();
+        assert!(load_storage(&snapshot, &journal).is_err());
+        assert!(ModLogStorageService::with_store_at(|| Ok(snapshot.clone()), |_| ()).is_err());
+        assert!(store().lock().unwrap_or_else(|e| e.into_inner()).is_none());
+        assert!(!DIRTY.load(Ordering::Acquire));
+        // A fold has nothing to write, so the file is untouched.
+        ModLogStorageService::flush_now().unwrap();
+        drop(held);
+        assert_eq!(fs::read(&snapshot).unwrap(), before);
+        // Once the lock is gone the same call seeds from the file.
+        let (restored, _) = load_storage(&snapshot, &journal).unwrap();
+        assert_eq!(restored.channels["chan"][0]["id"], "a1");
+    }
+
+    #[test]
+    fn an_unparseable_snapshot_is_kept_aside_and_the_journal_still_replays() {
+        let (snapshot, journal) = temp_paths("unparseable-snapshot");
+        let _cleanup = TempDirGuard(snapshot.parent().unwrap().to_path_buf());
+        let bytes: &[u8] = b"{\"channels\":";
+        fs::write(&snapshot, bytes).unwrap();
+        append_journal(&journal, 1, &JournalOp::Put { channel: "chan".into(), entry: json!({ "id": "a1" }) }).unwrap();
+        append_journal(&journal, 2, &JournalOp::Put { channel: "chan".into(), entry: json!({ "id": "a2" }) }).unwrap();
+        let (restored, replayed) = load_storage(&snapshot, &journal).unwrap();
+        assert_eq!(replayed, 2);
+        let ids: Vec<_> = restored.channels["chan"].iter().map(|e| e["id"].clone()).collect();
+        assert_eq!(ids, vec![json!("a1"), json!("a2")]);
+        assert!(!snapshot.exists());
+        let aside: Vec<PathBuf> = fs::read_dir(snapshot.parent().unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("mod_logs.json.unreadable-"))
+            })
+            .collect();
+        assert_eq!(aside.len(), 1);
+        assert_eq!(fs::read(&aside[0]).unwrap(), bytes);
+    }
+
+    #[test]
+    fn rename_durable_replaces_an_existing_destination() {
+        let (snapshot, _journal) = temp_paths("rename-durable");
+        let _cleanup = TempDirGuard(snapshot.parent().unwrap().to_path_buf());
+        let tmp = snapshot.with_extension("json.tmp");
+        fs::write(&snapshot, b"old").unwrap();
+        fs::write(&tmp, b"new").unwrap();
+        rename_durable(&tmp, &snapshot).unwrap();
+        assert_eq!(fs::read(&snapshot).unwrap(), b"new");
+        assert!(!tmp.exists());
     }
 }
