@@ -160,16 +160,23 @@ async fn bind_listener(dir: Option<&Path>, token: &str) -> std::io::Result<tokio
 
 /// Writes `text` to `<path>.tmp`, flushes it to disk, then renames it onto
 /// `path`, so a crash leaves the old file or the new one, never a partial one.
+/// A failed write deletes the temp file.
 fn write_synced(path: &Path, text: &str) -> std::io::Result<()> {
     use std::io::Write;
     let mut tmp_name = path.as_os_str().to_owned();
     tmp_name.push(".tmp");
     let tmp = PathBuf::from(tmp_name);
-    let mut file = std::fs::File::create(&tmp)?;
-    file.write_all(text.as_bytes())?;
-    file.sync_all()?;
-    drop(file);
-    std::fs::rename(&tmp, path)
+    let result = (|| -> std::io::Result<()> {
+        let mut file = std::fs::File::create(&tmp)?;
+        file.write_all(text.as_bytes())?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&tmp, path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
 }
 
 /// The server's routes: `/cache/{token}/ping` and
@@ -612,6 +619,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn only_an_svg_named_file_with_unknown_bytes_is_served_as_svg() {
+        let root = temp_root("extension-fallback");
+        let badges = root.join("badges");
+        std::fs::create_dir_all(&badges).unwrap();
+        std::fs::write(badges.join("x.svg"), b"not markup").unwrap();
+        std::fs::write(badges.join("y.png"), b"not markup").unwrap();
+        let (base, token) = spawn_server(root.clone()).await;
+        let c = client();
+        let content_type = |res: &reqwest::Response| res.headers().get("content-type").and_then(|v| v.to_str().ok()).map(str::to_owned);
+        let svg = c.get(format!("{base}/cache/{token}/badges/x.svg")).send().await.unwrap();
+        assert_eq!(svg.status().as_u16(), 200);
+        assert_eq!(content_type(&svg).as_deref(), Some("image/svg+xml"));
+        let png = c.get(format!("{base}/cache/{token}/badges/y.png")).send().await.unwrap();
+        assert_eq!(png.status().as_u16(), 200);
+        assert_eq!(content_type(&png).as_deref(), Some("application/octet-stream"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_failed_synced_write_leaves_no_temp_file() {
+        let root = temp_root("write-synced");
+        let target = root.join("cache_server_port");
+        std::fs::create_dir_all(&target).unwrap();
+        assert!(write_synced(&target, "1234").is_err(), "a folder cannot be replaced by a file");
+        assert!(!root.join("cache_server_port.tmp").exists(), "the temp file is deleted");
+        let file = root.join("saved_port");
+        write_synced(&file, "1234").unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "1234");
+        assert!(!root.join("saved_port.tmp").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
     async fn a_folder_outside_the_allowlist_is_not_served() {
         let root = temp_root("allowlist-wire");
         let (base, token) = spawn_server(root.clone()).await;
@@ -624,7 +664,7 @@ mod tests {
         let token = "0123456789abcdef0123456789abcdef";
         let ports = fallback_ports(token);
         assert_eq!(ports, fallback_ports(token), "the same token gives the same ports");
-        assert_eq!(ports.len(), FALLBACK_PORTS);
+        assert_eq!(ports, [35854, 29290, 33345, 33257, 34893, 39078, 20522, 31556], "the ports are fixed for a token");
         assert!(ports.iter().all(|p| (20000..40000).contains(p)), "{ports:?}");
         assert_ne!(ports, fallback_ports("fedcba9876543210fedcba9876543210"), "another token gives other ports");
     }

@@ -1437,17 +1437,21 @@ pub fn migrate_emote_namespace_cache() -> Result<bool> {
 }
 
 /// Whether the first 1024 bytes read as SVG markup: after an optional UTF-8 BOM
-/// and whitespace, an `<svg` element, a comment, an svg doctype, or an XML
-/// declaration with an `<svg` element after it.
+/// and whitespace, an `<svg` element, an svg doctype, or an XML declaration or
+/// a comment with an `<svg` element after it. A window that holds an `<html`
+/// element is a page, never SVG.
 pub(crate) fn looks_like_svg(bytes: &[u8]) -> bool {
     let head = &bytes[..bytes.len().min(1024)];
     let head = head.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(head);
     let start = head.iter().position(|b| !b.is_ascii_whitespace()).unwrap_or(head.len());
     let head = head[start..].to_ascii_lowercase();
-    if head.starts_with(b"<svg") || head.starts_with(b"<!--") || head.starts_with(b"<!doctype svg") {
+    if head.windows(5).any(|w| w == b"<html") {
+        return false;
+    }
+    if head.starts_with(b"<svg") || head.starts_with(b"<!doctype svg") {
         return true;
     }
-    head.starts_with(b"<?xml") && head.windows(4).any(|w| w == b"<svg")
+    (head.starts_with(b"<?xml") || head.starts_with(b"<!--")) && head.windows(4).any(|w| w == b"<svg")
 }
 
 /// Pick the correct file extension from the downloaded bytes (magic numbers,
@@ -1535,8 +1539,7 @@ pub async fn cache_file(
     let bytes = response.bytes().await?;
 
     let extension = detect_image_ext(&bytes, content_type.as_deref());
-    let safe_id = id.replace(['/', '\\'], "_");
-    let file_name = format!("{}.{}", safe_id, extension);
+    let file_name = content_addressed_file_name(&id, &url, extension);
     let (path_str, entry) =
         write_file_entry(&type_dir, cache_type, id, url, file_name, bytes, expiry_days).await?;
     save_cached_item(entry).await?;
@@ -1552,6 +1555,64 @@ fn file_type_dir(cache_type: &CacheType) -> Result<PathBuf> {
         fs::create_dir_all(&type_dir).context("Failed to create cache type directory")?;
     }
     Ok(type_dir)
+}
+
+/// Waits between the retries of a rename that is refused.
+const RENAME_RETRY_MS: [u64; 3] = [20, 40, 80];
+
+/// Writes `bytes` to `dest` through a temp file of its own, so concurrent
+/// writers of one name never mix bytes and a reader never sees a half-written
+/// file.
+fn write_atomic<B: AsRef<[u8]>>(dest: &Path, bytes: B) -> std::io::Result<()> {
+    write_atomic_with(dest, bytes, |from, to| fs::rename(from, to))
+}
+
+/// `write_atomic` with the final rename passed in. A rename refused with
+/// `PermissionDenied` (antivirus, or a reader holding the target) is retried
+/// after each wait in `RENAME_RETRY_MS`. Any other failure, or the last refusal,
+/// deletes the temp file and returns the error.
+fn write_atomic_with<B, R>(dest: &Path, bytes: B, mut rename: R) -> std::io::Result<()>
+where
+    B: AsRef<[u8]>,
+    R: FnMut(&Path, &Path) -> std::io::Result<()>,
+{
+    let mut tmp_name = dest.file_name().unwrap_or_default().to_os_string();
+    tmp_name.push(format!(".{}.tmp", uuid::Uuid::new_v4().simple()));
+    let tmp_path = dest.with_file_name(tmp_name);
+    let result = (|| -> std::io::Result<()> {
+        let mut file = fs::File::create(&tmp_path)?;
+        std::io::copy(&mut Cursor::new(bytes), &mut file)?;
+        file.sync_all()?;
+        drop(file);
+        let mut waits = RENAME_RETRY_MS.iter();
+        loop {
+            match rename(&tmp_path, dest) {
+                Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => match waits.next() {
+                    Some(ms) => std::thread::sleep(std::time::Duration::from_millis(*ms)),
+                    None => return Err(e),
+                },
+                other => return other,
+            }
+        }
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp_path);
+    }
+    result
+}
+
+/// The file name for a cached file: its id (path separators replaced), a short
+/// hash of the URL and the extension. The same key fetched from another URL gets
+/// another name, so one name always holds the same bytes.
+fn content_addressed_file_name(id: &str, url: &str, extension: &str) -> String {
+    let safe_id = id.replace(['/', '\\'], "_");
+    format!("{safe_id}-{}.{extension}", url_hash8(url))
+}
+
+/// The first 4 bytes of the SHA-256 of `url`, as 8 hex digits.
+fn url_hash8(url: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(url.as_bytes()).iter().take(4).map(|b| format!("{b:02x}")).collect()
 }
 
 /// Write a downloaded file into its type folder and build its manifest entry,
@@ -1574,18 +1635,9 @@ where
     // and a sync write per file on the runtime saturates the worker threads
     // (the join-time freeze). The HTTP fetch is already async.
     let write_path = file_path.clone();
-    // The bytes land in `{name}.tmp` first and are renamed over the final name,
-    // so a reader never sees a half-written file.
-    let tmp_path = type_dir.join(format!("{file_name}.tmp"));
-    tokio::task::spawn_blocking(move || -> std::io::Result<()> {
-        let mut file = fs::File::create(&tmp_path)?;
-        std::io::copy(&mut Cursor::new(bytes), &mut file)?;
-        file.sync_all()?;
-        drop(file);
-        fs::rename(&tmp_path, &write_path)
-    })
-    .await
-    .context("cache_file write task panicked")??;
+    tokio::task::spawn_blocking(move || write_atomic(&write_path, bytes))
+        .await
+        .context("cache_file write task panicked")??;
 
     let path_str = file_path.to_string_lossy().to_string();
     let entry = UniversalCacheEntry {
@@ -1636,7 +1688,6 @@ pub fn is_streamnook_art_url(url: &str) -> bool {
 /// plus a short hash of the whole URL, so a re-upload under `?v=3` gets its own
 /// file beside the old one.
 fn streamnook_art_file_name(url: &str, extension: &str) -> String {
-    use sha2::{Digest, Sha256};
     let path = url.split(['?', '#']).next().unwrap_or(url);
     let last = path.rsplit('/').next().unwrap_or("");
     let stem = last.rsplit_once('.').map_or(last, |(stem, _)| stem);
@@ -1645,8 +1696,7 @@ fn streamnook_art_file_name(url: &str, extension: &str) -> String {
         .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
         .take(48)
         .collect();
-    let digest = Sha256::digest(url.as_bytes());
-    let hash: String = digest.iter().take(4).map(|b| format!("{b:02x}")).collect();
+    let hash = url_hash8(url);
     if readable.is_empty() {
         format!("{hash}.{extension}")
     } else {
@@ -1818,8 +1868,7 @@ pub async fn download_file_to_disk(
     // Type the file by its real content; the manifest id keeps the raw (already
     // provider-namespaced) id, only path separators stripped for the filename.
     let extension = detect_image_ext(&bytes, content_type.as_deref());
-    let safe_id = id.replace(['/', '\\'], "_");
-    let file_name = format!("{}.{}", safe_id, extension);
+    let file_name = content_addressed_file_name(&id, &url, extension);
     let (_, entry) =
         write_file_entry(&type_dir, cache_type, id, url, file_name, bytes, expiry_days).await?;
     Ok(entry)
@@ -2123,13 +2172,115 @@ pub fn manifest_len() -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::{
-        badge_date_key, detect_image_ext, encode_with, is_still_paint_entry, missing_file_keys, parse_manifest,
-        usable_file_path, webp_is_animated, CacheMetadata, CacheType, UniversalCacheEntry, UniversalCacheManifest,
+        badge_date_key, content_addressed_file_name, detect_image_ext, encode_with, is_still_paint_entry,
+        looks_like_svg, missing_file_keys, parse_manifest, usable_file_path, webp_is_animated, write_atomic,
+        write_atomic_with, CacheMetadata, CacheType, UniversalCacheEntry, UniversalCacheManifest,
     };
     use std::collections::{HashMap, HashSet};
     use std::ffi::OsString;
     use std::fs;
-    use std::path::PathBuf;
+    use std::io::{Error, ErrorKind};
+    use std::path::{Path, PathBuf};
+
+    fn scratch_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("sn-cache-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn temp_files_in(dir: &Path) -> Vec<String> {
+        fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".tmp"))
+            .collect()
+    }
+
+    #[test]
+    fn concurrent_writers_of_one_file_leave_one_complete_payload_and_no_temp_files() {
+        let dir = scratch_dir("concurrent");
+        let dest = dir.join("a-12345678.webp");
+        let payloads = [vec![0xAA_u8; 256 * 1024], vec![0xBB_u8; 256 * 1024]];
+        let barrier = std::sync::Barrier::new(payloads.len());
+        std::thread::scope(|scope| {
+            for payload in &payloads {
+                let (dest, barrier) = (&dest, &barrier);
+                scope.spawn(move || {
+                    barrier.wait();
+                    for _ in 0..10 {
+                        write_atomic(dest, payload.as_slice()).unwrap();
+                    }
+                });
+            }
+        });
+        let written = fs::read(&dest).unwrap();
+        assert!(payloads.iter().any(|p| *p == written), "the file is one whole payload");
+        assert!(temp_files_in(&dir).is_empty(), "{:?}", temp_files_in(&dir));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_write_leaves_no_temp_file() {
+        let dir = scratch_dir("failed-write");
+        let dest = dir.join("b-12345678.webp");
+        let err = write_atomic_with(&dest, b"bytes", |_, _| Err(Error::new(ErrorKind::Other, "injected"))).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Other);
+        assert!(!dest.exists());
+        assert!(temp_files_in(&dir).is_empty(), "{:?}", temp_files_in(&dir));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_refused_rename_is_retried_and_then_given_up_cleanly() {
+        let dir = scratch_dir("refused-rename");
+        let dest = dir.join("c-12345678.webp");
+        let mut calls = 0;
+        write_atomic_with(&dest, b"landed", |from, to| {
+            calls += 1;
+            if calls < 3 {
+                Err(Error::new(ErrorKind::PermissionDenied, "held by a reader"))
+            } else {
+                fs::rename(from, to)
+            }
+        })
+        .unwrap();
+        assert_eq!(calls, 3, "two refusals, then the rename lands");
+        assert_eq!(fs::read(&dest).unwrap(), b"landed");
+
+        let never = dir.join("d-12345678.webp");
+        let mut attempts = 0;
+        let err = write_atomic_with(&never, b"x", |_, _| {
+            attempts += 1;
+            Err(Error::new(ErrorKind::PermissionDenied, "held by a reader"))
+        })
+        .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::PermissionDenied);
+        assert_eq!(attempts, 4, "the first try and three retries");
+        assert!(!never.exists());
+        assert!(temp_files_in(&dir).is_empty(), "{:?}", temp_files_in(&dir));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_cached_file_name_follows_its_url() {
+        let a = content_addressed_file_name("emote/x@1x", "https://cdn.example/a.webp", "webp");
+        let b = content_addressed_file_name("emote/x@1x", "https://cdn.example/b.webp", "webp");
+        assert_ne!(a, b, "the same key from another URL is another file");
+        assert_eq!(a, content_addressed_file_name("emote/x@1x", "https://cdn.example/a.webp", "webp"));
+        assert!(a.starts_with("emote_x@1x-") && a.ends_with(".webp"), "{a}");
+        assert_eq!(a.len(), "emote_x@1x-".len() + 8 + ".webp".len(), "{a}");
+    }
+
+    #[test]
+    fn a_comment_is_svg_only_when_an_svg_element_follows_it() {
+        assert!(looks_like_svg(b"<!-- made by a tool -->\n<svg/>"));
+        assert!(!looks_like_svg(b"<!-- made by a tool --><html><body></body></html>"));
+        assert!(!looks_like_svg(b"<!-- only a comment -->"));
+        assert!(!looks_like_svg(b"<?xml version='1.0'?><HTML></HTML>"));
+        assert_eq!(detect_image_ext(b"<!-- page --><html></html>", None), "bin");
+    }
 
     fn file_entry(cache_type: CacheType, age_days: u64) -> UniversalCacheEntry {
         UniversalCacheEntry {
