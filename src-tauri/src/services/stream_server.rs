@@ -1147,10 +1147,7 @@ impl StreamServer {
                     let hold = parse_directive(&raw_query, "apple_hold")
                         .unwrap_or(crate::services::ll_origin::APPLE_HOLD_BACK_PARTS)
                         .clamp(2, crate::services::ll_origin::APPLE_HOLD_BACK_PARTS);
-                    match crate::services::ll_origin::serve_playlist_apple(msn, part, &base, hold).await {
-                        Some(pl) => PlaylistServe::Playlist(pl),
-                        None => PlaylistServe::Inactive,
-                    }
+                    crate::services::ll_origin::serve_playlist_apple(msn, part, &base, hold).await
                 } else {
                     crate::services::ll_origin::serve_playlist_checked(msn, part).await
                 };

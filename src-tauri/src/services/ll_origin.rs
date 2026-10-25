@@ -3308,16 +3308,34 @@ impl LlOrigin {
     }
 
     /// The playlist for AVPlayer, honoring its blocking reload. A request
-    /// without directives (the first load) answers at once.
-    pub async fn serve_playlist_apple(
+    /// without directives (the first load) answers at once. After an unpark it
+    /// waits for the restarted reader's first publish like `serve_playlist_checked`
+    /// does, and answers `NotReady` if there is none.
+    pub(crate) async fn serve_playlist_apple(
         &self,
         msn: Option<u64>,
         part: Option<u64>,
         base: &str,
         hold_parts: u64,
-    ) -> Option<String> {
+    ) -> PlaylistServe {
+        self.serve_playlist_apple_within(msn, part, base, hold_parts, unpark_publish_timeout())
+            .await
+    }
+
+    async fn serve_playlist_apple_within(
+        &self,
+        msn: Option<u64>,
+        part: Option<u64>,
+        base: &str,
+        hold_parts: u64,
+        publish_wait: Duration,
+    ) -> PlaylistServe {
         self.note_playlist_request();
-        let served = self.serve_playlist_apple_held(msn, part, base, hold_parts).await;
+        let served = if self.wait_fresh(publish_wait).await {
+            self.serve_playlist_apple_held(msn, part, base, hold_parts).await
+        } else {
+            PlaylistServe::NotReady
+        };
         self.note_playlist_request();
         served
     }
@@ -3328,7 +3346,7 @@ impl LlOrigin {
         part: Option<u64>,
         base: &str,
         hold_parts: u64,
-    ) -> Option<String> {
+    ) -> PlaylistServe {
         if let Some(m) = msn {
             let deadline = tokio::time::Instant::now() + APPLE_BLOCK_TIMEOUT;
             let held = self
@@ -3346,11 +3364,13 @@ impl LlOrigin {
             // request per hold and never reaches the upstream relay. Only an
             // edge that went away falls through.
             if !held {
-                return None;
+                return PlaylistServe::Inactive;
             }
         }
         let g = self.live_edge.lock().unwrap();
-        let edge = g.as_ref()?;
+        let Some(edge) = g.as_ref() else {
+            return PlaylistServe::Inactive;
+        };
         let runs = apple_view(edge, None);
         let target = {
             let mut kept = self.apple_part_target.lock().unwrap();
@@ -3367,7 +3387,7 @@ impl LlOrigin {
             }
         };
         let view = runs.and_then(|_| apple_view(edge, Some(target)));
-        Some(render_apple(
+        PlaylistServe::Playlist(render_apple(
             view.as_ref().unwrap_or(edge),
             base,
             target,
@@ -3550,12 +3570,14 @@ pub(crate) async fn serve_playlist_checked(msn: Option<u64>, part: Option<u64>) 
     SOLO.serve_playlist_checked(msn, part).await
 }
 
-pub async fn serve_playlist_apple(
+/// The main player's playlist for AVPlayer, keeping a not-ready origin apart
+/// from an inactive one (see `PlaylistServe`).
+pub(crate) async fn serve_playlist_apple(
     msn: Option<u64>,
     part: Option<u64>,
     base: &str,
     hold_parts: u64,
-) -> Option<String> {
+) -> PlaylistServe {
     SOLO.serve_playlist_apple(msn, part, base, hold_parts).await
 }
 
@@ -5004,8 +5026,50 @@ mod tests {
         let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
         // A first load carries no directives and answers at once.
         let served = rt.block_on(origin.serve_playlist_apple(None, None, "http://x/", 2));
-        assert!(served.is_some());
+        assert!(matches!(served, PlaylistServe::Playlist(_)));
         assert_ne!(origin.last_playlist_ms.load(Ordering::SeqCst), OLD_REQUEST_MS);
+    }
+
+    #[test]
+    fn a_woken_origin_serves_the_apple_route_no_window_until_its_reader_publishes() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let _guard = rt.enter();
+        let origin = LlOrigin::new(6);
+        *origin.live_edge.lock().unwrap() = Some(ts_edge_with_one_segment());
+        // Nothing listens here, so the restarted reader publishes nothing.
+        *origin.upstream.lock().unwrap() = Some("http://127.0.0.1:1/live.m3u8".to_string());
+        let short = Duration::from_millis(50);
+        let serve = |origin: &Arc<LlOrigin>, wait: Duration| {
+            rt.block_on(origin.serve_playlist_apple_within(None, None, "http://x/", 2, wait))
+        };
+
+        // Parked, the held window is the answer.
+        assert!(origin.park());
+        assert!(matches!(serve(&origin, short), PlaylistServe::Playlist(_)));
+
+        // Woken: the held window is not served while the reader has not published.
+        assert!(origin.unpark());
+        assert_eq!(serve(&origin, short), PlaylistServe::NotReady);
+        assert!(origin.is_active(), "the origin is not inactive, so the relay answers 503");
+
+        // The current reader's first publish releases a request that was waiting.
+        let gen = origin.generation.load(Ordering::SeqCst);
+        let served = rt.block_on(async {
+            let publisher = {
+                let origin = origin.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                    origin.mark_fresh(gen);
+                })
+            };
+            let served = origin
+                .serve_playlist_apple_within(None, None, "http://x/", 2, Duration::from_secs(5))
+                .await;
+            publisher.await.unwrap();
+            served
+        });
+        assert!(matches!(served, PlaylistServe::Playlist(_)));
+        origin.stop();
     }
 
     #[test]
@@ -5043,7 +5107,7 @@ mod tests {
         }
         origin.wake_serves();
         let served = rt.block_on(held).unwrap();
-        assert!(served.is_some());
+        assert!(matches!(served, PlaylistServe::Playlist(_)));
         assert_ne!(
             origin.last_playlist_ms.load(Ordering::SeqCst),
             OLD_REQUEST_MS,
