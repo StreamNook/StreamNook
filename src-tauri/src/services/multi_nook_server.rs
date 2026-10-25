@@ -567,6 +567,10 @@ impl MultiNookServer {
             if request_path == "stream.m3u8" || request_path.is_empty() {
                 let msn = parse_directive(&raw_query, "_HLS_msn");
                 let part = parse_directive(&raw_query, "_HLS_part");
+                // A tile that loads again after a pause wakes its parked origin.
+                if origin.is_parked() {
+                    origin.unpark();
+                }
                 if let Some(pl) = origin.serve_playlist(msn, part).await {
                     return Ok(playlist_response(pl.into_bytes()));
                 }
