@@ -193,14 +193,19 @@ pub async fn auto_sync_universal_cache_if_stale() -> Result<bool, String> {
 
 /// Queue files for the shared disk-cache fill (services/asset_cache_queue.rs).
 /// Results arrive as `asset-cache://cached`.
+/// On the blocking pool: a sync command runs on the UI thread, and `enqueue`
+/// reads the manifest (and lists a type folder the first time).
 #[command]
-pub fn asset_cache_enqueue(
+pub async fn asset_cache_enqueue(
     app: crate::rt::AppHandle,
     kind: crate::services::asset_cache_queue::AssetKind,
     items: Vec<crate::services::asset_cache_queue::AssetRequest>,
     priority: Option<bool>,
-) {
-    crate::services::asset_cache_queue::enqueue(&app, kind, items, priority.unwrap_or(false));
+) -> Result<(), String> {
+    let priority = priority.unwrap_or(false);
+    tauri::async_runtime::spawn_blocking(move || crate::services::asset_cache_queue::enqueue(&app, kind, items, priority))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// An emote picker opened or closed in the calling window.
