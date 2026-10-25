@@ -816,6 +816,9 @@ mod provider_switch_tests {
 
     #[test]
     fn a_promoted_tile_installs_its_own_profile_and_re_signer_on_the_solo_relay() {
+        let _solo = crate::services::stream_server::SOLO_GLOBALS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         rt.block_on(async {
             let tile = |profile: TileProfile, refresher: Option<TileRefresher>| PromotionTarget {

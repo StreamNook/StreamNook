@@ -1667,16 +1667,16 @@ impl StreamServer {
     }
 }
 
+/// Every test that touches the solo relay's process-wide state must hold this.
+#[cfg(test)]
+pub(crate) static SOLO_GLOBALS_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod relay_rewrite_tests {
     use super::*;
 
-    /// The tests below share the solo relay's process-wide state (session,
-    /// held swap, plain-request clock, re-signer); each takes this first.
-    static SOLO_STATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     fn solo_state() -> std::sync::MutexGuard<'static, ()> {
-        SOLO_STATE.lock().unwrap_or_else(|e| e.into_inner())
+        SOLO_GLOBALS_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     #[test]
