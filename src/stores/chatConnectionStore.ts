@@ -2276,6 +2276,13 @@ export async function ensureChannelHistory(
 const NO_SLICE_WARN_INTERVAL_MS = 60_000;
 const noSliceWarnedAt = new Map<string, number>();
 
+/** Overlap on each side of a history backfill; dedup by message id makes it harmless. */
+const BACKFILL_MARGIN_MS = 30_000;
+
+/** Held-back channels whose backlog arrived with a hole before it, and where
+ *  the rows already shown ended (unix ms, null when none had a timestamp). */
+const parkGaps = new Map<string, { afterMs: number | null }>();
+
 function handleWsMessage(raw: string) {
   // Global signals first. HEARTBEAT deliberately does NOT touch
   // lastMessageTime: the backend heartbeat only proves the socket reads
@@ -2369,21 +2376,44 @@ function handleWsMessage(raw: string) {
   // The backlog has arrived: count it in place of the held tally, in one step
   // so the badge never dips or counts a row twice.
   if (raw.startsWith('PARK_END:')) {
-    const slice = getSlice(raw.slice('PARK_END:'.length));
+    const key = raw.slice('PARK_END:'.length).toLowerCase();
+    const slice = getSlice(key);
+    const gap = parkGaps.get(key);
+    parkGaps.delete(key);
     if (slice) {
       runFlush();
       slice.heldMentions = 0;
       slice.heldRows = 0;
       bumpRevisionFor([slice.channel]);
+      // The span Rust could not keep comes from recent history, around the
+      // rows already shown and the backlog just appended.
+      if (gap !== undefined && slice.provider === 'twitch' && slice.channelId) {
+        void preloadChannel(slice.channel, slice.channelId, {
+          mode: 'backfill',
+          afterMs: gap.afterMs,
+          beforeMs: Date.now() + BACKFILL_MARGIN_MS,
+        });
+      }
     }
     return;
   }
-  // More arrived while it was held back than Rust kept: drop the older rows so
-  // the backlog that follows never sits under a hole.
+  // More arrived while it was held back than Rust kept. The rows already shown
+  // stay; the backlog that follows is joined to them by a history backfill once
+  // it has arrived (PARK_END), so the tab never empties or sits under a hole.
   if (raw.startsWith('PARK_GAP:')) {
-    withSlice(raw.slice('PARK_GAP:'.length), (slice) => {
-      slice.messages = [];
-    });
+    const slice = getSlice(raw.slice('PARK_GAP:'.length));
+    if (slice) {
+      // Rows still waiting in the flush queue are older than the backlog, so
+      // they count as shown.
+      runFlush();
+      let newest: number | null = null;
+      for (let i = slice.messages.length - 1; i >= 0 && newest === null; i--) {
+        newest = messageTs(slice.messages[i]);
+      }
+      parkGaps.set(slice.channel, {
+        afterMs: newest === null ? null : newest - BACKFILL_MARGIN_MS,
+      });
+    }
     return;
   }
   if (raw.startsWith('RECONNECTING:')) {

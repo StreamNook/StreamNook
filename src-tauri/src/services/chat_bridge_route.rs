@@ -13,9 +13,13 @@
 //!   buffer size), and when any of them mention the viewer the window gets a
 //!   count each second instead (`PARKED_TICK:<mentions>:<rows>:<key>`, sent
 //!   whenever either moved) so tab badges and "new messages" marks keep up.
+//!   `cap` counts chat rows that do not mention the viewer. Mention rows are
+//!   never pushed out by plain rows, and deletions and patches wait in order
+//!   without taking a row's place; each of those two is bounded on its own.
 //! - `UNPARK:<key>` sends what waited, in order, then `PARK_END:<key>`, then
 //!   live frames again. If more arrived than were kept, `PARK_GAP:<key>` goes
-//!   first so the window drops its older rows instead of showing a hole.
+//!   first so the window keeps the rows it already shows and fills the span
+//!   between them and the backlog from history instead of showing a hole.
 //! - A state frame (the room's modes, the account's own badges and color
 //!   there) is never held back: it says how the channel stands, not what
 //!   happened in it, and Twitch sends it only once per JOIN, so a busy
@@ -88,13 +92,81 @@ pub fn channel_key(raw: &str) -> Arc<str> {
     Arc::from(raw.trim().trim_start_matches('#').to_lowercase())
 }
 
+/// What a held frame is, for deciding what may be dropped when the ring is full.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Kind {
+    /// A chat row that does not mention the viewer.
+    Row,
+    /// A chat row that mentions the viewer.
+    Mention,
+    /// Anything else held in order (a deletion, a timeout, a segment patch).
+    Other,
+}
+
+#[derive(Debug)]
+struct Entry {
+    kind: Kind,
+    text: Arc<str>,
+}
+
+/// A held-back channel's frames in arrival order. `cap` bounds the chat rows
+/// that are not mentions; mention rows and the other frames are bounded
+/// separately by `MAX_HELD` each, so a busy channel can push plain rows out but
+/// never a mention or the deletion that applies to a row still held.
 #[derive(Debug, Default)]
 struct Held {
     cap: usize,
-    ring: VecDeque<Arc<str>>,
+    ring: VecDeque<Entry>,
     dropped: bool,
     mentions: u32,
     rows: u32,
+    /// Rows of either kind in `ring`.
+    row_count: usize,
+    mention_count: usize,
+    other_count: usize,
+}
+
+impl Held {
+    fn push(&mut self, kind: Kind, text: Arc<str>) {
+        match kind {
+            Kind::Row => self.row_count += 1,
+            Kind::Mention => {
+                self.row_count += 1;
+                self.mention_count += 1;
+            }
+            Kind::Other => self.other_count += 1,
+        }
+        self.ring.push_back(Entry { kind, text });
+        while self.row_count > self.cap {
+            if !self.drop_oldest(Kind::Row) {
+                break;
+            }
+        }
+        if self.mention_count > MAX_HELD {
+            self.drop_oldest(Kind::Mention);
+        }
+        if self.other_count > MAX_HELD {
+            self.drop_oldest(Kind::Other);
+        }
+    }
+
+    /// Remove the oldest held frame of this kind. Returns whether there was one.
+    fn drop_oldest(&mut self, kind: Kind) -> bool {
+        let Some(i) = self.ring.iter().position(|e| e.kind == kind) else {
+            return false;
+        };
+        self.ring.remove(i);
+        match kind {
+            Kind::Row => self.row_count -= 1,
+            Kind::Mention => {
+                self.row_count -= 1;
+                self.mention_count -= 1;
+            }
+            Kind::Other => self.other_count -= 1,
+        }
+        self.dropped = true;
+        true
+    }
 }
 
 /// One socket's route. Pure: the socket task feeds it frames and the window's
@@ -136,7 +208,7 @@ impl SocketRoute {
                 if h.dropped {
                     out.push(Arc::from(format!("PARK_GAP:{k}")));
                 }
-                out.extend(h.ring);
+                out.extend(h.ring.into_iter().map(|e| e.text));
                 out.push(Arc::from(format!("PARK_END:{k}")));
                 return out;
             }
@@ -153,11 +225,12 @@ impl SocketRoute {
             if f.state {
                 return Some(f.text.clone());
             }
-            if h.ring.len() >= h.cap {
-                h.ring.pop_front();
-                h.dropped = true;
-            }
-            h.ring.push_back(f.text.clone());
+            let kind = match (f.row, f.mention) {
+                (true, true) => Kind::Mention,
+                (true, false) => Kind::Row,
+                (false, _) => Kind::Other,
+            };
+            h.push(kind, f.text.clone());
             if f.row {
                 h.rows = h.rows.saturating_add(1);
                 if f.mention {
@@ -268,6 +341,80 @@ mod tests {
         assert_eq!(texts(r.take_ticks()), vec!["PARKED_TICK:0:1:xqc"], "state is not a new message");
         assert!(r.on_frame(&BridgeFrame::channel("xqc", "del")).is_none(), "deletions stay in order");
         assert_eq!(texts(r.on_line("UNPARK:xqc")), vec!["1", "del", "PARK_END:xqc"]);
+    }
+
+    #[test]
+    fn a_full_backlog_keeps_its_mentions_and_deletions() {
+        let mut r = SocketRoute::default();
+        r.on_line("SUBS:xqc");
+        r.on_line("PARK:3:xqc");
+        let mut sent = 0;
+        for t in ["r1", "r2", "m1", "r3", "r4", "r5", "m2", "r6", "r7", "r8", "r9", "r10"] {
+            let mention = t.starts_with('m');
+            r.on_frame(&BridgeFrame::row("xqc", t, mention));
+            sent += 1;
+            if sent % 3 == 0 {
+                r.on_frame(&BridgeFrame::channel("xqc", format!("del{}", sent / 3)));
+            }
+        }
+        assert_eq!(texts(r.take_ticks()), vec!["PARKED_TICK:2:12:xqc"], "every arrival is counted");
+        assert_eq!(
+            texts(r.on_line("UNPARK:xqc")),
+            vec!["PARK_GAP:xqc", "m1", "del1", "del2", "m2", "del3", "r10", "del4", "PARK_END:xqc"],
+            "both mentions, the newest plain row and all four deletions, in arrival order",
+        );
+    }
+
+    #[test]
+    fn deletions_take_no_row_slot() {
+        let mut r = SocketRoute::default();
+        r.on_line("SUBS:xqc");
+        r.on_line("PARK:2:xqc");
+        r.on_frame(&BridgeFrame::row("xqc", "1", false));
+        for i in 0..5 {
+            r.on_frame(&BridgeFrame::channel("xqc", format!("del{i}")));
+        }
+        r.on_frame(&BridgeFrame::row("xqc", "2", false));
+        assert_eq!(
+            texts(r.on_line("UNPARK:xqc")),
+            vec!["1", "del0", "del1", "del2", "del3", "del4", "2", "PARK_END:xqc"],
+            "nothing was dropped, so no gap",
+        );
+    }
+
+    #[test]
+    fn a_mention_survives_a_full_ring_of_mentions() {
+        let mut r = SocketRoute::default();
+        r.on_line("SUBS:xqc");
+        r.on_line("PARK:2:xqc");
+        for t in ["m1", "m2", "m3"] {
+            r.on_frame(&BridgeFrame::row("xqc", t, true));
+        }
+        r.on_frame(&BridgeFrame::row("xqc", "plain", false));
+        assert_eq!(texts(r.on_line("UNPARK:xqc")), vec!["PARK_GAP:xqc", "m1", "m2", "m3", "PARK_END:xqc"]);
+    }
+
+    #[test]
+    fn the_other_frames_and_the_mentions_are_each_bounded() {
+        let mut r = SocketRoute::default();
+        r.on_line("SUBS:xqc");
+        r.on_line("PARK:5:xqc");
+        for i in 0..MAX_HELD + 1 {
+            r.on_frame(&BridgeFrame::channel("xqc", format!("d{i}")));
+        }
+        let out = texts(r.on_line("UNPARK:xqc"));
+        assert_eq!(out.len(), MAX_HELD + 2, "gap, the newest bound's worth, end");
+        assert_eq!(out[0], "PARK_GAP:xqc");
+        assert_eq!(out[1], "d1", "the oldest went first");
+
+        r.on_line("PARK:5:xqc");
+        for i in 0..MAX_HELD + 1 {
+            r.on_frame(&BridgeFrame::row("xqc", format!("m{i}"), true));
+        }
+        let out = texts(r.on_line("UNPARK:xqc"));
+        assert_eq!(out.len(), MAX_HELD + 2);
+        assert_eq!(out[0], "PARK_GAP:xqc");
+        assert_eq!(out[1], "m1");
     }
 
     #[test]
