@@ -12,7 +12,8 @@ vi.mock('../stores/multiNookStore', () => ({ usemultiNookStore: { getState: () =
 vi.mock('../utils/logger', () => ({ Logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } }));
 
 const { captureResumeSnapshot, resumePreviousSession } = await import('./sessionResume');
-const { clearPauseIntent, forgetOwnChannel, heldPause, holdOwnChannel, notePauseIntent } = await import('../utils/pausePark');
+const { clearPauseIntent, forgetOwnChannel, forgetTile, heldPause, holdOwnChannel, isTileHeld, markTileHeld, notePauseIntent } =
+  await import('../utils/pausePark');
 
 const liveApp = () => ({
   currentStream: { user_login: 'Streamer' },
@@ -28,6 +29,10 @@ beforeEach(() => {
   h.multi.toggleMultiNook.mockReset();
   clearPauseIntent('main');
   forgetOwnChannel();
+  for (const id of ['tile-a', 'tile-b']) {
+    clearPauseIntent(id);
+    forgetTile(id);
+  }
 });
 
 describe('resume snapshot', () => {
@@ -88,6 +93,51 @@ describe('resume snapshot', () => {
     h.invoke.mockResolvedValueOnce({ stream_login: 'streamer', was_running: false, paused: true });
     await resumePreviousSession();
     expect(holdOwnChannel('twitch:streamer')).toBe(true);
+  });
+
+  it('records the paused tiles and the tiles already held while MultiNook is open', async () => {
+    h.app = { currentStream: null, currentMediaType: null };
+    h.multi.isMultiNookActive = true;
+    notePauseIntent('tile-a', 'tile-a');
+    markTileHeld('tile-b');
+    await captureResumeSnapshot();
+    expect(h.invoke.mock.calls[0][1].snapshot).toMatchObject({
+      paused_tiles: ['tile-a'],
+      own_tiles_opened: ['tile-b'],
+    });
+  });
+
+  it('records no tile state while MultiNook is closed', async () => {
+    h.app = liveApp();
+    notePauseIntent('tile-a', 'tile-a');
+    markTileHeld('tile-b');
+    await captureResumeSnapshot();
+    expect(h.invoke.mock.calls[0][1].snapshot).toMatchObject({ paused_tiles: [], own_tiles_opened: [] });
+  });
+
+  it('restores paused and held tiles before MultiNook reopens', async () => {
+    let restoredWhenOpened: unknown[] = [];
+    h.multi.toggleMultiNook.mockImplementation(() => {
+      restoredWhenOpened = [heldPause('tile-a', 'tile-a'), isTileHeld('tile-b')];
+    });
+    h.app = { startStream: vi.fn() };
+    h.invoke.mockResolvedValueOnce({
+      stream_login: null,
+      was_running: false,
+      multinook_active: true,
+      paused_tiles: ['tile-a'],
+      own_tiles_opened: ['tile-b'],
+    });
+    await resumePreviousSession();
+    expect(restoredWhenOpened).toEqual([expect.objectContaining({ key: 'tile-a' }), true]);
+  });
+
+  it('an older snapshot without tile state restores nothing for tiles', async () => {
+    h.app = { startStream: vi.fn() };
+    h.invoke.mockResolvedValueOnce({ stream_login: null, was_running: false, multinook_active: true });
+    await resumePreviousSession();
+    expect(heldPause('tile-a', 'tile-a')).toBeNull();
+    expect(isTileHeld('tile-b')).toBe(false);
   });
 
   it('MultiNook reopens', async () => {

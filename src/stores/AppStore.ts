@@ -776,7 +776,7 @@ interface OfflineNotice {
 
 /** What Rust decided about a stream that looked offline. */
 type OfflineDecision =
-  | { action: 'nothing'; why: string }
+  | { action: 'nothing'; why: string; ended?: boolean }
   | { action: 'still_live' }
   | { action: 'resume' }
   | { action: 'offline_chat' }
@@ -925,6 +925,13 @@ async function applyOfflineDecision(
   switch (decision.action) {
     case 'nothing':
       Logger.debug('[AutoSwitch] Nothing to do:', decision.why);
+      // A confirmed end leaves nothing else to do, but the stream's pause and
+      // the own-channel memory end with it. Other answers (a newer stream, a
+      // confirmation already running) say nothing about the stream's end.
+      if (decision.ended) {
+        clearPauseIntent('main');
+        forgetOwnChannel();
+      }
       return;
     case 'still_live':
       Logger.debug('[AutoSwitch] Helix kept reporting the stream online; treating as a blip');
@@ -938,6 +945,9 @@ async function applyOfflineDecision(
       await get().restartStream({ quiet: true });
       return;
     case 'notify':
+      // The stream is confirmed over: its pause and the own-channel memory end with it.
+      clearPauseIntent('main');
+      forgetOwnChannel();
       say(decision.notice);
       return;
     case 'offline_chat':

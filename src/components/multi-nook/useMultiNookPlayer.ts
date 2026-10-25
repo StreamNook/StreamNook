@@ -29,6 +29,7 @@ import {
   isTileHeld,
   markTileHeld,
   notePauseIntent,
+  tileStreamEnded,
   windowedPauseTimings,
   type PausePark,
 } from '../../utils/pausePark';
@@ -764,8 +765,9 @@ export const useMultiNookPlayer = ({
     }
 
     return () => {
-      // The stream ended (the channel went offline): the hold goes with it.
-      if (usemultiNookStore.getState().slots.find((s) => s.id === streamId)?.offline) clearTileOnEnd(streamId);
+      // The stream ended (the channel went offline): the hold goes with it. A
+      // tile that is only restarting keeps its pause.
+      if (tileStreamEnded(usemultiNookStore.getState().slots.find((s) => s.id === streamId))) clearTileOnEnd(streamId);
       stopLinkReports?.();
       if (video) {
         video.removeEventListener('error', onNativeError);

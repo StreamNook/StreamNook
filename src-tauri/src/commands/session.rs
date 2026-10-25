@@ -22,6 +22,13 @@ pub struct ResumeSnapshot {
     /// MultiNook was open: it reopens with its saved tiles.
     #[serde(default)]
     pub multinook_active: bool,
+    /// MultiNook tiles (slot ids) the viewer had paused: they reopen paused.
+    #[serde(default)]
+    pub paused_tiles: Vec<String>,
+    /// MultiNook tiles (slot ids) whose own-channel pause was already applied:
+    /// they do not open paused a second time.
+    #[serde(default)]
+    pub own_tiles_opened: Vec<String>,
 }
 
 fn resume_snapshot_path() -> Result<std::path::PathBuf, String> {

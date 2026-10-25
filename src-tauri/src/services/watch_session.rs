@@ -932,7 +932,14 @@ async fn poll_provider_live(app: AppHandle, seq: u64) {
 pub enum OfflineDecision {
     /// Nothing to do (no session, a raid just redirected, auto-switch off, a
     /// confirmation already running, or a newer session started meanwhile).
-    Nothing { why: String },
+    /// `ended` is set when the stream was confirmed over and no other answer
+    /// follows from it (auto-switch off, no category to switch within), so the
+    /// view drops what it held for that stream.
+    Nothing {
+        why: String,
+        #[serde(default)]
+        ended: bool,
+    },
     /// Helix kept reporting the stream live: a blip.
     StillLive,
     /// The stream is live and serving: reload it in place (the player was
@@ -988,7 +995,7 @@ pub async fn resolve_offline(app: AppHandle, trigger: OfflineTrigger) -> Offline
     let state = app.state::<AppState>();
     let auto = state.settings.lock().map(|s| s.auto_switch.clone()).ok();
     let Some(auto) = auto else {
-        return OfflineDecision::Nothing { why: "settings unavailable".into() };
+        return OfflineDecision::Nothing { why: "settings unavailable".into(), ended: false };
     };
     let started = with_session(|s| {
         let session = s.as_mut()?;
@@ -1011,8 +1018,8 @@ pub async fn resolve_offline(app: AppHandle, trigger: OfflineTrigger) -> Offline
         Some(Ok((session.seq, session.target.clone())))
     });
     let (seq, target) = match started {
-        None => return OfflineDecision::Nothing { why: "no session".into() },
-        Some(Err(why)) => return OfflineDecision::Nothing { why: why.into() },
+        None => return OfflineDecision::Nothing { why: "no session".into(), ended: false },
+        Some(Err(why)) => return OfflineDecision::Nothing { why: why.into(), ended: false },
         Some(Ok(started)) => started,
     };
     let _ = app.emit(RESOLVING_EVENT, true);
@@ -1028,7 +1035,7 @@ pub async fn resolve_offline(app: AppHandle, trigger: OfflineTrigger) -> Offline
     });
     let _ = app.emit(RESOLVING_EVENT, false);
     if current(seq).is_none() {
-        return OfflineDecision::Nothing { why: "a newer stream started".into() };
+        return OfflineDecision::Nothing { why: "a newer stream started".into(), ended: false };
     }
     decision
 }
@@ -1047,7 +1054,7 @@ async fn decide_offline(
             tokio::time::sleep(VERIFY_INTERVAL).await;
         }
         if current(seq).is_none() {
-            return OfflineDecision::Nothing { why: "a newer stream started".into() };
+            return OfflineDecision::Nothing { why: "a newer stream started".into(), ended: false };
         }
         match TwitchService::check_stream_online(login).await {
             Ok(Some(_)) => consecutive_offline = 0,
@@ -1072,7 +1079,7 @@ async fn decide_offline(
     // reconnect the stream comes back from.
     crate::services::live_bookmark::note_ended(login);
     if !auto.enabled {
-        return OfflineDecision::Nothing { why: "auto-switch is off".into() };
+        return OfflineDecision::Nothing { why: "auto-switch is off".into(), ended: true };
     }
     if auto.stay_in_offline_chat {
         return OfflineDecision::OfflineChat;
@@ -1095,7 +1102,7 @@ async fn decide_offline(
                 let message = format!("{login} went offline. Unable to find similar streams.");
                 return match notice(show, message, false) {
                     Some(notice) => OfflineDecision::Notify { notice },
-                    None => OfflineDecision::Nothing { why: format!("{login} has no category") },
+                    None => OfflineDecision::Nothing { why: format!("{login} has no category"), ended: true },
                 };
             }
             let found = match &game_id {
@@ -1179,7 +1186,7 @@ async fn decide_provider_offline(app: &AppHandle, target: &WatchTarget, seq: u64
             tokio::time::sleep(VERIFY_INTERVAL).await;
         }
         if current(seq).is_none() {
-            return OfflineDecision::Nothing { why: "a newer stream started".into() };
+            return OfflineDecision::Nothing { why: "a newer stream started".into(), ended: false };
         }
         let rows = crate::commands::provider_browse::provider_live_check(
             target.provider.clone(),
@@ -1211,7 +1218,7 @@ async fn wait_out_youtube(app: &AppHandle, target: &WatchTarget, video_id: &str,
     let mut waiting = false;
     let decision = loop {
         if current(seq).is_none() {
-            break OfflineDecision::Nothing { why: "a newer stream started".into() };
+            break OfflineDecision::Nothing { why: "a newer stream started".into(), ended: false };
         }
         match youtube_media::broadcast_state(video_id).await {
             Some(Broadcast::Ended) => {
@@ -1456,6 +1463,10 @@ mod tests {
         );
         assert_eq!(serde_json::to_value(OfflineDecision::StillLive).unwrap(), json!({ "action": "still_live" }));
         assert_eq!(serde_json::to_value(OfflineDecision::Resume).unwrap(), json!({ "action": "resume" }));
+        assert_eq!(
+            serde_json::to_value(OfflineDecision::Nothing { why: "w".into(), ended: true }).unwrap(),
+            json!({ "action": "nothing", "why": "w", "ended": true })
+        );
     }
 
     #[test]

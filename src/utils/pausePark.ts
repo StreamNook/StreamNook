@@ -245,6 +245,27 @@ export function clearTileOnEnd(id: string): void {
   forgetTile(id);
 }
 
+/** Whether a tile's stream has ended, as its slot reads when its player goes
+ *  away: the offline edge marks the slot offline and failed together, and a
+ *  retry clears the failure, so a tile that is only restarting does not count. */
+export function tileStreamEnded(slot: { offline?: boolean; loadError?: boolean } | null | undefined): boolean {
+  return !!slot?.offline && !!slot.loadError;
+}
+
+/** Tiles (slot ids) that hold a live pause, for a snapshot. */
+export function pausedTileIds(): string[] {
+  const ids: string[] = [];
+  for (const [scope, intent] of intents) {
+    if (scope !== 'main' && intent.key === scope) ids.push(scope);
+  }
+  return ids;
+}
+
+/** Tiles (slot ids) whose own-channel pause was applied, for a snapshot. */
+export function heldTileIds(): string[] {
+  return [...heldTiles];
+}
+
 /** The channel `key` is already open as the viewer's own (a restart brings
  *  back a stream they were watching): its next opening does not pause it. */
 export function markOwnChannelOpened(key: string): void {

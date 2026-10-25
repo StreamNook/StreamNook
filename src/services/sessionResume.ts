@@ -3,7 +3,14 @@ import { useAppStore } from '../stores/AppStore';
 import { usemultiNookStore } from '../stores/multiNookStore';
 import { Logger } from '../utils/logger';
 import { makeKey, parseKey } from '../utils/providerKey';
-import { markOwnChannelOpened, notePauseIntent, pauseIntentOf } from '../utils/pausePark';
+import {
+  heldTileIds,
+  markOwnChannelOpened,
+  markTileHeld,
+  notePauseIntent,
+  pauseIntentOf,
+  pausedTileIds,
+} from '../utils/pausePark';
 import { streamKey, streamProvider } from '../utils/streamProvider';
 
 /** Mirrors the Rust `ResumeSnapshot` struct (commands/session.rs). */
@@ -15,6 +22,8 @@ interface ResumeSnapshot {
   automation_campaign_id?: string | null;
   paused?: boolean;
   multinook_active?: boolean;
+  paused_tiles?: string[];
+  own_tiles_opened?: string[];
 }
 
 /**
@@ -46,6 +55,10 @@ export async function captureResumeSnapshot(): Promise<void> {
     // The viewer's live pause, keyed as the player keys it.
     paused: !!live && !!intent && intent.key === makeKey(streamProvider(live), live.user_login),
     multinook_active: multinookActive,
+    // The tiles the viewer paused, and the ones whose own-channel pause was
+    // already applied, so a restart neither plays the first nor re-pauses the second.
+    paused_tiles: multinookActive ? pausedTileIds() : [],
+    own_tiles_opened: multinookActive ? heldTileIds() : [],
   };
 
   try {
@@ -94,6 +107,11 @@ export async function resumePreviousSession(): Promise<void> {
     if (reopened && snap.was_running) {
       void replayAutomation(snap.automation_campaign_id ?? null);
     }
+  }
+
+  if (snap.multinook_active) {
+    for (const id of snap.paused_tiles ?? []) notePauseIntent(id, id);
+    for (const id of snap.own_tiles_opened ?? []) markTileHeld(id);
   }
 
   if (snap.multinook_active && !usemultiNookStore.getState().isMultiNookActive) {

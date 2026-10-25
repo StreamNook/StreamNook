@@ -143,18 +143,85 @@ describe('followLiveAfterResync', () => {
     vi.advanceTimersByTime(RESYNC_WINDOW_MS);
     expect(onStuck).toHaveBeenCalledTimes(1);
     expect(hls.count('hlsLevelUpdated')).toBe(0);
-    expect(video.count('playing')).toBe(0);
+    expect(video.count('timeupdate')).toBe(0);
   });
 
   const liveFragment = { frag: { type: 'main', start: 5, duration: 2 } };
 
-  it('is not stuck once the video plays', () => {
+  it('is not stuck once the video plays on', () => {
     const { hls, video, onStuck } = start();
     hls.fire('hlsLevelUpdated');
     hls.fire('hlsFragBuffered', liveFragment);
     video.emit('playing');
-    vi.advanceTimersByTime(RESYNC_WINDOW_MS);
+    video.advance(14);
+    video.emit('timeupdate');
+    vi.advanceTimersByTime(RESYNC_WINDOW_MS * 2);
     expect(onStuck).not.toHaveBeenCalled();
+  });
+
+  it('is stuck one window after new live data when the video plays but its time stays pinned', () => {
+    const { hls, video, onStuck } = start();
+    hls.fire('hlsLevelUpdated');
+    hls.fire('hlsFragBuffered', liveFragment);
+    video.emit('playing');
+    vi.advanceTimersByTime(RESYNC_WINDOW_MS - 1);
+    expect(onStuck).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(onStuck).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a pinned playhead once, within four windows, under a seek every 1.5 seconds', () => {
+    const { hls, video, onStuck } = start();
+    hls.fire('hlsLevelUpdated');
+    hls.fire('hlsFragBuffered', liveFragment);
+    for (let elapsed = 0; elapsed < RESYNC_WINDOW_MS * 4; elapsed += 1500) {
+      vi.advanceTimersByTime(1500);
+      video.emit('seeking');
+    }
+    expect(onStuck).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not count a seek past the re-arm cap as progress', () => {
+    const { hls, video, onStuck } = start();
+    hls.fire('hlsLevelUpdated');
+    hls.fire('hlsFragBuffered', liveFragment);
+    for (let i = 0; i < 3; i++) {
+      vi.advanceTimersByTime(1000);
+      video.emit('seeking');
+    }
+    vi.advanceTimersByTime(1000);
+    video.advance(40); // a jump the element made on its own
+    video.emit('seeking');
+    vi.advanceTimersByTime(RESYNC_WINDOW_MS);
+    expect(onStuck).toHaveBeenCalledTimes(1);
+  });
+
+  it('counts real playback after the re-arm cap as progress', () => {
+    const { hls, video, onStuck } = start();
+    hls.fire('hlsLevelUpdated');
+    hls.fire('hlsFragBuffered', liveFragment);
+    for (let i = 0; i < 3; i++) {
+      vi.advanceTimersByTime(1000);
+      video.emit('seeking');
+    }
+    vi.advanceTimersByTime(1000);
+    video.advance(40);
+    video.emit('seeking');
+    video.advance(44);
+    video.emit('timeupdate');
+    vi.advanceTimersByTime(RESYNC_WINDOW_MS * 2);
+    expect(onStuck).not.toHaveBeenCalled();
+  });
+
+  it('is stuck at the window when one seek lands at 5 seconds and no live data arrives', () => {
+    const { video, onStuck } = start();
+    vi.advanceTimersByTime(5000);
+    video.advance(30);
+    video.emit('seeking');
+    vi.advanceTimersByTime(RESYNC_WINDOW_MS - 5000 - 1);
+    expect(onStuck).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(onStuck).toHaveBeenCalledTimes(1);
   });
 
   it('is not stuck when the time advances', () => {
@@ -216,7 +283,7 @@ describe('followLiveAfterResync', () => {
     expect(onStuck).toHaveBeenCalledTimes(1);
     expect(hls.count('hlsLevelUpdated')).toBe(0);
     expect(hls.count('hlsFragBuffered')).toBe(0);
-    expect(video.count('playing')).toBe(0);
+    expect(video.count('timeupdate')).toBe(0);
   });
 
   it('is stuck at the window when a reload arrives but no fragment inside it', () => {
@@ -260,7 +327,6 @@ describe('followLiveAfterResync', () => {
     video.setBuffered([[8, 16], [230, 240]]);
     hls.fire('hlsFragBuffered', { frag: { type: 'main', start: 230, duration: 2 } });
     expect(video.seeks).toEqual([232]);
-    video.emit('playing');
     video.advance(236);
     vi.advanceTimersByTime(RESYNC_WINDOW_MS * 3);
     expect(onStuck).not.toHaveBeenCalled();
@@ -273,7 +339,7 @@ describe('followLiveAfterResync', () => {
     video.setBuffered([[8, 16], [30, 42]]);
     hls.fire('hlsLevelUpdated');
     expect(video.seeks).toEqual([40]);
-    video.emit('playing');
+    video.advance(44);
     vi.advanceTimersByTime(RESYNC_WINDOW_MS * 3);
     expect(onStuck).not.toHaveBeenCalled();
   });
@@ -283,7 +349,7 @@ describe('followLiveAfterResync', () => {
     hls.liveSyncPosition = 40;
     hls.latestLevelDetails = { fragmentStart: 28 };
     video.setBuffered([[30, 42]]);
-    video.emit('playing'); // played before the seek, which does not count after it
+    video.advance(11); // progress before the seek does not count after it
     vi.advanceTimersByTime(3000);
     hls.fire('hlsLevelUpdated');
     expect(video.seeks).toEqual([40]);
@@ -301,6 +367,7 @@ describe('followLiveAfterResync', () => {
     video.emit('playing');
     hls.latestLevelDetails = { fragmentStart: 200 };
     hls.fire('hlsLevelUpdated');
+    hls.fire('hlsFragBuffered', { frag: { type: 'main', start: 228, duration: 2 } });
     vi.advanceTimersByTime(3000);
     video.advance(230);
     video.emit('seeking');
@@ -337,7 +404,7 @@ describe('followLiveAfterResync', () => {
     vi.advanceTimersByTime(RESYNC_WINDOW_MS);
     expect(video.seeks).toEqual([]);
     expect(onStuck).not.toHaveBeenCalled();
-    expect(video.count('playing')).toBe(0);
+    expect(video.count('timeupdate')).toBe(0);
     expect(video.count('seeking')).toBe(0);
   });
 });

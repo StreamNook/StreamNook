@@ -9,13 +9,16 @@ import {
   forgetOwnChannel,
   forgetTile,
   heldPause,
+  heldTileIds,
   holdOwnChannel,
   isTileHeld,
   markTileHeld,
   notePauseIntent,
   pauseIntentOf,
   pauseParkTimings,
+  pausedTileIds,
   resyncCutoffMs,
+  tileStreamEnded,
   windowedPauseTimings,
   type PauseParkTimings,
 } from './pausePark';
@@ -186,6 +189,29 @@ describe('pausePark', () => {
     clearTileOnEnd('tile-5');
     expect(heldPause('tile-5', 'tile-5')).toBeNull();
     expect(isTileHeld('tile-5')).toBe(false);
+  });
+
+  it('only a tile that is offline and failed has ended; a restarting tile keeps its pause', () => {
+    expect(tileStreamEnded({ offline: true, loadError: true })).toBe(true);
+    expect(tileStreamEnded({ offline: true, loadError: false })).toBe(false); // retrying
+    expect(tileStreamEnded({ offline: true })).toBe(false);
+    expect(tileStreamEnded({ offline: false, loadError: true })).toBe(false);
+    expect(tileStreamEnded({})).toBe(false);
+    expect(tileStreamEnded(undefined)).toBe(false);
+  });
+
+  it('lists the paused tiles and the held tiles for a snapshot', () => {
+    clearPauseIntent('main');
+    notePauseIntent('main', 'twitch:a');
+    notePauseIntent('tile-p', 'tile-p');
+    markTileHeld('tile-q');
+    expect(pausedTileIds()).toEqual(['tile-p']); // the main player is not a tile
+    expect(heldTileIds()).toEqual(['tile-q']);
+    clearPauseIntent('main');
+    clearPauseIntent('tile-p');
+    forgetTile('tile-q');
+    expect(pausedTileIds()).toEqual([]);
+    expect(heldTileIds()).toEqual([]);
   });
 
   it('a pause intent holds for its channel only', () => {
