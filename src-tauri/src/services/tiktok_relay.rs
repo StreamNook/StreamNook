@@ -32,6 +32,7 @@
 //! ```
 
 use crate::services::flv_fmp4;
+use crate::services::multi_nook_server::{ProviderEndState, TileFetch};
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use once_cell::sync::Lazy;
@@ -39,6 +40,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 use warp::Filter;
 
@@ -50,10 +52,30 @@ const PLAYLIST_TTL: Duration = Duration::from_millis(2000);
 const MAX_URIS: usize = 512;
 /// Relayed segment bodies kept per session.
 const KEEP_SEGMENTS: usize = 8;
-/// A session with no request for this long has lost its player: a destroyed
-/// webview never runs its cleanup, so this is the backstop that stops the work.
-/// It is NOT the primary teardown, which is `stop` from the command layer.
-const IDLE_ABORT: Duration = Duration::from_secs(20);
+/// A session with no request of any kind for this long has lost its player: a
+/// destroyed webview never runs its cleanup, so this is the backstop that
+/// releases it. It is NOT the primary teardown, which is `stop` from the command
+/// layer. It sits far above the park span, so a paused player finds its session
+/// still registered when it resumes.
+const ORPHAN_ABORT: Duration = Duration::from_secs(600);
+/// How often a parked session looks for having been stopped, replaced or orphaned.
+const PARK_POLL: Duration = Duration::from_secs(1);
+
+/// How long a session's pull or capture runs without a playlist request before
+/// it parks.
+fn park_span() -> Duration {
+    Duration::from_millis(crate::services::ll_origin::park_idle_ms())
+}
+
+/// The idle time after which a session is an orphan, given the park span: at
+/// least ten times the span, so a parked session outlives any pause.
+fn orphan_after(park: Duration) -> Duration {
+    ORPHAN_ABORT.max(park.saturating_mul(10))
+}
+
+fn orphan_abort() -> Duration {
+    orphan_after(park_span())
+}
 
 /// Hosts a TikTok playlist may point at, beyond its own host.
 ///
@@ -274,7 +296,29 @@ struct Session {
     /// DASH and FLV: the loop that takes each segment as it appears. Aborted
     /// the moment the session is stopped or replaced.
     capture_task: Mutex<Option<JoinHandle<()>>>,
+    /// The last request of any kind, which is what orphans are told by.
     last_seen: Mutex<Instant>,
+    /// The last playlist request, which is what the park span counts from.
+    last_playlist: Mutex<Instant>,
+    /// Playlist silence after which the pull or capture parks.
+    park_after: Duration,
+    park: Mutex<Park>,
+    /// Wakes a parked pull or capture.
+    wake: Notify,
+    /// HLS only: what the upstream playlist has answered, for telling an ended
+    /// stream from a bad moment.
+    hls_end: Mutex<ProviderEndState>,
+}
+
+/// Whether a session's pull or capture is running.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Park {
+    Running,
+    /// Stopped: no manifest, segment or pull reads until a playlist request.
+    Parked,
+    /// Woken by a playlist request; playlists answer 503 until the first new
+    /// segment is cut.
+    Resuming,
 }
 
 impl Session {
@@ -289,6 +333,97 @@ impl Session {
             .lock()
             .map(|t| t.elapsed())
             .unwrap_or_else(|_| Duration::ZERO)
+    }
+
+    fn touch_playlist(&self) {
+        if let Ok(mut t) = self.last_playlist.lock() {
+            *t = Instant::now();
+        }
+    }
+
+    /// No playlist has been asked for within the park span.
+    fn park_due(&self) -> bool {
+        self.last_playlist
+            .lock()
+            .map(|t| t.elapsed() >= self.park_after)
+            .unwrap_or(false)
+    }
+
+    fn is_parked(&self) -> bool {
+        self.park.lock().map(|p| *p == Park::Parked).unwrap_or(false)
+    }
+
+    /// Mark the pull or capture as stopped. False when a playlist request
+    /// arrived in the meantime, in which case it keeps running.
+    fn enter_park(&self) -> bool {
+        let Ok(mut p) = self.park.lock() else {
+            return false;
+        };
+        if !self.park_due() {
+            return false;
+        }
+        *p = Park::Parked;
+        true
+    }
+
+    /// A playlist was requested: if the session was parked, drop the stale
+    /// window, start counting a resume and wake the pull or capture. True when
+    /// this request did the waking.
+    fn wake_from_park(&self) -> bool {
+        let Ok(mut p) = self.park.lock() else {
+            return false;
+        };
+        if *p != Park::Parked {
+            return false;
+        }
+        self.reset_window();
+        *p = Park::Resuming;
+        self.wake.notify_one();
+        true
+    }
+
+    /// A resumed session has not cut a segment since it woke. Becomes false,
+    /// for good, with the first segment.
+    fn still_resuming(&self) -> bool {
+        let Ok(mut p) = self.park.lock() else {
+            return false;
+        };
+        if *p != Park::Resuming {
+            return false;
+        }
+        let cut = match self.packaging {
+            Packaging::Flv => self.flv.lock().map(|st| !st.segs.is_empty()).unwrap_or(true),
+            Packaging::Dash => self
+                .dash
+                .lock()
+                .map(|st| !st.v.held.is_empty() || !st.a.held.is_empty())
+                .unwrap_or(true),
+            Packaging::Hls => true,
+        };
+        if cut {
+            *p = Park::Running;
+        }
+        !cut
+    }
+
+    /// Forget the window held from before the park, so the first thing served
+    /// after it is the live edge and never a stale segment.
+    fn reset_window(&self) {
+        match self.packaging {
+            Packaging::Flv => {
+                if let Ok(mut st) = self.flv.lock() {
+                    st.segs.clear();
+                }
+            }
+            Packaging::Dash => {
+                if let Ok(mut st) = self.dash.lock() {
+                    st.v = TrackHold::default();
+                    st.a = TrackHold::default();
+                    st.failures = 0;
+                }
+            }
+            Packaging::Hls => {}
+        }
     }
 }
 
@@ -343,6 +478,11 @@ pub async fn start(stream_id: &str, handle: &str, up: Upstream) -> Result<String
         flv: Mutex::new(FlvState::default()),
         capture_task: Mutex::new(None),
         last_seen: Mutex::new(Instant::now()),
+        last_playlist: Mutex::new(Instant::now()),
+        park_after: park_span(),
+        park: Mutex::new(Park::Running),
+        wake: Notify::new(),
+        hls_end: Mutex::new(ProviderEndState::default()),
     });
 
     let port = ensure_server()?;
@@ -457,7 +597,7 @@ fn reap_idle() {
         Ok(mut reg) => {
             let idle: Vec<String> = reg
                 .iter()
-                .filter(|(_, s)| s.idle_for() >= IDLE_ABORT)
+                .filter(|(_, s)| s.idle_for() >= orphan_abort())
                 .map(|(id, _)| id.clone())
                 .collect();
             idle.into_iter()
@@ -592,10 +732,19 @@ async fn handle(path: String) -> Result<warp::http::Response<Bytes>, warp::Rejec
         return Ok(fail_because(404, format!("no session '{}'", id)));
     };
     session.touch();
-    // A grid tile's player polling its playlists keeps the tile from reading as
-    // parked. Only tiles are noted here, never the solo stream.
-    if tail.ends_with(".m3u8") && id != crate::services::stream_server::SOLO_STREAM_ID {
-        crate::services::multi_nook_server::note_tile_playlist_request(id);
+    if tail.ends_with(".m3u8") {
+        session.touch_playlist();
+        // A grid tile's player polling its playlists keeps the tile from reading as
+        // parked. Only tiles are noted here, never the solo stream.
+        if id != crate::services::stream_server::SOLO_STREAM_ID {
+            crate::services::multi_nook_server::note_tile_playlist_request(id);
+        }
+        // A parked session wakes on its next playlist request and answers 503
+        // until the first segment of its fresh window is cut, never a 404 and
+        // never the window it held before the pause.
+        if session.wake_from_park() || session.still_resuming() {
+            return Ok(fail_because(503, "resuming after a pause, no segment yet".into()));
+        }
     }
 
     const M3U8: &str = "application/vnd.apple.mpegurl";
@@ -606,7 +755,15 @@ async fn handle(path: String) -> Result<warp::http::Response<Bytes>, warp::Rejec
                 return Ok(cors(master_playlist(&session, id), M3U8));
             }
             if tail == "live.m3u8" {
-                return Ok(match media_playlist(&session).await {
+                let (res, fetch) = media_playlist(&session).await;
+                if let Some(fetch) = fetch {
+                    if note_hls_fetch(&session, fetch) {
+                        // The check names a room and may take a while, so the
+                        // player's playlist is not held for it.
+                        tokio::spawn(report_hls_end(id.to_string(), session.clone()));
+                    }
+                }
+                return Ok(match res {
                     Ok(body) => cors(body, M3U8),
                     Err(e) => fail_because(502, format!("playlist: {}", e)),
                 });
@@ -703,28 +860,70 @@ fn master_playlist(s: &Session, id: &str) -> String {
     )
 }
 
-async fn media_playlist(s: &Session) -> Result<String> {
+/// The media playlist, with what the upstream's answer says about the stream's
+/// end. The second value is `None` when no answer was asked for (a reused
+/// playlist) or none came (the request itself failed).
+async fn media_playlist(s: &Session) -> (Result<String>, Option<TileFetch>) {
     if let Ok(guard) = s.playlist.lock() {
         if let Some((at, body)) = guard.as_ref() {
             if at.elapsed() < PLAYLIST_TTL {
-                return Ok(body.clone());
+                return (Ok(body.clone()), None);
             }
         }
     }
-    let res = crate::services::http::client()
+    let res = match crate::services::http::client()
         .get(&s.upstream)
         .header("Referer", "https://www.tiktok.com/")
         .send()
-        .await?;
-    if !res.status().is_success() {
-        return Err(anyhow!("upstream {} for @{}", res.status(), s.handle));
+        .await
+    {
+        Ok(res) => res,
+        Err(e) => return (Err(e.into()), None),
+    };
+    let status = res.status();
+    if !status.is_success() {
+        let fetch = fetch_for_status(status.as_u16(), crate::services::ll_origin::mono_ms());
+        return (Err(anyhow!("upstream {} for @{}", status, s.handle)), Some(fetch));
     }
-    let text = res.text().await?;
+    let text = match res.text().await {
+        Ok(text) => text,
+        Err(e) => return (Err(e.into()), None),
+    };
+    let fetch = TileFetch::Playlist {
+        endlist: has_endlist(&text),
+    };
     let rewritten = rewrite_playlist(s, &text);
     if let Ok(mut guard) = s.playlist.lock() {
         *guard = Some((Instant::now(), rewritten.clone()));
     }
-    Ok(rewritten)
+    (Ok(rewritten), Some(fetch))
+}
+
+/// What an unsuccessful answer from the upstream playlist counts as: a refusal
+/// when the stream is gone (404 or 410), any other answer a failure that
+/// neither counts toward an end nor clears the run.
+fn fetch_for_status(status: u16, at_ms: u64) -> TileFetch {
+    if matches!(status, 404 | 410) {
+        TileFetch::Refused { at_ms }
+    } else {
+        TileFetch::Failed
+    }
+}
+
+/// Whether a playlist closes itself with `#EXT-X-ENDLIST`.
+fn has_endlist(body: &str) -> bool {
+    body.lines().any(|l| l.trim() == "#EXT-X-ENDLIST")
+}
+
+/// Feed one upstream playlist answer to the session's end tracking. True only
+/// for the answer that first concludes the stream has ended.
+fn note_hls_fetch(s: &Session, fetch: TileFetch) -> bool {
+    let Ok(mut state) = s.hls_end.lock() else {
+        return false;
+    };
+    let (next, first) = crate::services::multi_nook_server::provider_tile_ended(std::mem::take(&mut *state), fetch);
+    *state = next;
+    first
 }
 
 /// Point every URI in a media playlist back at this relay.
@@ -1127,9 +1326,11 @@ async fn capture_segment(s: Arc<Session>, is_video: bool, name: String, n: u64) 
 
 /// Read the manifest on a timer and take each segment while it is the newest.
 ///
-/// Ends when the session is stopped or replaced, when nobody has requested
-/// anything for `IDLE_ABORT` (a destroyed webview never says goodbye), or when
-/// the manifest has been unreachable long enough that the broadcast is over.
+/// Parks, with no manifest or segment read, when no playlist has been requested
+/// for the park span, and starts reading again at the next playlist request.
+/// Ends when the session is stopped or replaced, when a parked session is
+/// orphaned (a destroyed webview never says goodbye), or when the manifest has
+/// been unreachable long enough that the broadcast may be over.
 async fn capture_loop(id: String, s: Arc<Session>) {
     let mut tick = tokio::time::interval(CAPTURE_EVERY);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -1140,10 +1341,12 @@ async fn capture_loop(id: String, s: Arc<Session>) {
         if !still_registered(&id, &s) {
             return;
         }
-        if s.idle_for() >= IDLE_ABORT {
-            log::info!("[TikTokRelay] '{}' idle, releasing", id);
-            remove_if_same(&id, &s);
-            return;
+        if s.park_due() {
+            if !hold_parked(&id, &s).await {
+                return;
+            }
+            // The window was dropped on waking, so the next read starts afresh.
+            continue;
         }
         match fetch_manifest(&s).await {
             Ok((video, audio)) => {
@@ -1167,6 +1370,9 @@ async fn capture_loop(id: String, s: Arc<Session>) {
                         failures,
                         e
                     );
+                    if room_is_over(&id, &s).await {
+                        crate::services::multi_nook_server::report_tile_ended(&id);
+                    }
                     remove_if_same(&id, &s);
                     return;
                 }
@@ -1547,6 +1753,9 @@ enum FlvStop {
 /// Hold the pull open for the session's lifetime, reopening it when the CDN
 /// drops it. One muxer across every connection, so a reopen's cache replay is
 /// recognised as frames already held rather than written twice.
+///
+/// Drops the pull and reads nothing while parked (no playlist request for the
+/// park span), and pulls again when the next playlist request wakes it.
 async fn flv_pump(id: String, s: Arc<Session>) {
     let mut muxer = flv_fmp4::Muxer::new();
     let mut failures = 0u32;
@@ -1554,24 +1763,30 @@ async fn flv_pump(id: String, s: Arc<Session>) {
         if !still_registered(&id, &s) {
             return;
         }
-        if s.idle_for() >= IDLE_ABORT {
-            log::info!("[TikTokRelay] '{}' idle, releasing", id);
-            remove_if_same(&id, &s);
-            return;
+        if s.park_due() {
+            if !hold_parked(&id, &s).await {
+                return;
+            }
+            failures = 0;
+            continue;
         }
-        let alive = || still_registered(&id, &s) && s.idle_for() < IDLE_ABORT;
+        let alive = || still_registered(&id, &s) && !s.park_due();
         match flv_connection(&s, &mut muxer, &alive).await {
             Ok(produced) => {
                 if produced > 0 {
                     failures = 0;
                 }
+                if s.park_due() {
+                    continue;
+                }
             }
             Err(FlvStop::Unplayable(why)) => {
                 // A warning, not info: the file log keeps only warnings unless
                 // Diagnostics is on, and this is the one line that says which
-                // format a room was refused for.
+                // format a room was refused for. A room that cannot be played
+                // has not ended, so the page is not told it did.
                 log::warn!("[TikTokRelay] '{}' cannot play @{}: {}", id, s.handle, why);
-                end_flv(&id, &s, format!("@{} is streaming in a format StreamNook can't play", s.handle));
+                end_flv(&s, format!("@{} is streaming in a format StreamNook can't play", s.handle));
                 remove_if_same(&id, &s);
                 return;
             }
@@ -1582,11 +1797,41 @@ async fn flv_pump(id: String, s: Arc<Session>) {
         failures += 1;
         if failures >= FLV_MAX_RETRIES {
             log::info!("[TikTokRelay] '{}' pull for @{} failed {} times in a row; ending", id, s.handle, failures);
-            end_flv(&id, &s, format!("@{}'s stream stopped", s.handle));
+            end_flv(&s, format!("@{}'s stream stopped", s.handle));
+            // Only TikTok saying the room is over reports an end: a pull that
+            // kept failing during an outage leaves the page's own freeze
+            // recovery to bring the tile back.
+            if room_is_over(&id, &s).await {
+                crate::services::multi_nook_server::report_tile_ended(&id);
+            }
             remove_if_same(&id, &s);
             return;
         }
         tokio::time::sleep(Duration::from_secs(failures as u64)).await;
+    }
+}
+
+/// Park `s`: no reads until a playlist request wakes it. False when the
+/// session was stopped, replaced or orphaned meanwhile, and its task should end.
+async fn hold_parked(id: &str, s: &Arc<Session>) -> bool {
+    if !s.enter_park() {
+        return true;
+    }
+    log::info!("[TikTokRelay] '{}' parked", id);
+    loop {
+        if !still_registered(id, s) {
+            return false;
+        }
+        if s.idle_for() >= orphan_abort() {
+            log::info!("[TikTokRelay] '{}' orphaned, releasing", id);
+            remove_if_same(id, s);
+            return false;
+        }
+        if !s.is_parked() {
+            log::info!("[TikTokRelay] '{}' resuming", id);
+            return true;
+        }
+        let _ = tokio::time::timeout(PARK_POLL, s.wake.notified()).await;
     }
 }
 
@@ -1604,21 +1849,51 @@ fn error_chain(e: &dyn std::error::Error) -> String {
     out
 }
 
-/// Record why the pull of session `s` (registered as `id`) ended. The first
-/// reason stands, and a grid tile's page is told once; a session that was
-/// stopped meanwhile has no tile left to tell.
-fn end_flv(id: &str, s: &Arc<Session>, why: String) {
-    let first = s
-        .flv
-        .lock()
-        .map(|mut st| {
-            let first = st.ended.is_none();
-            st.ended.get_or_insert(why);
-            first
-        })
-        .unwrap_or(false);
-    if first && still_registered(id, s) {
-        crate::services::multi_nook_server::report_tile_ended(id);
+/// Record why the pull of session `s` ended, so waiting playlist requests fail
+/// with the reason. The first reason stands.
+fn end_flv(s: &Session, why: String) {
+    if let Ok(mut st) = s.flv.lock() {
+        st.ended.get_or_insert(why);
+    }
+}
+
+/// Whether TikTok says the room of session `s` (registered as `id`) is over:
+/// only an answer that names the room as not live counts, so an outage, a
+/// failed check or a room still live never reads as an end. A session stopped
+/// or replaced meanwhile has no tile left to tell.
+async fn room_is_over(id: &str, s: &Arc<Session>) -> bool {
+    use crate::services::providers::source::StreamSource;
+    let answer = crate::services::providers::tiktok_media::TikTokSource::new()
+        .live_check(&[s.handle.clone()])
+        .await;
+    if !room_ended(&s.handle, &answer) {
+        log::info!("[TikTokRelay] '{}' @{} is not confirmed ended; not reporting", id, s.handle);
+        return false;
+    }
+    still_registered(id, s)
+}
+
+/// The decision behind `room_is_over`. A live check answers with a row for every
+/// room it could check, live or not, and leaves out any it could not, so the
+/// room's own row saying it is not live is the only proof of an end.
+fn room_ended(handle: &str, answer: &Result<Vec<crate::models::provider_stream::ProviderStream>>) -> bool {
+    let handle = handle.trim_start_matches('@');
+    match answer {
+        Ok(rows) => rows
+            .iter()
+            .any(|r| r.user_login.eq_ignore_ascii_case(handle) && !r.is_live),
+        Err(_) => false,
+    }
+}
+
+/// Report the end of an HLS tile the playlist run concluded, once TikTok
+/// confirms it. When it does not, the run starts over so a later real end can
+/// still conclude.
+async fn report_hls_end(id: String, s: Arc<Session>) {
+    if room_is_over(&id, &s).await {
+        crate::services::multi_nook_server::report_tile_ended(&id);
+    } else if let Ok(mut state) = s.hls_end.lock() {
+        *state = ProviderEndState::default();
     }
 }
 
@@ -1866,8 +2141,17 @@ mod tests {
             flv: Mutex::new(FlvState::default()),
             capture_task: Mutex::new(None),
             last_seen: Mutex::new(Instant::now()),
+            last_playlist: Mutex::new(Instant::now()),
+            park_after: Duration::from_secs(30),
+            park: Mutex::new(Park::Running),
+            wake: Notify::new(),
+            hls_end: Mutex::new(ProviderEndState::default()),
         }
     }
+
+    /// Tests that register sessions share the process-global registry, which
+    /// another test may clear; holding this keeps one at a time.
+    static REGISTRY_TESTS: Lazy<tokio::sync::Mutex<()>> = Lazy::new(|| tokio::sync::Mutex::new(()));
 
     #[test]
     fn routes_split_on_the_stream_id() {
@@ -2042,6 +2326,7 @@ mod tests {
     /// the refusal to proxy an address it was never meant to reach, teardown.
     #[tokio::test]
     async fn serves_rewrites_isolates_and_refuses() {
+        let _registry = REGISTRY_TESTS.lock().await;
         let (up_port, _mock) = mock_upstream().await;
 
         let master_a = start("tile-a", "someone", upstream_for(up_port, "hd"))
@@ -2569,5 +2854,279 @@ mod tests {
         assert!(m.contains("RESOLUTION=720x1280"), "portrait, got: {}", m);
         assert!(m.contains("FRAME-RATE=30.000"));
         assert!(m.contains("/s/solo/live.m3u8"));
+    }
+
+    fn room_row(login: &str, live: bool) -> crate::models::provider_stream::ProviderStream {
+        crate::models::provider_stream::ProviderStream {
+            provider: "tiktok".into(),
+            key: format!("tiktok:{}", login),
+            id: String::new(),
+            user_id: String::new(),
+            user_login: login.into(),
+            user_name: login.into(),
+            title: String::new(),
+            viewer_count: 0,
+            game_id: String::new(),
+            game_name: String::new(),
+            category_thumbnail: None,
+            thumbnail_url: String::new(),
+            started_at: String::new(),
+            profile_image_url: None,
+            is_live: live,
+            watch_url: String::new(),
+            tags: None,
+        }
+    }
+
+    #[test]
+    fn only_a_row_saying_the_room_is_not_live_reports_an_end() {
+        let live: Result<Vec<_>> = Ok(vec![room_row("someone", true)]);
+        assert!(!room_ended("someone", &live), "a room still live has not ended");
+
+        let over: Result<Vec<_>> = Ok(vec![room_row("someone", false)]);
+        assert!(room_ended("someone", &over));
+        assert!(room_ended("@Someone", &over), "the handle is compared as TikTok names it");
+
+        // A check that could not be made leaves the room out of the answer.
+        let unchecked: Result<Vec<_>> = Ok(Vec::new());
+        assert!(!room_ended("someone", &unchecked));
+        let other: Result<Vec<_>> = Ok(vec![room_row("other", false)]);
+        assert!(!room_ended("someone", &other), "another room's row proves nothing");
+
+        let outage: Result<Vec<_>> = Err(anyhow!("TikTok device token failed"));
+        assert!(!room_ended("someone", &outage), "an outage is not an end");
+    }
+
+    #[test]
+    fn the_orphan_reap_sits_far_above_the_park_span() {
+        for span in [3u64, 30, 120, 900] {
+            let park = Duration::from_secs(span);
+            assert!(orphan_after(park) >= park * 10, "span {span}");
+        }
+        assert!(orphan_after(Duration::from_secs(30)) >= Duration::from_secs(300));
+    }
+
+    #[test]
+    fn a_playlist_refusal_counts_but_any_other_answer_does_not() {
+        assert_eq!(fetch_for_status(404, 5), TileFetch::Refused { at_ms: 5 });
+        assert_eq!(fetch_for_status(410, 6), TileFetch::Refused { at_ms: 6 });
+        assert_eq!(fetch_for_status(502, 7), TileFetch::Failed);
+        assert_eq!(fetch_for_status(503, 8), TileFetch::Failed);
+        assert!(has_endlist("#EXTM3U\n#EXTINF:4.0,\nseg.m4s\n#EXT-X-ENDLIST\n"));
+        assert!(!has_endlist("#EXTM3U\n#EXTINF:4.0,\nseg.m4s\n"));
+    }
+
+    #[test]
+    fn an_hls_stream_ends_after_a_run_of_refusals_and_only_once() {
+        let s = session("https://pull-hls.tiktokcdn.com/live/room/index.m3u8");
+        for i in 0..5u64 {
+            let refused = TileFetch::Refused { at_ms: 1_000 + i * 3_000 };
+            assert!(!note_hls_fetch(&s, refused), "refusal {} is too early to conclude", i + 1);
+        }
+        assert!(note_hls_fetch(&s, TileFetch::Refused { at_ms: 16_000 }), "six refusals over twelve seconds");
+        assert!(!note_hls_fetch(&s, TileFetch::Refused { at_ms: 19_000 }), "reported once");
+
+        // Answers that are not refusals leave a run alone, and a served
+        // playlist clears it.
+        let s = session("https://pull-hls.tiktokcdn.com/live/room/index.m3u8");
+        for i in 0..5u64 {
+            note_hls_fetch(&s, TileFetch::Refused { at_ms: 1_000 + i * 3_000 });
+        }
+        assert!(!note_hls_fetch(&s, TileFetch::Failed));
+        assert!(!note_hls_fetch(&s, TileFetch::Playlist { endlist: false }));
+        assert!(
+            !note_hls_fetch(&s, TileFetch::Refused { at_ms: 30_000 }),
+            "the run started over"
+        );
+
+        // A playlist that closes itself is an end at once.
+        let s = session("https://pull-hls.tiktokcdn.com/live/room/index.m3u8");
+        assert!(note_hls_fetch(&s, TileFetch::Playlist { endlist: true }));
+    }
+
+    #[test]
+    fn a_parked_session_wakes_once_and_resumes_with_a_fresh_window() {
+        let mut s = flv_session("https://pull-f5-tt01.tiktokcdn.com/stage/stream-1_hd/live.flv");
+        let held = |s: &Session, n: u64| {
+            s.flv.lock().unwrap().segs.insert(
+                n,
+                FlvSeg {
+                    epoch: 0,
+                    disc_seq: 0,
+                    discontinuity: false,
+                    duration: 1.0,
+                    frames: 25,
+                    bytes: Bytes::from_static(b"....moof"),
+                },
+            );
+        };
+        held(&s, 5);
+
+        // A playlist was just asked for: nothing parks.
+        assert!(!s.park_due());
+        assert!(!s.enter_park());
+        assert!(!s.is_parked());
+
+        s.park_after = Duration::ZERO;
+        assert!(s.park_due());
+        assert!(s.enter_park());
+        assert!(s.is_parked());
+        assert!(s.wake_from_park(), "the request after the park wakes it");
+        assert!(s.flv.lock().unwrap().segs.is_empty(), "the stale window is gone");
+        assert!(!s.is_parked());
+        assert!(!s.wake_from_park(), "only the first request wakes");
+
+        // Until a segment is cut every playlist is refused.
+        assert!(s.still_resuming());
+        assert!(s.still_resuming());
+        held(&s, 6);
+        assert!(!s.still_resuming());
+        assert!(!s.still_resuming(), "serving normally from then on");
+    }
+
+    /// A throwaway HTTP server that answers every request with `body` and counts
+    /// the requests.
+    async fn counting_http(body: Vec<u8>) -> (u16, Arc<std::sync::atomic::AtomicUsize>) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let counted = hits.clone();
+        tokio::spawn(async move {
+            while let Ok((mut sock, _)) = listener.accept().await {
+                counted.fetch_add(1, Ordering::SeqCst);
+                let body = body.clone();
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 4096];
+                    let _ = sock.read(&mut buf).await;
+                    let head = format!("HTTP/1.1 200 X\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+                    let _ = sock.write_all(head.as_bytes()).await;
+                    let _ = sock.write_all(&body).await;
+                    let _ = sock.shutdown().await;
+                });
+            }
+        });
+        (port, hits)
+    }
+
+    /// Wait until `done` holds, or fail after `limit`.
+    async fn wait_for(what: &str, limit: Duration, done: impl Fn() -> bool) {
+        let deadline = Instant::now() + limit;
+        while !done() {
+            assert!(Instant::now() < deadline, "timed out waiting for {what}");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn a_dash_capture_parks_without_reading_and_resumes_on_a_playlist_request() {
+        use std::sync::atomic::Ordering;
+        let _registry = REGISTRY_TESTS.lock().await;
+        let (port, hits) = counting_http(REAL_MPD.as_bytes().to_vec()).await;
+        let mut s = session(&format!("http://127.0.0.1:{}/index.mpd", port));
+        s.packaging = Packaging::Dash;
+        s.park_after = Duration::from_millis(2500);
+        let s = Arc::new(s);
+        REGISTRY.lock().unwrap().insert("park-dash".to_string(), s.clone());
+        let task = tokio::spawn(capture_loop("park-dash".to_string(), s.clone()));
+
+        // With no playlist asked for, the capture parks and stops reading.
+        wait_for("the capture to park", Duration::from_secs(10), || s.is_parked()).await;
+        let reads = hits.load(Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        assert_eq!(hits.load(Ordering::SeqCst), reads, "a parked capture read the manifest");
+
+        // The next playlist request is refused while the capture starts again.
+        let res = handle("/s/park-dash/video.m3u8".to_string()).await.unwrap();
+        assert_eq!(res.status(), 503);
+        wait_for("the capture to read again", Duration::from_secs(10), || {
+            hits.load(Ordering::SeqCst) > reads
+        })
+        .await;
+        let res = handle("/s/park-dash/video.m3u8".to_string()).await.unwrap();
+        assert_eq!(res.status(), 503, "no segment has been cut yet");
+
+        // Once a segment of the fresh window is held the playlist is served.
+        {
+            let mut st = s.dash.lock().unwrap();
+            st.v.held.insert(1110, Bytes::from_static(b"seg1110"));
+            st.v.held.insert(1111, Bytes::from_static(b"seg1111"));
+        }
+        let res = handle("/s/park-dash/video.m3u8".to_string()).await.unwrap();
+        assert_eq!(res.status(), 200);
+        assert!(String::from_utf8_lossy(res.body()).contains("/s/park-dash/v/1110"));
+
+        stop("park-dash");
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn an_flv_pull_parks_without_reading_and_resumes_on_a_playlist_request() {
+        use std::sync::atomic::Ordering;
+        let _registry = REGISTRY_TESTS.lock().await;
+        let (port, hits) = counting_http(flv_fmp4::tests::sample_flv(6_000_000, 6_008_100)).await;
+        let mut s = flv_session(&format!("http://127.0.0.1:{}/live.flv", port));
+        s.park_after = Duration::from_millis(2500);
+        let s = Arc::new(s);
+        REGISTRY.lock().unwrap().insert("park-flv".to_string(), s.clone());
+        let task = tokio::spawn(flv_pump("park-flv".to_string(), s.clone()));
+
+        wait_for("the pull to park", Duration::from_secs(15), || s.is_parked()).await;
+        let reads = hits.load(Ordering::SeqCst);
+        assert!(reads > 0, "the pull ran before it parked");
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        assert_eq!(hits.load(Ordering::SeqCst), reads, "a parked pull read the CDN");
+
+        let res = handle("/s/park-flv/flv.m3u8".to_string()).await.unwrap();
+        assert_eq!(res.status(), 503);
+        wait_for("the pull to open again", Duration::from_secs(10), || {
+            hits.load(Ordering::SeqCst) > reads
+        })
+        .await;
+        let res = handle("/s/park-flv/flv.m3u8".to_string()).await.unwrap();
+        assert_eq!(res.status(), 503, "the first segment of the new window is not cut yet");
+
+        {
+            let mut st = s.flv.lock().unwrap();
+            for n in 40..43u64 {
+                st.segs.insert(
+                    n,
+                    FlvSeg {
+                        epoch: 0,
+                        disc_seq: 0,
+                        discontinuity: false,
+                        duration: 1.0,
+                        frames: 25,
+                        bytes: Bytes::from_static(b"....moof"),
+                    },
+                );
+            }
+        }
+        let res = handle("/s/park-flv/flv.m3u8".to_string()).await.unwrap();
+        assert_eq!(res.status(), 200);
+        assert!(String::from_utf8_lossy(res.body()).contains("/s/park-flv/f/40"));
+
+        stop("park-flv");
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn an_unplayable_room_ends_the_pull_without_a_room_check() {
+        let _registry = REGISTRY_TESTS.lock().await;
+        let port = mock_http(vec![("/hevc.flv", 200, Vec::new(), flv_fmp4::tests::hevc_flv())]).await;
+        let s = Arc::new(flv_session(&format!("http://127.0.0.1:{}/hevc.flv", port)));
+        REGISTRY.lock().unwrap().insert("unplayable".to_string(), s.clone());
+        let task = tokio::spawn(flv_pump("unplayable".to_string(), s.clone()));
+
+        // The pump returns on its own: an end that waited on TikTok's answer
+        // would not finish here.
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .expect("the pump ended")
+            .expect("the pump did not panic");
+        assert!(!still_registered("unplayable", &s));
+        let why = s.flv.lock().unwrap().ended.clone().unwrap_or_default();
+        assert!(why.contains("can't play"), "{why}");
     }
 }

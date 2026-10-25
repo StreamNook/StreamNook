@@ -195,7 +195,7 @@ const TILE_ENDED_EVENT: &str = "multi-nook://tile-ended";
 /// What a provider tile's relay has seen of its upstream playlist. Held per
 /// tile instance and cleared when the tile is pointed at a new upstream.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-struct ProviderEndState {
+pub(crate) struct ProviderEndState {
     /// Refusals in a row since the last playlist that was served.
     refusals: u32,
     /// When the first of those refusals arrived (`mono_ms`; 0 = none yet).
@@ -206,7 +206,7 @@ struct ProviderEndState {
 
 /// One answer from a provider tile's upstream playlist.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum TileFetch {
+pub(crate) enum TileFetch {
     /// A playlist was served; `endlist` when it carries `#EXT-X-ENDLIST`.
     Playlist { endlist: bool },
     /// The upstream answered 404 or 410 and the tile's re-sign failed (or the
@@ -222,7 +222,7 @@ enum TileFetch {
 /// fetches in a row spanning `PROVIDER_END_SPAN_MS`. Only a served playlist
 /// clears the run; any other answer leaves it as it was. The bool is true only
 /// for the fetch that first concludes the end.
-fn provider_tile_ended(mut state: ProviderEndState, fetch: TileFetch) -> (ProviderEndState, bool) {
+pub(crate) fn provider_tile_ended(mut state: ProviderEndState, fetch: TileFetch) -> (ProviderEndState, bool) {
     let ended = match fetch {
         TileFetch::Playlist { endlist } => {
             state.refusals = 0;
