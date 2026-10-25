@@ -251,6 +251,9 @@ impl MultiNookServer {
         // mis-serves the tile at worst.
         if profile == TileProfile::Twitch {
             origin.start(stream_url).await;
+        } else {
+            // A tile moved off Twitch must not keep (or wake) its old origin.
+            origin.stop();
         }
 
         Ok(port)
@@ -568,9 +571,7 @@ impl MultiNookServer {
                 let msn = parse_directive(&raw_query, "_HLS_msn");
                 let part = parse_directive(&raw_query, "_HLS_part");
                 // A tile that loads again after a pause wakes its parked origin.
-                if origin.is_parked() {
-                    origin.unpark();
-                }
+                origin.wake_for_request(true);
                 if let Some(pl) = origin.serve_playlist(msn, part).await {
                     return Ok(playlist_response(pl.into_bytes()));
                 }

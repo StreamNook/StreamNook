@@ -686,6 +686,10 @@ impl crate::services::link_adapt::Route for SoloTwitchRoute {
     fn ads_playing(&self) -> bool {
         ad_state().ads_present
     }
+
+    fn parked(&self) -> bool {
+        crate::services::ll_origin::is_parked()
+    }
 }
 
 /// Whether a rendition switch would splice into the playlist the solo player
@@ -1004,9 +1008,7 @@ impl StreamServer {
                 let part = parse_directive(&raw_query, "_HLS_part");
                 // hls.js asks only while it loads; AVPlayer's first load carries no
                 // directives. A paused AVPlayer's blocking reloads do not count.
-                if crate::services::ll_origin::is_parked() && wakes_parked_origin(apple, msn) {
-                    crate::services::ll_origin::unpark();
-                }
+                crate::services::ll_origin::wake_for_request(wakes_parked_origin(apple, msn));
                 // Serve-side timing: hls.js reports levelLoadTimeOut pairs before
                 // stalls even though the blocking hold is bounded well under its
                 // budget; this measures whether the server ever actually exceeds

@@ -1035,6 +1035,12 @@ pub trait Route: Send + Sync {
     fn ads_playing(&self) -> bool {
         false
     }
+
+    /// Whether the stream is parked (no player is loading it and nothing is
+    /// downloading): a probe or a switch would restart it.
+    fn parked(&self) -> bool {
+        false
+    }
 }
 
 struct Session {
@@ -1516,7 +1522,19 @@ pub fn note_tail_loss(stream_id: &str) {
 /// Periodic look (the player's reports drive it; this catches clean stretches
 /// with nothing to report).
 pub fn tick(stream_id: &str) {
-    with_session(stream_id, |g, now| g.tick(now));
+    // Asked with the sessions lock released, like `with_session`'s route calls.
+    let Some(route) = sessions().get(stream_id).map(|s| s.route.clone()) else { return };
+    let parked = route.parked();
+    with_session(stream_id, move |g, now| tick_unless_parked(parked, g, now));
+}
+
+/// The governor's periodic look, except while the stream is parked: a probe or
+/// a switch then would restart the relay it parked.
+fn tick_unless_parked(parked: bool, g: &mut Governor, now: f64) -> Option<Decision> {
+    if parked {
+        return None;
+    }
+    g.tick(now)
 }
 
 fn announce(stream_id: &str, url: Option<String>, reason: &str) {
@@ -2228,6 +2246,35 @@ mod tests {
         let (b, s) = seg(8_200_000, 5e6);
         assert_eq!(g.note_probe(0, b, s, 42.0), None);
         assert_eq!(g.up_hold, UP_HOLD_BASE * 2.0);
+    }
+
+    /// A route that reports itself parked.
+    struct Parked;
+
+    impl Route for Parked {
+        fn switch(&self, _to: Rung, _same_decoder: bool) -> SwitchFuture {
+            Box::pin(async { Ok(None) })
+        }
+
+        fn player_measures_link(&self) -> bool {
+            false
+        }
+
+        fn parked(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn a_parked_route_yields_no_decision_from_tick() {
+        let route: Arc<dyn Route> = Arc::new(Parked);
+        assert!(route.parked());
+        assert!(!Still.parked(), "a route is not parked unless it says so");
+        let mut g = desk(0);
+        g.switched(1, 5.0);
+        assert_eq!(tick_unless_parked(route.parked(), &mut g, 40.0), None);
+        // The same look on a route that is not parked would probe.
+        assert_eq!(tick_unless_parked(Still.parked(), &mut g, 40.0), Some(Decision::Probe { rung: 0 }));
     }
 
     #[test]
