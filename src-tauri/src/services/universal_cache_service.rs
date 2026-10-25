@@ -1665,10 +1665,24 @@ fn file_type_dir(cache_type: &CacheType) -> Result<PathBuf> {
 /// Waits between the retries of a rename that is refused.
 const RENAME_RETRY_MS: [u64; 3] = [20, 40, 80];
 
-/// File in the cache root that every running instance holds a shared lock on
-/// while it may write cache files. The temp sweep takes it exclusively, so it
-/// runs only when no other instance can be mid-write.
+/// File that every running instance holds a shared lock on while it may write
+/// cache files. The temp sweep takes it exclusively, so it runs only when no
+/// other instance can be mid-write. This is the name used inside the cache
+/// root, for a root that has no parent folder.
 const WRITERS_LOCK_FILE: &str = ".writers.lock";
+
+/// Name of the writers lock file kept beside the cache root, so clearing the
+/// cache never has to delete a file that running instances hold locked.
+const WRITERS_LOCK_BESIDE_ROOT: &str = "streamnook-cache-writers.lock";
+
+/// Where the writers lock file lives for `cache_root`: in the folder that holds
+/// the cache root, or inside the root when it has no parent.
+fn writers_lock_path(cache_root: &Path) -> PathBuf {
+    match cache_root.parent() {
+        Some(parent) => parent.join(WRITERS_LOCK_BESIDE_ROOT),
+        None => cache_root.join(WRITERS_LOCK_FILE),
+    }
+}
 
 /// Runs the temp sweep once per process, before the first cache write.
 static SWEEP: Once = Once::new();
@@ -1720,7 +1734,7 @@ fn join_writers(cache_root: &Path) -> Option<(fs::File, Option<usize>)> {
         .write(true)
         .create(true)
         .truncate(false)
-        .open(cache_root.join(WRITERS_LOCK_FILE))
+        .open(writers_lock_path(cache_root))
     {
         Ok(file) => file,
         Err(e) => {
@@ -2464,8 +2478,8 @@ mod tests {
         badge_date_key, content_addressed_file_name, detect_image_ext, drop_expired, encode_with, is_still_paint_entry,
         join_writers, looks_like_html, looks_like_svg, missing_file_keys, parse_manifest, refuse_html,
         remove_cached_file, remove_entry_files, safe_id, store_entries, sweep_before_write, sweep_orphan_temp_files,
-        usable_file_path, webp_is_animated, write_atomic_with, write_file_entry, CacheMetadata, CacheType,
-        UniversalCacheEntry, UniversalCacheManifest, WRITERS_LOCK_FILE,
+        usable_file_path, webp_is_animated, write_atomic_with, write_file_entry, writers_lock_path, CacheMetadata,
+        CacheType, UniversalCacheEntry, UniversalCacheManifest, WRITERS_LOCK_FILE,
     };
     use std::collections::{HashMap, HashSet};
     use std::ffi::OsString;
@@ -2609,7 +2623,8 @@ mod tests {
 
     #[test]
     fn a_sweep_is_skipped_while_another_instance_may_be_writing() {
-        let root = scratch_dir("writers");
+        let base = scratch_dir("writers");
+        let root = base.join("cache");
         let emotes = root.join("emotes");
         fs::create_dir_all(&emotes).unwrap();
         let leftover = emotes.join(format!("a.png.{}.tmp", "0123456789abcdef0123456789abcdef"));
@@ -2620,7 +2635,7 @@ mod tests {
                 .write(true)
                 .create(true)
                 .truncate(false)
-                .open(root.join(WRITERS_LOCK_FILE))
+                .open(writers_lock_path(&root))
                 .unwrap()
         };
 
@@ -2641,12 +2656,40 @@ mod tests {
         assert!(third.try_lock().is_err(), "a sweeper cannot start while this process may write");
         drop(third);
         drop(mine);
-        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn the_writers_lock_sits_beside_the_cache_root_and_survives_removing_the_root() {
+        let base = scratch_dir("lock-beside-root");
+        let root = base.join("cache");
+        fs::create_dir_all(root.join("emotes")).unwrap();
+        fs::write(root.join("emotes").join("a-12345678.png"), b"png").unwrap();
+
+        let lock_path = writers_lock_path(&root);
+        assert_eq!(lock_path, base.join("streamnook-cache-writers.lock"));
+        assert_eq!(writers_lock_path(Path::new("")), Path::new(WRITERS_LOCK_FILE), "no parent: inside the root");
+
+        let (mine, _) = join_writers(&root).expect("joins the writers");
+        assert!(lock_path.exists(), "the lock file is outside the cache root");
+        assert!(!root.join(WRITERS_LOCK_FILE).exists(), "nothing is created inside the cache root");
+
+        // The removal and recreation `clear_universal_cache` performs.
+        fs::remove_dir_all(&root).unwrap();
+        fs::create_dir_all(&root).unwrap();
+
+        assert!(lock_path.exists(), "the lock file outlives the clear");
+        let other = fs::OpenOptions::new().read(true).write(true).open(&lock_path).unwrap();
+        assert!(other.try_lock().is_err(), "the lock is still held after the clear");
+        drop(other);
+        drop(mine);
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]
     fn a_write_waits_for_the_one_sweep_of_the_process() {
-        let root = scratch_dir("first-write");
+        let base = scratch_dir("first-write");
+        let root = base.join("cache");
         let emotes = root.join("emotes");
         fs::create_dir_all(&emotes).unwrap();
         let leftover = emotes.join(format!("a.png.{}.tmp", "0123456789abcdef0123456789abcdef"));
@@ -2666,7 +2709,7 @@ mod tests {
         sweep_before_write(&once, &holder, &dest);
         assert!(later.exists(), "the sweep runs once");
         drop(holder);
-        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]

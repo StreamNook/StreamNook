@@ -92,12 +92,18 @@ pub async fn sync_universal_cache_data(cache_types: Vec<String>) -> Result<usize
 
 #[command]
 pub async fn cleanup_universal_cache() -> Result<usize, String> {
-    cleanup_expired_entries().map_err(|e| e.to_string())
+    tauri::async_runtime::spawn_blocking(cleanup_expired_entries)
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
 }
 
 #[command]
 pub async fn clear_all_universal_cache(app: crate::rt::AppHandle) -> Result<(), String> {
-    clear_universal_cache().map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(clear_universal_cache)
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
     crate::services::asset_cache_queue::announce_cleared(&app);
     Ok(())
 }
