@@ -1,7 +1,7 @@
 use crate::services::ad_detect;
 use crate::services::ll_origin::{
     self, arc_bytes, empty_cors, media_response, opt_raw_query, parse_directive, parse_part_path,
-    playlist_response, LlOrigin,
+    playlist_response, LlOrigin, PlaylistServe,
 };
 use anyhow::Result;
 use log::{debug, info, warn};
@@ -181,11 +181,30 @@ impl MultiNookServer {
         profile: TileProfile,
         refresher: Option<TileRefresher>,
     ) -> Result<u16> {
+        Self::start_proxy_for(stream_id, stream_url, Some((profile, refresher))).await
+    }
+
+    /// Point a tile that is already registered at a new upstream, keeping its
+    /// profile and re-signer. The entry is looked up under the same registry
+    /// lock the start runs under, and a tile closed meanwhile is an error: a
+    /// swap or a rendition change never brings a closed tile back.
+    async fn start_proxy_existing(stream_id: &str, stream_url: String) -> Result<u16> {
+        Self::start_proxy_for(stream_id, stream_url, None).await
+    }
+
+    /// The start behind `start_proxy` and `start_proxy_existing`. `retarget` is
+    /// the profile and re-signer the tile takes on; `None` keeps the registered
+    /// tile's own and refuses to create one.
+    async fn start_proxy_for(
+        stream_id: &str,
+        stream_url: String,
+        retarget: Option<(TileProfile, Option<TileRefresher>)>,
+    ) -> Result<u16> {
         // Get-or-create under the registry lock, but probe the LL origin AFTER
         // releasing it: the probe fetches the upstream playlist plus backfill
         // segments, and holding the registry across that would serialize every
         // tile's startup when a preset cold-starts a whole grid.
-        let (port, origin) = {
+        let (port, origin, profile) = {
             let mut registry = STREAM_REGISTRY.lock().await;
 
             if let Some(instance) = registry.get_mut(stream_id) {
@@ -198,12 +217,17 @@ impl MultiNookServer {
                 *instance.ad_state.lock().unwrap() = ad_detect::AdDetectionState::default();
                 // A tile can be retargeted at a different platform (preset load,
                 // swap), so the profile follows the new upstream.
-                instance.profile = profile;
-                instance.refresher = refresher;
+                if let Some((profile, refresher)) = retarget {
+                    instance.profile = profile;
+                    instance.refresher = refresher;
+                }
                 // A swap held for the old upstream is moot once the tile is retargeted.
                 instance.pending_swap = None;
-                (instance.port, instance.ll_origin.clone())
+                (instance.port, instance.ll_origin.clone(), instance.profile)
             } else {
+                let Some((profile, refresher)) = retarget else {
+                    return Err(anyhow::anyhow!("no relay session for tile '{stream_id}'"));
+                };
                 // Start a new server on a random port
                 let port = rand::rng().random_range(10000..20000);
                 let proxy_url: Arc<Mutex<Option<String>>> =
@@ -272,7 +296,7 @@ impl MultiNookServer {
                         pending_swap: None,
                     },
                 );
-                (port, origin)
+                (port, origin, profile)
             }
         };
 
@@ -482,7 +506,7 @@ impl MultiNookServer {
     /// Otherwise the relay restarts on the rendition, keeping its port, and the
     /// returned URL is the one the tile reloads on.
     pub async fn adapt_tile(stream_id: &str, playlist_url: &str, same_decoder: bool) -> Result<Option<String>> {
-        let (proxy_url, ad_state, origin, port, profile, refresher) = {
+        let (proxy_url, ad_state, origin, port) = {
             let registry = STREAM_REGISTRY.lock().await;
             let inst = registry
                 .get(stream_id)
@@ -492,8 +516,6 @@ impl MultiNookServer {
                 inst.ad_state.clone(),
                 inst.ll_origin.clone(),
                 inst.port,
-                inst.profile,
-                inst.refresher.clone(),
             )
         };
         // A paused tile makes no request, a splice's included.
@@ -524,7 +546,7 @@ impl MultiNookServer {
             return Err(anyhow::Error::new(crate::services::link_adapt::RelayParked));
         }
         crate::services::hls_projection::reset(stream_id);
-        Self::start_proxy(stream_id, playlist_url.to_string(), profile, refresher).await?;
+        Self::start_proxy_existing(stream_id, playlist_url.to_string()).await?;
         let low_latency = Self::is_low_latency(stream_id).await;
         Ok(Some(format!(
             "http://localhost:{}/stream.m3u8?t={}{}",
@@ -597,14 +619,7 @@ impl MultiNookServer {
         // A pivot points the tile at a new region with its own segment numbering;
         // drop the old region's projection map so no synthetic URL survives it.
         crate::services::hls_projection::reset(stream_id);
-        let (profile, refresher) = {
-            let registry = STREAM_REGISTRY.lock().await;
-            registry
-                .get(stream_id)
-                .map(|i| (i.profile, i.refresher.clone()))
-                .unwrap_or((TileProfile::Twitch, None))
-        };
-        Self::start_proxy(stream_id, playlist_url, profile, refresher).await?;
+        Self::start_proxy_existing(stream_id, playlist_url).await?;
         info!(
             "[MultiNook] '{}' upstream swapped by a playback plugin",
             stream_id
@@ -684,10 +699,16 @@ impl MultiNookServer {
                         Self::apply_held_swap(&stream_id, url);
                     }
                 }
-                if let Some(pl) = origin.serve_playlist(msn, part).await {
-                    return Ok(playlist_response(pl.into_bytes()));
+                match origin.serve_playlist_checked(msn, part).await {
+                    PlaylistServe::Playlist(pl) => {
+                        return Ok(playlist_response(pl.into_bytes()));
+                    }
+                    // A woken origin still waiting on its reader: the player
+                    // retries, and the request never reaches the upstream.
+                    PlaylistServe::NotReady => return Ok(empty_cors(503)),
+                    // Origin went inactive between the check and now: fall through.
+                    PlaylistServe::Inactive => {}
                 }
-                // Origin went inactive between the check and now: fall through.
             }
         }
 
@@ -940,5 +961,58 @@ mod tests {
         assert!(!outcome.active);
         assert!(!origin.is_active());
         assert!(!origin.unpark());
+
+        // Every other precondition for a wake is back after the close: an edge,
+        // an upstream and a park. The close still wins.
+        origin.arm_for_test("http://127.0.0.1:1/x.m3u8");
+        origin.mark_parked_for_test();
+        assert!(!origin.unpark(), "a closed origin never wakes");
+        assert!(!origin.has_reader_for_test(), "no reader was started");
+    }
+
+    #[test]
+    fn a_swap_or_an_adapt_never_brings_a_closed_tile_back() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let id = "test-closed-tile-swap";
+            let url = "https://example.test/new.m3u8".to_string();
+            let origin = LlOrigin::new(ll_origin::TILE_MAX_SEGMENTS);
+            STREAM_REGISTRY.lock().await.insert(
+                id.to_string(),
+                StreamInstance {
+                    handle: tokio::spawn(async {}),
+                    port: 0,
+                    proxy_url: Arc::new(Mutex::new(Some("https://example.test/old.m3u8".to_string()))),
+                    ad_state: Arc::new(std::sync::Mutex::new(ad_detect::AdDetectionState::default())),
+                    ll_origin: origin.clone(),
+                    profile: TileProfile::GenericHls,
+                    refresher: None,
+                    resign_lock: Arc::new(Mutex::new(())),
+                    promotion: None,
+                    codec_steps: Vec::new(),
+                    pending_swap: None,
+                },
+            );
+            TILE_ORIGINS
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(id.to_string(), origin.clone());
+
+            // The tile closes before the swap gets to start it.
+            MultiNookServer::stop_instance(id).await.unwrap();
+            let gone = |registry: &HashMap<String, StreamInstance>| {
+                !registry.contains_key(id)
+                    && !TILE_ORIGINS.lock().unwrap_or_else(|e| e.into_inner()).contains_key(id)
+            };
+
+            assert!(MultiNookServer::swap_upstream_now(id, url.clone()).await.is_err());
+            assert!(gone(&*STREAM_REGISTRY.lock().await), "the swap recreated the tile");
+
+            assert!(MultiNookServer::start_proxy_existing(id, url.clone()).await.is_err());
+            assert!(gone(&*STREAM_REGISTRY.lock().await), "the start recreated the tile");
+
+            assert!(MultiNookServer::adapt_tile(id, &url, false).await.is_err());
+            assert!(gone(&*STREAM_REGISTRY.lock().await), "the adapt recreated the tile");
+        });
     }
 }

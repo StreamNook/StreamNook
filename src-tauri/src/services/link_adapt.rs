@@ -2351,6 +2351,26 @@ mod tests {
     }
 
     #[test]
+    fn a_parked_route_gets_no_probe_under_either_rule_set() {
+        let parked: Arc<dyn Route> = Arc::new(Parked);
+        let moving: Arc<dyn Route> = Arc::new(Still);
+
+        let mut p = phone(0, true);
+        p.switched(1, 5.0);
+        p.set_parked(parked.parked());
+        assert_eq!(p.decide_phone(40.0), None, "a parked phone stream is not probed");
+        p.set_parked(moving.parked());
+        assert_eq!(p.decide_phone(40.0), Some(Decision::Probe { rung: 0 }));
+
+        let mut d = desk(0);
+        d.switched(1, 5.0);
+        d.set_parked(parked.parked());
+        assert_eq!(d.decide_desktop(40.0), None, "a parked desktop stream is not probed");
+        d.set_parked(moving.parked());
+        assert_eq!(d.decide_desktop(40.0), Some(Decision::Probe { rung: 0 }));
+    }
+
+    #[test]
     fn desktop_the_bottom_rung_has_nowhere_to_go() {
         let mut g = desk(4);
         let (d, _) = feed(&mut g, 230_000, 50_000.0, 10.0, 6);

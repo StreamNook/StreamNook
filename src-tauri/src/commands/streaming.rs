@@ -401,6 +401,10 @@ impl crate::services::link_adapt::Route for ProviderSoloRoute {
     fn player_measures_link(&self) -> bool {
         false
     }
+
+    fn parked(&self) -> bool {
+        crate::services::stream_server::solo_parked()
+    }
 }
 
 /// Hand a provider's resolved stream to the solo player: through the relay,

@@ -1,6 +1,6 @@
 use crate::services::ll_origin::{
     arc_bytes, empty_cors, media_response, opt_raw_query, parse_directive, parse_part_path,
-    playlist_response,
+    playlist_response, PlaylistServe,
 };
 use anyhow::Result;
 use log::{error, info, warn};
@@ -38,6 +38,16 @@ static REFRESHING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool
 /// Register (or clear) how to re-sign the current stream's manifest url.
 pub async fn set_manifest_refresher(f: Option<Refresher>) {
     *REFRESHER.lock().await = f;
+}
+
+/// A Twitch stream is re-signed by the player's own resolve, never through the
+/// refresher a previous Kick or YouTube stream registered: drop it when the
+/// relay is handed a Twitch upstream. Another provider registers its own after
+/// this, once its upstream is in place.
+async fn drop_refresher_for(profile: UpstreamProfile) {
+    if profile == UpstreamProfile::Twitch {
+        *REFRESHER.lock().await = None;
+    }
 }
 
 /// An upstream refused us. If the stream knows how to re-sign itself, do it once
@@ -218,9 +228,8 @@ fn wakes_parked_origin(apple: bool, msn: Option<u64>) -> bool {
 
 fn reset_ad_state() {
     SOLO_STABILIZED.store(false, std::sync::atomic::Ordering::Relaxed);
-    // A new or stopped stream starts unparked, with no swap held for the old one.
+    // A new or stopped stream starts unparked.
     note_solo_plain_request_at(0);
-    *PENDING_SOLO_SWAP.lock().unwrap_or_else(|e| e.into_inner()) = None;
     *AD_STATE.lock().unwrap_or_else(|e| e.into_inner()) = AdDetectionState::default();
     // Tear down the LL-HLS origin (background reader + live edge) for the old stream.
     crate::services::ll_origin::stop();
@@ -616,8 +625,11 @@ pub fn set_app_handle(handle: crate::rt::AppHandle) {
 }
 
 /// Record (or clear) the live channel the solo relay serves. Live starts set
-/// it; VOD/clip starts and stops clear it.
+/// it; VOD/clip starts and stops clear it. Every start and stop sets the
+/// session, so a swap held for the previous stream goes with it; a swap's own
+/// restart does not, which keeps a swap held across it.
 pub fn set_solo_session(channel: Option<String>) {
+    *PENDING_SOLO_SWAP.lock().unwrap_or_else(|e| e.into_inner()) = None;
     *SOLO_CHANNEL.lock().unwrap_or_else(|e| e.into_inner()) = channel;
 }
 
@@ -641,12 +653,17 @@ pub fn solo_session_active() -> bool {
 /// the next playlist request: starting a proxy now would read again for a
 /// player that is not watching.
 pub async fn swap_upstream(playlist_url: String) -> Result<()> {
+    swap_upstream_at(playlist_url, solo_parked()).await
+}
+
+/// `swap_upstream`, given whether the stream is parked.
+async fn swap_upstream_at(playlist_url: String, parked: bool) -> Result<()> {
     if !solo_session_active() {
         return Err(anyhow::anyhow!("no live solo relay session"));
     }
     let to_apply = {
         let mut slot = PENDING_SOLO_SWAP.lock().unwrap_or_else(|e| e.into_inner());
-        crate::services::ll_origin::hold_swap_if_parked(&mut slot, solo_parked(), playlist_url)
+        crate::services::ll_origin::hold_swap_if_parked(&mut slot, parked, playlist_url)
     };
     let Some(playlist_url) = to_apply else {
         info!("[StreamServer] upstream swap held until playback resumes");
@@ -723,17 +740,28 @@ static SOLO_PLAIN_LAST_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::Ato
 /// Whether the solo stream is parked as of `now`: the parts origin is parked, or
 /// the whole-segment path has had no playlist request for the park span. The
 /// parts origin parks its own reader, so with it active only its flag counts.
+/// A player that asked for a playlist within the span is loading, so the stream
+/// is never parked then, whichever path served that request.
 fn solo_parked_at(now: u64) -> bool {
-    crate::services::ll_origin::is_parked()
-        || (!crate::services::ll_origin::is_active()
-            && crate::services::ll_origin::idle_for_park(
-                SOLO_PLAIN_LAST_MS.load(std::sync::atomic::Ordering::SeqCst),
-                now,
-                crate::services::ll_origin::park_idle_ms(),
-            ))
+    parked_from(
+        crate::services::ll_origin::is_parked(),
+        crate::services::ll_origin::is_active(),
+        SOLO_PLAIN_LAST_MS.load(std::sync::atomic::Ordering::SeqCst),
+        now,
+        crate::services::ll_origin::park_idle_ms(),
+    )
 }
 
-fn solo_parked() -> bool {
+/// `solo_parked_at` over its inputs: the origin's parked and active flags, the
+/// time of the last playlist request (0 = none), the clock and the park span.
+fn parked_from(origin_parked: bool, origin_active: bool, last: u64, now: u64, span: u64) -> bool {
+    let loading = last != 0 && now.saturating_sub(last) < span;
+    !loading && (origin_parked || (!origin_active && last != 0))
+}
+
+/// Whether the solo stream is parked now. Also read by the provider routes, so
+/// a Kick or YouTube stream holds still while paused like a Twitch one.
+pub(crate) fn solo_parked() -> bool {
     solo_parked_at(crate::services::ll_origin::mono_ms())
 }
 
@@ -746,15 +774,18 @@ fn note_solo_plain_request_at(ms: u64) {
 /// player loads again (`run_pending_solo_swap`).
 static PENDING_SOLO_SWAP: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
+/// The swap held while the solo stream was parked, taken once it no longer is.
+/// A stream that is still parked keeps it.
+fn take_pending_solo_swap() -> Option<String> {
+    let mut slot = PENDING_SOLO_SWAP.lock().unwrap_or_else(|e| e.into_inner());
+    crate::services::ll_origin::take_held_swap(&mut slot, solo_parked())
+}
+
 /// Apply the swap held while the solo stream was parked, now that a player is
 /// loading again. Spawned, so the request that woke it is not delayed; the
 /// player reloads through the swap's normal `ad-pivot` event.
 fn run_pending_solo_swap() {
-    let url = {
-        let mut slot = PENDING_SOLO_SWAP.lock().unwrap_or_else(|e| e.into_inner());
-        crate::services::ll_origin::take_held_swap(&mut slot, solo_parked())
-    };
-    let Some(url) = url else { return };
+    let Some(url) = take_pending_solo_swap() else { return };
     tokio::spawn(async move {
         if let Err(e) = swap_upstream_now(url).await {
             warn!("[StreamServer] held upstream swap failed: {}", e);
@@ -838,6 +869,9 @@ impl StreamServer {
         // concurrent cold starts could both spawn a warp server and both run the
         // shared SOLO origin's start, racing each other's edge setup.
         let _init_guard = SOLO_START_LOCK.lock().await;
+
+        // A Twitch upstream never inherits another provider's re-signer.
+        drop_refresher_for(upstream_profile()).await;
 
         // A refused first poll after a park re-signs through the same path the
         // playlist requests use.
@@ -1098,6 +1132,8 @@ impl StreamServer {
                 let wakes = wakes_parked_origin(apple, msn);
                 crate::services::ll_origin::wake_for_request(wakes);
                 if wakes {
+                    // A loading player is not a parked one, whichever path serves it.
+                    note_solo_plain_request_at(crate::services::ll_origin::mono_ms());
                     run_pending_solo_swap();
                 }
                 // Serve-side timing: hls.js reports levelLoadTimeOut pairs before
@@ -1111,9 +1147,12 @@ impl StreamServer {
                     let hold = parse_directive(&raw_query, "apple_hold")
                         .unwrap_or(crate::services::ll_origin::APPLE_HOLD_BACK_PARTS)
                         .clamp(2, crate::services::ll_origin::APPLE_HOLD_BACK_PARTS);
-                    crate::services::ll_origin::serve_playlist_apple(msn, part, &base, hold).await
+                    match crate::services::ll_origin::serve_playlist_apple(msn, part, &base, hold).await {
+                        Some(pl) => PlaylistServe::Playlist(pl),
+                        None => PlaylistServe::Inactive,
+                    }
                 } else {
-                    crate::services::ll_origin::serve_playlist(msn, part).await
+                    crate::services::ll_origin::serve_playlist_checked(msn, part).await
                 };
                 if probing {
                     crate::services::relay_probe::note_fetch(format!(
@@ -1123,18 +1162,24 @@ impl StreamServer {
                         t0.elapsed().as_millis()
                     ));
                 }
-                if let Some(pl) = served {
-                    if crate::services::ll_diagnostics::is_active() {
-                        crate::services::ll_diagnostics::event(&format!(
-                            "\"ev\":\"o_pl\",\"ms\":{},\"msn\":{},\"part\":{}",
-                            t0.elapsed().as_millis(),
-                            msn.map(|v| v as i64).unwrap_or(-1),
-                            part.map(|v| v as i64).unwrap_or(-1)
-                        ));
+                match served {
+                    PlaylistServe::Playlist(pl) => {
+                        if crate::services::ll_diagnostics::is_active() {
+                            crate::services::ll_diagnostics::event(&format!(
+                                "\"ev\":\"o_pl\",\"ms\":{},\"msn\":{},\"part\":{}",
+                                t0.elapsed().as_millis(),
+                                msn.map(|v| v as i64).unwrap_or(-1),
+                                part.map(|v| v as i64).unwrap_or(-1)
+                            ));
+                        }
+                        return Ok(playlist_response(pl.into_bytes()));
                     }
-                    return Ok(playlist_response(pl.into_bytes()));
+                    // A woken origin still waiting on its reader: the player
+                    // retries, and the request never reaches the upstream.
+                    PlaylistServe::NotReady => return Ok(empty_cors(503)),
+                    // Origin went inactive between the check and now: fall through.
+                    PlaylistServe::Inactive => {}
                 }
-                // Origin went inactive between the check and now: fall through.
             }
         }
 
@@ -1542,8 +1587,17 @@ impl StreamServer {
 mod relay_rewrite_tests {
     use super::*;
 
+    /// The tests below share the solo relay's process-wide state (session,
+    /// held swap, plain-request clock, re-signer); each takes this first.
+    static SOLO_STATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn solo_state() -> std::sync::MutexGuard<'static, ()> {
+        SOLO_STATE.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     #[test]
     fn a_whole_segment_stream_reads_as_parked_after_the_idle_span_until_a_request() {
+        let _state = solo_state();
         let span = crate::services::ll_origin::park_idle_ms();
         let asked = u64::MAX / 2;
 
@@ -1562,6 +1616,7 @@ mod relay_rewrite_tests {
 
     #[test]
     fn a_swap_held_during_a_park_is_taken_by_the_next_request_once() {
+        let _state = solo_state();
         let url = "https://example.test/fresh.m3u8".to_string();
         let mut slot = PENDING_SOLO_SWAP.lock().unwrap_or_else(|e| e.into_inner());
         *slot = None;
@@ -1587,6 +1642,91 @@ mod relay_rewrite_tests {
         assert!(wakes_parked_origin(false, Some(1)));
         assert!(wakes_parked_origin(true, None));
         assert!(!wakes_parked_origin(true, Some(1)));
+    }
+
+    #[test]
+    fn a_stream_being_loaded_never_reads_as_parked() {
+        let span = 30_000;
+        let asked = 1_000_000;
+
+        // The origin is parked but a player asked inside the span: it is loading.
+        assert!(!parked_from(true, true, asked, asked, span));
+        assert!(!parked_from(true, true, asked, asked + span - 1, span));
+        // Idle for the span, or never asked: the parked origin reads as parked.
+        assert!(parked_from(true, true, asked, asked + span, span));
+        assert!(parked_from(true, true, 0, asked, span));
+
+        // A whole-segment stream (origin inactive) parks only after the span.
+        assert!(!parked_from(false, false, asked, asked + span - 1, span));
+        assert!(parked_from(false, false, asked, asked + span, span));
+        assert!(!parked_from(false, false, 0, asked, span), "no request yet: not parked");
+
+        // A running parts origin parks itself; this reading never does.
+        assert!(!parked_from(false, true, asked, asked + span, span));
+    }
+
+    #[test]
+    fn a_twitch_start_leaves_no_other_providers_re_signer_behind() {
+        let _state = solo_state();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = calls.clone();
+        rt.block_on(async {
+            let stale = "https://example.test/stale.m3u8";
+            set_manifest_refresher(Some(Arc::new(move || {
+                counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Box::pin(async { Some("https://example.test/fresh.m3u8".to_string()) })
+                    as futures::future::BoxFuture<'static, Option<String>>
+            })))
+            .await;
+            *PROXY_URL.lock().await = Some(stale.to_string());
+
+            // Another provider's start keeps its own re-signer.
+            drop_refresher_for(UpstreamProfile::GenericHls).await;
+            assert!(REFRESHER.lock().await.is_some());
+
+            drop_refresher_for(UpstreamProfile::Twitch).await;
+            assert_eq!(resign_blocking(stale).await, None, "nothing re-signs a Twitch stream");
+            assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+            *PROXY_URL.lock().await = None;
+        });
+    }
+
+    #[test]
+    fn a_held_swap_outlives_a_reset_and_goes_with_a_stop_or_a_start() {
+        let _state = solo_state();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let url = "https://example.test/fresh.m3u8".to_string();
+        let held = || PENDING_SOLO_SWAP.lock().unwrap_or_else(|e| e.into_inner()).clone();
+
+        set_solo_session(Some("somechannel".to_string()));
+        assert!(held().is_none());
+
+        // Parked: the swap is held, not applied.
+        rt.block_on(swap_upstream_at(url.clone(), true)).unwrap();
+        assert_eq!(held().as_deref(), Some(url.as_str()));
+
+        // The restart a swap itself runs resets the ad state and keeps the swap.
+        reset_ad_state();
+        assert_eq!(held().as_deref(), Some(url.as_str()));
+
+        // A player loads again: the take hands it over once.
+        note_solo_plain_request_at(crate::services::ll_origin::mono_ms());
+        assert_eq!(take_pending_solo_swap().as_deref(), Some(url.as_str()));
+        assert_eq!(take_pending_solo_swap(), None);
+
+        // Held again, a stop (or a new start) drops it.
+        rt.block_on(swap_upstream_at(url.clone(), true)).unwrap();
+        set_solo_session(None);
+        assert!(held().is_none());
+        assert!(
+            rt.block_on(swap_upstream_at(url, true)).is_err(),
+            "no session: nothing to hold a swap for"
+        );
+        assert!(held().is_none());
+
+        note_solo_plain_request_at(0);
     }
 
     #[test]
