@@ -34,7 +34,8 @@ use std::sync::Arc;
 
 /// One frame on the bridge: the text the page parses, the channel it belongs
 /// to when known, whether it is a chat row (counted while held back) that
-/// mentions the viewer, and whether it is channel state (never held back).
+/// raised a ping for the viewer (an @ mention, a reply or a highlight phrase),
+/// and whether it is channel state (never held back).
 #[derive(Clone, Debug)]
 pub struct BridgeFrame {
     pub channel: Option<Arc<str>>,
@@ -392,6 +393,26 @@ mod tests {
         }
         r.on_frame(&BridgeFrame::row("xqc", "plain", false));
         assert_eq!(texts(r.on_line("UNPARK:xqc")), vec!["PARK_GAP:xqc", "m1", "m2", "m3", "PARK_END:xqc"]);
+    }
+
+    #[test]
+    fn rows_that_pinged_are_kept_and_a_phrase_hit_that_did_not_is_plain() {
+        let mut r = SocketRoute::default();
+        r.on_line("SUBS:xqc");
+        r.on_line("PARK:3:xqc");
+        // A phrase hit with its ping on arrives flagged; with pings off it does not.
+        r.on_frame(&BridgeFrame::row("xqc", "phrase1", true));
+        r.on_frame(&BridgeFrame::row("xqc", "silent", false));
+        r.on_frame(&BridgeFrame::row("xqc", "phrase2", true));
+        for i in 0..10 {
+            r.on_frame(&BridgeFrame::row("xqc", format!("p{i}"), false));
+        }
+        assert_eq!(texts(r.take_ticks()), vec!["PARKED_TICK:2:13:xqc"]);
+        assert_eq!(
+            texts(r.on_line("UNPARK:xqc")),
+            vec!["PARK_GAP:xqc", "phrase1", "phrase2", "p9", "PARK_END:xqc"],
+            "both rows that pinged stay, the silent phrase hit is pushed out like any plain row",
+        );
     }
 
     #[test]

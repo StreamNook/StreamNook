@@ -2758,7 +2758,7 @@ impl IrcService {
                             BridgeFrame::row(
                                 &chat_msg.channel,
                                 json_msg,
-                                chat_msg.metadata.is_mentioned || chat_msg.metadata.is_reply_to_me,
+                                crate::services::mention_inbox::pinged(&verdict),
                             ),
                             true,
                         )
@@ -2843,7 +2843,7 @@ impl IrcService {
                             BridgeFrame::row(
                                 &chat_msg.channel,
                                 json_msg,
-                                chat_msg.metadata.is_mentioned || chat_msg.metadata.is_reply_to_me,
+                                crate::services::mention_inbox::pinged(&verdict),
                             ),
                             true,
                         )
