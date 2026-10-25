@@ -1001,6 +1001,8 @@ pub async fn load_channel_history(
     limit: Option<u32>,
     after_ms: Option<u64>,
     before_ms: Option<u64>,
+    // The 7TV size the page draws, for the disk files stamped on the rows.
+    tier: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<Vec<ChatMessage>, String> {
     let key = channel.trim().trim_start_matches('#').to_lowercase();
@@ -1063,7 +1065,10 @@ pub async fn load_channel_history(
     // A native shell draws each row from its stamped view and only has these
     // rows once this answer returns, so the backlog waits briefly for its
     // authors' cosmetics and patches in the rest (`history_cosmetics`).
-    let parsed = crate::services::history_cosmetics::decorate(&key, &raw, parsed).await;
+    let mut parsed = crate::services::history_cosmetics::decorate(&key, &raw, parsed).await;
+    // The 7TV emotes' disk files at the page's size, so the rows' first paint
+    // is the disk copy (the page seeds its disk map from them).
+    super::emotes::stamp_row_emote_files(&mut parsed, super::emotes::render_tier(tier.as_deref()));
     if let Some(lines) = restamp_lines {
         IrcService::spawn_history_restamp(&key, lines, &parsed);
     }
