@@ -47,6 +47,7 @@ import { MAJOR_COLOGNE_THEME_ID } from '../services/cologneEvent';
 import type { HighlightMatch } from '../utils/chatHighlightMatcher';
 import { useStreamerMode } from '../utils/streamerMode';
 import { sevenTvSrcSet, staticEmoteUrl, static7tvSrcSet } from '../utils/staticEmoteUrl';
+import { emoteImageRetry } from '../utils/emoteImageRetry';
 import { flashTitle } from '../utils/titleFlasher';
 import { playSoundThrottled } from '../utils/notificationSound';
 import { chatterId, chatterProvider } from '../utils/chatterIdentity';
@@ -274,6 +275,99 @@ const WideEmoteImg = (
       }}
     />
   );
+};
+
+// A 7TV emote's image once the cache and CDN fallbacks have all failed (a
+// just-uploaded emote has no file on the CDN yet). The emote shows as its name
+// in a muted style while the shared retry looks for any file that exists, then
+// swaps to that image. Every other emote renders its plain image.
+const RetryingEmoteImg = ({
+  imgProps,
+  kind,
+  baseHeight,
+  retryId,
+  name,
+  tier,
+  wantStatic,
+  quiet,
+  placeholderStyle,
+}: {
+  imgProps: React.ImgHTMLAttributes<HTMLImageElement>;
+  kind: 'plain' | 'growX' | 'wide';
+  baseHeight: string;
+  /** Set for 7TV emotes only; the id the shared retry looks up. */
+  retryId?: string;
+  name: string;
+  tier: string;
+  wantStatic: boolean;
+  /** An overlay emote draws nothing while it waits, so it cannot cover its base. */
+  quiet: boolean;
+  placeholderStyle: React.CSSProperties;
+}) => {
+  const [phase, setPhase] = useState<'image' | 'pending' | 'found' | 'dead'>('image');
+  const [found, setFound] = useState<string | null>(null);
+  const [slotId, setSlotId] = useState(retryId);
+  if (slotId !== retryId) {
+    setSlotId(retryId);
+    setPhase('image');
+    setFound(null);
+  }
+
+  useEffect(() => {
+    if (phase !== 'pending' || !retryId) return;
+    return emoteImageRetry.subscribe(retryId, {
+      preferredTier: tier,
+      onResolved: (url) => {
+        setFound(url);
+        setPhase('found');
+      },
+    });
+  }, [phase, retryId, tier]);
+
+  if (phase === 'pending' || phase === 'dead') {
+    if (quiet) return null;
+    return (
+      <span
+        data-emote-pending={phase === 'pending' ? '' : undefined}
+        className="text-textSecondary opacity-60"
+        style={placeholderStyle}
+      >
+        {name}
+      </span>
+    );
+  }
+
+  let props = imgProps;
+  if (phase === 'image') {
+    props = {
+      ...imgProps,
+      onError: (e) => {
+        imgProps.onError?.(e);
+        if (retryId && e.currentTarget.dataset.ladderDone) setPhase('pending');
+      },
+    };
+  } else if (found) {
+    const url = wantStatic ? staticEmoteUrl(found) : found;
+    props = {
+      ...imgProps,
+      src: url,
+      srcSet: undefined,
+      onError: (e) => {
+        const t = e.currentTarget;
+        // The still frame may not exist in this format; the animated file does.
+        if (url !== found && !t.dataset.stillFallback) {
+          t.dataset.stillFallback = '1';
+          t.src = found;
+          return;
+        }
+        setPhase('dead');
+      },
+    };
+  }
+
+  if (kind === 'wide') return <WideEmoteImg {...props} baseHeight={baseHeight} />;
+  if (kind === 'growX') return <GrowXEmoteImg {...props} baseHeight={baseHeight} />;
+  return <img {...props} />;
 };
 
 // Parse plain text into emote/emoji/text segments by name lookup against the
@@ -1577,6 +1671,12 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             t.src = `https://cdn.7tv.app/emote/${segment.emoteId}/${emoteTier}${still}.webp`;
             return;
           }
+          // Every file a 7TV emote has failed: the image slot hands the emote
+          // to the shared retry, which keeps looking while a row shows it.
+          if (is7TVEmote && segment.emoteId) {
+            t.dataset.ladderDone = '1';
+            return;
+          }
           // A phone waking its radio fails a good image once. One late retry
           // before the emote becomes its name for good.
           if (!t.dataset.lateRetry) {
@@ -1598,18 +1698,18 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       };
       // BetterTTV's absolute stretch wins over FFZ's relative one when a
       // message stacks w! and ffzW on the same target.
-      const imgElement = mods?.wideX ? (
-        <WideEmoteImg
-          {...imgProps}
+      const imgElement = (
+        <RetryingEmoteImg
+          imgProps={imgProps}
+          kind={mods?.wideX ? 'wide' : mods?.growX ? 'growX' : 'plain'}
           baseHeight={giant ? GIANT_EMOTE_HEIGHT : INLINE_EMOTE_HEIGHT}
+          retryId={is7TVEmote ? segment.emoteId : undefined}
+          name={segment.content}
+          tier={emoteTier}
+          wantStatic={wantStatic}
+          quiet={isOverlay}
+          placeholderStyle={{ ...gridStyle, ...(inGrid ? {} : EMOTE_SIDE_MARGINS) }}
         />
-      ) : mods?.growX ? (
-        <GrowXEmoteImg
-          {...imgProps}
-          baseHeight={giant ? GIANT_EMOTE_HEIGHT : INLINE_EMOTE_HEIGHT}
-        />
-      ) : (
-        <img {...imgProps} />
       );
 
       // Big-preview tooltip mirroring the emote-picker's hover card. Compact

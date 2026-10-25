@@ -675,6 +675,33 @@ fn seventv_original_name(data: &serde_json::Value, shown: &str) -> Option<String
         .map(str::to_string)
 }
 
+/// The CDN file a 7TV emote's URL points at, chosen from its `host.files`: the
+/// 1x tier when it is listed, else the nearest listed tier, avif before webp
+/// before any other format. An emote still processing lists no files, which
+/// keeps the default 1x avif.
+fn seventv_file_name(emote_data: &serde_json::Value) -> String {
+    const DEFAULT_FILE: &str = "1x.avif";
+    let Some(files) = emote_data.pointer("/host/files").and_then(|v| v.as_array()) else {
+        return DEFAULT_FILE.to_string();
+    };
+    files
+        .iter()
+        .filter_map(|f| f.get("name").and_then(|n| n.as_str()))
+        .filter_map(|name| {
+            let (stem, ext) = name.rsplit_once('.')?;
+            let tier: u32 = stem.strip_suffix('x')?.parse().ok()?;
+            let ext_rank = match ext {
+                "avif" => 0,
+                "webp" => 1,
+                _ => 2,
+            };
+            Some(((tier.abs_diff(1), ext_rank, tier), name))
+        })
+        .min_by_key(|(rank, _)| *rank)
+        .map(|(_, name)| name.to_string())
+        .unwrap_or_else(|| DEFAULT_FILE.to_string())
+}
+
 pub(crate) fn parse_seventv_active_emotes(items: &[serde_json::Value]) -> Vec<Emote> {
     let mut out = Vec::new();
     for active_emote in items {
@@ -708,7 +735,11 @@ pub(crate) fn parse_seventv_active_emotes(items: &[serde_json::Value]) -> Vec<Em
             out.push(Emote {
                 id: id.to_string(),
                 name: name.to_string(),
-                url: format!("https://cdn.7tv.app/emote/{}/1x.avif", id),
+                url: format!(
+                    "https://cdn.7tv.app/emote/{}/{}",
+                    id,
+                    seventv_file_name(emote_data)
+                ),
                 provider: EmoteProvider::SevenTV,
                 is_zero_width: Some((flags & 256) == 256),
                 local_url: None,
@@ -2573,6 +2604,38 @@ mod tests {
         assert_eq!(out[0].is_zero_width, Some(false));
         assert_eq!(out[0].width, None);
         assert_eq!(out[0].owner_name, None);
+    }
+
+    #[test]
+    fn active_emote_url_follows_the_files_the_cdn_lists() {
+        let parse = |files: serde_json::Value| {
+            let items = vec![serde_json::json!({
+                "id": "e1",
+                "name": "Fresh",
+                "data": { "id": "e1", "host": { "files": files } }
+            })];
+            parse_seventv_active_emotes(&items).remove(0).url
+        };
+        // Only webp listed: the URL is the webp, not an avif that does not exist.
+        assert_eq!(
+            parse(serde_json::json!([{ "name": "1x.webp" }, { "name": "2x.webp" }])),
+            "https://cdn.7tv.app/emote/e1/1x.webp"
+        );
+        // Both formats listed: avif wins at the same tier.
+        assert_eq!(
+            parse(serde_json::json!([{ "name": "1x.webp" }, { "name": "1x.avif" }])),
+            "https://cdn.7tv.app/emote/e1/1x.avif"
+        );
+        // No 1x listed: the nearest tier is used.
+        assert_eq!(
+            parse(serde_json::json!([{ "name": "3x.avif" }, { "name": "2x.webp" }])),
+            "https://cdn.7tv.app/emote/e1/2x.webp"
+        );
+        // Still processing: no files listed keeps the default.
+        assert_eq!(
+            parse(serde_json::json!([])),
+            "https://cdn.7tv.app/emote/e1/1x.avif"
+        );
     }
 
     #[test]
