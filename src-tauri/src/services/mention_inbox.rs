@@ -1013,6 +1013,7 @@ mod tests {
                 is_zero_width: None,
                 modifier_flags: None,
                 is_personal: None,
+                local_path: None,
             },
             S::Emote {
                 content: "cvHazmat".into(),
@@ -1021,6 +1022,7 @@ mod tests {
                 is_zero_width: Some(true),
                 modifier_flags: None,
                 is_personal: None,
+                local_path: None,
             },
             S::Text { content: " hi ".into() },
             S::Link { content: "x.com".into(), url: "https://x.com".into(), card: None, label: String::new() },
