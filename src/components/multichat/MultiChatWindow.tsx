@@ -422,7 +422,7 @@ export default function MultiChatWindow() {
   // Keyboard moderation in the popout: the active pane registers the mod
   // controller (see ChatWidget), and this drives the hotkeys against it.
   useKeybindings();
-  // Plays the mention sound when Rust picks this window (main is closed).
+  // Hears every mention ping and plays the ones this window claims first.
   useMentionPing();
   useEffect(() => {
     startSnippetSync();

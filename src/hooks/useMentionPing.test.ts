@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-type Ping = { id: number; channel: string; sound: string; volume: number };
+type Ping = { id: number; channel: string; sound: string; volume: number; path?: string };
 type Handler = (e: { payload: Ping }) => void;
 
 const m = vi.hoisted(() => ({
@@ -10,6 +10,7 @@ const m = vi.hoisted(() => ({
   invoke: vi.fn(),
   globalListen: vi.fn(),
   playSound: vi.fn(),
+  playSoundFile: vi.fn(),
 }));
 
 vi.mock('@tauri-apps/api/webviewWindow', () => ({
@@ -17,7 +18,7 @@ vi.mock('@tauri-apps/api/webviewWindow', () => ({
 }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: m.invoke }));
 vi.mock('@tauri-apps/api/event', () => ({ listen: m.globalListen }));
-vi.mock('../utils/notificationSound', () => ({ playSound: m.playSound }));
+vi.mock('../utils/notificationSound', () => ({ playSound: m.playSound, playSoundFile: m.playSoundFile }));
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 const ping: Ping = { id: 7, channel: 'a', sound: 'boop', volume: 40 };
@@ -60,6 +61,18 @@ describe('startMentionPing', () => {
     m.invoke.mockRejectedValueOnce(new Error('no app'));
     m.handler?.({ payload: { ...ping, id: 9 } });
     await flush();
+    expect(m.playSound).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it('plays a custom sound from the file the ping carries', async () => {
+    const { startMentionPing } = await import('./useMentionPing');
+    const stop = startMentionPing();
+    await flush();
+    m.invoke.mockResolvedValueOnce(true);
+    m.handler?.({ payload: { ...ping, id: 10, sound: 'file:abc', path: 'C:/sounds/bell.wav' } });
+    await flush();
+    expect(m.playSoundFile).toHaveBeenCalledWith('file:abc', 'C:/sounds/bell.wav', 40);
     expect(m.playSound).not.toHaveBeenCalled();
     stop();
   });

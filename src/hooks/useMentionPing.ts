@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
-import { playSound } from '../utils/notificationSound';
+import { playSound, playSoundFile } from '../utils/notificationSound';
 
 interface MentionPing {
   /** What this page claims before playing. */
@@ -10,6 +10,8 @@ interface MentionPing {
   sound: string;
   /** Percent of the sound's own level. */
   volume: number;
+  /** A custom sound's file, so this window needs no settings to find it. */
+  path?: string;
 }
 
 /** Rust's event that plays the sound, sent to every window that could play it. */
@@ -28,10 +30,12 @@ export function startMentionPing(): () => void {
     .then(() =>
       // Window-scoped: a plain `listen` hears events sent to every other window too.
       getCurrentWebviewWindow().listen<MentionPing>(PING_EVENT, (e) => {
-        const { id, sound, volume } = e.payload;
+        const { id, sound, volume, path } = e.payload;
         void invoke<boolean>(CLAIM_COMMAND, { id })
           .then((mine) => {
-            if (mine) playSound(sound, volume);
+            if (!mine) return;
+            if (path) playSoundFile(sound, path, volume);
+            else playSound(sound, volume);
           })
           .catch(() => {});
       }),

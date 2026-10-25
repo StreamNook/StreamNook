@@ -61,7 +61,7 @@ function readParams() {
 const CHROME_LINGER_MS = 1600;
 
 export default function ChatOverlayWindow() {
-  // Plays the mention sound when Rust picks this window (main and MultiChat are closed).
+  // Hears every mention ping and plays the ones this window claims first.
   useMentionPing();
   const { channel, channelId, channelName } = useMemo(() => readParams(), []);
   const settings = useAppStore((s) => s.settings);
