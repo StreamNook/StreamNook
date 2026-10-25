@@ -214,6 +214,15 @@ export const MultiNookView: React.FC = () => {
       invoke('set_multi_nook_meta_channels', { logins: [] }).catch(() => {});
     };
   }, []);
+  // A Kick, YouTube or TikTok tile's relay reports its stream ended, by slot.
+  useEffect(() => {
+    const unlisten = listen<{ slotId: string }>('multi-nook://tile-ended', (e) => {
+      usemultiNookStore.getState().markSlotEnded(e.payload.slotId);
+    });
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
+  }, []);
 
   // The tile whose chat is shown carries the watch EventSub socket, drops
   // monitoring and the predictions set; Rust moves all three

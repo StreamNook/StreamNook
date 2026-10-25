@@ -88,6 +88,9 @@ struct StreamInstance {
     /// A plugin swap that arrived while this tile was parked, applied on the
     /// tile's next playlist request (`take_held_swap`, `apply_held_swap`).
     pending_swap: Option<String>,
+    /// What this tile's relay has seen of its upstream playlist, read by the
+    /// provider end rule (`provider_tile_ended`).
+    end_state: Arc<std::sync::Mutex<ProviderEndState>>,
 }
 
 pub struct MultiNookServer;
@@ -118,11 +121,7 @@ impl crate::services::link_adapt::Route for TwitchTileRoute {
     }
 
     fn parked(&self) -> bool {
-        TILE_ORIGINS
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&self.stream_id)
-            .is_some_and(|origin| origin.parked_or_idle())
+        tile_parked(&self.stream_id)
     }
 }
 
@@ -130,6 +129,90 @@ pub fn twitch_tile_route(stream_id: &str) -> Arc<dyn crate::services::link_adapt
     Arc::new(TwitchTileRoute {
         stream_id: stream_id.to_string(),
     })
+}
+
+/// Whether nothing is being read for this tile's player: its origin is parked,
+/// or no player has asked for its playlist for the park span. False for a tile
+/// with no origin registered.
+pub fn tile_parked(stream_id: &str) -> bool {
+    TILE_ORIGINS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(stream_id)
+        .is_some_and(|origin| origin.parked_or_idle())
+}
+
+/// Playlist fetches in a row an ended provider stream must refuse (404 or 410).
+const PROVIDER_END_REFUSALS: u32 = 6;
+/// How long those refusals must span, in milliseconds.
+const PROVIDER_END_SPAN_MS: u64 = 12_000;
+/// The event a provider tile's end is reported on; the payload is `{ "slotId" }`.
+const TILE_ENDED_EVENT: &str = "multi-nook://tile-ended";
+
+/// What a provider tile's relay has seen of its upstream playlist. Held per
+/// tile instance and cleared when the tile is pointed at a new upstream.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct ProviderEndState {
+    /// Refusals in a row since the last playlist that was served.
+    refusals: u32,
+    /// When the first of those refusals arrived (`mono_ms`; 0 = none yet).
+    first_refusal_ms: u64,
+    /// The end was already reported for this tile.
+    announced: bool,
+}
+
+/// One answer from a provider tile's upstream playlist.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TileFetch {
+    /// A playlist was served; `endlist` when it carries `#EXT-X-ENDLIST`.
+    Playlist { endlist: bool },
+    /// The upstream answered 404 or 410 and the tile's re-sign failed (or the
+    /// tile has none), at `at_ms`.
+    Refused { at_ms: u64 },
+    /// Any other answer. A fetch that got no answer at all is not reported here
+    /// and neither counts nor resets.
+    Failed,
+}
+
+/// Whether a provider tile's stream has ended: its playlist carries
+/// `#EXT-X-ENDLIST`, or the upstream refused `PROVIDER_END_REFUSALS` playlist
+/// fetches in a row spanning `PROVIDER_END_SPAN_MS`. Any other answer clears the
+/// run. The bool is true only for the fetch that first concludes the end.
+fn provider_tile_ended(mut state: ProviderEndState, fetch: TileFetch) -> (ProviderEndState, bool) {
+    let ended = match fetch {
+        TileFetch::Playlist { endlist } => {
+            state.refusals = 0;
+            state.first_refusal_ms = 0;
+            endlist
+        }
+        TileFetch::Refused { at_ms } => {
+            if state.refusals == 0 {
+                state.first_refusal_ms = at_ms;
+            }
+            state.refusals = state.refusals.saturating_add(1);
+            state.refusals >= PROVIDER_END_REFUSALS
+                && at_ms.saturating_sub(state.first_refusal_ms) >= PROVIDER_END_SPAN_MS
+        }
+        TileFetch::Failed => {
+            state.refusals = 0;
+            state.first_refusal_ms = 0;
+            false
+        }
+    };
+    let first = ended && !state.announced;
+    if ended {
+        state.announced = true;
+    }
+    (state, first)
+}
+
+/// Tell the page this provider tile's stream ended.
+fn announce_tile_ended(stream_id: &str) {
+    use tauri::Emitter;
+    let Some(app) = crate::services::providers::app_handle() else {
+        return;
+    };
+    let _ = app.emit(TILE_ENDED_EVENT, serde_json::json!({ "slotId": stream_id }));
 }
 
 /// Registry of all active stream proxy instances, keyed by stream_id
@@ -181,7 +264,7 @@ impl MultiNookServer {
         profile: TileProfile,
         refresher: Option<TileRefresher>,
     ) -> Result<u16> {
-        Self::start_proxy_for(stream_id, stream_url, Some((profile, refresher))).await
+        Self::start_proxy_for(stream_id, stream_url, Some((profile, refresher)), true).await
     }
 
     /// Point a tile that is already registered at a new upstream, keeping its
@@ -189,16 +272,30 @@ impl MultiNookServer {
     /// lock the start runs under, and a tile closed meanwhile is an error: a
     /// swap or a rendition change never brings a closed tile back.
     async fn start_proxy_existing(stream_id: &str, stream_url: String) -> Result<u16> {
-        Self::start_proxy_for(stream_id, stream_url, None).await
+        Self::start_proxy_for(stream_id, stream_url, None, false).await
     }
 
-    /// The start behind `start_proxy` and `start_proxy_existing`. `retarget` is
-    /// the profile and re-signer the tile takes on; `None` keeps the registered
-    /// tile's own and refuses to create one.
+    /// Like `start_proxy_existing`, but the tile also takes on `profile` and
+    /// `refresher`. For a tile switched to another rendition or size: a tile
+    /// closed meanwhile is an error rather than a new tile.
+    pub async fn restart_existing(
+        stream_id: &str,
+        stream_url: String,
+        profile: TileProfile,
+        refresher: Option<TileRefresher>,
+    ) -> Result<u16> {
+        Self::start_proxy_for(stream_id, stream_url, Some((profile, refresher)), false).await
+    }
+
+    /// The start behind `start_proxy`, `start_proxy_existing` and
+    /// `restart_existing`. `retarget` is the profile and re-signer the tile takes
+    /// on; `None` keeps the registered tile's own. `create` lets a tile that is
+    /// not registered be started; without it a missing tile is an error.
     async fn start_proxy_for(
         stream_id: &str,
         stream_url: String,
         retarget: Option<(TileProfile, Option<TileRefresher>)>,
+        create: bool,
     ) -> Result<u16> {
         // Get-or-create under the registry lock, but probe the LL origin AFTER
         // releasing it: the probe fetches the upstream playlist plus backfill
@@ -223,9 +320,12 @@ impl MultiNookServer {
                 }
                 // A swap held for the old upstream is moot once the tile is retargeted.
                 instance.pending_swap = None;
+                // The new upstream starts with a clean record of refusals.
+                *instance.end_state.lock().unwrap_or_else(|e| e.into_inner()) =
+                    ProviderEndState::default();
                 (instance.port, instance.ll_origin.clone(), instance.profile)
             } else {
-                let Some((profile, refresher)) = retarget else {
+                let (Some((profile, refresher)), true) = (retarget, create) else {
                     return Err(anyhow::anyhow!("no relay session for tile '{stream_id}'"));
                 };
                 // Start a new server on a random port
@@ -234,6 +334,8 @@ impl MultiNookServer {
                     Arc::new(Mutex::new(Some(stream_url.clone())));
                 let ad_state: Arc<std::sync::Mutex<ad_detect::AdDetectionState>> =
                     Arc::new(std::sync::Mutex::new(ad_detect::AdDetectionState::default()));
+                let end_state: Arc<std::sync::Mutex<ProviderEndState>> =
+                    Arc::new(std::sync::Mutex::new(ProviderEndState::default()));
                 let origin = LlOrigin::new(ll_origin::TILE_MAX_SEGMENTS);
                 origin.set_window(sync_window());
                 origin.set_adapt_id(stream_id);
@@ -249,6 +351,7 @@ impl MultiNookServer {
                 let addr = SocketAddr::from(([127, 0, 0, 1], port));
                 let proxy_url_clone = proxy_url.clone();
                 let ad_state_clone = ad_state.clone();
+                let end_state_clone = end_state.clone();
                 let origin_clone = origin.clone();
                 let sid = stream_id.to_string();
                 let profile_for_filter = profile;
@@ -264,6 +367,7 @@ impl MultiNookServer {
                     .and(warp::any().map(move || sid.clone()))
                     .and(warp::any().map(move || origin_clone.clone()))
                     .and(warp::any().map(move || profile_for_filter))
+                    .and(warp::any().map(move || end_state_clone.clone()))
                     .and_then(Self::proxy_handler)
                     .boxed();
 
@@ -294,6 +398,7 @@ impl MultiNookServer {
                         promotion: None,
                         codec_steps: Vec::new(),
                         pending_swap: None,
+                        end_state,
                     },
                 );
                 (port, origin, profile)
@@ -646,6 +751,7 @@ impl MultiNookServer {
         stream_id: String,
         origin: Arc<LlOrigin>,
         profile: TileProfile,
+        end_state: Arc<std::sync::Mutex<ProviderEndState>>,
     ) -> Result<warp::http::Response<bytes::Bytes>, warp::Rejection> {
         // Handle CORS preflight instantly without touching upstream.
         if method == warp::http::Method::OPTIONS {
@@ -764,6 +870,8 @@ impl MultiNookServer {
         // refusal body and stop for good with no way back.
         let mut url = url;
         let mut resigned = false;
+        // The tile's re-sign was tried and gave nothing (or the tile has none).
+        let mut resign_failed = false;
         let (status, mut bytes) = loop {
             let response = match HTTP_CLIENT.get(&url).send().await {
                 Ok(res) => res,
@@ -804,9 +912,35 @@ impl MultiNookServer {
                 }
                 // No refresher (Twitch tiles), or re-signing failed: serve what
                 // the upstream said rather than inventing a different failure.
-                None => break (status, body),
+                None => {
+                    resign_failed = true;
+                    break (status, body);
+                }
             }
         };
+
+        // A provider tile's stream has ended when its playlist says so or its
+        // upstream keeps refusing it. Twitch tiles are told by the channel poll.
+        if profile == TileProfile::GenericHls {
+            let fetch = if status.is_success() {
+                TileFetch::Playlist {
+                    endlist: std::str::from_utf8(&bytes).is_ok_and(|t| t.contains("#EXT-X-ENDLIST")),
+                }
+            } else if resign_failed && matches!(status.as_u16(), 404 | 410) {
+                TileFetch::Refused { at_ms: ll_origin::mono_ms() }
+            } else {
+                TileFetch::Failed
+            };
+            let first_end = {
+                let mut seen = end_state.lock().unwrap_or_else(|e| e.into_inner());
+                let (next, first_end) = provider_tile_ended(std::mem::take(&mut *seen), fetch);
+                *seen = next;
+                first_end
+            };
+            if first_end {
+                announce_tile_ended(&stream_id);
+            }
+        }
 
         // Detect ad markers for the per-tile state — same shared logic as the solo
         // player, read-only: the tile relay is ad-neutral and serves the upstream's
@@ -916,6 +1050,7 @@ mod tests {
                     promotion: None,
                     codec_steps: Vec::new(),
                     pending_swap: None,
+                    end_state: Arc::new(std::sync::Mutex::new(ProviderEndState::default())),
                 },
             );
             let held = |registry: &HashMap<String, StreamInstance>| registry.get(id).unwrap().pending_swap.clone();
@@ -991,6 +1126,7 @@ mod tests {
                     promotion: None,
                     codec_steps: Vec::new(),
                     pending_swap: None,
+                    end_state: Arc::new(std::sync::Mutex::new(ProviderEndState::default())),
                 },
             );
             TILE_ORIGINS
@@ -1013,6 +1149,89 @@ mod tests {
 
             assert!(MultiNookServer::adapt_tile(id, &url, false).await.is_err());
             assert!(gone(&*STREAM_REGISTRY.lock().await), "the adapt recreated the tile");
+
+            let restarted =
+                MultiNookServer::restart_existing(id, url.clone(), TileProfile::GenericHls, None).await;
+            assert!(restarted.is_err(), "a restart of a closed tile must fail");
+            assert!(gone(&*STREAM_REGISTRY.lock().await), "the restart recreated the tile");
         });
+    }
+
+    #[test]
+    fn a_provider_tile_is_parked_when_its_origin_is() {
+        let id = "test-parked-provider-tile";
+        assert!(!tile_parked(id), "a tile with no origin is not parked");
+
+        let origin = LlOrigin::new(ll_origin::TILE_MAX_SEGMENTS);
+        TILE_ORIGINS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(id.to_string(), origin.clone());
+        assert!(!tile_parked(id), "a running origin is not parked");
+
+        origin.mark_parked_for_test();
+        assert!(tile_parked(id));
+
+        TILE_ORIGINS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(id);
+        assert!(!tile_parked(id), "a removed tile is not parked");
+    }
+
+    fn refused(at_ms: u64) -> TileFetch {
+        TileFetch::Refused { at_ms }
+    }
+
+    #[test]
+    fn a_playlist_with_an_endlist_ends_the_tile_once() {
+        let (state, ended) = provider_tile_ended(
+            ProviderEndState::default(),
+            TileFetch::Playlist { endlist: false },
+        );
+        assert!(!ended);
+        let (state, ended) = provider_tile_ended(state, TileFetch::Playlist { endlist: true });
+        assert!(ended);
+        let (_, again) = provider_tile_ended(state, TileFetch::Playlist { endlist: true });
+        assert!(!again, "the end is reported once per tile");
+    }
+
+    #[test]
+    fn six_refusals_over_twelve_seconds_end_the_tile() {
+        let mut state = ProviderEndState::default();
+        for i in 0..5u64 {
+            let (next, ended) = provider_tile_ended(state, refused(1_000 + i * 2_400));
+            assert!(!ended, "refusal {} is too early", i + 1);
+            state = next;
+        }
+        let (_, ended) = provider_tile_ended(state, refused(1_000 + 5 * 2_400));
+        assert!(ended, "the sixth refusal, 12 s after the first, ends it");
+    }
+
+    #[test]
+    fn six_refusals_in_five_seconds_do_not_end_the_tile() {
+        let mut state = ProviderEndState::default();
+        for i in 0..8u64 {
+            let (next, ended) = provider_tile_ended(state, refused(1_000 + i * 700));
+            assert!(!ended, "refusal {} came too fast to be an end", i + 1);
+            state = next;
+        }
+        let (_, ended) = provider_tile_ended(state, refused(1_000 + 12_000));
+        assert!(ended, "once the run spans 12 s it ends");
+    }
+
+    #[test]
+    fn a_served_playlist_or_other_answer_resets_the_refusals() {
+        for reset in [TileFetch::Playlist { endlist: false }, TileFetch::Failed] {
+            let mut state = ProviderEndState::default();
+            for i in 0..5u64 {
+                state = provider_tile_ended(state, refused(1_000 + i * 4_000)).0;
+            }
+            let (state, ended) = provider_tile_ended(state, reset);
+            assert!(!ended);
+            assert_eq!(state, ProviderEndState::default());
+            let (_, ended) = provider_tile_ended(state, refused(30_000));
+            assert!(!ended, "the run starts over after a reset");
+        }
     }
 }

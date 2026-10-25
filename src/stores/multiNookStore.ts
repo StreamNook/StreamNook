@@ -260,6 +260,11 @@ interface MultiNookState {
    *  multi_nook_meta: one batched poll for the grid, sent on change). All of
    *  it is ephemeral view data: this never writes to settings. */
   applySlotMetadata: (entries: MultiNookTileMeta[]) => void;
+  /** A provider tile's relay saw its stream end (services/multi_nook_server,
+   *  `multi-nook://tile-ended`). The tile is stopped and shows the offline card,
+   *  the same as a Twitch tile whose channel went offline. Matched by slot id,
+   *  never by login. */
+  markSlotEnded: (slotId: string) => void;
   loadPresetChannels: (channels: MultiNookPresetChannel[], mode: 'replace' | 'append', presetId?: string) => Promise<void>;
   /** Tag the current grid with the preset it was loaded from (null = no equipped preset). Persisted. */
   setActivePresetId: (id: string | null) => Promise<void>;
@@ -417,6 +422,20 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
     // Title, category and partner mark are ephemeral; only a repaired
     // identity is worth saving.
     if (identityChanged) void get().saveSlots();
+  },
+
+  markSlotEnded: (slotId) => {
+    const slot = get().slots.find((s) => s.id === slotId);
+    if (!slot) return;
+    if (slot.offline === true && slot.loadError === true && !slot.streamUrl) return;
+    if (slot.streamUrl) {
+      void invoke('stop_multi_nook', { streamId: slot.id }).catch(() => {});
+    }
+    set((state) => ({
+      slots: state.slots.map((s) =>
+        s.id === slotId ? { ...s, offline: true, streamUrl: undefined, loadError: true } : s,
+      ),
+    }));
   },
 
   loadPresetChannels: async (channels, mode, presetId) => {
