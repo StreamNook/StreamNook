@@ -39,7 +39,7 @@ import { streamProvider } from '../utils/streamProvider';
 import { parseBadges } from '../services/twitchBadges';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { fetchAllEmotes, fetchKickChannelEmotes, fetchYouTubeChannelEmotes, enhanceRustEmotes, type Emote, type EmoteSet } from '../services/emoteService';
+import { fetchAllEmotes, fetchKickChannelEmotes, fetchYouTubeChannelEmotes, enhanceRustEmotes, inlineEmoteTier, type Emote, type EmoteSet } from '../services/emoteService';
 import { Logger } from '../utils/logger';
 import { useAppStore } from './AppStore';
 import { useGiftBombStore, type GiftRecipient } from './giftBombStore';
@@ -1182,6 +1182,8 @@ interface HistoryWindow {
 function loadHistory(key: string, window?: HistoryWindow): Promise<any[] | null> {
   return invoke<any[]>('load_channel_history', {
     channel: key,
+    // The 7TV size this window draws, so Rust stamps the rows' disk files at it.
+    tier: inlineEmoteTier(),
     limit: window?.limit,
     afterMs: window?.afterMs ?? undefined,
     beforeMs: window?.beforeMs ?? undefined,
@@ -2130,7 +2132,13 @@ async function initializeBadgesForChannel(channelId: string | null): Promise<voi
   if (!channelId) return;
   try {
     const { initializeBadgeCache } = await import('../services/twitchBadges');
-    await initializeBadgeCache(channelId);
+    // The badge file map (memoized) loads beside the metadata, so history
+    // rows draw disk badges on their first paint. Its failure never blocks
+    // the metadata.
+    const badgeFiles = import('../services/badgeImageCacheService')
+      .then((m) => m.initializeBadgeImageCache())
+      .catch(() => {});
+    await Promise.all([initializeBadgeCache(channelId), badgeFiles]);
   } catch (err) {
     Logger.warn('[ChatStore] Badge cache init failed:', err);
   }

@@ -25,6 +25,7 @@ vi.mock('../services/emoteService', () => ({
   fetchKickChannelEmotes: vi.fn(async () => null),
   fetchYouTubeChannelEmotes: vi.fn(async () => null),
   enhanceRustEmotes: vi.fn((x: unknown) => x),
+  inlineEmoteTier: vi.fn(() => '2x'),
 }));
 vi.mock('../services/twitchBadges', () => ({
   parseBadges: vi.fn(() => []),

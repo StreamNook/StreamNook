@@ -3,7 +3,7 @@ import { Gift } from 'lucide-react';
 import { parseBadges } from '../services/twitchBadges';
 import { Tooltip } from './ui/Tooltip';
 import { parseMessage, type LinkCardShape, type MessageSegment } from '../services/twitchChat';
-import { queueEmoteForDisplayCaching, getCachedEmoteUrl, getEmoteLookup, inlineEmoteTier, sevenTvTierUrl, EmoteSet } from '../services/emoteService';
+import { queueEmoteForDisplayCaching, getCachedEmoteUrl, getEmoteLookup, inlineEmoteTier, rememberRowEmoteFile, sevenTvTierUrl, EmoteSet } from '../services/emoteService';
 import { isDiskCopyUrl } from '../utils/cacheFileUrl';
 import { getCachedEmojiUrl, parseEmojisSync } from '../services/emojiService';
 import { calculateHalfPadding } from '../utils/chatLayoutUtils';
@@ -285,6 +285,9 @@ const WideEmoteImg = (
 const fromRustSegments = (segments: MessageSegment[], isProvider: boolean): EmoteSegment[] => {
   return segments.flatMap((seg): EmoteSegment[] => {
     if (seg.type === 'emote') {
+      // A history row carries its 7TV emote's disk file: seed the disk map
+      // before this row's emotes resolve, so the first paint is the disk copy.
+      if (seg.local_path && seg.emote_id) rememberRowEmoteFile(seg.emote_id, seg.local_path);
       return [{
         type: 'emote' as const,
         content: seg.content,

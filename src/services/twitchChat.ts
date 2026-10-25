@@ -21,7 +21,9 @@ export type LinkCardShape =
 // Message segment types - matches Rust MessageSegment enum
 export type MessageSegment =
   | { type: 'text'; content: string }
-  | { type: 'emote'; content: string; emote_id?: string; emote_url: string; is_zero_width?: boolean; modifier_flags?: number; is_personal?: boolean }
+  // `local_path`: the emote's disk file at this window's 7TV size, on history
+  // rows (Rust stamps it; absent otherwise).
+  | { type: 'emote'; content: string; emote_id?: string; emote_url: string; is_zero_width?: boolean; modifier_flags?: number; is_personal?: boolean; local_path?: string }
   | { type: 'emoji'; content: string; emoji_url: string }
   // `card`: the preview card kind this link's shape all but always gets; absent
   // when it may have none. `label`: the short form a row prints when links are

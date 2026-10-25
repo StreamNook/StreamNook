@@ -256,6 +256,13 @@ export function getCachedEmoteUrl(
   return path ? cacheFileUrl(path) : undefined;
 }
 
+/** A history row from Rust named a 7TV emote's disk file at this window's size
+ *  (load_channel_history stamps them): remember it before the row paints, so
+ *  its first paint is the disk copy instead of the CDN. */
+export function rememberRowEmoteFile(id: string, path: string): void {
+  cachedEmoteFiles.set(emoteCacheKey(id, '7tv', inlineEmoteTier()), path);
+}
+
 /**
  * Queue an emote for disk caching at the size it will actually render. 7TV is
  * cached per-tier (key `${id}@${tier}`, URL at that tier) so the stored file
