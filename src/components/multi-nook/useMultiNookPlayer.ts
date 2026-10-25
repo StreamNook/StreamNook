@@ -34,6 +34,7 @@ import {
   type PausePark,
 } from '../../utils/pausePark';
 import { followLiveAfterResync } from '../../utils/liveResync';
+import { watchStalls } from '../../utils/stallWatchdog';
 
 /** Whether the tile `streamId` plays the signed-in account's own Twitch
  *  channel, compared by login the way the Own channel shortcut finds it. */
@@ -686,6 +687,23 @@ export const useMultiNookPlayer = ({
           (m) => Logger.info(`[MultiNook-${streamId}] ${m}`),
         );
       }, opts);
+      // A pinned playhead while playing restarts the tile, as a failed resume
+      // does. The watch starts when playback does and ends with the listeners.
+      let stopFrozenWatch: (() => void) | null = null;
+      video.addEventListener('playing', () => {
+        if (stopFrozenWatch) return;
+        stopFrozenWatch = watchStalls(video, {
+          onFrozen: () => {
+            if (hlsRef.current !== hls || heldPause(streamId, streamId)) return;
+            Logger.warn(`[MultiNook-${streamId}] playhead frozen while playing; restarting the tile`);
+            usemultiNookStore.getState().retrySlot(streamId);
+          },
+        });
+      }, opts);
+      opts.signal.addEventListener('abort', () => {
+        stopFrozenWatch?.();
+        stopFrozenWatch = null;
+      }, { once: true });
       stopLinkReports = () => {
         linkListeners.abort();
         stalls.cancel();

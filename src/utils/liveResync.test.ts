@@ -55,6 +55,11 @@ function fakeVideo() {
     setBuffered(r: Array<[number, number]>) {
       ranges = r;
     },
+    /** Whether playing also downloads: the last buffered range grows with the playhead. */
+    feeding: true,
+    extend(by: number) {
+      if (ranges.length > 0) ranges[ranges.length - 1][1] += by;
+    },
     advance(t: number) {
       time = t;
     },
@@ -79,13 +84,23 @@ describe('followLiveAfterResync', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  /** The playhead plays forward in real time for `ms`, with a timeupdate each half second. */
+  /** The playhead plays forward in real time for `ms`, with a timeupdate each half second;
+   *  a feeding video also buffers that much more. */
   const playOn = (video: ReturnType<typeof fakeVideo>, ms: number) => {
     for (let elapsed = 0; elapsed < ms; elapsed += 500) {
       vi.advanceTimersByTime(500);
       video.advance(video.currentTime + 0.5);
+      if (video.feeding) video.extend(0.5);
       video.emit('timeupdate');
     }
+  };
+
+  /** A finished check holds no hls listener and no element listener. */
+  const expectReleased = (hls: ReturnType<typeof fakeHls>, video: ReturnType<typeof fakeVideo>) => {
+    expect(hls.count('hlsLevelUpdated')).toBe(0);
+    expect(hls.count('hlsFragBuffered')).toBe(0);
+    expect(video.count('timeupdate')).toBe(0);
+    expect(video.count('seeking')).toBe(0);
   };
 
   const start = () => {
@@ -166,6 +181,7 @@ describe('followLiveAfterResync', () => {
     video.emit('timeupdate');
     playOn(video, RESYNC_WINDOW_MS * 2);
     expect(onStuck).not.toHaveBeenCalled();
+    expectReleased(hls, video);
   });
 
   it('is stuck one window after new live data when the video plays but its time stays pinned', () => {
@@ -220,6 +236,7 @@ describe('followLiveAfterResync', () => {
     video.emit('timeupdate');
     playOn(video, RESYNC_WINDOW_MS * 2);
     expect(onStuck).not.toHaveBeenCalled();
+    expectReleased(hls, video);
   });
 
   it('is stuck at the window when one seek lands at 5 seconds and no live data arrives', () => {
@@ -339,6 +356,7 @@ describe('followLiveAfterResync', () => {
     video.advance(236);
     playOn(video, RESYNC_WINDOW_MS * 3);
     expect(onStuck).not.toHaveBeenCalled();
+    expectReleased(hls, video);
   });
 
   it('is not stuck once a reload lands and the playhead moves into the window', () => {
@@ -351,6 +369,7 @@ describe('followLiveAfterResync', () => {
     video.advance(44);
     playOn(video, RESYNC_WINDOW_MS * 3);
     expect(onStuck).not.toHaveBeenCalled();
+    expectReleased(hls, video);
   });
 
   it('reports a freeze after the seek one window after the seek', () => {
@@ -402,6 +421,7 @@ describe('followLiveAfterResync', () => {
     video.advance(234);
     playOn(video, RESYNC_WINDOW_MS * 3);
     expect(onStuck).not.toHaveBeenCalled();
+    expectReleased(hls, video);
   });
 
   it('is stuck at 16 seconds when the old buffer plays 2 seconds and then freezes', () => {
@@ -449,7 +469,7 @@ describe('followLiveAfterResync', () => {
     expect(onStuck).not.toHaveBeenCalled();
   });
 
-  it('is stuck at 25.5 seconds when its own seek plays briefly, stalls, plays briefly again and freezes', () => {
+  it('is stuck at 17.5 seconds when its own seek plays briefly, stalls, plays briefly again and freezes', () => {
     const { hls, video, onStuck } = start();
     hls.liveSyncPosition = 40;
     hls.latestLevelDetails = { fragmentStart: 28 };
@@ -462,13 +482,13 @@ describe('followLiveAfterResync', () => {
     vi.advanceTimersByTime(7200); // stalled through the first window's end at 9.5 s, now 9.7 s
     expect(onStuck).not.toHaveBeenCalled();
     playOn(video, 1000); // plays to 10.7 s, then freezes
-    vi.advanceTimersByTime(25500 - 10700 - 1);
+    vi.advanceTimersByTime(17500 - 10700 - 1);
     expect(onStuck).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1);
     expect(onStuck).toHaveBeenCalledTimes(1);
   });
 
-  it('is stuck at 25 seconds when old data plays briefly, stalls, plays briefly again and freezes', () => {
+  it('is stuck at 17 seconds when old data plays briefly, stalls, plays briefly again and freezes', () => {
     const { hls, video, onStuck } = start();
     hls.latestLevelDetails = { fragmentStart: 200 };
     hls.fire('hlsLevelUpdated');
@@ -478,10 +498,56 @@ describe('followLiveAfterResync', () => {
     vi.advanceTimersByTime(6500); // stalled through the first window's end at 9 s, now 9.5 s
     expect(onStuck).not.toHaveBeenCalled();
     playOn(video, 1000); // plays to 10.5 s, then freezes
-    vi.advanceTimersByTime(25000 - 10500 - 1);
+    vi.advanceTimersByTime(17000 - 10500 - 1);
     expect(onStuck).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1);
     expect(onStuck).toHaveBeenCalledTimes(1);
+  });
+
+  it('is stuck at 16 seconds when its own seek plays 1 second and then stalls 7 seconds', () => {
+    const { hls, video, onStuck } = start();
+    hls.liveSyncPosition = 40;
+    hls.latestLevelDetails = { fragmentStart: 28 };
+    video.setBuffered([[8, 16], [30, 50]]);
+    hls.fire('hlsLevelUpdated');
+    expect(video.seeks).toEqual([40]);
+    video.emit('seeking');
+    playOn(video, 1000);
+    vi.advanceTimersByTime(RESYNC_WINDOW_MS * 2 - 1000 - 1);
+    expect(onStuck).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(onStuck).toHaveBeenCalledTimes(1);
+  });
+
+  it('is stuck at 16 seconds when the buffer stops at the playhead after a fixed 40 to 60 range', () => {
+    const { hls, video, onStuck } = start();
+    hls.liveSyncPosition = 52;
+    hls.latestLevelDetails = { fragmentStart: 28 };
+    video.setBuffered([[40, 60]]);
+    video.feeding = false;
+    hls.fire('hlsLevelUpdated');
+    expect(video.seeks).toEqual([52]);
+    video.emit('seeking');
+    playOn(video, 7000); // plays to 59 s
+    video.advance(60); // the end of the buffer
+    video.emit('timeupdate');
+    vi.advanceTimersByTime(RESYNC_WINDOW_MS * 2 - 7000 - 1);
+    expect(onStuck).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(onStuck).toHaveBeenCalledTimes(1);
+    expectReleased(hls, video);
+  });
+
+  it('is not stuck when the buffered end grows one second per second of play', () => {
+    const { hls, video, onStuck } = start();
+    hls.liveSyncPosition = 20;
+    video.setBuffered([[8, 60]]);
+    hls.fire('hlsLevelUpdated');
+    expect(video.seeks).toEqual([20]);
+    video.emit('seeking');
+    playOn(video, RESYNC_WINDOW_MS * 3);
+    expect(onStuck).not.toHaveBeenCalled();
+    expectReleased(hls, video);
   });
 
   it('is stuck at 17 seconds when old data short of the window freezes just before a window ends', () => {
@@ -516,6 +582,7 @@ describe('followLiveAfterResync', () => {
     expect(onStuck).not.toHaveBeenCalled();
     playOn(video, RESYNC_WINDOW_MS * 2);
     expect(onStuck).not.toHaveBeenCalled();
+    expectReleased(hls, video);
   });
 
   it('cancel stops following and never reports', () => {

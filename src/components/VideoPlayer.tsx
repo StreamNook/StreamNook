@@ -109,6 +109,7 @@ import {
   type PausePark,
 } from '../utils/pausePark';
 import { followLiveAfterResync } from '../utils/liveResync';
+import { watchStalls } from '../utils/stallWatchdog';
 import { attachPauseRoutes } from '../utils/pauseRoutes';
 import { recognizeNowPlaying, announceSong } from '../utils/songId';
 import {
@@ -2431,6 +2432,26 @@ const VideoPlayer = () => {
             (m) => Logger.info(`[Player] ${m}`),
           );
         }, opts);
+        // A pinned playhead while playing on the whole-segment path restarts
+        // the stream (the low-latency path has its own watchdog above). The
+        // watch starts when playback does and ends with the listeners.
+        if (!isLowLatencyChannel) {
+          let stopFrozenWatch: (() => void) | null = null;
+          video.addEventListener('playing', () => {
+            if (stopFrozenWatch) return;
+            stopFrozenWatch = watchStalls(video, {
+              onFrozen: () => {
+                if (hlsRef.current !== hls || heldPause('main', liveKeyNow())) return;
+                Logger.warn('[Player] playhead frozen while playing; restarting the stream');
+                void useAppStore.getState().restartStream({ quiet: true });
+              },
+            });
+          }, opts);
+          opts.signal.addEventListener('abort', () => {
+            stopFrozenWatch?.();
+            stopFrozenWatch = null;
+          }, { once: true });
+        }
         linkReportRef.current = { stalls, listeners };
       }
 

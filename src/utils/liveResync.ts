@@ -25,6 +25,15 @@ const STALL_SECS = 2;
 /** Seconds the playhead must move past its last position to count as advancing. */
 const ADVANCE_EPSILON = 0.01;
 
+/** Windows that may end stalled (short play or a still playhead) before the stream is stuck. */
+const MAX_STALLED_ENDS = 2;
+
+/** Where the buffered video ends, or the playhead when nothing is buffered. */
+function bufferedEnd(video: HTMLVideoElement): number {
+  const b = video.buffered;
+  return b.length > 0 ? b.end(b.length - 1) : video.currentTime;
+}
+
 /** Whether some buffered range holds `t`. */
 function buffers(video: HTMLVideoElement, t: number): boolean {
   const b = video.buffered;
@@ -63,11 +72,13 @@ function windowStart(hls: Hls): number | null {
  * times; after that a seek never restarts it and the distance it jumped does not
  * count as progress. This follower's own seek never counts against that limit.
  * Wherever the freeze timer starts outside a seek it measures from the playhead
- * at that moment. When a window ends with progress made but the playhead standing
- * still for STALL_SECS or more, or not yet inside the served window, the freeze
- * timer measures again from there, until the playhead is inside the served window
- * and still advancing when a window ends. `onStuck` runs only while the video is
- * not paused. Returns the cancel.
+ * at that moment. A window with progress ends the check only when the playhead is
+ * inside the served window, still advancing (moved within STALL_SECS), has played
+ * at least half a window and the buffered end grew by at least half a window; then
+ * every listener is released. Otherwise the freeze timer measures again from
+ * there, and a window that ended with a short play or a still playhead counts as
+ * stalled: MAX_STALLED_ENDS of them report the stream stuck. `onStuck` runs only
+ * while the video is not paused. Returns the cancel.
  */
 export function followLiveAfterResync(
   hls: Hls,
@@ -84,11 +95,14 @@ export function followLiveAfterResync(
   let rearms = 0;
   let ownSeekTo: number | null = null; // where this follower's own seek was sent, until its event arrives
   let lastAdvanceAt = Date.now(); // when the playhead last moved forward by playing
+  let edgeAtArm = bufferedEnd(video); // where the buffered video ended when the freeze window began
+  let stalledEnds = 0; // windows that ended with a short play or a still playhead
   let dataTimer: ReturnType<typeof setTimeout> | null = null;
   let freezeTimer: ReturnType<typeof setTimeout> | null = null;
   const armFreeze = () => {
     if (freezeTimer !== null) clearTimeout(freezeTimer);
     lastAdvanceAt = Date.now();
+    edgeAtArm = bufferedEnd(video);
     freezeTimer = setTimeout(judgeFreeze, RESYNC_WINDOW_MS);
   };
   // The freeze window measures from the playhead as it is now, unless a seek is
@@ -201,11 +215,22 @@ export function followLiveAfterResync(
       stop();
       return;
     }
-    if (video.currentTime - baseline - jumped > PROGRESS_SECS) {
+    const progress = video.currentTime - baseline - jumped;
+    if (progress > PROGRESS_SECS) {
       const first = windowStart(hls);
       const atLive = seeked || (reloaded && first !== null && video.currentTime >= first);
-      if (atLive && Date.now() - lastAdvanceAt < STALL_SECS * 1000) {
+      const half = (RESYNC_WINDOW_MS / 2000) * Math.min(1, video.playbackRate || 1);
+      const advancing = Date.now() - lastAdvanceAt < STALL_SECS * 1000;
+      const played = progress >= half;
+      const fed = bufferedEnd(video) - edgeAtArm >= half;
+      if (atLive && advancing && played && fed) {
         stop();
+        return;
+      }
+      if (!advancing || !played) stalledEnds += 1;
+      if (stalledEnds >= MAX_STALLED_ENDS) {
+        stop();
+        onStuck();
         return;
       }
       measureFromHere();
