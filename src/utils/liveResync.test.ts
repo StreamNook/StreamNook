@@ -5,6 +5,7 @@ vi.mock('hls.js', () => ({
 }));
 
 const { RESYNC_WINDOW_MS, followLiveAfterResync } = await import('./liveResync');
+const { watchStalls } = await import('./stallWatchdog');
 
 /** Just enough of hls.js: listeners by event name, a settable sync point and
  *  the start of the window the origin serves. */
@@ -254,9 +255,9 @@ describe('followLiveAfterResync', () => {
     const { hls, video, onStuck } = start();
     hls.fire('hlsLevelUpdated');
     hls.fire('hlsFragBuffered', liveFragment);
-    video.advance(12);
-    vi.advanceTimersByTime(RESYNC_WINDOW_MS);
+    playOn(video, RESYNC_WINDOW_MS * 3);
     expect(onStuck).not.toHaveBeenCalled();
+    expectReleased(hls, video);
   });
 
   it('measures advance from the playhead after its own seek', () => {
@@ -465,8 +466,11 @@ describe('followLiveAfterResync', () => {
     video.advance(13);
     video.emit('timeupdate');
     vi.advanceTimersByTime(7000); // the first window ends in a stall
+    video.advance(230); // the playhead reaches the served window
+    video.emit('seeking');
     playOn(video, RESYNC_WINDOW_MS * 2);
     expect(onStuck).not.toHaveBeenCalled();
+    expectReleased(hls, video);
   });
 
   it('is stuck at 17.5 seconds when its own seek plays briefly, stalls, plays briefly again and freezes', () => {
@@ -512,11 +516,13 @@ describe('followLiveAfterResync', () => {
     hls.fire('hlsLevelUpdated');
     expect(video.seeks).toEqual([40]);
     video.emit('seeking');
-    playOn(video, 1000);
-    vi.advanceTimersByTime(RESYNC_WINDOW_MS * 2 - 1000 - 1);
-    expect(onStuck).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(1);
-    expect(onStuck).toHaveBeenCalledTimes(1);
+    for (let i = 0; i < 5; i++) {
+      playOn(video, 1000);
+      vi.advanceTimersByTime(7000);
+      // Two stalled windows end at 16 seconds; the cycles after it find the check released.
+      expect(onStuck).toHaveBeenCalledTimes(i === 0 ? 0 : 1);
+    }
+    expectReleased(hls, video);
   });
 
   it('is stuck at 16 seconds when the buffer stops at the playhead after a fixed 40 to 60 range', () => {
@@ -583,6 +589,42 @@ describe('followLiveAfterResync', () => {
     playOn(video, RESYNC_WINDOW_MS * 2);
     expect(onStuck).not.toHaveBeenCalled();
     expectReleased(hls, video);
+  });
+
+  describe('one recovery per player', () => {
+    /** The player's shape: the resume check and the freeze watchdog both end in
+     *  one guard, which restarts the stream the first time and never again. */
+    const wired = (restart: () => unknown) => {
+      const hls = fakeHls();
+      const video = fakeVideo();
+      const triggers: string[] = [];
+      let recovering = false;
+      const recover = (why: string) => {
+        triggers.push(why);
+        if (recovering) return;
+        recovering = true;
+        void restart();
+      };
+      followLiveAfterResync(hls as never, video as never, () => recover('resume'));
+      watchStalls(video as never, { onFrozen: () => recover('frozen') });
+      return { video, triggers };
+    };
+
+    it('restarts once when the resume check and the freeze watchdog fire on the same tick', () => {
+      const restart = vi.fn();
+      const { triggers } = wired(restart);
+      vi.advanceTimersByTime(RESYNC_WINDOW_MS);
+      expect(triggers.sort()).toEqual(['frozen', 'resume']);
+      expect(restart).toHaveBeenCalledTimes(1);
+    });
+
+    it('restarts once over 60 seconds of a pinned playhead when the restart leaves the player as it was', () => {
+      const restart = vi.fn();
+      const { triggers } = wired(restart);
+      vi.advanceTimersByTime(60_000);
+      expect(triggers.length).toBeGreaterThan(2);
+      expect(restart).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('cancel stops following and never reports', () => {

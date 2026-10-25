@@ -1515,6 +1515,21 @@ const VideoPlayer = () => {
         clearInterval(behindLiveWatchdogRef.current);
         behindLiveWatchdogRef.current = null;
       }
+      // One recovery per player: the resume check, the freeze watchdog and the
+      // behind-live watchdog all end here, so a single freeze can restart the
+      // stream once, never while a quality change, rewind or return to live is
+      // already swapping it, and an ended stream is not restarted in a loop.
+      let recovering = false;
+      let stopFrozenWatch: (() => void) | null = null;
+      const recover = (why: string, quiet = true) => {
+        if (recovering || hlsRef.current !== hls || useAppStore.getState().isRestartingStream) return;
+        recovering = true;
+        resyncStopRef.current?.();
+        resyncStopRef.current = null;
+        stopFrozenWatch?.();
+        Logger.warn(why);
+        void useAppStore.getState().restartStream({ quiet });
+      };
       if (isLowLatencyChannel) {
         let over = 0;
         let frozen = 0;
@@ -1560,7 +1575,7 @@ const VideoPlayer = () => {
               lastRecover = Date.now();
               over = 0;
               if (end === 0) {
-                restartStream();
+                recover('[HLS] behind-live watchdog: nothing buffered, restarting the stream', false);
               } else {
                 const target = end - cushion;
                 if (target > v.currentTime + 0.5) {
@@ -1597,8 +1612,7 @@ const VideoPlayer = () => {
                 }
               }
               if (!snapped) {
-                Logger.debug('[HLS] behind-live watchdog: playhead frozen with no reachable buffer, restarting to re-anchor to live');
-                restartStream();
+                recover('[HLS] behind-live watchdog: playhead frozen with no reachable buffer, restarting to re-anchor to live', false);
               }
             }
           } else {
@@ -2424,11 +2438,7 @@ const VideoPlayer = () => {
           resyncStopRef.current = followLiveAfterResync(
             hls,
             video,
-            () => {
-              if (hlsRef.current !== hls) return;
-              Logger.warn('[Player] no video after the resync; restarting the stream');
-              void useAppStore.getState().restartStream({ quiet: true });
-            },
+            () => recover('[Player] no video after the resync; restarting the stream'),
             (m) => Logger.info(`[Player] ${m}`),
           );
         }, opts);
@@ -2436,14 +2446,12 @@ const VideoPlayer = () => {
         // the stream (the low-latency path has its own watchdog above). The
         // watch starts when playback does and ends with the listeners.
         if (!isLowLatencyChannel) {
-          let stopFrozenWatch: (() => void) | null = null;
           video.addEventListener('playing', () => {
             if (stopFrozenWatch) return;
             stopFrozenWatch = watchStalls(video, {
               onFrozen: () => {
-                if (hlsRef.current !== hls || heldPause('main', liveKeyNow())) return;
-                Logger.warn('[Player] playhead frozen while playing; restarting the stream');
-                void useAppStore.getState().restartStream({ quiet: true });
+                if (heldPause('main', liveKeyNow())) return;
+                recover('[Player] playhead frozen while playing; restarting the stream');
               },
             });
           }, opts);

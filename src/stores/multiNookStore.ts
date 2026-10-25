@@ -8,6 +8,7 @@ import { makeKey, parseKey } from '../utils/providerKey';
 import { canGridProvider, gridRefusal } from '../types/providers';
 import { buildProviderUrl } from '../utils/streamProvider';
 import { Logger } from '../utils/logger';
+import { clearTileOnEnd } from '../utils/pausePark';
 import type { PlaybackAdapt } from '../utils/linkAdapt';
 
 /** Slot ids whose proxy start is currently in flight. The loader effect re-fires
@@ -384,10 +385,15 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
       if (m.live && s.loadError) {
         streamUrl = undefined;
         loadError = false;
-      } else if (offline && s.offline === false && s.streamUrl) {
-        void invoke('stop_multi_nook', { streamId: s.id }).catch(() => {});
-        streamUrl = undefined;
-        loadError = true;
+      } else if (offline && s.offline === false) {
+        // The channel ended: its pause and own-channel hold go whether or not
+        // a player exists right now (a retry or quality change clears the URL).
+        clearTileOnEnd(s.id);
+        if (s.streamUrl) {
+          void invoke('stop_multi_nook', { streamId: s.id }).catch(() => {});
+          streamUrl = undefined;
+          loadError = true;
+        }
       }
       // Offline: no title (a stale live title on an offline tile is wrong),
       // the last known category kept.
@@ -428,6 +434,7 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
     const slot = get().slots.find((s) => s.id === slotId);
     if (!slot) return;
     if (slot.offline === true && slot.loadError === true && !slot.streamUrl) return;
+    clearTileOnEnd(slotId);
     if (slot.streamUrl) {
       void invoke('stop_multi_nook', { streamId: slot.id }).catch(() => {});
     }

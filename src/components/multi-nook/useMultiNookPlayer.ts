@@ -658,6 +658,19 @@ export const useMultiNookPlayer = ({
       // not current any more when the intent would be recorded.
       let playedHere = false;
       let stopResync: (() => void) | null = null;
+      let stopFrozenWatch: (() => void) | null = null;
+      // One recovery per player: the resume check and the freeze watchdog both
+      // end here, so a single freeze restarts the tile once.
+      let recovering = false;
+      const recoverTile = (why: string) => {
+        if (recovering || hlsRef.current !== hls) return;
+        recovering = true;
+        stopResync?.();
+        stopResync = null;
+        stopFrozenWatch?.();
+        Logger.warn(`[MultiNook-${streamId}] ${why}`);
+        usemultiNookStore.getState().retrySlot(streamId);
+      };
       video.addEventListener('playing', () => {
         playedHere = true;
       }, opts);
@@ -679,24 +692,18 @@ export const useMultiNookPlayer = ({
         stopResync = followLiveAfterResync(
           hls,
           video,
-          () => {
-            if (hlsRef.current !== hls) return;
-            Logger.warn(`[MultiNook-${streamId}] no video after the resync; restarting the tile`);
-            usemultiNookStore.getState().retrySlot(streamId);
-          },
+          () => recoverTile('no video after the resync; restarting the tile'),
           (m) => Logger.info(`[MultiNook-${streamId}] ${m}`),
         );
       }, opts);
       // A pinned playhead while playing restarts the tile, as a failed resume
       // does. The watch starts when playback does and ends with the listeners.
-      let stopFrozenWatch: (() => void) | null = null;
       video.addEventListener('playing', () => {
         if (stopFrozenWatch) return;
         stopFrozenWatch = watchStalls(video, {
           onFrozen: () => {
-            if (hlsRef.current !== hls || heldPause(streamId, streamId)) return;
-            Logger.warn(`[MultiNook-${streamId}] playhead frozen while playing; restarting the tile`);
-            usemultiNookStore.getState().retrySlot(streamId);
+            if (heldPause(streamId, streamId)) return;
+            recoverTile('playhead frozen while playing; restarting the tile');
           },
         });
       }, opts);
