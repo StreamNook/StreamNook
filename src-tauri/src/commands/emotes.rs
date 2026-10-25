@@ -874,6 +874,7 @@ mod tests {
             layout: Default::default(),
             segments,
             metadata,
+            received_at_ms: None,
         }
     }
 

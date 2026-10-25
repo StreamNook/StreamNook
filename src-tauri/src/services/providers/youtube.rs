@@ -2577,6 +2577,7 @@ fn base_message(
         content: plain,
         provider: "youtube".to_string(),
         channel: channel_key.to_string(),
+        received_at_ms: None,
         emotes: Vec::new(),
         tags,
         layout: LayoutResult {

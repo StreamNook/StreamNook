@@ -212,6 +212,7 @@ mod tests {
             layout: LayoutResult::default(),
             segments: Vec::new(),
             metadata: MessageMetadata::default(),
+            received_at_ms: None,
         }
     }
 

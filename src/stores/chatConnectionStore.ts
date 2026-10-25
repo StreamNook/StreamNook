@@ -22,6 +22,7 @@ import type { CheerCheck } from '../services/bitsService';
 import { useCheerPromptStore } from './cheerPromptStore';
 import { sameSentContent } from '../utils/sentContent';
 import { isWindowHidden, onWindowVisibility } from '../utils/windowVisibility';
+import { noteRowReceived, noteRowsPainted } from '../utils/chatLatency';
 import { IS_MOBILE } from '../utils/platform';
 import { useEffect, useState } from 'react';
 import {
@@ -847,6 +848,8 @@ function trimSeenIds(slice: ChannelSlice): void {
 
 function flushPending(): void {
   const state = useChatConnectionStore.getState();
+  // Ids of the rows this flush commits, timed to their paint below.
+  const committedIds: string[] = [];
   for (const [key, queued] of pendingByChannel) {
     if (queued.length === 0) continue;
     const slice = state.channels.get(key);
@@ -874,6 +877,9 @@ function flushPending(): void {
     // changes with its content, so consumers can memoize on it.
     slice.messages = trimWithEventRetention(slice.messages.concat(queued), limit, slice.liveMessageCount);
     pruneModerationMarks(slice);
+    for (const row of queued) {
+      if (row && typeof row !== 'string' && typeof row.id === 'string') committedIds.push(row.id);
+    }
   }
   const touched = Array.from(pendingByChannel.keys());
   pendingByChannel.clear();
@@ -881,6 +887,11 @@ function flushPending(): void {
   // always warranted (covers both new-message appends and in-place upgrades).
   // In-place upgrades ride the global counter their own callers already bump.
   bumpRevisionFor(touched);
+  // Timed at the next frame, which draws the committed rows. A hidden window
+  // runs no frames, so its rows are not timed.
+  if (committedIds.length > 0 && typeof requestAnimationFrame === 'function' && !isWindowHidden()) {
+    requestAnimationFrame(() => noteRowsPainted(committedIds, Date.now()));
+  }
 }
 
 // Drain any queued messages into their slices immediately, outside the scheduled
@@ -2834,6 +2845,7 @@ function handleWsMessage(raw: string) {
           }
           return;
         }
+        if (!slice.seenMessageIds.has(messageId)) noteRowReceived(parsed, Date.now());
         appendStructuredMessage(slice, parsed);
         return;
       }

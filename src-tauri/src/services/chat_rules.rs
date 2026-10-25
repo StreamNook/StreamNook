@@ -2029,6 +2029,7 @@ mod tests {
             content: content.into(),
             provider: "twitch".into(),
             channel: "#Forsen".into(),
+            received_at_ms: None,
             emotes: vec![],
             tags: HashMap::new(),
             layout: Default::default(),

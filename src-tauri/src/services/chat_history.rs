@@ -569,6 +569,7 @@ mod tests {
             content: String::new(),
             provider: "twitch".into(),
             channel: "#ringtest".into(),
+            received_at_ms: None,
             emotes: vec![],
             tags: HashMap::new(),
             layout: Default::default(),

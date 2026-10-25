@@ -1714,6 +1714,7 @@ fn history_notice_row(raw: &str) -> Option<ChatMessage> {
         content: text.clone(),
         provider: "twitch".to_string(),
         channel,
+        received_at_ms: None,
         emotes: Vec::new(),
         tags,
         layout: LayoutResult::default(),
@@ -2681,6 +2682,10 @@ impl IrcService {
             return Ok(());
         }
 
+        // The one clock read for this line, before any parsing, stamped onto
+        // the live row it becomes.
+        let read_at_ms = chrono::Utc::now().timestamp_millis();
+
         // Parse and handle different message types
         if trimmed.contains("PRIVMSG") {
             // Regular chat message - forward as-is with shared chat detection
@@ -2707,7 +2712,7 @@ impl IrcService {
             // so the line is never stamped newer than the table it used.
             let room = extract_channel_from_irc_line(&enhanced_message);
             let table_generation = room.as_deref().map_or(0, crate::services::emote_restamp::generation);
-            if let Some(mut chat_msg) = Self::parse_privmsg(&enhanced_message) {
+            if let Some(mut chat_msg) = Self::parse_live_privmsg(&enhanced_message, read_at_ms) {
                 if let Some(room) = room.as_deref() {
                     crate::services::emote_restamp::remember(room, &enhanced_message, table_generation);
                 }
@@ -2792,7 +2797,7 @@ impl IrcService {
             // Parse USERNOTICE messages - layout will be measured by frontend
             let room = extract_channel_from_irc_line(trimmed);
             let table_generation = room.as_deref().map_or(0, crate::services::emote_restamp::generation);
-            if let Some(mut chat_msg) = Self::parse_usernotice(trimmed) {
+            if let Some(mut chat_msg) = Self::parse_live_usernotice(trimmed, read_at_ms) {
                 if let Some(room) = room.as_deref() {
                     crate::services::emote_restamp::remember(room, trimmed, table_generation);
                 }
@@ -5227,6 +5232,7 @@ impl IrcService {
             content: content_for_segments,
             provider: "twitch".to_string(),
             channel,
+            received_at_ms: None,
             emotes: emotes_adjusted,
             tags: tags_owned,
             layout: LayoutResult {
@@ -5482,6 +5488,7 @@ impl IrcService {
             content,
             provider: "twitch".to_string(),
             channel,
+            received_at_ms: None,
             emotes,
             tags: tags_owned,
             layout: LayoutResult {
@@ -5644,6 +5651,23 @@ impl IrcService {
             Some("USERNOTICE") => Self::parse_usernotice(raw),
             _ => None,
         }
+    }
+
+    /// A PRIVMSG the read loop just read, parsed and stamped with the time its
+    /// line was read. Backlog rows go through `parse_privmsg` alone and carry none.
+    fn parse_live_privmsg(raw: &str, read_at_ms: i64) -> Option<ChatMessage> {
+        Self::parse_privmsg(raw).map(|mut msg| {
+            msg.received_at_ms = Some(read_at_ms);
+            msg
+        })
+    }
+
+    /// A USERNOTICE the read loop just read, stamped like `parse_live_privmsg`.
+    fn parse_live_usernotice(raw: &str, read_at_ms: i64) -> Option<ChatMessage> {
+        Self::parse_usernotice(raw).map(|mut msg| {
+            msg.received_at_ms = Some(read_at_ms);
+            msg
+        })
     }
 
     #[cfg(test)]
@@ -6260,6 +6284,7 @@ fn redemption_message(r: &RedemptionRow, segments: Vec<MessageSegment>, timestam
         content: r.reward_title.clone(),
         provider: "twitch".to_string(),
         channel: r.channel.clone(),
+        received_at_ms: None,
         emotes: Vec::new(),
         tags,
         layout: LayoutResult::default(),
@@ -6591,6 +6616,20 @@ mod own_message_tests {
         assert_eq!(msg.username, "mochi_panda");
         assert_eq!(msg.display_name, "もちパンダ");
         assert_eq!(IrcService::privmsg_prefix_login(":tmi.twitch.tv USERNOTICE #c"), None);
+    }
+
+    #[tokio::test]
+    async fn a_live_row_carries_the_time_its_line_was_read_and_a_history_row_does_not() {
+        let live = IrcService::parse_live_privmsg(LOCALIZED_PRIVMSG, 1_700_000_000_123).expect("parses");
+        assert_eq!(live.received_at_ms, Some(1_700_000_000_123));
+        let notice = IrcService::parse_live_usernotice(LOGIN_ONLY_WATCH_STREAK, 1_700_000_000_456).expect("parses");
+        assert_eq!(notice.received_at_ms, Some(1_700_000_000_456));
+
+        let history = IrcService::parse_historical_messages(vec![LOCALIZED_PRIVMSG.to_string()]).await;
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].received_at_ms, None);
+        assert!(!serde_json::to_string(&history[0]).unwrap().contains("received_at_ms"));
+        assert!(serde_json::to_string(&live).unwrap().contains("\"received_at_ms\":1700000000123"));
     }
 
     #[test]

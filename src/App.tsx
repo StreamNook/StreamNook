@@ -70,6 +70,7 @@ import { OPEN_CHANGELOG_EVENT, requestChangelog, type OpenChangelogDetail } from
 
 import { Logger } from './utils/logger';
 import { startPageHeartbeat } from './utils/pageHeartbeat';
+import { startChatLatencyReporter } from './utils/chatLatency';
 import { startGpuRecoveryWatch } from './utils/gpuRecovery';
 import { ensureCacheFileServer } from './utils/cacheFileUrl';
 
@@ -1949,6 +1950,7 @@ function App() {
   useEffect(() => {
     void ensureCacheFileServer();
     startPageHeartbeat();
+    startChatLatencyReporter();
     return startGpuRecoveryWatch();
   }, []);
 

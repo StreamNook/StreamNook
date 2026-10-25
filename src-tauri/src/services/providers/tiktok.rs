@@ -599,6 +599,7 @@ fn base_message(
         content,
         provider: "tiktok".to_string(),
         channel: channel_key.to_string(),
+        received_at_ms: None,
         emotes: Vec::new(),
         tags,
         layout: LayoutResult {
