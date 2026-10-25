@@ -9,7 +9,7 @@ pub async fn load_mod_logs(
 ) -> Result<Vec<serde_json::Value>, String> {
     tauri::async_runtime::spawn_blocking(move || ModLogStorageService::load_channel(&app_handle, &channel))
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?
 }
 
 /// Record one moderation action and return the entry to show: the same action

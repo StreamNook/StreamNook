@@ -16,6 +16,11 @@
 // busy moderated chat costs a line per action instead of a rewrite of every
 // channel's log. Actions recorded while a write is in flight queue up and go
 // to disk together, so a burst costs one sync per batch, not one per action.
+//
+// A snapshot that cannot be read (locked by another process) leaves the store
+// unseeded and is never written over. Actions recorded meanwhile are appended
+// to a side file next to it, one JSON line each, and applied in order, then
+// journaled, by the next seed that can read the snapshot.
 
 use log::{debug, warn};
 use serde::{Deserialize, Serialize};
@@ -30,6 +35,11 @@ use tauri::Manager;
 const MOD_LOGS_FILE: &str = "mod_logs.json";
 /// Actions recorded since the file's last write, one JSON line each.
 const MOD_LOGS_JOURNAL: &str = "mod_logs.journal";
+/// Actions recorded while the snapshot could not be read, one seq-less JSON
+/// line each, in the order they happened.
+const MOD_LOGS_PENDING: &str = "mod_logs.pending";
+/// How many snapshots set aside as unreadable are kept.
+const KEEP_UNREADABLE: usize = 3;
 /// How often the store is folded into the file (and the journal emptied).
 const FOLD_EVERY: std::time::Duration = std::time::Duration::from_secs(30);
 // Keep at most this many entries per channel on disk. Mod actions are
@@ -53,6 +63,14 @@ static JOURNAL_DONE: Condvar = Condvar::new();
 /// one more. Only advanced under `JOURNAL_LOCK`.
 static LAST_SEQ: AtomicU64 = AtomicU64::new(0);
 static FLUSH_TASK_STARTED: AtomicBool = AtomicBool::new(false);
+/// Held for the whole of a seed attempt, so one thread reads the snapshot at a
+/// time and every parked action is appended to or applied from the side file
+/// by exactly one of them. Taken before `JOURNAL_LOCK` and the store lock, and
+/// never while holding either.
+static SEED_LOCK: Mutex<()> = Mutex::new(());
+/// True until the session's first snapshot read starts. Only that read waits
+/// out a snapshot another process holds; later attempts read once and return.
+static FIRST_SEED_ATTEMPT: AtomicBool = AtomicBool::new(true);
 
 fn store() -> &'static Mutex<Option<ModLogStorage>> {
     STORE.get_or_init(|| Mutex::new(None))
@@ -130,34 +148,121 @@ impl ModLogStorageService {
     }
 
     /// `with_store` with the snapshot path supplied by `resolve_path`, which
-    /// only runs when the store still has to be seeded.
+    /// only runs when the store still has to be seeded. An error means the
+    /// snapshot could not be read; the next call tries again.
     fn with_store_at<R>(
-        resolve_path: impl FnOnce() -> Result<PathBuf, String>,
+        resolve_path: impl Fn() -> Result<PathBuf, String>,
         f: impl FnOnce(&mut ModLogStorage) -> R,
     ) -> Result<R, String> {
+        Self::seed(&resolve_path, None)?;
+        Self::with_seeded(f)
+    }
+
+    /// Run `f` on the store, which must already be seeded.
+    fn with_seeded<R>(f: impl FnOnce(&mut ModLogStorage) -> R) -> Result<R, String> {
         let mut guard = store().lock().map_err(|e| e.to_string())?;
-        if guard.is_none() {
-            let path = resolve_path()?;
-            let journal = path.with_file_name(MOD_LOGS_JOURNAL);
-            // A snapshot that cannot be read leaves the store unseeded and
-            // DIRTY clear, so nothing folds over it and the next call retries.
-            let (storage, replayed) = load_storage(&path, &journal)?;
+        let storage = guard.as_mut().ok_or_else(|| "the mod log store is not seeded".to_string())?;
+        Ok(f(storage))
+    }
+
+    /// Seed the store from disk unless it is seeded already. Call it with
+    /// neither `JOURNAL_LOCK` nor the store lock held: the snapshot read may
+    /// wait out a lock another process holds, and a seed that finds parked
+    /// actions journals them under `JOURNAL_LOCK`.
+    ///
+    /// A snapshot that cannot be read leaves the store unseeded and DIRTY
+    /// clear, so nothing folds over it. With `park` given, that action is
+    /// appended to the side file instead and `Parked` is returned; without it
+    /// the read error is returned.
+    fn seed(
+        resolve_path: &impl Fn() -> Result<PathBuf, String>,
+        park: Option<&JournalOp>,
+    ) -> Result<Seeded, String> {
+        if store_is_seeded()? {
+            return Ok(Seeded::Ready);
+        }
+        let _seeding = SEED_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        if store_is_seeded()? {
+            return Ok(Seeded::Ready);
+        }
+        let path = resolve_path()?;
+        let journal = path.with_file_name(MOD_LOGS_JOURNAL);
+        let pending = path.with_file_name(MOD_LOGS_PENDING);
+        let (storage, replayed, parked) = match load_storage_and_pending(&path, &journal) {
+            Ok(loaded) => loaded,
+            Err(e) => {
+                let Some(op) = park else {
+                    return Err(e);
+                };
+                append_pending(&pending, op)?;
+                warn!("[ModLogStorage] snapshot unreadable, the action is kept in {}: {}", pending.display(), e);
+                return Ok(Seeded::Parked);
+            }
+        };
+        let queue = JOURNAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        {
+            let mut guard = store().lock().map_err(|e| e.to_string())?;
             let _ = STORE_PATH.set(path);
-            let _ = JOURNAL_PATH.set(journal);
+            let _ = JOURNAL_PATH.set(journal.clone());
             LAST_SEQ.store(storage.journal_seq, Ordering::SeqCst);
             *guard = Some(storage);
-            // Actions recorded after the last fold (a crash, or a kill before the
-            // exit flush): the next fold writes them into the file.
-            if replayed > 0 {
-                debug!("[ModLogStorage] replayed {} journal lines", replayed);
-                mark_dirty();
-            }
         }
-        Ok(f(guard.as_mut().expect("seeded above")))
+        if replayed > 0 {
+            debug!("[ModLogStorage] replayed {} journal lines", replayed);
+        }
+        // Actions recorded after the last fold (a crash, or a kill before the
+        // exit flush), or parked while the snapshot was locked: the next fold
+        // writes them into the file.
+        if replayed > 0 || !parked.is_empty() {
+            mark_dirty();
+        }
+        if !parked.is_empty() {
+            debug!("[ModLogStorage] applied {} parked actions", parked.len());
+            Self::journal_parked(queue, &journal, &pending, &parked);
+        }
+        Ok(Seeded::Ready)
+    }
+
+    /// Journal the actions just applied from the side file as ordinary lines
+    /// and remove the side file once they are durable, in the journal or in a
+    /// fold whose rename is proven. If the journal cannot take them, a fold
+    /// saves them instead; the side file stays until one of the two lands.
+    fn journal_parked(
+        mut queue: MutexGuard<'static, JournalQueue>,
+        journal: &Path,
+        pending: &Path,
+        parked: &[JournalOp],
+    ) {
+        let seqs: Vec<Option<u64>> = parked.iter().map(|op| journal_append(&mut queue, op)).collect();
+        let last = seqs.iter().flatten().max().copied();
+        let durable = match last {
+            Some(seq) if seqs.iter().all(Option::is_some) => {
+                wait_durable(&JOURNAL_LOCK, &JOURNAL_DONE, journal, queue, seq, commit_lines).is_ok()
+            }
+            _ => {
+                drop(queue);
+                false
+            }
+        };
+        if durable {
+            remove_pending(pending);
+            return;
+        }
+        warn!("[ModLogStorage] parked actions not journaled, the next fold saves them");
+        if let Err(e) = Self::flush_now() {
+            warn!("[ModLogStorage] flush after parked actions failed: {}", e);
+        }
     }
 
     /// Synchronous write-if-dirty, for shutdown paths.
     pub fn flush_now() -> Result<(), String> {
+        Self::flush_with(write_snapshot)
+    }
+
+    /// `flush_now` with the snapshot written by `write`.
+    fn flush_with(
+        write: impl FnOnce(&Path, &str) -> std::io::Result<Durability>,
+    ) -> Result<(), String> {
         // Held to the end: nothing is journaled between the snapshot below and
         // the journal being emptied after the write.
         let mut queue = JOURNAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -194,9 +299,20 @@ impl ModLogStorageService {
                 }
             }
         };
-        if let Err(e) = write_snapshot(path, &json) {
-            DIRTY.store(true, Ordering::Release);
-            return Err(format!("Failed to write mod logs file: {}", e));
+        let durability = match write(path, &json) {
+            Ok(durability) => durability,
+            Err(e) => {
+                DIRTY.store(true, Ordering::Release);
+                return Err(format!("Failed to write mod logs file: {}", e));
+            }
+        };
+        if durability == Durability::Unproven {
+            // The rename may not survive a power loss, so the journal stays as
+            // it is and lines still waiting for the disk stay queued for the
+            // next journal write. A replay skips every line the file covers,
+            // and the next durable fold cuts the journal.
+            debug!("[ModLogStorage] snapshot saved but its rename is not proven durable; the journal is kept");
+            return Ok(());
         }
         // Everything journaled is in the file now, including lines still
         // waiting for the disk, whose callers are released here.
@@ -212,16 +328,18 @@ impl ModLogStorageService {
                 Err(e) => warn!("[ModLogStorage] could not empty the journal after a fold: {}", e),
             }
         }
+        // The file holds every action the side file carried into this store.
+        remove_pending(&path.with_file_name(MOD_LOGS_PENDING));
         Ok(())
     }
 
-    /// Load one channel's persisted entries (oldest first). Empty if none.
-    pub fn load_channel(app_handle: &AppHandle, channel: &str) -> Vec<serde_json::Value> {
+    /// Load one channel's persisted entries (oldest first); empty if none. An
+    /// error means the snapshot could not be read, so the caller can ask again.
+    pub fn load_channel(app_handle: &AppHandle, channel: &str) -> Result<Vec<serde_json::Value>, String> {
         let key = channel.to_lowercase();
         Self::with_store(app_handle, |storage| {
             storage.channels.get(&key).cloned().unwrap_or_default()
         })
-        .unwrap_or_default()
     }
 
     /// Record one moderation action, merging it with the same action reported
@@ -243,9 +361,11 @@ impl ModLogStorageService {
         Self::record_at(|| Self::get_storage_path(app_handle), channel, entry)
     }
 
-    /// `record` with the snapshot path supplied by `resolve_path`.
+    /// `record` with the snapshot path supplied by `resolve_path`. While the
+    /// snapshot cannot be read the action is parked in the side file and
+    /// returned as it would be shown, without the merge a seeded store does.
     fn record_at(
-        resolve_path: impl FnOnce() -> Result<PathBuf, String>,
+        resolve_path: impl Fn() -> Result<PathBuf, String>,
         channel: &str,
         entry: serde_json::Value,
     ) -> Result<serde_json::Value, String> {
@@ -254,9 +374,17 @@ impl ModLogStorageService {
             return Ok(entry);
         }
         let now_ms = chrono::Utc::now().timestamp_millis();
+        let mut parked_entry = entry.clone();
+        strip_details(&mut parked_entry);
+        let parked = JournalOp::Put { channel: key.clone(), entry: parked_entry.clone() };
+        // Seeding can wait on a locked snapshot, so it happens before the
+        // journal lock is taken.
+        if Self::seed(&resolve_path, Some(&parked))? == Seeded::Parked {
+            return Ok(parked_entry);
+        }
         let mut queue = JOURNAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let channel_key = key.clone();
-        let (shown, changed) = Self::with_store_at(resolve_path, move |storage| {
+        let (shown, changed) = Self::with_seeded(move |storage| {
             merge_into(storage.channels.entry(key).or_default(), entry, now_ms)
         })?;
         if changed {
@@ -277,15 +405,21 @@ impl ModLogStorageService {
         Self::clear_channel_at(|| Self::get_storage_path(app_handle), channel)
     }
 
-    /// `clear_channel` with the snapshot path supplied by `resolve_path`.
+    /// `clear_channel` with the snapshot path supplied by `resolve_path`. While
+    /// the snapshot cannot be read the clear is parked in the side file.
     fn clear_channel_at(
-        resolve_path: impl FnOnce() -> Result<PathBuf, String>,
+        resolve_path: impl Fn() -> Result<PathBuf, String>,
         channel: &str,
     ) -> Result<(), String> {
         let key = channel.to_lowercase();
+        let parked = JournalOp::Clear { channel: key.clone() };
+        // Seeding can wait on a locked snapshot, so it happens before the
+        // journal lock is taken.
+        if Self::seed(&resolve_path, Some(&parked))? == Seeded::Parked {
+            return Ok(());
+        }
         let mut queue = JOURNAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let removed =
-            Self::with_store_at(resolve_path, |storage| storage.channels.remove(&key).is_some())?;
+        let removed = Self::with_seeded(|storage| storage.channels.remove(&key).is_some())?;
         if removed {
             debug!("[ModLogStorage] cleared {}", key);
             let seq = journal_append(&mut queue, &JournalOp::Clear { channel: key });
@@ -298,8 +432,30 @@ impl ModLogStorageService {
     }
 }
 
+/// What a seed attempt left behind.
+#[derive(Debug, PartialEq, Eq)]
+enum Seeded {
+    /// The store is seeded.
+    Ready,
+    /// The snapshot could not be read; the action was appended to the side file.
+    Parked,
+}
+
+/// Whether a saved snapshot's rename is known to be on disk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Durability {
+    Durable,
+    /// The file is in place, but the rename could not be flushed (the platform
+    /// refused the write-through move, or cannot sync a directory).
+    Unproven,
+}
+
+fn store_is_seeded() -> Result<bool, String> {
+    Ok(store().lock().map_err(|e| e.to_string())?.is_some())
+}
+
 /// One journal line.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "lowercase")]
 enum JournalOp {
     /// The entry to show for `channel`: a new one, or the upgrade of the entry
@@ -329,7 +485,7 @@ struct JournalLineOut<'a> {
 /// Write `json` to `path` through a sibling that is flushed to disk and then
 /// renamed over the file, so a crash or power loss mid-write never leaves a
 /// truncated or empty file for the next seed to read.
-fn write_snapshot(path: &Path, json: &str) -> std::io::Result<()> {
+fn write_snapshot(path: &Path, json: &str) -> std::io::Result<Durability> {
     use std::io::Write;
     let tmp = path.with_extension("json.tmp");
     let mut file = fs::File::create(&tmp)?;
@@ -339,13 +495,19 @@ fn write_snapshot(path: &Path, json: &str) -> std::io::Result<()> {
     rename_durable(&tmp, path)
 }
 
-/// Rename `from` over `to`, replacing an existing `to`, and return only once
-/// the rename itself is on disk, so a power loss afterwards cannot bring back
-/// the old file under a journal that was already emptied.
+/// Rename `from` over `to`, replacing an existing `to`. `Durable` means the
+/// rename itself is on disk, so a power loss afterwards cannot bring back the
+/// old file under a journal that was already emptied; `Unproven` means the
+/// file is in place but the platform would not confirm it.
+///
+/// A write-through move that is refused for access (a scanner or indexer
+/// holding the destination) falls back to a plain rename and a flush of the
+/// destination, which is not enough to prove the rename durable.
 #[cfg(windows)]
-fn rename_durable(from: &Path, to: &Path) -> std::io::Result<()> {
+fn rename_durable(from: &Path, to: &Path) -> std::io::Result<Durability> {
     use std::os::windows::ffi::OsStrExt;
     use windows::core::PCWSTR;
+    use windows::Win32::Foundation::ERROR_ACCESS_DENIED;
     use windows::Win32::Storage::FileSystem::{
         MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
     };
@@ -362,20 +524,108 @@ fn rename_durable(from: &Path, to: &Path) -> std::io::Result<()> {
         )
     };
     // A Win32 failure arrives as an HRESULT whose low 16 bits are the error code.
-    moved.map_err(|e| std::io::Error::from_raw_os_error(e.code().0 & 0xFFFF))
+    let Err(failure) = moved else {
+        return Ok(Durability::Durable);
+    };
+    let error = std::io::Error::from_raw_os_error(failure.code().0 & 0xFFFF);
+    if error.raw_os_error() != Some(ERROR_ACCESS_DENIED.0 as i32) {
+        return Err(error);
+    }
+    fs::rename(from, to)?;
+    // Best effort: the rename is already done, and a failed flush is the same
+    // unproven outcome the caller is told about.
+    let _ = fs::OpenOptions::new().write(true).open(to).and_then(|file| file.sync_all());
+    Ok(Durability::Unproven)
 }
 
-/// Rename `from` over `to`, replacing an existing `to`, and return only once
-/// the rename itself is on disk, so a power loss afterwards cannot bring back
-/// the old file under a journal that was already emptied.
+/// Rename `from` over `to`, replacing an existing `to`. `Durable` means the
+/// parent directory was synced after the rename, so a power loss afterwards
+/// cannot bring back the old file under a journal that was already emptied;
+/// `Unproven` means the file system cannot sync a directory.
 #[cfg(not(windows))]
-fn rename_durable(from: &Path, to: &Path) -> std::io::Result<()> {
+fn rename_durable(from: &Path, to: &Path) -> std::io::Result<Durability> {
     fs::rename(from, to)?;
-    let dir = match to.parent() {
+    match sync_parent_dir(to) {
+        Ok(()) => Ok(Durability::Durable),
+        Err(e) if dir_sync_unsupported(&e) => Ok(Durability::Unproven),
+        Err(e) => Err(e),
+    }
+}
+
+/// Flush `path`'s parent directory to disk.
+#[cfg(not(windows))]
+fn sync_parent_dir(path: &Path) -> std::io::Result<()> {
+    let dir = match path.parent() {
         Some(parent) if !parent.as_os_str().is_empty() => parent,
         _ => Path::new("."),
     };
     fs::File::open(dir)?.sync_all()
+}
+
+/// A directory sync the file system refuses outright (as opposed to one that
+/// failed): EINVAL, ENOTSUP or EOPNOTSUPP, ENOTTY or EBADF.
+#[cfg(not(windows))]
+fn dir_sync_unsupported(error: &std::io::Error) -> bool {
+    const EBADF: i32 = 9;
+    const EINVAL: i32 = 22;
+    const ENOTTY: i32 = 25;
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    const NOT_SUPPORTED: [i32; 2] = [45, 102];
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    const NOT_SUPPORTED: [i32; 1] = [95];
+    error.kind() == std::io::ErrorKind::Unsupported
+        || error
+            .raw_os_error()
+            .is_some_and(|code| [EBADF, EINVAL, ENOTTY].contains(&code) || NOT_SUPPORTED.contains(&code))
+}
+
+/// Remove the side file of parked actions once the store holds them durably.
+/// An absent file is the normal case.
+fn remove_pending(pending: &Path) {
+    match fs::remove_file(pending) {
+        // The removal itself has to survive a power loss, or the side file
+        // would be applied again over lines that came after it.
+        #[cfg(not(windows))]
+        Ok(()) => {
+            if let Err(e) = sync_parent_dir(pending) {
+                if !dir_sync_unsupported(&e) {
+                    warn!("[ModLogStorage] could not sync the folder after removing the side file: {}", e);
+                }
+            }
+        }
+        #[cfg(windows)]
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => warn!("[ModLogStorage] could not remove the side file of parked actions: {}", e),
+    }
+}
+
+/// Append one parked action to the side file and flush it, cutting a torn last
+/// line first and again if this write fails.
+fn append_pending(path: &Path, op: &JournalOp) -> Result<(), String> {
+    use std::io::Write;
+    let mut line = serde_json::to_string(op).map_err(|e| e.to_string())?;
+    line.push('\n');
+    cut_torn_tail(path);
+    let written = fs::OpenOptions::new().create(true).append(true).open(path).and_then(|mut file| {
+        file.write_all(line.as_bytes())?;
+        file.sync_data()
+    });
+    if let Err(e) = written {
+        cut_torn_tail(path);
+        return Err(format!("Failed to keep the mod log action: {}", e));
+    }
+    Ok(())
+}
+
+/// The parked actions in the side file, oldest first. A missing file has none;
+/// one that cannot be read is an error, so the seed does not drop it.
+fn read_pending(path: &Path) -> Result<Vec<JournalOp>, String> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(journal_lines(&bytes).map(|line| line.op).collect()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(e) => Err(format!("Failed to read the parked mod log actions: {}", e)),
+    }
 }
 
 /// Journal lines waiting for the disk, and the state of the write that carries
@@ -577,23 +827,25 @@ fn cut_torn_tail(journal: &Path) {
 }
 
 /// How many times a snapshot that cannot be read right now (locked by another
-/// process, say) is read again before the seed gives up.
+/// process, say) is read again before the session's first seed gives up. Every
+/// later seed attempt reads once.
 const SNAPSHOT_READ_RETRIES: u32 = 3;
 const SNAPSHOT_READ_RETRY_AFTER: std::time::Duration = std::time::Duration::from_millis(50);
 
 /// The snapshot's bytes, or `None` if there is no snapshot. Any other read
-/// error is retried, then returned.
+/// error is returned, after waiting it out if this is the session's first seed
+/// attempt.
 fn read_snapshot_bytes(snapshot: &Path) -> Result<Option<Vec<u8>>, String> {
-    let mut attempt = 0;
+    let mut retries_left = if FIRST_SEED_ATTEMPT.swap(false, Ordering::SeqCst) { SNAPSHOT_READ_RETRIES } else { 0 };
     loop {
         match fs::read(snapshot) {
             Ok(bytes) => return Ok(Some(bytes)),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(e) if attempt >= SNAPSHOT_READ_RETRIES => {
+            Err(e) if retries_left == 0 => {
                 return Err(format!("Failed to read mod logs file: {}", e));
             }
             Err(_) => {
-                attempt += 1;
+                retries_left -= 1;
                 std::thread::sleep(SNAPSHOT_READ_RETRY_AFTER);
             }
         }
@@ -601,14 +853,53 @@ fn read_snapshot_bytes(snapshot: &Path) -> Result<Option<Vec<u8>>, String> {
 }
 
 /// Move a snapshot that does not parse next to itself under a name no fold
-/// writes to, so its bytes stay recoverable.
+/// writes to, so its bytes stay recoverable, and delete all but the newest
+/// `KEEP_UNREADABLE` of them.
 fn set_aside_unreadable(snapshot: &Path) -> Result<(), String> {
     let name = snapshot.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let aside = snapshot.with_file_name(format!("{}.unreadable-{}", name, chrono::Utc::now().timestamp_millis()));
     fs::rename(snapshot, &aside)
         .map_err(|e| format!("Failed to move the unreadable mod logs file aside: {}", e))?;
     warn!("[ModLogStorage] mod logs file did not parse; kept as {}", aside.display());
+    prune_set_aside(snapshot, &name);
     Ok(())
+}
+
+/// Delete every set-aside copy of the snapshot named `name` beside it except
+/// the newest `KEEP_UNREADABLE`, newest by the timestamp in the file name.
+fn prune_set_aside(snapshot: &Path, name: &str) {
+    let dir = match snapshot.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let prefix = format!("{}.unreadable-", name);
+    let mut aside: Vec<(i64, PathBuf)> = entries
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| {
+            let file = entry.file_name().to_string_lossy().into_owned();
+            let stamp = file.strip_prefix(&prefix)?.parse::<i64>().ok()?;
+            Some((stamp, entry.path()))
+        })
+        .collect();
+    aside.sort_by_key(|(stamp, _)| std::cmp::Reverse(*stamp));
+    for (_, path) in aside.into_iter().skip(KEEP_UNREADABLE) {
+        if let Err(e) = fs::remove_file(&path) {
+            warn!("[ModLogStorage] could not delete an old unreadable mod logs file {}: {}", path.display(), e);
+        }
+    }
+}
+
+/// The readable lines of a journal or side file. Read as bytes and split on
+/// newlines: a fragment that ends inside a multi-byte character is not valid
+/// UTF-8 and fails only its own line.
+fn journal_lines(bytes: &[u8]) -> impl Iterator<Item = JournalLine> + '_ {
+    bytes
+        .split(|b| *b == b'\n')
+        .filter(|l| !l.iter().all(|b| b.is_ascii_whitespace()))
+        .filter_map(|l| serde_json::from_slice::<JournalLine>(l).ok())
 }
 
 /// The store from `snapshot` plus every readable journal line past the
@@ -616,7 +907,21 @@ fn set_aside_unreadable(snapshot: &Path) -> Result<(), String> {
 /// from a crash is cut off the journal first. A missing snapshot starts an
 /// empty store; one that does not parse is moved aside first; one that cannot
 /// be read, or moved aside, is an error, so no fold can overwrite it.
+#[cfg(test)]
 fn load_storage(snapshot: &Path, journal: &Path) -> Result<(ModLogStorage, usize), String> {
+    load_storage_and_pending(snapshot, journal).map(|(storage, applied, _)| (storage, applied))
+}
+
+/// `load_storage`, then the actions parked beside the snapshot while it could
+/// not be read, applied after the journal in the order they were parked
+/// (a put replaces by id, a clear is idempotent). They are returned as well,
+/// for the caller to journal. The side file is read first, so one that cannot
+/// be read fails the load before the snapshot is touched.
+fn load_storage_and_pending(
+    snapshot: &Path,
+    journal: &Path,
+) -> Result<(ModLogStorage, usize, Vec<JournalOp>), String> {
+    let parked = read_pending(&snapshot.with_file_name(MOD_LOGS_PENDING))?;
     let mut storage: ModLogStorage = match read_snapshot_bytes(snapshot)? {
         None => ModLogStorage::default(),
         Some(bytes) => match serde_json::from_slice(&bytes) {
@@ -629,20 +934,19 @@ fn load_storage(snapshot: &Path, journal: &Path) -> Result<(ModLogStorage, usize
     };
     cut_torn_tail(journal);
     let mut applied = 0;
-    // Read as bytes and split on newlines: a fragment that ends inside a
-    // multi-byte character is not valid UTF-8 and fails only its own line.
     if let Ok(bytes) = fs::read(journal) {
-        for line in bytes.split(|b| *b == b'\n').filter(|l| !l.iter().all(|b| b.is_ascii_whitespace())) {
-            if let Ok(JournalLine { seq, op }) = serde_json::from_slice::<JournalLine>(line) {
-                if seq > storage.journal_seq {
-                    apply_journal_op(&mut storage, op);
-                    storage.journal_seq = seq;
-                    applied += 1;
-                }
+        for JournalLine { seq, op } in journal_lines(&bytes) {
+            if seq > storage.journal_seq {
+                apply_journal_op(&mut storage, op);
+                storage.journal_seq = seq;
+                applied += 1;
             }
         }
     }
-    Ok((storage, applied))
+    for op in &parked {
+        apply_journal_op(&mut storage, op.clone());
+    }
+    Ok((storage, applied, parked))
 }
 
 /// Same action inside this window = one action reported twice.
@@ -672,6 +976,13 @@ fn timestamp_ms(entry: &serde_json::Value) -> Option<i64> {
         .map(|t| t.timestamp_millis())
 }
 
+/// The raw payload is never rendered; keep the stored and shown copy lean.
+fn strip_details(entry: &mut serde_json::Value) {
+    if let Some(fields) = entry.as_object_mut() {
+        fields.remove("details");
+    }
+}
+
 /// Apply the merge rule to one channel's list (oldest first). Returns the entry
 /// to show and whether the list changed.
 fn merge_into(
@@ -679,10 +990,7 @@ fn merge_into(
     mut entry: serde_json::Value,
     now_ms: i64,
 ) -> (serde_json::Value, bool) {
-    // The raw payload is never rendered; keep the stored and shown copy lean.
-    if let Some(fields) = entry.as_object_mut() {
-        fields.remove("details");
-    }
+    strip_details(&mut entry);
     let key = dedup_key(&entry);
     let duplicate = list.iter().rev().take(DEDUP_SCAN).position(|existing| {
         dedup_key(existing) == key
@@ -1127,14 +1435,28 @@ mod journal_tests {
         }
     }
 
-    // The store, the journal path and the queue are process-wide and set once,
-    // so this is the only test that goes through them; it covers both calls in
-    // sequence. Any test that touches them takes GLOBALS_TEST_LOCK first.
+    /// The folder every test that goes through the process-wide store uses: the
+    /// snapshot and journal paths are set once per process, so they must be the
+    /// same ones each time.
+    const GLOBALS_FOLDER: &str = "globals";
+
+    /// Puts the process-wide queue and counters back to a fresh session's.
+    fn reset_globals() {
+        *JOURNAL_LOCK.lock().unwrap_or_else(|e| e.into_inner()) = JournalQueue::new();
+        LAST_SEQ.store(0, Ordering::SeqCst);
+        DIRTY.store(false, Ordering::Release);
+    }
+
+    // The store, the journal path and the queue are process-wide and set once.
+    // Any test that touches them takes GLOBALS_TEST_LOCK first, uses
+    // GLOBALS_FOLDER and starts from reset_globals.
     #[test]
     fn record_and_clear_return_ok_when_every_journal_commit_fails() {
         let _globals = GLOBALS_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let (snapshot, journal) = temp_paths("record-clear-failing-journal");
+        let (snapshot, journal) = temp_paths(GLOBALS_FOLDER);
         let _cleanup = TempDirGuard(snapshot.parent().unwrap().to_path_buf());
+        reset_globals();
+        let _restore = StoreRestore(store().lock().unwrap_or_else(|e| e.into_inner()).take());
         // A directory where the journal file belongs: every commit fails.
         fs::create_dir(&journal).unwrap();
         let entry = json!({ "id": "a1", "action": "ban", "channel": "Chan", "target_user_name": "bob",
@@ -1348,5 +1670,110 @@ mod journal_tests {
         rename_durable(&tmp, &snapshot).unwrap();
         assert_eq!(fs::read(&snapshot).unwrap(), b"new");
         assert!(!tmp.exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn actions_recorded_while_the_snapshot_is_held_apply_in_order_once_it_is_free() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let _globals = GLOBALS_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (snapshot, journal) = temp_paths(GLOBALS_FOLDER);
+        let _cleanup = TempDirGuard(snapshot.parent().unwrap().to_path_buf());
+        reset_globals();
+        let _restore = StoreRestore(store().lock().unwrap_or_else(|e| e.into_inner()).take());
+        let saved = ModLogStorage {
+            channels: [("keep".to_string(), vec![json!({ "id": "k1" })])].into_iter().collect(),
+            version: 0,
+            journal_seq: 0,
+        };
+        fs::write(&snapshot, serde_json::to_string(&saved).unwrap()).unwrap();
+        let action = |id: &str| {
+            json!({ "id": id, "action": "ban", "channel": "chan", "target_user_name": id,
+                "timestamp": "2026-10-24T00:00:00Z", "source": "irc", "details": { "raw": true } })
+        };
+        // Held the way another process would hold it: open, sharing nothing.
+        FIRST_SEED_ATTEMPT.store(true, Ordering::SeqCst);
+        let held = fs::OpenOptions::new().read(true).share_mode(0).open(&snapshot).unwrap();
+        let shown = ModLogStorageService::record_at(|| Ok(snapshot.clone()), "Chan", action("x1")).unwrap();
+        assert_eq!(shown["id"], "x1");
+        assert!(shown.get("details").is_none());
+        ModLogStorageService::clear_channel_at(|| Ok(snapshot.clone()), "Chan").unwrap();
+        // Only the session's first seed attempt waits on the lock.
+        let started = std::time::Instant::now();
+        ModLogStorageService::record_at(|| Ok(snapshot.clone()), "Other", action("y1")).unwrap();
+        assert!(started.elapsed() < std::time::Duration::from_millis(10));
+        assert!(store().lock().unwrap_or_else(|e| e.into_inner()).is_none());
+        assert!(!DIRTY.load(Ordering::Acquire));
+        let pending = snapshot.with_file_name(MOD_LOGS_PENDING);
+        assert_eq!(fs::read_to_string(&pending).unwrap().lines().count(), 3);
+        drop(held);
+        // The next call seeds: x1 and the clear apply in order, so the channel
+        // ends empty, and the three actions are journaled before the side file goes.
+        let channels = ModLogStorageService::with_store_at(|| Ok(snapshot.clone()), |s| s.channels.clone()).unwrap();
+        assert!(!channels.contains_key("chan"));
+        assert_eq!(channels["other"][0]["id"], "y1");
+        assert_eq!(channels["keep"][0]["id"], "k1");
+        assert!(!pending.exists());
+        let (restored, replayed) = load_storage(&snapshot, &journal).unwrap();
+        assert_eq!(replayed, 3);
+        assert!(!restored.channels.contains_key("chan"));
+        assert_eq!(restored.channels["other"][0]["id"], "y1");
+        assert_eq!(restored.journal_seq, 3);
+    }
+
+    #[test]
+    fn an_unproven_save_keeps_the_journal_and_a_later_durable_one_cuts_it() {
+        let _globals = GLOBALS_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (snapshot, journal) = temp_paths(GLOBALS_FOLDER);
+        let _cleanup = TempDirGuard(snapshot.parent().unwrap().to_path_buf());
+        reset_globals();
+        let _restore = StoreRestore(store().lock().unwrap_or_else(|e| e.into_inner()).take());
+        let action = |id: &str| {
+            json!({ "id": id, "action": "ban", "channel": "chan", "target_user_name": id,
+                "timestamp": "2026-10-24T00:00:00Z", "source": "irc" })
+        };
+        ModLogStorageService::record_at(|| Ok(snapshot.clone()), "chan", action("a1")).unwrap();
+        assert!(!fs::read(&journal).unwrap().is_empty());
+        ModLogStorageService::flush_with(|path: &Path, json: &str| -> std::io::Result<Durability> {
+            fs::write(path, json)?;
+            Ok(Durability::Unproven)
+        })
+        .unwrap();
+        assert!(!DIRTY.load(Ordering::Acquire));
+        assert!(!fs::read(&journal).unwrap().is_empty());
+        assert_eq!(read_snapshot(&snapshot).journal_seq, 1);
+        ModLogStorageService::record_at(|| Ok(snapshot.clone()), "chan", action("a2")).unwrap();
+        ModLogStorageService::flush_with(|path: &Path, json: &str| -> std::io::Result<Durability> {
+            fs::write(path, json)?;
+            Ok(Durability::Durable)
+        })
+        .unwrap();
+        assert!(fs::read(&journal).unwrap().is_empty());
+        assert_eq!(read_snapshot(&snapshot).journal_seq, 2);
+    }
+
+    #[test]
+    fn only_the_newest_three_unreadable_snapshots_are_kept() {
+        let (snapshot, journal) = temp_paths("prune-aside");
+        let _cleanup = TempDirGuard(snapshot.parent().unwrap().to_path_buf());
+        for round in 0..5 {
+            fs::write(&snapshot, format!("{{\"channels\":{round}")).unwrap();
+            load_storage(&snapshot, &journal).unwrap();
+            // The set-aside names carry a millisecond stamp.
+            std::thread::sleep(std::time::Duration::from_millis(3));
+        }
+        let mut kept: Vec<Vec<u8>> = fs::read_dir(snapshot.parent().unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("mod_logs.json.unreadable-"))
+            })
+            .map(|path| fs::read(path).unwrap())
+            .collect();
+        kept.sort();
+        let expected: Vec<Vec<u8>> = (2..5).map(|round| format!("{{\"channels\":{round}").into_bytes()).collect();
+        assert_eq!(kept, expected);
     }
 }

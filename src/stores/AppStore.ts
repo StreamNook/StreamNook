@@ -1622,6 +1622,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       });
     } catch (e) {
       Logger.warn(`[ModLogs] Failed to load history for ${key}:`, e);
+      // The history never arrived, so the channel is loadable again on its next open.
+      set((state) => {
+        const loadedModLogChannels = new Set(state.loadedModLogChannels);
+        loadedModLogChannels.delete(key);
+        return { loadedModLogChannels };
+      });
     }
   },
   pruneModLogsToChannels: (activeChannels) => set((state) => {
