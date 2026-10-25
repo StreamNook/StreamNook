@@ -20,8 +20,25 @@ import { onTileTick } from './tileTicker';
 import { alignTile, isSynced, registerSyncTile, syncDelayFor } from './tileSync';
 import { createStallReporter, reportSegment } from '../../utils/linkAdapt';
 import { isCodecFailure, UNSUPPORTED_CODEC } from '../../utils/codecFailure';
-import { clearPauseIntent, createPausePark, heldPause, notePauseIntent, type PausePark } from '../../utils/pausePark';
+import {
+  clearPauseIntent,
+  createPausePark,
+  heldPause,
+  notePauseIntent,
+  windowedPauseTimings,
+  type PausePark,
+} from '../../utils/pausePark';
 import { followLiveAfterResync } from '../../utils/liveResync';
+
+/** Whether the tile `streamId` plays the signed-in account's own Twitch
+ *  channel, compared by login the way the Own channel shortcut finds it. */
+function isOwnChannelTile(streamId: string): boolean {
+  const slot = usemultiNookStore.getState().slots.find((s) => s.id === streamId);
+  if (!slot || (slot.provider ?? 'twitch') !== 'twitch') return false;
+  const me = useAppStore.getState().currentUser;
+  const myLogin = (me?.login || me?.username)?.toLowerCase();
+  return !!myLogin && slot.channelLogin.toLowerCase() === myLogin;
+}
 
 /** Shown when a codec failure leaves nothing better to switch to. */
 export const CODEC_UNPLAYABLE = "Can't play this quality here";
@@ -58,6 +75,9 @@ export const useMultiNookPlayer = ({
   const hlsRef = useRef<Hls | null>(null);
   const playerRef = useRef<Plyr | null>(null);
   const userInitiatedPauseRef = useRef<boolean>(false);
+  // The tile of the viewer's own channel opens paused once; a rebuild after
+  // they pressed play does not pause it again.
+  const ownChannelHeldRef = useRef(false);
   // Stops the live-latency governor for the current tile's hls instance.
   const latencyGovernorStopRef = useRef<(() => void) | null>(null);
   const currentSettings = useAppStore(state => state.settings.video_player);
@@ -291,6 +311,7 @@ export const useMultiNookPlayer = ({
         startLoad: () => hls.startLoad(),
         stillPaused: () => hlsRef.current === hls && video.paused,
         log: (m) => Logger.warn(`[MultiNook-${streamId}] ${m}`),
+        timings: () => windowedPauseTimings(hls, video),
       });
 
       // Continuous live-latency maintenance, same forward-buffer governor as the solo
@@ -350,6 +371,13 @@ export const useMultiNookPlayer = ({
       const startPlayback = () => {
         if (playStarted) return;
         playStarted = true;
+        // The viewer's own channel opens paused, once per tile, like the main
+        // player's: chat only, no second video pipeline on the streaming machine.
+        if (!ownChannelHeldRef.current && isOwnChannelTile(streamId)) {
+          ownChannelHeldRef.current = true;
+          if (!heldPause(streamId, streamId)) notePauseIntent(streamId, streamId);
+          Logger.warn(`[MultiNook-${streamId}] your own channel opens paused`);
+        }
         // The viewer paused this tile before it was rebuilt: stay paused.
         const held = heldPause(streamId, streamId);
         if (held) {
@@ -521,7 +549,8 @@ export const useMultiNookPlayer = ({
           switch (data.type) {
             case Hls.ErrorTypes.NETWORK_ERROR:
               setError('Network error');
-              hls.startLoad();
+              // A parked tile stopped its downloads on purpose; its play restarts them.
+              if (!park?.loadStopped) hls.startLoad();
               break;
             case Hls.ErrorTypes.MEDIA_ERROR:
               setError('Media error');
@@ -621,6 +650,9 @@ export const useMultiNookPlayer = ({
         playedHere = true;
       }, opts);
       video.addEventListener('pause', () => {
+        // A pause during a resume cancels it.
+        stopResync?.();
+        stopResync = null;
         if (!playedHere || video.ended) return;
         park?.paused();
         setTimeout(() => {
@@ -632,7 +664,10 @@ export const useMultiNookPlayer = ({
         clearPauseIntent(streamId);
         Logger.warn(`[MultiNook-${streamId}] paused past the live window; loading again from the live edge`);
         stopResync?.();
-        stopResync = followLiveAfterResync(
+        // While a Resync holds the tiles together this tile rejoins the shared
+        // delay once it plays, instead of moving to its own sync point.
+        const synced = isSynced();
+        const follow = followLiveAfterResync(
           hls,
           video,
           () => {
@@ -641,7 +676,18 @@ export const useMultiNookPlayer = ({
             usemultiNookStore.getState().retrySlot(streamId);
           },
           (m) => Logger.info(`[MultiNook-${streamId}] ${m}`),
+          { seek: !synced },
         );
+        if (synced) {
+          const rejoin = () => alignTile(streamId, true);
+          video.addEventListener('playing', rejoin, { once: true });
+          stopResync = () => {
+            follow();
+            video.removeEventListener('playing', rejoin);
+          };
+        } else {
+          stopResync = follow;
+        }
       }, opts);
       stopLinkReports = () => {
         linkListeners.abort();

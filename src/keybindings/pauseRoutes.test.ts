@@ -1,11 +1,9 @@
 // @vitest-environment node
-import { readFileSync } from 'node:fs';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Every way to pause the main player ends at the same controller: Plyr's
 // togglePlay on the one registered player adapter, or the <video> element's
-// own pause, whose onPause reports to the earning gate and whose listener
-// arms the park (VideoPlayer.tsx).
+// own `pause` event, which reports to the earning gate and arms the park.
 
 vi.mock('../stores/AppStore', () => ({
   useAppStore: { getState: () => ({ currentStream: { user_login: 'x' }, currentMediaType: 'live' }) },
@@ -26,8 +24,12 @@ vi.mock('../utils/platform', () => ({ IS_MAC: false, IS_MOBILE: false }));
 
 const { registerPlayerControls } = await import('./playerControls');
 const { getBindableCommand } = await import('./commands');
+const { attachPauseRoutes, CLICK_TOGGLE_DELAY_MS } = await import('../utils/pauseRoutes');
 
 describe('pause routes', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
   it('the hotkey command pauses through the registered player', () => {
     const togglePlay = vi.fn();
     registerPlayerControls({
@@ -50,22 +52,57 @@ describe('pause routes', () => {
     registerPlayerControls(null);
   });
 
-  it('the command palette row calls the same adapter', () => {
-    const src = readFileSync('src/utils/commandPaletteSources.ts', 'utf8');
-    expect(src).toContain('const pc = () => getPlayerControls();');
-    expect(src).toMatch(/id: 'player\.playPause'[^\n]*run: \(\) => pc\(\)\?\.togglePlay\(\)/);
+  const wire = () => {
+    const video = new EventTarget();
+    const deps = {
+      togglePlay: vi.fn(),
+      toggleFullscreen: vi.fn(),
+      reportPaused: vi.fn(),
+      parkPaused: vi.fn(),
+    };
+    const detach = attachPauseRoutes(video as unknown as HTMLVideoElement, deps);
+    return { video, deps, detach };
+  };
+
+  it('a pause of the element reports to the earning gate and reaches the park', () => {
+    // The Plyr button, picture-in-picture, media keys, the hotkey and the
+    // palette all pause the element, so they all end in this event.
+    const { video, deps } = wire();
+    video.dispatchEvent(new Event('pause'));
+    expect(deps.reportPaused).toHaveBeenCalledTimes(1);
+    expect(deps.parkPaused).toHaveBeenCalledTimes(1);
+    expect(deps.togglePlay).not.toHaveBeenCalled();
   });
 
-  it('the adapter, the video click and the element pause reach the controller', () => {
-    const src = readFileSync('src/components/VideoPlayer.tsx', 'utf8');
-    // Hotkey and palette: Plyr's togglePlay on the live player.
-    expect(src).toContain('togglePlay: () => playerRef.current?.togglePlay(),');
-    // A single click on the video.
-    expect(src).toMatch(/clickTimer = null;\s*playerRef\.current\?\.togglePlay\(\);/);
-    // Every pause of the element (Plyr button, click, hotkey, palette, the
-    // picture-in-picture window, media keys) reports to the earning gate...
-    expect(src).toMatch(/onPause=\{\(\) => \{[\s\S]{0,400}invoke\('report_player_state', \{ state: 'paused' \}\)/);
-    // ...and arms the park.
-    expect(src).toContain('pauseParkRef.current?.paused();');
+  it('a single click on the video toggles play after the click delay', () => {
+    const { video, deps } = wire();
+    video.dispatchEvent(new Event('click'));
+    expect(deps.togglePlay).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(CLICK_TOGGLE_DELAY_MS);
+    expect(deps.togglePlay).toHaveBeenCalledTimes(1);
+    expect(deps.toggleFullscreen).not.toHaveBeenCalled();
+  });
+
+  it('a double click goes fullscreen and never toggles play', () => {
+    const { video, deps } = wire();
+    video.dispatchEvent(new Event('click'));
+    video.dispatchEvent(new Event('click'));
+    video.dispatchEvent(new Event('dblclick'));
+    vi.advanceTimersByTime(CLICK_TOGGLE_DELAY_MS * 2);
+    expect(deps.togglePlay).not.toHaveBeenCalled();
+    expect(deps.toggleFullscreen).toHaveBeenCalledTimes(1);
+  });
+
+  it('detaching removes every route and drops a pending click', () => {
+    const { video, deps, detach } = wire();
+    video.dispatchEvent(new Event('click'));
+    detach();
+    vi.advanceTimersByTime(CLICK_TOGGLE_DELAY_MS * 2);
+    video.dispatchEvent(new Event('click'));
+    video.dispatchEvent(new Event('pause'));
+    vi.advanceTimersByTime(CLICK_TOGGLE_DELAY_MS * 2);
+    expect(deps.togglePlay).not.toHaveBeenCalled();
+    expect(deps.reportPaused).not.toHaveBeenCalled();
+    expect(deps.parkPaused).not.toHaveBeenCalled();
   });
 });

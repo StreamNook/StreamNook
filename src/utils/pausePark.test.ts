@@ -11,6 +11,8 @@ import {
   notePauseIntent,
   pauseIntentOf,
   pauseParkTimings,
+  resyncCutoffMs,
+  windowedPauseTimings,
   type PauseParkTimings,
 } from './pausePark';
 
@@ -109,6 +111,30 @@ describe('pausePark', () => {
     expect(pauseParkTimings()).toEqual({ stopLoadMs: STOP_LOAD_AFTER_PAUSE_MS, resyncMs: RESYNC_AFTER_PAUSE_MS });
     stored = 'not json';
     expect(pauseParkTimings()).toEqual({ stopLoadMs: STOP_LOAD_AFTER_PAUSE_MS, resyncMs: RESYNC_AFTER_PAUSE_MS });
+  });
+
+  it('the resync cut-off fits the window the origin serves', () => {
+    expect(resyncCutoffMs(12, 2)).toBe(10_000);
+    expect(resyncCutoffMs(12, 2)).toBeLessThan(12_000);
+    expect(resyncCutoffMs(60, 2)).toBe(RESYNC_AFTER_PAUSE_MS);
+    expect(resyncCutoffMs(12, 20)).toBe(0);
+    expect(resyncCutoffMs(null, 2)).toBe(RESYNC_AFTER_PAUSE_MS);
+    expect(resyncCutoffMs(undefined, 2)).toBe(RESYNC_AFTER_PAUSE_MS);
+  });
+
+  it('a short window resyncs a pause the default span would resume', () => {
+    const hls = { latestLevelDetails: { totalduration: 12 } };
+    const video = { currentTime: 100, buffered: { length: 1, start: () => 90, end: () => 102 } };
+    const { park, at } = make(true, () => windowedPauseTimings(hls, video as never));
+    park.paused(0);
+    at(11_000);
+    expect(park.play(11_000)).toBe('resync');
+  });
+
+  it('no playlist details keep the default cut-off', () => {
+    const video = { currentTime: 100, buffered: { length: 0, start: () => 0, end: () => 0 } };
+    expect(windowedPauseTimings({}, video as never).resyncMs).toBe(RESYNC_AFTER_PAUSE_MS);
+    expect(windowedPauseTimings({ latestLevelDetails: null }, video as never).resyncMs).toBe(RESYNC_AFTER_PAUSE_MS);
   });
 
   it('a pause intent holds for its channel only', () => {

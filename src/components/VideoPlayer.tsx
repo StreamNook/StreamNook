@@ -100,8 +100,16 @@ import { open as openExternalUrl } from '@tauri-apps/plugin-shell';
 import { LIVE_BUTTON_HTML, paintLiveButton, type LiveButtonState } from '../utils/liveButton';
 import { setActiveVideo } from '../utils/activeVideo';
 import { isWindowHidden } from '../utils/windowVisibility';
-import { clearPauseIntent, createPausePark, heldPause, notePauseIntent, type PausePark } from '../utils/pausePark';
+import {
+  clearPauseIntent,
+  createPausePark,
+  heldPause,
+  notePauseIntent,
+  windowedPauseTimings,
+  type PausePark,
+} from '../utils/pausePark';
 import { followLiveAfterResync } from '../utils/liveResync';
+import { attachPauseRoutes } from '../utils/pauseRoutes';
 import { recognizeNowPlaying, announceSong } from '../utils/songId';
 import {
   ignoresPlayerMouse,
@@ -309,6 +317,9 @@ const VideoPlayer = () => {
   const pauseParkRef = useRef<PausePark | null>(null);
   // Cancels a running follow to the live edge after a long pause.
   const resyncStopRef = useRef<(() => void) | null>(null);
+  // What the element's `pause` does for the current hls.js instance: cancel a
+  // resume in progress and arm its park. Null with no live instance.
+  const parkOnPauseRef = useRef<(() => void) | null>(null);
   const [availableQualities, setAvailableQualities] = useState<string[]>([]);
   // Tracked as STATE (not just the playerRef) so the quality-menu effect
   // re-runs the moment the player is created. The quality list now resolves
@@ -1327,6 +1338,7 @@ const VideoPlayer = () => {
       pauseParkRef.current?.dispose();
       resyncStopRef.current?.();
       resyncStopRef.current = null;
+      parkOnPauseRef.current = null;
       if (isVodPlayback) clearPauseIntent('main');
       pauseParkRef.current = isVodPlayback
         ? null
@@ -1335,7 +1347,9 @@ const VideoPlayer = () => {
             startLoad: () => hls.startLoad(),
             stillPaused: () => hlsRef.current === hls && video.paused,
             log: (m) => Logger.warn(`[Player] ${m}`),
+            timings: () => windowedPauseTimings(hls, video),
           });
+      const park = pauseParkRef.current;
       // The viewer paused this channel before this player was built (a
       // restart, an ad pivot, a quality change), or it is their own channel:
       // stay on the frame with loading stopped and say so to the earning gate.
@@ -1344,7 +1358,7 @@ const VideoPlayer = () => {
         const held = isVodPlayback ? null : heldPause('main', liveKeyNow());
         if (!held) return false;
         invoke('report_player_state', { state: 'paused' }).catch(() => {});
-        pauseParkRef.current?.paused(held.at);
+        park?.paused(held.at);
         Logger.warn('[Player] stays paused: paused before this player was built');
         return true;
       };
@@ -2075,7 +2089,8 @@ const VideoPlayer = () => {
                 }
               }
 
-              hls.startLoad();
+              // A parked player stopped its downloads on purpose; its play restarts them.
+              if (!park?.loadStopped) hls.startLoad();
               break;
             case Hls.ErrorTypes.MEDIA_ERROR:
               Logger.debug('[HLS] Fatal media error, attempting recovery...');
@@ -2153,7 +2168,15 @@ const VideoPlayer = () => {
       hls.on(Hls.Events.FRAG_BUFFERED, () => {
         // LL path started playback in MANIFEST_PARSED and positions via hls.js; the
         // whole-segment gate doesn't apply (and FRAG_BUFFERED is unreliable per-part).
-        if (playStarted || !currentSettings.autoplay || isLowLatencyChannel) return;
+        if (playStarted || isLowLatencyChannel) return;
+        if (!currentSettings.autoplay) {
+          // Autoplay is off: nothing will play, so a held or own-channel pause
+          // reports and arms the park, and a plain wait arms it too, which
+          // stops the downloads until the viewer presses play.
+          playStarted = true;
+          if (!holdHeldPause()) park?.paused();
+          return;
+        }
 
         const buffered = video.buffered;
         if (buffered.length === 0) return;
@@ -2374,12 +2397,16 @@ const VideoPlayer = () => {
         video.addEventListener('playing', () => {
           playedHere = true;
         }, opts);
-        video.addEventListener('pause', () => {
+        // The element's pause (attachPauseRoutes) lands here: a pause during a
+        // resume cancels it, and one after play arms the park.
+        parkOnPauseRef.current = () => {
+          resyncStopRef.current?.();
+          resyncStopRef.current = null;
           if (!playedHere || video.ended || useAppStore.getState().isRestartingStream) return;
-          pauseParkRef.current?.paused();
-        }, opts);
+          park?.paused();
+        };
         video.addEventListener('play', () => {
-          if (pauseParkRef.current?.play() !== 'resync') return;
+          if (park?.play() !== 'resync') return;
           clearPauseIntent('main');
           Logger.warn('[Player] paused past the live window; loading again from the live edge');
           resyncStopRef.current?.();
@@ -2604,6 +2631,7 @@ const VideoPlayer = () => {
       for (const ev of wakeEvents) videoElement.removeEventListener(ev, wakeLiveTime);
       pauseParkRef.current?.dispose();
       pauseParkRef.current = null;
+      parkOnPauseRef.current = null;
       resyncStopRef.current?.();
       resyncStopRef.current = null;
 
@@ -2774,39 +2802,27 @@ const VideoPlayer = () => {
     return () => registerPlayerControls(null);
   }, []);
 
-  // Click vs double-click on the video surface (live/VOD Plyr path only).
-  // Single click toggles play/pause; double click toggles fullscreen. A short
-  // timer holds the single-click action just long enough that a following
-  // double-click can cancel it, so a double-click never blips play/pause (which
-  // on a live stream would force a rebuffer). Listeners live on the <video>
-  // node itself, so clicks on the controls bar and the overlay buttons are
-  // unaffected. Clip playback uses native controls (no Plyr); there playerRef
-  // is null and these handlers no-op, leaving native behavior intact.
+  // The <video> element's own routes (utils/pauseRoutes.ts). Click vs
+  // double-click on the video surface (live/VOD Plyr path only): a single click
+  // toggles play/pause, a double click toggles fullscreen, and the double click
+  // never blips play/pause (which on a live stream would force a rebuffer).
+  // Listeners live on the <video> node itself, so clicks on the controls bar and
+  // the overlay buttons are unaffected. Clip playback uses native controls (no
+  // Plyr); there playerRef is null and the click routes no-op, leaving native
+  // behavior intact. Every pause of the element reports to Rust's earning gate
+  // (which counts it only once it outlives its grace window, so the transient
+  // pause of a source reload never gates earning off) and reaches the park.
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
-    let clickTimer: ReturnType<typeof setTimeout> | null = null;
-    const onClick = () => {
-      if (clickTimer) return; // second click of a pair — let dblclick handle it
-      clickTimer = setTimeout(() => {
-        clickTimer = null;
-        playerRef.current?.togglePlay();
-      }, 250);
-    };
-    const onDblClick = () => {
-      if (clickTimer) {
-        clearTimeout(clickTimer);
-        clickTimer = null;
-      }
-      playerRef.current?.fullscreen.toggle();
-    };
-    video.addEventListener('click', onClick);
-    video.addEventListener('dblclick', onDblClick);
-    return () => {
-      if (clickTimer) clearTimeout(clickTimer);
-      video.removeEventListener('click', onClick);
-      video.removeEventListener('dblclick', onDblClick);
-    };
+    return attachPauseRoutes(video, {
+      togglePlay: () => playerRef.current?.togglePlay(),
+      toggleFullscreen: () => playerRef.current?.fullscreen.toggle(),
+      reportPaused: () => {
+        invoke('report_player_state', { state: 'paused' }).catch(() => {});
+      },
+      parkPaused: () => parkOnPauseRef.current?.(),
+    });
   }, []);
 
   // Mouse volume: wheel to change it, middle click to mute. One-handed control
@@ -3384,11 +3400,6 @@ const VideoPlayer = () => {
           // once and cancels a pending pause, so an ad-pivot or quality reload
           // finishing keeps earning uninterrupted.
           invoke('report_player_state', { state: 'playing' }).catch(() => {});
-        }}
-        onPause={() => {
-          // Rust counts a pause only once it outlives its grace window, so the
-          // transient pause of a source reload never gates earning off.
-          invoke('report_player_state', { state: 'paused' }).catch(() => {});
         }}
       />
 

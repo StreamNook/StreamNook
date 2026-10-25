@@ -3,7 +3,7 @@ import { useAppStore } from '../stores/AppStore';
 import { usemultiNookStore } from '../stores/multiNookStore';
 import { Logger } from '../utils/logger';
 import { makeKey, parseKey } from '../utils/providerKey';
-import { notePauseIntent, pauseIntentOf } from '../utils/pausePark';
+import { markOwnChannelOpened, notePauseIntent, pauseIntentOf } from '../utils/pausePark';
 import { streamKey, streamProvider } from '../utils/streamProvider';
 
 /** Mirrors the Rust `ResumeSnapshot` struct (commands/session.rs). */
@@ -74,10 +74,14 @@ export async function resumePreviousSession(): Promise<void> {
   if (!snap) return;
 
   if (snap.stream_login) {
+    const { provider, channel } = parseKey(snap.stream_login);
     if (snap.paused) {
-      const { provider, channel } = parseKey(snap.stream_login);
       notePauseIntent('main', makeKey(provider, channel));
       Logger.info('[resume] the stream was paused; it reopens paused');
+    } else {
+      // It was playing, so the viewer already opened it: if it is their own
+      // channel it must not open paused a second time.
+      markOwnChannelOpened(makeKey(provider, channel));
     }
     Logger.info(`[resume] Restoring stream: ${snap.stream_login}`);
     let reopened = true;

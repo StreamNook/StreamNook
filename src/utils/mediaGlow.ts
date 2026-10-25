@@ -413,7 +413,7 @@ export function useMediaGlow(
         return;
       }
 
-      pausedReadAt = el.paused ? el.currentTime : Number.NaN;
+      pausedReadAt = el.paused && !el.seeking ? el.currentTime : Number.NaN;
       const attack = calm ? CALM_ATTACK_MS : ATTACK_MS;
       const rise = calm ? CALM_RELEASE_MS : RELEASE_MS;
       const live = liveRef.current;

@@ -42,7 +42,42 @@ export function pauseParkTimings(): PauseParkTimings {
   return timings;
 }
 
-export type PlayOutcome = 'none' | 'resume' | 'resync';
+/**
+ * The resync cut-off for a player whose origin serves `totalDuration` seconds
+ * of playlist while the element holds `forwardBuffer` seconds ahead of the
+ * paused frame: the pause outlives the window once everything past the buffer
+ * has rolled off the playlist. Never more than `cap`, never negative. With no
+ * playlist details it is `cap`.
+ */
+export function resyncCutoffMs(
+  totalDuration: number | null | undefined,
+  forwardBuffer: number,
+  cap = RESYNC_AFTER_PAUSE_MS,
+): number {
+  if (totalDuration == null || !Number.isFinite(totalDuration)) return cap;
+  const fwd = Number.isFinite(forwardBuffer) && forwardBuffer > 0 ? forwardBuffer : 0;
+  return Math.min(cap, Math.max(0, (totalDuration - fwd) * 1000));
+}
+
+/** The pause spans for a player: the defaults (or a test run's override) with
+ *  the resync cut-off cut down to what its playlist window and buffer allow. */
+export function windowedPauseTimings(
+  hls: { latestLevelDetails?: { totalduration?: number } | null },
+  video: Pick<HTMLVideoElement, 'buffered' | 'currentTime'>,
+): PauseParkTimings {
+  const base = pauseParkTimings();
+  let forward = 0;
+  const b = video.buffered;
+  for (let i = 0; i < b.length; i++) {
+    if (b.start(i) <= video.currentTime + 0.05 && b.end(i) >= video.currentTime) {
+      forward = b.end(i) - video.currentTime;
+      break;
+    }
+  }
+  return { ...base, resyncMs: resyncCutoffMs(hls.latestLevelDetails?.totalduration, forward, base.resyncMs) };
+}
+
+export type PlayOutcome ='none' | 'resume' | 'resync';
 
 export interface PausePark {
   /** The video paused (or a rebuilt player holds an earlier pause made at `at`). */
@@ -172,6 +207,12 @@ export function holdOwnChannel(key: string, at = Date.now()): boolean {
   ownChannelHeld = key;
   notePauseIntent('main', key, at);
   return true;
+}
+
+/** The channel `key` is already open as the viewer's own (a restart brings
+ *  back a stream they were watching): its next opening does not pause it. */
+export function markOwnChannelOpened(key: string): void {
+  ownChannelHeld = key;
 }
 
 /** Another channel opened, or the stream stopped: the next opening of the

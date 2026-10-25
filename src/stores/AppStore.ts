@@ -941,6 +941,9 @@ async function applyOfflineDecision(
       say(decision.notice);
       return;
     case 'offline_chat':
+      // The stream ended: its pause and the own-channel memory end with it.
+      clearPauseIntent('main');
+      forgetOwnChannel();
       // Stop the video but not the chat, then settle into offline chat.
       await invoke('stop_stream').catch((e) => Logger.warn('[AutoSwitch] Error stopping stream video:', e));
       setTimeout(() => {
@@ -969,6 +972,8 @@ async function applyOfflineDecision(
         // The relay, the watch session, drops and channel points (services/watch_start.rs).
         await invoke('watch_stop', { preserveBackend: false }).catch((e) => Logger.warn('[AutoSwitch] Error stopping stream:', e));
         await invoke('stop_chat').catch((e) => Logger.warn('[AutoSwitch] Error stopping chat:', e));
+        clearPauseIntent('main');
+        forgetOwnChannel();
         set({ streamUrl: null, activeQuality: null, availableQualities: [], adSource: null, currentStream: null, currentMediaType: null });
         say(decision.notice);
         if (decision.action === 'stop') return;
@@ -3038,6 +3043,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         return;
       }
 
+      // An offline room plays nothing: no pause to keep, and the next time
+      // the broadcaster's own channel goes live it opens paused again.
+      clearPauseIntent('main');
+      forgetOwnChannel();
       const info: TwitchStream = { ...(opened.row as TwitchStream), user_login: login, is_live: false };
       set({
         streamUrl: 'offline',

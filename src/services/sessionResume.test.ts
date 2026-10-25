@@ -12,7 +12,7 @@ vi.mock('../stores/multiNookStore', () => ({ usemultiNookStore: { getState: () =
 vi.mock('../utils/logger', () => ({ Logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } }));
 
 const { captureResumeSnapshot, resumePreviousSession } = await import('./sessionResume');
-const { clearPauseIntent, heldPause, notePauseIntent } = await import('../utils/pausePark');
+const { clearPauseIntent, forgetOwnChannel, heldPause, holdOwnChannel, notePauseIntent } = await import('../utils/pausePark');
 
 const liveApp = () => ({
   currentStream: { user_login: 'Streamer' },
@@ -27,6 +27,7 @@ beforeEach(() => {
   h.multi.isMultiNookActive = false;
   h.multi.toggleMultiNook.mockReset();
   clearPauseIntent('main');
+  forgetOwnChannel();
 });
 
 describe('resume snapshot', () => {
@@ -72,6 +73,21 @@ describe('resume snapshot', () => {
     h.invoke.mockResolvedValueOnce({ stream_login: 'streamer', was_running: false, paused: true });
     await resumePreviousSession();
     expect(heldWhenOpened).toMatchObject({ key: 'twitch:streamer' });
+  });
+
+  it('a stream that was playing does not open paused again as the own channel', async () => {
+    h.app = { startStream: vi.fn(async () => {}) };
+    h.invoke.mockResolvedValueOnce({ stream_login: 'Streamer', was_running: false, paused: false });
+    await resumePreviousSession();
+    expect(holdOwnChannel('twitch:streamer')).toBe(false);
+    expect(heldPause('main', 'twitch:streamer')).toBeNull();
+  });
+
+  it('a paused stream leaves the own-channel hold to the opening', async () => {
+    h.app = { startStream: vi.fn(async () => {}) };
+    h.invoke.mockResolvedValueOnce({ stream_login: 'streamer', was_running: false, paused: true });
+    await resumePreviousSession();
+    expect(holdOwnChannel('twitch:streamer')).toBe(true);
   });
 
   it('MultiNook reopens', async () => {
