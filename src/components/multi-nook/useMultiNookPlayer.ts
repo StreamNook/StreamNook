@@ -22,6 +22,7 @@ import { createStallReporter, reportSegment } from '../../utils/linkAdapt';
 import { isCodecFailure, UNSUPPORTED_CODEC } from '../../utils/codecFailure';
 import {
   clearPauseIntent,
+  clearTileOnEnd,
   createPausePark,
   forgetTile,
   heldPause,
@@ -390,6 +391,7 @@ export const useMultiNookPlayer = ({
         const held = heldPause(streamId, streamId);
         if (held) {
           setIsBuffering(false);
+          invoke('report_player_state', { state: 'paused', slot: streamId }).catch(() => {});
           park?.paused(held.at);
           Logger.warn(`[MultiNook-${streamId}] stays paused: paused before this tile was rebuilt`);
           return;
@@ -762,6 +764,8 @@ export const useMultiNookPlayer = ({
     }
 
     return () => {
+      // The stream ended (the channel went offline): the hold goes with it.
+      if (usemultiNookStore.getState().slots.find((s) => s.id === streamId)?.offline) clearTileOnEnd(streamId);
       stopLinkReports?.();
       if (video) {
         video.removeEventListener('error', onNativeError);

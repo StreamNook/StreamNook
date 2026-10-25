@@ -237,6 +237,14 @@ export function forgetTile(id: string): void {
   heldTiles.delete(id);
 }
 
+/** Tile `id`'s stream ended: its pause and its own-channel hold go, so the
+ *  next opening of the channel plays (or pauses, if it is the viewer's own)
+ *  afresh. */
+export function clearTileOnEnd(id: string): void {
+  clearPauseIntent(id);
+  forgetTile(id);
+}
+
 /** The channel `key` is already open as the viewer's own (a restart brings
  *  back a stream they were watching): its next opening does not pause it. */
 export function markOwnChannelOpened(key: string): void {

@@ -44,7 +44,8 @@ function windowStart(hls: Hls): number | null {
  * buffer is doing. With new live data it is also stuck when the video has not
  * fired `playing` and its time has not advanced. After the seek the window
  * starts again and the same playing check applies, so a freeze after the seek
- * is reported one window later. `onStuck` runs only while the video is not
+ * is reported one window later; so is a freeze after any other seek of the
+ * element. `onStuck` runs only while the video is not
  * paused. Returns the cancel.
  */
 export function followLiveAfterResync(
@@ -95,6 +96,13 @@ export function followLiveAfterResync(
   const onPlaying = () => {
     playing = true;
   };
+  // Any seek, whoever made it (this follower, hls.js's own live sync, the
+  // watchdog, a gap nudge), starts the window again from where it landed.
+  const onSeeking = () => {
+    playing = false;
+    baseline = video.currentTime;
+    arm();
+  };
   const stop = () => {
     if (timer !== null) {
       clearTimeout(timer);
@@ -105,6 +113,7 @@ export function followLiveAfterResync(
     hls.off(Hls.Events.FRAG_BUFFERED, tryMove);
     hls.off(Hls.Events.FRAG_BUFFERED, onFragment);
     video.removeEventListener('playing', onPlaying);
+    video.removeEventListener('seeking', onSeeking);
   };
   function judge() {
     timer = null;
@@ -124,6 +133,7 @@ export function followLiveAfterResync(
   hls.on(Hls.Events.FRAG_BUFFERED, onFragment);
   hls.on(Hls.Events.FRAG_BUFFERED, tryMove);
   video.addEventListener('playing', onPlaying);
+  video.addEventListener('seeking', onSeeking);
   arm();
   return stop;
 }

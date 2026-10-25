@@ -4,6 +4,7 @@ import {
   RESYNC_AFTER_PAUSE_MS,
   STOP_LOAD_AFTER_PAUSE_MS,
   clearPauseIntent,
+  clearTileOnEnd,
   createPausePark,
   forgetOwnChannel,
   forgetTile,
@@ -176,6 +177,15 @@ describe('pausePark', () => {
     expect(isTileHeld('tile-8')).toBe(false);
     forgetTile('tile-9');
     expect(isTileHeld('tile-9')).toBe(false);
+  });
+
+  it('a tile whose stream ended loses its pause and its own-channel hold', () => {
+    markTileHeld('tile-5');
+    notePauseIntent('tile-5', 'tile-5', 4);
+    expect(heldPause('tile-5', 'tile-5')).not.toBeNull();
+    clearTileOnEnd('tile-5');
+    expect(heldPause('tile-5', 'tile-5')).toBeNull();
+    expect(isTileHeld('tile-5')).toBe(false);
   });
 
   it('a pause intent holds for its channel only', () => {

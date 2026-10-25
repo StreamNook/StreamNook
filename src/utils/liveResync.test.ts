@@ -293,6 +293,41 @@ describe('followLiveAfterResync', () => {
     expect(onStuck).toHaveBeenCalledTimes(1);
   });
 
+  it('reports a freeze after a seek made by anyone, one window after that seek', () => {
+    const { hls, video, onStuck } = start();
+    hls.latestLevelDetails = { fragmentStart: 80 };
+    video.advance(100);
+    video.setBuffered([[80, 106]]);
+    video.emit('playing');
+    hls.latestLevelDetails = { fragmentStart: 200 };
+    hls.fire('hlsLevelUpdated');
+    vi.advanceTimersByTime(3000);
+    video.advance(230);
+    video.emit('seeking');
+    vi.advanceTimersByTime(RESYNC_WINDOW_MS - 1);
+    expect(onStuck).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(onStuck).toHaveBeenCalledTimes(1);
+    expect(video.count('seeking')).toBe(0);
+  });
+
+  it('is not stuck when a seek by anyone lands and the video plays on', () => {
+    const { hls, video, onStuck } = start();
+    hls.latestLevelDetails = { fragmentStart: 80 };
+    video.advance(100);
+    video.setBuffered([[80, 106]]);
+    video.emit('playing');
+    hls.latestLevelDetails = { fragmentStart: 200 };
+    hls.fire('hlsLevelUpdated');
+    video.advance(230);
+    video.emit('seeking');
+    hls.fire('hlsFragBuffered', { frag: { type: 'main', start: 228, duration: 2 } });
+    video.emit('playing');
+    video.advance(234);
+    vi.advanceTimersByTime(RESYNC_WINDOW_MS * 3);
+    expect(onStuck).not.toHaveBeenCalled();
+  });
+
   it('cancel stops following and never reports', () => {
     const { hls, video, onStuck, stop } = start();
     stop();
@@ -303,5 +338,6 @@ describe('followLiveAfterResync', () => {
     expect(video.seeks).toEqual([]);
     expect(onStuck).not.toHaveBeenCalled();
     expect(video.count('playing')).toBe(0);
+    expect(video.count('seeking')).toBe(0);
   });
 });
