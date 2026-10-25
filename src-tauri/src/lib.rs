@@ -882,6 +882,11 @@ pub fn run() {
     ));
     let eventsub_service_state = commands::eventsub::EventSubServiceState(eventsub_service.clone());
 
+    // Closed here, before any window can ask the cache for a list or write a
+    // file, on every platform. The setup closure owns it and moves it into the
+    // migrations' task, which opens it when they end however they end; if setup
+    // never runs, dropping the app drops the closure and opens it.
+    let startup_gate = services::universal_cache_service::StartupGateGuard::close();
     let builder = Builder::new();
     // Single-instance is desktop-only and must be registered first: it forwards a
     // streamnook:// deep link opened while the app is already running to the
@@ -1105,9 +1110,9 @@ pub fn run() {
             // sweep reads which files it names. The sweep runs once per process
             // and only while no other instance holds the cache's writers lock; a
             // cache write that starts first waits for it. The cache lists the
-            // windows ask for wait on the start-up gate, which this guard holds
-            // closed until the migrations end, however they end.
-            let startup_gate = services::universal_cache_service::StartupGateGuard::close();
+            // windows ask for, and the file writes they start, wait on the start-up
+            // gate, which the guard moved in below holds closed until the
+            // migrations end, however they end.
             tauri::async_runtime::spawn_blocking(move || {
                 // Migrate emote cache if app version changed (handles format changes like webp → avif)
                 // This clears stale emote files that may have the old format
