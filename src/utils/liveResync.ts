@@ -64,9 +64,10 @@ function windowStart(hls: Hls): number | null {
  * count as progress. This follower's own seek never counts against that limit.
  * Wherever the freeze timer starts outside a seek it measures from the playhead
  * at that moment. When a window ends with progress made but the playhead standing
- * still for STALL_SECS or more, the freeze timer measures one more window from
- * there (once). `onStuck` runs only while the video is not paused. Returns the
- * cancel.
+ * still for STALL_SECS or more, or not yet inside the served window, the freeze
+ * timer measures again from there, until the playhead is inside the served window
+ * and still advancing when a window ends. `onStuck` runs only while the video is
+ * not paused. Returns the cancel.
  */
 export function followLiveAfterResync(
   hls: Hls,
@@ -83,7 +84,6 @@ export function followLiveAfterResync(
   let rearms = 0;
   let ownSeekTo: number | null = null; // where this follower's own seek was sent, until its event arrives
   let lastAdvanceAt = Date.now(); // when the playhead last moved forward by playing
-  let extended = false; // the freeze timer already measured one extra window
   let dataTimer: ReturnType<typeof setTimeout> | null = null;
   let freezeTimer: ReturnType<typeof setTimeout> | null = null;
   const armFreeze = () => {
@@ -202,13 +202,14 @@ export function followLiveAfterResync(
       return;
     }
     if (video.currentTime - baseline - jumped > PROGRESS_SECS) {
-      if (!extended && Date.now() - lastAdvanceAt >= STALL_SECS * 1000) {
-        extended = true;
-        measureFromHere();
-        armFreeze();
+      const first = windowStart(hls);
+      const atLive = seeked || (reloaded && first !== null && video.currentTime >= first);
+      if (atLive && Date.now() - lastAdvanceAt < STALL_SECS * 1000) {
+        stop();
         return;
       }
-      stop();
+      measureFromHere();
+      armFreeze();
       return;
     }
     stop();
