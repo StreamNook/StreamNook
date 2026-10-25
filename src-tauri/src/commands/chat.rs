@@ -1128,7 +1128,7 @@ pub fn get_youtube_channel_emojis(
 /// named by a `PERSONAL_EMOTES` bridge frame (their set arrived after the row
 /// did). `None` when nothing changes.
 #[tauri::command]
-pub fn apply_personal_emotes(
+pub async fn apply_personal_emotes(
     user_id: String,
     segments: Vec<crate::models::chat_layout::MessageSegment>,
 ) -> Option<Vec<crate::models::chat_layout::MessageSegment>> {
