@@ -1005,6 +1005,10 @@ pub fn phone_rules() -> bool {
 /// when the switch was spliced into the playlist it is already reading.
 pub type SwitchFuture = Pin<Box<dyn Future<Output = anyhow::Result<Option<String>>> + Send>>;
 
+/// The message of the error a route's `switch` returns when it left the relay
+/// untouched because the relay is parked: no switch happened.
+pub const PARKED: &str = "parked";
+
 /// How one stream is served. The relay knows how to move it to another rung
 /// (splice or restart) and whether its player's own downloads cross the
 /// internet; this module only decides when and to what.
@@ -1590,6 +1594,12 @@ async fn switch_to(stream_id: &str, to: usize, why: &'static str, generation: u6
     info!("[LinkAdapt] {}: {} -> {} ({})", stream_id, from.name, rung.name, why);
     let reload = match route.switch(rung, same_decoder).await {
         Ok(reload) => reload,
+        Err(e) if e.to_string() == PARKED => {
+            // Nothing moved: no switch is recorded and nothing is announced,
+            // so the governor judges the rung again once the player resumes.
+            log::debug!("[LinkAdapt] {}: switch skipped: relay parked", stream_id);
+            return;
+        }
         Err(e) => {
             log::warn!("[LinkAdapt] {}: switch to {} failed: {}", stream_id, name, e);
             return;
@@ -2411,6 +2421,51 @@ mod tests {
         rt.block_on(switch_to(live_id, 1, "test", 0));
         assert_eq!(live_switches.load(Ordering::SeqCst), 1);
         end(live_id);
+    }
+
+    /// A seamless route whose relay is parked only once the switch is
+    /// attempted: it refuses with the parked error.
+    struct Refusing {
+        attempts: Arc<AtomicU64>,
+    }
+
+    impl Route for Refusing {
+        fn switch(&self, _to: Rung, _same_decoder: bool) -> SwitchFuture {
+            self.attempts.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Err(anyhow::anyhow!(PARKED)) })
+        }
+
+        fn player_measures_link(&self) -> bool {
+            false
+        }
+
+        fn seamless(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn a_refused_switch_is_not_recorded() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+        let id = "test-refused-switch";
+        let attempts = Arc::new(AtomicU64::new(0));
+        settled_session(id, Arc::new(Refusing { attempts: attempts.clone() }));
+        let (current, last_switch, up_hold) = {
+            let guard = sessions();
+            let gov = &guard.get(id).unwrap().gov;
+            (gov.current(), gov.last_switch, gov.up_hold)
+        };
+
+        rt.block_on(switch_to(id, 1, "test", 0));
+
+        assert_eq!(attempts.load(Ordering::SeqCst), 1, "the switch was attempted");
+        let guard = sessions();
+        let gov = &guard.get(id).unwrap().gov;
+        assert_eq!(gov.current(), current, "the rung is unchanged");
+        assert_eq!(gov.last_switch, last_switch, "no switch is recorded");
+        assert_eq!(gov.up_hold, up_hold, "no back-off follows");
+        drop(guard);
+        end(id);
     }
 
     #[test]

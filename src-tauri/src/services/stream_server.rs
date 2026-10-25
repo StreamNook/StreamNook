@@ -734,9 +734,10 @@ pub async fn adapt_upstream(playlist_url: &str, same_decoder: bool) -> Result<Op
         return Ok(None);
     }
     // A parked origin stays parked: restarting it would read again for a
-    // player that is not watching.
+    // player that is not watching. The refusal is an error so the caller does
+    // not record a switch that never happened.
     if !crate::services::ll_origin::stop_unless_parked() {
-        return Ok(None);
+        return Err(anyhow::anyhow!(crate::services::link_adapt::PARKED));
     }
     let port = StreamServer::start_proxy_server(playlist_url.to_string()).await?;
     Ok(Some(crate::commands::streaming::local_player_url(port)))

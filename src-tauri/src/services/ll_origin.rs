@@ -2282,9 +2282,7 @@ async fn stream_response(
         // timeline expectations, so the lost media is bridged into a seamless
         // output instead of a served hole (the playlist stays sn-contiguous
         // and cannot express the gap).
-        if let Some(t) = origin.transmux.lock().unwrap().as_mut() {
-            t.drop_partial_input();
-        }
+        origin.drop_partial_input_if_current(gen);
     }
 }
 
@@ -2445,6 +2443,24 @@ impl LlOrigin {
                     .and_then(|(tid, ts)| cmaf_part_duration(&bytes, tid, ts));
                 Some((bytes, measured.unwrap_or(dur)))
             }
+        }
+    }
+
+    /// Drop the transmuxer's half-assembled input for the reader started as
+    /// generation `gen`. The generation is checked inside the transmux lock, so
+    /// a reader that a stop, park or newer start has retired leaves a newer
+    /// start's transmuxer alone. True when the partial input was dropped.
+    fn drop_partial_input_if_current(&self, gen: u64) -> bool {
+        let mut g = self.transmux.lock().unwrap();
+        if self.generation.load(Ordering::SeqCst) != gen {
+            return false;
+        }
+        match g.as_mut() {
+            Some(t) => {
+                t.drop_partial_input();
+                true
+            }
+            None => false,
         }
     }
 
@@ -4243,6 +4259,25 @@ mod tests {
         assert_eq!(held_parts(&origin), 2);
         assert_eq!(origin.push_shell(3, None, gen), Some(true));
         assert!(origin.finish_segment(2, gen));
+    }
+
+    #[test]
+    fn a_stale_reader_leaves_the_transmuxer_alone() {
+        let origin = LlOrigin::new(6);
+        let gen = origin.generation.load(Ordering::SeqCst);
+
+        assert!(!origin.drop_partial_input_if_current(gen), "no transmuxer, nothing to drop");
+
+        *origin.transmux.lock().unwrap() = Some(crate::services::ts_fmp4::Transmuxer::new());
+        assert!(!origin.drop_partial_input_if_current(gen + 1), "a stale reader drops nothing");
+        assert!(origin.drop_partial_input_if_current(gen), "the current reader drops the tail");
+
+        origin.stop();
+        *origin.transmux.lock().unwrap() = Some(crate::services::ts_fmp4::Transmuxer::new());
+        assert!(
+            !origin.drop_partial_input_if_current(gen),
+            "a reader retired by a stop leaves a newer transmuxer alone"
+        );
     }
 
     const OLD_REQUEST_MS: u64 = u64::MAX / 2;

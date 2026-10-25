@@ -494,9 +494,10 @@ impl MultiNookServer {
             return Ok(None);
         }
         // A parked origin stays parked: restarting it would read again for a
-        // tile that is not watching.
+        // tile that is not watching. The refusal is an error so the caller does
+        // not record a switch that never happened.
         if !origin.stop_unless_parked() {
-            return Ok(None);
+            return Err(anyhow::anyhow!(crate::services::link_adapt::PARKED));
         }
         crate::services::hls_projection::reset(stream_id);
         Self::start_proxy(stream_id, playlist_url.to_string(), profile, refresher).await?;
