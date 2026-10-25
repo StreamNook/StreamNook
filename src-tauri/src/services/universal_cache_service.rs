@@ -18,6 +18,108 @@ use crate::services::cache_service::get_cache_dir;
 // Global mutex to prevent concurrent manifest writes (for sync operations)
 static MANIFEST_LOCK: Lazy<StdMutex<()>> = Lazy::new(|| StdMutex::new(()));
 
+/// Manifest entries this build could not read (a newer build's cache type),
+/// kept as they were so writing the manifest back never drops them. Cleared
+/// only with the cache.
+static FOREIGN_ENTRIES: Lazy<StdMutex<Vec<(String, serde_json::Value)>>> = Lazy::new(|| StdMutex::new(Vec::new()));
+
+/// A manifest's `entries`, read one at a time: each converts as it is read, and
+/// one this build cannot read is set aside instead of failing the whole file.
+#[derive(Default)]
+struct LenientEntries {
+    known: HashMap<String, UniversalCacheEntry>,
+    foreign: Vec<(String, serde_json::Value)>,
+}
+
+impl<'de> Deserialize<'de> for LenientEntries {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        struct EntriesVisitor;
+        impl<'de> serde::de::Visitor<'de> for EntriesVisitor {
+            type Value = LenientEntries;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a map of cache entries")
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> std::result::Result<LenientEntries, A::Error> {
+                let mut out = LenientEntries {
+                    known: HashMap::with_capacity(map.size_hint().unwrap_or(0)),
+                    foreign: Vec::new(),
+                };
+                while let Some((key, value)) = map.next_entry::<String, serde_json::Value>()? {
+                    match UniversalCacheEntry::deserialize(&value) {
+                        Ok(entry) => {
+                            out.known.insert(key, entry);
+                        }
+                        Err(_) => out.foreign.push((key, value)),
+                    }
+                }
+                Ok(out)
+            }
+        }
+        deserializer.deserialize_map(EntriesVisitor)
+    }
+}
+
+#[derive(Deserialize)]
+struct LenientManifest {
+    version: u32,
+    last_sync: Option<u64>,
+    #[serde(default)]
+    entries: LenientEntries,
+}
+
+/// Read a manifest, setting aside any entry this build cannot read.
+fn parse_manifest(json: &str) -> serde_json::Result<(UniversalCacheManifest, Vec<(String, serde_json::Value)>)> {
+    let raw: LenientManifest = serde_json::from_str(json)?;
+    Ok((
+        UniversalCacheManifest { version: raw.version, last_sync: raw.last_sync, entries: raw.entries.known },
+        raw.entries.foreign,
+    ))
+}
+
+/// `entries` as written: this build's entries, then each set-aside one it has
+/// no entry for under the same key, without building a second map.
+struct EntriesOut<'a> {
+    known: &'a HashMap<String, UniversalCacheEntry>,
+    foreign: &'a [(String, serde_json::Value)],
+}
+
+impl Serialize for EntriesOut<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let extra = self.foreign.iter().filter(|(k, _)| !self.known.contains_key(k)).count();
+        let mut map = serializer.serialize_map(Some(self.known.len() + extra))?;
+        for (k, v) in self.known {
+            map.serialize_entry(k, v)?;
+        }
+        for (k, v) in self.foreign {
+            if !self.known.contains_key(k) {
+                map.serialize_entry(k, v)?;
+            }
+        }
+        map.end()
+    }
+}
+
+#[derive(Serialize)]
+struct ManifestOut<'a> {
+    version: u32,
+    last_sync: Option<u64>,
+    entries: EntriesOut<'a>,
+}
+
+/// The manifest as written to disk, with the set-aside entries back in.
+fn encode_manifest(manifest: &UniversalCacheManifest) -> serde_json::Result<Vec<u8>> {
+    let foreign = FOREIGN_ENTRIES.lock().unwrap_or_else(|e| e.into_inner());
+    if foreign.is_empty() {
+        return serde_json::to_vec(manifest);
+    }
+    serde_json::to_vec(&ManifestOut {
+        version: manifest.version,
+        last_sync: manifest.last_sync,
+        entries: EntriesOut { known: &manifest.entries, foreign: foreign.as_slice() },
+    })
+}
+
 // Async mutex for async operations
 static ASYNC_MANIFEST_LOCK: Lazy<TokioMutex<()>> = Lazy::new(|| TokioMutex::new(()));
 
@@ -131,7 +233,7 @@ fn ensure_flush_task() {
                         let guard = MANIFEST_MEMORY
                             .read()
                             .map_err(|_| anyhow::anyhow!("manifest memory lock poisoned"))?;
-                        serde_json::to_vec(&*guard)?
+                        encode_manifest(&*guard)?
                     };
                     write_manifest_bytes(&json)
                 })
@@ -291,8 +393,14 @@ fn load_manifest_from_disk() -> Result<UniversalCacheManifest> {
         }
     };
 
-    match serde_json::from_str::<UniversalCacheManifest>(&json) {
-        Ok(manifest) => Ok(manifest),
+    match parse_manifest(&json) {
+        Ok((manifest, foreign)) => {
+            if !foreign.is_empty() {
+                log::info!("[UniversalCache] kept {} manifest entries this build cannot read", foreign.len());
+                *FOREIGN_ENTRIES.lock().unwrap_or_else(|e| e.into_inner()) = foreign;
+            }
+            Ok(manifest)
+        }
         Err(e) => {
             debug!(
                 "[UniversalCache] Failed to parse manifest ({}), creating new one",
@@ -320,7 +428,7 @@ fn load_manifest_from_disk() -> Result<UniversalCacheManifest> {
 fn save_manifest_to_disk(manifest: &UniversalCacheManifest) -> Result<()> {
     // Compact, not pretty: nothing reads this file by eye, and the indentation
     // was ~22% of a 22 MB file rewritten many times per session.
-    let json = serde_json::to_vec(manifest)?;
+    let json = encode_manifest(manifest)?;
     write_manifest_bytes(&json)
 }
 
@@ -407,7 +515,7 @@ pub fn flush_manifest_now() -> Result<()> {
         return Ok(());
     }
     let json = match MANIFEST_MEMORY.read() {
-        Ok(g) => serde_json::to_vec(&*g),
+        Ok(g) => encode_manifest(&*g),
         Err(_) => {
             MANIFEST_DIRTY.store(true, Ordering::Release);
             return Err(anyhow::anyhow!("manifest memory lock poisoned"));
@@ -964,6 +1072,7 @@ pub fn clear_universal_cache() -> Result<()> {
         };
     }
     MANIFEST_DIRTY.store(false, Ordering::Release);
+    FOREIGN_ENTRIES.lock().unwrap_or_else(|e| e.into_inner()).clear();
     if let Ok(mut verified) = VERIFIED_TYPES.lock() {
         verified.clear();
     }
@@ -2276,5 +2385,44 @@ mod streamnook_art_tests {
         assert_eq!(content_range_start("bytes 16384-99999/100000"), Some((16384, Some(100000))));
         assert_eq!(content_range_start("bytes 0-9/*"), Some((0, None)));
         assert_eq!(content_range_start("items 0-9/10"), None);
+    }
+
+    #[test]
+    fn an_unknown_cache_type_is_kept_aside_and_written_back() {
+        let json = r#"{"version":1,"last_sync":null,"entries":{
+            "a":{"id":"a","cache_type":"emote","data":{},"metadata":META},
+            "b":{"id":"b","cache_type":"futuretype","data":{},"metadata":META}}}"#
+            .replace("META", r#"{"timestamp":1,"expiry_days":7,"source":"universal_file","version":1}"#);
+        let (manifest, foreign) = super::parse_manifest(&json).unwrap();
+        assert_eq!(manifest.entries.len(), 1);
+        assert!(manifest.entries.contains_key("a"));
+        assert_eq!(foreign.len(), 1);
+        assert_eq!(foreign[0].0, "b");
+        *super::FOREIGN_ENTRIES.lock().unwrap() = foreign;
+        let bytes = super::encode_manifest(&manifest).unwrap();
+        let out: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(out["entries"]["a"]["cache_type"], "emote");
+        assert_eq!(out["entries"]["b"]["cache_type"], "futuretype");
+        assert_eq!(out["entries"].as_object().unwrap().len(), 2);
+        // Read back: the unknown entry is still set aside, the known one still known.
+        let (again, foreign_again) = super::parse_manifest(std::str::from_utf8(&bytes).unwrap()).unwrap();
+        assert_eq!(again.entries.len(), 1);
+        assert_eq!(foreign_again.len(), 1);
+        super::FOREIGN_ENTRIES.lock().unwrap().clear();
+    }
+
+    #[test]
+    fn this_builds_entry_wins_over_a_set_aside_one_with_its_key() {
+        let manifest = super::UniversalCacheManifest {
+            version: 1,
+            last_sync: None,
+            entries: [("a".to_string(), file_entry(CacheType::Emote, 0))].into_iter().collect(),
+        };
+        *super::FOREIGN_ENTRIES.lock().unwrap() =
+            vec![("a".to_string(), serde_json::json!({ "cache_type": "futuretype" }))];
+        let out: serde_json::Value = serde_json::from_slice(&super::encode_manifest(&manifest).unwrap()).unwrap();
+        assert_eq!(out["entries"].as_object().unwrap().len(), 1);
+        assert_eq!(out["entries"]["a"]["cache_type"], "emote");
+        super::FOREIGN_ENTRIES.lock().unwrap().clear();
     }
 }
