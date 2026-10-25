@@ -49,6 +49,7 @@ import { normalizeForRepeat, isPrivilegedChatter } from '../utils/messageRepeat'
 import type { SongMatch } from '../utils/songId';
 import type { SeventvEmoteChange } from '../components/overlay/overlayConfig';
 import type { BackendChatMessage } from '../services/twitchChat';
+import { withClearedEntry } from './clearedContexts';
 
 // Hard caps borrowed from the prior single-channel hook. Keeping them as
 // per-channel limits means a 5-channel MultiChat caps memory at 5x the
@@ -2593,6 +2594,7 @@ function handleWsMessage(raw: string) {
               ? 'timeout'
               : 'ban';
           const affected = new Set<string>();
+          const present = new Set<string>();
           for (const msg of slice.messages) {
             const msgUserId =
               typeof msg !== 'string'
@@ -2600,9 +2602,10 @@ function handleWsMessage(raw: string) {
                 : msg.match?.(/(?:^@|;)user-id=([^;]+)/)?.[1];
             const msgId =
               typeof msg !== 'string' ? msg.id : msg.match?.(/(?:^|;)id=([^;]+)/)?.[1];
+            if (msgId) present.add(msgId);
             if (msgUserId === parsed.target_user_id && msgId) affected.add(msgId);
           }
-          slice.clearedUserContexts = new Map(slice.clearedUserContexts).set(parsed.target_user_id, {
+          slice.clearedUserContexts = withClearedEntry(slice.clearedUserContexts, present, parsed.target_user_id, {
             context: {
               type: modType,
               duration: parsed.ban_duration,
