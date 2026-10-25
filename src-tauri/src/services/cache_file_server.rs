@@ -328,41 +328,64 @@ mod tests {
         assert_eq!(arms, CACHE_DIRS.len(), "every CacheType folder is in CACHE_DIRS");
     }
 
+    /// Links the folder `link` to `target`. Windows uses a directory junction,
+    /// which needs no privilege; other platforms use a symlink.
     #[cfg(windows)]
-    fn symlink_file(target: &Path, link: &Path) -> std::io::Result<()> {
-        std::os::windows::fs::symlink_file(target, link)
+    fn link_dir(target: &Path, link: &Path) -> std::io::Result<()> {
+        let status = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(link).arg(target).status()?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(std::io::Error::new(std::io::ErrorKind::Other, format!("mklink /J failed with {status}")))
+        }
     }
 
-    #[cfg(windows)]
-    fn symlink_dir(target: &Path, link: &Path) -> std::io::Result<()> {
-        std::os::windows::fs::symlink_dir(target, link)
-    }
-
-    #[cfg(unix)]
-    fn symlink_file(target: &Path, link: &Path) -> std::io::Result<()> {
+    #[cfg(not(windows))]
+    fn link_dir(target: &Path, link: &Path) -> std::io::Result<()> {
         std::os::unix::fs::symlink(target, link)
     }
 
-    #[cfg(unix)]
-    fn symlink_dir(target: &Path, link: &Path) -> std::io::Result<()> {
-        std::os::unix::fs::symlink(target, link)
+    /// Makes `emotes/evil.webp` a way out of the cache. Windows junctions are
+    /// folder-only, so there the `emotes` folder becomes a junction to a folder
+    /// outside the cache that holds `evil.webp`; elsewhere `evil.webp` is a
+    /// symlink to the manifest. Returns the outside folder on Windows.
+    fn link_evil_image_out(root: &Path, name: &str) -> Option<PathBuf> {
+        #[cfg(windows)]
+        {
+            let outside = std::env::temp_dir().join(format!("sn-cachefiles-evil-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&outside);
+            std::fs::create_dir_all(&outside).unwrap();
+            std::fs::write(outside.join("evil.webp"), b"RIFF0000WEBPVP8 ").unwrap();
+            std::fs::remove_dir_all(root.join("emotes")).unwrap();
+            link_dir(&outside, &root.join("emotes")).expect(NO_SYMLINK);
+            Some(outside)
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = name;
+            std::os::unix::fs::symlink(root.join("manifest.json"), root.join("emotes").join("evil.webp")).expect(NO_SYMLINK);
+            None
+        }
     }
 
-    const NO_SYMLINK: &str = "this platform could not create a symlink here (on Windows turn on Developer Mode or run elevated); the symlink checks cannot run";
+    const NO_SYMLINK: &str = "this platform could not create a link out of the cache folder here; the link checks cannot run";
 
     #[test]
     fn a_symlink_out_of_the_image_folder_does_not_resolve() {
         let root = temp_root("symlink");
-        symlink_file(&root.join("manifest.json"), &root.join("emotes").join("evil.webp")).expect(NO_SYMLINK);
-        assert!(resolve(&root, "emotes", "evil.webp").is_none(), "a file link to the manifest");
+        let evil_outside = link_evil_image_out(&root, "symlink");
+        assert!(resolve(&root, "emotes", "evil.webp").is_none(), "a link out of the cache to an image");
         let outside = std::env::temp_dir().join(format!("sn-cachefiles-outside-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&outside);
         std::fs::create_dir_all(&outside).unwrap();
         std::fs::write(outside.join("x.png"), b"\x89PNG\r\n\x1a\n").unwrap();
-        symlink_dir(&outside, &root.join("badges")).expect(NO_SYMLINK);
+        link_dir(&outside, &root.join("badges")).expect(NO_SYMLINK);
         assert!(resolve(&root, "badges", "x.png").is_none(), "an image folder that is a link out of the cache");
         let _ = std::fs::remove_dir_all(&outside);
         let _ = std::fs::remove_dir_all(&root);
+        if let Some(evil) = evil_outside {
+            let _ = std::fs::remove_dir_all(&evil);
+        }
     }
 
     /// Serves `routes` on a loopback port the OS picks. Returns the base URL and
@@ -458,9 +481,12 @@ mod tests {
     #[tokio::test]
     async fn a_symlink_out_of_the_folder_is_not_served() {
         let root = temp_root("wire-symlink");
-        symlink_file(&root.join("manifest.json"), &root.join("emotes").join("evil.webp")).expect(NO_SYMLINK);
+        let evil_outside = link_evil_image_out(&root, "wire-symlink");
         let (base, token) = spawn_server(root.clone()).await;
         assert_eq!(status_of(&client(), &format!("{base}/cache/{token}/emotes/evil.webp")).await, 404);
         let _ = std::fs::remove_dir_all(&root);
+        if let Some(evil) = evil_outside {
+            let _ = std::fs::remove_dir_all(&evil);
+        }
     }
 }
