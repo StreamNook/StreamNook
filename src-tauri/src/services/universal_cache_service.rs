@@ -1439,7 +1439,7 @@ pub fn migrate_emote_namespace_cache() -> Result<bool> {
 /// Whether the first 1024 bytes read as SVG markup: after an optional UTF-8 BOM
 /// and whitespace, an `<svg` element, a comment, an svg doctype, or an XML
 /// declaration with an `<svg` element after it.
-fn looks_like_svg(bytes: &[u8]) -> bool {
+pub(crate) fn looks_like_svg(bytes: &[u8]) -> bool {
     let head = &bytes[..bytes.len().min(1024)];
     let head = head.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(head);
     let start = head.iter().position(|b| !b.is_ascii_whitespace()).unwrap_or(head.len());

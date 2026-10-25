@@ -215,7 +215,7 @@ enum Found {
     /// The caller's validator still matches the file.
     NotModified(String),
     /// The file's bytes, with a validator when the folder is revalidated.
-    File { bytes: Vec<u8>, etag: Option<String> },
+    File { bytes: Vec<u8>, etag: Option<String>, ext: String },
 }
 
 /// Folders whose files can change under the same name, so the WebView asks
@@ -257,8 +257,9 @@ async fn serve(root: PathBuf, dir: String, file: String, if_none_match: Option<S
                 return Some(Found::NotModified(tag.clone()));
             }
         }
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
         let bytes = std::fs::read(path).ok()?;
-        Some(Found::File { bytes, etag })
+        Some(Found::File { bytes, etag, ext })
     })
     .await;
     match read {
@@ -269,10 +270,10 @@ async fn serve(root: PathBuf, dir: String, file: String, if_none_match: Option<S
             .header("Access-Control-Allow-Origin", "*")
             .body(bytes::Bytes::new())
             .unwrap_or_else(|_| status(StatusCode::INTERNAL_SERVER_ERROR)),
-        Ok(Some(Found::File { bytes, etag })) => {
+        Ok(Some(Found::File { bytes, etag, ext })) => {
             let builder = Response::builder()
                 .status(StatusCode::OK)
-                .header("Content-Type", sniff(&bytes))
+                .header("Content-Type", sniff(&bytes, &ext))
                 .header("Access-Control-Allow-Origin", "*");
             let builder = match etag {
                 // The file can be replaced under the same name, so the WebView
@@ -308,8 +309,10 @@ fn resolve(root: &Path, dir: &str, file: &str) -> Option<PathBuf> {
 }
 
 /// The image type from its first bytes (many cached badges are `.bin` files
-/// that hold PNG; some cosmetics `.bin` files hold WebP).
-fn sniff(b: &[u8]) -> &'static str {
+/// that hold PNG; some cosmetics `.bin` files hold WebP). Bytes that give no
+/// known type in a file named `.svg` are still served as SVG, because the cache
+/// only saves that extension for SVG content.
+fn sniff(b: &[u8], ext: &str) -> &'static str {
     if b.starts_with(b"\x89PNG\r\n\x1a\n") {
         "image/png"
     } else if b.starts_with(b"GIF87a") || b.starts_with(b"GIF89a") {
@@ -320,29 +323,17 @@ fn sniff(b: &[u8]) -> &'static str {
         "image/webp"
     } else if b.len() >= 12 && &b[4..8] == b"ftyp" && (&b[8..12] == b"avif" || &b[8..12] == b"avis") {
         "image/avif"
-    } else if is_svg(b) {
+    } else if crate::services::universal_cache_service::looks_like_svg(b) ||ext.eq_ignore_ascii_case("svg") {
         "image/svg+xml"
     } else {
         "application/octet-stream"
     }
 }
 
-/// SVG text: after an optional BOM and whitespace it opens with `<svg`, a
-/// comment, a `<!DOCTYPE svg`, or an XML declaration followed by `<svg` within
-/// the first 1024 bytes.
-fn is_svg(b: &[u8]) -> bool {
-    let b = b.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(b);
-    let start = b.iter().position(|c| !c.is_ascii_whitespace()).unwrap_or(b.len());
-    let head = &b[start..b.len().min(start + 1024)];
-    head.starts_with(b"<svg")
-        || head.starts_with(b"<!--")
-        || head.starts_with(b"<!DOCTYPE svg")
-        || (head.starts_with(b"<?xml") && head.windows(4).any(|w| w == b"<svg"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::universal_cache_service::looks_like_svg as is_svg;
 
     fn temp_root(name: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!("sn-cachefiles-{name}-{}", std::process::id()));
@@ -372,14 +363,22 @@ mod tests {
 
     #[test]
     fn types_come_from_the_bytes() {
-        assert_eq!(sniff(b"\x89PNG\r\n\x1a\nrest"), "image/png");
-        assert_eq!(sniff(b"GIF89a.."), "image/gif");
-        assert_eq!(sniff(&[0xFF, 0xD8, 0xFF, 0xE0]), "image/jpeg");
-        assert_eq!(sniff(b"RIFF0000WEBPVP8 "), "image/webp");
-        assert_eq!(sniff(b"\0\0\0\x1cftypavif0000"), "image/avif");
-        assert_eq!(sniff(b"  <svg xmlns=''/>"), "image/svg+xml");
-        assert_eq!(sniff(b"<?xml version='1.0'?><svg/>"), "image/svg+xml");
-        assert_eq!(sniff(b"hello"), "application/octet-stream");
+        assert_eq!(sniff(b"\x89PNG\r\n\x1a\nrest", "bin"), "image/png");
+        assert_eq!(sniff(b"GIF89a..", "bin"), "image/gif");
+        assert_eq!(sniff(&[0xFF, 0xD8, 0xFF, 0xE0], "bin"), "image/jpeg");
+        assert_eq!(sniff(b"RIFF0000WEBPVP8 ", "bin"), "image/webp");
+        assert_eq!(sniff(b"\0\0\0\x1cftypavif0000", "bin"), "image/avif");
+        assert_eq!(sniff(b"  <svg xmlns=''/>", "bin"), "image/svg+xml");
+        assert_eq!(sniff(b"<?xml version='1.0'?><svg/>", "bin"), "image/svg+xml");
+        assert_eq!(sniff(b"hello", "bin"), "application/octet-stream");
+    }
+
+    #[test]
+    fn an_svg_file_is_served_as_svg_even_when_its_bytes_fail_the_check() {
+        assert_eq!(sniff(b"not markup", "svg"), "image/svg+xml");
+        assert_eq!(sniff(b"not markup", "SVG"), "image/svg+xml");
+        assert_eq!(sniff(b"not markup", "png"), "application/octet-stream");
+        assert_eq!(sniff(b"\x89PNG\r\n\x1a\nrest", "svg"), "image/png", "known bytes win over the extension");
     }
 
     #[test]
@@ -401,7 +400,7 @@ mod tests {
         assert!(!is_svg(b"\x89PNG\r\n\x1a\nrest"), "a PNG is not an SVG");
         assert!(!is_svg(b"<html><body></body></html>"));
         assert!(!is_svg(b""));
-        assert_eq!(sniff(b"\xEF\xBB\xBF<svg/>"), "image/svg+xml");
+        assert_eq!(sniff(b"\xEF\xBB\xBF<svg/>", "bin"), "image/svg+xml");
     }
 
     #[test]
