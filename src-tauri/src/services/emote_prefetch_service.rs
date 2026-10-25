@@ -449,6 +449,25 @@ fn spawn_scan(
     });
 }
 
+/// Stores `entries` in the manifest, then tells the windows about the ones that
+/// were stored. A refused entry (its file is not on disk) is not announced, and
+/// neither is any entry when the store failed.
+async fn save_then_announce(app_handle: &AppHandle, entries: Vec<UniversalCacheEntry>) {
+    let refused = match save_cached_items_batch(entries.clone()).await {
+        Ok(refused) => refused,
+        Err(e) => {
+            debug!("[EmotePrefetch] Could not store {} cached emotes: {e}", entries.len());
+            return;
+        }
+    };
+    if refused.is_empty() {
+        announce_entries(app_handle, AssetKind::Emote, &entries);
+    } else {
+        let stored: Vec<UniversalCacheEntry> = entries.into_iter().filter(|e| !refused.contains(&e.id)).collect();
+        announce_entries(app_handle, AssetKind::Emote, &stored);
+    }
+}
+
 async fn run_downloads(
     items: Vec<PrefetchItem>,
     progress: Arc<RwLock<PrefetchProgress>>,
@@ -487,8 +506,7 @@ async fn run_downloads(
 
         if buffer.len() >= MANIFEST_FLUSH_EVERY {
             let batch = std::mem::take(&mut buffer);
-            announce_entries(&app_handle, AssetKind::Emote, &batch);
-            let _ = save_cached_items_batch(batch).await;
+            save_then_announce(&app_handle, batch).await;
         }
 
         since_emit += 1;
@@ -514,8 +532,7 @@ async fn run_downloads(
 
     // Persist whatever is left.
     if !buffer.is_empty() {
-        announce_entries(&app_handle, AssetKind::Emote, &buffer);
-        let _ = save_cached_items_batch(buffer).await;
+        save_then_announce(&app_handle, buffer).await;
     }
 
     let cancelled = *cancel.read().await;

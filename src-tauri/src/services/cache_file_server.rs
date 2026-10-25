@@ -58,16 +58,28 @@ pub fn start() {
         return;
     }
     tauri::async_runtime::spawn(async {
-        let root = match crate::services::universal_cache_service::get_universal_cache_dir() {
-            Ok(r) => r,
-            Err(e) => {
+        // The folders, the token and the saved port are read from disk on the
+        // blocking pool, not on this async worker.
+        let setup = tokio::task::spawn_blocking(|| {
+            let root = crate::services::universal_cache_service::get_universal_cache_dir()?;
+            let state_dir = crate::services::cache_service::get_app_data_dir().ok();
+            let token = install_token(state_dir.as_deref());
+            let saved = saved_port(state_dir.as_deref());
+            Ok::<_, anyhow::Error>((root, state_dir, token, saved))
+        })
+        .await;
+        let (root, state_dir, token, saved) = match setup {
+            Ok(Ok(setup)) => setup,
+            Ok(Err(e)) => {
                 log::warn!("[CacheFiles] no cache folder ({e}); cached images stay on the asset protocol");
                 return;
             }
+            Err(e) => {
+                log::warn!("[CacheFiles] the setup task failed ({e}); cached images stay on the asset protocol");
+                return;
+            }
         };
-        let state_dir = crate::services::cache_service::get_app_data_dir().ok();
-        let token = install_token(state_dir.as_deref());
-        let listener = match bind_listener(state_dir.as_deref(), &token).await {
+        let listener = match bind_listener(saved, &token).await {
             Ok(l) => l,
             Err(e) => {
                 log::warn!("[CacheFiles] no loopback port ({e}); cached images stay on the asset protocol");
@@ -81,6 +93,18 @@ pub fn start() {
                 return;
             }
         };
+        if let (Some(dir), true) = (state_dir, saved != Some(port)) {
+            let path = dir.join(PORT_FILE);
+            match tokio::task::spawn_blocking(move || write_synced(&path, &port.to_string())).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    log::warn!("[CacheFiles] could not save the port ({e}); cached image URLs change next launch");
+                }
+                Err(e) => {
+                    log::warn!("[CacheFiles] the port save task failed ({e}); cached image URLs change next launch");
+                }
+            }
+        }
         if SERVER.set(CacheFileServer { port, token: token.clone() }).is_err() {
             return;
         }
@@ -123,16 +147,17 @@ fn fallback_ports(token: &str) -> [u16; FALLBACK_PORTS] {
     ports
 }
 
-/// A loopback listener on the port saved last time, else on one of the ports
-/// derived from the token, else on a free port the OS picks. The bound port is
-/// saved for the next launch.
-async fn bind_listener(dir: Option<&Path>, token: &str) -> std::io::Result<tokio::net::TcpListener> {
-    let path = dir.map(|d| d.join(PORT_FILE));
-    let saved = path
-        .as_ref()
+/// The port saved last time in the app data folder, if there is one.
+fn saved_port(dir: Option<&Path>) -> Option<u16> {
+    dir.map(|d| d.join(PORT_FILE))
         .and_then(|p| std::fs::read_to_string(p).ok())
         .and_then(|s| s.trim().parse::<u16>().ok())
-        .filter(|p| *p != 0);
+        .filter(|p| *p != 0)
+}
+
+/// A loopback listener on the port `saved` from the last launch, else on one of
+/// the ports derived from the token, else on a free port the OS picks.
+async fn bind_listener(saved: Option<u16>, token: &str) -> std::io::Result<tokio::net::TcpListener> {
     let mut bound = None;
     for port in saved.into_iter().chain(fallback_ports(token)) {
         match tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
@@ -143,19 +168,10 @@ async fn bind_listener(dir: Option<&Path>, token: &str) -> std::io::Result<tokio
             Err(e) => log::info!("[CacheFiles] port {port} is taken ({e}); trying another"),
         }
     }
-    let listener = match bound {
-        Some(l) => l,
-        None => tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?,
-    };
-    if let Some(p) = &path {
-        let port = listener.local_addr()?.port();
-        if saved != Some(port) {
-            if let Err(e) = write_synced(p, &port.to_string()) {
-                log::warn!("[CacheFiles] could not save the port ({e}); cached image URLs change next launch");
-            }
-        }
+    match bound {
+        Some(l) => Ok(l),
+        None => tokio::net::TcpListener::bind(("127.0.0.1", 0)).await,
     }
-    Ok(listener)
 }
 
 /// Writes `text` to `<path>.tmp`, flushes it to disk, then renames it onto
