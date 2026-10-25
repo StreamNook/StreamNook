@@ -494,9 +494,22 @@ pub async fn get_kick_channel_emotes(
     slug: String,
     tier: Option<String>,
 ) -> crate::services::emote_service::EmoteSet {
-    let mut set = crate::services::providers::kick_emotes::channel_emote_set(&slug).await;
-    super::emotes::stamp_set_paths(&mut set, super::emotes::render_tier(tier.as_deref()));
-    set
+    let set = crate::services::providers::kick_emotes::channel_emote_set(&slug).await;
+    let fallback = set.clone();
+    let tier = super::emotes::render_tier(tier.as_deref());
+    match tauri::async_runtime::spawn_blocking(move || {
+        let mut set = set;
+        super::emotes::stamp_set_paths(&mut set, tier);
+        set
+    })
+    .await
+    {
+        Ok(stamped) => stamped,
+        Err(e) => {
+            log::warn!("[Emotes] stamping disk paths failed: {}", e);
+            fallback
+        }
+    }
 }
 
 /// A YouTube channel's 7TV emotes (channel set + 7TV globals) as an EmoteSet,
@@ -507,9 +520,22 @@ pub async fn get_youtube_channel_emotes(
     channel: String,
     tier: Option<String>,
 ) -> crate::services::emote_service::EmoteSet {
-    let mut set = crate::services::providers::youtube_emotes::channel_emote_set(&channel).await;
-    super::emotes::stamp_set_paths(&mut set, super::emotes::render_tier(tier.as_deref()));
-    set
+    let set = crate::services::providers::youtube_emotes::channel_emote_set(&channel).await;
+    let fallback = set.clone();
+    let tier = super::emotes::render_tier(tier.as_deref());
+    match tauri::async_runtime::spawn_blocking(move || {
+        let mut set = set;
+        super::emotes::stamp_set_paths(&mut set, tier);
+        set
+    })
+    .await
+    {
+        Ok(stamped) => stamped,
+        Err(e) => {
+            log::warn!("[Emotes] stamping disk paths failed: {}", e);
+            fallback
+        }
+    }
 }
 
 #[tauri::command]
