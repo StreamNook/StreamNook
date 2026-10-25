@@ -569,7 +569,7 @@ interface ChatMessageProps {
   homeProvider?: ProviderId;
   /** Blended feed: the row's platform logo, drawn at the start of the name
    *  line on every row type, so it sits beside the name whatever is above it
-   *  (a reply, a redemption header, a timestamp). */
+   *  (a reply, a redemption header). */
   sourceMark?: ProviderId;
   /** Line buttons, resolved once by the list when the viewer moderates this
    *  channel and has them on; null otherwise. One shared array for every
@@ -1475,8 +1475,8 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   const showPlatformMark =
     rowSourceProvider !== homeProvider && chatBlend?.show_platform_badge !== false;
   // Blended feed: every row leads its name line with its platform's logo. It
-  // is drawn inside that line, so a reply quote, a redemption header or a
-  // timestamp above the name never pulls it off the name. Centred on the text
+  // is drawn inside that line, so a reply quote or a redemption header
+  // above the name never pulls it off the name. Centred on the text
   // the way the badge strip is (see .sn-badge-strip): an image-only
   // inline-flex box sits on its bottom edge, lifted until its middle meets
   // the text's.
@@ -3579,23 +3579,10 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       )}
 
       <div>
-        {/* Timestamp - own line above the badges/name/message when enabled */}
-        {formattedTimestamp && (
-          <div
-            className={`text-[10px] leading-tight mb-0.5 text-textSecondary ${
-              atmosphereFrost
-                ? `block w-fit rounded-sm px-1 opacity-80 ${frostClass}`
-                : 'opacity-50'
-            }`}
-          >
-            {formattedTimestamp}
-          </div>
-        )}
         {/* Badges and Message content - inline flow so wrapped text starts at left edge.
             When the atmosphere asks for frost (chatFrost) this is one frosted
-            block hugging the badges + name + message (the timestamp gets its
-            own separate frost above), so the text/badges stay readable over a
-            busy wash. */}
+            block hugging the timestamp + badges + name + message, so the
+            text/badges stay readable over a busy wash. */}
         {/* The row carries the chat font size so badges, name and text are all
             measured against the same line: the badge group centres on it and the
             text sits on its baseline, so a tall emote grows the line without
@@ -3604,8 +3591,19 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
           className={atmosphereFrost ? `inline-block max-w-full rounded-md px-1.5 py-0.5 ${frostClass}` : 'min-w-0'}
           style={{ fontSize: `${chatDesign?.font_size ?? 14}px`, lineHeight: 1.625 }}
         >
+          {/* The time leads the row's inline flow, on the text's baseline, so
+              wrapped text still starts at the left edge. Left selectable so a
+              copied line keeps its time. */}
+          {formattedTimestamp && (
+            <span
+              className="text-textSecondary tabular-nums whitespace-nowrap"
+              style={{ fontSize: '0.78em', opacity: atmosphereFrost ? 0.8 : 0.5, marginRight: '0.45em' }}
+            >
+              {formattedTimestamp}
+            </span>
+          )}
           {/* Where this row came from, when it is not the platform being watched.
-              FIRST, ahead of the avatar and every badge, because it answers
+              Right after the time, ahead of the avatar and every badge, because it answers
               "which community is this" before anything about who they are in
               it — and because a mark that has to be hunted for between badges
               is not doing its one job. Small on purpose: it is a marker, not a
