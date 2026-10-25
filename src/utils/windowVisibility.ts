@@ -9,7 +9,7 @@
 // `data-sn-hidden` for the stylesheet (animations paused, video element out of
 // the render tree, audio unaffected) and fires a `sn-visibility` DOM event so
 // interval hooks can catch up the moment the window is back.
-import { listen } from '@tauri-apps/api/event';
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 
 let rustHidden = false;
 let initialised = false;
@@ -30,11 +30,17 @@ function applyHidden(next: boolean) {
 export function initWindowVisibility(): void {
   if (initialised || typeof window === 'undefined') return;
   initialised = true;
-  void listen<{ hidden: boolean }>('window-visibility', (event) => {
-    applyHidden(!!event.payload?.hidden);
-  }).catch(() => {
-    initialised = false;
-  });
+  // Window-scoped: Rust sends this to each window by label, and a plain
+  // `listen` would take every other window's minimize for this one's.
+  void Promise.resolve()
+    .then(() =>
+      getCurrentWebviewWindow().listen<{ hidden: boolean }>('window-visibility', (event) => {
+        applyHidden(!!event.payload?.hidden);
+      }),
+    )
+    .catch(() => {
+      initialised = false;
+    });
 }
 
 /** True when the page is hidden by the browser's own account OR minimized

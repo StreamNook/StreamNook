@@ -46,6 +46,7 @@ import {
 import { listenForSettingsUpdates } from '../../utils/settingsBroadcast';
 import { Logger } from '../../utils/logger';
 import { IS_LINUX } from '../../utils/platform';
+import { useMentionPing } from '../../hooks/useMentionPing';
 
 function readParams() {
   const hash = window.location.hash;
@@ -61,6 +62,8 @@ function readParams() {
 const CHROME_LINGER_MS = 1600;
 
 export default function ChatOverlayWindow() {
+  // Plays the mention sound when Rust picks this window (main and MultiChat are closed).
+  useMentionPing();
   const { channel, channelId, channelName } = useMemo(() => readParams(), []);
   const settings = useAppStore((s) => s.settings);
   const updateSettings = useAppStore((s) => s.updateSettings);

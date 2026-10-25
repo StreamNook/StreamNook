@@ -1222,6 +1222,8 @@ pub fn run() {
             // its `ad-pivot` reload event to the player.
             services::stream_server::set_app_handle(app_handle.clone());
             services::providers::set_app_handle(app_handle.clone());
+            // Which windows can play the mention sound (main, MultiChat, overlay).
+            services::mention_ping::listen_ready(&app_handle);
 
             // Start the shared 7TV EventAPI WebSocket client (live emote set
             // updates, and later cosmetics). It idle-connects and subscribes

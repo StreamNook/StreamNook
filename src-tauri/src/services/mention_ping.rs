@@ -5,21 +5,21 @@
 //! joined channel, docked and hidden ones included, so the decision lives here
 //! too: the setting, streamer mode, a per-channel cooldown and the age of the
 //! message. A message that passes becomes one small `chat-mention-ping` event
-//! to the main window, which only plays the sound it names. Off, this is one
-//! read of an empty slot per mention.
+//! to the one window that plays it (`pick_player`), which only plays the sound
+//! it names. Off, this is one read of an empty slot per mention.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::{Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use once_cell::sync::Lazy;
-use serde::Serialize;
-use tauri::Emitter;
+use serde::{Deserialize, Serialize};
+use tauri::{Emitter, Listener, Manager};
 
 use crate::models::chat_layout::ChatMessage;
 use crate::models::settings::Settings;
 
-/// The main window's event that plays the mention sound.
+/// The event that plays the mention sound, sent to one window.
 pub const EVENT: &str = "chat-mention-ping";
 
 /// One channel pings at most this often: a chat that keeps @-ing you should
@@ -112,6 +112,68 @@ fn sent_at_ms(msg: &ChatMessage) -> Option<i64> {
     msg.tags.get("tmi-sent-ts").and_then(|v| v.parse::<i64>().ok())
 }
 
+/// A page that plays the ping says so on this event, `{ label, ready }`, when
+/// it starts and stops listening.
+pub const READY_EVENT: &str = "mention-ping-ready";
+
+const MULTICHAT_PREFIX: &str = "multichat-";
+const OVERLAY_PREFIX: &str = "overlay-";
+
+/// Windows whose page is listening for the ping right now.
+static READY: Lazy<Mutex<BTreeSet<String>>> = Lazy::new(|| Mutex::new(BTreeSet::new()));
+
+#[derive(Deserialize)]
+struct Ready {
+    label: String,
+    ready: bool,
+}
+
+/// Keep `READY` in step with the pages. Called once at setup.
+pub fn listen_ready(app: &crate::rt::AppHandle) {
+    app.listen_any(READY_EVENT, |event| {
+        let Ok(r) = serde_json::from_str::<Ready>(event.payload()) else {
+            return;
+        };
+        let mut ready = READY.lock().unwrap_or_else(|e| e.into_inner());
+        if r.ready {
+            ready.insert(r.label);
+        } else {
+            ready.remove(&r.label);
+        }
+    });
+}
+
+/// The one window that plays the ping, so it never plays twice, chosen among
+/// the windows whose page listens (in label order): main whenever it does, then
+/// the first MultiChat window, then the first chat overlay. Closing main while
+/// a popout is open destroys it to free its memory, which is when a popout
+/// plays. With nobody listening it stays main, the iPhone core's only target.
+fn pick_player<'a>(ready: impl IntoIterator<Item = &'a String>) -> String {
+    let mut multichat = None;
+    let mut overlay = None;
+    for label in ready {
+        if label == "main" {
+            return label.clone();
+        }
+        if multichat.is_none() && label.starts_with(MULTICHAT_PREFIX) {
+            multichat = Some(label);
+        } else if overlay.is_none() && label.starts_with(OVERLAY_PREFIX) {
+            overlay = Some(label);
+        }
+    }
+    multichat.or(overlay).map_or_else(|| "main".to_string(), String::clone)
+}
+
+/// `pick_player` over the listening windows still open. A window gone without
+/// saying so (a crash, a forced close) drops out here. No window getters: they
+/// wait on the UI thread, and this runs on the chat read loop.
+fn player(app: &crate::rt::AppHandle) -> String {
+    let open = app.webview_windows();
+    let mut ready = READY.lock().unwrap_or_else(|e| e.into_inner());
+    ready.retain(|label| open.contains_key(label));
+    pick_player(ready.iter())
+}
+
 /// The tone `msg`, just received live, plays, if any. Pure apart from the
 /// clock and the cooldown table it is handed, so it can be tested.
 fn should_ping<'c>(
@@ -175,8 +237,9 @@ pub fn on_live_message(msg: &ChatMessage, mentioned: bool, reply_to_me: bool) {
         return;
     };
     if let Some(app) = crate::services::providers::app_handle() {
+        let target = player(&app);
         let _ = app.emit_to(
-            "main",
+            target.as_str(),
             EVENT,
             PingPayload {
                 channel: &channel,
@@ -297,5 +360,26 @@ mod tests {
         s.chat_design.mention_sound_replies = None;
         s.chat_design.reply_sound = Some("none".into());
         assert!(config_from(&s).unwrap().reply.is_none());
+    }
+
+    fn labels(v: &[&str]) -> BTreeSet<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn pick_player_main_then_multichat_then_overlay() {
+        let all = labels(&["main", "multichat-default", "overlay-a"]);
+        assert_eq!(pick_player(&all), "main", "main plays whenever its page listens");
+        let popouts = labels(&["overlay-a", "multichat-w2", "multichat-default"]);
+        assert_eq!(pick_player(&popouts), "multichat-default", "MultiChat before an overlay, first by label");
+        assert_eq!(pick_player(&labels(&["overlay-b", "overlay-a"])), "overlay-a");
+        assert_eq!(pick_player(&labels(&["profile-x"])), "main", "never a profile or plugin window");
+        assert_eq!(pick_player(&labels(&[])), "main", "nobody listening: main, as on the iPhone");
+    }
+
+    #[test]
+    fn ready_payload_reads_the_page_shape() {
+        let r: Ready = serde_json::from_str(r#"{"label":"multichat-default","ready":true}"#).unwrap();
+        assert_eq!((r.label.as_str(), r.ready), ("multichat-default", true));
     }
 }
