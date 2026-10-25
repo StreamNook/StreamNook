@@ -25,7 +25,7 @@
 use crate::models::chat_layout::{BuiltInStamp, ChatMessage, HighlightStamp, ScrollbarMark};
 use crate::models::settings::Settings;
 use crate::services::mention_match::{find_mention, MatchOptions, MentionTarget, NameHit};
-use sn_mention_rule::judge::{is_known_bot, is_reply_to, KNOWN_BOTS};
+use sn_mention_rule::judge::{is_known_bot, is_reply_to, Identity, KNOWN_BOTS};
 use regex::{Regex, RegexSet};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
@@ -653,11 +653,12 @@ pub struct MessageFacts<'a> {
     pub login: String,
     pub display_lower: String,
     pub user_id: &'a str,
-    /// The message came from Twitch. The engine's own identity is the Twitch
-    /// account, so user-id comparisons (own message, reply to me) only mean
-    /// anything here: another platform's ids live in a different space and can
-    /// collide with the Twitch id numerically.
+    /// The message came from Twitch. Twitch rows are judged against the IRC
+    /// account; every other platform's rows against that platform's own
+    /// signed-in account, since ids from two platforms can collide numerically.
     pub twitch: bool,
+    /// `twitch`, `kick`, `youtube`, ... (lowercase; an empty provider is Twitch).
+    pub provider: String,
     pub color: &'a str,
     /// `name/version` lowercased.
     pub badge_keys: Vec<String>,
@@ -671,6 +672,8 @@ pub struct MessageFacts<'a> {
     pub flags: u32,
     pub reward_id: String,
     pub reply_parent_user_id: &'a str,
+    /// Lowercase login of the replied-to sender, for a reply frame without an id.
+    pub reply_parent_login: &'a str,
     pub msg_type: &'a str,
     /// A /announce row (here or relayed through shared chat): the colour name
     /// Twitch sent with it (`PRIMARY`, `BLUE`, ...), `PRIMARY` when absent.
@@ -794,6 +797,7 @@ impl<'a> MessageFacts<'a> {
             display_lower,
             user_id: &msg.user_id,
             twitch: msg.provider.is_empty() || msg.provider.eq_ignore_ascii_case("twitch"),
+            provider: if msg.provider.is_empty() { "twitch".to_string() } else { msg.provider.to_lowercase() },
             color: msg.color.as_deref().unwrap_or(""),
             badge_keys,
             badge_names,
@@ -810,6 +814,12 @@ impl<'a> MessageFacts<'a> {
                 .reply_info
                 .as_ref()
                 .map(|r| r.parent_user_id.as_str())
+                .unwrap_or(""),
+            reply_parent_login: msg
+                .metadata
+                .reply_info
+                .as_ref()
+                .map(|r| r.parent_user_login.as_str())
                 .unwrap_or(""),
             msg_type,
             announcement,
@@ -852,6 +862,9 @@ static RULES: OnceLock<RwLock<Arc<CompiledRules>>> = OnceLock::new();
 static RULES_HASH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static OWN: OnceLock<RwLock<Option<(String, String)>>> = OnceLock::new();
 static OWN_TARGET: OnceLock<RwLock<MentionTarget>> = OnceLock::new();
+/// The signed-in account on each other platform (`kick`, `youtube`,
+/// `tiktok`), compared only against that platform's rows.
+static PLATFORM_OWN: OnceLock<RwLock<HashMap<String, Identity>>> = OnceLock::new();
 
 fn rules_cell() -> &'static RwLock<Arc<CompiledRules>> {
     RULES.get_or_init(|| RwLock::new(Arc::new(CompiledRules::default())))
@@ -863,6 +876,10 @@ fn own_cell() -> &'static RwLock<Option<(String, String)>> {
 
 fn own_target_cell() -> &'static RwLock<MentionTarget> {
     OWN_TARGET.get_or_init(|| RwLock::new(MentionTarget::default()))
+}
+
+fn platform_own_cell() -> &'static RwLock<HashMap<String, Identity>> {
+    PLATFORM_OWN.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
 pub struct ChatRules;
@@ -1003,6 +1020,60 @@ impl ChatRules {
 
     fn own_target() -> MentionTarget {
         own_target_cell().read().map(|g| g.clone()).unwrap_or_default()
+    }
+
+    /// Who you are on another platform's chat: its chat user id and the names
+    /// that count as a mention there. An empty id and login clears it.
+    pub fn set_platform_identity(provider: &str, user_id: &str, login: &str, display_name: &str) {
+        let provider = provider.to_lowercase();
+        let mut next = Identity::new(user_id.trim(), login, display_name);
+        if let Ok(mut g) = platform_own_cell().write() {
+            // A refetch that lost the name keeps the names already known for
+            // the same account, so its mentions keep counting.
+            if next.target.login.is_empty() && !next.user_id.is_empty() {
+                if let Some(prev) = g.get(&provider).filter(|p| p.user_id == next.user_id) {
+                    next.target = prev.target.clone();
+                }
+            }
+            if next.user_id.is_empty() && next.target.login.is_empty() {
+                g.remove(&provider);
+            } else if g.get(&provider) != Some(&next) {
+                g.insert(provider, next);
+            }
+        }
+    }
+
+    pub fn clear_platform_identity(provider: &str) {
+        if let Ok(mut g) = platform_own_cell().write() {
+            g.remove(&provider.to_lowercase());
+        }
+    }
+
+    fn platform_identity(provider: &str) -> Option<Identity> {
+        platform_own_cell().read().ok().and_then(|g| g.get(provider).cloned())
+    }
+
+    /// The mention-inbox keys of every signed-in platform account, in the
+    /// order kick, youtube, tiktok: `kick-<id>` when its chat id is known and
+    /// `kick-name-<login>` when its name is (both when both are). The first is
+    /// whose inbox to keep while no Twitch account is known.
+    pub(crate) fn platform_owners() -> Vec<String> {
+        let Ok(g) = platform_own_cell().read() else { return Vec::new() };
+        let mut out = Vec::new();
+        for p in ["kick", "youtube", "tiktok"] {
+            let Some(i) = g.get(p) else { continue };
+            if !i.user_id.is_empty() {
+                out.push(format!("{p}-{}", i.user_id));
+            }
+            let login = &i.target.login;
+            // Only a name that survives as a file name unchanged.
+            if !login.is_empty()
+                && login.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+            {
+                out.push(format!("{p}-name-{login}"));
+            }
+        }
+        out
     }
 
     /// Recompile from the live settings when the rule groups changed. Cheap
@@ -1160,11 +1231,26 @@ impl ChatRules {
 
     fn evaluate_facts(facts: &MessageFacts<'_>, rules: &CompiledRules) -> Evaluation {
         let own = Self::own_identity();
-        let is_own = facts.twitch
-            && own
-                .as_ref()
+        // Off Twitch, "me" is that platform's signed-in account; ids from two
+        // platforms are never compared.
+        let platform = if facts.twitch { None } else { Self::platform_identity(&facts.provider) };
+        let is_own = if facts.twitch {
+            own.as_ref()
                 .map(|(_, id)| !id.is_empty() && id == facts.user_id)
-                .unwrap_or(false);
+                .unwrap_or(false)
+        } else {
+            platform.as_ref().is_some_and(|me| {
+                if !me.user_id.is_empty() {
+                    me.user_id == facts.user_id
+                } else {
+                    // No chat id known yet: the name has to do. A Kick row's
+                    // login is the slug, its display name the username.
+                    !me.target.login.is_empty()
+                        && (facts.login.trim_start_matches('@') == me.target.login
+                            || facts.display_lower.trim_start_matches('@') == me.target.login)
+                }
+            })
+        };
 
         // 1. Ignores. Own messages are exempt so hiding yourself can never
         //    eat your sends (same rule the JS gate had).
@@ -1202,17 +1288,32 @@ impl ChatRules {
         }
 
         // 2. Mention and reply-to-me. Which names count is the user's choice
-        //    (`settings.mentions`); `@login` always does.
-        let name_hit = if own.is_some() && !is_own {
+        //    (`settings.mentions`); `@login` always does. On a platform you are
+        //    signed in to, that account's names count; elsewhere (or while its
+        //    name is not known yet) your Twitch ones.
+        let platform_names = platform.as_ref().filter(|me| !me.target.login.is_empty());
+        let name_hit = if is_own {
+            None
+        } else if let Some(me) = platform_names {
+            find_mention(facts.content, &me.target, &rules.mention_opts)
+        } else if own.is_some() {
             find_mention(facts.content, &Self::own_target(), &rules.mention_opts)
         } else {
             None
         };
         let mentioned = name_hit.is_some();
-        let reply_to_me = own
-            .as_ref()
-            .map(|(_, id)| facts.twitch && !is_own && is_reply_to(id, Some(facts.reply_parent_user_id)))
-            .unwrap_or(false);
+        let reply_to_me = !is_own
+            && if facts.twitch {
+                own.as_ref()
+                    .is_some_and(|(_, id)| is_reply_to(id, Some(facts.reply_parent_user_id)))
+            } else {
+                platform.as_ref().is_some_and(|me| {
+                    is_reply_to(&me.user_id, Some(facts.reply_parent_user_id))
+                        || ((facts.reply_parent_user_id.is_empty() || me.user_id.is_empty())
+                            && !me.target.login.is_empty()
+                            && facts.reply_parent_login == me.target.login)
+                })
+            };
 
         // 3. Highlight rules: phrase, then user, then badge; first wins. A
         //    mention or reply suppresses them so sound and animation never
@@ -2004,6 +2105,33 @@ fn eval(e: &Expr, ctx: &EvalCtx<'_, '_>) -> Value {
 // Tests
 // ---------------------------------------------------------------------------
 
+/// Clears every platform identity when it is made and when it is dropped
+/// (even on a panic), so a test's identity never leaks into another test.
+/// Hold it together with `ChatRules::own_identity_test_lock()`.
+#[cfg(test)]
+pub(crate) struct PlatformReset;
+
+#[cfg(test)]
+impl PlatformReset {
+    pub(crate) fn new() -> Self {
+        Self::clear();
+        PlatformReset
+    }
+
+    fn clear() {
+        for p in ["kick", "youtube", "tiktok"] {
+            ChatRules::clear_platform_identity(p);
+        }
+    }
+}
+
+#[cfg(test)]
+impl Drop for PlatformReset {
+    fn drop(&mut self) {
+        Self::clear();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2179,6 +2307,7 @@ mod tests {
     #[test]
     fn another_platforms_ids_never_match_the_twitch_identity() {
         let _own = ChatRules::own_identity_test_lock();
+        let _reset = PlatformReset::new();
         ChatRules::set_own_identity("brandon", "999");
         let rules = rules_from("{}", "{}", "{}");
         let reply_to = |provider: &str, sender_id: &str| {
@@ -2210,6 +2339,7 @@ mod tests {
     #[test]
     fn ignores_drop_bots_users_channels_and_phrases() {
         let _own = ChatRules::own_identity_test_lock();
+        let _reset = PlatformReset::new();
         ChatRules::set_own_identity("brandon", "999");
         let rules = rules_from(
             "{}",
@@ -2312,6 +2442,8 @@ mod tests {
 
     #[test]
     fn a_hidden_channel_is_dropped_by_account_not_by_name() {
+        let _own = ChatRules::own_identity_test_lock();
+        let _reset = PlatformReset::new();
         let mut rules = rules_from("{}", "{}", "{}");
         rules.hidden_accounts.insert("twitch:42".into());
         rules.hidden_accounts.insert("kick:carl".into());
@@ -2545,5 +2677,171 @@ mod tests {
         let ids = local_view_ids(&MessageFacts::from_message(&moderator));
         assert!(ids.contains(&LOCAL_MOD_FILTER.to_string()));
         assert!(ids.contains(&LOCAL_SUB_FILTER.to_string()));
+    }
+
+    fn kick_reply(sender_id: &str, parent_id: &str, parent_login: &str) -> ChatMessage {
+        let mut m = msg("bob", "agreed");
+        m.provider = "kick".into();
+        m.user_id = sender_id.into();
+        m.metadata.reply_info = Some(crate::models::chat_layout::ReplyInfo {
+            parent_user_id: parent_id.into(),
+            parent_user_login: parent_login.into(),
+            ..Default::default()
+        });
+        m
+    }
+
+    fn on(provider: &str, login: &str, user_id: &str, text: &str) -> ChatMessage {
+        let mut m = msg(login, text);
+        m.provider = provider.into();
+        m.user_id = user_id.into();
+        m
+    }
+
+    #[test]
+    fn a_kick_reply_to_your_kick_account_is_a_reply() {
+        let _own = ChatRules::own_identity_test_lock();
+        let _reset = PlatformReset::new();
+        ChatRules::set_own_identity("brandon", "999");
+        ChatRules::set_platform_identity("kick", "5550001", "SnKickTester", "SnKickTester");
+        let rules = rules_from("{}", "{}", "{}");
+        let mut m = kick_reply("7", "5550001", "snkicktester");
+        let v = eval_with(&rules, &mut m);
+        assert!(v.reply_to_me && m.metadata.is_reply_to_me);
+        // The Twitch id on a Kick row is still not us.
+        let mut m = kick_reply("7", "999", "someone");
+        eval_with(&rules, &mut m);
+        assert!(!m.metadata.is_reply_to_me);
+        // A frame without the parent id falls back to the parent login.
+        let mut m = kick_reply("7", "", "snkicktester");
+        eval_with(&rules, &mut m);
+        assert!(m.metadata.is_reply_to_me);
+    }
+
+    #[test]
+    fn a_kick_reply_counts_without_a_twitch_sign_in() {
+        let _own = ChatRules::own_identity_test_lock();
+        let _reset = PlatformReset::new();
+        if let Ok(mut g) = own_cell().write() {
+            *g = None;
+        }
+        ChatRules::set_platform_identity("kick", "5550001", "snkicktester", "SnKickTester");
+        let rules = rules_from("{}", "{}", "{}");
+        let mut m = kick_reply("7", "5550001", "snkicktester");
+        eval_with(&rules, &mut m);
+        assert!(m.metadata.is_reply_to_me);
+        let mut m = on("kick", "bob", "7", "hey @SnKickTester");
+        eval_with(&rules, &mut m);
+        assert!(m.metadata.is_mentioned);
+    }
+
+    #[test]
+    fn a_kick_identity_without_an_id_still_knows_replies_and_own_rows() {
+        let _own = ChatRules::own_identity_test_lock();
+        let _reset = PlatformReset::new();
+        ChatRules::set_own_identity("brandon", "999");
+        ChatRules::set_platform_identity("kick", "", "snkicktester", "");
+        let rules = rules_from("{}", "{}", "{}");
+        // Our id is unknown, the frame's parent id is not: the login decides.
+        let mut m = kick_reply("7", "5550001", "snkicktester");
+        eval_with(&rules, &mut m);
+        assert!(m.metadata.is_reply_to_me);
+        // Our own row, found by name, is never a mention of ourselves.
+        let mut m = on("kick", "snkicktester", "5550001", "@snkicktester test");
+        eval_with(&rules, &mut m);
+        assert!(!m.metadata.is_mentioned);
+    }
+
+    #[test]
+    fn a_kick_identity_without_a_name_falls_back_to_the_twitch_names() {
+        let _own = ChatRules::own_identity_test_lock();
+        let _reset = PlatformReset::new();
+        ChatRules::set_own_identity("brandon", "999");
+        ChatRules::set_platform_identity("kick", "5550001", "", "");
+        let rules = rules_from("{}", "{}", "{}");
+        let mut m = on("kick", "bob", "7", "@brandon hi");
+        eval_with(&rules, &mut m);
+        assert!(m.metadata.is_mentioned);
+    }
+
+    #[test]
+    fn a_lost_name_keeps_the_known_one_for_the_same_account() {
+        let _own = ChatRules::own_identity_test_lock();
+        let _reset = PlatformReset::new();
+        ChatRules::set_platform_identity("kick", "5550001", "snkicktester", "SnKickTester");
+        ChatRules::set_platform_identity("kick", "5550001", "", "");
+        assert_eq!(
+            ChatRules::platform_owners(),
+            vec!["kick-5550001".to_string(), "kick-name-snkicktester".to_string()]
+        );
+    }
+
+    #[test]
+    fn your_platform_name_replaces_the_twitch_name_there() {
+        let _own = ChatRules::own_identity_test_lock();
+        let _reset = PlatformReset::new();
+        ChatRules::set_own_identity("brandon", "999");
+        ChatRules::set_platform_identity("kick", "5550001", "snkicktester", "snkicktester");
+        let rules = rules_from("{}", "{}", "{}");
+        let mut m = on("kick", "bob", "7", "@snkicktester hi");
+        eval_with(&rules, &mut m);
+        assert!(m.metadata.is_mentioned);
+        let mut m = on("kick", "bob", "7", "@brandon hi");
+        eval_with(&rules, &mut m);
+        assert!(!m.metadata.is_mentioned);
+        // YouTube has no identity: the Twitch name still counts there.
+        let mut m = on("youtube", "bob", "UCbob", "@brandon hi");
+        eval_with(&rules, &mut m);
+        assert!(m.metadata.is_mentioned);
+    }
+
+    #[test]
+    fn a_youtube_handle_mention_and_own_rows() {
+        let _own = ChatRules::own_identity_test_lock();
+        let _reset = PlatformReset::new();
+        ChatRules::set_own_identity("brandon", "999");
+        ChatRules::set_platform_identity("youtube", "UCsntester", "@sntester", "");
+        let rules = rules_from("{}", "{}", "{}");
+        let mut m = on("youtube", "@alice", "UCalice", "@sntester gg");
+        eval_with(&rules, &mut m);
+        assert!(m.metadata.is_mentioned);
+        // Your own YouTube row is yours: never a mention of yourself.
+        let mut m = on("youtube", "@sntester", "UCsntester", "@sntester test");
+        eval_with(&rules, &mut m);
+        assert!(!m.metadata.is_mentioned);
+    }
+
+    #[test]
+    fn a_tiktok_own_row_is_never_a_mention() {
+        let _own = ChatRules::own_identity_test_lock();
+        let _reset = PlatformReset::new();
+        ChatRules::set_platform_identity("tiktok", "70010001", "sntiktoker", "");
+        let rules = rules_from("{}", "{}", "{}");
+        let mut m = on("tiktok", "sntiktoker", "70010001", "@sntiktoker hi");
+        eval_with(&rules, &mut m);
+        assert!(!m.metadata.is_mentioned);
+        let mut m = on("tiktok", "carl", "8", "@sntiktoker hi");
+        eval_with(&rules, &mut m);
+        assert!(m.metadata.is_mentioned);
+    }
+
+    #[test]
+    fn platform_owners_list_kick_then_youtube_with_name_aliases() {
+        let _own = ChatRules::own_identity_test_lock();
+        let _reset = PlatformReset::new();
+        assert!(ChatRules::platform_owners().is_empty());
+        ChatRules::set_platform_identity("youtube", "UCsntester", "sntester", "");
+        assert_eq!(
+            ChatRules::platform_owners(),
+            vec!["youtube-UCsntester".to_string(), "youtube-name-sntester".to_string()]
+        );
+        ChatRules::set_platform_identity("kick", "5550001", "snkicktester", "");
+        assert_eq!(ChatRules::platform_owners()[0], "kick-5550001");
+        // A name that would not survive as a file name gets no alias.
+        ChatRules::set_platform_identity("kick", "5550001", "브랜든", "");
+        assert_eq!(ChatRules::platform_owners()[0], "kick-5550001");
+        assert!(!ChatRules::platform_owners().iter().any(|k| k.starts_with("kick-name-")));
+        ChatRules::set_platform_identity("kick", "", "", "");
+        assert_eq!(ChatRules::platform_owners()[0], "youtube-UCsntester");
     }
 }
