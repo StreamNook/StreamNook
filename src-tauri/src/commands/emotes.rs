@@ -28,20 +28,12 @@ pub(crate) fn render_tier(tier: Option<&str>) -> &'static str {
 }
 
 /// Put each emote's disk-cache file in `local_url`, at `tier` for 7TV, from
-/// the in-memory manifest (one read lock for the whole set). A page used to
-/// work this out itself, which meant pulling the entire cache index (tens of
-/// thousands of id -> path pairs, megabytes over IPC) into every window that
-/// shows emotes. Only ever applied to the copy handed to a page: a path goes
-/// stale when the cache is cleared, so the cached and stored sets never hold one.
-pub(crate) fn stamp_local_paths<'a>(emotes: impl IntoIterator<Item = &'a mut Emote>, tier: &str) {
-    let emotes: Vec<&mut Emote> = emotes.into_iter().collect();
-    let keys: Vec<String> = emotes.iter().map(|e| emote_cache_key(&e.provider, &e.id, tier)).collect();
-    let paths = universal_cache_service::cached_file_paths(CacheType::Emote, &keys);
-    apply_local_paths(emotes, tier, &paths);
-}
-
-/// Put each emote's file from `paths` (manifest answers keyed by cache key) in
-/// `local_url`. An empty answer leaves every emote as it was.
+/// `paths` (manifest answers keyed by cache key). A page used to work this out
+/// itself, which meant pulling the entire cache index (tens of thousands of
+/// id -> path pairs, megabytes over IPC) into every window that shows emotes.
+/// Only ever applied to the copy handed to a page: a path goes stale when the
+/// cache is cleared, so the cached and stored sets never hold one. An empty
+/// answer leaves every emote as it was.
 fn apply_local_paths<'a>(emotes: impl IntoIterator<Item = &'a mut Emote>, tier: &str, paths: &HashMap<String, String>) {
     if paths.is_empty() {
         return;
@@ -192,7 +184,9 @@ pub async fn get_emote_by_name(
     let mut emote = service.get_emote_by_name(channel_id, &emote_name).await;
     drop(service);
     if let Some(e) = emote.as_mut() {
-        stamp_local_paths(std::iter::once(e), render_tier(tier.as_deref()));
+        let tier = render_tier(tier.as_deref());
+        let paths = cached_emote_paths(vec![emote_cache_key(&e.provider, &e.id, tier)]).await;
+        apply_local_paths(std::iter::once(e), tier, &paths);
     }
     Ok(emote)
 }
@@ -575,7 +569,13 @@ pub async fn emote_picker(
         }
     };
     let mut answer = found.unwrap_or_else(|| picker::build(None, &ctx, tab, &query));
-    stamp_local_paths(answer.sections.iter_mut().flat_map(|s| s.emotes.iter_mut().map(|c| &mut c.emote)), tier);
+    let keys: Vec<String> = answer
+        .sections
+        .iter()
+        .flat_map(|s| s.emotes.iter().map(|c| emote_cache_key(&c.emote.provider, &c.emote.id, tier)))
+        .collect();
+    let paths = cached_emote_paths(keys).await;
+    apply_local_paths(answer.sections.iter_mut().flat_map(|s| s.emotes.iter_mut().map(|c| &mut c.emote)), tier, &paths);
     Ok(answer)
 }
 

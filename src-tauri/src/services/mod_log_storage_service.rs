@@ -195,8 +195,10 @@ impl ModLogStorageService {
         // A truncate that fails leaves lines the file's journal_seq already
         // covers, which a replay skips.
         if let Some(journal) = JOURNAL_PATH.get() {
-            if let Err(e) = fs::write(journal, b"") {
-                warn!("[ModLogStorage] could not empty the journal after a fold: {}", e);
+            match fs::write(journal, b"") {
+                // An empty journal has no torn line to guard against.
+                Ok(()) => queue.torn = false,
+                Err(e) => warn!("[ModLogStorage] could not empty the journal after a fold: {}", e),
             }
         }
         Ok(())
@@ -241,7 +243,15 @@ impl ModLogStorageService {
             let seq = journal_append(&mut queue, &JournalOp::Put { channel: channel_key, entry: shown.clone() });
             mark_dirty();
             if let Some(seq) = seq {
-                journal_wait(queue, seq)?;
+                // The action is in the store and the store is dirty, so a journal
+                // that cannot be written only costs the crash window: the fold
+                // saves the action, and the caller is not told it failed.
+                if let Err(e) = journal_wait(queue, seq) {
+                    warn!("[ModLogStorage] journal write failed, the next fold saves the action: {}", e);
+                    if let Err(e) = Self::flush_now() {
+                        debug!("[ModLogStorage] flush after a failed journal write failed: {}", e);
+                    }
+                }
             }
         }
         Ok(shown)
@@ -258,7 +268,12 @@ impl ModLogStorageService {
             let seq = journal_append(&mut queue, &JournalOp::Clear { channel: key });
             mark_dirty();
             if let Some(seq) = seq {
-                journal_wait(queue, seq)?;
+                if let Err(e) = journal_wait(queue, seq) {
+                    warn!("[ModLogStorage] journal write failed, the next fold saves the clear: {}", e);
+                    if let Err(e) = Self::flush_now() {
+                        debug!("[ModLogStorage] flush after a failed journal write failed: {}", e);
+                    }
+                }
             }
         }
         Ok(())
@@ -316,11 +331,15 @@ struct JournalQueue {
     writing: bool,
     /// Every line up to this sequence number is on disk or in the file.
     durable_seq: u64,
+    /// A write failed, so the journal may end in a line with no newline. The
+    /// next write starts with one, so its first line is never glued onto the
+    /// fragment. Replay skips the blank line and the fragment.
+    torn: bool,
 }
 
 impl JournalQueue {
     const fn new() -> Self {
-        Self { pending: Vec::new(), writing: false, durable_seq: 0 }
+        Self { pending: Vec::new(), writing: false, durable_seq: 0, torn: false }
     }
 }
 
@@ -379,21 +398,23 @@ fn journal_wait(queue: MutexGuard<'_, JournalQueue>, seq: u64) -> Result<(), Str
     let Some(path) = JOURNAL_PATH.get() else {
         return Ok(());
     };
-    wait_durable(&JOURNAL_LOCK, &JOURNAL_DONE, path, queue, seq)
+    wait_durable(&JOURNAL_LOCK, &JOURNAL_DONE, path, queue, seq, commit_lines)
 }
 
 /// Return once line `seq` is on disk. The first caller that finds no write in
-/// flight takes every pending line and writes them with one sync, outside the
-/// lock; the others wait for it. A waiter that wakes to find no writer and its
-/// line still pending becomes the writer. A failed write puts its lines back at
-/// the front of the queue and returns the error to that writer's own caller;
-/// the lines are written by the next writer.
-fn wait_durable(
-    lock: &Mutex<JournalQueue>,
+/// flight takes every pending line and writes them with one `commit` (one
+/// sync), outside the lock; the others wait for it. A waiter that wakes to find
+/// no writer and its line still pending becomes the writer. A failed write puts
+/// its lines back at the front of the queue, marks the journal torn so the next
+/// write starts on a fresh line, and returns the error to that writer's own
+/// caller; the lines are written by the next writer.
+fn wait_durable<'a>(
+    lock: &'a Mutex<JournalQueue>,
     done: &Condvar,
     path: &Path,
-    mut queue: MutexGuard<'_, JournalQueue>,
+    mut queue: MutexGuard<'a, JournalQueue>,
     seq: u64,
+    commit: impl Fn(&Path, &[(u64, String)]) -> Result<(), String>,
 ) -> Result<(), String> {
     loop {
         if queue.durable_seq >= seq {
@@ -403,23 +424,32 @@ fn wait_durable(
             queue = done.wait(queue).unwrap_or_else(|e| e.into_inner());
             continue;
         }
-        let batch = std::mem::take(&mut queue.pending);
+        let mut batch = std::mem::take(&mut queue.pending);
         if batch.is_empty() {
             // A fold took the line into the file.
             return Ok(());
         }
+        if queue.torn {
+            if let Some((_, first)) = batch.first_mut() {
+                if !first.starts_with('\n') {
+                    first.insert(0, '\n');
+                }
+            }
+        }
         queue.writing = true;
         drop(queue);
-        let written = commit_lines(path, &batch);
+        let written = commit(path, &batch);
         queue = lock.lock().unwrap_or_else(|e| e.into_inner());
         queue.writing = false;
         match &written {
             Ok(()) => {
+                queue.torn = false;
                 if let Some((last, _)) = batch.last() {
                     queue.durable_seq = queue.durable_seq.max(*last);
                 }
             }
             Err(_) => {
+                queue.torn = true;
                 let newer = std::mem::replace(&mut queue.pending, batch);
                 queue.pending.extend(newer);
             }
@@ -652,6 +682,29 @@ mod merge_tests {
 mod journal_tests {
     use super::*;
     use serde_json::json;
+    use std::sync::atomic::AtomicUsize;
+
+    /// A commit that writes the first half of its batch and a fragment of the
+    /// next line, then fails, like a disk that dies partway through a write.
+    fn torn_commit(path: &Path, lines: &[(u64, String)]) -> Result<(), String> {
+        use std::io::Write;
+        let whole = lines.len() / 2;
+        let mut bytes: Vec<u8> = lines[..whole].iter().flat_map(|(_, line)| line.as_bytes().iter().copied()).collect();
+        if let Some((_, next)) = lines.get(whole) {
+            bytes.extend_from_slice(&next.as_bytes()[..next.len() / 2]);
+        }
+        let mut file = fs::OpenOptions::new().create(true).append(true).open(path).map_err(|e| e.to_string())?;
+        file.write_all(&bytes).map_err(|e| e.to_string())?;
+        Err("injected write failure".to_string())
+    }
+
+    /// Queue the line `seq` (an entry with id `a{seq}`) and return the held lock.
+    fn enqueue(lock: &Mutex<JournalQueue>, seq: u64) -> MutexGuard<'_, JournalQueue> {
+        let op = JournalOp::Put { channel: "chan".into(), entry: json!({ "id": format!("a{seq}") }) };
+        let mut queue = lock.lock().unwrap();
+        queue.pending.push((seq, journal_line(seq, &op).unwrap()));
+        queue
+    }
 
     fn temp_paths(name: &str) -> (PathBuf, PathBuf) {
         let dir = std::env::temp_dir().join(format!("sn-modlog-{name}-{}", std::process::id()));
@@ -744,7 +797,7 @@ mod journal_tests {
                         let seq = last_seq.load(Ordering::SeqCst) + 1;
                         last_seq.store(seq, Ordering::SeqCst);
                         queue.pending.push((seq, journal_line(seq, &op).unwrap()));
-                        wait_durable(lock, done, journal, queue, seq).unwrap();
+                        wait_durable(lock, done, journal, queue, seq, commit_lines).unwrap();
                     }
                 });
             }
@@ -761,6 +814,132 @@ mod journal_tests {
             let expected: Vec<_> = (0..200).map(|i| json!(format!("t{t}-{i}"))).collect();
             assert_eq!(ids, expected);
         }
+        let _ = fs::remove_dir_all(snapshot.parent().unwrap());
+    }
+
+    #[test]
+    fn a_burst_with_failing_writes_lands_once_each_and_in_order() {
+        let (snapshot, journal) = temp_paths("burst-failing");
+        let lock = Mutex::new(JournalQueue::new());
+        let done = Condvar::new();
+        let last_seq = AtomicU64::new(0);
+        let commits = AtomicUsize::new(0);
+        let failed_commits = AtomicUsize::new(0);
+        let observed_failures = AtomicUsize::new(0);
+        // Every third commit writes half its batch and fails.
+        let commit = |path: &Path, lines: &[(u64, String)]| {
+            if commits.fetch_add(1, Ordering::SeqCst) % 3 == 2 {
+                failed_commits.fetch_add(1, Ordering::SeqCst);
+                torn_commit(path, lines)
+            } else {
+                commit_lines(path, lines)
+            }
+        };
+        std::thread::scope(|scope| {
+            for t in 0..8 {
+                let (lock, done, last_seq, journal, commit, observed_failures) =
+                    (&lock, &done, &last_seq, &journal, &commit, &observed_failures);
+                scope.spawn(move || {
+                    for i in 0..200 {
+                        let op = JournalOp::Put { channel: format!("t{t}"), entry: json!({ "id": format!("t{t}-{i}") }) };
+                        let mut queue = lock.lock().unwrap();
+                        let seq = last_seq.load(Ordering::SeqCst) + 1;
+                        last_seq.store(seq, Ordering::SeqCst);
+                        queue.pending.push((seq, journal_line(seq, &op).unwrap()));
+                        // A failed write is the failing writer's to see; the line
+                        // stays queued and the record carries on.
+                        if wait_durable(lock, done, journal, queue, seq, commit).is_err() {
+                            observed_failures.fetch_add(1, Ordering::SeqCst);
+                        }
+                    }
+                });
+            }
+        });
+        assert!(failed_commits.load(Ordering::SeqCst) > 0);
+        assert_eq!(observed_failures.load(Ordering::SeqCst), failed_commits.load(Ordering::SeqCst));
+        // Lines a failed write left queued go out with the next write.
+        for _ in 0..4 {
+            let queue = lock.lock().unwrap();
+            if wait_durable(&lock, &done, &journal, queue, 1600, &commit).is_ok() {
+                break;
+            }
+        }
+        let queue = lock.lock().unwrap();
+        assert!(queue.pending.is_empty());
+        assert!(!queue.writing);
+        assert_eq!(queue.durable_seq, 1600);
+        drop(queue);
+        let (restored, replayed) = load_storage(&snapshot, &journal);
+        assert_eq!(replayed, 1600);
+        for t in 0..8 {
+            let ids: Vec<_> = restored.channels[&format!("t{t}")].iter().map(|e| e["id"].clone()).collect();
+            let expected: Vec<_> = (0..200).map(|i| json!(format!("t{t}-{i}"))).collect();
+            assert_eq!(ids, expected);
+        }
+        let _ = fs::remove_dir_all(snapshot.parent().unwrap());
+    }
+
+    #[test]
+    fn lines_queued_behind_a_write_in_flight_go_out_in_one_commit() {
+        const N: usize = 12;
+        let (snapshot, journal) = temp_paths("batching");
+        let lock = Mutex::new(JournalQueue::new());
+        let done = Condvar::new();
+        let last_seq = AtomicU64::new(0);
+        let batches = Mutex::new(Vec::<usize>::new());
+        let commit = |path: &Path, lines: &[(u64, String)]| {
+            batches.lock().unwrap().push(lines.len());
+            commit_lines(path, lines)
+        };
+        lock.lock().unwrap().writing = true;
+        std::thread::scope(|scope| {
+            for i in 0..N {
+                let (lock, done, last_seq, journal, commit) = (&lock, &done, &last_seq, &journal, &commit);
+                scope.spawn(move || {
+                    let op = JournalOp::Put { channel: "chan".into(), entry: json!({ "id": format!("e{i}") }) };
+                    let mut queue = lock.lock().unwrap();
+                    let seq = last_seq.load(Ordering::SeqCst) + 1;
+                    last_seq.store(seq, Ordering::SeqCst);
+                    queue.pending.push((seq, journal_line(seq, &op).unwrap()));
+                    wait_durable(lock, done, journal, queue, seq, commit).unwrap();
+                });
+            }
+            // Every thread is waiting behind the write in flight; let it end.
+            while lock.lock().unwrap().pending.len() < N {
+                std::thread::yield_now();
+            }
+            let mut queue = lock.lock().unwrap();
+            queue.writing = false;
+            done.notify_all();
+        });
+        assert_eq!(*batches.lock().unwrap(), vec![N]);
+        let queue = lock.lock().unwrap();
+        assert!(queue.pending.is_empty());
+        assert_eq!(queue.durable_seq, N as u64);
+        drop(queue);
+        let (restored, replayed) = load_storage(&snapshot, &journal);
+        assert_eq!(replayed, N);
+        assert_eq!(restored.channels["chan"].len(), N);
+        let _ = fs::remove_dir_all(snapshot.parent().unwrap());
+    }
+
+    #[test]
+    fn a_write_after_a_failed_one_starts_on_a_fresh_line() {
+        let (snapshot, journal) = temp_paths("torn-guard");
+        let lock = Mutex::new(JournalQueue::new());
+        let done = Condvar::new();
+        let queue = enqueue(&lock, 1);
+        assert!(wait_durable(&lock, &done, &journal, queue, 1, torn_commit).is_err());
+        assert!(lock.lock().unwrap().torn);
+        // The failed write left a fragment with no newline; the next write
+        // carries the failed line again and must not be glued onto it.
+        let queue = enqueue(&lock, 2);
+        wait_durable(&lock, &done, &journal, queue, 2, commit_lines).unwrap();
+        assert!(!lock.lock().unwrap().torn);
+        let (restored, replayed) = load_storage(&snapshot, &journal);
+        assert_eq!(replayed, 2);
+        let ids: Vec<_> = restored.channels["chan"].iter().map(|e| e["id"].clone()).collect();
+        assert_eq!(ids, vec![json!("a1"), json!("a2")]);
         let _ = fs::remove_dir_all(snapshot.parent().unwrap());
     }
 
