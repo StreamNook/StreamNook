@@ -1008,14 +1008,20 @@ pub fn cleanup_expired_entries() -> Result<usize> {
     let mut manifest = load_manifest()?;
     let initial_count = manifest.entries.len();
 
-    manifest
-        .entries
-        .retain(|_, entry| !is_cache_expired(&entry.metadata));
+    let mut dropped: Vec<UniversalCacheEntry> = Vec::new();
+    manifest.entries.retain(|_, entry| {
+        let expired = is_cache_expired(&entry.metadata);
+        if expired {
+            dropped.push(entry.clone());
+        }
+        !expired
+    });
 
     let removed_count = initial_count - manifest.entries.len();
 
     if removed_count > 0 {
         save_manifest_owned(manifest)?;
+        remove_entry_files(&get_universal_cache_dir()?, &dropped);
         debug!(
             "[UniversalCache] Cleaned up {} expired entries",
             removed_count
@@ -1439,13 +1445,14 @@ pub fn migrate_emote_namespace_cache() -> Result<bool> {
 /// Whether the first 1024 bytes read as SVG markup: after an optional UTF-8 BOM
 /// and whitespace, an `<svg` element, an svg doctype, or an XML declaration or
 /// a comment with an `<svg` element after it. A window that holds an `<html`
-/// element is a page, never SVG.
+/// element, an html doctype, a `<head` or a `<body` is a page, never SVG.
 pub(crate) fn looks_like_svg(bytes: &[u8]) -> bool {
     let head = &bytes[..bytes.len().min(1024)];
     let head = head.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(head);
     let start = head.iter().position(|b| !b.is_ascii_whitespace()).unwrap_or(head.len());
     let head = head[start..].to_ascii_lowercase();
-    if head.windows(5).any(|w| w == b"<html") {
+    let has = |needle: &[u8]| head.windows(needle.len()).any(|w| w == needle);
+    if has(b"<html") || has(b"<!doctype html") || has(b"<head") || has(b"<body") {
         return false;
     }
     if head.starts_with(b"<svg") || head.starts_with(b"<!doctype svg") {
@@ -1540,9 +1547,16 @@ pub async fn cache_file(
 
     let extension = detect_image_ext(&bytes, content_type.as_deref());
     let file_name = content_addressed_file_name(&id, &url, extension);
+    let replaced = peek_entry(&format!("file:{id}"))?
+        .0
+        .and_then(|old| old.data.get("local_path").and_then(|p| p.as_str()).map(PathBuf::from));
     let (path_str, entry) =
         write_file_entry(&type_dir, cache_type, id, url, file_name, bytes, expiry_days).await?;
     save_cached_item(entry).await?;
+
+    if let Some(old_path) = replaced.filter(|old| old.as_path() != Path::new(&path_str)) {
+        let _ = tokio::task::spawn_blocking(move || remove_cached_file(&type_dir, &old_path)).await;
+    }
 
     debug!("[UniversalCache] Successfully cached file: {}", path_str);
     Ok(path_str)
@@ -1605,8 +1619,117 @@ where
 /// hash of the URL and the extension. The same key fetched from another URL gets
 /// another name, so one name always holds the same bytes.
 fn content_addressed_file_name(id: &str, url: &str, extension: &str) -> String {
-    let safe_id = id.replace(['/', '\\'], "_");
-    format!("{safe_id}-{}.{extension}", url_hash8(url))
+    format!("{}-{}.{extension}", safe_id(id), url_hash8(url))
+}
+
+/// `id` made usable in a file name on every platform: each character Windows
+/// rejects in a name (`<>:"/\|?*` and the control characters) becomes `_`,
+/// trailing dots and spaces are dropped, and a reserved device name gets a
+/// leading `_`.
+fn safe_id(id: &str) -> String {
+    let replaced: String = id
+        .chars()
+        .map(|c| match c {
+            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '_',
+            c if (c as u32) < 0x20 => '_',
+            c => c,
+        })
+        .collect();
+    let trimmed = replaced.trim_end_matches(['.', ' ']);
+    if is_reserved_device_name(trimmed) {
+        format!("_{trimmed}")
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// Whether Windows reserves `name` as a device (`CON`, `PRN`, `AUX`, `NUL`,
+/// `COM1` to `COM9`, `LPT1` to `LPT9`), with or without an extension and in any
+/// letter case.
+fn is_reserved_device_name(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or("").trim_end_matches(' ');
+    let upper = stem.to_ascii_uppercase();
+    matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (upper.len() == 4
+            && (upper.starts_with("COM") || upper.starts_with("LPT"))
+            && matches!(upper.as_bytes()[3], b'1'..=b'9'))
+}
+
+/// Whether `name` is a temp file `write_atomic_with` left behind: the target
+/// name, a dot, 32 lowercase hex digits and `.tmp`.
+fn is_temp_leftover(name: &str) -> bool {
+    let Some(stem) = name.strip_suffix(".tmp") else {
+        return false;
+    };
+    let Some((_, token)) = stem.rsplit_once('.') else {
+        return false;
+    };
+    token.len() == 32 && token.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// Deletes the temp files a crash left in the cache's file folders and returns
+/// how many were removed. Call it once at launch, while this process holds the
+/// single-instance lock and before any cache write starts, so no live writer's
+/// temp file can be taken.
+pub fn sweep_orphan_temp_files(cache_root: &Path) -> usize {
+    let mut removed = 0;
+    for cache_type in [
+        CacheType::Badge,
+        CacheType::Emote,
+        CacheType::ThirdPartyBadge,
+        CacheType::Cosmetic,
+        CacheType::StreamNookArt,
+    ] {
+        let Ok(entries) = fs::read_dir(cache_root.join(cache_type.dir_name())) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let is_file = entry.file_type().map_or(false, |t| t.is_file());
+            if is_file && is_temp_leftover(&entry.file_name().to_string_lossy()) && fs::remove_file(entry.path()).is_ok() {
+                removed += 1;
+            }
+        }
+    }
+    if removed > 0 {
+        log::info!("[UniversalCache] Removed {removed} temp files left by an earlier run");
+    }
+    removed
+}
+
+/// Deletes the cached file at `path` when it sits inside `type_dir`. A path
+/// outside the folder, the folder itself and a file already gone are left
+/// alone; any other failure is logged.
+fn remove_cached_file(type_dir: &Path, path: &Path) {
+    let canonical = |p: &Path| match p.canonicalize() {
+        Ok(c) => Some(c),
+        Err(e) => {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                log::warn!("[UniversalCache] Could not resolve {}: {e}", p.display());
+            }
+            None
+        }
+    };
+    let (Some(dir), Some(file)) = (canonical(type_dir), canonical(path)) else {
+        return;
+    };
+    if file == dir || !file.starts_with(&dir) {
+        return;
+    }
+    match fs::remove_file(&file) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => log::warn!("[UniversalCache] Could not delete {}: {e}", file.display()),
+    }
+}
+
+/// Deletes the file of each of `entries` from its type folder under
+/// `cache_root`. Entries without a file are skipped.
+fn remove_entry_files(cache_root: &Path, entries: &[UniversalCacheEntry]) {
+    for entry in entries {
+        if let Some(path) = entry.data.get("local_path").and_then(|p| p.as_str()) {
+            remove_cached_file(&cache_root.join(entry.cache_type.dir_name()), Path::new(path));
+        }
+    }
 }
 
 /// The first 4 bytes of the SHA-256 of `url`, as 8 hex digits.
@@ -2173,8 +2296,9 @@ pub fn manifest_len() -> Option<usize> {
 mod tests {
     use super::{
         badge_date_key, content_addressed_file_name, detect_image_ext, encode_with, is_still_paint_entry,
-        looks_like_svg, missing_file_keys, parse_manifest, usable_file_path, webp_is_animated, write_atomic,
-        write_atomic_with, CacheMetadata, CacheType, UniversalCacheEntry, UniversalCacheManifest,
+        looks_like_svg, missing_file_keys, parse_manifest, remove_cached_file, remove_entry_files, safe_id,
+        sweep_orphan_temp_files, usable_file_path, webp_is_animated, write_atomic, write_atomic_with, CacheMetadata,
+        CacheType, UniversalCacheEntry, UniversalCacheManifest,
     };
     use std::collections::{HashMap, HashSet};
     use std::ffi::OsString;
@@ -2280,6 +2404,116 @@ mod tests {
         assert!(!looks_like_svg(b"<!-- only a comment -->"));
         assert!(!looks_like_svg(b"<?xml version='1.0'?><HTML></HTML>"));
         assert_eq!(detect_image_ext(b"<!-- page --><html></html>", None), "bin");
+    }
+
+    #[test]
+    fn a_page_without_an_html_tag_is_never_svg() {
+        assert!(!looks_like_svg(b"<!-- x --><!doctype html><title>Login</title><svg>"));
+        assert!(!looks_like_svg(b"<?xml version='1.0'?><HEAD><title>x</title></HEAD><svg/>"));
+        assert!(!looks_like_svg(b"<!-- x --><BODY><svg/></BODY>"));
+        assert!(looks_like_svg(b"<?xml version='1.0'?><svg xmlns='http://www.w3.org/2000/svg'/>"));
+    }
+
+    #[test]
+    fn crash_leftover_temp_files_are_swept_and_other_files_stay() {
+        let root = scratch_dir("sweep");
+        let emotes = root.join("emotes");
+        let badges = root.join("badges");
+        fs::create_dir_all(&emotes).unwrap();
+        fs::create_dir_all(&badges).unwrap();
+        let leftover = format!("a.png.{}.tmp", "0123456789abcdef0123456789abcdef");
+        fs::write(emotes.join(&leftover), b"half").unwrap();
+        fs::write(badges.join(&leftover), b"half").unwrap();
+        fs::write(emotes.join("a.png"), b"png").unwrap();
+        fs::write(emotes.join("b.tmp"), b"other").unwrap();
+        fs::write(emotes.join(format!("c.png.{}.tmp", "0123456789ABCDEF0123456789ABCDEF")), b"other").unwrap();
+        fs::write(emotes.join(format!("d.png.{}.tmp", "0123456789abcdef")), b"other").unwrap();
+
+        assert_eq!(sweep_orphan_temp_files(&root), 2);
+
+        let mut left: Vec<String> = temp_files_in(&emotes);
+        left.extend(temp_files_in(&badges));
+        left.sort();
+        assert_eq!(left.len(), 3, "{left:?}");
+        assert!(emotes.join("a.png").exists());
+        assert!(emotes.join("b.tmp").exists());
+        assert!(!emotes.join(&leftover).exists());
+        assert!(!badges.join(&leftover).exists());
+        assert_eq!(sweep_orphan_temp_files(&root), 0);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_replaced_file_is_deleted_and_only_the_new_one_stays() {
+        let root = scratch_dir("replaced");
+        let type_dir = root.join("emotes");
+        fs::create_dir_all(&type_dir).unwrap();
+        let old = type_dir.join("x-aaaaaaaa.png");
+        let new = type_dir.join("x-bbbbbbbb.png");
+        fs::write(&old, b"old").unwrap();
+        fs::write(&new, b"new").unwrap();
+
+        remove_cached_file(&type_dir, &old);
+        assert!(!old.exists());
+        assert!(new.exists());
+
+        // Already gone: nothing to do, nothing raised.
+        remove_cached_file(&type_dir, &old);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_path_outside_the_type_folder_is_never_deleted() {
+        let root = scratch_dir("outside");
+        let type_dir = root.join("emotes");
+        let other_dir = root.join("elsewhere");
+        fs::create_dir_all(&type_dir).unwrap();
+        fs::create_dir_all(&other_dir).unwrap();
+        let outside = other_dir.join("keep.png");
+        fs::write(&outside, b"keep").unwrap();
+
+        remove_cached_file(&type_dir, &outside);
+        assert!(outside.exists());
+        remove_cached_file(&type_dir, &type_dir.join("..").join("elsewhere").join("keep.png"));
+        assert!(outside.exists());
+        remove_cached_file(&type_dir, &type_dir);
+        assert!(type_dir.exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_expired_entrys_file_is_gone_after_cleanup() {
+        let root = scratch_dir("expired");
+        let type_dir = root.join("emotes");
+        fs::create_dir_all(&type_dir).unwrap();
+        let file = type_dir.join("x-aaaaaaaa.png");
+        let outside = root.join("keep.png");
+        fs::write(&file, b"old").unwrap();
+        fs::write(&outside, b"keep").unwrap();
+
+        let mut inside_entry = file_entry(CacheType::Emote, 30);
+        inside_entry.data = serde_json::json!({ "local_path": file.to_string_lossy() });
+        let mut outside_entry = file_entry(CacheType::Emote, 30);
+        outside_entry.data = serde_json::json!({ "local_path": outside.to_string_lossy() });
+        let mut no_file_entry = file_entry(CacheType::Emote, 30);
+        no_file_entry.data = serde_json::json!({ "name": "x" });
+
+        remove_entry_files(&root, &[inside_entry, outside_entry, no_file_entry]);
+        assert!(!file.exists());
+        assert!(outside.exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn cached_file_names_are_valid_on_windows() {
+        assert_eq!(safe_id("a:b?c."), "a_b_c");
+        assert_eq!(safe_id("con"), "_con");
+        assert_eq!(safe_id("CON.txt"), "_CON.txt");
+        assert_eq!(safe_id("Lpt3"), "_Lpt3");
+        assert_eq!(safe_id("com10"), "com10");
+        assert_eq!(safe_id("a<b>c\"d\\e|f*g\u{1}h  "), "a_b_c_d_e_f_g_h");
+        assert_eq!(safe_id("emote/x@1x"), "emote_x@1x");
+        assert_eq!(safe_id("01H2XYZABC7TVEMOTEID"), "01H2XYZABC7TVEMOTEID");
     }
 
     fn file_entry(cache_type: CacheType, age_days: u64) -> UniversalCacheEntry {

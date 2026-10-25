@@ -1155,6 +1155,12 @@ pub fn run() {
             if let Ok(s) = settings_arc.lock() {
                 services::twitch_resolver::refresh_device_codecs(&s);
             }
+            // Temp files a crashed run left in the cache folders. This is the
+            // primary instance (the single-instance lock is held) and nothing
+            // has queued a cache write yet, so no live writer's file is taken.
+            if let Ok(cache_root) = services::universal_cache_service::get_universal_cache_dir() {
+                services::universal_cache_service::sweep_orphan_temp_files(&cache_root);
+            }
             // Runtime stall detector: measures backend freezes (tokio-blocked vs
             // whole-process) and records them to the capture file. Started here,
             // inside the tokio runtime Tauri set up.
