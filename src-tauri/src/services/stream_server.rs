@@ -30,7 +30,7 @@ static CURRENT_PORT: Lazy<Arc<Mutex<Option<u16>>>> = Lazy::new(|| Arc::new(Mutex
 ///
 /// Registered by the playback starter rather than resolved here, so this file
 /// stays provider-agnostic.
-type Refresher = Arc<dyn Fn() -> futures::future::BoxFuture<'static, Option<String>> + Send + Sync>;
+pub type Refresher = Arc<dyn Fn() -> futures::future::BoxFuture<'static, Option<String>> + Send + Sync>;
 static REFRESHER: Lazy<Arc<Mutex<Option<Refresher>>>> = Lazy::new(|| Arc::new(Mutex::new(None)));
 /// One re-resolve at a time; a refusal usually arrives on several requests at once.
 static REFRESHING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -38,16 +38,6 @@ static REFRESHING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool
 /// Register (or clear) how to re-sign the current stream's manifest url.
 pub async fn set_manifest_refresher(f: Option<Refresher>) {
     *REFRESHER.lock().await = f;
-}
-
-/// A Twitch stream is re-signed by the player's own resolve, never through the
-/// refresher a previous Kick or YouTube stream registered: drop it when the
-/// relay is handed a Twitch upstream. Another provider registers its own after
-/// this, once its upstream is in place.
-async fn drop_refresher_for(profile: UpstreamProfile) {
-    if profile == UpstreamProfile::Twitch {
-        *REFRESHER.lock().await = None;
-    }
 }
 
 /// An upstream refused us. If the stream knows how to re-sign itself, do it once
@@ -315,6 +305,41 @@ pub fn set_upstream_profile(profile: UpstreamProfile) {
     if let Ok(mut m) = pseg_map().lock() {
         m.clear();
     }
+}
+
+/// Whether the stream a start belongs to is still the solo session.
+pub type SessionCheck = Arc<dyn Fn() -> bool + Send + Sync>;
+
+/// What a solo start installs with the relay's new upstream: the profile, and
+/// the re-signer of the stream's manifest url (None for a stream that has none,
+/// which also drops one a previous stream registered). Installed under the start
+/// lock together with the url, so a start can never inherit another stream's.
+pub struct SoloUpstream {
+    pub profile: UpstreamProfile,
+    pub refresher: Option<Refresher>,
+    /// Asked under the start lock: a start for a session that ended or was
+    /// replaced since it began installs nothing and fails. None for a start
+    /// that begins its own session.
+    pub session: Option<SessionCheck>,
+}
+
+impl SoloUpstream {
+    /// A live or VOD Twitch start: the full Twitch profile and no re-signer.
+    pub fn twitch() -> Self {
+        Self { profile: UpstreamProfile::Twitch, refresher: None, session: None }
+    }
+}
+
+/// Put `upstream` in place for the relay, with the start lock held.
+async fn install_solo_upstream(upstream: SoloUpstream) -> Result<()> {
+    if let Some(current) = &upstream.session {
+        if !current() {
+            anyhow::bail!("the stream this start belongs to is no longer playing");
+        }
+    }
+    set_upstream_profile(upstream.profile);
+    set_manifest_refresher(upstream.refresher).await;
+    Ok(())
 }
 
 /// Absolute segment URLs, addressed by a relay-local index.
@@ -755,8 +780,38 @@ fn solo_parked_at(now: u64) -> bool {
 /// `solo_parked_at` over its inputs: the origin's parked and active flags, the
 /// time of the last playlist request (0 = none), the clock and the park span.
 fn parked_from(origin_parked: bool, origin_active: bool, last: u64, now: u64, span: u64) -> bool {
-    let loading = last != 0 && now.saturating_sub(last) < span;
-    !loading && (origin_parked || (!origin_active && last != 0))
+    !loading_from(last, now, span) && (origin_parked || (!origin_active && last != 0))
+}
+
+/// Whether a player asked for a playlist within the park span: it is loading.
+fn loading_from(last: u64, now: u64, span: u64) -> bool {
+    last != 0 && now.saturating_sub(last) < span
+}
+
+/// Whether a player is loading the solo stream as of `now`, whichever path
+/// served its last playlist request.
+fn solo_loading_at(now: u64) -> bool {
+    loading_from(
+        SOLO_PLAIN_LAST_MS.load(std::sync::atomic::Ordering::SeqCst),
+        now,
+        crate::services::ll_origin::park_idle_ms(),
+    )
+}
+
+/// Stop the parts origin for a restart. A loading player wants the new stream,
+/// so the origin stops even when it is parked; otherwise a parked origin is
+/// left alone (`stop_unless_parked`). False when the restart must be refused.
+fn stop_origin_for_restart(
+    loading: bool,
+    stop: impl FnOnce(),
+    stop_unless_parked: impl FnOnce() -> bool,
+) -> bool {
+    if loading {
+        stop();
+        true
+    } else {
+        stop_unless_parked()
+    }
 }
 
 /// Whether the solo stream is parked now. Also read by the provider routes, so
@@ -768,6 +823,13 @@ pub(crate) fn solo_parked() -> bool {
 /// A playlist request arrived at the solo relay at `ms`.
 fn note_solo_plain_request_at(ms: u64) {
     SOLO_PLAIN_LAST_MS.store(ms, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// A player asked for a playlist of a solo stream that does not come through
+/// this relay's own handler (YouTube's local HLS above 1080p): the stream is
+/// not parked while these keep arriving.
+pub(crate) fn note_solo_playlist_request() {
+    note_solo_plain_request_at(crate::services::ll_origin::mono_ms());
 }
 
 /// A plugin swap that arrived while the solo stream was parked, applied when a
@@ -839,9 +901,14 @@ pub async fn adapt_upstream(playlist_url: &str, same_decoder: bool) -> Result<Op
         return Ok(None);
     }
     // A parked origin stays parked: restarting it would read again for a
-    // player that is not watching. The refusal is an error so the caller does
-    // not record a switch that never happened.
-    if !crate::services::ll_origin::stop_unless_parked() {
+    // player that is not watching. A player on the plain playlist is loading
+    // even while the origin is parked, and that restart goes ahead. The refusal
+    // is an error so the caller does not record a switch that never happened.
+    if !stop_origin_for_restart(
+        solo_loading_at(crate::services::ll_origin::mono_ms()),
+        crate::services::ll_origin::stop,
+        crate::services::ll_origin::stop_unless_parked,
+    ) {
         return Err(anyhow::Error::new(crate::services::link_adapt::RelayParked));
     }
     let port = StreamServer::start_proxy_server(playlist_url.to_string()).await?;
@@ -852,13 +919,21 @@ impl StreamServer {
     /// Serve `stream_url` through the relay, probing the low-latency origin
     /// (the live default).
     pub async fn start_proxy_server(stream_url: String) -> Result<u16> {
-        Self::start_proxy_server_with(stream_url, true).await
+        Self::start_proxy_server_with(stream_url, true, None).await
     }
 
     /// `probe_ll: false` for VOD playlists: they never carry the prefetch
     /// tags the origin keys on, and a recording VOD playlist is thousands of
     /// lines, so the probe would only pay one big fetch to learn "inactive".
-    pub async fn start_proxy_server_with(stream_url: String, probe_ll: bool) -> Result<u16> {
+    ///
+    /// `owner` is the profile and re-signer this start installs, under the
+    /// start lock with the url; None keeps what the relay already has, for a
+    /// restart of the stream it is already serving.
+    pub async fn start_proxy_server_with(
+        stream_url: String,
+        probe_ll: bool,
+        owner: Option<SoloUpstream>,
+    ) -> Result<u16> {
         // The upstream media-playlist URL the LL-HLS origin will poll. `reset_ad_state`
         // (below) stops any prior origin; `ll_origin::start` probes this URL and, if it's
         // a low-latency broadcast, builds the live edge before we return — so the player
@@ -870,8 +945,11 @@ impl StreamServer {
         // shared SOLO origin's start, racing each other's edge setup.
         let _init_guard = SOLO_START_LOCK.lock().await;
 
-        // A Twitch upstream never inherits another provider's re-signer.
-        drop_refresher_for(upstream_profile()).await;
+        // The profile and re-signer belong to this start alone, so a Twitch
+        // upstream never inherits another provider's.
+        if let Some(owner) = owner {
+            install_solo_upstream(owner).await?;
+        }
 
         // A refused first poll after a park re-signs through the same path the
         // playlist requests use.
@@ -1678,16 +1756,131 @@ mod relay_rewrite_tests {
             .await;
             *PROXY_URL.lock().await = Some(stale.to_string());
 
-            // Another provider's start keeps its own re-signer.
-            drop_refresher_for(UpstreamProfile::GenericHls).await;
+            // Another provider's start brings its own re-signer.
+            let own: Refresher = Arc::new(|| {
+                Box::pin(async { Some("https://example.test/own.m3u8".to_string()) })
+                    as futures::future::BoxFuture<'static, Option<String>>
+            });
+            install_solo_upstream(SoloUpstream {
+                profile: UpstreamProfile::GenericHls,
+                refresher: Some(own),
+                session: None,
+            })
+            .await
+            .unwrap();
+            assert_eq!(upstream_profile(), UpstreamProfile::GenericHls);
             assert!(REFRESHER.lock().await.is_some());
 
-            drop_refresher_for(UpstreamProfile::Twitch).await;
+            install_solo_upstream(SoloUpstream::twitch()).await.unwrap();
+            assert_eq!(upstream_profile(), UpstreamProfile::Twitch);
             assert_eq!(resign_blocking(stale).await, None, "nothing re-signs a Twitch stream");
             assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
 
             *PROXY_URL.lock().await = None;
         });
+    }
+
+    #[test]
+    fn a_provider_switch_whose_session_was_replaced_by_a_twitch_start_installs_nothing() {
+        let _state = solo_state();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            install_solo_upstream(SoloUpstream::twitch()).await.unwrap();
+
+            let own: Refresher = Arc::new(|| {
+                Box::pin(async { Some("https://example.test/own.m3u8".to_string()) })
+                    as futures::future::BoxFuture<'static, Option<String>>
+            });
+            let ended: SessionCheck = Arc::new(|| false);
+            let switched = install_solo_upstream(SoloUpstream {
+                profile: UpstreamProfile::GenericHls,
+                refresher: Some(own.clone()),
+                session: Some(ended),
+            })
+            .await;
+            assert!(switched.is_err(), "the replaced session's switch is refused");
+            assert_eq!(upstream_profile(), UpstreamProfile::Twitch);
+            assert!(REFRESHER.lock().await.is_none(), "no re-signer is left for the Twitch stream");
+
+            // The same switch while its session is current goes through.
+            let current: SessionCheck = Arc::new(|| true);
+            install_solo_upstream(SoloUpstream {
+                profile: UpstreamProfile::GenericHls,
+                refresher: Some(own),
+                session: Some(current),
+            })
+            .await
+            .unwrap();
+            assert_eq!(upstream_profile(), UpstreamProfile::GenericHls);
+            assert!(REFRESHER.lock().await.is_some());
+
+            install_solo_upstream(SoloUpstream::twitch()).await.unwrap();
+            assert!(REFRESHER.lock().await.is_none());
+        });
+    }
+
+    #[test]
+    fn a_restart_gate_lets_a_loading_player_restart_a_parked_origin_only() {
+        let restart = |loading: bool, origin_parked: bool| {
+            let stopped = std::cell::Cell::new(false);
+            let allowed = stop_origin_for_restart(
+                loading,
+                || stopped.set(true),
+                || {
+                    if origin_parked {
+                        false
+                    } else {
+                        stopped.set(true);
+                        true
+                    }
+                },
+            );
+            (allowed, stopped.get())
+        };
+        assert_eq!(restart(true, true), (true, true), "parked and loading: restarts");
+        assert_eq!(restart(false, true), (false, false), "parked and idle: refused");
+        assert_eq!(restart(false, false), (true, true), "unparked: restarts");
+        assert_eq!(restart(true, false), (true, true));
+    }
+
+    #[test]
+    fn a_player_on_the_plain_playlist_is_loading_for_the_park_span_only() {
+        let _state = solo_state();
+        let span = crate::services::ll_origin::park_idle_ms();
+        let asked = u64::MAX / 2;
+
+        note_solo_plain_request_at(0);
+        assert!(!solo_loading_at(asked), "no request yet: not loading");
+
+        note_solo_plain_request_at(asked);
+        assert!(solo_loading_at(asked + span - 1));
+        assert!(!solo_loading_at(asked + span));
+
+        note_solo_plain_request_at(0);
+    }
+
+    #[test]
+    fn a_local_hls_stream_never_reads_as_parked_while_its_playlists_keep_coming() {
+        let _state = solo_state();
+        let span = crate::services::ll_origin::park_idle_ms();
+        let started = u64::MAX / 2;
+
+        // The hand-off notes once, then each playlist poll does.
+        note_solo_plain_request_at(started);
+        for poll in 1..=4 {
+            let at = started + poll * (span / 2);
+            note_solo_plain_request_at(at);
+            assert!(!solo_parked_at(at + span - 1), "polled {poll}: still playing");
+        }
+
+        // The player stops polling: parked once a whole span goes by.
+        let last = started + 4 * (span / 2);
+        assert!(solo_parked_at(last + span));
+
+        // The real note stamps the clock, so the stream reads as loading.
+        note_solo_playlist_request();
+        assert!(!solo_parked_at(crate::services::ll_origin::mono_ms()));
+        note_solo_plain_request_at(0);
     }
 
     #[test]
