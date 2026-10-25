@@ -340,6 +340,13 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
             // A small tile of a main layout: Rust holds it to the cap.
             small: cap !== null,
           });
+          // The tile was removed while its start was in flight: removeSlot only
+          // stops a tile that already has a url, so the relay this start just
+          // brought up is stopped here.
+          if (!get().slots.some((s) => s.id === slot.id)) {
+            void invoke('stop_multi_nook', { streamId: slot.id }).catch(() => {});
+            return;
+          }
           set((state) => ({
             slots: state.slots.map((s) =>
               s.id === slot.id ? { ...s, streamUrl: url, loadError: false, startedCap: cap } : s,

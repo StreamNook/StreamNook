@@ -908,13 +908,13 @@ fn env_secs(name: &str, default: Duration) -> Duration {
         .unwrap_or(default)
 }
 
-/// `STREAMNOOK_YT_END_CHECK_AFTER_SECS` overrides the stall time.
+/// `SN_YT_END_CHECK_AFTER_SECS` overrides the stall time.
 static END_CHECK_AFTER: Lazy<Duration> =
-    Lazy::new(|| env_secs("STREAMNOOK_YT_END_CHECK_AFTER_SECS", END_CHECK_AFTER_DEFAULT));
+    Lazy::new(|| env_secs("SN_YT_END_CHECK_AFTER_SECS", END_CHECK_AFTER_DEFAULT));
 
-/// `STREAMNOOK_YT_END_CHECK_EVERY_SECS` overrides the interval between checks.
+/// `SN_YT_END_CHECK_EVERY_SECS` overrides the interval between checks.
 static END_CHECK_EVERY: Lazy<Duration> =
-    Lazy::new(|| env_secs("STREAMNOOK_YT_END_CHECK_EVERY_SECS", END_CHECK_EVERY_DEFAULT));
+    Lazy::new(|| env_secs("SN_YT_END_CHECK_EVERY_SECS", END_CHECK_EVERY_DEFAULT));
 
 /// Whether the head has stood still long enough to ask the broadcast's state.
 /// The clock is passed in so the answer can be tested without waiting.

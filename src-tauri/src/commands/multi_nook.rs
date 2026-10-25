@@ -738,6 +738,7 @@ https://cdn.example/480.m3u8\n";
 mod provider_switch_tests {
     use super::*;
     use crate::services::link_adapt::Route;
+    use crate::services::stream_server::upstream_profile;
 
     #[test]
     fn a_switch_of_a_closed_provider_tile_never_recreates_it() {
@@ -811,6 +812,57 @@ mod provider_switch_tests {
         let twitch = promotion_upstream(TileProfile::Twitch, None);
         assert_eq!(twitch.profile, UpstreamProfile::Twitch);
         assert!(twitch.refresher.is_none());
+    }
+
+    #[test]
+    fn a_promoted_tile_installs_its_own_profile_and_re_signer_on_the_solo_relay() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let tile = |profile: TileProfile, refresher: Option<TileRefresher>| PromotionTarget {
+                upstream: "https://example.test/tile.m3u8".to_string(),
+                promotion: TilePromotion {
+                    quality: "480p".to_string(),
+                    available: Vec::new(),
+                    status: None,
+                    capped: None,
+                    codecs: None,
+                },
+                profile,
+                refresher,
+            };
+            let own: TileRefresher = std::sync::Arc::new(|| {
+                Box::pin(async { Some("https://example.test/own.m3u8".to_string()) })
+                    as futures::future::BoxFuture<'static, Option<String>>
+            });
+
+            // The relay holds a re-signer only through the clone it was handed,
+            // so the strong count tells whether the tile's own is installed.
+            start_promoted_relay(&tile(TileProfile::Twitch, None), false).await.unwrap();
+            assert_eq!(upstream_profile(), UpstreamProfile::Twitch);
+            assert_eq!(std::sync::Arc::strong_count(&own), 1);
+
+            // A Kick tile after a Twitch solo brings the generic profile and its re-signer.
+            start_promoted_relay(&tile(TileProfile::GenericHls, Some(own.clone())), false)
+                .await
+                .unwrap();
+            assert_eq!(upstream_profile(), UpstreamProfile::GenericHls);
+            assert_eq!(
+                std::sync::Arc::strong_count(&own),
+                2,
+                "the relay holds the Kick tile's re-signer"
+            );
+
+            // The reverse puts Twitch back and drops the Kick tile's re-signer.
+            start_promoted_relay(&tile(TileProfile::Twitch, None), false).await.unwrap();
+            assert_eq!(upstream_profile(), UpstreamProfile::Twitch);
+            assert_eq!(
+                std::sync::Arc::strong_count(&own),
+                1,
+                "a Twitch tile leaves no re-signer behind"
+            );
+
+            StreamServer::stop().await.unwrap();
+        });
     }
 
     #[test]
@@ -918,6 +970,20 @@ fn promotion_upstream(profile: TileProfile, refresher: Option<TileRefresher>) ->
     }
 }
 
+/// Point the solo relay at a promoted tile's upstream and install, under the
+/// relay's start lock, the tile's own profile and re-signer with it. The relay
+/// re-probes the low-latency origin against the upstream when `probe_ll` is set
+/// (skipped inside the relay for a non-Twitch profile).
+async fn start_promoted_relay(target: &PromotionTarget, probe_ll: bool) -> Result<u16, String> {
+    StreamServer::start_proxy_server_with(
+        target.upstream.clone(),
+        probe_ll,
+        Some(promotion_upstream(target.profile, target.refresher.clone())),
+    )
+    .await
+    .map_err(|e| e.to_string())
+}
+
 /// Hand ONE grid tile to the solo player and tear the rest of the grid down.
 ///
 /// The point is that nothing is resolved again. The tile's relay is already
@@ -940,15 +1006,14 @@ fn promotion_upstream(profile: TileProfile, refresher: Option<TileRefresher>) ->
 pub async fn promote_multi_nook_tile(
     stream_id: String,
 ) -> Result<Option<StreamStartResult>, String> {
-    let Some(PromotionTarget { upstream, promotion, profile, refresher }) =
-        MultiNookServer::promotion_target(&stream_id).await
-    else {
+    let Some(target) = MultiNookServer::promotion_target(&stream_id).await else {
         debug!(
             "[MultiNook] '{}' has no promotion target; caller falls back to a normal start",
             stream_id
         );
         return Ok(None);
     };
+    let promotion = &target.promotion;
     // A small tile's stream was resolved under the small-tile cap; the solo
     // player resolves afresh at the viewer's own quality instead.
     if promotion.capped.is_some() {
@@ -970,13 +1035,7 @@ pub async fn promote_multi_nook_tile(
     // relay itself (the origin only speaks Twitch's playlist shape). The tile's
     // own profile and re-signer are installed with it, under the relay's start
     // lock, so the promoted stream never plays under the previous solo stream's.
-    let port = StreamServer::start_proxy_server_with(
-        upstream,
-        true,
-        Some(promotion_upstream(profile, refresher)),
-    )
-    .await
-    .map_err(|e| e.to_string())?;
+    let port = start_promoted_relay(&target, true).await?;
 
     // The tile's rung and what it learned about the link carry over, so "Auto"
     // keeps adapting (and can climb back) on the solo player. A provider
@@ -1017,11 +1076,11 @@ pub async fn promote_multi_nook_tile(
 
     Ok(Some(StreamStartResult {
         url: crate::commands::streaming::local_player_url(port),
-        quality: promotion.quality,
+        quality: promotion.quality.clone(),
         mode: status.as_ref().map(|s| s.mode.clone()),
         entitled: status.as_ref().map(|s| s.entitled).unwrap_or(false),
         proxy_region: status.and_then(|s| s.proxy_region),
-        available: promotion.available,
+        available: promotion.available.clone(),
         clip_source: None,
         vod: None,
         kind: None,
