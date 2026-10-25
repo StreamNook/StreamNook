@@ -10,17 +10,21 @@
 //! window by the `HISTORY_SEGMENTS` frame every client already applies by row
 //! id. A removal never un-draws an emote that is already showing.
 //!
-//! Each line carries the generation of the table it was remembered under (0 is
-//! no table at all), and a room's generation rises with every table put in
-//! place. Only a line from an older generation is ever repaired, and once a
-//! table lands every remembered line counts as covered by it, so no line is
-//! sent twice for the same table. Leaving a channel forgets the room.
+//! Each line carries the generation of the table it was parsed under (0 is no
+//! table at all), and a room's generation rises with every table put in place.
+//! The generation is read before a line is parsed. A table reaches the parse
+//! map before its generation rises here, so a value read before the parse is
+//! never newer than the table the parse used. Only a line from an older
+//! generation is ever repaired, and once a table lands every remembered line
+//! counts as covered by it, so no line is sent twice for the same table. A line
+//! remembered after a newer table already landed is repaired at once. Leaving
+//! a channel, or dropping its parse table, forgets the room.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use crate::services::irc_service::{irc_trailing_text, EmoteLookup, IrcService};
+use crate::services::irc_service::{irc_trailing_text, parse_lookup_for, EmoteLookup, IrcService};
 
 /// Lines kept per channel. A busy room passes this in seconds, which is fine:
 /// a table that lands seconds late repairs what is still on screen.
@@ -31,7 +35,7 @@ const KEEP_FOR: Duration = Duration::from_secs(180);
 struct Line {
     at: Instant,
     raw: String,
-    /// The room's table generation when the line was remembered; 0 is none.
+    /// The generation of the table the line was parsed under; 0 is none.
     generation: u64,
 }
 
@@ -47,12 +51,47 @@ fn rooms() -> &'static Mutex<HashMap<String, Room>> {
     ROOMS.get_or_init(Default::default)
 }
 
-/// Remember a chat line for `channel` (lowercase, no `#`, the parse-table key).
-pub(crate) fn remember(channel: &str, raw: &str) {
-    if channel.is_empty() {
+/// The generation of the table now in place for `channel` (lowercase, no `#`,
+/// the parse-table key); 0 when none. Read it before parsing a line and hand it
+/// to `remember` with that line.
+pub(crate) fn generation(channel: &str) -> u64 {
+    rooms().lock().ok().and_then(|map| map.get(channel).map(|r| r.generation)).unwrap_or(0)
+}
+
+/// Remember a chat line for `channel`, parsed under table generation
+/// `generation` (see `generation`). A line parsed under an older table than the
+/// one now in place is repaired at once, since no later install will compare it.
+pub(crate) fn remember(channel: &str, raw: &str, generation: u64) {
+    if remember_line(channel, raw, generation) {
+        repair_late(channel, raw);
+    }
+}
+
+/// Parse the line again under the table now in place when it names an emote
+/// there, and patch it in every window.
+fn repair_late(channel: &str, raw: &str) {
+    if is_partner_line(raw) {
         return;
     }
-    let Ok(mut map) = rooms().lock() else { return };
+    let Some(table) = parse_lookup_for(channel) else { return };
+    // The table the line was parsed under is not kept, so any emote word counts
+    // as gained; patching a row with the segments it already has is harmless.
+    if !gains_emote(irc_trailing_text(raw), &table, None) {
+        return;
+    }
+    let Ok(rt) = tokio::runtime::Handle::try_current() else { return };
+    let key = channel.to_string();
+    let line = raw.to_string();
+    rt.spawn(async move { IrcService::restamp_live_rows(&key, vec![line], Duration::ZERO).await });
+}
+
+/// Keep the line under the room's current generation; true when it was parsed
+/// under an older one, so a table landed between its parse and now.
+fn remember_line(channel: &str, raw: &str, generation: u64) -> bool {
+    if channel.is_empty() {
+        return false;
+    }
+    let Ok(mut map) = rooms().lock() else { return false };
     let now = Instant::now();
     // Rooms left behind (a channel browsed past) lose their lines once their
     // newest line is too old to repair, and drop out unless a table is in
@@ -68,7 +107,9 @@ pub(crate) fn remember(channel: &str, raw: &str) {
         });
     }
     let room = map.entry(channel.to_string()).or_default();
+    let stale = generation < room.generation;
     push_line(&mut room.lines, room.generation, raw, now);
+    stale
 }
 
 /// Drop everything remembered for `room`, as when the channel is left. A
@@ -298,15 +339,56 @@ mod tests {
         install_table(channel, old, new, Instant::now()).map(|(lines, _)| lines).unwrap_or_default()
     }
 
+    /// A line parsed right now: the generation is read, then the line is kept.
+    fn keep(channel: &str, raw: &str) -> bool {
+        remember_line(channel, raw, generation(channel))
+    }
+
     #[test]
     fn lines_with_no_table_are_repaired_once() {
         let room = "restamp_no_table";
         let clap = lookup(vec![emote("2", "Clap")]);
         let mine = line("hi Clap");
-        remember(room, &mine);
-        remember(room, &line("plain words"));
+        assert!(!keep(room, &mine));
+        assert!(!keep(room, &line("plain words")));
         assert_eq!(install(room, None, &clap), vec![mine]);
         assert!(install(room, Some(&*clap), &clap).is_empty());
+    }
+
+    #[test]
+    fn a_line_parsed_before_a_table_and_kept_after_it_is_repaired_at_once() {
+        let room = "restamp_parsed_before_kept_after";
+        let clap = lookup(vec![emote("2", "Clap")]);
+        let mine = line("hi Clap");
+        // The line is parsed with no table (generation 0), then a table lands,
+        // then the line is kept: nothing is left for a later install to find.
+        let read_before_parse = generation(room);
+        assert_eq!(read_before_parse, 0);
+        assert!(install(room, None, &clap).is_empty());
+        assert!(remember_line(room, &mine, read_before_parse));
+        assert!(install(room, Some(&*clap), &clap).is_empty());
+    }
+
+    #[test]
+    fn a_line_parsed_under_an_older_table_and_kept_after_a_newer_one_is_late() {
+        let room = "restamp_older_table_kept_late";
+        let first = lookup(vec![emote("1", "KEKW")]);
+        let second = lookup(vec![emote("1", "KEKW"), emote("2", "Clap")]);
+        assert!(install(room, None, &first).is_empty());
+        let read_before_parse = generation(room);
+        assert_eq!(read_before_parse, 1);
+        assert!(install(room, Some(&*first), &second).is_empty());
+        assert!(remember_line(room, &line("hi Clap"), read_before_parse));
+        assert!(!keep(room, &line("hi Clap again")));
+    }
+
+    #[test]
+    fn a_line_parsed_after_the_table_is_not_late() {
+        let room = "restamp_parsed_after_table";
+        let clap = lookup(vec![emote("2", "Clap")]);
+        assert!(install(room, None, &clap).is_empty());
+        assert_eq!(generation(room), 1);
+        assert!(!keep(room, &line("hi Clap")));
     }
 
     #[test]
@@ -317,8 +399,8 @@ mod tests {
         assert!(install(room, None, &first).is_empty());
         let kept = line("hi KEKW");
         let added = line("hi Clap");
-        remember(room, &kept);
-        remember(room, &added);
+        keep(room, &kept);
+        keep(room, &added);
         assert_eq!(install(room, Some(&*first), &second), vec![added]);
         assert!(install(room, Some(&*second), &second).is_empty());
     }
@@ -328,7 +410,7 @@ mod tests {
         let room = "restamp_current_table";
         let clap = lookup(vec![emote("2", "Clap")]);
         assert!(install(room, None, &clap).is_empty());
-        remember(room, &line("hi Clap"));
+        keep(room, &line("hi Clap"));
         assert!(install(room, Some(&*clap), &clap).is_empty());
         assert!(install(room, None, &clap).is_empty());
     }
@@ -338,10 +420,10 @@ mod tests {
         let room = "restamp_part_rejoin";
         let clap = lookup(vec![emote("2", "Clap")]);
         assert!(install(room, None, &clap).is_empty());
-        remember(room, &line("hi Clap"));
+        keep(room, &line("hi Clap"));
         forget(room);
         assert!(install(room, None, &clap).is_empty());
-        remember(room, &line("again Clap"));
+        keep(room, &line("again Clap"));
         assert!(install(room, Some(&*clap), &clap).is_empty());
     }
 
@@ -350,14 +432,14 @@ mod tests {
         let room = "restamp_dropped_table";
         let clap = lookup(vec![emote("2", "Clap")]);
         assert!(install(room, None, &clap).is_empty());
-        remember(room, &line("hi Clap"));
+        keep(room, &line("hi Clap"));
         assert!(install(room, None, &clap).is_empty());
     }
 
     #[test]
     fn forget_drops_the_room() {
         let room = "restamp_forget";
-        remember(room, &line("hi Clap"));
+        keep(room, &line("hi Clap"));
         assert!(rooms().lock().unwrap().contains_key(room));
         forget(room);
         assert!(!rooms().lock().unwrap().contains_key(room));

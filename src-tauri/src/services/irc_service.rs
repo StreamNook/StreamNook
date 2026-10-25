@@ -1117,6 +1117,11 @@ fn rebuild_parse_lookup(key: &str, set: &EmoteSet) {
     crate::services::emote_restamp::table_changed(key, old, lookup);
 }
 
+/// The table now in place for `key`, if any.
+pub(crate) fn parse_lookup_for(key: &str) -> Option<Arc<EmoteLookup>> {
+    channel_parse_lookup().read().ok()?.get(key).cloned()
+}
+
 fn drop_parse_lookup(key: &str) {
     if let Ok(mut guard) = channel_parse_lookup().write() {
         guard.remove(key);
@@ -2693,10 +2698,13 @@ impl IrcService {
                 );
             }
 
-            // Parse and layout
+            // Parse and layout. The table generation is read before the parse,
+            // so the line is never stamped newer than the table it used.
+            let room = extract_channel_from_irc_line(&enhanced_message);
+            let table_generation = room.as_deref().map_or(0, crate::services::emote_restamp::generation);
             if let Some(mut chat_msg) = Self::parse_privmsg(&enhanced_message) {
-                if let Some(room) = extract_channel_from_irc_line(&enhanced_message) {
-                    crate::services::emote_restamp::remember(&room, &enhanced_message);
+                if let Some(room) = room.as_deref() {
+                    crate::services::emote_restamp::remember(room, &enhanced_message, table_generation);
                 }
                 debug!(
                     "[IRC Chat DEBUG] Parsed message from {}: content='{}', {} segments",
@@ -2777,9 +2785,11 @@ impl IrcService {
                 }
             }
             // Parse USERNOTICE messages - layout will be measured by frontend
+            let room = extract_channel_from_irc_line(trimmed);
+            let table_generation = room.as_deref().map_or(0, crate::services::emote_restamp::generation);
             if let Some(mut chat_msg) = Self::parse_usernotice(trimmed) {
-                if let Some(room) = extract_channel_from_irc_line(trimmed) {
-                    crate::services::emote_restamp::remember(&room, trimmed);
+                if let Some(room) = room.as_deref() {
+                    crate::services::emote_restamp::remember(room, trimmed, table_generation);
                 }
                 // Skip USERNOTICE messages with no visible content
                 // These render as blank/ghost messages (e.g., "onetapgiftredeemed" with no text)
@@ -4275,12 +4285,19 @@ impl IrcService {
             }
         };
         if let Some(old_key) = evict {
-            if !get_current_channels().lock().await.contains(&old_key) {
-                get_channel_emotes().lock().await.remove(&old_key);
-                drop_parse_lookup(&old_key);
-                if let Ok(mut g) = get_channel_cheermotes().write() {
-                    g.remove(&old_key);
-                }
+            Self::evict_parse_only_channel(&old_key).await;
+        }
+    }
+
+    /// Drop a parse-only channel's tables and remembered lines, unless it has
+    /// since genuinely joined.
+    async fn evict_parse_only_channel(old_key: &str) {
+        if !get_current_channels().lock().await.contains(old_key) {
+            get_channel_emotes().lock().await.remove(old_key);
+            drop_parse_lookup(old_key);
+            crate::services::emote_restamp::forget(old_key);
+            if let Ok(mut g) = get_channel_cheermotes().write() {
+                g.remove(old_key);
             }
         }
     }
@@ -7672,6 +7689,33 @@ mod history_notice_tests {
         get_channel_emotes().lock().await.remove(key);
 
         assert!(!wait_for_channel_emotes("history_wait_none", std::time::Duration::from_millis(30)).await);
+    }
+
+    #[tokio::test]
+    async fn a_reaped_parse_only_channel_forgets_its_remembered_lines() {
+        let key = "reaped_parse_only_chan";
+        let mut set = EmoteSet::new();
+        set.seven_tv.push(
+            serde_json::from_value(json!({
+                "id": "01GB2S3ZQ8000BNRXQQ0VKQ0E4",
+                "name": "catJAM",
+                "url": "https://cdn.7tv.app/emote/01GB2S3ZQ8000BNRXQQ0VKQ0E4/1x.avif",
+                "provider": "7tv",
+            }))
+            .expect("minimal emote"),
+        );
+        rebuild_parse_lookup(key, &set);
+        crate::services::emote_restamp::remember(
+            key,
+            "@id=r-1;room-id=11 :a!a@a.tmi.twitch.tv PRIVMSG #reaped_parse_only_chan :hi",
+            crate::services::emote_restamp::generation(key),
+        );
+        assert_eq!(crate::services::emote_restamp::generation(key), 1);
+
+        IrcService::evict_parse_only_channel(key).await;
+
+        assert!(parse_lookup_for(key).is_none());
+        assert_eq!(crate::services::emote_restamp::generation(key), 0);
     }
 }
 

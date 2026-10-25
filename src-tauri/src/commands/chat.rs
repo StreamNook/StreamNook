@@ -1060,9 +1060,12 @@ pub async fn load_channel_history(
     let restamp_lines = (!seeded).then(|| raw.clone());
     // Remembered with the live lines, so a table that lands or changes later
     // (a partial first answer, an emote added since) repairs these rows too.
+    // The table generation is read before the parse below, so these rows are
+    // never stamped newer than the table they are parsed under.
     if !windowed {
+        let table_generation = crate::services::emote_restamp::generation(&key);
         for line in &raw {
-            crate::services::emote_restamp::remember(&key, line);
+            crate::services::emote_restamp::remember(&key, line, table_generation);
         }
     }
     let parsed = IrcService::parse_historical_messages(raw.clone()).await;
