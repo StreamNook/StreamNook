@@ -100,6 +100,8 @@ import { open as openExternalUrl } from '@tauri-apps/plugin-shell';
 import { LIVE_BUTTON_HTML, paintLiveButton, type LiveButtonState } from '../utils/liveButton';
 import { setActiveVideo } from '../utils/activeVideo';
 import { isWindowHidden } from '../utils/windowVisibility';
+import { clearPauseIntent, createPausePark, heldPause, notePauseIntent, type PausePark } from '../utils/pausePark';
+import { followLiveAfterResync } from '../utils/liveResync';
 import { recognizeNowPlaying, announceSong } from '../utils/songId';
 import {
   ignoresPlayerMouse,
@@ -187,6 +189,12 @@ function rememberLLCushion(channel: string | undefined, cushion: number, provide
   } catch {
     /* storage full/blocked: the session keeps its in-memory value */
   }
+}
+
+/** The pause intent key for the stream on screen. */
+function liveKeyNow(): string | null {
+  const s = useAppStore.getState().currentStream;
+  return s ? makeKey(streamProvider(s), s.user_login ?? s.user_name ?? '') : null;
 }
 
 const VideoPlayer = () => {
@@ -296,6 +304,11 @@ const VideoPlayer = () => {
   isAutoSwitchingRef.current = isAutoSwitching;
   const isLiveRef = useRef<boolean>(true);
   const userInitiatedPauseRef = useRef<boolean>(false);
+  // Stops the paused player's downloads and says how a play resumes
+  // (utils/pausePark.ts). One per hls.js instance.
+  const pauseParkRef = useRef<PausePark | null>(null);
+  // Cancels a running follow to the live edge after a long pause.
+  const resyncStopRef = useRef<(() => void) | null>(null);
   const [availableQualities, setAvailableQualities] = useState<string[]>([]);
   // Tracked as STATE (not just the playerRef) so the quality-menu effect
   // re-runs the moment the player is created. The quality list now resolves
@@ -855,6 +868,8 @@ const VideoPlayer = () => {
   // low-latency watchdog must not "recover" them to the edge.
   const deliberateBehindRef = useRef(false);
   const updateLiveTimeDisplay = useCallback(() => {
+    // This frame ran; a wake may ask for the next one.
+    progressUpdateIntervalRef.current = null;
     const video = videoRef.current;
     const container = containerRef.current;
     if (!video || !container || !isLiveRef.current) return;
@@ -935,7 +950,7 @@ const VideoPlayer = () => {
         // Buffering, a swap in flight, or the recording: not at the edge in
         // any sense the button should claim.
         const store = useAppStore.getState();
-        const atEdge = nextAtLive && !store.liveRewind && !store.isRestartingStream && !bufferingRef.current;
+        const atEdge = nextAtLive && !video.paused && !store.liveRewind && !store.isRestartingStream && !bufferingRef.current;
         let nextState: LiveButtonState = atEdge ? 'live' : 'behind';
         if (atEdge) catchingUpUntilRef.current = 0;
         else if (catchingUpUntilRef.current > now) nextState = 'catching-up';
@@ -962,8 +977,10 @@ const VideoPlayer = () => {
       }
     }
 
-    // Continue the animation loop
-    if (isLiveRef.current) {
+    // Continue the animation loop. A paused player's readout and button do not
+    // change until it plays or seeks, so the loop sleeps until the video's
+    // play, pause, seek or timeupdate wakes it (see wakeLiveTime).
+    if (isLiveRef.current && !(video.paused && !video.seeking)) {
       progressUpdateIntervalRef.current = requestAnimationFrame(updateLiveTimeDisplay);
     }
   }, []);
@@ -1304,6 +1321,33 @@ const VideoPlayer = () => {
       (hls as unknown as { __snPathHint?: string }).__snPathHint = livePath;
 
       hlsRef.current = hls;
+      // A paused live player stops downloading a moment into the pause; a play
+      // resumes loading, and past the live window also moves to the edge. A
+      // VOD keeps no live pause (it shares its channel's key).
+      pauseParkRef.current?.dispose();
+      resyncStopRef.current?.();
+      resyncStopRef.current = null;
+      if (isVodPlayback) clearPauseIntent('main');
+      pauseParkRef.current = isVodPlayback
+        ? null
+        : createPausePark({
+            stopLoad: () => hls.stopLoad(),
+            startLoad: () => hls.startLoad(),
+            stillPaused: () => hlsRef.current === hls && video.paused,
+            log: (m) => Logger.warn(`[Player] ${m}`),
+          });
+      // The viewer paused this channel before this player was built (a
+      // restart, an ad pivot, a quality change), or it is their own channel:
+      // stay on the frame with loading stopped and say so to the earning gate.
+      // True when it held.
+      const holdHeldPause = (): boolean => {
+        const held = isVodPlayback ? null : heldPause('main', liveKeyNow());
+        if (!held) return false;
+        invoke('report_player_state', { state: 'paused' }).catch(() => {});
+        pauseParkRef.current?.paused(held.at);
+        Logger.warn('[Player] stays paused: paused before this player was built');
+        return true;
+      };
       // Dev bundles expose the live hls.js instance beside the store
       // (`window.__snStore`, main.tsx) so a CDP session can read latency,
       // buffer and playing date on every path without the recorder.
@@ -1684,12 +1728,27 @@ const VideoPlayer = () => {
           // Listen for Plyr events
           player.on('play', () => {
             userInitiatedPauseRef.current = false;
+            clearPauseIntent('main');
           });
 
           player.on('pause', () => {
             setTimeout(() => {
               if (video.paused) {
                 userInitiatedPauseRef.current = true;
+                // The viewer's live pause outlives a rebuild of this channel's
+                // player. A rebuild pauses the element too, but it destroys this
+                // Plyr and clears the ref first, and a restart says so in the
+                // store; neither pause is the viewer's.
+                const key = liveKeyNow();
+                if (
+                  playerRef.current === player &&
+                  isLiveRef.current &&
+                  key &&
+                  !video.ended &&
+                  !useAppStore.getState().isRestartingStream
+                ) {
+                  notePauseIntent('main', key);
+                }
               }
             }, 50);
           });
@@ -1735,6 +1794,7 @@ const VideoPlayer = () => {
             Logger.debug(
               `[HLS] Level loaded (LL) — starting playback at ${video.currentTime.toFixed(2)}`,
             );
+            if (holdHeldPause()) return;
             video.play().catch(() => {
               video.muted = true;
               video.play().catch(() => Logger.debug('[HLS] LL muted autoplay also failed'));
@@ -1846,7 +1906,7 @@ const VideoPlayer = () => {
             }
 
             // Try to recover by seeking slightly forward if video is paused
-            if (video.paused && !userInitiatedPauseRef.current) {
+            if (video.paused && !userInitiatedPauseRef.current && !heldPause('main', liveKeyNow())) {
               Logger.debug('[HLS] Video is paused due to stall, attempting to resume playback');
               video.play().catch(e => Logger.debug('[HLS] Resume play failed:', e));
             }
@@ -2116,6 +2176,7 @@ const VideoPlayer = () => {
           video.currentTime = target;
         }
 
+        if (holdHeldPause()) return;
         Logger.debug(`[HLS] Buffer gate cleared: ${depth.toFixed(1)}s buffered, edge ${bufEnd.toFixed(1)}, snap to ${target.toFixed(1)} — starting playback`);
         video.play().catch(e => {
           Logger.debug('[HLS] Autoplay failed:', e);
@@ -2129,6 +2190,7 @@ const VideoPlayer = () => {
         bufferGateTimeoutRef.current = setTimeout(() => {
           if (!playStarted && currentSettings.autoplay) {
             playStarted = true;
+            if (holdHeldPause()) return;
             Logger.debug('[HLS] Buffer gate timeout — starting playback');
             video.play().catch(() => {});
           }
@@ -2305,6 +2367,33 @@ const VideoPlayer = () => {
         video.addEventListener('playing', () => stalls.end(), opts);
         video.addEventListener('pause', () => stalls.cancel(), opts);
         video.addEventListener('seeking', () => stalls.cancel(), opts);
+        // The park arms on a pause after this player played. A rebuild's own
+        // teardown pause lands before that and must not stop the new player
+        // while it waits to start; a held pause arms it at the autoplay point.
+        let playedHere = false;
+        video.addEventListener('playing', () => {
+          playedHere = true;
+        }, opts);
+        video.addEventListener('pause', () => {
+          if (!playedHere || video.ended || useAppStore.getState().isRestartingStream) return;
+          pauseParkRef.current?.paused();
+        }, opts);
+        video.addEventListener('play', () => {
+          if (pauseParkRef.current?.play() !== 'resync') return;
+          clearPauseIntent('main');
+          Logger.warn('[Player] paused past the live window; loading again from the live edge');
+          resyncStopRef.current?.();
+          resyncStopRef.current = followLiveAfterResync(
+            hls,
+            video,
+            () => {
+              if (hlsRef.current !== hls) return;
+              Logger.warn('[Player] no video after the resync; restarting the stream');
+              void useAppStore.getState().restartStream({ quiet: true });
+            },
+            (m) => Logger.info(`[Player] ${m}`),
+          );
+        }, opts);
         linkReportRef.current = { stalls, listeners };
       }
 
@@ -2422,6 +2511,8 @@ const VideoPlayer = () => {
   }, [isRestartingStream]);
 
   useEffect(() => {
+    // The offline room plays nothing live: no pause to keep.
+    if (streamUrl === 'offline') clearPauseIntent('main');
     const videoElement = videoRef.current;
     if (!videoElement || !streamUrl) return;
 
@@ -2429,6 +2520,15 @@ const VideoPlayer = () => {
     progressUpdateIntervalRef.current = requestAnimationFrame(updateLiveTimeDisplay);
 
     const video = videoElement;
+
+    // Wakes the readout loop, which sleeps while the player is paused.
+    const wakeLiveTime = () => {
+      if (progressUpdateIntervalRef.current !== null) return;
+      liveTextComputedAtRef.current = 0;
+      progressUpdateIntervalRef.current = requestAnimationFrame(updateLiveTimeDisplay);
+    };
+    const wakeEvents = ['play', 'pause', 'seeking', 'seeked', 'timeupdate'] as const;
+    for (const ev of wakeEvents) video.addEventListener(ev, wakeLiveTime);
 
     // Deferred-recreate timeout id for the stream-swap path. Held in an
     // effect-scoped variable (not a partial early-return cleanup) so the SINGLE
@@ -2500,6 +2600,12 @@ const VideoPlayer = () => {
 
       // Close any active LL diagnostic recording.
       stopLLDiagnostics();
+
+      for (const ev of wakeEvents) videoElement.removeEventListener(ev, wakeLiveTime);
+      pauseParkRef.current?.dispose();
+      pauseParkRef.current = null;
+      resyncStopRef.current?.();
+      resyncStopRef.current = null;
 
       // Destroy HLS.js instance
       if (hlsRef.current) {
