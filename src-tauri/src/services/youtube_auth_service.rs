@@ -332,6 +332,12 @@ impl Identity {
     }
 }
 
+/// The channel an identity stands for, owned, so two reads compare.
+fn channel_of(id: &Identity) -> (String, String) {
+    let (index, page) = id.effective();
+    (index.to_string(), page.to_string())
+}
+
 /// The identity currently stored on the session.
 fn stored_identity() -> Identity {
     session_cell()
@@ -804,6 +810,10 @@ fn note_handle(sess: &mut YouTubeSession, v: &serde_json::Value) -> bool {
 }
 
 async fn fetch_account_name() -> Option<String> {
+    // Which channel this request speaks for. A switch while it is in flight
+    // resets the session's channel fields; an answer for the old channel
+    // must not fill them back in.
+    let asked = channel_of(&stored_identity());
     let headers = auth_headers()?;
     let body = serde_json::json!({
         "context": { "client": { "clientName": "WEB", "clientVersion": "2.20240101.00.00", "hl": "en", "gl": "US" } }
@@ -830,7 +840,7 @@ async fn fetch_account_name() -> Option<String> {
     // Same for the channel id, which rides in the same response and is what
     // YouTube chat identifies this member by.
     // Only a signed-in answer can say "this account has no channel".
-    if menu_proves_sign_in(&v) && !channel_id_checked() {
+    if menu_proves_sign_in(&v) && !channel_id_checked() && channel_of(&stored_identity()) == asked {
         let found = find_account_channel_id(&v);
         match &found {
             Some((id, path)) => log::info!("[YouTube] account channel id {id} via {path}"),
@@ -874,10 +884,11 @@ async fn fetch_account_name() -> Option<String> {
     }
     // The handle rides in the same response; it is what chat names this
     // account by.
+    let same_channel = channel_of(&stored_identity()) == asked;
     let mut handled = None;
     if let Ok(mut s) = session_cell().lock() {
         if let Some(sess) = s.as_mut() {
-            if note_handle(sess, &v) {
+            if same_channel && note_handle(sess, &v) {
                 handled = Some(sess.clone());
             }
         }
@@ -916,7 +927,8 @@ pub async fn account_identity() -> (Option<String>, Option<String>) {
         return (Some(name), Some(avatar));
     }
     // Populates the picture as a side effect and caches the name.
-    let name = account_name_lazy_uncached().await;
+    // A failed or signed-out read keeps the name already known.
+    let name = account_name_lazy_uncached().await.or_else(account_name);
     let avatar = account_avatar();
     // The picture and the name come from ONE response, so "name but no picture"
     // is a parsing miss, not a missing request, and is worth saying out loud.

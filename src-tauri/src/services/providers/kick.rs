@@ -47,6 +47,10 @@ const RECONNECT_DELAY_SECS: u64 = 3;
 
 static FALLBACK_SEQ: AtomicU64 = AtomicU64::new(0);
 
+/// Prefix of an id made up here for a row Kick sent without one. Such an id
+/// changes on every load, so it can never dedupe anything.
+pub const KICK_LOCAL_ID: &str = "kick-local-";
+
 /// What the connected account is IN a given channel. One request answers all of
 /// it, so it is fetched and cached together rather than per-question.
 #[derive(Clone, Default, serde::Serialize)]
@@ -1395,7 +1399,7 @@ fn parse_chat_message(frame: &Value, channel_key: &str) -> Option<ChatMessage> {
         .get("id")
         .and_then(|x| x.as_str())
         .map(String::from)
-        .unwrap_or_else(|| format!("kick-{}", FALLBACK_SEQ.fetch_add(1, Ordering::Relaxed)));
+        .unwrap_or_else(|| format!("{KICK_LOCAL_ID}{}", FALLBACK_SEQ.fetch_add(1, Ordering::Relaxed)));
     let timestamp = data
         .get("created_at")
         .and_then(|x| x.as_str())

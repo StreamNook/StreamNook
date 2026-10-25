@@ -474,7 +474,9 @@ pub async fn kick_chat_history(
             } else {
                 // A mention from before you opened the chat still reaches the
                 // inbox (once: it dedupes by id), with no sound or notice.
-                crate::services::mention_inbox::on_backfill(&m, &verdict);
+                if !m.id.starts_with(crate::services::providers::kick::KICK_LOCAL_ID) {
+                    crate::services::mention_inbox::on_backfill(&m, &verdict);
+                }
                 m.metadata.from_backfill = true;
                 crate::services::chat_row_view::stamp(&mut m);
                 // Patched in later if the channel's whole 7TV table is not in yet.

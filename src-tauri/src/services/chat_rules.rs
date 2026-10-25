@@ -2875,4 +2875,23 @@ mod tests {
         let json = serde_json::to_value(&other.metadata).unwrap();
         assert!(json.get("is_own").is_none());
     }
+
+    #[test]
+    fn a_youtube_account_without_a_handle_names_nobody() {
+        let _own = ChatRules::own_identity_test_lock();
+        let _reset = PlatformReset::new();
+        ChatRules::set_own_identity("brandon", "999");
+        ChatRules::set_platform_identity("youtube", "UCsntester", "", "");
+        let rules = rules_from("{}", "{}", "{}");
+        let mut m = on("youtube", "@bob", "UCbob", "i love gaming");
+        eval_with(&rules, &mut m);
+        assert!(!m.metadata.is_mentioned);
+        // Twitch names still count there, and our own row is still ours.
+        let mut m = on("youtube", "@bob", "UCbob", "@brandon hi");
+        eval_with(&rules, &mut m);
+        assert!(m.metadata.is_mentioned);
+        let mut m = on("youtube", "@me", "UCsntester", "@brandon test");
+        eval_with(&rules, &mut m);
+        assert!(!m.metadata.is_mentioned && m.metadata.is_own);
+    }
 }

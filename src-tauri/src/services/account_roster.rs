@@ -106,8 +106,16 @@ static EXPIRED: Lazy<Mutex<HashSet<&'static str>>> = Lazy::new(|| Mutex::new(Has
 static LAST_SENT: Lazy<tokio::sync::Mutex<Option<AccountRoster>>> =
     Lazy::new(|| tokio::sync::Mutex::new(None));
 
-/// Identity retries run since the roster last fully resolved (see `retry_if_unresolved`).
+/// Identity retries run since the roster last fully resolved; it sets the cadence.
 static RETRIES: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// Roster builds are numbered as they start; only a build newer than the
+/// last one followed may set the chat identities, so an older build that
+/// finishes late can never undo a sign-out (or a sign-in) a newer one saw.
+static BUILD_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static FOLLOWED_GEN: std::sync::Mutex<u64> = std::sync::Mutex::new(0);
+/// One identity retry timer at a time.
+static RETRY_PENDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn static_id(provider: &str) -> Option<&'static str> {
     match provider {
@@ -324,9 +332,9 @@ pub fn notify() {
     tauri::async_runtime::spawn(async move {
         use tauri::Emitter;
         let mut last = LAST_SENT.lock().await;
+        let gen = next_gen();
         let roster = build().await;
-        follow_chat_identities(&roster);
-        retry_if_unresolved(&roster);
+        follow_if_newest(gen, &roster);
         // Claims are reported from every build (they dedupe on their own), so a
         // retry after a cooldown goes out even when the roster did not change.
         crate::services::linked_accounts::on_roster(&roster);
@@ -345,15 +353,36 @@ pub fn notify() {
     });
 }
 
-/// Build the roster and follow its chat identities, one build at a time
-/// with `notify`, so an older build can never overwrite a newer one's
-/// identities (a sign-out landing while a slow build is in flight).
+/// Build the roster and follow its chat identities. Builds run side by
+/// side; the newest one to start decides (see `BUILD_GEN`).
 pub async fn build_followed() -> AccountRoster {
-    let _turn = LAST_SENT.lock().await;
+    let gen = next_gen();
     let roster = build().await;
-    follow_chat_identities(&roster);
-    retry_if_unresolved(&roster);
+    follow_if_newest(gen, &roster);
     roster
+}
+
+fn next_gen() -> u64 {
+    BUILD_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1
+}
+
+/// Whether build `gen` is newer than the last one followed, recording it
+/// if so. Pure apart from the cell it is handed.
+fn take_if_newer(followed: &mut u64, gen: u64) -> bool {
+    if gen > *followed {
+        *followed = gen;
+        true
+    } else {
+        false
+    }
+}
+
+fn follow_if_newest(gen: u64, roster: &AccountRoster) {
+    let newest = FOLLOWED_GEN.lock().map(|mut f| take_if_newer(&mut f, gen)).unwrap_or(false);
+    if newest {
+        follow_chat_identities(roster);
+        retry_if_unresolved(roster);
+    }
 }
 
 /// The chat identity each other platform's row stands for, as
@@ -372,12 +401,15 @@ fn identities_for(
             let name = account.name.clone().unwrap_or_default();
             let handle = (if id == "youtube" { youtube_handle.clone() } else { account.handle.clone() })
                 .filter(|h| !h.trim().is_empty());
-            // YouTube chat names people by @handle only; a channel title
-            // like "Gaming" would match ordinary words, so it is never a
-            // display name there.
+            // YouTube chat names people by @handle only, and a YouTube title
+            // or TikTok nickname is free text ("Gaming", "Nick") that would
+            // match ordinary words, so neither is ever a mention name. With no
+            // YouTube handle the id still marks your rows and replies; the
+            // Twitch names count for mentions, as they did before.
             let (login, display) = match (id, handle) {
                 ("youtube", Some(h)) => (h, String::new()),
-                ("youtube", None) => (name, String::new()),
+                ("youtube", None) => (String::new(), String::new()),
+                ("tiktok", Some(h)) => (h, String::new()),
                 (_, Some(h)) => (h, name),
                 (_, None) => (name.clone(), name),
             };
@@ -390,7 +422,12 @@ fn identities_for(
 /// reply to your Kick message or an `@` of your YouTube handle counts as
 /// yours.
 pub fn follow_chat_identities(roster: &AccountRoster) {
-    let youtube_handle = crate::services::youtube_auth_service::account_handle();
+    follow_with(roster, crate::services::youtube_auth_service::account_handle());
+}
+
+/// `follow_chat_identities` with the YouTube handle already read, so tests
+/// never reach the real credential store.
+fn follow_with(roster: &AccountRoster, youtube_handle: Option<String>) {
     for (id, user_id, login, display) in identities_for(roster, youtube_handle) {
         crate::services::chat_rules::ChatRules::set_platform_identity(id, &user_id, &login, &display);
     }
@@ -406,32 +443,37 @@ fn unresolved(roster: &AccountRoster) -> bool {
     })
 }
 
-/// When to ask again after the `n`th retry: 30 s, 2 min, 10 min, then never.
-fn retry_delay(n: u8) -> Option<std::time::Duration> {
-    match n {
-        0 => Some(30),
-        1 => Some(120),
-        2 => Some(600),
-        _ => None,
-    }
-    .map(std::time::Duration::from_secs)
+/// When to ask again after the `n`th retry: 30 s, 2 min, then every 10 min
+/// for as long as a connected account stays unresolved.
+fn retry_delay(n: u8) -> std::time::Duration {
+    std::time::Duration::from_secs(match n {
+        0 => 30,
+        1 => 120,
+        _ => 600,
+    })
 }
 
-/// Nothing else rebuilds the roster after a lookup failed, so ask again a
-/// few times; a fully resolved roster resets the count.
+/// Nothing else rebuilds the roster after a lookup failed, so keep asking
+/// (one timer at a time) until it resolves; a resolved roster resets the
+/// cadence.
 fn retry_if_unresolved(roster: &AccountRoster) {
     use std::sync::atomic::Ordering;
     if !unresolved(roster) {
         RETRIES.store(0, Ordering::Relaxed);
         return;
     }
-    let n = RETRIES.fetch_add(1, Ordering::Relaxed);
-    if let Some(delay) = retry_delay(n) {
-        tauri::async_runtime::spawn(async move {
-            tokio::time::sleep(delay).await;
-            notify();
-        });
+    if RETRY_PENDING.swap(true, Ordering::AcqRel) {
+        return;
     }
+    let n = RETRIES
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| Some(n.saturating_add(1)))
+        .unwrap_or(u8::MAX);
+    let delay = retry_delay(n);
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(delay).await;
+        RETRY_PENDING.store(false, Ordering::Release);
+        notify();
+    });
 }
 
 #[cfg(test)]
@@ -540,10 +582,10 @@ mod tests {
         assert_eq!(ids[0], ("kick", "5550001".into(), "SnKickTester".into(), "SnKickTester".into()));
         // YouTube: the handle, and never the channel title as a display name.
         assert_eq!(ids[1], ("youtube", "UCme".into(), "@sntester".into(), String::new()));
-        assert_eq!(ids[2], ("tiktok", "70010001".into(), "sntiktoker".into(), "Nick".into()));
-        // No handle yet: the title is the login, still no display name.
+        assert_eq!(ids[2], ("tiktok", "70010001".into(), "sntiktoker".into(), String::new()));
+        // No handle: no YouTube mention name at all (the id still marks your rows).
         let ids = identities_for(&roster, None);
-        assert_eq!(ids[1], ("youtube", "UCme".into(), "Gaming".into(), String::new()));
+        assert_eq!(ids[1], ("youtube", "UCme".into(), String::new(), String::new()));
     }
 
     #[test]
@@ -558,12 +600,12 @@ mod tests {
     fn following_sets_and_clears_the_chat_identities() {
         let _own = crate::services::chat_rules::ChatRules::own_identity_test_lock();
         let _reset = crate::services::chat_rules::PlatformReset::new();
-        follow_chat_identities(&roster_of(vec![connected("kick", Some("SnKickTester"), Some("5550001"), None)]));
+        follow_with(&roster_of(vec![connected("kick", Some("SnKickTester"), Some("5550001"), None)]), None);
         assert_eq!(
             crate::services::chat_rules::ChatRules::platform_owners().first().map(String::as_str),
             Some("kick-5550001")
         );
-        follow_chat_identities(&roster_of(vec![empty("kick", AccountStatus::NotConnected)]));
+        follow_with(&roster_of(vec![empty("kick", AccountStatus::NotConnected)]), None);
         assert!(crate::services::chat_rules::ChatRules::platform_owners().is_empty());
     }
 
@@ -574,8 +616,20 @@ mod tests {
         assert!(unresolved(&roster_of(vec![connected("youtube", None, Some("UCme"), None)])));
         assert!(!unresolved(&roster_of(vec![connected("youtube", Some("A"), None, None)])));
         assert!(!unresolved(&roster_of(vec![empty("kick", AccountStatus::Expired)])));
-        assert_eq!(retry_delay(0), Some(std::time::Duration::from_secs(30)));
-        assert_eq!(retry_delay(2), Some(std::time::Duration::from_secs(600)));
-        assert_eq!(retry_delay(3), None);
+        assert_eq!(retry_delay(0), std::time::Duration::from_secs(30));
+        assert_eq!(retry_delay(1), std::time::Duration::from_secs(120));
+        assert_eq!(retry_delay(2), std::time::Duration::from_secs(600));
+        assert_eq!(retry_delay(200), std::time::Duration::from_secs(600));
+    }
+
+    #[test]
+    fn only_a_newer_build_follows() {
+        let mut followed = 0;
+        assert!(take_if_newer(&mut followed, 2));
+        // Build 1 started first but finished last: it must not undo build 2.
+        assert!(!take_if_newer(&mut followed, 1));
+        assert!(!take_if_newer(&mut followed, 2));
+        assert!(take_if_newer(&mut followed, 3));
+        assert_eq!(followed, 3);
     }
 }
