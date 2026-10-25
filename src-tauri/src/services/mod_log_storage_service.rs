@@ -20,7 +20,11 @@
 // A snapshot that cannot be read (locked by another process) leaves the store
 // unseeded and is never written over. Actions recorded meanwhile are appended
 // to a side file next to it, one JSON line each, and applied in order, then
-// journaled, by the next seed that can read the snapshot.
+// journaled, by the next seed that can read the snapshot. While the side file
+// exists (the journal could not take its lines yet) every later action is
+// appended to it too, after a retry of moving its lines into the journal, so it
+// only ever holds actions newer than every journal line and a replay of the
+// snapshot, then the journal, then the side file is always in order.
 
 use log::{debug, warn};
 use serde::{Deserialize, Serialize};
@@ -71,6 +75,9 @@ static SEED_LOCK: Mutex<()> = Mutex::new(());
 /// True until the session's first snapshot read starts. Only that read waits
 /// out a snapshot another process holds; later attempts read once and return.
 static FIRST_SEED_ATTEMPT: AtomicBool = AtomicBool::new(true);
+/// How many times a snapshot read has slept before reading again.
+#[cfg(test)]
+static SNAPSHOT_RETRY_SLEEPS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 fn store() -> &'static Mutex<Option<ModLogStorage>> {
     STORE.get_or_init(|| Mutex::new(None))
@@ -218,7 +225,7 @@ impl ModLogStorageService {
         }
         if !parked.is_empty() {
             debug!("[ModLogStorage] applied {} parked actions", parked.len());
-            Self::journal_parked(queue, &journal, &pending, &parked);
+            Self::journal_parked(queue, &journal, &pending);
         }
         Ok(Seeded::Ready)
     }
@@ -226,26 +233,12 @@ impl ModLogStorageService {
     /// Journal the actions just applied from the side file as ordinary lines
     /// and remove the side file once they are durable, in the journal or in a
     /// fold whose rename is proven. If the journal cannot take them, a fold
-    /// saves them instead; the side file stays until one of the two lands.
-    fn journal_parked(
-        mut queue: MutexGuard<'static, JournalQueue>,
-        journal: &Path,
-        pending: &Path,
-        parked: &[JournalOp],
-    ) {
-        let seqs: Vec<Option<u64>> = parked.iter().map(|op| journal_append(&mut queue, op)).collect();
-        let last = seqs.iter().flatten().max().copied();
-        let durable = match last {
-            Some(seq) if seqs.iter().all(Option::is_some) => {
-                wait_durable(&JOURNAL_LOCK, &JOURNAL_DONE, journal, queue, seq, commit_lines).is_ok()
-            }
-            _ => {
-                drop(queue);
-                false
-            }
-        };
-        if durable {
-            remove_pending(pending);
+    /// saves them instead; the side file stays, and takes every later action,
+    /// until one of the two lands.
+    fn journal_parked(queue: MutexGuard<'static, JournalQueue>, journal: &Path, pending: &Path) {
+        let (queue, migrated) = migrate_pending(queue, journal, pending);
+        drop(queue);
+        if migrated {
             return;
         }
         warn!("[ModLogStorage] parked actions not journaled, the next fold saves them");
@@ -382,19 +375,28 @@ impl ModLogStorageService {
         if Self::seed(&resolve_path, Some(&parked))? == Seeded::Parked {
             return Ok(parked_entry);
         }
-        let mut queue = JOURNAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let queue = JOURNAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (mut queue, side_file) = settle_pending(queue);
         let channel_key = key.clone();
         let (shown, changed) = Self::with_seeded(move |storage| {
             merge_into(storage.channels.entry(key).or_default(), entry, now_ms)
         })?;
         if changed {
-            let seq = journal_append(&mut queue, &JournalOp::Put { channel: channel_key, entry: shown.clone() });
-            mark_dirty();
-            if let (Some(seq), Some(path)) = (seq, JOURNAL_PATH.get()) {
-                // The action is in the store and the store is dirty, so a journal
-                // that cannot be written only costs the crash window: the fold
-                // saves the action, and the caller is not told it failed.
-                wait_or_fold(&JOURNAL_LOCK, &JOURNAL_DONE, path, queue, seq, commit_lines, Self::flush_now);
+            let op = JournalOp::Put { channel: channel_key, entry: shown.clone() };
+            if let Some(side_file) = side_file {
+                // Older actions still wait in the side file, so this one goes
+                // behind them, not into the journal ahead of them.
+                keep_in_pending(&side_file, &op);
+                mark_dirty();
+            } else {
+                let seq = journal_append(&mut queue, &op);
+                mark_dirty();
+                if let (Some(seq), Some(path)) = (seq, JOURNAL_PATH.get()) {
+                    // The action is in the store and the store is dirty, so a journal
+                    // that cannot be written only costs the crash window: the fold
+                    // saves the action, and the caller is not told it failed.
+                    wait_or_fold(&JOURNAL_LOCK, &JOURNAL_DONE, path, queue, seq, commit_lines, Self::flush_now);
+                }
             }
         }
         Ok(shown)
@@ -418,14 +420,21 @@ impl ModLogStorageService {
         if Self::seed(&resolve_path, Some(&parked))? == Seeded::Parked {
             return Ok(());
         }
-        let mut queue = JOURNAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let queue = JOURNAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (mut queue, side_file) = settle_pending(queue);
         let removed = Self::with_seeded(|storage| storage.channels.remove(&key).is_some())?;
         if removed {
             debug!("[ModLogStorage] cleared {}", key);
-            let seq = journal_append(&mut queue, &JournalOp::Clear { channel: key });
-            mark_dirty();
-            if let (Some(seq), Some(path)) = (seq, JOURNAL_PATH.get()) {
-                wait_or_fold(&JOURNAL_LOCK, &JOURNAL_DONE, path, queue, seq, commit_lines, Self::flush_now);
+            let op = JournalOp::Clear { channel: key };
+            if let Some(side_file) = side_file {
+                keep_in_pending(&side_file, &op);
+                mark_dirty();
+            } else {
+                let seq = journal_append(&mut queue, &op);
+                mark_dirty();
+                if let (Some(seq), Some(path)) = (seq, JOURNAL_PATH.get()) {
+                    wait_or_fold(&JOURNAL_LOCK, &JOURNAL_DONE, path, queue, seq, commit_lines, Self::flush_now);
+                }
             }
         }
         Ok(())
@@ -580,8 +589,8 @@ fn dir_sync_unsupported(error: &std::io::Error) -> bool {
 }
 
 /// Remove the side file of parked actions once the store holds them durably.
-/// An absent file is the normal case.
-fn remove_pending(pending: &Path) {
+/// An absent file is the normal case. Returns whether the file is gone.
+fn remove_pending(pending: &Path) -> bool {
     match fs::remove_file(pending) {
         // The removal itself has to survive a power loss, or the side file
         // would be applied again over lines that came after it.
@@ -592,12 +601,122 @@ fn remove_pending(pending: &Path) {
                     warn!("[ModLogStorage] could not sync the folder after removing the side file: {}", e);
                 }
             }
+            true
         }
         #[cfg(windows)]
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => warn!("[ModLogStorage] could not remove the side file of parked actions: {}", e),
+        Ok(()) => true,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
+        Err(e) => {
+            warn!("[ModLogStorage] could not remove the side file of parked actions: {}", e);
+            false
+        }
     }
+}
+
+/// Whether the side file may still hold actions. Only a file known to be absent
+/// counts as gone: a file that cannot even be inspected is treated as there.
+fn pending_present(pending: &Path) -> bool {
+    !matches!(fs::metadata(pending), Err(e) if e.kind() == std::io::ErrorKind::NotFound)
+}
+
+/// Append an action recorded after the seed to the side file. The store holds
+/// the action and is dirty, so a failed append only costs the crash window: the
+/// fold saves the action, and the caller is not told it failed.
+fn keep_in_pending(pending: &Path, op: &JournalOp) {
+    if let Err(e) = append_pending(pending, op) {
+        warn!("[ModLogStorage] could not keep the action in the side file, the next fold saves it: {}", e);
+    }
+}
+
+/// With `JOURNAL_LOCK` held, move the side file's actions into the journal if a
+/// side file is left from the seed. Returns the lock and, while the side file
+/// is still there, its path: the caller appends its action to it, not to the
+/// journal, so the journal never gets a line newer than an action the side file
+/// still holds.
+fn settle_pending(
+    queue: MutexGuard<'static, JournalQueue>,
+) -> (MutexGuard<'static, JournalQueue>, Option<PathBuf>) {
+    let (Some(snapshot), Some(journal)) = (STORE_PATH.get(), JOURNAL_PATH.get()) else {
+        return (queue, None);
+    };
+    let pending = snapshot.with_file_name(MOD_LOGS_PENDING);
+    if !pending_present(&pending) {
+        return (queue, None);
+    }
+    let (queue, migrated) = migrate_pending(queue, journal, &pending);
+    if migrated {
+        (queue, None)
+    } else {
+        (queue, Some(pending))
+    }
+}
+
+/// Journal every action in the side file as ordinary lines, in file order, and
+/// remove the side file once those lines are on disk. The store already holds
+/// these actions (the seed applied them, and later ones were applied as they
+/// were appended), so only the journal and the file change. Returns the lock
+/// and whether the side file is gone.
+///
+/// The lock is held through the write, so nothing is appended to the side file
+/// between reading it and removing it. If the write fails the side file stays,
+/// and the lines of the batch that did reach the journal stay too: a replay
+/// applies the side file after the journal, a put replaces the entry with the
+/// same id and a clear is idempotent, so applying them twice changes nothing.
+/// The failed attempt's own lines leave the queue, so a journal that stays
+/// broken does not collect them again on every retry.
+fn migrate_pending(
+    mut queue: MutexGuard<'static, JournalQueue>,
+    journal: &Path,
+    pending: &Path,
+) -> (MutexGuard<'static, JournalQueue>, bool) {
+    // A write already in flight finishes first; no new one can start while
+    // this holds the lock.
+    while queue.writing {
+        queue = JOURNAL_DONE.wait(queue).unwrap_or_else(|e| e.into_inner());
+    }
+    let ops = match read_pending(pending) {
+        Ok(ops) => ops,
+        Err(e) => {
+            warn!("[ModLogStorage] {}", e);
+            return (queue, false);
+        }
+    };
+    if ops.is_empty() {
+        let gone = remove_pending(pending);
+        return (queue, gone);
+    }
+    let queued = queue.pending.len();
+    if ops.iter().any(|op| journal_append(&mut queue, op).is_none()) {
+        queue.pending.truncate(queued);
+        return (queue, false);
+    }
+    let mut batch = std::mem::take(&mut queue.pending);
+    if queue.torn {
+        if let Some((_, first)) = batch.first_mut() {
+            if !first.starts_with('\n') {
+                first.insert(0, '\n');
+            }
+        }
+    }
+    let written = commit_lines(journal, &batch);
+    let migrated = match &written {
+        Ok(()) => {
+            queue.torn = false;
+            if let Some((last, _)) = batch.last() {
+                queue.durable_seq = queue.durable_seq.max(*last);
+            }
+            remove_pending(pending)
+        }
+        Err(e) => {
+            warn!("[ModLogStorage] could not journal the parked actions: {}", e);
+            queue.torn = true;
+            batch.truncate(queued);
+            queue.pending = batch;
+            false
+        }
+    };
+    JOURNAL_DONE.notify_all();
+    (queue, migrated)
 }
 
 /// Append one parked action to the side file and flush it, cutting a torn last
@@ -846,6 +965,8 @@ fn read_snapshot_bytes(snapshot: &Path) -> Result<Option<Vec<u8>>, String> {
             }
             Err(_) => {
                 retries_left -= 1;
+                #[cfg(test)]
+                SNAPSHOT_RETRY_SLEEPS.fetch_add(1, Ordering::SeqCst);
                 std::thread::sleep(SNAPSHOT_READ_RETRY_AFTER);
             }
         }
@@ -1699,9 +1820,9 @@ mod journal_tests {
         assert!(shown.get("details").is_none());
         ModLogStorageService::clear_channel_at(|| Ok(snapshot.clone()), "Chan").unwrap();
         // Only the session's first seed attempt waits on the lock.
-        let started = std::time::Instant::now();
+        let sleeps_before = SNAPSHOT_RETRY_SLEEPS.load(Ordering::SeqCst);
         ModLogStorageService::record_at(|| Ok(snapshot.clone()), "Other", action("y1")).unwrap();
-        assert!(started.elapsed() < std::time::Duration::from_millis(10));
+        assert_eq!(SNAPSHOT_RETRY_SLEEPS.load(Ordering::SeqCst), sleeps_before);
         assert!(store().lock().unwrap_or_else(|e| e.into_inner()).is_none());
         assert!(!DIRTY.load(Ordering::Acquire));
         let pending = snapshot.with_file_name(MOD_LOGS_PENDING);
@@ -1719,6 +1840,58 @@ mod journal_tests {
         assert!(!restored.channels.contains_key("chan"));
         assert_eq!(restored.channels["other"][0]["id"], "y1");
         assert_eq!(restored.journal_seq, 3);
+    }
+
+    #[test]
+    fn while_the_side_file_exists_every_action_goes_to_it_in_order_until_it_is_journaled() {
+        let _globals = GLOBALS_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (snapshot, journal) = temp_paths(GLOBALS_FOLDER);
+        let _cleanup = TempDirGuard(snapshot.parent().unwrap().to_path_buf());
+        reset_globals();
+        let _restore = StoreRestore(store().lock().unwrap_or_else(|e| e.into_inner()).take());
+        FIRST_SEED_ATTEMPT.store(false, Ordering::SeqCst);
+        let pending = snapshot.with_file_name(MOD_LOGS_PENDING);
+        let fold_tmp = snapshot.with_extension("json.tmp");
+        let action = |id: &str| {
+            json!({ "id": id, "action": "ban", "channel": "chan", "target_user_name": id,
+                "timestamp": "2026-10-24T00:00:00Z", "source": "irc" })
+        };
+        let ids_of = |storage: &ModLogStorage| -> Vec<serde_json::Value> {
+            storage.channels["chan"].iter().map(|e| e["id"].clone()).collect()
+        };
+        let pending_lines = || fs::read_to_string(&pending).unwrap().lines().count();
+        // A folder where the snapshot belongs cannot be read: x1 is parked.
+        fs::create_dir(&snapshot).unwrap();
+        ModLogStorageService::record_at(|| Ok(snapshot.clone()), "chan", action("x1")).unwrap();
+        assert!(store().lock().unwrap_or_else(|e| e.into_inner()).is_none());
+        assert_eq!(pending_lines(), 1);
+        // The snapshot reads now, but neither the journal nor a fold can write:
+        // the seed applies x1, cannot journal it, and x2 goes behind x1 in the
+        // side file instead of into the journal.
+        fs::remove_dir(&snapshot).unwrap();
+        fs::create_dir(&journal).unwrap();
+        fs::create_dir(&fold_tmp).unwrap();
+        ModLogStorageService::record_at(|| Ok(snapshot.clone()), "chan", action("x2")).unwrap();
+        assert!(store().lock().unwrap_or_else(|e| e.into_inner()).is_some());
+        assert_eq!(pending_lines(), 2);
+        assert!(JOURNAL_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .pending
+            .iter()
+            .all(|(_, line)| !line.contains("x2")));
+        // A crash now replays x1 then x2 from the side file, nothing older.
+        let (crashed, _) = load_storage(&snapshot, &journal).unwrap();
+        assert_eq!(ids_of(&crashed), vec![json!("x1"), json!("x2")]);
+        // Once the journal takes writes, the next action moves the side file's
+        // lines into it first, removes the file, and then goes to the journal.
+        fs::remove_dir(&journal).unwrap();
+        fs::remove_dir(&fold_tmp).unwrap();
+        ModLogStorageService::record_at(|| Ok(snapshot.clone()), "chan", action("x3")).unwrap();
+        assert!(!pending.exists());
+        let (restored, _) = load_storage(&snapshot, &journal).unwrap();
+        assert_eq!(ids_of(&restored), vec![json!("x1"), json!("x2"), json!("x3")]);
+        assert_eq!(restored.journal_seq, LAST_SEQ.load(Ordering::SeqCst));
     }
 
     #[test]
