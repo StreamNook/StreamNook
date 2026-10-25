@@ -1,12 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-type Handler = (e: { payload: { channel: string; sound: string; volume: number } }) => void;
+type Ping = { id: number; channel: string; sound: string; volume: number };
+type Handler = (e: { payload: Ping }) => void;
 
 const m = vi.hoisted(() => ({
   handler: undefined as Handler | undefined,
   unlisten: vi.fn(),
   winListen: vi.fn(),
-  invoke: vi.fn(async () => {}),
+  invoke: vi.fn(),
   globalListen: vi.fn(),
   playSound: vi.fn(),
 }));
@@ -19,6 +20,7 @@ vi.mock('@tauri-apps/api/event', () => ({ listen: m.globalListen }));
 vi.mock('../utils/notificationSound', () => ({ playSound: m.playSound }));
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
+const ping: Ping = { id: 7, channel: 'a', sound: 'boop', volume: 40 };
 
 describe('startMentionPing', () => {
   beforeEach(() => {
@@ -28,44 +30,45 @@ describe('startMentionPing', () => {
       return m.unlisten;
     });
   });
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
 
-  it('listens on this window only and tells Rust while it can play', async () => {
+  it('listens on this window only', async () => {
     const { startMentionPing } = await import('./useMentionPing');
     const stop = startMentionPing();
     await flush();
     expect(m.winListen).toHaveBeenCalledWith('chat-mention-ping', expect.any(Function));
     expect(m.globalListen).not.toHaveBeenCalled();
-    expect(m.invoke).toHaveBeenCalledWith('mention_ping_ready', { ready: true });
-    m.handler?.({ payload: { channel: 'a', sound: 'boop', volume: 40 } });
+    stop();
+    expect(m.unlisten).toHaveBeenCalledTimes(1);
+  });
+
+  it('plays a ping only when its claim is granted', async () => {
+    const { startMentionPing } = await import('./useMentionPing');
+    const stop = startMentionPing();
+    await flush();
+    m.invoke.mockResolvedValueOnce(true);
+    m.handler?.({ payload: ping });
+    await flush();
+    expect(m.invoke).toHaveBeenCalledWith('mention_ping_claim', { id: 7 });
     expect(m.playSound).toHaveBeenCalledWith('boop', 40);
+
+    m.playSound.mockClear();
+    m.invoke.mockResolvedValueOnce(false);
+    m.handler?.({ payload: { ...ping, id: 8 } });
+    await flush();
+    expect(m.playSound).not.toHaveBeenCalled();
+
+    m.invoke.mockRejectedValueOnce(new Error('no app'));
+    m.handler?.({ payload: { ...ping, id: 9 } });
+    await flush();
+    expect(m.playSound).not.toHaveBeenCalled();
     stop();
-    expect(m.unlisten).toHaveBeenCalledTimes(1);
-    expect(m.invoke).toHaveBeenLastCalledWith('mention_ping_ready', { ready: false });
   });
 
-  it('stopped before the listener lands: unlistens and never says ready', async () => {
+  it('stopped before the listener lands: unlistens at once', async () => {
     const { startMentionPing } = await import('./useMentionPing');
     const stop = startMentionPing();
     stop();
     await flush();
     expect(m.unlisten).toHaveBeenCalledTimes(1);
-    expect(m.invoke).not.toHaveBeenCalled();
-  });
-
-  it('a page going away says it stopped, and a stopped page never does', async () => {
-    const win = new EventTarget();
-    vi.stubGlobal('window', win);
-    const { startMentionPing } = await import('./useMentionPing');
-    const stop = startMentionPing();
-    await flush();
-    win.dispatchEvent(new Event('pagehide'));
-    expect(m.invoke).toHaveBeenLastCalledWith('mention_ping_ready', { ready: false });
-    stop();
-    m.invoke.mockClear();
-    win.dispatchEvent(new Event('pagehide'));
-    expect(m.invoke).not.toHaveBeenCalled();
   });
 });

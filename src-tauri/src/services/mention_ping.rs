@@ -5,10 +5,12 @@
 //! joined channel, docked and hidden ones included, so the decision lives here
 //! too: the setting, streamer mode, a per-channel cooldown and the age of the
 //! message. A message that passes becomes one small `chat-mention-ping` event
-//! to the one window that plays it (`pick_player`), which only plays the sound
-//! it names. Off, this is one read of an empty slot per mention.
+//! to every window that could play it; the first page to claim it
+//! (`mention_ping_claim`) plays the sound it names, so it plays once. Off, this
+//! is one read of an empty slot per mention.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, RwLock};
 use std::time::{Duration, Instant};
 
@@ -19,7 +21,7 @@ use tauri::{Emitter, Manager};
 use crate::models::chat_layout::ChatMessage;
 use crate::models::settings::Settings;
 
-/// The event that plays the mention sound, sent to one window.
+/// The event that plays the mention sound, sent to every window that could play it.
 pub const EVENT: &str = "chat-mention-ping";
 
 /// One channel pings at most this often: a chat that keeps @-ing you should
@@ -67,6 +69,8 @@ fn tone(sound: Option<&str>, volume: Option<u32>) -> Option<Tone> {
 
 #[derive(Clone, Debug, Serialize)]
 struct PingPayload<'a> {
+    /// What a page claims with `mention_ping_claim`.
+    id: u64,
     channel: &'a str,
     sound: &'a str,
     /// Percent of the sound's own level.
@@ -115,62 +119,59 @@ fn sent_at_ms(msg: &ChatMessage) -> Option<i64> {
 const MULTICHAT_PREFIX: &str = "multichat-";
 const OVERLAY_PREFIX: &str = "overlay-";
 
-/// Windows whose page is listening for the ping right now.
-static READY: Lazy<Mutex<BTreeSet<String>>> = Lazy::new(|| Mutex::new(BTreeSet::new()));
+/// A page claims a ping within this, or it is not news any more.
+const CLAIM_WINDOW: Duration = Duration::from_secs(3);
+/// At most this many pings wait for a claim; the cooldowns keep it near one.
+const UNCLAIMED_KEPT: usize = 8;
 
-/// A page says whether it is listening for the ping. A command rather than an
-/// event: it is never queued, and the label is the calling window's own, so a
-/// page can only speak for itself.
+static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+/// Pings sent and not claimed yet, oldest first: `(id, sent)`.
+static UNCLAIMED: Lazy<Mutex<VecDeque<(u64, Instant)>>> = Lazy::new(|| Mutex::new(VecDeque::new()));
+
+/// Every open window that could play the ping: main, each MultiChat window and
+/// each chat overlay. Closing main while a popout is open destroys it to free
+/// its memory, so any of them may be the one alive; all of them get the ping
+/// and the first to claim it plays it. With none open it goes to main, the
+/// iPhone core's only target. No window getters: they wait on the UI thread,
+/// and this runs on the chat read loop.
+fn players(labels: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut out: Vec<String> = labels
+        .into_iter()
+        .filter(|l| l == "main" || l.starts_with(MULTICHAT_PREFIX) || l.starts_with(OVERLAY_PREFIX))
+        .collect();
+    if out.is_empty() {
+        out.push("main".to_string());
+    }
+    out
+}
+
+/// Note a ping as sent and return its id.
+fn issue(now: Instant, unclaimed: &mut VecDeque<(u64, Instant)>) -> u64 {
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    unclaimed.retain(|(_, sent)| now.duration_since(*sent) < CLAIM_WINDOW);
+    while unclaimed.len() >= UNCLAIMED_KEPT {
+        unclaimed.pop_front();
+    }
+    unclaimed.push_back((id, now));
+    id
+}
+
+/// True for the first claim of a ping still within `CLAIM_WINDOW`, false for
+/// every other.
+fn take(id: u64, now: Instant, unclaimed: &mut VecDeque<(u64, Instant)>) -> bool {
+    let Some(at) = unclaimed.iter().position(|(i, _)| *i == id) else {
+        return false;
+    };
+    unclaimed
+        .remove(at)
+        .is_some_and(|(_, sent)| now.duration_since(sent) < CLAIM_WINDOW)
+}
+
+/// A page heard ping `id`. True: this page plays it. False: another page
+/// already does, or it is stale.
 #[tauri::command]
-pub fn mention_ping_ready(webview: crate::rt::Webview, ready: bool) {
-    set_ready(webview.label(), ready);
-}
-
-fn set_ready(label: &str, ready: bool) {
-    let mut set = READY.lock().unwrap_or_else(|e| e.into_inner());
-    if ready {
-        set.insert(label.to_string());
-    } else {
-        set.remove(label);
-    }
-}
-
-/// The page in `label` is gone or starting over, and a page that goes never
-/// says so itself: not listening until it says so again. Called when a window
-/// is destroyed and when a page starts loading.
-pub fn forget(label: &str) {
-    set_ready(label, false);
-}
-
-/// The one window that plays the ping, so it never plays twice, chosen among
-/// the windows whose page listens (in label order): main whenever it does, then
-/// the first MultiChat window, then the first chat overlay. Closing main while
-/// a popout is open destroys it to free its memory, which is when a popout
-/// plays. With nobody listening it stays main, the iPhone core's only target.
-fn pick_player<'a>(ready: impl IntoIterator<Item = &'a String>) -> String {
-    let mut multichat = None;
-    let mut overlay = None;
-    for label in ready {
-        if label == "main" {
-            return label.clone();
-        }
-        if multichat.is_none() && label.starts_with(MULTICHAT_PREFIX) {
-            multichat = Some(label);
-        } else if overlay.is_none() && label.starts_with(OVERLAY_PREFIX) {
-            overlay = Some(label);
-        }
-    }
-    multichat.or(overlay).map_or_else(|| "main".to_string(), String::clone)
-}
-
-/// `pick_player` over the listening windows still open. A window gone without
-/// saying so (a crash, a forced close) drops out here. No window getters: they
-/// wait on the UI thread, and this runs on the chat read loop.
-fn player(app: &crate::rt::AppHandle) -> String {
-    let open = app.webview_windows();
-    let mut ready = READY.lock().unwrap_or_else(|e| e.into_inner());
-    ready.retain(|label| open.contains_key(label));
-    pick_player(ready.iter())
+pub fn mention_ping_claim(id: u64) -> bool {
+    take(id, Instant::now(), &mut UNCLAIMED.lock().unwrap_or_else(|e| e.into_inner()))
 }
 
 /// The tone `msg`, just received live, plays, if any. Pure apart from the
@@ -236,16 +237,16 @@ pub fn on_live_message(msg: &ChatMessage, mentioned: bool, reply_to_me: bool) {
         return;
     };
     if let Some(app) = crate::services::providers::app_handle() {
-        let target = player(&app);
-        let _ = app.emit_to(
-            target.as_str(),
-            EVENT,
-            PingPayload {
-                channel: &channel,
-                sound: &tone.sound,
-                volume: tone.volume,
-            },
-        );
+        let id = issue(Instant::now(), &mut UNCLAIMED.lock().unwrap_or_else(|e| e.into_inner()));
+        let payload = PingPayload {
+            id,
+            channel: &channel,
+            sound: &tone.sound,
+            volume: tone.volume,
+        };
+        for target in players(app.webview_windows().into_keys()) {
+            let _ = app.emit_to(target.as_str(), EVENT, &payload);
+        }
     }
 }
 
@@ -361,29 +362,35 @@ mod tests {
         assert!(config_from(&s).unwrap().reply.is_none());
     }
 
-    fn labels(v: &[&str]) -> BTreeSet<String> {
-        v.iter().map(|s| s.to_string()).collect()
+    #[test]
+    fn every_window_that_can_play_gets_it_and_none_means_main() {
+        let open = ["main", "multichat-default", "overlay-a", "profile-x", "emote-palette", "multichat-w2"];
+        let mut got = players(open.iter().map(|s| s.to_string()));
+        got.sort();
+        assert_eq!(got, ["main", "multichat-default", "multichat-w2", "overlay-a"]);
+        assert_eq!(players(["profile-x".to_string()]), ["main"], "nothing that can play: main, as on the iPhone");
+        assert_eq!(players(Vec::<String>::new()), ["main"]);
     }
 
     #[test]
-    fn pick_player_main_then_multichat_then_overlay() {
-        let all = labels(&["main", "multichat-default", "overlay-a"]);
-        assert_eq!(pick_player(&all), "main", "main plays whenever its page listens");
-        let popouts = labels(&["overlay-a", "multichat-w2", "multichat-default"]);
-        assert_eq!(pick_player(&popouts), "multichat-default", "MultiChat before an overlay, first by label");
-        assert_eq!(pick_player(&labels(&["overlay-b", "overlay-a"])), "overlay-a");
-        assert_eq!(pick_player(&labels(&["profile-x"])), "main", "never a profile or plugin window");
-        assert_eq!(pick_player(&labels(&[])), "main", "nobody listening: main, as on the iPhone");
+    fn a_ping_is_claimed_once_and_only_while_fresh() {
+        let mut q = VecDeque::new();
+        let t0 = Instant::now();
+        let a = issue(t0, &mut q);
+        assert!(take(a, t0, &mut q), "the first page to claim plays it");
+        assert!(!take(a, t0, &mut q), "every other page stays quiet");
+        let b = issue(t0, &mut q);
+        assert!(!take(b, t0 + CLAIM_WINDOW, &mut q), "a claim after the window is stale");
+        assert!(!take(u64::MAX, t0, &mut q), "an id never sent");
     }
 
     #[test]
-    fn forget_drops_a_window_until_it_says_ready_again() {
-        set_ready("multichat-test-forget", true);
-        assert!(READY.lock().unwrap().contains("multichat-test-forget"));
-        forget("multichat-test-forget");
-        assert!(!READY.lock().unwrap().contains("multichat-test-forget"));
-        set_ready("multichat-test-forget", true);
-        assert!(READY.lock().unwrap().contains("multichat-test-forget"));
-        forget("multichat-test-forget");
+    fn unclaimed_pings_stay_bounded() {
+        let mut q = VecDeque::new();
+        let t0 = Instant::now();
+        for _ in 0..UNCLAIMED_KEPT * 3 {
+            issue(t0, &mut q);
+        }
+        assert_eq!(q.len(), UNCLAIMED_KEPT);
     }
 }

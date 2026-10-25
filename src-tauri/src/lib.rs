@@ -2398,7 +2398,7 @@ pub fn run() {
             set_visible_mention_rooms,
             mention_watch_pull,
             mention_push_arrived,
-            services::mention_ping::mention_ping_ready,
+            services::mention_ping::mention_ping_claim,
             // IVR account facts
             get_ivr_user_summary,
             get_ivr_subage_summary,
@@ -2708,13 +2708,6 @@ pub fn run() {
             plugins_report_stream_event,
             plugins_ui_bundle,
         ])
-        // A page that starts loading (a reload, a recreated window) is not
-        // listening for the mention ping until it says so again.
-        .on_page_load(|webview, payload| {
-            if matches!(payload.event(), tauri::webview::PageLoadEvent::Started) {
-                services::mention_ping::forget(webview.label());
-            }
-        })
         // Window-event handler. Two behaviors:
         //
         // 1. Main window close: hide to the tray instead of exiting, per the
@@ -2747,8 +2740,6 @@ pub fn run() {
 
             if let WindowEvent::Destroyed = event {
                 services::app_exit::note_window_destroyed(&label);
-                // Its page never says it stopped listening for the mention ping.
-                services::mention_ping::forget(&label);
                 // A destroyed webview never runs its React cleanup, so any
                 // chat consumer claims it still holds would pin those channels
                 // JOINed (and their IRC traffic flowing) forever. Sweep them;
