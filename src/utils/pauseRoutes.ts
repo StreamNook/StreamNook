@@ -12,8 +12,6 @@ export const CLICK_TOGGLE_DELAY_MS = 250;
 export interface PauseRouteDeps {
   /** Toggle play and pause on the player. */
   togglePlay: () => void;
-  /** Toggle fullscreen on the player. */
-  toggleFullscreen: () => void;
   /** Tell the earning gate the video paused. */
   reportPaused: () => void;
   /** Hand the pause to the pause park. */
@@ -24,14 +22,15 @@ type PauseRouteTarget = Pick<HTMLVideoElement, 'addEventListener' | 'removeEvent
 
 /**
  * Wire the element. A single click toggles play after a short hold; a double
- * click cancels that hold and toggles fullscreen, so it never blips
- * play/pause (which on a live stream forces a rebuffer). Every `pause` reports
- * and parks. Returns the detach.
+ * click only cancels that hold, so it never blips play/pause (which on a live
+ * stream forces a rebuffer). Fullscreen on a double click belongs to Plyr,
+ * which owns it on its container. Every `pause` reports and parks. Returns
+ * the detach.
  */
 export function attachPauseRoutes(video: PauseRouteTarget, deps: PauseRouteDeps): () => void {
   let clickTimer: ReturnType<typeof setTimeout> | null = null;
   const onClick = () => {
-    if (clickTimer) return; // second click of a pair: the double-click handler owns it
+    if (clickTimer) return; // second click of a pair: the double-click handler cancels it
     clickTimer = setTimeout(() => {
       clickTimer = null;
       deps.togglePlay();
@@ -42,7 +41,6 @@ export function attachPauseRoutes(video: PauseRouteTarget, deps: PauseRouteDeps)
       clearTimeout(clickTimer);
       clickTimer = null;
     }
-    deps.toggleFullscreen();
   };
   const onPause = () => {
     deps.reportPaused();

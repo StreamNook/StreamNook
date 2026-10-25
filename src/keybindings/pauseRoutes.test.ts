@@ -6,7 +6,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // own `pause` event, which reports to the earning gate and arms the park.
 
 vi.mock('../stores/AppStore', () => ({
-  useAppStore: { getState: () => ({ currentStream: { user_login: 'x' }, currentMediaType: 'live' }) },
+  useAppStore: {
+    getState: () => ({
+      currentStream: { user_login: 'x' },
+      currentMediaType: 'live',
+      followedStreams: [],
+      currentUser: null,
+      settings: {},
+    }),
+  },
 }));
 vi.mock('../stores/multiNookStore', () => ({ usemultiNookStore: { getState: () => ({}) } }));
 vi.mock('../stores/chatDockStore', () => ({
@@ -25,6 +33,7 @@ vi.mock('../utils/platform', () => ({ IS_MAC: false, IS_MOBILE: false }));
 const { registerPlayerControls } = await import('./playerControls');
 const { getBindableCommand } = await import('./commands');
 const { attachPauseRoutes, CLICK_TOGGLE_DELAY_MS } = await import('../utils/pauseRoutes');
+const { getStaticItems } = await import('../utils/commandPaletteSources');
 
 describe('pause routes', () => {
   beforeEach(() => vi.useFakeTimers());
@@ -56,7 +65,6 @@ describe('pause routes', () => {
     const video = new EventTarget();
     const deps = {
       togglePlay: vi.fn(),
-      toggleFullscreen: vi.fn(),
       reportPaused: vi.fn(),
       parkPaused: vi.fn(),
     };
@@ -80,17 +88,43 @@ describe('pause routes', () => {
     expect(deps.togglePlay).not.toHaveBeenCalled();
     vi.advanceTimersByTime(CLICK_TOGGLE_DELAY_MS);
     expect(deps.togglePlay).toHaveBeenCalledTimes(1);
-    expect(deps.toggleFullscreen).not.toHaveBeenCalled();
   });
 
-  it('a double click goes fullscreen and never toggles play', () => {
+  it('a double click cancels the pending click and never toggles play', () => {
+    // Fullscreen on a double click is Plyr's own; the route only keeps the
+    // click from turning into a play/pause blip.
     const { video, deps } = wire();
     video.dispatchEvent(new Event('click'));
     video.dispatchEvent(new Event('click'));
     video.dispatchEvent(new Event('dblclick'));
     vi.advanceTimersByTime(CLICK_TOGGLE_DELAY_MS * 2);
     expect(deps.togglePlay).not.toHaveBeenCalled();
-    expect(deps.toggleFullscreen).toHaveBeenCalledTimes(1);
+    expect(deps.reportPaused).not.toHaveBeenCalled();
+    expect(deps.parkPaused).not.toHaveBeenCalled();
+  });
+
+  it('the palette row pauses through the registered player', () => {
+    const togglePlay = vi.fn();
+    registerPlayerControls({
+      isActive: () => true,
+      getCurrentTime: () => 0,
+      togglePlay,
+      toggleMute: vi.fn(),
+      toggleFullscreen: vi.fn(),
+      volumeUp: vi.fn(),
+      volumeDown: vi.fn(),
+      seekForward: vi.fn(),
+      seekBackward: vi.fn(),
+      togglePip: vi.fn(),
+      speedUp: vi.fn(),
+      speedDown: vi.fn(),
+      goLive: vi.fn(),
+    });
+    const row = getStaticItems().find((item) => item.id === 'player.playPause');
+    expect(row).toBeDefined();
+    void row?.run();
+    expect(togglePlay).toHaveBeenCalledTimes(1);
+    registerPlayerControls(null);
   });
 
   it('detaching removes every route and drops a pending click', () => {

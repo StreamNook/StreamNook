@@ -1809,6 +1809,12 @@ const VideoPlayer = () => {
               `[HLS] Level loaded (LL) — starting playback at ${video.currentTime.toFixed(2)}`,
             );
             if (holdHeldPause()) return;
+            if (!currentSettings.autoplay) {
+              // Autoplay is off: nothing plays, and the wait arms the park so
+              // the downloads stop until the viewer presses play.
+              park?.paused();
+              return;
+            }
             video.play().catch(() => {
               video.muted = true;
               video.play().catch(() => Logger.debug('[HLS] LL muted autoplay also failed'));
@@ -2406,7 +2412,11 @@ const VideoPlayer = () => {
           park?.paused();
         };
         video.addEventListener('play', () => {
-          if (park?.play() !== 'resync') return;
+          const outcome = park?.play();
+          // Resuming at the paused frame is the viewer's place; the watchdog
+          // must not read it as a drought and snap to the edge.
+          if (outcome === 'resume') deliberateBehindRef.current = true;
+          if (outcome !== 'resync') return;
           clearPauseIntent('main');
           Logger.warn('[Player] paused past the live window; loading again from the live edge');
           resyncStopRef.current?.();
@@ -2804,8 +2814,9 @@ const VideoPlayer = () => {
 
   // The <video> element's own routes (utils/pauseRoutes.ts). Click vs
   // double-click on the video surface (live/VOD Plyr path only): a single click
-  // toggles play/pause, a double click toggles fullscreen, and the double click
-  // never blips play/pause (which on a live stream would force a rebuffer).
+  // toggles play/pause, a double click leaves fullscreen to Plyr and only
+  // cancels the pending click, so it never blips play/pause (which on a live
+  // stream would force a rebuffer).
   // Listeners live on the <video> node itself, so clicks on the controls bar and
   // the overlay buttons are unaffected. Clip playback uses native controls (no
   // Plyr); there playerRef is null and the click routes no-op, leaving native
@@ -2817,7 +2828,6 @@ const VideoPlayer = () => {
     if (!video) return;
     return attachPauseRoutes(video, {
       togglePlay: () => playerRef.current?.togglePlay(),
-      toggleFullscreen: () => playerRef.current?.fullscreen.toggle(),
       reportPaused: () => {
         invoke('report_player_state', { state: 'paused' }).catch(() => {});
       },

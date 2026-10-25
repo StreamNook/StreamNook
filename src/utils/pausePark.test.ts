@@ -6,8 +6,11 @@ import {
   clearPauseIntent,
   createPausePark,
   forgetOwnChannel,
+  forgetTile,
   heldPause,
   holdOwnChannel,
+  isTileHeld,
+  markTileHeld,
   notePauseIntent,
   pauseIntentOf,
   pauseParkTimings,
@@ -113,28 +116,66 @@ describe('pausePark', () => {
     expect(pauseParkTimings()).toEqual({ stopLoadMs: STOP_LOAD_AFTER_PAUSE_MS, resyncMs: RESYNC_AFTER_PAUSE_MS });
   });
 
-  it('the resync cut-off fits the window the origin serves', () => {
-    expect(resyncCutoffMs(12, 2)).toBe(10_000);
-    expect(resyncCutoffMs(12, 2)).toBeLessThan(12_000);
-    expect(resyncCutoffMs(60, 2)).toBe(RESYNC_AFTER_PAUSE_MS);
-    expect(resyncCutoffMs(12, 20)).toBe(0);
-    expect(resyncCutoffMs(null, 2)).toBe(RESYNC_AFTER_PAUSE_MS);
-    expect(resyncCutoffMs(undefined, 2)).toBe(RESYNC_AFTER_PAUSE_MS);
+  it('the resync cut-off is the time until the window start passes the buffer end', () => {
+    expect(resyncCutoffMs(102, 90, 0)).toBe(12_000);
+    expect(resyncCutoffMs(102, 90, 2)).toBe(10_000);
+    expect(resyncCutoffMs(200, 90, 0)).toBe(RESYNC_AFTER_PAUSE_MS);
+    expect(resyncCutoffMs(100, 130, 0)).toBe(0);
+    expect(resyncCutoffMs(102, null, 0)).toBe(RESYNC_AFTER_PAUSE_MS);
+    expect(resyncCutoffMs(102, undefined, 0)).toBe(RESYNC_AFTER_PAUSE_MS);
   });
 
-  it('a short window resyncs a pause the default span would resume', () => {
-    const hls = { latestLevelDetails: { totalduration: 12 } };
+  it('a buffer that ends before the window starts resyncs at once', () => {
+    const hls = { latestLevelDetails: { fragmentStart: 130, age: 0 } };
     const video = { currentTime: 100, buffered: { length: 1, start: () => 90, end: () => 102 } };
     const { park, at } = make(true, () => windowedPauseTimings(hls, video as never));
     park.paused(0);
+    at(500);
+    expect(park.play(500)).toBe('resync');
+  });
+
+  it('a playhead far behind with a buffer to the edge resumes a short pause in place', () => {
+    // 20 s behind the edge, the buffer reaches the edge, the window is 12 s.
+    const hls = { latestLevelDetails: { fragmentStart: 108, age: 0 } };
+    const video = { currentTime: 100, buffered: { length: 1, start: () => 90, end: () => 120 } };
+    const { park, calls, at } = make(true, () => ({ ...windowedPauseTimings(hls, video as never), stopLoadMs: 100 }));
+    park.paused(0);
+    vi.advanceTimersByTime(100);
+    expect(calls).toEqual(['stop']);
+    at(500);
+    expect(park.play(500)).toBe('resume');
+    expect(calls).toEqual(['stop', 'start']);
+  });
+
+  it('the cut-off is read when the pause starts, not when play comes', () => {
+    let fragmentStart = 90;
+    const hls = {
+      get latestLevelDetails() {
+        return { fragmentStart, age: 0 };
+      },
+    };
+    const video = { currentTime: 100, buffered: { length: 1, start: () => 90, end: () => 102 } };
+    const { park, at } = make(true, () => windowedPauseTimings(hls, video as never));
+    park.paused(0);
+    fragmentStart = 130; // the window rolled on during the pause
     at(11_000);
-    expect(park.play(11_000)).toBe('resync');
+    expect(park.play(11_000)).toBe('none'); // 12 s cut-off from the pause start
   });
 
   it('no playlist details keep the default cut-off', () => {
     const video = { currentTime: 100, buffered: { length: 0, start: () => 0, end: () => 0 } };
     expect(windowedPauseTimings({}, video as never).resyncMs).toBe(RESYNC_AFTER_PAUSE_MS);
     expect(windowedPauseTimings({ latestLevelDetails: null }, video as never).resyncMs).toBe(RESYNC_AFTER_PAUSE_MS);
+  });
+
+  it('a tile hold survives a remount and ends when the tile is forgotten', () => {
+    forgetTile('tile-9');
+    expect(isTileHeld('tile-9')).toBe(false);
+    markTileHeld('tile-9');
+    expect(isTileHeld('tile-9')).toBe(true); // docked and undocked: the same tile
+    expect(isTileHeld('tile-8')).toBe(false);
+    forgetTile('tile-9');
+    expect(isTileHeld('tile-9')).toBe(false);
   });
 
   it('a pause intent holds for its channel only', () => {

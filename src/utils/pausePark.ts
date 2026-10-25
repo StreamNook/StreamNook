@@ -43,38 +43,42 @@ export function pauseParkTimings(): PauseParkTimings {
 }
 
 /**
- * The resync cut-off for a player whose origin serves `totalDuration` seconds
- * of playlist while the element holds `forwardBuffer` seconds ahead of the
- * paused frame: the pause outlives the window once everything past the buffer
- * has rolled off the playlist. Never more than `cap`, never negative. With no
- * playlist details it is `cap`.
+ * The resync cut-off for a player whose buffer around the paused frame ends at
+ * `bufferEnd` while the origin's playlist now begins at `windowStart` (`age`
+ * seconds old): the pause outlives the window once the playlist's start has
+ * rolled past the end of the buffer, so nothing after the buffer can be
+ * fetched. Never more than `cap`, never negative. With no playlist details it
+ * is `cap`.
  */
 export function resyncCutoffMs(
-  totalDuration: number | null | undefined,
-  forwardBuffer: number,
+  bufferEnd: number,
+  windowStart: number | null | undefined,
+  age: number | null | undefined,
   cap = RESYNC_AFTER_PAUSE_MS,
 ): number {
-  if (totalDuration == null || !Number.isFinite(totalDuration)) return cap;
-  const fwd = Number.isFinite(forwardBuffer) && forwardBuffer > 0 ? forwardBuffer : 0;
-  return Math.min(cap, Math.max(0, (totalDuration - fwd) * 1000));
+  if (windowStart == null || !Number.isFinite(windowStart) || !Number.isFinite(bufferEnd)) return cap;
+  const aged = age != null && Number.isFinite(age) && age > 0 ? age : 0;
+  return Math.min(cap, Math.max(0, (bufferEnd - windowStart - aged) * 1000));
 }
 
 /** The pause spans for a player: the defaults (or a test run's override) with
- *  the resync cut-off cut down to what its playlist window and buffer allow. */
+ *  the resync cut-off cut down to what its playlist window and buffer allow,
+ *  measured now. */
 export function windowedPauseTimings(
-  hls: { latestLevelDetails?: { totalduration?: number } | null },
+  hls: { latestLevelDetails?: { fragmentStart?: number; age?: number } | null },
   video: Pick<HTMLVideoElement, 'buffered' | 'currentTime'>,
 ): PauseParkTimings {
   const base = pauseParkTimings();
-  let forward = 0;
+  let bufferEnd = video.currentTime;
   const b = video.buffered;
   for (let i = 0; i < b.length; i++) {
     if (b.start(i) <= video.currentTime + 0.05 && b.end(i) >= video.currentTime) {
-      forward = b.end(i) - video.currentTime;
+      bufferEnd = b.end(i);
       break;
     }
   }
-  return { ...base, resyncMs: resyncCutoffMs(hls.latestLevelDetails?.totalduration, forward, base.resyncMs) };
+  const details = hls.latestLevelDetails;
+  return { ...base, resyncMs: resyncCutoffMs(bufferEnd, details?.fragmentStart, details?.age, base.resyncMs) };
 }
 
 export type PlayOutcome ='none' | 'resume' | 'resync';
@@ -106,6 +110,9 @@ export function createPausePark(o: PauseParkOptions): PausePark {
   const now = o.now ?? Date.now;
   const timings = o.timings ?? pauseParkTimings;
   let pausedAt: number | null = null;
+  // The resync cut-off, measured when the pause starts: the playlist window
+  // keeps moving while paused, so a reading at play time would be too late.
+  let resyncMs = 0;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
   let disposed = false;
@@ -121,6 +128,7 @@ export function createPausePark(o: PauseParkOptions): PausePark {
     },
     paused(at = now()) {
       if (disposed) return;
+      if (pausedAt === null) resyncMs = timings().resyncMs;
       if (pausedAt === null || at < pausedAt) pausedAt = at;
       if (stopped || timer !== null) return;
       const wait = Math.max(0, pausedAt + timings().stopLoadMs - now());
@@ -151,7 +159,7 @@ export function createPausePark(o: PauseParkOptions): PausePark {
           /* player already torn down */
         }
       }
-      if (at - since >= timings().resyncMs) return 'resync';
+      if (at - since >= resyncMs) return 'resync';
       return wasStopped ? 'resume' : 'none';
     },
     dispose() {
@@ -207,6 +215,26 @@ export function holdOwnChannel(key: string, at = Date.now()): boolean {
   ownChannelHeld = key;
   notePauseIntent('main', key, at);
   return true;
+}
+
+/** Tiles (by slot id) whose own-channel pause was already applied. Module
+ *  level, so a tile that docks and undocks (its component remounts) is not
+ *  paused a second time after the viewer pressed play. */
+const heldTiles = new Set<string>();
+
+/** The own-channel pause was applied to tile `id`. */
+export function markTileHeld(id: string): void {
+  heldTiles.add(id);
+}
+
+/** Whether tile `id` already had its own-channel pause applied. */
+export function isTileHeld(id: string): boolean {
+  return heldTiles.has(id);
+}
+
+/** Tile `id` was removed: its next opening pauses again. */
+export function forgetTile(id: string): void {
+  heldTiles.delete(id);
 }
 
 /** The channel `key` is already open as the viewer's own (a restart brings

@@ -23,7 +23,10 @@ import { isCodecFailure, UNSUPPORTED_CODEC } from '../../utils/codecFailure';
 import {
   clearPauseIntent,
   createPausePark,
+  forgetTile,
   heldPause,
+  isTileHeld,
+  markTileHeld,
   notePauseIntent,
   windowedPauseTimings,
   type PausePark,
@@ -75,9 +78,6 @@ export const useMultiNookPlayer = ({
   const hlsRef = useRef<Hls | null>(null);
   const playerRef = useRef<Plyr | null>(null);
   const userInitiatedPauseRef = useRef<boolean>(false);
-  // The tile of the viewer's own channel opens paused once; a rebuild after
-  // they pressed play does not pause it again.
-  const ownChannelHeldRef = useRef(false);
   // Stops the live-latency governor for the current tile's hls instance.
   const latencyGovernorStopRef = useRef<(() => void) | null>(null);
   const currentSettings = useAppStore(state => state.settings.video_player);
@@ -200,8 +200,16 @@ export const useMultiNookPlayer = ({
     }
   }, [isMinimized, muted, volume]); // Added muted, volume to deps for correct restoration
 
-  // A removed tile's pause goes with it.
-  useEffect(() => () => clearPauseIntent(streamId), [streamId]);
+  // A removed tile's pause goes with it. A tile that only docks or undocks
+  // remounts with the same slot, and keeps its pause and its own-channel hold.
+  useEffect(
+    () => () => {
+      if (usemultiNookStore.getState().slots.some((s) => s.id === streamId)) return;
+      clearPauseIntent(streamId);
+      forgetTile(streamId);
+    },
+    [streamId],
+  );
 
   // Clean up Plyr on unmount
   useEffect(() => {
@@ -373,8 +381,8 @@ export const useMultiNookPlayer = ({
         playStarted = true;
         // The viewer's own channel opens paused, once per tile, like the main
         // player's: chat only, no second video pipeline on the streaming machine.
-        if (!ownChannelHeldRef.current && isOwnChannelTile(streamId)) {
-          ownChannelHeldRef.current = true;
+        if (!isTileHeld(streamId) && isOwnChannelTile(streamId)) {
+          markTileHeld(streamId);
           if (!heldPause(streamId, streamId)) notePauseIntent(streamId, streamId);
           Logger.warn(`[MultiNook-${streamId}] your own channel opens paused`);
         }
@@ -664,10 +672,7 @@ export const useMultiNookPlayer = ({
         clearPauseIntent(streamId);
         Logger.warn(`[MultiNook-${streamId}] paused past the live window; loading again from the live edge`);
         stopResync?.();
-        // While a Resync holds the tiles together this tile rejoins the shared
-        // delay once it plays, instead of moving to its own sync point.
-        const synced = isSynced();
-        const follow = followLiveAfterResync(
+        stopResync = followLiveAfterResync(
           hls,
           video,
           () => {
@@ -676,18 +681,7 @@ export const useMultiNookPlayer = ({
             usemultiNookStore.getState().retrySlot(streamId);
           },
           (m) => Logger.info(`[MultiNook-${streamId}] ${m}`),
-          { seek: !synced },
         );
-        if (synced) {
-          const rejoin = () => alignTile(streamId, true);
-          video.addEventListener('playing', rejoin, { once: true });
-          stopResync = () => {
-            follow();
-            video.removeEventListener('playing', rejoin);
-          };
-        } else {
-          stopResync = follow;
-        }
       }, opts);
       stopLinkReports = () => {
         linkListeners.abort();

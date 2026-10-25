@@ -6,11 +6,13 @@ vi.mock('hls.js', () => ({
 
 const { RESYNC_WINDOW_MS, followLiveAfterResync } = await import('./liveResync');
 
-/** Just enough of hls.js: listeners by event name and a settable sync point. */
+/** Just enough of hls.js: listeners by event name, a settable sync point and
+ *  the start of the window the origin serves. */
 function fakeHls() {
   const on = new Map<string, Set<() => void>>();
   return {
     liveSyncPosition: null as number | null,
+    latestLevelDetails: { fragmentStart: 0 } as { fragmentStart: number } | null,
     on(e: string, f: () => void) {
       if (!on.has(e)) on.set(e, new Set());
       on.get(e)!.add(f);
@@ -76,11 +78,11 @@ describe('followLiveAfterResync', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  const start = (seek = true) => {
+  const start = () => {
     const hls = fakeHls();
     const video = fakeVideo();
     const onStuck = vi.fn();
-    const stop = followLiveAfterResync(hls as never, video as never, onStuck, undefined, { seek });
+    const stop = followLiveAfterResync(hls as never, video as never, onStuck);
     return { hls, video, onStuck, stop };
   };
 
@@ -116,7 +118,7 @@ describe('followLiveAfterResync', () => {
     hls.fire('hlsFragBuffered');
     expect(video.seeks).toEqual([34]); // one seek, then it stops following
     expect(hls.count('hlsLevelUpdated')).toBe(0);
-    expect(hls.count('hlsFragBuffered')).toBe(0);
+    expect(hls.count('hlsFragBuffered')).toBe(1); // only the stuck check's fragment tracker remains
   });
 
   it('uses the sync point when the buffer reaches past it', () => {
@@ -173,12 +175,63 @@ describe('followLiveAfterResync', () => {
     expect(onStuck).not.toHaveBeenCalled();
   });
 
-  it('leaves the move to the caller when told not to seek', () => {
-    const { hls, video, onStuck } = start(false);
+  it('seeks only into the window the origin serves now, never into the old buffer', () => {
+    const { hls, video } = start();
+    hls.liveSyncPosition = 40;
+    hls.latestLevelDetails = { fragmentStart: 28 };
+    video.setBuffered([[8, 16]]); // only video from before the pause
+    hls.fire('hlsLevelUpdated');
+    hls.fire('hlsFragBuffered');
+    expect(video.seeks).toEqual([]);
+    video.setBuffered([[8, 16], [30, 42]]);
+    hls.fire('hlsFragBuffered');
+    expect(video.seeks).toEqual([40]);
+  });
+
+  it('waits while hls.js has no level details', () => {
+    const { hls, video } = start();
     hls.liveSyncPosition = 20;
+    hls.latestLevelDetails = null;
     video.setBuffered([[8, 60]]);
     hls.fire('hlsLevelUpdated');
     expect(video.seeks).toEqual([]);
+  });
+
+  it('is stuck when only the old buffer plays and no new fragment arrives', () => {
+    const { hls, video, onStuck } = start();
+    hls.latestLevelDetails = { fragmentStart: 28 };
+    video.setBuffered([[8, 16]]);
+    video.emit('playing');
+    video.advance(12);
+    vi.advanceTimersByTime(RESYNC_WINDOW_MS);
+    expect(onStuck).not.toHaveBeenCalled(); // old video still playing: the window runs again
+    video.advance(15);
+    vi.advanceTimersByTime(RESYNC_WINDOW_MS);
+    expect(onStuck).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(RESYNC_WINDOW_MS); // the old buffer is used up
+    expect(onStuck).toHaveBeenCalledTimes(1);
+    expect(hls.count('hlsFragBuffered')).toBe(0);
+    expect(video.count('playing')).toBe(0);
+  });
+
+  it('is not stuck once a new fragment lands and the playhead moves into the window', () => {
+    const { hls, video, onStuck } = start();
+    hls.liveSyncPosition = 40;
+    hls.latestLevelDetails = { fragmentStart: 28 };
+    video.setBuffered([[8, 16], [30, 42]]);
+    hls.fire('hlsFragBuffered');
+    expect(video.seeks).toEqual([40]);
+    video.emit('playing');
+    vi.advanceTimersByTime(RESYNC_WINDOW_MS * 3);
+    expect(onStuck).not.toHaveBeenCalled();
+  });
+
+  it('is stuck when the seek lands in the window but nothing plays after it', () => {
+    const { hls, video, onStuck } = start();
+    hls.liveSyncPosition = 40;
+    hls.latestLevelDetails = { fragmentStart: 28 };
+    video.setBuffered([[30, 42]]);
+    hls.fire('hlsFragBuffered');
     vi.advanceTimersByTime(RESYNC_WINDOW_MS);
     expect(onStuck).toHaveBeenCalledTimes(1);
   });
