@@ -3846,6 +3846,7 @@ impl IrcService {
         // USERSTATE/ROOMSTATE refill from the next IRC frames.
         get_channel_emotes().lock().await.remove(key);
         drop_parse_lookup(key);
+        crate::services::emote_restamp::forget(key);
         if let Ok(mut g) = get_channel_cheermotes().write() { g.remove(key); }
         get_user_badges_cache().lock().await.remove(key);
         get_user_color_cache().lock().await.remove(key);

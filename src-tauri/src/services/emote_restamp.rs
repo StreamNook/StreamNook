@@ -9,6 +9,12 @@
 //! emote (or a different one) are parsed again and patched in place in every
 //! window by the `HISTORY_SEGMENTS` frame every client already applies by row
 //! id. A removal never un-draws an emote that is already showing.
+//!
+//! Each line carries the generation of the table it was remembered under (0 is
+//! no table at all), and a room's generation rises with every table put in
+//! place. Only a line from an older generation is ever repaired, and once a
+//! table lands every remembered line counts as covered by it, so no line is
+//! sent twice for the same table. Leaving a channel forgets the room.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -25,10 +31,19 @@ const KEEP_FOR: Duration = Duration::from_secs(180);
 struct Line {
     at: Instant,
     raw: String,
+    /// The room's table generation when the line was remembered; 0 is none.
+    generation: u64,
 }
 
-fn rooms() -> &'static Mutex<HashMap<String, VecDeque<Line>>> {
-    static ROOMS: OnceLock<Mutex<HashMap<String, VecDeque<Line>>>> = OnceLock::new();
+#[derive(Default)]
+struct Room {
+    /// How many tables have been put in place for the room; 0 is none yet.
+    generation: u64,
+    lines: VecDeque<Line>,
+}
+
+fn rooms() -> &'static Mutex<HashMap<String, Room>> {
+    static ROOMS: OnceLock<Mutex<HashMap<String, Room>>> = OnceLock::new();
     ROOMS.get_or_init(Default::default)
 }
 
@@ -39,19 +54,36 @@ pub(crate) fn remember(channel: &str, raw: &str) {
     }
     let Ok(mut map) = rooms().lock() else { return };
     let now = Instant::now();
-    // Rooms left behind (a channel browsed past) drop out once their newest
-    // line is too old to repair, so the map stays the size of what is open.
-    if map.len() > 32 {
-        map.retain(|_, q| q.back().is_some_and(|l| now.duration_since(l.at) <= KEEP_FOR));
+    // Rooms left behind (a channel browsed past) lose their lines once their
+    // newest line is too old to repair, and drop out unless a table is in
+    // place for them. Checked only when a room is added, so a line for a room
+    // already open stays a single push.
+    if map.len() > 32 && !map.contains_key(channel) {
+        map.retain(|_, r| {
+            if r.lines.back().is_some_and(|l| now.duration_since(l.at) <= KEEP_FOR) {
+                return true;
+            }
+            r.lines.clear();
+            r.generation > 0
+        });
     }
-    push_line(map.entry(channel.to_string()).or_default(), raw, now);
+    let room = map.entry(channel.to_string()).or_default();
+    push_line(&mut room.lines, room.generation, raw, now);
 }
 
-fn push_line(q: &mut VecDeque<Line>, raw: &str, now: Instant) {
+/// Drop everything remembered for `room`, as when the channel is left. A
+/// rejoin starts clean: its lines are remembered under the table it installs.
+pub(crate) fn forget(room: &str) {
+    if let Ok(mut map) = rooms().lock() {
+        map.remove(room);
+    }
+}
+
+fn push_line(q: &mut VecDeque<Line>, generation: u64, raw: &str, now: Instant) {
     while q.front().is_some_and(|l| now.duration_since(l.at) > KEEP_FOR) || q.len() >= KEEP {
         q.pop_front();
     }
-    q.push_back(Line { at: now, raw: raw.to_string() });
+    q.push_back(Line { at: now, raw: raw.to_string(), generation });
 }
 
 /// True when some word of `text` names an emote in `new` that `old` did not
@@ -81,10 +113,14 @@ fn is_partner_line(raw: &str) -> bool {
     }
 }
 
-/// The lines of `q` the change from `old` to `new` repairs, each once, and
-/// how long ago the oldest of them arrived.
+/// The lines of `q` the change from `old` to `new` (generation `generation`)
+/// repairs, each once, and how long ago the oldest of them arrived. A line
+/// remembered with no table is compared against none; a line from an older
+/// table is compared against `old`, and skipped when `old` is not known. A
+/// line already under `generation` is never repaired.
 fn lines_to_repair(
     q: &VecDeque<Line>,
+    generation: u64,
     new: &EmoteLookup,
     old: Option<&EmoteLookup>,
     now: Instant,
@@ -94,10 +130,19 @@ fn lines_to_repair(
     let mut out = Vec::new();
     for l in q {
         let age = now.duration_since(l.at);
-        if age > KEEP_FOR || is_partner_line(&l.raw) || !seen.insert(l.raw.as_str()) {
+        if age > KEEP_FOR
+            || l.generation >= generation
+            || is_partner_line(&l.raw)
+            || !seen.insert(l.raw.as_str())
+        {
             continue;
         }
-        if gains_emote(irc_trailing_text(&l.raw), new, old) {
+        let before = match (l.generation, old) {
+            (0, _) => None,
+            (_, Some(o)) => Some(o),
+            (_, None) => continue,
+        };
+        if gains_emote(irc_trailing_text(&l.raw), new, before) {
             oldest = oldest.max(age);
             out.push(l.raw.clone());
         }
@@ -105,12 +150,29 @@ fn lines_to_repair(
     (out, oldest)
 }
 
+/// Put `new` in place for `channel`: the lines it repairs and how long ago the
+/// oldest arrived. Every remembered line then counts as covered by it.
+fn install_table(
+    channel: &str,
+    old: Option<&EmoteLookup>,
+    new: &EmoteLookup,
+    now: Instant,
+) -> Option<(Vec<String>, Duration)> {
+    let Ok(mut map) = rooms().lock() else { return None };
+    let room = map.entry(channel.to_string()).or_default();
+    room.generation += 1;
+    let found = lines_to_repair(&room.lines, room.generation, new, old, now);
+    let generation = room.generation;
+    for l in room.lines.iter_mut() {
+        l.generation = generation;
+    }
+    Some(found)
+}
+
 /// `channel`'s parse table went from `old` to `new`.
 pub(crate) fn table_changed(channel: &str, old: Option<Arc<EmoteLookup>>, new: Arc<EmoteLookup>) {
-    let (lines, oldest) = {
-        let Ok(map) = rooms().lock() else { return };
-        let Some(q) = map.get(channel) else { return };
-        lines_to_repair(q, &new, old.as_deref(), Instant::now())
+    let Some((lines, oldest)) = install_table(channel, old.as_deref(), &new, Instant::now()) else {
+        return;
     };
     if lines.is_empty() {
         return;
@@ -203,10 +265,10 @@ mod tests {
         let mut q = VecDeque::new();
         let now = Instant::now();
         let mine = line("Clap");
-        push_line(&mut q, &mine, now);
-        push_line(&mut q, &mine, now);
-        push_line(&mut q, "@id=2;room-id=11;source-room-id=22 :b!b@b.tmi.twitch.tv PRIVMSG #chan :Clap", now);
-        let (lines, _) = lines_to_repair(&q, &new, None, now);
+        push_line(&mut q, 0, &mine, now);
+        push_line(&mut q, 0, &mine, now);
+        push_line(&mut q, 0, "@id=2;room-id=11;source-room-id=22 :b!b@b.tmi.twitch.tv PRIVMSG #chan :Clap", now);
+        let (lines, _) = lines_to_repair(&q, 1, &new, None, now);
         assert_eq!(lines, vec![mine]);
     }
 
@@ -215,7 +277,7 @@ mod tests {
         let mut q = VecDeque::new();
         let now = Instant::now();
         for i in 0..(KEEP + 10) {
-            push_line(&mut q, &line(&format!("m{i}")), now);
+            push_line(&mut q, 0, &line(&format!("m{i}")), now);
         }
         assert_eq!(q.len(), KEEP);
         assert!(q.back().is_some_and(|l| l.raw.ends_with(&format!("m{}", KEEP + 9))));
@@ -226,9 +288,80 @@ mod tests {
         let new = lookup(vec![emote("2", "Clap")]);
         let mut q = VecDeque::new();
         let then = Instant::now();
-        push_line(&mut q, &line("Clap"), then);
+        push_line(&mut q, 0, &line("Clap"), then);
         let later = then + KEEP_FOR + Duration::from_secs(1);
-        let (lines, _) = lines_to_repair(&q, &new, None, later);
+        let (lines, _) = lines_to_repair(&q, 1, &new, None, later);
         assert!(lines.is_empty());
+    }
+
+    fn install(channel: &str, old: Option<&EmoteLookup>, new: &EmoteLookup) -> Vec<String> {
+        install_table(channel, old, new, Instant::now()).map(|(lines, _)| lines).unwrap_or_default()
+    }
+
+    #[test]
+    fn lines_with_no_table_are_repaired_once() {
+        let room = "restamp_no_table";
+        let clap = lookup(vec![emote("2", "Clap")]);
+        let mine = line("hi Clap");
+        remember(room, &mine);
+        remember(room, &line("plain words"));
+        assert_eq!(install(room, None, &clap), vec![mine]);
+        assert!(install(room, Some(&*clap), &clap).is_empty());
+    }
+
+    #[test]
+    fn a_newer_table_repairs_lines_that_use_what_it_adds() {
+        let room = "restamp_newer_table";
+        let first = lookup(vec![emote("1", "KEKW")]);
+        let second = lookup(vec![emote("1", "KEKW"), emote("2", "Clap")]);
+        assert!(install(room, None, &first).is_empty());
+        let kept = line("hi KEKW");
+        let added = line("hi Clap");
+        remember(room, &kept);
+        remember(room, &added);
+        assert_eq!(install(room, Some(&*first), &second), vec![added]);
+        assert!(install(room, Some(&*second), &second).is_empty());
+    }
+
+    #[test]
+    fn lines_under_the_current_table_are_never_repaired() {
+        let room = "restamp_current_table";
+        let clap = lookup(vec![emote("2", "Clap")]);
+        assert!(install(room, None, &clap).is_empty());
+        remember(room, &line("hi Clap"));
+        assert!(install(room, Some(&*clap), &clap).is_empty());
+        assert!(install(room, None, &clap).is_empty());
+    }
+
+    #[test]
+    fn leaving_and_rejoining_with_the_same_table_sends_nothing() {
+        let room = "restamp_part_rejoin";
+        let clap = lookup(vec![emote("2", "Clap")]);
+        assert!(install(room, None, &clap).is_empty());
+        remember(room, &line("hi Clap"));
+        forget(room);
+        assert!(install(room, None, &clap).is_empty());
+        remember(room, &line("again Clap"));
+        assert!(install(room, Some(&*clap), &clap).is_empty());
+    }
+
+    #[test]
+    fn a_table_dropped_without_forgetting_never_resends_its_lines() {
+        let room = "restamp_dropped_table";
+        let clap = lookup(vec![emote("2", "Clap")]);
+        assert!(install(room, None, &clap).is_empty());
+        remember(room, &line("hi Clap"));
+        assert!(install(room, None, &clap).is_empty());
+    }
+
+    #[test]
+    fn forget_drops_the_room() {
+        let room = "restamp_forget";
+        remember(room, &line("hi Clap"));
+        assert!(rooms().lock().unwrap().contains_key(room));
+        forget(room);
+        assert!(!rooms().lock().unwrap().contains_key(room));
+        let clap = lookup(vec![emote("2", "Clap")]);
+        assert!(install(room, None, &clap).is_empty());
     }
 }
