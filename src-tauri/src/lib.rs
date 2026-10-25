@@ -1104,8 +1104,11 @@ pub fn run() {
             // each once per install, and edit the manifest in memory before the
             // sweep reads which files it names. The sweep runs once per process
             // and only while no other instance holds the cache's writers lock; a
-            // cache write that starts first waits for it.
-            tauri::async_runtime::spawn_blocking(|| {
+            // cache write that starts first waits for it. The cache lists the
+            // windows ask for wait on the start-up gate, which this guard holds
+            // closed until the migrations end, however they end.
+            let startup_gate = services::universal_cache_service::StartupGateGuard::close();
+            tauri::async_runtime::spawn_blocking(move || {
                 // Migrate emote cache if app version changed (handles format changes like webp → avif)
                 // This clears stale emote files that may have the old format
                 let current_version = env!("CARGO_PKG_VERSION");
@@ -1161,6 +1164,9 @@ pub fn run() {
                         error!("[Main] Failed to purge non-7TV emote cache: {}", e);
                     }
                 }
+
+                // The lists are final now; the sweep below changes no entry.
+                drop(startup_gate);
 
                 if let Ok(cache_root) = services::universal_cache_service::get_universal_cache_dir() {
                     services::universal_cache_service::sweep_temp_files_once(&cache_root);

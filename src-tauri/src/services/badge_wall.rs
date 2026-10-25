@@ -650,7 +650,14 @@ pub async fn get(app: &crate::rt::AppHandle, sort: Sort, force: bool) -> BadgeWa
         .iter()
         .flat_map(|s| s.versions.iter().map(|v| metadata_key(&s.set_id, &v.id)))
         .collect();
-    let metadata = universal_cache_service::get_cached_items_batch(CacheType::Badge, &keys).unwrap_or_default();
+    // On the blocking pool: the read waits for the cache's start-up migrations.
+    let metadata = tauri::async_runtime::spawn_blocking(move || {
+        universal_cache_service::get_cached_items_batch(CacheType::Badge, &keys)
+    })
+    .await
+    .ok()
+    .and_then(Result::ok)
+    .unwrap_or_default();
     let owned: HashSet<&str> = standing.owned.iter().map(String::as_str).collect();
     let built = tiles(&catalogue, &metadata, &standing.windows, &owned, now);
     let owned_count = built.iter().filter(|(t, _)| t.owned).count();

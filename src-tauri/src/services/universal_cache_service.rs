@@ -8,6 +8,7 @@ use std::fs;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Condvar;
 use std::sync::Mutex as StdMutex;
 use std::sync::RwLock as StdRwLock;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -20,9 +21,90 @@ use crate::services::cache_service::get_cache_dir;
 ///
 /// Lock order, outermost first: `FLUSH_LOCK`, `MANIFEST_LOCK`,
 /// `MANIFEST_MEMORY`, `FOREIGN_ENTRIES`. A thread that holds one never takes an
-/// earlier one. `DELETING` is a leaf: it is held only for a lookup, an insert or
-/// a remove, and nothing else is taken or waited on while it is held.
+/// earlier one. `DELETING` and `CLEARING` are leaves: each is held only for a
+/// lookup, an insert or a remove, and nothing else is taken or waited on while
+/// it is held.
 static FLUSH_LOCK: StdMutex<()> = StdMutex::new(());
+
+/// The state of the start-up gate: whether it is open, and the condition that
+/// wakes the threads waiting on it.
+type StartupGate = (StdMutex<bool>, Condvar);
+
+/// Closed from the moment the app's setup begins until its cache migrations
+/// finish, so a window never reads a list the migrations are about to change.
+/// Open in every process that never runs setup, and in tests.
+static STARTUP_GATE: StartupGate = (StdMutex::new(true), Condvar::new());
+
+/// Sets `gate` open or closed and wakes the threads waiting on it.
+fn set_gate(gate: &StartupGate, open: bool) {
+    *gate.0.lock().unwrap_or_else(|e| e.into_inner()) = open;
+    gate.1.notify_all();
+}
+
+/// Blocks the calling thread until `gate` is open. Call it only from a blocking
+/// thread, never from an async worker or the main thread.
+fn wait_for_gate(gate: &StartupGate) {
+    let mut open = gate.0.lock().unwrap_or_else(|e| e.into_inner());
+    while !*open {
+        open = gate.1.wait(open).unwrap_or_else(|e| e.into_inner());
+    }
+}
+
+/// Closes the start-up gate while it is alive and opens it when it is dropped,
+/// so a migration that fails or panics still opens it.
+pub struct StartupGateGuard;
+
+impl StartupGateGuard {
+    /// Closes the start-up gate until the returned guard is dropped.
+    pub fn close() -> Self {
+        set_gate(&STARTUP_GATE, false);
+        StartupGateGuard
+    }
+}
+
+impl Drop for StartupGateGuard {
+    fn drop(&mut self) {
+        set_gate(&STARTUP_GATE, true);
+    }
+}
+
+/// Waits for the cache's start-up migrations to finish. Call it only from a
+/// blocking thread.
+fn wait_for_startup() {
+    wait_for_gate(&STARTUP_GATE);
+}
+
+/// Cache folders a clear is deleting in place, with no lock held. A store of an
+/// entry that sits in one is refused, and a file write into one fails.
+static CLEARING: Lazy<StdMutex<HashSet<PathBuf>>> = Lazy::new(|| StdMutex::new(HashSet::new()));
+
+/// Whether `path` sits in a folder a clear is deleting in place.
+fn in_clearing_folder(path: &Path) -> bool {
+    CLEARING
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .any(|folder| path.starts_with(folder))
+}
+
+/// Takes `folder` out of `CLEARING` when it goes out of scope.
+struct ClearingMark {
+    folder: PathBuf,
+}
+
+impl ClearingMark {
+    /// Marks `folder` as being cleared in place.
+    fn set(folder: &Path) -> Self {
+        CLEARING.lock().unwrap_or_else(|e| e.into_inner()).insert(folder.to_path_buf());
+        ClearingMark { folder: folder.to_path_buf() }
+    }
+}
+
+impl Drop for ClearingMark {
+    fn drop(&mut self) {
+        CLEARING.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.folder);
+    }
+}
 
 // Global mutex to prevent concurrent manifest writes (for sync operations)
 static MANIFEST_LOCK: Lazy<StdMutex<()>> = Lazy::new(|| StdMutex::new(()));
@@ -555,17 +637,29 @@ fn requeue_pending(pending: &StdMutex<Vec<PendingDelete>>, files: Vec<PendingDel
     pending.lock().unwrap_or_else(|e| e.into_inner()).extend(files);
 }
 
-/// Takes the files of `files` that are being deleted out of `deleting` when it
-/// goes out of scope.
+/// Takes the files of `files` that are being deleted out of `deleting`: each one
+/// when `release_next` is called for it, in order, and the rest when it goes out
+/// of scope, which covers an unwind part way through the batch.
 struct Unmark<'a> {
     deleting: &'a StdMutex<HashSet<PathBuf>>,
     files: Vec<&'a Path>,
+    released: usize,
+}
+
+impl Unmark<'_> {
+    /// Frees the name of the next file whose delete is done.
+    fn release_next(&mut self) {
+        if let Some(file) = self.files.get(self.released) {
+            self.deleting.lock().unwrap_or_else(|e| e.into_inner()).remove(*file);
+            self.released += 1;
+        }
+    }
 }
 
 impl Drop for Unmark<'_> {
     fn drop(&mut self) {
         let mut marked = self.deleting.lock().unwrap_or_else(|e| e.into_inner());
-        for file in &self.files {
+        for file in &self.files[self.released..] {
             marked.remove(*file);
         }
     }
@@ -576,7 +670,8 @@ impl Drop for Unmark<'_> {
 /// all the files and the unnamed ones are put in `deleting`; the lock is then
 /// released and the files are deleted with no manifest lock held. A store that
 /// names one of them meanwhile is refused (see `store_entries`), and one that
-/// names a file this check found named keeps it.
+/// names a file this check found named keeps it. Each file leaves `deleting` as
+/// soon as its own delete is done.
 fn delete_unnamed_files(
     files: &[PendingDelete],
     memory: &StdRwLock<UniversalCacheManifest>,
@@ -592,6 +687,18 @@ fn delete_unnamed_files_with(
     memory: &StdRwLock<UniversalCacheManifest>,
     deleting: &StdMutex<HashSet<PathBuf>>,
     after_marked: impl FnOnce(),
+) {
+    delete_unnamed_files_hooked(files, memory, deleting, after_marked, |_| {});
+}
+
+/// `delete_unnamed_files_with` that also calls `after_each` with each file once
+/// its delete is done and its name is free, with no lock held.
+fn delete_unnamed_files_hooked(
+    files: &[PendingDelete],
+    memory: &StdRwLock<UniversalCacheManifest>,
+    deleting: &StdMutex<HashSet<PathBuf>>,
+    after_marked: impl FnOnce(),
+    mut after_each: impl FnMut(&Path),
 ) {
     if files.is_empty() {
         return;
@@ -623,12 +730,18 @@ fn delete_unnamed_files_with(
         }
         doomed
     };
-    let _unmark = Unmark { deleting, files: doomed.iter().copied().map(|(_, file)| file.as_path()).collect() };
+    let mut unmark = Unmark {
+        deleting,
+        files: doomed.iter().copied().map(|(_, file)| file.as_path()).collect(),
+        released: 0,
+    };
     after_marked();
     for (type_dir, file) in doomed {
         if let Some(Some(dir)) = folders.get(type_dir.as_path()) {
             remove_cached_file(dir, file);
         }
+        unmark.release_next();
+        after_each(file.as_path());
     }
 }
 
@@ -636,8 +749,9 @@ fn delete_unnamed_files_with(
 /// refused. When an entry replaces one with another file, the old file is
 /// queued in `pending` for deletion from its type folder under `cache_root`,
 /// after the manifest change and outside the manifest's write lock. A file in
-/// `deleting` counts as gone, so an entry that names it is refused. The caller
-/// holds MANIFEST_LOCK.
+/// `deleting` counts as gone, so an entry that names it is refused, and so does
+/// a file in a folder a clear is deleting in place. The caller holds
+/// MANIFEST_LOCK.
 fn store_entries(
     memory: &StdRwLock<UniversalCacheManifest>,
     cache_root: &Path,
@@ -652,7 +766,7 @@ fn store_entries(
         let gone = entry_file_path(&entry)
             .filter(|path| {
                 let being_deleted = deleting.lock().unwrap_or_else(|e| e.into_inner()).contains(Path::new(path));
-                being_deleted || !Path::new(path).exists()
+                being_deleted || in_clearing_folder(Path::new(path)) || !Path::new(path).exists()
             })
             .map(str::to_string);
         match gone {
@@ -709,7 +823,9 @@ fn flush_manifest_if_dirty() -> Result<bool> {
 /// `manifest_path`, with the dirty flag `dirty`. It takes `FLUSH_LOCK` before it
 /// reads the flag and holds it for the whole flush, so a call that finds the flag
 /// clear because another flush cleared it returns only once that flush is done
-/// and its manifest is on disk. A failed flush sets the flag again.
+/// and its manifest is on disk. A failed flush sets the flag again. The files the
+/// written manifest no longer names are deleted after `FLUSH_LOCK` is released,
+/// so another flush never waits for those deletes.
 /// `after_encode` runs once the manifest is encoded and before it is written.
 fn flush_if_dirty_with(
     memory: &StdRwLock<UniversalCacheManifest>,
@@ -718,26 +834,47 @@ fn flush_if_dirty_with(
     dirty: &AtomicBool,
     after_encode: impl FnOnce(),
 ) -> Result<bool> {
-    let _flush = FLUSH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    if !dirty.swap(false, Ordering::AcqRel) {
-        return Ok(false);
-    }
-    match flush_manifest_locked(memory, pending, manifest_path, after_encode) {
-        Ok(()) => Ok(true),
-        Err(e) => {
-            dirty.store(true, Ordering::Release);
-            Err(e)
-        }
-    }
+    flush_if_dirty_hooked(memory, pending, manifest_path, dirty, after_encode, |doomed| {
+        delete_unnamed_files(doomed, memory, &DELETING)
+    })
 }
 
-/// The flush of `flush_if_dirty_with`, whose caller holds `FLUSH_LOCK`.
+/// `flush_if_dirty_with` that hands the files to delete to `delete`, which runs
+/// after `FLUSH_LOCK` is released.
+fn flush_if_dirty_hooked(
+    memory: &StdRwLock<UniversalCacheManifest>,
+    pending: &StdMutex<Vec<PendingDelete>>,
+    manifest_path: &Path,
+    dirty: &AtomicBool,
+    after_encode: impl FnOnce(),
+    delete: impl FnOnce(&[PendingDelete]),
+) -> Result<bool> {
+    let doomed = {
+        let _flush = FLUSH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        if !dirty.swap(false, Ordering::AcqRel) {
+            return Ok(false);
+        }
+        match flush_manifest_locked(memory, pending, manifest_path, after_encode) {
+            Ok(doomed) => doomed,
+            Err(e) => {
+                dirty.store(true, Ordering::Release);
+                return Err(e);
+            }
+        }
+    };
+    delete(&doomed);
+    Ok(true)
+}
+
+/// The flush of `flush_if_dirty_with`, whose caller holds `FLUSH_LOCK`. Returns
+/// the files to delete now that the manifest without them is on disk; a failed
+/// write puts them back in the queue.
 fn flush_manifest_locked(
     memory: &StdRwLock<UniversalCacheManifest>,
     pending: &StdMutex<Vec<PendingDelete>>,
     manifest_path: &Path,
     after_encode: impl FnOnce(),
-) -> Result<()> {
+) -> Result<Vec<PendingDelete>> {
     let doomed = take_pending(pending);
     let written = (|| -> Result<()> {
         // Compact, not pretty: nothing reads this file by eye, and the
@@ -752,10 +889,7 @@ fn flush_manifest_locked(
         write_manifest_bytes_to(manifest_path, &json)
     })();
     match written {
-        Ok(()) => {
-            delete_unnamed_files(&doomed, memory, &DELETING);
-            Ok(())
-        }
+        Ok(()) => Ok(doomed),
         Err(e) => {
             requeue_pending(pending, doomed);
             Err(e)
@@ -1415,14 +1549,27 @@ fn clearing_sibling(cache_dir: &Path) -> Option<PathBuf> {
 /// Under both locks the manifest is emptied and the cache folder is renamed to
 /// a sibling and recreated empty; the sibling is deleted after the locks are
 /// released, so a store never waits for the delete. When the folder cannot be
-/// renamed (a file in it is held open), it is deleted in place under the locks.
+/// renamed (a file in it is held open), it is marked in `CLEARING` under the
+/// locks, which makes a store into it and a file write into it fail, and is
+/// deleted in place after the locks are released.
 fn clear_cache_in_with(
     cache_dir: &Path,
     memory: &StdRwLock<UniversalCacheManifest>,
     pending: &StdMutex<Vec<PendingDelete>>,
     after_release: impl FnOnce(),
 ) -> Result<()> {
-    let set_aside = {
+    clear_cache_in_renaming(cache_dir, memory, pending, |from, to| fs::rename(from, to), after_release)
+}
+
+/// `clear_cache_in_with` with the rename of the cache folder passed in.
+fn clear_cache_in_renaming(
+    cache_dir: &Path,
+    memory: &StdRwLock<UniversalCacheManifest>,
+    pending: &StdMutex<Vec<PendingDelete>>,
+    rename: impl FnOnce(&Path, &Path) -> std::io::Result<()>,
+    after_release: impl FnOnce(),
+) -> Result<()> {
+    let (set_aside, in_place) = {
         // A flush in progress finishes first, so it cannot write its manifest back
         // into the folder once it is cleared.
         let _flush = FLUSH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -1454,34 +1601,33 @@ fn clear_cache_in_with(
         clear_verified_types();
 
         if cache_dir.exists() {
-            let parked = clearing_sibling(cache_dir).filter(|sibling| fs::rename(cache_dir, sibling).is_ok());
+            let parked = clearing_sibling(cache_dir).filter(|sibling| rename(cache_dir, sibling).is_ok());
             match parked {
                 Some(sibling) => match fs::create_dir_all(cache_dir) {
-                    Ok(()) => Some(sibling),
+                    Ok(()) => (Some(sibling), None),
                     Err(e) => {
                         let _ = fs::rename(&sibling, cache_dir);
                         clear_verified_types();
                         return Err(anyhow::Error::new(e).context("Failed to recreate universal cache directory"));
                     }
                 },
-                None => {
-                    let deleted = fs::remove_dir_all(cache_dir)
-                        .context("Failed to remove universal cache directory")
-                        .and_then(|()| {
-                            fs::create_dir_all(cache_dir).context("Failed to recreate universal cache directory")
-                        });
-                    // A type folder listed before a delete that failed part way
-                    // is not a record of what is on disk now.
-                    clear_verified_types();
-                    return deleted;
-                }
+                None => (None, Some(ClearingMark::set(cache_dir))),
             }
         } else {
-            None
+            (None, None)
         }
     };
 
     after_release();
+    if let Some(_mark) = in_place {
+        let deleted = fs::remove_dir_all(cache_dir)
+            .context("Failed to remove universal cache directory")
+            .and_then(|()| fs::create_dir_all(cache_dir).context("Failed to recreate universal cache directory"));
+        // A type folder listed before a delete that failed part way is not a
+        // record of what is on disk now.
+        clear_verified_types();
+        return deleted;
+    }
     if let Some(sibling) = set_aside {
         if let Err(e) = fs::remove_dir_all(&sibling) {
             log::warn!(
@@ -1546,7 +1692,9 @@ fn take_entries_where(
     Ok(keys.iter().filter_map(|key| guard.entries.remove(key)).collect())
 }
 
-/// Writes the manifest to disk now, after a migration changed it in memory.
+/// Writes the manifest to disk now, after a migration changed it in memory. The
+/// files the migration queued for deletion go only after a write that no longer
+/// names them; a failed write leaves them queued for the next flush.
 fn persist_migrated_manifest() {
     MANIFEST_DIRTY.store(true, Ordering::Release);
     ensure_flush_task();
@@ -1555,28 +1703,16 @@ fn persist_migrated_manifest() {
     }
 }
 
-/// Deletes the files `entries` name, each only when it sits inside the folder of
-/// its entry's type under `cache_dir`. A path anywhere else is left alone.
-fn delete_entry_files_in(cache_dir: &Path, entries: &[UniversalCacheEntry]) {
-    let mut folders: HashMap<&'static str, Option<PathBuf>> = HashMap::new();
-    for entry in entries {
-        let Some(path) = entry_file_path(entry) else {
-            continue;
-        };
-        let folder = folders
-            .entry(entry.cache_type.dir_name())
-            .or_insert_with_key(|name| resolve_path(&cache_dir.join(name)));
-        if let Some(type_dir) = folder.as_deref() {
-            remove_cached_file(type_dir, Path::new(path));
-        }
-    }
-}
-
 /// One-time emote cache migration token
 /// This token triggers cache clearing exactly once when upgrading.
 /// After migration completes, the token is written to disk and never triggers again.
 /// UPDATE: Changed token to force re-migration with manifest clearing
 const EMOTE_CACHE_MIGRATION_TOKEN: &str = "PERDPI_TIER_2026_V3";
+
+/// Name, in the cache root, of the file that says the emote folder holds files
+/// no entry names that the next exclusive sweep must delete. The sweep removes
+/// the file when it is done.
+const EMOTE_LEFTOVERS_MARKER: &str = ".emote_leftovers";
 
 /// Migrate emote cache if migration token not yet applied
 /// This is a ONE-TIME migration - it clears the cache once, then never again.
@@ -1606,43 +1742,39 @@ pub fn migrate_emote_cache_on_version_change(_current_version: &str) -> Result<b
             EMOTE_CACHE_MIGRATION_TOKEN
         );
 
-        // Clear only the emotes directory
-        let emotes_dir = cache_dir.join("emotes");
-        if emotes_dir.exists() {
-            fs::remove_dir_all(&emotes_dir)?;
-            fs::create_dir_all(&emotes_dir)?;
-            debug!("[UniversalCache] Emote cache directory cleared for one-time migration");
-        }
-
-        // Also clear emote entries from manifest to prevent stale references
-        let manifest_path = cache_dir.join("manifest.json");
-        if manifest_path.exists() {
-            // The emote folder is already gone, so only the entries are dropped.
-            let removed = take_entries_where(&MANIFEST_MEMORY, |key, entry| {
-                // Every emote-type entry goes.
-                if entry.cache_type == CacheType::Emote {
-                    return true;
-                }
-                // So does a file: entry of another type that names an emote file.
-                key.starts_with("file:")
-                    && entry
-                        .data
-                        .get("local_path")
-                        .and_then(|p| p.as_str())
-                        .is_some_and(|path| path.contains("/emotes/") || path.contains("\\emotes\\"))
-            });
-            if let Ok(removed) = removed {
-                if !removed.is_empty() {
-                    // Written now, so the pruned manifest persists even if the
-                    // app exits before the next debounced flush.
-                    persist_migrated_manifest();
-                    debug!(
-                        "[UniversalCache] Cleared {} emote entries from manifest",
-                        removed.len()
-                    );
-                }
+        // Every emote entry leaves the manifest, to stop stale references.
+        let removed = take_entries_where(&MANIFEST_MEMORY, |key, entry| {
+            // Every emote-type entry goes.
+            if entry.cache_type == CacheType::Emote {
+                return true;
+            }
+            // So does a file: entry of another type that names an emote file.
+            key.starts_with("file:")
+                && entry
+                    .data
+                    .get("local_path")
+                    .and_then(|p| p.as_str())
+                    .is_some_and(|path| path.contains("/emotes/") || path.contains("\\emotes\\"))
+        });
+        if let Ok(removed) = removed {
+            if !removed.is_empty() {
+                // Their files are queued, and deleted only after the manifest
+                // without them is written; a file stored again meanwhile stays.
+                queue_entry_files(&PENDING_DELETES, &cache_dir, &removed);
+                // Written now, so the pruned manifest persists even if the
+                // app exits before the next debounced flush.
+                persist_migrated_manifest();
+                debug!(
+                    "[UniversalCache] Cleared {} emote entries from manifest",
+                    removed.len()
+                );
             }
         }
+
+        // The files in the emote folder that no entry names are deleted by the
+        // next sweep that holds the writers lock exclusively, so no write that
+        // is under way can lose its file.
+        fs::write(cache_dir.join(EMOTE_LEFTOVERS_MARKER), b"")?;
 
         // Write migration token (prevents re-triggering on future updates)
         fs::write(&version_file, EMOTE_CACHE_MIGRATION_TOKEN)?;
@@ -1710,11 +1842,12 @@ pub fn migrate_ffz_animated_cache() -> Result<bool> {
         // Drop the matching manifest entries so stale paths are never served...
         if let Ok(removed) = take_entries_where(&MANIFEST_MEMORY, |_key, entry| is_ffz_emote(entry)) {
             if !removed.is_empty() {
-                // ...write the pruned manifest now, so it survives an early
-                // exit...
+                // ...queue their files, which are deleted only from inside the
+                // cache and only after the manifest without them is written...
+                queue_entry_files(&PENDING_DELETES, &cache_dir, &removed);
+                // ...and write the pruned manifest now, so it survives an early
+                // exit.
                 persist_migrated_manifest();
-                // ...then delete their files, only from inside the cache.
-                delete_entry_files_in(&cache_dir, &removed);
                 debug!(
                     "[UniversalCache] Purged {} FFZ emote entries from cache",
                     removed.len()
@@ -1769,10 +1902,11 @@ pub fn migrate_paint_animated_cache() -> Result<bool> {
             };
             if let Ok(removed) = removed {
                 if !removed.is_empty() {
-                    // Written now, so the pruned manifest survives an early exit;
-                    // their files are deleted after, only from inside the cache.
+                    // Their files are queued, to be deleted only from inside the
+                    // cache and only after the manifest without them is written
+                    // now, so it survives an early exit.
+                    queue_entry_files(&PENDING_DELETES, &cache_dir, &removed);
                     persist_migrated_manifest();
-                    delete_entry_files_in(&cache_dir, &removed);
                     debug!(
                         "[UniversalCache] Purged {} still 7TV paint images for re-fetch",
                         removed.len()
@@ -1866,10 +2000,11 @@ pub fn migrate_emote_namespace_cache() -> Result<bool> {
     });
     if let Ok(removed) = removed {
         if !removed.is_empty() {
-            // Written now, so the pruned manifest survives an early exit; the
-            // files are deleted after, only from inside the cache.
+            // Their files are queued, to be deleted only from inside the cache
+            // and only after the manifest without them is written now, so it
+            // survives an early exit.
+            queue_entry_files(&PENDING_DELETES, &cache_dir, &removed);
             persist_migrated_manifest();
-            delete_entry_files_in(&cache_dir, &removed);
             debug!(
                 "[UniversalCache] Namespace migration: dropped {} non-7TV emote entries",
                 removed.len()
@@ -2136,6 +2271,9 @@ where
     B: AsRef<[u8]>,
     N: FnOnce() -> Option<HashSet<(OsString, OsString)>>,
 {
+    if in_clearing_folder(dest) {
+        return Err(std::io::Error::other("cache folder is being cleared"));
+    }
     if !sweep_before_write(holder, dest, named_files) {
         return Err(std::io::Error::other("cache writers lock not held"));
     }
@@ -2225,8 +2363,10 @@ where
     };
     let swept = if file.try_lock().is_ok() {
         let mut removed = sweep_orphan_temp_files(cache_root);
-        if let Some(named) = named_files() {
-            removed += sweep_unnamed_files(cache_root, &named);
+        let named = named_files();
+        if let Some(named) = &named {
+            removed += sweep_unnamed_files(cache_root, named);
+            removed += sweep_emote_leftovers(cache_root, named);
         }
         if let Err(e) = file.unlock() {
             debug!("[UniversalCache] Could not release the sweep lock: {e}");
@@ -2424,6 +2564,48 @@ fn sweep_unnamed_files(cache_root: &Path, named: &HashSet<(OsString, OsString)>)
     }
     if removed > 0 {
         log::info!("[UniversalCache] Removed {removed} cached files that no manifest entry names");
+    }
+    removed
+}
+
+/// Deletes the files of the emote folder that no manifest entry names, whatever
+/// their names look like, when the emote migration left `EMOTE_LEFTOVERS_MARKER`
+/// in `cache_root`, and then removes the marker. `named` holds the (type folder,
+/// file name) pairs the manifest names. Call it only while holding the writers
+/// lock exclusively (see `join_writers_with`); returns how many files were
+/// removed.
+fn sweep_emote_leftovers(cache_root: &Path, named: &HashSet<(OsString, OsString)>) -> usize {
+    let marker = cache_root.join(EMOTE_LEFTOVERS_MARKER);
+    if !marker.exists() {
+        return 0;
+    }
+    let folder = CacheType::Emote.dir_name();
+    let mut removed = 0;
+    let mut complete = true;
+    match fs::read_dir(cache_root.join(folder)) {
+        Ok(entries) => {
+            for entry in entries.flatten() {
+                let is_file = entry.file_type().map_or(false, |t| t.is_file());
+                let key = (OsString::from(folder), entry.file_name());
+                if !is_file || named.contains(&key) {
+                    continue;
+                }
+                match fs::remove_file(entry.path()) {
+                    Ok(()) => removed += 1,
+                    Err(_) => complete = false,
+                }
+            }
+        }
+        Err(e) => complete = e.kind() == std::io::ErrorKind::NotFound,
+    }
+    // A file that would not go keeps the marker, so the next sweep tries again.
+    if complete {
+        if let Err(e) = fs::remove_file(&marker) {
+            debug!("[UniversalCache] Could not remove the emote leftovers marker: {e}");
+        }
+    }
+    if removed > 0 {
+        log::info!("[UniversalCache] Removed {removed} emote files that no manifest entry names");
     }
     removed
 }
@@ -2752,8 +2934,10 @@ pub async fn download_file_to_disk(
     Ok(entry)
 }
 
-/// Get cached file path if exists and valid
+/// Get cached file path if exists and valid. Waits for the start-up migrations,
+/// so call it from the blocking pool.
 pub async fn get_cached_file_path(cache_type: CacheType, id: &str) -> Result<Option<String>> {
+    wait_for_startup();
     let manifest_id = format!("file:{}", id);
 
     // Use existing get_cached_item which handles expiry
@@ -2771,10 +2955,12 @@ pub async fn get_cached_file_path(cache_type: CacheType, id: &str) -> Result<Opt
     Ok(None)
 }
 
-/// Get ALL cached items of a specific type - efficient batch lookup (single disk read)
+/// Get ALL cached items of a specific type - efficient batch lookup (single disk
+/// read). Waits for the start-up migrations, so call it from the blocking pool.
 pub fn get_all_cached_items_by_type(
     cache_type: CacheType,
 ) -> Result<HashMap<String, UniversalCacheEntry>> {
+    wait_for_startup();
     // Reads under the lock and clones only the entries it keeps. It used to call
     // load_manifest(), which deep-clones EVERY entry, and then throw most of
     // them away. Mobile calls this on the Rewards screen, where the manifest is
@@ -2795,11 +2981,13 @@ pub fn get_all_cached_items_by_type(
     Ok(items)
 }
 
-/// Get multiple cached items by their IDs - efficient batch lookup (single disk read)
+/// Get multiple cached items by their IDs - efficient batch lookup (single disk
+/// read). Waits for the start-up migrations, so call it from the blocking pool.
 pub fn get_cached_items_batch(
     cache_type: CacheType,
     ids: &[String],
 ) -> Result<HashMap<String, UniversalCacheEntry>> {
+    wait_for_startup();
     // Same reasoning as get_all_cached_items_by_type: this asks for a handful of
     // ids, so cloning the whole manifest to look them up was the wrong shape.
     let guard = MANIFEST_MEMORY
@@ -2926,8 +3114,10 @@ fn drop_missing_files(cache_type: &CacheType) {
 }
 
 /// The cached files among `ids` (id -> path), by the same rule as the listing.
-/// Reads the in-memory manifest only.
+/// Reads the in-memory manifest only. Waits for the start-up migrations, so
+/// call it from the blocking pool.
 pub fn cached_file_paths(cache_type: CacheType, ids: &[String]) -> HashMap<String, String> {
+    wait_for_startup();
     drop_missing_files(&cache_type);
     let Ok(guard) = MANIFEST_MEMORY.read() else {
         return HashMap::new();
@@ -2946,24 +3136,34 @@ pub async fn get_cached_files_list(cache_type: CacheType) -> Result<HashMap<Stri
     cached_files_list(cache_type)
 }
 
-/// The cached files of a type (id -> path). The first call for a type lists its
-/// folder, so call this from a blocking thread.
+/// The cached files of a type (id -> path). Waits for the start-up migrations,
+/// and the first call for a type lists its folder, so call this from a blocking
+/// thread.
 pub fn cached_files_list(cache_type: CacheType) -> Result<HashMap<String, String>> {
     // debug!(
     //     "[UniversalCache] Getting cached files list for {:?}",
     //     cache_type
     // );
+    wait_for_startup();
     drop_missing_files(&cache_type);
+    cached_files_in(&MANIFEST_MEMORY, &cache_type)
+}
+
+/// The cached files of `cache_type` in `memory` (id -> path).
+fn cached_files_in(
+    memory: &StdRwLock<UniversalCacheManifest>,
+    cache_type: &CacheType,
+) -> Result<HashMap<String, String>> {
     // Filtered under the read lock. `load_manifest()` clones every entry of
     // every kind first, which cost ~150 ms per call on a 70k-entry cache to
     // return a few hundred badge paths.
-    let guard = MANIFEST_MEMORY
+    let guard = memory
         .read()
         .map_err(|_| anyhow::anyhow!("manifest memory lock poisoned"))?;
     let mut files = HashMap::new();
 
     for (key, entry) in guard.entries.iter() {
-        if let (Some(id), Some(path)) = (key.strip_prefix("file:"), usable_file_path(&cache_type, entry)) {
+        if let (Some(id), Some(path)) = (key.strip_prefix("file:"), usable_file_path(cache_type, entry)) {
             files.insert(id.to_string(), path.to_string());
         }
     }
@@ -3058,15 +3258,16 @@ pub fn manifest_len() -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::{
-        assign_positions_in_with, badge_date_key, clear_cache_in, clear_cache_in_with, content_addressed_file_name,
-        delete_entry_files_in, delete_unnamed_files_with, detect_image_ext, drop_expired, encode_with,
-        flush_if_dirty_with, is_hashed_cache_name, is_still_paint_entry, join_writers, looks_like_html, looks_like_svg,
+        assign_positions_in_with, badge_date_key, cached_files_in, clear_cache_in, clear_cache_in_renaming,
+        clear_cache_in_with, content_addressed_file_name, delete_unnamed_files_hooked, delete_unnamed_files_with,
+        detect_image_ext, drop_expired, encode_with, flush_if_dirty_hooked, flush_if_dirty_with, in_clearing_folder,
+        is_hashed_cache_name, is_still_paint_entry, join_writers, join_writers_with, looks_like_html, looks_like_svg,
         merge_remote_into_with, missing_file_keys, parse_manifest, queue_entry_files, refuse_html, remove_cached_file,
-        remove_clearing_leftovers, resolve_path, safe_id, stamp_last_sync_in, sweep_before_write,
-        sweep_orphan_temp_files, sweep_unnamed_files, take_entries_where, take_pending, usable_file_path,
-        webp_is_animated, write_atomic_held, write_atomic_with, write_file_entry_with, writers_lock_path, CacheMetadata,
-        CacheType, PendingDelete, StoreOutcome, UniversalCacheEntry, UniversalCacheManifest, MANIFEST_LOCK,
-        WRITERS_LOCK_FILE,
+        remove_clearing_leftovers, resolve_path, safe_id, set_gate, stamp_last_sync_in, sweep_before_write,
+        sweep_emote_leftovers, sweep_orphan_temp_files, sweep_unnamed_files, take_entries_where, take_pending,
+        usable_file_path, wait_for_gate, webp_is_animated, write_atomic_held, write_atomic_with,
+        write_file_entry_with, writers_lock_path, CacheMetadata, CacheType, PendingDelete, StartupGate, StoreOutcome,
+        UniversalCacheEntry, UniversalCacheManifest, EMOTE_LEFTOVERS_MARKER, MANIFEST_LOCK, WRITERS_LOCK_FILE,
     };
     use std::collections::{HashMap, HashSet};
     use std::ffi::OsString;
@@ -3074,7 +3275,7 @@ mod tests {
     use std::io::{Error, ErrorKind};
     use std::path::{Path, PathBuf};
     use std::sync::atomic::AtomicBool;
-    use std::sync::{Mutex, RwLock};
+    use std::sync::{Condvar, Mutex, RwLock};
 
     /// `super::store_entries` with no file being deleted.
     fn store_entries(
@@ -4191,12 +4392,245 @@ mod tests {
             cosmetic,
         ];
 
-        delete_entry_files_in(&cache_dir, &entries);
+        let pending = Mutex::new(Vec::new());
+        queue_entry_files(&pending, &cache_dir, &entries);
+        flush_deletes(&pending, &RwLock::new(UniversalCacheManifest::default()));
 
         assert!(!inside.exists(), "a file inside the type folder is deleted");
         assert!(outside.exists(), "a file outside the cache is never deleted");
         assert!(other_type.exists(), "a file outside its own type's folder is never deleted");
         let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_file_stored_again_after_a_migration_took_its_entry_out_survives() {
+        let (root, files) = emote_files("migrate-restored", &["a-aaaaaaaa.png", "b-bbbbbbbb.png"]);
+        let memory = RwLock::new(UniversalCacheManifest::default());
+        let pending = Mutex::new(Vec::new());
+        let both = vec![entry_with_file("file:a", &files[0]), entry_with_file("file:b", &files[1])];
+        store_entries(&memory, &root, &pending, both).unwrap();
+        let _ = take_pending(&pending);
+
+        let removed = take_entries_where(&memory, |_, _| true).unwrap();
+        queue_entry_files(&pending, &root, &removed);
+        // A download names one of the files again before the queue is worked.
+        store_entries(&memory, &root, &pending, vec![entry_with_file("file:a", &files[0])]).unwrap();
+        flush_deletes(&pending, &memory);
+
+        assert!(files[0].exists(), "the file a current entry names stays");
+        assert!(!files[1].exists(), "the file no entry names is deleted");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_emote_folder_leftovers_go_only_in_the_exclusive_sweep_and_live_files_stay() {
+        let base = scratch_dir("emote-leftovers");
+        let root = base.join("cache");
+        let emotes = root.join("emotes");
+        fs::create_dir_all(&emotes).unwrap();
+        let live = emotes.join("live-aaaaaaaa.png");
+        let old_shape = emotes.join("old.bin");
+        let orphan = emotes.join("orphan-bbbbbbbb.png");
+        for file in [&live, &old_shape, &orphan] {
+            fs::write(file, b"x").unwrap();
+        }
+        let named: HashSet<(OsString, OsString)> =
+            [(OsString::from("emotes"), OsString::from("live-aaaaaaaa.png"))].into_iter().collect();
+
+        assert_eq!(sweep_emote_leftovers(&root, &named), 0, "nothing goes without the marker");
+        assert!(old_shape.exists());
+
+        fs::write(root.join(EMOTE_LEFTOVERS_MARKER), b"").unwrap();
+        let (held, swept) = join_writers_with(&root, || Some(named.clone())).expect("joins the writers");
+        assert_eq!(swept, Some(2), "the exclusive sweep removes the orphan and the old-shaped file");
+        assert!(live.exists(), "a file an entry names stays");
+        assert!(!old_shape.exists());
+        assert!(!orphan.exists());
+        assert!(!root.join(EMOTE_LEFTOVERS_MARKER).exists(), "the marker goes once the sweep is done");
+
+        // A second process joining while the first writes holds no exclusive
+        // lock, so nothing is swept and a marker would stay.
+        fs::write(root.join(EMOTE_LEFTOVERS_MARKER), b"").unwrap();
+        let stray = emotes.join("stray.bin");
+        fs::write(&stray, b"x").unwrap();
+        let (second, swept) = join_writers_with(&root, || Some(named.clone())).expect("joins the writers");
+        assert_eq!(swept, None);
+        assert!(stray.exists(), "a file is never taken while another process may be writing");
+        assert!(root.join(EMOTE_LEFTOVERS_MARKER).exists());
+        drop(second);
+        drop(held);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_listing_waits_for_the_start_up_gate_and_returns_the_migrated_list() {
+        let gate: StartupGate = (Mutex::new(true), Condvar::new());
+        set_gate(&gate, false);
+        let memory = RwLock::new(UniversalCacheManifest::default());
+        for id in ["a", "b", "c"] {
+            let key = format!("file:{id}");
+            let entry = entry_with_file(&key, Path::new(&format!("C:/cache/emotes/{id}-aaaaaaaa.png")));
+            memory.write().unwrap().entries.insert(key, entry);
+        }
+        let (tx, rx) = std::sync::mpsc::channel::<HashMap<String, String>>();
+        std::thread::scope(|scope| {
+            let (gate, memory) = (&gate, &memory);
+            scope.spawn(move || {
+                wait_for_gate(gate);
+                tx.send(cached_files_in(memory, &CacheType::Emote).unwrap()).unwrap();
+            });
+            let early = rx.recv_timeout(std::time::Duration::from_millis(100)).is_ok();
+
+            // The migration takes an entry out, then the gate opens.
+            take_entries_where(memory, |key, _| key == "file:b").unwrap();
+            set_gate(gate, true);
+            assert!(!early, "a listing returned while the gate was closed");
+            let list = rx.recv_timeout(std::time::Duration::from_secs(5)).expect("the listing returns once the gate opens");
+            let mut ids: Vec<&String> = list.keys().collect();
+            ids.sort();
+            assert_eq!(ids, ["a", "c"], "the list has no removed entry");
+        });
+    }
+
+    #[test]
+    fn a_clear_whose_rename_fails_deletes_in_place_with_no_lock_held() {
+        let base = scratch_dir("clear-in-place");
+        let cache_dir = base.join("cache");
+        let emotes = cache_dir.join("emotes");
+        fs::create_dir_all(&emotes).unwrap();
+        let old = emotes.join("old-aaaaaaaa.png");
+        fs::write(&old, b"old").unwrap();
+        let memory = RwLock::new(manifest_of(1, 5));
+        let pending = Mutex::new(Vec::new());
+        let (paused_tx, paused_rx) = std::sync::mpsc::channel::<()>();
+        let (resume_tx, resume_rx) = std::sync::mpsc::channel::<()>();
+        let (stored_tx, stored_rx) = std::sync::mpsc::channel::<(usize, Vec<String>)>();
+        std::thread::scope(|scope| {
+            let (memory, pending, cache_dir) = (&memory, &pending, &cache_dir);
+            // The folder cannot be renamed, as when a file in it is held open;
+            // the clear is paused after its locks are released and before the
+            // folder is deleted in place.
+            let clear = scope.spawn(move || {
+                clear_cache_in_renaming(
+                    cache_dir,
+                    memory,
+                    pending,
+                    |_, _| Err(Error::new(ErrorKind::PermissionDenied, "held open")),
+                    || {
+                        paused_tx.send(()).unwrap();
+                        resume_rx.recv().unwrap();
+                    },
+                )
+                .expect("the clear works");
+            });
+            paused_rx.recv().unwrap();
+            assert!(in_clearing_folder(&old), "the folder is marked while it is deleted");
+
+            // A store of an entry that sits in the folder is refused, and
+            // neither waits for the delete.
+            let entry = entry_with_file("file:old", &old);
+            let store = scope.spawn(move || {
+                let _lock = MANIFEST_LOCK.lock().unwrap();
+                let out = store_entries(memory, cache_dir, pending, vec![entry]).unwrap();
+                stored_tx.send((out.stored, out.refused)).unwrap();
+            });
+            let (stored, refused) = stored_rx
+                .recv_timeout(std::time::Duration::from_millis(50))
+                .expect("a store did not wait for the delete");
+            assert_eq!(stored, 0);
+            assert_eq!(refused, vec!["file:old".to_string()]);
+
+            let holder = Mutex::new(None);
+            let dest = emotes.join("new-bbbbbbbb.png");
+            assert!(write_atomic_held(&holder, &dest, b"new", || None).is_err(), "a write into the folder fails");
+            assert!(!dest.exists());
+            assert!(temp_files_in(&emotes).is_empty(), "no temp file was created");
+
+            resume_tx.send(()).unwrap();
+            clear.join().unwrap();
+            store.join().unwrap();
+        });
+        assert!(!in_clearing_folder(&old), "the mark is gone once the clear is done");
+        assert!(cache_dir.is_dir(), "the folder is recreated");
+        assert!(fs::read_dir(&cache_dir).unwrap().next().is_none(), "the folder is empty");
+        assert!(memory.read().unwrap().entries.is_empty());
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_second_flush_does_not_wait_for_the_first_ones_file_deletes() {
+        let dir = scratch_dir("flush-deletes-after-lock");
+        let path = dir.join("manifest.json");
+        let memory = RwLock::new(manifest_of(1, 3));
+        let folder = dir.join("emotes");
+        let queued: Vec<PendingDelete> = (0..3000).map(|i| (folder.clone(), folder.join(format!("f{i}.png")))).collect();
+        let pending = Mutex::new(queued);
+        let none = Mutex::new(Vec::new());
+        let dirty = AtomicBool::new(true);
+        let (reached_tx, reached_rx) = std::sync::mpsc::channel::<usize>();
+        let (resume_tx, resume_rx) = std::sync::mpsc::channel::<()>();
+        let (second_tx, second_rx) = std::sync::mpsc::channel::<bool>();
+        std::thread::scope(|scope| {
+            let (memory, pending, none, path, dirty) = (&memory, &pending, &none, &path, &dirty);
+            // The first flush has written and is paused where it would delete.
+            let first = scope.spawn(move || {
+                flush_if_dirty_hooked(memory, pending, path, dirty, || {}, |files| {
+                    reached_tx.send(files.len()).unwrap();
+                    resume_rx.recv().unwrap();
+                })
+                .expect("the flush writes")
+            });
+            assert_eq!(reached_rx.recv().unwrap(), 3000);
+            assert!(path.exists(), "the first flush has written");
+
+            dirty.store(true, std::sync::atomic::Ordering::Release);
+            let second = scope.spawn(move || {
+                let flushed = flush_if_dirty_with(memory, none, path, dirty, || {}).expect("the flush runs");
+                second_tx.send(flushed).unwrap();
+            });
+            let flushed = second_rx
+                .recv_timeout(std::time::Duration::from_millis(500))
+                .expect("the second flush waited for the first one's deletes");
+            assert!(flushed, "the second flush wrote");
+            resume_tx.send(()).unwrap();
+            assert!(first.join().unwrap());
+            second.join().unwrap();
+        });
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_name_is_free_again_as_soon_as_its_own_file_is_deleted() {
+        let (root, files) = emote_files("unmark-each", &["a-aaaaaaaa.png", "b-bbbbbbbb.png"]);
+        let queue: Vec<PendingDelete> = files.iter().map(|f| (root.join("emotes"), f.clone())).collect();
+        let memory = RwLock::new(UniversalCacheManifest::default());
+        let pending = Mutex::new(Vec::new());
+        let deleting = Mutex::new(HashSet::new());
+        let (mut first_stored, mut second_stored) = (None, None);
+        delete_unnamed_files_hooked(
+            &queue,
+            &memory,
+            &deleting,
+            || {},
+            |done| {
+                if done != files[0].as_path() {
+                    return;
+                }
+                // The first file is deleted and the second is not yet: the first
+                // is downloaded again and accepted, the second is still refused.
+                fs::write(&files[0], b"again").unwrap();
+                let again = vec![entry_with_file("file:a", &files[0])];
+                first_stored = Some(super::store_entries(&memory, &root, &pending, &deleting, again).unwrap().stored);
+                let waiting = vec![entry_with_file("file:b", &files[1])];
+                second_stored = Some(super::store_entries(&memory, &root, &pending, &deleting, waiting).unwrap().stored);
+            },
+        );
+        assert_eq!(first_stored, Some(1), "a name whose file is deleted is accepted mid-batch");
+        assert_eq!(second_stored, Some(0), "a name whose file is still to be deleted is refused");
+        assert!(files[0].exists(), "the file downloaded again stays");
+        assert!(!files[1].exists());
+        assert!(deleting.lock().unwrap().is_empty());
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
