@@ -319,6 +319,26 @@ impl Session {
         self.park.lock().map(|p| *p == Park::Parked).unwrap_or(false)
     }
 
+    /// Parked, or woken and not yet cut a segment: whatever a player asks for
+    /// by number was cut before the pause.
+    fn is_paused(&self) -> bool {
+        self.park
+            .lock()
+            .map(|p| matches!(*p, Park::Parked | Park::Resuming))
+            .unwrap_or(false)
+    }
+
+    /// Whether this DASH session holds segment `n` of the video or audio track.
+    fn dash_holds(&self, want_video: bool, n: u64) -> bool {
+        self.dash
+            .lock()
+            .map(|st| {
+                let hold = if want_video { &st.v } else { &st.a };
+                hold.held.contains_key(&n)
+            })
+            .unwrap_or(false)
+    }
+
     /// Mark the pull or capture as stopped and let go of the window it held,
     /// so a parked session holds no media. False when a playlist request
     /// arrived in the meantime, in which case it keeps running.
@@ -674,13 +694,10 @@ async fn handle(path: String) -> Result<warp::http::Response<Bytes>, warp::Rejec
         return Ok(fail_because(404, "not a stream path".into()));
     };
     let Some(session) = session_of(id) else {
-        // A playlist request that names no session is one in flight when its
-        // stream stopped: a 503 makes the player retry or give up quietly,
-        // where a 404 reads as the stream being gone for good.
-        if tail.ends_with(".m3u8") {
-            return Ok(fail_because(503, format!("no session '{}'", id)));
-        }
-        return Ok(fail_because(404, format!("no session '{}'", id)));
+        // A request that names no session is one in flight when its stream
+        // stopped or was replaced: a 503 makes the player retry or give up
+        // quietly, where a 404 reads as the stream being gone for good.
+        return Ok(fail_because(503, format!("no session '{}'", id)));
     };
     if tail.ends_with(".m3u8") {
         session.touch_playlist();
@@ -748,6 +765,11 @@ async fn handle(path: String) -> Result<warp::http::Response<Bytes>, warp::Rejec
             // `iv`/`ia` are the init segments, `v/{n}`/`a/{n}` the media ones.
             for (prefix, want_video) in [("v/", true), ("a/", false)] {
                 if let Some(n) = tail.strip_prefix(prefix).and_then(|s| s.parse::<u64>().ok()) {
+                    // A number from before the park is not the live edge, and
+                    // asking the CDN for it would only fetch stale media.
+                    if session.is_paused() && !session.dash_holds(want_video, n) {
+                        return Ok(fail_because(503, format!("segment {} is from before a pause", n)));
+                    }
                     return Ok(match dash_segment(&session, want_video, Some(n)).await {
                         Ok(bytes) => media_response(bytes),
                         Err(e) => fail_because(502, format!("segment: {}", e)),
@@ -788,7 +810,7 @@ async fn handle(path: String) -> Result<warp::http::Response<Bytes>, warp::Rejec
                 let seg = session.flv.lock().ok().and_then(|st| st.segs.get(&n).map(|g| g.bytes.clone()));
                 return Ok(match seg {
                     Some(bytes) => media_response(bytes),
-                    None => fail_because(404, format!("segment {} is outside the window", n)),
+                    None => fail_because(503, format!("segment {} is not held", n)),
                 });
             }
         }
@@ -1294,10 +1316,10 @@ async fn capture_loop(id: String, s: Arc<Session>) {
             return;
         }
         if s.park_due() {
-            if !hold_parked(&id, &s).await {
+            if s.enter_park() && !wait_parked(&id, &s).await {
                 return;
             }
-            // The window was dropped on waking, so the next read starts afresh.
+            // The window was dropped on parking, so the next read starts afresh.
             continue;
         }
         match fetch_manifest(&s).await {
@@ -1716,13 +1738,18 @@ async fn flv_pump(id: String, s: Arc<Session>) {
             return;
         }
         if s.park_due() {
-            if !hold_parked(&id, &s).await {
-                return;
+            // A playlist request that raced the park leaves the session
+            // running, so only a real park drops what the muxer still held.
+            if s.enter_park() {
+                // Whatever the muxer still held is from before the pause, and
+                // the pull that comes back may be on any later point of the
+                // timeline.
+                muxer.drop_pending();
+                if !wait_parked(&id, &s).await {
+                    return;
+                }
+                failures = 0;
             }
-            // Whatever the muxer still held is from before the pause, and the
-            // pull that comes back may be on any later point of the timeline.
-            muxer.drop_pending();
-            failures = 0;
             continue;
         }
         let alive = || still_registered(&id, &s) && !s.park_due();
@@ -1766,13 +1793,10 @@ async fn flv_pump(id: String, s: Arc<Session>) {
     }
 }
 
-/// Park `s`: no reads until a playlist request wakes it, however long that
-/// takes. False when the session was stopped or replaced meanwhile, and its
-/// task should end.
-async fn hold_parked(id: &str, s: &Arc<Session>) -> bool {
-    if !s.enter_park() {
-        return true;
-    }
+/// Wait while `s` is parked (the caller has just entered the park): no reads
+/// until a playlist request wakes it, however long that takes. False when the
+/// session was stopped or replaced meanwhile, and its task should end.
+async fn wait_parked(id: &str, s: &Arc<Session>) -> bool {
     log::info!("[TikTokRelay] '{}' parked", id);
     loop {
         if !still_registered(id, s) {
@@ -2323,7 +2347,7 @@ mod tests {
         let (status, _) = get(&format!("{base_a}live.m3u8")).await;
         assert_eq!(status, 503, "stopped session must stop answering, as a retryable refusal");
         let (status, _) = get(&format!("{base_a}f/1")).await;
-        assert_eq!(status, 404, "a segment of a stopped session is simply not there");
+        assert_eq!(status, 503, "a segment of a stopped session is a retryable refusal");
         // Stopping one must not touch the other.
         let (status, _) = get(&master_b).await;
         assert_eq!(status, 200, "sibling session survived");
@@ -2981,6 +3005,60 @@ mod tests {
         task.abort();
     }
 
+    #[tokio::test]
+    async fn a_parked_dash_session_refuses_a_segment_it_does_not_hold_without_asking_the_cdn() {
+        use std::sync::atomic::Ordering;
+        let _registry = REGISTRY_TESTS.lock().await;
+        let (port, hits) = counting_http(REAL_MPD.as_bytes().to_vec()).await;
+        let mut s = session(&format!("http://127.0.0.1:{}/index.mpd", port));
+        s.packaging = Packaging::Dash;
+        let s = Arc::new(s);
+        {
+            let mut st = s.dash.lock().unwrap();
+            st.video = parse_mpd(REAL_MPD).0;
+            st.v.held.insert(1111, Bytes::from_static(b"seg1111"));
+        }
+        *s.park.lock().unwrap() = Park::Parked;
+        REGISTRY.lock().unwrap().insert("park-refuse-dash".to_string(), s.clone());
+
+        let reads = hits.load(Ordering::SeqCst);
+        let res = handle("/s/park-refuse-dash/v/1110".to_string()).await.unwrap();
+        assert_eq!(res.status(), 503, "a number from before the park");
+        assert_eq!(hits.load(Ordering::SeqCst), reads, "the CDN was asked for it");
+        let res = handle("/s/park-refuse-dash/v/1111".to_string()).await.unwrap();
+        assert_eq!(res.status(), 200, "a held number is still served");
+
+        stop("park-refuse-dash");
+    }
+
+    #[tokio::test]
+    async fn a_parked_flv_session_refuses_a_segment_it_does_not_hold() {
+        let _registry = REGISTRY_TESTS.lock().await;
+        let s = Arc::new(flv_session("http://127.0.0.1:9/live.flv"));
+        for n in [5u64, 7] {
+            s.flv.lock().unwrap().segs.insert(
+                n,
+                FlvSeg {
+                    epoch: 0,
+                    disc_seq: 0,
+                    discontinuity: false,
+                    duration: 1.0,
+                    frames: 25,
+                    bytes: Bytes::from_static(b"....moof"),
+                },
+            );
+        }
+        *s.park.lock().unwrap() = Park::Parked;
+        REGISTRY.lock().unwrap().insert("park-refuse-flv".to_string(), s.clone());
+
+        let res = handle("/s/park-refuse-flv/f/6".to_string()).await.unwrap();
+        assert_eq!(res.status(), 503, "a number that is not held");
+        let res = handle("/s/park-refuse-flv/f/5".to_string()).await.unwrap();
+        assert_eq!(res.status(), 200, "a held number is still served");
+
+        stop("park-refuse-flv");
+    }
+
     /// Where the video run of an fMP4 fragment starts, in milliseconds.
     fn fragment_start_ms(seg: &[u8]) -> u64 {
         let at = seg.windows(4).position(|w| w == b"tfdt").expect("a tfdt box");
@@ -3063,12 +3141,19 @@ mod tests {
 
         let res = handle("/s/park-long/flv.m3u8".to_string()).await.unwrap();
         assert_eq!(res.status(), 503, "the request that wakes it is refused, not a 404");
-        wait_for("the pull to cut a fresh window", Duration::from_secs(10), || {
-            s.flv.lock().map(|st| st.segs.len() >= 3).unwrap_or(false)
-        })
-        .await;
-        let res = handle("/s/park-long/flv.m3u8".to_string()).await.unwrap();
-        assert_eq!(res.status(), 200);
+        // Playlist requests keep coming, as a player's would, and answer 503
+        // until the fresh window is cut.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let res = handle("/s/park-long/flv.m3u8".to_string()).await.unwrap();
+            match res.status().as_u16() {
+                200 => break,
+                503 => {}
+                other => panic!("status {other} while the fresh window was being cut"),
+            }
+            assert!(Instant::now() < deadline, "timed out waiting for the playlist");
+        }
 
         stop("park-long");
         task.abort();

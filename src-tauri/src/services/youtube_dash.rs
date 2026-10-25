@@ -189,9 +189,6 @@ struct DashStream {
     /// `last_segment_warn` on purpose: one throttles failures, this throttles a
     /// diagnostic about successes, and sharing one would hide whichever is rarer.
     last_cost_log: Mutex<Option<Instant>>,
-    /// Touched by every request. The reaper reads it; nothing here runs on a
-    /// timer, so a stream that went away without a stop is collected lazily.
-    last_seen: Mutex<Instant>,
     /// Set while a broadcast check for this stream is running, so at most one is
     /// ever in flight.
     end_check_inflight: std::sync::atomic::AtomicBool,
@@ -205,12 +202,6 @@ static REGISTRY: Lazy<Mutex<HashMap<String, Arc<DashStream>>>> =
 /// Concurrent relayed streams. Above this a stream stays on the 1080p HLS
 /// ladder rather than queueing behind the one shared resolver webview.
 const MAX_DASH_STREAMS: usize = 4;
-
-/// A stream nothing has requested for this long is gone: the player closed
-/// without a stop, or the window was destroyed. Swept on the next `start`
-/// rather than by a ticker, because a ticker would turn every leaked entry into
-/// a hidden webview resolve every fifteen seconds.
-const IDLE_EVICT: Duration = Duration::from_secs(120);
 
 /// Ids reach the URL path, so keep them to something that needs no escaping and
 /// cannot contain the separator `route_of` splits on.
@@ -337,16 +328,6 @@ impl DashStream {
         Some((g.video_url.clone(), g.audio_url.clone()))
     }
 
-    fn touch(&self) {
-        if let Ok(mut g) = self.last_seen.lock() {
-            *g = Instant::now();
-        }
-    }
-
-    fn idle_for(&self) -> Duration {
-        self.last_seen.lock().ok().map(|g| g.elapsed()).unwrap_or_default()
-    }
-
     /// One fragment, carrying this stream's playback identity and recording the
     /// head it reports.
     ///
@@ -463,19 +444,7 @@ pub async fn start(
     if !valid_id(stream_id) {
         return Err(anyhow!("unusable stream id '{}'", stream_id));
     }
-    // Lazy reaper. Nothing in this module runs on a timer (a ticker would turn
-    // every leaked entry into a hidden webview resolve every fifteen seconds),
-    // so abandoned streams are collected the next time one starts.
-    reap_idle();
-    {
-        let reg = REGISTRY.lock().map_err(|_| anyhow!("registry poisoned"))?;
-        if !reg.contains_key(stream_id) && reg.len() >= MAX_DASH_STREAMS {
-            return Err(anyhow!(
-                "already relaying {} streams; this one stays on the HLS ladder",
-                reg.len()
-            ));
-        }
-    }
+    admit(stream_id)?;
     // One nonce per stream, minted here. This used to be a process-global that
     // was cleared on every start, which rewrote the nonce a running stream was
     // mid-playback on.
@@ -557,7 +526,6 @@ pub async fn start(
         inflight: Mutex::new(HashMap::new()),
         last_segment_warn: Mutex::new(None),
         last_cost_log: Mutex::new(None),
-        last_seen: Mutex::new(Instant::now()),
         end_check_inflight: std::sync::atomic::AtomicBool::new(false),
         last_end_check: Mutex::new(None),
     });
@@ -598,21 +566,19 @@ pub async fn start(
     ))
 }
 
-/// Drop streams nothing has asked about for a while.
-///
-/// A leaked entry is inert (every clock in this module is read inside `handle`
-/// on an incoming request), but it holds two init segments plus up to six
-/// remuxed fragments, and it counts against MAX_DASH_STREAMS, so the next real
-/// stream would be refused and silently fall back to 1080p.
-fn reap_idle() {
-    let Ok(mut reg) = REGISTRY.lock() else { return };
-    reg.retain(|id, st| {
-        let keep = st.idle_for() < IDLE_EVICT;
-        if !keep {
-            log::info!("[YouTubeDash] {}: idle, dropping the relay", id);
-        }
-        keep
-    });
+/// Whether a stream under `stream_id` may be relayed: always for an id that is
+/// already registered (a quality change replaces it), and otherwise only while
+/// fewer than MAX_DASH_STREAMS are relayed. Nothing is dropped to make room: a
+/// stream ends with its stop, a replacement or a teardown, never on a timer.
+fn admit(stream_id: &str) -> Result<()> {
+    let reg = REGISTRY.lock().map_err(|_| anyhow!("registry poisoned"))?;
+    if !reg.contains_key(stream_id) && reg.len() >= MAX_DASH_STREAMS {
+        return Err(anyhow!(
+            "already relaying {} streams; this one stays on the HLS ladder",
+            reg.len()
+        ));
+    }
+    Ok(())
 }
 
 /// Drop ONE stream. A missing id is a deliberate no-op: this is called from the
@@ -1067,8 +1033,6 @@ async fn handle(full: String) -> Result<warp::http::Response<Bytes>, std::conver
         // stopped, and hls.js treats the two differently.
         return Ok(fail_because(503, format!("no session for stream {}", id)));
     };
-    // Proof of life for the reaper.
-    st.touch();
     // A player polling the solo stream's playlists is loading it, which is
     // what keeps the stream from reading as parked while it plays.
     if path.ends_with(".m3u8") {
@@ -1683,10 +1647,21 @@ mod tests {
             inflight: Mutex::new(HashMap::new()),
             last_segment_warn: Mutex::new(None),
             last_cost_log: Mutex::new(None),
-            last_seen: Mutex::new(Instant::now()),
             end_check_inflight: std::sync::atomic::AtomicBool::new(false),
             last_end_check: Mutex::new(None),
         })
+    }
+
+    #[test]
+    fn admitting_another_stream_never_drops_a_registered_one() {
+        let old = a_stream("admit-old", a_session(5.0, 100));
+        REGISTRY.lock().unwrap().insert("admit-old".to_string(), old);
+
+        assert!(admit("admit-new").is_ok());
+        assert!(lookup("admit-old").is_some(), "a registered stream is only ever stopped or replaced");
+        assert!(admit("admit-old").is_ok(), "an id already registered is always admitted");
+
+        REGISTRY.lock().unwrap().remove("admit-old");
     }
 
     /// THE bug this whole refactor exists to remove. Sequence numbers restart per

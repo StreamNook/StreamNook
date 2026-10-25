@@ -1296,6 +1296,35 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_replay_without_a_park_continues_the_timeline_unbroken() {
+        let mut m = Muxer::new();
+        let mut before = Vec::new();
+        for f in Demuxer::default().push(&sample_flv(10_000, 15_500)).unwrap() {
+            before.extend(m.push(f).unwrap());
+        }
+        let written_frames: u32 = segments(&before).iter().map(|s| s.video_frames).sum();
+        assert!(written_frames > 0, "the first stretch produced segments");
+        // 25 fps from 10 000: the written end on the stream's clock.
+        let written_end = 10_000u64 + written_frames as u64 * 40;
+
+        // The pull reconnects and the CDN replays from the keyframe at 14 000.
+        let mut after = Vec::new();
+        for f in Demuxer::default().push(&sample_flv(14_000, 18_100)).unwrap() {
+            after.extend(m.push(f).unwrap());
+        }
+        let segs = segments(&after);
+        assert!(!segs.is_empty(), "the replay went on to produce segments");
+        for s in &segs {
+            assert!(
+                video_tfdt(&s.bytes) >= written_end * (VIDEO_TIMESCALE / 1000) as u64,
+                "segment {} starts before the written end",
+                s.number
+            );
+            assert!(!s.discontinuity, "segment {} is marked as a break", s.number);
+        }
+    }
+
+    #[test]
     fn a_changed_configuration_gets_a_new_init_and_epoch() {
         let mut bytes = header(true, true);
         bytes.extend(audio_config());

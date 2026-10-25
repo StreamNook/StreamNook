@@ -984,6 +984,18 @@ pub fn run() {
         .manage(emote_service_state)
         .manage(emote_prefetch_state)
         .manage(eventsub_service_state)
+        // A reload of the main page destroys the players that were using the
+        // relay sessions, and nothing in the new page knows their ids, so the
+        // sessions are released as it starts loading. The first load finds none.
+        .on_page_load(|webview, payload| {
+            if webview.label() == "main" && payload.event() == tauri::webview::PageLoadEvent::Started {
+                tauri::async_runtime::spawn(async {
+                    services::tiktok_relay::stop_all_except("");
+                    services::youtube_dash::stop_all_except("").await;
+                    let _ = services::multi_nook_server::MultiNookServer::stop_all().await;
+                });
+            }
+        })
         .setup(move |app| {
             // Only the primary instance reaches setup (a deep-link secondary
             // exits inside the single-instance plugin), so this is the proof
