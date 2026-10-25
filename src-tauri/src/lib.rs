@@ -1222,6 +1222,8 @@ pub fn run() {
             // its `ad-pivot` reload event to the player.
             services::stream_server::set_app_handle(app_handle.clone());
             services::providers::set_app_handle(app_handle.clone());
+            // Cached art over loopback, off the UI thread (Windows only).
+            services::cache_file_server::start();
 
             // Start the shared 7TV EventAPI WebSocket client (live emote set
             // updates, and later cosmetics). It idle-connects and subscribes
@@ -2265,6 +2267,7 @@ pub fn run() {
             assign_badge_positions,
             export_manifest,
             asset_cache_enqueue,
+            cache_file_server,
             asset_cache_set_burst,
             get_cached_file,
             get_cached_files,
@@ -2358,6 +2361,7 @@ pub fn run() {
             // Session resume
             save_resume_snapshot,
             take_resume_snapshot,
+            restart_app,
             // Announcements
             fetch_announcements,
             fetch_user_chat_logs,

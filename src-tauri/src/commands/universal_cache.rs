@@ -208,3 +208,10 @@ pub fn asset_cache_enqueue(
 pub fn asset_cache_set_burst(app: crate::rt::AppHandle, window: crate::rt::WebviewWindow, active: bool) {
     crate::services::asset_cache_queue::set_burst(&app, window.label(), active);
 }
+
+/// The loopback server for cached images (`services/cache_file_server.rs`), or
+/// none (not Windows, not bound yet, or the bind failed).
+#[command]
+pub async fn cache_file_server() -> Option<crate::services::cache_file_server::CacheFileServer> {
+    crate::services::cache_file_server::info()
+}

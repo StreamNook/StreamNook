@@ -16,6 +16,12 @@ pub struct ResumeSnapshot {
     pub was_running: bool,
     /// Campaign being collected, if a specific one (vs auto-collect).
     pub automation_campaign_id: Option<String>,
+    /// The viewer had paused the live stream: it reopens paused.
+    #[serde(default)]
+    pub paused: bool,
+    /// MultiNook was open: it reopens with its saved tiles.
+    #[serde(default)]
+    pub multinook_active: bool,
 }
 
 fn resume_snapshot_path() -> Result<std::path::PathBuf, String> {
@@ -48,4 +54,11 @@ pub fn take_resume_snapshot() -> Result<Option<ResumeSnapshot>, String> {
     let snapshot = serde_json::from_str::<ResumeSnapshot>(&data)
         .map_err(|e| format!("Failed to parse resume snapshot: {}", e))?;
     Ok(Some(snapshot))
+}
+
+/// Relaunch the app. The page saves a resume snapshot first, so the stream it
+/// was on reopens. Used when WebView2's GPU process came back without the GPU.
+#[tauri::command]
+pub fn restart_app(app: crate::rt::AppHandle, reason: String) {
+    crate::services::app_exit::request_restart(&app, &format!("restart asked by the page ({reason})"));
 }
