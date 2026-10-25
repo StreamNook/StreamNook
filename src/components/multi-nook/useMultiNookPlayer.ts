@@ -20,6 +20,8 @@ import { onTileTick } from './tileTicker';
 import { alignTile, isSynced, registerSyncTile, syncDelayFor } from './tileSync';
 import { createStallReporter, reportSegment } from '../../utils/linkAdapt';
 import { isCodecFailure, UNSUPPORTED_CODEC } from '../../utils/codecFailure';
+import { clearPauseIntent, createPausePark, heldPause, notePauseIntent, type PausePark } from '../../utils/pausePark';
+import { followLiveAfterResync } from '../../utils/liveResync';
 
 /** Shown when a codec failure leaves nothing better to switch to. */
 export const CODEC_UNPLAYABLE = "Can't play this quality here";
@@ -178,6 +180,9 @@ export const useMultiNookPlayer = ({
     }
   }, [isMinimized, muted, volume]); // Added muted, volume to deps for correct restoration
 
+  // A removed tile's pause goes with it.
+  useEffect(() => () => clearPauseIntent(streamId), [streamId]);
+
   // Clean up Plyr on unmount
   useEffect(() => {
     return () => {
@@ -235,6 +240,7 @@ export const useMultiNookPlayer = ({
     const startDelay = Math.max(cushion, syncDelayFor(streamId) ?? 0);
     let unregisterSync: (() => void) | null = null;
     let stopLinkReports: (() => void) | null = null;
+    let park: PausePark | null = null;
 
     if (Hls.isSupported()) {
       const hls = new Hls({
@@ -280,6 +286,12 @@ export const useMultiNookPlayer = ({
       });
 
       hlsRef.current = hls;
+      park = createPausePark({
+        stopLoad: () => hls.stopLoad(),
+        startLoad: () => hls.startLoad(),
+        stillPaused: () => hlsRef.current === hls && video.paused,
+        log: (m) => Logger.warn(`[MultiNook-${streamId}] ${m}`),
+      });
 
       // Continuous live-latency maintenance, same forward-buffer governor as the solo
       // player with a slightly wider band for tiles (tiny per-tile buffers, and grid
@@ -338,6 +350,14 @@ export const useMultiNookPlayer = ({
       const startPlayback = () => {
         if (playStarted) return;
         playStarted = true;
+        // The viewer paused this tile before it was rebuilt: stay paused.
+        const held = heldPause(streamId, streamId);
+        if (held) {
+          setIsBuffering(false);
+          park?.paused(held.at);
+          Logger.warn(`[MultiNook-${streamId}] stays paused: paused before this tile was rebuilt`);
+          return;
+        }
         video.play().catch((e) => {
           Logger.debug(`[MultiNook-${streamId}] Autoplay failed:`, e);
           video.muted = true;
@@ -392,6 +412,7 @@ export const useMultiNookPlayer = ({
           // Listen for pause to know if it was user initiated
           playerRef.current.on('play', () => {
              userInitiatedPauseRef.current = false;
+             clearPauseIntent(streamId);
           });
           playerRef.current.on('pause', () => {
              setTimeout(() => {
@@ -456,7 +477,7 @@ export const useMultiNookPlayer = ({
            }
            if (data.details === 'bufferStalledError') {
              Logger.debug(`[MultiNook-${streamId}] Buffer stalled, attempting recovery...`);
-             if (video.paused && !userInitiatedPauseRef.current) {
+             if (video.paused && !userInitiatedPauseRef.current && !heldPause(streamId, streamId)) {
                video.play().catch(() => {});
              }
              // NON-LL tiles only: a forward seek toward the edge on the LL
@@ -591,9 +612,42 @@ export const useMultiNookPlayer = ({
       video.addEventListener('playing', () => stalls.end(), opts);
       video.addEventListener('pause', () => stalls.cancel(), opts);
       video.addEventListener('seeking', () => stalls.cancel(), opts);
+      // Only a pause after this instance played is the viewer's: a rebuild's
+      // teardown comes before it, and an instance replaced within 50 ms is
+      // not current any more when the intent would be recorded.
+      let playedHere = false;
+      let stopResync: (() => void) | null = null;
+      video.addEventListener('playing', () => {
+        playedHere = true;
+      }, opts);
+      video.addEventListener('pause', () => {
+        if (!playedHere || video.ended) return;
+        park?.paused();
+        setTimeout(() => {
+          if (video.paused && !video.ended && hlsRef.current === hls) notePauseIntent(streamId, streamId);
+        }, 50);
+      }, opts);
+      video.addEventListener('play', () => {
+        if (park?.play() !== 'resync') return;
+        clearPauseIntent(streamId);
+        Logger.warn(`[MultiNook-${streamId}] paused past the live window; loading again from the live edge`);
+        stopResync?.();
+        stopResync = followLiveAfterResync(
+          hls,
+          video,
+          () => {
+            if (hlsRef.current !== hls) return;
+            Logger.warn(`[MultiNook-${streamId}] no video after the resync; restarting the tile`);
+            usemultiNookStore.getState().retrySlot(streamId);
+          },
+          (m) => Logger.info(`[MultiNook-${streamId}] ${m}`),
+        );
+      }, opts);
       stopLinkReports = () => {
         linkListeners.abort();
         stalls.cancel();
+        park?.dispose();
+        stopResync?.();
       };
 
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
