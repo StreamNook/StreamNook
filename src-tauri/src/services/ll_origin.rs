@@ -391,6 +391,12 @@ pub struct LlOrigin {
     /// Held for the whole of `start`, so two starts on one origin run one after
     /// the other instead of interleaving their probes and installs.
     start_lock: tokio::sync::Mutex<()>,
+    /// Set by `close`: the stream this origin served is gone for good, so no
+    /// start, install or unpark may bring a reader back.
+    closed: AtomicBool,
+    /// Re-signs the upstream playlist URL when the first polls after an unpark
+    /// are refused (`PlaylistHealth`). Set by the relay that owns the stream.
+    resigner: Mutex<Option<Resigner>>,
 }
 
 /// Hard kill switch: when true, no origin activates and the relays fall back to the
@@ -418,7 +424,7 @@ const PARK_IDLE_MS: u64 = 30_000;
 
 /// `PARK_IDLE_MS`, or `SN_PARK_IDLE_MS` from the environment when it holds a
 /// positive number of milliseconds (test runs use seconds). Read once.
-fn park_idle_ms() -> u64 {
+pub(crate) fn park_idle_ms() -> u64 {
     static SPAN: Lazy<u64> = Lazy::new(|| {
         std::env::var("SN_PARK_IDLE_MS")
             .ok()
@@ -430,16 +436,111 @@ fn park_idle_ms() -> u64 {
 }
 
 /// Milliseconds on a monotonic clock, for idle spans. Never 0.
-fn mono_ms() -> u64 {
+pub(crate) fn mono_ms() -> u64 {
     static T0: Lazy<std::time::Instant> = Lazy::new(std::time::Instant::now);
     (T0.elapsed().as_millis() as u64).saturating_add(1)
 }
 
 /// Whether an origin last asked at `last` (0 = never) has been idle for
 /// `span` at `now`.
-fn idle_for_park(last: u64, now: u64, span: u64) -> bool {
+pub(crate) fn idle_for_park(last: u64, now: u64, span: u64) -> bool {
     last != 0 && now.saturating_sub(last) >= span
 }
+
+/// A plugin swap that arrived while the relay was parked: stored in `slot`
+/// (replacing an older one) and `None` returned, so nothing starts. When the
+/// relay is not parked the URL comes back to be applied now, and a swap held
+/// earlier is dropped as superseded.
+pub(crate) fn hold_swap_if_parked(
+    slot: &mut Option<String>,
+    parked: bool,
+    url: String,
+) -> Option<String> {
+    if parked {
+        *slot = Some(url);
+        None
+    } else {
+        *slot = None;
+        Some(url)
+    }
+}
+
+/// The held swap, taken once a player is loading again. A relay that is still
+/// parked keeps it.
+pub(crate) fn take_held_swap(slot: &mut Option<String>, parked: bool) -> Option<String> {
+    if parked {
+        None
+    } else {
+        slot.take()
+    }
+}
+
+/// A callback that re-signs a refused upstream playlist URL: given the stale
+/// URL, it yields the fresh one.
+pub(crate) type Resigner =
+    Arc<dyn Fn(String) -> futures::future::BoxFuture<'static, Option<String>> + Send + Sync>;
+
+/// A spawned task that is aborted when its handle is dropped, so a task never
+/// outlives the reader (or the loop pass) that owns it.
+struct AbortOnDrop<T>(JoinHandle<T>);
+
+impl<T> Drop for AbortOnDrop<T> {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// Playlist polls after an unpark in which a 403 or 404 is read as an expired
+/// signature rather than an offline stream.
+const RESIGN_POLLS_AFTER_UNPARK: u32 = 3;
+
+/// The reader's tally of failing playlist polls, and its one chance after an
+/// unpark to re-sign a refused playlist before a refusal counts toward going
+/// offline.
+struct PlaylistHealth {
+    /// Consecutive failing polls; reset by any good poll.
+    fails: u32,
+    /// Polls started by this reader.
+    polls: u32,
+    /// Whether a refusal in the first polls may still be answered by a re-sign.
+    resign_left: bool,
+}
+
+impl PlaylistHealth {
+    fn new(after_unpark: bool) -> Self {
+        Self {
+            fails: 0,
+            polls: 0,
+            resign_left: after_unpark,
+        }
+    }
+
+    fn polled(&mut self) {
+        self.polls = self.polls.saturating_add(1);
+    }
+
+    fn healthy(&mut self) {
+        self.fails = 0;
+    }
+
+    /// Counts a failing poll and returns the run of failures so far.
+    fn failed(&mut self) -> u32 {
+        self.fails += 1;
+        self.fails
+    }
+
+    /// Whether a refused poll should be answered by a re-sign instead of
+    /// being counted: once per unpark, only in the first polls, only for a
+    /// 403 or 404.
+    fn wants_resign(&mut self, status: u16) -> bool {
+        if self.resign_left && self.polls <= RESIGN_POLLS_AFTER_UNPARK && matches!(status, 403 | 404) {
+            self.resign_left = false;
+            return true;
+        }
+        false
+    }
+}
+
 /// How far behind the relay's edge AVPlayer sits past the playlist's hold-back
 /// (measured: a 0.936 s hold-back plays 1.44 to 1.71 s behind the edge, a 0.624 s
 /// one 1.13 to 1.20 s).
@@ -1030,7 +1131,33 @@ impl LlOrigin {
             parked: AtomicBool::new(false),
             last_playlist_ms: AtomicU64::new(0),
             start_lock: tokio::sync::Mutex::new(()),
+            closed: AtomicBool::new(false),
+            resigner: Mutex::new(None),
         })
+    }
+
+    /// Install (or clear) how this origin's upstream URL is re-signed.
+    pub(crate) fn set_resigner(&self, resigner: Option<Resigner>) {
+        *self.resigner.lock().unwrap() = resigner;
+    }
+
+    /// Ask the installed resigner for a fresh URL in place of `stale`. `None`
+    /// when no resigner is installed or it found nothing.
+    async fn resign(&self, stale: &str) -> Option<String> {
+        let resigner = { self.resigner.lock().unwrap().clone() };
+        let resigner = resigner?;
+        resigner(stale.to_string()).await
+    }
+
+    /// Make `url` the playlist an unparked reader of generation `gen` and any
+    /// later unpark follow. False when that reader is no longer the current one.
+    fn adopt_upstream(&self, gen: u64, url: String) -> bool {
+        let _task = self.reader_task.lock().unwrap();
+        if self.generation.load(Ordering::SeqCst) != gen {
+            return false;
+        }
+        *self.upstream.lock().unwrap() = Some(url);
+        true
     }
 
     /// Name the stream this origin serves, for `link_adapt`.
@@ -1117,6 +1244,13 @@ impl LlOrigin {
         // finds the origin stopped and starts nothing.
         let task = self.reader_task.lock().unwrap();
         self.stop_locked(task);
+    }
+
+    /// The stream this origin served is gone for good (a closed tile): stop it,
+    /// and refuse every later start, install and unpark.
+    pub fn close(&self) {
+        self.closed.store(true, Ordering::SeqCst);
+        self.stop();
     }
 
     /// `stop()` unless the origin is parked: a parked origin is left as it is
@@ -1221,7 +1355,7 @@ impl LlOrigin {
     /// catch-up replaces it, so the player never sees the origin go inactive.
     pub fn unpark(self: &Arc<Self>) -> bool {
         let mut task = self.reader_task.lock().unwrap();
-        if !self.parked.load(Ordering::SeqCst) {
+        if self.closed.load(Ordering::SeqCst) || !self.parked.load(Ordering::SeqCst) {
             return false;
         }
         self.parked.store(false, Ordering::SeqCst);
@@ -1230,7 +1364,7 @@ impl LlOrigin {
             return false;
         };
         let gen = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
-        *task = Some(tokio::spawn(run_reader(self.clone(), url, http_client(), gen)));
+        *task = Some(tokio::spawn(run_reader(self.clone(), url, http_client(), gen, true)));
         info!("[LLOrigin] unparked; reader back at the live edge");
         true
     }
@@ -1282,6 +1416,23 @@ impl LlOrigin {
         idle_for_park(self.last_playlist_ms.load(Ordering::SeqCst), now, park_idle_ms())
     }
 
+    /// A player on the whole-segment path asked for the playlist, which this
+    /// origin does not serve while inactive.
+    pub(crate) fn note_plain_request(&self) {
+        self.note_playlist_request();
+    }
+
+    /// Nothing is being read for this origin's player: the reader is parked, or
+    /// the origin is inactive (whole-segment path) and no player has asked for
+    /// the playlist for the park span.
+    pub(crate) fn parked_or_idle(&self) -> bool {
+        self.parked_or_idle_at(mono_ms())
+    }
+
+    fn parked_or_idle_at(&self, now: u64) -> bool {
+        self.is_parked() || (!self.is_active() && self.idle_park_due_at(now))
+    }
+
     /// Probe the upstream and, if it's a low-latency broadcast we can serve, build the
     /// initial live edge (backfilling a couple of complete segments) and spawn the
     /// streaming reader. Returns `{active, has_prefetch}`: `active` when the origin took
@@ -1290,6 +1441,9 @@ impl LlOrigin {
     /// when the origin declined). Awaited from stream start so the player can read the
     /// result before constructing hls.js.
     pub async fn start(self: Arc<Self>, upstream_playlist_url: String) -> StartOutcome {
+        if self.closed.load(Ordering::SeqCst) {
+            return StartOutcome::default();
+        }
         // Stopped before the queue, so a start already running ends early at
         // its next check and a stop that lands while this one waits is seen.
         self.stop();
@@ -1438,7 +1592,7 @@ impl LlOrigin {
                         bytes.len() as u64,
                         t0.elapsed().as_secs_f64(),
                     );
-                    let parts = self.convert_parts(split_complete(&bytes, container));
+                    let parts = self.convert_parts(split_complete(&bytes, container), gen);
                     if !parts.is_empty() {
                         segments.push_back(make_segment(sn, pdt, true, parts));
                     }
@@ -1481,7 +1635,7 @@ impl LlOrigin {
             segments,
         };
         let installed = self.install_started(gen, edge, upstream_playlist_url.clone(), || {
-            tokio::spawn(run_reader(self.clone(), upstream_playlist_url, client, gen))
+            tokio::spawn(run_reader(self.clone(), upstream_playlist_url, client, gen, false))
         });
         if !installed {
             debug!("[LLOrigin] start superseded by a stop; nothing installed");
@@ -1518,7 +1672,7 @@ impl LlOrigin {
         spawn: impl FnOnce() -> JoinHandle<()>,
     ) -> bool {
         let mut task = self.reader_task.lock().unwrap();
-        if self.generation.load(Ordering::SeqCst) != gen {
+        if self.generation.load(Ordering::SeqCst) != gen || self.closed.load(Ordering::SeqCst) {
             *self.transmux.lock().unwrap() = None;
             *self.cmaf_video.lock().unwrap() = None;
             return false;
@@ -1585,29 +1739,35 @@ fn split_complete(bytes: &[u8], container: Container) -> Vec<Vec<u8>> {
 
 // ──────────────────────────── the streaming reader ────────────────────────────
 
+/// `after_unpark`: this reader replaces one a park stopped, so a refused first
+/// poll may be an expired signature (see `PlaylistHealth`).
 async fn run_reader(
     origin: Arc<LlOrigin>,
-    upstream_playlist_url: String,
+    mut upstream_playlist_url: String,
     client: Client,
     gen: u64,
+    after_unpark: bool,
 ) {
-    let base = base_of(&upstream_playlist_url);
+    let mut base = base_of(&upstream_playlist_url);
     // Connection to the NEXT in-progress segment, opened by `preopen_next` while
     // the current one was still streaming. Consumed by the fast path below;
     // discarded whenever the world doesn't match (the poll path then re-syncs).
-    let mut preopened: Option<(u64, JoinHandle<Option<(Response, Option<String>, String)>>)> = None;
+    // Aborted when dropped, so no pass of this loop and no end of this reader
+    // leaves a connection opening behind.
+    let mut preopened: Option<(
+        u64,
+        AbortOnDrop<Option<(Response, Option<String>, String)>>,
+    )> = None;
     // Consecutive failing playlist polls; reset on any good poll. Drives offline
     // deactivation so a permanently-dead upstream stops being served forever.
-    let mut consec_playlist_fail: u32 = 0;
+    let mut health = PlaylistHealth::new(after_unpark);
     loop {
         if gen != origin.generation.load(Ordering::SeqCst) {
             return;
         }
         // The player stopped asking (paused): stop reading until it asks again.
         if origin.idle_park_due_at(mono_ms()) {
-            if let Some((_, h)) = preopened.take() {
-                h.abort();
-            }
+            drop(preopened.take());
             if origin.park_if_idle(gen) {
                 return;
             }
@@ -1633,7 +1793,7 @@ async fn run_reader(
                 }
             };
             if contiguous {
-                match tokio::time::timeout(PREOPEN_WAIT, &mut handle).await {
+                match tokio::time::timeout(PREOPEN_WAIT, &mut handle.0).await {
                     Ok(Ok(Some((resp, pdt, seg_url)))) => {
                         match origin.push_shell(sn, pdt.clone(), gen) {
                             Some(true) => {
@@ -1644,11 +1804,11 @@ async fn run_reader(
                                         .unwrap_or_else(|| "null".into())
                                 ));
                                 origin.wake_serves();
-                                let next = tokio::spawn(preopen_next(
+                                let next = AbortOnDrop(tokio::spawn(preopen_next(
                                     client.clone(),
                                     upstream_playlist_url.clone(),
                                     sn + 1,
-                                ));
+                                )));
                                 stream_response(
                                     &origin,
                                     resp,
@@ -1672,7 +1832,7 @@ async fn run_reader(
                         }
                     }
                     Ok(_) => {} // preopen failed (no hint / ad window): poll path
-                    Err(_) => handle.abort(), // not ready in time: poll path
+                    Err(_) => handle.0.abort(), // not ready in time: poll path
                 }
             }
         }
@@ -1681,6 +1841,7 @@ async fn run_reader(
         // returns Ok for any HTTP status, so a 403/404 (stream offline, or an
         // expired usher-signed URL) would otherwise parse to an empty playlist and
         // loop forever; inspect the status and count failures toward deactivation.
+        health.polled();
         let text = match client
             .get(&upstream_playlist_url)
             .timeout(FETCH_TIMEOUT)
@@ -1690,9 +1851,23 @@ async fn run_reader(
             Ok(r) => {
                 let status = r.status();
                 if !status.is_success() {
-                    consec_playlist_fail += 1;
-                    warn!("[LLOrigin] reader playlist HTTP {status} ({consec_playlist_fail})");
-                    if consec_playlist_fail >= PLAYLIST_OFFLINE_LIMIT {
+                    // The first polls after an unpark may meet a signature that
+                    // expired while parked: re-sign once and poll again before
+                    // the refusal counts toward going offline.
+                    if health.wants_resign(status.as_u16()) {
+                        warn!("[LLOrigin] reader playlist HTTP {status} right after an unpark; re-signing");
+                        if let Some(fresh) = origin.resign(&upstream_playlist_url).await {
+                            if !origin.adopt_upstream(gen, fresh.clone()) {
+                                return;
+                            }
+                            base = base_of(&fresh);
+                            upstream_playlist_url = fresh;
+                            continue;
+                        }
+                    }
+                    let fails = health.failed();
+                    warn!("[LLOrigin] reader playlist HTTP {status} ({fails})");
+                    if fails >= PLAYLIST_OFFLINE_LIMIT {
                         origin.deactivate_offline(&format!("playlist HTTP {status}"), gen);
                         return;
                     }
@@ -1702,9 +1877,9 @@ async fn run_reader(
                 r.text().await.unwrap_or_default()
             }
             Err(e) => {
-                consec_playlist_fail += 1;
-                warn!("[LLOrigin] reader playlist fetch failed: {e} ({consec_playlist_fail})");
-                if consec_playlist_fail >= PLAYLIST_OFFLINE_LIMIT {
+                let fails = health.failed();
+                warn!("[LLOrigin] reader playlist fetch failed: {e} ({fails})");
+                if fails >= PLAYLIST_OFFLINE_LIMIT {
                     origin.deactivate_offline("playlist fetch repeatedly failing", gen);
                     return;
                 }
@@ -1715,12 +1890,11 @@ async fn run_reader(
         let up = parse_upstream(&text, &base);
         let last_published_sn = match up.published.last() {
             Some((sn, _, _)) => {
-                consec_playlist_fail = 0; // a healthy poll
+                health.healthy(); // a healthy poll
                 *sn
             }
             None => {
-                consec_playlist_fail += 1;
-                if consec_playlist_fail >= PLAYLIST_OFFLINE_LIMIT {
+                if health.failed() >= PLAYLIST_OFFLINE_LIMIT {
                     origin.deactivate_offline("playlist has no segments", gen);
                     return;
                 }
@@ -1833,7 +2007,7 @@ async fn run_reader(
                     filled = false;
                     break;
                 };
-                match fetch_published(&client, sn, seg_pdt.clone(), url, &origin).await {
+                match fetch_published(&client, sn, seg_pdt.clone(), url, &origin, gen).await {
                     Some(seg) => fetched.push(seg),
                     None => {
                         filled = false;
@@ -1899,11 +2073,11 @@ async fn run_reader(
         ));
         origin.wake_serves();
 
-        let next = tokio::spawn(preopen_next(
+        let next = AbortOnDrop(tokio::spawn(preopen_next(
             client.clone(),
             upstream_playlist_url.clone(),
             inprogress_sn + 1,
-        ));
+        )));
         stream_segment(&origin, &client, &inprogress_url, inprogress_sn, gen).await;
 
         if !origin.finish_segment(inprogress_sn, gen) {
@@ -2046,6 +2220,7 @@ async fn fetch_published(
     pdt: Option<String>,
     url: &str,
     origin: &LlOrigin,
+    gen: u64,
 ) -> Option<Segment> {
     let t0 = std::time::Instant::now();
     let resp = match client.get(url).timeout(FETCH_TIMEOUT).send().await {
@@ -2063,7 +2238,7 @@ async fn fetch_published(
         }
     };
     crate::services::link_adapt::note_throughput(&origin.adapt_id(), bytes.len() as u64, t0.elapsed().as_secs_f64());
-    let parts = origin.convert_parts(split_complete(&bytes, origin.container()));
+    let parts = origin.convert_parts(split_complete(&bytes, origin.container()), gen);
     if parts.is_empty() {
         warn!("[LLOrigin] catch-up segment sn {sn} produced no parts");
         return None;
@@ -2170,7 +2345,7 @@ async fn stream_response(
                 remember_tail(&mut held_tail, rest);
                 received += rest.len() as u64;
                 for (part, dur) in chunker.push(rest) {
-                    let Some((part, dur)) = origin.convert_part(part, dur) else {
+                    let Some((part, dur)) = origin.convert_part(part, dur, gen) else {
                         continue;
                     };
                     if !origin.append_part(sn, part, dur, gen) {
@@ -2269,7 +2444,7 @@ async fn stream_response(
         break;
     }
     if let Some((tail, dur)) = chunker.flush() {
-        if let Some((tail, dur)) = origin.convert_part(tail, dur) {
+        if let Some((tail, dur)) = origin.convert_part(tail, dur, gen) {
             if origin.append_part(sn, tail, dur, gen) {
                 origin.wake_serves();
             }
@@ -2427,8 +2602,15 @@ impl LlOrigin {
     /// parts it already buffered (mid-GOP rewrites at the playhead = visible
     /// artifacting). Sample-measured durations keep playlist arithmetic glued
     /// to buffer reality.
-    fn convert_part(&self, bytes: Vec<u8>, dur: f64) -> Option<(Vec<u8>, f64)> {
+    ///
+    /// The generation is checked inside the transmux lock: a reader that a
+    /// stop, park or newer start has retired gets `None` and never feeds the
+    /// transmuxer a newer start owns.
+    fn convert_part(&self, bytes: Vec<u8>, dur: f64, gen: u64) -> Option<(Vec<u8>, f64)> {
         let mut g = self.transmux.lock().unwrap();
+        if self.generation.load(Ordering::SeqCst) != gen {
+            return None;
+        }
         match g.as_mut() {
             Some(t) => t.push_part(&bytes),
             None => {
@@ -2468,11 +2650,11 @@ impl LlOrigin {
     /// with its duration: sample-measured on the transmux path, an even
     /// `TARGET_DURATION/count` split on the raw path (unchanged behavior — raw
     /// backfill durations are normalized so they sum to the segment exactly).
-    fn convert_parts(&self, parts: Vec<Vec<u8>>) -> Vec<(Vec<u8>, f64)> {
+    fn convert_parts(&self, parts: Vec<Vec<u8>>, gen: u64) -> Vec<(Vec<u8>, f64)> {
         let even = TARGET_DURATION as f64 / parts.len().max(1) as f64;
         parts
             .into_iter()
-            .filter_map(|p| self.convert_part(p, even))
+            .filter_map(|p| self.convert_part(p, even, gen))
             .collect()
     }
 
@@ -3200,6 +3382,12 @@ pub fn unpark() -> bool {
 
 pub fn is_parked() -> bool {
     SOLO.is_parked()
+}
+
+/// How the main player's origin re-signs a refused playlist after an unpark
+/// (see `LlOrigin::set_resigner`).
+pub(crate) fn set_resigner(resigner: Option<Resigner>) {
+    SOLO.set_resigner(resigner)
 }
 
 /// The main player's origin noted a playlist request (see
@@ -4278,6 +4466,181 @@ mod tests {
             !origin.drop_partial_input_if_current(gen),
             "a reader retired by a stop leaves a newer transmuxer alone"
         );
+    }
+
+    #[test]
+    fn a_stale_reader_converts_no_part() {
+        let origin = LlOrigin::new(6);
+        let gen = origin.generation.load(Ordering::SeqCst);
+
+        // Passthrough (no transmuxer): the current reader's part comes back as
+        // it went in, a stale reader's does not.
+        assert_eq!(origin.convert_part(vec![7], 0.5, gen), Some((vec![7], 0.5)));
+        assert_eq!(origin.convert_part(vec![7], 0.5, gen + 1), None);
+
+        // With a transmuxer, a reader retired by a stop never feeds it.
+        origin.stop();
+        *origin.transmux.lock().unwrap() = Some(crate::services::ts_fmp4::Transmuxer::new());
+        assert_eq!(origin.convert_part(vec![7], 0.5, gen), None);
+        assert!(origin.convert_parts(vec![vec![7], vec![8]], gen).is_empty());
+    }
+
+    #[test]
+    fn a_closed_origin_installs_nothing_and_never_unparks() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+        let origin = LlOrigin::new(6);
+        *origin.live_edge.lock().unwrap() = Some(ts_edge_with_one_segment());
+        *origin.upstream.lock().unwrap() = Some("http://x/playlist.m3u8".to_string());
+        assert!(origin.park());
+
+        origin.close();
+        assert!(!origin.is_active());
+        assert!(!origin.unpark(), "a closed origin starts no reader");
+        assert!(origin.reader_task.lock().unwrap().is_none());
+
+        let gen = origin.generation.load(Ordering::SeqCst);
+        *origin.transmux.lock().unwrap() = Some(crate::services::ts_fmp4::Transmuxer::new());
+        let installed = origin.install_started(
+            gen,
+            ts_edge_with_one_segment(),
+            "http://x/playlist.m3u8".to_string(),
+            || -> JoinHandle<()> { panic!("a closed origin spawns no reader") },
+        );
+        assert!(!installed, "a start that probed before the close installs nothing");
+        assert!(!origin.is_active());
+        assert!(origin.upstream.lock().unwrap().is_none());
+        assert!(origin.transmux.lock().unwrap().is_none(), "the prepared transmuxer is cleared");
+
+        let outcome = rt.block_on(origin.clone().start("http://127.0.0.1:1/x.m3u8".to_string()));
+        assert!(!outcome.active, "a closed origin does not start");
+    }
+
+    #[test]
+    fn an_inactive_origin_reads_as_parked_after_the_idle_span_without_a_request() {
+        let origin = LlOrigin::new(6);
+        let asked = OLD_REQUEST_MS;
+        assert!(!origin.parked_or_idle_at(asked + park_idle_ms()), "never asked: not parked");
+
+        origin.note_playlist_request_at(asked);
+        assert!(!origin.parked_or_idle_at(asked + park_idle_ms() - 1));
+        assert!(origin.parked_or_idle_at(asked + park_idle_ms()));
+
+        origin.note_playlist_request_at(asked + park_idle_ms());
+        assert!(!origin.parked_or_idle_at(asked + park_idle_ms()), "a fresh request clears it");
+
+        // An active origin is idle-parked by its reader, not by this reading.
+        origin.note_playlist_request_at(asked);
+        *origin.live_edge.lock().unwrap() = Some(ts_edge_with_one_segment());
+        assert!(!origin.parked_or_idle_at(asked + park_idle_ms()));
+        assert!(origin.park());
+        assert!(origin.parked_or_idle_at(asked));
+    }
+
+    #[test]
+    fn a_swap_is_held_while_parked_and_taken_once_after() {
+        let mut slot: Option<String> = None;
+        assert_eq!(hold_swap_if_parked(&mut slot, true, "a".to_string()), None);
+        assert_eq!(slot.as_deref(), Some("a"));
+        // A newer swap replaces the held one.
+        assert_eq!(hold_swap_if_parked(&mut slot, true, "b".to_string()), None);
+        assert_eq!(slot.as_deref(), Some("b"));
+        // Still parked: it stays held.
+        assert_eq!(take_held_swap(&mut slot, true), None);
+        assert_eq!(slot.as_deref(), Some("b"));
+        // A player loads again: taken once.
+        assert_eq!(take_held_swap(&mut slot, false).as_deref(), Some("b"));
+        assert_eq!(take_held_swap(&mut slot, false), None);
+        // Not parked: applied now, nothing held.
+        assert_eq!(hold_swap_if_parked(&mut slot, false, "c".to_string()).as_deref(), Some("c"));
+        assert!(slot.is_none());
+        // A swap applied now supersedes one held earlier.
+        assert_eq!(hold_swap_if_parked(&mut slot, true, "d".to_string()), None);
+        assert_eq!(hold_swap_if_parked(&mut slot, false, "e".to_string()).as_deref(), Some("e"));
+        assert!(slot.is_none(), "the older held swap is gone");
+    }
+
+    #[test]
+    fn a_refusal_right_after_an_unpark_re_signs_once_before_it_counts() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+        let origin = LlOrigin::new(6);
+        let gen = origin.generation.load(Ordering::SeqCst);
+        *origin.upstream.lock().unwrap() = Some("http://x/stale.m3u8".to_string());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+        {
+            let calls = calls.clone();
+            let seen = seen.clone();
+            origin.set_resigner(Some(Arc::new(move |stale: String| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                seen.lock().unwrap().push(stale);
+                Box::pin(async { Some("http://x/fresh.m3u8".to_string()) })
+                    as futures::future::BoxFuture<'static, Option<String>>
+            })));
+        }
+
+        let mut health = PlaylistHealth::new(true);
+        health.polled();
+        assert!(health.wants_resign(403));
+        let fresh = rt.block_on(origin.resign("http://x/stale.m3u8"));
+        assert_eq!(fresh.as_deref(), Some("http://x/fresh.m3u8"));
+        assert!(origin.adopt_upstream(gen, fresh.unwrap()));
+        assert_eq!(
+            origin.upstream.lock().unwrap().as_deref(),
+            Some("http://x/fresh.m3u8"),
+            "the retry follows the fresh URL"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(*seen.lock().unwrap(), vec!["http://x/stale.m3u8".to_string()]);
+        assert_eq!(health.fails, 0, "the re-signed refusal did not count");
+
+        // One re-sign per unpark: the next refusal counts.
+        health.polled();
+        assert!(!health.wants_resign(403));
+        assert_eq!(health.failed(), 1);
+
+        // A superseded reader adopts nothing.
+        assert!(!origin.adopt_upstream(gen + 1, "http://x/other.m3u8".to_string()));
+        assert_eq!(origin.upstream.lock().unwrap().as_deref(), Some("http://x/fresh.m3u8"));
+    }
+
+    #[test]
+    fn a_refusal_without_a_recent_unpark_counts_as_before() {
+        // A reader that did not follow an unpark never re-signs.
+        let mut health = PlaylistHealth::new(false);
+        health.polled();
+        assert!(!health.wants_resign(403));
+        assert!(!health.wants_resign(404));
+        assert_eq!(health.failed(), 1);
+
+        // After an unpark, only a 403 or 404 in the first polls re-signs.
+        let mut late = PlaylistHealth::new(true);
+        for _ in 0..=RESIGN_POLLS_AFTER_UNPARK {
+            late.polled();
+        }
+        assert!(!late.wants_resign(403), "past the first polls a refusal counts");
+        let mut other = PlaylistHealth::new(true);
+        other.polled();
+        assert!(!other.wants_resign(500), "a server error is not an expired signature");
+        assert!(other.wants_resign(404));
+
+        // A good poll resets the run.
+        health.healthy();
+        assert_eq!(health.fails, 0);
+    }
+
+    #[test]
+    fn a_dropped_preopen_handle_aborts_its_task() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+        rt.block_on(async {
+            let task = AbortOnDrop(tokio::spawn(async {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+            }));
+            let probe = task.0.abort_handle();
+            drop(task);
+            tokio::task::yield_now().await;
+            tokio::task::yield_now().await;
+            assert!(probe.is_finished(), "dropping the handle ended the task");
+        });
     }
 
     const OLD_REQUEST_MS: u64 = u64::MAX / 2;
