@@ -81,6 +81,14 @@ struct YouTubeSession {
     /// look, which is how they backfill.
     #[serde(default)]
     channel_id_checked: bool,
+    /// The signed-in channel's `@handle`, which is the name YouTube live chat
+    /// shows and people type to mention it.
+    #[serde(default)]
+    account_handle: Option<String>,
+    /// Whether the handle has been looked for in a signed-in account menu
+    /// yet (an account can have none, so "still None" is not "try again").
+    #[serde(default)]
+    handle_checked: bool,
 }
 
 static SESSION: CachedCredential<YouTubeSession> = CachedCredential::new(".youtube_session");
@@ -421,14 +429,7 @@ pub async fn refresh_identity() -> bool {
             sess.session_index = next.session_index.clone();
             sess.delegated_session_id = next.delegated_session_id.clone();
             if changed {
-                sess.account_name = None;
-                sess.account_avatar = None;
-                // The channel id belongs to the channel that was active, so it is
-                // stale for exactly the same reason. Left behind, the member would
-                // keep claiming the channel they just switched AWAY from, and
-                // their cosmetics would appear on someone else's chat rows.
-                sess.account_channel_id = None;
-                sess.channel_id_checked = false;
+                reset_channel_fields(sess);
             }
             updated = Some(sess.clone());
         }
@@ -627,6 +628,8 @@ pub async fn connect() -> Result<()> {
         delegated_session_id: None,
         account_channel_id: None,
         channel_id_checked: false,
+        account_handle: None,
+        handle_checked: false,
     };
     // Store first so auth_headers() (used by the account-name fetch) sees the session.
     if let Ok(mut s) = session_cell().lock() {
@@ -768,6 +771,38 @@ pub fn start_reharvest_daemon() {
     });
 }
 
+/// Forget everything that belongs to the channel that was active, after a
+/// switch to another one. The channel id and handle are stale for exactly
+/// the same reason as the name: left behind, the member would keep claiming
+/// the channel they just switched AWAY from, and their cosmetics and
+/// mentions would follow someone else's chat rows.
+fn reset_channel_fields(sess: &mut YouTubeSession) {
+    sess.account_name = None;
+    sess.account_avatar = None;
+    sess.account_channel_id = None;
+    sess.channel_id_checked = false;
+    sess.account_handle = None;
+    sess.handle_checked = false;
+}
+
+/// A signed-in account menu names its account. Rotated cookies can make
+/// YouTube answer 200 with signed-out content, which proves nothing and must
+/// never be recorded as "looked, found none".
+fn menu_proves_sign_in(v: &serde_json::Value) -> bool {
+    find_account_name(v).is_some()
+}
+
+/// Record the account's handle from a signed-in account menu, once per
+/// session. True when the session changed.
+fn note_handle(sess: &mut YouTubeSession, v: &serde_json::Value) -> bool {
+    if sess.handle_checked || !menu_proves_sign_in(v) {
+        return false;
+    }
+    sess.account_handle = find_account_handle(v);
+    sess.handle_checked = true;
+    true
+}
+
 async fn fetch_account_name() -> Option<String> {
     let headers = auth_headers()?;
     let body = serde_json::json!({
@@ -776,7 +811,8 @@ async fn fetch_account_name() -> Option<String> {
     let url = "https://www.youtube.com/youtubei/v1/account/account_menu?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8&prettyPrint=false";
     let mut req = crate::services::http::client_unbounded()
         .post(url)
-        .header("User-Agent", UA);
+        .header("User-Agent", UA)
+        .timeout(Duration::from_secs(10));
     for (k, v) in headers {
         req = req.header(k, v);
     }
@@ -793,7 +829,8 @@ async fn fetch_account_name() -> Option<String> {
     }
     // Same for the channel id, which rides in the same response and is what
     // YouTube chat identifies this member by.
-    if !channel_id_checked() {
+    // Only a signed-in answer can say "this account has no channel".
+    if menu_proves_sign_in(&v) && !channel_id_checked() {
         let found = find_account_channel_id(&v);
         match &found {
             Some((id, path)) => log::info!("[YouTube] account channel id {id} via {path}"),
@@ -835,6 +872,19 @@ async fn fetch_account_name() -> Option<String> {
             persist(&sess);
         }
     }
+    // The handle rides in the same response; it is what chat names this
+    // account by.
+    let mut handled = None;
+    if let Ok(mut s) = session_cell().lock() {
+        if let Some(sess) = s.as_mut() {
+            if note_handle(sess, &v) {
+                handled = Some(sess.clone());
+            }
+        }
+    }
+    if let Some(sess) = handled {
+        persist(&sess);
+    }
     find_account_name(&v)
 }
 
@@ -857,10 +907,11 @@ pub async fn account_identity() -> (Option<String>, Option<String>) {
     if !is_connected() {
         return (None, None);
     }
-    // The channel-id check rides along, so an account connected before that
+    // The channel-id and handle checks ride along, so an account connected before that
     // existed has to fall through once to pick it up. Same reasoning as the
     // picture below: a cached NAME alone is not a complete identity.
-    if let (Some(name), Some(avatar), true) = (account_name(), account_avatar(), channel_id_checked())
+    if let (Some(name), Some(avatar), true, true) =
+        (account_name(), account_avatar(), channel_id_checked(), handle_checked())
     {
         return (Some(name), Some(avatar));
     }
@@ -1045,7 +1096,8 @@ async fn resolve_handle_to_channel_id(handle: &str) -> Option<String> {
         });
         let mut req = crate::services::http::client_unbounded()
             .post("https://www.youtube.com/youtubei/v1/navigation/resolve_url?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8&prettyPrint=false")
-            .header("User-Agent", UA);
+            .header("User-Agent", UA)
+            .timeout(Duration::from_secs(10));
         for (k, v) in headers {
             req = req.header(k, v);
         }
@@ -1078,6 +1130,24 @@ fn channel_id_checked() -> bool {
         .and_then(|s| s.clone())
         .map(|s| s.channel_id_checked)
         .unwrap_or(false)
+}
+
+fn handle_checked() -> bool {
+    session_cell()
+        .lock()
+        .ok()
+        .and_then(|s| s.clone())
+        .map(|s| s.handle_checked)
+        .unwrap_or(false)
+}
+
+/// The signed-in channel's `@handle`, if it has been read yet. A pure cache read.
+pub fn account_handle() -> Option<String> {
+    session_cell()
+        .lock()
+        .ok()
+        .and_then(|s| s.clone())
+        .and_then(|s| s.account_handle)
 }
 
 /// The signed-in channel's own id, if it has been read yet. A pure cache read.
@@ -1274,6 +1344,8 @@ pub async fn reharvest() -> bool {
                     // channel the member just switched away from.
                     account_channel_id: account_channel_id(),
                     channel_id_checked: channel_id_checked(),
+                    account_handle: account_handle(),
+                    handle_checked: handle_checked(),
                 };
                 // Only over a session still stored: a sign-out while this ran is
                 // not undone by it.
@@ -1768,6 +1840,40 @@ mod channel_id_tests {
         );
         assert_eq!(find_account_handle(&simple).as_deref(), Some("@winters"));
         assert_eq!(find_account_handle(&runs).as_deref(), Some("@winters"));
+    }
+
+    #[test]
+    fn a_signed_out_menu_records_no_handle() {
+        let mut sess = YouTubeSession::default();
+        let signed_out = wrap(json!({}), json!([]));
+        assert!(!note_handle(&mut sess, &signed_out));
+        assert!(!sess.handle_checked);
+        let signed_in = wrap(
+            json!({ "activeAccountHeaderRenderer": {
+                "accountName": { "simpleText": "Brandon" },
+                "channelHandle": { "simpleText": "@winters" } } }),
+            json!([]),
+        );
+        assert!(note_handle(&mut sess, &signed_in));
+        assert!(sess.handle_checked);
+        assert_eq!(sess.account_handle.as_deref(), Some("@winters"));
+        // Once per session.
+        assert!(!note_handle(&mut sess, &signed_in));
+    }
+
+    #[test]
+    fn a_channel_switch_forgets_the_handle_too() {
+        let mut sess = YouTubeSession {
+            account_name: Some("A".into()),
+            account_channel_id: Some("UCx".into()),
+            channel_id_checked: true,
+            account_handle: Some("@a".into()),
+            handle_checked: true,
+            ..Default::default()
+        };
+        reset_channel_fields(&mut sess);
+        assert!(sess.account_name.is_none() && sess.account_channel_id.is_none());
+        assert!(!sess.channel_id_checked && !sess.handle_checked && sess.account_handle.is_none());
     }
 
     #[test]

@@ -468,9 +468,13 @@ pub async fn kick_chat_history(
         .await
         .into_iter()
         .filter_map(|mut m| {
-            if crate::services::chat_rules::ChatRules::evaluate(&mut m, &rules).drop {
+            let verdict = crate::services::chat_rules::ChatRules::evaluate(&mut m, &rules);
+            if verdict.drop {
                 None
             } else {
+                // A mention from before you opened the chat still reaches the
+                // inbox (once: it dedupes by id), with no sound or notice.
+                crate::services::mention_inbox::on_backfill(&m, &verdict);
                 m.metadata.from_backfill = true;
                 crate::services::chat_row_view::stamp(&mut m);
                 // Patched in later if the channel's whole 7TV table is not in yet.
@@ -583,7 +587,7 @@ pub async fn platform_account_info(provider: String) -> PlatformAccountInfo {
 /// `account-roster-changed`; this is the first read.
 #[tauri::command]
 pub async fn get_account_roster() -> crate::services::account_roster::AccountRoster {
-    let roster = crate::services::account_roster::build().await;
+    let roster = crate::services::account_roster::build_followed().await;
     // Every read reports what changed (linked accounts dedupe on their own).
     crate::services::linked_accounts::on_roster(&roster);
     roster

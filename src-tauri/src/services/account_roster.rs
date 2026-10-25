@@ -106,6 +106,9 @@ static EXPIRED: Lazy<Mutex<HashSet<&'static str>>> = Lazy::new(|| Mutex::new(Has
 static LAST_SENT: Lazy<tokio::sync::Mutex<Option<AccountRoster>>> =
     Lazy::new(|| tokio::sync::Mutex::new(None));
 
+/// Identity retries run since the roster last fully resolved (see `retry_if_unresolved`).
+static RETRIES: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
 fn static_id(provider: &str) -> Option<&'static str> {
     match provider {
         "twitch" => Some("twitch"),
@@ -322,6 +325,8 @@ pub fn notify() {
         use tauri::Emitter;
         let mut last = LAST_SENT.lock().await;
         let roster = build().await;
+        follow_chat_identities(&roster);
+        retry_if_unresolved(&roster);
         // Claims are reported from every build (they dedupe on their own), so a
         // retry after a cooldown goes out even when the roster did not change.
         crate::services::linked_accounts::on_roster(&roster);
@@ -338,6 +343,95 @@ pub fn notify() {
         let _ = app.emit("account-roster-changed", &roster);
         *last = Some(roster);
     });
+}
+
+/// Build the roster and follow its chat identities, one build at a time
+/// with `notify`, so an older build can never overwrite a newer one's
+/// identities (a sign-out landing while a slow build is in flight).
+pub async fn build_followed() -> AccountRoster {
+    let _turn = LAST_SENT.lock().await;
+    let roster = build().await;
+    follow_chat_identities(&roster);
+    retry_if_unresolved(&roster);
+    roster
+}
+
+/// The chat identity each other platform's row stands for, as
+/// (platform, chat id, login, display name). A row that is not connected
+/// comes back empty, which clears that platform.
+fn identities_for(
+    roster: &AccountRoster,
+    youtube_handle: Option<String>,
+) -> Vec<(&'static str, String, String, String)> {
+    ["kick", "youtube", "tiktok"]
+        .into_iter()
+        .map(|id| {
+            let Some(account) = roster.main_account(id).filter(|a| a.status == AccountStatus::Connected) else {
+                return (id, String::new(), String::new(), String::new());
+            };
+            let name = account.name.clone().unwrap_or_default();
+            let handle = (if id == "youtube" { youtube_handle.clone() } else { account.handle.clone() })
+                .filter(|h| !h.trim().is_empty());
+            // YouTube chat names people by @handle only; a channel title
+            // like "Gaming" would match ordinary words, so it is never a
+            // display name there.
+            let (login, display) = match (id, handle) {
+                ("youtube", Some(h)) => (h, String::new()),
+                ("youtube", None) => (name, String::new()),
+                (_, Some(h)) => (h, name),
+                (_, None) => (name.clone(), name),
+            };
+            (id, account.account_id.clone().unwrap_or_default(), login, display)
+        })
+        .collect()
+}
+
+/// Tell the chat rule engine who you are on each other platform, so a
+/// reply to your Kick message or an `@` of your YouTube handle counts as
+/// yours.
+pub fn follow_chat_identities(roster: &AccountRoster) {
+    let youtube_handle = crate::services::youtube_auth_service::account_handle();
+    for (id, user_id, login, display) in identities_for(roster, youtube_handle) {
+        crate::services::chat_rules::ChatRules::set_platform_identity(id, &user_id, &login, &display);
+    }
+}
+
+/// A connected platform whose name, or Kick's chat id, has not come back
+/// yet (offline at boot, a failed fetch).
+fn unresolved(roster: &AccountRoster) -> bool {
+    roster.main.iter().any(|a| {
+        a.id != "twitch"
+            && a.status == AccountStatus::Connected
+            && (a.name.is_none() || (a.id == "kick" && a.account_id.is_none()))
+    })
+}
+
+/// When to ask again after the `n`th retry: 30 s, 2 min, 10 min, then never.
+fn retry_delay(n: u8) -> Option<std::time::Duration> {
+    match n {
+        0 => Some(30),
+        1 => Some(120),
+        2 => Some(600),
+        _ => None,
+    }
+    .map(std::time::Duration::from_secs)
+}
+
+/// Nothing else rebuilds the roster after a lookup failed, so ask again a
+/// few times; a fully resolved roster resets the count.
+fn retry_if_unresolved(roster: &AccountRoster) {
+    use std::sync::atomic::Ordering;
+    if !unresolved(roster) {
+        RETRIES.store(0, Ordering::Relaxed);
+        return;
+    }
+    let n = RETRIES.fetch_add(1, Ordering::Relaxed);
+    if let Some(delay) = retry_delay(n) {
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(delay).await;
+            notify();
+        });
+    }
 }
 
 #[cfg(test)]
@@ -419,5 +513,69 @@ mod tests {
         assert_eq!(signed_out.status, AccountStatus::NotConnected);
         assert_eq!(signed_out.reason, None);
         assert_eq!(serde_json::to_value(&signed_out).unwrap()["reason"], serde_json::Value::Null);
+    }
+
+    fn connected(id: &'static str, name: Option<&str>, account_id: Option<&str>, handle: Option<&str>) -> RosterAccount {
+        RosterAccount {
+            name: name.map(String::from),
+            account_id: account_id.map(String::from),
+            handle: handle.map(String::from),
+            ..empty(id, AccountStatus::Connected)
+        }
+    }
+
+    fn roster_of(main: Vec<RosterAccount>) -> AccountRoster {
+        AccountRoster { main, extras: vec![] }
+    }
+
+    #[test]
+    fn identities_pick_the_name_each_chat_uses() {
+        let roster = roster_of(vec![
+            twitch_row_from(Some(user()), None),
+            connected("youtube", Some("Gaming"), Some("UCme"), None),
+            connected("kick", Some("SnKickTester"), Some("5550001"), None),
+            connected("tiktok", Some("Nick"), Some("70010001"), Some("sntiktoker")),
+        ]);
+        let ids = identities_for(&roster, Some("@sntester".into()));
+        assert_eq!(ids[0], ("kick", "5550001".into(), "SnKickTester".into(), "SnKickTester".into()));
+        // YouTube: the handle, and never the channel title as a display name.
+        assert_eq!(ids[1], ("youtube", "UCme".into(), "@sntester".into(), String::new()));
+        assert_eq!(ids[2], ("tiktok", "70010001".into(), "sntiktoker".into(), "Nick".into()));
+        // No handle yet: the title is the login, still no display name.
+        let ids = identities_for(&roster, None);
+        assert_eq!(ids[1], ("youtube", "UCme".into(), "Gaming".into(), String::new()));
+    }
+
+    #[test]
+    fn rows_that_are_not_connected_clear_their_platform() {
+        let roster = roster_of(vec![empty("kick", AccountStatus::Expired)]);
+        for (_, id, login, display) in identities_for(&roster, None) {
+            assert!(id.is_empty() && login.is_empty() && display.is_empty());
+        }
+    }
+
+    #[test]
+    fn following_sets_and_clears_the_chat_identities() {
+        let _own = crate::services::chat_rules::ChatRules::own_identity_test_lock();
+        let _reset = crate::services::chat_rules::PlatformReset::new();
+        follow_chat_identities(&roster_of(vec![connected("kick", Some("SnKickTester"), Some("5550001"), None)]));
+        assert_eq!(
+            crate::services::chat_rules::ChatRules::platform_owners().first().map(String::as_str),
+            Some("kick-5550001")
+        );
+        follow_chat_identities(&roster_of(vec![empty("kick", AccountStatus::NotConnected)]));
+        assert!(crate::services::chat_rules::ChatRules::platform_owners().is_empty());
+    }
+
+    #[test]
+    fn unresolved_rows_and_the_retry_schedule() {
+        assert!(!unresolved(&roster_of(vec![twitch_row_from(None, None)])));
+        assert!(unresolved(&roster_of(vec![connected("kick", Some("A"), None, None)])));
+        assert!(unresolved(&roster_of(vec![connected("youtube", None, Some("UCme"), None)])));
+        assert!(!unresolved(&roster_of(vec![connected("youtube", Some("A"), None, None)])));
+        assert!(!unresolved(&roster_of(vec![empty("kick", AccountStatus::Expired)])));
+        assert_eq!(retry_delay(0), Some(std::time::Duration::from_secs(30)));
+        assert_eq!(retry_delay(2), Some(std::time::Duration::from_secs(600)));
+        assert_eq!(retry_delay(3), None);
     }
 }
