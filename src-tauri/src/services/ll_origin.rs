@@ -4953,7 +4953,7 @@ mod tests {
         // Never woken: no poll, so nothing is refused and nothing is re-signed.
         let before = server.paths().len();
         let (idle, idle_calls, _) = parked_origin_with_resigner(&stale, &fresh);
-        rt.block_on(tokio::time::sleep(Duration::from_millis(300)));
+        rt.block_on(async { tokio::time::sleep(Duration::from_millis(300)).await });
         assert_eq!(idle_calls.load(Ordering::SeqCst), 0, "a parked origin never re-signs");
         assert_eq!(server.paths().len(), before, "a parked origin polls nothing");
         assert_eq!(idle.upstream.lock().unwrap().as_deref(), Some(stale.as_str()));
@@ -5224,10 +5224,13 @@ mod tests {
         assert_eq!(origin.serving.load(Ordering::SeqCst), 0);
 
         // Cancelled while it waits.
-        let cancelled = rt.block_on(tokio::time::timeout(
-            Duration::from_millis(20),
-            origin.serve_playlist_apple_within(None, None, "http://x/", 2, Duration::from_secs(5)),
-        ));
+        let cancelled = rt.block_on(async {
+            tokio::time::timeout(
+                Duration::from_millis(20),
+                origin.serve_playlist_apple_within(None, None, "http://x/", 2, Duration::from_secs(5)),
+            )
+            .await
+        });
         assert!(cancelled.is_err());
         assert_eq!(origin.serving.load(Ordering::SeqCst), 0);
         origin.stop();
