@@ -109,6 +109,14 @@ impl crate::services::link_adapt::Route for TwitchTileRoute {
     fn segment_secs(&self) -> Option<f64> {
         Some(crate::services::link_adapt::TWITCH_SEGMENT_SECS)
     }
+
+    fn parked(&self) -> bool {
+        TILE_ORIGINS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&self.stream_id)
+            .is_some_and(|origin| origin.is_parked())
+    }
 }
 
 pub fn twitch_tile_route(stream_id: &str) -> Arc<dyn crate::services::link_adapt::Route> {
@@ -120,6 +128,11 @@ pub fn twitch_tile_route(stream_id: &str) -> Arc<dyn crate::services::link_adapt
 /// Registry of all active stream proxy instances, keyed by stream_id
 static STREAM_REGISTRY: Lazy<Arc<Mutex<HashMap<String, StreamInstance>>>> =
     Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
+
+/// Each registered tile's LL origin, readable without the async registry lock
+/// so a route can ask whether its tile is parked.
+static TILE_ORIGINS: Lazy<std::sync::Mutex<HashMap<String, Arc<LlOrigin>>>> =
+    Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
 
 /// Global HTTP client with optimized connection pooling
 static HTTP_CLIENT: Lazy<Client> = Lazy::new(|| {
@@ -222,6 +235,10 @@ impl MultiNookServer {
                     stream_id, port
                 );
 
+                TILE_ORIGINS
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .insert(stream_id.to_string(), origin.clone());
                 registry.insert(
                     stream_id.to_string(),
                     StreamInstance {
@@ -302,6 +319,10 @@ impl MultiNookServer {
         crate::services::link_adapt::end(stream_id);
         let mut registry = STREAM_REGISTRY.lock().await;
 
+        TILE_ORIGINS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(stream_id);
         if let Some(instance) = registry.remove(stream_id) {
             debug!(
                 "[MultiNook] Stopping proxy for stream '{}' on port {}",
@@ -326,6 +347,10 @@ impl MultiNookServer {
         crate::services::link_adapt::end_tiles();
         let mut registry = STREAM_REGISTRY.lock().await;
         let count = registry.len();
+        TILE_ORIGINS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
 
         for (id, instance) in registry.drain() {
             debug!(
@@ -723,5 +748,33 @@ impl MultiNookServer {
             .header("Expires", "0")
             .body(bytes.into())
             .unwrap())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_tile_route_is_parked_when_its_origin_is() {
+        let id = "test-parked-tile-route";
+        let route = twitch_tile_route(id);
+        assert!(!route.parked(), "a tile with no origin is not parked");
+
+        let origin = LlOrigin::new(ll_origin::TILE_MAX_SEGMENTS);
+        TILE_ORIGINS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(id.to_string(), origin.clone());
+        assert!(!route.parked(), "a running origin is not parked");
+
+        origin.mark_parked_for_test();
+        assert!(route.parked());
+
+        TILE_ORIGINS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(id);
+        assert!(!route.parked(), "a removed tile is not parked");
     }
 }

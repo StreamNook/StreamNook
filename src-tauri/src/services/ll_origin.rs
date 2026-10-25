@@ -1103,8 +1103,11 @@ impl LlOrigin {
 
     /// Stop any running reader and clear state. Called on stream stop / restart.
     pub fn stop(&self) {
+        // Held to the end of the clears, so an `unpark` waiting on the lock
+        // finds the origin stopped and starts nothing.
+        let mut task = self.reader_task.lock().unwrap();
         self.generation.fetch_add(1, Ordering::SeqCst);
-        if let Some(h) = self.reader_task.lock().unwrap().take() {
+        if let Some(h) = task.take() {
             h.abort();
         }
         *self.live_edge.lock().unwrap() = None;
@@ -1115,6 +1118,7 @@ impl LlOrigin {
         self.parked.store(false, Ordering::SeqCst);
         *self.upstream.lock().unwrap() = None;
         self.last_playlist_ms.store(0, Ordering::SeqCst);
+        drop(task);
         self.wake_serves();
     }
 
@@ -1205,6 +1209,13 @@ impl LlOrigin {
 
     pub fn is_parked(&self) -> bool {
         self.parked.load(Ordering::SeqCst)
+    }
+
+    /// Marks the origin parked without needing a live edge, for tests outside
+    /// this module that only read the flag.
+    #[cfg(test)]
+    pub(crate) fn mark_parked_for_test(&self) {
+        self.parked.store(true, Ordering::SeqCst);
     }
 
     /// The in-progress tail at a park: finished at what it holds, or dropped when
@@ -3996,6 +4007,22 @@ mod tests {
         assert!(!origin.is_active());
     }
 
+    #[test]
+    fn an_unpark_after_a_stop_starts_no_reader() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+        let _guard = rt.enter();
+        let origin = LlOrigin::new(6);
+        *origin.live_edge.lock().unwrap() = Some(ts_edge_with_one_segment());
+        *origin.upstream.lock().unwrap() = Some("http://x/playlist.m3u8".to_string());
+        assert!(origin.park());
+        origin.stop();
+        let generation = origin.generation.load(Ordering::SeqCst);
+        assert!(!origin.unpark(), "a stopped origin has nothing to wake");
+        assert!(origin.reader_task.lock().unwrap().is_none(), "no reader was spawned");
+        assert_eq!(origin.generation.load(Ordering::SeqCst), generation);
+        assert!(!origin.is_parked());
+    }
+
     const OLD_REQUEST_MS: u64 = u64::MAX / 2;
 
     #[test]
@@ -4020,6 +4047,49 @@ mod tests {
         let served = rt.block_on(origin.serve_playlist_apple(None, None, "http://x/", 2));
         assert!(served.is_some());
         assert_ne!(origin.last_playlist_ms.load(Ordering::SeqCst), OLD_REQUEST_MS);
+    }
+
+    #[test]
+    fn a_held_reload_notes_the_request_when_the_hold_ends() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_time()
+            .build()
+            .unwrap();
+        let origin = LlOrigin::new(6);
+        *origin.live_edge.lock().unwrap() = Some(ts_edge_with_one_segment());
+        origin.note_playlist_request_at(OLD_REQUEST_MS);
+
+        // Segment 1 is complete with one part, so a reload for part 1 of it
+        // waits for part 0 of segment 2.
+        let held = {
+            let origin = origin.clone();
+            rt.spawn(async move { origin.serve_playlist_apple(Some(1), Some(1), "http://x/", 2).await })
+        };
+
+        // The request is noted as it arrives; put the old value back mid-hold.
+        let began = std::time::Instant::now();
+        while origin.last_playlist_ms.load(Ordering::SeqCst) == OLD_REQUEST_MS {
+            assert!(began.elapsed() < Duration::from_secs(5), "the request was never noted");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        origin.note_playlist_request_at(OLD_REQUEST_MS);
+        assert!(!held.is_finished(), "the reload is still held");
+
+        // The part lands and the hold ends.
+        {
+            let mut g = origin.live_edge.lock().unwrap();
+            let edge = g.as_mut().unwrap();
+            edge.segments.push_back(make_segment(2, None, false, even_parts(vec![vec![2]])));
+        }
+        origin.wake_serves();
+        let served = rt.block_on(held).unwrap();
+        assert!(served.is_some());
+        assert_ne!(
+            origin.last_playlist_ms.load(Ordering::SeqCst),
+            OLD_REQUEST_MS,
+            "the end of the hold noted the request again"
+        );
     }
 
     #[test]

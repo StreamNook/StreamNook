@@ -1584,6 +1584,9 @@ async fn switch_to(stream_id: &str, to: usize, why: &'static str, generation: u6
         info!("[LinkAdapt] {}: holding {}: a switch to {} would reload the player", stream_id, from.name, name);
         return;
     }
+    if route.parked() {
+        return;
+    }
     info!("[LinkAdapt] {}: {} -> {} ({})", stream_id, from.name, rung.name, why);
     let reload = match route.switch(rung, same_decoder).await {
         Ok(reload) => reload,
@@ -1608,7 +1611,10 @@ async fn switch_to(stream_id: &str, to: usize, why: &'static str, generation: u6
 
 /// Times one whole, already-published segment of rung `rung`'s playlist.
 async fn probe(stream_id: &str, rung: usize, generation: u64) {
-    let Some((target, _, _)) = rung_of(stream_id, generation, rung) else { return };
+    let Some((target, _, route)) = rung_of(stream_id, generation, rung) else { return };
+    if route.parked() {
+        return;
+    }
     let count = if phone_rules() { 1 } else { 2 };
     let measured = measure_segment(&target.url, count).await;
     let decision = {
@@ -2348,6 +2354,63 @@ mod tests {
 
     fn warm_count(id: &str) -> usize {
         sessions().get(id).map_or(0, |s| s.gov.warm.len())
+    }
+
+    /// A seamless route that counts the switches it is asked to apply; `parked`
+    /// says whether it reports itself parked.
+    struct Counting {
+        parked: bool,
+        switches: Arc<AtomicU64>,
+    }
+
+    impl Route for Counting {
+        fn switch(&self, _to: Rung, _same_decoder: bool) -> SwitchFuture {
+            self.switches.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Ok(None) })
+        }
+
+        fn player_measures_link(&self) -> bool {
+            false
+        }
+
+        fn seamless(&self) -> bool {
+            true
+        }
+
+        fn parked(&self) -> bool {
+            self.parked
+        }
+    }
+
+    #[test]
+    fn a_parked_route_is_never_probed_or_switched() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+
+        let parked_id = "test-parked-route";
+        let parked_switches = Arc::new(AtomicU64::new(0));
+        settled_session(
+            parked_id,
+            Arc::new(Counting { parked: true, switches: parked_switches.clone() }),
+        );
+        rt.block_on(probe(parked_id, 0, 0));
+        assert!(
+            sessions().get(parked_id).unwrap().gov.last_probe.is_none(),
+            "a parked stream is not probed"
+        );
+        rt.block_on(switch_to(parked_id, 1, "test", 0));
+        assert_eq!(parked_switches.load(Ordering::SeqCst), 0, "a parked stream is not switched");
+        end(parked_id);
+
+        // The same call on a route that is not parked does switch.
+        let live_id = "test-unparked-route";
+        let live_switches = Arc::new(AtomicU64::new(0));
+        settled_session(
+            live_id,
+            Arc::new(Counting { parked: false, switches: live_switches.clone() }),
+        );
+        rt.block_on(switch_to(live_id, 1, "test", 0));
+        assert_eq!(live_switches.load(Ordering::SeqCst), 1);
+        end(live_id);
     }
 
     #[test]
