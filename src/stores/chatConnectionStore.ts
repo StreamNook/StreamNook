@@ -2302,6 +2302,11 @@ const BACKFILL_MARGIN_MS = 30_000;
  *  the rows already shown ended (unix ms, null when none had a timestamp). */
 const parkGaps = new Map<string, { afterMs: number | null }>();
 
+/** Slices between the `UNPARK` this page sent and Rust's `PARK_END`: every row
+ *  in that span is a held row being released, not a live one. Keyed to the
+ *  slice itself, so a channel closed mid-replay and opened again starts live. */
+const replayingSlices = new Map<string, ChannelSlice>();
+
 function handleWsMessage(raw: string) {
   // Global signals first. HEARTBEAT deliberately does NOT touch
   // lastMessageTime: the backend heartbeat only proves the socket reads
@@ -2399,6 +2404,7 @@ function handleWsMessage(raw: string) {
     const slice = getSlice(key);
     const gap = parkGaps.get(key);
     parkGaps.delete(key);
+    replayingSlices.delete(key);
     if (slice) {
       runFlush();
       slice.heldMentions = 0;
@@ -2845,7 +2851,9 @@ function handleWsMessage(raw: string) {
           }
           return;
         }
-        if (!slice.seenMessageIds.has(messageId)) noteRowReceived(parsed, Date.now());
+        if (!slice.seenMessageIds.has(messageId)) {
+          noteRowReceived(parsed, Date.now(), replayingSlices.get(targetChannel) === slice);
+        }
         appendStructuredMessage(slice, parsed);
         return;
       }
@@ -3452,6 +3460,7 @@ function reviewHold(key: string): void {
   if (hold === slice.heldBack) return;
   const wasHeld = slice.heldBack;
   slice.heldBack = hold;
+  if (wasHeld && !hold) replayingSlices.set(key, slice);
   sendRoute(hold ? `PARK:${holdCap(slice)}:${key}` : `UNPARK:${key}`);
   scheduleParkedEmoteRelease(key, hold);
   if (wasHeld && !hold) reloadShownEmotes(slice);
@@ -3503,6 +3512,8 @@ function scheduleParkedEmoteRelease(key: string, held: boolean): void {
 /** The whole route, for a socket that just opened. */
 function sendRouteSnapshot(): void {
   const { channels } = useChatConnectionStore.getState();
+  // A new socket has no replay in flight, so no PARK_END is coming for these.
+  replayingSlices.clear();
   sendRoute(`SUBS:${Array.from(channels.keys()).join('\t')}`);
   for (const slice of channels.values()) {
     if (slice.heldBack) sendRoute(`PARK:${holdCap(slice)}:${slice.channel}`);

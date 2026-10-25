@@ -94,6 +94,40 @@ describe('the per-minute line', () => {
   });
 });
 
+describe('held rows', () => {
+  it('keeps held rows out of the percentiles and reports them apart', () => {
+    for (let i = 0; i < 5; i++) {
+      noteRowReceived(row(`live${i}`, 'c', 1000, 1100), 1150);
+      noteRowsPainted([`live${i}`], 1170);
+    }
+    noteRowReceived(row('h1', 'c', 1000, 2000), 600_000, true);
+    noteRowReceived(row('h2', 'c', 1000, 5000), 600_000, true);
+    noteRowReceived(row('h3', 'c', 1000, 9000), 600_000, true);
+    noteRowsPainted(['h1', 'h2', 'h3'], 700_000);
+    expect(takeChatLatencyLine()).toBe(
+      '[ChatLatency] 5 rows, twitch->rust 100/100/100ms, rust->page 50/50/50ms, page->paint 20/20/20ms, worst c 170ms, clock skew est 100ms, held 3 (oldest 598000ms)',
+    );
+  });
+
+  it('ages a held row without received_at_ms from its Twitch stamp', () => {
+    noteRowReceived(row('h1', 'c', 1000), 31_000, true);
+    expect(takeChatLatencyLine()).toBe(
+      '[ChatLatency] 0 rows, twitch->rust n/a, rust->page n/a, page->paint n/a, worst n/a, clock skew est n/a, held 1 (oldest 30000ms)',
+    );
+  });
+
+  it('has no held field in a minute without held rows', () => {
+    noteRowReceived(row('a', 'c', 1000, 1100), 1150);
+    expect(takeChatLatencyLine()).not.toContain('held');
+  });
+
+  it('starts the next minute with no held rows', () => {
+    noteRowReceived(row('h1', 'c', 1000, 2000), 5000, true);
+    expect(takeChatLatencyLine()).toContain('held 1');
+    expect(takeChatLatencyLine()).toBeNull();
+  });
+});
+
 describe('memory', () => {
   it('stays bounded at 10,000 rows a minute', () => {
     const ids: string[] = [];

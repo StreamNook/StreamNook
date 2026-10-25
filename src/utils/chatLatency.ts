@@ -35,6 +35,8 @@ let pageToPaint = newStage();
 let rowsInMinute = 0;
 let worst: { channel: string; ms: number } | null = null;
 let minTwitchToRust: number | null = null;
+let heldInMinute = 0;
+let oldestHeldMs: number | null = null;
 const pending = new Map<string, Pending>();
 
 function addSample(stage: Stage, value: number): void {
@@ -78,13 +80,27 @@ function describeStage(stage: Stage): string {
   return `${s.p50}/${s.p95}/${s.max}ms`;
 }
 
-/** A chat row frame reached this page's bridge socket at `nowMs` (local clock). */
-export function noteRowReceived(row: LatencyRow, nowMs: number): void {
+/**
+ * A chat row frame reached this page's bridge socket at `nowMs` (local clock).
+ * A `held` row waited in a parked tab and is released on unpark: it is counted
+ * with its age and kept out of every stage, so it never reads as live latency.
+ */
+export function noteRowReceived(row: LatencyRow, nowMs: number, held = false): void {
   if (typeof row.id !== 'string' || row.id === '') return;
-  rowsInMinute += 1;
 
   const sentMs = Number(tagValue(row.tags, 'tmi-sent-ts'));
   const readMs = typeof row.received_at_ms === 'number' && Number.isFinite(row.received_at_ms) ? row.received_at_ms : null;
+  if (held) {
+    heldInMinute += 1;
+    const originMs = readMs ?? (Number.isFinite(sentMs) && sentMs > 0 ? sentMs : null);
+    if (originMs !== null) {
+      const age = nowMs - originMs;
+      if (oldestHeldMs === null || age > oldestHeldMs) oldestHeldMs = age;
+    }
+    return;
+  }
+  rowsInMinute += 1;
+
   let t2r: number | null = null;
   let r2p: number | null = null;
   if (readMs !== null) {
@@ -127,12 +143,18 @@ export function noteRowsPainted(ids: readonly string[], paintMs: number): void {
 /** The line for the minute so far, or null when no row arrived; starts a new minute either way. */
 export function takeChatLatencyLine(): string | null {
   const n = rowsInMinute;
+  const heldField =
+    heldInMinute === 0
+      ? ''
+      : `, held ${heldInMinute} (oldest ${oldestHeldMs === null ? 'n/a' : `${Math.round(oldestHeldMs)}ms`})`;
   const line =
-    n === 0
+    n === 0 && heldInMinute === 0
       ? null
       : `[ChatLatency] ${n} rows, twitch->rust ${describeStage(twitchToRust)}, rust->page ${describeStage(rustToPage)}, page->paint ${describeStage(pageToPaint)}, worst ${
           worst ? `${worst.channel || 'unknown'} ${worst.ms}ms` : 'n/a'
-        }, clock skew est ${minTwitchToRust === null ? 'n/a' : `${Math.round(minTwitchToRust)}ms`}`;
+        }, clock skew est ${minTwitchToRust === null ? 'n/a' : `${Math.round(minTwitchToRust)}ms`}${heldField}`;
+  heldInMinute = 0;
+  oldestHeldMs = null;
   twitchToRust = newStage();
   rustToPage = newStage();
   pageToPaint = newStage();
