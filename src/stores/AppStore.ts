@@ -714,8 +714,17 @@ interface AppState {
 /** Newest-first, in-memory ceiling across channels. */
 const MOD_LOG_CAP = 300;
 
+/** Seconds to wait before each retry of a mod-log history load Rust rejected;
+ *  the last wait repeats until the load succeeds or the channel closes. */
+const MOD_LOG_RETRY_SECONDS = [1, 2, 4, 8, 16, 30];
+
+/** The history load that owns each channel. A load keeps retrying only while it
+ *  still owns its channel, so a channel is never retried by two loads at once. */
+const modLogLoadOwner = new Map<string, number>();
+let modLogLoadCount = 0;
+
 /** Replace the entry with the same id in place, or put it on top. */
-const upsertModLog = (logs: ModLogEvent[], entry: ModLogEvent): ModLogEvent[] => {
+const upsertModLog =(logs: ModLogEvent[], entry: ModLogEvent): ModLogEvent[] => {
   const index = logs.findIndex((l) => l.id === entry.id);
   if (index === -1) return [entry, ...logs].slice(0, MOD_LOG_CAP);
   const next = logs.slice();
@@ -1618,26 +1627,38 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (get().loadedModLogChannels.has(key)) return;
     // Mark loaded up-front so a re-render doesn't kick off a duplicate load.
     set((state) => ({ loadedModLogChannels: new Set(state.loadedModLogChannels).add(key) }));
+    const load = ++modLogLoadCount;
+    modLogLoadOwner.set(key, load);
+    // This load still owns the channel and the channel is still open (closing
+    // it drops the key from loadedModLogChannels).
+    const isCurrent = () => modLogLoadOwner.get(key) === load && get().loadedModLogChannels.has(key);
     try {
-      const entries = await invoke<ModLogEvent[]>('load_mod_logs', { channel: key });
-      if (!entries || entries.length === 0) return;
-      set((state) => {
-        const seen = new Set(state.modLogs.map((l) => l.id));
-        const fresh = entries.filter((e) => e && e.id && !seen.has(e.id));
-        if (fresh.length === 0) return { modLogs: state.modLogs };
-        const merged = [...state.modLogs, ...fresh]
-          .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-          .slice(0, MOD_LOG_CAP);
-        return { modLogs: merged };
-      });
-    } catch (e) {
-      Logger.warn(`[ModLogs] Failed to load history for ${key}:`, e);
-      // The history never arrived, so the channel is loadable again on its next open.
-      set((state) => {
-        const loadedModLogChannels = new Set(state.loadedModLogChannels);
-        loadedModLogChannels.delete(key);
-        return { loadedModLogChannels };
-      });
+      for (let attempt = 0; ; attempt++) {
+        try {
+          const entries = await invoke<ModLogEvent[]>('load_mod_logs', { channel: key });
+          if (!isCurrent() || !entries || entries.length === 0) return;
+          set((state) => {
+            const seen = new Set(state.modLogs.map((l) => l.id));
+            const fresh = entries.filter((e) => e && e.id && !seen.has(e.id));
+            if (fresh.length === 0) return { modLogs: state.modLogs };
+            const merged = [...state.modLogs, ...fresh]
+              .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+              .slice(0, MOD_LOG_CAP);
+            return { modLogs: merged };
+          });
+          return;
+        } catch (e) {
+          Logger.warn(`[ModLogs] Failed to load history for ${key}:`, e);
+          // The history never arrived: ask again after a growing wait, until it
+          // does or the channel closes.
+          if (!isCurrent()) return;
+          const seconds = MOD_LOG_RETRY_SECONDS[Math.min(attempt, MOD_LOG_RETRY_SECONDS.length - 1)];
+          await new Promise<void>((resolve) => setTimeout(resolve, seconds * 1000));
+          if (!isCurrent()) return;
+        }
+      }
+    } finally {
+      if (modLogLoadOwner.get(key) === load) modLogLoadOwner.delete(key);
     }
   },
   pruneModLogsToChannels: (activeChannels) => set((state) => {

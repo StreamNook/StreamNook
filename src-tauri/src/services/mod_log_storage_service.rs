@@ -26,6 +26,25 @@
 // and folds resume. A fold that cuts the journal replaces it with one header
 // line holding the last seq the file covers, so the next seq is always known
 // from the journal alone.
+//
+// A journal that cannot be read hands out no seq at all. The store then holds
+// a partial view flagged journal_unread, and every action recorded meanwhile is
+// merged into that view and kept in memory without a seq. Once the journal
+// reads, those actions are numbered after everything the journal and the
+// snapshot hold and journaled in order.
+//
+// Lines journaled while the snapshot could not be read carry "partial":true,
+// because their seq may sit at or below the seq the snapshot later turns out to
+// cover. A replay applies them after the whole lines, in seq order, and when
+// the snapshot reads the journal is rewritten atomically with those lines
+// renumbered past the snapshot's journal_seq. No fold runs until that rewrite
+// is durable.
+//
+// A journal append that fails is repeated in the first overflow file
+// (mod_logs.journal.<n>) that takes it. A replay reads the main journal and
+// then each overflow file the main journal's header has not absorbed. A fold or
+// rewrite that is durable records the absorbed files in the header and then
+// removes them.
 
 use log::{debug, warn};
 use serde::{Deserialize, Serialize};
@@ -41,6 +60,8 @@ const MOD_LOGS_FILE: &str = "mod_logs.json";
 /// Actions recorded since the file's last write, one JSON line each, led by a
 /// header line once a fold has cut it.
 const MOD_LOGS_JOURNAL: &str = "mod_logs.journal";
+/// How many overflow files are tried, in order, for one refused journal append.
+const OVERFLOW_TRIES: u64 = 8;
 /// How many snapshots set aside as unreadable are kept.
 const KEEP_UNREADABLE: usize = 3;
 /// How often the store is folded into the file (and the journal cut).
@@ -65,13 +86,18 @@ static JOURNAL_DONE: Condvar = Condvar::new();
 /// The sequence number of the last journal line written; the next line takes
 /// one more. Only advanced under `JOURNAL_LOCK`.
 static LAST_SEQ: AtomicU64 = AtomicU64::new(0);
+/// Overflow files up to this index hold only lines the main journal's header or
+/// the snapshot already covers, so a replay skips them and an append starts
+/// after them. Only changed under `JOURNAL_LOCK`.
+static OVERFLOW_ABSORBED: AtomicU64 = AtomicU64::new(0);
 static FLUSH_TASK_STARTED: AtomicBool = AtomicBool::new(false);
 /// Held for the whole of a seed attempt, so one thread reads the snapshot at a
 /// time. Taken before `JOURNAL_LOCK` and the store lock, and never while
 /// holding either.
 static SEED_LOCK: Mutex<()> = Mutex::new(());
-/// True until the session's first snapshot read starts. Only that read waits
-/// out a snapshot another process holds; later attempts read once and return.
+/// True until the session's first seed attempt starts. Only that attempt waits
+/// out a snapshot or journal another process holds; later attempts read once
+/// and return.
 static FIRST_SEED_ATTEMPT: AtomicBool = AtomicBool::new(true);
 /// How many times a snapshot read has slept before reading again.
 #[cfg(test)]
@@ -127,10 +153,33 @@ pub struct ModLogStorage {
     /// (a crash between the rename and the cut) is never applied twice.
     #[serde(default)]
     pub journal_seq: u64,
-    /// True while the snapshot could not be read: `channels` is built from the
-    /// journal alone and is never written over the snapshot.
+    /// True while the snapshot could not be read, or the journal rewrite that
+    /// renumbers its partial lines is not durable yet: `channels` is never
+    /// written over the snapshot.
     #[serde(skip)]
     partial: bool,
+    /// True while the journal could not be read: no seq is handed out, and
+    /// every action recorded meanwhile waits in `held`.
+    #[serde(skip)]
+    journal_unread: bool,
+    /// The actions recorded while the journal was unread, oldest first, already
+    /// merged into `channels`.
+    #[serde(skip)]
+    held: Vec<JournalOp>,
+}
+
+impl ModLogStorage {
+    /// Where an action already applied to the store goes next. With the journal
+    /// unread it waits in `held`, since no seq can be handed out, and nothing
+    /// is returned. Otherwise it is returned with whether the store is partial,
+    /// which marks its journal line.
+    fn journal_or_hold(&mut self, op: JournalOp) -> Option<(JournalOp, bool)> {
+        if self.journal_unread {
+            self.held.push(op);
+            return None;
+        }
+        Some((op, self.partial))
+    }
 }
 
 pub struct ModLogStorageService;
@@ -182,14 +231,15 @@ impl ModLogStorageService {
         Ok(f(storage))
     }
 
-    /// Make the store complete when the snapshot can be read, and give it at
-    /// least a partial view when it cannot. Call it with neither
-    /// `JOURNAL_LOCK` nor the store lock held: the snapshot read may wait out a
+    /// Make the store complete when the snapshot and the journal can be read,
+    /// and give it at least a partial view when they cannot. Call it with
+    /// neither `JOURNAL_LOCK` nor the store lock held: a read may wait out a
     /// lock another process holds.
     ///
     /// A snapshot that cannot be read leaves a partial store (built from the
-    /// journal alone, never folded) and returns `Ok`; the next call reads the
-    /// snapshot again. An error means there is no snapshot path to work with.
+    /// journal alone, never folded); a journal that cannot be read leaves a
+    /// partial store that hands out no seq. Both return `Ok`, and the next call
+    /// reads them again. An error means there is no snapshot path to work with.
     fn seed(resolve_path: &impl Fn() -> Result<PathBuf, String>) -> Result<(), String> {
         if store_is_complete()? {
             return Ok(());
@@ -200,26 +250,44 @@ impl ModLogStorageService {
         }
         let path = resolve_path()?;
         let journal = path.with_file_name(MOD_LOGS_JOURNAL);
-        match load_snapshot(&path) {
-            Ok(snapshot) => Self::install(path, journal, Some(snapshot)),
+        let retries = first_attempt_retries();
+        match load_snapshot(&path, retries) {
+            Ok(snapshot) => Self::install(path, journal, Some(snapshot), retries),
             Err(e) => {
                 warn!("[ModLogStorage] snapshot unreadable, working from the journal alone: {}", e);
-                if store_is_seeded()? {
-                    return Ok(());
-                }
-                Self::install(path, journal, None)
+                Self::install(path, journal, None, retries)
             }
         }
     }
 
     /// Put a store in place built from `snapshot` plus the journal, or, with no
-    /// snapshot, a partial store built from the journal alone. Called with
-    /// `SEED_LOCK` held. A store already in place (partial) is replaced, and
-    /// every line it journaled meanwhile is in the rebuilt one.
-    fn install(path: PathBuf, journal: PathBuf, snapshot: Option<ModLogStorage>) -> Result<(), String> {
+    /// snapshot, a partial store built from the journal alone, or, with a
+    /// journal that cannot be read, a partial store that holds new actions
+    /// without a seq. Called with `SEED_LOCK` held. A store already in place
+    /// (partial) is replaced, and every line it journaled meanwhile is in the
+    /// rebuilt one; the actions it held are numbered after everything the
+    /// journal and the snapshot hold and journaled in order. `retries` is how
+    /// many times the first read of the journal is repeated.
+    fn install(
+        path: PathBuf,
+        journal: PathBuf,
+        snapshot: Option<ModLogStorage>,
+        retries: u32,
+    ) -> Result<(), String> {
         let seeded = store_is_seeded()?;
+        // A partial view of the journal alone has nothing to learn from a
+        // snapshot that still cannot be read.
+        if seeded && snapshot.is_none() && !store_journal_unread() {
+            return Ok(());
+        }
+        // No journal write can be in flight before the first install, so the
+        // journal is read (and waited on, on the session's first attempt) here,
+        // outside the locks.
+        let mut unread = None;
         if !seeded {
-            cut_torn_tail(&journal);
+            unread = read_journal_files(&journal, retries)
+                .and_then(|_| cut_torn_tail(&journal))
+                .err();
         }
         let mut queue = JOURNAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // A write in flight finishes first, so the file holds every line that
@@ -227,31 +295,118 @@ impl ModLogStorageService {
         while queue.writing {
             queue = JOURNAL_DONE.wait(queue).unwrap_or_else(|e| e.into_inner());
         }
-        let mut bytes = fs::read(&journal).unwrap_or_default();
+        let read = match unread {
+            Some(e) => Err(e),
+            None => read_journal_files(&journal, 0),
+        };
+        let files = match read {
+            Ok(files) => files,
+            Err(e) => {
+                warn!("[ModLogStorage] journal unreadable, holding new actions until it reads: {}", e);
+                if seeded {
+                    return Ok(());
+                }
+                let mut storage = snapshot.unwrap_or_default();
+                storage.partial = true;
+                storage.journal_unread = true;
+                let mut guard = store().lock().map_err(|e| e.to_string())?;
+                let _ = STORE_PATH.set(path);
+                let _ = JOURNAL_PATH.set(journal);
+                *guard = Some(storage);
+                return Ok(());
+            }
+        };
+        let JournalFiles { mut bytes, absorbed, overflow_newest } = files;
+        OVERFLOW_ABSORBED.store(absorbed, Ordering::SeqCst);
         for (_, line) in &queue.pending {
             bytes.push(b'\n');
             bytes.extend_from_slice(line.as_bytes());
         }
-        let partial = snapshot.is_none();
+        let have_snapshot = snapshot.is_some();
         let mut storage = snapshot.unwrap_or_default();
-        storage.partial = partial;
-        let newest = newest_seq(&bytes).max(storage.journal_seq);
-        let replayed = replay_journal(&mut storage, &bytes);
+        let base = storage.journal_seq;
+        let lines = replay_lines(&bytes, base);
+        // Lines journaled while the snapshot could not be read are renumbered
+        // past the snapshot before the store counts as complete, and so is a
+        // journal whose last such rewrite is not proven durable.
+        let rewrite = have_snapshot && (queue.rewrite_unproven || lines.iter().any(|line| line.partial));
+        storage.partial = !have_snapshot || rewrite;
+        let mut last = newest_seq(&bytes).max(base);
+        let mut renumbered = false;
+        if rewrite {
+            let through = absorbed.max(overflow_newest);
+            match rewrite_journal(&journal, base, through, &lines) {
+                Ok(durability) => {
+                    // The queued lines are in the rewritten journal.
+                    last = base + lines.len() as u64;
+                    renumbered = true;
+                    queue.pending.clear();
+                    queue.durable_seq = last;
+                    queue.torn = false;
+                    OVERFLOW_ABSORBED.store(through, Ordering::SeqCst);
+                    JOURNAL_DONE.notify_all();
+                    if durability == Durability::Durable {
+                        queue.rewrite_unproven = false;
+                        remove_overflow_files(&journal, through);
+                        storage.partial = false;
+                    } else {
+                        queue.rewrite_unproven = true;
+                    }
+                }
+                Err(e) => {
+                    warn!("[ModLogStorage] could not rewrite the journal, the store stays partial: {}", e);
+                    queue.rewrite_unproven = true;
+                }
+            }
+        }
+        let replayed = apply_replay(&mut storage, lines);
+        if renumbered {
+            storage.journal_seq = last;
+        }
+        let partial = storage.partial;
+        let rewrite_owed = queue.rewrite_unproven;
+        let had_held;
+        let mut held_last = None;
         {
             let mut guard = store().lock().map_err(|e| e.to_string())?;
+            let held = guard.as_mut().map(|old| std::mem::take(&mut old.held)).unwrap_or_default();
+            if renumbered {
+                LAST_SEQ.store(last, Ordering::SeqCst);
+            } else {
+                LAST_SEQ.fetch_max(last, Ordering::SeqCst);
+            }
+            had_held = !held.is_empty();
+            for op in held {
+                apply_journal_op(&mut storage, op.clone());
+                let seq = LAST_SEQ.load(Ordering::SeqCst) + 1;
+                match journal_line_with(seq, &op, partial) {
+                    Ok(line) => {
+                        LAST_SEQ.store(seq, Ordering::SeqCst);
+                        queue.pending.push((seq, line));
+                        held_last = Some(seq);
+                    }
+                    Err(e) => debug!("[ModLogStorage] held journal line not serialized: {}", e),
+                }
+            }
             let _ = STORE_PATH.set(path);
             let _ = JOURNAL_PATH.set(journal);
-            LAST_SEQ.fetch_max(newest, Ordering::SeqCst);
             *guard = Some(storage);
         }
         if replayed > 0 {
             debug!("[ModLogStorage] replayed {} journal lines", replayed);
         }
         // Actions recorded after the last fold (a crash, or a kill before the
-        // exit flush), or journaled while the snapshot was locked: the next
-        // fold writes them into the file.
-        if replayed > 0 && !partial {
+        // exit flush), journaled while the snapshot was locked, or held while
+        // the journal was unread: the next fold writes them into the file. A
+        // journal rewrite that is not proven durable is tried again at the
+        // next tick.
+        if ((replayed > 0 || had_held) && !partial) || rewrite_owed {
             mark_dirty();
+        }
+        if let (Some(seq), Some(path)) = (held_last, JOURNAL_PATH.get()) {
+            if let Err(e) = wait_durable(&JOURNAL_LOCK, &JOURNAL_DONE, path, queue, seq, commit_lines) {
+                warn!("[ModLogStorage] journal write failed, the next fold saves the held actions: {}", e);
+            }
         }
         Ok(())
     }
@@ -265,8 +420,8 @@ impl ModLogStorageService {
     fn flush_with(
         write: impl FnOnce(&Path, &str) -> std::io::Result<Durability>,
     ) -> Result<(), String> {
-        // A partial store gets another read of its snapshot before anything
-        // folds.
+        // A partial store gets another read of its snapshot and journal before
+        // anything folds.
         if let Some(path) = STORE_PATH.get() {
             if store_is_partial() {
                 Self::seed(&|| Ok::<PathBuf, String>(path.clone()))?;
@@ -280,8 +435,9 @@ impl ModLogStorageService {
         while queue.writing {
             queue = JOURNAL_DONE.wait(queue).unwrap_or_else(|e| e.into_inner());
         }
-        // A snapshot that could not be read is never written over; DIRTY stays
-        // set, so the fold runs once the snapshot reads.
+        // A snapshot that could not be read is never written over, and no fold
+        // runs while a line flagged partial may still sit in the journal; DIRTY
+        // stays set, so the fold runs once the store is complete.
         if store_is_partial() {
             return Ok(());
         }
@@ -338,10 +494,19 @@ impl ModLogStorageService {
         // A cut that fails leaves lines the file's journal_seq already covers,
         // which a replay skips.
         if let Some(journal) = JOURNAL_PATH.get() {
-            match cut_journal(journal, covered) {
+            // The file covers every overflow line, so the new header absorbs
+            // the overflow files and they are removed once it is in place.
+            let absorbed = OVERFLOW_ABSORBED.load(Ordering::SeqCst).max(newest_overflow(journal));
+            match cut_journal(journal, covered, absorbed) {
                 // A journal holding one whole line has no torn line to guard
                 // against.
-                Ok(_) => queue.torn = false,
+                Ok(durability) => {
+                    queue.torn = false;
+                    OVERFLOW_ABSORBED.store(absorbed, Ordering::SeqCst);
+                    if durability == Durability::Durable {
+                        remove_overflow_files(journal, absorbed);
+                    }
+                }
                 Err(e) => warn!("[ModLogStorage] could not cut the journal after a fold: {}", e),
             }
         }
@@ -379,7 +544,8 @@ impl ModLogStorageService {
 
     /// `record` with the snapshot path supplied by `resolve_path`. While the
     /// snapshot cannot be read the action is merged into the partial view and
-    /// journaled like any other.
+    /// journaled like any other. While the journal cannot be read it is merged
+    /// into the view and held in memory, with no seq, until the journal reads.
     fn record_at(
         resolve_path: impl Fn() -> Result<PathBuf, String>,
         channel: &str,
@@ -395,12 +561,16 @@ impl ModLogStorageService {
         Self::seed(&resolve_path)?;
         let mut queue = JOURNAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let channel_key = key.clone();
-        let (shown, changed) = Self::with_seeded(move |storage| {
-            merge_into(storage.channels.entry(key).or_default(), entry, now_ms)
+        let (shown, changed, line) = Self::with_seeded(move |storage| {
+            let (shown, changed) = merge_into(storage.channels.entry(key).or_default(), entry, now_ms);
+            if !changed {
+                return (shown, false, None);
+            }
+            let op = JournalOp::Put { channel: channel_key, entry: shown.clone() };
+            (shown, true, storage.journal_or_hold(op))
         })?;
         if changed {
-            let op = JournalOp::Put { channel: channel_key, entry: shown.clone() };
-            let seq = journal_append(&mut queue, &op);
+            let seq = line.and_then(|(op, partial)| journal_append(&mut queue, &op, partial));
             mark_dirty();
             if let (Some(seq), Some(path)) = (seq, JOURNAL_PATH.get()) {
                 // The action is in the store and the store is dirty, so a journal
@@ -419,7 +589,8 @@ impl ModLogStorageService {
 
     /// `clear_channel` with the snapshot path supplied by `resolve_path`. While
     /// the snapshot cannot be read the clear is journaled whether or not the
-    /// partial view holds the channel, since the snapshot may.
+    /// partial view holds the channel, since the snapshot may. While the
+    /// journal cannot be read it is held in memory, with no seq.
     fn clear_channel_at(
         resolve_path: impl Fn() -> Result<PathBuf, String>,
         channel: &str,
@@ -429,14 +600,16 @@ impl ModLogStorageService {
         // journal lock is taken.
         Self::seed(&resolve_path)?;
         let mut queue = JOURNAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let journaled = Self::with_seeded(|storage| {
+        let (journaled, line) = Self::with_seeded(|storage| {
             let removed = storage.channels.remove(&key).is_some();
-            removed || storage.partial
+            if !(removed || storage.partial) {
+                return (false, None);
+            }
+            (true, storage.journal_or_hold(JournalOp::Clear { channel: key.clone() }))
         })?;
         if journaled {
             debug!("[ModLogStorage] cleared {}", key);
-            let op = JournalOp::Clear { channel: key };
-            let seq = journal_append(&mut queue, &op);
+            let seq = line.and_then(|(op, partial)| journal_append(&mut queue, &op, partial));
             mark_dirty();
             if let (Some(seq), Some(path)) = (seq, JOURNAL_PATH.get()) {
                 wait_or_fold(&JOURNAL_LOCK, &JOURNAL_DONE, path, queue, seq, commit_lines, Self::flush_now);
@@ -472,6 +645,14 @@ fn store_is_partial() -> bool {
         .unwrap_or(false)
 }
 
+/// Whether the store is in place but its journal could not be read.
+fn store_journal_unread() -> bool {
+    store()
+        .lock()
+        .map(|guard| guard.as_ref().is_some_and(|storage| storage.journal_unread))
+        .unwrap_or(false)
+}
+
 /// One journal line.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "lowercase")]
@@ -483,21 +664,31 @@ enum JournalOp {
     Clear { channel: String },
 }
 
-/// A journal line as read: the operation and its sequence number.
+/// A journal line as read: the operation, its sequence number, and whether it
+/// was written while the store was partial.
 #[derive(Debug, Deserialize)]
 struct JournalLine {
     #[serde(default)]
     seq: u64,
+    #[serde(default)]
+    partial: bool,
     #[serde(flatten)]
     op: JournalOp,
 }
 
-/// A journal line as written; reads back as a `JournalLine`.
+/// A journal line as written; reads back as a `JournalLine`. The flag is only
+/// written when set.
 #[derive(Serialize)]
 struct JournalLineOut<'a> {
     seq: u64,
+    #[serde(skip_serializing_if = "is_false")]
+    partial: bool,
     #[serde(flatten)]
     op: &'a JournalOp,
+}
+
+fn is_false(flag: &bool) -> bool {
+    !*flag
 }
 
 /// The sequence number of any journal line, the header included.
@@ -507,6 +698,15 @@ struct JournalSeq {
     seq: u64,
 }
 
+/// The header line of a journal: the last seq its snapshot covers and, when
+/// overflow files were absorbed, the index of the newest of them.
+#[derive(Deserialize)]
+struct JournalBase {
+    op: String,
+    #[serde(default)]
+    overflow: u64,
+}
+
 /// Write `json` to `path` through a sibling that is flushed to disk and then
 /// renamed over the file, so a crash or power loss mid-write never leaves a
 /// truncated or empty file for the next seed to read.
@@ -514,12 +714,40 @@ fn write_snapshot(path: &Path, json: &str) -> std::io::Result<Durability> {
     replace_file(path, &path.with_extension("json.tmp"), json.as_bytes())
 }
 
+/// The header line of a journal: `seq` is the last sequence number the snapshot
+/// covers, and `absorbed`, when not 0, the index of the newest overflow file
+/// whose lines the journal or the snapshot already holds.
+fn base_header(seq: u64, absorbed: u64) -> String {
+    if absorbed == 0 {
+        format!("{{\"op\":\"base\",\"seq\":{}}}\n", seq)
+    } else {
+        format!("{{\"op\":\"base\",\"seq\":{},\"overflow\":{}}}\n", seq, absorbed)
+    }
+}
+
 /// Replace the journal with one holding only a header line, `seq` being the
 /// last sequence number the snapshot covers. The next seq is read back from it
 /// (or from a later line), so a cut journal still knows where it stands.
-fn cut_journal(journal: &Path, seq: u64) -> std::io::Result<Durability> {
-    let header = format!("{{\"op\":\"base\",\"seq\":{}}}\n", seq);
+fn cut_journal(journal: &Path, seq: u64, absorbed: u64) -> std::io::Result<Durability> {
+    let header = base_header(seq, absorbed);
     replace_file(journal, &journal.with_extension("journal.tmp"), header.as_bytes())
+}
+
+/// Replace the journal with a header at `base_seq` followed by `lines`
+/// renumbered from `base_seq + 1`, whole and in order, so none of them is
+/// flagged and all of them sit past the snapshot that covers `base_seq`.
+fn rewrite_journal(
+    journal: &Path,
+    base_seq: u64,
+    absorbed: u64,
+    lines: &[JournalLine],
+) -> std::io::Result<Durability> {
+    let mut text = base_header(base_seq, absorbed);
+    for (i, line) in lines.iter().enumerate() {
+        let renumbered = journal_line(base_seq + 1 + i as u64, &line.op).map_err(std::io::Error::other)?;
+        text.push_str(&renumbered);
+    }
+    replace_file(journal, &journal.with_extension("journal.tmp"), text.as_bytes())
 }
 
 /// Write `bytes` to `tmp`, flush them to disk, and rename `tmp` over `path`.
@@ -632,23 +860,34 @@ struct JournalQueue {
     /// Replay skips the blank line and the fragment. A new queue starts torn,
     /// so a session's first write is safe whatever it finds.
     torn: bool,
+    /// The journal was replaced by a rewrite that renumbers lines written while
+    /// the store was partial, and the rename is not proven durable (or the
+    /// rewrite failed). The store stays partial and the rewrite is repeated.
+    rewrite_unproven: bool,
 }
 
 impl JournalQueue {
     const fn new() -> Self {
-        Self { pending: Vec::new(), writing: false, durable_seq: 0, torn: true }
+        Self { pending: Vec::new(), writing: false, durable_seq: 0, torn: true, rewrite_unproven: false }
     }
 }
 
 /// One journal line as written: JSON and a closing newline.
 fn journal_line(seq: u64, op: &JournalOp) -> Result<String, String> {
-    let mut line = serde_json::to_string(&JournalLineOut { seq, op }).map_err(|e| e.to_string())?;
+    journal_line_with(seq, op, false)
+}
+
+/// `journal_line`, flagged when `partial` is set: the line was written while
+/// the snapshot could not be read.
+fn journal_line_with(seq: u64, op: &JournalOp, partial: bool) -> Result<String, String> {
+    let mut line = serde_json::to_string(&JournalLineOut { seq, partial, op }).map_err(|e| e.to_string())?;
     line.push('\n');
     Ok(line)
 }
 
 /// Append `lines` to the journal with one write and one sync. A failed write
-/// cuts whatever torn line it left, so the next append starts a clean line.
+/// cuts whatever torn line it left, so the next append starts a clean line,
+/// and repeats the lines in the first overflow file that takes them.
 fn commit_lines(path: &Path, lines: &[(u64, String)]) -> Result<(), String> {
     use std::io::Write;
     let bytes: Vec<u8> = lines.iter().flat_map(|(_, line)| line.as_bytes().iter().copied()).collect();
@@ -657,10 +896,88 @@ fn commit_lines(path: &Path, lines: &[(u64, String)]) -> Result<(), String> {
         file.sync_data()
     });
     if let Err(e) = written {
-        cut_torn_tail(path);
+        if let Err(cut) = cut_torn_tail(path) {
+            debug!("[ModLogStorage] could not cut the journal's torn line: {}", cut);
+        }
+        append_overflow(path, &bytes);
         return Err(e.to_string());
     }
     Ok(())
+}
+
+/// The overflow file for `journal` with index `n`.
+fn overflow_path(journal: &Path, n: u64) -> PathBuf {
+    let name = journal.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+    journal.with_file_name(format!("{}.{}", name, n))
+}
+
+/// Repeat `bytes` in the first overflow file that takes them, so lines the main
+/// journal refused are still on disk. Each write starts on a fresh line, and a
+/// replay reads a line repeated here or in the journal once.
+fn append_overflow(journal: &Path, bytes: &[u8]) {
+    use std::io::Write;
+    let first = OVERFLOW_ABSORBED.load(Ordering::SeqCst) + 1;
+    let mut text = Vec::with_capacity(bytes.len() + 1);
+    text.push(b'\n');
+    text.extend_from_slice(bytes);
+    for n in first..first + OVERFLOW_TRIES {
+        let overflow = overflow_path(journal, n);
+        let written = fs::OpenOptions::new().create(true).append(true).open(&overflow).and_then(|mut file| {
+            file.write_all(&text)?;
+            file.sync_data()
+        });
+        match written {
+            Ok(()) => return,
+            Err(e) => debug!("[ModLogStorage] overflow journal {} refused the lines: {}", n, e),
+        }
+    }
+    warn!("[ModLogStorage] no overflow journal took the lines the journal refused");
+}
+
+/// The overflow files beside `journal`, oldest index first.
+fn overflow_files(journal: &Path) -> std::io::Result<Vec<(u64, PathBuf)>> {
+    let dir = match journal.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    };
+    let name = journal.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+    let prefix = format!("{}.", name);
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e),
+    };
+    let mut files: Vec<(u64, PathBuf)> = entries
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| {
+            let file = entry.file_name().to_string_lossy().into_owned();
+            let n = file.strip_prefix(&prefix)?.parse::<u64>().ok()?;
+            Some((n, entry.path()))
+        })
+        .collect();
+    files.sort_by_key(|(n, _)| *n);
+    Ok(files)
+}
+
+/// The index of the newest overflow file beside `journal`; 0 when there is none.
+fn newest_overflow(journal: &Path) -> u64 {
+    overflow_files(journal).ok().and_then(|files| files.last().map(|(n, _)| *n)).unwrap_or(0)
+}
+
+/// Delete the overflow files beside `journal` with an index up to `through`.
+/// One that stays is skipped by every replay, because the journal's header has
+/// absorbed it.
+fn remove_overflow_files(journal: &Path, through: u64) {
+    let Ok(files) = overflow_files(journal) else {
+        return;
+    };
+    for (n, path) in files {
+        if n <= through {
+            if let Err(e) = fs::remove_file(&path) {
+                warn!("[ModLogStorage] could not delete an absorbed overflow journal {}: {}", path.display(), e);
+            }
+        }
+    }
 }
 
 /// Append one line to the journal and flush it to disk.
@@ -673,11 +990,12 @@ fn append_journal(path: &Path, seq: u64, op: &JournalOp) -> Result<(), String> {
 /// Called with `JOURNAL_LOCK` held (`queue` is what it guards), which is what
 /// orders the sequence numbers; `wait_or_fold` then carries the line to disk.
 /// `None` when there is no journal or the line cannot be serialized: the store
-/// is dirty, so the next fold writes the action anyway.
-fn journal_append(queue: &mut JournalQueue, op: &JournalOp) -> Option<u64> {
+/// is dirty, so the next fold writes the action anyway. `partial` flags the
+/// line as written while the snapshot could not be read.
+fn journal_append(queue: &mut JournalQueue, op: &JournalOp, partial: bool) -> Option<u64> {
     JOURNAL_PATH.get()?;
     let seq = LAST_SEQ.load(Ordering::SeqCst) + 1;
-    match journal_line(seq, op) {
+    match journal_line_with(seq, op, partial) {
         Ok(line) => {
             LAST_SEQ.store(seq, Ordering::SeqCst);
             queue.pending.push((seq, line));
@@ -797,12 +1115,15 @@ fn apply_journal_op(storage: &mut ModLogStorage, op: JournalOp) {
 
 /// Cut a torn last line (no closing newline: a crash mid-append) off the
 /// journal, so the next append starts a fresh line instead of merging into it.
-fn cut_torn_tail(journal: &Path) {
-    let Ok(bytes) = fs::read(journal) else {
-        return;
+/// A journal that does not exist has none; one that cannot be read is an error.
+fn cut_torn_tail(journal: &Path) -> Result<(), String> {
+    let bytes = match fs::read(journal) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(format!("Failed to read mod logs journal: {}", e)),
     };
     if bytes.is_empty() || bytes.ends_with(b"\n") {
-        return;
+        return Ok(());
     }
     let keep = bytes.iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1);
     let cut = fs::OpenOptions::new().write(true).open(journal).and_then(|file| {
@@ -812,25 +1133,34 @@ fn cut_torn_tail(journal: &Path) {
     if let Err(e) = cut {
         warn!("[ModLogStorage] could not cut a torn journal line: {}", e);
     }
+    Ok(())
 }
 
-/// How many times a snapshot that cannot be read right now (locked by another
-/// process, say) is read again before the session's first seed gives up. Every
-/// later seed attempt reads once.
+/// How many times a snapshot or journal that cannot be read right now (locked
+/// by another process, say) is read again before the session's first seed gives
+/// up. Every later seed attempt reads once.
 const SNAPSHOT_READ_RETRIES: u32 = 3;
 const SNAPSHOT_READ_RETRY_AFTER: std::time::Duration = std::time::Duration::from_millis(50);
 
-/// The snapshot's bytes, or `None` if there is no snapshot. Any other read
-/// error is returned, after waiting it out if this is the session's first seed
-/// attempt.
-fn read_snapshot_bytes(snapshot: &Path) -> Result<Option<Vec<u8>>, String> {
-    let mut retries_left = if FIRST_SEED_ATTEMPT.swap(false, Ordering::SeqCst) { SNAPSHOT_READ_RETRIES } else { 0 };
+/// How many times a read is repeated: the retries if this is the session's
+/// first seed attempt, none after it.
+fn first_attempt_retries() -> u32 {
+    if FIRST_SEED_ATTEMPT.swap(false, Ordering::SeqCst) {
+        SNAPSHOT_READ_RETRIES
+    } else {
+        0
+    }
+}
+
+/// A file's bytes, or `None` if it does not exist. Any other read error is
+/// returned, after `retries` more reads, each after a short sleep.
+fn read_file_waiting(path: &Path, mut retries_left: u32, what: &str) -> Result<Option<Vec<u8>>, String> {
     loop {
-        match fs::read(snapshot) {
+        match fs::read(path) {
             Ok(bytes) => return Ok(Some(bytes)),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(e) if retries_left == 0 => {
-                return Err(format!("Failed to read mod logs file: {}", e));
+                return Err(format!("Failed to read {}: {}", what, e));
             }
             Err(_) => {
                 retries_left -= 1;
@@ -840,6 +1170,55 @@ fn read_snapshot_bytes(snapshot: &Path) -> Result<Option<Vec<u8>>, String> {
             }
         }
     }
+}
+
+/// Every byte of the journal on disk, and what its header says about the
+/// overflow files.
+struct JournalFiles {
+    /// The main journal, then each overflow file its header has not absorbed,
+    /// in index order, each on lines of its own.
+    bytes: Vec<u8>,
+    /// The index of the newest overflow file the header has absorbed.
+    absorbed: u64,
+    /// The index of the newest overflow file on disk.
+    overflow_newest: u64,
+}
+
+/// Read the journal and its overflow files. A file that does not exist is
+/// empty; one that cannot be read is an error, so no seq is handed out from a
+/// journal that was not seen whole. `retries` is how often each read repeats.
+fn read_journal_files(journal: &Path, retries: u32) -> Result<JournalFiles, String> {
+    let mut bytes = read_file_waiting(journal, retries, "mod logs journal")?.unwrap_or_default();
+    let absorbed = absorbed_overflow(&bytes);
+    let files = overflow_files(journal).map_err(|e| format!("Failed to list the mod logs journal files: {}", e))?;
+    let mut overflow_newest = 0;
+    for (n, path) in files {
+        overflow_newest = overflow_newest.max(n);
+        if n <= absorbed {
+            continue;
+        }
+        let more = read_file_waiting(&path, retries, "mod logs journal")?.unwrap_or_default();
+        bytes.push(b'\n');
+        bytes.extend_from_slice(&more);
+    }
+    Ok(JournalFiles { bytes, absorbed, overflow_newest })
+}
+
+/// The newest overflow index a journal's header line has absorbed; 0 if none.
+fn absorbed_overflow(bytes: &[u8]) -> u64 {
+    bytes
+        .split(|b| *b == b'\n')
+        .filter_map(|l| serde_json::from_slice::<JournalBase>(l).ok())
+        .filter(|base| base.op == "base")
+        .map(|base| base.overflow)
+        .max()
+        .unwrap_or(0)
+}
+
+/// The snapshot's bytes, or `None` if there is no snapshot. Any other read
+/// error is returned, after `retries` more reads.
+fn read_snapshot_bytes(snapshot: &Path, retries: u32) -> Result<Option<Vec<u8>>, String> {
+    read_file_waiting(snapshot, retries, "mod logs file")
 }
 
 /// Move a snapshot that does not parse next to itself under a name no fold
@@ -904,27 +1283,50 @@ fn newest_seq(bytes: &[u8]) -> u64 {
         .unwrap_or(0)
 }
 
-/// Apply every readable journal line past the base's `journal_seq` to
-/// `storage`, once each and in sequence order whatever order the lines sit in,
-/// and return how many were applied.
-fn replay_journal(storage: &mut ModLogStorage, bytes: &[u8]) -> usize {
-    let mut lines: Vec<JournalLine> = journal_lines(bytes).filter(|line| line.seq > storage.journal_seq).collect();
+/// The lines a replay applies over a base that covers `base_seq`, in the order
+/// it applies them: the whole lines past the base in seq order, then the lines
+/// written while the store was partial, which the base never covers whatever
+/// their seq, in seq order. Each seq counts once within its group.
+fn replay_lines(bytes: &[u8], base_seq: u64) -> Vec<JournalLine> {
+    let (partial, whole): (Vec<JournalLine>, Vec<JournalLine>) =
+        journal_lines(bytes).partition(|line| line.partial);
+    let mut lines: Vec<JournalLine> = whole.into_iter().filter(|line| line.seq > base_seq).collect();
     lines.sort_by_key(|line| line.seq);
     lines.dedup_by_key(|line| line.seq);
+    let mut partial = partial;
+    partial.sort_by_key(|line| line.seq);
+    partial.dedup_by_key(|line| line.seq);
+    lines.extend(partial);
+    lines
+}
+
+/// Apply `lines` to `storage` in order and return how many there were.
+fn apply_replay(storage: &mut ModLogStorage, lines: Vec<JournalLine>) -> usize {
     let applied = lines.len();
-    for JournalLine { seq, op } in lines {
+    for JournalLine { seq, op, .. } in lines {
         apply_journal_op(storage, op);
-        storage.journal_seq = seq;
+        storage.journal_seq = storage.journal_seq.max(seq);
     }
     applied
+}
+
+/// Apply every readable journal line past the base's `journal_seq` to
+/// `storage` (the lines written while the store was partial after them), once
+/// each and in sequence order whatever order the lines sit in, and return how
+/// many were applied.
+#[cfg(test)]
+fn replay_journal(storage: &mut ModLogStorage, bytes: &[u8]) -> usize {
+    let lines = replay_lines(bytes, storage.journal_seq);
+    apply_replay(storage, lines)
 }
 
 /// The store `snapshot` holds. A missing snapshot is an empty store; one that
 /// does not parse is moved aside first and also gives an empty store, so the
 /// whole journal replays over it; one that cannot be read, or moved aside, is
-/// an error, so no fold can overwrite it.
-fn load_snapshot(snapshot: &Path) -> Result<ModLogStorage, String> {
-    match read_snapshot_bytes(snapshot)? {
+/// an error, so no fold can overwrite it. `retries` is how often an unreadable
+/// snapshot is read again.
+fn load_snapshot(snapshot: &Path, retries: u32) -> Result<ModLogStorage, String> {
+    match read_snapshot_bytes(snapshot, retries)? {
         None => Ok(ModLogStorage::default()),
         Some(bytes) => match serde_json::from_slice(&bytes) {
             Ok(parsed) => Ok(parsed),
@@ -941,9 +1343,10 @@ fn load_snapshot(snapshot: &Path) -> Result<ModLogStorage, String> {
 /// from a crash is cut off the journal first.
 #[cfg(test)]
 fn load_storage(snapshot: &Path, journal: &Path) -> Result<(ModLogStorage, usize), String> {
-    let mut storage = load_snapshot(snapshot)?;
-    cut_torn_tail(journal);
-    let applied = replay_journal(&mut storage, &fs::read(journal).unwrap_or_default());
+    let mut storage = load_snapshot(snapshot, first_attempt_retries())?;
+    cut_torn_tail(journal)?;
+    let files = read_journal_files(journal, 0)?;
+    let applied = replay_journal(&mut storage, &files.bytes);
     Ok((storage, applied))
 }
 
@@ -1443,6 +1846,7 @@ mod journal_tests {
     fn reset_globals() {
         *JOURNAL_LOCK.lock().unwrap_or_else(|e| e.into_inner()) = JournalQueue::new();
         LAST_SEQ.store(0, Ordering::SeqCst);
+        OVERFLOW_ABSORBED.store(0, Ordering::SeqCst);
         DIRTY.store(false, Ordering::Release);
         FIRST_SEED_ATTEMPT.store(false, Ordering::SeqCst);
     }
@@ -1457,6 +1861,8 @@ mod journal_tests {
         let (snapshot, journal) = temp_paths(GLOBALS_FOLDER);
         let _cleanup = TempDirGuard(snapshot.parent().unwrap().to_path_buf());
         let _restore = StoreRestore(store().lock().unwrap_or_else(|e| e.into_inner()).take());
+        // The store is complete before the journal starts failing.
+        ModLogStorageService::with_store_at(|| Ok(snapshot.clone()), |_| ()).unwrap();
         // A directory where the journal file belongs: every commit fails.
         fs::create_dir(&journal).unwrap();
         let entry = json!({ "id": "a1", "action": "ban", "channel": "Chan", "target_user_name": "bob",
@@ -1546,8 +1952,8 @@ mod journal_tests {
         let mut f = fs::OpenOptions::new().append(true).open(&journal).unwrap();
         std::io::Write::write_all(&mut f, b"{\"seq\":2,\"op\":\"put\",\"chan").unwrap();
         drop(f);
-        cut_torn_tail(&journal);
-        let retry = journal_line(2, &JournalOp::Put { channel: "chan".into(), entry: json!({ "id": "a2" }) }).unwrap();
+        cut_torn_tail(&journal).unwrap();
+        let retry =journal_line(2, &JournalOp::Put { channel: "chan".into(), entry: json!({ "id": "a2" }) }).unwrap();
         commit_lines(&journal, &[(2, retry)]).unwrap();
         let (restored, replayed) = load_storage(&snapshot, &journal).unwrap();
         assert_eq!(replayed, 2);
@@ -1915,6 +2321,326 @@ mod journal_tests {
         // The cut leaves a header holding the last seq the file covers.
         assert_eq!(fs::read(&journal).unwrap(), b"{\"op\":\"base\",\"seq\":2}\n");
         assert_eq!(read_snapshot(&snapshot).journal_seq, 2);
+    }
+
+    /// A ban of its own: no two ids merge into one action.
+    fn ban(id: &str) -> serde_json::Value {
+        json!({ "id": id, "action": "ban", "channel": "chan", "target_user_name": id,
+            "timestamp": "2026-10-24T00:00:00Z", "source": "irc" })
+    }
+
+    fn ids(channels: &HashMap<String, Vec<serde_json::Value>>, channel: &str) -> Vec<serde_json::Value> {
+        channels[channel].iter().map(|e| e["id"].clone()).collect()
+    }
+
+    fn write_snapshot_file(snapshot: &Path, channels: Vec<(&str, Vec<serde_json::Value>)>, journal_seq: u64) {
+        let saved = ModLogStorage {
+            channels: channels.into_iter().map(|(channel, entries)| (channel.to_string(), entries)).collect(),
+            journal_seq,
+            ..Default::default()
+        };
+        fs::write(snapshot, serde_json::to_string(&saved).unwrap()).unwrap();
+    }
+
+    /// A restart: the process-wide store and counters are a fresh session's.
+    fn restart() {
+        *store().lock().unwrap_or_else(|e| e.into_inner()) = None;
+        reset_globals();
+    }
+
+    /// A snapshot write that lands durably.
+    fn durable_write(path: &Path, json: &str) -> std::io::Result<Durability> {
+        fs::write(path, json)?;
+        Ok(Durability::Durable)
+    }
+
+    #[test]
+    fn actions_recorded_while_the_snapshot_and_journal_are_both_held_are_numbered_after_both() {
+        let _globals = GLOBALS_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset_globals();
+        let (snapshot, journal) = temp_paths(GLOBALS_FOLDER);
+        let _cleanup = TempDirGuard(snapshot.parent().unwrap().to_path_buf());
+        let _restore = StoreRestore(store().lock().unwrap_or_else(|e| e.into_inner()).take());
+        // A folder where each file belongs cannot be read.
+        fs::create_dir(&snapshot).unwrap();
+        fs::create_dir(&journal).unwrap();
+        ModLogStorageService::record_at(|| Ok(snapshot.clone()), "chan", ban("x")).unwrap();
+        // No seq is handed out from a journal that was not read, and nothing is journaled.
+        assert_eq!(LAST_SEQ.load(Ordering::SeqCst), 0);
+        assert!(store_is_partial());
+        assert!(store_journal_unread());
+        assert!(DIRTY.load(Ordering::Acquire));
+        // Both files read again: the journal is a header at 7 and the snapshot covers 7.
+        fs::remove_dir(&snapshot).unwrap();
+        fs::remove_dir(&journal).unwrap();
+        fs::write(&journal, base_header(7, 0)).unwrap();
+        write_snapshot_file(&snapshot, vec![("keep", vec![json!({ "id": "k1" })])], 7);
+        let channels = ModLogStorageService::with_store_at(|| Ok(snapshot.clone()), |s| s.channels.clone()).unwrap();
+        assert_eq!(ids(&channels, "chan"), vec![json!("x")]);
+        assert_eq!(ids(&channels, "keep"), vec![json!("k1")]);
+        assert_eq!(LAST_SEQ.load(Ordering::SeqCst), 8);
+        // The held action is journaled past the snapshot, so a restart keeps it.
+        let (restored, replayed) = load_storage(&snapshot, &journal).unwrap();
+        assert_eq!(replayed, 1);
+        assert_eq!(ids(&restored.channels, "chan"), vec![json!("x")]);
+    }
+
+    #[test]
+    fn a_journal_held_at_seed_replays_behind_the_snapshot_and_a_later_action_follows_it() {
+        let _globals = GLOBALS_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset_globals();
+        let _restore = StoreRestore(store().lock().unwrap_or_else(|e| e.into_inner()).take());
+        let (snapshot, _journal) = temp_paths(GLOBALS_FOLDER);
+        let _cleanup = TempDirGuard(snapshot.parent().unwrap().to_path_buf());
+        for fold_before_restart in [false, true] {
+            restart();
+            // A crash left the snapshot at 3 and the journal holding lines 4 and 5.
+            let (snapshot, journal) = temp_paths(GLOBALS_FOLDER);
+            write_snapshot_file(&snapshot, vec![("chan", vec![json!({ "id": "a1" })])], 3);
+            let put = |id: &str| JournalOp::Put { channel: "chan".into(), entry: json!({ "id": id }) };
+            let lines = format!("{}{}", journal_line(4, &put("a4")).unwrap(), journal_line(5, &put("a5")).unwrap());
+            fs::create_dir(&journal).unwrap();
+            assert!(ModLogStorageService::with_store_at(|| Ok(snapshot.clone()), |_| ()).is_err());
+            assert!(store_journal_unread());
+            assert_eq!(LAST_SEQ.load(Ordering::SeqCst), 0);
+            fs::remove_dir(&journal).unwrap();
+            fs::write(&journal, &lines).unwrap();
+            ModLogStorageService::record_at(|| Ok(snapshot.clone()), "chan", ban("x")).unwrap();
+            let channels = ModLogStorageService::with_store_at(|| Ok(snapshot.clone()), |s| s.channels.clone()).unwrap();
+            let expected = vec![json!("a1"), json!("a4"), json!("a5"), json!("x")];
+            assert_eq!(ids(&channels, "chan"), expected, "fold {fold_before_restart}");
+            assert_eq!(LAST_SEQ.load(Ordering::SeqCst), 6);
+            if fold_before_restart {
+                ModLogStorageService::flush_with(durable_write).unwrap();
+                assert_eq!(fs::read(&journal).unwrap(), base_header(6, 0).as_bytes());
+            }
+            restart();
+            let channels = ModLogStorageService::with_store_at(|| Ok(snapshot.clone()), |s| s.channels.clone()).unwrap();
+            assert_eq!(ids(&channels, "chan"), expected, "restart after fold {fold_before_restart}");
+        }
+    }
+
+    #[test]
+    fn a_clear_held_while_the_journal_is_unread_applies_after_the_journal_lines() {
+        let _globals = GLOBALS_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset_globals();
+        let (snapshot, journal) = temp_paths(GLOBALS_FOLDER);
+        let _cleanup = TempDirGuard(snapshot.parent().unwrap().to_path_buf());
+        let _restore = StoreRestore(store().lock().unwrap_or_else(|e| e.into_inner()).take());
+        write_snapshot_file(&snapshot, vec![("chan", vec![json!({ "id": "c1" })])], 0);
+        fs::create_dir(&journal).unwrap();
+        ModLogStorageService::record_at(|| Ok(snapshot.clone()), "chan", ban("n1")).unwrap();
+        ModLogStorageService::clear_channel_at(|| Ok(snapshot.clone()), "chan").unwrap();
+        assert_eq!(LAST_SEQ.load(Ordering::SeqCst), 0);
+        fs::remove_dir(&journal).unwrap();
+        let held = JournalOp::Put { channel: "chan".into(), entry: json!({ "id": "j1" }) };
+        fs::write(&journal, journal_line(1, &held).unwrap()).unwrap();
+        let channels = ModLogStorageService::with_store_at(|| Ok(snapshot.clone()), |s| s.channels.clone()).unwrap();
+        assert!(!channels.contains_key("chan"));
+        assert_eq!(LAST_SEQ.load(Ordering::SeqCst), 3);
+        let (restored, replayed) = load_storage(&snapshot, &journal).unwrap();
+        assert_eq!(replayed, 3);
+        assert!(!restored.channels.contains_key("chan"));
+    }
+
+    #[test]
+    fn only_the_first_seed_attempt_waits_on_an_unreadable_journal() {
+        let _globals = GLOBALS_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset_globals();
+        let (snapshot, journal) = temp_paths(GLOBALS_FOLDER);
+        let _cleanup = TempDirGuard(snapshot.parent().unwrap().to_path_buf());
+        let _restore = StoreRestore(store().lock().unwrap_or_else(|e| e.into_inner()).take());
+        fs::create_dir(&journal).unwrap();
+        FIRST_SEED_ATTEMPT.store(true, Ordering::SeqCst);
+        let before = SNAPSHOT_RETRY_SLEEPS.load(Ordering::SeqCst);
+        assert!(ModLogStorageService::with_store_at(|| Ok(snapshot.clone()), |_| ()).is_err());
+        let after = SNAPSHOT_RETRY_SLEEPS.load(Ordering::SeqCst);
+        assert_eq!(after - before, SNAPSHOT_READ_RETRIES as usize);
+        assert!(ModLogStorageService::with_store_at(|| Ok(snapshot.clone()), |_| ()).is_err());
+        assert_eq!(SNAPSHOT_RETRY_SLEEPS.load(Ordering::SeqCst), after);
+        assert!(store_journal_unread());
+    }
+
+    #[test]
+    fn a_journal_that_cannot_be_read_is_an_error_and_a_missing_one_is_not() {
+        let (snapshot, journal) = temp_paths("journal-unreadable");
+        let _cleanup = TempDirGuard(snapshot.parent().unwrap().to_path_buf());
+        assert!(cut_torn_tail(&journal).is_ok());
+        assert!(read_journal_files(&journal, 0).unwrap().bytes.is_empty());
+        fs::create_dir(&journal).unwrap();
+        assert!(cut_torn_tail(&journal).is_err());
+        assert!(read_journal_files(&journal, 0).is_err());
+    }
+
+    #[test]
+    fn lines_written_while_partial_replay_after_the_whole_lines_whatever_their_seq() {
+        let op = |id: &str| JournalOp::Put { channel: "chan".into(), entry: json!({ "id": id }) };
+        let mut bytes = base_header(5, 0).into_bytes();
+        // Out of order, one partial line twice, and one whole line the base covers.
+        for (seq, id, partial) in [
+            (7, "w7", false),
+            (6, "w6", false),
+            (2, "p2", true),
+            (2, "p2", true),
+            (3, "p3", true),
+            (4, "old", false),
+        ] {
+            bytes.extend_from_slice(journal_line_with(seq, &op(id), partial).unwrap().as_bytes());
+        }
+        let order: Vec<(u64, bool)> = replay_lines(&bytes, 5).iter().map(|line| (line.seq, line.partial)).collect();
+        assert_eq!(order, vec![(6, false), (7, false), (2, true), (3, true)]);
+    }
+
+    #[test]
+    fn a_line_numbered_at_or_below_the_snapshot_while_partial_is_kept_when_the_snapshot_reads() {
+        let _globals = GLOBALS_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset_globals();
+        let (snapshot, journal) = temp_paths(GLOBALS_FOLDER);
+        let _cleanup = TempDirGuard(snapshot.parent().unwrap().to_path_buf());
+        let _restore = StoreRestore(store().lock().unwrap_or_else(|e| e.into_inner()).take());
+        // A fold saved a and b at seq 2, but the journal write of b failed and
+        // the cut failed, so the journal still holds only line 1.
+        write_snapshot_file(&snapshot, vec![("chan", vec![json!({ "id": "a" }), json!({ "id": "b" })])], 2);
+        append_journal(&journal, 1, &JournalOp::Put { channel: "chan".into(), entry: json!({ "id": "a" }) }).unwrap();
+        // The next session cannot read the snapshot and numbers c from the journal alone.
+        let saved = fs::read(&snapshot).unwrap();
+        fs::remove_file(&snapshot).unwrap();
+        fs::create_dir(&snapshot).unwrap();
+        ModLogStorageService::record_at(|| Ok(snapshot.clone()), "chan", ban("c")).unwrap();
+        assert_eq!(LAST_SEQ.load(Ordering::SeqCst), 2);
+        assert!(fs::read_to_string(&journal).unwrap().contains("\"partial\":true"));
+        fs::remove_dir(&snapshot).unwrap();
+        fs::write(&snapshot, saved).unwrap();
+        let channels = ModLogStorageService::with_store_at(|| Ok(snapshot.clone()), |s| s.channels.clone()).unwrap();
+        assert_eq!(ids(&channels, "chan"), vec![json!("a"), json!("b"), json!("c")]);
+        // c is renumbered past the snapshot and no line is flagged any more.
+        assert_eq!(LAST_SEQ.load(Ordering::SeqCst), 3);
+        assert!(!fs::read_to_string(&journal).unwrap().contains("partial"));
+        let (restored, replayed) = load_storage(&snapshot, &journal).unwrap();
+        assert_eq!(replayed, 1);
+        assert_eq!(ids(&restored.channels, "chan"), vec![json!("a"), json!("b"), json!("c")]);
+    }
+
+    #[test]
+    fn a_journal_rewrite_that_fails_keeps_the_store_partial_until_it_lands() {
+        let _globals = GLOBALS_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset_globals();
+        let (snapshot, journal) = temp_paths(GLOBALS_FOLDER);
+        let _cleanup = TempDirGuard(snapshot.parent().unwrap().to_path_buf());
+        let _restore = StoreRestore(store().lock().unwrap_or_else(|e| e.into_inner()).take());
+        fs::create_dir(&snapshot).unwrap();
+        ModLogStorageService::record_at(|| Ok(snapshot.clone()), "chan", ban("x")).unwrap();
+        fs::remove_dir(&snapshot).unwrap();
+        write_snapshot_file(&snapshot, vec![("keep", vec![json!({ "id": "k1" })])], 0);
+        // A folder where the rewrite's temporary file belongs refuses it.
+        let tmp = journal.with_extension("journal.tmp");
+        fs::create_dir(&tmp).unwrap();
+        assert!(ModLogStorageService::with_store_at(|| Ok(snapshot.clone()), |_| ()).is_err());
+        assert!(store_is_partial());
+        let writes = AtomicUsize::new(0);
+        ModLogStorageService::flush_with(|path: &Path, json: &str| -> std::io::Result<Durability> {
+            writes.fetch_add(1, Ordering::SeqCst);
+            durable_write(path, json)
+        })
+        .unwrap();
+        assert_eq!(writes.load(Ordering::SeqCst), 0);
+        assert!(fs::read_to_string(&journal).unwrap().contains("\"partial\":true"));
+        // The next call rewrites the journal and the store is complete.
+        fs::remove_dir(&tmp).unwrap();
+        let channels = ModLogStorageService::with_store_at(|| Ok(snapshot.clone()), |s| s.channels.clone()).unwrap();
+        assert_eq!(ids(&channels, "chan"), vec![json!("x")]);
+        assert!(!store_is_partial());
+        assert!(!fs::read_to_string(&journal).unwrap().contains("partial"));
+    }
+
+    #[test]
+    fn a_fold_after_a_journal_rewrite_whose_cut_is_lost_applies_nothing_twice() {
+        let _globals = GLOBALS_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset_globals();
+        let (snapshot, journal) = temp_paths(GLOBALS_FOLDER);
+        let _cleanup = TempDirGuard(snapshot.parent().unwrap().to_path_buf());
+        let _restore = StoreRestore(store().lock().unwrap_or_else(|e| e.into_inner()).take());
+        fs::create_dir(&snapshot).unwrap();
+        ModLogStorageService::record_at(|| Ok(snapshot.clone()), "chan", ban("x")).unwrap();
+        fs::remove_dir(&snapshot).unwrap();
+        write_snapshot_file(&snapshot, vec![("keep", vec![json!({ "id": "k1" })])], 0);
+        // The snapshot reads: x is renumbered to line 1 and y becomes line 2.
+        ModLogStorageService::with_store_at(|| Ok(snapshot.clone()), |_| ()).unwrap();
+        ModLogStorageService::record_at(|| Ok(snapshot.clone()), "chan", ban("y")).unwrap();
+        let before_cut = fs::read(&journal).unwrap();
+        ModLogStorageService::flush_with(durable_write).unwrap();
+        assert_eq!(read_snapshot(&snapshot).journal_seq, 2);
+        // Power fails: the snapshot is on disk, the journal replacement is not.
+        fs::write(&journal, before_cut).unwrap();
+        restart();
+        let channels = ModLogStorageService::with_store_at(|| Ok(snapshot.clone()), |s| s.channels.clone()).unwrap();
+        assert_eq!(ids(&channels, "chan"), vec![json!("x"), json!("y")]);
+        assert_eq!(ids(&channels, "keep"), vec![json!("k1")]);
+        assert_eq!(LAST_SEQ.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn overflow_files_replay_after_the_main_journal_unless_its_header_absorbed_them() {
+        let (snapshot, journal) = temp_paths("overflow-read");
+        let _cleanup = TempDirGuard(snapshot.parent().unwrap().to_path_buf());
+        let put = |id: &str| JournalOp::Put { channel: "chan".into(), entry: json!({ "id": id }) };
+        append_journal(&journal, 1, &put("a1")).unwrap();
+        fs::write(overflow_path(&journal, 1), journal_line(2, &put("a2")).unwrap()).unwrap();
+        fs::write(overflow_path(&journal, 2), journal_line(3, &put("a3")).unwrap()).unwrap();
+        let files = read_journal_files(&journal, 0).unwrap();
+        assert_eq!((files.absorbed, files.overflow_newest), (0, 2));
+        let mut storage = ModLogStorage::default();
+        assert_eq!(replay_journal(&mut storage, &files.bytes), 3);
+        assert_eq!(ids(&storage.channels, "chan"), vec![json!("a1"), json!("a2"), json!("a3")]);
+        // A header that absorbed file 1 hides it and keeps file 2.
+        fs::write(&journal, base_header(1, 1)).unwrap();
+        let files = read_journal_files(&journal, 0).unwrap();
+        assert_eq!((files.absorbed, files.overflow_newest), (1, 2));
+        let mut storage = ModLogStorage { journal_seq: 1, ..Default::default() };
+        assert_eq!(replay_journal(&mut storage, &files.bytes), 1);
+        assert_eq!(ids(&storage.channels, "chan"), vec![json!("a3")]);
+    }
+
+    #[test]
+    fn an_action_the_snapshot_and_journal_both_refused_is_recovered_from_the_overflow_file() {
+        let _globals = GLOBALS_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset_globals();
+        let (snapshot, journal) = temp_paths(GLOBALS_FOLDER);
+        let _cleanup = TempDirGuard(snapshot.parent().unwrap().to_path_buf());
+        let _restore = StoreRestore(store().lock().unwrap_or_else(|e| e.into_inner()).take());
+        write_snapshot_file(&snapshot, vec![("keep", vec![json!({ "id": "k1" })])], 0);
+        ModLogStorageService::with_store_at(|| Ok(snapshot.clone()), |_| ()).unwrap();
+        // Folders where the snapshot's temporary file and the journal belong:
+        // neither takes a write.
+        let tmp = snapshot.with_extension("json.tmp");
+        fs::create_dir(&tmp).unwrap();
+        fs::create_dir(&journal).unwrap();
+        ModLogStorageService::record_at(|| Ok(snapshot.clone()), "chan", ban("a1")).unwrap();
+        let overflow = overflow_path(&journal, 1);
+        assert!(overflow.is_file());
+        assert_eq!(read_snapshot(&snapshot).journal_seq, 0);
+        // A crash, then both take writes again: the action comes back from the overflow file.
+        restart();
+        fs::remove_dir(&tmp).unwrap();
+        fs::remove_dir(&journal).unwrap();
+        let channels = ModLogStorageService::with_store_at(|| Ok(snapshot.clone()), |s| s.channels.clone()).unwrap();
+        assert_eq!(ids(&channels, "chan"), vec![json!("a1")]);
+        assert_eq!(ids(&channels, "keep"), vec![json!("k1")]);
+        // The fold saves it, the new header absorbs the overflow file, and the file goes.
+        ModLogStorageService::flush_with(durable_write).unwrap();
+        assert_eq!(read_snapshot(&snapshot).journal_seq, 1);
+        assert_eq!(fs::read(&journal).unwrap(), base_header(1, 1).as_bytes());
+        assert!(!overflow.exists());
+        // A stale copy of that file is skipped, and a refused append moves past it.
+        fs::write(&overflow, journal_line_with(1, &JournalOp::Clear { channel: "chan".into() }, true).unwrap()).unwrap();
+        restart();
+        let channels = ModLogStorageService::with_store_at(|| Ok(snapshot.clone()), |s| s.channels.clone()).unwrap();
+        assert_eq!(ids(&channels, "chan"), vec![json!("a1")]);
+        assert_eq!(OVERFLOW_ABSORBED.load(Ordering::SeqCst), 1);
+        fs::remove_file(&journal).unwrap();
+        fs::create_dir(&journal).unwrap();
+        ModLogStorageService::record_at(|| Ok(snapshot.clone()), "chan", ban("a2")).unwrap();
+        assert!(overflow_path(&journal, 2).is_file());
     }
 
     #[test]
