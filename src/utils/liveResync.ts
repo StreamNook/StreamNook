@@ -37,12 +37,15 @@ function windowStart(hls: Hls): number | null {
  * A seek into video that is not downloaded yet would freeze the element. After
  * the move it is left alone.
  *
- * The stream counts as stuck when, by the end of the window, the video has not
- * fired `playing` and its time has not advanced (an upstream that refused the
- * parked URL, for one): `onStuck` runs, and only while the video is not paused.
- * Playing out the old buffer is not progress while no new fragment has arrived
- * and the playhead is below the served window: the window then runs again, and
- * the stream is stuck once that old video is used up. Returns the cancel.
+ * The move waits for a playlist reload that started after the resync. The
+ * stream counts as stuck, one window after the resync, when no new live data
+ * arrived: a main fragment inside the reloaded playlist's window was never
+ * buffered and the playhead has not reached that window, whatever the old
+ * buffer is doing. With new live data it is also stuck when the video has not
+ * fired `playing` and its time has not advanced. After the seek the window
+ * starts again and the same playing check applies, so a freeze after the seek
+ * is reported one window later. `onStuck` runs only while the video is not
+ * paused. Returns the cancel.
  */
 export function followLiveAfterResync(
   hls: Hls,
@@ -52,11 +55,16 @@ export function followLiveAfterResync(
 ): () => void {
   let seeked = false;
   let playing = false;
-  let freshFragment = false;
+  let reloaded = false; // a playlist arrived after the resync started
+  let liveData = false; // a main fragment inside that playlist's window was buffered
   let baseline = video.currentTime;
   let timer: ReturnType<typeof setTimeout> | null = null;
+  const arm = () => {
+    if (timer !== null) clearTimeout(timer);
+    timer = setTimeout(judge, RESYNC_WINDOW_MS);
+  };
   const tryMove = () => {
-    if (seeked) return;
+    if (seeked || !reloaded) return;
     const pos = hls.liveSyncPosition;
     if (pos == null || !Number.isFinite(pos)) return;
     const first = windowStart(hls);
@@ -69,12 +77,20 @@ export function followLiveAfterResync(
     seeked = true;
     video.currentTime = target;
     baseline = video.currentTime;
+    playing = false;
     hls.off(Hls.Events.LEVEL_UPDATED, tryMove);
     hls.off(Hls.Events.FRAG_BUFFERED, tryMove);
+    arm();
     log?.(`resync: playhead to the live edge (${target.toFixed(1)}s)`);
   };
-  const onFragment = () => {
-    freshFragment = true;
+  const onLevel = () => {
+    reloaded = true;
+  };
+  const onFragment = (_e: unknown, data?: { frag?: { type?: string; start: number; duration: number } }) => {
+    const f = data?.frag;
+    if (!reloaded || !f || f.type !== 'main') return;
+    const first = windowStart(hls);
+    if (first !== null && f.start + f.duration > first) liveData = true;
   };
   const onPlaying = () => {
     playing = true;
@@ -84,33 +100,30 @@ export function followLiveAfterResync(
       clearTimeout(timer);
       timer = null;
     }
+    hls.off(Hls.Events.LEVEL_UPDATED, onLevel);
     hls.off(Hls.Events.LEVEL_UPDATED, tryMove);
     hls.off(Hls.Events.FRAG_BUFFERED, tryMove);
     hls.off(Hls.Events.FRAG_BUFFERED, onFragment);
     video.removeEventListener('playing', onPlaying);
   };
-  const judge = () => {
+  function judge() {
     timer = null;
-    const first = windowStart(hls);
-    const onOldData = !freshFragment && first !== null && video.currentTime < first;
-    if (onOldData && !video.paused && video.currentTime > baseline) {
-      baseline = video.currentTime;
-      timer = setTimeout(judge, RESYNC_WINDOW_MS);
-      return;
-    }
     stop();
     if (video.paused) return;
-    if (onOldData) {
+    const first = windowStart(hls);
+    const reached = reloaded && first !== null && video.currentTime >= first;
+    if (!liveData && !reached) {
       onStuck();
       return;
     }
     if (playing || video.currentTime > baseline) return;
     onStuck();
-  };
+  }
+  hls.on(Hls.Events.LEVEL_UPDATED, onLevel); // before tryMove, so tryMove sees the reload
   hls.on(Hls.Events.LEVEL_UPDATED, tryMove);
-  hls.on(Hls.Events.FRAG_BUFFERED, tryMove);
   hls.on(Hls.Events.FRAG_BUFFERED, onFragment);
+  hls.on(Hls.Events.FRAG_BUFFERED, tryMove);
   video.addEventListener('playing', onPlaying);
-  timer = setTimeout(judge, RESYNC_WINDOW_MS);
+  arm();
   return stop;
 }
