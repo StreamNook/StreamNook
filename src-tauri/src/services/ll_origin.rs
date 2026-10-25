@@ -1094,7 +1094,12 @@ impl LlOrigin {
     /// error (offline UI) on true death, or a graceful non-LL serve if the upstream
     /// recovered. Without this the reader spun forever serving the last-good
     /// playlist while `edge_version` never advanced (a silent permanent freeze).
-    fn deactivate_offline(&self, reason: &str) {
+    /// A reader that is no longer the current one (`gen` is stale) changes nothing.
+    fn deactivate_offline(&self, reason: &str, gen: u64) {
+        let task = self.reader_task.lock().unwrap();
+        if self.generation.load(Ordering::SeqCst) != gen {
+            return;
+        }
         warn!("[LLOrigin] deactivating origin (upstream gone): {reason}");
         crate::services::ll_diagnostics::event(&format!(
             "\"ev\":\"o_offline\",\"reason\":{reason:?}"
@@ -1102,6 +1107,7 @@ impl LlOrigin {
         *self.live_edge.lock().unwrap() = None;
         *self.transmux.lock().unwrap() = None;
         *self.cmaf_video.lock().unwrap() = None;
+        drop(task);
         self.wake_serves();
     }
 
@@ -1109,7 +1115,25 @@ impl LlOrigin {
     pub fn stop(&self) {
         // Held to the end of the clears, so an `unpark` waiting on the lock
         // finds the origin stopped and starts nothing.
-        let mut task = self.reader_task.lock().unwrap();
+        let task = self.reader_task.lock().unwrap();
+        self.stop_locked(task);
+    }
+
+    /// `stop()` unless the origin is parked: a parked origin is left as it is
+    /// and false is returned, so a rendition switch cannot restart a relay that
+    /// is deliberately idle. True when it stopped.
+    pub fn stop_unless_parked(&self) -> bool {
+        let task = self.reader_task.lock().unwrap();
+        if self.parked.load(Ordering::SeqCst) {
+            return false;
+        }
+        self.stop_locked(task);
+        true
+    }
+
+    /// The stop itself, run with the `reader_task` lock held; the lock is
+    /// released after the clears.
+    fn stop_locked(&self, mut task: std::sync::MutexGuard<'_, Option<JoinHandle<()>>>) {
         self.generation.fetch_add(1, Ordering::SeqCst);
         if let Some(h) = task.take() {
             h.abort();
@@ -1240,7 +1264,7 @@ impl LlOrigin {
             finish
         };
         if let Some(sn) = tail {
-            self.finish_segment(sn);
+            self.finish_segment(sn, self.generation.load(Ordering::SeqCst));
         }
     }
 
@@ -1266,7 +1290,14 @@ impl LlOrigin {
     /// when the origin declined). Awaited from stream start so the player can read the
     /// result before constructing hls.js.
     pub async fn start(self: Arc<Self>, upstream_playlist_url: String) -> StartOutcome {
+        // Stopped before the queue, so a start already running ends early at
+        // its next check and a stop that lands while this one waits is seen.
+        self.stop();
+        let requested = self.generation.load(Ordering::SeqCst);
         let _start = self.start_lock.lock().await;
+        if self.generation.load(Ordering::SeqCst) != requested {
+            return StartOutcome::default();
+        }
         self.stop();
         // The experimental-low-latency kill switch (`DISABLED`, default on) gates the
         // TS parts path, which has a clean fallback (the stable whole-segment path
@@ -1293,6 +1324,9 @@ impl LlOrigin {
                 return StartOutcome::default();
             }
         };
+        if self.start_superseded(gen) {
+            return StartOutcome::default();
+        }
         let base = base_of(&upstream_playlist_url);
         let up = parse_upstream(&text, &base);
         let has_prefetch = !up.prefetch.is_empty();
@@ -1371,6 +1405,9 @@ impl LlOrigin {
                     warn!("[LLOrigin] CMAF init fetch failed ({e}); parts fall back to nominal durations");
                 }
             }
+            if self.start_superseded(gen) {
+                return inactive;
+            }
         }
 
         // Backfill the last few complete segments so the first playlist has #EXTINF.
@@ -1384,7 +1421,11 @@ impl LlOrigin {
             .cloned()
             .collect();
         for (sn, pdt, url) in backfill {
-            match client.get(&url).timeout(FETCH_TIMEOUT).send().await.ok() {
+            let fetched = client.get(&url).timeout(FETCH_TIMEOUT).send().await.ok();
+            if self.start_superseded(gen) {
+                return inactive;
+            }
+            match fetched {
                 Some(resp) => {
                     // Timed from the response, so the connection's setup (and
                     // the first one's handshake) is left out.
@@ -1450,6 +1491,18 @@ impl LlOrigin {
             active: true,
             has_prefetch: true,
         }
+    }
+
+    /// Whether a stop has superseded the start that began as generation `gen`.
+    /// When it has, the transmuxer and CMAF track the start prepared are cleared
+    /// so nothing of it outlives the stop.
+    fn start_superseded(&self, gen: u64) -> bool {
+        if self.generation.load(Ordering::SeqCst) == gen {
+            return false;
+        }
+        *self.transmux.lock().unwrap() = None;
+        *self.cmaf_video.lock().unwrap() = None;
+        true
     }
 
     /// Take over for a start that probed as generation `gen`: set the live edge
@@ -1582,7 +1635,7 @@ async fn run_reader(
             if contiguous {
                 match tokio::time::timeout(PREOPEN_WAIT, &mut handle).await {
                     Ok(Ok(Some((resp, pdt, seg_url)))) => {
-                        match origin.push_shell(sn, pdt.clone()) {
+                        match origin.push_shell(sn, pdt.clone(), gen) {
                             Some(true) => {
                                 crate::services::ll_diagnostics::event(&format!(
                                     "\"ev\":\"o_shell\",\"path\":\"fast\",\"sn\":{sn},\"pdt\":{}",
@@ -1604,7 +1657,7 @@ async fn run_reader(
                                     Some((&client, seg_url.as_str())),
                                 )
                                 .await;
-                                if !origin.finish_segment(sn) {
+                                if !origin.finish_segment(sn, gen) {
                                     return;
                                 }
                                 crate::services::ll_diagnostics::event(&format!(
@@ -1640,7 +1693,7 @@ async fn run_reader(
                     consec_playlist_fail += 1;
                     warn!("[LLOrigin] reader playlist HTTP {status} ({consec_playlist_fail})");
                     if consec_playlist_fail >= PLAYLIST_OFFLINE_LIMIT {
-                        origin.deactivate_offline(&format!("playlist HTTP {status}"));
+                        origin.deactivate_offline(&format!("playlist HTTP {status}"), gen);
                         return;
                     }
                     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -1652,7 +1705,7 @@ async fn run_reader(
                 consec_playlist_fail += 1;
                 warn!("[LLOrigin] reader playlist fetch failed: {e} ({consec_playlist_fail})");
                 if consec_playlist_fail >= PLAYLIST_OFFLINE_LIMIT {
-                    origin.deactivate_offline("playlist fetch repeatedly failing");
+                    origin.deactivate_offline("playlist fetch repeatedly failing", gen);
                     return;
                 }
                 tokio::time::sleep(Duration::from_millis(500)).await;
@@ -1668,7 +1721,7 @@ async fn run_reader(
             None => {
                 consec_playlist_fail += 1;
                 if consec_playlist_fail >= PLAYLIST_OFFLINE_LIMIT {
-                    origin.deactivate_offline("playlist has no segments");
+                    origin.deactivate_offline("playlist has no segments", gen);
                     return;
                 }
                 tokio::time::sleep(Duration::from_millis(500)).await;
@@ -1833,7 +1886,7 @@ async fn run_reader(
 
         // Create the in-progress segment shell and stream its parts in, preopening
         // the following segment's connection so the next boundary is seamless.
-        match origin.push_shell(inprogress_sn, pdt.clone()) {
+        match origin.push_shell(inprogress_sn, pdt.clone(), gen) {
             Some(true) => {}
             Some(false) => continue,
             None => return,
@@ -1853,7 +1906,7 @@ async fn run_reader(
         ));
         stream_segment(&origin, &client, &inprogress_url, inprogress_sn, gen).await;
 
-        if !origin.finish_segment(inprogress_sn) {
+        if !origin.finish_segment(inprogress_sn, gen) {
             return;
         }
         crate::services::ll_diagnostics::event(&format!(
@@ -2120,7 +2173,7 @@ async fn stream_response(
                     let Some((part, dur)) = origin.convert_part(part, dur) else {
                         continue;
                     };
-                    if !origin.append_part(sn, part, dur) {
+                    if !origin.append_part(sn, part, dur, gen) {
                         return; // edge gone
                     }
                     origin.wake_serves();
@@ -2217,7 +2270,7 @@ async fn stream_response(
     }
     if let Some((tail, dur)) = chunker.flush() {
         if let Some((tail, dur)) = origin.convert_part(tail, dur) {
-            if origin.append_part(sn, tail, dur) {
+            if origin.append_part(sn, tail, dur, gen) {
                 origin.wake_serves();
             }
         }
@@ -2279,11 +2332,15 @@ async fn range_resume(
 }
 
 impl LlOrigin {
-    /// Append the in-progress segment shell. Returns `None` if the edge is gone,
+    /// Append the in-progress segment shell. Returns `None` if the edge is gone
+    /// or the reader started as generation `gen` is no longer the current one,
     /// `Some(false)` if appending would break window contiguity (refused; the
     /// reader's catch-up should make that impossible), `Some(true)` on success.
-    fn push_shell(&self, sn: u64, pdt: Option<String>) -> Option<bool> {
+    fn push_shell(&self, sn: u64, pdt: Option<String>, gen: u64) -> Option<bool> {
         let mut g = self.live_edge.lock().unwrap();
+        if self.generation.load(Ordering::SeqCst) != gen {
+            return None;
+        }
         let edge = g.as_mut()?;
         if edge.segments.back().is_some_and(|s| s.sn + 1 != sn) {
             warn!("[LLOrigin] refusing non-contiguous shell sn {sn}");
@@ -2314,7 +2371,8 @@ impl LlOrigin {
     /// and re-appending an identical TS part makes hls.js extend the video timeline
     /// while the audio coalesces, giving progressive A/V drift of roughly half a
     /// second per re-fetch. The earlier even-split rewrite here was the cause.
-    /// Returns false if the edge is gone.
+    /// Returns false if the edge is gone or the reader started as generation
+    /// `gen` is no longer the current one.
     /// Media seconds currently held for `sn`, from its parts' measured
     /// durations (0 when the edge or segment is gone).
     fn held_secs(&self, sn: u64) -> f64 {
@@ -2334,8 +2392,11 @@ impl LlOrigin {
             .unwrap_or(0)
     }
 
-    fn finish_segment(&self, sn: u64) -> bool {
+    fn finish_segment(&self, sn: u64, gen: u64) -> bool {
         let mut g = self.live_edge.lock().unwrap();
+        if self.generation.load(Ordering::SeqCst) != gen {
+            return false;
+        }
         match g.as_mut() {
             Some(edge) => {
                 if let Some(seg) = edge.segments.iter_mut().find(|s| s.sn == sn) {
@@ -2422,9 +2483,13 @@ impl LlOrigin {
     }
 
     /// Append a part (with its real media duration) to the segment with `sn`. Returns
-    /// false if the edge is gone.
-    fn append_part(&self, sn: u64, bytes: Vec<u8>, duration: f64) -> bool {
+    /// false if the edge is gone or the reader started as generation `gen` is no
+    /// longer the current one.
+    fn append_part(&self, sn: u64, bytes: Vec<u8>, duration: f64, gen: u64) -> bool {
         let mut g = self.live_edge.lock().unwrap();
+        if self.generation.load(Ordering::SeqCst) != gen {
+            return false;
+        }
         match g.as_mut() {
             Some(edge) => {
                 if let Some(seg) = edge.segments.iter_mut().find(|s| s.sn == sn) {
@@ -3100,6 +3165,12 @@ pub fn engine_disabled() -> bool {
 
 pub fn stop() {
     SOLO.stop()
+}
+
+/// The main player's origin, stopped unless it is parked (see
+/// `LlOrigin::stop_unless_parked`).
+pub fn stop_unless_parked() -> bool {
+    SOLO.stop_unless_parked()
 }
 
 /// The main player's origin, parked (see `LlOrigin::park`).
@@ -3965,7 +4036,8 @@ mod tests {
         *origin.live_edge.lock().unwrap() = Some(ts_edge_with_one_segment());
         assert!(origin.is_active());
         let before = origin.edge_version.load(Ordering::SeqCst);
-        origin.deactivate_offline("test offline");
+        let gen = origin.generation.load(Ordering::SeqCst);
+        origin.deactivate_offline("test offline", gen);
         assert!(!origin.is_active());
         // serve_playlist must report inactive, not a stale playlist.
         let served = tokio::runtime::Builder::new_current_thread()
@@ -4079,6 +4151,7 @@ mod tests {
         let gen = origin.generation.load(Ordering::SeqCst);
         origin.stop();
         *origin.cmaf_video.lock().unwrap() = Some((1, 90_000));
+        *origin.transmux.lock().unwrap() = Some(crate::services::ts_fmp4::Transmuxer::new());
 
         let installed = origin.install_started(
             gen,
@@ -4090,7 +4163,86 @@ mod tests {
         assert!(!origin.is_active());
         assert!(origin.upstream.lock().unwrap().is_none());
         assert!(origin.cmaf_video.lock().unwrap().is_none(), "the prepared track is cleared");
+        assert!(origin.transmux.lock().unwrap().is_none(), "the prepared transmuxer is cleared");
         assert!(origin.reader_task.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn a_queued_start_returns_inactive_when_a_stop_lands_while_it_waits() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            // Anything fetched would connect here and sit in the backlog.
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let url = format!("http://{}/live.m3u8", listener.local_addr().unwrap());
+
+            let origin = LlOrigin::new(6);
+            let waiting_on = origin.start_lock.lock().await;
+            let generation = origin.generation.load(Ordering::SeqCst);
+            let starter = tokio::spawn(origin.clone().start(url));
+            // The queued start stops first, which moves the generation.
+            let began = std::time::Instant::now();
+            while origin.generation.load(Ordering::SeqCst) == generation {
+                assert!(began.elapsed() < Duration::from_secs(5), "the start never queued");
+                tokio::task::yield_now().await;
+            }
+            origin.stop();
+            drop(waiting_on);
+
+            let outcome = starter.await.unwrap();
+            assert!(!outcome.active);
+            assert!(origin.reader_task.lock().unwrap().is_none());
+            assert!(!origin.is_active());
+            assert!(listener.accept().is_err(), "a stopped start fetches nothing");
+        });
+    }
+
+    #[test]
+    fn stop_unless_parked_leaves_a_parked_origin_alone() {
+        let origin = LlOrigin::new(6);
+        *origin.live_edge.lock().unwrap() = Some(ts_edge_with_one_segment());
+        assert!(origin.park());
+        let generation = origin.generation.load(Ordering::SeqCst);
+        assert!(!origin.stop_unless_parked());
+        assert!(origin.is_parked());
+        assert!(origin.is_active());
+        assert_eq!(origin.generation.load(Ordering::SeqCst), generation);
+
+        let running = LlOrigin::new(6);
+        *running.live_edge.lock().unwrap() = Some(ts_edge_with_one_segment());
+        assert!(running.stop_unless_parked());
+        assert!(!running.is_active());
+    }
+
+    #[test]
+    fn a_stale_reader_changes_nothing() {
+        let origin = LlOrigin::new(6);
+        let mut edge = ts_edge_with_one_segment();
+        edge.segments.push_back(make_segment(2, None, false, even_parts(vec![vec![2]])));
+        *origin.live_edge.lock().unwrap() = Some(edge);
+        let gen = origin.generation.load(Ordering::SeqCst);
+        let stale = gen + 1;
+        let held_parts = |origin: &LlOrigin| origin.parts_held(2);
+
+        assert!(!origin.append_part(2, vec![9], 0.5, stale));
+        assert_eq!(held_parts(&origin), 1);
+
+        assert_eq!(origin.push_shell(3, None, stale), None);
+        assert_eq!(held_sns(&origin), vec![1, 2]);
+
+        assert!(!origin.finish_segment(2, stale));
+        assert!(!origin.live_edge.lock().unwrap().as_ref().unwrap().segments[1].complete);
+
+        let before = origin.edge_version.load(Ordering::SeqCst);
+        origin.deactivate_offline("stale reader", stale);
+        assert!(origin.is_active());
+        assert_eq!(origin.edge_version.load(Ordering::SeqCst), before);
+
+        // The current reader's calls take effect.
+        assert!(origin.append_part(2, vec![9], 0.5, gen));
+        assert_eq!(held_parts(&origin), 2);
+        assert_eq!(origin.push_shell(3, None, gen), Some(true));
+        assert!(origin.finish_segment(2, gen));
     }
 
     const OLD_REQUEST_MS: u64 = u64::MAX / 2;

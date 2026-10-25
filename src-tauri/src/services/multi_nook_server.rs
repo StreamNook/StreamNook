@@ -493,6 +493,11 @@ impl MultiNookServer {
             }
             return Ok(None);
         }
+        // A parked origin stays parked: restarting it would read again for a
+        // tile that is not watching.
+        if !origin.stop_unless_parked() {
+            return Ok(None);
+        }
         crate::services::hls_projection::reset(stream_id);
         Self::start_proxy(stream_id, playlist_url.to_string(), profile, refresher).await?;
         let low_latency = Self::is_low_latency(stream_id).await;
