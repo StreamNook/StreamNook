@@ -310,14 +310,18 @@ fn restore_rect_size(_window: &Window) -> Option<(u32, u32)> {
 /// before the process can die. Every flush is a no-op when nothing is dirty.
 #[cfg(mobile)]
 #[command]
-pub fn flush_persistent_stores() -> Result<(), String> {
-    let _ = crate::commands::settings::flush_settings_now();
-    let _ = crate::services::universal_cache_service::flush_manifest_now();
-    let _ = crate::services::mod_log_storage_service::ModLogStorageService::flush_now();
-    let _ = crate::services::whisper_storage_service::WhisperStorageService::flush_now();
-    let _ = crate::services::vod_progress_service::flush_now();
-    let _ = crate::services::chat_logger_service::ChatLoggerService::flush_all();
-    Ok(())
+pub async fn flush_persistent_stores() -> Result<(), String> {
+    // On the blocking pool: each flush writes a file.
+    tauri::async_runtime::spawn_blocking(|| {
+        let _ = crate::commands::settings::flush_settings_now();
+        let _ = crate::services::universal_cache_service::flush_manifest_now();
+        let _ = crate::services::mod_log_storage_service::ModLogStorageService::flush_now();
+        let _ = crate::services::whisper_storage_service::WhisperStorageService::flush_now();
+        let _ = crate::services::vod_progress_service::flush_now();
+        let _ = crate::services::chat_logger_service::ChatLoggerService::flush_all();
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 #[command]

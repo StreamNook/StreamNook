@@ -15,6 +15,14 @@ use tokio::sync::Mutex as TokioMutex;
 
 use crate::services::cache_service::get_cache_dir;
 
+/// Held for the whole of a manifest flush and of a clear, so manifest writes
+/// never overlap and a clear waits for a flush in progress.
+///
+/// Lock order, outermost first: `FLUSH_LOCK`, `MANIFEST_LOCK`,
+/// `MANIFEST_MEMORY`, `FOREIGN_ENTRIES`. A thread that holds one never takes an
+/// earlier one.
+static FLUSH_LOCK: StdMutex<()> = StdMutex::new(());
+
 // Global mutex to prevent concurrent manifest writes (for sync operations)
 static MANIFEST_LOCK: Lazy<StdMutex<()>> = Lazy::new(|| StdMutex::new(()));
 
@@ -426,6 +434,7 @@ fn load_manifest_from_disk() -> Result<UniversalCacheManifest> {
 /// which updates the in-memory mirror and schedules a debounced flush. This
 /// is only invoked by the background flush task.
 fn save_manifest_to_disk(manifest: &UniversalCacheManifest) -> Result<()> {
+    let _flush = FLUSH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // Compact, not pretty: nothing reads this file by eye, and the indentation
     // was ~22% of a 22 MB file rewritten many times per session.
     let json = encode_manifest(manifest)?;
@@ -436,10 +445,16 @@ fn save_manifest_to_disk(manifest: &UniversalCacheManifest) -> Result<()> {
 /// over the original, so a crash mid-write can never leave a truncated manifest
 /// behind (the load path treats parse failure as "start over", which would
 /// silently forget every cached file). std::fs::rename replaces an existing
-/// destination on Windows (MoveFileExW with replace) and on Unix.
+/// destination on Windows (MoveFileExW with replace) and on Unix. The caller
+/// holds `FLUSH_LOCK`, since every write goes through the same sibling file.
 fn write_manifest_bytes(json: &[u8]) -> Result<()> {
-    use std::io::Write;
     let manifest_path = get_universal_cache_dir()?.join("manifest.json");
+    write_manifest_bytes_to(&manifest_path, json)
+}
+
+/// `write_manifest_bytes` for the manifest at `manifest_path`.
+fn write_manifest_bytes_to(manifest_path: &Path, json: &[u8]) -> Result<()> {
+    use std::io::Write;
     let tmp_path = manifest_path.with_extension("json.tmp");
     {
         let mut file = fs::File::create(&tmp_path).context("Failed to create manifest temp file")?;
@@ -448,7 +463,7 @@ fn write_manifest_bytes(json: &[u8]) -> Result<()> {
         // power loss can leave a correctly named, zero-filled manifest.
         file.sync_all().context("Failed to sync manifest file")?;
     }
-    fs::rename(&tmp_path, &manifest_path).context("Failed to replace manifest file")?;
+    fs::rename(&tmp_path, manifest_path).context("Failed to replace manifest file")?;
     Ok(())
 }
 
@@ -553,29 +568,46 @@ fn requeue_pending(pending: &StdMutex<Vec<PendingDelete>>, files: Vec<PendingDel
     pending.lock().unwrap_or_else(|e| e.into_inner()).extend(files);
 }
 
-/// Deletes the queued files that no entry of `memory` names. The check and the
-/// deletes run under MANIFEST_LOCK, so a store that names one of these files
-/// again is either seen here or finds the file gone and is refused.
+/// Files `delete_unnamed_files` checks and deletes under one hold of
+/// MANIFEST_LOCK.
+const DELETE_CHUNK: usize = 64;
+
+/// Deletes the queued files that no entry of `memory` names. Each type folder is
+/// resolved once. The files are taken in chunks of `DELETE_CHUNK`; the check and
+/// the deletes of a chunk run under MANIFEST_LOCK, with the names read again
+/// under each hold, so a store that names one of these files again is either
+/// seen here or finds the file gone and is refused.
 fn delete_unnamed_files(files: &[PendingDelete], memory: &StdRwLock<UniversalCacheManifest>) {
     if files.is_empty() {
         return;
     }
-    let _lock = MANIFEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let candidates: HashSet<&Path> = files.iter().map(|(_, file)| file.as_path()).collect();
-    let named: HashSet<PathBuf> = match memory.read() {
-        Ok(guard) => guard
-            .entries
-            .values()
-            .filter_map(entry_file_path)
-            .map(Path::new)
-            .filter(|path| candidates.contains(path))
-            .map(Path::to_path_buf)
-            .collect(),
-        Err(_) => return,
-    };
-    for (type_dir, file) in files {
-        if !named.contains(file) {
-            remove_cached_file(type_dir, file);
+    let mut folders: HashMap<&Path, Option<PathBuf>> = HashMap::new();
+    for (type_dir, _) in files {
+        folders
+            .entry(type_dir.as_path())
+            .or_insert_with(|| resolve_path(type_dir));
+    }
+    for chunk in files.chunks(DELETE_CHUNK) {
+        let _lock = MANIFEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let candidates: HashSet<&Path> = chunk.iter().map(|(_, file)| file.as_path()).collect();
+        let named: HashSet<PathBuf> = match memory.read() {
+            Ok(guard) => guard
+                .entries
+                .values()
+                .filter_map(entry_file_path)
+                .map(Path::new)
+                .filter(|path| candidates.contains(path))
+                .map(Path::to_path_buf)
+                .collect(),
+            Err(_) => return,
+        };
+        for (type_dir, file) in chunk {
+            if named.contains(file) {
+                continue;
+            }
+            if let Some(Some(dir)) = folders.get(type_dir.as_path()) {
+                remove_cached_file(dir, file);
+            }
         }
     }
 }
@@ -643,23 +675,38 @@ fn store_entries_locked(entries: Vec<UniversalCacheEntry>) -> Result<StoreOutcom
 /// entries named are taken before the manifest is encoded and deleted only
 /// once it is written; a failed write puts them back in the queue.
 fn flush_manifest_to_disk() -> Result<()> {
-    let doomed = take_pending(&PENDING_DELETES);
+    let manifest_path = get_universal_cache_dir()?.join("manifest.json");
+    flush_manifest_with(&MANIFEST_MEMORY, &PENDING_DELETES, &manifest_path, || {})
+}
+
+/// `flush_manifest_to_disk` of `memory` and `pending` to the manifest at
+/// `manifest_path`, under `FLUSH_LOCK` for its whole length. `after_encode` runs
+/// once the manifest is encoded and before it is written.
+fn flush_manifest_with(
+    memory: &StdRwLock<UniversalCacheManifest>,
+    pending: &StdMutex<Vec<PendingDelete>>,
+    manifest_path: &Path,
+    after_encode: impl FnOnce(),
+) -> Result<()> {
+    let _flush = FLUSH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let doomed = take_pending(pending);
     let written = (|| -> Result<()> {
         let json = {
-            let guard = MANIFEST_MEMORY
+            let guard = memory
                 .read()
                 .map_err(|_| anyhow::anyhow!("manifest memory lock poisoned"))?;
             encode_manifest(&*guard)?
         };
-        write_manifest_bytes(&json)
+        after_encode();
+        write_manifest_bytes_to(manifest_path, &json)
     })();
     match written {
         Ok(()) => {
-            delete_unnamed_files(&doomed, &MANIFEST_MEMORY);
+            delete_unnamed_files(&doomed, memory);
             Ok(())
         }
         Err(e) => {
-            requeue_pending(&PENDING_DELETES, doomed);
+            requeue_pending(pending, doomed);
             Err(e)
         }
     }
@@ -724,6 +771,16 @@ pub async fn fetch_universal_cache_data(
 /// entry that names a file not on disk is skipped. Returns whether a badgebase
 /// entry still has no position.
 fn merge_remote_into(memory: &StdRwLock<UniversalCacheManifest>, remote: UniversalCacheManifest) -> Result<bool> {
+    merge_remote_into_with(memory, remote, || {})
+}
+
+/// `merge_remote_into` that calls `after_read` once the entries to replace are
+/// chosen and before they are put in `memory`.
+fn merge_remote_into_with(
+    memory: &StdRwLock<UniversalCacheManifest>,
+    remote: UniversalCacheManifest,
+    after_read: impl FnOnce(),
+) -> Result<bool> {
     let candidates: Vec<(String, UniversalCacheEntry)> = remote
         .entries
         .into_iter()
@@ -747,6 +804,7 @@ fn merge_remote_into(memory: &StdRwLock<UniversalCacheManifest>, remote: Univers
             })
             .collect()
     };
+    after_read();
     let mut guard = memory
         .write()
         .map_err(|_| anyhow::anyhow!("manifest memory lock poisoned"))?;
@@ -1023,11 +1081,17 @@ fn assign_badge_metadata_positions_impl() -> Result<usize> {
 }
 
 /// Orders the badgebase badge entries of `memory` by date added (newest first),
-/// then usage, and sets each entry's position in place under MANIFEST_LOCK.
-/// Returns how many badgebase badges have a position.
+/// then usage, and sets each entry's position in place under MANIFEST_LOCK. The
+/// order is worked out from a read snapshot before the lock is taken, and set
+/// only on the entries still in `memory`. Returns how many badgebase badges have
+/// a position.
 fn assign_positions_in(memory: &StdRwLock<UniversalCacheManifest>) -> Result<usize> {
-    let _lock = MANIFEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    assign_positions_in_with(memory, || {})
+}
 
+/// `assign_positions_in` that calls `after_read` once the order is worked out and
+/// before the positions are set in `memory`.
+fn assign_positions_in_with(memory: &StdRwLock<UniversalCacheManifest>, after_read: impl FnOnce()) -> Result<usize> {
     // The ids of the badge entries from the badge metadata source, in position order.
     let ordered: Vec<String> = {
         let guard = memory
@@ -1043,7 +1107,9 @@ fn assign_positions_in(memory: &StdRwLock<UniversalCacheManifest>) -> Result<usi
         sort_badge_entries(&mut metadata_entries);
         metadata_entries.into_iter().map(|(id, _)| id.clone()).collect()
     };
+    after_read();
 
+    let _lock = MANIFEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut guard = memory
         .write()
         .map_err(|_| anyhow::anyhow!("manifest memory lock poisoned"))?;
@@ -1273,7 +1339,18 @@ pub fn get_universal_cache_stats() -> Result<UniversalCacheStats> {
 /// Clear all universal cache data
 pub fn clear_universal_cache() -> Result<()> {
     let cache_dir = get_universal_cache_dir()?;
+    clear_cache_in(&cache_dir, &MANIFEST_MEMORY, &PENDING_DELETES)
+}
 
+/// `clear_universal_cache` of `memory`, `pending` and the folder `cache_dir`.
+fn clear_cache_in(
+    cache_dir: &Path,
+    memory: &StdRwLock<UniversalCacheManifest>,
+    pending: &StdMutex<Vec<PendingDelete>>,
+) -> Result<()> {
+    // A flush in progress finishes first, so it cannot write its manifest back
+    // into the folder once it is cleared.
+    let _flush = FLUSH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // Held for the whole clear: a store runs entirely before it (its entry is
     // cleared with the rest) or entirely after it.
     let _lock = MANIFEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -1289,7 +1366,7 @@ pub fn clear_universal_cache() -> Result<()> {
     // Done BEFORE the delete: on Windows `remove_dir_all` stops at the first
     // file another process holds open, after deleting the ones before it, and
     // returning there used to keep every entry for the files already gone.
-    if let Ok(mut guard) = MANIFEST_MEMORY.write() {
+    if let Ok(mut guard) = memory.write() {
         *guard = UniversalCacheManifest {
             version: CACHE_VERSION,
             last_sync: None,
@@ -1297,14 +1374,14 @@ pub fn clear_universal_cache() -> Result<()> {
         };
         FOREIGN_ENTRIES.lock().unwrap_or_else(|e| e.into_inner()).clear();
     }
-    take_pending(&PENDING_DELETES);
+    take_pending(pending);
     MANIFEST_DIRTY.store(false, Ordering::Release);
     clear_verified_types();
 
     let deleted = if cache_dir.exists() {
-        fs::remove_dir_all(&cache_dir)
+        fs::remove_dir_all(cache_dir)
             .context("Failed to remove universal cache directory")
-            .and_then(|()| fs::create_dir_all(&cache_dir).context("Failed to recreate universal cache directory"))
+            .and_then(|()| fs::create_dir_all(cache_dir).context("Failed to recreate universal cache directory"))
     } else {
         Ok(())
     };
@@ -1776,8 +1853,6 @@ pub async fn cache_file(
     url: String,
     expiry_days: u32,
 ) -> Result<String> {
-    let type_dir = file_type_dir(&cache_type)?;
-
     debug!(
         "[UniversalCache] Downloading and caching file: {} (type: {:?})",
         id, cache_type
@@ -1804,8 +1879,7 @@ pub async fn cache_file(
     let file_name = content_addressed_file_name(&id, &url, extension);
     // The entry replaces any earlier one for this id, and the earlier file is
     // deleted with that change (see `store_entries`).
-    let (path_str, entry) =
-        write_file_entry(&type_dir, cache_type, id, url, file_name, bytes, expiry_days).await?;
+    let (path_str, entry) = write_file_entry(cache_type, id, url, file_name, bytes, expiry_days).await?;
     save_cached_item(entry).await?;
 
     debug!("[UniversalCache] Successfully cached file: {}", path_str);
@@ -1902,41 +1976,65 @@ fn manifest_named_files() -> Option<HashSet<(OsString, OsString)>> {
 /// Writes `bytes` to `dest` through a temp file of its own, so concurrent
 /// writers of one name never mix bytes and a reader never sees a half-written
 /// file. `dest` sits in a type folder of the cache root. The first write of the
-/// process waits for the temp sweep, so call this from the blocking pool.
+/// process waits for the temp sweep, so call this from the blocking pool. Fails,
+/// before any file is created, when the process does not hold the writers lock.
 fn write_atomic<B: AsRef<[u8]>>(dest: &Path, bytes: B) -> std::io::Result<()> {
-    sweep_before_write(&WRITERS, dest, manifest_named_files);
-    let written = write_atomic_with(dest, bytes, |from, to| fs::rename(from, to));
+    let written = write_atomic_held(&WRITERS, dest, bytes, manifest_named_files);
     if written.is_ok() {
         WROTE_THIS_RUN.store(true, Ordering::Release);
     }
     written
 }
 
+/// `write_atomic` with the writers lock `holder` and the sweep's `named_files`
+/// given.
+fn write_atomic_held<B, N>(
+    holder: &StdMutex<Option<fs::File>>,
+    dest: &Path,
+    bytes: B,
+    named_files: N,
+) -> std::io::Result<()>
+where
+    B: AsRef<[u8]>,
+    N: FnOnce() -> Option<HashSet<(OsString, OsString)>>,
+{
+    if !sweep_before_write(holder, dest, named_files) {
+        return Err(std::io::Error::other("cache writers lock not held"));
+    }
+    write_atomic_with(dest, bytes, |from, to| fs::rename(from, to))
+}
+
 /// Joins the writers for the cache root that holds `dest`'s type folder, unless
-/// `holder` already holds the lock.
-fn sweep_before_write<N>(holder: &StdMutex<Option<fs::File>>, dest: &Path, named_files: N)
+/// `holder` already holds the lock. Returns whether the lock is held; a `dest`
+/// that sits in no cache root holds none.
+fn sweep_before_write<N>(holder: &StdMutex<Option<fs::File>>, dest: &Path, named_files: N) -> bool
 where
     N: FnOnce() -> Option<HashSet<(OsString, OsString)>>,
 {
     let Some(cache_root) = dest.parent().and_then(Path::parent) else {
-        return;
+        return false;
     };
-    join_writers_once(holder, cache_root, named_files);
+    join_writers_once(holder, cache_root, named_files)
 }
 
 /// Joins the writers into `holder` when it is empty. The mutex is held while
 /// joining, so a write that starts first waits for the sweep. A join that fails
-/// leaves `holder` empty and is tried again by the next call.
-fn join_writers_once<N>(holder: &StdMutex<Option<fs::File>>, cache_root: &Path, named_files: N)
+/// leaves `holder` empty and is tried again by the next call. Returns whether
+/// `holder` holds the lock.
+fn join_writers_once<N>(holder: &StdMutex<Option<fs::File>>, cache_root: &Path, named_files: N) -> bool
 where
     N: FnOnce() -> Option<HashSet<(OsString, OsString)>>,
 {
     let mut held = holder.lock().unwrap_or_else(|e| e.into_inner());
     if held.is_some() {
-        return;
+        return true;
     }
-    if let Some((file, _)) = join_writers_with(cache_root, named_files) {
-        *held = Some(file);
+    match join_writers_with(cache_root, named_files) {
+        Some((file, _)) => {
+            *held = Some(file);
+            true
+        }
+        None => false,
     }
 }
 
@@ -1944,7 +2042,7 @@ where
 /// blocking-pool thread, unless the process has already joined the writers. A
 /// first write finds it done, or waits for it.
 pub fn sweep_temp_files_once(cache_root: &Path) {
-    join_writers_once(&WRITERS, cache_root, manifest_named_files);
+    let _ = join_writers_once(&WRITERS, cache_root, manifest_named_files);
 }
 
 /// Joins the instances that write to the cache: locks the writers file shared
@@ -2139,8 +2237,9 @@ pub fn sweep_orphan_temp_files(cache_root: &Path) -> usize {
 }
 
 /// Whether `name` is shaped like a cached file name (`content_addressed_file_name`
-/// and `streamnook_art_file_name`): an id, a dash, 8 lowercase hex digits, a dot
-/// and an alphanumeric extension.
+/// and `streamnook_art_file_name`): an id that may be empty, then a dash, 8
+/// lowercase hex digits, a dot and an alphanumeric extension. With an empty id
+/// the dash is left out as well, so the name is the 8 digits and the extension.
 fn is_hashed_cache_name(name: &str) -> bool {
     let Some((stem, ext)) = name.rsplit_once('.') else {
         return false;
@@ -2148,10 +2247,8 @@ fn is_hashed_cache_name(name: &str) -> bool {
     if ext.is_empty() || !ext.bytes().all(|b| b.is_ascii_alphanumeric()) {
         return false;
     }
-    let Some((id, hash)) = stem.rsplit_once('-') else {
-        return false;
-    };
-    !id.is_empty() && hash.len() == 8 && hash.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    let hash = stem.rsplit_once('-').map_or(stem, |(_, hash)| hash);
+    hash.len() == 8 && hash.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 /// Deletes the files of the cache's type folders that are shaped like cached
@@ -2190,11 +2287,10 @@ fn sweep_unnamed_files(cache_root: &Path, named: &HashSet<(OsString, OsString)>)
     removed
 }
 
-/// Deletes the cached file at `path` when it sits inside `type_dir`. A path
-/// outside the folder, the folder itself and a file already gone are left
-/// alone; any other failure is logged.
-fn remove_cached_file(type_dir: &Path, path: &Path) {
-    let canonical = |p: &Path| match p.canonicalize() {
+/// `p` with links and relative parts resolved. A path that is not there gives
+/// `None`; any other failure is logged.
+fn resolve_path(p: &Path) -> Option<PathBuf> {
+    match p.canonicalize() {
         Ok(c) => Some(c),
         Err(e) => {
             if e.kind() != std::io::ErrorKind::NotFound {
@@ -2202,11 +2298,17 @@ fn remove_cached_file(type_dir: &Path, path: &Path) {
             }
             None
         }
-    };
-    let (Some(dir), Some(file)) = (canonical(type_dir), canonical(path)) else {
+    }
+}
+
+/// Deletes the cached file at `path` when it sits inside `type_dir`, which is
+/// already resolved (see `resolve_path`). A path outside the folder, the folder
+/// itself and a file already gone are left alone; any other failure is logged.
+fn remove_cached_file(type_dir: &Path, path: &Path) {
+    let Some(file) = resolve_path(path) else {
         return;
     };
-    if file == dir || !file.starts_with(&dir) {
+    if file == type_dir || !file.starts_with(type_dir) {
         return;
     }
     match fs::remove_file(&file) {
@@ -2224,9 +2326,9 @@ fn url_hash8(url: &str) -> String {
 
 /// Write a downloaded file into its type folder and build its manifest entry,
 /// without saving the manifest. Returns the file's path with the entry. An HTML
-/// page is refused before anything is written.
+/// page is refused before anything is written. The type folder is found, and
+/// created if need be, on the blocking pool with the write.
 async fn write_file_entry<B>(
-    type_dir: &std::path::Path,
     cache_type: CacheType,
     id: String,
     url: String,
@@ -2237,16 +2339,47 @@ async fn write_file_entry<B>(
 where
     B: AsRef<[u8]> + Send + 'static,
 {
+    let folder_type = cache_type.clone();
+    write_file_entry_with(
+        move || file_type_dir(&folder_type),
+        cache_type,
+        id,
+        url,
+        file_name,
+        bytes,
+        expiry_days,
+    )
+    .await
+}
+
+/// `write_file_entry` with the type folder given by `type_dir`, which runs on the
+/// blocking pool.
+async fn write_file_entry_with<B, D>(
+    type_dir: D,
+    cache_type: CacheType,
+    id: String,
+    url: String,
+    file_name: String,
+    bytes: B,
+    expiry_days: u32,
+) -> Result<(String, UniversalCacheEntry)>
+where
+    B: AsRef<[u8]> + Send + 'static,
+    D: FnOnce() -> Result<PathBuf> + Send + 'static,
+{
     refuse_html(bytes.as_ref())?;
-    let file_path = type_dir.join(&file_name);
 
     // Write on the blocking pool: a channel join downloads many emotes/badges
     // and a sync write per file on the runtime saturates the worker threads
     // (the join-time freeze). The HTTP fetch is already async.
-    let write_path = file_path.clone();
-    tokio::task::spawn_blocking(move || write_atomic(&write_path, bytes))
-        .await
-        .context("cache_file write task panicked")??;
+    let write_name = file_name.clone();
+    let file_path = tokio::task::spawn_blocking(move || -> Result<PathBuf> {
+        let file_path = type_dir()?.join(write_name);
+        write_atomic(&file_path, bytes)?;
+        Ok(file_path)
+    })
+    .await
+    .context("cache_file write task panicked")??;
 
     let path_str = file_path.to_string_lossy().to_string();
     let entry = UniversalCacheEntry {
@@ -2414,7 +2547,6 @@ pub async fn cache_streamnook_art(url: String) -> Result<String> {
     if !is_streamnook_art_url(&url) {
         return Err(anyhow::anyhow!("not StreamNook art: {url}"));
     }
-    let type_dir = file_type_dir(&CacheType::StreamNookArt)?;
     let (bytes, content_type) = fetch_resumable(
         &LARGE_DOWNLOAD_CLIENT,
         &url,
@@ -2433,7 +2565,6 @@ pub async fn cache_streamnook_art(url: String) -> Result<String> {
     let file_name = streamnook_art_file_name(&url, extension);
     // Never expires: new art ships under a new URL.
     let (path_str, entry) = write_file_entry(
-        &type_dir,
         CacheType::StreamNookArt,
         url.clone(),
         url,
@@ -2458,8 +2589,6 @@ pub async fn download_file_to_disk(
     url: String,
     expiry_days: u32,
 ) -> Result<UniversalCacheEntry> {
-    let type_dir = file_type_dir(&cache_type)?;
-
     let response = DOWNLOAD_CLIENT.get(&url).send().await?;
     if !response.status().is_success() {
         return Err(anyhow::anyhow!(
@@ -2478,8 +2607,7 @@ pub async fn download_file_to_disk(
     // provider-namespaced) id, only path separators stripped for the filename.
     let extension = detect_image_ext(&bytes, content_type.as_deref());
     let file_name = content_addressed_file_name(&id, &url, extension);
-    let (_, entry) =
-        write_file_entry(&type_dir, cache_type, id, url, file_name, bytes, expiry_days).await?;
+    let (_, entry) = write_file_entry(cache_type, id, url, file_name, bytes, expiry_days).await?;
     Ok(entry)
 }
 
@@ -2671,7 +2799,15 @@ pub fn cached_file_paths(cache_type: CacheType, ids: &[String]) -> HashMap<Strin
         .collect()
 }
 
+/// `cached_files_list` for async callers. It lists a type's folder the first time
+/// the type is asked for, so call it from the blocking pool.
 pub async fn get_cached_files_list(cache_type: CacheType) -> Result<HashMap<String, String>> {
+    cached_files_list(cache_type)
+}
+
+/// The cached files of a type (id -> path). The first call for a type lists its
+/// folder, so call this from a blocking thread.
+pub fn cached_files_list(cache_type: CacheType) -> Result<HashMap<String, String>> {
     // debug!(
     //     "[UniversalCache] Getting cached files list for {:?}",
     //     cache_type
@@ -2781,13 +2917,13 @@ pub fn manifest_len() -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::{
-        assign_positions_in, badge_date_key, content_addressed_file_name, delete_unnamed_files, detect_image_ext,
-        drop_expired, encode_with, is_hashed_cache_name, is_still_paint_entry, join_writers, looks_like_html,
-        looks_like_svg, merge_remote_into, missing_file_keys, parse_manifest, queue_entry_files, refuse_html,
-        remove_cached_file, safe_id, stamp_last_sync_in, store_entries, sweep_before_write, sweep_orphan_temp_files,
-        sweep_unnamed_files, take_pending, usable_file_path, webp_is_animated, write_atomic_with, write_file_entry,
-        writers_lock_path, CacheMetadata, CacheType, PendingDelete, UniversalCacheEntry, UniversalCacheManifest,
-        WRITERS_LOCK_FILE,
+        assign_positions_in_with, badge_date_key, clear_cache_in, content_addressed_file_name, delete_unnamed_files,
+        detect_image_ext, drop_expired, encode_with, flush_manifest_with, is_hashed_cache_name, is_still_paint_entry,
+        join_writers, looks_like_html, looks_like_svg, merge_remote_into_with, missing_file_keys, parse_manifest,
+        queue_entry_files, refuse_html, remove_cached_file, resolve_path, safe_id, stamp_last_sync_in, store_entries,
+        sweep_before_write, sweep_orphan_temp_files, sweep_unnamed_files, take_pending, usable_file_path,
+        webp_is_animated, write_atomic_held, write_atomic_with, write_file_entry_with, writers_lock_path, CacheMetadata,
+        CacheType, PendingDelete, UniversalCacheEntry, UniversalCacheManifest, DELETE_CHUNK, WRITERS_LOCK_FILE,
     };
     use std::collections::{HashMap, HashSet};
     use std::ffi::OsString;
@@ -2914,8 +3050,9 @@ mod tests {
     async fn an_html_answer_is_refused_before_anything_is_written() {
         let root = scratch_dir("html-refused");
         let page = b"<html><body>Sign in to the network</body></html>".to_vec();
-        let result = write_file_entry(
-            &root,
+        let type_dir = root.clone();
+        let result = write_file_entry_with(
+            move || Ok(type_dir),
             CacheType::Emote,
             "x".into(),
             "https://cdn.example/x.png".into(),
@@ -3032,12 +3169,36 @@ mod tests {
         // A file where the locks folder belongs: the join cannot start.
         let blocker = base.join("locks");
         fs::write(&blocker, b"in the way").unwrap();
-        sweep_before_write(&holder, &dest, || None);
+        assert!(!sweep_before_write(&holder, &dest, || None), "the lock is not held");
         assert!(holder.lock().unwrap().is_none(), "nothing is held after a failed join");
 
         fs::remove_file(&blocker).unwrap();
-        sweep_before_write(&holder, &dest, || None);
+        assert!(sweep_before_write(&holder, &dest, || None), "the lock is held");
         assert!(holder.lock().unwrap().is_some(), "the next write joined");
+        drop(holder);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_write_without_the_writers_lock_fails_before_creating_any_file() {
+        let base = scratch_dir("write-needs-lock");
+        let emotes = base.join("cache").join("emotes");
+        fs::create_dir_all(&emotes).unwrap();
+        let dest = emotes.join("a-12345678.png");
+        let holder = Mutex::new(None);
+
+        // A file where the locks folder belongs: the join cannot start.
+        let blocker = base.join("locks");
+        fs::write(&blocker, b"in the way").unwrap();
+        let err = write_atomic_held(&holder, &dest, b"png", || None).unwrap_err();
+        assert!(err.to_string().contains("writers lock not held"), "{err}");
+        assert!(!dest.exists(), "no file was written");
+        assert_eq!(fs::read_dir(&emotes).unwrap().count(), 0, "no temp file was made");
+
+        fs::remove_file(&blocker).unwrap();
+        write_atomic_held(&holder, &dest, b"png", || None).unwrap();
+        assert_eq!(fs::read(&dest).unwrap(), b"png", "the next write lands");
+        assert!(temp_files_in(&emotes).is_empty(), "{:?}", temp_files_in(&emotes));
         drop(holder);
         let _ = fs::remove_dir_all(&base);
     }
@@ -3082,14 +3243,19 @@ mod tests {
                 "plain-name.png",
                 "x-ABCDEF12.png",
                 "-cccccccc.png",
+                "dddddddd.png",
             ],
         );
         let named: HashSet<(OsString, OsString)> =
             [(OsString::from("emotes"), OsString::from("kept-aaaaaaaa.png"))].into_iter().collect();
 
-        assert_eq!(sweep_unnamed_files(&root, &named), 1);
+        assert_eq!(sweep_unnamed_files(&root, &named), 3);
         let left: Vec<bool> = files.iter().map(|f| f.exists()).collect();
-        assert_eq!(left, [true, false, true, true, true, true], "only the unnamed hashed file goes");
+        assert_eq!(
+            left,
+            [true, false, true, true, true, false, false],
+            "only the unnamed hashed files go, with or without an id"
+        );
 
         // The same name in another folder is not what the entry names.
         let other = root.join("badges");
@@ -3105,7 +3271,8 @@ mod tests {
     fn cached_file_names_are_told_from_other_names() {
         assert!(is_hashed_cache_name("emote_x@1x-0123abcd.webp"));
         assert!(is_hashed_cache_name("streamnook-mobius-0123abcd.webp"));
-        assert!(!is_hashed_cache_name("0123abcd.webp"), "no id");
+        assert!(is_hashed_cache_name("0123abcd.webp"), "no id and no dash");
+        assert!(is_hashed_cache_name("-0123abcd.png"), "an empty id");
         assert!(!is_hashed_cache_name("x-0123ABCD.webp"), "upper case hex");
         assert!(!is_hashed_cache_name("x-0123abc.webp"), "short hash");
         assert!(!is_hashed_cache_name("x-0123abcd"), "no extension");
@@ -3296,12 +3463,42 @@ mod tests {
         let outside = other_dir.join("keep.png");
         fs::write(&outside, b"keep").unwrap();
 
-        remove_cached_file(&type_dir, &outside);
+        let resolved = resolve_path(&type_dir).expect("the type folder resolves");
+        remove_cached_file(&resolved, &outside);
         assert!(outside.exists());
-        remove_cached_file(&type_dir, &type_dir.join("..").join("elsewhere").join("keep.png"));
+        remove_cached_file(&resolved, &type_dir.join("..").join("elsewhere").join("keep.png"));
         assert!(outside.exists());
-        remove_cached_file(&type_dir, &type_dir);
+        remove_cached_file(&resolved, &type_dir);
         assert!(type_dir.exists());
+        let inside = type_dir.join("drop-aaaaaaaa.png");
+        fs::write(&inside, b"drop").unwrap();
+        remove_cached_file(&resolved, &inside);
+        assert!(!inside.exists(), "a file inside the folder is deleted");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_long_queue_of_deletions_is_checked_in_chunks_and_keeps_what_an_entry_names() {
+        let names: Vec<String> = (0..DELETE_CHUNK * 2 + 5).map(|i| format!("f{i}-aaaaaaaa.png")).collect();
+        let name_refs: Vec<&str> = names.iter().map(String::as_str).collect();
+        let (root, files) = emote_files("delete-chunks", &name_refs);
+        let type_dir = root.join("emotes");
+        let kept = [0, DELETE_CHUNK - 1, DELETE_CHUNK, DELETE_CHUNK * 2 + 4];
+        let memory = RwLock::new(UniversalCacheManifest::default());
+        {
+            let mut guard = memory.write().unwrap();
+            for &i in &kept {
+                let id = format!("file:{i}");
+                guard.entries.insert(id.clone(), entry_with_file(&id, &files[i]));
+            }
+        }
+        let queue: Vec<PendingDelete> = files.iter().map(|f| (type_dir.clone(), f.clone())).collect();
+
+        delete_unnamed_files(&queue, &memory);
+
+        for (i, file) in files.iter().enumerate() {
+            assert_eq!(file.exists(), kept.contains(&i), "file {i}");
+        }
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -3433,8 +3630,10 @@ mod tests {
     }
 
     #[test]
-    fn a_remote_merge_keeps_the_stored_file_entry_and_skips_an_entry_with_a_missing_file() {
-        let (root, memory, stored) = memory_with_stored_file("merge-in-place");
+    fn a_remote_merge_keeps_an_entry_stored_during_it_and_skips_an_entry_with_a_missing_file() {
+        let (root, files) = emote_files("merge-in-place", &["stored-aaaaaaaa.png"]);
+        let memory = RwLock::new(UniversalCacheManifest::default());
+        let pending = Mutex::new(Vec::new());
         let mut remote = UniversalCacheManifest::default();
         remote.entries.insert("new".into(), badgebase_entry("new", "1 March 2026", None));
         let mut ghost = badgebase_entry("ghost", "1 March 2026", None);
@@ -3442,8 +3641,13 @@ mod tests {
         ghost.data = serde_json::json!({ "local_path": ghost_path.to_string_lossy() });
         remote.entries.insert("ghost".into(), ghost);
 
-        assert!(merge_remote_into(&memory, remote).unwrap(), "a merged badge has no position yet");
-        assert_eq!(stored_path(&memory).as_deref(), stored.to_str(), "the stored entry is kept");
+        // A store lands after the merge has read the manifest and before it writes.
+        let needs_positions = merge_remote_into_with(&memory, remote, || {
+            store_entries(&memory, &root, &pending, vec![entry_with_file("file:stored", &files[0])]).unwrap();
+        })
+        .unwrap();
+        assert!(needs_positions, "a merged badge has no position yet");
+        assert_eq!(stored_path(&memory).as_deref(), files[0].to_str(), "the stored entry is kept");
         let guard = memory.read().unwrap();
         assert!(guard.entries.contains_key("new"), "the merge went on past the skipped entry");
         assert!(!guard.entries.contains_key("ghost"));
@@ -3452,21 +3656,49 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[test]
-    fn assigning_positions_keeps_the_stored_file_entry() {
-        let (root, memory, stored) = memory_with_stored_file("positions-in-place");
+    /// A manifest with two unplaced badgebase badges, "recent" and "old".
+    fn memory_with_two_badges() -> RwLock<UniversalCacheManifest> {
+        let memory = RwLock::new(UniversalCacheManifest::default());
         {
             let mut guard = memory.write().unwrap();
             guard.entries.insert("old".into(), badgebase_entry("old", "March 2018", None));
             guard.entries.insert("recent".into(), badgebase_entry("recent", "2 September 2026", None));
         }
-        assert_eq!(assign_positions_in(&memory).unwrap(), 2);
-        assert_eq!(stored_path(&memory).as_deref(), stored.to_str(), "the stored entry is kept");
+        memory
+    }
+
+    #[test]
+    fn assigning_positions_keeps_an_entry_stored_during_it() {
+        let (root, files) = emote_files("positions-in-place", &["stored-aaaaaaaa.png"]);
+        let memory = memory_with_two_badges();
+        let pending = Mutex::new(Vec::new());
+
+        // A store lands after the order is worked out and before it is applied.
+        let count = assign_positions_in_with(&memory, || {
+            store_entries(&memory, &root, &pending, vec![entry_with_file("file:stored", &files[0])]).unwrap();
+        })
+        .unwrap();
+        assert_eq!(count, 2);
+        assert_eq!(stored_path(&memory).as_deref(), files[0].to_str(), "the stored entry is kept");
         let guard = memory.read().unwrap();
         assert_eq!(guard.entries["recent"].position, Some(0));
         assert_eq!(guard.entries["old"].position, Some(1));
         drop(guard);
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn assigning_positions_skips_a_badge_removed_after_the_order_was_worked_out() {
+        let memory = memory_with_two_badges();
+
+        let count = assign_positions_in_with(&memory, || {
+            memory.write().unwrap().entries.remove("recent");
+        })
+        .unwrap();
+        assert_eq!(count, 1);
+        let guard = memory.read().unwrap();
+        assert!(!guard.entries.contains_key("recent"), "the removed badge is not brought back");
+        assert_eq!(guard.entries["old"].position, Some(1));
     }
 
     #[test]
@@ -3476,6 +3708,92 @@ mod tests {
         assert_eq!(stored_path(&memory).as_deref(), stored.to_str(), "the stored entry is kept");
         assert_eq!(memory.read().unwrap().last_sync, Some(1234));
         let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A manifest of `count` emote entries whose ids carry `version`.
+    fn manifest_of(version: u32, count: usize) -> UniversalCacheManifest {
+        let mut manifest = UniversalCacheManifest { version, last_sync: None, entries: HashMap::new() };
+        for i in 0..count {
+            let mut entry = file_entry(CacheType::Emote, 0);
+            entry.id = format!("file:{version}-{i}");
+            manifest.entries.insert(entry.id.clone(), entry);
+        }
+        manifest
+    }
+
+    #[test]
+    fn flushes_take_turns_and_the_manifest_always_parses() {
+        let dir = scratch_dir("flush-turns");
+        let path = dir.join("manifest.json");
+        let memories = [RwLock::new(manifest_of(1, 300)), RwLock::new(manifest_of(2, 500))];
+        let pendings = [Mutex::new(Vec::new()), Mutex::new(Vec::new())];
+        let barrier = std::sync::Barrier::new(memories.len());
+        std::thread::scope(|scope| {
+            for (memory, pending) in memories.iter().zip(&pendings) {
+                let (path, barrier) = (&path, &barrier);
+                scope.spawn(move || {
+                    barrier.wait();
+                    for _ in 0..40 {
+                        // The other flush has finished its write: what is on disk is
+                        // whole.
+                        let on_disk_is_whole = || {
+                            if path.exists() {
+                                let json = fs::read_to_string(path).unwrap();
+                                assert!(parse_manifest(&json).is_ok(), "the manifest on disk parses");
+                            }
+                        };
+                        flush_manifest_with(memory, pending, path, on_disk_is_whole).expect("the flush writes");
+                    }
+                });
+            }
+        });
+        let json = fs::read_to_string(&path).unwrap();
+        let (manifest, _) = parse_manifest(&json).unwrap();
+        assert!(manifest.entries.len() == 300 || manifest.entries.len() == 500);
+        assert!(temp_files_in(&dir).is_empty(), "{:?}", temp_files_in(&dir));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_clear_waits_for_a_flush_in_progress_and_leaves_no_manifest() {
+        let base = scratch_dir("clear-waits");
+        let cache_dir = base.join("cache");
+        fs::create_dir_all(&cache_dir).unwrap();
+        let path = cache_dir.join("manifest.json");
+        let memory = RwLock::new(manifest_of(1, 50));
+        let pending = Mutex::new(Vec::new());
+        let (paused_tx, paused_rx) = std::sync::mpsc::channel::<()>();
+        let (resume_tx, resume_rx) = std::sync::mpsc::channel::<()>();
+        let (clearing_tx, clearing_rx) = std::sync::mpsc::channel::<()>();
+        std::thread::scope(|scope| {
+            let (memory, pending, path, cache_dir) = (&memory, &pending, &path, &cache_dir);
+            let flush = scope.spawn(move || {
+                flush_manifest_with(memory, pending, path, || {
+                    paused_tx.send(()).unwrap();
+                    resume_rx.recv().unwrap();
+                })
+                .expect("the flush writes");
+            });
+            // The flush is paused between encoding and writing.
+            paused_rx.recv().unwrap();
+            let clear = scope.spawn(move || {
+                clearing_tx.send(()).unwrap();
+                clear_cache_in(cache_dir, memory, pending).expect("the clear works");
+            });
+            clearing_rx.recv().unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            resume_tx.send(()).unwrap();
+            flush.join().unwrap();
+            clear.join().unwrap();
+        });
+        let left = match fs::read_to_string(&path) {
+            Ok(json) => parse_manifest(&json).unwrap().0.entries.len(),
+            Err(_) => 0,
+        };
+        assert_eq!(left, 0, "the flush did not write its manifest back after the clear");
+        assert!(memory.read().unwrap().entries.is_empty());
+        assert!(cache_dir.exists(), "the folder is recreated");
+        let _ = fs::remove_dir_all(&base);
     }
 
     fn file_entry(cache_type: CacheType, age_days: u64) -> UniversalCacheEntry {

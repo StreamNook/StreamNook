@@ -31,7 +31,7 @@ use crate::services::emote_service::{
 use crate::services::asset_cache_queue::{announce_entries, AssetKind};
 use crate::services::twitch_service::TwitchService;
 use crate::services::universal_cache_service::{
-    download_file_to_disk, get_cached_files_list, save_cached_items_batch, CacheType,
+    cached_files_list, download_file_to_disk, save_cached_items_batch, CacheType,
     UniversalCacheEntry,
 };
 
@@ -370,9 +370,12 @@ async fn run_plan(
         }
     }
 
-    // Diff against what is already on disk (pure in-memory manifest read).
-    let cached = get_cached_files_list(CacheType::Emote)
+    // Diff against what is already on disk. The first listing of the emote type
+    // reads its folder, so it runs on the blocking pool.
+    let cached = tauri::async_runtime::spawn_blocking(|| cached_files_list(CacheType::Emote))
         .await
+        .ok()
+        .and_then(|listed| listed.ok())
         .unwrap_or_default();
 
     let mut to_download: Vec<PrefetchItem> = Vec::new();

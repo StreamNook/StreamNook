@@ -18,7 +18,11 @@ pub async fn open_universal_cache_folder() -> Result<(), String> {
     if cfg!(target_os = "ios") {
         return Err("Opening folders is not available on iPhone".into());
     }
-    let dir = get_universal_cache_dir().map_err(|e| e.to_string())?;
+    // On the blocking pool: resolving the folder checks the disk and may create it.
+    let dir = tauri::async_runtime::spawn_blocking(get_universal_cache_dir)
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
     let program = if cfg!(target_os = "windows") {
         "explorer"
     } else if cfg!(target_os = "macos") {
