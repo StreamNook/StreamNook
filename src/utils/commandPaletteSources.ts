@@ -31,6 +31,7 @@ import { useSnippetStore } from '../stores/snippetStore';
 import { WATCHABLE_PROVIDERS, providerLabel, type ProviderId } from '../types/providers';
 import { usePluginUiRegistry } from '../plugins-ui/registry';
 import { Logger } from './logger';
+import { isApprovalClosed } from './twitchApproval';
 import { requestChangelog } from './changelogEvents';
 import { getBuiltInSnippets, type Snippet } from './commandPaletteCopypastas';
 import type { TwitchStream, TwitchVideo, TwitchClip } from '../types';
@@ -456,8 +457,10 @@ function buildQuickActions(): PaletteItem[] {
           await invoke('follow_channel', { targetUserId: stream.user_id });
           useAppStore.getState().addToast(`Following ${stream.user_name}`, 'success');
         } catch (e) {
+          // Closing Twitch's approval sheet leaves things as they were, quietly.
+          if (isApprovalClosed(e)) return;
           Logger.warn('[CommandPalette] follow_channel failed:', e);
-          useAppStore.getState().addToast('Follow failed', 'error');
+          useAppStore.getState().addToast(`Couldn't follow ${stream.user_name}. Try again.`, 'error');
         }
       },
     },
@@ -474,8 +477,9 @@ function buildQuickActions(): PaletteItem[] {
           await invoke('unfollow_channel', { targetUserId: stream.user_id });
           useAppStore.getState().addToast(`Unfollowed ${stream.user_name}`, 'success');
         } catch (e) {
+          if (isApprovalClosed(e)) return;
           Logger.warn('[CommandPalette] unfollow_channel failed:', e);
-          useAppStore.getState().addToast('Unfollow failed', 'error');
+          useAppStore.getState().addToast(`Couldn't unfollow ${stream.user_name}. Try again.`, 'error');
         }
       },
     },

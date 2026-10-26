@@ -102,6 +102,12 @@ pub fn take_kick_redirect(_app: &AppHandle) -> String {
     sheet().kick_redirect.take().unwrap_or_default()
 }
 
+/// Android's twin hands over the Drops grant its overlay caught. Here
+/// `sheet_redirected` stores the grant itself, so there is never one to take.
+pub fn take_drops_token(_app: &AppHandle) -> String {
+    String::new()
+}
+
 /// Expire every cookie on these origins, leaving other sites signed in.
 pub fn expire_cookies(_app: &AppHandle, urls: &[&str]) {
     shell_cookies::forget(urls);

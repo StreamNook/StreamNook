@@ -216,7 +216,7 @@ fn main_window_chrome(
 /// and the "Show StreamNook" menu item. Restores from minimized if needed and
 /// re-shows if the window was hidden to the tray on close.
 #[cfg(desktop)]
-fn show_main_window(app: &crate::rt::AppHandle) {
+pub(crate) fn show_main_window(app: &crate::rt::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
         let _ = window.show();
@@ -1703,8 +1703,6 @@ pub fn run() {
             #[cfg(target_os = "android")]
             twitch_login_plugin::get_mobile_login_cookies,
             #[cfg(target_os = "android")]
-            twitch_login_plugin::finish_mobile_drops_login,
-            #[cfg(target_os = "android")]
             twitch_login_plugin::clear_mobile_login_cookies,
             #[cfg(mobile)]
             export_logs,
@@ -1840,8 +1838,6 @@ pub fn run() {
             // webview windows); mobile logs in via the device-code flow.
             #[cfg(desktop)]
             open_twitch_login_window,
-            #[cfg(desktop)]
-            open_drops_login_window,
             // Two bodies: a desktop panel, and the phone's login overlay or sheet.
             open_subscribe_window,
             #[cfg(any(desktop, target_os = "android"))]
@@ -2315,7 +2311,7 @@ pub fn run() {
             report_player_state,
             // Automation commands
             // Drops Authentication commands
-            start_drops_login,
+            connect_twitch_approval,
             start_drops_device_flow,
             poll_drops_token,
             drops_logout,
@@ -2398,6 +2394,7 @@ pub fn run() {
             set_visible_mention_rooms,
             mention_watch_pull,
             mention_push_arrived,
+            services::mention_ping::mention_ping_claim,
             // IVR account facts
             get_ivr_user_summary,
             get_ivr_subage_summary,

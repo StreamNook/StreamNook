@@ -2630,8 +2630,12 @@ impl TwitchService {
     /// the same app, which is why both come from the Android pair here.
     pub async fn follow_channel(target_user_id: &str) -> Result<()> {
         use crate::services::drops_auth_service::DropsAuthService;
+        use crate::services::twitch_approval::NEEDS_DROPS_AUTH;
 
-        let token = DropsAuthService::get_token().await?;
+        // No grant yet: the command asks for the approval and runs this again.
+        let token = DropsAuthService::get_token()
+            .await
+            .map_err(|_| anyhow::anyhow!(NEEDS_DROPS_AUTH))?;
         let client = crate::services::http::client().clone();
 
         const GQL_CLIENT_ID: &str = env!("TWITCH_ANDROID_CLIENT_ID");
@@ -2667,6 +2671,12 @@ impl TwitchService {
             .await?;
 
         let status = response.status();
+        // A revoked grant: validate_token clears it, so it is asked for again.
+        if status == reqwest::StatusCode::UNAUTHORIZED
+            && !DropsAuthService::validate_token().await.unwrap_or(true)
+        {
+            return Err(anyhow::anyhow!(NEEDS_DROPS_AUTH));
+        }
         if !status.is_success() {
             let error_text = response.text().await?;
             return Err(anyhow::anyhow!(
@@ -2697,8 +2707,11 @@ impl TwitchService {
     /// device-login token plus the Android Client-Id, integrity-free.
     pub async fn unfollow_channel(target_user_id: &str) -> Result<()> {
         use crate::services::drops_auth_service::DropsAuthService;
+        use crate::services::twitch_approval::NEEDS_DROPS_AUTH;
 
-        let token = DropsAuthService::get_token().await?;
+        let token = DropsAuthService::get_token()
+            .await
+            .map_err(|_| anyhow::anyhow!(NEEDS_DROPS_AUTH))?;
         let client = crate::services::http::client().clone();
 
         const GQL_CLIENT_ID: &str = env!("TWITCH_ANDROID_CLIENT_ID");
@@ -2733,6 +2746,11 @@ impl TwitchService {
             .await?;
 
         let status = response.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED
+            && !DropsAuthService::validate_token().await.unwrap_or(true)
+        {
+            return Err(anyhow::anyhow!(NEEDS_DROPS_AUTH));
+        }
         if !status.is_success() {
             let error_text = response.text().await?;
             return Err(anyhow::anyhow!(

@@ -2,7 +2,6 @@ import { lazy, Suspense, useState, useCallback, useEffect, useRef } from 'react'
 import { motion, AnimatePresence, type Transition } from 'framer-motion';
 import {
     Check,
-    ExternalLink,
     ChevronLeft,
     Loader2,
     User,
@@ -202,45 +201,10 @@ interface StepStatus {
     mainAuthenticated: boolean;
 }
 
-// The overlay reports the outcome on events, so a caller that needs to await it
-// builds its promise from them.
-const waitForDropsLogin = (): Promise<void> =>
-    new Promise((resolve, reject) => {
-        const uns: Array<() => void> = [];
-        const settle = (fn: () => void) => {
-            uns.forEach((u) => u());
-            fn();
-        };
-        void listen('drops-login-complete', () => settle(resolve)).then((u) => uns.push(u));
-        void listen<string>('drops-login-error', (e) =>
-            settle(() => reject(new Error(String(e.payload)))),
-        ).then((u) => uns.push(u));
-    });
-
-// Android: resolves true when the login overlay reports that Twitch redirected
-// back with the drops credential, false when the user closed the overlay or
-// the deadline passed. The deadline is long enough to sign in from scratch if
-// the session had lapsed.
-const waitForMobileDropsRedirect = (): Promise<boolean> =>
-    new Promise((resolve) => {
-        const done = (ok: boolean) => {
-            window.removeEventListener('sn:drops-redirect', onLanded);
-            window.removeEventListener('sn:login-cancelled', onCancelled);
-            clearTimeout(deadline);
-            resolve(ok);
-        };
-        const onLanded = () => done(true);
-        const onCancelled = () => done(false);
-        const deadline = setTimeout(() => done(false), 5 * 60 * 1000);
-        window.addEventListener('sn:drops-redirect', onLanded);
-        window.addEventListener('sn:login-cancelled', onCancelled);
-    });
-
 const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
     const [currentStep, setCurrentStep] = useState(0);
     const [isExtracting, setIsExtracting] = useState(false);
     const [isAuthenticating, setIsAuthenticating] = useState(false);
-    const [dropsAuthUrl, setDropsAuthUrl] = useState<string | null>(null);
     const [status, setStatus] = useState<StepStatus>({
         componentsInstalled: null,
         extractionError: null,
@@ -341,106 +305,41 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
         }
     }, [currentStep, status.componentsInstalled, isExtracting, status.extractionError, extractComponents]);
 
-    const openDropsVerificationWindow = useCallback(async (verificationUri: string) => {
-        // Desktop opens a Rust-side webview bound to the active account's web
-        // profile, so it reuses the main login's twitch.tv session (authorize
-        // only, no re-login) and Rust clears any stale window on the fixed label
-        // first.
-        //
-        // That whole login-overlay subsystem is `#[cfg(desktop)]`, so on Android
-        // `open_drops_login_window` simply does not exist: the invoke rejected,
-        // the catch below logged it, and the step appeared to do nothing at all
-        // - no browser, no error. Mobile authorizes in the same in-app login
-        // WebView the main Twitch sign-in uses.
-        try {
-            if (IS_MOBILE) {
-                await invoke('open_mobile_login', { url: verificationUri });
-            } else {
-                await invoke('open_drops_login_window', { url: verificationUri });
-            }
-        } catch (e) {
-            Logger.error('Failed to open drops login window:', e);
-        }
+    // Sign-in asks for the Drops approval itself (AppStore.loginToTwitch), and a
+    // Follow tap can too, so the step also learns of one it did not start.
+    useEffect(() => {
+        const unlisten = listen('drops-login-complete', () =>
+            setStatus(prev => ({ ...prev, dropsAuthenticated: true })),
+        );
+        return () => {
+            void unlisten.then((fn) => fn());
+        };
     }, []);
 
+    // Twitch's approval in the platform's sign-in sheet, driven from Rust
+    // (connect_twitch_approval): it opens the sheet, waits for the grant or for
+    // the sheet to be closed, stores it and closes the sheet. False means the
+    // person closed it, which hands the step straight back.
     const handleDropsLogin = useCallback(async () => {
         setIsAuthenticating(true);
         setError(null);
         try {
-            const url = await invoke<string>('start_drops_login');
-            setDropsAuthUrl(url);
-
-            // Subscribed BEFORE the window opens. An account that has already
-            // authorized is redirected the moment the page loads, and a listener
-            // attached afterwards would miss it.
-            //
-            // Android: nothing there emits `drops-login-complete`; that event
-            // belongs to the desktop overlay. The phone's login overlay is a
-            // native view that keeps the redirect's credential itself and
-            // announces the landing as `sn:drops-redirect`, after which Rust
-            // collects and stores it (`finish_mobile_drops_login`), the same
-            // way the Rewards screen connects drops. The user can also close
-            // the overlay with its X (`sn:login-cancelled`), which hands the
-            // step straight back instead of leaving it on "authorizing".
-            const landed = IS_MOBILE ? waitForMobileDropsRedirect() : null;
-            const poll = IS_MOBILE ? null : waitForDropsLogin();
-
-            await openDropsVerificationWindow(url);
-
-            try {
-                if (landed) {
-                    if (!(await landed)) {
-                        setDropsAuthUrl(null);
-                        return;
-                    }
-                    await invoke('finish_mobile_drops_login');
-                } else {
-                    await poll;
-                }
-
-                setStatus(prev => ({ ...prev, dropsAuthenticated: true }));
-                setDropsAuthUrl(null);
-                addToast('Drops login successful!', 'success');
-
-                // Desktop-only: there is no separate window to raise on a phone,
-                // and `focus_window` is part of the same cfg(desktop) subsystem.
-                if (!IS_MOBILE) {
-                    try {
-                        await invoke('focus_window');
-                    } catch (focusError) {
-                        Logger.error('Failed to focus window:', focusError);
-                    }
-                }
-
-                // stepAfter, NOT a literal 4. Drops is step 3, and hardcoding
-                // its successor routes around MOBILE_SKIPPED_STEPS entirely -
-                // which landed Android straight on the whisper-import step even
-                // though it is skipped, because the skip only ever applied to
-                // normal navigation.
-                setTimeout(() => setCurrentStep(stepAfter(3)), 500);
-            } catch (pollError) {
-                Logger.error('Failed to complete drops login:', pollError);
-                setError(`Login failed: ${pollError}`);
-                setDropsAuthUrl(null);
-            }
+            if (!(await invoke<boolean>('connect_twitch_approval'))) return;
+            setStatus(prev => ({ ...prev, dropsAuthenticated: true }));
+            addToast('Drops login successful!', 'success');
+            // stepAfter, NOT a literal 4. Drops is step 3, and hardcoding
+            // its successor routes around MOBILE_SKIPPED_STEPS entirely -
+            // which landed Android straight on the whisper-import step even
+            // though it is skipped, because the skip only ever applied to
+            // normal navigation.
+            setTimeout(() => setCurrentStep(stepAfter(3)), 500);
         } catch (e) {
-            Logger.error('Failed to start drops login:', e);
-            setError(`Failed to start login: ${e}`);
+            Logger.error('Failed to complete drops login:', e);
+            setError(`Login failed: ${e}`);
         } finally {
-            // Close in `finally`, not only on success. The old code dismissed the
-            // overlay on the happy path alone, so a failed or expired poll left
-            // it sitting over the app with no way back - survivable as a desktop
-            // window you can close, not survivable as a full-screen mobile
-            // overlay.
-            try {
-                if (IS_MOBILE) await invoke('close_mobile_login');
-                else await invoke('close_login_overlay', { label: 'drops-login' });
-            } catch {
-                // Already dismissed by the backend on token receipt.
-            }
             setIsAuthenticating(false);
         }
-    }, [addToast, openDropsVerificationWindow]);
+    }, [addToast]);
 
     const handleMainLogin = useCallback(async () => {
         setIsAuthenticating(true);
@@ -810,15 +709,6 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
                                     <Loader2 size={13} className="animate-spin" />
                                     <span>Waiting for authorization</span>
                                 </div>
-                                {dropsAuthUrl && (
-                                    <button
-                                        onClick={() => openDropsVerificationWindow(dropsAuthUrl)}
-                                        className="mt-3 inline-flex items-center justify-center gap-1.5 w-full text-xs text-textSecondary hover:text-textPrimary transition-colors"
-                                    >
-                                        <ExternalLink size={12} />
-                                        Reopen sign-in window
-                                    </button>
-                                )}
                             </div>
                         )}
 

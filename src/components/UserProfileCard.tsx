@@ -23,6 +23,7 @@ import { SubStandingRow } from './profile/SubStandingRow';
 import { wornSubBadgeArt } from '../utils/wornSubBadge';
 import type { SubStanding } from '../types';
 import { Logger } from '../utils/logger';
+import { isApprovalClosed } from '../utils/twitchApproval';
 import {
   getProfileFromMemoryCache,
   getFullProfileWithFallback,
@@ -1413,11 +1414,10 @@ const UserProfileCard = ({
       setIsFollowing(nowFollowing);
       Logger.debug(`[UserProfileCard] Successfully ${action}ed ${username}`);
     } catch (err: any) {
+      // Closing Twitch's approval sheet leaves things as they were, quietly.
+      if (isApprovalClosed(err)) return;
       Logger.error(`[UserProfileCard] ${action} error:`, err);
-      useAppStore.getState().addToast(
-        `Follow/Unfollow failed. Try logging out and back in via Settings to re-authenticate.`,
-        'error'
-      );
+      useAppStore.getState().addToast(`Couldn't ${action} ${username}. Try again.`, 'error');
     } finally {
       setFollowLoading(false);
     }

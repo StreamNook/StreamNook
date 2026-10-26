@@ -1386,6 +1386,10 @@ pub fn dismiss_login_overlay(app: &AppHandle, label: &str) {
         }
     }
     crate::services::ui_hang_watchdog::set_active_overlay(None);
+    // A Twitch approval waiting on this overlay learns it is gone.
+    if label == "drops-login" {
+        crate::services::twitch_approval::sheet_dismissed();
+    }
     // Back from Twitch's bits page: a purchase changed the balance.
     if label.starts_with("bits-") {
         crate::commands::bits::refresh_balance_after_purchase(app);
@@ -1506,15 +1510,6 @@ pub(crate) fn emit_overlay_open_with(
 #[tauri::command]
 pub fn open_twitch_login_window(app: AppHandle, url: String) -> Result<(), String> {
     emit_overlay_open(&app, "twitch-login", &url, "fullbody")
-}
-
-/// Take over the app body with the drops/points device-code login. The active
-/// account's profile already holds its twitch.tv session, so the user is shown as
-/// signed in and only authorizes the device. Shows the live URL in a bar at the top.
-#[cfg(desktop)]
-#[tauri::command]
-pub fn open_drops_login_window(app: AppHandle, url: String) -> Result<(), String> {
-    emit_overlay_open(&app, "drops-login", &url, "fullbody")
 }
 
 /// The memberships (`/join`) page for a YouTube identifier.
@@ -1829,9 +1824,8 @@ pub async fn get_user_by_login(login: String) -> Result<UserInfo, String> {
 
 #[tauri::command]
 pub async fn follow_channel(target_user_id: String) -> Result<(), String> {
-    TwitchService::follow_channel(&target_user_id)
-        .await
-        .map_err(|e| e.to_string())?;
+    // Follow rides on the Drops approval; a missing one is asked for here.
+    crate::services::twitch_approval::run(|| TwitchService::follow_channel(&target_user_id)).await?;
     // A followers-only room you are in now words itself for the new follow.
     crate::services::irc_service::own_follow_changed(&target_user_id, true).await;
     crate::services::channel_state::own_follow_changed(&target_user_id, true).await;
@@ -1843,9 +1837,7 @@ pub async fn follow_channel(target_user_id: String) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn unfollow_channel(target_user_id: String) -> Result<(), String> {
-    TwitchService::unfollow_channel(&target_user_id)
-        .await
-        .map_err(|e| e.to_string())?;
+    crate::services::twitch_approval::run(|| TwitchService::unfollow_channel(&target_user_id)).await?;
     crate::services::irc_service::own_follow_changed(&target_user_id, false).await;
     crate::services::channel_state::own_follow_changed(&target_user_id, false).await;
     #[cfg(mobile)]

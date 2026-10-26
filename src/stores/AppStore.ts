@@ -3371,15 +3371,33 @@ export const useAppStore = create<AppState>((set, get) => ({
       const unlisten = await listen('twitch-login-complete', async () => {
         Logger.debug('Login complete event received');
 
+        // Follow, channel points and drops run on Twitch's separate Drops
+        // approval, so it is asked for now, while the session sign-in just
+        // made answers it (usually with no consent screen). Rust drives it
+        // (connect_twitch_approval). On the phone it takes over this same
+        // sheet, so the sheet is not closed first; closing it with its X is
+        // the approval's own cancel now, not the sign-in's.
+        const needsApproval = !(await invoke<boolean>('is_drops_authenticated').catch(() => true));
+        if (needsApproval) removeCancelListener?.();
+
         // Dismiss the in-app login overlay
         try {
           if (isMobile) {
-            await invoke('close_mobile_login');
+            if (!needsApproval) await invoke('close_mobile_login');
           } else {
             await invoke('close_login_overlay', { label: 'twitch-login' });
           }
         } catch (e) {
           Logger.warn('[TwitchLogin] Failed to close login overlay:', e);
+        }
+
+        if (needsApproval) {
+          void invoke<boolean>('connect_twitch_approval')
+            .catch((e) => Logger.warn('[TwitchLogin] Drops approval failed:', e))
+            // Rust closes the sheet itself; this covers a failure before it opened.
+            .finally(() => {
+              if (isMobile) void invoke('close_mobile_login').catch(() => {});
+            });
         }
 
         // After successful login, check auth status FIRST

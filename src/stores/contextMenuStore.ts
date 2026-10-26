@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import type { TwitchStream } from '../types';
 import { useAppStore } from './AppStore';
 import { Logger } from '../utils/logger';
+import { isApprovalClosed } from '../utils/twitchApproval';
 import { getSpellcheckTarget, type SpellToken } from '../utils/chatInputWord';
 import { isKnownChatToken, suggestWord } from '../utils/spellcheck';
 
@@ -317,9 +318,16 @@ export const useContextMenuStore = create<ContextMenuState>((set, get) => ({
             useAppStore.getState().loadFollowedStreams();
             
         } catch (error) {
-            Logger.error('[ContextMenu] Failed to toggle follow:', error);
-            // Revert optimistic update on failure
+            // Revert optimistic update on failure, or when Twitch's approval
+            // sheet was closed (which needs no toast).
             set({ isFollowing: !newFollowingState });
+            if (!isApprovalClosed(error)) {
+                Logger.error('[ContextMenu] Failed to toggle follow:', error);
+                useAppStore.getState().addToast(
+                    `Couldn't ${newFollowingState ? 'follow' : 'unfollow'} ${stream.user_name}. Try again.`,
+                    'error',
+                );
+            }
         }
         
         // Close menu after action

@@ -150,10 +150,12 @@ export default function AccountStack() {
     if (dropsSigningIn) return;
     setDropsSigningIn(true);
     try {
-      const url = await invoke<string>('start_drops_login');
-      // Opened bound to the active account's web profile, so it reuses the
-      // main login's twitch.tv session: authorize, no second sign-in.
-      await invoke('open_drops_login_window', { url });
+      // Rust opens Twitch's approval in the overlay, bound to the active
+      // account's web profile, so it reuses the main login's twitch.tv session.
+      // The outcome toast comes from the events above; a closed overlay only
+      // hands the button back.
+      await invoke<boolean>('connect_twitch_approval');
+      setDropsSigningIn(false);
     } catch (e) {
       Logger.error('[AccountStack] Drops login failed:', e);
       addToast(`Drops sign-in failed: ${e instanceof Error ? e.message : String(e)}`, 'error');

@@ -13,7 +13,6 @@ allow = [
   "open_mobile_login",
   "close_mobile_login",
   "get_mobile_login_cookies",
-  "finish_mobile_drops_login",
   "clear_mobile_login_cookies",
   "push_register",
   "push_unregister",

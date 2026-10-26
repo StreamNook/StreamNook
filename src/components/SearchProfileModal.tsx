@@ -9,6 +9,7 @@ import StreamerAboutPanel from './StreamerAboutPanel';
 import StreamerMedia from './StreamerMedia';
 import { Tooltip } from './ui/Tooltip';
 import { Logger } from '../utils/logger';
+import { isApprovalClosed } from '../utils/twitchApproval';
 import { CardChip } from './ui/CardChip';
 import { SevenTvAvatar } from './SevenTvAvatar';
 import { sevenTvIdForStream } from '../services/sevenTvPictures';
@@ -65,8 +66,10 @@ export const SearchProfileModal = ({ user, onClose }: { user: TwitchStream, onCl
             setIsFollowing(!isFollowing);
             useAppStore.getState().addToast(`Successfully ${isFollowing ? 'unfollowed' : 'followed'} ${user.user_name}`, 'success');
         } catch (err) {
+            // Closing Twitch's approval sheet leaves things as they were, quietly.
+            if (isApprovalClosed(err)) return;
             Logger.error('Failed to toggle follow status:', err);
-            useAppStore.getState().addToast(`Failed to ${isFollowing ? 'unfollow' : 'follow'} ${user.user_name}`, 'error');
+            useAppStore.getState().addToast(`Couldn't ${isFollowing ? 'unfollow' : 'follow'} ${user.user_name}. Try again.`, 'error');
         } finally {
             setFollowLoading(false);
         }

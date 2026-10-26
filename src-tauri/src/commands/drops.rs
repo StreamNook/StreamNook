@@ -754,12 +754,14 @@ pub async fn report_player_state(app: AppHandle, state: String, slot: Option<Str
 
 // Drops Authentication commands
 
-/// The url the drops sign-in overlay should load. Completion is reported on the
-/// `drops-login-complete` / `drops-login-error` events rather than returned here,
-/// because the credential arrives on a redirect the overlay observes.
+/// Connect Drops: Twitch's approval in the platform's sign-in sheet, which
+/// follow and channel points ride on too. True once the grant is stored (at
+/// once when it already is); false when the person closed the sheet.
 #[tauri::command]
-pub fn start_drops_login() -> String {
-    DropsAuthService::authorize_url()
+pub async fn connect_twitch_approval() -> Result<bool, String> {
+    crate::services::twitch_approval::ensure()
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

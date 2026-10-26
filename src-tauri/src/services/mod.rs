@@ -217,6 +217,7 @@ pub mod token_vault;
 pub mod tv_screen;
 pub mod twitch_chat_history;
 pub mod twitch_service;
+pub mod twitch_approval;
 pub mod twitch_signin;
 pub mod twitch_profile_edit;
 pub mod universal_cache_service;

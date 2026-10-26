@@ -9,6 +9,7 @@ import { useChannelState } from '../stores/channelStateStore';
 import { makeKey } from '../utils/providerKey';
 import type { ProviderId } from '../types/providers';
 import { IS_MOBILE } from '../utils/platform';
+import { isApprovalClosed } from '../utils/twitchApproval';
 
 interface ChannelSocialTarget {
   /** Which platform this channel is on. Pass it whenever the channel is NOT the
@@ -309,6 +310,7 @@ export function useChannelSocial({ provider: providerProp, userId, userLogin, us
     try {
       if (isTwitch) {
         // Rust also sets the held relationship, so every open menu flips with it.
+        // Without the Drops approval it asks Twitch for it first, then follows.
         const command = following ? 'unfollow_channel' : 'follow_channel';
         await invoke(command, { targetUserId: userId });
       } else {
@@ -325,11 +327,10 @@ export function useChannelSocial({ provider: providerProp, userId, userLogin, us
       setIsFollowing(nowFollowing);
       Logger.debug(`[useChannelSocial] Successfully ${action}ed ${userLogin}`);
     } catch (err) {
+      // Closing Twitch's approval sheet leaves things as they were, quietly.
+      if (isApprovalClosed(err)) return;
       Logger.error(`[useChannelSocial] ${action} error:`, err);
-      useAppStore.getState().addToast(
-        `Follow/Unfollow failed. Try logging out and back in via Settings to re-authenticate.`,
-        'error'
-      );
+      useAppStore.getState().addToast(`Couldn't ${action} ${userName || userLogin}. Try again.`, 'error');
     } finally {
       setFollowLoading(false);
     }

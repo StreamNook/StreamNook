@@ -105,28 +105,6 @@ pub async fn close_mobile_login<R: Runtime>(app: AppHandle<R>) -> Result<(), Str
         .map_err(|e| e.to_string())
 }
 
-/// Finish a drops sign-in the overlay reported (`sn:drops-redirect`): collect
-/// the credential the Kotlin plugin captured off the redirect and store it the
-/// way the device flow used to. The token comes plugin -> Rust -> disk and is
-/// never handed to the page.
-#[tauri::command]
-pub async fn finish_mobile_drops_login<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
-    let token = {
-        let state = app.state::<TwitchLoginState<R>>();
-        state
-            .0
-            .run_mobile_plugin::<DropsTokenResp>("takeDropsToken", ())
-            .map(|r| r.token)
-            .map_err(|e| e.to_string())?
-    };
-    if token.is_empty() {
-        return Err("Twitch did not hand back a drops credential".to_string());
-    }
-    crate::services::drops_auth_service::DropsAuthService::store_access_token(token)
-        .await
-        .map_err(|e| e.to_string())
-}
-
 /// Sign the embedded browser out: drop every cookie and web-storage entry the
 /// login overlay's WebView holds. Called on sign-out so the next sign-in starts
 /// from Twitch's login page rather than the previous account's session.
@@ -205,6 +183,16 @@ pub fn take_kick_redirect(app: &AppHandle<Rt>) -> String {
         .0
         .run_mobile_plugin::<KickRedirectResp>("takeKickRedirect", ())
         .map(|r| r.url)
+        .unwrap_or_default()
+}
+
+/// The Twitch Drops grant the overlay caught off its redirect, once; empty
+/// when none.
+pub fn take_drops_token(app: &AppHandle<Rt>) -> String {
+    handle(app)
+        .0
+        .run_mobile_plugin::<DropsTokenResp>("takeDropsToken", ())
+        .map(|r| r.token)
         .unwrap_or_default()
 }
 

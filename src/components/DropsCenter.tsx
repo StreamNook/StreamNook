@@ -236,11 +236,13 @@ export default function DropsCenter() {
             setIsAuthenticating(true);
             setError(null);
 
-            const url = await invoke<string>('start_drops_login');
-
-            // Bound to the active account's web profile (Rust), so it reuses the
-            // main login's twitch.tv session - authorize only, no re-login.
-            await invoke('open_drops_login_window', { url });
+            // Rust opens Twitch's approval in the overlay, bound to the active
+            // account's web profile, so it reuses the main login's twitch.tv
+            // session: authorize only, no re-login. Success is handled by the
+            // drops-login-complete listener; a closed overlay hands the button
+            // back.
+            await invoke<boolean>('connect_twitch_approval');
+            setIsAuthenticating(false);
         } catch (err) {
             Logger.error('Failed to start drops login:', err);
             setError(err instanceof Error ? err.message : String(err));
