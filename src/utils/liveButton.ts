@@ -17,6 +17,17 @@ export const LIVE_BUTTON_HTML =
   '<span class="sn-live-btn__label">LIVE</span>' +
   '<span class="plyr__tooltip" role="tooltip"></span>';
 
+/** The state a freshly inserted LIVE control starts in: behind when the viewer
+ *  is rewound or the video is paused (a paused player is never at the edge),
+ *  otherwise whatever the page last knew. */
+export function initialLiveButtonState(o: {
+  rewound: boolean;
+  paused: boolean;
+  last: LiveButtonState;
+}): LiveButtonState {
+  return o.rewound || o.paused ? 'behind' : o.last;
+}
+
 /** Paints the injected LIVE control. Idempotent: returns at once when the
  *  state it shows already matches, so callers can be generous with it. */
 export function paintLiveButton(btn: HTMLButtonElement, state: LiveButtonState): void {

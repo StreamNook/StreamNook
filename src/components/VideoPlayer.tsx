@@ -97,7 +97,7 @@ const CHAPTERS_BUTTON_HTML =
 
 
 import { open as openExternalUrl } from '@tauri-apps/plugin-shell';
-import { LIVE_BUTTON_HTML, paintLiveButton, type LiveButtonState } from '../utils/liveButton';
+import { initialLiveButtonState, LIVE_BUTTON_HTML, paintLiveButton, type LiveButtonState } from '../utils/liveButton';
 import { liveWake } from '../utils/liveWake';
 import { setActiveVideo } from '../utils/activeVideo';
 import { isWindowHidden } from '../utils/windowVisibility';
@@ -515,7 +515,11 @@ const VideoPlayer = () => {
       },
       onInserted: (btn) => {
         liveBtnNodeRef.current = btn;
-        const initial: LiveButtonState = useAppStore.getState().liveRewind ? 'behind' : liveStateRef.current;
+        const initial = initialLiveButtonState({
+          rewound: !!useAppStore.getState().liveRewind,
+          paused: videoRef.current?.paused ?? true,
+          last: liveStateRef.current,
+        });
         liveStateRef.current = initial;
         paintLiveButton(btn, initial);
       },
@@ -1378,6 +1382,8 @@ const VideoPlayer = () => {
         if (!held) return false;
         invoke('report_player_state', { state: 'paused' }).catch(() => {});
         park?.paused(held.at);
+        liveStateRef.current = 'behind';
+        if (liveBtnNodeRef.current?.isConnected) paintLiveButton(liveBtnNodeRef.current, 'behind');
         Logger.warn('[Player] stays paused: paused before this player was built');
         return true;
       };
