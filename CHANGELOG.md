@@ -1,3 +1,33 @@
+## [8.8.16] - 2026-10-26
+
+### ✨ Features
+- Pausing a live stream stops its download now. The pause holds through a restart and in MultiNook tiles, and play picks up at the live edge. Your own channel opens paused.
+- A click on the video pauses and plays it. Double-click still goes full screen.
+- Clips and VODs show the category they were recorded under, like a live stream does.
+- When follow, channel points or drops need Twitch's approval, StreamNook asks for it right there. Before, you got an error telling you to sign out and back in.
+- A mention notification for a reply quotes the message it answers.
+- The About page names the platform you're on and links the other apps.
+
+### 🐛 Bug Fixes
+- Replies to your Kick messages now highlight and play the mention sound, the same as on Twitch. Your Kick name and your YouTube @handle count as mentions on those chats, and the inbox and mention sound work without a Twitch sign-in.
+- The mention sound plays in MultiChat windows, including when MultiChat is the only window open, and each mention plays once.
+- New 7TV emotes show up as soon as their image exists, and a later refresh no longer undoes an emote edit. When someone's personal 7TV set loads late, the lines they already sent get their emotes.
+- Switching channels no longer replays a burst of old messages. A chat tab in the background keeps every message, and its emotes are current when you open it.
+- Timestamps lead the message line again and stay in a straight column. A chatter's atmosphere no longer shifts their message sideways.
+- The mod log keeps every action through a crash or a damaged save.
+- Stats and watch minutes go out in batches and when you quit, with nothing lost or counted twice. StreamNook's own requests take a backup route when a network blocks the usual one.
+- On macOS, updates install and reopen the app. Freezes and automatic stream reloads are written to the log, so a report shows what happened.
+- Paused TikTok and YouTube tiles hold still, and every player reports when a stream ends.
+- Toasts read clearly in every theme. Falling back to software drawing shows one warning, with an offer to restart.
+
+### ⚡ Performance
+- Chat opens faster: the newest messages paint first, and emotes and badges you've seen before load from disk.
+- Emote, cache and mod log work runs off the UI thread.
+- A paused stream downloads nothing, in the player and in MultiNook tiles.
+
+### 🔧 Maintenance
+- The log records chat delay, page lag, the drawing mode and backend stalls, so a "chat feels slow" or "the app froze" report can be traced.
+
 ## [8.8.15] - 2026-10-21
 
 ## 🎉 New: Send pictures in chat
