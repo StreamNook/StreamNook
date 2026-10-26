@@ -2060,7 +2060,7 @@ const VideoPlayer = () => {
           // A rejected refresh on a live channel: accept the next one rather
           // than stall against the stale playlist. Not a sign of an offline
           // channel, so it does not count toward the offline threshold.
-          if (recoverFromSequenceMismatch(hls, data)) {
+          if (recoverFromSequenceMismatch(hls, data, () => !park?.loadStopped)) {
             Logger.warn('[HLS] playlist refresh rejected for a sequence mismatch; accepting the next refresh');
             return;
           }

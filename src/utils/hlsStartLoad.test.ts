@@ -58,6 +58,46 @@ describe('resumeLoadAfterRecover', () => {
   });
 });
 
+/**
+ * A loader that follows hls.js 1.7.2's attach rule: when media attaches while
+ * the loader is stopped, it starts loading again if `config.autoStartLoad` is on.
+ */
+function attachingHls(config: { autoStartLoad?: boolean }) {
+  const state = { loading: false };
+  return {
+    config,
+    state,
+    startLoad() {
+      state.loading = true;
+    },
+    stopLoad() {
+      state.loading = false;
+    },
+    mediaAttached() {
+      if (config.autoStartLoad && !state.loading) this.startLoad();
+    },
+  };
+}
+
+describe('the attach rule with the start config', () => {
+  it('stays stopped on attach when HLS_START_CONFIG is merged in', () => {
+    const defaults: { autoStartLoad: boolean } = { autoStartLoad: true };
+    const hls = attachingHls({ ...defaults, ...HLS_START_CONFIG });
+    hls.startLoad();
+    hls.stopLoad();
+    hls.mediaAttached();
+    expect(hls.state.loading).toBe(false);
+  });
+
+  it('restarts on attach without it', () => {
+    const hls = attachingHls({ autoStartLoad: true });
+    hls.startLoad();
+    hls.stopLoad();
+    hls.mediaAttached();
+    expect(hls.state.loading).toBe(true);
+  });
+});
+
 describe('the desktop players hold loading until the page starts it', () => {
   const root = resolve(__dirname, '..');
   const source = (file: string) => readFileSync(resolve(root, file), 'utf8').replace(/\r\n/g, '\n');
