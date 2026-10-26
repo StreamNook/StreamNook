@@ -14,7 +14,7 @@ import {
   releaseChannel,
   useChatConnectionStore,
 } from '../../stores/chatConnectionStore';
-import { makeKey, parseKey } from '../../utils/providerKey';
+import { makeKey, parseKey, sliceLookupKey } from '../../utils/providerKey';
 import { badgeSourceKey, HOMIES_CUSTOM_SOURCE } from '../../utils/chatterBadges';
 import { initializeBadgeCache, parseBadges } from '../../services/twitchBadges';
 import { useChatUserStore } from '../../stores/chatUserStore';
@@ -59,9 +59,11 @@ export interface LiveSource { provider: ProviderId; channel: string; }
 
 type UsersMap = ReturnType<typeof useChatUserStore.getState>['users'];
 
-// The chat store's slice key: bare login for Twitch, composite for the rest.
-const sliceKeyFor = (provider: ProviderId, channel: string): string =>
-  provider === 'twitch' ? channel.trim().toLowerCase() : makeKey(provider, channel.trim());
+// The chat store's slice key: bare login for Twitch, composite for the rest,
+// folded the way the store stores it. `makeKey` keeps a YouTube id's case, so
+// reading by it missed the slice and a connected YouTube source sat on
+// "Connecting to …" forever.
+const sliceKeyFor = (provider: ProviderId, channel: string): string => sliceLookupKey(provider, channel.trim());
 
 // Real send time (ms). Twitch stamps `tmi-sent-ts`; others carry an ISO timestamp.
 const sentAt = (m: BackendChatMessage): number => {

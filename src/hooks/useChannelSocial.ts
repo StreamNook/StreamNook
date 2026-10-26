@@ -6,7 +6,7 @@ import { streamProvider, followIdentifier } from '../utils/streamProvider';
 import { useFollowsStore } from '../stores/followsStore';
 import { useChatConnectionStore } from '../stores/chatConnectionStore';
 import { useChannelState } from '../stores/channelStateStore';
-import { makeKey } from '../utils/providerKey';
+import { sliceLookupKey } from '../utils/providerKey';
 import type { ProviderId } from '../types/providers';
 import { IS_MOBILE } from '../utils/platform';
 import { isApprovalClosed } from '../utils/twitchApproval';
@@ -105,7 +105,8 @@ export function useChannelSocial({ provider: providerProp, userId, userLogin, us
     // LiveOverlayFeed's `void revision`.
     void chatRevision;
     if (isTwitch || !userLogin) return null;
-    const key = makeKey(provider, userLogin);
+    // The slice's stored (folded) key; `makeKey` keeps a YouTube id's case.
+    const key = sliceLookupKey(provider, userLogin);
     // A different channel invalidates whatever was found for the last one.
     if (chatBadgeRef.current && chatBadgeRef.current.key !== key) chatBadgeRef.current = null;
     const slice = useChatConnectionStore.getState().channels.get(key);
