@@ -73,6 +73,56 @@ describe('pausePark', () => {
     expect(calls).toEqual(['stop', 'start']);
   });
 
+  describe('with a resync load', () => {
+    const makeWith = () => {
+      const calls: string[] = [];
+      let t = 0;
+      const park = createPausePark({
+        stopLoad: () => calls.push('stop'),
+        startLoad: () => calls.push('start'),
+        resyncLoad: () => calls.push('resync'),
+        stillPaused: () => true,
+        now: () => t,
+      });
+      return { park, calls, at: (ms: number) => (t = ms) };
+    };
+
+    it('a long pause hands the load to resyncLoad once and never calls startLoad', () => {
+      const { park, calls, at } = makeWith();
+      park.paused();
+      vi.advanceTimersByTime(STOP_LOAD_AFTER_PAUSE_MS);
+      at(RESYNC_AFTER_PAUSE_MS);
+      expect(park.play()).toBe('resync');
+      expect(calls).toEqual(['stop', 'resync']);
+      expect(park.loadStopped).toBe(false);
+    });
+
+    it('stops a load that is still running before resyncLoad', () => {
+      const { park, calls, at } = makeWith();
+      park.paused();
+      at(RESYNC_AFTER_PAUSE_MS);
+      expect(park.play()).toBe('resync');
+      expect(calls).toEqual(['stop', 'resync']);
+    });
+
+    it('a pause under the cut-off still resumes with startLoad', () => {
+      const { park, calls, at } = makeWith();
+      park.paused();
+      vi.advanceTimersByTime(STOP_LOAD_AFTER_PAUSE_MS);
+      at(RESYNC_AFTER_PAUSE_MS - 1);
+      expect(park.play()).toBe('resume');
+      expect(calls).toEqual(['stop', 'start']);
+    });
+
+    it('a play inside the grace changes nothing', () => {
+      const { park, calls, at } = makeWith();
+      park.paused();
+      at(500);
+      expect(park.play()).toBe('none');
+      expect(calls).toEqual([]);
+    });
+  });
+
   it('a held pause from before a rebuild stops at once and keeps its time', () => {
     const { park, calls, at } = make();
     at(10_000);

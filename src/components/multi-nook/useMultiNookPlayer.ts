@@ -331,6 +331,18 @@ export const useMultiNookPlayer = ({
       park = createPausePark({
         stopLoad: () => hls.stopLoad(),
         startLoad: () => hls.startLoad(),
+        // Past the resync cut-off the tile's origin rebuilds its window at the
+        // live edge before loading starts again, so the play never meets the
+        // window held across the pause.
+        resyncLoad: isLowLatencyChannel
+          ? () => {
+              invoke<boolean>('relay_rebuild_live_edge', { tile: streamId })
+                .catch(() => false)
+                .finally(() => {
+                  if (hlsRef.current === hls && !video.paused) hls.startLoad();
+                });
+            }
+          : undefined,
         stillPaused: () => hlsRef.current === hls && video.paused,
         log: (m) => Logger.warn(`[MultiNook-${streamId}] ${m}`),
         timings: () => windowedPauseTimings(hls, video),

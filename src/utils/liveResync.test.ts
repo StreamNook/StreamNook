@@ -186,6 +186,7 @@ describe('followLiveAfterResync', () => {
 
   it('is stuck one window after new live data when the video plays but its time stays pinned', () => {
     const { hls, video, onStuck } = start();
+    video.setBuffered([[5, 12]]);
     hls.fire('hlsLevelUpdated');
     hls.fire('hlsFragBuffered', liveFragment);
     video.emit('playing');
@@ -208,6 +209,7 @@ describe('followLiveAfterResync', () => {
 
   it('does not count a seek past the re-arm cap as progress', () => {
     const { hls, video, onStuck } = start();
+    video.setBuffered([[5, 12]]);
     hls.fire('hlsLevelUpdated');
     hls.fire('hlsFragBuffered', liveFragment);
     for (let i = 0; i < 3; i++) {
@@ -333,6 +335,36 @@ describe('followLiveAfterResync', () => {
     expect(onStuck).toHaveBeenCalledTimes(1);
   });
 
+  it('is stuck at the window when a fragment in the served window reports buffered but the element holds none of it', () => {
+    const { hls, video, onStuck } = start();
+    hls.latestLevelDetails = { fragmentStart: 200 };
+    video.advance(100);
+    video.setBuffered([[98, 106]]); // only video from before the pause
+    video.emit('playing');
+    hls.fire('hlsLevelUpdated');
+    hls.fire('hlsFragBuffered', { frag: { type: 'main', start: 230, duration: 2 } });
+    vi.advanceTimersByTime(RESYNC_WINDOW_MS - 1);
+    expect(onStuck).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(onStuck).toHaveBeenCalledTimes(1);
+    expectReleased(hls, video);
+  });
+
+  it('counts a fragment in the served window as live data once the element holds it', () => {
+    const { hls, video, onStuck } = start();
+    hls.latestLevelDetails = { fragmentStart: 200 };
+    video.advance(100);
+    video.setBuffered([[98, 106]]);
+    video.emit('playing');
+    hls.fire('hlsLevelUpdated');
+    video.setBuffered([[98, 106], [230, 240]]);
+    hls.fire('hlsFragBuffered', { frag: { type: 'main', start: 230, duration: 2 } });
+    vi.advanceTimersByTime(RESYNC_WINDOW_MS - 1);
+    expect(onStuck).not.toHaveBeenCalled(); // the freeze timer, not the data timer, judges now
+    vi.advanceTimersByTime(1);
+    expect(onStuck).toHaveBeenCalledTimes(1); // one window after the data, with the playhead pinned
+  });
+
   it('never seeks on a fragment that arrives before any reload', () => {
     const { hls, video } = start();
     hls.liveSyncPosition = 20;
@@ -395,6 +427,7 @@ describe('followLiveAfterResync', () => {
     video.emit('playing');
     hls.latestLevelDetails = { fragmentStart: 200 };
     hls.fire('hlsLevelUpdated');
+    video.setBuffered([[80, 106], [228, 240]]);
     hls.fire('hlsFragBuffered', { frag: { type: 'main', start: 228, duration: 2 } });
     vi.advanceTimersByTime(3000);
     video.advance(230);
@@ -443,6 +476,7 @@ describe('followLiveAfterResync', () => {
     vi.advanceTimersByTime(1000);
     video.advance(11);
     video.emit('timeupdate');
+    video.setBuffered([[8, 12], [230, 240]]);
     hls.fire('hlsFragBuffered', { frag: { type: 'main', start: 230, duration: 2 } });
     vi.advanceTimersByTime(2000);
     video.advance(13);
@@ -460,6 +494,7 @@ describe('followLiveAfterResync', () => {
     vi.advanceTimersByTime(1000);
     video.advance(11);
     video.emit('timeupdate');
+    video.setBuffered([[8, 12], [230, 240]]);
     hls.fire('hlsFragBuffered', { frag: { type: 'main', start: 230, duration: 2 } });
     vi.advanceTimersByTime(2000);
     video.advance(13);
@@ -496,6 +531,7 @@ describe('followLiveAfterResync', () => {
     hls.latestLevelDetails = { fragmentStart: 200 };
     hls.fire('hlsLevelUpdated');
     vi.advanceTimersByTime(1000);
+    video.setBuffered([[8, 12], [230, 240]]);
     hls.fire('hlsFragBuffered', { frag: { type: 'main', start: 230, duration: 2 } }); // live data the playhead cannot reach
     playOn(video, 2000); // old buffer plays to 3 s
     vi.advanceTimersByTime(6500); // stalled through the first window's end at 9 s, now 9.5 s
@@ -560,6 +596,7 @@ describe('followLiveAfterResync', () => {
     hls.latestLevelDetails = { fragmentStart: 200 };
     hls.fire('hlsLevelUpdated');
     vi.advanceTimersByTime(1000);
+    video.setBuffered([[8, 12], [230, 240]]);
     hls.fire('hlsFragBuffered', { frag: { type: 'main', start: 230, duration: 2 } });
     playOn(video, 6000); // plays to 7 s
     vi.advanceTimersByTime(250);

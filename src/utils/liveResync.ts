@@ -142,7 +142,14 @@ export function followLiveAfterResync(
     const f = data?.frag;
     if (!reloaded || !f || f.type !== 'main') return;
     const first = windowStart(hls);
-    if (first !== null && f.start + f.duration > first && !liveData) {
+    // hls.js reports a fragment buffered even when it appended nothing, so only
+    // one the element actually holds counts as live data.
+    if (
+      first !== null &&
+      f.start + f.duration > first &&
+      !liveData &&
+      buffers(video, f.start + Math.min(f.duration / 2, 0.25))
+    ) {
       liveData = true;
       measureFromHere();
       armFreeze();

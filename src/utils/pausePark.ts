@@ -14,8 +14,9 @@
 export const STOP_LOAD_AFTER_PAUSE_MS = 2000;
 
 /** A pause this long resumes at the live edge instead of the paused frame. The
- *  relay's low-latency origin parks after the same span without a playlist
- *  request (ll_origin.rs PARK_IDLE_MS). */
+ *  relay's low-latency origin parks only after a longer span without a playlist
+ *  request (ll_origin.rs PARK_IDLE_MS), so a player on it asks the origin to
+ *  rebuild its window before it loads again (`resyncLoad`). */
 export const RESYNC_AFTER_PAUSE_MS = 30_000;
 
 /** localStorage key a test run sets to shorten the spans, for example
@@ -99,6 +100,10 @@ export interface PausePark {
 export interface PauseParkOptions {
   stopLoad: () => void;
   startLoad: () => void;
+  /** Loads again after a pause past the resync cut-off, in place of
+   *  `startLoad`. It owns the restart: the park stops any load still running
+   *  first and never calls `startLoad` for that play. */
+  resyncLoad?: () => void;
   /** True while this instance is still current and its video still paused. */
   stillPaused: () => boolean;
   log?: (message: string) => void;
@@ -150,6 +155,16 @@ export function createPausePark(o: PauseParkOptions): PausePark {
       const since = pausedAt;
       pausedAt = null;
       if (since === null) return 'none';
+      if (at - since >= resyncMs && o.resyncLoad) {
+        try {
+          if (!stopped) o.stopLoad();
+          o.resyncLoad();
+        } catch {
+          /* player already torn down */
+        }
+        stopped = false;
+        return 'resync';
+      }
       const wasStopped = stopped;
       if (wasStopped) {
         stopped = false;
