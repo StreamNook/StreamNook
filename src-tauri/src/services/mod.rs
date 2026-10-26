@@ -178,6 +178,29 @@ pub mod moderation;
 // Desktop-only: MultiNook multi-stream tiling is not part of the phone app.
 #[cfg(desktop)]
 pub mod multi_nook_server;
+/// Phones have no MultiNook grid, so the tile notices the shared relays
+/// (TikTok, YouTube) send go nowhere there.
+#[cfg(not(desktop))]
+pub mod multi_nook_server {
+    pub(crate) use crate::services::tile_end::{provider_tile_ended, ProviderEndState, TileFetch};
+
+    pub(crate) fn note_tile_playlist_request(_stream_id: &str) {}
+
+    pub(crate) fn report_tile_ended(_stream_id: &str) {}
+
+    pub fn rebuild_tile_at_edge(_stream_id: &str) -> bool {
+        false
+    }
+
+    pub struct MultiNookServer;
+
+    impl MultiNookServer {
+        pub async fn stop_all() -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+}
+pub mod tile_end;
 pub mod multi_nook_meta;
 #[cfg(desktop)]
 pub mod multi_nook_raids;
