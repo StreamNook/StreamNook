@@ -12,9 +12,9 @@ const PROVIDER_END_SPAN_MS: u64 = 12_000;
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ProviderEndState {
     /// Refusals in a row since the last playlist that was served.
-    refusals: u32,
+    pub(crate) refusals: u32,
     /// When the first of those refusals arrived (`mono_ms`; 0 = none yet).
-    first_refusal_ms: u64,
+    pub(crate) first_refusal_ms: u64,
     /// The end was already reported for this tile.
     announced: bool,
 }
