@@ -16,6 +16,7 @@ import { lineButtons, type LineButton } from './chat/modLine';
 import { bindLineStrips, bindLineWheel, isOnLineStrip, useLineArt, useLineButtons } from './chat/lineArt';
 import { collectMarks, FALLBACK_MARK_KINDS } from './chat/scrollbarMarkLayout';
 import { IS_MAC, IS_MOBILE } from '../utils/platform';
+import { releaseRowImagesOnUnmount } from '../utils/releaseImages';
 
 /**
  * How many of the newest rows always paint (see MessageRow). Enough to fill
@@ -174,6 +175,7 @@ const MessageRow = memo(function MessageRow({
   );
   return (
     <div
+      ref={releaseRowImagesOnUnmount}
       data-message-id={messageId || undefined}
       className={`chat-message-row${isModFocus ? ' is-mod-focus' : ''}${
         typeof message !== 'string' && message.metadata?.from_backfill ? ' is-backfill' : ''

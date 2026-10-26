@@ -3,6 +3,7 @@ import {
   RETRY_DELAYS_SECONDS,
   candidateUrls,
   createEmoteImageRetry,
+  imageProbe,
   type EmoteImageProbe,
 } from './emoteImageRetry';
 
@@ -24,6 +25,54 @@ function fakeProbe() {
 }
 
 const SWEEP = candidateUrls('E1').length;
+
+describe('imageProbe', () => {
+  /** An Image stand-in; `settle` fires the load or error the browser would. */
+  class FakeImage {
+    static last: FakeImage | null = null;
+    attrs = new Map<string, string>();
+    referrerPolicy = '';
+    onload: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    constructor() {
+      FakeImage.last = this;
+    }
+    set src(value: string) {
+      this.attrs.set('src', value);
+    }
+    removeAttribute(name: string) {
+      this.attrs.delete(name);
+    }
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    FakeImage.last = null;
+  });
+
+  it('resolves true on load and lets go of the file and both handlers', async () => {
+    vi.stubGlobal('Image', FakeImage);
+    const pending = imageProbe('https://cdn.example/a.webp');
+    const img = FakeImage.last!;
+    expect(img.attrs.get('src')).toBe('https://cdn.example/a.webp');
+    img.onload?.();
+    await expect(pending).resolves.toBe(true);
+    expect(img.attrs.has('src')).toBe(false);
+    expect(img.onload).toBeNull();
+    expect(img.onerror).toBeNull();
+  });
+
+  it('resolves false on error and lets go of the file and both handlers', async () => {
+    vi.stubGlobal('Image', FakeImage);
+    const pending = imageProbe('https://cdn.example/missing.webp');
+    const img = FakeImage.last!;
+    img.onerror?.();
+    await expect(pending).resolves.toBe(false);
+    expect(img.attrs.has('src')).toBe(false);
+    expect(img.onload).toBeNull();
+    expect(img.onerror).toBeNull();
+  });
+});
 
 beforeEach(() => {
   vi.useFakeTimers();

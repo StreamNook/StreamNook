@@ -40,8 +40,16 @@ export const imageProbe: EmoteImageProbe = (url) =>
     }
     const img = new Image();
     img.referrerPolicy = 'no-referrer';
-    img.onload = () => resolve(true);
-    img.onerror = () => resolve(false);
+    // A settled probe lets go of its file: the element is dropped right after,
+    // but it would otherwise keep the decoded image until a major collection.
+    const settle = (ok: boolean) => {
+      resolve(ok);
+      img.onload = null;
+      img.onerror = null;
+      img.removeAttribute('src');
+    };
+    img.onload = () => settle(true);
+    img.onerror = () => settle(false);
     img.src = url;
   });
 
