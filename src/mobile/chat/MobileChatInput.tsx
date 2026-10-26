@@ -51,6 +51,7 @@ import { RoomModeIndicator } from '../../components/chat/RoomModeIndicator';
 import type { ProviderId } from '../../types/providers';
 import { isTwitchStream } from '../../utils/streamProvider';
 import { formatShortCount } from '../../utils/streamStats';
+import { bitsOn } from '../../utils/wallet';
 import { usePlatformAccountStore } from '../../stores/platformAccountStore';
 import { ManageChannelSheet } from './ManageChannelSheet';
 import { ModerationSheet } from './ModerationSheet';
@@ -1130,9 +1131,16 @@ const MobileChatInputImpl: React.FC<Props> = ({
       {/* The rewards, as a sheet: the phone's own surface for a menu like this.
           Its first open does not wait on Twitch: the read below fills Rust's
           list as soon as there is a points button, and the menu paints that
-          list at once while it reads a fresh one. */}
+          list at once while it reads a fresh one. With both tabs it opens at
+          full height, so a tab switch or the Bits tab's late answer never
+          resizes it under the finger. */}
       {hasWallet && channel && channelId && (
-        <MobileSheet open={pointsOpen} onClose={() => setPointsOpen(false)} maxHeightFraction={0.78}>
+        <MobileSheet
+          open={pointsOpen}
+          onClose={() => setPointsOpen(false)}
+          maxHeightFraction={0.78}
+          fill={points.balance !== null && bitsOn(walletBits) !== null}
+        >
           <WalletSheet
             channelLogin={channel}
             channelId={channelId}

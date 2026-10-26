@@ -226,6 +226,15 @@ export const RewardsScreen: React.FC = () => {
     void load('', true);
   }, [load]);
 
+  // Drops can be connected from elsewhere (a Follow tap, sign-in), so the
+  // screen catches up when the approval lands.
+  useEffect(() => {
+    const unlisten = listen('drops-login-complete', () => void load(latestQuery.current, true));
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
+  }, [load]);
+
   useEffect(() => {
     if (!drops?.connected) return;
     const timer = setTimeout(() => void load(dropsQuery, false), 200);
@@ -291,45 +300,26 @@ export const RewardsScreen: React.FC = () => {
     };
   }, [badgeSort]);
 
-  // The redirect grant, the same one desktop moved to when Twitch closed the
-  // device-code grant on the drops client. The authorize page opens in the
-  // in-app login WebView, Twitch redirects back with the credential, the
-  // native overlay keeps it and closes itself, and Rust collects and stores
-  // it. The page never sees the token.
+  // Twitch's approval in the in-app login sheet, driven from Rust
+  // (connect_twitch_approval): the sheet opens on the authorize page, Rust
+  // collects and stores the grant, and closes the sheet. The page never sees
+  // the token. Follow asks for the same approval, so it may already be done.
   const connect = async () => {
     setConnecting(true);
     setConnectError(null);
     try {
-      const url = await invoke<string>('start_drops_login');
-      const landed = new Promise<boolean>((resolve) => {
-        const done = (ok: boolean) => {
-          window.removeEventListener('sn:drops-redirect', onLanded);
-          window.removeEventListener('sn:login-cancelled', onCancel);
-          clearTimeout(deadline);
-          resolve(ok);
-        };
-        const onLanded = () => done(true);
-        const onCancel = () => done(false);
-        // Long enough to sign in from scratch if the session had lapsed.
-        const deadline = setTimeout(() => done(false), 5 * 60 * 1000);
-        window.addEventListener('sn:drops-redirect', onLanded);
-        window.addEventListener('sn:login-cancelled', onCancel);
-      });
-      await invoke('open_mobile_login', { url, title: 'Connect drops' });
-      if (!(await landed)) {
+      if (!(await invoke<boolean>('connect_twitch_approval'))) {
         setConnectError('Sign-in was closed before Twitch approved drops.');
         return;
       }
-      await invoke('finish_mobile_drops_login');
+      // The reload rides on drops-login-complete (the listener below).
       addToast('Drops connected!', 'success');
-      await load(dropsQuery, true);
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       Logger.error('[Rewards] drops connect failed:', err);
       setConnectError(reason);
       addToast(`Drops connection failed: ${reason}`, 'error');
     } finally {
-      await invoke('close_mobile_login').catch(() => {});
       setConnecting(false);
     }
   };

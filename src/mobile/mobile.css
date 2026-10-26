@@ -399,8 +399,9 @@ body:has(.sn-mobile) .glass-input:focus {
    the glass family's: a lit rim all the way round that fades inward over about
    four pixels (nested inset strokes adding up to roughly 0.26 white at the
    outer pixel), and a dark hairline just outside it. The rim stays at the edge,
-   clear of the labels. */
-.sn-mobile .sn-segment-track {
+   clear of the labels. Unscoped: a bottom sheet portals outside .sn-mobile,
+   and this file loads only in the phone shell. */
+.sn-segment-track {
   border-radius: 9999px;
   background: linear-gradient(var(--color-surface), var(--color-surface)), var(--color-background);
   box-shadow:
@@ -433,7 +434,8 @@ body:has(.sn-mobile) .glass-input:focus {
 }
 /* On a light theme a dark pill sinks the theme's dark text into it, so the
    chosen item is a tint of that text instead. */
-:root[data-theme-tone='light'] .sn-mobile .glaze-selected {
+:root[data-theme-tone='light'] .sn-mobile .glaze-selected,
+:root[data-theme-tone='light'] .sn-segment-track .glaze-selected {
   background-color: color-mix(in srgb, var(--color-text-primary) 10%, transparent);
 }
 

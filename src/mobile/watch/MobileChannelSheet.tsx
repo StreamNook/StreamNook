@@ -207,7 +207,8 @@ const ChannelMedia: React.FC<{ channel: TwitchStream }> = ({ channel }) => {
           </button>
         </div>
       ) : (
-        <div className="pb-2 pt-3">
+        // flex: the track hugs its segments, as Kind's does above.
+        <div className="flex pb-2 pt-3">
           <SegmentedControl label="Period" segments={CLIP_PERIODS} value={period} onChange={setPeriod} />
         </div>
       )}

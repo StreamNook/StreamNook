@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { AnimatePresence, motion } from 'framer-motion';
-import { MessageSquareText, Search, X } from 'lucide-react';
+import { MessageSquareText, RefreshCw, Search, X } from 'lucide-react';
 import { useAppStore } from '../stores/AppStore';
 import { ChannelReward, ChannelRewardsSnapshot, RedeemOutcome, RewardBlock, UnlockedEmote } from '../types';
 
@@ -51,7 +51,7 @@ const StatusLine: React.FC<{ text: string; reason: RewardBlock | null; className
   <Tooltip content={title} describe>
     <span className={`flex items-start gap-1.5 min-w-0 text-xs leading-snug text-textSecondary ${className}`} role="status">
       <span className={`w-1.5 h-1.5 mt-[5px] rounded-full flex-shrink-0 ${statusDot(reason)}`} aria-hidden="true" />
-      <span className="line-clamp-2 break-words">{text}</span>
+      <span className="line-clamp-2 break-words tabular-nums">{text}</span>
     </span>
   </Tooltip>
 );
@@ -628,34 +628,6 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
         transition: motionOff ? { duration: 0 } : { duration: 0.16, ease: 'easeOut' as const },
       };
 
-  const balanceButton = (
-    <Tooltip content="Click to refresh" side="top">
-      <button
-        type="button"
-        onClick={handleRefreshBalance}
-        disabled={isRefreshingBalance}
-        aria-label={`Refresh ${customPointsName || 'channel points'} balance`}
-        className="flex items-center gap-1.5 rounded-md px-1.5 py-0.5 -mr-1.5 transition-colors hover:bg-surface-hover disabled:opacity-60 flex-shrink-0"
-      >
-        {customPointsIconUrl ? (
-          <img
-            src={customPointsIconUrl}
-            alt=""
-            className={`w-4 h-4 ${isRefreshingBalance ? 'animate-spin' : ''}`}
-          />
-        ) : (
-          <ChannelPointsIcon
-            size={16}
-            className={`text-accent-neon ${isRefreshingBalance ? 'animate-spin' : ''}`}
-          />
-        )}
-        <span className="text-base font-bold text-accent-neon">
-          {balance?.toLocaleString() ?? '--'}
-        </span>
-      </button>
-    </Tooltip>
-  );
-
   const errorOrEmpty = error ? (
     <div className="px-4 py-6 text-center">
       <p className="text-textSecondary text-sm">{error}</p>
@@ -693,14 +665,23 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
     >
       {isSheet ? (
         <>
-          {/* Header with balance */}
-          <div className={`px-1 pb-3 ${overlayOpen ? 'invisible' : ''}`}>
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-sm font-medium text-textSecondary truncate">
-                {pointsName}
-              </span>
-              {balanceButton}
-            </div>
+          {/* The balance leads, as on the Bits tab: art, number, the
+              channel's name for its points; refresh at the far end. */}
+          <div className={`mb-4 flex items-center gap-2.5 border-b border-borderSubtle pb-3 ${overlayOpen ? 'invisible' : ''}`}>
+            {pointsGlyph(24, customPointsIconUrl ? 'flex-shrink-0' : 'flex-shrink-0 text-accent-neon')}
+            <span className="min-w-0 truncate text-[13px] text-textSecondary">
+              <span className="text-[17px] font-bold tabular-nums text-textPrimary">{balance?.toLocaleString() ?? '--'}</span>{' '}
+              {pointsName}
+            </span>
+            <button
+              type="button"
+              onClick={handleRefreshBalance}
+              disabled={isRefreshingBalance}
+              aria-label={`Refresh ${customPointsName || 'channel points'} balance`}
+              className="-mr-2 ml-auto flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-textSecondary transition-colors active:bg-white/[0.08] disabled:opacity-60"
+            >
+              <RefreshCw size={16} className={isRefreshingBalance ? 'animate-spin' : ''} />
+            </button>
           </div>
 
           {/* Content. The sheet scrolls. */}
@@ -714,7 +695,9 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
             ) : (
               // Tiles, Twitch's own layout on a phone: the art, the cost under it,
               // the name on two lines, and why it is blocked when it is.
-              <div className="grid grid-cols-3 gap-2">
+              // -mx-1.5: the art lines up with the header and switcher; each
+              // tile's own padding is its press area.
+              <div className="-mx-1.5 grid grid-cols-3 gap-2">
                 {rewards.map((reward) => {
                   const available = reward.availability.redeemable;
                   const status = rewardStatusText(reward.availability, nowMs, 'label');
@@ -748,10 +731,14 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
                       </div>
                       <span
                         className={`flex items-center gap-1 text-[12px] font-semibold tabular-nums ${
-                          canAfford ? (available ? 'text-accent' : 'text-textSecondary') : 'text-red-400'
+                          canAfford
+                            ? available
+                              ? 'text-textPrimary'
+                              : 'text-textSecondary'
+                            : '[color:color-mix(in_srgb,var(--color-error)_70%,var(--color-text-primary))]'
                         }`}
                       >
-                        {pointsGlyph(12)}
+                        {pointsGlyph(12, canAfford && available ? 'text-accent' : '')}
                         {reward.view.cost_label}
                       </span>
                       <span
@@ -759,7 +746,15 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
                       >
                         {reward.title}
                       </span>
-                      {status && <StatusLine text={status} reason={reward.availability.reason} />}
+                      {/* A narrow tile puts the countdown on its own line
+                          rather than leaving the dot hanging at a line's end. */}
+                      {status && (
+                        <StatusLine
+                          text={status.replace(' · ', '\n')}
+                          reason={reward.availability.reason}
+                          className="whitespace-pre-line"
+                        />
+                      )}
                     </button>
                   );
                 })}

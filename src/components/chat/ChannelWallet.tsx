@@ -8,7 +8,8 @@
 // `WalletFace` sits in the composer row. `WalletMenu` opens above the whole
 // composer, like the insert menu: Points (the rewards menu) and Bits (the
 // cheer picker), with the switcher at the bottom when the channel has both.
-// `WalletSheet` is the same two tabs inside the phone's bottom sheet.
+// `WalletSheet` is the same two tabs inside the phone's bottom sheet, its
+// switcher on top.
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import ChannelPointsMenu from '../ChannelPointsMenu';
@@ -16,6 +17,7 @@ import { ChannelPointsIcon } from '../ChannelPointsIcon';
 import { Tooltip } from '../ui/Tooltip';
 import { BitsPane } from './BitsPane';
 import { MenuSwitcher, type MenuSwitcherTab } from './MenuSwitcher';
+import { SegmentedControl, type Segment } from '../../mobile/ui/SegmentedControl';
 import { SplitWalletGlyph, WalletChestGlyph } from './SplitWalletGlyph';
 import { useFitAbove } from '../../hooks/useFitAbove';
 import { useOutsidePress } from '../../hooks/useOutsidePress';
@@ -396,16 +398,27 @@ interface SheetProps {
   onInsert: (text: string) => void;
 }
 
+const SHEET_TABS: Segment<Tab>[] = [
+  { value: 'points', label: 'Points' },
+  { value: 'bits', label: 'Bits' },
+];
+
 /** The phone's wallet: the same two tabs as the desktop menu, inside the
- *  host's bottom sheet, the switcher along the bottom. */
+ *  host's bottom sheet, the switcher on top as the iPhone's wallet has it. It
+ *  scrolls away with the content, so nothing ever scrolls under it. */
 export function WalletSheet({ channelLogin, channelId, points, bits: bitsFace, onClose, onPointsRefresh, onEmotesChange, onInsert }: SheetProps) {
   const bits = bitsOn(bitsFace);
   const [tab, setTab] = useState<Tab>(points ? 'points' : 'bits');
   const shown = shownTab(tab, points, bits);
   const bitsState = useBitsPicker(channelLogin, channelId, shown === 'bits', bits?.balance);
-  const tabs = walletTabs(points, bits);
   return (
-    <div className="flex flex-col">
+    // pt-2: the sheet's grabber gets the same room below it as above it.
+    <div className="flex flex-col pt-2">
+      {points && bits && (
+        <div className="mb-4">
+          <SegmentedControl<Tab> label="Wallet" segments={SHEET_TABS} value={shown} onChange={setTab} fill />
+        </div>
+      )}
       {shown === 'points' && points ? (
         <ChannelPointsMenu
           variant="sheet"
@@ -420,6 +433,7 @@ export function WalletSheet({ channelLogin, channelId, points, bits: bitsFace, o
         />
       ) : bitsState ? (
         <BitsPane
+          variant="sheet"
           state={bitsState}
           onInsert={(text) => {
             onInsert(text);
@@ -428,11 +442,6 @@ export function WalletSheet({ channelLogin, channelId, points, bits: bitsFace, o
         />
       ) : (
         bitsLoading
-      )}
-      {tabs.length > 1 && (
-        <div className="sticky bottom-0 mt-2">
-          <MenuSwitcher label="Wallet" tabs={tabs} value={shown} onChange={setTab} />
-        </div>
       )}
     </div>
   );
