@@ -1,7 +1,7 @@
 import React, { useMemo, useState, useEffect, memo, useSyncExternalStore, type JSX } from 'react';
 import { Gift } from 'lucide-react';
 import { parseBadges } from '../services/twitchBadges';
-import { Tooltip } from './ui/Tooltip';
+import { Tooltip, type TooltipChildProps } from './ui/Tooltip';
 import { parseMessage, type LinkCardShape, type MessageSegment } from '../services/twitchChat';
 import { queueEmoteForDisplayCaching, getCachedEmoteUrl, getEmoteLookup, inlineEmoteTier, rememberRowEmoteFile, sevenTvTierUrl, EmoteSet } from '../services/emoteService';
 import { isDiskCopyUrl } from '../utils/cacheFileUrl';
@@ -281,6 +281,10 @@ const WideEmoteImg = (
 // just-uploaded emote has no file on the CDN yet). The emote shows as its name
 // in a muted style while the shared retry looks for any file that exists, then
 // swaps to that image. Every other emote renders its plain image.
+//
+// The emote's Tooltip clones this element to add its hover and focus handlers
+// (TooltipChildProps); they are passed on to whatever is drawn, or the hover
+// preview never opens.
 const RetryingEmoteImg = ({
   imgProps,
   kind,
@@ -291,6 +295,7 @@ const RetryingEmoteImg = ({
   wantStatic,
   quiet,
   placeholderStyle,
+  ...tooltipProps
 }: {
   imgProps: React.ImgHTMLAttributes<HTMLImageElement>;
   kind: 'plain' | 'growX' | 'wide';
@@ -303,7 +308,7 @@ const RetryingEmoteImg = ({
   /** An overlay emote draws nothing while it waits, so it cannot cover its base. */
   quiet: boolean;
   placeholderStyle: React.CSSProperties;
-}) => {
+} & TooltipChildProps) => {
   const [phase, setPhase] = useState<'image' | 'pending' | 'found' | 'dead'>('image');
   const [found, setFound] = useState<string | null>(null);
   const [slotId, setSlotId] = useState(retryId);
@@ -328,6 +333,7 @@ const RetryingEmoteImg = ({
     if (quiet) return null;
     return (
       <span
+        {...tooltipProps}
         data-emote-pending={phase === 'pending' ? '' : undefined}
         className="text-textSecondary opacity-60"
         style={placeholderStyle}
@@ -337,10 +343,11 @@ const RetryingEmoteImg = ({
     );
   }
 
-  let props = imgProps;
+  const base: React.ImgHTMLAttributes<HTMLImageElement> = { ...imgProps, ...tooltipProps };
+  let props = base;
   if (phase === 'image') {
     props = {
-      ...imgProps,
+      ...base,
       onError: (e) => {
         imgProps.onError?.(e);
         if (retryId && e.currentTarget.dataset.ladderDone) setPhase('pending');
@@ -349,7 +356,7 @@ const RetryingEmoteImg = ({
   } else if (found) {
     const url = wantStatic ? staticEmoteUrl(found) : found;
     props = {
-      ...imgProps,
+      ...base,
       src: url,
       srcSet: undefined,
       onError: (e) => {
