@@ -82,6 +82,7 @@ mod tests {
             layout: Default::default(),
             segments: vec![],
             metadata: Default::default(),
+            received_at_ms: None,
         };
         msg.tags.insert("reply-parent-msg-body".into(), "did\\syou\\ssee\\sthat".into());
         let n = notice_for(&msg, MentionKind::Reply, Some("https://static-cdn.jtvnw.net/v.png"));

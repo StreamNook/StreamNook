@@ -1367,6 +1367,7 @@ mod tests {
             layout: Default::default(),
             segments: vec![],
             metadata: Default::default(),
+            received_at_ms: None,
         };
         msg.tags.insert("reply-parent-msg-body".into(), "hello\\schat".into());
         assert_eq!(entry_for(&msg, MentionKind::Reply, NOW).reply_parent_text.as_deref(), Some("hello chat"));
