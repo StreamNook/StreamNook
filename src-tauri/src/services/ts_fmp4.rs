@@ -87,6 +87,15 @@ fn silent_aac_frame(channel_config: u8) -> Option<&'static [u8]> {
 const SPLICE_TOLERANCE_MIN: u64 = 22_500;
 /// Upper bound on a believable frame interval (1 fps) for cadence tracking.
 const MAX_FRAME_DELTA: u64 = 90_000;
+/// How far back (90 kHz) an input timestamp may step and still count as media
+/// we already converted, handed to us again. The relay matches segments by
+/// number only, so a stale CDN edge or a prefetch URL that still points at the
+/// last segment feeds old seconds back in; bridging them like a splice put
+/// them on the timeline again and the viewer watched the same seconds repeat.
+/// Those samples are dropped until the input passes where it was. A real
+/// encoder restart lands this close behind only by chance, and costs at most
+/// this much media when it does. ~10 s, five Twitch segments.
+const REPLAY_WINDOW: u64 = 900_000;
 
 // ──────────────────────────── demuxed sample types ────────────────────────────
 
@@ -99,6 +108,18 @@ struct VideoSample {
     /// AVCC payload (4-byte length-prefixed NAL units, AUD stripped; SPS/PPS
     /// kept in-band per the avc3 sample-entry contract).
     bytes: Vec<u8>,
+}
+
+/// Frames dropped by one open replay (see `REPLAY_WINDOW`).
+struct Replay {
+    video: u32,
+    audio: u32,
+}
+
+/// Is an input timestamp at or behind the last one, by no more than
+/// `REPLAY_WINDOW`? Decode timestamps only ever move forward within a stream.
+fn is_replay(input: u64, last: u64) -> bool {
+    input <= last && last - input <= REPLAY_WINDOW
 }
 
 struct AudioFrame {
@@ -366,6 +387,11 @@ pub struct Transmuxer {
     /// cadence unconditionally (the dropped tail is known lost media; even a
     /// sub-tolerance gap must not become a served hole).
     force_bridge_next: bool,
+    /// A replay in progress (see `REPLAY_WINDOW`): the video and audio frames
+    /// dropped so far, logged when fresh input closes it.
+    replay: Option<Replay>,
+    /// Last INPUT audio PES timestamp, the audio replay check.
+    last_audio_in: Option<u64>,
     pending_video: Vec<VideoSample>,
     pending_audio: Vec<AudioFrame>,
     /// Where the declared part durations (the playlist timeline) currently end,
@@ -406,6 +432,8 @@ impl Transmuxer {
             last_video_delta: DEFAULT_VIDEO_DUR,
             pending_delta: None,
             force_bridge_next: false,
+            replay: None,
+            last_audio_in: None,
             pending_video: Vec::new(),
             pending_audio: Vec::new(),
             declared_end: None,
@@ -463,6 +491,8 @@ impl Transmuxer {
         self.next_audio_dts = None;
         self.last_video_out = None;
         self.last_video_in = None;
+        self.last_audio_in = None;
+        self.end_replay();
         self.pending_delta = None;
         self.force_bridge_next = false;
         // The playlist itself jumps with the window, so the declared timeline
@@ -608,6 +638,22 @@ impl Transmuxer {
         let pts_in = unwrap33(Some(dts_in), raw_pts);
         self.video_clock = Some(dts_in);
 
+        // Media we already converted, fed in again: drop it (`REPLAY_WINDOW`).
+        if let Some(prev_in) = self.last_video_in {
+            if is_replay(dts_in, prev_in) {
+                let replay = self.replay.get_or_insert_with(|| {
+                    warn!(
+                        "[TsFmp4] replayed video: input went back {:.2}s (dts {dts_in} after {prev_in}); dropping it until the input passes where it was",
+                        (prev_in - dts_in) as f64 / 90_000.0
+                    );
+                    Replay { video: 0, audio: 0 }
+                });
+                replay.video += 1;
+                return;
+            }
+        }
+        self.end_replay();
+
         // Timeline bridging: served output must be ONE seamless timeline that
         // tiles with the declared part durations. Any input-clock discontinuity
         // beyond the cadence tolerance — an encoder-change splice's arbitrary
@@ -644,8 +690,11 @@ impl Transmuxer {
             let expected = (prev + self.last_video_delta) as i128;
             let tolerance = SPLICE_TOLERANCE_MIN.max(2 * self.last_video_delta) as i128;
             if self.force_bridge_next || (out - expected).abs() > tolerance {
-                info!(
-                    "[TsFmp4] video timeline discontinuity: bridging input dts {dts_in} to output {expected}"
+                // Warn level, so it is in every log a user sends: a backward
+                // jump here is the signature of replayed or restarted media.
+                warn!(
+                    "[TsFmp4] video timeline discontinuity: input jumped {:+.2}s; bridging input dts {dts_in} to output {expected}",
+                    (out - expected) as f64 / 90_000.0
                 );
                 self.splice_offset += (expected - out) as i64;
                 out = expected;
@@ -697,10 +746,29 @@ impl Transmuxer {
         }
     }
 
+    /// Close an open replay, logging what it dropped.
+    fn end_replay(&mut self) {
+        if let Some(r) = self.replay.take() {
+            warn!(
+                "[TsFmp4] replay over: dropped {} video and {} audio frames of repeated media",
+                r.video, r.audio
+            );
+        }
+    }
+
     fn audio_frames(&mut self, pes: PesPacket) {
         let Some(raw_pts) = pes.pts else { return };
         let base_in = unwrap33(self.audio_clock, raw_pts);
         self.audio_clock = Some(base_in);
+        if self.last_audio_in.is_some_and(|prev| is_replay(base_in, prev)) {
+            // Counted against the video replay when one is open; a lone audio
+            // replay is dropped the same way.
+            if let Some(replay) = self.replay.as_mut() {
+                replay.audio += 1;
+            }
+            return;
+        }
+        self.last_audio_in = Some(base_in);
         // Audio rides the video-anchored splice offset so a bridged program
         // keeps its own A/V alignment; the `next_audio_dts` continuity then
         // absorbs the sub-frame residue at the boundary.
@@ -2229,6 +2297,44 @@ mod tests {
             100_500,
             "output timeline continues unbroken"
         );
+    }
+
+    /// The field bug behind "a few segments keep repeating": the same media
+    /// handed in twice used to be bridged onto the timeline like a splice, so
+    /// it played again. It must be dropped, and the stream must carry on
+    /// seamlessly once the input passes where it was.
+    #[test]
+    fn replayed_media_is_dropped_not_played_again() {
+        let mut t = Transmuxer::new();
+        let _ = t.push_part(&test_segment(90_000, 1500)); // out 90000..93000
+        // The same segment again. Only the dangling 4th AU of the first copy
+        // (94500) comes out; every replayed frame is dropped.
+        let (frag2, _) = t.push_part(&test_segment(90_000, 1500)).expect("the dangler");
+        assert_eq!(video_tfdt(&frag2), 94_500);
+        assert_eq!(video_samples(&frag2), 1, "replayed frames must not be emitted");
+        assert!(t.replay.is_some(), "the replay is still open");
+        // Fresh media continues on the cadence with no bridge and no repeat.
+        let (frag3, _) = t.push_part(&test_segment(96_000, 1500)).expect("samples");
+        assert_eq!(video_tfdt(&frag3), 96_000, "the timeline carries on unbroken");
+        assert!(t.replay.is_none(), "fresh input closes the replay");
+    }
+
+    #[test]
+    fn only_a_short_step_back_counts_as_a_replay() {
+        assert!(is_replay(90_000, 90_000));
+        assert!(is_replay(2_000_000 - REPLAY_WINDOW, 2_000_000));
+        assert!(!is_replay(2_000_001, 2_000_000), "forward is never a replay");
+        assert!(
+            !is_replay(2_000_000 - REPLAY_WINDOW - 1, 2_000_000),
+            "a long way back is a restart, bridged as before"
+        );
+    }
+
+    fn video_samples(frag: &[u8]) -> u32 {
+        let moof = walk(&walk(frag)[0].1);
+        let trafs: Vec<_> = moof.iter().filter(|(k, _)| k == "traf").collect();
+        let v = walk(&trafs[0].1);
+        u32::from_be_bytes(find(&v, "trun")[4..8].try_into().unwrap())
     }
 
     #[test]

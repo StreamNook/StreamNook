@@ -689,6 +689,7 @@ mod platform {
 #[cfg(not(windows))]
 mod platform {
     use super::*;
+    #[cfg(not(target_os = "macos"))]
     use tauri_plugin_notification::NotificationExt;
 
     /// Title and text only: the rows and the small line join the text, and a
@@ -712,18 +713,46 @@ mod platform {
                 body.push_str(&line);
             }
         }
-        let mut builder = app.notification().builder().title(&notice.title);
-        if !body.is_empty() {
-            builder = builder.body(&body);
+        // macOS: notify-rust directly, on this blocking-pool thread. Through
+        // the plugin, show() ran notify-rust's delivery wait (up to 2 s per
+        // notification) inside an async task, so a burst of alerts (go-live
+        // notices at startup, a busy chat's mentions) could hold every async
+        // worker at once and commands stopped answering.
+        #[cfg(target_os = "macos")]
+        {
+            let _ = image;
+            static APP_SET: std::sync::Once = std::sync::Once::new();
+            APP_SET.call_once(|| {
+                let id = if tauri::is_dev() {
+                    "com.apple.Terminal".to_string()
+                } else {
+                    app.config().identifier.clone()
+                };
+                let _ = notify_rust::set_application(&id);
+            });
+            let mut n = notify_rust::Notification::new();
+            n.summary(&notice.title);
+            if !body.is_empty() {
+                n.body(&body);
+            }
+            n.auto_icon();
+            return n.show().map(|_| ()).map_err(|e| e.to_string());
         }
-        // Linux draws a picture from a file path; macOS shows the app icon.
-        #[cfg(target_os = "linux")]
-        if let Some(path) = rich.and_then(|r| r.logo_path.as_deref()).or(image) {
-            builder = builder.icon(path.display().to_string());
+        #[cfg(not(target_os = "macos"))]
+        {
+            let mut builder = app.notification().builder().title(&notice.title);
+            if !body.is_empty() {
+                builder = builder.body(&body);
+            }
+            // Linux draws a picture from a file path.
+            #[cfg(target_os = "linux")]
+            if let Some(path) = rich.and_then(|r| r.logo_path.as_deref()).or(image) {
+                builder = builder.icon(path.display().to_string());
+            }
+            #[cfg(not(target_os = "linux"))]
+            let _ = image;
+            return builder.show().map_err(|e| e.to_string());
         }
-        #[cfg(not(target_os = "linux"))]
-        let _ = image;
-        builder.show().map_err(|e| e.to_string())
     }
 }
 

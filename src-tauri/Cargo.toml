@@ -347,6 +347,10 @@ tauri-plugin-updater = "2"
 [target.'cfg(target_os = "macos")'.dependencies]
 # Login-keychain store for the token vault's key (the same items keyring 3 wrote).
 apple-native-keyring-store = { version = "1", features = ["keychain"] }
+# System notifications, called directly from the blocking pool: the plugin's
+# show() runs this crate's blocking delivery wait (up to 2 s each) on an async
+# worker. The version tauri-plugin-notification already resolves to.
+notify-rust = { version = "4.18", default-features = false }
 block2 = "0.6"
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = [

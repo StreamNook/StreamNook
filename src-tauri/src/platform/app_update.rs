@@ -42,6 +42,28 @@ pub struct SwapRequest {
     pub pid: u32,
     /// What to launch once the swap succeeds. Usually equal to `current`.
     pub relaunch: PathBuf,
+    /// Where the macOS helper appends what it did. The helper runs after the
+    /// app is gone, so this file is the only record of a swap that failed.
+    /// `None` writes nowhere.
+    pub log: Option<PathBuf>,
+}
+
+/// Suffix the macOS helper gives the installed bundle while the new one moves
+/// into place. Lives next to the app (same folder, same volume, so both moves
+/// are renames) and is removed once the new build is in.
+pub const MACOS_BACKUP_SUFFIX: &str = ".update-old";
+
+/// Is this bundle path one of Gatekeeper's App Translocation copies?
+///
+/// A quarantined app opened where it was downloaded (not moved there by
+/// Finder) runs from a read-only copy under
+/// `/private/var/folders/.../AppTranslocation/<uuid>/d/`. `current_exe()`
+/// points into that copy, so a swap would target a path that cannot be
+/// written and that disappears when the app quits.
+pub fn is_translocated(bundle: &Path) -> bool {
+    bundle
+        .components()
+        .any(|c| c.as_os_str() == "AppTranslocation")
 }
 
 /// The swap shape a platform needs. Three, not two.
@@ -98,20 +120,32 @@ pub fn render_script_for(req: &SwapRequest, flavor: SwapFlavor) -> String {
     let replacement = req.replacement.to_string_lossy();
     let relaunch = req.relaunch.to_string_lossy();
     let pid = req.pid;
+    let log = req
+        .log
+        .as_ref()
+        .map_or_else(|| "/dev/null".into(), |p| p.to_string_lossy());
 
-    // The unix wait loop is shared: `kill -0` tests for existence without
-    // signalling, and the bound matters because an unbounded `while kill -0`
-    // leaves a stray shell forever if the app never exits (on macOS that shell
-    // would also keep the old bundle's file handles alive).
-    let unix_wait = format!(
+    // The unix head is shared: a log, then the wait. No `set -e` in either
+    // unix script, so a refused step falls through to a relaunch instead of
+    // ending the script with no app on screen (the old macOS and Linux
+    // helpers both did that, silently). `kill -0` tests for existence without
+    // signalling. The app flushed its stores before starting the helper, so a
+    // process still here after 30 s is stuck in its exit and is killed; the
+    // wait still gives up eventually rather than leaving a stray shell.
+    let unix_head = format!(
         "#!/bin/sh\n\
-         set -e\n\
+         PATH=\"$PATH:/usr/bin:/bin:/usr/sbin:/sbin\"\n\
+         LOG=\"{log}\"\n\
+         log() {{ echo \"$(date '+%Y-%m-%d %H:%M:%S') $*\" >> \"$LOG\" 2>/dev/null; }}\n\
+         log \"update helper started, waiting for pid {pid} to exit\"\n\
          i=0\n\
          while kill -0 {pid} 2>/dev/null; do\n\
          \x20 i=$((i+1))\n\
-         \x20 [ \"$i\" -gt 120 ] && exit 1\n\
+         \x20 if [ \"$i\" -eq 30 ]; then log \"pid {pid} still running after 30 s, killing it\"; kill -9 {pid} 2>/dev/null; fi\n\
+         \x20 if [ \"$i\" -gt 40 ]; then log \"FAILED: pid {pid} would not exit\"; exit 1; fi\n\
          \x20 sleep 1\n\
-         done\n"
+         done\n\
+         log \"app exited after ${{i}} s\"\n"
     );
 
     match flavor {
@@ -134,29 +168,68 @@ pub fn render_script_for(req: &SwapRequest, flavor: SwapFlavor) -> String {
             )
         }
         SwapFlavor::MacOsBundle => {
+            // Never `rm -rf` the installed app before the new one is in place.
+            // This used to be `set -e; rm -rf; mv; open`: any refused step (a
+            // translocated or read-only copy, a folder the user cannot write,
+            // macOS App Management) ended the script before `open`, so the
+            // app quit for the update and never came back. Every path below
+            // ends by opening an app, the new one or the old one.
+            //
+            // Move aside, then move in, NOT `cp -R` over the top: a bundle is
+            // a directory, and copying into an existing one leaves stale files
+            // from the old version behind and can break the code signature.
             format!(
-                "{unix_wait}\
-             # rm -rf then mv, NOT `cp -R` over the top: a bundle is a directory,\n\
-             # and copying into an existing one leaves stale files from the old\n\
-             # version behind and can break the code signature.\n\
-             rm -rf \"{current}\"\n\
-             mv \"{replacement}\" \"{current}\"\n\
-             open \"{relaunch}\"\n\
+                "{unix_head}\
+             CURRENT=\"{current}\"\n\
+             NEW=\"{replacement}\"\n\
+             OLD=\"{current}{MACOS_BACKUP_SUFFIX}\"\n\
+             RELAUNCH=\"{relaunch}\"\n\
+             relaunch() {{\n\
+             \x20 if open \"$1\" >> \"$LOG\" 2>&1; then\n\
+             \x20   log \"reopened $1\"\n\
+             \x20 else\n\
+             \x20   log \"open failed for $1; starting its executable directly\"\n\
+             \x20   nohup \"$1/Contents/MacOS/StreamNook\" >/dev/null 2>&1 &\n\
+             \x20 fi\n\
+             }}\n\
+             rm -rf \"$OLD\" 2>/dev/null\n\
+             if ! mv \"$CURRENT\" \"$OLD\" >> \"$LOG\" 2>&1; then\n\
+             \x20 log \"FAILED: could not move the installed app aside; reopening the old version\"\n\
+             \x20 relaunch \"$CURRENT\"\n\
+             \x20 exit 1\n\
+             fi\n\
+             if ! mv \"$NEW\" \"$CURRENT\" >> \"$LOG\" 2>&1; then\n\
+             \x20 log \"FAILED: could not move the new app into place; restoring the old version\"\n\
+             \x20 rm -rf \"$CURRENT\" 2>/dev/null\n\
+             \x20 mv \"$OLD\" \"$CURRENT\" >> \"$LOG\" 2>&1 || log \"FAILED: could not restore the old app from $OLD\"\n\
+             \x20 relaunch \"$CURRENT\"\n\
+             \x20 exit 1\n\
+             fi\n\
+             xattr -dr com.apple.quarantine \"$CURRENT\" 2>/dev/null\n\
+             rm -rf \"$OLD\" >> \"$LOG\" 2>&1 || log \"could not remove $OLD\"\n\
+             log \"swapped in the new version\"\n\
+             relaunch \"$RELAUNCH\"\n\
              exit 0\n"
             )
         }
         SwapFlavor::LinuxAppImage => {
+            // An AppImage is ONE FILE, so `mv -f` alone replaces it. Deliberately
+            // no `rm` first: a failed mv leaves the old build exactly where it
+            // was, and the old build is then reopened.
+            //
+            // NOT `open`: that is macOS. An AppImage is executed directly, and
+            // nohup + & detaches it so this helper can exit without taking the
+            // freshly-launched app down with it.
             format!(
-                "{unix_wait}\
-             # An AppImage is ONE FILE, so `mv -f` alone replaces it. Deliberately\n\
-             # no `rm` first: with `set -e` a failed mv then leaves the old build\n\
-             # exactly where it was, instead of deleting it and leaving nothing.\n\
-             mv -f \"{replacement}\" \"{current}\"\n\
-             chmod +x \"{current}\"\n\
-             # NOT `open`: that is macOS. An AppImage is executed directly, and\n\
-             # nohup + & detaches it so this helper can exit without taking the\n\
-             # freshly-launched app down with it.\n\
+                "{unix_head}\
+             if mv -f \"{replacement}\" \"{current}\" >> \"$LOG\" 2>&1; then\n\
+             \x20 chmod +x \"{current}\"\n\
+             \x20 log \"swapped in the new version\"\n\
+             else\n\
+             \x20 log \"FAILED: could not replace {current}; reopening the old version\"\n\
+             fi\n\
              nohup \"{relaunch}\" >/dev/null 2>&1 &\n\
+             log \"reopened {relaunch}\"\n\
              exit 0\n"
             )
         }
@@ -242,6 +315,7 @@ mod tests {
             replacement: PathBuf::from("/tmp/new/StreamNook.app"),
             pid: 4242,
             relaunch: PathBuf::from("/Applications/StreamNook.app"),
+            log: None,
         }
     }
 
@@ -255,7 +329,7 @@ mod tests {
     fn swap_token(flavor: SwapFlavor) -> &'static str {
         match flavor {
             SwapFlavor::WindowsExe => "copy /y",
-            SwapFlavor::MacOsBundle => "rm -rf",
+            SwapFlavor::MacOsBundle => "mv \"$CURRENT\" \"$OLD\"",
             SwapFlavor::LinuxAppImage => "mv -f",
         }
     }
@@ -264,7 +338,7 @@ mod tests {
     fn relaunch_token(flavor: SwapFlavor) -> &'static str {
         match flavor {
             SwapFlavor::WindowsExe => "start ",
-            SwapFlavor::MacOsBundle => "open ",
+            SwapFlavor::MacOsBundle => "relaunch \"$RELAUNCH\"",
             SwapFlavor::LinuxAppImage => "nohup ",
         }
     }
@@ -348,22 +422,33 @@ mod tests {
                 SwapFlavor::WindowsExe => {
                     assert!(s.contains("goto wait"), "windows uses a goto loop")
                 }
-                // An unbounded `while kill -0` leaves a stray shell forever if
-                // the app never exits, holding the old bundle's handles open.
+                // Both unix helpers end a stuck exit themselves (stores are
+                // already flushed), then give up rather than spin forever.
                 _ => assert!(
-                    s.contains("-gt 120") && s.contains("exit 1"),
-                    "{flavor:?}: the unix wait loop must give up rather than \
-                     spin forever"
+                    s.contains("kill -9 4242") && s.contains("-gt 40") && s.contains("exit 1"),
+                    "{flavor:?}: the unix wait loop must end a stuck app, then give up"
                 ),
             }
         }
     }
 
     #[test]
-    fn a_macos_bundle_is_removed_not_copied_over() {
+    fn no_unix_helper_stops_before_reopening_an_app() {
+        for flavor in [SwapFlavor::MacOsBundle, SwapFlavor::LinuxAppImage] {
+            let cmds = commands_only(&render_script_for(&req(), flavor));
+            assert!(!cmds.contains("set -e"), "{flavor:?}: a failed step must fall through to a relaunch");
+        }
+        let linux = commands_only(&render_script_for(&req(), SwapFlavor::LinuxAppImage));
+        let fi = linux.find("
+fi").expect("the swap is one if/else");
+        assert!(linux.find("nohup ").unwrap() > fi, "the relaunch runs whether or not the swap worked");
+    }
+
+    #[test]
+    fn a_macos_bundle_is_moved_not_copied_over() {
         let cmds = commands_only(&render_script_for(&req(), SwapFlavor::MacOsBundle));
         assert!(
-            cmds.contains("rm -rf") && cmds.contains("mv "),
+            cmds.contains("mv \"$CURRENT\" \"$OLD\"") && cmds.contains("mv \"$NEW\" \"$CURRENT\""),
             "a .app is a DIRECTORY: copying into an existing one leaves stale \
              files from the old version and can break the signature"
         );
@@ -372,6 +457,151 @@ mod tests {
             "cp -R over an existing bundle is the bug this guards against; \
              found it in an executable line, not just the explanatory comment"
         );
+    }
+
+    /// The field bug: `set -e` plus `rm -rf` of the installed app meant one
+    /// refused step quit the script before `open`, so the app left for the
+    /// update and never came back.
+    #[test]
+    fn the_macos_script_never_deletes_the_installed_app_before_the_new_one_is_in() {
+        let cmds = commands_only(&render_script_for(&req(), SwapFlavor::MacOsBundle));
+        assert!(!cmds.contains("set -e"), "a failed step must fall through to a relaunch");
+        let aside = cmds.find("mv \"$CURRENT\" \"$OLD\"").expect("move aside");
+        let moved_in = cmds.find("mv \"$NEW\" \"$CURRENT\"").expect("move in");
+        assert!(aside < moved_in);
+        // `$CURRENT` is only ever deleted after it was moved aside, as the
+        // cleanup of a half-finished move in.
+        let deleted = cmds.find("rm -rf \"$CURRENT\"").expect("partial cleanup");
+        assert!(deleted > moved_in);
+        assert!(
+            !cmds.contains("rm -rf \"/Applications/StreamNook.app\""),
+            "the installed bundle is never deleted by its own path"
+        );
+    }
+
+    #[test]
+    fn every_macos_failure_reopens_an_app() {
+        let s = render_script_for(&req(), SwapFlavor::MacOsBundle);
+        let lines: Vec<&str> = s.lines().map(str::trim).collect();
+        let mut failures = 0;
+        for (i, line) in lines.iter().enumerate().skip(1) {
+            // The one-line `would not exit` give-up is the only other exit 1:
+            // the app is still running then, so there is nothing to reopen.
+            if *line == "exit 1" {
+                failures += 1;
+                assert!(
+                    lines[i - 1].starts_with("relaunch "),
+                    "an `exit 1` that does not reopen an app leaves the user \
+                     with nothing on screen: {:?}",
+                    &lines[i.saturating_sub(3)..=i]
+                );
+            }
+        }
+        assert_eq!(failures, 2, "both swap failures must be covered");
+    }
+
+    #[test]
+    fn the_macos_helper_logs_where_it_is_told() {
+        let mut r = req();
+        r.log = Some(PathBuf::from("/Users/a/Library/Application Support/StreamNook/logs/update-swap.log"));
+        let s = render_script_for(&r, SwapFlavor::MacOsBundle);
+        assert!(s.contains(
+            "LOG=\"/Users/a/Library/Application Support/StreamNook/logs/update-swap.log\""
+        ));
+        assert!(render_script_for(&req(), SwapFlavor::MacOsBundle).contains("LOG=\"/dev/null\""));
+    }
+
+    #[test]
+    fn translocated_copies_are_recognised() {
+        assert!(is_translocated(Path::new(
+            "/private/var/folders/xy/abc/T/AppTranslocation/1F2E-33/d/StreamNook.app"
+        )));
+        assert!(!is_translocated(Path::new("/Applications/StreamNook.app")));
+        assert!(!is_translocated(Path::new("/Users/a/Downloads/StreamNook.app")));
+    }
+
+    /// Runs the macOS script with `open` and `xattr` stubbed, so it works on
+    /// any unix: the success path swaps and reopens the new build, and a
+    /// failed move in puts the old build back and reopens that.
+    #[cfg(unix)]
+    #[test]
+    fn the_macos_script_really_swaps_or_restores() {
+        use std::process::{Command, Stdio};
+
+        fn run(dir: &Path, with_new: bool) -> (String, String) {
+            let _ = std::fs::remove_dir_all(dir);
+            let bin = dir.join("bin");
+            let apps = dir.join("Applications");
+            let staged = dir.join("staged");
+            for d in [&bin, &apps, &staged] {
+                std::fs::create_dir_all(d).unwrap();
+            }
+            let opened = dir.join("opened");
+            std::fs::write(
+                bin.join("open"),
+                format!("#!/bin/sh\necho \"$1\" > \"{}\"\n", opened.display()),
+            )
+            .unwrap();
+            std::fs::write(bin.join("xattr"), "#!/bin/sh\nexit 0\n").unwrap();
+            super::super::fs::make_executable(&bin.join("open")).unwrap();
+            super::super::fs::make_executable(&bin.join("xattr")).unwrap();
+
+            let current = apps.join("StreamNook.app");
+            std::fs::create_dir_all(current.join("Contents/MacOS")).unwrap();
+            std::fs::write(current.join("Contents/MacOS/StreamNook"), "old").unwrap();
+            let replacement = staged.join("StreamNook.app");
+            if with_new {
+                std::fs::create_dir_all(replacement.join("Contents/MacOS")).unwrap();
+                std::fs::write(replacement.join("Contents/MacOS/StreamNook"), "new").unwrap();
+            }
+
+            // A pid that is already gone, so the wait loop ends at once.
+            let mut gone = Command::new("/bin/sh").arg("-c").arg("exit 0").spawn().unwrap();
+            let pid = gone.id();
+            gone.wait().unwrap();
+
+            let script = render_script_for(
+                &SwapRequest {
+                    current: current.clone(),
+                    replacement,
+                    pid,
+                    relaunch: current.clone(),
+                    log: Some(dir.join("swap.log")),
+                },
+                SwapFlavor::MacOsBundle,
+            );
+            let script_path = dir.join("helper.sh");
+            std::fs::write(&script_path, script).unwrap();
+            let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default());
+            Command::new("/bin/sh")
+                .arg(&script_path)
+                .env("PATH", path)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .unwrap();
+            let installed =
+                std::fs::read_to_string(current.join("Contents/MacOS/StreamNook")).unwrap_or_default();
+            let opened = std::fs::read_to_string(&opened).unwrap_or_default();
+            assert!(
+                !apps.join(format!("StreamNook.app{MACOS_BACKUP_SUFFIX}")).exists(),
+                "the moved-aside bundle must not be left behind"
+            );
+            (installed, opened.trim().to_string())
+        }
+
+        let dir = std::env::temp_dir().join(format!("sn_mac_swap_{}", std::process::id()));
+        let current = dir.join("Applications").join("StreamNook.app");
+
+        let (installed, opened) = run(&dir, true);
+        assert_eq!(installed, "new", "the new build must be in place");
+        assert_eq!(opened, current.display().to_string(), "and reopened");
+
+        let (installed, opened) = run(&dir, false);
+        assert_eq!(installed, "old", "a failed move in must put the old build back");
+        assert_eq!(opened, current.display().to_string(), "and still reopen it");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The mirror image of the rule above, and the reason the two flavors cannot
@@ -485,6 +715,7 @@ mod tests {
                 replacement: staged.clone(),
                 pid: old.id(),
                 relaunch: installed.clone(),
+                log: None,
             },
             SwapFlavor::LinuxAppImage,
         );

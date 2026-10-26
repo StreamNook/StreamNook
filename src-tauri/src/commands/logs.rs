@@ -12,6 +12,15 @@ pub fn log_frontend_diag(message: String) {
     log::info!("[frontend] {}", message);
 }
 
+/// The main window's page is alive; `focused` = the viewer could see it.
+/// See `services::page_watchdog`.
+#[command]
+pub async fn page_heartbeat(window: crate::rt::Window, focused: bool) {
+    if window.label() == "main" {
+        crate::services::page_watchdog::beat(focused);
+    }
+}
+
 #[command]
 pub async fn log_message(
     level: String,

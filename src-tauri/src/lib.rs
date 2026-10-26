@@ -967,6 +967,10 @@ pub fn run() {
     // endpoint live in tauri.windows.conf.json, the only config that has them.
     #[cfg(windows)]
     let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    // A page whose WebKit content process died: recorded, then reloaded (the
+    // WebView2 renderer failure handling, on macOS).
+    #[cfg(target_os = "macos")]
+    let builder = builder.on_web_content_process_terminate(services::webkit_failures::content_process_terminated);
     #[cfg(not(target_os = "ios"))]
     let builder = builder
         .plugin(tauri_plugin_dialog::init())
@@ -1001,6 +1005,10 @@ pub fn run() {
             // exits inside the single-instance plugin), so this is the proof
             // that unlocks the file log and its "==== started ====" banner.
             services::file_log::arm();
+            // What the macOS update helper did last time, now that the log
+            // can take it.
+            commands::components::report_last_update_swap();
+            commands::components::log_install_context();
             // Linux builds the main window here instead of from the config
             // (tauri.linux.conf.json sets `create: false`), after every plugin
             // has registered its init script, and always opaque: the CEF
@@ -1193,6 +1201,8 @@ pub fn run() {
             // whole-process) and records them to the capture file. Started here,
             // inside the tokio runtime Tauri set up.
             services::runtime_watchdog::start();
+            // A main-window page that stops answering ([PageHang]).
+            services::page_watchdog::start(app.handle().clone());
             // Process-tree memory logging: one [Resource] line a minute in the
             // file log (rust, WebView2 browser/GPU/renderers/utilities, plugin
             // children), so a "StreamNook is at 800 MB" report can be read off
@@ -2085,6 +2095,8 @@ pub fn run() {
             youtube_user_profile,
             provider_membership,
             log_frontend_diag,
+            page_heartbeat,
+            note_playback_reload,
             kick_account_is_synced,
             report_kick_follows,
             report_kick_resolve_diag,

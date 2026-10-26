@@ -287,6 +287,8 @@ export const useMultiNookPlayer = ({
         // Loading starts when the manifest is parsed (startLoadOnManifest) and
         // after a pause only when the page says so (see pausePark).
         ...HLS_START_CONFIG,
+        // Standard MSE on macOS too (see the solo player's config).
+        preferManagedMediaSource: false,
         enableWorker: true,
         lowLatencyMode: isLowLatencyChannel, // True only when the tile's relay serves the LL-HLS origin (blocking reload + parts); hls.js's native LL engine owns pacing there. Otherwise false: native LL parsing against a plain proxied playlist causes cyclic starvation.
         startFragPrefetch: false, // Off for tiles: prefetch double-buffers TS chunks in the V8 heap, multiplied across every tile.

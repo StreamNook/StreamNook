@@ -101,6 +101,11 @@ const isChatOverlay = hash.startsWith('#/chat-overlay');
 const isPluginWindow = hash.startsWith('#/plugin/');
 const isEmotePalette = hash.startsWith('#/emote-palette');
 
+// The main window beats so a page that freezes leaves a [PageHang] line.
+if (!IS_MOBILE && !isProfileCard && !isMultiChat && !isChatOverlay && !isPluginWindow && !isEmotePalette) {
+  void import('./utils/pageHeartbeat').then((m) => m.startPageHeartbeat());
+}
+
 // The dedicated mobile shell (src/mobile/: bottom tabs, sheets, touch player,
 // drill-in settings) is the mobile DEFAULT. The in-place adapted App
 // (data-mobile CSS + MobileNav) remains reachable as an escape hatch: set

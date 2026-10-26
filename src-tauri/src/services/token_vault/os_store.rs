@@ -14,6 +14,15 @@ const ACCOUNT: &str = "StreamNook";
 
 /// How long a failed lookup is trusted before the store is asked again.
 const RETRY_AFTER: Duration = Duration::from_secs(30);
+/// A lookup that takes this long waited on a person: the macOS Keychain
+/// asks whether StreamNook may read its item whenever the app's signature
+/// changed (every update of an ad-hoc signed build). Every token read waits
+/// behind that dialog, so it is logged.
+const SLOW_ANSWER: Duration = Duration::from_secs(2);
+/// A slow lookup that still failed was refused or left unanswered at that
+/// dialog. Asking again every `RETRY_AFTER` would put the dialog back up
+/// every half minute, each time holding every token read behind it.
+const RETRY_AFTER_REFUSAL: Duration = Duration::from_secs(10 * 60);
 
 /// Tokens that builds on keyring 2 (which had native backends on by default)
 /// stored directly in the credential store, as (service, user). Nothing has
@@ -68,6 +77,7 @@ pub(super) fn system() -> &'static KeyStore {
 enum State {
     Unknown,
     Ready(Key),
+    /// Failed; not asked again before this instant.
     Unavailable(Instant),
 }
 
@@ -97,11 +107,12 @@ impl KeyStore {
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         let retrying = match *state {
             State::Ready(key) => return Some(key),
-            State::Unavailable(at) if at.elapsed() < self.retry_after => return None,
+            State::Unavailable(retry_at) if Instant::now() < retry_at => return None,
             State::Unavailable(_) => true,
             State::Unknown => false,
         };
-        match self.fetch(create) {
+        let (answer, took) = self.timed_fetch(create);
+        match answer {
             Ok(Some(key)) => {
                 *state = State::Ready(key);
                 Some(key)
@@ -116,7 +127,7 @@ impl KeyStore {
                 } else {
                     warn!("[VAULT] credential store unavailable: {e}");
                 }
-                *state = State::Unavailable(Instant::now());
+                *state = State::Unavailable(self.retry_at(took));
                 None
             }
         }
@@ -127,17 +138,18 @@ impl KeyStore {
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         match *state {
             State::Ready(_) => return true,
-            State::Unavailable(at) if at.elapsed() < self.retry_after => return false,
+            State::Unavailable(retry_at) if Instant::now() < retry_at => return false,
             _ => {}
         }
-        match self.fetch(false) {
+        let (answer, took) = self.timed_fetch(false);
+        match answer {
             Ok(Some(key)) => {
                 *state = State::Ready(key);
                 true
             }
             Ok(None) => true,
             Err(_) => {
-                *state = State::Unavailable(Instant::now());
+                *state = State::Unavailable(self.retry_at(took));
                 false
             }
         }
@@ -160,6 +172,31 @@ impl KeyStore {
                 }
             }
         }
+    }
+
+    /// `fetch`, timed: a slow answer is logged (see `SLOW_ANSWER`).
+    fn timed_fetch(&self, create: bool) -> (Result<Option<Key>, String>, Duration) {
+        let asked = Instant::now();
+        let answer = self.fetch(create);
+        let took = asked.elapsed();
+        if took >= SLOW_ANSWER {
+            warn!(
+                "[VAULT] the credential store took {:.1}s to answer (a keychain permission prompt?); sign-ins waited for it{}",
+                took.as_secs_f64(),
+                if answer.is_err() { ", then it refused" } else { "" }
+            );
+        }
+        (answer, took)
+    }
+
+    /// When a lookup that failed after `took` may be asked again.
+    fn retry_at(&self, took: Duration) -> Instant {
+        let wait = if took >= SLOW_ANSWER {
+            self.retry_after.max(RETRY_AFTER_REFUSAL)
+        } else {
+            self.retry_after
+        };
+        Instant::now() + wait
     }
 
     fn store(&self) -> keyring_core::Result<Arc<CredentialStore>> {
@@ -303,6 +340,15 @@ mod tests {
         );
     }
 
+    /// A refusal at the keychain prompt must not bring the prompt back every
+    /// half minute; a quick failure (locked keychain, no store) still retries soon.
+    #[test]
+    fn a_refused_prompt_waits_longer_before_asking_again() {
+        let store = KeyStore::new(mock_store, RETRY_AFTER);
+        let before = Instant::now();
+        assert!(store.retry_at(Duration::from_millis(5)) <= before + RETRY_AFTER + Duration::from_secs(1));
+        assert!(store.retry_at(SLOW_ANSWER) >= before + RETRY_AFTER_REFUSAL);
+    }
     #[test]
     fn a_store_that_will_not_open_reads_as_unreachable() {
         let store = KeyStore::new(fail_to_open, RETRY_AFTER);

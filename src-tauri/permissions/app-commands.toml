@@ -279,6 +279,8 @@ allow = [
   "youtube_user_profile",
   "provider_membership",
   "log_frontend_diag",
+  "page_heartbeat",
+  "note_playback_reload",
   "kick_account_is_synced",
   "get_kick_channel_meta",
   "get_youtube_channel_meta",

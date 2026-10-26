@@ -1059,6 +1059,11 @@ async fn install_bundle_from_status(
     let download_url = status.download_url.ok_or("No download URL available")?;
     let bundle_name = status.bundle_name.ok_or("No bundle name available")?;
 
+    // Refuse before downloading a bundle the swap could never put in place.
+    if cfg!(target_os = "macos") && !cfg!(debug_assertions) {
+        replaceable_app_bundle()?;
+    }
+
     // Emit progress
     let _ = app_handle.emit("bundle-update-progress", "Downloading bundle...");
 
@@ -1116,6 +1121,10 @@ async fn install_bundle_from_status(
     // in-app. A runtime check rather than cfg so the branch compiles (and the
     // helpers stay testable) on every platform.
     if cfg!(target_os = "macos") {
+        // Again, in case the app was moved during the download.
+        if !cfg!(debug_assertions) {
+            replaceable_app_bundle()?;
+        }
         return stage_macos_bundle(&app_handle, &temp_dir, &bundle_path).await;
     }
 
@@ -1477,6 +1486,117 @@ fn running_app_bundle() -> Result<PathBuf, String> {
     Ok(bundle)
 }
 
+/// The running `.app`, once it is known the swap helper can replace it.
+///
+/// Asked BEFORE the download and again before the app quits, because the
+/// helper runs after the app is gone and can only reopen the old version when
+/// it is refused. Saying so here keeps the app open with a reason on screen.
+fn replaceable_app_bundle() -> Result<PathBuf, String> {
+    let bundle = running_app_bundle()?;
+    if crate::platform::app_update::is_translocated(&bundle) {
+        return Err("macOS is running StreamNook from a temporary read-only copy because it \
+             was opened from the folder it was downloaded to. Quit StreamNook, move it \
+             into your Applications folder, open it from there, then update."
+            .to_string());
+    }
+    let parent = bundle
+        .parent()
+        .ok_or_else(|| format!("{} has no parent folder", bundle.display()))?;
+    // The swap renames the bundle inside this folder, so it must be writable.
+    let probe = parent.join(format!(".streamnook-update-probe-{}", std::process::id()));
+    match std::fs::File::create(&probe) {
+        Ok(_) => {
+            let _ = std::fs::remove_file(&probe);
+            Ok(bundle)
+        }
+        Err(e) => Err(format!(
+            "StreamNook can't replace itself in {} ({e}). Move StreamNook into your \
+             Applications folder, or download the new version from streamnook.app.",
+            parent.display()
+        )),
+    }
+}
+
+/// One warn-level line at startup saying where this copy runs from, so a
+/// user's log answers "which OS, and can it update itself" without asking:
+/// macOS version, a translocated copy, a folder the swap cannot write.
+/// Off the main thread (it runs `sw_vers`).
+pub fn log_install_context() {
+    if cfg!(any(target_os = "android", target_os = "ios")) {
+        return;
+    }
+    let _ = std::thread::Builder::new().name("install-context".into()).spawn(|| {
+        let arch = std::env::consts::ARCH;
+        if cfg!(target_os = "macos") {
+            let version = std::process::Command::new("/usr/bin/sw_vers")
+                .arg("-productVersion")
+                .output()
+                .ok()
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                .unwrap_or_else(|| "?".into());
+            match running_app_bundle() {
+                Ok(bundle) => {
+                    let translocated = crate::platform::app_update::is_translocated(&bundle);
+                    let update = match replaceable_app_bundle() {
+                        Ok(_) => "can update itself".to_string(),
+                        Err(e) => format!("cannot update itself: {e}"),
+                    };
+                    log::warn!(
+                        "[Startup] macOS {version} {arch}; app at {}{}; {update}",
+                        bundle.display(),
+                        if translocated { " (translocated copy)" } else { "" }
+                    );
+                }
+                Err(e) => log::warn!("[Startup] macOS {version} {arch}; {e}"),
+            }
+        } else {
+            // An AppImage runs from a temporary mount; $APPIMAGE is the file.
+            let exe = std::env::var("APPIMAGE").ok().unwrap_or_else(|| {
+                std::env::current_exe()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|_| "?".into())
+            });
+            log::warn!("[Startup] {} {arch}; running {exe}", std::env::consts::OS);
+        }
+    });
+}
+
+/// The macOS and Linux swap helper's own log, next to streamnook.log.
+fn update_swap_log_path() -> Option<PathBuf> {
+    crate::services::file_log::log_file_path()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("update-swap.log")))
+}
+
+/// Copy what the macOS or Linux swap helper wrote during the last update into
+/// streamnook.log, then set its file aside, so a failed swap shows up in the
+/// log a user sends. Also removes a moved-aside bundle a failed cleanup left.
+/// Called once the file log is armed (primary instance only).
+pub fn report_last_update_swap() {
+    if !cfg!(any(target_os = "macos", target_os = "linux")) {
+        return;
+    }
+    if let Some(bundle) = running_app_bundle().ok().filter(|_| cfg!(target_os = "macos")) {
+        let mut old = bundle.into_os_string();
+        old.push(crate::platform::app_update::MACOS_BACKUP_SUFFIX);
+        let old = PathBuf::from(old);
+        if old.is_dir() {
+            log::warn!("[Update] removing {} left by the last swap", old.display());
+            let _ = std::fs::remove_dir_all(&old);
+        }
+    }
+    let Some(path) = update_swap_log_path() else {
+        return;
+    };
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    for line in text.lines().rev().take(20).collect::<Vec<_>>().into_iter().rev() {
+        log::warn!("[Update] swap helper: {line}");
+    }
+    let _ = std::fs::rename(&path, path.with_file_name("update-swap.last.log"));
+}
+
 /// `std::process::exit` skips Tauri's `RunEvent::Exit`, so the window-state
 /// plugin would never auto-save (the relaunch forgets which monitor/size the
 /// window had) and nothing debounced would reach disk. Flush it all by hand
@@ -1484,12 +1604,25 @@ fn running_app_bundle() -> Result<PathBuf, String> {
 /// (position/size/maximized only). The window-state plugin is desktop-only,
 /// and no swap path runs on mobile (Android updates via the package installer).
 pub(crate) fn flush_stores_before_hard_exit(app_handle: &crate::rt::AppHandle) {
+    // On the main thread, and never waited on for long. From this worker the
+    // plugin held its cache lock while every window getter crossed to the main
+    // thread, and a move or resize event there takes the same lock: each side
+    // waited on the other and the app never exited for the update. A save
+    // that cannot finish in time is skipped (the window reopens where it was
+    // last saved) rather than holding the update.
     #[cfg(desktop)]
     {
         use tauri_plugin_window_state::{AppHandleExt, StateFlags};
-        let _ = app_handle.save_window_state(
-            StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED,
-        );
+        let (tx, rx) = std::sync::mpsc::channel();
+        let app = app_handle.clone();
+        let queued = app_handle.run_on_main_thread(move || {
+            let _ = tx.send(app.save_window_state(
+                StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED,
+            ));
+        });
+        if queued.is_err() || rx.recv_timeout(std::time::Duration::from_secs(2)).is_err() {
+            log::warn!("[Exit] window state not saved before the update restart (main thread busy)");
+        }
     }
     #[cfg(not(desktop))]
     let _ = app_handle;
@@ -1537,7 +1670,7 @@ pub async fn restart_to_apply_update(app_handle: crate::rt::AppHandle) -> Result
     if cfg!(target_os = "macos") {
         let staged = temp_dir.join("extracted").join("StreamNook.app");
         if staged.is_dir() {
-            let current = running_app_bundle()?;
+            let current = replaceable_app_bundle()?;
             crate::services::app_exit::record(
                 "update: macOS bundle swap staged, exiting so the helper can replace the app",
             );
@@ -1547,6 +1680,7 @@ pub async fn restart_to_apply_update(app_handle: crate::rt::AppHandle) -> Result
                 replacement: staged,
                 pid: std::process::id(),
                 relaunch: current,
+                log: update_swap_log_path(),
             };
             crate::platform::app_update::swap_and_relaunch(&request)
                 .map_err(|e| format!("Failed to start the bundle swap: {}", e))?;
@@ -1570,6 +1704,7 @@ pub async fn restart_to_apply_update(app_handle: crate::rt::AppHandle) -> Result
                 replacement: staged,
                 pid: std::process::id(),
                 relaunch: current,
+                log: update_swap_log_path(),
             };
             crate::platform::app_update::swap_and_relaunch(&request)
                 .map_err(|e| format!("Failed to start the AppImage swap: {}", e))?;

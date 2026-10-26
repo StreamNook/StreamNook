@@ -597,8 +597,10 @@ interface AppState {
    *  confirmation toast, for a reload the viewer did not ask for. `ifUrl` makes
    *  the restart a no-op when the stream's URL is no longer that one (a swap
    *  replaced the stream the caller saw). A call made while a restart is
-   *  running returns that restart. */
-  restartStream: (options?: { quiet?: boolean; ifUrl?: string }) => Promise<void>;
+   *  running returns that restart. `reason` names an AUTOMATIC reload (the
+   *  player recovering on its own); Rust counts those per channel and logs
+   *  them. Absent = the viewer asked. */
+  restartStream: (options?: { quiet?: boolean; ifUrl?: string; reason?: AutoReloadReason }) => Promise<void>;
   isRestartingStream: boolean;  // True from restart begin until the new stream URL lands; the player freezes its loader on this so it doesn't poll a dead backend
   /** Phone only: why a provider stream has no picture while its chat keeps
    *  running (it ended, is offline, or failed to start). Keyed by the stream's
@@ -783,6 +785,9 @@ function whenBootSettled(task: () => void): void {
 // store tells it what is playing and acts on what it decides; the player and
 // the chat panes stay here.
 
+/** Why the player reloaded a live stream by itself (see `note_playback_reload`). */
+export type AutoReloadReason = 'stall' | 'no-buffer' | 'gave-up';
+
 type StoreSet = (partial: Partial<AppState>) => void;
 type StoreGet = () => AppState;
 
@@ -957,9 +962,9 @@ async function applyOfflineDecision(
       // Live, and the player was stuck on a manifest the streamer reconnected
       // out of. The confirmation is over, so the restart is not refused as
       // mid-switch even if the resolving event has not landed yet.
-      Logger.info(`[WatchSession] ${ended.user_login} is live; reloading the stream in place`);
+      Logger.warn(`[WatchSession] ${ended.user_login} is live; reloading the stream in place`);
       set({ isAutoSwitching: false });
-      await get().restartStream({ quiet: true });
+      await get().restartStream({ quiet: true, reason: 'gave-up' });
       return;
     case 'notify':
       // The stream is confirmed over: its pause and the own-channel memory end with it.
@@ -2572,6 +2577,14 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     Logger.info(`[Stream] Restarting stream for ${currentStream.user_login}...`);
     trackActivity('Restarted stream');
+    if (options?.reason) {
+      // Counted and logged in Rust; repeated reloads turn low latency off
+      // for a while, which the start below then honors.
+      await invoke<boolean>('note_playback_reload', {
+        login: currentStream.user_login,
+        reason: options.reason,
+      }).catch(() => false);
+    }
 
     // Save current stream info
     const channel = currentStream.user_login;

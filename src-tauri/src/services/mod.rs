@@ -77,6 +77,8 @@ pub mod hls_projection;
 pub mod hls_seq_ids;
 #[cfg(windows)]
 pub mod webview2_failures;
+// macOS twin: a WebKit web content process that died (recorded, page reloaded).
+pub mod webkit_failures;
 // Desktop-only: Discord Rich Presence (IPC to a running Discord client).
 #[cfg(desktop)]
 pub mod discord_service;
@@ -145,6 +147,8 @@ pub mod provider_categories;
 pub mod provider_live_service;
 pub mod link_adapt;
 pub mod ll_origin;
+pub mod page_watchdog;
+pub mod playback_reload;
 pub mod theme_palette;
 pub mod settings_backups;
 pub mod install_marker;

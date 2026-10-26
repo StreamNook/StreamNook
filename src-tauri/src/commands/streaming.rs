@@ -1237,6 +1237,15 @@ pub fn set_experimental_low_latency(enabled: bool) {
     crate::services::ll_origin::set_disabled(!enabled);
 }
 
+/// The player is about to reload a live stream on its own (a stall, or a
+/// stream that gave up while still live). Counted and logged in Rust; returns
+/// true when repeated reloads turned low latency off for a while, so this
+/// reload plays the stable stream.
+#[tauri::command]
+pub async fn note_playback_reload(login: String, reason: String) -> bool {
+    crate::services::playback_reload::note(&login, &reason)
+}
+
 /// Report which video codecs this machine can decode and the user allows (families:
 /// "av1","hevc","h264"), most-preferred first. The frontend probes
 /// `MediaSource.isTypeSupported` and the `enhanced_codecs` setting and calls this at

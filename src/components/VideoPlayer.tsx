@@ -8,7 +8,7 @@ import Plyr from 'plyr';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Loader2, RefreshCcw, LayoutGrid, Shield, ShieldCheck, ShieldAlert, Clapperboard, Music, Share2, Check, VolumeX } from 'lucide-react';
 import { Heart, HeartBreak, ArrowLeft, CaretRight, X as XIcon } from 'phosphor-react';
-import { useAppStore } from '../stores/AppStore';
+import { useAppStore, type AutoReloadReason } from '../stores/AppStore';
 import { streamProvider } from '../utils/streamProvider';
 import { currentCategoryTarget } from '../utils/streamCategory';
 import { makeKey } from '../utils/providerKey';
@@ -1203,6 +1203,13 @@ const VideoPlayer = () => {
       // here so the LEVEL_LOADED correction and the stall ramp share one base.
       let providerCushionBase = PROVIDER_LIVE_SYNC_FALLBACK;
       const hls = new Hls({
+        // Standard MSE everywhere it exists, macOS included. hls.js otherwise
+        // picks WebKit's ManagedMediaSource on a Mac, which may tell it to stop
+        // buffering (`endstreaming`) whenever WebKit judges the buffer full
+        // enough; on a low-latency cushion of a second or two that drained the
+        // buffer into stalls and reloads. Windows (WebView2) and Linux have
+        // only standard MSE, so this makes the Mac player behave the same.
+        preferManagedMediaSource: false,
         // A custom logger sink ONLY when diagnostics are enabled; otherwise
         // `false` so hls.js does zero internal logging (no per-line string
         // formatting / mirror work). When on, hls.js explains every internal
@@ -1556,11 +1563,13 @@ const VideoPlayer = () => {
           resyncStopRef.current = null;
           stopFrozenWatch?.();
         },
-        restart: (why: string, quiet: boolean = true) => {
+        // `reason` marks an automatic reload, which Rust counts per channel.
+        restart: (why: string, quiet: boolean = true, reason?: AutoReloadReason) => {
           Logger.warn(why);
           void useAppStore.getState().restartStream({
             quiet,
             ifUrl: useAppStore.getState().streamUrl ?? undefined,
+            reason,
           });
         },
       });
@@ -1609,7 +1618,7 @@ const VideoPlayer = () => {
               lastRecover = Date.now();
               over = 0;
               if (end === 0) {
-                recover('[HLS] behind-live watchdog: nothing buffered, restarting the stream', false);
+                recover(`[HLS] behind-live watchdog: nothing buffered after ${fwd.toFixed(1)}s behind; reloading the stream`, true, 'no-buffer');
               } else {
                 const target = end - cushion;
                 if (target > v.currentTime + 0.5) {
@@ -1639,14 +1648,14 @@ const VideoPlayer = () => {
                 // A range strictly ahead of the stuck playhead with real content.
                 if (b.start(i) > v.currentTime + 0.1 && b.end(i) - b.start(i) > 0.5) {
                   const target = Math.max(b.start(i) + 0.1, b.end(i) - cushion);
-                  Logger.debug(`[HLS] behind-live watchdog: playhead frozen at ${v.currentTime.toFixed(1)}, snapping into live range -> ${target.toFixed(1)}`);
+                  Logger.warn(`[HLS] behind-live watchdog: playhead frozen at ${v.currentTime.toFixed(1)}, snapping into live range -> ${target.toFixed(1)}`);
                   v.currentTime = target;
                   snapped = true;
                   break;
                 }
               }
               if (!snapped) {
-                recover('[HLS] behind-live watchdog: playhead frozen with no reachable buffer, restarting to re-anchor to live', false);
+                recover(`[HLS] behind-live watchdog: playhead frozen at ${v.currentTime.toFixed(1)} for ~8s with no reachable buffer; reloading the stream`, true, 'stall');
               }
             }
           } else {
@@ -2030,8 +2039,8 @@ const VideoPlayer = () => {
               !isAutoSwitchingRef.current;
 
             if (shouldTriggerOffline) {
-              Logger.debug('[HLS] Multiple non-fatal errors with stalled fragments detected. Stream appears to have ended.');
-              Logger.debug(`[HLS] Non-fatal errors: ${nonFatalErrorCountRef.current}, Time since frag: ${timeSinceLastFrag}ms`);
+              Logger.warn('[HLS] Multiple non-fatal errors with stalled fragments detected. Stream appears to have ended.');
+              Logger.warn(`[HLS] Non-fatal errors: ${nonFatalErrorCountRef.current}, Time since frag: ${timeSinceLastFrag}ms`);
 
               // Reset error counts
               nonFatalErrorCountRef.current = 0;
@@ -2103,7 +2112,7 @@ const VideoPlayer = () => {
 
           // Check if we've exceeded max fatal errors - likely stream is offline
           if (fatalErrorCountRef.current >= maxFatalErrorsBeforeOffline && !isAutoSwitchingRef.current) {
-            Logger.debug('[HLS] Max fatal errors reached, stream appears to be offline. Triggering auto-switch...');
+            Logger.warn(`[HLS] Max fatal errors reached (last: ${data.type}/${data.details}), stream appears to be offline. Triggering auto-switch...`);
 
             // Reset error count
             fatalErrorCountRef.current = 0;
@@ -2137,7 +2146,7 @@ const VideoPlayer = () => {
                   (!hasPlayedSuccessfully || timeSinceStart > minPlayTimeBeforeOfflineMs);
 
                 if (shouldTriggerOffline && !isAutoSwitchingRef.current) {
-                  Logger.debug('[HLS] Multiple manifest errors, stream likely offline. Triggering auto-switch...');
+                  Logger.warn(`[HLS] Multiple manifest errors (last: ${data.details}), stream likely offline. Triggering auto-switch...`);
                   Logger.debug(`[HLS] Has played: ${hasPlayedSuccessfully}, Time since start: ${timeSinceStart}ms`);
                   manifestErrorCountRef.current = 0;
                   fatalErrorCountRef.current = 0;

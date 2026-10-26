@@ -1149,6 +1149,23 @@ pub fn set_disabled(disabled: bool) {
     DISABLED.store(disabled, Ordering::Relaxed);
 }
 
+/// Until when the TS low-latency path is off regardless of the setting
+/// (`playback_reload`: automatic reloads kept coming). CMAF still runs, as
+/// with the setting off, since it has no other path.
+static HOLD_OFF_UNTIL: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+
+/// Serve TS streams through the stable whole-segment path for `d`.
+pub fn hold_off(d: Duration) {
+    *HOLD_OFF_UNTIL.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now() + d);
+}
+
+fn held_off() -> bool {
+    HOLD_OFF_UNTIL
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .is_some_and(|until| std::time::Instant::now() < until)
+}
+
 /// The viewer's target latency (None or a non-positive value is Auto). AVPlayer
 /// reads it as the hold-back of the next playlist it loads.
 /// The viewer's target latency in seconds, or None at Auto.
@@ -1646,7 +1663,11 @@ impl LlOrigin {
         // and always let CMAF through (native passthrough, the proven path). This is
         // what lets a region-unlocked 1440p tier play without the user turning on the
         // setting.
-        let force_disabled = DISABLED.load(Ordering::Relaxed);
+        let held = held_off();
+        if held && !DISABLED.load(Ordering::Relaxed) {
+            warn!("[LLOrigin] low latency held off after repeated reloads; using the stable path for TS");
+        }
+        let force_disabled = DISABLED.load(Ordering::Relaxed) || held;
         let gen = self.generation.load(Ordering::SeqCst);
         let client = http_client();
 
