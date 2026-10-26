@@ -98,6 +98,7 @@ const CHAPTERS_BUTTON_HTML =
 
 import { open as openExternalUrl } from '@tauri-apps/plugin-shell';
 import { LIVE_BUTTON_HTML, paintLiveButton, type LiveButtonState } from '../utils/liveButton';
+import { liveWake } from '../utils/liveWake';
 import { setActiveVideo } from '../utils/activeVideo';
 import { isWindowHidden } from '../utils/windowVisibility';
 import {
@@ -2598,11 +2599,15 @@ const VideoPlayer = () => {
 
     const video = videoElement;
 
-    // Wakes the readout loop, which sleeps while the player is paused.
-    const wakeLiveTime = () => {
-      if (progressUpdateIntervalRef.current !== null) return;
-      liveTextComputedAtRef.current = 0;
-      progressUpdateIntervalRef.current = requestAnimationFrame(updateLiveTimeDisplay);
+    // Wakes the readout loop, which sleeps while the player is paused. A
+    // play, pause or seek also reopens the 250 ms gate when a frame is already
+    // pending, so that frame recomputes the readout and the LIVE button.
+    const wakeLiveTime = (e: Event) => {
+      const wake = liveWake(e.type, progressUpdateIntervalRef.current !== null);
+      if (wake.resetGate) liveTextComputedAtRef.current = 0;
+      if (wake.schedule) {
+        progressUpdateIntervalRef.current = requestAnimationFrame(updateLiveTimeDisplay);
+      }
     };
     const wakeEvents = ['play', 'pause', 'seeking', 'seeked', 'timeupdate'] as const;
     for (const ev of wakeEvents) video.addEventListener(ev, wakeLiveTime);
