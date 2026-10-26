@@ -110,6 +110,7 @@ import {
   type PausePark,
 } from '../utils/pausePark';
 import { followLiveAfterResync } from '../utils/liveResync';
+import { HLS_START_CONFIG, resumeLoadAfterRecover, startLoadOnManifest } from '../utils/hlsStartLoad';
 import { watchStalls } from '../utils/stallWatchdog';
 import { createRecovery } from '../utils/recovery';
 import { attachPauseRoutes } from '../utils/pauseRoutes';
@@ -1246,6 +1247,9 @@ const VideoPlayer = () => {
             llDiagNote(msg);
           },
         } : false,
+        // Loading starts when the manifest is parsed (startLoadOnManifest) and
+        // after a pause only when the page says so (see pausePark).
+        ...HLS_START_CONFIG,
         enableWorker: true,
         lowLatencyMode: isLowLatencyChannel, // Per-channel: true only when the relay LL-HLS origin is serving parts. Universal true would activate hls.js's playback-rate controller on normal channels and fight liveLatencyGovernor.
         startFragPrefetch: false, // Disabled: prefetching double-buffers massive TS chunks in V8 heap
@@ -1646,6 +1650,7 @@ const VideoPlayer = () => {
 
       // HLS.js event handlers
       hls.on(Hls.Events.MANIFEST_PARSED, (_event, data) => {
+        startLoadOnManifest(hls, park);
         Logger.debug('[HLS] Manifest parsed, starting playback');
         Logger.debug('[HLS] Available quality levels:', data.levels.map(l => `${l.height}p @ ${l.bitrate}bps`).join(', '));
 
@@ -2056,6 +2061,7 @@ const VideoPlayer = () => {
                 if (hlsRef.current !== hls) return; // the stream moved on meanwhile
                 if (!restart) {
                   hls.recoverMediaError();
+                  resumeLoadAfterRecover(hls, park);
                   return;
                 }
                 Logger.warn('[HLS] codec failed to decode; restarting on a tier this device plays');
@@ -2128,6 +2134,7 @@ const VideoPlayer = () => {
             case Hls.ErrorTypes.MEDIA_ERROR:
               Logger.debug('[HLS] Fatal media error, attempting recovery...');
               hls.recoverMediaError();
+              resumeLoadAfterRecover(hls, park);
               break;
             default:
               Logger.error('[HLS] Fatal error, cannot recover. Recreating player...');

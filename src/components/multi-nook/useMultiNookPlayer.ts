@@ -34,6 +34,7 @@ import {
   type PausePark,
 } from '../../utils/pausePark';
 import { followLiveAfterResync } from '../../utils/liveResync';
+import { HLS_START_CONFIG, resumeLoadAfterRecover, startLoadOnManifest } from '../../utils/hlsStartLoad';
 import { watchStalls } from '../../utils/stallWatchdog';
 import { createRecovery } from '../../utils/recovery';
 import { isViewerPlay, shouldKeepHeldPause } from './keepHeldPause';
@@ -283,6 +284,9 @@ export const useMultiNookPlayer = ({
     if (Hls.isSupported()) {
       const hls = new Hls({
         debug: false,
+        // Loading starts when the manifest is parsed (startLoadOnManifest) and
+        // after a pause only when the page says so (see pausePark).
+        ...HLS_START_CONFIG,
         enableWorker: true,
         lowLatencyMode: isLowLatencyChannel, // True only when the tile's relay serves the LL-HLS origin (blocking reload + parts); hls.js's native LL engine owns pacing there. Otherwise false: native LL parsing against a plain proxied playlist causes cyclic starvation.
         startFragPrefetch: false, // Off for tiles: prefetch double-buffers TS chunks in the V8 heap, multiplied across every tile.
@@ -419,6 +423,7 @@ export const useMultiNookPlayer = ({
       hls.attachMedia(video);
 
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        startLoadOnManifest(hls, park);
         Logger.debug(`[MultiNook-${streamId}] Manifest parsed, starting playback`);
         
         // Initialize Plyr once Media is attached
@@ -583,6 +588,7 @@ export const useMultiNookPlayer = ({
                 } else {
                   setError('Media error');
                   hls.recoverMediaError();
+                  resumeLoadAfterRecover(hls, park);
                 }
               });
             return;
@@ -596,6 +602,7 @@ export const useMultiNookPlayer = ({
             case Hls.ErrorTypes.MEDIA_ERROR:
               setError('Media error');
               hls.recoverMediaError();
+              resumeLoadAfterRecover(hls, park);
               break;
             default:
               setError('Playback error');
