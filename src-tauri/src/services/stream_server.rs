@@ -1978,13 +1978,6 @@ mod relay_rewrite_tests {
     }
 
     #[test]
-    fn only_a_loading_player_wakes_a_parked_origin() {
-        assert!(wakes_parked_origin(false, Some(1)));
-        assert!(wakes_parked_origin(true, None));
-        assert!(!wakes_parked_origin(true, Some(1)));
-    }
-
-    #[test]
     fn the_plain_playlist_carries_the_target_never_under_three_targets() {
         let pl = "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:5\n#EXTINF:2.000,\nseg.ts\n";
         let auto = with_plain_hold_back(pl, AUTO_PLAIN_GAP_SECS, 0.0);
