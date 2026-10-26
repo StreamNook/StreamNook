@@ -1200,6 +1200,19 @@ pub fn get_relay_live_distance(
     crate::services::relay_probe::report(player_pdt_ms, target_ms, playlist_behind_ms)
 }
 
+/// Ask a low-latency origin to drop its held window and rebuild it at the live
+/// edge, the rebuild a park and unpark gives. The page asks before it loads again
+/// after a pause it judged too long to resume from, so the play never gets the
+/// window held across the pause. `tile` is a MultiNook tile id; `None` is the
+/// solo player. False when no origin is armed for it.
+#[tauri::command]
+pub async fn relay_rebuild_live_edge(tile: Option<String>) -> bool {
+    match tile {
+        Some(id) => crate::services::multi_nook_server::rebuild_tile_at_edge(&id),
+        None => crate::services::ll_origin::rebuild_at_edge(),
+    }
+}
+
 /// Enable or disable the experimental parts-based low-latency origin at runtime.
 /// Default is DISABLED: the stable whole-segment path serves every stream, which plays
 /// cleanly on all channels and hardware. Turning this on lets the synthesized spec

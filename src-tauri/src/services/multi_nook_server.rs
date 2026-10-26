@@ -172,6 +172,17 @@ fn tile_parked_at(stream_id: &str, now: u64) -> bool {
     last_request.is_some_and(|last| ll_origin::idle_for_park(last, now, span))
 }
 
+/// The tile's origin, rebuilt at the live edge (see `LlOrigin::rebuild_at_edge`).
+/// False when the tile has no origin armed.
+pub fn rebuild_tile_at_edge(stream_id: &str) -> bool {
+    let origin = TILE_ORIGINS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(stream_id)
+        .cloned();
+    origin.is_some_and(|origin| origin.rebuild_at_edge())
+}
+
 /// A player asked a relay of its own (YouTube's local HLS, TikTok) for this
 /// tile's playlist. The tile is not parked while these keep arriving.
 pub(crate) fn note_tile_playlist_request(stream_id: &str) {

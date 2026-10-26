@@ -391,6 +391,10 @@ pub struct LlOrigin {
     /// instead of being handed the window held across the park. True at
     /// creation, after a stop, and while parked.
     fresh_after_unpark: AtomicBool,
+    /// Set by `rebuild_at_edge`, taken by the reader it starts: that reader
+    /// drops the held window and rebuilds it from the upstream's live edge,
+    /// whether or not the window already reaches the upstream.
+    force_rebuild: AtomicBool,
     /// When a player last asked for the playlist (`mono_ms`; 0 = not yet). A
     /// player that stopped loading lets the reader park the origin (`PARK_IDLE_MS`).
     last_playlist_ms: AtomicU64,
@@ -438,9 +442,10 @@ static TARGET_GAP_MS: AtomicU64 = AtomicU64::new(0);
 /// A player that has not asked for the playlist this long has stopped loading
 /// (the desktop players stop 2 s into a pause): the reader parks the origin and
 /// the next request wakes it (stream_server, multi_nook_server). The desktop
-/// players start over at the live edge after a pause of the same span counted
-/// from the pause (pausePark.ts RESYNC_AFTER_PAUSE_MS), so a player that
-/// resumes before then never finds its origin parked.
+/// players start over at the live edge after a shorter pause (pausePark.ts
+/// RESYNC_AFTER_PAUSE_MS) and ask the origin to rebuild its window first
+/// (`rebuild_at_edge`), so a resync never plays the window held across the
+/// pause whether or not the origin has parked yet.
 const PARK_IDLE_MS: u64 = 30_000;
 
 /// `PARK_IDLE_MS`, or `SN_PARK_IDLE_MS` from the environment when it holds a
@@ -1187,6 +1192,7 @@ impl LlOrigin {
             upstream: Mutex::new(None),
             parked: AtomicBool::new(false),
             fresh_after_unpark: AtomicBool::new(true),
+            force_rebuild: AtomicBool::new(false),
             last_playlist_ms: AtomicU64::new(0),
             start_lock: tokio::sync::Mutex::new(()),
             closed: AtomicBool::new(false),
@@ -1344,6 +1350,7 @@ impl LlOrigin {
         *self.apple_part_target.lock().unwrap() = None;
         self.parked.store(false, Ordering::SeqCst);
         self.fresh_after_unpark.store(true, Ordering::SeqCst);
+        self.force_rebuild.store(false, Ordering::SeqCst);
         *self.upstream.lock().unwrap() = None;
         self.last_playlist_ms.store(0, Ordering::SeqCst);
         drop(task);
@@ -1438,6 +1445,45 @@ impl LlOrigin {
         *task = Some(tokio::spawn(run_reader(self.clone(), url, http_client(), gen, true)));
         info!("[LLOrigin] unparked; reader back at the live edge");
         true
+    }
+
+    /// Drop the held window and rebuild it from the upstream's live edge, the
+    /// rebuild a park and unpark gives, parked or not. The current reader is
+    /// replaced by one that rebuilds before it publishes; a playlist request
+    /// waits for that publish (`fresh_after_unpark`) and is never handed the
+    /// window held before. False when the origin is closed, inactive or has no
+    /// upstream to read.
+    pub fn rebuild_at_edge(self: &Arc<Self>) -> bool {
+        let mut task = self.reader_task.lock().unwrap();
+        if self.closed.load(Ordering::SeqCst) || !self.is_active() {
+            return false;
+        }
+        let Some(url) = self.upstream.lock().unwrap().clone() else {
+            return false;
+        };
+        self.parked.store(false, Ordering::SeqCst);
+        self.note_playlist_request();
+        let gen = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        if let Some(h) = task.take() {
+            h.abort();
+        }
+        if let Some(t) = self.transmux.lock().unwrap().as_mut() {
+            t.reset_assembly();
+        }
+        self.force_rebuild.store(true, Ordering::SeqCst);
+        self.fresh_after_unpark.store(false, Ordering::SeqCst);
+        *task = Some(tokio::spawn(run_reader(self.clone(), url, http_client(), gen, true)));
+        info!("[LLOrigin] page asked for a rebuild; reader back at the live edge");
+        true
+    }
+
+    /// Whether the reader started as generation `gen` is to rebuild the window
+    /// from the live edge. Taken under the reader lock, so a reader that a newer
+    /// start or rebuild already replaced never takes the request meant for its
+    /// successor.
+    fn take_force_rebuild(&self, gen: u64) -> bool {
+        let _task = self.reader_task.lock().unwrap();
+        self.generation.load(Ordering::SeqCst) == gen && self.force_rebuild.swap(false, Ordering::SeqCst)
     }
 
     /// The reader started as generation `gen` has brought the window up to the
@@ -1899,6 +1945,9 @@ async fn run_reader(
     // Consecutive failing playlist polls; reset on any good poll. Drives offline
     // deactivation so a permanently-dead upstream stops being served forever.
     let mut health = PlaylistHealth::new(after_unpark);
+    // The page asked for the window to be rebuilt from the live edge: stays set
+    // until the rebuild has replaced the window, across retried polls.
+    let mut forced = origin.take_force_rebuild(gen);
     loop {
         if gen != origin.generation.load(Ordering::SeqCst) {
             return;
@@ -2099,7 +2148,7 @@ async fn run_reader(
         if origin.live_edge.lock().unwrap().is_none() {
             return;
         }
-        if already {
+        if already && !forced {
             // The window already reaches the upstream's in-progress segment.
             origin.mark_fresh(gen);
             tokio::time::sleep(Duration::from_millis(250)).await;
@@ -2123,12 +2172,13 @@ async fn run_reader(
                 None => return,
             }
         };
-        if newest_in_window + 1 < inprogress_sn {
+        if forced || newest_in_window + 1 < inprogress_sn {
             let oldest_published = match up.published.first() {
                 Some((sn, _, _)) => *sn,
                 None => unreachable!("published is non-empty (checked above)"),
             };
-            let (rebuild, fetch) = plan_catch_up(newest_in_window, oldest_published, inprogress_sn);
+            let (rebuild, fetch) =
+                catch_up_plan(forced, newest_in_window, oldest_published, inprogress_sn);
             // A rebuild jumps over segments the transmuxer never saw; completing
             // its half-assembled pre-gap PES with post-gap bytes would emit one
             // garbage sample, so drop that state before converting anything.
@@ -2196,6 +2246,7 @@ async fn run_reader(
                 }
             }
             origin.wake_serves();
+            forced = false;
         }
         // The window now runs up to the upstream's in-progress segment (caught
         // up, rebuilt, or already there): a request held since an unpark may go.
@@ -2352,6 +2403,25 @@ fn plan_catch_up(
         (true, start..inprogress_sn)
     } else {
         (false, first_missing..inprogress_sn)
+    }
+}
+
+/// `plan_catch_up`, except that a `forced` plan (the page asked for a rebuild)
+/// treats no segment as held: the window is always rebuilt from the live edge,
+/// with the same minimal backfill, however current the held window looks.
+fn catch_up_plan(
+    forced: bool,
+    window_newest: u64,
+    oldest_published: u64,
+    inprogress_sn: u64,
+) -> (bool, std::ops::Range<u64>) {
+    if forced {
+        let start = inprogress_sn
+            .saturating_sub(REBUILD_BACKFILL)
+            .max(oldest_published);
+        (true, start..inprogress_sn)
+    } else {
+        plan_catch_up(window_newest, oldest_published, inprogress_sn)
     }
 }
 
@@ -3577,6 +3647,12 @@ pub fn unpark() -> bool {
     SOLO.unpark()
 }
 
+/// The main player's origin, rebuilt at the live edge (see
+/// `LlOrigin::rebuild_at_edge`). False when none is armed.
+pub fn rebuild_at_edge() -> bool {
+    SOLO.rebuild_at_edge()
+}
+
 pub fn is_parked() -> bool {
     SOLO.is_parked()
 }
@@ -4195,6 +4271,80 @@ mod tests {
         let (rebuild, fetch) = plan_catch_up(0, 8546, 8553);
         assert!(rebuild);
         assert_eq!(fetch.collect::<Vec<_>>(), vec![8552]);
+    }
+
+    #[test]
+    fn a_forced_catch_up_rebuilds_from_the_live_edge_whatever_the_window_holds() {
+        // The window reaches the upstream (newest 8552, in-progress 8553): not
+        // forced there is nothing to fetch, forced it is rebuilt behind the edge.
+        let (rebuild, fetch) = catch_up_plan(false, 8552, 8540, 8553);
+        assert!(!rebuild);
+        assert_eq!(fetch.collect::<Vec<_>>(), Vec::<u64>::new());
+        let (rebuild, fetch) = catch_up_plan(true, 8552, 8540, 8553);
+        assert!(rebuild);
+        assert_eq!(fetch.collect::<Vec<_>>(), vec![8552]);
+
+        // The backfill never starts before the oldest published segment.
+        let (rebuild, fetch) = catch_up_plan(true, 8552, 8552, 8553);
+        assert!(rebuild);
+        assert_eq!(fetch.collect::<Vec<_>>(), vec![8552]);
+
+        // Not forced keeps `plan_catch_up`'s answer, small hole and deep hole.
+        let (rebuild, fetch) = catch_up_plan(false, 8551, 8540, 8553);
+        assert!(!rebuild);
+        assert_eq!(fetch.collect::<Vec<_>>(), vec![8552]);
+        let (rebuild, fetch) = catch_up_plan(false, 8500, 8540, 8553);
+        assert!(rebuild);
+        assert_eq!(fetch.collect::<Vec<_>>(), vec![8552]);
+    }
+
+    #[tokio::test]
+    async fn rebuild_at_edge_replaces_the_reader_and_serves_no_window_held_before() {
+        let origin = LlOrigin::new(6);
+        let short = Duration::from_millis(50);
+        assert!(!origin.rebuild_at_edge(), "an inactive origin has nothing to rebuild");
+        assert!(origin.reader_task.lock().unwrap().is_none());
+
+        // Nothing listens here, so the restarted reader publishes nothing.
+        origin.arm_for_test("http://127.0.0.1:1/live.m3u8");
+        assert!(matches!(
+            origin.serve_playlist_held_within(Some(1), Some(0), short).await,
+            PlaylistServe::Playlist(_)
+        ));
+        let generation = origin.generation.load(Ordering::SeqCst);
+        assert!(origin.rebuild_at_edge());
+        assert!(origin.has_reader_for_test());
+        assert!(origin.generation.load(Ordering::SeqCst) > generation);
+        assert!(origin.force_rebuild.load(Ordering::SeqCst), "the new reader is told to rebuild");
+        assert!(!origin.fresh_after_unpark.load(Ordering::SeqCst));
+        assert_eq!(
+            origin.serve_playlist_held_within(Some(1), Some(0), short).await,
+            PlaylistServe::NotReady,
+            "the window held before the rebuild is never served"
+        );
+        assert!(origin.is_active(), "the origin stays active, so the relay answers 503");
+
+        // A reader that is no longer the current one does not take the request.
+        assert!(!origin.take_force_rebuild(generation));
+        origin.stop();
+        assert!(!origin.force_rebuild.load(Ordering::SeqCst), "a stop clears a pending rebuild");
+    }
+
+    #[tokio::test]
+    async fn rebuild_at_edge_wakes_a_parked_origin_and_refuses_a_closed_one() {
+        let origin = LlOrigin::new(6);
+        origin.arm_for_test("http://127.0.0.1:1/live.m3u8");
+        assert!(origin.park());
+        assert!(origin.rebuild_at_edge());
+        assert!(!origin.is_parked(), "the rebuild's reader replaces the parked one");
+        assert!(origin.has_reader_for_test());
+        origin.stop();
+
+        origin.arm_for_test("http://127.0.0.1:1/live.m3u8");
+        origin.close();
+        origin.arm_for_test("http://127.0.0.1:1/live.m3u8");
+        assert!(!origin.rebuild_at_edge(), "a closed origin never rebuilds");
+        assert!(!origin.has_reader_for_test(), "no reader was started");
     }
 
     #[test]

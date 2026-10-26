@@ -1965,6 +1965,7 @@ pub fn run() {
             get_stream_low_latency,
             get_stream_prefetch_present,
             get_relay_live_distance,
+            relay_rebuild_live_edge,
             set_experimental_low_latency,
             set_codec_preference,
             report_solo_codec_failure,
