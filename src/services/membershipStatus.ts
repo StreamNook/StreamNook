@@ -24,6 +24,12 @@ export interface MembershipStatus {
     giftPermanent: boolean;
     giftStartsAt: string | null;
     giftEndsAt: string | null;
+    /** The free month for boosting is running; the gifted months start when it ends. */
+    giftWaitsForBoost: boolean;
+    /** When the free month a Discord boost earned ends, while it runs. */
+    boostEndsAt?: string | null;
+    /** Gifted months still to come; they count toward the member's total. */
+    giftMonthsQueued: number;
     billingNote: BillingNote | null;
     billingResumesAt: string | null;
     renewsAt: string | null;
@@ -61,6 +67,17 @@ export const membershipStatusCopy = (
     switch (s.kind) {
         case 'gifted':
         case 'gifted_over_paid': {
+            // The free month for boosting runs first; the gifted months follow it.
+            if (s.giftWaitsForBoost && s.giftEndsAt) {
+                return {
+                    label: 'Gifted',
+                    tone: 'gift',
+                    headline: `Gifted membership · ends ${fmt(s.giftEndsAt)}`,
+                    detail: s.boostEndsAt
+                        ? `Your free month for boosting runs until ${fmt(s.boostEndsAt)}, then your gifted months begin.`
+                        : 'Your free month for boosting runs first, then your gifted months begin.',
+                };
+            }
             const headline = s.giftPermanent || !s.giftEndsAt
                 ? 'Gifted membership · permanent'
                 : s.giftStartsAt
@@ -119,8 +136,10 @@ export const membershipStatusCopy = (
             return {
                 label: 'Boost',
                 tone: 'gift',
-                headline: 'Membership from your Discord boost',
-                detail: 'It lasts while you boost, nothing is charged.',
+                headline: s.boostEndsAt
+                    ? `Free month for boosting · ends ${fmt(s.boostEndsAt)}`
+                    : 'Free month for boosting',
+                detail: 'Thanks for boosting the StreamNook Discord. Nothing is charged, and the Uplift badge is yours to keep.',
             };
         default:
             return null;

@@ -70,6 +70,18 @@ pub struct MembershipStatus {
     pub gift_starts_at: Option<String>,
     #[serde(default)]
     pub gift_ends_at: Option<String>,
+    /// The free month a Discord boost earned is running, so the gift's months
+    /// start when it ends.
+    #[serde(default)]
+    pub gift_waits_for_boost: bool,
+    /// When that free month ends; None when none is running. A boost earns
+    /// one month, once.
+    #[serde(default)]
+    pub boost_ends_at: Option<String>,
+    /// Gifted months still to come after the month being served (all of them
+    /// before the gift starts); they count toward the member's total.
+    #[serde(default)]
+    pub gift_months_queued: u32,
     #[serde(default)]
     pub billing_note: Option<BillingNote>,
     #[serde(default)]
@@ -203,6 +215,23 @@ mod tests {
     }
 
     #[test]
+    fn a_gift_waiting_for_a_boost_reaches_the_frontend() {
+        let raw = r#"{"kind":"gifted","gift_permanent":false,"gift_ends_at":"2027-02-25T00:00:00.000Z","gift_waits_for_boost":true,"boost_ends_at":"2026-11-25T00:00:00.000Z","gift_months_queued":3,"billing_note":"none_set_up"}"#;
+        let parsed: MembershipStatus = serde_json::from_str(raw).expect("parses");
+        assert!(parsed.gift_waits_for_boost);
+        assert_eq!(parsed.gift_months_queued, 3);
+        let json = serde_json::to_value(&parsed).expect("serializes");
+        assert_eq!(json["giftWaitsForBoost"], true);
+        assert_eq!(json["boostEndsAt"], "2026-11-25T00:00:00.000Z");
+        assert_eq!(json["giftMonthsQueued"], 3);
+
+        // An older server sends neither field.
+        let old: MembershipStatus = serde_json::from_str(r#"{"kind":"gifted"}"#).expect("parses");
+        assert!(!old.gift_waits_for_boost);
+        assert_eq!(old.gift_months_queued, 0);
+    }
+
+    #[test]
     fn unknown_values_from_a_newer_server_do_not_break_parsing() {
         let raw = r#"{"kind":"something_new","billing_note":"also_new"}"#;
         let parsed: MembershipStatus = serde_json::from_str(raw).expect("parses");
@@ -219,6 +248,9 @@ mod tests {
             gift_permanent: false,
             gift_starts_at: None,
             gift_ends_at: None,
+            gift_waits_for_boost: false,
+            boost_ends_at: None,
+            gift_months_queued: 0,
             billing_note: Some(BillingNote::Renews),
             billing_resumes_at: None,
             renews_at: Some("2026-11-01T00:00:00Z".into()),

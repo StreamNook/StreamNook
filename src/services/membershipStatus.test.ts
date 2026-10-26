@@ -13,6 +13,8 @@ const base: MembershipStatus = {
     giftPermanent: false,
     giftStartsAt: null,
     giftEndsAt: null,
+    giftWaitsForBoost: false,
+    giftMonthsQueued: 0,
     billingNote: null,
     billingResumesAt: null,
     renewsAt: null,
@@ -91,8 +93,26 @@ describe('membershipStatusCopy', () => {
         expect(c?.detail).toBeNull();
     });
 
-    it('boost', () => {
-        expect(membershipStatusCopy(s({ kind: 'boost' }), fmt)?.headline).toBe('Membership from your Discord boost');
+    it('a boost is one free month and says when it ends', () => {
+        const c = membershipStatusCopy(s({ kind: 'boost', boostEndsAt: '2026-11-25T00:00:00Z' }), fmt);
+        expect(c?.headline).toBe('Free month for boosting · ends 2026-11-25');
+        expect(c?.detail).toContain('Uplift badge is yours to keep');
+    });
+
+    it('a gift behind the free boost month gives both dates', () => {
+        const c = membershipStatusCopy(
+            s({
+                kind: 'gifted',
+                billingNote: 'none_set_up',
+                giftEndsAt: '2027-02-25T00:00:00Z',
+                giftWaitsForBoost: true,
+                boostEndsAt: '2026-11-25T00:00:00Z',
+                giftMonthsQueued: 3,
+            }),
+            fmt,
+        );
+        expect(c?.headline).toBe('Gifted membership · ends 2027-02-25');
+        expect(c?.detail).toBe('Your free month for boosting runs until 2026-11-25, then your gifted months begin.');
     });
 });
 

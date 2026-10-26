@@ -86,6 +86,7 @@ const MembershipSection = ({ userId }: { userId: string }) => {
   const copy = status ? membershipStatusCopy(status) : null;
   if (!membership && !copy) return null;
   const m = membership;
+  const queuedGiftMonths = status?.giftMonthsQueued ?? 0;
 
   const live = m ? m.status === 'active' || m.status === 'past_due' || m.status === 'trialing' : false;
   const pillKey = m && live && m.cancelAtPeriodEnd && m.status !== 'past_due' ? 'ending' : (m?.status ?? '');
@@ -117,7 +118,15 @@ const MembershipSection = ({ userId }: { userId: string }) => {
               value={`${dateLabel(m.firstSubscribedAt)} · ${daysSince(m.firstSubscribedAt).toLocaleString()} days`}
             />
           )}
-          <Row label="Months supported" value={String(m.totalMonths)} />
+          {/* Gifts stack, so their queued months count the moment they land. */}
+          <Row
+            label="Total months"
+            value={
+              queuedGiftMonths > 0
+                ? `${m.totalMonths + queuedGiftMonths} · ${queuedGiftMonths} gifted still to come`
+                : String(m.totalMonths)
+            }
+          />
           {!copy && live && m.currentPeriodEnd && (
             <Row
               label={m.cancelAtPeriodEnd ? 'Ends on' : 'Renews on'}
