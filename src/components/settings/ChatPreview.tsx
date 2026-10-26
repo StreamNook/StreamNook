@@ -171,15 +171,18 @@ const PreviewLine = ({
       // name and text share one baseline.
       style={{ ...box.style, opacity: dim ? 0.5 : undefined, fontSize: `${design.font_size}px`, lineHeight: 1.625 }}
     >
-      {design.show_timestamps && (
-        <div className="mb-0.5 text-[10px] leading-tight text-textSecondary opacity-50">
-          {sampleTime(design, minutesAgo)}
-        </div>
-      )}
       <span
         className="leading-relaxed"
         style={{ fontSize: `${design.font_size}px`, fontWeight: design.font_weight }}
       >
+        {design.show_timestamps && (
+          <span
+            className="text-textSecondary tabular-nums whitespace-nowrap"
+            style={{ fontSize: '0.78em', opacity: 0.5, marginRight: '0.45em' }}
+          >
+            {sampleTime(design, minutesAgo)}
+          </span>
+        )}
         {lead}
         <StyledChatName
           name={who.name}

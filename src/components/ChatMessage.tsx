@@ -47,6 +47,7 @@ import { MAJOR_COLOGNE_THEME_ID } from '../services/cologneEvent';
 import type { HighlightMatch } from '../utils/chatHighlightMatcher';
 import { useStreamerMode } from '../utils/streamerMode';
 import { sevenTvSrcSet, staticEmoteUrl, static7tvSrcSet } from '../utils/staticEmoteUrl';
+import { emoteImageRetry } from '../utils/emoteImageRetry';
 import { flashTitle } from '../utils/titleFlasher';
 import { playSoundThrottled } from '../utils/notificationSound';
 import { chatterId, chatterProvider } from '../utils/chatterIdentity';
@@ -276,6 +277,99 @@ const WideEmoteImg = (
   );
 };
 
+// A 7TV emote's image once the cache and CDN fallbacks have all failed (a
+// just-uploaded emote has no file on the CDN yet). The emote shows as its name
+// in a muted style while the shared retry looks for any file that exists, then
+// swaps to that image. Every other emote renders its plain image.
+const RetryingEmoteImg = ({
+  imgProps,
+  kind,
+  baseHeight,
+  retryId,
+  name,
+  tier,
+  wantStatic,
+  quiet,
+  placeholderStyle,
+}: {
+  imgProps: React.ImgHTMLAttributes<HTMLImageElement>;
+  kind: 'plain' | 'growX' | 'wide';
+  baseHeight: string;
+  /** Set for 7TV emotes only; the id the shared retry looks up. */
+  retryId?: string;
+  name: string;
+  tier: string;
+  wantStatic: boolean;
+  /** An overlay emote draws nothing while it waits, so it cannot cover its base. */
+  quiet: boolean;
+  placeholderStyle: React.CSSProperties;
+}) => {
+  const [phase, setPhase] = useState<'image' | 'pending' | 'found' | 'dead'>('image');
+  const [found, setFound] = useState<string | null>(null);
+  const [slotId, setSlotId] = useState(retryId);
+  if (slotId !== retryId) {
+    setSlotId(retryId);
+    setPhase('image');
+    setFound(null);
+  }
+
+  useEffect(() => {
+    if (phase !== 'pending' || !retryId) return;
+    return emoteImageRetry.subscribe(retryId, {
+      preferredTier: tier,
+      onResolved: (url) => {
+        setFound(url);
+        setPhase('found');
+      },
+    });
+  }, [phase, retryId, tier]);
+
+  if (phase === 'pending' || phase === 'dead') {
+    if (quiet) return null;
+    return (
+      <span
+        data-emote-pending={phase === 'pending' ? '' : undefined}
+        className="text-textSecondary opacity-60"
+        style={placeholderStyle}
+      >
+        {name}
+      </span>
+    );
+  }
+
+  let props = imgProps;
+  if (phase === 'image') {
+    props = {
+      ...imgProps,
+      onError: (e) => {
+        imgProps.onError?.(e);
+        if (retryId && e.currentTarget.dataset.ladderDone) setPhase('pending');
+      },
+    };
+  } else if (found) {
+    const url = wantStatic ? staticEmoteUrl(found) : found;
+    props = {
+      ...imgProps,
+      src: url,
+      srcSet: undefined,
+      onError: (e) => {
+        const t = e.currentTarget;
+        // The still frame may not exist in this format; the animated file does.
+        if (url !== found && !t.dataset.stillFallback) {
+          t.dataset.stillFallback = '1';
+          t.src = found;
+          return;
+        }
+        setPhase('dead');
+      },
+    };
+  }
+
+  if (kind === 'wide') return <WideEmoteImg {...props} baseHeight={baseHeight} />;
+  if (kind === 'growX') return <GrowXEmoteImg {...props} baseHeight={baseHeight} />;
+  return <img {...props} />;
+};
+
 // Parse plain text into emote/emoji/text segments by name lookup against the
 // loaded emote sets. Serves the local-echo fallback (no Rust segments yet) and
 // the reply preview, which only ever has the parent message as raw text.
@@ -475,7 +569,7 @@ interface ChatMessageProps {
   homeProvider?: ProviderId;
   /** Blended feed: the row's platform logo, drawn at the start of the name
    *  line on every row type, so it sits beside the name whatever is above it
-   *  (a reply, a redemption header, a timestamp). */
+   *  (a reply, a redemption header). */
   sourceMark?: ProviderId;
   /** Line buttons, resolved once by the list when the viewer moderates this
    *  channel and has them on; null otherwise. One shared array for every
@@ -1381,8 +1475,8 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   const showPlatformMark =
     rowSourceProvider !== homeProvider && chatBlend?.show_platform_badge !== false;
   // Blended feed: every row leads its name line with its platform's logo. It
-  // is drawn inside that line, so a reply quote, a redemption header or a
-  // timestamp above the name never pulls it off the name. Centred on the text
+  // is drawn inside that line, so a reply quote or a redemption header
+  // above the name never pulls it off the name. Centred on the text
   // the way the badge strip is (see .sn-badge-strip): an image-only
   // inline-flex box sits on its bottom edge, lifted until its middle meets
   // the text's.
@@ -1577,6 +1671,12 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             t.src = `https://cdn.7tv.app/emote/${segment.emoteId}/${emoteTier}${still}.webp`;
             return;
           }
+          // Every file a 7TV emote has failed: the image slot hands the emote
+          // to the shared retry, which keeps looking while a row shows it.
+          if (is7TVEmote && segment.emoteId) {
+            t.dataset.ladderDone = '1';
+            return;
+          }
           // A phone waking its radio fails a good image once. One late retry
           // before the emote becomes its name for good.
           if (!t.dataset.lateRetry) {
@@ -1598,18 +1698,18 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       };
       // BetterTTV's absolute stretch wins over FFZ's relative one when a
       // message stacks w! and ffzW on the same target.
-      const imgElement = mods?.wideX ? (
-        <WideEmoteImg
-          {...imgProps}
+      const imgElement = (
+        <RetryingEmoteImg
+          imgProps={imgProps}
+          kind={mods?.wideX ? 'wide' : mods?.growX ? 'growX' : 'plain'}
           baseHeight={giant ? GIANT_EMOTE_HEIGHT : INLINE_EMOTE_HEIGHT}
+          retryId={is7TVEmote ? segment.emoteId : undefined}
+          name={segment.content}
+          tier={emoteTier}
+          wantStatic={wantStatic}
+          quiet={isOverlay}
+          placeholderStyle={{ ...gridStyle, ...(inGrid ? {} : EMOTE_SIDE_MARGINS) }}
         />
-      ) : mods?.growX ? (
-        <GrowXEmoteImg
-          {...imgProps}
-          baseHeight={giant ? GIANT_EMOTE_HEIGHT : INLINE_EMOTE_HEIGHT}
-        />
-      ) : (
-        <img {...imgProps} />
       );
 
       // Big-preview tooltip mirroring the emote-picker's hover card. Compact
@@ -3479,23 +3579,10 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       )}
 
       <div>
-        {/* Timestamp - own line above the badges/name/message when enabled */}
-        {formattedTimestamp && (
-          <div
-            className={`text-[10px] leading-tight mb-0.5 text-textSecondary ${
-              atmosphereFrost
-                ? `block w-fit rounded-sm px-1 opacity-80 ${frostClass}`
-                : 'opacity-50'
-            }`}
-          >
-            {formattedTimestamp}
-          </div>
-        )}
         {/* Badges and Message content - inline flow so wrapped text starts at left edge.
             When the atmosphere asks for frost (chatFrost) this is one frosted
-            block hugging the badges + name + message (the timestamp gets its
-            own separate frost above), so the text/badges stay readable over a
-            busy wash. */}
+            block hugging the timestamp + badges + name + message, so the
+            text/badges stay readable over a busy wash. */}
         {/* The row carries the chat font size so badges, name and text are all
             measured against the same line: the badge group centres on it and the
             text sits on its baseline, so a tall emote grows the line without
@@ -3504,8 +3591,19 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
           className={atmosphereFrost ? `inline-block max-w-full rounded-md px-1.5 py-0.5 ${frostClass}` : 'min-w-0'}
           style={{ fontSize: `${chatDesign?.font_size ?? 14}px`, lineHeight: 1.625 }}
         >
+          {/* The time leads the row's inline flow, on the text's baseline, so
+              wrapped text still starts at the left edge. Left selectable so a
+              copied line keeps its time. */}
+          {formattedTimestamp && (
+            <span
+              className="text-textSecondary tabular-nums whitespace-nowrap"
+              style={{ fontSize: '0.78em', opacity: atmosphereFrost ? 0.8 : 0.5, marginRight: '0.45em' }}
+            >
+              {formattedTimestamp}
+            </span>
+          )}
           {/* Where this row came from, when it is not the platform being watched.
-              FIRST, ahead of the avatar and every badge, because it answers
+              Right after the time, ahead of the avatar and every badge, because it answers
               "which community is this" before anything about who they are in
               it — and because a mark that has to be hunted for between badges
               is not doing its one job. Small on purpose: it is a marker, not a
