@@ -19,6 +19,10 @@ export const STOP_LOAD_AFTER_PAUSE_MS = 2000;
  *  rebuild its window before it loads again (`resyncLoad`). */
 export const RESYNC_AFTER_PAUSE_MS = 30_000;
 
+/** Seconds of playlist window kept in hand when a play resumes at the paused
+ *  frame, for a playlist that reports no target duration. */
+export const RESUME_MARGIN_FALLBACK_SEC = 4;
+
 /** localStorage key a test run sets to shorten the spans, for example
  *  `{"stopLoadMs": 2000, "resyncMs": 5000}`. Positive numbers only. */
 export const PAUSE_PARK_OVERRIDE_KEY = 'streamnook.dev.pause-park';
@@ -48,25 +52,30 @@ export function pauseParkTimings(): PauseParkTimings {
  * `bufferEnd` while the origin's playlist now begins at `windowStart` (`age`
  * seconds old): the pause outlives the window once the playlist's start has
  * rolled past the end of the buffer, so nothing after the buffer can be
- * fetched. Never more than `cap`, never negative. With no playlist details it
- * is `cap`.
+ * fetched. `marginSec` is cut off the room that is left: a play restarts
+ * loading on a playlist reload and the next fragment's fetch, which land a
+ * target duration or more after the play, by which time the window has moved
+ * on. Never more than `cap`, never negative. With no playlist details it is
+ * `cap`.
  */
 export function resyncCutoffMs(
   bufferEnd: number,
   windowStart: number | null | undefined,
   age: number | null | undefined,
   cap = RESYNC_AFTER_PAUSE_MS,
+  marginSec = 0,
 ): number {
   if (windowStart == null || !Number.isFinite(windowStart) || !Number.isFinite(bufferEnd)) return cap;
   const aged = age != null && Number.isFinite(age) && age > 0 ? age : 0;
-  return Math.min(cap, Math.max(0, (bufferEnd - windowStart - aged) * 1000));
+  return Math.min(cap, Math.max(0, (bufferEnd - windowStart - aged - marginSec) * 1000));
 }
 
 /** The pause spans for a player: the defaults (or a test run's override) with
  *  the resync cut-off cut down to what its playlist window and buffer allow,
- *  measured now. */
+ *  measured now. The margin is two target durations, or
+ *  `RESUME_MARGIN_FALLBACK_SEC` when the playlist reports none. */
 export function windowedPauseTimings(
-  hls: { latestLevelDetails?: { fragmentStart?: number; age?: number } | null },
+  hls: { latestLevelDetails?: { fragmentStart?: number; age?: number; targetduration?: number } | null },
   video: Pick<HTMLVideoElement, 'buffered' | 'currentTime'>,
 ): PauseParkTimings {
   const base = pauseParkTimings();
@@ -79,7 +88,12 @@ export function windowedPauseTimings(
     }
   }
   const details = hls.latestLevelDetails;
-  return { ...base, resyncMs: resyncCutoffMs(bufferEnd, details?.fragmentStart, details?.age, base.resyncMs) };
+  const target = details?.targetduration;
+  const marginSec = target != null && Number.isFinite(target) && target > 0 ? 2 * target : RESUME_MARGIN_FALLBACK_SEC;
+  return {
+    ...base,
+    resyncMs: resyncCutoffMs(bufferEnd, details?.fragmentStart, details?.age, base.resyncMs, marginSec),
+  };
 }
 
 export type PlayOutcome ='none' | 'resume' | 'resync';

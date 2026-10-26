@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   PAUSE_PARK_OVERRIDE_KEY,
+  RESUME_MARGIN_FALLBACK_SEC,
   RESYNC_AFTER_PAUSE_MS,
   STOP_LOAD_AFTER_PAUSE_MS,
   clearPauseIntent,
@@ -179,6 +180,22 @@ describe('pausePark', () => {
     expect(resyncCutoffMs(102, undefined, 0)).toBe(RESYNC_AFTER_PAUSE_MS);
   });
 
+  it('the resync cut-off keeps a margin of window in hand', () => {
+    expect(resyncCutoffMs(101, 90, 0, RESYNC_AFTER_PAUSE_MS, 4)).toBe(7_000);
+    expect(resyncCutoffMs(101, 90, 0, RESYNC_AFTER_PAUSE_MS, 20)).toBe(0);
+    expect(resyncCutoffMs(101, null, 0, RESYNC_AFTER_PAUSE_MS, 4)).toBe(RESYNC_AFTER_PAUSE_MS);
+  });
+
+  it('the windowed cut-off takes two target durations, or the fallback when there is none', () => {
+    const video = { currentTime: 100, buffered: { length: 1, start: () => 90, end: () => 102 } };
+    const timed = (targetduration?: number) =>
+      windowedPauseTimings({ latestLevelDetails: { fragmentStart: 90, age: 0, targetduration } }, video as never).resyncMs;
+    expect(timed(2)).toBe(8_000);
+    expect(timed(undefined)).toBe(12_000 - RESUME_MARGIN_FALLBACK_SEC * 1000);
+    expect(timed(0)).toBe(12_000 - RESUME_MARGIN_FALLBACK_SEC * 1000);
+    expect(timed(6)).toBe(0);
+  });
+
   it('a buffer that ends before the window starts resyncs at once', () => {
     const hls = { latestLevelDetails: { fragmentStart: 130, age: 0 } };
     const video = { currentTime: 100, buffered: { length: 1, start: () => 90, end: () => 102 } };
@@ -212,8 +229,8 @@ describe('pausePark', () => {
     const { park, at } = make(true, () => windowedPauseTimings(hls, video as never));
     park.paused(0);
     fragmentStart = 130; // the window rolled on during the pause
-    at(11_000);
-    expect(park.play(11_000)).toBe('none'); // 12 s cut-off from the pause start
+    at(7_000);
+    expect(park.play(7_000)).toBe('none'); // 8 s cut-off from the pause start: 12 s of room less the 4 s fallback margin
   });
 
   it('no playlist details keep the default cut-off', () => {
