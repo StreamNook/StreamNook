@@ -2,7 +2,8 @@
 // sets Rust already holds. This file is the typed bridge: it passes what the
 // page knows (the channel, what was typed, the 7TV size it renders) and shapes
 // rows for the Tab cycle and the emote list. No ranking happens here.
-import { invoke, convertFileSrc } from '@tauri-apps/api/core';
+import { invoke } from '@tauri-apps/api/core';
+import { cacheFileUrl } from '../utils/cacheFileUrl';
 
 import { inlineEmoteTier } from './emoteService';
 import type { ProviderId } from '../types/providers';
@@ -120,7 +121,7 @@ export async function matchEmotes(
         name: r.name,
         insertText: r.insert_text,
         url: r.url,
-        localUrl: r.local_path ? convertFileSrc(r.local_path) : undefined,
+        localUrl: r.local_path ? cacheFileUrl(r.local_path) : undefined,
         provider: r.provider === 'user' ? 'twitch' : r.provider,
         sourceLabel: r.source_label,
         sourceDetail: r.source_detail,

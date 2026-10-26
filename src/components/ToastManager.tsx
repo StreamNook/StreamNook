@@ -313,25 +313,12 @@ const ToastManager = () => {
 
   const getToastIcon = (type: string) => {
     switch (type) {
-      case 'success': return <CheckCircle size={20} />;
-      case 'error': return <XCircle size={20} />;
-      case 'warning': return <AlertCircle size={20} />;
+      case 'success': return <CheckCircle size={18} />;
+      case 'error': return <XCircle size={18} />;
+      case 'warning': return <AlertCircle size={18} />;
       case 'live': return null;
       case 'channel_points': return null;
-      default: return <Info size={20} />;
-    }
-  };
-
-  // Border only. The fill is .glass-panel's, which follows the Glassiness
-  // slider down to solid at 0%; a background utility here replaces it.
-  const getToastColor = (type: string) => {
-    switch (type) {
-      case 'success': return 'border-green-500/30';
-      case 'error': return 'border-red-500/30';
-      case 'warning': return 'border-yellow-500/30';
-      case 'live': return 'border-accent/40';
-      case 'channel_points': return 'border-orange-500/30';
-      default: return 'border-accent/30';
+      default: return <Info size={18} />;
     }
   };
 
@@ -358,7 +345,6 @@ const ToastManager = () => {
             toast={toast}
             removeToast={removeToast}
             getToastIcon={getToastIcon}
-            getToastColor={getToastColor}
             enter={layout.enter}
           />
         ))}
@@ -372,11 +358,10 @@ interface ToastItemProps {
   toast: Toast;
   removeToast: (id: number) => void;
   getToastIcon: (type: string) => React.ReactNode;
-  getToastColor: (type: string) => string;
   enter: { x?: number; y?: number };
 }
 
-const ToastItem = ({ toast, removeToast, getToastIcon, getToastColor, enter }: ToastItemProps) => {
+const ToastItem = ({ toast, removeToast, getToastIcon, enter }: ToastItemProps) => {
   const [isPaused, setIsPaused] = useState(false);
   const remainingTimeRef = useRef(toast.duration);
   const startTimeRef = useRef(0);
@@ -453,21 +438,24 @@ const ToastItem = ({ toast, removeToast, getToastIcon, getToastColor, enter }: T
       } : undefined}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
-      className={`glass-panel p-4 rounded-lg shadow-lg border ${getToastColor(toast.type)} w-[min(380px,calc(100vw-24px))] pointer-events-auto ${isClickable ? 'cursor-pointer' : ''} ${isPaused && isClickable ? 'shimmer-border' : ''}`}
+      className={`glass-panel sn-toast p-4 rounded-lg shadow-lg border w-[min(380px,calc(100vw-24px))] pointer-events-auto ${isClickable ? 'cursor-pointer' : ''} ${isPaused && isClickable ? 'shimmer-border' : ''}`}
     >
       <div className="flex items-start gap-3">
         {getToastIcon(toast.type) && (
-          <div className="flex-shrink-0 mt-0.5">{getToastIcon(toast.type)}</div>
+          <div className="flex-shrink-0 mt-px text-textSecondary">{getToastIcon(toast.type)}</div>
         )}
-        <div className="text-sm font-medium flex-1 min-w-0 overflow-hidden">
-          {typeof toast.message === 'string' ? toast.message : toast.message}
+        <div className="flex-1 min-w-0 overflow-hidden">
+          {toast.title && <div className="text-sm font-semibold text-textPrimary">{toast.title}</div>}
+          <div className={toast.title ? 'mt-0.5 text-[13px] leading-[18px] text-textSecondary text-pretty' : 'text-sm font-medium'}>
+            {toast.message}
+          </div>
         </div>
         <button
           onClick={(e) => {
             e.stopPropagation();
             removeToast(toast.id);
           }}
-          className="text-textSecondary hover:text-textPrimary transition-colors flex-shrink-0 mt-0.5"
+          className="flex-shrink-0 rounded p-1 -mt-0.5 -mb-1 -ml-1 -mr-2 text-textSecondary hover:text-textPrimary transition-colors"
           aria-label="Dismiss"
         >
           <X size={16} />
@@ -481,7 +469,7 @@ const ToastItem = ({ toast, removeToast, getToastIcon, getToastColor, enter }: T
               toast.action?.onClick();
               removeToast(toast.id);
             }}
-            className="px-3 py-1.5 bg-accent hover:bg-accent/80 text-background text-xs font-medium rounded transition-colors"
+            className="glass-button px-3 py-1.5 text-xs font-medium text-textPrimary"
           >
             {toast.action.label}
           </button>

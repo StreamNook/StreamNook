@@ -228,14 +228,28 @@ pub fn watch(win: &crate::rt::WebviewWindow) {
                     exit_code as u32
                 );
                 let recovering = kind == COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED;
+                // Kind 6. The GPU process relaunches by itself, sometimes without
+                // the GPU (software drawing until restart); the page checks which.
+                let gpu = kind.0 == 6;
                 let recovery = if recovering {
                     "reloading the page"
                 } else if kind == COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED {
                     relaunch_after_browser_failure(&app)
+                } else if gpu {
+                    "the page checks whether drawing came back on the GPU"
                 } else {
                     "none in place"
                 };
                 crate::services::file_log::record_now("WebView2", &summary, "Recovery", recovery);
+                if gpu && window == "main" {
+                    use tauri::Emitter;
+                    let target = app.clone();
+                    let code = exit_code;
+                    // Out of the COM callback first, as the relaunch does.
+                    let _ = app.run_on_main_thread(move || {
+                        let _ = target.emit_to("main", "webview-gpu-failed", code);
+                    });
+                }
                 if recovering {
                     if let Some(sender) = sender {
                         let _ = sender.Reload();

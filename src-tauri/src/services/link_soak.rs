@@ -398,7 +398,13 @@ async fn link_soak() {
     )
     .map_or_else(|| r.url.clone(), |rung| rung.url);
     let generation = crate::services::link_adapt::generation(crate::services::link_adapt::SOLO);
-    let port = match crate::services::stream_server::StreamServer::start_proxy_server(serve).await {
+    let port = match crate::services::stream_server::StreamServer::start_proxy_server_with(
+        serve,
+        true,
+        Some(crate::services::stream_server::SoloUpstream::twitch()),
+    )
+    .await
+    {
         Ok(p) => p,
         Err(e) => {
             println!("[link-soak] ABORT: relay failed: {e}");
@@ -412,7 +418,12 @@ async fn link_soak() {
         crate::services::link_adapt::start_check(crate::services::link_adapt::SOLO, generation)
     {
         println!("[link-soak] starting on {} after the first downloads", rung.name);
-        let _ = crate::services::stream_server::StreamServer::start_proxy_server(rung.url).await;
+        let _ = crate::services::stream_server::StreamServer::start_proxy_server_with(
+            rung.url,
+            true,
+            Some(crate::services::stream_server::SoloUpstream::twitch()),
+        )
+        .await;
     }
     crate::services::stream_server::set_solo_session(Some(channel.clone()));
     let on_ll = crate::services::ll_origin::is_active();

@@ -142,9 +142,11 @@ fn groups(list: &[RecentUpload], now: i64) -> Vec<UploadGroup> {
     out
 }
 
-/// The emote menu's Images section.
+/// The emote menu's Images section. Async, with the uploads list and the
+/// folder walk for its size on the blocking pool: a sync command runs on the
+/// UI thread.
 #[tauri::command]
-pub fn image_upload_panel(state: State<'_, AppState>) -> Result<ImageUploadPanel, String> {
+pub async fn image_upload_panel(state: State<'_, AppState>) -> Result<ImageUploadPanel, String> {
     let t = target(&state)?;
     let mut hosts = upload::hosts();
     if !hosts.iter().any(|h| h.id == t.key) {
@@ -152,12 +154,15 @@ pub fn image_upload_panel(state: State<'_, AppState>) -> Result<ImageUploadPanel
     }
     let now = now_ms();
     tauri::async_runtime::spawn(fill_missing_thumbs());
+    let (recents, disk) = tauri::async_runtime::spawn_blocking(move || (store::recents(now), store::disk_bytes()))
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(ImageUploadPanel {
         needs_consent: !store::accepted(&t.key),
         host: t.host(),
         hosts,
-        groups: groups(&store::recents(now), now),
-        storage: format!("{} on this device", upload::size_label(store::disk_bytes())),
+        groups: groups(&recents, now),
+        storage: format!("{} on this device", upload::size_label(disk)),
         can_open_folder: cfg!(desktop),
     })
 }
@@ -173,7 +178,15 @@ async fn fill_missing_thumbs() {
         return;
     }
     for (url, copy) in store::missing_thumbs() {
-        let local = copy.as_deref().and_then(store::copy_path).and_then(|p| std::fs::read(p).ok());
+        let local = match copy {
+            Some(copy) => tokio::task::spawn_blocking(move || {
+                store::copy_path(&copy).and_then(|p| std::fs::read(p).ok())
+            })
+            .await
+            .ok()
+            .flatten(),
+            None => None,
+        };
         let bytes = match local {
             Some(b) => b,
             None => match fetch_capped(&url).await {

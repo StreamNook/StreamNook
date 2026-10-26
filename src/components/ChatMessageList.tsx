@@ -16,6 +16,7 @@ import { lineButtons, type LineButton } from './chat/modLine';
 import { bindLineStrips, bindLineWheel, isOnLineStrip, useLineArt, useLineButtons } from './chat/lineArt';
 import { collectMarks, FALLBACK_MARK_KINDS } from './chat/scrollbarMarkLayout';
 import { IS_MAC, IS_MOBILE } from '../utils/platform';
+import { releaseRowImagesOnUnmount } from '../utils/releaseImages';
 
 /**
  * How many of the newest rows always paint (see MessageRow). Enough to fill
@@ -166,14 +167,15 @@ const MessageRow = memo(function MessageRow({
   const style = useMemo(
     () => ({
       contentVisibility: paintAlways ? ('visible' as const) : ('auto' as const),
-      // Off-screen size hint, computed per-user from font size, spacing, and
-      // whether timestamps are on. Ignored when content-visibility is visible.
+      // Off-screen size hint, computed per-user from font size and spacing.
+      // Ignored when content-visibility is visible.
       containIntrinsicBlockSize: paintAlways ? undefined : intrinsicSizeCSS,
     }),
     [paintAlways, intrinsicSizeCSS],
   );
   return (
     <div
+      ref={releaseRowImagesOnUnmount}
       data-message-id={messageId || undefined}
       className={`chat-message-row${isModFocus ? ' is-mod-focus' : ''}${
         typeof message !== 'string' && message.metadata?.from_backfill ? ' is-backfill' : ''
@@ -436,7 +438,7 @@ const ChatMessageList = memo(function ChatMessageList({
   // uses this for off-screen messages (content-visibility: auto). Picking a
   // value close to the real rendered height prevents a layout shift on the
   // FIRST render of each message — the prior hardcoded 50px was tuned for
-  // single-line messages, which was way off when timestamps add a second line.
+  // single-line messages. The timestamp leads the message line, so it adds no height.
   // The `auto` keyword still lets the browser remember the actual size after
   // first render, so this is just the initial-paint guess.
   const chatDesign = useAppStore((s) => s.settings.chat_design);
@@ -449,12 +451,9 @@ const ChatMessageList = memo(function ChatMessageList({
     // 1px divider border underneath.
     const padding = Math.max(4, messageSpacing / 2) * 2;
     const contentLine = Math.round(fontSize * 1.5);
-    // Timestamp row is a 10px text line with line-height tight (~1.25) plus
-    // mb-0.5 (~2px). Total ≈ 14-15px when enabled.
-    const timestampHeight = chatDesign?.show_timestamps ? 15 : 0;
-    const total = contentLine + timestampHeight + padding + 1; // +1 for divider
+    const total = contentLine + padding + 1; // +1 for divider
     return `auto ${total}px`;
-  }, [chatDesign?.font_size, chatDesign?.message_spacing, chatDesign?.show_timestamps]);
+  }, [chatDesign?.font_size, chatDesign?.message_spacing]);
 
   // Line buttons. Rust's steps for the viewer's line list are resolved here,
   // once for the whole list, and every row gets the same array: no per-row

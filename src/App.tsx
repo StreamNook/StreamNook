@@ -69,6 +69,10 @@ import { getAppVersion, primeClientIdentity } from './utils/appVersion';
 import { OPEN_CHANGELOG_EVENT, requestChangelog, type OpenChangelogDetail } from './utils/changelogEvents';
 
 import { Logger } from './utils/logger';
+import { startPageHeartbeat } from './utils/pageHeartbeat';
+import { startChatLatencyReporter } from './utils/chatLatency';
+import { startGpuRecoveryWatch } from './utils/gpuRecovery';
+import { ensureCacheFileServer } from './utils/cacheFileUrl';
 
 // Heavy overlays load on first open instead of riding the boot bundle. Each
 // always-mounted one is gated behind an "ever opened" latch in the component
@@ -1939,6 +1943,15 @@ function App() {
       active = false;
       unlisten?.();
     };
+  }, []);
+
+  // Page main-thread lateness in the log once a minute, the drawing mode and
+  // the restart offer after a GPU fallback, and the cached-art server's address.
+  useEffect(() => {
+    void ensureCacheFileServer();
+    startPageHeartbeat();
+    startChatLatencyReporter();
+    return startGpuRecoveryWatch();
   }, []);
 
   // Warm the lazy VideoPlayer chunk once boot has settled, so the first stream

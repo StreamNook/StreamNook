@@ -2577,6 +2577,7 @@ fn base_message(
         content: plain,
         provider: "youtube".to_string(),
         channel: channel_key.to_string(),
+        received_at_ms: None,
         emotes: Vec::new(),
         tags,
         layout: LayoutResult {
@@ -2638,6 +2639,7 @@ fn bake_seventv(segments: Vec<MessageSegment>, channel_key: &str) -> Vec<Message
                         is_zero_width: Some(e.zero_width),
                         modifier_flags: None,
                         is_personal: None,
+                        local_path: None,
                     });
                 }
                 None => buf.push_str(word),
@@ -2714,6 +2716,7 @@ fn parse_runs(message: Option<&Value>) -> (Vec<MessageSegment>, String) {
                     is_zero_width: None,
                     modifier_flags: None,
                     is_personal: None,
+                    local_path: None,
                 });
             }
         }

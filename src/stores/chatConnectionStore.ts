@@ -22,6 +22,7 @@ import type { CheerCheck } from '../services/bitsService';
 import { useCheerPromptStore } from './cheerPromptStore';
 import { sameSentContent } from '../utils/sentContent';
 import { isWindowHidden, onWindowVisibility } from '../utils/windowVisibility';
+import { noteRowReceived, noteRowsPainted } from '../utils/chatLatency';
 import { IS_MOBILE } from '../utils/platform';
 import { useEffect, useState } from 'react';
 import {
@@ -41,7 +42,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { createChatPerfSampler, watchLongFrames } from './chatPerfSampler';
-import { fetchAllEmotes, fetchKickChannelEmotes, fetchYouTubeChannelEmotes, enhanceRustEmotes, type Emote, type EmoteSet } from '../services/emoteService';
+import { fetchAllEmotes, fetchKickChannelEmotes, fetchYouTubeChannelEmotes, enhanceRustEmotes, inlineEmoteTier, type Emote, type EmoteSet } from '../services/emoteService';
 import { Logger } from '../utils/logger';
 import { useAppStore } from './AppStore';
 import { useGiftBombStore, type GiftRecipient } from './giftBombStore';
@@ -52,6 +53,7 @@ import type { SongMatch } from '../utils/songId';
 import type { SeventvEmoteChange } from '../components/overlay/overlayConfig';
 import type { BackendChatMessage } from '../services/twitchChat';
 import { patchHeldRows } from './heldRowPatch';
+import { withClearedEntry } from './clearedContexts';
 
 // Hard caps borrowed from the prior single-channel hook. Keeping them as
 // per-channel limits means a 5-channel MultiChat caps memory at 5x the
@@ -672,19 +674,27 @@ export function emoteCacheKey(channel: string, provider: ProviderId = 'twitch'):
   return provider === 'twitch' ? c : `${provider}:${c}`;
 }
 
+/**
+ * `force` reloads the set even when a copy is cached (a chat tab being shown
+ * again). A fetch already in flight is awaited first, so the forced read cannot
+ * be overwritten by an older read finishing after it.
+ */
 export async function ensureChannelEmotes(
   channel: string,
   channelId: string,
   provider: ProviderId = 'twitch',
+  opts?: { force?: boolean },
 ): Promise<EmoteSet | null> {
   const key = emoteCacheKey(channel, provider);
+  const force = opts?.force === true;
   const cached = emoteCache.get(key);
-  if (cached) return cached;
+  if (cached && !force) return cached;
   const inflight = inflightEmoteFetches.get(key);
-  if (inflight) return inflight;
+  if (inflight && !force) return inflight;
 
   const promise = (async () => {
     try {
+      if (inflight) await inflight;
       // Kick and YouTube each have their own 7TV path (by platform user id);
       // Twitch keeps the full BTTV/FFZ/7TV/native fetch. TikTok has no
       // channel-emote fetch — its messages are plain text baked at parse time,
@@ -872,6 +882,8 @@ function trimSeenIds(slice: ChannelSlice): void {
 
 function flushPending(): void {
   const state = useChatConnectionStore.getState();
+  // Ids of the rows this flush commits, timed to their paint below.
+  const committedIds: string[] = [];
   for (const [key, queued] of pendingByChannel) {
     if (queued.length === 0) continue;
     const slice = state.channels.get(key);
@@ -899,6 +911,9 @@ function flushPending(): void {
     // changes with its content, so consumers can memoize on it.
     slice.messages = trimWithEventRetention(slice.messages.concat(queued), limit, slice.liveMessageCount);
     pruneModerationMarks(slice);
+    for (const row of queued) {
+      if (row && typeof row !== 'string' && typeof row.id === 'string') committedIds.push(row.id);
+    }
   }
   const touched = Array.from(pendingByChannel.keys());
   pendingByChannel.clear();
@@ -906,6 +921,11 @@ function flushPending(): void {
   // always warranted (covers both new-message appends and in-place upgrades).
   // In-place upgrades ride the global counter their own callers already bump.
   bumpRevisionFor(touched);
+  // Timed at the next frame, which draws the committed rows. A hidden window
+  // runs no frames, so its rows are not timed.
+  if (committedIds.length > 0 && typeof requestAnimationFrame === 'function' && !isWindowHidden()) {
+    requestAnimationFrame(() => noteRowsPainted(committedIds, Date.now()));
+  }
 }
 
 // Drain any queued messages into their slices immediately, outside the scheduled
@@ -1217,6 +1237,8 @@ interface HistoryWindow {
 function loadHistory(key: string, window?: HistoryWindow): Promise<any[] | null> {
   return invoke<any[]>('load_channel_history', {
     channel: key,
+    // The 7TV size this window draws, so Rust stamps the rows' disk files at it.
+    tier: inlineEmoteTier(),
     limit: window?.limit,
     afterMs: window?.afterMs ?? undefined,
     beforeMs: window?.beforeMs ?? undefined,
@@ -2173,7 +2195,13 @@ async function initializeBadgesForChannel(channelId: string | null): Promise<voi
   if (!channelId) return;
   try {
     const { initializeBadgeCache } = await import('../services/twitchBadges');
-    await initializeBadgeCache(channelId);
+    // The badge file map (memoized) loads beside the metadata, so history
+    // rows draw disk badges on their first paint. Its failure never blocks
+    // the metadata.
+    const badgeFiles = import('../services/badgeImageCacheService')
+      .then((m) => m.initializeBadgeImageCache())
+      .catch(() => {});
+    await Promise.all([initializeBadgeCache(channelId), badgeFiles]);
   } catch (err) {
     Logger.warn('[ChatStore] Badge cache init failed:', err);
   }
@@ -2196,6 +2224,20 @@ function backfillLimit(afterMs: number | null): number {
   return Math.max(10, Math.min(seconds * 10, cap));
 }
 
+/** How many of the newest history rows an initial load commits first. The older
+ *  rows follow a frame later, so the first paint is a handful of rows instead of
+ *  the whole backlog (up to 1000) mounting, decoding and loading at once. */
+const FIRST_PAINT_HISTORY_ROWS = 30;
+
+/** Runs `fn` after the next frame has painted. */
+function afterNextFrame(fn: () => void): void {
+  if (typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(() => setTimeout(fn, 0));
+  } else {
+    setTimeout(fn, 16);
+  }
+}
+
 async function preloadChannel(
   channel: string,
   channelId: string | null,
@@ -2205,6 +2247,8 @@ async function preloadChannel(
   const mode = opts?.mode ?? 'initial';
   const key = channel.toLowerCase();
   const __t = performance.now();
+  // The older history rows of an initial load, and the slice they belong to.
+  const deferred: { slice: ChannelSlice | null; rows: ChannelSlice['messages'] } = { slice: null, rows: [] };
   try {
     // Badges and history in parallel. The backfill used to wait behind the
     // badge cache init and then the page fetched the mirror itself; now Rust
@@ -2271,7 +2315,11 @@ async function preloadChannel(
       if (mode === 'backfill') {
         insertChronological(slice, filtered);
       } else {
-        slice.messages = [...filtered, ...slice.messages];
+        // Only the newest rows commit now; the rest follow after a paint.
+        const newest = filtered.slice(-FIRST_PAINT_HISTORY_ROWS);
+        deferred.rows = filtered.slice(0, filtered.length - newest.length);
+        deferred.slice = slice;
+        slice.messages = [...newest, ...slice.messages];
       }
       const limit = currentBufferLimit(slice, getActiveHistoryMax());
       if (slice.messages.length > limit) {
@@ -2280,6 +2328,22 @@ async function preloadChannel(
       // History is in; the held live tail goes under it in the same revision.
       if (mode !== 'backfill') releaseHistoryHold(slice);
     });
+    if (deferred.slice && deferred.rows.length > 0) {
+      const target = deferred.slice;
+      const older = deferred.rows;
+      afterNextFrame(() => {
+        // A channel released (or released and joined again) in the meantime is
+        // another slice, or none: the older rows have nowhere to go.
+        if (getSlice(key) !== target) return;
+        withSlice(key, (slice) => {
+          slice.messages = [...older, ...slice.messages];
+          const stageLimit = currentBufferLimit(slice, getActiveHistoryMax());
+          if (slice.messages.length > stageLimit) {
+            slice.messages = slice.messages.slice(slice.messages.length - stageLimit);
+          }
+        });
+      });
+    }
   } catch (err) {
     Logger.error('[ChatStore] Failed to load recent messages:', err);
     withSlice(key, (slice) => {
@@ -2309,6 +2373,18 @@ export async function ensureChannelHistory(
 // Per-channel throttle for the no-slice drop warning (see handleWsMessage).
 const NO_SLICE_WARN_INTERVAL_MS = 60_000;
 const noSliceWarnedAt = new Map<string, number>();
+
+/** Overlap on each side of a history backfill; dedup by message id makes it harmless. */
+const BACKFILL_MARGIN_MS = 30_000;
+
+/** Held-back channels whose backlog arrived with a hole before it, and where
+ *  the rows already shown ended (unix ms, null when none had a timestamp). */
+const parkGaps = new Map<string, { afterMs: number | null }>();
+
+/** Slices between the `UNPARK` this page sent and Rust's `PARK_END`: every row
+ *  in that span is a held row being released, not a live one. Keyed to the
+ *  slice itself, so a channel closed mid-replay and opened again starts live. */
+const replayingSlices = new Map<string, ChannelSlice>();
 
 function handleWsMessage(raw: string) {
   // Global signals first. HEARTBEAT deliberately does NOT touch
@@ -2403,21 +2479,45 @@ function handleWsMessage(raw: string) {
   // The backlog has arrived: count it in place of the held tally, in one step
   // so the badge never dips or counts a row twice.
   if (raw.startsWith('PARK_END:')) {
-    const slice = getSlice(raw.slice('PARK_END:'.length));
+    const key = raw.slice('PARK_END:'.length).toLowerCase();
+    const slice = getSlice(key);
+    const gap = parkGaps.get(key);
+    parkGaps.delete(key);
+    replayingSlices.delete(key);
     if (slice) {
       runFlush();
       slice.heldMentions = 0;
       slice.heldRows = 0;
       bumpRevisionFor([slice.channel]);
+      // The span Rust could not keep comes from recent history, around the
+      // rows already shown and the backlog just appended.
+      if (gap !== undefined && slice.provider === 'twitch' && slice.channelId) {
+        void preloadChannel(slice.channel, slice.channelId, {
+          mode: 'backfill',
+          afterMs: gap.afterMs,
+          beforeMs: Date.now() + BACKFILL_MARGIN_MS,
+        });
+      }
     }
     return;
   }
-  // More arrived while it was held back than Rust kept: drop the older rows so
-  // the backlog that follows never sits under a hole.
+  // More arrived while it was held back than Rust kept. The rows already shown
+  // stay; the backlog that follows is joined to them by a history backfill once
+  // it has arrived (PARK_END), so the tab never empties or sits under a hole.
   if (raw.startsWith('PARK_GAP:')) {
-    withSlice(raw.slice('PARK_GAP:'.length), (slice) => {
-      slice.messages = [];
-    });
+    const slice = getSlice(raw.slice('PARK_GAP:'.length));
+    if (slice) {
+      // Rows still waiting in the flush queue are older than the backlog, so
+      // they count as shown.
+      runFlush();
+      let newest: number | null = null;
+      for (let i = slice.messages.length - 1; i >= 0 && newest === null; i--) {
+        newest = messageTs(slice.messages[i]);
+      }
+      parkGaps.set(slice.channel, {
+        afterMs: newest === null ? null : newest - BACKFILL_MARGIN_MS,
+      });
+    }
     return;
   }
   if (raw.startsWith('RECONNECTING:')) {
@@ -2628,6 +2728,7 @@ function handleWsMessage(raw: string) {
               ? 'timeout'
               : 'ban';
           const affected = new Set<string>();
+          const present = new Set<string>();
           for (const msg of slice.messages) {
             const msgUserId =
               typeof msg !== 'string'
@@ -2635,9 +2736,10 @@ function handleWsMessage(raw: string) {
                 : msg.match?.(/(?:^@|;)user-id=([^;]+)/)?.[1];
             const msgId =
               typeof msg !== 'string' ? msg.id : msg.match?.(/(?:^|;)id=([^;]+)/)?.[1];
+            if (msgId) present.add(msgId);
             if (msgUserId === parsed.target_user_id && msgId) affected.add(msgId);
           }
-          slice.clearedUserContexts = new Map(slice.clearedUserContexts).set(parsed.target_user_id, {
+          slice.clearedUserContexts = withClearedEntry(slice.clearedUserContexts, present, parsed.target_user_id, {
             context: {
               type: modType,
               duration: parsed.ban_duration,
@@ -2827,6 +2929,9 @@ function handleWsMessage(raw: string) {
             );
           }
           return;
+        }
+        if (!slice.seenMessageIds.has(messageId)) {
+          noteRowReceived(parsed, Date.now(), replayingSlices.get(targetChannel) === slice);
         }
         appendStructuredMessage(slice, parsed);
         return;
@@ -3433,9 +3538,25 @@ function reviewHold(key: string): void {
   const hold =
     slice.refCount > 0 && slice.backgroundRefs >= slice.refCount && (sliceViewers.get(key) ?? 0) === 0;
   if (hold === slice.heldBack) return;
+  const wasHeld = slice.heldBack;
   slice.heldBack = hold;
+  if (wasHeld && !hold) replayingSlices.set(key, slice);
   sendRoute(hold ? `PARK:${holdCap(slice)}:${key}` : `UNPARK:${key}`);
   scheduleParkedEmoteRelease(key, hold);
+  if (wasHeld && !hold) reloadShownEmotes(slice);
+}
+
+/**
+ * A chat shown again re-reads its emote set from Rust's table, which every 7TV
+ * edit patched while it was hidden. The page's own copy may be gone (released
+ * while parked) or may predate an edit it could not apply, so it is reloaded
+ * even when present; subscribers (the picker) re-query when the set lands. A
+ * Twitch channel without its id yet has nothing to fetch with.
+ */
+function reloadShownEmotes(slice: ChannelSlice): void {
+  const { provider } = slice;
+  if (provider !== 'kick' && !slice.channelId) return;
+  void ensureChannelEmotes(parseKey(slice.channel).channel, slice.channelId ?? '', provider, { force: true });
 }
 
 /** A chat held back this long gives up its emote set. */
@@ -3471,6 +3592,8 @@ function scheduleParkedEmoteRelease(key: string, held: boolean): void {
 /** The whole route, for a socket that just opened. */
 function sendRouteSnapshot(): void {
   const { channels } = useChatConnectionStore.getState();
+  // A new socket has no replay in flight, so no PARK_END is coming for these.
+  replayingSlices.clear();
   sendRoute(`SUBS:${Array.from(channels.keys()).join('\t')}`);
   for (const slice of channels.values()) {
     if (slice.heldBack) sendRoute(`PARK:${holdCap(slice)}:${slice.channel}`);

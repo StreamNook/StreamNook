@@ -14,6 +14,7 @@ import { updatePresence } from '../services/supabaseService';
 import { patchSettings, settingsDiff } from '../utils/settingsBroadcast';
 import { IS_MOBILE } from '../utils/platform';
 import { makeKey, parseKey } from '../utils/providerKey';
+import { clearPauseIntent, forgetOwnChannel, holdOwnChannel } from '../utils/pausePark';
 import { isStrayYouTubeFavoriteId } from '../utils/favorites';
 import { buildProviderUrl, streamProvider } from '../utils/streamProvider';
 import { categoryNavigation, type StreamCategoryTarget } from '../utils/streamCategory';
@@ -100,6 +101,8 @@ function logQualityFallback(requested: string, actual: string) {
 
 export interface Toast {
   id: number;
+  /** A short heading drawn above the message. */
+  title?: string;
   message: string | React.ReactNode;
   type: 'info' | 'success' | 'warning' | 'error' | 'live' | 'channel_points';
   action?: {
@@ -541,7 +544,7 @@ interface AppState {
   patchCurrentStream: (partial: Partial<TwitchStream>) => void;
   /** `sticky` keeps the toast on screen until it is dismissed or removed by
    *  id; pass `id` to be able to remove it. */
-  addToast: (message: string | React.ReactNode, type: 'info' | 'success' | 'warning' | 'error' | 'live' | 'channel_points', action?: { label: string; onClick: () => void }, options?: { skipIsland?: boolean; alwaysShow?: boolean; avatarUrl?: string; avatarSevenTvId?: string; source?: 'plugin'; sticky?: boolean; id?: number }) => void;
+  addToast: (message: string | React.ReactNode, type: 'info' | 'success' | 'warning' | 'error' | 'live' | 'channel_points', action?: { label: string; onClick: () => void }, options?: { skipIsland?: boolean; alwaysShow?: boolean; avatarUrl?: string; avatarSevenTvId?: string; source?: 'plugin'; sticky?: boolean; id?: number; title?: string }) => void;
   removeToast: (id: number) => void;
   loadSettings: () => Promise<void>;
   updateSettings: (newSettings: Settings) => Promise<void>;
@@ -588,8 +591,11 @@ interface AppState {
   playMedia: (type: 'clip' | 'video', url: string, info: MediaInfo) => Promise<void>;
   stopStream: (options?: { preserveBackend?: boolean }) => Promise<void>;
   /** Restart the current stream (stops and starts again). `quiet` skips the
-   *  confirmation toast, for a reload the viewer did not ask for. */
-  restartStream: (options?: { quiet?: boolean }) => Promise<void>;
+   *  confirmation toast, for a reload the viewer did not ask for. `ifUrl` makes
+   *  the restart a no-op when the stream's URL is no longer that one (a swap
+   *  replaced the stream the caller saw). A call made while a restart is
+   *  running returns that restart. */
+  restartStream: (options?: { quiet?: boolean; ifUrl?: string }) => Promise<void>;
   isRestartingStream: boolean;  // True from restart begin until the new stream URL lands; the player freezes its loader on this so it doesn't poll a dead backend
   /** Phone only: why a provider stream has no picture while its chat keeps
    *  running (it ended, is offline, or failed to start). Keyed by the stream's
@@ -713,8 +719,17 @@ interface AppState {
 /** Newest-first, in-memory ceiling across channels. */
 const MOD_LOG_CAP = 300;
 
+/** Seconds to wait before each retry of a mod-log history load Rust rejected;
+ *  the last wait repeats until the load succeeds or the channel closes. */
+const MOD_LOG_RETRY_SECONDS = [1, 2, 4, 8, 16, 30];
+
+/** The history load that owns each channel. A load keeps retrying only while it
+ *  still owns its channel, so a channel is never retried by two loads at once. */
+const modLogLoadOwner = new Map<string, number>();
+let modLogLoadCount = 0;
+
 /** Replace the entry with the same id in place, or put it on top. */
-const upsertModLog = (logs: ModLogEvent[], entry: ModLogEvent): ModLogEvent[] => {
+const upsertModLog =(logs: ModLogEvent[], entry: ModLogEvent): ModLogEvent[] => {
   const index = logs.findIndex((l) => l.id === entry.id);
   if (index === -1) return [entry, ...logs].slice(0, MOD_LOG_CAP);
   const next = logs.slice();
@@ -775,7 +790,7 @@ interface OfflineNotice {
 
 /** What Rust decided about a stream that looked offline. */
 type OfflineDecision =
-  | { action: 'nothing'; why: string }
+  | { action: 'nothing'; why: string; ended?: boolean }
   | { action: 'still_live' }
   | { action: 'resume' }
   | { action: 'offline_chat' }
@@ -924,6 +939,13 @@ async function applyOfflineDecision(
   switch (decision.action) {
     case 'nothing':
       Logger.debug('[AutoSwitch] Nothing to do:', decision.why);
+      // A confirmed end leaves nothing else to do, but the stream's pause and
+      // the own-channel memory end with it. Other answers (a newer stream, a
+      // confirmation already running) say nothing about the stream's end.
+      if (decision.ended) {
+        clearPauseIntent('main');
+        forgetOwnChannel();
+      }
       return;
     case 'still_live':
       Logger.debug('[AutoSwitch] Helix kept reporting the stream online; treating as a blip');
@@ -937,9 +959,15 @@ async function applyOfflineDecision(
       await get().restartStream({ quiet: true });
       return;
     case 'notify':
+      // The stream is confirmed over: its pause and the own-channel memory end with it.
+      clearPauseIntent('main');
+      forgetOwnChannel();
       say(decision.notice);
       return;
     case 'offline_chat':
+      // The stream ended: its pause and the own-channel memory end with it.
+      clearPauseIntent('main');
+      forgetOwnChannel();
       // Stop the video but not the chat, then settle into offline chat.
       await invoke('stop_stream').catch((e) => Logger.warn('[AutoSwitch] Error stopping stream video:', e));
       setTimeout(() => {
@@ -968,6 +996,8 @@ async function applyOfflineDecision(
         // The relay, the watch session, drops and channel points (services/watch_start.rs).
         await invoke('watch_stop', { preserveBackend: false }).catch((e) => Logger.warn('[AutoSwitch] Error stopping stream:', e));
         await invoke('stop_chat').catch((e) => Logger.warn('[AutoSwitch] Error stopping chat:', e));
+        clearPauseIntent('main');
+        forgetOwnChannel();
         set({ streamUrl: null, activeQuality: null, availableQualities: [], adSource: null, currentStream: null, currentMediaType: null });
         say(decision.notice);
         if (decision.action === 'stop') return;
@@ -1016,6 +1046,9 @@ let transientSwapInFlight: Promise<void> | null = null;
 // winning over the restore issued after it, and every one of them a full relay
 // restart and player rebuild.
 let transientSwapSeq = 0;
+// The restart that is running. A second restart asked for meanwhile is that
+// one, so two relay cycles never overlap.
+let restartInFlight: Promise<void> | null = null;
 async function settleTransientSwap(): Promise<void> {
   if (transientSwapInFlight) await transientSwapInFlight.catch(() => {});
 }
@@ -1602,20 +1635,38 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (get().loadedModLogChannels.has(key)) return;
     // Mark loaded up-front so a re-render doesn't kick off a duplicate load.
     set((state) => ({ loadedModLogChannels: new Set(state.loadedModLogChannels).add(key) }));
+    const load = ++modLogLoadCount;
+    modLogLoadOwner.set(key, load);
+    // This load still owns the channel and the channel is still open (closing
+    // it drops the key from loadedModLogChannels).
+    const isCurrent = () => modLogLoadOwner.get(key) === load && get().loadedModLogChannels.has(key);
     try {
-      const entries = await invoke<ModLogEvent[]>('load_mod_logs', { channel: key });
-      if (!entries || entries.length === 0) return;
-      set((state) => {
-        const seen = new Set(state.modLogs.map((l) => l.id));
-        const fresh = entries.filter((e) => e && e.id && !seen.has(e.id));
-        if (fresh.length === 0) return { modLogs: state.modLogs };
-        const merged = [...state.modLogs, ...fresh]
-          .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-          .slice(0, MOD_LOG_CAP);
-        return { modLogs: merged };
-      });
-    } catch (e) {
-      Logger.warn(`[ModLogs] Failed to load history for ${key}:`, e);
+      for (let attempt = 0; ; attempt++) {
+        try {
+          const entries = await invoke<ModLogEvent[]>('load_mod_logs', { channel: key });
+          if (!isCurrent() || !entries || entries.length === 0) return;
+          set((state) => {
+            const seen = new Set(state.modLogs.map((l) => l.id));
+            const fresh = entries.filter((e) => e && e.id && !seen.has(e.id));
+            if (fresh.length === 0) return { modLogs: state.modLogs };
+            const merged = [...state.modLogs, ...fresh]
+              .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+              .slice(0, MOD_LOG_CAP);
+            return { modLogs: merged };
+          });
+          return;
+        } catch (e) {
+          Logger.warn(`[ModLogs] Failed to load history for ${key}:`, e);
+          // The history never arrived: ask again after a growing wait, until it
+          // does or the channel closes.
+          if (!isCurrent()) return;
+          const seconds = MOD_LOG_RETRY_SECONDS[Math.min(attempt, MOD_LOG_RETRY_SECONDS.length - 1)];
+          await new Promise<void>((resolve) => setTimeout(resolve, seconds * 1000));
+          if (!isCurrent()) return;
+        }
+      }
+    } finally {
+      if (modLogLoadOwner.get(key) === load) modLogLoadOwner.delete(key);
     }
   },
   pruneModLogsToChannels: (activeChannels) => set((state) => {
@@ -1820,12 +1871,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     // notifications use. The passive callers (live/whisper/drop/badge...) pass
     // { skipIsland: true } because they already register their own island entry,
     // and the rich JSX toasts can't ride the (string-only) event bus anyway, so
-    // this only fires for the ~80 string action toasts.
-    if (!options?.skipIsland && typeof message === 'string') {
+    // this only fires for the ~80 string action toasts. A toast whose id is
+    // already showing is the same notification updated in place, so it adds no
+    // second entry.
+    const alreadyShowing = options?.id !== undefined && get().toasts.some(t => t.id === options.id);
+    if (!options?.skipIsland && !alreadyShowing && typeof message === 'string') {
       const islandOn = !ln || (ln.enabled !== false && ln.use_dynamic_island !== false);
       if (islandOn) {
         emit('action-notification', {
-          text: message,
+          text: options?.title ? `${options.title}. ${message}` : message,
           level: type,
           // Only the callers that are about a PERSON pass this; everything else
           // keeps the level glyph.
@@ -1863,18 +1917,25 @@ export const useAppStore = create<AppState>((set, get) => ({
     // A live toast, or one carrying an action (Undo), leaves its timer to the
     // surface that draws it, so hovering holds it: an Undo must never vanish
     // under the pointer. Other toasts use the simple auto-dismiss.
+    // A toast added with an id that is already showing replaces it in place:
+    // same position and same createdAt, with the old auto-dismiss timer cleared
+    // so it cannot remove the replacement.
+    const showing = get().toasts.find(t => t.id === id);
+    if (showing?.timeoutId) clearTimeout(showing.timeoutId);
+    const place = (toast: Toast) => set(state => ({
+      toasts: state.toasts.some(t => t.id === id)
+        ? state.toasts.map(t => (t.id === id ? { ...toast, createdAt: t.createdAt } : t))
+        : [...state.toasts, toast],
+    }));
+
     if (type === 'live' || options?.sticky || action) {
-      set(state => ({
-        toasts: [...state.toasts, { id, message, type, action, duration, createdAt }]
-      }));
+      place({ id, title: options?.title, message, type, action, duration, createdAt });
     } else {
       const timeoutId = setTimeout(() => {
         set(state => ({ toasts: state.toasts.filter(t => t.id !== id) }));
       }, duration);
 
-      set(state => ({
-        toasts: [...state.toasts, { id, message, type, action, timeoutId, duration, createdAt }]
-      }));
+      place({ id, title: options?.title, message, type, action, timeoutId, duration, createdAt });
     }
   },
   removeToast: (id) => {
@@ -2397,6 +2458,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   stopStream: async (options) => {
     const preserveBackend = options?.preserveBackend ?? false;
     trackActivity('Stopped stream');
+    // Stopping the stream drops the viewer's pause and the own-channel memory.
+    clearPauseIntent('main');
+    forgetOwnChannel();
     // Starts wait for this close to finish (settleStop).
     let finishStop: () => void = () => {};
     const stopping = new Promise<void>((resolve) => {
@@ -2481,6 +2545,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   restartStream: async (options) => {
+    if (restartInFlight) return restartInFlight;
     const quiet = options?.quiet ?? false;
     const { currentStream, settings, currentMediaType, isAutoSwitching } = get();
     if (!currentStream) {
@@ -2509,9 +2574,24 @@ export const useAppStore = create<AppState>((set, get) => ({
     const quality = settings.quality;
     const provider = streamProvider(currentStream);
 
+    // From here this call is the restart that is running, until it ends or
+    // hands a dead channel to the offline decision (which may restart again).
+    let release = () => {};
+    const running = new Promise<void>((resolve) => {
+      release = () => {
+        if (restartInFlight === running) restartInFlight = null;
+        resolve();
+      };
+    });
+    restartInFlight = running;
+
     // Provider streams re-resolve through their own adapter. Same shape as the
     // Twitch path below, minus the Helix repair/liveness steps it can't use.
     if (provider !== 'twitch') {
+      if (options?.ifUrl && get().streamUrl !== options.ifUrl) {
+        release();
+        return;
+      }
       try {
         set({ isRestartingStream: true });
         await invoke('stop_stream');
@@ -2535,7 +2615,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         set({ isRestartingStream: false });
         // A failed re-resolve on these platforms usually means the stream
         // ended, so check rather than retrying into a loop.
+        release();
         await get().handleStreamOffline();
+      } finally {
+        release();
       }
       return;
     }
@@ -2563,9 +2646,16 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
     }
     
+    // A swap still resolving must land before the relay is cycled under it.
+    await settleTransientSwap();
+    // The stream the caller saw has been replaced (by that swap or another):
+    // there is nothing left to recover.
+    if (options?.ifUrl && get().streamUrl !== options.ifUrl) {
+      release();
+      return;
+    }
+
     try {
-      // A swap still resolving must land before the relay is cycled under it.
-      await settleTransientSwap();
       // Freeze the running player's loader BEFORE the backend goes down: the relay
       // and its LL origin stop here, but the old hls.js instance lives until the
       // new streamUrl lands (~1-2s of resolve), and polling a dead origin in that
@@ -2603,6 +2693,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         if (!live) {
           Logger.info(`[Stream] ${channel} is offline; routing to auto-switch instead of restarting`);
           set({ isRestartingStream: false });
+          release();
           await get().handleStreamOffline();
           return;
         }
@@ -2622,6 +2713,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       // Always release the freeze; on the recovery path startStream set a fresh
       // streamUrl and the remounted player must be allowed to load.
       if (get().isRestartingStream) set({ isRestartingStream: false });
+      release();
     }
   },
 
@@ -2944,6 +3036,18 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (!preResolved) logQualityFallback(requestedQuality, result.quality);
       // The row is Rust's; only the unified lists' provider marks ride along.
       const info: TwitchStream = { ...started.row, provider: seed?.provider, watch_url: seed?.watch_url };
+      // The signed-in broadcaster opening their own live channel: it opens
+      // paused, chat only (no second video pipeline on the machine that is
+      // streaming, and no echo into the stream). Once per opening; any other
+      // channel resets that.
+      const me = get().currentUser?.user_id;
+      if (me && info.user_id === me) {
+        if (holdOwnChannel(makeKey('twitch', info.user_login))) {
+          Logger.warn('[Stream] your own channel opens paused (chat only)');
+        }
+      } else {
+        forgetOwnChannel();
+      }
 
       set({ streamUrl: result.url, activeQuality: result.quality, adSource: adSourceFrom(result), availableQualities: result.available ?? [], playbackKind: 'hls', currentStream: info, currentMediaType: 'live', originalMediaUrl: null, vodPlayback: null, liveRewind: null, liveRewindAvailable: null, liveRewindAnchor: null, liveLeftOffSecs: null, offlineRoom: null, offlineRoomLive: null, offlineRoomJoining: false, isHomeActive: false });
 
@@ -3022,6 +3126,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         return;
       }
 
+      // An offline room plays nothing: no pause to keep, and the next time
+      // the broadcaster's own channel goes live it opens paused again.
+      clearPauseIntent('main');
+      forgetOwnChannel();
       const info: TwitchStream = { ...(opened.row as TwitchStream), user_login: login, is_live: false };
       set({
         streamUrl: 'offline',

@@ -19,7 +19,7 @@ vi.mock('./assetCacheQueue', () => ({
   forgetAssetRequests: vi.fn(),
 }));
 
-const { enhanceRustEmotes, fetchAllEmotes, getCachedEmoteUrl } = await import('./emoteService');
+const { enhanceRustEmotes, fetchAllEmotes, getCachedEmoteUrl, rememberRowEmoteFile } = await import('./emoteService');
 
 beforeEach(() => invoke.mockReset());
 
@@ -59,4 +59,11 @@ test('loading a channel set is one call, with no index load and no page-side tok
   const args = calls.find((c) => c[0] === 'fetch_channel_emotes')![1] as Record<string, unknown>;
   assert.equal('accessToken' in args, false);
   assert.ok(['1x', '2x', '3x', '4x'].includes(args.tier as string));
+});
+
+test('a history row segment seeds the 7TV disk map at this window tier', () => {
+  assert.equal(getCachedEmoteUrl('rowonly', '7tv'), undefined);
+  rememberRowEmoteFile('rowonly', 'C:\\cache\\universal\\emotes\\rowonly@2x.webp');
+  // Looked up at the default tier, the one the seed used.
+  assert.equal(getCachedEmoteUrl('rowonly', '7tv'), 'asset://localhost/C%3A%5Ccache%5Cuniversal%5Cemotes%5Crowonly%402x.webp');
 });

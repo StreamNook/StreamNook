@@ -793,62 +793,6 @@ pub fn run() {
     // Streamlink-bundled build (native resolution no longer needs it).
     cleanup_legacy_streamlink_bundle();
 
-    // Migrate emote cache if app version changed (handles format changes like webp → avif)
-    // This clears stale emote files that may have the old format
-    let current_version = env!("CARGO_PKG_VERSION");
-    match services::universal_cache_service::migrate_emote_cache_on_version_change(current_version)
-    {
-        Ok(migrated) => {
-            if migrated {
-                debug!("[Main] Emote cache migrated for new version");
-            }
-        }
-        Err(e) => {
-            error!("[Main] Failed to migrate emote cache: {}", e);
-        }
-    }
-
-    // One-time, FFZ-only purge so previously cached static FFZ frames re-download
-    // as their animated variants. Targeted by source URL, so other providers'
-    // emote caches are left intact.
-    match services::universal_cache_service::migrate_ffz_animated_cache() {
-        Ok(purged) => {
-            if purged {
-                debug!("[Main] FFZ emote cache purged for animated re-fetch");
-            }
-        }
-        Err(e) => {
-            error!("[Main] Failed to purge FFZ emote cache: {}", e);
-        }
-    }
-
-    // One-time purge of cached 7TV paint images that hold a still frame, so
-    // animated paints re-download as animations.
-    match services::universal_cache_service::migrate_paint_animated_cache() {
-        Ok(purged) => {
-            if purged {
-                debug!("[Main] 7TV paint cache purged for animated re-fetch");
-            }
-        }
-        Err(e) => {
-            error!("[Main] Failed to purge 7TV paint cache: {}", e);
-        }
-    }
-
-    // One-time purge of OLD non-7TV emote files (bare-id keys + URL-derived
-    // `.0`/`.bin` extensions) so they re-cache under provider-namespaced keys with
-    // content-typed extensions. 7TV files (already correct) are kept.
-    match services::universal_cache_service::migrate_emote_namespace_cache() {
-        Ok(purged) => {
-            if purged {
-                debug!("[Main] Non-7TV emote cache purged for namespaced re-fetch");
-            }
-        }
-        Err(e) => {
-            error!("[Main] Failed to purge non-7TV emote cache: {}", e);
-        }
-    }
-
     // Forced-logout switch. Bumping FORCE_REAUTH_TOKEN in account_store signs every
     // user out on their next launch so they re-login into the current auth-storage
     // layout. It runs HERE, before the Tauri builder creates any window, so the
@@ -938,6 +882,11 @@ pub fn run() {
     ));
     let eventsub_service_state = commands::eventsub::EventSubServiceState(eventsub_service.clone());
 
+    // Closed here, before any window can ask the cache for a list or write a
+    // file, on every platform. The setup closure owns it and moves it into the
+    // migrations' task, which opens it when they end however they end; if setup
+    // never runs, dropping the app drops the closure and opens it.
+    let startup_gate = services::universal_cache_service::StartupGateGuard::close();
     let builder = Builder::new();
     // Single-instance is desktop-only and must be registered first: it forwards a
     // streamnook:// deep link opened while the app is already running to the
@@ -1035,6 +984,18 @@ pub fn run() {
         .manage(emote_service_state)
         .manage(emote_prefetch_state)
         .manage(eventsub_service_state)
+        // A reload of the main page destroys the players that were using the
+        // relay sessions, and nothing in the new page knows their ids, so the
+        // sessions are released as it starts loading. The first load finds none.
+        .on_page_load(|webview, payload| {
+            if webview.label() == "main" && payload.event() == tauri::webview::PageLoadEvent::Started {
+                tauri::async_runtime::spawn(async {
+                    services::tiktok_relay::stop_all_except("");
+                    services::youtube_dash::stop_all_except("").await;
+                    let _ = services::multi_nook_server::MultiNookServer::stop_all().await;
+                });
+            }
+        })
         .setup(move |app| {
             // Only the primary instance reaches setup (a deep-link secondary
             // exits inside the single-instance plugin), so this is the proof
@@ -1155,6 +1116,79 @@ pub fn run() {
             if let Ok(s) = settings_arc.lock() {
                 services::twitch_resolver::refresh_device_codecs(&s);
             }
+            // The cache migrations, then the temp files a crashed run left in the
+            // cache folders, on the blocking pool. The migrations run in order,
+            // each once per install, and edit the manifest in memory before the
+            // sweep reads which files it names. The sweep runs once per process
+            // and only while no other instance holds the cache's writers lock; a
+            // cache write that starts first waits for it. The cache lists the
+            // windows ask for, and the file writes they start, wait on the start-up
+            // gate, which the guard moved in below holds closed until the
+            // migrations end, however they end.
+            tauri::async_runtime::spawn_blocking(move || {
+                // Migrate emote cache if app version changed (handles format changes like webp → avif)
+                // This clears stale emote files that may have the old format
+                let current_version = env!("CARGO_PKG_VERSION");
+                match services::universal_cache_service::migrate_emote_cache_on_version_change(current_version)
+                {
+                    Ok(migrated) => {
+                        if migrated {
+                            debug!("[Main] Emote cache migrated for new version");
+                        }
+                    }
+                    Err(e) => {
+                        error!("[Main] Failed to migrate emote cache: {}", e);
+                    }
+                }
+
+                // One-time, FFZ-only purge so previously cached static FFZ frames re-download
+                // as their animated variants. Targeted by source URL, so other providers'
+                // emote caches are left intact.
+                match services::universal_cache_service::migrate_ffz_animated_cache() {
+                    Ok(purged) => {
+                        if purged {
+                            debug!("[Main] FFZ emote cache purged for animated re-fetch");
+                        }
+                    }
+                    Err(e) => {
+                        error!("[Main] Failed to purge FFZ emote cache: {}", e);
+                    }
+                }
+
+                // One-time purge of cached 7TV paint images that hold a still frame, so
+                // animated paints re-download as animations.
+                match services::universal_cache_service::migrate_paint_animated_cache() {
+                    Ok(purged) => {
+                        if purged {
+                            debug!("[Main] 7TV paint cache purged for animated re-fetch");
+                        }
+                    }
+                    Err(e) => {
+                        error!("[Main] Failed to purge 7TV paint cache: {}", e);
+                    }
+                }
+
+                // One-time purge of OLD non-7TV emote files (bare-id keys + URL-derived
+                // `.0`/`.bin` extensions) so they re-cache under provider-namespaced keys with
+                // content-typed extensions. 7TV files (already correct) are kept.
+                match services::universal_cache_service::migrate_emote_namespace_cache() {
+                    Ok(purged) => {
+                        if purged {
+                            debug!("[Main] Non-7TV emote cache purged for namespaced re-fetch");
+                        }
+                    }
+                    Err(e) => {
+                        error!("[Main] Failed to purge non-7TV emote cache: {}", e);
+                    }
+                }
+
+                // The lists are final now; the sweep below changes no entry.
+                drop(startup_gate);
+
+                if let Ok(cache_root) = services::universal_cache_service::get_universal_cache_dir() {
+                    services::universal_cache_service::sweep_temp_files_once(&cache_root);
+                }
+            });
             // Runtime stall detector: measures backend freezes (tokio-blocked vs
             // whole-process) and records them to the capture file. Started here,
             // inside the tokio runtime Tauri set up.
@@ -1222,6 +1256,8 @@ pub fn run() {
             // its `ad-pivot` reload event to the player.
             services::stream_server::set_app_handle(app_handle.clone());
             services::providers::set_app_handle(app_handle.clone());
+            // Cached art over loopback, off the UI thread (Windows only).
+            services::cache_file_server::start();
 
             // Start the shared 7TV EventAPI WebSocket client (live emote set
             // updates, and later cosmetics). It idle-connects and subscribes
@@ -1925,6 +1961,7 @@ pub fn run() {
             get_stream_low_latency,
             get_stream_prefetch_present,
             get_relay_live_distance,
+            relay_rebuild_live_edge,
             set_experimental_low_latency,
             set_codec_preference,
             report_solo_codec_failure,
@@ -2261,6 +2298,7 @@ pub fn run() {
             assign_badge_positions,
             export_manifest,
             asset_cache_enqueue,
+            cache_file_server,
             asset_cache_set_burst,
             get_cached_file,
             get_cached_files,
@@ -2354,6 +2392,7 @@ pub fn run() {
             // Session resume
             save_resume_snapshot,
             take_resume_snapshot,
+            restart_app,
             // Announcements
             fetch_announcements,
             fetch_user_chat_logs,

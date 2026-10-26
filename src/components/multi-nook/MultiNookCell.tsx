@@ -46,6 +46,8 @@ import { AudioBoostControls } from '../AudioBoostFaders';
 import { canGridProvider, PROVIDER_WATCH, type ProviderId } from '../../types/providers';
 import { SevenTvAvatar } from '../SevenTvAvatar';
 import { slotSevenTvId } from './slotSevenTvId';
+import { tileClickAction } from './tileClick';
+import { CLICK_TOGGLE_DELAY_MS } from '../../utils/pauseRoutes';
 
 interface MultiNookCellProps {
   slot: MultiNookSlot;
@@ -66,10 +68,17 @@ interface MultiNookCellProps {
  *  space) can cancel it first — that's what stops the audible mute/unmute flip on
  *  the way to maximizing. Focus-ON stays instant; only this toggle-off is deferred. */
 let pendingFocusToggle: ReturnType<typeof setTimeout> | null = null;
-const clearPendingFocusToggle = () => {
+/** The same deferral for a maximized tile's click, which toggles play and pause
+ *  once a double-click can no longer claim it. */
+let pendingPlayToggle: ReturnType<typeof setTimeout> | null = null;
+const clearPendingTileClick = () => {
   if (pendingFocusToggle) {
     clearTimeout(pendingFocusToggle);
     pendingFocusToggle = null;
+  }
+  if (pendingPlayToggle) {
+    clearTimeout(pendingPlayToggle);
+    pendingPlayToggle = null;
   }
 };
 
@@ -488,7 +497,7 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
       if (target.closest('button') || target.closest('.plyr__controls') || ignoresPlayerMouse(target)) return;
       e.stopPropagation();
       e.preventDefault();
-      clearPendingFocusToggle(); // a double-click cancels any deferred unfocus
+      clearPendingTileClick(); // a double-click cancels any deferred unfocus or play toggle
       toggleMaximizeSlot(id);
     };
     el.addEventListener('dblclick', onDblCapture, { capture: true });
@@ -612,24 +621,36 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
       style={combinedStyle}
       onContextMenu={handleContextMenu}
       onClick={(e) => {
-        // Ignore clicks on buttons, tools, or plyr control sliders.
+        // Buttons, tools and plyr control sliders are not the picture. The
+        // second click of a double-click (detail >= 2) is left for the
+        // capture-phase dblclick handler that fills the space.
         const target = e.target as HTMLElement;
-        if (target.closest('button') || target.closest('.plyr__controls') || ignoresPlayerMouse(target)) return;
-        // While maximized, a bare click shouldn't change focus (you're already
-        // watching this one). The second click of a double-click (detail === 2)
-        // is left for the capture-phase dblclick handler that fills the space.
-        if (isMaximized || e.detail >= 2) return;
-        clearPendingFocusToggle();
-        if (!isFocused) {
+        const action = tileClickAction({
+          onControl: !!target.closest('button') || !!target.closest('.plyr__controls') || ignoresPlayerMouse(target),
+          isMaximized,
+          isFocused,
+          detail: e.detail,
+        });
+        if (action === 'ignore') return;
+        clearPendingTileClick();
+        if (action === 'focus') {
           // Focusing a tile (the common audio switch) stays instant.
           toggleFocusSlot(id);
-        } else {
+        } else if (action === 'unfocus-later') {
           // Un-focusing (unmute-all) is deferred so a double-click can cancel it
           // before it fires — no mute/unmute flip while maximizing this tile.
           pendingFocusToggle = setTimeout(() => {
             pendingFocusToggle = null;
             toggleFocusSlot(id);
           }, 260);
+        } else {
+          // A maximized tile is already the one being watched, so a click on the
+          // picture plays or pauses it, held back so a double-click (which
+          // restores the grid) never blips the stream.
+          pendingPlayToggle = setTimeout(() => {
+            pendingPlayToggle = null;
+            playerRef.current?.togglePlay();
+          }, CLICK_TOGGLE_DELAY_MS);
         }
       }}
       className={`${gridSpanClass} relative w-full h-full overflow-hidden ${
@@ -653,7 +674,6 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
           backgroundColor: '#000',
           objectFit: isMaximized || isPortrait ? 'contain' : 'cover',
         }}
-        autoPlay
         playsInline
       />
 

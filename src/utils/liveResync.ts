@@ -1,0 +1,258 @@
+import Hls from 'hls.js';
+
+/** How long a resync waits for the video to play again before the caller
+ *  rebuilds the stream. */
+export const RESYNC_WINDOW_MS = 8000;
+
+/** A target less than this ahead of the playhead leaves it where it is. */
+const MIN_GAIN_SECS = 1;
+
+/** Seconds of buffer kept ahead of the playhead after the move, the same
+ *  margin the Go Live button leaves. */
+const CUSHION_SECS = 2;
+
+/** How many seeks by anyone restart the freeze timer. */
+const MAX_SEEK_REARMS = 3;
+
+/** Seconds the playhead must have moved forward by playing for the stream not
+ *  to count as frozen. */
+const PROGRESS_SECS = 0.25;
+
+/** Seconds the playhead must have stood still, with progress already made in
+ *  the window, for the freeze timer to measure one more window. */
+const STALL_SECS = 2;
+
+/** Seconds the playhead must move past its last position to count as advancing. */
+const ADVANCE_EPSILON = 0.01;
+
+/** Windows that may end stalled (short play or a still playhead) before the stream is stuck. */
+const MAX_STALLED_ENDS = 2;
+
+/** Where the buffered video ends, or the playhead when nothing is buffered. */
+function bufferedEnd(video: HTMLVideoElement): number {
+  const b = video.buffered;
+  return b.length > 0 ? b.end(b.length - 1) : video.currentTime;
+}
+
+/** Whether some buffered range holds `t`. */
+function buffers(video: HTMLVideoElement, t: number): boolean {
+  const b = video.buffered;
+  for (let i = 0; i < b.length; i++) {
+    if (b.start(i) <= t && t <= b.end(i)) return true;
+  }
+  return false;
+}
+
+/** Where the playlist the origin serves now begins, or null while hls.js has no
+ *  level details yet. */
+function windowStart(hls: Hls): number | null {
+  const start = hls.latestLevelDetails?.fragmentStart;
+  return start != null && Number.isFinite(start) ? start : null;
+}
+
+/**
+ * After a pause outlived the live window (pausePark 'resync'; loading already
+ * restarted): the playhead makes one move to the live edge, and only once the
+ * buffer holds the place it is moving to, which is the lower of hls.js's live
+ * sync point and the buffered end less a small cushion. That place must also be
+ * inside the window the origin serves now: video buffered before the pause is
+ * not the live edge, so until new data covers the place the playhead stays put.
+ * A seek into video that is not downloaded yet would freeze the element. After
+ * the move it is left alone.
+ *
+ * The move waits for a playlist reload that started after the resync. Two
+ * timers judge the stream. The data timer starts with the resync, is never
+ * re-armed and, one window later, reports the stream stuck when no new live data
+ * arrived: a main fragment inside the reloaded playlist's window was never
+ * buffered and the playhead has not reached that window, whatever the old
+ * buffer is doing. The freeze timer starts when new live data is first buffered
+ * (or at this follower's own seek) and reports the stream stuck one window later
+ * unless the playhead moved forward by playing. Any other seek of the element
+ * restarts the freeze timer from where it landed, at most MAX_SEEK_REARMS
+ * times; after that a seek never restarts it and the distance it jumped does not
+ * count as progress. This follower's own seek never counts against that limit.
+ * Wherever the freeze timer starts outside a seek it measures from the playhead
+ * at that moment. A window with progress ends the check only when the playhead is
+ * inside the served window, still advancing (moved within STALL_SECS), has played
+ * at least half a window and the buffered end grew by at least half a window; then
+ * every listener is released. Otherwise the freeze timer measures again from
+ * there, and a window that ended with a short play or a still playhead counts as
+ * stalled: MAX_STALLED_ENDS of them report the stream stuck. `onStuck` runs only
+ * while the video is not paused. Returns the cancel.
+ */
+export function followLiveAfterResync(
+  hls: Hls,
+  video: HTMLVideoElement,
+  onStuck: () => void,
+  log?: (message: string) => void,
+): () => void {
+  let seeked = false;
+  let reloaded = false; // a playlist arrived after the resync started
+  let liveData = false; // a main fragment inside that playlist's window was buffered
+  let baseline = video.currentTime; // where the freeze window measures progress from
+  let jumped = 0; // seconds the playhead was moved by seeks that did not restart the window
+  let lastPos = video.currentTime; // the playhead before the latest seek
+  let rearms = 0;
+  let ownSeekTo: number | null = null; // where this follower's own seek was sent, until its event arrives
+  let lastAdvanceAt = Date.now(); // when the playhead last moved forward by playing
+  let edgeAtArm = bufferedEnd(video); // where the buffered video ended when the freeze window began
+  let stalledEnds = 0; // windows that ended with a short play or a still playhead
+  let dataTimer: ReturnType<typeof setTimeout> | null = null;
+  let freezeTimer: ReturnType<typeof setTimeout> | null = null;
+  const armFreeze = () => {
+    if (freezeTimer !== null) clearTimeout(freezeTimer);
+    lastAdvanceAt = Date.now();
+    edgeAtArm = bufferedEnd(video);
+    freezeTimer = setTimeout(judgeFreeze, RESYNC_WINDOW_MS);
+  };
+  // The freeze window measures from the playhead as it is now, unless a seek is
+  // still landing (its own event measures from where it lands).
+  const measureFromHere = () => {
+    if (video.seeking) return;
+    baseline = video.currentTime;
+    jumped = 0;
+    lastPos = video.currentTime;
+  };
+  const tryMove = () => {
+    if (seeked || !reloaded) return;
+    const pos = hls.liveSyncPosition;
+    if (pos == null || !Number.isFinite(pos)) return;
+    const first = windowStart(hls);
+    if (first === null) return;
+    const b = video.buffered;
+    if (b.length === 0) return;
+    const target = Math.min(pos, b.end(b.length - 1) - CUSHION_SECS);
+    if (!Number.isFinite(target) || target <= video.currentTime + MIN_GAIN_SECS) return;
+    if (target < first || !buffers(video, target)) return;
+    seeked = true;
+    ownSeekTo = target;
+    video.currentTime = target;
+    baseline = video.currentTime;
+    jumped = 0;
+    lastPos = video.currentTime;
+    hls.off(Hls.Events.LEVEL_UPDATED, tryMove);
+    hls.off(Hls.Events.FRAG_BUFFERED, tryMove);
+    armFreeze();
+    log?.(`resync: playhead to the live edge (${target.toFixed(1)}s)`);
+  };
+  const onLevel = () => {
+    reloaded = true;
+  };
+  const onFragment = (_e: unknown, data?: { frag?: { type?: string; start: number; duration: number } }) => {
+    const f = data?.frag;
+    if (!reloaded || !f || f.type !== 'main') return;
+    const first = windowStart(hls);
+    // hls.js reports a fragment buffered even when it appended nothing, so only
+    // one the element actually holds counts as live data.
+    if (
+      first !== null &&
+      f.start + f.duration > first &&
+      !liveData &&
+      buffers(video, f.start + Math.min(f.duration / 2, 0.25))
+    ) {
+      liveData = true;
+      measureFromHere();
+      armFreeze();
+    }
+  };
+  const onTimeUpdate = () => {
+    if (video.seeking) return;
+    if (video.currentTime > lastPos + ADVANCE_EPSILON) lastAdvanceAt = Date.now();
+    lastPos = video.currentTime;
+  };
+  // Any seek, whoever made it (this follower, hls.js's own live sync, the
+  // watchdog, a gap nudge), measures progress from where it landed. While the
+  // freeze timer runs it restarts it, up to MAX_SEEK_REARMS times; past that
+  // the seek only adds the distance it jumped, which is not progress. This
+  // follower's own seek already measured from its target and uses no re-arm.
+  const onSeeking = () => {
+    const now = video.currentTime;
+    const own = ownSeekTo !== null && now === ownSeekTo;
+    ownSeekTo = null;
+    if (own) {
+      lastPos = now;
+      return;
+    }
+    if (freezeTimer !== null && rearms >= MAX_SEEK_REARMS) {
+      jumped += now - lastPos;
+    } else {
+      if (freezeTimer !== null) rearms += 1;
+      baseline = now;
+      jumped = 0;
+      if (freezeTimer !== null) armFreeze();
+    }
+    lastPos = now;
+  };
+  const stop = () => {
+    if (dataTimer !== null) {
+      clearTimeout(dataTimer);
+      dataTimer = null;
+    }
+    if (freezeTimer !== null) {
+      clearTimeout(freezeTimer);
+      freezeTimer = null;
+    }
+    hls.off(Hls.Events.LEVEL_UPDATED, onLevel);
+    hls.off(Hls.Events.LEVEL_UPDATED, tryMove);
+    hls.off(Hls.Events.FRAG_BUFFERED, tryMove);
+    hls.off(Hls.Events.FRAG_BUFFERED, onFragment);
+    video.removeEventListener('timeupdate', onTimeUpdate);
+    video.removeEventListener('seeking', onSeeking);
+  };
+  // One window after the resync: no new live data and a playhead short of the
+  // served window means the stream is stuck. Otherwise the freeze timer decides,
+  // and starts here when nothing else started it.
+  function judgeData() {
+    dataTimer = null;
+    const first = windowStart(hls);
+    const reached = reloaded && first !== null && video.currentTime >= first;
+    if (!liveData && !reached) {
+      stop();
+      if (!video.paused) onStuck();
+      return;
+    }
+    if (freezeTimer === null) {
+      measureFromHere();
+      armFreeze();
+    }
+  }
+  function judgeFreeze() {
+    freezeTimer = null;
+    if (video.paused) {
+      stop();
+      return;
+    }
+    const progress = video.currentTime - baseline - jumped;
+    if (progress > PROGRESS_SECS) {
+      const first = windowStart(hls);
+      const atLive = seeked || (reloaded && first !== null && video.currentTime >= first);
+      const half = (RESYNC_WINDOW_MS / 2000) * Math.min(1, video.playbackRate || 1);
+      const advancing = Date.now() - lastAdvanceAt < STALL_SECS * 1000;
+      const played = progress >= half;
+      const fed = bufferedEnd(video) - edgeAtArm >= half;
+      if (atLive && advancing && played && fed) {
+        stop();
+        return;
+      }
+      if (!advancing || !played) stalledEnds += 1;
+      if (stalledEnds >= MAX_STALLED_ENDS) {
+        stop();
+        onStuck();
+        return;
+      }
+      measureFromHere();
+      armFreeze();
+      return;
+    }
+    stop();
+    onStuck();
+  }
+  hls.on(Hls.Events.LEVEL_UPDATED, onLevel); // before tryMove, so tryMove sees the reload
+  hls.on(Hls.Events.LEVEL_UPDATED, tryMove);
+  hls.on(Hls.Events.FRAG_BUFFERED, onFragment);
+  hls.on(Hls.Events.FRAG_BUFFERED, tryMove);
+  video.addEventListener('timeupdate', onTimeUpdate);
+  video.addEventListener('seeking', onSeeking);
+  dataTimer = setTimeout(judgeData, RESYNC_WINDOW_MS);
+  return stop;
+}

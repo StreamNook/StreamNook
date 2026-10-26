@@ -380,6 +380,48 @@ pub struct LlOrigin {
     /// The stream `link_adapt` knows this origin by (`solo` or a tile id): its
     /// lost tails and its own segment downloads are reported under it.
     adapt_id: Mutex<String>,
+    /// The upstream playlist the reader follows, so a parked origin can restart it.
+    upstream: Mutex<Option<String>>,
+    /// No player asked for the playlist for `PARK_IDLE_MS`: the reader is
+    /// stopped and the edge held until a player asks again (`unpark`).
+    parked: AtomicBool,
+    /// Whether the live edge holds a window the reader published since the last
+    /// unpark. False from an `unpark` until the restarted reader's first
+    /// publish (`mark_fresh`), so a playlist request in between waits for it
+    /// instead of being handed the window held across the park. True at
+    /// creation, after a stop, and while parked.
+    fresh_after_unpark: AtomicBool,
+    /// Set by `rebuild_at_edge`, taken by the reader it starts: that reader
+    /// drops the held window and rebuilds it from the upstream's live edge,
+    /// whether or not the window already reaches the upstream.
+    force_rebuild: AtomicBool,
+    /// When a player last asked for the playlist (`mono_ms`; 0 = not yet). A
+    /// player that stopped loading lets the reader park the origin (`PARK_IDLE_MS`).
+    last_playlist_ms: AtomicU64,
+    /// Held for the whole of `start`, so two starts on one origin run one after
+    /// the other instead of interleaving their probes and installs.
+    start_lock: tokio::sync::Mutex<()>,
+    /// Set by `close`: the stream this origin served is gone for good, so no
+    /// start, install or unpark may bring a reader back.
+    closed: AtomicBool,
+    /// Re-signs the upstream playlist URL when the first polls after an unpark
+    /// are refused (`PlaylistHealth`). Set by the relay that owns the stream.
+    resigner: Mutex<Option<Resigner>>,
+    /// Playlist requests being served right now (`ServeGuard`). The reader never
+    /// parks the origin while one is in flight: the request is waiting on the
+    /// window it would be handed.
+    serving: AtomicUsize,
+}
+
+/// One playlist request in flight on an origin, counted in `LlOrigin::serving`
+/// from `LlOrigin::serving_guard` until it drops, on every return path and when
+/// the request is cancelled.
+struct ServeGuard<'a>(&'a AtomicUsize);
+
+impl Drop for ServeGuard<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 /// Hard kill switch: when true, no origin activates and the relays fall back to the
@@ -396,6 +438,171 @@ static DISABLED: AtomicBool = AtomicBool::new(true);
 /// The viewer's chosen distance behind live (`video_player.ll_target_latency`), in
 /// milliseconds; 0 is Auto.
 static TARGET_GAP_MS: AtomicU64 = AtomicU64::new(0);
+
+/// A player that has not asked for the playlist this long has stopped loading
+/// (the desktop players stop 2 s into a pause): the reader parks the origin and
+/// the next request wakes it (stream_server, multi_nook_server). The desktop
+/// players start over at the live edge after a shorter pause (pausePark.ts
+/// RESYNC_AFTER_PAUSE_MS) and ask the origin to rebuild its window first
+/// (`rebuild_at_edge`), so a resync never plays the window held across the
+/// pause whether or not the origin has parked yet.
+const PARK_IDLE_MS: u64 = 30_000;
+
+/// `PARK_IDLE_MS`, or `SN_PARK_IDLE_MS` from the environment when it holds a
+/// positive number of milliseconds (test runs use seconds). Read once.
+pub(crate) fn park_idle_ms() -> u64 {
+    static SPAN: Lazy<u64> = Lazy::new(|| {
+        std::env::var("SN_PARK_IDLE_MS")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .filter(|ms| *ms > 0)
+            .unwrap_or(PARK_IDLE_MS)
+    });
+    *SPAN
+}
+
+/// Milliseconds on a monotonic clock, for idle spans. Never 0.
+pub(crate) fn mono_ms() -> u64 {
+    static T0: Lazy<std::time::Instant> = Lazy::new(std::time::Instant::now);
+    (T0.elapsed().as_millis() as u64).saturating_add(1)
+}
+
+/// Whether an origin last asked at `last` (0 = never) has been idle for
+/// `span` at `now`.
+pub(crate) fn idle_for_park(last: u64, now: u64, span: u64) -> bool {
+    last != 0 && now.saturating_sub(last) >= span
+}
+
+/// A plugin swap that arrived while the relay was parked: stored in `slot`
+/// (replacing an older one) and `None` returned, so nothing starts. When the
+/// relay is not parked the URL comes back to be applied now, and a swap held
+/// earlier is dropped as superseded.
+pub(crate) fn hold_swap_if_parked(
+    slot: &mut Option<String>,
+    parked: bool,
+    url: String,
+) -> Option<String> {
+    if parked {
+        *slot = Some(url);
+        None
+    } else {
+        *slot = None;
+        Some(url)
+    }
+}
+
+/// The held swap, taken once a player is loading again. A relay that is still
+/// parked keeps it.
+pub(crate) fn take_held_swap(slot: &mut Option<String>, parked: bool) -> Option<String> {
+    if parked {
+        None
+    } else {
+        slot.take()
+    }
+}
+
+/// How long a playlist request waits, after an unpark, for the restarted
+/// reader's first publish before the relay answers 503. Under the main
+/// player's 10 s `levelLoadingTimeOut`, so the player retries instead of
+/// timing out.
+const UNPARK_PUBLISH_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// `UNPARK_PUBLISH_TIMEOUT`, or `SN_UNPARK_PUBLISH_SECS` from the environment
+/// when it holds a positive number of seconds. Read once.
+fn unpark_publish_timeout() -> Duration {
+    static SPAN: Lazy<Duration> = Lazy::new(|| {
+        publish_timeout_from(std::env::var("SN_UNPARK_PUBLISH_SECS").ok().as_deref())
+    });
+    *SPAN
+}
+
+fn publish_timeout_from(secs: Option<&str>) -> Duration {
+    secs.and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|s| *s > 0)
+        .map(Duration::from_secs)
+        .unwrap_or(UNPARK_PUBLISH_TIMEOUT)
+}
+
+/// What a playlist request came to at the parts origin.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum PlaylistServe {
+    /// The playlist to answer with.
+    Playlist(String),
+    /// No edge: the origin is off for this stream and the relay falls through
+    /// to the plain upstream path.
+    Inactive,
+    /// A woken origin whose reader has not published yet. The relay answers
+    /// 503 and the player asks again; the held window is never served, and
+    /// the request never falls through to the upstream.
+    NotReady,
+}
+
+/// A callback that re-signs a refused upstream playlist URL: given the stale
+/// URL, it yields the fresh one.
+pub(crate) type Resigner =
+    Arc<dyn Fn(String) -> futures::future::BoxFuture<'static, Option<String>> + Send + Sync>;
+
+/// A spawned task that is aborted when its handle is dropped, so a task never
+/// outlives the reader (or the loop pass) that owns it.
+struct AbortOnDrop<T>(JoinHandle<T>);
+
+impl<T> Drop for AbortOnDrop<T> {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// Playlist polls after an unpark in which a 403 or 404 is read as an expired
+/// signature rather than an offline stream.
+const RESIGN_POLLS_AFTER_UNPARK: u32 = 3;
+
+/// The reader's tally of failing playlist polls, and its one chance after an
+/// unpark to re-sign a refused playlist before a refusal counts toward going
+/// offline.
+struct PlaylistHealth {
+    /// Consecutive failing polls; reset by any good poll.
+    fails: u32,
+    /// Polls started by this reader.
+    polls: u32,
+    /// Whether a refusal in the first polls may still be answered by a re-sign.
+    resign_left: bool,
+}
+
+impl PlaylistHealth {
+    fn new(after_unpark: bool) -> Self {
+        Self {
+            fails: 0,
+            polls: 0,
+            resign_left: after_unpark,
+        }
+    }
+
+    fn polled(&mut self) {
+        self.polls = self.polls.saturating_add(1);
+    }
+
+    fn healthy(&mut self) {
+        self.fails = 0;
+    }
+
+    /// Counts a failing poll and returns the run of failures so far.
+    fn failed(&mut self) -> u32 {
+        self.fails += 1;
+        self.fails
+    }
+
+    /// Whether a refused poll should be answered by a re-sign instead of
+    /// being counted: once per unpark, only in the first polls, only for a
+    /// 403 or 404.
+    fn wants_resign(&mut self, status: u16) -> bool {
+        if self.resign_left && self.polls <= RESIGN_POLLS_AFTER_UNPARK && matches!(status, 403 | 404) {
+            self.resign_left = false;
+            return true;
+        }
+        false
+    }
+}
+
 /// How far behind the relay's edge AVPlayer sits past the playlist's hold-back
 /// (measured: a 0.936 s hold-back plays 1.44 to 1.71 s behind the edge, a 0.624 s
 /// one 1.13 to 1.20 s).
@@ -982,7 +1189,46 @@ impl LlOrigin {
             retired: Mutex::new(VecDeque::new()),
             apple_part_target: Mutex::new(None),
             adapt_id: Mutex::new(String::new()),
+            upstream: Mutex::new(None),
+            parked: AtomicBool::new(false),
+            fresh_after_unpark: AtomicBool::new(true),
+            force_rebuild: AtomicBool::new(false),
+            last_playlist_ms: AtomicU64::new(0),
+            start_lock: tokio::sync::Mutex::new(()),
+            closed: AtomicBool::new(false),
+            resigner: Mutex::new(None),
+            serving: AtomicUsize::new(0),
         })
+    }
+
+    /// Counts a playlist request as in flight until the guard drops.
+    fn serving_guard(&self) -> ServeGuard<'_> {
+        self.serving.fetch_add(1, Ordering::SeqCst);
+        ServeGuard(&self.serving)
+    }
+
+    /// Install (or clear) how this origin's upstream URL is re-signed.
+    pub(crate) fn set_resigner(&self, resigner: Option<Resigner>) {
+        *self.resigner.lock().unwrap() = resigner;
+    }
+
+    /// Ask the installed resigner for a fresh URL in place of `stale`. `None`
+    /// when no resigner is installed or it found nothing.
+    async fn resign(&self, stale: &str) -> Option<String> {
+        let resigner = { self.resigner.lock().unwrap().clone() };
+        let resigner = resigner?;
+        resigner(stale.to_string()).await
+    }
+
+    /// Make `url` the playlist an unparked reader of generation `gen` and any
+    /// later unpark follow. False when that reader is no longer the current one.
+    fn adopt_upstream(&self, gen: u64, url: String) -> bool {
+        let _task = self.reader_task.lock().unwrap();
+        if self.generation.load(Ordering::SeqCst) != gen {
+            return false;
+        }
+        *self.upstream.lock().unwrap() = Some(url);
+        true
     }
 
     /// Name the stream this origin serves, for `link_adapt`.
@@ -1046,7 +1292,12 @@ impl LlOrigin {
     /// error (offline UI) on true death, or a graceful non-LL serve if the upstream
     /// recovered. Without this the reader spun forever serving the last-good
     /// playlist while `edge_version` never advanced (a silent permanent freeze).
-    fn deactivate_offline(&self, reason: &str) {
+    /// A reader that is no longer the current one (`gen` is stale) changes nothing.
+    fn deactivate_offline(&self, reason: &str, gen: u64) {
+        let task = self.reader_task.lock().unwrap();
+        if self.generation.load(Ordering::SeqCst) != gen {
+            return;
+        }
         warn!("[LLOrigin] deactivating origin (upstream gone): {reason}");
         crate::services::ll_diagnostics::event(&format!(
             "\"ev\":\"o_offline\",\"reason\":{reason:?}"
@@ -1054,13 +1305,42 @@ impl LlOrigin {
         *self.live_edge.lock().unwrap() = None;
         *self.transmux.lock().unwrap() = None;
         *self.cmaf_video.lock().unwrap() = None;
+        drop(task);
         self.wake_serves();
     }
 
     /// Stop any running reader and clear state. Called on stream stop / restart.
     pub fn stop(&self) {
+        // Held to the end of the clears, so an `unpark` waiting on the lock
+        // finds the origin stopped and starts nothing.
+        let task = self.reader_task.lock().unwrap();
+        self.stop_locked(task);
+    }
+
+    /// The stream this origin served is gone for good (a closed tile): stop it,
+    /// and refuse every later start, install and unpark.
+    pub fn close(&self) {
+        self.closed.store(true, Ordering::SeqCst);
+        self.stop();
+    }
+
+    /// `stop()` unless the origin is parked: a parked origin is left as it is
+    /// and false is returned, so a rendition switch cannot restart a relay that
+    /// is deliberately idle. True when it stopped.
+    pub fn stop_unless_parked(&self) -> bool {
+        let task = self.reader_task.lock().unwrap();
+        if self.parked.load(Ordering::SeqCst) {
+            return false;
+        }
+        self.stop_locked(task);
+        true
+    }
+
+    /// The stop itself, run with the `reader_task` lock held; the lock is
+    /// released after the clears.
+    fn stop_locked(&self, mut task: std::sync::MutexGuard<'_, Option<JoinHandle<()>>>) {
         self.generation.fetch_add(1, Ordering::SeqCst);
-        if let Some(h) = self.reader_task.lock().unwrap().take() {
+        if let Some(h) = task.take() {
             h.abort();
         }
         *self.live_edge.lock().unwrap() = None;
@@ -1068,7 +1348,273 @@ impl LlOrigin {
         *self.cmaf_video.lock().unwrap() = None;
         self.retired.lock().unwrap().clear();
         *self.apple_part_target.lock().unwrap() = None;
+        self.parked.store(false, Ordering::SeqCst);
+        self.fresh_after_unpark.store(true, Ordering::SeqCst);
+        self.force_rebuild.store(false, Ordering::SeqCst);
+        *self.upstream.lock().unwrap() = None;
+        self.last_playlist_ms.store(0, Ordering::SeqCst);
+        drop(task);
         self.wake_serves();
+    }
+
+    /// No player asked for the playlist for `PARK_IDLE_MS`: stop downloading. The reader
+    /// ends and the half-read in-progress segment is closed the way an abandoned
+    /// tail is (stream_response): what arrived stays, the transmuxer drops its
+    /// partial input and bridges the loss, and the segment is finished at the sum
+    /// of its parts. So the playlist never shrinks under a client that read it, a
+    /// paused player's blocking reloads get it back (serve_playlist_apple), and a
+    /// reader restarted soon after (`unpark`, a gap too small to rebuild) carries on
+    /// from a complete segment instead of an unfinishable one. A long park rebuilds
+    /// at the live edge (plan_catch_up).
+    pub fn park(&self) -> bool {
+        let mut task = self.reader_task.lock().unwrap();
+        if !self.is_active() || self.parked.swap(true, Ordering::SeqCst) {
+            return false;
+        }
+        self.finish_park(&mut task);
+        true
+    }
+
+    /// The reader's own park, for the reader started as generation `gen`. It
+    /// parks only while that reader is still the current one and no player has
+    /// asked since the idle span ran out; a request that lands after the
+    /// reader decided leaves the origin running.
+    fn park_if_idle(&self, gen: u64) -> bool {
+        self.park_if_idle_at(gen, mono_ms())
+    }
+
+    fn park_if_idle_at(&self, gen: u64, now: u64) -> bool {
+        let mut task = self.reader_task.lock().unwrap();
+        if self.generation.load(Ordering::SeqCst) != gen
+            || !self.is_active()
+            || self.parked.swap(true, Ordering::SeqCst)
+        {
+            return false;
+        }
+        if !self.idle_park_due_at(now) {
+            self.parked.store(false, Ordering::SeqCst);
+            return false;
+        }
+        self.finish_park(&mut task);
+        true
+    }
+
+    /// The park itself, run with the `reader_task` lock held and `parked` set:
+    /// retire the reader, then close the half-read tail.
+    fn finish_park(&self, task: &mut Option<JoinHandle<()>>) {
+        self.generation.fetch_add(1, Ordering::SeqCst);
+        if let Some(h) = task.take() {
+            h.abort();
+        }
+        if let Some(t) = self.transmux.lock().unwrap().as_mut() {
+            t.drop_partial_input();
+        }
+        self.close_tail();
+        // A parked origin serves the window it holds, however recently it was
+        // woken before.
+        self.fresh_after_unpark.store(true, Ordering::SeqCst);
+        self.wake_serves();
+        info!("[LLOrigin] parked (player paused)");
+    }
+
+    /// A player asked for the playlist. The request is noted first, so a reader
+    /// deciding to park sees it; `wakes` is whether this request is from a
+    /// player that is loading and wants a parked origin reading again.
+    pub fn wake_for_request(self: &Arc<Self>, wakes: bool) {
+        self.note_playlist_request();
+        if wakes && self.is_parked() {
+            self.unpark();
+        }
+    }
+
+    /// Restart a parked reader. The held edge stays in place so the origin never
+    /// reads as inactive, but a playlist request waits for the reader's first
+    /// publish (`fresh_after_unpark`) rather than being served that stale window.
+    pub fn unpark(self: &Arc<Self>) -> bool {
+        let mut task = self.reader_task.lock().unwrap();
+        if self.closed.load(Ordering::SeqCst) || !self.parked.load(Ordering::SeqCst) {
+            return false;
+        }
+        self.parked.store(false, Ordering::SeqCst);
+        self.note_playlist_request();
+        let Some(url) = self.upstream.lock().unwrap().clone().filter(|_| self.is_active()) else {
+            return false;
+        };
+        let gen = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        self.fresh_after_unpark.store(false, Ordering::SeqCst);
+        *task = Some(tokio::spawn(run_reader(self.clone(), url, http_client(), gen, true)));
+        info!("[LLOrigin] unparked; reader back at the live edge");
+        true
+    }
+
+    /// Drop the held window and rebuild it from the upstream's live edge, the
+    /// rebuild a park and unpark gives, parked or not. The current reader is
+    /// replaced by one that rebuilds before it publishes; a playlist request
+    /// waits for that publish (`fresh_after_unpark`) and is never handed the
+    /// window held before. False when the origin is closed, inactive or has no
+    /// upstream to read.
+    pub fn rebuild_at_edge(self: &Arc<Self>) -> bool {
+        let mut task = self.reader_task.lock().unwrap();
+        if self.closed.load(Ordering::SeqCst) || !self.is_active() {
+            return false;
+        }
+        let Some(url) = self.upstream.lock().unwrap().clone() else {
+            return false;
+        };
+        self.parked.store(false, Ordering::SeqCst);
+        self.note_playlist_request();
+        let gen = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        if let Some(h) = task.take() {
+            h.abort();
+        }
+        if let Some(t) = self.transmux.lock().unwrap().as_mut() {
+            t.reset_assembly();
+        }
+        self.force_rebuild.store(true, Ordering::SeqCst);
+        self.fresh_after_unpark.store(false, Ordering::SeqCst);
+        *task = Some(tokio::spawn(run_reader(self.clone(), url, http_client(), gen, true)));
+        info!("[LLOrigin] page asked for a rebuild; reader back at the live edge");
+        true
+    }
+
+    /// Whether the reader started as generation `gen` is to rebuild the window
+    /// from the live edge. Taken under the reader lock, so a reader that a newer
+    /// start or rebuild already replaced never takes the request meant for its
+    /// successor.
+    fn take_force_rebuild(&self, gen: u64) -> bool {
+        let _task = self.reader_task.lock().unwrap();
+        self.generation.load(Ordering::SeqCst) == gen && self.force_rebuild.swap(false, Ordering::SeqCst)
+    }
+
+    /// The reader started as generation `gen` has brought the window up to the
+    /// upstream's live edge: playlist requests held since the unpark go out.
+    /// Nothing changes for a reader that is no longer the current one.
+    fn mark_fresh(&self, gen: u64) {
+        // Under the reader lock, like `adopt_upstream`, so a stale reader's
+        // check cannot pass and then store after a newer unpark cleared the flag.
+        let _task = self.reader_task.lock().unwrap();
+        if self.generation.load(Ordering::SeqCst) != gen {
+            return;
+        }
+        self.fresh_after_unpark.store(true, Ordering::SeqCst);
+        self.notify.notify_waiters();
+    }
+
+    /// Waits up to `wait` for the first publish after an unpark. True once the
+    /// window is fresh or the edge is gone (the caller answers inactive), false
+    /// when `wait` runs out first, or when the origin parked while this request
+    /// waited: a park marks the window fresh only so a paused player is handed
+    /// what the origin holds, and a request that waited for a new reader must
+    /// not be handed that.
+    async fn wait_fresh(&self, wait: Duration) -> bool {
+        let deadline = tokio::time::Instant::now() + wait;
+        let mut waited = false;
+        loop {
+            let notified = self.notify.notified();
+            tokio::pin!(notified);
+            // Registered before the check, so a publish between the two is not lost.
+            notified.as_mut().enable();
+            if !self.is_active() {
+                return true;
+            }
+            if self.fresh_after_unpark.load(Ordering::SeqCst) {
+                return !(waited && self.is_parked());
+            }
+            waited = true;
+            let now = tokio::time::Instant::now();
+            if now >= deadline || tokio::time::timeout(deadline - now, notified).await.is_err() {
+                return false;
+            }
+        }
+    }
+
+    pub fn is_parked(&self) -> bool {
+        self.parked.load(Ordering::SeqCst)
+    }
+
+    /// Marks the origin parked without needing a live edge, for tests outside
+    /// this module that only read the flag.
+    #[cfg(test)]
+    pub(crate) fn mark_parked_for_test(&self) {
+        self.parked.store(true, Ordering::SeqCst);
+    }
+
+    /// Gives the origin a one-segment live edge and an upstream, for tests
+    /// outside this module that exercise the wake path.
+    #[cfg(test)]
+    pub(crate) fn arm_for_test(&self, upstream: &str) {
+        let mut segments = VecDeque::new();
+        segments.push_back(make_segment(1, None, true, vec![(vec![1], 1.0)]));
+        *self.live_edge.lock().unwrap() = Some(LiveEdge {
+            init_url: String::new(),
+            init_bytes: None,
+            container: Container::Ts,
+            target_duration: 2,
+            part_target: PART_TARGET,
+            segments,
+        });
+        *self.upstream.lock().unwrap() = Some(upstream.to_string());
+    }
+
+    /// Whether a reader task is running, for tests outside this module.
+    #[cfg(test)]
+    pub(crate) fn has_reader_for_test(&self) -> bool {
+        self.reader_task.lock().unwrap().is_some()
+    }
+
+    /// The in-progress tail at a park: finished at what it holds, or dropped when
+    /// it is still a bare shell (listed only as the preload hint, so no listed
+    /// segment disappears).
+    fn close_tail(&self) {
+        let tail = {
+            let mut g = self.live_edge.lock().unwrap();
+            let Some(edge) = g.as_mut() else { return };
+            let (pop, finish) = match edge.segments.back() {
+                Some(s) if !s.complete && s.parts.is_empty() => (edge.segments.len() > 1, None),
+                Some(s) if !s.complete => (false, Some(s.sn)),
+                _ => (false, None),
+            };
+            if pop {
+                edge.segments.pop_back();
+            }
+            finish
+        };
+        if let Some(sn) = tail {
+            self.finish_segment(sn, self.generation.load(Ordering::SeqCst));
+        }
+    }
+
+    /// A player asked for the playlist (either form).
+    fn note_playlist_request(&self) {
+        self.note_playlist_request_at(mono_ms());
+    }
+
+    fn note_playlist_request_at(&self, ms: u64) {
+        self.last_playlist_ms.store(ms, Ordering::SeqCst);
+    }
+
+    /// No player has asked for the playlist for `PARK_IDLE_MS` as of `now`, and
+    /// none is waiting on an answer.
+    fn idle_park_due_at(&self, now: u64) -> bool {
+        self.serving.load(Ordering::SeqCst) == 0
+            && idle_for_park(self.last_playlist_ms.load(Ordering::SeqCst), now, park_idle_ms())
+    }
+
+    /// A player on the whole-segment path asked for the playlist, which this
+    /// origin does not serve while inactive.
+    pub(crate) fn note_plain_request(&self) {
+        self.note_playlist_request();
+    }
+
+    /// Nothing is being read for this origin's player: the reader is parked, or
+    /// the origin is inactive (whole-segment path) and no player has asked for
+    /// the playlist for the park span.
+    pub(crate) fn parked_or_idle(&self) -> bool {
+        self.parked_or_idle_at(mono_ms())
+    }
+
+    fn parked_or_idle_at(&self, now: u64) -> bool {
+        self.is_parked() || (!self.is_active() && self.idle_park_due_at(now))
     }
 
     /// Probe the upstream and, if it's a low-latency broadcast we can serve, build the
@@ -1079,6 +1625,17 @@ impl LlOrigin {
     /// when the origin declined). Awaited from stream start so the player can read the
     /// result before constructing hls.js.
     pub async fn start(self: Arc<Self>, upstream_playlist_url: String) -> StartOutcome {
+        if self.closed.load(Ordering::SeqCst) {
+            return StartOutcome::default();
+        }
+        // Stopped before the queue, so a start already running ends early at
+        // its next check and a stop that lands while this one waits is seen.
+        self.stop();
+        let requested = self.generation.load(Ordering::SeqCst);
+        let _start = self.start_lock.lock().await;
+        if self.generation.load(Ordering::SeqCst) != requested {
+            return StartOutcome::default();
+        }
         self.stop();
         // The experimental-low-latency kill switch (`DISABLED`, default on) gates the
         // TS parts path, which has a clean fallback (the stable whole-segment path
@@ -1105,6 +1662,9 @@ impl LlOrigin {
                 return StartOutcome::default();
             }
         };
+        if self.start_superseded(gen) {
+            return StartOutcome::default();
+        }
         let base = base_of(&upstream_playlist_url);
         let up = parse_upstream(&text, &base);
         let has_prefetch = !up.prefetch.is_empty();
@@ -1183,6 +1743,9 @@ impl LlOrigin {
                     warn!("[LLOrigin] CMAF init fetch failed ({e}); parts fall back to nominal durations");
                 }
             }
+            if self.start_superseded(gen) {
+                return inactive;
+            }
         }
 
         // Backfill the last few complete segments so the first playlist has #EXTINF.
@@ -1196,7 +1759,11 @@ impl LlOrigin {
             .cloned()
             .collect();
         for (sn, pdt, url) in backfill {
-            match client.get(&url).timeout(FETCH_TIMEOUT).send().await.ok() {
+            let fetched = client.get(&url).timeout(FETCH_TIMEOUT).send().await.ok();
+            if self.start_superseded(gen) {
+                return inactive;
+            }
+            match fetched {
                 Some(resp) => {
                     // Timed from the response, so the connection's setup (and
                     // the first one's handshake) is left out.
@@ -1209,7 +1776,7 @@ impl LlOrigin {
                         bytes.len() as u64,
                         t0.elapsed().as_secs_f64(),
                     );
-                    let parts = self.convert_parts(split_complete(&bytes, container));
+                    let parts = self.convert_parts(split_complete(&bytes, container), gen);
                     if !parts.is_empty() {
                         segments.push_back(make_segment(sn, pdt, true, parts));
                     }
@@ -1240,7 +1807,7 @@ impl LlOrigin {
             }
         };
 
-        *self.live_edge.lock().unwrap() = Some(LiveEdge {
+        let edge = LiveEdge {
             init_url,
             init_bytes,
             container,
@@ -1250,20 +1817,63 @@ impl LlOrigin {
             target_duration: TARGET_DURATION,
             part_target: PART_TARGET,
             segments,
+        };
+        let installed = self.install_started(gen, edge, upstream_playlist_url.clone(), || {
+            tokio::spawn(run_reader(self.clone(), upstream_playlist_url, client, gen, false))
         });
-        // Query string stripped: it is most of the length and can carry signed
-        // playback params that have no business in a log people send around.
-        info!(
-            "[LLOrigin] activated ({container:?} low-latency origin) for {}",
-            upstream_playlist_url.split('?').next().unwrap_or("")
-        );
-
-        let handle = tokio::spawn(run_reader(self.clone(), upstream_playlist_url, client, gen));
-        *self.reader_task.lock().unwrap() = Some(handle);
+        if !installed {
+            debug!("[LLOrigin] start superseded by a stop; nothing installed");
+            return inactive;
+        }
         StartOutcome {
             active: true,
             has_prefetch: true,
         }
+    }
+
+    /// Whether a stop has superseded the start that began as generation `gen`.
+    /// When it has, the transmuxer and CMAF track the start prepared are cleared
+    /// so nothing of it outlives the stop.
+    fn start_superseded(&self, gen: u64) -> bool {
+        if self.generation.load(Ordering::SeqCst) == gen {
+            return false;
+        }
+        *self.transmux.lock().unwrap() = None;
+        *self.cmaf_video.lock().unwrap() = None;
+        true
+    }
+
+    /// Take over for a start that probed as generation `gen`: set the live edge
+    /// and upstream, note the request and store the reader `spawn` makes, all under
+    /// the `reader_task` lock that `stop()` also takes. A start that a `stop()`
+    /// superseded since it began installs nothing (the transmuxer and CMAF track it
+    /// prepared are cleared) and returns false.
+    fn install_started(
+        &self,
+        gen: u64,
+        edge: LiveEdge,
+        upstream: String,
+        spawn: impl FnOnce() -> JoinHandle<()>,
+    ) -> bool {
+        let mut task = self.reader_task.lock().unwrap();
+        if self.generation.load(Ordering::SeqCst) != gen || self.closed.load(Ordering::SeqCst) {
+            *self.transmux.lock().unwrap() = None;
+            *self.cmaf_video.lock().unwrap() = None;
+            return false;
+        }
+        let container = edge.container;
+        *self.live_edge.lock().unwrap() = Some(edge);
+        // Query string stripped: it is most of the length and can carry signed
+        // playback params that have no business in a log people send around.
+        info!(
+            "[LLOrigin] activated ({container:?} low-latency origin) for {}",
+            upstream.split('?').next().unwrap_or("")
+        );
+
+        *self.upstream.lock().unwrap() = Some(upstream);
+        self.note_playlist_request();
+        *task = Some(spawn());
+        true
     }
 }
 
@@ -1313,23 +1923,47 @@ fn split_complete(bytes: &[u8], container: Container) -> Vec<Vec<u8>> {
 
 // ──────────────────────────── the streaming reader ────────────────────────────
 
+/// `after_unpark`: this reader replaces one a park stopped, so a refused first
+/// poll may be an expired signature (see `PlaylistHealth`).
 async fn run_reader(
     origin: Arc<LlOrigin>,
-    upstream_playlist_url: String,
+    mut upstream_playlist_url: String,
     client: Client,
     gen: u64,
+    after_unpark: bool,
 ) {
-    let base = base_of(&upstream_playlist_url);
+    let mut base = base_of(&upstream_playlist_url);
     // Connection to the NEXT in-progress segment, opened by `preopen_next` while
     // the current one was still streaming. Consumed by the fast path below;
     // discarded whenever the world doesn't match (the poll path then re-syncs).
-    let mut preopened: Option<(u64, JoinHandle<Option<(Response, Option<String>, String)>>)> = None;
+    // Aborted when dropped, so no pass of this loop and no end of this reader
+    // leaves a connection opening behind.
+    let mut preopened: Option<(
+        u64,
+        AbortOnDrop<Option<(Response, Option<String>, String)>>,
+    )> = None;
     // Consecutive failing playlist polls; reset on any good poll. Drives offline
     // deactivation so a permanently-dead upstream stops being served forever.
-    let mut consec_playlist_fail: u32 = 0;
+    let mut health = PlaylistHealth::new(after_unpark);
+    // The page asked for the window to be rebuilt from the live edge: stays set
+    // until the rebuild has replaced the window, across retried polls.
+    let mut forced = origin.take_force_rebuild(gen);
     loop {
         if gen != origin.generation.load(Ordering::SeqCst) {
             return;
+        }
+        // The player stopped asking (paused): stop reading until it asks again.
+        if origin.idle_park_due_at(mono_ms()) {
+            drop(preopened.take());
+            if origin.park_if_idle(gen) {
+                return;
+            }
+            // A request landed after the idle read: this reader keeps running.
+            // A superseded or inactive one ends at the next pass.
+            if !origin.is_active() {
+                return;
+            }
+            continue;
         }
 
         // Fast path: stream the preopened next segment. No playlist round trip, no
@@ -1346,9 +1980,9 @@ async fn run_reader(
                 }
             };
             if contiguous {
-                match tokio::time::timeout(PREOPEN_WAIT, &mut handle).await {
+                match tokio::time::timeout(PREOPEN_WAIT, &mut handle.0).await {
                     Ok(Ok(Some((resp, pdt, seg_url)))) => {
-                        match origin.push_shell(sn, pdt.clone()) {
+                        match origin.push_shell(sn, pdt.clone(), gen) {
                             Some(true) => {
                                 crate::services::ll_diagnostics::event(&format!(
                                     "\"ev\":\"o_shell\",\"path\":\"fast\",\"sn\":{sn},\"pdt\":{}",
@@ -1357,11 +1991,11 @@ async fn run_reader(
                                         .unwrap_or_else(|| "null".into())
                                 ));
                                 origin.wake_serves();
-                                let next = tokio::spawn(preopen_next(
+                                let next = AbortOnDrop(tokio::spawn(preopen_next(
                                     client.clone(),
                                     upstream_playlist_url.clone(),
                                     sn + 1,
-                                ));
+                                )));
                                 stream_response(
                                     &origin,
                                     resp,
@@ -1370,7 +2004,7 @@ async fn run_reader(
                                     Some((&client, seg_url.as_str())),
                                 )
                                 .await;
-                                if !origin.finish_segment(sn) {
+                                if !origin.finish_segment(sn, gen) {
                                     return;
                                 }
                                 crate::services::ll_diagnostics::event(&format!(
@@ -1385,7 +2019,7 @@ async fn run_reader(
                         }
                     }
                     Ok(_) => {} // preopen failed (no hint / ad window): poll path
-                    Err(_) => handle.abort(), // not ready in time: poll path
+                    Err(_) => handle.0.abort(), // not ready in time: poll path
                 }
             }
         }
@@ -1394,6 +2028,7 @@ async fn run_reader(
         // returns Ok for any HTTP status, so a 403/404 (stream offline, or an
         // expired usher-signed URL) would otherwise parse to an empty playlist and
         // loop forever; inspect the status and count failures toward deactivation.
+        health.polled();
         let text = match client
             .get(&upstream_playlist_url)
             .timeout(FETCH_TIMEOUT)
@@ -1403,10 +2038,24 @@ async fn run_reader(
             Ok(r) => {
                 let status = r.status();
                 if !status.is_success() {
-                    consec_playlist_fail += 1;
-                    warn!("[LLOrigin] reader playlist HTTP {status} ({consec_playlist_fail})");
-                    if consec_playlist_fail >= PLAYLIST_OFFLINE_LIMIT {
-                        origin.deactivate_offline(&format!("playlist HTTP {status}"));
+                    // The first polls after an unpark may meet a signature that
+                    // expired while parked: re-sign once and poll again before
+                    // the refusal counts toward going offline.
+                    if health.wants_resign(status.as_u16()) {
+                        warn!("[LLOrigin] reader playlist HTTP {status} right after an unpark; re-signing");
+                        if let Some(fresh) = origin.resign(&upstream_playlist_url).await {
+                            if !origin.adopt_upstream(gen, fresh.clone()) {
+                                return;
+                            }
+                            base = base_of(&fresh);
+                            upstream_playlist_url = fresh;
+                            continue;
+                        }
+                    }
+                    let fails = health.failed();
+                    warn!("[LLOrigin] reader playlist HTTP {status} ({fails})");
+                    if fails >= PLAYLIST_OFFLINE_LIMIT {
+                        origin.deactivate_offline(&format!("playlist HTTP {status}"), gen);
                         return;
                     }
                     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -1415,10 +2064,10 @@ async fn run_reader(
                 r.text().await.unwrap_or_default()
             }
             Err(e) => {
-                consec_playlist_fail += 1;
-                warn!("[LLOrigin] reader playlist fetch failed: {e} ({consec_playlist_fail})");
-                if consec_playlist_fail >= PLAYLIST_OFFLINE_LIMIT {
-                    origin.deactivate_offline("playlist fetch repeatedly failing");
+                let fails = health.failed();
+                warn!("[LLOrigin] reader playlist fetch failed: {e} ({fails})");
+                if fails >= PLAYLIST_OFFLINE_LIMIT {
+                    origin.deactivate_offline("playlist fetch repeatedly failing", gen);
                     return;
                 }
                 tokio::time::sleep(Duration::from_millis(500)).await;
@@ -1428,13 +2077,12 @@ async fn run_reader(
         let up = parse_upstream(&text, &base);
         let last_published_sn = match up.published.last() {
             Some((sn, _, _)) => {
-                consec_playlist_fail = 0; // a healthy poll
+                health.healthy(); // a healthy poll
                 *sn
             }
             None => {
-                consec_playlist_fail += 1;
-                if consec_playlist_fail >= PLAYLIST_OFFLINE_LIMIT {
-                    origin.deactivate_offline("playlist has no segments");
+                if health.failed() >= PLAYLIST_OFFLINE_LIMIT {
+                    origin.deactivate_offline("playlist has no segments", gen);
                     return;
                 }
                 tokio::time::sleep(Duration::from_millis(500)).await;
@@ -1500,7 +2148,9 @@ async fn run_reader(
         if origin.live_edge.lock().unwrap().is_none() {
             return;
         }
-        if already {
+        if already && !forced {
+            // The window already reaches the upstream's in-progress segment.
+            origin.mark_fresh(gen);
             tokio::time::sleep(Duration::from_millis(250)).await;
             continue;
         }
@@ -1522,12 +2172,13 @@ async fn run_reader(
                 None => return,
             }
         };
-        if newest_in_window + 1 < inprogress_sn {
+        if forced || newest_in_window + 1 < inprogress_sn {
             let oldest_published = match up.published.first() {
                 Some((sn, _, _)) => *sn,
                 None => unreachable!("published is non-empty (checked above)"),
             };
-            let (rebuild, fetch) = plan_catch_up(newest_in_window, oldest_published, inprogress_sn);
+            let (rebuild, fetch) =
+                catch_up_plan(forced, newest_in_window, oldest_published, inprogress_sn);
             // A rebuild jumps over segments the transmuxer never saw; completing
             // its half-assembled pre-gap PES with post-gap bytes would emit one
             // garbage sample, so drop that state before converting anything.
@@ -1546,7 +2197,7 @@ async fn run_reader(
                     filled = false;
                     break;
                 };
-                match fetch_published(&client, sn, seg_pdt.clone(), url, &origin).await {
+                match fetch_published(&client, sn, seg_pdt.clone(), url, &origin, gen).await {
                     Some(seg) => fetched.push(seg),
                     None => {
                         filled = false;
@@ -1595,11 +2246,15 @@ async fn run_reader(
                 }
             }
             origin.wake_serves();
+            forced = false;
         }
+        // The window now runs up to the upstream's in-progress segment (caught
+        // up, rebuilt, or already there): a request held since an unpark may go.
+        origin.mark_fresh(gen);
 
         // Create the in-progress segment shell and stream its parts in, preopening
         // the following segment's connection so the next boundary is seamless.
-        match origin.push_shell(inprogress_sn, pdt.clone()) {
+        match origin.push_shell(inprogress_sn, pdt.clone(), gen) {
             Some(true) => {}
             Some(false) => continue,
             None => return,
@@ -1612,14 +2267,14 @@ async fn run_reader(
         ));
         origin.wake_serves();
 
-        let next = tokio::spawn(preopen_next(
+        let next = AbortOnDrop(tokio::spawn(preopen_next(
             client.clone(),
             upstream_playlist_url.clone(),
             inprogress_sn + 1,
-        ));
+        )));
         stream_segment(&origin, &client, &inprogress_url, inprogress_sn, gen).await;
 
-        if !origin.finish_segment(inprogress_sn) {
+        if !origin.finish_segment(inprogress_sn, gen) {
             return;
         }
         crate::services::ll_diagnostics::event(&format!(
@@ -1751,6 +2406,25 @@ fn plan_catch_up(
     }
 }
 
+/// `plan_catch_up`, except that a `forced` plan (the page asked for a rebuild)
+/// treats no segment as held: the window is always rebuilt from the live edge,
+/// with the same minimal backfill, however current the held window looks.
+fn catch_up_plan(
+    forced: bool,
+    window_newest: u64,
+    oldest_published: u64,
+    inprogress_sn: u64,
+) -> (bool, std::ops::Range<u64>) {
+    if forced {
+        let start = inprogress_sn
+            .saturating_sub(REBUILD_BACKFILL)
+            .max(oldest_published);
+        (true, start..inprogress_sn)
+    } else {
+        plan_catch_up(window_newest, oldest_published, inprogress_sn)
+    }
+}
+
 /// Fetch a published segment whole and build its complete window entry.
 /// Returns None on any failure (caller retries the poll).
 async fn fetch_published(
@@ -1759,6 +2433,7 @@ async fn fetch_published(
     pdt: Option<String>,
     url: &str,
     origin: &LlOrigin,
+    gen: u64,
 ) -> Option<Segment> {
     let t0 = std::time::Instant::now();
     let resp = match client.get(url).timeout(FETCH_TIMEOUT).send().await {
@@ -1776,7 +2451,7 @@ async fn fetch_published(
         }
     };
     crate::services::link_adapt::note_throughput(&origin.adapt_id(), bytes.len() as u64, t0.elapsed().as_secs_f64());
-    let parts = origin.convert_parts(split_complete(&bytes, origin.container()));
+    let parts = origin.convert_parts(split_complete(&bytes, origin.container()), gen);
     if parts.is_empty() {
         warn!("[LLOrigin] catch-up segment sn {sn} produced no parts");
         return None;
@@ -1883,10 +2558,10 @@ async fn stream_response(
                 remember_tail(&mut held_tail, rest);
                 received += rest.len() as u64;
                 for (part, dur) in chunker.push(rest) {
-                    let Some((part, dur)) = origin.convert_part(part, dur) else {
+                    let Some((part, dur)) = origin.convert_part(part, dur, gen) else {
                         continue;
                     };
-                    if !origin.append_part(sn, part, dur) {
+                    if !origin.append_part(sn, part, dur, gen) {
                         return; // edge gone
                     }
                     origin.wake_serves();
@@ -1982,8 +2657,8 @@ async fn stream_response(
         break;
     }
     if let Some((tail, dur)) = chunker.flush() {
-        if let Some((tail, dur)) = origin.convert_part(tail, dur) {
-            if origin.append_part(sn, tail, dur) {
+        if let Some((tail, dur)) = origin.convert_part(tail, dur, gen) {
+            if origin.append_part(sn, tail, dur, gen) {
                 origin.wake_serves();
             }
         }
@@ -1995,9 +2670,7 @@ async fn stream_response(
         // timeline expectations, so the lost media is bridged into a seamless
         // output instead of a served hole (the playlist stays sn-contiguous
         // and cannot express the gap).
-        if let Some(t) = origin.transmux.lock().unwrap().as_mut() {
-            t.drop_partial_input();
-        }
+        origin.drop_partial_input_if_current(gen);
     }
 }
 
@@ -2045,11 +2718,15 @@ async fn range_resume(
 }
 
 impl LlOrigin {
-    /// Append the in-progress segment shell. Returns `None` if the edge is gone,
+    /// Append the in-progress segment shell. Returns `None` if the edge is gone
+    /// or the reader started as generation `gen` is no longer the current one,
     /// `Some(false)` if appending would break window contiguity (refused; the
     /// reader's catch-up should make that impossible), `Some(true)` on success.
-    fn push_shell(&self, sn: u64, pdt: Option<String>) -> Option<bool> {
+    fn push_shell(&self, sn: u64, pdt: Option<String>, gen: u64) -> Option<bool> {
         let mut g = self.live_edge.lock().unwrap();
+        if self.generation.load(Ordering::SeqCst) != gen {
+            return None;
+        }
         let edge = g.as_mut()?;
         if edge.segments.back().is_some_and(|s| s.sn + 1 != sn) {
             warn!("[LLOrigin] refusing non-contiguous shell sn {sn}");
@@ -2080,7 +2757,8 @@ impl LlOrigin {
     /// and re-appending an identical TS part makes hls.js extend the video timeline
     /// while the audio coalesces, giving progressive A/V drift of roughly half a
     /// second per re-fetch. The earlier even-split rewrite here was the cause.
-    /// Returns false if the edge is gone.
+    /// Returns false if the edge is gone or the reader started as generation
+    /// `gen` is no longer the current one.
     /// Media seconds currently held for `sn`, from its parts' measured
     /// durations (0 when the edge or segment is gone).
     fn held_secs(&self, sn: u64) -> f64 {
@@ -2100,8 +2778,11 @@ impl LlOrigin {
             .unwrap_or(0)
     }
 
-    fn finish_segment(&self, sn: u64) -> bool {
+    fn finish_segment(&self, sn: u64, gen: u64) -> bool {
         let mut g = self.live_edge.lock().unwrap();
+        if self.generation.load(Ordering::SeqCst) != gen {
+            return false;
+        }
         match g.as_mut() {
             Some(edge) => {
                 if let Some(seg) = edge.segments.iter_mut().find(|s| s.sn == sn) {
@@ -2134,8 +2815,15 @@ impl LlOrigin {
     /// parts it already buffered (mid-GOP rewrites at the playhead = visible
     /// artifacting). Sample-measured durations keep playlist arithmetic glued
     /// to buffer reality.
-    fn convert_part(&self, bytes: Vec<u8>, dur: f64) -> Option<(Vec<u8>, f64)> {
+    ///
+    /// The generation is checked inside the transmux lock: a reader that a
+    /// stop, park or newer start has retired gets `None` and never feeds the
+    /// transmuxer a newer start owns.
+    fn convert_part(&self, bytes: Vec<u8>, dur: f64, gen: u64) -> Option<(Vec<u8>, f64)> {
         let mut g = self.transmux.lock().unwrap();
+        if self.generation.load(Ordering::SeqCst) != gen {
+            return None;
+        }
         match g.as_mut() {
             Some(t) => t.push_part(&bytes),
             None => {
@@ -2153,15 +2841,33 @@ impl LlOrigin {
         }
     }
 
+    /// Drop the transmuxer's half-assembled input for the reader started as
+    /// generation `gen`. The generation is checked inside the transmux lock, so
+    /// a reader that a stop, park or newer start has retired leaves a newer
+    /// start's transmuxer alone. True when the partial input was dropped.
+    fn drop_partial_input_if_current(&self, gen: u64) -> bool {
+        let mut g = self.transmux.lock().unwrap();
+        if self.generation.load(Ordering::SeqCst) != gen {
+            return false;
+        }
+        match g.as_mut() {
+            Some(t) => {
+                t.drop_partial_input();
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Convert a complete segment's split parts, pairing each published part
     /// with its duration: sample-measured on the transmux path, an even
     /// `TARGET_DURATION/count` split on the raw path (unchanged behavior — raw
     /// backfill durations are normalized so they sum to the segment exactly).
-    fn convert_parts(&self, parts: Vec<Vec<u8>>) -> Vec<(Vec<u8>, f64)> {
+    fn convert_parts(&self, parts: Vec<Vec<u8>>, gen: u64) -> Vec<(Vec<u8>, f64)> {
         let even = TARGET_DURATION as f64 / parts.len().max(1) as f64;
         parts
             .into_iter()
-            .filter_map(|p| self.convert_part(p, even))
+            .filter_map(|p| self.convert_part(p, even, gen))
             .collect()
     }
 
@@ -2188,9 +2894,13 @@ impl LlOrigin {
     }
 
     /// Append a part (with its real media duration) to the segment with `sn`. Returns
-    /// false if the edge is gone.
-    fn append_part(&self, sn: u64, bytes: Vec<u8>, duration: f64) -> bool {
+    /// false if the edge is gone or the reader started as generation `gen` is no
+    /// longer the current one.
+    fn append_part(&self, sn: u64, bytes: Vec<u8>, duration: f64, gen: u64) -> bool {
         let mut g = self.live_edge.lock().unwrap();
+        if self.generation.load(Ordering::SeqCst) != gen {
+            return false;
+        }
         match g.as_mut() {
             Some(edge) => {
                 if let Some(seg) = edge.segments.iter_mut().find(|s| s.sn == sn) {
@@ -2249,7 +2959,46 @@ fn blocking_satisfied(edge: &LiveEdge, sn: u64, part: u64) -> bool {
 
 impl LlOrigin {
     /// Serve the LL-HLS playlist, honoring a blocking reload for `(msn, part)`.
+    /// A hold that runs long counts from when it answers as well as when it
+    /// began, so it never reads as an idle stretch.
     pub async fn serve_playlist(&self, msn: Option<u64>, part: Option<u64>) -> Option<String> {
+        match self.serve_playlist_checked(msn, part).await {
+            PlaylistServe::Playlist(pl) => Some(pl),
+            PlaylistServe::Inactive | PlaylistServe::NotReady => None,
+        }
+    }
+
+    /// `serve_playlist`, telling an origin that is not ready (woken, its reader
+    /// not yet published) from one that is inactive: the relays answer the first
+    /// with a retryable error and only the second falls through to the upstream.
+    pub(crate) async fn serve_playlist_checked(
+        &self,
+        msn: Option<u64>,
+        part: Option<u64>,
+    ) -> PlaylistServe {
+        let _serving = self.serving_guard();
+        self.note_playlist_request();
+        let served = self.serve_playlist_held(msn, part).await;
+        self.note_playlist_request();
+        served
+    }
+
+    async fn serve_playlist_held(&self, msn: Option<u64>, part: Option<u64>) -> PlaylistServe {
+        self.serve_playlist_held_within(msn, part, unpark_publish_timeout()).await
+    }
+
+    /// The playlist for a request. After an unpark it first waits up to
+    /// `publish_wait` for the restarted reader's first publish, and answers
+    /// `NotReady` if there is none, never the window held across the park.
+    async fn serve_playlist_held_within(
+        &self,
+        msn: Option<u64>,
+        part: Option<u64>,
+        publish_wait: Duration,
+    ) -> PlaylistServe {
+        if !self.wait_fresh(publish_wait).await {
+            return PlaylistServe::NotReady;
+        }
         let deadline = tokio::time::Instant::now() + BLOCK_TIMEOUT;
         if let (Some(m), Some(p)) = (msn, part) {
             // Blocking reload: hold until the requested part exists.
@@ -2266,7 +3015,7 @@ impl LlOrigin {
                     match g.as_ref() {
                         Some(edge) if blocking_satisfied(edge, m, p) => break,
                         Some(_) => {}
-                        None => return None,
+                        None => return PlaylistServe::Inactive,
                     }
                 }
                 let now = tokio::time::Instant::now();
@@ -2299,7 +3048,7 @@ impl LlOrigin {
                     break;
                 }
                 if self.live_edge.lock().unwrap().is_none() {
-                    return None;
+                    return PlaylistServe::Inactive;
                 }
                 let now = tokio::time::Instant::now();
                 if now >= deadline {
@@ -2314,7 +3063,10 @@ impl LlOrigin {
             }
         }
         let g = self.live_edge.lock().unwrap();
-        g.as_ref().map(render_locked)
+        match g.as_ref() {
+            Some(edge) => PlaylistServe::Playlist(render_locked(edge)),
+            None => PlaylistServe::Inactive,
+        }
     }
 }
 
@@ -2662,14 +3414,46 @@ impl LlOrigin {
     }
 
     /// The playlist for AVPlayer, honoring its blocking reload. A request
-    /// without directives (the first load) answers at once.
-    pub async fn serve_playlist_apple(
+    /// without directives (the first load) answers at once. After an unpark it
+    /// waits for the restarted reader's first publish like `serve_playlist_checked`
+    /// does, and answers `NotReady` if there is none.
+    pub(crate) async fn serve_playlist_apple(
         &self,
         msn: Option<u64>,
         part: Option<u64>,
         base: &str,
         hold_parts: u64,
-    ) -> Option<String> {
+    ) -> PlaylistServe {
+        self.serve_playlist_apple_within(msn, part, base, hold_parts, unpark_publish_timeout())
+            .await
+    }
+
+    async fn serve_playlist_apple_within(
+        &self,
+        msn: Option<u64>,
+        part: Option<u64>,
+        base: &str,
+        hold_parts: u64,
+        publish_wait: Duration,
+    ) -> PlaylistServe {
+        let _serving = self.serving_guard();
+        self.note_playlist_request();
+        let served = if self.wait_fresh(publish_wait).await {
+            self.serve_playlist_apple_held(msn, part, base, hold_parts).await
+        } else {
+            PlaylistServe::NotReady
+        };
+        self.note_playlist_request();
+        served
+    }
+
+    async fn serve_playlist_apple_held(
+        &self,
+        msn: Option<u64>,
+        part: Option<u64>,
+        base: &str,
+        hold_parts: u64,
+    ) -> PlaylistServe {
         if let Some(m) = msn {
             let deadline = tokio::time::Instant::now() + APPLE_BLOCK_TIMEOUT;
             let held = self
@@ -2682,12 +3466,18 @@ impl LlOrigin {
                     }
                 })
                 .await;
+            // A hold that runs out answers with the held playlist (wait_for is
+            // true at its deadline), so a paused player costs one loopback
+            // request per hold and never reaches the upstream relay. Only an
+            // edge that went away falls through.
             if !held {
-                return None;
+                return PlaylistServe::Inactive;
             }
         }
         let g = self.live_edge.lock().unwrap();
-        let edge = g.as_ref()?;
+        let Some(edge) = g.as_ref() else {
+            return PlaylistServe::Inactive;
+        };
         let runs = apple_view(edge, None);
         let target = {
             let mut kept = self.apple_part_target.lock().unwrap();
@@ -2704,7 +3494,7 @@ impl LlOrigin {
             }
         };
         let view = runs.and_then(|_| apple_view(edge, Some(target)));
-        Some(render_apple(
+        PlaylistServe::Playlist(render_apple(
             view.as_ref().unwrap_or(edge),
             base,
             target,
@@ -2842,6 +3632,43 @@ pub fn stop() {
     SOLO.stop()
 }
 
+/// The main player's origin, stopped unless it is parked (see
+/// `LlOrigin::stop_unless_parked`).
+pub fn stop_unless_parked() -> bool {
+    SOLO.stop_unless_parked()
+}
+
+/// The main player's origin, parked (see `LlOrigin::park`).
+pub fn park() -> bool {
+    SOLO.park()
+}
+
+pub fn unpark() -> bool {
+    SOLO.unpark()
+}
+
+/// The main player's origin, rebuilt at the live edge (see
+/// `LlOrigin::rebuild_at_edge`). False when none is armed.
+pub fn rebuild_at_edge() -> bool {
+    SOLO.rebuild_at_edge()
+}
+
+pub fn is_parked() -> bool {
+    SOLO.is_parked()
+}
+
+/// How the main player's origin re-signs a refused playlist after an unpark
+/// (see `LlOrigin::set_resigner`).
+pub(crate) fn set_resigner(resigner: Option<Resigner>) {
+    SOLO.set_resigner(resigner)
+}
+
+/// The main player's origin noted a playlist request (see
+/// `LlOrigin::wake_for_request`).
+pub fn wake_for_request(wakes: bool) {
+    SOLO.wake_for_request(wakes)
+}
+
 pub async fn start(upstream_playlist_url: String) -> StartOutcome {
     SOLO.clone().start(upstream_playlist_url).await
 }
@@ -2850,16 +3677,20 @@ pub fn get_init() -> Option<Arc<Vec<u8>>> {
     SOLO.get_init()
 }
 
-pub async fn serve_playlist(msn: Option<u64>, part: Option<u64>) -> Option<String> {
-    SOLO.serve_playlist(msn, part).await
+/// The main player's playlist, keeping a not-ready origin apart from an
+/// inactive one (see `PlaylistServe`).
+pub(crate) async fn serve_playlist_checked(msn: Option<u64>, part: Option<u64>) -> PlaylistServe {
+    SOLO.serve_playlist_checked(msn, part).await
 }
 
-pub async fn serve_playlist_apple(
+/// The main player's playlist for AVPlayer, keeping a not-ready origin apart
+/// from an inactive one (see `PlaylistServe`).
+pub(crate) async fn serve_playlist_apple(
     msn: Option<u64>,
     part: Option<u64>,
     base: &str,
     hold_parts: u64,
-) -> Option<String> {
+) -> PlaylistServe {
     SOLO.serve_playlist_apple(msn, part, base, hold_parts).await
 }
 
@@ -3443,6 +4274,80 @@ mod tests {
     }
 
     #[test]
+    fn a_forced_catch_up_rebuilds_from_the_live_edge_whatever_the_window_holds() {
+        // The window reaches the upstream (newest 8552, in-progress 8553): not
+        // forced there is nothing to fetch, forced it is rebuilt behind the edge.
+        let (rebuild, fetch) = catch_up_plan(false, 8552, 8540, 8553);
+        assert!(!rebuild);
+        assert_eq!(fetch.collect::<Vec<_>>(), Vec::<u64>::new());
+        let (rebuild, fetch) = catch_up_plan(true, 8552, 8540, 8553);
+        assert!(rebuild);
+        assert_eq!(fetch.collect::<Vec<_>>(), vec![8552]);
+
+        // The backfill never starts before the oldest published segment.
+        let (rebuild, fetch) = catch_up_plan(true, 8552, 8552, 8553);
+        assert!(rebuild);
+        assert_eq!(fetch.collect::<Vec<_>>(), vec![8552]);
+
+        // Not forced keeps `plan_catch_up`'s answer, small hole and deep hole.
+        let (rebuild, fetch) = catch_up_plan(false, 8551, 8540, 8553);
+        assert!(!rebuild);
+        assert_eq!(fetch.collect::<Vec<_>>(), vec![8552]);
+        let (rebuild, fetch) = catch_up_plan(false, 8500, 8540, 8553);
+        assert!(rebuild);
+        assert_eq!(fetch.collect::<Vec<_>>(), vec![8552]);
+    }
+
+    #[tokio::test]
+    async fn rebuild_at_edge_replaces_the_reader_and_serves_no_window_held_before() {
+        let origin = LlOrigin::new(6);
+        let short = Duration::from_millis(50);
+        assert!(!origin.rebuild_at_edge(), "an inactive origin has nothing to rebuild");
+        assert!(origin.reader_task.lock().unwrap().is_none());
+
+        // Nothing listens here, so the restarted reader publishes nothing.
+        origin.arm_for_test("http://127.0.0.1:1/live.m3u8");
+        assert!(matches!(
+            origin.serve_playlist_held_within(Some(1), Some(0), short).await,
+            PlaylistServe::Playlist(_)
+        ));
+        let generation = origin.generation.load(Ordering::SeqCst);
+        assert!(origin.rebuild_at_edge());
+        assert!(origin.has_reader_for_test());
+        assert!(origin.generation.load(Ordering::SeqCst) > generation);
+        assert!(origin.force_rebuild.load(Ordering::SeqCst), "the new reader is told to rebuild");
+        assert!(!origin.fresh_after_unpark.load(Ordering::SeqCst));
+        assert_eq!(
+            origin.serve_playlist_held_within(Some(1), Some(0), short).await,
+            PlaylistServe::NotReady,
+            "the window held before the rebuild is never served"
+        );
+        assert!(origin.is_active(), "the origin stays active, so the relay answers 503");
+
+        // A reader that is no longer the current one does not take the request.
+        assert!(!origin.take_force_rebuild(generation));
+        origin.stop();
+        assert!(!origin.force_rebuild.load(Ordering::SeqCst), "a stop clears a pending rebuild");
+    }
+
+    #[tokio::test]
+    async fn rebuild_at_edge_wakes_a_parked_origin_and_refuses_a_closed_one() {
+        let origin = LlOrigin::new(6);
+        origin.arm_for_test("http://127.0.0.1:1/live.m3u8");
+        assert!(origin.park());
+        assert!(origin.rebuild_at_edge());
+        assert!(!origin.is_parked(), "the rebuild's reader replaces the parked one");
+        assert!(origin.has_reader_for_test());
+        origin.stop();
+
+        origin.arm_for_test("http://127.0.0.1:1/live.m3u8");
+        origin.close();
+        origin.arm_for_test("http://127.0.0.1:1/live.m3u8");
+        assert!(!origin.rebuild_at_edge(), "a closed origin never rebuilds");
+        assert!(!origin.has_reader_for_test(), "no reader was started");
+    }
+
+    #[test]
     fn newest_complete_segment_defers_extinf_until_successor() {
         // 101 is internally complete but has no successor yet: it must render as
         // still-in-progress (parts only), so a client never learns "complete" in
@@ -3686,7 +4591,8 @@ mod tests {
         *origin.live_edge.lock().unwrap() = Some(ts_edge_with_one_segment());
         assert!(origin.is_active());
         let before = origin.edge_version.load(Ordering::SeqCst);
-        origin.deactivate_offline("test offline");
+        let gen = origin.generation.load(Ordering::SeqCst);
+        origin.deactivate_offline("test offline", gen);
         assert!(!origin.is_active());
         // serve_playlist must report inactive, not a stale playlist.
         let served = tokio::runtime::Builder::new_current_thread()
@@ -3697,6 +4603,883 @@ mod tests {
         assert!(served.is_none());
         // The change was published so any blocked reload wakes.
         assert!(origin.edge_version.load(Ordering::SeqCst) > before);
+    }
+
+    fn held_sns(origin: &LlOrigin) -> Vec<u64> {
+        origin.live_edge.lock().unwrap().as_ref().unwrap().segments.iter().map(|s| s.sn).collect()
+    }
+
+    #[test]
+    fn park_finishes_a_half_read_tail_at_its_parts() {
+        let origin = LlOrigin::new(6);
+        let mut edge = ts_edge_with_one_segment();
+        edge.segments.push_back(make_segment(2, None, false, even_parts(vec![vec![1], vec![2]])));
+        *origin.live_edge.lock().unwrap() = Some(edge);
+        assert!(origin.park());
+        let g = origin.live_edge.lock().unwrap();
+        let tail = g.as_ref().unwrap().segments.back().unwrap();
+        assert_eq!(tail.sn, 2);
+        assert!(tail.complete, "a restarted reader must find a finished segment");
+        let sum: f64 = tail.parts.iter().map(|p| p.duration).sum();
+        assert!((tail.duration - sum).abs() < 1e-9);
+    }
+
+    #[test]
+    fn park_drops_a_bare_shell() {
+        let origin = LlOrigin::new(6);
+        let mut edge = ts_edge_with_one_segment();
+        edge.segments.push_back(make_segment(2, None, false, Vec::new()));
+        *origin.live_edge.lock().unwrap() = Some(edge);
+        assert!(origin.park());
+        assert_eq!(held_sns(&origin), vec![1]);
+    }
+
+    #[test]
+    fn park_holds_the_edge_as_served() {
+        let origin = LlOrigin::new(6);
+        *origin.live_edge.lock().unwrap() = Some(ts_edge_with_one_segment());
+        let before = held_sns(&origin);
+        let generation = origin.generation.load(Ordering::SeqCst);
+        assert!(origin.park());
+        assert!(origin.is_active());
+        assert!(origin.is_parked());
+        assert!(origin.generation.load(Ordering::SeqCst) > generation);
+        assert_eq!(held_sns(&origin), before);
+        assert!(!origin.park(), "a second park is a no-op");
+    }
+
+    #[test]
+    fn unpark_without_an_upstream_clears_the_park_and_starts_nothing() {
+        let origin = LlOrigin::new(6);
+        *origin.live_edge.lock().unwrap() = Some(ts_edge_with_one_segment());
+        assert!(origin.park());
+        assert!(!origin.unpark());
+        assert!(!origin.is_parked());
+        assert!(origin.reader_task.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn stop_clears_a_park() {
+        let origin = LlOrigin::new(6);
+        *origin.live_edge.lock().unwrap() = Some(ts_edge_with_one_segment());
+        assert!(origin.park());
+        origin.stop();
+        assert!(!origin.is_parked());
+        assert!(!origin.is_active());
+    }
+
+    #[test]
+    fn an_unpark_after_a_stop_starts_no_reader() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+        let _guard = rt.enter();
+        let origin = LlOrigin::new(6);
+        *origin.live_edge.lock().unwrap() = Some(ts_edge_with_one_segment());
+        *origin.upstream.lock().unwrap() = Some("http://x/playlist.m3u8".to_string());
+        assert!(origin.park());
+        let generation = origin.generation.load(Ordering::SeqCst);
+
+        // The stop takes the reader lock and the generation bump, then waits on
+        // the live edge this thread holds, so it is mid-stop while the checks run.
+        let edge_guard = origin.live_edge.lock().unwrap();
+        let stopper = {
+            let origin = origin.clone();
+            std::thread::spawn(move || origin.stop())
+        };
+        let began = std::time::Instant::now();
+        while origin.generation.load(Ordering::SeqCst) == generation {
+            assert!(began.elapsed() < Duration::from_secs(5), "the stop never began");
+            std::thread::yield_now();
+        }
+        assert!(origin.reader_task.try_lock().is_err(), "the stop holds the reader lock");
+        drop(edge_guard);
+        stopper.join().unwrap();
+
+        assert!(!origin.unpark(), "a stopped origin has nothing to wake");
+        assert!(origin.reader_task.lock().unwrap().is_none(), "no reader was spawned");
+        assert!(!origin.is_parked());
+        assert!(!origin.is_active());
+    }
+
+    #[test]
+    fn a_start_superseded_by_a_stop_installs_nothing() {
+        let origin = LlOrigin::new(6);
+        let gen = origin.generation.load(Ordering::SeqCst);
+        origin.stop();
+        *origin.cmaf_video.lock().unwrap() = Some((1, 90_000));
+        *origin.transmux.lock().unwrap() = Some(crate::services::ts_fmp4::Transmuxer::new());
+
+        let installed = origin.install_started(
+            gen,
+            ts_edge_with_one_segment(),
+            "http://x/playlist.m3u8".to_string(),
+            || -> JoinHandle<()> { panic!("a superseded start spawns no reader") },
+        );
+        assert!(!installed);
+        assert!(!origin.is_active());
+        assert!(origin.upstream.lock().unwrap().is_none());
+        assert!(origin.cmaf_video.lock().unwrap().is_none(), "the prepared track is cleared");
+        assert!(origin.transmux.lock().unwrap().is_none(), "the prepared transmuxer is cleared");
+        assert!(origin.reader_task.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn a_queued_start_returns_inactive_when_a_stop_lands_while_it_waits() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            // Anything fetched would connect here and sit in the backlog.
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let url = format!("http://{}/live.m3u8", listener.local_addr().unwrap());
+
+            let origin = LlOrigin::new(6);
+            let waiting_on = origin.start_lock.lock().await;
+            let generation = origin.generation.load(Ordering::SeqCst);
+            let starter = tokio::spawn(origin.clone().start(url));
+            // The queued start stops first, which moves the generation.
+            let began = std::time::Instant::now();
+            while origin.generation.load(Ordering::SeqCst) == generation {
+                assert!(began.elapsed() < Duration::from_secs(5), "the start never queued");
+                tokio::task::yield_now().await;
+            }
+            origin.stop();
+            drop(waiting_on);
+
+            let outcome = starter.await.unwrap();
+            assert!(!outcome.active);
+            assert!(origin.reader_task.lock().unwrap().is_none());
+            assert!(!origin.is_active());
+            assert!(listener.accept().is_err(), "a stopped start fetches nothing");
+        });
+    }
+
+    #[test]
+    fn stop_unless_parked_leaves_a_parked_origin_alone() {
+        let origin = LlOrigin::new(6);
+        *origin.live_edge.lock().unwrap() = Some(ts_edge_with_one_segment());
+        assert!(origin.park());
+        let generation = origin.generation.load(Ordering::SeqCst);
+        assert!(!origin.stop_unless_parked());
+        assert!(origin.is_parked());
+        assert!(origin.is_active());
+        assert_eq!(origin.generation.load(Ordering::SeqCst), generation);
+
+        let running = LlOrigin::new(6);
+        *running.live_edge.lock().unwrap() = Some(ts_edge_with_one_segment());
+        assert!(running.stop_unless_parked());
+        assert!(!running.is_active());
+    }
+
+    #[test]
+    fn a_stale_reader_changes_nothing() {
+        let origin = LlOrigin::new(6);
+        let mut edge = ts_edge_with_one_segment();
+        edge.segments.push_back(make_segment(2, None, false, even_parts(vec![vec![2]])));
+        *origin.live_edge.lock().unwrap() = Some(edge);
+        let gen = origin.generation.load(Ordering::SeqCst);
+        let stale = gen + 1;
+        let held_parts = |origin: &LlOrigin| origin.parts_held(2);
+
+        assert!(!origin.append_part(2, vec![9], 0.5, stale));
+        assert_eq!(held_parts(&origin), 1);
+
+        assert_eq!(origin.push_shell(3, None, stale), None);
+        assert_eq!(held_sns(&origin), vec![1, 2]);
+
+        assert!(!origin.finish_segment(2, stale));
+        assert!(!origin.live_edge.lock().unwrap().as_ref().unwrap().segments[1].complete);
+
+        let before = origin.edge_version.load(Ordering::SeqCst);
+        origin.deactivate_offline("stale reader", stale);
+        assert!(origin.is_active());
+        assert_eq!(origin.edge_version.load(Ordering::SeqCst), before);
+
+        // The current reader's calls take effect.
+        assert!(origin.append_part(2, vec![9], 0.5, gen));
+        assert_eq!(held_parts(&origin), 2);
+        assert_eq!(origin.push_shell(3, None, gen), Some(true));
+        assert!(origin.finish_segment(2, gen));
+    }
+
+    #[test]
+    fn a_stale_reader_leaves_the_transmuxer_alone() {
+        let origin = LlOrigin::new(6);
+        let gen = origin.generation.load(Ordering::SeqCst);
+
+        assert!(!origin.drop_partial_input_if_current(gen), "no transmuxer, nothing to drop");
+
+        *origin.transmux.lock().unwrap() = Some(crate::services::ts_fmp4::Transmuxer::new());
+        assert!(!origin.drop_partial_input_if_current(gen + 1), "a stale reader drops nothing");
+        assert!(origin.drop_partial_input_if_current(gen), "the current reader drops the tail");
+
+        origin.stop();
+        *origin.transmux.lock().unwrap() = Some(crate::services::ts_fmp4::Transmuxer::new());
+        assert!(
+            !origin.drop_partial_input_if_current(gen),
+            "a reader retired by a stop leaves a newer transmuxer alone"
+        );
+    }
+
+    #[test]
+    fn a_stale_reader_converts_no_part() {
+        let origin = LlOrigin::new(6);
+        let gen = origin.generation.load(Ordering::SeqCst);
+
+        // Passthrough (no transmuxer): the current reader's part comes back as
+        // it went in, a stale reader's does not.
+        assert_eq!(origin.convert_part(vec![7], 0.5, gen), Some((vec![7], 0.5)));
+        assert_eq!(origin.convert_part(vec![7], 0.5, gen + 1), None);
+
+        // With a transmuxer, a reader retired by a stop never feeds it.
+        origin.stop();
+        *origin.transmux.lock().unwrap() = Some(crate::services::ts_fmp4::Transmuxer::new());
+        assert_eq!(origin.convert_part(vec![7], 0.5, gen), None);
+        assert!(origin.convert_parts(vec![vec![7], vec![8]], gen).is_empty());
+    }
+
+    #[test]
+    fn a_closed_origin_installs_nothing_and_never_unparks() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+        let origin = LlOrigin::new(6);
+        *origin.live_edge.lock().unwrap() = Some(ts_edge_with_one_segment());
+        *origin.upstream.lock().unwrap() = Some("http://x/playlist.m3u8".to_string());
+        assert!(origin.park());
+
+        origin.close();
+        assert!(!origin.is_active());
+        assert!(!origin.unpark(), "a closed origin starts no reader");
+        assert!(origin.reader_task.lock().unwrap().is_none());
+
+        // Every other precondition for a wake is back after the close: an
+        // edge, an upstream and a park. The close still wins.
+        *origin.live_edge.lock().unwrap() = Some(ts_edge_with_one_segment());
+        *origin.upstream.lock().unwrap() = Some("http://x/playlist.m3u8".to_string());
+        origin.mark_parked_for_test();
+        assert!(!origin.unpark(), "a closed origin never wakes");
+        assert!(origin.reader_task.lock().unwrap().is_none(), "no reader was started");
+        origin.stop();
+
+        let gen = origin.generation.load(Ordering::SeqCst);
+        *origin.transmux.lock().unwrap() = Some(crate::services::ts_fmp4::Transmuxer::new());
+        let installed = origin.install_started(
+            gen,
+            ts_edge_with_one_segment(),
+            "http://x/playlist.m3u8".to_string(),
+            || -> JoinHandle<()> { panic!("a closed origin spawns no reader") },
+        );
+        assert!(!installed, "a start that probed before the close installs nothing");
+        assert!(!origin.is_active());
+        assert!(origin.upstream.lock().unwrap().is_none());
+        assert!(origin.transmux.lock().unwrap().is_none(), "the prepared transmuxer is cleared");
+
+        let outcome = rt.block_on(origin.clone().start("http://127.0.0.1:1/x.m3u8".to_string()));
+        assert!(!outcome.active, "a closed origin does not start");
+    }
+
+    #[test]
+    fn an_inactive_origin_reads_as_parked_after_the_idle_span_without_a_request() {
+        let origin = LlOrigin::new(6);
+        let asked = OLD_REQUEST_MS;
+        assert!(!origin.parked_or_idle_at(asked + park_idle_ms()), "never asked: not parked");
+
+        origin.note_playlist_request_at(asked);
+        assert!(!origin.parked_or_idle_at(asked + park_idle_ms() - 1));
+        assert!(origin.parked_or_idle_at(asked + park_idle_ms()));
+
+        origin.note_playlist_request_at(asked + park_idle_ms());
+        assert!(!origin.parked_or_idle_at(asked + park_idle_ms()), "a fresh request clears it");
+
+        // An active origin is idle-parked by its reader, not by this reading.
+        origin.note_playlist_request_at(asked);
+        *origin.live_edge.lock().unwrap() = Some(ts_edge_with_one_segment());
+        assert!(!origin.parked_or_idle_at(asked + park_idle_ms()));
+        assert!(origin.park());
+        assert!(origin.parked_or_idle_at(asked));
+    }
+
+    #[test]
+    fn a_swap_is_held_while_parked_and_taken_once_after() {
+        let mut slot: Option<String> = None;
+        assert_eq!(hold_swap_if_parked(&mut slot, true, "a".to_string()), None);
+        assert_eq!(slot.as_deref(), Some("a"));
+        // A newer swap replaces the held one.
+        assert_eq!(hold_swap_if_parked(&mut slot, true, "b".to_string()), None);
+        assert_eq!(slot.as_deref(), Some("b"));
+        // Still parked: it stays held.
+        assert_eq!(take_held_swap(&mut slot, true), None);
+        assert_eq!(slot.as_deref(), Some("b"));
+        // A player loads again: taken once.
+        assert_eq!(take_held_swap(&mut slot, false).as_deref(), Some("b"));
+        assert_eq!(take_held_swap(&mut slot, false), None);
+        // Not parked: applied now, nothing held.
+        assert_eq!(hold_swap_if_parked(&mut slot, false, "c".to_string()).as_deref(), Some("c"));
+        assert!(slot.is_none());
+        // A swap applied now supersedes one held earlier.
+        assert_eq!(hold_swap_if_parked(&mut slot, true, "d".to_string()), None);
+        assert_eq!(hold_swap_if_parked(&mut slot, false, "e".to_string()).as_deref(), Some("e"));
+        assert!(slot.is_none(), "the older held swap is gone");
+    }
+
+    #[test]
+    fn a_refusal_right_after_an_unpark_re_signs_once_before_it_counts() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+        let origin = LlOrigin::new(6);
+        let gen = origin.generation.load(Ordering::SeqCst);
+        *origin.upstream.lock().unwrap() = Some("http://x/stale.m3u8".to_string());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+        {
+            let calls = calls.clone();
+            let seen = seen.clone();
+            origin.set_resigner(Some(Arc::new(move |stale: String| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                seen.lock().unwrap().push(stale);
+                Box::pin(async { Some("http://x/fresh.m3u8".to_string()) })
+                    as futures::future::BoxFuture<'static, Option<String>>
+            })));
+        }
+
+        let mut health = PlaylistHealth::new(true);
+        health.polled();
+        assert!(health.wants_resign(403));
+        let fresh = rt.block_on(origin.resign("http://x/stale.m3u8"));
+        assert_eq!(fresh.as_deref(), Some("http://x/fresh.m3u8"));
+        assert!(origin.adopt_upstream(gen, fresh.unwrap()));
+        assert_eq!(
+            origin.upstream.lock().unwrap().as_deref(),
+            Some("http://x/fresh.m3u8"),
+            "the retry follows the fresh URL"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(*seen.lock().unwrap(), vec!["http://x/stale.m3u8".to_string()]);
+        assert_eq!(health.fails, 0, "the re-signed refusal did not count");
+
+        // One re-sign per unpark: the next refusal counts.
+        health.polled();
+        assert!(!health.wants_resign(403));
+        assert_eq!(health.failed(), 1);
+
+        // A superseded reader adopts nothing.
+        assert!(!origin.adopt_upstream(gen + 1, "http://x/other.m3u8".to_string()));
+        assert_eq!(origin.upstream.lock().unwrap().as_deref(), Some("http://x/fresh.m3u8"));
+    }
+
+    #[test]
+    fn a_refusal_without_a_recent_unpark_counts_as_before() {
+        // A reader that did not follow an unpark never re-signs.
+        let mut health = PlaylistHealth::new(false);
+        health.polled();
+        assert!(!health.wants_resign(403));
+        assert!(!health.wants_resign(404));
+        assert_eq!(health.failed(), 1);
+
+        // After an unpark, only a 403 or 404 in the first polls re-signs.
+        let mut late = PlaylistHealth::new(true);
+        for _ in 0..=RESIGN_POLLS_AFTER_UNPARK {
+            late.polled();
+        }
+        assert!(!late.wants_resign(403), "past the first polls a refusal counts");
+        let mut other = PlaylistHealth::new(true);
+        other.polled();
+        assert!(!other.wants_resign(500), "a server error is not an expired signature");
+        assert!(other.wants_resign(404));
+
+        // A good poll resets the run.
+        health.healthy();
+        assert_eq!(health.fails, 0);
+    }
+
+    /// A local playlist server on loopback: `/stale.m3u8` is refused with a 403
+    /// and every other path answers 200 with an empty body. Each path asked for
+    /// is recorded.
+    struct RefusingServer {
+        addr: std::net::SocketAddr,
+        paths: Arc<Mutex<Vec<String>>>,
+        done: Arc<AtomicBool>,
+        thread: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl RefusingServer {
+        fn start() -> Self {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let addr = listener.local_addr().unwrap();
+            let paths = Arc::new(Mutex::new(Vec::<String>::new()));
+            let done = Arc::new(AtomicBool::new(false));
+            let thread = {
+                let (paths, done) = (paths.clone(), done.clone());
+                std::thread::spawn(move || {
+                    use std::io::{Read, Write};
+                    while !done.load(Ordering::SeqCst) {
+                        match listener.accept() {
+                            Ok((mut stream, _)) => {
+                                let _ = stream.set_nonblocking(false);
+                                let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+                                let mut buf = [0u8; 2048];
+                                let n = stream.read(&mut buf).unwrap_or(0);
+                                let request = String::from_utf8_lossy(&buf[..n]).to_string();
+                                let path = request.split_whitespace().nth(1).unwrap_or("").to_string();
+                                let status = if path == "/stale.m3u8" { "403 Forbidden" } else { "200 OK" };
+                                paths.lock().unwrap().push(path);
+                                let _ = write!(
+                                    stream,
+                                    "HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                                );
+                            }
+                            Err(_) => std::thread::sleep(Duration::from_millis(5)),
+                        }
+                    }
+                })
+            };
+            Self { addr, paths, done, thread: Some(thread) }
+        }
+
+        fn url(&self, path: &str) -> String {
+            format!("http://{}{}", self.addr, path)
+        }
+
+        fn paths(&self) -> Vec<String> {
+            self.paths.lock().unwrap().clone()
+        }
+    }
+
+    impl Drop for RefusingServer {
+        fn drop(&mut self) {
+            self.done.store(true, Ordering::SeqCst);
+            if let Some(thread) = self.thread.take() {
+                let _ = thread.join();
+            }
+        }
+    }
+
+    /// A parked origin holding an edge and `upstream`, whose resigner counts its
+    /// calls and always answers `fresh`.
+    fn parked_origin_with_resigner(
+        upstream: &str,
+        fresh: &str,
+    ) -> (Arc<LlOrigin>, Arc<AtomicUsize>, Arc<Mutex<Vec<String>>>) {
+        let origin = LlOrigin::new(6);
+        *origin.live_edge.lock().unwrap() = Some(ts_edge_with_one_segment());
+        *origin.upstream.lock().unwrap() = Some(upstream.to_string());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+        {
+            let (calls, seen, fresh) = (calls.clone(), seen.clone(), fresh.to_string());
+            origin.set_resigner(Some(Arc::new(move |stale: String| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                seen.lock().unwrap().push(stale);
+                let fresh = fresh.clone();
+                Box::pin(async move { Some(fresh) }) as futures::future::BoxFuture<'static, Option<String>>
+            })));
+        }
+        assert!(origin.park());
+        (origin, calls, seen)
+    }
+
+    #[test]
+    fn an_unpark_re_signs_a_refused_first_poll_once_and_polls_the_fresh_url() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let server = RefusingServer::start();
+        let stale = server.url("/stale.m3u8");
+        let fresh = server.url("/fresh.m3u8");
+
+        // Woken: the reader's first poll is refused, the resigner is asked
+        // once, and the poll after it goes to the fresh URL.
+        let (origin, calls, seen) = parked_origin_with_resigner(&stale, &fresh);
+        rt.block_on(async {
+            assert!(origin.unpark());
+            let began = std::time::Instant::now();
+            while !server.paths().contains(&"/fresh.m3u8".to_string()) {
+                assert!(began.elapsed() < Duration::from_secs(10), "the fresh URL was never polled");
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        });
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "one re-sign");
+        assert_eq!(*seen.lock().unwrap(), vec![stale.clone()]);
+        assert_eq!(origin.upstream.lock().unwrap().as_deref(), Some(fresh.as_str()));
+        let asked = server.paths();
+        assert_eq!(asked.first().map(String::as_str), Some("/stale.m3u8"), "the stale URL went first");
+        origin.stop();
+
+        // Never woken: no poll, so nothing is refused and nothing is re-signed.
+        let before = server.paths().len();
+        let (idle, idle_calls, _) = parked_origin_with_resigner(&stale, &fresh);
+        rt.block_on(async { tokio::time::sleep(Duration::from_millis(300)).await });
+        assert_eq!(idle_calls.load(Ordering::SeqCst), 0, "a parked origin never re-signs");
+        assert_eq!(server.paths().len(), before, "a parked origin polls nothing");
+        assert_eq!(idle.upstream.lock().unwrap().as_deref(), Some(stale.as_str()));
+    }
+
+    #[test]
+    fn a_woken_origin_serves_no_window_until_its_reader_publishes() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let _guard = rt.enter();
+        let origin = LlOrigin::new(6);
+        assert!(origin.fresh_after_unpark.load(Ordering::SeqCst), "a new origin is fresh");
+        *origin.live_edge.lock().unwrap() = Some(ts_edge_with_one_segment());
+        // Nothing listens here, so the restarted reader publishes nothing.
+        *origin.upstream.lock().unwrap() = Some("http://127.0.0.1:1/live.m3u8".to_string());
+        let short = Duration::from_millis(50);
+        let serve = |origin: &Arc<LlOrigin>, wait: Duration| {
+            rt.block_on(origin.serve_playlist_held_within(Some(1), Some(0), wait))
+        };
+
+        // Parked, the held window is the answer.
+        assert!(origin.park());
+        assert!(matches!(serve(&origin, short), PlaylistServe::Playlist(_)));
+
+        // Woken: the held window is not served while the reader has not published.
+        assert!(origin.unpark());
+        assert!(!origin.fresh_after_unpark.load(Ordering::SeqCst));
+        assert_eq!(serve(&origin, short), PlaylistServe::NotReady);
+        assert!(origin.is_active(), "the origin is not inactive, so the relay answers 503");
+
+        // A reader that is no longer the current one publishes nothing.
+        let gen = origin.generation.load(Ordering::SeqCst);
+        origin.mark_fresh(gen + 1);
+        assert_eq!(serve(&origin, short), PlaylistServe::NotReady);
+
+        // The current reader's first publish releases a request that was waiting.
+        let served = rt.block_on(async {
+            let publisher = {
+                let origin = origin.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                    origin.mark_fresh(gen);
+                })
+            };
+            let served = origin
+                .serve_playlist_held_within(Some(1), Some(0), Duration::from_secs(5))
+                .await;
+            publisher.await.unwrap();
+            served
+        });
+        assert!(matches!(served, PlaylistServe::Playlist(_)));
+        assert!(matches!(serve(&origin, short), PlaylistServe::Playlist(_)));
+
+        // A park or a stop leaves the origin serving what it holds.
+        origin.fresh_after_unpark.store(false, Ordering::SeqCst);
+        assert!(origin.park());
+        assert!(origin.fresh_after_unpark.load(Ordering::SeqCst));
+        origin.fresh_after_unpark.store(false, Ordering::SeqCst);
+        origin.stop();
+        assert!(origin.fresh_after_unpark.load(Ordering::SeqCst));
+        assert_eq!(serve(&origin, short), PlaylistServe::Inactive);
+    }
+
+    #[test]
+    fn the_unpark_publish_wait_reads_seconds_and_stays_under_the_player_timeout() {
+        assert_eq!(publish_timeout_from(None), UNPARK_PUBLISH_TIMEOUT);
+        assert_eq!(publish_timeout_from(Some("2")), Duration::from_secs(2));
+        assert_eq!(publish_timeout_from(Some(" 7 ")), Duration::from_secs(7));
+        assert_eq!(publish_timeout_from(Some("0")), UNPARK_PUBLISH_TIMEOUT);
+        assert_eq!(publish_timeout_from(Some("soon")), UNPARK_PUBLISH_TIMEOUT);
+        assert!(UNPARK_PUBLISH_TIMEOUT < Duration::from_secs(10));
+    }
+
+    #[test]
+    fn a_dropped_preopen_handle_aborts_its_task() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+        rt.block_on(async {
+            let task = AbortOnDrop(tokio::spawn(async {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+            }));
+            let probe = task.0.abort_handle();
+            drop(task);
+            tokio::task::yield_now().await;
+            tokio::task::yield_now().await;
+            assert!(probe.is_finished(), "dropping the handle ended the task");
+        });
+    }
+
+    const OLD_REQUEST_MS: u64 = u64::MAX / 2;
+
+    #[test]
+    fn serve_playlist_notes_the_request() {
+        let origin = LlOrigin::new(6);
+        *origin.live_edge.lock().unwrap() = Some(ts_edge_with_one_segment());
+        origin.note_playlist_request_at(OLD_REQUEST_MS);
+        let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+        // Segment 1 part 0 exists, so the blocking reload answers at once.
+        let served = rt.block_on(origin.serve_playlist(Some(1), Some(0)));
+        assert!(served.is_some());
+        assert_ne!(origin.last_playlist_ms.load(Ordering::SeqCst), OLD_REQUEST_MS);
+    }
+
+    #[test]
+    fn serve_playlist_apple_notes_the_request() {
+        let origin = LlOrigin::new(6);
+        *origin.live_edge.lock().unwrap() = Some(ts_edge_with_one_segment());
+        origin.note_playlist_request_at(OLD_REQUEST_MS);
+        let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+        // A first load carries no directives and answers at once.
+        let served = rt.block_on(origin.serve_playlist_apple(None, None, "http://x/", 2));
+        assert!(matches!(served, PlaylistServe::Playlist(_)));
+        assert_ne!(origin.last_playlist_ms.load(Ordering::SeqCst), OLD_REQUEST_MS);
+    }
+
+    #[test]
+    fn a_woken_origin_serves_the_apple_route_no_window_until_its_reader_publishes() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let _guard = rt.enter();
+        let origin = LlOrigin::new(6);
+        *origin.live_edge.lock().unwrap() = Some(ts_edge_with_one_segment());
+        // Nothing listens here, so the restarted reader publishes nothing.
+        *origin.upstream.lock().unwrap() = Some("http://127.0.0.1:1/live.m3u8".to_string());
+        let short = Duration::from_millis(50);
+        let serve = |origin: &Arc<LlOrigin>, wait: Duration| {
+            rt.block_on(origin.serve_playlist_apple_within(None, None, "http://x/", 2, wait))
+        };
+
+        // Parked, the held window is the answer.
+        assert!(origin.park());
+        assert!(matches!(serve(&origin, short), PlaylistServe::Playlist(_)));
+
+        // Woken: the held window is not served while the reader has not published.
+        assert!(origin.unpark());
+        assert_eq!(serve(&origin, short), PlaylistServe::NotReady);
+        assert!(origin.is_active(), "the origin is not inactive, so the relay answers 503");
+
+        // The current reader's first publish releases a request that was waiting.
+        let gen = origin.generation.load(Ordering::SeqCst);
+        let served = rt.block_on(async {
+            let publisher = {
+                let origin = origin.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                    origin.mark_fresh(gen);
+                })
+            };
+            let served = origin
+                .serve_playlist_apple_within(None, None, "http://x/", 2, Duration::from_secs(5))
+                .await;
+            publisher.await.unwrap();
+            served
+        });
+        assert!(matches!(served, PlaylistServe::Playlist(_)));
+        origin.stop();
+    }
+
+    #[test]
+    fn a_held_reload_notes_the_request_when_the_hold_ends() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_time()
+            .build()
+            .unwrap();
+        let origin = LlOrigin::new(6);
+        *origin.live_edge.lock().unwrap() = Some(ts_edge_with_one_segment());
+        origin.note_playlist_request_at(OLD_REQUEST_MS);
+
+        // Segment 1 is complete with one part, so a reload for part 1 of it
+        // waits for part 0 of segment 2.
+        let held = {
+            let origin = origin.clone();
+            rt.spawn(async move { origin.serve_playlist_apple(Some(1), Some(1), "http://x/", 2).await })
+        };
+
+        // The request is noted as it arrives; put the old value back mid-hold.
+        let began = std::time::Instant::now();
+        while origin.last_playlist_ms.load(Ordering::SeqCst) == OLD_REQUEST_MS {
+            assert!(began.elapsed() < Duration::from_secs(5), "the request was never noted");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        origin.note_playlist_request_at(OLD_REQUEST_MS);
+        assert!(!held.is_finished(), "the reload is still held");
+
+        // The part lands and the hold ends.
+        {
+            let mut g = origin.live_edge.lock().unwrap();
+            let edge = g.as_mut().unwrap();
+            edge.segments.push_back(make_segment(2, None, false, even_parts(vec![vec![2]])));
+        }
+        origin.wake_serves();
+        let served = rt.block_on(held).unwrap();
+        assert!(matches!(served, PlaylistServe::Playlist(_)));
+        assert_ne!(
+            origin.last_playlist_ms.load(Ordering::SeqCst),
+            OLD_REQUEST_MS,
+            "the end of the hold noted the request again"
+        );
+    }
+
+    #[test]
+    fn park_if_idle_parks_only_when_idle_and_current() {
+        let origin = LlOrigin::new(6);
+        *origin.live_edge.lock().unwrap() = Some(ts_edge_with_one_segment());
+        let gen = origin.generation.load(Ordering::SeqCst);
+        let idle_at = OLD_REQUEST_MS + park_idle_ms();
+        origin.note_playlist_request_at(OLD_REQUEST_MS);
+
+        // A reader that is no longer the current one never parks.
+        assert!(!origin.park_if_idle_at(gen + 1, idle_at));
+        assert!(!origin.is_parked());
+
+        // A request that landed after the reader decided keeps the origin running.
+        origin.note_playlist_request_at(idle_at);
+        assert!(!origin.park_if_idle_at(gen, idle_at));
+        assert!(!origin.is_parked(), "the failed park leaves the origin unparked");
+
+        // Idle and current: parks, and the reader's generation is retired.
+        origin.note_playlist_request_at(OLD_REQUEST_MS);
+        assert!(origin.park_if_idle_at(gen, idle_at));
+        assert!(origin.is_parked());
+        assert!(origin.generation.load(Ordering::SeqCst) > gen);
+    }
+
+    #[test]
+    fn park_if_idle_refuses_while_a_playlist_request_is_in_flight() {
+        let origin = LlOrigin::new(6);
+        *origin.live_edge.lock().unwrap() = Some(ts_edge_with_one_segment());
+        let gen = origin.generation.load(Ordering::SeqCst);
+        let idle_at = OLD_REQUEST_MS + park_idle_ms();
+        origin.note_playlist_request_at(OLD_REQUEST_MS);
+
+        let first = origin.serving_guard();
+        let second = origin.serving_guard();
+        assert!(!origin.idle_park_due_at(idle_at), "a request waiting on its answer is not idle");
+        assert!(!origin.park_if_idle_at(gen, idle_at));
+        assert!(!origin.is_parked());
+
+        drop(first);
+        assert!(!origin.park_if_idle_at(gen, idle_at), "one request is still in flight");
+        drop(second);
+        assert_eq!(origin.serving.load(Ordering::SeqCst), 0);
+        assert!(origin.park_if_idle_at(gen, idle_at), "idle once none is in flight");
+        assert!(origin.is_parked());
+    }
+
+    #[test]
+    fn every_way_a_playlist_request_ends_releases_its_count() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let _guard = rt.enter();
+        let origin = LlOrigin::new(6);
+        *origin.live_edge.lock().unwrap() = Some(ts_edge_with_one_segment());
+        *origin.upstream.lock().unwrap() = Some("http://127.0.0.1:1/live.m3u8".to_string());
+        let short = Duration::from_millis(50);
+
+        // Answered at once.
+        assert!(matches!(
+            rt.block_on(origin.serve_playlist_checked(Some(1), Some(0))),
+            PlaylistServe::Playlist(_)
+        ));
+        assert_eq!(origin.serving.load(Ordering::SeqCst), 0);
+
+        // Not ready: woken, and the reader publishes nothing.
+        assert!(origin.park());
+        assert!(origin.unpark());
+        assert_eq!(
+            rt.block_on(origin.serve_playlist_apple_within(None, None, "http://x/", 2, short)),
+            PlaylistServe::NotReady
+        );
+        assert_eq!(origin.serving.load(Ordering::SeqCst), 0);
+
+        // Cancelled while it waits.
+        let cancelled = rt.block_on(async {
+            tokio::time::timeout(
+                Duration::from_millis(20),
+                origin.serve_playlist_apple_within(None, None, "http://x/", 2, Duration::from_secs(5)),
+            )
+            .await
+        });
+        assert!(cancelled.is_err());
+        assert_eq!(origin.serving.load(Ordering::SeqCst), 0);
+        origin.stop();
+    }
+
+    #[test]
+    fn a_park_landing_while_a_request_waits_never_hands_it_the_held_window() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let _guard = rt.enter();
+        let origin = LlOrigin::new(6);
+        *origin.live_edge.lock().unwrap() = Some(ts_edge_with_one_segment());
+        // Nothing listens here, so the restarted reader publishes nothing.
+        *origin.upstream.lock().unwrap() = Some("http://127.0.0.1:1/live.m3u8".to_string());
+
+        let park_after_wait = |origin: &Arc<LlOrigin>| {
+            let origin = origin.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                assert!(origin.park());
+            })
+        };
+
+        // The checked route.
+        assert!(origin.park());
+        assert!(origin.unpark());
+        let served = rt.block_on(async {
+            let parker = park_after_wait(&origin);
+            let served = origin
+                .serve_playlist_held_within(Some(1), Some(0), Duration::from_secs(5))
+                .await;
+            parker.await.unwrap();
+            served
+        });
+        assert_eq!(served, PlaylistServe::NotReady);
+        assert!(origin.is_parked());
+
+        // The Apple route.
+        assert!(origin.unpark());
+        let served = rt.block_on(async {
+            let parker = park_after_wait(&origin);
+            let served = origin
+                .serve_playlist_apple_within(None, None, "http://x/", 2, Duration::from_secs(5))
+                .await;
+            parker.await.unwrap();
+            served
+        });
+        assert_eq!(served, PlaylistServe::NotReady);
+
+        // A request that never waited is still handed the held window.
+        assert!(matches!(
+            rt.block_on(origin.serve_playlist_apple_within(None, None, "http://x/", 2, Duration::from_millis(50))),
+            PlaylistServe::Playlist(_)
+        ));
+        origin.stop();
+    }
+
+    #[test]
+    fn a_request_wakes_a_parked_origin_through_wake_for_request() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+        let _guard = rt.enter();
+        let origin = LlOrigin::new(6);
+        *origin.live_edge.lock().unwrap() = Some(ts_edge_with_one_segment());
+        *origin.upstream.lock().unwrap() = Some("http://x/playlist.m3u8".to_string());
+        assert!(origin.park());
+
+        origin.wake_for_request(false);
+        assert!(origin.is_parked(), "a request that does not wake leaves it parked");
+        assert!(origin.reader_task.lock().unwrap().is_none());
+
+        origin.wake_for_request(true);
+        assert!(!origin.is_parked());
+        let handle = origin.reader_task.lock().unwrap().take();
+        assert!(handle.is_some(), "the wake started a reader");
+        handle.unwrap().abort();
+    }
+
+    #[test]
+    fn idle_parks_only_after_the_span_and_never_before_a_first_request() {
+        let span = 30_000;
+        assert!(!idle_for_park(0, 10 * span, span), "never asked: nothing to measure");
+        assert!(!idle_for_park(1_000, 1_000 + span - 1, span));
+        assert!(idle_for_park(1_000, 1_000 + span, span));
+        // A clock read before the request (a race) is not idle.
+        assert!(!idle_for_park(5_000, 4_000, span));
+    }
+
+    #[test]
+    fn an_unpark_counts_as_a_request() {
+        let origin = LlOrigin::new(6);
+        *origin.live_edge.lock().unwrap() = Some(ts_edge_with_one_segment());
+        let asked = u64::MAX / 2;
+        origin.note_playlist_request_at(asked);
+        assert!(!origin.idle_park_due_at(asked + park_idle_ms() - 1));
+        assert!(origin.idle_park_due_at(asked + park_idle_ms()), "idle before the unpark");
+        assert!(origin.park());
+        assert!(!origin.unpark(), "no upstream in a test: nothing restarts");
+        let woke = origin.last_playlist_ms.load(Ordering::SeqCst);
+        assert_ne!(woke, asked, "the unpark noted a request");
+        assert!(!origin.idle_park_due_at(woke), "not idle right after the unpark");
     }
 
     #[test]

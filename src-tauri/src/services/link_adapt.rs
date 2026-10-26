@@ -233,6 +233,9 @@ pub struct Governor {
     tile: bool,
     /// Whether a switch now would be seamless (spliced, no reload).
     seamless: bool,
+    /// The stream is parked: no player is loading it, so a probe would be the
+    /// only download it makes.
+    parked: bool,
     /// Desktop: the downloads before the first frame (the start pick's
     /// evidence), until the pick is made.
     start_samples: Vec<Measured>,
@@ -272,6 +275,7 @@ impl Governor {
             ceiling_bw: None,
             tile: false,
             seamless: true,
+            parked: false,
             start_samples: Vec::new(),
             start_done: false,
             held: None,
@@ -322,6 +326,12 @@ impl Governor {
     /// route before every decision.
     pub fn set_seamless(&mut self, seamless: bool) {
         self.seamless = seamless;
+    }
+
+    /// Whether the stream is parked; the runtime asks the stream's route
+    /// before every decision. A parked stream is never probed.
+    pub fn set_parked(&mut self, parked: bool) {
+        self.parked = parked;
     }
 
     fn settling(&self, now: f64) -> bool {
@@ -798,6 +808,7 @@ impl Governor {
         // No transfers of our own to judge by (the parts path): measure the
         // next rung once the clean-playback hold has passed.
         if self.up_ready(now)
+            && !self.parked
             && self.samples < UP_MIN_SAMPLES
             && self.last_probe.is_none_or(|t| now - t >= self.up_hold)
         {
@@ -835,7 +846,7 @@ impl Governor {
         }
         // No warm samples of its own yet: measure the next rung up once the
         // clean-playback hold has passed.
-        if self.up_ready(now) && self.last_probe.is_none_or(|t| now - t >= self.up_hold) {
+        if self.up_ready(now) && !self.parked && self.last_probe.is_none_or(|t| now - t >= self.up_hold) {
             if let Some(next) = self.next_up() {
                 self.last_probe = Some(now);
                 return Some(Decision::Probe { rung: next });
@@ -1005,6 +1016,25 @@ pub fn phone_rules() -> bool {
 /// when the switch was spliced into the playlist it is already reading.
 pub type SwitchFuture = Pin<Box<dyn Future<Output = anyhow::Result<Option<String>>> + Send>>;
 
+/// The error a route's `switch` returns when it left the relay untouched
+/// because the relay is parked: no switch happened. It is a type, not a
+/// message, so it is still recognized after a caller wraps it with context.
+#[derive(Debug)]
+pub struct RelayParked;
+
+impl std::fmt::Display for RelayParked {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("parked")
+    }
+}
+
+impl std::error::Error for RelayParked {}
+
+/// Whether `e` is (or wraps) a `RelayParked` refusal.
+pub fn refused_by_park(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<RelayParked>().is_some() || e.chain().any(|cause| cause.is::<RelayParked>())
+}
+
 /// How one stream is served. The relay knows how to move it to another rung
 /// (splice or restart) and whether its player's own downloads cross the
 /// internet; this module only decides when and to what.
@@ -1033,6 +1063,12 @@ pub trait Route: Send + Sync {
 
     /// Whether an ad is playing: its segments say nothing about the rung.
     fn ads_playing(&self) -> bool {
+        false
+    }
+
+    /// Whether the stream is parked (no player is loading it and nothing is
+    /// downloading): a probe or a switch would restart it.
+    fn parked(&self) -> bool {
         false
     }
 }
@@ -1374,10 +1410,12 @@ fn with_session(stream_id: &str, f: impl FnOnce(&mut Governor, f64) -> Option<De
     // origin, whose own lock is sometimes held while it reads the cushion.
     let Some(route) = sessions().get(stream_id).map(|s| s.route.clone()) else { return };
     let seamless = route.seamless();
+    let parked = route.parked();
     let (decision, generation, cushion_moved) = {
         let mut guard = sessions();
         let Some(s) = guard.get_mut(stream_id) else { return };
         s.gov.set_seamless(seamless);
+        s.gov.set_parked(parked);
         let now = s.epoch.elapsed().as_secs_f64();
         let d = if s.applying { None } else { f(&mut s.gov, now) };
         if d.is_some() {
@@ -1516,7 +1554,19 @@ pub fn note_tail_loss(stream_id: &str) {
 /// Periodic look (the player's reports drive it; this catches clean stretches
 /// with nothing to report).
 pub fn tick(stream_id: &str) {
-    with_session(stream_id, |g, now| g.tick(now));
+    // Asked with the sessions lock released, like `with_session`'s route calls.
+    let Some(route) = sessions().get(stream_id).map(|s| s.route.clone()) else { return };
+    let parked = route.parked();
+    with_session(stream_id, move |g, now| tick_unless_parked(parked, g, now));
+}
+
+/// The governor's periodic look, except while the stream is parked: a probe or
+/// a switch then would restart the relay it parked.
+fn tick_unless_parked(parked: bool, g: &mut Governor, now: f64) -> Option<Decision> {
+    if parked {
+        return None;
+    }
+    g.tick(now)
 }
 
 fn announce(stream_id: &str, url: Option<String>, reason: &str) {
@@ -1538,7 +1588,9 @@ fn announce(stream_id: &str, url: Option<String>, reason: &str) {
 
 async fn apply(stream_id: String, decision: Decision, generation: u64) {
     match decision {
-        Decision::Switch { to, why } => switch_to(&stream_id, to, why, generation).await,
+        Decision::Switch { to, why } => {
+            switch_to(&stream_id, to, why, generation).await;
+        }
         Decision::Probe { rung } => probe(&stream_id, rung, generation).await,
         Decision::Measure { why } => measure(&stream_id, why, generation).await,
     }
@@ -1558,26 +1610,51 @@ fn rung_of(stream_id: &str, generation: u64, i: usize) -> Option<(Rung, Rung, Ar
     Some((s.gov.ladder().get(i)?.clone(), from, s.route.clone()))
 }
 
-async fn switch_to(stream_id: &str, to: usize, why: &'static str, generation: u64) {
-    let Some((rung, from, route)) = rung_of(stream_id, generation, to) else { return };
+/// What `switch_to` did with a decision to move to another rung.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SwitchOutcome {
+    /// The route moved the stream and the move was recorded.
+    Applied,
+    /// Nothing was attempted: the session changed, the move would reload the
+    /// player, or the route was already parked.
+    Skipped,
+    /// The route refused because the relay is parked; nothing moved.
+    RefusedByPark,
+    /// The route failed for another reason.
+    Failed,
+}
+
+async fn switch_to(stream_id: &str, to: usize, why: &'static str, generation: u64) -> SwitchOutcome {
+    let Some((rung, from, route)) = rung_of(stream_id, generation, to) else {
+        return SwitchOutcome::Skipped;
+    };
     let same_decoder = rung.family == from.family;
     let name = rung.name.clone();
     if !phone_rules() && !(same_decoder && route.seamless()) {
         info!("[LinkAdapt] {}: holding {}: a switch to {} would reload the player", stream_id, from.name, name);
-        return;
+        return SwitchOutcome::Skipped;
+    }
+    if route.parked() {
+        return SwitchOutcome::Skipped;
     }
     info!("[LinkAdapt] {}: {} -> {} ({})", stream_id, from.name, rung.name, why);
     let reload = match route.switch(rung, same_decoder).await {
         Ok(reload) => reload,
+        Err(e) if refused_by_park(&e) => {
+            // Nothing moved: no switch is recorded and nothing is announced,
+            // so the governor judges the rung again once the player resumes.
+            log::debug!("[LinkAdapt] {}: switch skipped: relay parked", stream_id);
+            return SwitchOutcome::RefusedByPark;
+        }
         Err(e) => {
             log::warn!("[LinkAdapt] {}: switch to {} failed: {}", stream_id, name, e);
-            return;
+            return SwitchOutcome::Failed;
         }
     };
     {
         let mut guard = sessions();
         let Some(s) = guard.get_mut(stream_id).filter(|s| s.generation == generation) else {
-            return;
+            return SwitchOutcome::Skipped;
         };
         let now = s.epoch.elapsed().as_secs_f64();
         s.gov.switched(to, now);
@@ -1586,11 +1663,15 @@ async fn switch_to(stream_id: &str, to: usize, why: &'static str, generation: u6
         }
     }
     announce(stream_id, reload, why);
+    SwitchOutcome::Applied
 }
 
 /// Times one whole, already-published segment of rung `rung`'s playlist.
 async fn probe(stream_id: &str, rung: usize, generation: u64) {
-    let Some((target, _, _)) = rung_of(stream_id, generation, rung) else { return };
+    let Some((target, _, route)) = rung_of(stream_id, generation, rung) else { return };
+    if route.parked() {
+        return;
+    }
     let count = if phone_rules() { 1 } else { 2 };
     let measured = measure_segment(&target.url, count).await;
     let decision = {
@@ -1620,9 +1701,19 @@ async fn measure(stream_id: &str, why: &'static str, generation: u64) {
         guard
             .get(stream_id)
             .filter(|s| s.generation == generation)
-            .and_then(|s| s.gov.ladder().get(s.gov.current()).cloned())
+            .and_then(|s| {
+                s.gov
+                    .ladder()
+                    .get(s.gov.current())
+                    .cloned()
+                    .map(|rung| (rung, s.route.clone()))
+            })
     };
-    let Some(rung) = current else { return };
+    let Some((rung, route)) = current else { return };
+    // A parked stream downloads nothing, a measure included.
+    if route.parked() {
+        return;
+    }
     let measured = measure_segment(&rung.url, 2).await;
     if let Some(m) = measured {
         info!("[LinkAdapt] {}: measured {} after {}: {:.2} Mbit/s", stream_id, rung.name, why, m.bps() / 1e6);
@@ -2230,6 +2321,55 @@ mod tests {
         assert_eq!(g.up_hold, UP_HOLD_BASE * 2.0);
     }
 
+    /// A route that reports itself parked.
+    struct Parked;
+
+    impl Route for Parked {
+        fn switch(&self, _to: Rung, _same_decoder: bool) -> SwitchFuture {
+            Box::pin(async { Ok(None) })
+        }
+
+        fn player_measures_link(&self) -> bool {
+            false
+        }
+
+        fn parked(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn a_parked_route_yields_no_decision_from_tick() {
+        let route: Arc<dyn Route> = Arc::new(Parked);
+        assert!(route.parked());
+        assert!(!Still.parked(), "a route is not parked unless it says so");
+        let mut g = desk(0);
+        g.switched(1, 5.0);
+        assert_eq!(tick_unless_parked(route.parked(), &mut g, 40.0), None);
+        // The same look on a route that is not parked would probe.
+        assert_eq!(tick_unless_parked(Still.parked(), &mut g, 40.0), Some(Decision::Probe { rung: 0 }));
+    }
+
+    #[test]
+    fn a_parked_route_gets_no_probe_under_either_rule_set() {
+        let parked: Arc<dyn Route> = Arc::new(Parked);
+        let moving: Arc<dyn Route> = Arc::new(Still);
+
+        let mut p = phone(0, true);
+        p.switched(1, 5.0);
+        p.set_parked(parked.parked());
+        assert_eq!(p.decide_phone(40.0), None, "a parked phone stream is not probed");
+        p.set_parked(moving.parked());
+        assert_eq!(p.decide_phone(40.0), Some(Decision::Probe { rung: 0 }));
+
+        let mut d = desk(0);
+        d.switched(1, 5.0);
+        d.set_parked(parked.parked());
+        assert_eq!(d.decide_desktop(40.0), None, "a parked desktop stream is not probed");
+        d.set_parked(moving.parked());
+        assert_eq!(d.decide_desktop(40.0), Some(Decision::Probe { rung: 0 }));
+    }
+
     #[test]
     fn desktop_the_bottom_rung_has_nowhere_to_go() {
         let mut g = desk(4);
@@ -2301,6 +2441,150 @@ mod tests {
 
     fn warm_count(id: &str) -> usize {
         sessions().get(id).map_or(0, |s| s.gov.warm.len())
+    }
+
+    /// A seamless route that counts the switches it is asked to apply; `parked`
+    /// says whether it reports itself parked.
+    struct Counting {
+        parked: bool,
+        switches: Arc<AtomicU64>,
+    }
+
+    impl Route for Counting {
+        fn switch(&self, _to: Rung, _same_decoder: bool) -> SwitchFuture {
+            self.switches.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Ok(None) })
+        }
+
+        fn player_measures_link(&self) -> bool {
+            false
+        }
+
+        fn seamless(&self) -> bool {
+            true
+        }
+
+        fn parked(&self) -> bool {
+            self.parked
+        }
+    }
+
+    #[test]
+    fn a_parked_route_is_never_probed_or_switched() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+
+        let parked_id = "test-parked-route";
+        let parked_switches = Arc::new(AtomicU64::new(0));
+        settled_session(
+            parked_id,
+            Arc::new(Counting { parked: true, switches: parked_switches.clone() }),
+        );
+        rt.block_on(probe(parked_id, 0, 0));
+        assert!(
+            sessions().get(parked_id).unwrap().gov.last_probe.is_none(),
+            "a parked stream is not probed"
+        );
+        rt.block_on(switch_to(parked_id, 1, "test", 0));
+        assert_eq!(parked_switches.load(Ordering::SeqCst), 0, "a parked stream is not switched");
+        end(parked_id);
+
+        // The same call on a route that is not parked does switch.
+        let live_id = "test-unparked-route";
+        let live_switches = Arc::new(AtomicU64::new(0));
+        settled_session(
+            live_id,
+            Arc::new(Counting { parked: false, switches: live_switches.clone() }),
+        );
+        rt.block_on(switch_to(live_id, 1, "test", 0));
+        assert_eq!(live_switches.load(Ordering::SeqCst), 1);
+        end(live_id);
+    }
+
+    /// A seamless route whose relay is parked only once the switch is
+    /// attempted: it refuses with the parked error.
+    struct Refusing {
+        attempts: Arc<AtomicU64>,
+    }
+
+    impl Route for Refusing {
+        fn switch(&self, _to: Rung, _same_decoder: bool) -> SwitchFuture {
+            self.attempts.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Err(anyhow::Error::new(RelayParked)) })
+        }
+
+        fn player_measures_link(&self) -> bool {
+            false
+        }
+
+        fn seamless(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn a_refused_switch_is_not_recorded() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+        let id = "test-refused-switch";
+        let attempts = Arc::new(AtomicU64::new(0));
+        settled_session(id, Arc::new(Refusing { attempts: attempts.clone() }));
+        let (current, last_switch, up_hold) = {
+            let guard = sessions();
+            let gov = &guard.get(id).unwrap().gov;
+            (gov.current(), gov.last_switch, gov.up_hold)
+        };
+
+        let outcome = rt.block_on(switch_to(id, 1, "test", 0));
+
+        assert_eq!(attempts.load(Ordering::SeqCst), 1, "the switch was attempted");
+        assert_eq!(outcome, SwitchOutcome::RefusedByPark, "the refusal was read as a park");
+        let guard = sessions();
+        let gov = &guard.get(id).unwrap().gov;
+        assert_eq!(gov.current(), current, "the rung is unchanged");
+        assert_eq!(gov.last_switch, last_switch, "no switch is recorded");
+        assert_eq!(gov.up_hold, up_hold, "no back-off follows");
+        drop(guard);
+        end(id);
+    }
+
+    #[test]
+    fn the_park_refusal_is_recognized_through_context() {
+        use anyhow::Context;
+
+        let plain = anyhow::Error::new(RelayParked);
+        assert!(refused_by_park(&plain));
+        assert_eq!(plain.to_string(), "parked");
+
+        let wrapped = Err::<(), _>(anyhow::Error::new(RelayParked)).context("x").unwrap_err();
+        assert_eq!(wrapped.to_string(), "x");
+        assert!(refused_by_park(&wrapped), "context does not hide the park");
+
+        assert!(!refused_by_park(&anyhow::anyhow!("parked")), "the word alone is not the type");
+        assert!(!refused_by_park(&anyhow::anyhow!("boom").context("x")));
+    }
+
+    #[test]
+    fn a_parked_stream_is_not_probed_or_measured() {
+        // The governor's own look: a parked stream makes no probe.
+        let mut g = desk(0);
+        g.switched(1, 5.0);
+        g.set_parked(true);
+        assert_eq!(g.tick(40.0), None, "a parked stream is not probed");
+        g.set_parked(false);
+        assert_eq!(g.tick(40.0), Some(Decision::Probe { rung: 0 }));
+
+        // The runtime's measure: a parked route returns before any download.
+        let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+        let id = "test-parked-measure";
+        settled_session(
+            id,
+            Arc::new(Counting { parked: true, switches: Arc::new(AtomicU64::new(0)) }),
+        );
+        rt.block_on(measure(id, "test", 0));
+        assert!(
+            sessions().get(id).unwrap().gov.last_measure.is_none(),
+            "a parked stream is not measured"
+        );
+        end(id);
     }
 
     #[test]

@@ -18,7 +18,11 @@ pub async fn open_universal_cache_folder() -> Result<(), String> {
     if cfg!(target_os = "ios") {
         return Err("Opening folders is not available on iPhone".into());
     }
-    let dir = get_universal_cache_dir().map_err(|e| e.to_string())?;
+    // On the blocking pool: resolving the folder checks the disk and may create it.
+    let dir = tauri::async_runtime::spawn_blocking(get_universal_cache_dir)
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
     let program = if cfg!(target_os = "windows") {
         "explorer"
     } else if cfg!(target_os = "macos") {
@@ -92,19 +96,30 @@ pub async fn sync_universal_cache_data(cache_types: Vec<String>) -> Result<usize
 
 #[command]
 pub async fn cleanup_universal_cache() -> Result<usize, String> {
-    cleanup_expired_entries().map_err(|e| e.to_string())
+    tauri::async_runtime::spawn_blocking(cleanup_expired_entries)
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
 }
 
 #[command]
 pub async fn clear_all_universal_cache(app: crate::rt::AppHandle) -> Result<(), String> {
-    clear_universal_cache().map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(clear_universal_cache)
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
     crate::services::asset_cache_queue::announce_cleared(&app);
     Ok(())
 }
 
+/// On the blocking pool: a statistics read clones the manifest and lists the
+/// cache folder.
 #[command]
 pub async fn get_universal_cache_statistics() -> Result<UniversalCacheStats, String> {
-    get_universal_cache_stats().map_err(|e| e.to_string())
+    tauri::async_runtime::spawn_blocking(get_universal_cache_stats)
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
 }
 
 #[command]
@@ -117,7 +132,10 @@ pub async fn assign_badge_positions() -> Result<usize, String> {
 #[command]
 pub async fn export_manifest(output_path: String) -> Result<(), String> {
     let path = PathBuf::from(output_path);
-    export_manifest_for_github(path).map_err(|e| e.to_string())
+    tauri::async_runtime::spawn_blocking(move || export_manifest_for_github(path))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
 }
 
 #[command]
@@ -130,9 +148,14 @@ pub async fn get_cached_file(cache_type: String, id: String) -> Result<Option<St
         _ => return Err(format!("Invalid cache type: {}", cache_type)),
     };
 
-    get_cached_file_path(cache_type_enum, &id)
-        .await
-        .map_err(|e| e.to_string())
+    // On the blocking pool: the lookup checks the file on disk. It is async only
+    // because a stale manifest is downloaded first, which the closure waits for.
+    tauri::async_runtime::spawn_blocking(move || {
+        tauri::async_runtime::block_on(get_cached_file_path(cache_type_enum, &id))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
 }
 
 #[command]
@@ -146,14 +169,17 @@ pub async fn get_cached_files(cache_type: String) -> Result<HashMap<String, Stri
         _ => return Err(format!("Invalid cache type: {}", cache_type)),
     };
 
-    get_cached_files_list(cache_type_enum)
+    // On the blocking pool: the first listing of a type reads its folder. The
+    // service function is async but never waits on anything.
+    tauri::async_runtime::spawn_blocking(move || tauri::async_runtime::block_on(get_cached_files_list(cache_type_enum)))
         .await
+        .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())
 }
 
 /// Get ALL cached items of a specific type - efficient batch lookup (single disk read)
 #[command]
-pub fn get_all_universal_cached_items(
+pub async fn get_all_universal_cached_items(
     cache_type: String,
 ) -> Result<HashMap<String, UniversalCacheEntry>, String> {
     let cache_type_enum = match cache_type.as_str() {
@@ -164,12 +190,17 @@ pub fn get_all_universal_cached_items(
         _ => return Err(format!("Invalid cache type: {}", cache_type)),
     };
 
-    get_all_cached_items_by_type(cache_type_enum).map_err(|e| e.to_string())
+    // On the blocking pool: a sync command runs on the UI thread, and the first
+    // read of a type lists its folder.
+    tauri::async_runtime::spawn_blocking(move || get_all_cached_items_by_type(cache_type_enum))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
 }
 
 /// Get multiple cached items by their IDs - efficient batch lookup (single disk read)
 #[command]
-pub fn get_universal_cached_items_batch(
+pub async fn get_universal_cached_items_batch(
     cache_type: String,
     ids: Vec<String>,
 ) -> Result<HashMap<String, UniversalCacheEntry>, String> {
@@ -181,7 +212,10 @@ pub fn get_universal_cached_items_batch(
         _ => return Err(format!("Invalid cache type: {}", cache_type)),
     };
 
-    get_cached_items_batch(cache_type_enum, &ids).map_err(|e| e.to_string())
+    tauri::async_runtime::spawn_blocking(move || get_cached_items_batch(cache_type_enum, &ids))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
 }
 
 /// Auto-sync universal cache if stale (>24 hours since last sync)
@@ -193,18 +227,30 @@ pub async fn auto_sync_universal_cache_if_stale() -> Result<bool, String> {
 
 /// Queue files for the shared disk-cache fill (services/asset_cache_queue.rs).
 /// Results arrive as `asset-cache://cached`.
+/// On the blocking pool: a sync command runs on the UI thread, and `enqueue`
+/// reads the manifest (and lists a type folder the first time).
 #[command]
-pub fn asset_cache_enqueue(
+pub async fn asset_cache_enqueue(
     app: crate::rt::AppHandle,
     kind: crate::services::asset_cache_queue::AssetKind,
     items: Vec<crate::services::asset_cache_queue::AssetRequest>,
     priority: Option<bool>,
-) {
-    crate::services::asset_cache_queue::enqueue(&app, kind, items, priority.unwrap_or(false));
+) -> Result<(), String> {
+    let priority = priority.unwrap_or(false);
+    tauri::async_runtime::spawn_blocking(move || crate::services::asset_cache_queue::enqueue(&app, kind, items, priority))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// An emote picker opened or closed in the calling window.
 #[command]
 pub fn asset_cache_set_burst(app: crate::rt::AppHandle, window: crate::rt::WebviewWindow, active: bool) {
     crate::services::asset_cache_queue::set_burst(&app, window.label(), active);
+}
+
+/// The loopback server for cached images (`services/cache_file_server.rs`), or
+/// none (not Windows, not bound yet, or the bind failed).
+#[command]
+pub async fn cache_file_server() -> Option<crate::services::cache_file_server::CacheFileServer> {
+    crate::services::cache_file_server::info()
 }

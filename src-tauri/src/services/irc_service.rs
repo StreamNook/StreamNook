@@ -952,6 +952,11 @@ pub async fn with_channel_emotes<R>(channel: &str, f: impl FnOnce(&EmoteSet) -> 
     map.get(&channel.to_lowercase()).map(f)
 }
 
+/// A copy of the table held for the joined channel `key`, if any.
+pub(crate) async fn held_channel_emotes(key: &str) -> Option<EmoteSet> {
+    get_channel_emotes().lock().await.get(key).cloned()
+}
+
 /// Run `f` over a user's 7TV personal emotes (name -> emote), which work in
 /// every channel. `None` until 7TV has reported that user's personal set; ours
 /// arrives through the presence we post on each channel we join.
@@ -1115,6 +1120,11 @@ fn rebuild_parse_lookup(key: &str, set: &EmoteSet) {
         .and_then(|mut guard| guard.insert(key.to_string(), lookup.clone()));
     // Rows already drawn without an emote this table now names are repaired.
     crate::services::emote_restamp::table_changed(key, old, lookup);
+}
+
+/// The table now in place for `key`, if any.
+pub(crate) fn parse_lookup_for(key: &str) -> Option<Arc<EmoteLookup>> {
+    channel_parse_lookup().read().ok()?.get(key).cloned()
 }
 
 fn drop_parse_lookup(key: &str) {
@@ -1704,6 +1714,7 @@ fn history_notice_row(raw: &str) -> Option<ChatMessage> {
         content: text.clone(),
         provider: "twitch".to_string(),
         channel,
+        received_at_ms: None,
         emotes: Vec::new(),
         tags,
         layout: LayoutResult::default(),
@@ -2671,6 +2682,10 @@ impl IrcService {
             return Ok(());
         }
 
+        // The one clock read for this line, before any parsing, stamped onto
+        // the live row it becomes.
+        let read_at_ms = chrono::Utc::now().timestamp_millis();
+
         // Parse and handle different message types
         if trimmed.contains("PRIVMSG") {
             // Regular chat message - forward as-is with shared chat detection
@@ -2693,10 +2708,13 @@ impl IrcService {
                 );
             }
 
-            // Parse and layout
-            if let Some(mut chat_msg) = Self::parse_privmsg(&enhanced_message) {
-                if let Some(room) = extract_channel_from_irc_line(&enhanced_message) {
-                    crate::services::emote_restamp::remember(&room, &enhanced_message);
+            // Parse and layout. The table generation is read before the parse,
+            // so the line is never stamped newer than the table it used.
+            let room = extract_channel_from_irc_line(&enhanced_message);
+            let table_generation = room.as_deref().map_or(0, crate::services::emote_restamp::generation);
+            if let Some(mut chat_msg) = Self::parse_live_privmsg(&enhanced_message, read_at_ms) {
+                if let Some(room) = room.as_deref() {
+                    crate::services::emote_restamp::remember(room, &enhanced_message, table_generation);
                 }
                 debug!(
                     "[IRC Chat DEBUG] Parsed message from {}: content='{}', {} segments",
@@ -2745,7 +2763,7 @@ impl IrcService {
                             BridgeFrame::row(
                                 &chat_msg.channel,
                                 json_msg,
-                                chat_msg.metadata.is_mentioned || chat_msg.metadata.is_reply_to_me,
+                                crate::services::mention_inbox::pinged(&verdict),
                             ),
                             true,
                         )
@@ -2777,9 +2795,11 @@ impl IrcService {
                 }
             }
             // Parse USERNOTICE messages - layout will be measured by frontend
-            if let Some(mut chat_msg) = Self::parse_usernotice(trimmed) {
-                if let Some(room) = extract_channel_from_irc_line(trimmed) {
-                    crate::services::emote_restamp::remember(&room, trimmed);
+            let room = extract_channel_from_irc_line(trimmed);
+            let table_generation = room.as_deref().map_or(0, crate::services::emote_restamp::generation);
+            if let Some(mut chat_msg) = Self::parse_live_usernotice(trimmed, read_at_ms) {
+                if let Some(room) = room.as_deref() {
+                    crate::services::emote_restamp::remember(room, trimmed, table_generation);
                 }
                 // Skip USERNOTICE messages with no visible content
                 // These render as blank/ghost messages (e.g., "onetapgiftredeemed" with no text)
@@ -2828,7 +2848,7 @@ impl IrcService {
                             BridgeFrame::row(
                                 &chat_msg.channel,
                                 json_msg,
-                                chat_msg.metadata.is_mentioned || chat_msg.metadata.is_reply_to_me,
+                                crate::services::mention_inbox::pinged(&verdict),
                             ),
                             true,
                         )
@@ -3846,6 +3866,7 @@ impl IrcService {
         // USERSTATE/ROOMSTATE refill from the next IRC frames.
         get_channel_emotes().lock().await.remove(key);
         drop_parse_lookup(key);
+        crate::services::emote_restamp::forget(key);
         if let Ok(mut g) = get_channel_cheermotes().write() { g.remove(key); }
         get_user_badges_cache().lock().await.remove(key);
         get_user_color_cache().lock().await.remove(key);
@@ -4117,6 +4138,9 @@ impl IrcService {
         // future writer would otherwise convoy every reader behind an
         // in-flight HTTP call.
         let emote_svc = emote_service.read().await.clone();
+        // Deltas applied from here on are replayed onto the answer, which may
+        // have been produced before them.
+        let refresh_window = crate::services::emote_service::begin_refresh_window(&user_id);
         match emote_svc
             .fetch_channel_emotes_checked(
                 Some(channel_name.clone()),
@@ -4139,24 +4163,28 @@ impl IrcService {
                     seven_tv_ok
                 );
                 let whole = seven_tv_ok && crate::services::emote_service::fetch_was_whole(&user_id);
-                let held = get_channel_emotes().lock().await.contains_key(&key);
-                if seven_tv_ok || !held {
-                    if whole {
-                        crate::services::emote_set_cache::save_force(&user_id, &emote_set);
-                    } else {
+                let seven_tv_rows = emote_set.seven_tv.len();
+                if Self::install_fetched_set(
+                    &key,
+                    &user_id,
+                    refresh_window.start(),
+                    emote_set,
+                    seven_tv_ok,
+                    whole,
+                )
+                .await
+                {
+                    if !whole {
                         debug!(
                             "[IRC Chat] {}: partial emote table installed, not saved (7TV channel ok: {})",
                             channel_name, seven_tv_ok
                         );
                     }
-                    rebuild_parse_lookup(&key, &emote_set);
-                    get_channel_emotes().lock().await.insert(key.clone(), emote_set);
                     note_emote_table_installed(&key);
                 } else {
                     debug!(
                         "[IRC Chat] Keeping held set for {}; 7TV channel fetch was deficient (7TV {})",
-                        channel_name,
-                        emote_set.seven_tv.len()
+                        channel_name, seven_tv_rows
                     );
                 }
                 whole
@@ -4166,6 +4194,52 @@ impl IrcService {
                 false
             }
         }
+    }
+
+    /// Puts a provider answer in place as `key`'s table, after replaying onto
+    /// it every 7TV delta applied since `started` (the journal number current
+    /// when its fetch began), so an edit made while the providers were
+    /// answering is not undone. True when it was installed. A whole answer is
+    /// saved as the channel's dictionary, with the replayed deltas in it.
+    ///
+    /// The deltas that landed up to the table's lock are replayed before the
+    /// save; any that land while it is written are replayed under the lock, and
+    /// the dictionary is written again for them.
+    async fn install_fetched_set(
+        key: &str,
+        user_id: &str,
+        started: u64,
+        mut emote_set: EmoteSet,
+        seven_tv_ok: bool,
+        whole: bool,
+    ) -> bool {
+        let (_, replayed_to) = crate::services::emote_service::replay_seventv_journal(
+            user_id,
+            started,
+            &mut emote_set.seven_tv,
+        );
+        if whole {
+            crate::services::emote_set_cache::save_force(user_id, &emote_set);
+        }
+        let late = {
+            let mut map = get_channel_emotes().lock().await;
+            if !seven_tv_ok && map.contains_key(key) {
+                return false;
+            }
+            // Deltas are journaled under this lock, so none can be missed here.
+            let (late, _) = crate::services::emote_service::replay_seventv_journal(
+                user_id,
+                replayed_to,
+                &mut emote_set.seven_tv,
+            );
+            rebuild_parse_lookup(key, &emote_set);
+            map.insert(key.to_string(), emote_set);
+            late
+        };
+        if late > 0 {
+            schedule_dictionary_write(key.to_string(), user_id.to_string());
+        }
+        true
     }
 
     /// Applies a live 7TV set change to this channel's parse dictionary without
@@ -4182,6 +4256,9 @@ impl IrcService {
     ) -> Option<crate::services::emote_service::SeventvComposedDelta> {
         let composed = {
             let mut map = get_channel_emotes().lock().await;
+            // Journaled under the table's lock, whether or not a table is held
+            // yet, so a provider answer installing later replays this delta.
+            crate::services::emote_service::journal_seventv_delta(user_id, key, delta, globals);
             let set = map.get_mut(key)?;
             let composed = crate::services::emote_service::apply_seventv_delta(
                 &mut set.seven_tv,
@@ -4274,12 +4351,19 @@ impl IrcService {
             }
         };
         if let Some(old_key) = evict {
-            if !get_current_channels().lock().await.contains(&old_key) {
-                get_channel_emotes().lock().await.remove(&old_key);
-                drop_parse_lookup(&old_key);
-                if let Ok(mut g) = get_channel_cheermotes().write() {
-                    g.remove(&old_key);
-                }
+            Self::evict_parse_only_channel(&old_key).await;
+        }
+    }
+
+    /// Drop a parse-only channel's tables and remembered lines, unless it has
+    /// since genuinely joined.
+    async fn evict_parse_only_channel(old_key: &str) {
+        if !get_current_channels().lock().await.contains(old_key) {
+            get_channel_emotes().lock().await.remove(old_key);
+            drop_parse_lookup(old_key);
+            crate::services::emote_restamp::forget(old_key);
+            if let Ok(mut g) = get_channel_cheermotes().write() {
+                g.remove(old_key);
             }
         }
     }
@@ -4419,6 +4503,7 @@ impl IrcService {
                                 is_zero_width: emote.is_zero_width,
                                 modifier_flags: emote.modifier_flags,
                                 is_personal: Some(true),
+                                local_path: None,
                             }
                         }
                         None => segment.clone(),
@@ -4583,6 +4668,7 @@ impl IrcService {
                 is_zero_width: None,
                 modifier_flags: None,
                 is_personal: None,
+                local_path: None,
             });
 
             last_char_index = emote.end + 1;
@@ -4679,6 +4765,7 @@ impl IrcService {
                     is_zero_width: emote.is_zero_width,
                     modifier_flags: emote.modifier_flags,
                     is_personal: from_personal.then_some(true),
+                    local_path: None,
                 });
             } else {
                 // Convert emoji shortcodes first
@@ -5169,6 +5256,7 @@ impl IrcService {
             content: content_for_segments,
             provider: "twitch".to_string(),
             channel,
+            received_at_ms: None,
             emotes: emotes_adjusted,
             tags: tags_owned,
             layout: LayoutResult {
@@ -5424,6 +5512,7 @@ impl IrcService {
             content,
             provider: "twitch".to_string(),
             channel,
+            received_at_ms: None,
             emotes,
             tags: tags_owned,
             layout: LayoutResult {
@@ -5586,6 +5675,23 @@ impl IrcService {
             Some("USERNOTICE") => Self::parse_usernotice(raw),
             _ => None,
         }
+    }
+
+    /// A PRIVMSG the read loop just read, parsed and stamped with the time its
+    /// line was read. Backlog rows go through `parse_privmsg` alone and carry none.
+    fn parse_live_privmsg(raw: &str, read_at_ms: i64) -> Option<ChatMessage> {
+        Self::parse_privmsg(raw).map(|mut msg| {
+            msg.received_at_ms = Some(read_at_ms);
+            msg
+        })
+    }
+
+    /// A USERNOTICE the read loop just read, stamped like `parse_live_privmsg`.
+    fn parse_live_usernotice(raw: &str, read_at_ms: i64) -> Option<ChatMessage> {
+        Self::parse_usernotice(raw).map(|mut msg| {
+            msg.received_at_ms = Some(read_at_ms);
+            msg
+        })
     }
 
     #[cfg(test)]
@@ -6214,6 +6320,7 @@ fn redemption_message(r: &RedemptionRow, segments: Vec<MessageSegment>, timestam
         content: r.reward_title.clone(),
         provider: "twitch".to_string(),
         channel: r.channel.clone(),
+        received_at_ms: None,
         emotes: Vec::new(),
         tags,
         layout: LayoutResult::default(),
@@ -6545,6 +6652,20 @@ mod own_message_tests {
         assert_eq!(msg.username, "mochi_panda");
         assert_eq!(msg.display_name, "もちパンダ");
         assert_eq!(IrcService::privmsg_prefix_login(":tmi.twitch.tv USERNOTICE #c"), None);
+    }
+
+    #[tokio::test]
+    async fn a_live_row_carries_the_time_its_line_was_read_and_a_history_row_does_not() {
+        let live = IrcService::parse_live_privmsg(LOCALIZED_PRIVMSG, 1_700_000_000_123).expect("parses");
+        assert_eq!(live.received_at_ms, Some(1_700_000_000_123));
+        let notice = IrcService::parse_live_usernotice(LOGIN_ONLY_WATCH_STREAK, 1_700_000_000_456).expect("parses");
+        assert_eq!(notice.received_at_ms, Some(1_700_000_000_456));
+
+        let history = IrcService::parse_historical_messages(vec![LOCALIZED_PRIVMSG.to_string()]).await;
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].received_at_ms, None);
+        assert!(!serde_json::to_string(&history[0]).unwrap().contains("received_at_ms"));
+        assert!(serde_json::to_string(&live).unwrap().contains("\"received_at_ms\":1700000000123"));
     }
 
     #[test]
@@ -7704,6 +7825,170 @@ mod history_notice_tests {
         get_channel_emotes().lock().await.remove(key);
 
         assert!(!wait_for_channel_emotes("history_wait_none", std::time::Duration::from_millis(30)).await);
+    }
+
+    #[tokio::test]
+    async fn a_reaped_parse_only_channel_forgets_its_remembered_lines() {
+        let key = "reaped_parse_only_chan";
+        let mut set = EmoteSet::new();
+        set.seven_tv.push(
+            serde_json::from_value(json!({
+                "id": "01GB2S3ZQ8000BNRXQQ0VKQ0E4",
+                "name": "catJAM",
+                "url": "https://cdn.7tv.app/emote/01GB2S3ZQ8000BNRXQQ0VKQ0E4/1x.avif",
+                "provider": "7tv",
+            }))
+            .expect("minimal emote"),
+        );
+        rebuild_parse_lookup(key, &set);
+        crate::services::emote_restamp::remember(
+            key,
+            "@id=r-1;room-id=11 :a!a@a.tmi.twitch.tv PRIVMSG #reaped_parse_only_chan :hi",
+            crate::services::emote_restamp::generation(key),
+        );
+        assert_eq!(crate::services::emote_restamp::generation(key), 1);
+
+        IrcService::evict_parse_only_channel(key).await;
+
+        assert!(parse_lookup_for(key).is_none());
+        assert_eq!(crate::services::emote_restamp::generation(key), 0);
+    }
+
+    fn seven_tv_row(id: &str, name: &str) -> Emote {
+        serde_json::from_value(json!({
+            "id": id,
+            "name": name,
+            "url": format!("https://cdn.7tv.app/emote/{id}/1x.avif"),
+            "provider": "7tv",
+        }))
+        .expect("minimal emote")
+    }
+
+    fn set_of(rows: &[(&str, &str)]) -> EmoteSet {
+        let mut set = EmoteSet::new();
+        set.seven_tv = rows.iter().map(|(id, name)| seven_tv_row(id, name)).collect();
+        set
+    }
+
+    async fn held_names(key: &str) -> Vec<String> {
+        get_channel_emotes()
+            .lock()
+            .await
+            .get(key)
+            .map(|s| s.seven_tv.iter().map(|e| e.name.clone()).collect())
+            .unwrap_or_default()
+    }
+
+    async fn forget_table(key: &str) {
+        get_channel_emotes().lock().await.remove(key);
+        drop_parse_lookup(key);
+    }
+
+    #[tokio::test]
+    async fn an_edit_made_during_a_refresh_survives_the_older_answer() {
+        let (key, user_id) = ("edit_during_refresh_chan", "edit-during-refresh-id");
+        get_channel_emotes().lock().await.insert(key.to_string(), set_of(&[("A", "old")]));
+        let window = crate::services::emote_service::begin_refresh_window(user_id);
+
+        let delta = crate::services::emote_service::SeventvSetDelta {
+            added: vec![seven_tv_row("X", "newOne")],
+            ..Default::default()
+        };
+        IrcService::apply_seventv_delta(key, user_id, &delta, &[]).await;
+        // The answer was produced before the edit and lacks it.
+        let installed = IrcService::install_fetched_set(
+            key,
+            user_id,
+            window.start(),
+            set_of(&[("A", "old")]),
+            true,
+            false,
+        )
+        .await;
+
+        assert!(installed);
+        assert_eq!(held_names(key).await, vec!["old", "newOne"]);
+        assert!(parse_lookup_for(key).is_some_and(|l| l.get("newOne").is_some()));
+        forget_table(key).await;
+    }
+
+    #[tokio::test]
+    async fn a_removal_made_during_a_refresh_beats_the_fetched_row() {
+        let (key, user_id) = ("remove_during_refresh_chan", "remove-during-refresh-id");
+        get_channel_emotes()
+            .lock()
+            .await
+            .insert(key.to_string(), set_of(&[("A", "old"), ("B", "gone")]));
+        let window = crate::services::emote_service::begin_refresh_window(user_id);
+
+        let delta = crate::services::emote_service::SeventvSetDelta {
+            removed: vec![("B".into(), "gone".into())],
+            ..Default::default()
+        };
+        IrcService::apply_seventv_delta(key, user_id, &delta, &[]).await;
+        IrcService::install_fetched_set(
+            key,
+            user_id,
+            window.start(),
+            set_of(&[("A", "old"), ("B", "gone")]),
+            true,
+            false,
+        )
+        .await;
+
+        assert_eq!(held_names(key).await, vec!["old"]);
+        assert!(parse_lookup_for(key).is_some_and(|l| l.get("gone").is_none()));
+        forget_table(key).await;
+    }
+
+    #[tokio::test]
+    async fn an_edit_from_before_the_fetch_began_is_not_applied_again() {
+        let (key, user_id) = ("edit_before_refresh_chan", "edit-before-refresh-id");
+        get_channel_emotes().lock().await.insert(key.to_string(), set_of(&[("A", "old")]));
+        let delta = crate::services::emote_service::SeventvSetDelta {
+            added: vec![seven_tv_row("X", "newOne")],
+            ..Default::default()
+        };
+        IrcService::apply_seventv_delta(key, user_id, &delta, &[]).await;
+        let window = crate::services::emote_service::begin_refresh_window(user_id);
+
+        // The answer began after the edit and does not show it: it is what the
+        // providers say, and nothing is added to it.
+        IrcService::install_fetched_set(
+            key,
+            user_id,
+            window.start(),
+            set_of(&[("A", "old")]),
+            true,
+            false,
+        )
+        .await;
+
+        assert_eq!(held_names(key).await, vec!["old"]);
+        forget_table(key).await;
+    }
+
+    #[tokio::test]
+    async fn a_delta_makes_a_cache_entry_when_none_is_held() {
+        let (key, user_id) = ("delta_cache_entry_chan", "delta-cache-entry-id");
+        get_channel_emotes().lock().await.insert(key.to_string(), set_of(&[("A", "old")]));
+        let svc = EmoteService::new();
+
+        let delta = crate::services::emote_service::SeventvSetDelta {
+            added: vec![seven_tv_row("X", "newOne")],
+            ..Default::default()
+        };
+        IrcService::apply_seventv_delta(key, user_id, &delta, &[]).await;
+        svc.apply_seventv_delta_cached(user_id, &delta, &[]).await;
+
+        // A fetch now is answered from that entry, with the edit in it.
+        let (cached, _) = svc
+            .fetch_channel_emotes_checked(None, Some(user_id.to_string()), None, None)
+            .await
+            .expect("served from the cache");
+        let names: Vec<&str> = cached.seven_tv.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, vec!["old", "newOne"]);
+        forget_table(key).await;
     }
 }
 

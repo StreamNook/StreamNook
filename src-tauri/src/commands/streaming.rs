@@ -329,13 +329,20 @@ async fn start_provider_stream(
         let route = std::sync::Arc::new(ProviderSoloRoute {
             provider,
             channel: channel.to_string(),
+            session: std::sync::atomic::AtomicU64::new(0),
         });
         let start = crate::services::link_adapt::begin_named(
             crate::services::link_adapt::SOLO,
             &resolved.qualities,
             &resolved.quality,
             is_auto_quality(quality),
-            route,
+            route.clone(),
+        );
+        // Read with no await since `begin_named`: the session this start owns,
+        // which a later switch of this route must still find current.
+        route.session.store(
+            crate::services::link_adapt::generation(crate::services::link_adapt::SOLO).unwrap_or(0),
+            std::sync::atomic::Ordering::SeqCst,
         );
         if let Some(rung) = start.filter(|r| !r.name.eq_ignore_ascii_case(&resolved.quality)) {
             match source.resolve_playback(crate::services::stream_server::SOLO_STREAM_ID, channel, &rung.name).await {
@@ -345,7 +352,7 @@ async fn start_provider_stream(
         }
     }
 
-    let url = serve_provider_playback(provider, channel, quality, &resolved).await?;
+    let url = serve_provider_playback(provider, channel, quality, &resolved, None).await?;
     Ok(StreamStartResult {
         url,
         quality: resolved.quality,
@@ -378,11 +385,15 @@ pub(crate) fn is_auto_quality(quality: &str) -> bool {
 struct ProviderSoloRoute {
     provider: &'static str,
     channel: String,
+    /// The `link_adapt` generation of the solo session this route belongs to
+    /// (0 until the start that made the route has read it).
+    session: std::sync::atomic::AtomicU64,
 }
 
 impl crate::services::link_adapt::Route for ProviderSoloRoute {
     fn switch(&self, to: crate::services::link_adapt::Rung, _same_decoder: bool) -> crate::services::link_adapt::SwitchFuture {
         let (provider, channel) = (self.provider, self.channel.clone());
+        let session = self.session.load(std::sync::atomic::Ordering::SeqCst);
         Box::pin(async move {
             let source = crate::services::providers::registry()
                 .await
@@ -391,7 +402,12 @@ impl crate::services::link_adapt::Route for ProviderSoloRoute {
             let resolved = source
                 .resolve_playback(crate::services::stream_server::SOLO_STREAM_ID, &channel, &to.name)
                 .await?;
-            let url = serve_provider_playback(provider, &channel, &to.name, &resolved)
+            // Asked again under the relay's start lock: a Twitch start or
+            // another channel may have taken the solo session while this
+            // resolved, and then nothing of this stream may be installed.
+            let current: crate::services::stream_server::SessionCheck =
+                std::sync::Arc::new(move || solo_session_is(session));
+            let url = serve_provider_playback(provider, &channel, &to.name, &resolved, Some(current))
                 .await
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
             Ok(Some(url))
@@ -401,16 +417,37 @@ impl crate::services::link_adapt::Route for ProviderSoloRoute {
     fn player_measures_link(&self) -> bool {
         false
     }
+
+    fn parked(&self) -> bool {
+        crate::services::stream_server::solo_parked()
+    }
+}
+
+/// Whether `expected` (a route's session, 0 = none yet) is the `link_adapt`
+/// generation the solo stream has now (None = no session).
+fn session_is_current(expected: u64, now: Option<u64>) -> bool {
+    expected != 0 && now == Some(expected)
+}
+
+/// Whether the solo session with generation `expected` is still the current one.
+fn solo_session_is(expected: u64) -> bool {
+    session_is_current(
+        expected,
+        crate::services::link_adapt::generation(crate::services::link_adapt::SOLO),
+    )
 }
 
 /// Hand a provider's resolved stream to the solo player: through the relay,
 /// or as is when the adapter already serves it from localhost. Returns the
-/// URL the player loads.
+/// URL the player loads. `session` is set for a rendition switch: it is asked
+/// under the relay's start lock, and a stream whose session is gone installs
+/// nothing and fails.
 async fn serve_provider_playback(
     provider: &'static str,
     channel: &str,
     quality: &str,
     resolved: &crate::services::providers::source::ResolvedPlayback,
+    session: Option<crate::services::stream_server::SessionCheck>,
 ) -> Result<String, StartError> {
     // Deliberately no `auth_proxy::set_status` and no solo-session registration:
     // both address the Twitch-contractual plugin resolution protocol
@@ -418,16 +455,13 @@ async fn serve_provider_playback(
     // `mode: None`, so the UI shows no ad-source badge, which is the truth.
     match resolved.kind {
         PlaybackKind::Hls => {
-            crate::services::stream_server::set_upstream_profile(
-                crate::services::stream_server::UpstreamProfile::GenericHls,
-            );
             // Teach the relay how to re-sign this stream. Kick's master url
             // carries a JWT that expires mid-session; without this the first
             // refusal after expiry ends playback for good.
-            if provider == "kick" {
+            let refresher: Option<crate::services::stream_server::Refresher> = if provider == "kick" {
                 let ch = channel.to_string();
                 let q = quality.to_string();
-                crate::services::stream_server::set_manifest_refresher(Some(std::sync::Arc::new(
+                Some(std::sync::Arc::new(
                     move || {
                         let ch = ch.clone();
                         // The rung playing now: "Auto" may have moved off the
@@ -511,14 +545,23 @@ async fn serve_provider_playback(
                             }
                         })
                     },
-                )))
-                .await;
+                ))
             } else {
-                crate::services::stream_server::set_manifest_refresher(None).await;
-            }
-            let port = StreamServer::start_proxy_server(resolved.url.clone())
-                .await
-                .map_err(|e| e.to_string())?;
+                None
+            };
+            // The profile and re-signer are installed by the start itself,
+            // under its lock, so they always belong to the stream it serves.
+            let port = StreamServer::start_proxy_server_with(
+                resolved.url.clone(),
+                true,
+                Some(crate::services::stream_server::SoloUpstream {
+                    profile: crate::services::stream_server::UpstreamProfile::GenericHls,
+                    refresher,
+                    session,
+                }),
+            )
+            .await
+            .map_err(|e| e.to_string())?;
             Ok(local_player_url(port))
         }
         // Already localhost HLS, produced by the adapter itself (YouTube's
@@ -526,12 +569,23 @@ async fn serve_provider_playback(
         // would proxy a local server through another local server and rewrite
         // playlists that are already exactly what the player needs.
         PlaybackKind::LocalHls => {
-            // The relay is not used on this path, so a refresher registered by
-            // an EARLIER stream would otherwise stay installed for the rest of
-            // the session: `StreamServer::stop` clears the proxy url but not
-            // the refresher. Inert while nothing re-signs, and wrong the moment
-            // something does.
-            crate::services::stream_server::set_manifest_refresher(None).await;
+            // The relay is not used on this path, so a profile and refresher
+            // installed by an EARLIER stream would otherwise stay in place for
+            // the rest of the session: `StreamServer::stop` clears the proxy
+            // url but not those. Installed under the start lock, with the
+            // session check, so the stream owns them from here.
+            crate::services::stream_server::install_solo_upstream_locked(
+                crate::services::stream_server::SoloUpstream {
+                    profile: crate::services::stream_server::UpstreamProfile::GenericHls,
+                    refresher: None,
+                    session,
+                },
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+            // The player polls the adapter's own playlists from here on, so the
+            // stream reads as loading from now (`youtube_dash` notes each poll).
+            crate::services::stream_server::note_solo_playlist_request();
             Ok(resolved.url.clone())
         }
         // Nothing returns these: an adapter whose upstream is FLV serves it
@@ -647,13 +701,10 @@ async fn start_stream_inner(
         return start_provider_stream(provider, &channel, &quality).await;
     }
 
-    // Everything below this point is Twitch, so restore the relay's full
-    // Twitch behaviour (ad detection, segment projection, LL probe) in case the
-    // previous stream was a provider one.
-    crate::services::stream_server::set_upstream_profile(
-        crate::services::stream_server::UpstreamProfile::Twitch,
-    );
-
+    // Everything below this point is Twitch. The relay's full Twitch behaviour
+    // (ad detection, segment projection, LL probe) is installed by the start
+    // that serves it, under the start lock, never inherited from a provider
+    // stream that played before.
     let streamlink_settings = { state.settings.lock().unwrap().streamlink.clone() };
     let oauth = state.twitch_auth.get_token().await.ok();
 
@@ -771,9 +822,13 @@ async fn start_stream_inner(
     .map_or_else(|| r.url.clone(), |rung| rung.url);
     // Read with no await since `begin`: the session this start owns.
     let generation = crate::services::link_adapt::generation(crate::services::link_adapt::SOLO);
-    let port = StreamServer::start_proxy_server(serve_url)
-        .await
-        .map_err(|e| e.to_string())?;
+    let port = StreamServer::start_proxy_server_with(
+        serve_url,
+        true,
+        Some(crate::services::stream_server::SoloUpstream::twitch()),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
     // The parts origin's first downloads just measured the link (on the
     // whole-segment path the start pick downloads two segments itself). When
     // they say this rung clearly cannot be carried, restart on one that can
@@ -783,9 +838,13 @@ async fn start_stream_inner(
         crate::services::link_adapt::SOLO,
         generation,
     ) {
-        Some(rung) => StreamServer::start_proxy_server(rung.url)
-            .await
-            .map_err(|e| e.to_string())?,
+        Some(rung) => StreamServer::start_proxy_server_with(
+            rung.url,
+            true,
+            Some(crate::services::stream_server::SoloUpstream::twitch()),
+        )
+        .await
+        .map_err(|e| e.to_string())?,
         None => port,
     };
     // Register the live solo session AFTER the relay is serving it, so the
@@ -872,9 +931,13 @@ async fn start_vod(
         remote_read
     );
     let r = resolved.map_err(|e| e.to_string())?;
-    let port = StreamServer::start_proxy_server_with(r.url, false)
-        .await
-        .map_err(|e| e.to_string())?;
+    let port = StreamServer::start_proxy_server_with(
+        r.url,
+        false,
+        Some(crate::services::stream_server::SoloUpstream::twitch()),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
     let start_position = match start_override {
         Some(p) => Some(p),
         None if resume_enabled => {
@@ -1056,9 +1119,6 @@ pub async fn rewind_live_stream(
     };
     state.watch_heartbeat.clear_target().await;
     crate::services::stream_server::set_solo_session(None);
-    crate::services::stream_server::set_upstream_profile(
-        crate::services::stream_server::UpstreamProfile::Twitch,
-    );
     let oauth = state.twitch_auth.get_token().await.ok();
     let mut result = start_vod(
         &archive.video_id,
@@ -1138,6 +1198,19 @@ pub fn get_relay_live_distance(
     playlist_behind_ms: Option<f64>,
 ) -> crate::services::relay_probe::LiveDistance {
     crate::services::relay_probe::report(player_pdt_ms, target_ms, playlist_behind_ms)
+}
+
+/// Ask a low-latency origin to drop its held window and rebuild it at the live
+/// edge, the rebuild a park and unpark gives. The page asks before it loads again
+/// after a pause it judged too long to resume from, so the play never gets the
+/// window held across the pause. `tile` is a MultiNook tile id; `None` is the
+/// solo player. False when no origin is armed for it.
+#[tauri::command]
+pub async fn relay_rebuild_live_edge(tile: Option<String>) -> bool {
+    match tile {
+        Some(id) => crate::services::multi_nook_server::rebuild_tile_at_edge(&id),
+        None => crate::services::ll_origin::rebuild_at_edge(),
+    }
 }
 
 /// Enable or disable the experimental parts-based low-latency origin at runtime.
@@ -1522,6 +1595,15 @@ mod liveness_tests {
 mod start_error_tests {
     use super::*;
     use crate::services::providers::source::SignInRequired;
+
+    #[test]
+    fn a_route_belongs_to_the_solo_session_it_began_and_to_no_other() {
+        assert!(session_is_current(7, Some(7)));
+        assert!(!session_is_current(7, Some(8)), "a newer start took the session");
+        assert!(!session_is_current(7, None), "the session ended");
+        assert!(!session_is_current(0, Some(0)), "a route that never read its session");
+        assert!(!session_is_current(0, None));
+    }
 
     #[test]
     fn a_plain_failure_is_still_a_bare_string_on_the_wire() {

@@ -8,6 +8,7 @@ import { makeKey, parseKey } from '../utils/providerKey';
 import { canGridProvider, gridRefusal } from '../types/providers';
 import { buildProviderUrl } from '../utils/streamProvider';
 import { Logger } from '../utils/logger';
+import { clearTileOnEnd } from '../utils/pausePark';
 import type { PlaybackAdapt } from '../utils/linkAdapt';
 
 /** Slot ids whose proxy start is currently in flight. The loader effect re-fires
@@ -260,6 +261,11 @@ interface MultiNookState {
    *  multi_nook_meta: one batched poll for the grid, sent on change). All of
    *  it is ephemeral view data: this never writes to settings. */
   applySlotMetadata: (entries: MultiNookTileMeta[]) => void;
+  /** A provider tile's relay saw its stream end (services/multi_nook_server,
+   *  `multi-nook://tile-ended`). The tile is stopped and shows the offline card,
+   *  the same as a Twitch tile whose channel went offline. Matched by slot id,
+   *  never by login. */
+  markSlotEnded: (slotId: string) => void;
   loadPresetChannels: (channels: MultiNookPresetChannel[], mode: 'replace' | 'append', presetId?: string) => Promise<void>;
   /** Tag the current grid with the preset it was loaded from (null = no equipped preset). Persisted. */
   setActivePresetId: (id: string | null) => Promise<void>;
@@ -334,6 +340,13 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
             // A small tile of a main layout: Rust holds it to the cap.
             small: cap !== null,
           });
+          // The tile was removed while its start was in flight: removeSlot only
+          // stops a tile that already has a url, so the relay this start just
+          // brought up is stopped here.
+          if (!get().slots.some((s) => s.id === slot.id)) {
+            void invoke('stop_multi_nook', { streamId: slot.id }).catch(() => {});
+            return;
+          }
           set((state) => ({
             slots: state.slots.map((s) =>
               s.id === slot.id ? { ...s, streamUrl: url, loadError: false, startedCap: cap } : s,
@@ -379,10 +392,15 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
       if (m.live && s.loadError) {
         streamUrl = undefined;
         loadError = false;
-      } else if (offline && s.offline === false && s.streamUrl) {
-        void invoke('stop_multi_nook', { streamId: s.id }).catch(() => {});
-        streamUrl = undefined;
-        loadError = true;
+      } else if (offline && s.offline === false) {
+        // The channel ended: its pause and own-channel hold go whether or not
+        // a player exists right now (a retry or quality change clears the URL).
+        clearTileOnEnd(s.id);
+        if (s.streamUrl) {
+          void invoke('stop_multi_nook', { streamId: s.id }).catch(() => {});
+          streamUrl = undefined;
+          loadError = true;
+        }
       }
       // Offline: no title (a stale live title on an offline tile is wrong),
       // the last known category kept.
@@ -417,6 +435,21 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
     // Title, category and partner mark are ephemeral; only a repaired
     // identity is worth saving.
     if (identityChanged) void get().saveSlots();
+  },
+
+  markSlotEnded: (slotId) => {
+    const slot = get().slots.find((s) => s.id === slotId);
+    if (!slot) return;
+    if (slot.offline === true && slot.loadError === true && !slot.streamUrl) return;
+    clearTileOnEnd(slotId);
+    if (slot.streamUrl) {
+      void invoke('stop_multi_nook', { streamId: slot.id }).catch(() => {});
+    }
+    set((state) => ({
+      slots: state.slots.map((s) =>
+        s.id === slotId ? { ...s, offline: true, streamUrl: undefined, loadError: true } : s,
+      ),
+    }));
   },
 
   loadPresetChannels: async (channels, mode, presetId) => {
@@ -1149,6 +1182,9 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
       ),
     );
     stale.forEach((s) => inFlightStarts.delete(s.id));
+    // A tile cleared (a recovery's retry) while its quality change was running
+    // was skipped by the loader for the in-flight mark; start it now.
+    void get().batchLoadMissingStreams();
     if (restart.length > 0) {
       // Clearing the URL hands the tile to the missing-stream loader, which
       // starts it again under the cap its role now wants.

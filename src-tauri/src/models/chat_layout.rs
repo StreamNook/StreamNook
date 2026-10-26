@@ -361,6 +361,12 @@ pub enum MessageSegment {
         /// emote came from the channel's own sets.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         is_personal: Option<bool>,
+        /// The emote's file in the disk cache at the size the page draws, when
+        /// Rust knew it as the row was handed over (`load_channel_history`
+        /// stamps history rows' 7TV emotes). The page draws that file on the
+        /// row's first paint. Absent otherwise.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        local_path: Option<String>,
     },
     Emoji {
         content: String,
@@ -449,6 +455,11 @@ pub struct ChatMessage {
     /// All message analysis done in Rust, frontend just renders
     #[serde(default)]
     pub metadata: MessageMetadata,
+    /// Wall-clock milliseconds at which the IRC line this row came from was
+    /// read, set on live PRIVMSG and USERNOTICE rows only (never history), so
+    /// the page can time each hop a row took.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub received_at_ms: Option<i64>,
 }
 
 /// A chat row as a native renderer draws it, built once in Rust so the shell

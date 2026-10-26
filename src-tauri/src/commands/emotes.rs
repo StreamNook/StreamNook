@@ -2,7 +2,8 @@ use crate::services::emote_credit::{self as credit, CreditProvider, EmoteCredit}
 use crate::services::emote_match::{self, Collector, Context, Seed, Slot, Spec};
 use crate::services::emote_picker as picker;
 use crate::services::emote_prefetch_service::emote_cache_key;
-use crate::services::emote_service::{seventv_globals_snapshot, Emote, EmoteService, EmoteSet};
+use crate::models::chat_layout::{ChatMessage, MessageSegment};
+use crate::services::emote_service::{seventv_globals_snapshot, Emote, EmoteProvider, EmoteService, EmoteSet};
 use crate::services::providers::{kick_emotes, youtube, youtube_emotes};
 use crate::services::universal_cache_service::{self, CacheType};
 use crate::services::account_store::AccountStore;
@@ -27,29 +28,118 @@ pub(crate) fn render_tier(tier: Option<&str>) -> &'static str {
 }
 
 /// Put each emote's disk-cache file in `local_url`, at `tier` for 7TV, from
-/// the in-memory manifest (one read lock for the whole set). A page used to
-/// work this out itself, which meant pulling the entire cache index (tens of
-/// thousands of id -> path pairs, megabytes over IPC) into every window that
-/// shows emotes. Only ever applied to the copy handed to a page: a path goes
-/// stale when the cache is cleared, so the cached and stored sets never hold one.
-pub(crate) fn stamp_local_paths<'a>(emotes: impl IntoIterator<Item = &'a mut Emote>, tier: &str) {
-    let mut emotes: Vec<&mut Emote> = emotes.into_iter().collect();
-    let keys: Vec<String> = emotes.iter().map(|e| emote_cache_key(&e.provider, &e.id, tier)).collect();
-    let paths = universal_cache_service::cached_file_paths(CacheType::Emote, &keys);
+/// `paths` (manifest answers keyed by cache key). A page used to work this out
+/// itself, which meant pulling the entire cache index (tens of thousands of
+/// id -> path pairs, megabytes over IPC) into every window that shows emotes.
+/// Only ever applied to the copy handed to a page: a path goes stale when the
+/// cache is cleared, so the cached and stored sets never hold one. An empty
+/// answer leaves every emote as it was.
+fn apply_local_paths<'a>(emotes: impl IntoIterator<Item = &'a mut Emote>, tier: &str, paths: &HashMap<String, String>) {
     if paths.is_empty() {
         return;
     }
-    for (emote, key) in emotes.iter_mut().zip(&keys) {
-        emote.local_url = paths.get(key).cloned();
+    for emote in emotes {
+        emote.local_url = paths.get(&emote_cache_key(&emote.provider, &emote.id, tier)).cloned();
     }
 }
 
-pub(crate) fn stamp_set_paths(set: &mut EmoteSet, tier: &str) {
+/// The disk-cache key of every emote in `set` at `tier`.
+pub(crate) fn set_cache_keys(set: &EmoteSet, tier: &str) -> Vec<String> {
     let EmoteSet { twitch, bttv, seven_tv, ffz, kick, .. } = set;
-    stamp_local_paths(
+    twitch
+        .iter()
+        .chain(bttv)
+        .chain(seven_tv)
+        .chain(ffz)
+        .chain(kick)
+        .map(|e| emote_cache_key(&e.provider, &e.id, tier))
+        .collect()
+}
+
+/// Put each emote's file from `paths` in `local_url` across the set.
+pub(crate) fn stamp_set_paths(set: &mut EmoteSet, tier: &str, paths: &HashMap<String, String>) {
+    let EmoteSet { twitch, bttv, seven_tv, ffz, kick, .. } = set;
+    apply_local_paths(
         twitch.iter_mut().chain(bttv.iter_mut()).chain(seven_tv.iter_mut()).chain(ffz.iter_mut()).chain(kick.iter_mut()),
         tier,
+        paths,
     );
+}
+
+/// The manifest's disk file for each of `keys`, looked up on a blocking thread
+/// so the async worker never waits on the manifest lock. A lookup that cannot
+/// run answers nothing: the caller's emotes or rows simply go out without disk
+/// paths.
+pub(crate) async fn cached_emote_paths(keys: Vec<String>) -> HashMap<String, String> {
+    if keys.is_empty() {
+        return HashMap::new();
+    }
+    match tauri::async_runtime::spawn_blocking(move || {
+        universal_cache_service::cached_file_paths(CacheType::Emote, &keys)
+    })
+    .await
+    {
+        Ok(paths) => paths,
+        Err(e) => {
+            log::warn!("[Emotes] disk path lookup failed: {}", e);
+            HashMap::new()
+        }
+    }
+}
+
+/// The 7TV emotes in `segments` (a row or a quoted parent) as disk-cache keys
+/// at `tier`, added to `keys`.
+fn seventv_row_keys(segments: &[MessageSegment], tier: &str, keys: &mut Vec<String>) {
+    for seg in segments {
+        if let MessageSegment::Emote { emote_id: Some(id), emote_url, .. } = seg {
+            if emote_url.contains("7tv") {
+                keys.push(emote_cache_key(&EmoteProvider::SevenTV, id, tier));
+            }
+        }
+    }
+}
+
+/// Put each 7TV emote's disk file from `paths` on its segment.
+fn stamp_row_segments(segments: &mut [MessageSegment], tier: &str, paths: &HashMap<String, String>) {
+    for seg in segments {
+        if let MessageSegment::Emote { emote_id: Some(id), emote_url, local_path, .. } = seg {
+            if emote_url.contains("7tv") {
+                *local_path = paths.get(&emote_cache_key(&EmoteProvider::SevenTV, id, tier)).cloned();
+            }
+        }
+    }
+}
+
+/// The disk-cache key of every 7TV emote in `rows` (and in a reply's quoted
+/// parent) at the page's `tier`, sorted and without repeats.
+pub(crate) fn row_cache_keys(rows: &[ChatMessage], tier: &str) -> Vec<String> {
+    let mut keys = Vec::new();
+    for row in rows {
+        seventv_row_keys(&row.segments, tier, &mut keys);
+        if let Some(parent) = row.metadata.reply_info.as_ref().and_then(|r| r.parent_segments.as_ref()) {
+            seventv_row_keys(parent, tier, &mut keys);
+        }
+    }
+    keys.sort_unstable();
+    keys.dedup();
+    keys
+}
+
+/// Stamp the disk file of every 7TV emote in `rows` (and in a reply's quoted
+/// parent) on its segment, at the page's `tier`, from `paths` (the manifest's
+/// answer for `row_cache_keys`). The page seeds its disk map from these before
+/// a row's first paint (ChatMessage.tsx `fromRustSegments`), so a history batch
+/// draws cached emotes from disk instead of racing the channel's emote set.
+pub(crate) fn stamp_row_emote_files(rows: &mut [ChatMessage], tier: &str, paths: &HashMap<String, String>) {
+    if paths.is_empty() {
+        return;
+    }
+    for row in rows.iter_mut() {
+        stamp_row_segments(&mut row.segments, tier, paths);
+        if let Some(parent) = row.metadata.reply_info.as_mut().and_then(|r| r.parent_segments.as_mut()) {
+            stamp_row_segments(parent, tier, paths);
+        }
+    }
 }
 
 /// A channel's emote set for a page, with disk-cache paths filled in for the
@@ -77,7 +167,9 @@ pub async fn fetch_channel_emotes(
         .await
         .map_err(|e| e.to_string())?;
     drop(service);
-    stamp_set_paths(&mut set, render_tier(tier.as_deref()));
+    let tier = render_tier(tier.as_deref());
+    let paths = cached_emote_paths(set_cache_keys(&set, tier)).await;
+    stamp_set_paths(&mut set, tier, &paths);
     Ok(set)
 }
 
@@ -92,7 +184,9 @@ pub async fn get_emote_by_name(
     let mut emote = service.get_emote_by_name(channel_id, &emote_name).await;
     drop(service);
     if let Some(e) = emote.as_mut() {
-        stamp_local_paths(std::iter::once(e), render_tier(tier.as_deref()));
+        let tier = render_tier(tier.as_deref());
+        let paths = cached_emote_paths(vec![emote_cache_key(&e.provider, &e.id, tier)]).await;
+        apply_local_paths(std::iter::once(e), tier, &paths);
     }
     Ok(emote)
 }
@@ -257,7 +351,7 @@ pub async fn match_emote_tokens(
         .map(|r| r.slot.cache_provider().map(|p| emote_cache_key(&p, &r.id, tier)))
         .collect();
     let wanted: Vec<String> = keys.iter().flatten().cloned().collect();
-    let paths = universal_cache_service::cached_file_paths(CacheType::Emote, &wanted);
+    let paths = cached_emote_paths(wanted).await;
     for (row, key) in rows.iter_mut().zip(keys) {
         row.local_path = key.and_then(|k| paths.get(&k).cloned());
     }
@@ -475,7 +569,13 @@ pub async fn emote_picker(
         }
     };
     let mut answer = found.unwrap_or_else(|| picker::build(None, &ctx, tab, &query));
-    stamp_local_paths(answer.sections.iter_mut().flat_map(|s| s.emotes.iter_mut().map(|c| &mut c.emote)), tier);
+    let keys: Vec<String> = answer
+        .sections
+        .iter()
+        .flat_map(|s| s.emotes.iter().map(|c| emote_cache_key(&c.emote.provider, &c.emote.id, tier)))
+        .collect();
+    let paths = cached_emote_paths(keys).await;
+    apply_local_paths(answer.sections.iter_mut().flat_map(|s| s.emotes.iter_mut().map(|c| &mut c.emote)), tier, &paths);
     Ok(answer)
 }
 
@@ -710,5 +810,102 @@ mod tests {
             found,
             vec![PersonalOverride { name: "buh".into(), id: "mine".into(), url: "https://example.invalid/mine".into() }]
         );
+    }
+
+    fn row_emote(id: &str, url: &str) -> MessageSegment {
+        MessageSegment::Emote {
+            content: id.into(),
+            emote_id: Some(id.into()),
+            emote_url: url.into(),
+            is_zero_width: None,
+            modifier_flags: None,
+            is_personal: None,
+            local_path: None,
+        }
+    }
+
+    #[test]
+    fn history_rows_carry_their_7tv_emote_files_at_the_page_tier() {
+        let mut segs = vec![
+            row_emote("abc", "https://cdn.7tv.app/emote/abc/2x.webp"),
+            row_emote("25", "https://static-cdn.jtvnw.net/emoticons/v2/25/default/dark/2.0"),
+            row_emote("gone", "https://cdn.7tv.app/emote/gone/2x.webp"),
+        ];
+        let mut keys = Vec::new();
+        seventv_row_keys(&segs, "2x", &mut keys);
+        assert_eq!(keys, vec!["abc@2x".to_string(), "gone@2x".to_string()]);
+        let paths: HashMap<String, String> =
+            [("abc@2x".to_string(), "C:/cache/universal/emotes/abc@2x.webp".to_string())].into_iter().collect();
+        stamp_row_segments(&mut segs, "2x", &paths);
+        let local = |s: &MessageSegment| match s {
+            MessageSegment::Emote { local_path, .. } => local_path.clone(),
+            _ => None,
+        };
+        assert_eq!(local(&segs[0]).as_deref(), Some("C:/cache/universal/emotes/abc@2x.webp"));
+        assert_eq!(local(&segs[1]), None, "only 7TV is cached per size and stamped");
+        assert_eq!(local(&segs[2]), None, "not on disk");
+        // On the wire only when known.
+        let wire = serde_json::to_value(&segs).unwrap();
+        assert_eq!(wire[0]["local_path"], "C:/cache/universal/emotes/abc@2x.webp");
+        assert!(wire[1].get("local_path").is_none());
+    }
+
+    fn row_with(segments: Vec<MessageSegment>, parent_segments: Option<Vec<MessageSegment>>) -> ChatMessage {
+        let metadata = crate::models::chat_layout::MessageMetadata {
+            reply_info: parent_segments.map(|parent| crate::models::chat_layout::ReplyInfo {
+                parent_segments: Some(parent),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        ChatMessage {
+            id: "m1".into(),
+            user_id: "1".into(),
+            username: "viewer".into(),
+            display_name: "Viewer".into(),
+            color: None,
+            badges: Vec::new(),
+            timestamp: "0".into(),
+            content: String::new(),
+            provider: "twitch".into(),
+            channel: "chan".into(),
+            emotes: Vec::new(),
+            tags: HashMap::new(),
+            layout: Default::default(),
+            segments,
+            metadata,
+            received_at_ms: None,
+        }
+    }
+
+    fn stamped(seg: &MessageSegment) -> Option<String> {
+        match seg {
+            MessageSegment::Emote { local_path, .. } => local_path.clone(),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn a_row_and_its_reply_parent_are_both_stamped() {
+        let mut rows = vec![
+            row_with(
+                vec![row_emote("abc", "https://cdn.7tv.app/emote/abc/2x.webp")],
+                Some(vec![row_emote("par", "https://cdn.7tv.app/emote/par/2x.webp")]),
+            ),
+            row_with(vec![row_emote("gone", "https://cdn.7tv.app/emote/gone/2x.webp")], None),
+        ];
+        let asked = row_cache_keys(&rows, "2x");
+        assert_eq!(asked, vec!["abc@2x".to_string(), "gone@2x".to_string(), "par@2x".to_string()]);
+        let paths: HashMap<String, String> = [
+            ("abc@2x".to_string(), "C:/cache/abc@2x.webp".to_string()),
+            ("par@2x".to_string(), "C:/cache/par@2x.webp".to_string()),
+        ]
+        .into_iter()
+        .collect();
+        stamp_row_emote_files(&mut rows, "2x", &paths);
+        assert_eq!(stamped(&rows[0].segments[0]).as_deref(), Some("C:/cache/abc@2x.webp"));
+        let parent = rows[0].metadata.reply_info.as_ref().and_then(|r| r.parent_segments.as_ref()).unwrap();
+        assert_eq!(stamped(&parent[0]).as_deref(), Some("C:/cache/par@2x.webp"));
+        assert_eq!(stamped(&rows[1].segments[0]), None, "not on disk");
     }
 }

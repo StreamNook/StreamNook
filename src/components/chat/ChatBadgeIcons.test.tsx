@@ -62,6 +62,7 @@ import { BadgeHoverCard } from './BadgeHoverCard';
 import { openBadgeInfo, useBadgeSpotlightStore } from '../../stores/badgeSpotlightStore';
 import { badgeDetailsRoute, directBadgeRoute, pickBadgeArt, streamNookBadgeRef, type BadgeRef } from '../../utils/badgeSpotlight';
 import type { ThirdPartyBadge } from '../../services/badgeService';
+import { Logger } from '../../utils/logger';
 
 type ClickableProps = { onClick?: () => void; 'aria-label'?: string; children?: ReactNode };
 
@@ -270,6 +271,42 @@ describe('ChatBadgeIcons click routing', () => {
     });
     const labels = buttons(tree).map((b) => b.props['aria-label']);
     expect(labels).toEqual(['1-Year Subscriber', 'Moderator', '7TV Subscriber - 6 Months', 'FFZ Supporter', 'BTTV Pro']);
+  });
+});
+
+describe('badge failure reports', () => {
+  /** Fire the broken-image handler of the one badge image with this local file. */
+  function failBadge(localUrl: string): void {
+    const tree = ChatBadgeIcons({
+      twitchBadges: [{ key: 'moderator/1', info: { localUrl, title: 'Moderator', provider: 'kick' } }],
+      seventvBadge: null,
+      thirdPartyBadges: [],
+      streamNookMemberId: null,
+    });
+    const img = elements(tree).find((e) => e.type === 'img') as ReactElement<{
+      onError: (e: { currentTarget: { dataset: Record<string, string>; style: Record<string, string>; src: string } }) => void;
+    }>;
+    img.props.onError({ currentTarget: { dataset: {}, style: {}, src: localUrl } });
+  }
+
+  it('reports each failing source once, keeps 1000 sources, and reports an evicted one again', () => {
+    const warn = vi.spyOn(Logger, 'warn').mockImplementation(() => {});
+    try {
+      failBadge('/f/0.svg');
+      failBadge('/f/0.svg');
+      expect(warn).toHaveBeenCalledTimes(1);
+
+      for (let i = 1; i <= 1000; i++) failBadge(`/f/${i}.svg`);
+      expect(warn).toHaveBeenCalledTimes(1001);
+
+      // Still remembered: silent. Evicted: reported like a first failure.
+      failBadge('/f/1000.svg');
+      expect(warn).toHaveBeenCalledTimes(1001);
+      failBadge('/f/0.svg');
+      expect(warn).toHaveBeenCalledTimes(1002);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 

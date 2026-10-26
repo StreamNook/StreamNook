@@ -33,6 +33,29 @@ describe('recoverFromSequenceMismatch', () => {
     expect(raw.config.ignorePlaylistParsingErrors).toBe(false);
   });
 
+  it('starts loading once when the caller allows it', () => {
+    const { hls, raw } = fakeHls();
+    expect(recoverFromSequenceMismatch(hls, mismatch, () => true)).toBe(true);
+    expect(raw.startLoad).toHaveBeenCalledTimes(1);
+  });
+
+  it('still handles the error but leaves loading stopped when the caller refuses', () => {
+    const { hls, raw, fire } = fakeHls();
+    expect(recoverFromSequenceMismatch(hls, mismatch, () => false)).toBe(true);
+    expect(raw.startLoad).not.toHaveBeenCalled();
+    expect(raw.config.ignorePlaylistParsingErrors).toBe(true);
+    fire();
+    expect(raw.config.ignorePlaylistParsingErrors).toBe(false);
+  });
+
+  it('does nothing for another error detail, whatever the caller allows', () => {
+    const { hls, raw } = fakeHls();
+    const loadError = { ...mismatch, details: Hls.ErrorDetails.LEVEL_LOAD_ERROR } as ErrorData;
+    expect(recoverFromSequenceMismatch(hls, loadError, () => true)).toBe(false);
+    expect(raw.startLoad).not.toHaveBeenCalled();
+    expect(raw.once).not.toHaveBeenCalled();
+  });
+
   it('leaves other playlist failures to the caller', () => {
     const { hls, raw } = fakeHls();
     const unparsable = { ...mismatch, error: new Error('Missing Target Duration') } as ErrorData;

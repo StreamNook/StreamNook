@@ -2564,6 +2564,16 @@ body {
     var(--elev-1);
 }
 
+/* A toast. A sticky one (a restart prompt) stays up over moving chat and live
+   video, so its text must not ride the Glassiness slider the way a plain
+   .glass-panel does: at low settings the panel turns into a ghost you can read
+   the stream straight through. The base stays a near-opaque theme surface at
+   every slider position and reaches fully opaque at 0%, the same call
+   .glass-flyout makes. No backdrop-filter here: the panel's own frost stays. */
+.glass-panel.sn-toast {
+  background-color: color-mix(in srgb, var(--color-background-tertiary) calc(88% + (1 - var(--glass-strength, 1)) * 12%), transparent);
+}
+
 /* Telemetry HUD over live video. Readability here must NOT ride the global
    Glassiness slider (that slider is for app chrome): a near-transparent stats
    panel is unreadable against a bright moving stream. So this keeps a
@@ -5145,9 +5155,11 @@ html[data-watching] .drops-progress-inline {
   font-family: "Satoshi", -apple-system, BlinkMacSystemFont, sans-serif;
 }
 
-/* Poster */
+/* Poster. It sits over the <video> at full size, so it takes no pointer
+   events: a click on the picture has to reach the video under it. */
 .video-player-container .plyr__poster {
   background-color: #000;
+  pointer-events: none;
 }
 
 /* Quality badge in menu */

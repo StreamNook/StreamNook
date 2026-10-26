@@ -4,6 +4,7 @@ import { isWindowHidden, onWindowVisibility } from './windowVisibility';
 // Is something full-screen sitting over the player? Shared with the moving
 // profile pictures, so both agree on what covers the window.
 import { coveredByOverlay } from './coverage';
+import { pausedFrameAlreadyRead } from './mediaGlowPaused';
 import { Logger } from './logger';
 import { IS_LINUX } from './platform';
 import {
@@ -316,6 +317,8 @@ export function useMediaGlow(
     let lastAr = '';
     let rvfc: number | null = null;
     let last = 0;
+    // The paused frame's time, once read back (NaN while playing).
+    let pausedReadAt = Number.NaN;
     liveRef.current = { overall: null, top: [], bottom: [] };
     wroteRef.current = [];
 
@@ -347,6 +350,7 @@ export function useMediaGlow(
         }
       }
       if (covered) return;
+      if (pausedFrameAlreadyRead(el, pausedReadAt)) return;
 
       wroteTo = host;
 
@@ -409,6 +413,7 @@ export function useMediaGlow(
         return;
       }
 
+      pausedReadAt = el.paused && !el.seeking ? el.currentTime : Number.NaN;
       const attack = calm ? CALM_ATTACK_MS : ATTACK_MS;
       const rise = calm ? CALM_RELEASE_MS : RELEASE_MS;
       const live = liveRef.current;

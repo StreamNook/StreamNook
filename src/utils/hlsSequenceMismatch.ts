@@ -19,8 +19,16 @@ type HlsLike = Pick<Hls, 'config' | 'once' | 'startLoad'>;
  * Returns true when it handled the error. Only the sequence mismatch is taken:
  * a playlist that fails to parse at all is a different failure and keeps the
  * caller's normal handling.
+ *
+ * Loading restarts only when `mayLoad()` is true, so a player whose downloads
+ * were stopped on purpose (a paused park) stays stopped; the error is still
+ * handled and the next refresh is still accepted once loading starts again.
  */
-export function recoverFromSequenceMismatch(hls: HlsLike, data: ErrorData): boolean {
+export function recoverFromSequenceMismatch(
+  hls: HlsLike,
+  data: ErrorData,
+  mayLoad: () => boolean = () => true,
+): boolean {
   if (data.details !== Hls.ErrorDetails.LEVEL_PARSING_ERROR) return false;
   const message = data.error?.message ?? '';
   if (!message.includes('sequence mismatch')) return false;
@@ -28,6 +36,6 @@ export function recoverFromSequenceMismatch(hls: HlsLike, data: ErrorData): bool
   hls.once(Hls.Events.LEVEL_UPDATED, () => {
     hls.config.ignorePlaylistParsingErrors = false;
   });
-  hls.startLoad();
+  if (mayLoad()) hls.startLoad();
   return true;
 }

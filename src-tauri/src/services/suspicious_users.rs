@@ -322,6 +322,7 @@ impl SuspiciousUsers {
             content: text,
             provider: "twitch".into(),
             channel,
+            received_at_ms: None,
             emotes: Vec::new(),
             tags,
             layout: Default::default(),

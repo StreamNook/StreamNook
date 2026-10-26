@@ -1,4 +1,5 @@
 import { Logger } from '../utils/logger';
+import { withoutLoopbackUrls } from '../utils/cacheFileUrl';
 // Service for caching cosmetics - user lookups in memory, image files on disk
 // User -> cosmetics mappings come from APIs fresh each time
 // Image files are cached to disk by their respective services (seventvService, thirdPartyBadges)
@@ -148,7 +149,8 @@ function persistOwnCosmetics(userId: string): void {
     if (!cosmetics) return;
     const store = readPersistedCosmetics();
     store[userId] = cosmetics;
-    localStorage.setItem(OWN_COSMETICS_KEY, JSON.stringify(store));
+    // A loopback image URL dies with this launch (new port and token): never saved.
+    localStorage.setItem(OWN_COSMETICS_KEY, JSON.stringify(store, withoutLoopbackUrls));
   } catch (e) {
     Logger.warn('[cosmeticsCache] persistOwnCosmetics failed:', e);
   }

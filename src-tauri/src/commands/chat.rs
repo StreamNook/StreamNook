@@ -510,7 +510,9 @@ pub async fn get_kick_channel_emotes(
     tier: Option<String>,
 ) -> crate::services::emote_service::EmoteSet {
     let mut set = crate::services::providers::kick_emotes::channel_emote_set(&slug).await;
-    super::emotes::stamp_set_paths(&mut set, super::emotes::render_tier(tier.as_deref()));
+    let tier = super::emotes::render_tier(tier.as_deref());
+    let paths = super::emotes::cached_emote_paths(super::emotes::set_cache_keys(&set, tier)).await;
+    super::emotes::stamp_set_paths(&mut set, tier, &paths);
     set
 }
 
@@ -523,7 +525,9 @@ pub async fn get_youtube_channel_emotes(
     tier: Option<String>,
 ) -> crate::services::emote_service::EmoteSet {
     let mut set = crate::services::providers::youtube_emotes::channel_emote_set(&channel).await;
-    super::emotes::stamp_set_paths(&mut set, super::emotes::render_tier(tier.as_deref()));
+    let tier = super::emotes::render_tier(tier.as_deref());
+    let paths = super::emotes::cached_emote_paths(super::emotes::set_cache_keys(&set, tier)).await;
+    super::emotes::stamp_set_paths(&mut set, tier, &paths);
     set
 }
 
@@ -1021,6 +1025,8 @@ pub async fn load_channel_history(
     limit: Option<u32>,
     after_ms: Option<u64>,
     before_ms: Option<u64>,
+    // The 7TV size the page draws, for the disk files stamped on the rows.
+    tier: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<Vec<ChatMessage>, String> {
     let key = channel.trim().trim_start_matches('#').to_lowercase();
@@ -1074,16 +1080,24 @@ pub async fn load_channel_history(
     let restamp_lines = (!seeded).then(|| raw.clone());
     // Remembered with the live lines, so a table that lands or changes later
     // (a partial first answer, an emote added since) repairs these rows too.
+    // The table generation is read before the parse below, so these rows are
+    // never stamped newer than the table they are parsed under.
     if !windowed {
+        let table_generation = crate::services::emote_restamp::generation(&key);
         for line in &raw {
-            crate::services::emote_restamp::remember(&key, line);
+            crate::services::emote_restamp::remember(&key, line, table_generation);
         }
     }
     let parsed = IrcService::parse_historical_messages(raw.clone()).await;
     // A native shell draws each row from its stamped view and only has these
     // rows once this answer returns, so the backlog waits briefly for its
     // authors' cosmetics and patches in the rest (`history_cosmetics`).
-    let parsed = crate::services::history_cosmetics::decorate(&key, &raw, parsed).await;
+    let mut parsed = crate::services::history_cosmetics::decorate(&key, &raw, parsed).await;
+    // The 7TV emotes' disk files at the page's size, so the rows' first paint
+    // is the disk copy (the page seeds its disk map from them).
+    let tier = super::emotes::render_tier(tier.as_deref());
+    let paths = super::emotes::cached_emote_paths(super::emotes::row_cache_keys(&parsed, tier)).await;
+    super::emotes::stamp_row_emote_files(&mut parsed, tier, &paths);
     if let Some(lines) = restamp_lines {
         IrcService::spawn_history_restamp(&key, lines, &parsed);
     }
@@ -1148,7 +1162,7 @@ pub fn get_youtube_channel_emojis(
 /// named by a `PERSONAL_EMOTES` bridge frame (their set arrived after the row
 /// did). `None` when nothing changes.
 #[tauri::command]
-pub fn apply_personal_emotes(
+pub async fn apply_personal_emotes(
     user_id: String,
     segments: Vec<crate::models::chat_layout::MessageSegment>,
 ) -> Option<Vec<crate::models::chat_layout::MessageSegment>> {

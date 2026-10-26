@@ -8,17 +8,19 @@
  * Badges are cached at 4x resolution (72px) for maximum crispness on HiDPI displays.
  */
 import { invoke } from '@tauri-apps/api/core';
-import { convertFileSrc } from '@tauri-apps/api/core';
+import { cacheFileUrl } from '../utils/cacheFileUrl';
+import { boundedSet } from '../utils/boundedMap';
 
 import { Logger } from '../utils/logger';
 import { onAssetsCached, requestAssetCaching } from './assetCacheQueue';
 
 // Module-level registry of cached badge files (id -> localPath)
 const cachedBadgeFiles: Map<string, string> = new Map();
+const CACHED_BADGE_FILES_MAX = 5000;
 
 onAssetsCached('badge', {
   arrived: (files) => {
-    for (const [id, path] of Object.entries(files)) cachedBadgeFiles.set(id, path);
+    for (const [id, path] of Object.entries(files)) boundedSet(cachedBadgeFiles, id, path, CACHED_BADGE_FILES_MAX);
   },
   cleared: () => cachedBadgeFiles.clear(),
 });
@@ -40,7 +42,7 @@ export function queueBadgeForCaching(id: string, url: string) {
  */
 export function getCachedBadgeUrl(id: string): string | undefined {
   const path = cachedBadgeFiles.get(id);
-  return path ? convertFileSrc(path) : undefined;
+  return path ? cacheFileUrl(path) : undefined;
 }
 
 /**
@@ -58,7 +60,7 @@ export async function initializeBadgeImageCache(): Promise<void> {
     try {
       Logger.debug('[BadgeImageCache] Initializing badge file cache...');
       const files = await invoke('get_cached_files', { cacheType: 'badge' }) as Record<string, string>;
-      Object.entries(files).forEach(([id, path]) => cachedBadgeFiles.set(id, path));
+      Object.entries(files).forEach(([id, path]) => boundedSet(cachedBadgeFiles, id, path, CACHED_BADGE_FILES_MAX));
       Logger.debug(`[BadgeImageCache] Badge file cache initialized with ${cachedBadgeFiles.size} entries`);
     } catch (e) {
       Logger.warn('[BadgeImageCache] Failed to init badge file cache:', e);

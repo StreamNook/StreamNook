@@ -13,6 +13,7 @@
 // loadout always reflects the latest selection.
 
 import { Logger } from '../utils/logger';
+import { withoutLoopbackUrls } from '../utils/cacheFileUrl';
 
 const KEY = 'streamnook_own_profile_v1';
 // Signed-in user plus a few linked accounts. Each snapshot is a few KB of JSON
@@ -70,7 +71,8 @@ export function writeOwnProfileCache(
     const next: Store = {};
     for (const [id, snap] of kept) next[id] = snap;
     next[userId] = snapshot;
-    localStorage.setItem(KEY, JSON.stringify(next));
+    // A loopback image URL dies with this launch (new port and token): never saved.
+    localStorage.setItem(KEY, JSON.stringify(next, withoutLoopbackUrls));
   } catch (e) {
     Logger.warn('[ownProfileCache] write failed:', e);
   }

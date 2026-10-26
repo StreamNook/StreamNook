@@ -1,7 +1,7 @@
 use crate::services::ad_detect;
 use crate::services::ll_origin::{
     self, arc_bytes, empty_cors, media_response, opt_raw_query, parse_directive, parse_part_path,
-    playlist_response, LlOrigin,
+    playlist_response, LlOrigin, PlaylistServe,
 };
 use anyhow::Result;
 use log::{debug, info, warn};
@@ -57,6 +57,16 @@ pub struct TilePromotion {
     pub codecs: Option<String>,
 }
 
+/// A tile as the solo player takes it over: the upstream the tile serves now,
+/// what its resolve knew, and the profile and re-signer that go with that
+/// upstream.
+pub struct PromotionTarget {
+    pub upstream: String,
+    pub promotion: TilePromotion,
+    pub profile: TileProfile,
+    pub refresher: Option<TileRefresher>,
+}
+
 /// Represents a single stream proxy instance
 struct StreamInstance {
     handle: tokio::task::JoinHandle<()>,
@@ -85,9 +95,19 @@ struct StreamInstance {
     /// failure on one of them means its re-resolve found nothing else to play,
     /// so restarting again would only loop.
     codec_steps: Vec<&'static str>,
+    /// A plugin swap that arrived while this tile was parked, applied on the
+    /// tile's next playlist request (`take_held_swap`, `apply_held_swap`).
+    pending_swap: Option<String>,
+    /// What this tile's relay has seen of its upstream playlist, read by the
+    /// provider end rule (`provider_tile_ended`).
+    end_state: Arc<std::sync::Mutex<ProviderEndState>>,
 }
 
 pub struct MultiNookServer;
+
+/// Some tile holds a swap in `pending_swap`: lets a playlist request skip the
+/// registry lock when none does. Cleared by a pass that finds none held.
+static TILE_SWAP_HELD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// A Twitch tile as `link_adapt` moves it (`MultiNookServer::adapt_tile`). Its
 /// player reports whole segments only on the whole-segment path, where they
@@ -109,6 +129,10 @@ impl crate::services::link_adapt::Route for TwitchTileRoute {
     fn segment_secs(&self) -> Option<f64> {
         Some(crate::services::link_adapt::TWITCH_SEGMENT_SECS)
     }
+
+    fn parked(&self) -> bool {
+        tile_parked(&self.stream_id)
+    }
 }
 
 pub fn twitch_tile_route(stream_id: &str) -> Arc<dyn crate::services::link_adapt::Route> {
@@ -117,9 +141,190 @@ pub fn twitch_tile_route(stream_id: &str) -> Arc<dyn crate::services::link_adapt
     })
 }
 
+/// Whether nothing is being read for this tile's player: its origin is parked,
+/// or no player has asked for its playlist for the park span. A tile served by
+/// its own relay (no origin registered) is parked once its player has not asked
+/// for a playlist for the park span. A player that asked for a playlist inside
+/// the park span is loading, whatever its origin says. False for a tile known
+/// to neither.
+pub fn tile_parked(stream_id: &str) -> bool {
+    tile_parked_at(stream_id, ll_origin::mono_ms())
+}
+
+fn tile_parked_at(stream_id: &str, now: u64) -> bool {
+    let last_request = TILE_REQUESTS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(stream_id)
+        .copied();
+    let span = ll_origin::park_idle_ms();
+    if last_request.is_some_and(|last| !ll_origin::idle_for_park(last, now, span)) {
+        return false;
+    }
+    let by_origin = TILE_ORIGINS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(stream_id)
+        .map(|origin| origin.parked_or_idle());
+    if let Some(parked) = by_origin {
+        return parked;
+    }
+    last_request.is_some_and(|last| ll_origin::idle_for_park(last, now, span))
+}
+
+/// The tile's origin, rebuilt at the live edge (see `LlOrigin::rebuild_at_edge`).
+/// False when the tile has no origin armed.
+pub fn rebuild_tile_at_edge(stream_id: &str) -> bool {
+    let origin = TILE_ORIGINS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(stream_id)
+        .cloned();
+    origin.is_some_and(|origin| origin.rebuild_at_edge())
+}
+
+/// A player asked a relay of its own (YouTube's local HLS, TikTok) for this
+/// tile's playlist. The tile is not parked while these keep arriving.
+pub(crate) fn note_tile_playlist_request(stream_id: &str) {
+    note_tile_playlist_request_at(stream_id, ll_origin::mono_ms());
+}
+
+fn note_tile_playlist_request_at(stream_id: &str, ms: u64) {
+    TILE_REQUESTS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(stream_id.to_string(), ms);
+}
+
+/// Playlist fetches in a row an ended provider stream must refuse (404 or 410).
+const PROVIDER_END_REFUSALS: u32 = 6;
+/// How long those refusals must span, in milliseconds.
+const PROVIDER_END_SPAN_MS: u64 = 12_000;
+/// The event a provider tile's end is reported on; the payload is `{ "slotId" }`.
+const TILE_ENDED_EVENT: &str = "multi-nook://tile-ended";
+
+/// What a provider tile's relay has seen of its upstream playlist. Held per
+/// tile instance and cleared when the tile is pointed at a new upstream.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ProviderEndState {
+    /// Refusals in a row since the last playlist that was served.
+    refusals: u32,
+    /// When the first of those refusals arrived (`mono_ms`; 0 = none yet).
+    first_refusal_ms: u64,
+    /// The end was already reported for this tile.
+    announced: bool,
+}
+
+/// One answer from a provider tile's upstream playlist.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TileFetch {
+    /// A playlist was served; `endlist` when it carries `#EXT-X-ENDLIST`.
+    Playlist { endlist: bool },
+    /// The upstream answered 404 or 410 and the tile's re-sign failed (or the
+    /// tile has none), at `at_ms`.
+    Refused { at_ms: u64 },
+    /// Any other answer. A fetch that got no answer at all is not reported here.
+    /// Neither kind counts or resets the run.
+    Failed,
+}
+
+/// Whether a provider tile's stream has ended: its playlist carries
+/// `#EXT-X-ENDLIST`, or the upstream refused `PROVIDER_END_REFUSALS` playlist
+/// fetches in a row spanning `PROVIDER_END_SPAN_MS`. Only a served playlist
+/// clears the run; any other answer leaves it as it was. The bool is true only
+/// for the fetch that first concludes the end.
+pub(crate) fn provider_tile_ended(mut state: ProviderEndState, fetch: TileFetch) -> (ProviderEndState, bool) {
+    let ended = match fetch {
+        TileFetch::Playlist { endlist } => {
+            state.refusals = 0;
+            state.first_refusal_ms = 0;
+            endlist
+        }
+        TileFetch::Refused { at_ms } => {
+            if state.refusals == 0 {
+                state.first_refusal_ms = at_ms;
+            }
+            state.refusals = state.refusals.saturating_add(1);
+            state.refusals >= PROVIDER_END_REFUSALS
+                && at_ms.saturating_sub(state.first_refusal_ms) >= PROVIDER_END_SPAN_MS
+        }
+        TileFetch::Failed => return (state, false),
+    };
+    let first = ended && !state.announced;
+    if ended {
+        state.announced = true;
+    }
+    (state, first)
+}
+
+/// Tell the page this provider tile's stream ended.
+fn announce_tile_ended(stream_id: &str) {
+    use tauri::Emitter;
+    let Some(app) = crate::services::providers::app_handle() else {
+        return;
+    };
+    let _ = app.emit(TILE_ENDED_EVENT, serde_json::json!({ "slotId": stream_id }));
+}
+
+/// The tiles served by an adapter's own relay (YouTube's high quality, TikTok)
+/// whose end was already announced. Cleared per tile when it stops or starts
+/// again, and whole when the grid stops.
+static TILE_ENDS_REPORTED: Lazy<std::sync::Mutex<std::collections::HashSet<String>>> =
+    Lazy::new(|| std::sync::Mutex::new(std::collections::HashSet::new()));
+
+/// Whether this is the first end reported for `stream_id` since it last
+/// started. Never for the solo stream, which has no tile to end.
+fn first_tile_end(stream_id: &str) -> bool {
+    if stream_id == crate::services::stream_server::SOLO_STREAM_ID {
+        return false;
+    }
+    TILE_ENDS_REPORTED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(stream_id.to_string())
+}
+
+/// A tile served by an adapter's own relay found its stream ended: tell the
+/// page, once per start of the tile.
+pub(crate) fn report_tile_ended(stream_id: &str) {
+    if first_tile_end(stream_id) {
+        announce_tile_ended(stream_id);
+    }
+}
+
+/// A tile is starting: the end of its previous run is no longer reported.
+pub(crate) fn forget_tile_ended(stream_id: &str) {
+    TILE_ENDS_REPORTED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(stream_id);
+}
+
+impl MultiNookServer {
+    /// A tile is starting: playlist requests noted for its previous run, which
+    /// a late request of that run's player may have left behind, no longer
+    /// count.
+    pub fn forget_tile_requests(stream_id: &str) {
+        TILE_REQUESTS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(stream_id);
+    }
+}
+
 /// Registry of all active stream proxy instances, keyed by stream_id
 static STREAM_REGISTRY: Lazy<Arc<Mutex<HashMap<String, StreamInstance>>>> =
     Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
+
+/// Each registered tile's LL origin, readable without the async registry lock
+/// so a route can ask whether its tile is parked.
+static TILE_ORIGINS: Lazy<std::sync::Mutex<HashMap<String, Arc<LlOrigin>>>> =
+    Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
+
+/// When each relay-served tile's player last asked for a playlist (`mono_ms`),
+/// for the tiles that have no LL origin to say whether they are parked.
+static TILE_REQUESTS: Lazy<std::sync::Mutex<HashMap<String, u64>>> =
+    Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
 
 /// Global HTTP client with optimized connection pooling
 static HTTP_CLIENT: Lazy<Client> = Lazy::new(|| {
@@ -154,19 +359,70 @@ impl MultiNookServer {
         }
     }
 
-    /// Start a new proxy server for a specific stream, or update the URL if one already exists
+    /// Start a new proxy server for a specific stream, or update the URL if one
+    /// already exists. `session` is asked under the registry lock: a start for
+    /// a session that is no longer current changes nothing and fails.
     pub async fn start_proxy(
         stream_id: &str,
         stream_url: String,
         profile: TileProfile,
         refresher: Option<TileRefresher>,
+        session: Option<crate::services::stream_server::SessionCheck>,
+    ) -> Result<u16> {
+        Self::start_proxy_for(stream_id, stream_url, Some((profile, refresher)), true, session).await
+    }
+
+    /// Point a tile that is already registered at a new upstream, keeping its
+    /// profile and re-signer. The entry is looked up under the same registry
+    /// lock the start runs under, and a tile closed meanwhile is an error: a
+    /// swap or a rendition change never brings a closed tile back.
+    async fn start_proxy_existing(stream_id: &str, stream_url: String) -> Result<u16> {
+        Self::start_proxy_for(stream_id, stream_url, None, false, None).await
+    }
+
+    /// Like `start_proxy_existing`, but the tile also takes on `profile` and
+    /// `refresher`. For a tile switched to another rendition or size: a tile
+    /// closed meanwhile is an error rather than a new tile. `session` is asked
+    /// under the registry lock, as for `start_proxy`.
+    pub async fn restart_existing(
+        stream_id: &str,
+        stream_url: String,
+        profile: TileProfile,
+        refresher: Option<TileRefresher>,
+        session: Option<crate::services::stream_server::SessionCheck>,
+    ) -> Result<u16> {
+        Self::start_proxy_for(stream_id, stream_url, Some((profile, refresher)), false, session).await
+    }
+
+    /// The start behind `start_proxy`, `start_proxy_existing` and
+    /// `restart_existing`. `retarget` is the profile and re-signer the tile takes
+    /// on; `None` keeps the registered tile's own. `create` lets a tile that is
+    /// not registered be started; without it a missing tile is an error.
+    /// `session`, when given, must still hold under the registry lock before the
+    /// tile is updated or created.
+    async fn start_proxy_for(
+        stream_id: &str,
+        stream_url: String,
+        retarget: Option<(TileProfile, Option<TileRefresher>)>,
+        create: bool,
+        session: Option<crate::services::stream_server::SessionCheck>,
     ) -> Result<u16> {
         // Get-or-create under the registry lock, but probe the LL origin AFTER
         // releasing it: the probe fetches the upstream playlist plus backfill
         // segments, and holding the registry across that would serialize every
         // tile's startup when a preset cold-starts a whole grid.
-        let (port, origin) = {
+        let (port, origin, profile) = {
             let mut registry = STREAM_REGISTRY.lock().await;
+
+            // A tile closed or started again since this start began has a new
+            // session (or none): this start belongs to a stream that is gone.
+            if let Some(current) = &session {
+                if !current() {
+                    return Err(anyhow::anyhow!(
+                        "tile '{stream_id}' was closed or started again during its switch"
+                    ));
+                }
+            }
 
             if let Some(instance) = registry.get_mut(stream_id) {
                 debug!(
@@ -178,23 +434,44 @@ impl MultiNookServer {
                 *instance.ad_state.lock().unwrap() = ad_detect::AdDetectionState::default();
                 // A tile can be retargeted at a different platform (preset load,
                 // swap), so the profile follows the new upstream.
-                instance.profile = profile;
-                instance.refresher = refresher;
-                (instance.port, instance.ll_origin.clone())
+                if let Some((profile, refresher)) = retarget {
+                    instance.profile = profile;
+                    instance.refresher = refresher;
+                }
+                // A swap held for the old upstream is moot once the tile is retargeted.
+                instance.pending_swap = None;
+                // The new upstream starts with a clean record of refusals.
+                *instance.end_state.lock().unwrap_or_else(|e| e.into_inner()) =
+                    ProviderEndState::default();
+                (instance.port, instance.ll_origin.clone(), instance.profile)
             } else {
+                let (Some((profile, refresher)), true) = (retarget, create) else {
+                    return Err(anyhow::anyhow!("no relay session for tile '{stream_id}'"));
+                };
                 // Start a new server on a random port
                 let port = rand::rng().random_range(10000..20000);
                 let proxy_url: Arc<Mutex<Option<String>>> =
                     Arc::new(Mutex::new(Some(stream_url.clone())));
                 let ad_state: Arc<std::sync::Mutex<ad_detect::AdDetectionState>> =
                     Arc::new(std::sync::Mutex::new(ad_detect::AdDetectionState::default()));
+                let end_state: Arc<std::sync::Mutex<ProviderEndState>> =
+                    Arc::new(std::sync::Mutex::new(ProviderEndState::default()));
                 let origin = LlOrigin::new(ll_origin::TILE_MAX_SEGMENTS);
                 origin.set_window(sync_window());
                 origin.set_adapt_id(stream_id);
+                // A refused first poll after a park re-signs through the tile's
+                // own refresher.
+                let resign_id = stream_id.to_string();
+                origin.set_resigner(Some(Arc::new(move |stale: String| {
+                    let id = resign_id.clone();
+                    Box::pin(async move { Self::resign_tile(&id, &stale).await })
+                        as futures::future::BoxFuture<'static, Option<String>>
+                })));
 
                 let addr = SocketAddr::from(([127, 0, 0, 1], port));
                 let proxy_url_clone = proxy_url.clone();
                 let ad_state_clone = ad_state.clone();
+                let end_state_clone = end_state.clone();
                 let origin_clone = origin.clone();
                 let sid = stream_id.to_string();
                 let profile_for_filter = profile;
@@ -210,6 +487,7 @@ impl MultiNookServer {
                     .and(warp::any().map(move || sid.clone()))
                     .and(warp::any().map(move || origin_clone.clone()))
                     .and(warp::any().map(move || profile_for_filter))
+                    .and(warp::any().map(move || end_state_clone.clone()))
                     .and_then(Self::proxy_handler)
                     .boxed();
 
@@ -222,6 +500,10 @@ impl MultiNookServer {
                     stream_id, port
                 );
 
+                TILE_ORIGINS
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .insert(stream_id.to_string(), origin.clone());
                 registry.insert(
                     stream_id.to_string(),
                     StreamInstance {
@@ -235,9 +517,11 @@ impl MultiNookServer {
                         resign_lock: Arc::new(Mutex::new(())),
                         promotion: None,
                         codec_steps: Vec::new(),
+                        pending_swap: None,
+                        end_state,
                     },
                 );
-                (port, origin)
+                (port, origin, profile)
             }
         };
 
@@ -251,6 +535,9 @@ impl MultiNookServer {
         // mis-serves the tile at worst.
         if profile == TileProfile::Twitch {
             origin.start(stream_url).await;
+        } else {
+            // A tile moved off Twitch must not keep (or wake) its old origin.
+            origin.stop();
         }
 
         Ok(port)
@@ -299,12 +586,23 @@ impl MultiNookServer {
         crate::services::link_adapt::end(stream_id);
         let mut registry = STREAM_REGISTRY.lock().await;
 
+        TILE_ORIGINS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(stream_id);
+        TILE_REQUESTS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(stream_id);
+        forget_tile_ended(stream_id);
         if let Some(instance) = registry.remove(stream_id) {
             debug!(
                 "[MultiNook] Stopping proxy for stream '{}' on port {}",
                 stream_id, instance.port
             );
-            instance.ll_origin.stop();
+            // Closed, not just stopped: a start still probing for this tile
+            // must not bring a reader back after the tile is gone.
+            instance.ll_origin.close();
             instance.handle.abort();
             *instance.proxy_url.lock().await = None;
             crate::services::hls_projection::reset(stream_id);
@@ -318,18 +616,52 @@ impl MultiNookServer {
         Ok(())
     }
 
+    /// Remove a tile's relay instance while its session goes on: the tile is
+    /// now served by an adapter's own relay, so nothing here reads for it. Its
+    /// playlist requests keep counting (the adapter's relay notes them); the
+    /// adapt session and the end report are left alone.
+    pub async fn drop_relay(stream_id: &str) {
+        let mut registry = STREAM_REGISTRY.lock().await;
+        TILE_ORIGINS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(stream_id);
+        if let Some(instance) = registry.remove(stream_id) {
+            debug!(
+                "[MultiNook] Dropping relay for stream '{}' on port {}",
+                stream_id, instance.port
+            );
+            instance.ll_origin.close();
+            instance.handle.abort();
+            *instance.proxy_url.lock().await = None;
+            crate::services::hls_projection::reset(stream_id);
+        }
+    }
+
     /// Stop all stream proxy servers (cleanup on exit or mode switch)
     pub async fn stop_all() -> Result<()> {
         crate::services::link_adapt::end_tiles();
         let mut registry = STREAM_REGISTRY.lock().await;
         let count = registry.len();
+        TILE_ORIGINS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        TILE_REQUESTS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        TILE_ENDS_REPORTED
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
 
         for (id, instance) in registry.drain() {
             debug!(
                 "[MultiNook] Stopping proxy for stream '{}' on port {}",
                 id, instance.port
             );
-            instance.ll_origin.stop();
+            instance.ll_origin.close();
             instance.handle.abort();
             *instance.proxy_url.lock().await = None;
             crate::services::hls_projection::reset(&id);
@@ -360,12 +692,17 @@ impl MultiNookServer {
     /// Read-only: the tile keeps running. The caller stops the grid itself,
     /// AFTER the solo relay is serving, so nothing is torn down on a path that
     /// might still fail.
-    pub async fn promotion_target(stream_id: &str) -> Option<(String, TilePromotion)> {
+    pub async fn promotion_target(stream_id: &str) -> Option<PromotionTarget> {
         let registry = STREAM_REGISTRY.lock().await;
         let instance = registry.get(stream_id)?;
         let promotion = instance.promotion.clone()?;
         let upstream = instance.proxy_url.lock().await.clone()?;
-        Some((upstream, promotion))
+        Some(PromotionTarget {
+            upstream,
+            promotion,
+            profile: instance.profile,
+            refresher: instance.refresher.clone(),
+        })
     }
 
     /// The CODECS of the rendition this tile's resolve picked, when known.
@@ -434,7 +771,7 @@ impl MultiNookServer {
     /// Otherwise the relay restarts on the rendition, keeping its port, and the
     /// returned URL is the one the tile reloads on.
     pub async fn adapt_tile(stream_id: &str, playlist_url: &str, same_decoder: bool) -> Result<Option<String>> {
-        let (proxy_url, ad_state, origin, port, profile, refresher) = {
+        let (proxy_url, ad_state, origin, port) = {
             let registry = STREAM_REGISTRY.lock().await;
             let inst = registry
                 .get(stream_id)
@@ -444,10 +781,12 @@ impl MultiNookServer {
                 inst.ad_state.clone(),
                 inst.ll_origin.clone(),
                 inst.port,
-                inst.profile,
-                inst.refresher.clone(),
             )
         };
+        // A paused tile makes no request, a splice's included.
+        if origin.parked_or_idle() {
+            return Err(anyhow::Error::new(crate::services::link_adapt::RelayParked));
+        }
         let splice = same_decoder && ll_origin::engine_disabled() && !origin.is_active();
         if splice {
             crate::services::hls_projection::begin_switch(stream_id);
@@ -465,8 +804,14 @@ impl MultiNookServer {
             }
             return Ok(None);
         }
+        // A parked origin stays parked: restarting it would read again for a
+        // tile that is not watching. The refusal is an error so the caller does
+        // not record a switch that never happened.
+        if !origin.stop_unless_parked() {
+            return Err(anyhow::Error::new(crate::services::link_adapt::RelayParked));
+        }
         crate::services::hls_projection::reset(stream_id);
-        Self::start_proxy(stream_id, playlist_url.to_string(), profile, refresher).await?;
+        Self::start_proxy_existing(stream_id, playlist_url.to_string()).await?;
         let low_latency = Self::is_low_latency(stream_id).await;
         Ok(Some(format!(
             "http://localhost:{}/stream.m3u8?t={}{}",
@@ -479,7 +824,59 @@ impl MultiNookServer {
     /// Replace a tile's upstream playlist with one a resolution-owning plugin
     /// supplied via `set_upstream`. Reuses the tile-restart path: the relay
     /// keeps its port, resets its ad state, and re-probes the new upstream.
+    ///
+    /// While the tile is parked (paused) the swap is held instead and applied
+    /// on the tile's next playlist request: starting a proxy now would read
+    /// again for a tile that is not watching.
     pub async fn swap_upstream(stream_id: &str, playlist_url: String) -> Result<()> {
+        let to_apply = {
+            let mut registry = STREAM_REGISTRY.lock().await;
+            let inst = registry
+                .get_mut(stream_id)
+                .ok_or_else(|| anyhow::anyhow!("no relay session for tile '{stream_id}'"))?;
+            let parked = inst.ll_origin.parked_or_idle();
+            ll_origin::hold_swap_if_parked(&mut inst.pending_swap, parked, playlist_url)
+        };
+        let Some(playlist_url) = to_apply else {
+            TILE_SWAP_HELD.store(true, std::sync::atomic::Ordering::SeqCst);
+            info!(
+                "[MultiNook] '{}' upstream swap held until playback resumes",
+                stream_id
+            );
+            return Ok(());
+        };
+        Self::swap_upstream_now(stream_id, playlist_url).await
+    }
+
+    /// The swap held while the tile was parked, taken now that a player is
+    /// loading its playlist again (`apply_held_swap` runs it).
+    async fn take_held_swap(stream_id: &str, origin: &LlOrigin) -> Option<String> {
+        let parked = origin.parked_or_idle();
+        let mut registry = STREAM_REGISTRY.lock().await;
+        let url = match registry.get_mut(stream_id) {
+            Some(inst) => ll_origin::take_held_swap(&mut inst.pending_swap, parked),
+            None => None,
+        };
+        let any_held = registry.values().any(|i| i.pending_swap.is_some());
+        TILE_SWAP_HELD.store(any_held, std::sync::atomic::Ordering::SeqCst);
+        url
+    }
+
+    /// Run a held swap in the background, so the playlist request that woke it
+    /// is not delayed; the player reloads through the swap's normal path. Not
+    /// async on purpose: the relay's request handler calls it without taking
+    /// the swap's future into its own.
+    fn apply_held_swap(stream_id: &str, url: String) {
+        let id = stream_id.to_string();
+        tokio::spawn(async move {
+            if let Err(e) = Self::swap_upstream_now(&id, url).await {
+                warn!("[MultiNook] '{}' held upstream swap failed: {}", id, e);
+            }
+        });
+    }
+
+    /// The swap itself: restart the tile's relay on `playlist_url`.
+    async fn swap_upstream_now(stream_id: &str, playlist_url: String) -> Result<()> {
         let exists = STREAM_REGISTRY.lock().await.contains_key(stream_id);
         if !exists {
             return Err(anyhow::anyhow!("no relay session for tile '{stream_id}'"));
@@ -487,14 +884,7 @@ impl MultiNookServer {
         // A pivot points the tile at a new region with its own segment numbering;
         // drop the old region's projection map so no synthetic URL survives it.
         crate::services::hls_projection::reset(stream_id);
-        let (profile, refresher) = {
-            let registry = STREAM_REGISTRY.lock().await;
-            registry
-                .get(stream_id)
-                .map(|i| (i.profile, i.refresher.clone()))
-                .unwrap_or((TileProfile::Twitch, None))
-        };
-        Self::start_proxy(stream_id, playlist_url, profile, refresher).await?;
+        Self::start_proxy_existing(stream_id, playlist_url).await?;
         info!(
             "[MultiNook] '{}' upstream swapped by a playback plugin",
             stream_id
@@ -521,6 +911,7 @@ impl MultiNookServer {
         stream_id: String,
         origin: Arc<LlOrigin>,
         profile: TileProfile,
+        end_state: Arc<std::sync::Mutex<ProviderEndState>>,
     ) -> Result<warp::http::Response<bytes::Bytes>, warp::Rejection> {
         // Handle CORS preflight instantly without touching upstream.
         if method == warp::http::Method::OPTIONS {
@@ -567,10 +958,23 @@ impl MultiNookServer {
             if request_path == "stream.m3u8" || request_path.is_empty() {
                 let msn = parse_directive(&raw_query, "_HLS_msn");
                 let part = parse_directive(&raw_query, "_HLS_part");
-                if let Some(pl) = origin.serve_playlist(msn, part).await {
-                    return Ok(playlist_response(pl.into_bytes()));
+                // A tile that loads again after a pause wakes its parked origin.
+                origin.wake_for_request(true);
+                if TILE_SWAP_HELD.load(std::sync::atomic::Ordering::Relaxed) {
+                    if let Some(url) = Self::take_held_swap(&stream_id, &origin).await {
+                        Self::apply_held_swap(&stream_id, url);
+                    }
                 }
-                // Origin went inactive between the check and now: fall through.
+                match origin.serve_playlist_checked(msn, part).await {
+                    PlaylistServe::Playlist(pl) => {
+                        return Ok(playlist_response(pl.into_bytes()));
+                    }
+                    // A woken origin still waiting on its reader: the player
+                    // retries, and the request never reaches the upstream.
+                    PlaylistServe::NotReady => return Ok(empty_cors(503)),
+                    // Origin went inactive between the check and now: fall through.
+                    PlaylistServe::Inactive => {}
+                }
             }
         }
 
@@ -603,6 +1007,15 @@ impl MultiNookServer {
             return Ok(empty_cors(404));
         }
 
+        // A playlist request on the plain path: a player is loading, so the
+        // tile is not parked, and a swap held while it was can run.
+        origin.note_plain_request();
+        if TILE_SWAP_HELD.load(std::sync::atomic::Ordering::Relaxed) {
+            if let Some(url) = Self::take_held_swap(&stream_id, &origin).await {
+                Self::apply_held_swap(&stream_id, url);
+            }
+        }
+
         // A keep-alive connection can deliver one last poll after the tile relay
         // stops (the abort only kills the accept loop). A warp rejection would be
         // a bare 404 without CORS headers, which the webview logs as a CORS error;
@@ -617,6 +1030,8 @@ impl MultiNookServer {
         // refusal body and stop for good with no way back.
         let mut url = url;
         let mut resigned = false;
+        // The tile's re-sign was tried and gave nothing (or the tile has none).
+        let mut resign_failed = false;
         let (status, mut bytes) = loop {
             let response = match HTTP_CLIENT.get(&url).send().await {
                 Ok(res) => res,
@@ -657,9 +1072,35 @@ impl MultiNookServer {
                 }
                 // No refresher (Twitch tiles), or re-signing failed: serve what
                 // the upstream said rather than inventing a different failure.
-                None => break (status, body),
+                None => {
+                    resign_failed = true;
+                    break (status, body);
+                }
             }
         };
+
+        // A provider tile's stream has ended when its playlist says so or its
+        // upstream keeps refusing it. Twitch tiles are told by the channel poll.
+        if profile == TileProfile::GenericHls {
+            let fetch = if status.is_success() {
+                TileFetch::Playlist {
+                    endlist: std::str::from_utf8(&bytes).is_ok_and(|t| t.contains("#EXT-X-ENDLIST")),
+                }
+            } else if resign_failed && matches!(status.as_u16(), 404 | 410) {
+                TileFetch::Refused { at_ms: ll_origin::mono_ms() }
+            } else {
+                TileFetch::Failed
+            };
+            let first_end = {
+                let mut seen = end_state.lock().unwrap_or_else(|e| e.into_inner());
+                let (next, first_end) = provider_tile_ended(std::mem::take(&mut *seen), fetch);
+                *seen = next;
+                first_end
+            };
+            if first_end {
+                announce_tile_ended(&stream_id);
+            }
+        }
 
         // Detect ad markers for the per-tile state — same shared logic as the solo
         // player, read-only: the tile relay is ad-neutral and serves the upstream's
@@ -718,5 +1159,468 @@ impl MultiNookServer {
             .header("Expires", "0")
             .body(bytes.into())
             .unwrap())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_tile_route_is_parked_when_its_origin_is() {
+        let id = "test-parked-tile-route";
+        let route = twitch_tile_route(id);
+        assert!(!route.parked(), "a tile with no origin is not parked");
+
+        let origin = LlOrigin::new(ll_origin::TILE_MAX_SEGMENTS);
+        TILE_ORIGINS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(id.to_string(), origin.clone());
+        assert!(!route.parked(), "a running origin is not parked");
+
+        origin.mark_parked_for_test();
+        assert!(route.parked());
+
+        TILE_ORIGINS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(id);
+        assert!(!route.parked(), "a removed tile is not parked");
+    }
+
+    #[test]
+    fn a_swap_during_a_tile_park_is_held_and_taken_once_after() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+        rt.block_on(async {
+            let id = "test-held-tile-swap";
+            let origin = LlOrigin::new(ll_origin::TILE_MAX_SEGMENTS);
+            let proxy_url = Arc::new(Mutex::new(Some("https://example.test/old.m3u8".to_string())));
+            STREAM_REGISTRY.lock().await.insert(
+                id.to_string(),
+                StreamInstance {
+                    handle: tokio::spawn(async {}),
+                    port: 0,
+                    proxy_url: proxy_url.clone(),
+                    ad_state: Arc::new(std::sync::Mutex::new(ad_detect::AdDetectionState::default())),
+                    ll_origin: origin.clone(),
+                    profile: TileProfile::Twitch,
+                    refresher: None,
+                    resign_lock: Arc::new(Mutex::new(())),
+                    promotion: None,
+                    codec_steps: Vec::new(),
+                    pending_swap: None,
+                    end_state: Arc::new(std::sync::Mutex::new(ProviderEndState::default())),
+                },
+            );
+            let held = |registry: &HashMap<String, StreamInstance>| registry.get(id).unwrap().pending_swap.clone();
+
+            // Parked: the swap is held, the upstream is unchanged, no proxy started.
+            origin.mark_parked_for_test();
+            MultiNookServer::swap_upstream(id, "https://example.test/new.m3u8".to_string())
+                .await
+                .unwrap();
+            assert_eq!(proxy_url.lock().await.as_deref(), Some("https://example.test/old.m3u8"));
+            assert_eq!(held(&*STREAM_REGISTRY.lock().await).as_deref(), Some("https://example.test/new.m3u8"));
+
+            // A newer swap replaces the held one.
+            MultiNookServer::swap_upstream(id, "https://example.test/newer.m3u8".to_string())
+                .await
+                .unwrap();
+            assert_eq!(held(&*STREAM_REGISTRY.lock().await).as_deref(), Some("https://example.test/newer.m3u8"));
+
+            // Still parked: a request takes nothing.
+            assert_eq!(MultiNookServer::take_held_swap(id, &origin).await, None);
+
+            // Playing again: the next request takes it once.
+            origin.stop();
+            assert_eq!(
+                MultiNookServer::take_held_swap(id, &origin).await.as_deref(),
+                Some("https://example.test/newer.m3u8")
+            );
+            assert_eq!(MultiNookServer::take_held_swap(id, &origin).await, None);
+
+            STREAM_REGISTRY.lock().await.remove(id);
+        });
+    }
+
+    #[test]
+    fn a_closed_tile_origin_never_gets_a_reader_back() {
+        let origin = LlOrigin::new(ll_origin::TILE_MAX_SEGMENTS);
+        origin.close();
+        let outcome = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(origin.clone().start("http://127.0.0.1:1/x.m3u8".to_string()));
+        assert!(!outcome.active);
+        assert!(!origin.is_active());
+        assert!(!origin.unpark());
+
+        // Every other precondition for a wake is back after the close: an edge,
+        // an upstream and a park. The close still wins.
+        origin.arm_for_test("http://127.0.0.1:1/x.m3u8");
+        origin.mark_parked_for_test();
+        assert!(!origin.unpark(), "a closed origin never wakes");
+        assert!(!origin.has_reader_for_test(), "no reader was started");
+    }
+
+    #[test]
+    fn a_swap_or_an_adapt_never_brings_a_closed_tile_back() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let id = "test-closed-tile-swap";
+            let url = "https://example.test/new.m3u8".to_string();
+            let origin = LlOrigin::new(ll_origin::TILE_MAX_SEGMENTS);
+            STREAM_REGISTRY.lock().await.insert(
+                id.to_string(),
+                StreamInstance {
+                    handle: tokio::spawn(async {}),
+                    port: 0,
+                    proxy_url: Arc::new(Mutex::new(Some("https://example.test/old.m3u8".to_string()))),
+                    ad_state: Arc::new(std::sync::Mutex::new(ad_detect::AdDetectionState::default())),
+                    ll_origin: origin.clone(),
+                    profile: TileProfile::GenericHls,
+                    refresher: None,
+                    resign_lock: Arc::new(Mutex::new(())),
+                    promotion: None,
+                    codec_steps: Vec::new(),
+                    pending_swap: None,
+                    end_state: Arc::new(std::sync::Mutex::new(ProviderEndState::default())),
+                },
+            );
+            TILE_ORIGINS
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(id.to_string(), origin.clone());
+
+            // The tile closes before the swap gets to start it.
+            MultiNookServer::stop_instance(id).await.unwrap();
+            let gone = |registry: &HashMap<String, StreamInstance>| {
+                !registry.contains_key(id)
+                    && !TILE_ORIGINS.lock().unwrap_or_else(|e| e.into_inner()).contains_key(id)
+            };
+
+            assert!(MultiNookServer::swap_upstream_now(id, url.clone()).await.is_err());
+            assert!(gone(&*STREAM_REGISTRY.lock().await), "the swap recreated the tile");
+
+            assert!(MultiNookServer::start_proxy_existing(id, url.clone()).await.is_err());
+            assert!(gone(&*STREAM_REGISTRY.lock().await), "the start recreated the tile");
+
+            assert!(MultiNookServer::adapt_tile(id, &url, false).await.is_err());
+            assert!(gone(&*STREAM_REGISTRY.lock().await), "the adapt recreated the tile");
+
+            let restarted =
+                MultiNookServer::restart_existing(id, url.clone(), TileProfile::GenericHls, None, None).await;
+            assert!(restarted.is_err(), "a restart of a closed tile must fail");
+            assert!(gone(&*STREAM_REGISTRY.lock().await), "the restart recreated the tile");
+        });
+    }
+
+    #[test]
+    fn a_provider_tile_is_parked_when_its_origin_is() {
+        let id = "test-parked-provider-tile";
+        assert!(!tile_parked(id), "a tile with no origin is not parked");
+
+        let origin = LlOrigin::new(ll_origin::TILE_MAX_SEGMENTS);
+        TILE_ORIGINS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(id.to_string(), origin.clone());
+        assert!(!tile_parked(id), "a running origin is not parked");
+
+        origin.mark_parked_for_test();
+        assert!(tile_parked(id));
+
+        TILE_ORIGINS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(id);
+        assert!(!tile_parked(id), "a removed tile is not parked");
+    }
+
+    #[test]
+    fn a_relay_served_tile_is_parked_after_the_span_without_requests() {
+        let id = "test-parked-relay-tile";
+        let span = ll_origin::park_idle_ms();
+        assert!(!tile_parked_at(id, 10 * span), "a tile known to neither is not parked");
+
+        let started = 1_000;
+        note_tile_playlist_request_at(id, started);
+        assert!(!tile_parked_at(id, started + span - 1), "inside the span it is playing");
+        assert!(tile_parked_at(id, started + span), "a whole span without a request parks it");
+
+        // Requests that keep arriving keep it playing.
+        for poll in 1..=4u64 {
+            let at = started + poll * (span / 2);
+            note_tile_playlist_request_at(id, at);
+            assert!(!tile_parked_at(id, at + span - 1), "polled {poll}: still playing");
+        }
+        let last = started + 4 * (span / 2);
+        assert!(tile_parked_at(id, last + span));
+
+        TILE_REQUESTS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(id);
+    }
+
+    #[test]
+    fn stopping_a_relay_served_tile_removes_its_request_entry() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let id = "test-stopped-relay-tile";
+            note_tile_playlist_request_at(id, 1_000);
+            assert!(TILE_REQUESTS.lock().unwrap_or_else(|e| e.into_inner()).contains_key(id));
+
+            MultiNookServer::stop_instance(id).await.unwrap();
+            assert!(
+                !TILE_REQUESTS.lock().unwrap_or_else(|e| e.into_inner()).contains_key(id),
+                "a stopped tile keeps no entry"
+            );
+            assert!(!tile_parked_at(id, 1_000 + 10 * ll_origin::park_idle_ms()));
+        });
+    }
+
+    fn refused(at_ms: u64) -> TileFetch {
+        TileFetch::Refused { at_ms }
+    }
+
+    #[test]
+    fn a_playlist_with_an_endlist_ends_the_tile_once() {
+        let (state, ended) = provider_tile_ended(
+            ProviderEndState::default(),
+            TileFetch::Playlist { endlist: false },
+        );
+        assert!(!ended);
+        let (state, ended) = provider_tile_ended(state, TileFetch::Playlist { endlist: true });
+        assert!(ended);
+        let (_, again) = provider_tile_ended(state, TileFetch::Playlist { endlist: true });
+        assert!(!again, "the end is reported once per tile");
+    }
+
+    #[test]
+    fn six_refusals_over_twelve_seconds_end_the_tile() {
+        let mut state = ProviderEndState::default();
+        for i in 0..5u64 {
+            let (next, ended) = provider_tile_ended(state, refused(1_000 + i * 2_400));
+            assert!(!ended, "refusal {} is too early", i + 1);
+            state = next;
+        }
+        let (_, ended) = provider_tile_ended(state, refused(1_000 + 5 * 2_400));
+        assert!(ended, "the sixth refusal, 12 s after the first, ends it");
+    }
+
+    #[test]
+    fn six_refusals_in_five_seconds_do_not_end_the_tile() {
+        let mut state = ProviderEndState::default();
+        for i in 0..8u64 {
+            let (next, ended) = provider_tile_ended(state, refused(1_000 + i * 700));
+            assert!(!ended, "refusal {} came too fast to be an end", i + 1);
+            state = next;
+        }
+        let (_, ended) = provider_tile_ended(state, refused(1_000 + 12_000));
+        assert!(ended, "once the run spans 12 s it ends");
+    }
+
+    #[test]
+    fn a_served_playlist_resets_the_refusals() {
+        let mut state = ProviderEndState::default();
+        for i in 0..5u64 {
+            state = provider_tile_ended(state, refused(1_000 + i * 4_000)).0;
+        }
+        let (state, ended) = provider_tile_ended(state, TileFetch::Playlist { endlist: false });
+        assert!(!ended);
+        assert_eq!(state, ProviderEndState::default());
+        let (_, ended) = provider_tile_ended(state, refused(30_000));
+        assert!(!ended, "the run starts over after a reset");
+    }
+
+    #[test]
+    fn another_answer_between_refusals_continues_the_count() {
+        // 404, 403, 404: the 403 neither counts nor clears the run.
+        let (state, ended) = provider_tile_ended(ProviderEndState::default(), refused(1_000));
+        assert!(!ended);
+        let (state, ended) = provider_tile_ended(state, TileFetch::Failed);
+        assert!(!ended);
+        assert_eq!(state.refusals, 1);
+        assert_eq!(state.first_refusal_ms, 1_000);
+        let (state, _) = provider_tile_ended(state, refused(3_400));
+        assert_eq!(state.refusals, 2);
+        assert_eq!(state.first_refusal_ms, 1_000);
+
+        // Refusals broken up by other answers still reach the end.
+        let mut state = state;
+        for i in 2..5u64 {
+            state = provider_tile_ended(state, TileFetch::Failed).0;
+            state = provider_tile_ended(state, refused(1_000 + i * 2_400)).0;
+        }
+        let (_, ended) = provider_tile_ended(state, refused(1_000 + 5 * 2_400));
+        assert!(ended, "six refusals over twelve seconds end it, whatever came between");
+    }
+
+    #[test]
+    fn a_tile_end_is_reported_once_per_start() {
+        let id = "test-reported-tile-end";
+        forget_tile_ended(id);
+        assert!(first_tile_end(id), "the first end is reported");
+        assert!(!first_tile_end(id), "the same end is not reported twice");
+
+        forget_tile_ended(id);
+        assert!(first_tile_end(id), "a tile that started again can end again");
+
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            MultiNookServer::stop_instance(id).await.unwrap();
+        });
+        assert!(first_tile_end(id), "stopping the tile forgets its report");
+        forget_tile_ended(id);
+
+        assert!(!first_tile_end(crate::services::stream_server::SOLO_STREAM_ID), "the solo stream has no tile to end");
+    }
+
+    #[test]
+    fn a_tile_with_a_fresh_playlist_request_never_reads_as_parked() {
+        let id = "test-requested-parked-origin";
+        let span = ll_origin::park_idle_ms();
+        let origin = LlOrigin::new(ll_origin::TILE_MAX_SEGMENTS);
+        origin.mark_parked_for_test();
+        TILE_ORIGINS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(id.to_string(), origin);
+        assert!(tile_parked_at(id, 10 * span), "an idle origin with no request is parked");
+
+        let asked = 20 * span;
+        note_tile_playlist_request_at(id, asked);
+        assert!(!tile_parked_at(id, asked + span - 1), "a player asked inside the span");
+        assert!(tile_parked_at(id, asked + span), "a whole span without a request parks it again");
+
+        TILE_ORIGINS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(id);
+        MultiNookServer::forget_tile_requests(id);
+    }
+
+    async fn registered(id: &str, url: &str) -> Arc<Mutex<Option<String>>> {
+        let proxy_url = Arc::new(Mutex::new(Some(url.to_string())));
+        let origin = LlOrigin::new(ll_origin::TILE_MAX_SEGMENTS);
+        let instance = StreamInstance {
+            handle: tokio::spawn(async {}),
+            port: 0,
+            proxy_url: proxy_url.clone(),
+            ad_state: Arc::new(std::sync::Mutex::new(ad_detect::AdDetectionState::default())),
+            ll_origin: origin,
+            profile: TileProfile::GenericHls,
+            refresher: None,
+            resign_lock: Arc::new(Mutex::new(())),
+            promotion: None,
+            codec_steps: Vec::new(),
+            pending_swap: None,
+            end_state: Arc::new(std::sync::Mutex::new(ProviderEndState::default())),
+        };
+        STREAM_REGISTRY.lock().await.insert(id.to_string(), instance);
+        proxy_url
+    }
+
+    #[test]
+    fn a_switch_whose_session_was_replaced_changes_nothing() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let id = "test-replaced-switch-session";
+            let url = registered(id, "https://example.test/new-start.m3u8").await;
+
+            // The switch began under session 1; the tile was stopped and started
+            // again, so session 2 is the current one.
+            let current = Arc::new(std::sync::atomic::AtomicU64::new(2));
+            let began_under = 1;
+            let check = || -> crate::services::stream_server::SessionCheck {
+                let current = current.clone();
+                Arc::new(move || current.load(std::sync::atomic::Ordering::SeqCst) == began_under)
+            };
+
+            let restarted = MultiNookServer::restart_existing(
+                id,
+                "https://example.test/old-switch.m3u8".to_string(),
+                TileProfile::GenericHls,
+                None,
+                Some(check()),
+            )
+            .await;
+            assert!(restarted.is_err(), "a replaced session's switch is refused");
+            assert_eq!(
+                url.lock().await.as_deref(),
+                Some("https://example.test/new-start.m3u8"),
+                "the new start's url is untouched"
+            );
+
+            let started = MultiNookServer::start_proxy(
+                id,
+                "https://example.test/old-switch.m3u8".to_string(),
+                TileProfile::GenericHls,
+                None,
+                Some(check()),
+            )
+            .await;
+            assert!(started.is_err());
+            assert_eq!(url.lock().await.as_deref(), Some("https://example.test/new-start.m3u8"));
+
+            // The same switch under the current session goes through.
+            current.store(began_under, std::sync::atomic::Ordering::SeqCst);
+            MultiNookServer::restart_existing(
+                id,
+                "https://example.test/switched.m3u8".to_string(),
+                TileProfile::GenericHls,
+                None,
+                Some(check()),
+            )
+            .await
+            .unwrap();
+            assert_eq!(url.lock().await.as_deref(), Some("https://example.test/switched.m3u8"));
+
+            STREAM_REGISTRY.lock().await.remove(id);
+        });
+    }
+
+    #[test]
+    fn a_switch_after_a_close_creates_nothing() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let id = "test-closed-switch-session";
+            // The tile closed: its session is gone, so no check holds.
+            let closed: crate::services::stream_server::SessionCheck = Arc::new(|| false);
+
+            let started = MultiNookServer::start_proxy(
+                id,
+                "https://example.test/live.m3u8".to_string(),
+                TileProfile::GenericHls,
+                None,
+                Some(closed),
+            )
+            .await;
+            assert!(started.is_err(), "a switch after a close must fail");
+            assert!(MultiNookServer::get_port(id).await.is_none(), "the switch created a tile");
+            assert!(!TILE_ORIGINS.lock().unwrap_or_else(|e| e.into_inner()).contains_key(id));
+        });
+    }
+
+    #[test]
+    fn dropping_a_relay_keeps_the_tiles_request_clock() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let id = "test-dropped-relay-tile";
+            registered(id, "https://example.test/live.m3u8").await;
+            note_tile_playlist_request_at(id, 1_000);
+
+            MultiNookServer::drop_relay(id).await;
+            assert!(MultiNookServer::get_port(id).await.is_none());
+            assert!(!TILE_ORIGINS.lock().unwrap_or_else(|e| e.into_inner()).contains_key(id));
+            assert!(
+                TILE_REQUESTS.lock().unwrap_or_else(|e| e.into_inner()).contains_key(id),
+                "the adapter's relay keeps noting this tile's requests"
+            );
+            MultiNookServer::forget_tile_requests(id);
+        });
     }
 }

@@ -7,7 +7,9 @@ pub async fn load_mod_logs(
     app_handle: AppHandle,
     channel: String,
 ) -> Result<Vec<serde_json::Value>, String> {
-    Ok(ModLogStorageService::load_channel(&app_handle, &channel))
+    tauri::async_runtime::spawn_blocking(move || ModLogStorageService::load_channel(&app_handle, &channel))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// Record one moderation action and return the entry to show: the same action
@@ -19,11 +21,15 @@ pub async fn record_mod_log(
     channel: String,
     entry: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    ModLogStorageService::record(&app_handle, &channel, entry)
+    tauri::async_runtime::spawn_blocking(move || ModLogStorageService::record(&app_handle, &channel, entry))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// Clear a channel's persisted mod-log entries.
 #[tauri::command]
 pub async fn clear_mod_logs(app_handle: AppHandle, channel: String) -> Result<(), String> {
-    ModLogStorageService::clear_channel(&app_handle, &channel)
+    tauri::async_runtime::spawn_blocking(move || ModLogStorageService::clear_channel(&app_handle, &channel))
+        .await
+        .map_err(|e| e.to_string())?
 }

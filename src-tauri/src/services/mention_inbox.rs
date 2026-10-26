@@ -619,6 +619,16 @@ pub fn kind_for(verdict: &Verdict, highlight_words: bool) -> Option<MentionKind>
     }
 }
 
+/// Whether this verdict raises a ping under the current settings: an @
+/// mention, a reply, or a highlight phrase while phrases count.
+pub fn pinged(verdict: &Verdict) -> bool {
+    pinged_with(verdict, config().highlight_words)
+}
+
+fn pinged_with(verdict: &Verdict, highlight_words: bool) -> bool {
+    kind_for(verdict, highlight_words).is_some()
+}
+
 fn sent_at_ms(msg: &ChatMessage) -> Option<i64> {
     msg.tags.get("tmi-sent-ts").and_then(|t| t.parse::<i64>().ok())
 }
@@ -1395,6 +1405,7 @@ mod tests {
                 is_zero_width: None,
                 modifier_flags: None,
                 is_personal: None,
+                local_path: None,
             },
             S::Emote {
                 content: "cvHazmat".into(),
@@ -1403,6 +1414,7 @@ mod tests {
                 is_zero_width: Some(true),
                 modifier_flags: None,
                 is_personal: None,
+                local_path: None,
             },
             S::Text { content: " hi ".into() },
             S::Link { content: "x.com".into(), url: "https://x.com".into(), card: None, label: String::new() },
@@ -1606,6 +1618,15 @@ mod tests {
         assert_eq!(kind_for(&verdict(false, false, true), true), Some(MentionKind::Word));
         assert_eq!(kind_for(&verdict(false, false, true), false), None);
         assert_eq!(kind_for(&verdict(false, false, false), true), None);
+    }
+
+    #[test]
+    fn a_ping_is_a_mention_a_reply_or_a_phrase_while_phrases_count() {
+        assert!(pinged_with(&verdict(false, false, true), true));
+        assert!(!pinged_with(&verdict(false, false, true), false));
+        assert!(pinged_with(&verdict(true, false, false), false));
+        assert!(pinged_with(&verdict(false, true, false), false));
+        assert!(!pinged_with(&verdict(false, false, false), true));
     }
 
     #[test]

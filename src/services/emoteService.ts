@@ -1,11 +1,12 @@
 // Simplified emote service - now a thin wrapper around Rust backend
 import { invoke } from '@tauri-apps/api/core';
-import { convertFileSrc } from '@tauri-apps/api/core';
+import { cacheFileUrl } from '../utils/cacheFileUrl';
 
 import { Logger } from '../utils/logger';
 import { onAssetsCached, requestAssetCaching, setAssetCacheBurst, forgetAssetRequests } from './assetCacheQueue';
 import { IS_MOBILE } from '../utils/platform';
 import { listsByPrecedence } from '../utils/emotePrecedence';
+import { boundedSet } from '../utils/boundedMap';
 export interface Emote {
   id: string;
   name: string;
@@ -64,6 +65,7 @@ export interface EmoteSet {
 // each emote set this window loads, and from Rust's answers to caching
 // requests (a file already on disk is answered at once).
 const cachedEmoteFiles: Map<string, string> = new Map();
+const CACHED_EMOTE_FILES_MAX = 5000;
 
 // Lazily-built per-set name indexes, keyed by set identity. Emote sets are only
 // ever replaced wholesale (never mutated in place), so a WeakMap entry lives
@@ -104,14 +106,16 @@ export function getEmoteLookup(set: EmoteSet): { byName: Map<string, Emote>; low
 export function enhanceRustEmotes(emotes: any[], tier: EmoteTier = inlineEmoteTier()): Emote[] {
   return (emotes ?? []).map((emote) => {
     const { local_url: localPath, ...rest } = emote as { local_url?: string } & Record<string, unknown>;
-    if (localPath) cachedEmoteFiles.set(emoteCacheKey(emote.id, emote.provider, tier), localPath);
+    if (localPath) {
+      boundedSet(cachedEmoteFiles, emoteCacheKey(emote.id, emote.provider, tier), localPath, CACHED_EMOTE_FILES_MAX);
+    }
     const zeroWidth = emote.is_zero_width !== undefined ? emote.is_zero_width : emote.isZeroWidth;
     return {
       ...rest,
       isZeroWidth: zeroWidth,
       modifierFlags: emote.modifier_flags ?? emote.modifierFlags,
       ffzSubOnly: emote.ffz_sub_only ?? emote.ffzSubOnly,
-      localUrl: localPath ? convertFileSrc(localPath) : undefined,
+      localUrl: localPath ? cacheFileUrl(localPath) : undefined,
     } as Emote;
   });
 }
@@ -222,7 +226,7 @@ function emoteCacheKey(id: string, provider?: string, tier: EmoteTier = inlineEm
 // moment the user is waiting on emotes), when they burst five at a time.
 onAssetsCached('emote', {
   arrived: (files) => {
-    for (const [id, path] of Object.entries(files)) cachedEmoteFiles.set(id, path);
+    for (const [id, path] of Object.entries(files)) boundedSet(cachedEmoteFiles, id, path, CACHED_EMOTE_FILES_MAX);
   },
   cleared: () => cachedEmoteFiles.clear(),
 });
@@ -253,7 +257,14 @@ export function getCachedEmoteUrl(
     // file serves it instead of downloading and storing the image a second
     // time under `kick-<id>`.
     (provider === 'kick' ? cachedEmoteFiles.get(id) : undefined);
-  return path ? convertFileSrc(path) : undefined;
+  return path ? cacheFileUrl(path) : undefined;
+}
+
+/** A history row from Rust named a 7TV emote's disk file at this window's size
+ *  (load_channel_history stamps them): remember it before the row paints, so
+ *  its first paint is the disk copy instead of the CDN. */
+export function rememberRowEmoteFile(id: string, path: string): void {
+  boundedSet(cachedEmoteFiles, emoteCacheKey(id, '7tv', inlineEmoteTier()), path, CACHED_EMOTE_FILES_MAX);
 }
 
 /**

@@ -183,7 +183,6 @@ pub(crate) async fn seventv_ids_store(channel_id: &str, ids: SeventvIds) {
 /// None when the read failed, so the caller does not record a set it never
 /// saw; an answer with no personal-use emotes is `Some` of an empty list.
 pub async fn fetch_personal_emote_set(set_id: &str) -> Option<Vec<Emote>> {
-    let mut out = Vec::new();
     let url = format!("https://7tv.io/v3/emote-sets/{}", set_id);
     let resp = match crate::services::http::client()
         .get(&url)
@@ -195,10 +194,19 @@ pub async fn fetch_personal_emote_set(set_id: &str) -> Option<Vec<Emote>> {
         _ => return None,
     };
     let json: serde_json::Value = resp.json().await.ok()?;
-    let Some(arr) = json.get("emotes").and_then(|v| v.as_array()) else {
-        // A set with no emotes yet answers with no list at all.
-        return Some(out);
-    };
+    // A set with no emotes yet answers with no list at all.
+    let arr = json
+        .get("emotes")
+        .and_then(|v| v.as_array())
+        .map(|a| a.as_slice())
+        .unwrap_or(&[]);
+    Some(parse_personal_emotes(arr))
+}
+
+/// The personal-use emotes of a 7TV emote set's `emotes` list, as ready-to-
+/// render emotes. Each URL follows the files the emote's `host.files` lists.
+fn parse_personal_emotes(arr: &[serde_json::Value]) -> Vec<Emote> {
+    let mut out = Vec::new();
     for active in arr {
         let data = active.get("data").unwrap_or(active);
 
@@ -240,7 +248,11 @@ pub async fn fetch_personal_emote_set(set_id: &str) -> Option<Vec<Emote>> {
             out.push(Emote {
                 id: id.to_string(),
                 name: name.to_string(),
-                url: format!("https://cdn.7tv.app/emote/{}/1x.avif", id),
+                url: format!(
+                    "https://cdn.7tv.app/emote/{}/{}",
+                    id,
+                    seventv_file_name(data)
+                ),
                 provider: EmoteProvider::SevenTV,
                 is_zero_width: Some((flags & 256) == 256),
                 local_url: None,
@@ -257,7 +269,7 @@ pub async fn fetch_personal_emote_set(set_id: &str) -> Option<Vec<Emote>> {
             });
         }
     }
-    Some(out)
+    out
 }
 
 /// Active emote-set id from a `/v3/users/:platform/:id` payload. Reads the
@@ -416,6 +428,247 @@ pub(crate) fn apply_seventv_delta(
     out
 }
 
+/// How long a journaled delta is kept once no fetch that began before it is
+/// still in flight.
+const SEVENTV_JOURNAL_KEEP: Duration = Duration::from_secs(10 * 60);
+
+/// The most deltas held for one channel, whatever their age.
+const SEVENTV_JOURNAL_MAX: usize = 256;
+
+/// One applied delta, with the dictionary it was composed against.
+struct JournaledDelta {
+    seq: u64,
+    at: Instant,
+    delta: Arc<SeventvSetDelta>,
+    globals: Arc<[Emote]>,
+}
+
+/// A channel's recent deltas, oldest first, and the chat room they belong to.
+#[derive(Default)]
+struct ChannelJournal {
+    room: String,
+    entries: std::collections::VecDeque<JournaledDelta>,
+}
+
+/// The 7TV deltas applied lately, per channel id, so a provider answer fetched
+/// before an edit can be brought up to date before it is installed. Every
+/// delta takes the next sequence number; a fetch notes the number current when
+/// it begins and later replays the deltas numbered from it.
+#[derive(Default)]
+struct DeltaJournal {
+    next_seq: u64,
+    next_token: u64,
+    channels: HashMap<String, ChannelJournal>,
+    /// (token, first sequence number not yet seen) of each fetch in flight.
+    in_flight: HashMap<String, Vec<(u64, u64)>>,
+}
+
+impl DeltaJournal {
+    fn push(
+        &mut self,
+        channel_id: &str,
+        room: &str,
+        delta: &SeventvSetDelta,
+        globals: &[Emote],
+        now: Instant,
+    ) {
+        let seq = self.next_seq;
+        self.next_seq += 1;
+        let channel = self.channels.entry(channel_id.to_string()).or_default();
+        channel.room = room.to_string();
+        channel.entries.push_back(JournaledDelta {
+            seq,
+            at: now,
+            delta: Arc::new(delta.clone()),
+            globals: Arc::from(globals),
+        });
+        self.trim(now);
+    }
+
+    fn begin(&mut self, channel_id: &str) -> (u64, u64) {
+        let token = self.next_token;
+        self.next_token += 1;
+        let start = self.next_seq;
+        self.in_flight
+            .entry(channel_id.to_string())
+            .or_default()
+            .push((token, start));
+        (token, start)
+    }
+
+    fn end(&mut self, channel_id: &str, token: u64, now: Instant) {
+        if let Some(open) = self.in_flight.get_mut(channel_id) {
+            open.retain(|(t, _)| *t != token);
+            if open.is_empty() {
+                self.in_flight.remove(channel_id);
+            }
+        }
+        self.trim(now);
+    }
+
+    /// The deltas numbered `since` or later, in the order applied, and the
+    /// number the next delta will take.
+    fn since(&self, channel_id: &str, since: u64) -> (Vec<(Arc<SeventvSetDelta>, Arc<[Emote]>)>, u64) {
+        let pending: Vec<(Arc<SeventvSetDelta>, Arc<[Emote]>)> = self
+            .channels
+            .get(channel_id)
+            .map(|c| {
+                c.entries
+                    .iter()
+                    .filter(|e| e.seq >= since)
+                    .map(|e| (e.delta.clone(), e.globals.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        (pending, self.next_seq)
+    }
+
+    /// Drops what no fetch can need: entries older than the keep time that no
+    /// in-flight fetch began before, and anything past the per-channel cap.
+    fn trim(&mut self, now: Instant) {
+        let in_flight = &self.in_flight;
+        self.channels.retain(|id, channel| {
+            let oldest_open = in_flight
+                .get(id)
+                .and_then(|open| open.iter().map(|(_, start)| *start).min());
+            while let Some(front) = channel.entries.front() {
+                let protected = oldest_open.is_some_and(|start| front.seq >= start);
+                let aged = now.saturating_duration_since(front.at) >= SEVENTV_JOURNAL_KEEP;
+                if (aged && !protected) || channel.entries.len() > SEVENTV_JOURNAL_MAX {
+                    channel.entries.pop_front();
+                } else {
+                    break;
+                }
+            }
+            !channel.entries.is_empty()
+        });
+    }
+}
+
+fn seventv_journal() -> &'static std::sync::Mutex<DeltaJournal> {
+    static JOURNAL: OnceLock<std::sync::Mutex<DeltaJournal>> = OnceLock::new();
+    JOURNAL.get_or_init(Default::default)
+}
+
+/// Records a delta just applied to the chat room `room` of channel
+/// `channel_id`. Called with the room's table locked, so a fetch installing
+/// its answer sees every delta that reached the table it replaces.
+pub(crate) fn journal_seventv_delta(
+    channel_id: &str,
+    room: &str,
+    delta: &SeventvSetDelta,
+    globals: &[Emote],
+) {
+    if let Ok(mut journal) = seventv_journal().lock() {
+        journal.push(channel_id, room, delta, globals, Instant::now());
+    }
+}
+
+/// The chat room a channel's last journaled delta was applied to.
+fn journaled_room(channel_id: &str) -> Option<String> {
+    seventv_journal()
+        .lock()
+        .ok()?
+        .channels
+        .get(channel_id)
+        .map(|c| c.room.clone())
+}
+
+/// A provider fetch in flight for one channel. Deltas applied from the moment
+/// it begins stay journaled until it is dropped.
+pub(crate) struct RefreshWindow {
+    channel_id: String,
+    token: u64,
+    start: u64,
+}
+
+impl RefreshWindow {
+    /// The sequence number from which the deltas it has not seen are numbered.
+    pub(crate) fn start(&self) -> u64 {
+        self.start
+    }
+}
+
+impl Drop for RefreshWindow {
+    fn drop(&mut self) {
+        if let Ok(mut journal) = seventv_journal().lock() {
+            journal.end(&self.channel_id, self.token, Instant::now());
+        }
+    }
+}
+
+/// Notes that a fetch for `channel_id` is beginning.
+pub(crate) fn begin_refresh_window(channel_id: &str) -> RefreshWindow {
+    let (token, start) = seventv_journal()
+        .lock()
+        .map(|mut journal| journal.begin(channel_id))
+        .unwrap_or((0, 0));
+    RefreshWindow {
+        channel_id: channel_id.to_string(),
+        token,
+        start,
+    }
+}
+
+/// The part of `delta` that `rows` do not already show, so replaying a delta
+/// onto rows that hold it changes nothing and moves nothing.
+fn unapplied_part(rows: &[Emote], delta: &SeventvSetDelta) -> SeventvSetDelta {
+    let same = |a: &Emote, b: &Emote| {
+        a.id == b.id && a.name == b.name && a.url == b.url && a.is_zero_width == b.is_zero_width
+    };
+    SeventvSetDelta {
+        added: delta
+            .added
+            .iter()
+            .filter(|row| !rows.iter().any(|r| same(r, *row)))
+            .cloned()
+            .collect(),
+        removed: delta
+            .removed
+            .iter()
+            .filter(|(id, name)| rows.iter().any(|r| &r.id == id && &r.name == name))
+            .cloned()
+            .collect(),
+        updated: delta
+            .updated
+            .iter()
+            .filter(|(id, old, row)| {
+                let in_place = rows.iter().any(|r| same(r, row));
+                let old_gone = old == &row.name || !rows.iter().any(|r| &r.id == id && &r.name == old);
+                !(in_place && old_gone)
+            })
+            .cloned()
+            .collect(),
+    }
+}
+
+/// Applies to `seven_tv` every journaled delta for `channel_id` numbered
+/// `since` or later that it does not already show: adds win over an absent
+/// row, removes over a present one, renames apply by emote id. Returns how many
+/// changed something and the number the next delta will take, which a caller
+/// that replays again later passes as its new `since`.
+pub(crate) fn replay_seventv_journal(
+    channel_id: &str,
+    since: u64,
+    seven_tv: &mut Vec<Emote>,
+) -> (usize, u64) {
+    let Ok(journal) = seventv_journal().lock() else {
+        return (0, since);
+    };
+    let (pending, next) = journal.since(channel_id, since);
+    drop(journal);
+    let mut changed = 0;
+    for (delta, globals) in pending {
+        let needed = unapplied_part(seven_tv, &delta);
+        if needed.added.is_empty() && needed.removed.is_empty() && needed.updated.is_empty() {
+            continue;
+        }
+        apply_seventv_delta(seven_tv, &needed, &globals);
+        changed += 1;
+    }
+    (changed, next)
+}
+
 /// Parse 7TV "active emote" objects (name at the root, full emote under `data`)
 /// into ready-to-render Emotes. Both channel-set sources carry this shape: the
 /// inline `emote_set.emotes` array (pre-change user payloads) and the
@@ -432,6 +685,33 @@ fn seventv_original_name(data: &serde_json::Value, shown: &str) -> Option<String
         .and_then(|v| v.as_str())
         .filter(|own| !own.is_empty() && *own != shown)
         .map(str::to_string)
+}
+
+/// The CDN file a 7TV emote's URL points at, chosen from its `host.files`: the
+/// 1x tier when it is listed, else the nearest listed tier, avif before webp
+/// before any other format. An emote still processing lists no files, which
+/// keeps the default 1x avif.
+fn seventv_file_name(emote_data: &serde_json::Value) -> String {
+    const DEFAULT_FILE: &str = "1x.avif";
+    let Some(files) = emote_data.pointer("/host/files").and_then(|v| v.as_array()) else {
+        return DEFAULT_FILE.to_string();
+    };
+    files
+        .iter()
+        .filter_map(|f| f.get("name").and_then(|n| n.as_str()))
+        .filter_map(|name| {
+            let (stem, ext) = name.rsplit_once('.')?;
+            let tier: u32 = stem.strip_suffix('x')?.parse().ok()?;
+            let ext_rank = match ext {
+                "avif" => 0,
+                "webp" => 1,
+                _ => 2,
+            };
+            Some(((tier.abs_diff(1), ext_rank, tier), name))
+        })
+        .min_by_key(|(rank, _)| *rank)
+        .map(|(_, name)| name.to_string())
+        .unwrap_or_else(|| DEFAULT_FILE.to_string())
 }
 
 pub(crate) fn parse_seventv_active_emotes(items: &[serde_json::Value]) -> Vec<Emote> {
@@ -467,7 +747,11 @@ pub(crate) fn parse_seventv_active_emotes(items: &[serde_json::Value]) -> Vec<Em
             out.push(Emote {
                 id: id.to_string(),
                 name: name.to_string(),
-                url: format!("https://cdn.7tv.app/emote/{}/1x.avif", id),
+                url: format!(
+                    "https://cdn.7tv.app/emote/{}/{}",
+                    id,
+                    seventv_file_name(emote_data)
+                ),
                 provider: EmoteProvider::SevenTV,
                 is_zero_width: Some((flags & 256) == 256),
                 local_url: None,
@@ -852,6 +1136,11 @@ impl EmoteService {
             }
         }
 
+        // Deltas applied from here on are journaled until this fetch ends, and
+        // replayed onto its answer before that is cached, so an edit made while
+        // the providers were answering is never lost to an older answer.
+        let refresh_window = begin_refresh_window(&cache_key);
+
         let is_twitch = provider.as_deref().unwrap_or("twitch") == "twitch";
         debug!(
             "[EmoteService] Fetching emotes concurrently for channel: {:?}, ID: {:?}, provider: {:?}",
@@ -1010,6 +1299,7 @@ impl EmoteService {
         // Update memory cache
         {
             let mut cache = self.cache.write().await;
+            replay_seventv_journal(&cache_key, refresh_window.start(), &mut emote_set.seven_tv);
             // Back-date the timestamp so a DEGRADED fetch expires fast (~10s)
             // instead of being pinned for the full 5 min. Degraded means: Twitch
             // failing, OR 7TV returning nothing, OR the 7TV CHANNEL fetch failing
@@ -1059,17 +1349,39 @@ impl EmoteService {
 
     /// Patch the cached set for `channel_id` with a live 7TV delta, so a window
     /// fetching after an EventAPI change gets the changed set without anyone
-    /// re-downloading the channel document. No-op when the channel is not
-    /// cached (the next fetch is fresh anyway).
+    /// re-downloading the channel document. A channel with no cached set gets
+    /// one made from the chat table this process holds for it, which the same
+    /// delta has just patched, so a cached answer is never older than the last
+    /// delta; with neither the next fetch is fresh anyway. Only a patched
+    /// entry reports what changed.
     pub async fn apply_seventv_delta_cached(
         &self,
         channel_id: &str,
         delta: &SeventvSetDelta,
         globals: &[Emote],
     ) -> Option<SeventvComposedDelta> {
+        {
+            let mut cache = self.cache.write().await;
+            if let Some(entry) = cache.get_mut(channel_id) {
+                return Some(apply_seventv_delta(&mut entry.set.seven_tv, delta, globals));
+            }
+        }
+        // The chat table is read with no cache lock held, so the two locks are
+        // never held together.
+        let room = journaled_room(channel_id)?;
+        let held = crate::services::irc_service::held_channel_emotes(&room).await?;
         let mut cache = self.cache.write().await;
-        let entry = cache.get_mut(channel_id)?;
-        Some(apply_seventv_delta(&mut entry.set.seven_tv, delta, globals))
+        if cache.peek(channel_id).is_none() {
+            cache.put(
+                channel_id.to_string(),
+                CachedEmoteSet {
+                    set: held,
+                    timestamp: SystemTime::now(),
+                    seven_tv_ok: fetch_was_whole(channel_id),
+                },
+            );
+        }
+        None
     }
 
     /// Fetch one 7TV channel document (a user's connection document or an emote
@@ -2307,6 +2619,70 @@ mod tests {
     }
 
     #[test]
+    fn active_emote_url_follows_the_files_the_cdn_lists() {
+        let parse = |files: serde_json::Value| {
+            let items = vec![serde_json::json!({
+                "id": "e1",
+                "name": "Fresh",
+                "data": { "id": "e1", "host": { "files": files } }
+            })];
+            parse_seventv_active_emotes(&items).remove(0).url
+        };
+        // Only webp listed: the URL is the webp, not an avif that does not exist.
+        assert_eq!(
+            parse(serde_json::json!([{ "name": "1x.webp" }, { "name": "2x.webp" }])),
+            "https://cdn.7tv.app/emote/e1/1x.webp"
+        );
+        // Both formats listed: avif wins at the same tier.
+        assert_eq!(
+            parse(serde_json::json!([{ "name": "1x.webp" }, { "name": "1x.avif" }])),
+            "https://cdn.7tv.app/emote/e1/1x.avif"
+        );
+        // No 1x listed: the nearest tier is used.
+        assert_eq!(
+            parse(serde_json::json!([{ "name": "3x.avif" }, { "name": "2x.webp" }])),
+            "https://cdn.7tv.app/emote/e1/2x.webp"
+        );
+        // Still processing: no files listed keeps the default.
+        assert_eq!(
+            parse(serde_json::json!([])),
+            "https://cdn.7tv.app/emote/e1/1x.avif"
+        );
+    }
+
+    #[test]
+    fn personal_emote_url_follows_the_files_the_cdn_lists() {
+        let parse = |files: serde_json::Value| {
+            let items = vec![serde_json::json!({
+                "id": "p1",
+                "name": "Mine",
+                "data": { "id": "p1", "state": ["PERSONAL"], "host": { "files": files } }
+            })];
+            parse_personal_emotes(&items).remove(0).url
+        };
+        // Only webp listed: the URL is the webp, not an avif that does not exist.
+        assert_eq!(
+            parse(serde_json::json!([{ "name": "1x.webp" }, { "name": "2x.webp" }])),
+            "https://cdn.7tv.app/emote/p1/1x.webp"
+        );
+        // Still processing: no files listed keeps the default.
+        assert_eq!(
+            parse(serde_json::json!([])),
+            "https://cdn.7tv.app/emote/p1/1x.avif"
+        );
+    }
+
+    #[test]
+    fn personal_emotes_skip_those_not_yet_approved() {
+        let items = vec![serde_json::json!({
+            "id": "p2",
+            "name": "Pending",
+            "data": { "id": "p2", "state": [], "host": { "files": [] } }
+        })];
+        assert!(parse_personal_emotes(&items).is_empty());
+    }
+
+    #[test]
     fn set_id_from_post_change_payload() {
         let json = serde_json::json!({ "emote_set": null, "emote_set_id": "01ABC" });
         assert_eq!(seventv_active_set_id(&json).as_deref(), Some("01ABC"));
@@ -2484,6 +2860,164 @@ mod tests {
         let out = apply_seventv_delta(&mut set, &remove, &[]);
         assert_eq!(names(&set), vec![("Y", "Pog")]);
         assert!(out.removed.is_empty() && out.added.is_empty());
+    }
+
+    fn add_delta(id: &str, name: &str) -> SeventvSetDelta {
+        SeventvSetDelta {
+            added: vec![stv(id, name)],
+            ..Default::default()
+        }
+    }
+
+    fn remove_delta(id: &str, name: &str) -> SeventvSetDelta {
+        SeventvSetDelta {
+            removed: vec![(id.into(), name.into())],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn replay_adds_a_row_the_older_answer_lacks() {
+        let channel = "journal-add";
+        let window = begin_refresh_window(channel);
+        journal_seventv_delta(channel, "room", &add_delta("X", "newOne"), &[]);
+        let mut fetched = vec![stv("A", "old")];
+
+        let (changed, _) = replay_seventv_journal(channel, window.start(), &mut fetched);
+
+        assert_eq!(changed, 1);
+        assert_eq!(names(&fetched), vec![("A", "old"), ("X", "newOne")]);
+    }
+
+    #[test]
+    fn replay_removal_wins_over_a_fetched_row() {
+        let channel = "journal-remove";
+        let window = begin_refresh_window(channel);
+        journal_seventv_delta(channel, "room", &remove_delta("B", "gone"), &[]);
+        let mut fetched = vec![stv("A", "old"), stv("B", "gone")];
+
+        replay_seventv_journal(channel, window.start(), &mut fetched);
+
+        assert_eq!(names(&fetched), vec![("A", "old")]);
+    }
+
+    #[test]
+    fn replay_renames_by_emote_id() {
+        let channel = "journal-rename";
+        let window = begin_refresh_window(channel);
+        let rename = SeventvSetDelta {
+            updated: vec![("B".into(), "before".into(), stv("B", "after"))],
+            ..Default::default()
+        };
+        journal_seventv_delta(channel, "room", &rename, &[]);
+        let mut fetched = vec![stv("A", "old"), stv("B", "before")];
+
+        replay_seventv_journal(channel, window.start(), &mut fetched);
+
+        assert_eq!(names(&fetched), vec![("A", "old"), ("B", "after")]);
+    }
+
+    #[test]
+    fn replay_skips_a_delta_applied_before_the_fetch_began() {
+        let channel = "journal-before";
+        journal_seventv_delta(channel, "room", &add_delta("X", "early"), &[]);
+        let window = begin_refresh_window(channel);
+        let mut fetched = vec![stv("A", "old")];
+
+        let (changed, _) = replay_seventv_journal(channel, window.start(), &mut fetched);
+
+        assert_eq!(changed, 0);
+        assert_eq!(names(&fetched), vec![("A", "old")]);
+    }
+
+    #[test]
+    fn replaying_twice_changes_nothing_the_second_time() {
+        let channel = "journal-twice";
+        let window = begin_refresh_window(channel);
+        journal_seventv_delta(channel, "room", &add_delta("X", "newOne"), &[]);
+        journal_seventv_delta(channel, "room", &remove_delta("B", "gone"), &[]);
+        let mut fetched = vec![stv("A", "old"), stv("B", "gone")];
+
+        let (first, next) = replay_seventv_journal(channel, window.start(), &mut fetched);
+        let rows = |set: &[Emote]| -> Vec<String> {
+            set.iter().map(|e| format!("{}:{}", e.id, e.name)).collect()
+        };
+        let once = rows(&fetched);
+        let (second, _) = replay_seventv_journal(channel, window.start(), &mut fetched);
+
+        assert_eq!(first, 2);
+        assert_eq!(second, 0);
+        assert_eq!(rows(&fetched), once);
+        // A later replay from where the first stopped has nothing new.
+        assert_eq!(replay_seventv_journal(channel, next, &mut fetched).0, 0);
+    }
+
+    #[test]
+    fn replay_keeps_the_order_deltas_were_applied() {
+        let channel = "journal-order";
+        let window = begin_refresh_window(channel);
+        journal_seventv_delta(channel, "room", &add_delta("X", "flip"), &[]);
+        journal_seventv_delta(channel, "room", &remove_delta("X", "flip"), &[]);
+        let mut fetched = vec![stv("A", "old")];
+
+        replay_seventv_journal(channel, window.start(), &mut fetched);
+
+        assert_eq!(names(&fetched), vec![("A", "old")]);
+    }
+
+    #[test]
+    fn the_journal_keeps_what_an_open_fetch_needs_and_drops_the_rest() {
+        let t0 = Instant::now();
+        let later = t0 + SEVENTV_JOURNAL_KEEP + Duration::from_secs(1);
+
+        let mut idle = DeltaJournal::default();
+        idle.push("c", "room", &add_delta("X", "one"), &[], t0);
+        idle.trim(later);
+        assert!(idle.channels.is_empty());
+
+        let mut open = DeltaJournal::default();
+        let (token, start) = open.begin("c");
+        open.push("c", "room", &add_delta("X", "one"), &[], t0);
+        open.trim(later);
+        assert_eq!(open.since("c", start).0.len(), 1);
+        open.end("c", token, later);
+        assert!(open.channels.is_empty());
+        assert!(open.in_flight.is_empty());
+    }
+
+    #[test]
+    fn the_journal_holds_a_bounded_number_of_deltas_per_channel() {
+        let t0 = Instant::now();
+        let mut journal = DeltaJournal::default();
+        let (_token, start) = journal.begin("c");
+        for i in 0..(SEVENTV_JOURNAL_MAX + 40) {
+            journal.push("c", "room", &add_delta(&format!("E{i}"), &format!("n{i}")), &[], t0);
+        }
+        assert_eq!(journal.since("c", start).0.len(), SEVENTV_JOURNAL_MAX);
+    }
+
+    #[tokio::test]
+    async fn a_cached_set_carries_a_delta_applied_after_it_was_stored() {
+        let svc = EmoteService::new();
+        let channel = "cache-patched";
+        let mut set = EmoteSet::new();
+        set.seven_tv = vec![stv("A", "old")];
+        svc.cache.write().await.put(
+            channel.to_string(),
+            CachedEmoteSet {
+                set,
+                timestamp: SystemTime::now(),
+                seven_tv_ok: true,
+            },
+        );
+
+        svc.apply_seventv_delta_cached(channel, &add_delta("X", "newOne"), &[]).await;
+
+        let (cached, _) = svc
+            .fetch_channel_emotes_checked(None, Some(channel.to_string()), None, None)
+            .await
+            .expect("served from the cache");
+        assert_eq!(names(&cached.seven_tv), vec![("A", "old"), ("X", "newOne")]);
     }
 
     /// Live proof that the composed dictionary is complete for a real channel:

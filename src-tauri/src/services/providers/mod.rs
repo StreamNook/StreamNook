@@ -294,7 +294,7 @@ pub async fn publish_chat_message(msg: &ChatMessage) {
         let frame = crate::services::chat_bridge_route::BridgeFrame::row(
             &msg.channel,
             json,
-            msg.metadata.is_mentioned || msg.metadata.is_reply_to_me,
+            crate::services::mention_inbox::pinged(&verdict),
         );
         match IrcService::broadcaster().await {
             Some(tx) => {

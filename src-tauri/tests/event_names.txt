@@ -71,6 +71,7 @@ mirrored-notification
 mirrored-notification-activate
 multi-nook://meta
 multi-nook://raid
+multi-nook://tile-ended
 multichat-popout-closed
 my-clips://changed
 new-favorite-drops
@@ -134,6 +135,7 @@ watch-session://stream-update
 watch-session://waiting
 watch-session://went-live
 watched-chest-claimed
+webview-gpu-failed
 whisper-archive-changed
 whisper-conversation-updated
 whisper-import-complete

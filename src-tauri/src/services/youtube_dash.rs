@@ -139,6 +139,10 @@ struct Session {
     audio_head: u64,
     video_head_at: Instant,
     audio_head_at: Instant,
+    /// When the video head last moved forward. `video_head_at` is stamped on every
+    /// answer, including one that repeats the same head, so it cannot say how long
+    /// the broadcast has been standing still.
+    video_head_moved_at: Instant,
     /// Segments held back from the edge, per track, grown when the origin proves
     /// the edge is further back than assumed. Self-tuning because the right
     /// value differs per broadcast and a fixed constant is just a guess that
@@ -185,9 +189,11 @@ struct DashStream {
     /// `last_segment_warn` on purpose: one throttles failures, this throttles a
     /// diagnostic about successes, and sharing one would hide whichever is rarer.
     last_cost_log: Mutex<Option<Instant>>,
-    /// Touched by every request. The reaper reads it; nothing here runs on a
-    /// timer, so a stream that went away without a stop is collected lazily.
-    last_seen: Mutex<Instant>,
+    /// Set while a broadcast check for this stream is running, so at most one is
+    /// ever in flight.
+    end_check_inflight: std::sync::atomic::AtomicBool,
+    /// When the last broadcast check for this stream started.
+    last_end_check: Mutex<Option<Instant>>,
 }
 
 static REGISTRY: Lazy<Mutex<HashMap<String, Arc<DashStream>>>> =
@@ -196,12 +202,6 @@ static REGISTRY: Lazy<Mutex<HashMap<String, Arc<DashStream>>>> =
 /// Concurrent relayed streams. Above this a stream stays on the 1080p HLS
 /// ladder rather than queueing behind the one shared resolver webview.
 const MAX_DASH_STREAMS: usize = 4;
-
-/// A stream nothing has requested for this long is gone: the player closed
-/// without a stop, or the window was destroyed. Swept on the next `start`
-/// rather than by a ticker, because a ticker would turn every leaked entry into
-/// a hidden webview resolve every fifteen seconds.
-const IDLE_EVICT: Duration = Duration::from_secs(120);
 
 /// Ids reach the URL path, so keep them to something that needs no escaping and
 /// cannot contain the separator `route_of` splits on.
@@ -328,16 +328,6 @@ impl DashStream {
         Some((g.video_url.clone(), g.audio_url.clone()))
     }
 
-    fn touch(&self) {
-        if let Ok(mut g) = self.last_seen.lock() {
-            *g = Instant::now();
-        }
-    }
-
-    fn idle_for(&self) -> Duration {
-        self.last_seen.lock().ok().map(|g| g.elapsed()).unwrap_or_default()
-    }
-
     /// One fragment, carrying this stream's playback identity and recording the
     /// head it reports.
     ///
@@ -396,6 +386,9 @@ impl DashStream {
                     h - *cur
                 );
             }
+            if video && h > *cur {
+                s.video_head_moved_at = Instant::now();
+            }
             *cur = h;
             *at = Instant::now();
         }
@@ -451,19 +444,7 @@ pub async fn start(
     if !valid_id(stream_id) {
         return Err(anyhow!("unusable stream id '{}'", stream_id));
     }
-    // Lazy reaper. Nothing in this module runs on a timer (a ticker would turn
-    // every leaked entry into a hidden webview resolve every fifteen seconds),
-    // so abandoned streams are collected the next time one starts.
-    reap_idle();
-    {
-        let reg = REGISTRY.lock().map_err(|_| anyhow!("registry poisoned"))?;
-        if !reg.contains_key(stream_id) && reg.len() >= MAX_DASH_STREAMS {
-            return Err(anyhow!(
-                "already relaying {} streams; this one stays on the HLS ladder",
-                reg.len()
-            ));
-        }
-    }
+    admit(stream_id)?;
     // One nonce per stream, minted here. This used to be a process-global that
     // was cleared on every start, which rewrote the nonce a running stream was
     // mid-playback on.
@@ -525,6 +506,7 @@ pub async fn start(
         audio_head: ahead.unwrap_or(head),
         video_head_at: Instant::now(),
         audio_head_at: Instant::now(),
+        video_head_moved_at: Instant::now(),
         video_backoff: EDGE_BACKOFF_START,
         audio_backoff: EDGE_BACKOFF_START,
     };
@@ -544,7 +526,8 @@ pub async fn start(
         inflight: Mutex::new(HashMap::new()),
         last_segment_warn: Mutex::new(None),
         last_cost_log: Mutex::new(None),
-        last_seen: Mutex::new(Instant::now()),
+        end_check_inflight: std::sync::atomic::AtomicBool::new(false),
+        last_end_check: Mutex::new(None),
     });
     REGISTRY
         .lock()
@@ -583,21 +566,19 @@ pub async fn start(
     ))
 }
 
-/// Drop streams nothing has asked about for a while.
-///
-/// A leaked entry is inert (every clock in this module is read inside `handle`
-/// on an incoming request), but it holds two init segments plus up to six
-/// remuxed fragments, and it counts against MAX_DASH_STREAMS, so the next real
-/// stream would be refused and silently fall back to 1080p.
-fn reap_idle() {
-    let Ok(mut reg) = REGISTRY.lock() else { return };
-    reg.retain(|id, st| {
-        let keep = st.idle_for() < IDLE_EVICT;
-        if !keep {
-            log::info!("[YouTubeDash] {}: idle, dropping the relay", id);
-        }
-        keep
-    });
+/// Whether a stream under `stream_id` may be relayed: always for an id that is
+/// already registered (a quality change replaces it), and otherwise only while
+/// fewer than MAX_DASH_STREAMS are relayed. Nothing is dropped to make room: a
+/// stream ends with its stop, a replacement or a teardown, never on a timer.
+fn admit(stream_id: &str) -> Result<()> {
+    let reg = REGISTRY.lock().map_err(|_| anyhow!("registry poisoned"))?;
+    if !reg.contains_key(stream_id) && reg.len() >= MAX_DASH_STREAMS {
+        return Err(anyhow!(
+            "already relaying {} streams; this one stays on the HLS ladder",
+            reg.len()
+        ));
+    }
+    Ok(())
 }
 
 /// Drop ONE stream. A missing id is a deliberate no-op: this is called from the
@@ -819,6 +800,7 @@ impl DashStream {
                     itag,
                     e
                 );
+                me.check_end_if_due(&video_id);
             }
         });
     }
@@ -873,6 +855,120 @@ async fn pick_url(fresh: &str, current: &str) -> String {
     // the handshake is paid here rather than on the next segment.
     probe(fresh).await;
     fresh.to_string()
+}
+
+/// How long the video head may stand still before the broadcast is checked.
+const END_CHECK_AFTER_DEFAULT: Duration = Duration::from_secs(20);
+
+/// The least time between two broadcast checks of one stream.
+const END_CHECK_EVERY_DEFAULT: Duration = Duration::from_secs(30);
+
+/// A whole number of seconds from the environment, or the default when the
+/// variable is unset, not a number, or zero.
+fn env_secs(name: &str, default: Duration) -> Duration {
+    std::env::var(name)
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|s| *s > 0)
+        .map(Duration::from_secs)
+        .unwrap_or(default)
+}
+
+/// `SN_YT_END_CHECK_AFTER_SECS` overrides the stall time.
+static END_CHECK_AFTER: Lazy<Duration> =
+    Lazy::new(|| env_secs("SN_YT_END_CHECK_AFTER_SECS", END_CHECK_AFTER_DEFAULT));
+
+/// `SN_YT_END_CHECK_EVERY_SECS` overrides the interval between checks.
+static END_CHECK_EVERY: Lazy<Duration> =
+    Lazy::new(|| env_secs("SN_YT_END_CHECK_EVERY_SECS", END_CHECK_EVERY_DEFAULT));
+
+/// Whether the head has stood still long enough to ask the broadcast's state.
+/// The clock is passed in so the answer can be tested without waiting.
+fn head_stalled(now: Instant, head_moved_at: Instant, after: Duration) -> bool {
+    now.saturating_duration_since(head_moved_at) >= after
+}
+
+/// Clears a stream's in-flight broadcast check on every exit of the task that
+/// owns it, including a panic.
+struct EndCheckGuard(Arc<DashStream>);
+
+impl Drop for EndCheckGuard {
+    fn drop(&mut self) {
+        self.0
+            .end_check_inflight
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+impl DashStream {
+    /// Claim the right to run a broadcast check: true when none is running and
+    /// `every` has passed since the last one started. A caller that gets true
+    /// must clear `end_check_inflight` when its check is over.
+    fn begin_end_check(&self, now: Instant, every: Duration) -> bool {
+        use std::sync::atomic::Ordering;
+        if self.end_check_inflight.swap(true, Ordering::SeqCst) {
+            return false;
+        }
+        let allowed = match self.last_end_check.lock() {
+            Ok(mut last) => {
+                let open = last.map_or(true, |t| now.saturating_duration_since(t) >= every);
+                if open {
+                    *last = Some(now);
+                }
+                open
+            }
+            Err(_) => false,
+        };
+        if !allowed {
+            self.end_check_inflight.store(false, Ordering::SeqCst);
+        }
+        allowed
+    }
+
+    /// Start a broadcast check unless one is running or one started too recently.
+    /// Returns immediately; the check runs on its own task.
+    fn check_end_if_due(self: &Arc<Self>, video_id: &str) {
+        if self.id == crate::services::stream_server::SOLO_STREAM_ID {
+            return;
+        }
+        if !self.begin_end_check(Instant::now(), *END_CHECK_EVERY) {
+            return;
+        }
+        let guard = EndCheckGuard(Arc::clone(self));
+        let me = Arc::clone(self);
+        let video_id = video_id.to_string();
+        tokio::spawn(async move {
+            let _guard = guard;
+            me.report_if_broadcast_ended(&video_id).await;
+        });
+    }
+
+    /// Check the broadcast once the video head has stood still for
+    /// `END_CHECK_AFTER`, whether or not the urls are gated.
+    fn check_end_if_head_stalled(self: &Arc<Self>) {
+        let (video_id, moved_at) = {
+            let Ok(g) = self.session.lock() else { return };
+            (g.video_id.clone(), g.video_head_moved_at)
+        };
+        if head_stalled(Instant::now(), moved_at, *END_CHECK_AFTER) {
+            self.check_end_if_due(&video_id);
+        }
+    }
+
+    /// Ask where the broadcast stands, and tell the page when it is over. Only a
+    /// tile that is still this registered stream is reported. Anything but an
+    /// ended broadcast reports nothing.
+    async fn report_if_broadcast_ended(self: &Arc<Self>, video_id: &str) {
+        let Some(crate::services::providers::youtube_media::Broadcast::Ended) =
+            crate::services::providers::youtube_media::broadcast_state(video_id).await
+        else {
+            return;
+        };
+        if lookup(&self.id).is_some_and(|current| Arc::ptr_eq(&current, self)) {
+            log::info!("[YouTubeDash] {}: the broadcast has ended", self.id);
+            crate::services::multi_nook_server::report_tile_ended(&self.id);
+        }
+    }
 }
 
 impl DashStream {
@@ -937,8 +1033,17 @@ async fn handle(full: String) -> Result<warp::http::Response<Bytes>, std::conver
         // stopped, and hls.js treats the two differently.
         return Ok(fail_because(503, format!("no session for stream {}", id)));
     };
-    // Proof of life for the reaper.
-    st.touch();
+    // A player polling the solo stream's playlists is loading it, which is
+    // what keeps the stream from reading as parked while it plays.
+    if path.ends_with(".m3u8") {
+        if id == crate::services::stream_server::SOLO_STREAM_ID {
+            crate::services::stream_server::note_solo_playlist_request();
+        } else {
+            // A grid tile's player polling its playlists keeps the tile from
+            // reading as parked.
+            crate::services::multi_nook_server::note_tile_playlist_request(id);
+        }
+    }
     // Every request goes through here, so the refresh rides the player's own
     // cadence instead of needing a timer of its own. It does not block: the
     // current urls stay good for another ten seconds or so.
@@ -1004,6 +1109,12 @@ async fn handle(full: String) -> Result<warp::http::Response<Bytes>, std::conver
                     let base = if video { v } else { a };
                     st.note_head(video, probe_head(&base).await);
                 }
+            }
+            // A tile whose video head has stopped may be over. Read after the
+            // probe above, so a player that simply paused polling is not mistaken
+            // for a broadcast that stopped.
+            if video {
+                st.check_end_if_head_stalled();
             }
             st.session
                 .lock()
@@ -1363,6 +1474,7 @@ mod tests {
             audio_head,
             video_head_at: Instant::now(),
             audio_head_at: Instant::now(),
+            video_head_moved_at: Instant::now(),
             video_backoff: EDGE_BACKOFF_START,
             audio_backoff: EDGE_BACKOFF_START,
         }
@@ -1535,8 +1647,21 @@ mod tests {
             inflight: Mutex::new(HashMap::new()),
             last_segment_warn: Mutex::new(None),
             last_cost_log: Mutex::new(None),
-            last_seen: Mutex::new(Instant::now()),
+            end_check_inflight: std::sync::atomic::AtomicBool::new(false),
+            last_end_check: Mutex::new(None),
         })
+    }
+
+    #[test]
+    fn admitting_another_stream_never_drops_a_registered_one() {
+        let old = a_stream("admit-old", a_session(5.0, 100));
+        REGISTRY.lock().unwrap().insert("admit-old".to_string(), old);
+
+        assert!(admit("admit-new").is_ok());
+        assert!(lookup("admit-old").is_some(), "a registered stream is only ever stopped or replaced");
+        assert!(admit("admit-old").is_ok(), "an id already registered is always admitted");
+
+        REGISTRY.lock().unwrap().remove("admit-old");
     }
 
     /// THE bug this whole refactor exists to remove. Sequence numbers restart per
@@ -1638,6 +1763,68 @@ mod tests {
         let st = a_stream("a", a_session(5.0, 100)); // plain https://example/v
         st.force_rotate.store(true, std::sync::atomic::Ordering::SeqCst);
         assert!(st.rotation_due().is_none());
+    }
+
+    #[test]
+    fn a_head_that_stopped_is_stalled_only_after_the_wait() {
+        let moved = Instant::now();
+        let after = Duration::from_secs(20);
+        assert!(!head_stalled(moved, moved, after));
+        assert!(!head_stalled(moved + Duration::from_secs(19), moved, after));
+        assert!(head_stalled(moved + after, moved, after));
+        assert!(head_stalled(moved + Duration::from_secs(90), moved, after));
+        // A clock reading before the stamp never counts as a stall.
+        assert!(!head_stalled(moved, moved + Duration::from_secs(5), after));
+    }
+
+    #[test]
+    fn the_video_head_stamp_moves_only_when_the_head_advances() {
+        let st = a_stream("a", a_session(5.0, 100));
+        let stamp = |st: &Arc<DashStream>| st.session.lock().unwrap().video_head_moved_at;
+        let first = stamp(&st);
+        std::thread::sleep(Duration::from_millis(5));
+        // The same head again is an answer, not progress.
+        st.note_head(true, Some(100));
+        assert_eq!(stamp(&st), first);
+        // The audio head is a different clock.
+        st.note_head(false, Some(200));
+        assert_eq!(stamp(&st), first);
+        st.note_head(true, Some(101));
+        assert!(stamp(&st) > first);
+    }
+
+    #[test]
+    fn a_burst_of_due_checks_starts_one_and_the_next_waits_out_the_interval() {
+        let st = a_stream("a", a_session(5.0, 100));
+        let every = Duration::from_secs(30);
+        let t0 = Instant::now();
+        let started = (0..10).filter(|_| st.begin_end_check(t0, every)).count();
+        assert_eq!(started, 1, "a burst must start exactly one check");
+
+        // While it runs, nothing else starts, however late.
+        assert!(!st.begin_end_check(t0 + every * 2, every));
+
+        // It finishes; the interval has not passed yet.
+        st.end_check_inflight.store(false, std::sync::atomic::Ordering::SeqCst);
+        assert!(!st.begin_end_check(t0 + Duration::from_secs(29), every));
+        assert!(
+            !st.end_check_inflight.load(std::sync::atomic::Ordering::SeqCst),
+            "a refused claim must not leave the flag set"
+        );
+
+        // Once the interval has passed, exactly one more starts.
+        assert!(st.begin_end_check(t0 + every, every));
+        assert!(!st.begin_end_check(t0 + every, every));
+    }
+
+    #[test]
+    fn the_end_check_guard_clears_the_flag_when_dropped() {
+        let st = a_stream("a", a_session(5.0, 100));
+        assert!(st.begin_end_check(Instant::now(), Duration::from_secs(30)));
+        let guard = EndCheckGuard(Arc::clone(&st));
+        assert!(st.end_check_inflight.load(std::sync::atomic::Ordering::SeqCst));
+        drop(guard);
+        assert!(!st.end_check_inflight.load(std::sync::atomic::Ordering::SeqCst));
     }
 
     #[test]
