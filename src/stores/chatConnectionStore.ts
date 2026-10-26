@@ -39,6 +39,8 @@ import { streamProvider } from '../utils/streamProvider';
 import { parseBadges } from '../services/twitchBadges';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { createChatPerfSampler, watchLongFrames } from './chatPerfSampler';
 import { fetchAllEmotes, fetchKickChannelEmotes, fetchYouTubeChannelEmotes, enhanceRustEmotes, type Emote, type EmoteSet } from '../services/emoteService';
 import { Logger } from '../utils/logger';
 import { useAppStore } from './AppStore';
@@ -49,6 +51,7 @@ import { normalizeForRepeat, isPrivilegedChatter } from '../utils/messageRepeat'
 import type { SongMatch } from '../utils/songId';
 import type { SeventvEmoteChange } from '../components/overlay/overlayConfig';
 import type { BackendChatMessage } from '../services/twitchChat';
+import { patchHeldRows } from './heldRowPatch';
 
 // Hard caps borrowed from the prior single-channel hook. Keeping them as
 // per-channel limits means a 5-channel MultiChat caps memory at 5x the
@@ -766,6 +769,35 @@ let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
 
 const FLUSH_MAX_LATENCY_MS = 250;
 
+// Live chat timing for the log (see chatPerfSampler): row age, the wait from a
+// row's arrival to its flush, and the long frames in between.
+const chatPerf = createChatPerfSampler();
+let chatPerfWatching = false;
+/** When the oldest row still waiting for a flush was queued. */
+let firstQueuedAt: number | null = null;
+
+function chatPerfLabel(): string {
+  try {
+    return getCurrentWindow().label;
+  } catch {
+    return 'window';
+  }
+}
+
+/** A live Twitch row arriving in a window someone is looking at. Rows held
+ *  back for a hidden tab arrive late on purpose and are left out. */
+function noteChatPerfRow(slice: ChannelSlice, parsed: { own_optimistic?: boolean; provider?: ProviderId; timestamp?: string }): void {
+  if (parsed.own_optimistic || (parsed.provider ?? 'twitch') !== 'twitch') return;
+  if (slice.heldRows > 0 || isWindowHidden()) return;
+  if (!chatPerfWatching) {
+    chatPerfWatching = true;
+    watchLongFrames((ms, script) => chatPerf.noteLongFrame(ms, script));
+  }
+  chatPerf.noteRowAge(Date.now() - Number(parsed.timestamp));
+  const line = chatPerf.take(chatPerfLabel());
+  if (line) Logger.info(line);
+}
+
 function runFlush(): void {
   // Disarm both schedulers and null the handles BEFORE flushing, so the next
   // queueMessage re-arms cleanly and a throw inside flushPending can never strand
@@ -778,6 +810,8 @@ function runFlush(): void {
     clearTimeout(timeoutHandle);
     timeoutHandle = null;
   }
+  if (firstQueuedAt !== null && !isWindowHidden()) chatPerf.notePaintWait(performance.now() - firstQueuedAt);
+  firstQueuedAt = null;
   flushPending();
 }
 
@@ -891,6 +925,7 @@ function flushPendingNow(): void {
 // Queue a brand-new message for the next coalesced flush instead of rendering it
 // immediately. Dedup + reconciliation have already run on the caller's side.
 function queueMessage(channelKey: string, msg: any): void {
+  if (firstQueuedAt === null) firstQueuedAt = performance.now();
   let q = pendingByChannel.get(channelKey);
   if (!q) {
     q = [];
@@ -1427,6 +1462,14 @@ function applyHistorySegments(channel: string, rows: unknown[]): void {
       }
       if (next) s.messages = next;
     });
+    // Rows this window holds but has not drawn: a join's backlog wait and the
+    // next frame's queue. A re-stamp can land while they sit there (a 7TV
+    // personal set arriving as the channel opens, a parked tab's rows and their
+    // re-stamp released together), and no backlog merge would ever name them.
+    const slice = getSlice(key);
+    for (const held of [slice?.historyHold?.held, pendingByChannel.get(key)]) {
+      if (held) patchHeldRows(held, byId, (m, row) => withHistorySegments(m as BackendChatMessage, row));
+    }
   }
   if (byId.size === 0) return;
   const now = Date.now();
@@ -3124,6 +3167,7 @@ function appendStructuredMessage(slice: ChannelSlice, parsed: any) {
     repeatSuppressed;
 
   if (!activityOnly) {
+    noteChatPerfRow(slice, parsed);
     queueMessage(slice.channel, parsed);
   }
 
@@ -3794,6 +3838,8 @@ export async function sendChannelMessage(
   // The row is built in Rust by the same parser as received messages (segments,
   // emotes, reply info), so it renders exactly as the rest of chat. Requested
   // alongside the send rather than before it: the send must not wait on it.
+  const sendT0 = performance.now();
+  let rowMs = -1;
   const built = invoke<BackendChatMessage | null>('build_own_chat_message', {
     message: {
       channel: key,
@@ -3823,8 +3869,20 @@ export async function sendChannelMessage(
   // Awaited below; this only stops a fast failure reporting as unhandled while
   // the row is still being built.
   sending.catch(() => {});
+  // A slow send in the log, whichever way it ended: how long your row took to
+  // show, and how long Twitch took to answer.
+  const noteSend = () => {
+    const sendMs = performance.now() - sendT0;
+    if (rowMs < 0 || rowMs > 300 || sendMs > 1500) {
+      Logger.info(
+        `[ChatPerf] send: own row ${rowMs < 0 ? 'still building' : `after ${Math.round(rowMs)}ms`}, Twitch answered after ${Math.round(sendMs)}ms`,
+      );
+    }
+  };
+  void sending.then(noteSend, noteSend);
 
   const row = await built;
+  rowMs = performance.now() - sendT0;
   if (row) {
     slice.seenMessageIds.add(tempId);
     pushMessage(slice, { ...row, own_optimistic: true });
