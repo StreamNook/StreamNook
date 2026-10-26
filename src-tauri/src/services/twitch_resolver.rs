@@ -308,6 +308,10 @@ query VideoAccessToken_Clip($slug: ID!) {\n\
     video {\n\
       id\n\
     }\n\
+    game {\n\
+      id\n\
+      name\n\
+    }\n\
     broadcaster {\n\
       login\n\
     }\n\
@@ -919,6 +923,30 @@ pub struct ClipSource {
     pub broadcaster_login: Option<String>,
 }
 
+/// The Twitch category a clip or VOD was recorded under, named the way Helix
+/// names a live stream's (`game_id` / `game_name`), so the player can show
+/// and open it like a live one.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct MediaCategory {
+    pub id: String,
+    pub name: String,
+}
+
+/// A GQL `game { id name }` object as a category. A video with no category
+/// comes back `null`, and one without a name has nothing to show, so both
+/// give None.
+pub fn media_category(game: Option<&Value>) -> Option<MediaCategory> {
+    let game = game.filter(|g| !g.is_null())?;
+    let name = str_field(game, "name")?.trim().to_string();
+    if name.is_empty() {
+        return None;
+    }
+    Some(MediaCategory {
+        id: str_field(game, "id").unwrap_or_default(),
+        name,
+    })
+}
+
 #[derive(Debug, Clone)]
 pub struct ResolvedMedia {
     pub url: String,
@@ -926,6 +954,8 @@ pub struct ResolvedMedia {
     pub available: Vec<String>,
     /// Clip resolution only; None for a live stream or a VOD.
     pub clip_source: Option<ClipSource>,
+    /// Clip resolution only (a VOD's comes from `fetch_vod_info`).
+    pub category: Option<MediaCategory>,
 }
 
 /// Extract the numeric VOD id from a `.../videos/123456789` URL.
@@ -1049,6 +1079,7 @@ pub async fn resolve_vod(
         quality: label,
         available: quality_names(&variants),
         clip_source: None,
+        category: None,
     })
 }
 
@@ -1199,6 +1230,7 @@ pub async fn resolve_clip(
         quality: chosen,
         available,
         clip_source: Some(clip_source),
+        category: media_category(clip.get("game")),
     })
 }
 
@@ -1824,6 +1856,8 @@ pub struct VodInfo {
     pub owner_login: Option<String>,
     pub title: Option<String>,
     pub thumbnail_url: Option<String>,
+    /// The category the video is filed under. None when it has none.
+    pub category: Option<MediaCategory>,
     /// Audio ranges Twitch muted, merged and clamped. Empty means none are
     /// KNOWN: on a recording VOD Twitch has not run audio recognition yet,
     /// which is not the same as "no mutes" (the GQL connection comes back
@@ -1931,6 +1965,7 @@ pub async fn fetch_vod_info(vod_id: &str) -> VodInfo {
         owner_login: None,
         title: None,
         thumbnail_url: None,
+        category: None,
         muted_segments: Vec::new(),
         chapters: Vec::new(),
         storyboard: None,
@@ -1945,6 +1980,7 @@ pub async fn fetch_vod_info(vod_id: &str) -> VodInfo {
         video(id: $id) {
             id status lengthSeconds recordedAt title
             owner { login }
+            game { id name }
             previewThumbnailURL(width: 440, height: 248)
             muteInfo { mutedSegmentConnection { nodes { offset duration } } }
             seekPreviewsURL
@@ -2027,6 +2063,7 @@ pub async fn fetch_vod_info(vod_id: &str) -> VodInfo {
             .map(|s| s.to_lowercase()),
         title: str_field(video, "title"),
         thumbnail_url: str_field(video, "previewThumbnailURL"),
+        category: media_category(video.get("game")),
         muted_segments: crate::services::muted_segments::normalize(&mute_nodes, length_seconds),
         chapters: vod_chapters::normalize(&chapter_nodes, length_seconds),
         storyboard,
@@ -2111,5 +2148,42 @@ mod live_archive_tests {
         a.recorded_at = None;
         a.stream_created_at = None;
         assert_eq!(a.position_for(at("2026-09-06T07:03:59Z"), Some(60.0)), 0.0);
+    }
+}
+
+#[cfg(test)]
+mod media_category_tests {
+    use super::*;
+
+    #[test]
+    fn a_named_game_is_the_category() {
+        let game = json!({ "id": "32982", "name": "Grand Theft Auto V" });
+        assert_eq!(
+            media_category(Some(&game)),
+            Some(MediaCategory {
+                id: "32982".into(),
+                name: "Grand Theft Auto V".into()
+            })
+        );
+    }
+
+    #[test]
+    fn no_game_or_no_name_is_none() {
+        assert_eq!(media_category(None), None);
+        assert_eq!(media_category(Some(&Value::Null)), None);
+        assert_eq!(media_category(Some(&json!({ "id": "1", "name": "  " }))), None);
+        assert_eq!(media_category(Some(&json!({ "id": "1" }))), None);
+    }
+
+    #[test]
+    fn a_name_without_an_id_still_shows() {
+        let got = media_category(Some(&json!({ "name": "Just Chatting" }))).unwrap();
+        assert_eq!((got.id.as_str(), got.name.as_str()), ("", "Just Chatting"));
+    }
+
+    #[test]
+    fn the_clip_document_asks_for_the_game() {
+        let compact: String = CLIP_ACCESS_TOKEN_QUERY.split_whitespace().collect();
+        assert!(compact.contains("game{idname}"), "{compact}");
     }
 }

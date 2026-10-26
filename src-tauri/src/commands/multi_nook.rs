@@ -1085,6 +1085,7 @@ pub async fn promote_multi_nook_tile(
         proxy_region: status.and_then(|s| s.proxy_region),
         available: promotion.available.clone(),
         clip_source: None,
+        category: None,
         vod: None,
         kind: None,
     }))

@@ -3650,7 +3650,8 @@ const VideoPlayer = () => {
                 </h3>
                 </Tooltip>
               )}
-              {currentStream.game_name && (
+              {/* A clip or VOD keeps its views and date when it has no category. */}
+              {(currentStream.game_name || currentMediaType === 'clip' || currentMediaType === 'video') && (
                 // With the chip the line is a flex row, so the date beside it
                 // centers on the chip instead of riding its text baseline.
                 <p className={`text-white/70 text-xs drop-shadow-md ${categoryLink ? 'mt-1 flex items-center gap-1.5 min-w-0' : 'mt-0.5'}`}>
@@ -3686,9 +3687,14 @@ const VideoPlayer = () => {
                       </span>
                     </button>
                   ) : (
-                    currentStream.game_name
+                    currentStream.game_name || null
                   )}
-                  {categorySuffix && (categoryLink ? <span className="truncate">{categorySuffix}</span> : ` ${categorySuffix}`)}
+                  {categorySuffix &&
+                    (!currentStream.game_name
+                      ? categorySuffix.replace(/^• /, '')
+                      : categoryLink
+                        ? <span className="truncate">{categorySuffix}</span>
+                        : ` ${categorySuffix}`)}
                 </p>
               )}
             </div>

@@ -58,6 +58,9 @@ export type StreamStartResult = {
   /** Clips only: where this clip sits inside its source broadcast, so chat replay can
    *  address the right comments. Playback never uses it. */
   clip_source?: ClipSource;
+  /** Clips and VODs: the Twitch category they were recorded under. Absent for live
+   *  (the stream row carries it) and for a video filed under none. */
+  category?: { id: string; name: string };
   /** How the player should ingest `url`. Absent (every Twitch path) means HLS. */
   kind?: 'hls' | 'flv' | 'mp4';
   /** VOD starts only: status, length, where to begin, and whether this VOD is
@@ -2274,7 +2277,9 @@ export const useAppStore = create<AppState>((set, get) => ({
         user_login: vodOwnerLogin,
         title: info.title || `Twitch ${type}`,
         viewer_count: info.view_count || 0,
-        game_name: type === 'clip' ? 'Twitch Clip' : 'Twitch Video',
+        // The category Rust read off the clip or VOD; none leaves the slot empty.
+        game_id: result.category?.id || undefined,
+        game_name: result.category?.name ?? '',
         thumbnail_url: info.thumbnail_url || '',
         // Filled in by the lookup below. Neither TwitchVideo nor TwitchClip carries the
         // broadcaster's avatar, and leaving it blank is why a VOD or clip showed no

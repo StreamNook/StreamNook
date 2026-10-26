@@ -112,6 +112,11 @@ pub struct StreamStartResult {
     /// for live/VOD, and for a clip whose parent VOD has expired.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub clip_source: Option<tr::ClipSource>,
+    /// Clips and VODs: the category they were recorded under, which the player
+    /// shows where a live stream shows its `game_name`. Absent for live (the
+    /// stream row carries it) and when Twitch files the video under none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category: Option<tr::MediaCategory>,
     /// The quality menu the resolver discovered for this stream (variant names
     /// plus best/worst). The player builds its quality selector from this, so it
     /// always matches what was actually resolved — no separate probe needed.
@@ -361,6 +366,7 @@ async fn start_provider_stream(
         proxy_region: None,
         available: hls_master::quality_names(&resolved.qualities),
         clip_source: None,
+        category: None,
         vod: None,
         kind: Some("hls".to_string()),
     })
@@ -654,6 +660,7 @@ pub async fn resolve_clip_media(
         proxy_region: None,
         available: r.available,
         clip_source: r.clip_source,
+        category: r.category,
         vod: None,
         kind: None,
     })
@@ -723,6 +730,7 @@ async fn start_stream_inner(
             proxy_region: None,
             available: r.available,
             clip_source: r.clip_source,
+            category: r.category,
             vod: None,
             kind: None,
         });
@@ -875,6 +883,7 @@ async fn start_stream_inner(
         proxy_region: r.status.proxy_region,
         available: r.available,
         clip_source: None,
+        category: None,
         vod: None,
         kind: None,
     })
@@ -894,6 +903,7 @@ fn cast_placeholder(provider: &str, channel: &str, quality: &str) -> StreamStart
         proxy_region: None,
         available: Vec::new(),
         clip_source: None,
+        category: None,
         vod: None,
         kind: Some("cast".to_string()),
     }
@@ -963,6 +973,7 @@ async fn start_vod(
         proxy_region: None,
         available: r.available,
         clip_source: None,
+        category: info.category,
         kind: None,
         vod: Some(VodStartInfo {
             video_id: vod_id.to_string(),
