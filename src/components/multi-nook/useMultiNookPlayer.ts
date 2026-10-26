@@ -36,6 +36,7 @@ import {
 import { followLiveAfterResync } from '../../utils/liveResync';
 import { watchStalls } from '../../utils/stallWatchdog';
 import { createRecovery } from '../../utils/recovery';
+import { isViewerPlay, shouldKeepHeldPause } from './keepHeldPause';
 
 /** Whether the tile `streamId` plays the signed-in account's own Twitch
  *  channel, compared by login the way the Own channel shortcut finds it. */
@@ -82,6 +83,11 @@ export const useMultiNookPlayer = ({
   const hlsRef = useRef<Hls | null>(null);
   const playerRef = useRef<Plyr | null>(null);
   const userInitiatedPauseRef = useRef<boolean>(false);
+  // Whether the current build of this tile has reached its start point. Plyr
+  // outlives a rebuild, so its play handler reads this instead of a closure.
+  const playStartedRef = useRef(false);
+  // When the viewer last pressed a pointer button or key inside the tile.
+  const viewerGestureAtRef = useRef(0);
   // Stops the live-latency governor for the current tile's hls instance.
   const latencyGovernorStopRef = useRef<(() => void) | null>(null);
   const currentSettings = useAppStore(state => state.settings.video_player);
@@ -378,11 +384,13 @@ export const useMultiNookPlayer = ({
       });
 
       let playStarted = false;
+      playStartedRef.current = false;
       let fragsBuffered = 0;
 
       const startPlayback = () => {
         if (playStarted) return;
         playStarted = true;
+        playStartedRef.current = true;
         // The viewer's own channel opens paused, once per tile, like the main
         // player's: chat only, no second video pipeline on the streaming machine.
         if (!isTileHeld(streamId) && isOwnChannelTile(streamId)) {
@@ -450,8 +458,28 @@ export const useMultiNookPlayer = ({
           if (typeof volume === 'number') playerRef.current.volume = volume;
           if (typeof muted === 'boolean') playerRef.current.muted = muted;
 
-          // Listen for pause to know if it was user initiated
+          // A press inside the tile marks the next play as the viewer's own.
+          const gestureHost = (playerRef.current as unknown as { elements?: { container?: HTMLElement } }).elements?.container;
+          const noteViewerGesture = () => {
+            viewerGestureAtRef.current = performance.now();
+          };
+          gestureHost?.addEventListener('pointerdown', noteViewerGesture, true);
+          gestureHost?.addEventListener('keydown', noteViewerGesture, true);
+
+          // Listen for pause to know if it was user initiated. A play that comes
+          // before this build's start point while a pause is held is not the
+          // viewer's: it is paused again and the pause stays held.
           playerRef.current.on('play', () => {
+             if (
+               shouldKeepHeldPause({
+                 playStarted: playStartedRef.current,
+                 held: !!heldPause(streamId, streamId),
+                 viewerPlay: isViewerPlay(viewerGestureAtRef.current, performance.now()),
+               })
+             ) {
+               video.pause();
+               return;
+             }
              userInitiatedPauseRef.current = false;
              clearPauseIntent(streamId);
           });
@@ -784,6 +812,14 @@ export const useMultiNookPlayer = ({
           playerRef.current.on('controlshidden', () => setShowControls(false));
           
           setShowControls(true);
+        }
+        // The viewer paused this tile before it was rebuilt: stay paused.
+        const held = heldPause(streamId, streamId);
+        if (held) {
+          setIsBuffering(false);
+          invoke('report_player_state', { state: 'paused', slot: streamId }).catch(() => {});
+          Logger.warn(`[MultiNook-${streamId}] stays paused: paused before this tile was rebuilt`);
+          return;
         }
         video.play().catch(e => Logger.error(`[MultiNook-${streamId}] Fallback auto-play failed:`, e));
       };

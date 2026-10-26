@@ -653,7 +653,6 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
           backgroundColor: '#000',
           objectFit: isMaximized || isPortrait ? 'contain' : 'cover',
         }}
-        autoPlay
         playsInline
       />
 
