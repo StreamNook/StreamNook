@@ -1003,7 +1003,7 @@ fn parse_gifs_tag(value: &str) -> Vec<EmotePos> {
 
 /// Undo IRCv3 message-tag value escapes (`\:` for `;`, `\s` for space, `\\`,
 /// `\r`, `\n`). Tag values are kept raw in the tag map and unescaped per field.
-fn unescape_irc_tag(value: &str) -> String {
+pub(crate) fn unescape_irc_tag(value: &str) -> String {
     if !value.contains('\\') {
         return value.to_string();
     }
@@ -4323,8 +4323,32 @@ impl IrcService {
     /// in place through `apply_personal_emotes`. Only rows whose text holds one
     /// of the set's names are named, which is usually none.
     async fn repaint_personal_rows(twitch_id: &str, set: &HashMap<String, Emote>) {
+        // Lines still remembered are parsed again whole, the set now in place,
+        // and patched in like an emote re-stamp. `HISTORY_SEGMENTS` reaches a
+        // row a window holds but has not drawn (a join's backlog wait, a parked
+        // tab's rows released together), which is exactly when a set lands: 7TV
+        // announces everyone present as the channel is opened. It also carries
+        // the native view.
+        let mut restamped: HashSet<String> = HashSet::new();
+        for (channel, lines) in crate::services::emote_restamp::lines_by_user(twitch_id) {
+            let naming: Vec<String> = lines
+                .into_iter()
+                .filter(|raw| irc_trailing_text(raw).split(' ').any(|word| set.contains_key(word)))
+                .collect();
+            let rows = Self::restamped_rows(naming);
+            if rows.is_empty() {
+                continue;
+            }
+            restamped.extend(rows.iter().map(|(id, _)| id.clone()));
+            Self::send_history_segments(&channel, rows.into_iter().map(|(_, row)| row).collect()).await;
+        }
+        // Older rows (past the re-stamp's memory) are still named for each
+        // window to re-apply the set itself.
         let since_ms = chrono::Utc::now().timestamp_millis() - PERSONAL_REPAINT_WINDOW_MS;
-        let rows = ChatHistory::recent_by_user(twitch_id, since_ms, PERSONAL_REPAINT_SCAN);
+        let rows = ChatHistory::recent_by_user(twitch_id, since_ms, PERSONAL_REPAINT_SCAN)
+            .into_iter()
+            .filter(|(_, id, _)| !restamped.contains(id))
+            .collect();
         for (channel, message_ids) in Self::rows_naming_personal_emotes(rows, set) {
             let frame = serde_json::json!({
                 "type": "PERSONAL_EMOTES",
@@ -5574,6 +5598,24 @@ impl IrcService {
     /// patched in place in every window showing the channel through the same
     /// `HISTORY_SEGMENTS` frame the backlog re-stamp uses.
     pub(crate) async fn restamp_live_rows(channel: &str, lines: Vec<String>, oldest: std::time::Duration) {
+        let rows = Self::restamped_rows(lines);
+        if rows.is_empty() {
+            return;
+        }
+        // Info, not debug: a phone's support log has to show whether rows
+        // still arrive without their emotes, and how late they were fixed.
+        log::info!(
+            "[EmoteRestamp] {channel}: {} rows now wear their emotes, oldest {:.1}s",
+            rows.len(),
+            oldest.as_secs_f32()
+        );
+        Self::send_history_segments(channel, rows.into_iter().map(|(_, row)| row).collect()).await;
+    }
+
+    /// Raw lines parsed again as rows (`(id, row)`), each carrying what a
+    /// `HISTORY_SEGMENTS` patch swaps in: segments, the reply's quoted segments
+    /// and the native view.
+    fn restamped_rows(lines: Vec<String>) -> Vec<(String, Value)> {
         let mut rows = Vec::new();
         for raw in lines {
             let Some(mut msg) = Self::parse_live_line(&raw) else { continue };
@@ -5586,18 +5628,12 @@ impl IrcService {
             if let Some(view) = &msg.metadata.view {
                 row["view"] = json!(view);
             }
-            rows.push(row);
+            rows.push((msg.id, row));
         }
-        if rows.is_empty() {
-            return;
-        }
-        // Info, not debug: a phone's support log has to show whether rows
-        // still arrive without their emotes, and how late they were fixed.
-        log::info!(
-            "[EmoteRestamp] {channel}: {} rows now wear their emotes, oldest {:.1}s",
-            rows.len(),
-            oldest.as_secs_f32()
-        );
+        rows
+    }
+
+    async fn send_history_segments(channel: &str, rows: Vec<Value>) {
         let frame = json!({ "type": "HISTORY_SEGMENTS", "channel": channel, "rows": rows });
         send_to_bridge(BridgeFrame::channel(channel, frame.to_string()), false).await;
     }

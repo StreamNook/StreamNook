@@ -105,6 +105,31 @@ fn lines_to_repair(
     (out, oldest)
 }
 
+/// The lines of `q` one chatter sent that are still repairable, each once.
+fn user_lines(q: &VecDeque<Line>, twitch_id: &str, now: Instant) -> Vec<String> {
+    let mut seen: HashSet<&str> = HashSet::new();
+    q.iter()
+        .filter(|l| now.duration_since(l.at) <= KEEP_FOR && tag(&l.raw, "user-id") == Some(twitch_id))
+        .filter(|l| seen.insert(l.raw.as_str()))
+        .map(|l| l.raw.clone())
+        .collect()
+}
+
+/// Every remembered line `twitch_id` sent, by room (lowercase, no `#`). A 7TV
+/// personal set that lands after its owner's first lines parses those again
+/// with the set in place (`IrcService::repaint_personal_rows`).
+pub(crate) fn lines_by_user(twitch_id: &str) -> Vec<(String, Vec<String>)> {
+    if twitch_id.is_empty() {
+        return Vec::new();
+    }
+    let Ok(map) = rooms().lock() else { return Vec::new() };
+    let now = Instant::now();
+    map.iter()
+        .map(|(room, q)| (room.clone(), user_lines(q, twitch_id, now)))
+        .filter(|(_, lines)| !lines.is_empty())
+        .collect()
+}
+
 /// `channel`'s parse table went from `old` to `new`.
 pub(crate) fn table_changed(channel: &str, old: Option<Arc<EmoteLookup>>, new: Arc<EmoteLookup>) {
     let (lines, oldest) = {
@@ -219,6 +244,23 @@ mod tests {
         }
         assert_eq!(q.len(), KEEP);
         assert!(q.back().is_some_and(|l| l.raw.ends_with(&format!("m{}", KEEP + 9))));
+    }
+
+    #[test]
+    fn a_chatters_own_recent_lines_are_found_once() {
+        let mut q = VecDeque::new();
+        let then = Instant::now();
+        let old = "@id=0;user-id=7 :a!a@a.tmi.twitch.tv PRIVMSG #chan :before";
+        push_line(&mut q, old, then);
+        let now = then + KEEP_FOR;
+        let mine = "@id=1;user-id=7 :a!a@a.tmi.twitch.tv PRIVMSG #chan :dance";
+        push_line(&mut q, mine, now);
+        push_line(&mut q, mine, now);
+        push_line(&mut q, "@id=2;user-id=8 :b!b@b.tmi.twitch.tv PRIVMSG #chan :dance", now);
+        push_line(&mut q, "@id=3;user-id=77 :c!c@c.tmi.twitch.tv PRIVMSG #chan :dance", now);
+        assert_eq!(user_lines(&q, "7", now), vec![old.to_string(), mine.to_string()]);
+        let later = now + Duration::from_secs(1);
+        assert_eq!(user_lines(&q, "7", later), vec![mine.to_string()]);
     }
 
     #[test]
