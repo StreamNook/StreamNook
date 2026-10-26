@@ -1,3 +1,8 @@
+## [8.8.17] - 2026-10-26
+
+### 🐛 Bug Fixes
+- Hovering an emote in chat shows its preview again. 8.8.16 stopped it from opening.
+
 ## [8.8.16] - 2026-10-26
 
 ### ✨ Features
