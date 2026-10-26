@@ -2181,6 +2181,20 @@ function backfillLimit(afterMs: number | null): number {
   return Math.max(10, Math.min(seconds * 10, cap));
 }
 
+/** How many of the newest history rows an initial load commits first. The older
+ *  rows follow a frame later, so the first paint is a handful of rows instead of
+ *  the whole backlog (up to 1000) mounting, decoding and loading at once. */
+const FIRST_PAINT_HISTORY_ROWS = 30;
+
+/** Runs `fn` after the next frame has painted. */
+function afterNextFrame(fn: () => void): void {
+  if (typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(() => setTimeout(fn, 0));
+  } else {
+    setTimeout(fn, 16);
+  }
+}
+
 async function preloadChannel(
   channel: string,
   channelId: string | null,
@@ -2190,6 +2204,8 @@ async function preloadChannel(
   const mode = opts?.mode ?? 'initial';
   const key = channel.toLowerCase();
   const __t = performance.now();
+  // The older history rows of an initial load, and the slice they belong to.
+  const deferred: { slice: ChannelSlice | null; rows: ChannelSlice['messages'] } = { slice: null, rows: [] };
   try {
     // Badges and history in parallel. The backfill used to wait behind the
     // badge cache init and then the page fetched the mirror itself; now Rust
@@ -2256,7 +2272,11 @@ async function preloadChannel(
       if (mode === 'backfill') {
         insertChronological(slice, filtered);
       } else {
-        slice.messages = [...filtered, ...slice.messages];
+        // Only the newest rows commit now; the rest follow after a paint.
+        const newest = filtered.slice(-FIRST_PAINT_HISTORY_ROWS);
+        deferred.rows = filtered.slice(0, filtered.length - newest.length);
+        deferred.slice = slice;
+        slice.messages = [...newest, ...slice.messages];
       }
       const limit = currentBufferLimit(slice, getActiveHistoryMax());
       if (slice.messages.length > limit) {
@@ -2265,6 +2285,22 @@ async function preloadChannel(
       // History is in; the held live tail goes under it in the same revision.
       if (mode !== 'backfill') releaseHistoryHold(slice);
     });
+    if (deferred.slice && deferred.rows.length > 0) {
+      const target = deferred.slice;
+      const older = deferred.rows;
+      afterNextFrame(() => {
+        // A channel released (or released and joined again) in the meantime is
+        // another slice, or none: the older rows have nowhere to go.
+        if (getSlice(key) !== target) return;
+        withSlice(key, (slice) => {
+          slice.messages = [...older, ...slice.messages];
+          const stageLimit = currentBufferLimit(slice, getActiveHistoryMax());
+          if (slice.messages.length > stageLimit) {
+            slice.messages = slice.messages.slice(slice.messages.length - stageLimit);
+          }
+        });
+      });
+    }
   } catch (err) {
     Logger.error('[ChatStore] Failed to load recent messages:', err);
     withSlice(key, (slice) => {

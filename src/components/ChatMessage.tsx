@@ -1843,6 +1843,8 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             alt={segment.content}
             className={`inline h-5 w-5 ${inGrid ? '' : 'align-middle'} ${marginClass}`}
             style={gridStyle}
+            loading="lazy"
+            decoding="async"
             onError={(e) => {
               const t = e.currentTarget;
               // emoji-datasource-apple names some older text-default symbols
@@ -1876,6 +1878,8 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
               src={segment.cheermoteUrl}
               alt={segment.content}
               className="inline-block h-7 w-auto align-middle"
+              loading="lazy"
+              decoding="async"
               referrerPolicy="no-referrer"
               onError={(e) => {
                 e.currentTarget.style.display = 'none';

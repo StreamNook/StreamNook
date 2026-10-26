@@ -137,6 +137,8 @@ export function ChatBadgeIcons({
             src={src}
             alt={info.title}
             className="sn-chat-badge block"
+            loading="lazy"
+            decoding="async"
             onError={(e) => {
               // A disk copy that went missing: show Twitch's own image instead.
               const remote = info.image_url_4x || info.image_url_1x;
@@ -211,6 +213,8 @@ export function ChatBadgeIcons({
             src={badge.image2x || badge.imageUrl}
             alt={badge.title}
             className="sn-chat-badge block object-contain"
+            loading="lazy"
+            decoding="async"
             onError={(e) => {
               e.currentTarget.style.display = 'none';
             }}
