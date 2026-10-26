@@ -317,6 +317,11 @@ pub fn flush_persistent_stores() -> Result<(), String> {
     let _ = crate::services::whisper_storage_service::WhisperStorageService::flush_now();
     let _ = crate::services::vod_progress_service::flush_now();
     let _ = crate::services::chat_logger_service::ChatLoggerService::flush_all();
+    // Unsent stat counts and watch minutes go out now too: the process can be
+    // killed right after this. Both sends start without waiting, so this
+    // command never blocks its thread.
+    let _ = crate::services::member_stats::flush_on_exit();
+    let _ = crate::services::watch_minutes::flush_on_exit();
     Ok(())
 }
 

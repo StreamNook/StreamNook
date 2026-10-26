@@ -393,7 +393,9 @@ pub fn start() {
     tauri::async_runtime::spawn(async move {
         loop {
             match changes.recv().await {
-                Ok(backend::Change::Row { table, record, .. }) if table == "user_profile_prefs" => apply_row(&record),
+                Ok(backend::Change::Row { table, kind, record }) if table == "user_profile_prefs" => {
+                    apply_row(&kind, &record)
+                }
                 Ok(_) => {}
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
@@ -402,9 +404,13 @@ pub fn start() {
     });
 }
 
-fn apply_row(record: &Value) {
+fn apply_row(kind: &str, record: &Value) {
     let Some(member) = record.get("twitch_user_id").and_then(Value::as_str) else { return };
     let Some(known) = peek(member) else { return };
+    if kind == "DELETE" {
+        store(resolve_theme(member, None, false, is_own(member)));
+        return;
+    }
     let theme = record.get("profile_theme").and_then(Value::as_str).map(String::from).or(known.theme.clone());
     let hidden = match record.get("chat_atmosphere").and_then(Value::as_bool) {
         Some(show) => !show,
@@ -497,12 +503,25 @@ mod tests {
     fn a_live_prefs_row_repaints_only_known_members() {
         let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         fixture();
-        apply_row(&json!({ "twitch_user_id": "10", "profile_theme": "aurora" }));
+        apply_row("UPDATE", &json!({ "twitch_user_id": "10", "profile_theme": "aurora" }));
         assert!(peek("10").is_none());
         store(resolve_theme("10", Some("tier"), false, false));
-        apply_row(&json!({ "twitch_user_id": "10", "profile_theme": "aurora", "chat_atmosphere": false }));
+        apply_row("UPDATE", &json!({ "twitch_user_id": "10", "profile_theme": "aurora", "chat_atmosphere": false }));
         let now = peek("10").unwrap();
         assert_eq!(now.atmosphere_id.as_deref(), Some("aurora"));
         assert!(now.hidden_in_chat);
+    }
+
+    #[test]
+    fn a_deleted_prefs_row_clears_a_known_members_theme() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        fixture();
+        store(resolve_theme("10", Some("aurora"), true, false));
+        assert!(peek("10").unwrap().hidden_in_chat);
+        apply_row("DELETE", &json!({ "twitch_user_id": "10" }));
+        let now = peek("10").unwrap();
+        assert_eq!(now.atmosphere_id, None);
+        assert_eq!(now.theme, None);
+        assert!(!now.hidden_in_chat);
     }
 }

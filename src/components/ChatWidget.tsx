@@ -54,7 +54,6 @@ import { useAppStore } from '../stores/AppStore';
 import { useChannelState, watchChannel, unwatchChannel, refreshChannelState } from '../stores/channelStateStore';
 import { useProviderEmoteStore } from '../stores/providerEmoteStore';
 import { usePlatformAccountStore } from '../stores/platformAccountStore';
-import { trackEmoteUsage } from '../utils/trackEmoteUsage';
 import { EmoteText, useTextEmotes } from '../utils/emoteText';
 import { isImeComposing } from '../utils/imeComposing';
 import { syncComposerPlaceholder, trackComposerWidth } from '../utils/composerNarrow';
@@ -3693,14 +3692,6 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
             badges: ''
           } : undefined, replyParentMsgId, senderAccount);
           noteChatLineSent();
-        }
-
-        // Stats and emote tallies are keyed by the Twitch user id, so they only
-        // apply when a Twitch account is linked.
-        if (currentUser) {
-          // Tally emote usage from this message into the member's persisted
-          // most-used-emotes counts (best effort, non-blocking).
-          void trackEmoteUsage(messageToSend, currentStream?.user_id || null, currentUser.user_id);
         }
       } catch (err) {
         Logger.error('Failed to send message:', err);

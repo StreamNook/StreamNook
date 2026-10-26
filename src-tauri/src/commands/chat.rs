@@ -120,6 +120,15 @@ pub async fn provider_send_message(
             let outcome = p.send(&channel, &text, reply_to.as_deref()).await.map_err(|e| e.to_string())?;
             if outcome.is_sent {
                 crate::services::member_stats::count(crate::services::member_stats::Stat::MessagesSent, 1);
+                // Only Kick has a channel emote set in Rust; YouTube and TikTok
+                // sends are not tallied for emote usage.
+                if provider == "kick" {
+                    let (channel, text) = (channel.clone(), text.clone());
+                    tauri::async_runtime::spawn(async move {
+                        let set = crate::services::providers::kick_emotes::channel_emote_set(&channel).await;
+                        crate::services::member_stats::count_emotes(crate::services::recent_emotes::used_in_set(&set, &text));
+                    });
+                }
             }
             Ok(outcome)
         }
@@ -773,6 +782,11 @@ pub async fn send_chat_message(
         crate::services::member_stats::count(crate::services::member_stats::Stat::MessagesSent, 1);
         if let Some(channel) = target_channel.as_deref() {
             crate::services::recent_emotes::record(channel, &message).await;
+            let (channel, text) = (channel.to_string(), message.clone());
+            tauri::async_runtime::spawn(async move {
+                let uses = crate::services::recent_emotes::used_in(&channel, &text).await;
+                crate::services::member_stats::count_emotes(uses);
+            });
         }
     }
     let pin_error = if pin_after_send.unwrap_or(false) {

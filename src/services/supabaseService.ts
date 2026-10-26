@@ -741,63 +741,6 @@ export interface EmoteUsage {
 }
 
 /**
- * Increment usage of an emote for a user. Atomic via the `increment_emote_usage`
- * RPC, with a manual-upsert fallback. Fire-and-forget; never throws.
- */
-export const incrementEmoteUsage = async (
-    userId: string,
-    emote: { id: string; name: string; provider: string; url: string },
-    amount: number = 1,
-): Promise<void> => {
-    if (!supabase || !userId || !emote?.id) return;
-    try {
-        const { error } = await supabase.rpc('increment_emote_usage', {
-            p_user_id: userId,
-            p_emote_id: emote.id,
-            p_emote_name: emote.name,
-            p_provider: emote.provider,
-            p_image_url: emote.url,
-            p_amount: amount,
-        });
-        if (!error) return;
-        await manualIncrementEmote(userId, emote, amount);
-    } catch (error) {
-        Logger.warn('[Supabase] incrementEmoteUsage failed:', error);
-    }
-};
-
-const manualIncrementEmote = async (
-    userId: string,
-    emote: { id: string; name: string; provider: string; url: string },
-    amount: number,
-): Promise<void> => {
-    if (!supabase) return;
-    try {
-        const { data: existing } = await supabase
-            .from('user_emote_usage')
-            .select('count')
-            .eq('twitch_user_id', userId)
-            .eq('emote_id', emote.id)
-            .maybeSingle();
-        const newCount = ((existing as { count?: number } | null)?.count || 0) + amount;
-        await supabase.from('user_emote_usage').upsert(
-            {
-                twitch_user_id: userId,
-                emote_id: emote.id,
-                emote_name: emote.name,
-                provider: emote.provider,
-                image_url: emote.url,
-                count: newCount,
-                updated_at: new Date().toISOString(),
-            },
-            { onConflict: 'twitch_user_id,emote_id' },
-        );
-    } catch (error) {
-        Logger.warn('[Supabase] manual emote increment failed:', error);
-    }
-};
-
-/**
  * Get a user's most-used emotes, highest count first. Returns [] when Supabase
  * is unconfigured or the table is missing.
  */
