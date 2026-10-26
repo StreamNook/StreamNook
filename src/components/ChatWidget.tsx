@@ -16,7 +16,6 @@ import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { IS_MOBILE } from '../utils/platform';
 import { registerChatSearchController } from '../keybindings/chatSearchController';
 import { Dropdown, type DropdownOption } from './ui/Dropdown';
-import { BANNER_STYLE, GLAZE_BANNER } from './ui/glazeButtons';
 
 import { useTwitchChat, type ModerationContext } from '../hooks/useTwitchChat';
 import { useChannelEmotes, ensureChannelEmotes, getChannelEmotes, emoteCacheKey, refreshChannelEmotes, useChannelChat, useChannelChatMeta, useChatConnectionStore, setChannelPaused, sliceLookupKey, injectSystemMessage, systemSourceFor, ensureChannelHistory } from '../stores/chatConnectionStore';
@@ -115,12 +114,10 @@ import {
 import {
   matchEmoteFill,
   matchEmotes,
-  matchMentions,
   rowsToTabCandidates,
   createRequestSeq,
   type EmoteMatchChannel,
   type EmoteMatchRow,
-  type MentionSuggestion,
 } from '../services/emoteMatch';
 import {
   COMMAND_DEFINITIONS,
@@ -1532,14 +1529,11 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   const [mentionQuery, setMentionQuery] = useState('');
   const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0);
   const [mentionStartPosition, setMentionStartPosition] = useState<number | null>(null);
-  // The @ list on screen, kept with the query it answers.
-  const [mentionAnswer, setMentionAnswer] = useState<{ query: string; users: ChatUser[] }>({ query: '', users: [] });
-  const [mentionSeq] = useState(createRequestSeq);
   // These are stable store actions (vanilla zustand never recreates them), so we
   // read them imperatively rather than subscribing. Subscribing here made the
   // whole ChatWidget re-render on every chatUserStore write, and addUser fires
   // once per chatter, so on a busy channel that was a constant re-render storm.
-  const { addUser, clearUsers } = useChatUserStore.getState();
+  const { addUser, getMatchingUsers, clearUsers } = useChatUserStore.getState();
 
   // / command autocomplete state
   const [showCommandAutocomplete, setShowCommandAutocomplete] = useState(false);
@@ -1602,47 +1596,30 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     [provider, currentStream?.user_login, currentStream?.user_id],
   );
 
-  /** Rust's @ rows, each wearing its chatter's color and paint when they have
-   *  chatted here. */
-  const mentionUsersFrom = useCallback(
-    (rows: MentionSuggestion[]): ChatUser[] => {
-      const { users } = useChatUserStore.getState();
-      return rows.map((r) => {
-        const key = provider === 'twitch' ? r.userId : `${provider}:${r.userId}`;
-        return (
-          users.get(key) ?? {
-            userId: key || r.login,
-            username: r.login,
-            displayName: r.displayName,
-            color: '',
-            lastSeen: 0,
-          }
-        );
-      });
-    },
-    [provider],
-  );
+  /** The room's streamer, so the @ list leads with them: in a Twitch room even
+   *  before they chat, in a Kick or YouTube room once they have (a Kick room
+   *  key need not be the username, a YouTube one is a channel id). */
+  const mentionLead = useCallback((): ChatUser | null => {
+    const login = currentStream?.user_login?.toLowerCase();
+    if (!login) return null;
+    const chatted = useChatUserStore.getState().getUserByUsername(login, provider);
+    if (chatted) return chatted;
+    if (provider !== 'twitch') return null;
+    return {
+      userId: currentStream?.user_id || login,
+      username: login,
+      displayName: currentStream?.user_name || login,
+      color: '',
+      lastSeen: 0,
+    };
+  }, [provider, currentStream?.user_login, currentStream?.user_id, currentStream?.user_name]);
 
-  /** Ask Rust for the @ list (the streamer first, then the room's recent
-   *  chatters); a reply to an older keystroke is dropped. */
-  const askMentions = useCallback(
-    (query: string, commandArg: boolean) => {
-      const n = mentionSeq.next();
-      void matchMentions(emoteMatchTarget, query, commandArg).then((rows) => {
-        if (!mentionSeq.isCurrent(n)) return;
-        const users = mentionUsersFrom(rows);
-        setMentionAnswer({ query, users });
-        setShowMentionAutocomplete(users.length > 0);
-      });
-    },
-    [emoteMatchTarget, mentionSeq, mentionUsersFrom],
+  /** The @ list for what is typed, the streamer first. A command's username
+   *  argument (/ban, /timeout) keeps plain recency. */
+  const mentionMatches = useCallback(
+    (query: string, commandArg: boolean) => getMatchingUsers(query, 5, commandArg ? null : mentionLead()),
+    [getMatchingUsers, mentionLead],
   );
-
-  /** Close the @ list, so a reply still on its way cannot reopen it. */
-  const dropMentions = useCallback(() => {
-    mentionSeq.next();
-    setShowMentionAutocomplete(false);
-  }, [mentionSeq]);
 
   /**
    * Open (or re-query) the emote list for the text typed since `anchor`. The
@@ -3778,18 +3755,8 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
 
     // Handle autocomplete navigation when visible
     if (showMentionAutocomplete) {
-      const matchingUsers = mentionAnswer.users;
-      // The list on screen may answer an older keystroke. Picking from it would
-      // insert the wrong name (the streamer leads nearly every broad list), so
-      // a pick then asks for the answer to what is typed now.
-      const fresh = mentionAnswer.query === mentionQuery;
       const commandArg = mentionStartPosition !== null && messageInput.charAt(mentionStartPosition) === ' ';
-      const pickCurrent = () => {
-        void matchMentions(emoteMatchTarget, mentionQuery, commandArg).then((rows) => {
-          const first = mentionUsersFrom(rows)[0];
-          if (first) insertMention(first);
-        });
-      };
+      const matchingUsers = mentionMatches(mentionQuery, commandArg);
 
       if (e.key === 'ArrowUp') {
         e.preventDefault();
@@ -3809,10 +3776,6 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
       
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
-        if (!fresh) {
-          pickCurrent();
-          return;
-        }
         const selectedUser = matchingUsers[mentionSelectedIndex];
         if (selectedUser) {
           insertMention(selectedUser);
@@ -3822,16 +3785,12 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
 
       if (e.key === 'Escape') {
         e.preventDefault();
-        dropMentions();
+        setShowMentionAutocomplete(false);
         return;
       }
 
       if (e.key === 'Tab') {
         e.preventDefault();
-        if (!fresh) {
-          pickCurrent();
-          return;
-        }
         const selectedUser = matchingUsers[mentionSelectedIndex];
         if (selectedUser) {
           insertMention(selectedUser);
@@ -4134,7 +4093,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
         setCommandSelectedIndex(0);
 
         // don't show mention autocomplete
-        dropMentions();
+        setShowMentionAutocomplete(false);
         return;
       } else {
         // We've typed past the command name (there's a space).
@@ -4150,7 +4109,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
             flowReplaceFromRef.current = flow.replaceFrom;
             setShowCommandAutocomplete(true);
             setCommandSelectedIndex(0);
-            dropMentions();
+            setShowMentionAutocomplete(false);
             return;
           }
           // No suggestions for this step (e.g. typing the message body): drop the
@@ -4175,7 +4134,9 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
             setMentionQuery(query);
             setMentionStartPosition(firstSpaceIndex);
             setMentionSelectedIndex(0);
-            askMentions(query, true);
+
+            const matches = mentionMatches(query, true);
+            setShowMentionAutocomplete(matches.length > 0);
             return;
           }
         }
@@ -4202,17 +4163,19 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
         setMentionQuery(query);
         setMentionStartPosition(lastAtIndex);
         setMentionSelectedIndex(0);
-        // Shown once Rust answers with at least one name.
-        askMentions(query, false);
+
+        // Only show autocomplete if we have matches
+        const matches = mentionMatches(query, false);
+        setShowMentionAutocomplete(matches.length > 0);
         return;
       }
     }
 
     // No valid @ trigger found
-    dropMentions();
+    setShowMentionAutocomplete(false);
     setMentionQuery('');
     setMentionStartPosition(null);
-  }, [askMentions, dropMentions, isModerator, isBroadcaster, settings.chat_commands?.user_commands, settings.reminders?.reminders, settings.chat_input?.emote_colon_search_enabled, emoteTabState, emoteList, openEmoteList, closeEmoteList]);
+  }, [mentionMatches, isModerator, isBroadcaster, settings.chat_commands?.user_commands, settings.reminders?.reminders, settings.chat_input?.emote_colon_search_enabled, emoteTabState, emoteList, openEmoteList, closeEmoteList]);
 
   // Insert a command string directly from other UI elements (like UserProfileCard)
   const preFillCommand = useCallback((cmdText: string) => {
@@ -4312,7 +4275,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     setMessageInput(newValue);
 
     // Hide autocomplete
-    dropMentions();
+    setShowMentionAutocomplete(false);
     setMentionQuery('');
     setMentionStartPosition(null);
 
@@ -4322,7 +4285,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     setTimeout(() => {
       inputRef.current?.setSelectionRange(newCursorPos, newCursorPos);
     }, 0);
-  }, [messageInput, mentionStartPosition, mentionQuery, provider, dropMentions]);
+  }, [messageInput, mentionStartPosition, mentionQuery, provider]);
 
   // At the cursor, spaced from its neighbours. The textarea keeps its caret
   // while focus is elsewhere (the emote menu, or the popped-out one in another
@@ -5304,8 +5267,8 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                   animate={{ opacity: 1, y: 0, scale: 1, height: 'auto' }}
                   exit={{ opacity: 0, y: -10, scale: 0.96, height: 0 }}
                   transition={{ duration: 0.3, ease: [0.175, 0.885, 0.32, 1.2] }}
-                  className={`${GLAZE_BANNER} w-full max-w-sm mt-2 pointer-events-auto overflow-hidden origin-top cursor-pointer`}
-                  style={BANNER_STYLE}
+                  // The emote, bits and mod menus' glass, blur and corners.
+                  className="glass-flyout rounded-xl !p-0 w-full max-w-sm mt-2 pointer-events-auto overflow-hidden origin-top cursor-pointer"
                   // Clicking the open pin folds it back to the bar, the same
                   // gesture that opened it. Interactive children (unpin, links,
                   // preview cards) keep their own click, and a drag that selected
@@ -5516,8 +5479,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                       setIsPinnedExpanded(true);
                       seenPinIdRef.current = pin.id;
                     }}
-                    className={`${GLAZE_BANNER} chrome-glaze--control group w-full max-w-sm mt-2 pointer-events-auto overflow-hidden flex items-center gap-2.5 px-3.5 py-2.5 text-left transition-colors`}
-                    style={BANNER_STYLE}
+                    className="glass-flyout rounded-xl group w-full max-w-sm mt-2 pointer-events-auto overflow-hidden flex items-center gap-2.5 !px-3.5 !py-2.5 text-left transition-colors"
                   >
                     <svg className="w-3.5 h-3.5 text-accent flex-shrink-0" fill="currentColor" viewBox="0 0 16 16">
                       <path d="M4.146.146A.5.5 0 0 1 4.5 0h7a.5.5 0 0 1 .5.5c0 .68-.342 1.174-.646 1.479-.126.125-.25.224-.354.298v4.431l.078.048c.203.127.476.314.751.555C12.36 7.775 13 8.527 13 9.5a.5.5 0 0 1-.5.5h-4v4.5a.5.5 0 0 1-1 0V10h-4A.5.5 0 0 1 3 9.5c0-.973.64-1.725 1.17-2.189A5.921 5.921 0 0 1 5 6.708V2.277a2.77 2.77 0 0 1-.354-.298C4.342 1.674 4 1.179 4 .5a.5.5 0 0 1 .146-.354z"/>
@@ -6045,7 +6007,10 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                   {/* @ Mention Autocomplete */}
                   {showMentionAutocomplete && (
                     <MentionAutocomplete
-                      users={mentionAnswer.users}
+                      users={mentionMatches(
+                        mentionQuery,
+                        mentionStartPosition !== null && messageInput.charAt(mentionStartPosition) === ' ',
+                      )}
                       selectedIndex={mentionSelectedIndex}
                       onSelect={(user) => insertMention(user)}
                       onSelectedIndexChange={setMentionSelectedIndex}
@@ -6193,7 +6158,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                     disabled={isInputDisabled}
                     onBlur={() => {
                       // Delay hiding to allow click on autocomplete
-                      setTimeout(dropMentions, 150);
+                      setTimeout(() => setShowMentionAutocomplete(false), 150);
                       setTimeout(() => setShowCommandAutocomplete(false), 150);
                       setEmoteTabState(null);
                       // Picking a row never blurs (rows act on mousedown), so a

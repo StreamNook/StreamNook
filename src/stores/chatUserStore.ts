@@ -30,6 +30,8 @@ import {
   resolveBttvProUrl,
   withBttvPro,
 } from '../services/bttvProBadge';
+import { snapshotOverrides } from '../utils/userChatOverrides';
+import { matchingUsers } from '../utils/mentionMatch';
 import { onePerCategory } from '../utils/chatterBadges';
 import { IS_MOBILE } from '../utils/platform';
 
@@ -96,7 +98,11 @@ interface ChatUserStore {
   
   /** Get a user by username (case-insensitive) */
   getUserByUsername: (username: string, provider?: ProviderId) => ChatUser | undefined;
-
+  
+  /** Get users matching a search query (prefix match on username/displayName),
+   *  `lead` (the room's streamer) first when it matches too */
+  getMatchingUsers: (query: string, limit?: number, lead?: ChatUser | null) => ChatUser[];
+  
   /** Clear all users (call when switching channels) */
   clearUsers: () => void;
 }
@@ -728,7 +734,7 @@ export const useChatUserStore = create<ChatUserStore>((set, get) => ({
         return;
       }
       // Metadata-only bump. lastSeen has NO reactive readers (only call-time
-      // sorts: eviction, command palette), so mutate in place —
+      // sorts: eviction, @-autocomplete, command palette), so mutate in place —
       // no Map clones, no subscriber fan-out. This bypassing of setState is
       // deliberate; do not "fix" it back into a store update.
       existingUser!.lastSeen = Date.now();
@@ -834,6 +840,9 @@ export const useChatUserStore = create<ChatUserStore>((set, get) => ({
     }
     return undefined;
   },
+  
+  getMatchingUsers: (query: string, limit = 5, lead = null) =>
+    matchingUsers(get().users, query, limit, lead, snapshotOverrides()),
   
   clearUsers: () => {
     // Sized against the user map it shadows. The ANSWERS live in Rust and
