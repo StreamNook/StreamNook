@@ -4,7 +4,7 @@ import { Gift, Package, Sparkle } from 'phosphor-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { useAppStore, type Toast } from '../../stores/AppStore';
 import { Logger } from '../../utils/logger';
 import {
@@ -108,6 +108,7 @@ function MirroredCard({ notice, onDone }: { notice: MirroredNotice; onDone: (id:
       )}
       <div className="min-w-0 flex-1">
         <div className="truncate text-[13px] font-semibold leading-snug text-textPrimary">{notice.title}</div>
+        {notice.quote && <div className="truncate text-xs leading-snug text-textMuted">{notice.quote}</div>}
         {(notice.body || clickable) && (
           <div className="flex items-baseline gap-2 text-xs leading-snug">
             {notice.body && <span className="line-clamp-2 min-w-0 flex-1 text-textSecondary">{notice.body}</span>}
@@ -201,7 +202,9 @@ export default function MultiChatToasts() {
   const [mirrored, setMirrored] = useState<MirroredNotice[]>([]);
 
   useEffect(() => {
-    const unlisten = listen<MirroredNotice>(MIRRORED_NOTIFICATION_EVENT, (event) => {
+    // Window-scoped: Rust sends each card to ONE MultiChat window, and a plain
+    // `listen` would show it in every one.
+    const unlisten = getCurrentWebviewWindow().listen<MirroredNotice>(MIRRORED_NOTIFICATION_EVENT, (event) => {
       setMirrored((prev) => [event.payload, ...prev.filter((n) => n.id !== event.payload.id)].slice(0, MAX_MIRRORED));
     });
     return () => {

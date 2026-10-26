@@ -76,6 +76,7 @@ import ClipModal from '../ClipModal';
 import VodModal from './VodModal';
 import { useCommandPaletteHotkey } from '../../hooks/useCommandPaletteHotkey';
 import { usePlatformAccountSync } from '../../hooks/usePlatformAccountSync';
+import { useMentionPing } from '../../hooks/useMentionPing';
 import { useKeybindings } from '../../keybindings';
 import { startSnippetSync } from '../../stores/snippetStore';
 import PluginUiHost from '../../plugins-ui/PluginUiHost';
@@ -421,6 +422,8 @@ export default function MultiChatWindow() {
   // Keyboard moderation in the popout: the active pane registers the mod
   // controller (see ChatWidget), and this drives the hotkeys against it.
   useKeybindings();
+  // Hears every mention ping and plays the ones this window claims first.
+  useMentionPing();
   useEffect(() => {
     startSnippetSync();
   }, []);

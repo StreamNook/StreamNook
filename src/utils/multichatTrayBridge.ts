@@ -7,15 +7,23 @@
 //    while they're in "chat-only" mode. Chat stays alive because the popouts
 //    need it — we deliberately do NOT call `stop_chat` here.
 //
-// Both listeners gate on URL hash so the popout windows ignore these events
-// (the popout window's own JS context shouldn't react to tray events).
+// Every listener here is main-window only and gates on the window's label, so
+// popouts, the chat overlay, the emote menu and plugin windows ignore them.
 
 import { invoke } from '@tauri-apps/api/core';
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import type { MediaInfo } from '../stores/AppStore';
 import { Logger } from './logger';
 
-const hash = window.location.hash;
-const isPopout = hash.startsWith('#/multichat') || hash.startsWith('#/profile');
+// The chat overlay, emote menu and plugin windows load this module too, and
+// the events below are broadcasts, so gate on the label rather than the URL.
+const isMain = (() => {
+  try {
+    return getCurrentWebviewWindow().label === 'main';
+  } catch {
+    return false;
+  }
+})();
 
 /** The core app's X button was intercepted (popouts open, or the "Always
  *  minimize" close mode). Stop everything that costs CPU/network, THEN destroy the
@@ -83,7 +91,7 @@ async function pushAggregateToStore() {
   useAppStore.setState({ channelsInPopouts: aggregate });
 }
 
-if (!isPopout && typeof window !== 'undefined') {
+if (isMain) {
   (async () => {
     try {
       const { listen, emit } = await import('@tauri-apps/api/event');

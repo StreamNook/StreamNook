@@ -5,21 +5,23 @@
 //! joined channel, docked and hidden ones included, so the decision lives here
 //! too: the setting, streamer mode, a per-channel cooldown and the age of the
 //! message. A message that passes becomes one small `chat-mention-ping` event
-//! to the main window, which only plays the sound it names. Off, this is one
-//! read of an empty slot per mention.
+//! to every window that could play it; the first page to claim it
+//! (`mention_ping_claim`) plays the sound it names, so it plays once. Off, this
+//! is one read of an empty slot per mention.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use once_cell::sync::Lazy;
 use serde::Serialize;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
 use crate::models::chat_layout::ChatMessage;
 use crate::models::settings::Settings;
 
-/// The main window's event that plays the mention sound.
+/// The event that plays the mention sound, sent to every window that could play it.
 pub const EVENT: &str = "chat-mention-ping";
 
 /// One channel pings at most this often: a chat that keeps @-ing you should
@@ -35,6 +37,9 @@ const MAX_AGE_MS: i64 = 5_000;
 struct Tone {
     sound: String,
     volume: u32,
+    /// A custom sound's file, so the window that plays it needs no settings
+    /// of its own to find it.
+    path: Option<String>,
 }
 
 /// What a mention and a reply to you each play; `None` is silent.
@@ -62,15 +67,40 @@ fn tone(sound: Option<&str>, volume: Option<u32>) -> Option<Tone> {
     Some(Tone {
         sound: sound.to_string(),
         volume: volume.unwrap_or(100).min(200),
+        path: None,
     })
+}
+
+/// The file behind a custom sound (`file:<id>`), from the settings' custom
+/// sound list. None for a built-in tone or a sound no longer in the list.
+fn custom_path(settings: &Settings, sound: &str) -> Option<String> {
+    if !sound.starts_with("file:") {
+        return None;
+    }
+    settings
+        .extra
+        .get("chat_highlights")?
+        .get("custom_sounds")?
+        .as_array()?
+        .iter()
+        .find(|s| s.get("id").and_then(serde_json::Value::as_str) == Some(sound))?
+        .get("path")?
+        .as_str()
+        .filter(|p| !p.is_empty())
+        .map(str::to_string)
 }
 
 #[derive(Clone, Debug, Serialize)]
 struct PingPayload<'a> {
+    /// What a page claims with `mention_ping_claim`.
+    id: u64,
     channel: &'a str,
     sound: &'a str,
     /// Percent of the sound's own level.
     volume: u32,
+    /// The file of a custom sound, when it is one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<&'a str>,
 }
 
 static CONFIG: Lazy<RwLock<Option<PingConfig>>> = Lazy::new(|| RwLock::new(None));
@@ -89,7 +119,13 @@ fn config_from(settings: &Settings) -> Option<PingConfig> {
     if mention.is_none() && reply.is_none() {
         return None;
     }
-    Some(PingConfig { mention, reply })
+    let with_path = |t: Option<Tone>| {
+        t.map(|mut t| {
+            t.path = custom_path(settings, &t.sound);
+            t
+        })
+    };
+    Some(PingConfig { mention: with_path(mention), reply: with_path(reply) })
 }
 
 /// Re-read the mention sound settings. Called on load and on every save.
@@ -110,6 +146,68 @@ pub fn refresh(settings: &Settings) {
 /// The message's server send time, when Twitch stamped one.
 fn sent_at_ms(msg: &ChatMessage) -> Option<i64> {
     msg.tags.get("tmi-sent-ts").and_then(|v| v.parse::<i64>().ok())
+}
+
+const MULTICHAT_PREFIX: &str = "multichat-";
+const OVERLAY_PREFIX: &str = "overlay-";
+
+/// A page claims a ping within this, or it is not news any more.
+const CLAIM_WINDOW: Duration = Duration::from_secs(3);
+/// At most this many pings wait for a claim; the cooldowns keep it near one.
+const UNCLAIMED_KEPT: usize = 8;
+
+static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+/// Pings sent and not claimed yet, oldest first: `(id, sent)`.
+static UNCLAIMED: Lazy<Mutex<VecDeque<(u64, Instant)>>> = Lazy::new(|| Mutex::new(VecDeque::new()));
+
+/// Every open window that could play the ping: main, each MultiChat window and
+/// each chat overlay. Closing main while a popout is open destroys it to free
+/// its memory, so any of them may be the one alive; all of them get the ping
+/// and the first to claim it plays it. Main in the tray is on its way to being
+/// destroyed, so it is left out while a popout can play instead. With none
+/// open it goes to main, the iPhone core's only target. No window getters:
+/// they wait on the UI thread, and this runs on the chat read loop.
+fn players(labels: impl IntoIterator<Item = String>, main_in_tray: bool) -> Vec<String> {
+    let mut out: Vec<String> = labels
+        .into_iter()
+        .filter(|l| l == "main" || l.starts_with(MULTICHAT_PREFIX) || l.starts_with(OVERLAY_PREFIX))
+        .collect();
+    if main_in_tray && out.iter().any(|l| l != "main") {
+        out.retain(|l| l != "main");
+    }
+    if out.is_empty() {
+        out.push("main".to_string());
+    }
+    out
+}
+
+/// Note a ping as sent and return its id.
+fn issue(now: Instant, unclaimed: &mut VecDeque<(u64, Instant)>) -> u64 {
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    unclaimed.retain(|(_, sent)| now.duration_since(*sent) < CLAIM_WINDOW);
+    while unclaimed.len() >= UNCLAIMED_KEPT {
+        unclaimed.pop_front();
+    }
+    unclaimed.push_back((id, now));
+    id
+}
+
+/// True for the first claim of a ping still within `CLAIM_WINDOW`, false for
+/// every other.
+fn take(id: u64, now: Instant, unclaimed: &mut VecDeque<(u64, Instant)>) -> bool {
+    let Some(at) = unclaimed.iter().position(|(i, _)| *i == id) else {
+        return false;
+    };
+    unclaimed
+        .remove(at)
+        .is_some_and(|(_, sent)| now.duration_since(sent) < CLAIM_WINDOW)
+}
+
+/// A page heard ping `id`. True: this page plays it. False: another page
+/// already does, or it is stale.
+#[tauri::command]
+pub fn mention_ping_claim(id: u64) -> bool {
+    take(id, Instant::now(), &mut UNCLAIMED.lock().unwrap_or_else(|e| e.into_inner()))
 }
 
 /// The tone `msg`, just received live, plays, if any. Pure apart from the
@@ -175,15 +273,18 @@ pub fn on_live_message(msg: &ChatMessage, mentioned: bool, reply_to_me: bool) {
         return;
     };
     if let Some(app) = crate::services::providers::app_handle() {
-        let _ = app.emit_to(
-            "main",
-            EVENT,
-            PingPayload {
-                channel: &channel,
-                sound: &tone.sound,
-                volume: tone.volume,
-            },
-        );
+        let id = issue(Instant::now(), &mut UNCLAIMED.lock().unwrap_or_else(|e| e.into_inner()));
+        let payload = PingPayload {
+            id,
+            channel: &channel,
+            sound: &tone.sound,
+            volume: tone.volume,
+            path: tone.path.as_deref(),
+        };
+        let in_tray = crate::services::app_exit::main_in_tray();
+        for target in players(app.webview_windows().into_keys(), in_tray) {
+            let _ = app.emit_to(target.as_str(), EVENT, &payload);
+        }
     }
 }
 
@@ -192,7 +293,7 @@ mod tests {
     use super::*;
 
     fn boop() -> Option<Tone> {
-        Some(Tone { sound: "boop".into(), volume: 100 })
+        Some(Tone { sound: "boop".into(), volume: 100, path: None })
     }
 
     fn cfg(replies: bool) -> PingConfig {
@@ -297,5 +398,58 @@ mod tests {
         s.chat_design.mention_sound_replies = None;
         s.chat_design.reply_sound = Some("none".into());
         assert!(config_from(&s).unwrap().reply.is_none());
+    }
+
+    #[test]
+    fn every_window_that_can_play_gets_it_and_none_means_main() {
+        let open = ["main", "multichat-default", "overlay-a", "profile-x", "emote-palette", "multichat-w2"];
+        let mut got = players(open.iter().map(|s| s.to_string()), false);
+        got.sort();
+        assert_eq!(got, ["main", "multichat-default", "multichat-w2", "overlay-a"]);
+        assert_eq!(players(["profile-x".to_string()], false), ["main"], "nothing that can play: main, as on the iPhone");
+        assert_eq!(players(Vec::<String>::new(), false), ["main"]);
+        let mut away = players(open.iter().map(|s| s.to_string()), true);
+        away.sort();
+        assert_eq!(away, ["multichat-default", "multichat-w2", "overlay-a"], "main in the tray steps aside");
+        assert_eq!(players(["main".to_string()], true), ["main"], "unless nothing else can play");
+    }
+
+    #[test]
+    fn a_ping_is_claimed_once_and_only_while_fresh() {
+        let mut q = VecDeque::new();
+        let t0 = Instant::now();
+        let a = issue(t0, &mut q);
+        assert!(take(a, t0, &mut q), "the first page to claim plays it");
+        assert!(!take(a, t0, &mut q), "every other page stays quiet");
+        let b = issue(t0, &mut q);
+        assert!(!take(b, t0 + CLAIM_WINDOW, &mut q), "a claim after the window is stale");
+        assert!(!take(u64::MAX, t0, &mut q), "an id never sent");
+    }
+
+    #[test]
+    fn unclaimed_pings_stay_bounded() {
+        let mut q = VecDeque::new();
+        let t0 = Instant::now();
+        for _ in 0..UNCLAIMED_KEPT * 3 {
+            issue(t0, &mut q);
+        }
+        assert_eq!(q.len(), UNCLAIMED_KEPT);
+    }
+
+    #[test]
+    fn a_custom_sound_carries_its_file() {
+        let mut s = Settings::default();
+        s.extra.insert(
+            "chat_highlights".into(),
+            serde_json::json!({ "custom_sounds": [{ "id": "file:abc", "name": "Bell", "path": "C:/sounds/bell.wav" }] }),
+        );
+        s.chat_design.mention_sound = Some("file:abc".into());
+        let c = config_from(&s).unwrap();
+        assert_eq!(c.mention.as_ref().unwrap().path.as_deref(), Some("C:/sounds/bell.wav"));
+        assert_eq!(c.reply.as_ref().unwrap().path.as_deref(), Some("C:/sounds/bell.wav"), "replies follow it");
+        s.chat_design.mention_sound = Some("file:gone".into());
+        assert_eq!(config_from(&s).unwrap().mention.unwrap().path, None, "a sound no longer in the list");
+        s.chat_design.mention_sound = Some("boop".into());
+        assert_eq!(config_from(&s).unwrap().mention.unwrap().path, None, "a built-in tone has no file");
     }
 }

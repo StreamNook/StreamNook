@@ -22,7 +22,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { listen } from '@tauri-apps/api/event';
 import { MousePointer2, MousePointerBan, X } from 'lucide-react';
 import BlendedChatPane from './BlendedChatPane';
 import BadgeSpotlightHost from '../BadgeSpotlightHost';
@@ -46,6 +45,7 @@ import {
 import { listenForSettingsUpdates } from '../../utils/settingsBroadcast';
 import { Logger } from '../../utils/logger';
 import { IS_LINUX } from '../../utils/platform';
+import { useMentionPing } from '../../hooks/useMentionPing';
 
 function readParams() {
   const hash = window.location.hash;
@@ -61,6 +61,8 @@ function readParams() {
 const CHROME_LINGER_MS = 1600;
 
 export default function ChatOverlayWindow() {
+  // Hears every mention ping and plays the ones this window claims first.
+  useMentionPing();
   const { channel, channelId, channelName } = useMemo(() => readParams(), []);
   const settings = useAppStore((s) => s.settings);
   const updateSettings = useAppStore((s) => s.updateSettings);
@@ -178,12 +180,15 @@ export default function ChatOverlayWindow() {
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let cancelled = false;
-    void listen('chat-overlay-toggle-interactive', () => {
-      void applyClickThrough(!clickThrough);
-    }).then((u) => {
-      if (cancelled) u();
-      else unlisten = u;
-    });
+    // A broadcast from main's shortcut to every overlay; each toggles its own.
+    void getCurrentWindow()
+      .listen('chat-overlay-toggle-interactive', () => {
+        void applyClickThrough(!clickThrough);
+      })
+      .then((u) => {
+        if (cancelled) u();
+        else unlisten = u;
+      });
     return () => {
       cancelled = true;
       unlisten?.();

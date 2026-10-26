@@ -163,16 +163,28 @@ function playCustomSound(id: string, scale: number): void {
   void import('../stores/AppStore').then(({ useAppStore }) => {
     const entry = useAppStore.getState().settings.chat_highlights?.custom_sounds?.find((s) => s.id === id);
     if (!entry?.path) return;
-    let el = fileAudio.get(id);
-    if (!el || el.dataset.path !== entry.path) {
-      el = new Audio(convertFileSrc(entry.path));
-      el.dataset.path = entry.path;
-      fileAudio.set(id, el);
-    }
-    el.volume = Math.min(1, FILE_BASE_VOLUME * scale);
-    el.currentTime = 0;
-    el.play().catch((err) => Logger.debug('[Sound] custom play failed:', err));
+    playFile(id, entry.path, scale);
   });
+}
+
+function playFile(id: string, path: string, scale: number): void {
+  let el = fileAudio.get(id);
+  if (!el || el.dataset.path !== path) {
+    el = new Audio(convertFileSrc(path));
+    el.dataset.path = path;
+    fileAudio.set(id, el);
+  }
+  el.volume = Math.min(1, FILE_BASE_VOLUME * scale);
+  el.currentTime = 0;
+  el.play().catch((err) => Logger.debug('[Sound] custom play failed:', err));
+}
+
+/** A custom sound whose file is already known (the mention ping carries it),
+ *  so the window playing it needs no settings of its own. */
+export function playSoundFile(id: string, path: string, volume?: number | null): void {
+  const scale = volumeScale(volume);
+  if (scale <= 0) return;
+  playFile(id, path, scale);
 }
 
 /** Play a sound at `volume` percent of its own level (0-200, default 100). */
