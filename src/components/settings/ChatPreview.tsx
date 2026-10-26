@@ -177,8 +177,8 @@ const PreviewLine = ({
       >
         {design.show_timestamps && (
           <span
-            className="text-textSecondary tabular-nums whitespace-nowrap"
-            style={{ fontSize: '0.78em', opacity: 0.5, marginRight: '0.45em' }}
+            className="text-textMuted tabular-nums whitespace-nowrap"
+            style={{ fontSize: '0.78em', marginRight: '0.45em' }}
           >
             {sampleTime(design, minutesAgo)}
           </span>

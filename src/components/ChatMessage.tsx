@@ -3540,7 +3540,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       {parsed.replyInfo && replyStyle === 'full' && (
         <Tooltip content="Click to view parent message" side="top">
           <div
-            className="mb-1.5 pl-2 border-l-2 border-textSecondary/40 cursor-pointer hover:border-textSecondary/60 transition-colors"
+            className="mb-1 pl-2 border-l-2 border-textSecondary/40 cursor-pointer hover:border-textSecondary/60 transition-colors"
             // This line owns its own tap. Without the marker, a tap on mobile
             // ALSO reaches MobileChatPane's tap-to-reply handler on the list, so
             // jumping to the parent would simultaneously start a reply to the
@@ -3592,7 +3592,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             text sits on its baseline, so a tall emote grows the line without
             moving the name away from the badges. */}
         <div
-          className={atmosphereFrost ? `inline-block max-w-full rounded-md px-1.5 py-0.5 ${frostClass}` : 'min-w-0'}
+          className={atmosphereFrost ? `inline-block max-w-full -ml-1.5 -my-0.5 rounded-md px-1.5 py-0.5 ${frostClass}` : 'min-w-0'}
           style={{ fontSize: `${chatDesign?.font_size ?? 14}px`, lineHeight: 1.625 }}
         >
           {/* The time leads the row's inline flow, on the text's baseline, so
@@ -3600,8 +3600,8 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
               copied line keeps its time. */}
           {formattedTimestamp && (
             <span
-              className="text-textSecondary tabular-nums whitespace-nowrap"
-              style={{ fontSize: '0.78em', opacity: atmosphereFrost ? 0.8 : 0.5, marginRight: '0.45em' }}
+              className="text-textMuted tabular-nums whitespace-nowrap"
+              style={{ fontSize: '0.78em', marginRight: '0.45em' }}
             >
               {formattedTimestamp}
             </span>

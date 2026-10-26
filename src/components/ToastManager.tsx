@@ -446,7 +446,7 @@ const ToastItem = ({ toast, removeToast, getToastIcon, enter }: ToastItemProps) 
         )}
         <div className="flex-1 min-w-0 overflow-hidden">
           {toast.title && <div className="text-sm font-semibold text-textPrimary">{toast.title}</div>}
-          <div className={toast.title ? 'mt-0.5 text-[13px] leading-[18px] text-textSecondary' : 'text-sm font-medium'}>
+          <div className={toast.title ? 'mt-0.5 text-[13px] leading-[18px] text-textSecondary text-pretty' : 'text-sm font-medium'}>
             {toast.message}
           </div>
         </div>
