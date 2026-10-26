@@ -47,7 +47,7 @@ import { canGridProvider, PROVIDER_WATCH, type ProviderId } from '../../types/pr
 import { SevenTvAvatar } from '../SevenTvAvatar';
 import { slotSevenTvId } from './slotSevenTvId';
 import { tileClickAction } from './tileClick';
-import { CLICK_TOGGLE_DELAY_MS } from '../../utils/pauseRoutes';
+import { CLICK_TOGGLE_DELAY_MS, releaseTypingFocus } from '../../utils/pauseRoutes';
 
 interface MultiNookCellProps {
   slot: MultiNookSlot;
@@ -232,6 +232,7 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
   const socialEnabled = isFocused && !isMinimized;
   const playerOverlayButtons = useAppStore((s) => s.settings.player_overlay_buttons);
   const mediaGlowEnabled = useAppStore((s) => s.settings.media_glow !== false);
+  const clickToPause = useAppStore((s) => s.settings.video_player?.click_to_pause !== false);
   const {
     isFollowing,
     followLoading,
@@ -625,11 +626,15 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
         // second click of a double-click (detail >= 2) is left for the
         // capture-phase dblclick handler that fills the space.
         const target = e.target as HTMLElement;
+        const onControl = !!target.closest('button') || !!target.closest('.plyr__controls') || ignoresPlayerMouse(target);
+        // A click on the picture hands the player keys back from a text box.
+        if (!onControl) releaseTypingFocus();
         const action = tileClickAction({
-          onControl: !!target.closest('button') || !!target.closest('.plyr__controls') || ignoresPlayerMouse(target),
+          onControl,
           isMaximized,
           isFocused,
           detail: e.detail,
+          clickToPause,
         });
         if (action === 'ignore') return;
         clearPendingTileClick();

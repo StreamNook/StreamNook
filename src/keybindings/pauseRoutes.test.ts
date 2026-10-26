@@ -32,7 +32,7 @@ vi.mock('../utils/platform', () => ({ IS_MAC: false, IS_MOBILE: false }));
 
 const { registerPlayerControls } = await import('./playerControls');
 const { getBindableCommand } = await import('./commands');
-const { attachPauseRoutes, CLICK_TOGGLE_DELAY_MS } = await import('../utils/pauseRoutes');
+const { attachPauseRoutes, CLICK_TOGGLE_DELAY_MS, releaseTypingFocus } = await import('../utils/pauseRoutes');
 const { getStaticItems } = await import('../utils/commandPaletteSources');
 
 describe('pause routes', () => {
@@ -125,6 +125,57 @@ describe('pause routes', () => {
     void row?.run();
     expect(togglePlay).toHaveBeenCalledTimes(1);
     registerPlayerControls(null);
+  });
+
+  it('with Click to pause off, a click releases the text box and never toggles', () => {
+    const video = new EventTarget();
+    let clickToPause = false;
+    const deps = {
+      togglePlay: vi.fn(),
+      reportPaused: vi.fn(),
+      parkPaused: vi.fn(),
+      clickToPause: () => clickToPause,
+      releaseFocus: vi.fn(),
+    };
+    attachPauseRoutes(video as unknown as HTMLVideoElement, deps);
+    video.dispatchEvent(new Event('click'));
+    vi.advanceTimersByTime(CLICK_TOGGLE_DELAY_MS * 2);
+    expect(deps.releaseFocus).toHaveBeenCalledTimes(1);
+    expect(deps.togglePlay).not.toHaveBeenCalled();
+    // The setting is read at click time: turned back on, the next click toggles.
+    clickToPause = true;
+    video.dispatchEvent(new Event('click'));
+    vi.advanceTimersByTime(CLICK_TOGGLE_DELAY_MS);
+    expect(deps.releaseFocus).toHaveBeenCalledTimes(2);
+    expect(deps.togglePlay).toHaveBeenCalledTimes(1);
+  });
+
+  it('with Click to pause off, a pause from the button or a key still parks the download', () => {
+    const video = new EventTarget();
+    const deps = {
+      togglePlay: vi.fn(),
+      reportPaused: vi.fn(),
+      parkPaused: vi.fn(),
+      clickToPause: () => false,
+      releaseFocus: vi.fn(),
+    };
+    attachPauseRoutes(video as unknown as HTMLVideoElement, deps);
+    video.dispatchEvent(new Event('pause'));
+    expect(deps.reportPaused).toHaveBeenCalledTimes(1);
+    expect(deps.parkPaused).toHaveBeenCalledTimes(1);
+  });
+
+  it('releaseTypingFocus blurs a text box and leaves anything else focused', () => {
+    const typing = { tagName: 'TEXTAREA', blur: vi.fn() };
+    releaseTypingFocus({ activeElement: typing as unknown as Element });
+    expect(typing.blur).toHaveBeenCalledTimes(1);
+    const editable = { tagName: 'DIV', isContentEditable: true, blur: vi.fn() };
+    releaseTypingFocus({ activeElement: editable as unknown as Element });
+    expect(editable.blur).toHaveBeenCalledTimes(1);
+    const button = { tagName: 'BUTTON', isContentEditable: false, blur: vi.fn() };
+    releaseTypingFocus({ activeElement: button as unknown as Element });
+    expect(button.blur).not.toHaveBeenCalled();
+    releaseTypingFocus({ activeElement: null });
   });
 
   it('detaching removes every route and drops a pending click', () => {

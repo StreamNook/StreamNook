@@ -78,6 +78,10 @@ export interface VideoPlayerSettings {
   /** Scroll down over the player to open the channel About drawer. Default
    *  true. Moves to Shift + scroll down while `scroll_volume` is also on. */
   scroll_about_reveal?: boolean;
+  /** A click on the video pauses and plays it (the main player and a
+   *  maximized MultiNook tile). Default true. Off, a click only moves focus out
+   *  of a text box so the player keys work. Typed in Rust. */
+  click_to_pause?: boolean;
   /** Middle-click the player to toggle mute. Default true. */
   middle_click_mute?: boolean;
   /** Middle-click a stream card or sidebar row to open it in MultiNook.

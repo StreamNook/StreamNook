@@ -34,4 +34,14 @@ describe('tileClickAction', () => {
   it('unfocuses a focused tile later', () => {
     expect(tileClickAction({ ...base, isFocused: true })).toBe('unfocus-later');
   });
+
+  it('leaves a maximized tile playing when Click to pause is off', () => {
+    expect(tileClickAction({ ...base, isMaximized: true, clickToPause: false })).toBe('ignore');
+    expect(tileClickAction({ ...base, isMaximized: true, clickToPause: true })).toBe('toggle-play-later');
+  });
+
+  it('still switches the audio tile with Click to pause off', () => {
+    expect(tileClickAction({ ...base, isFocused: false, clickToPause: false })).toBe('focus');
+    expect(tileClickAction({ ...base, isFocused: true, clickToPause: false })).toBe('unfocus-later');
+  });
 });

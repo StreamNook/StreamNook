@@ -88,6 +88,13 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Player',
     section: 'Mouse Controls',
     sectionId: 'settings-section-mouse-controls',
+    title: 'Click to pause',
+    description: 'Click the video to pause or play the stream. Turn it off and a click only leaves the chat box, so Space, M and the other player keys work without pausing.'
+  },
+  {
+    tab: 'Player',
+    section: 'Mouse Controls',
+    sectionId: 'settings-section-mouse-controls',
     title: 'Middle-click mute',
     description: 'Click the scroll wheel or middle mouse button over the player to mute and unmute the stream without the keyboard. Previously "Middle-click to mute".'
   },
