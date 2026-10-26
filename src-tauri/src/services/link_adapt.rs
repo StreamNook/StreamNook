@@ -15,11 +15,12 @@
 //! - **how much extra distance from the live edge** to keep: one second per
 //!   stall, given back half a second at a time while playback stays clean, so a
 //!   good link returns to the tight edge and a bad one stops stalling. Only
-//!   the phones' players follow it; the desktop players learn their own
-//!   cushion per channel.
+//!   the old phone rules (tests) hand it out; every app's player learns its
+//!   own cushion per channel.
 //!
-//! Two rule sets (`Rules`). The phones keep the governor they shipped. The
-//! desktop is held to "never hitch": it judges only warm samples (never the
+//! Two rule sets (`Rules`). Every app runs the desktop's; the governor the
+//! phones first shipped stays for its unit tests. The desktop's is held to
+//! "never hitch": it judges only warm samples (never the
 //! first transfer of a session or one taken while a switch settles), steps
 //! down only on the median of at least four of them against the rate the
 //! rung's content measurably runs at, measures twice and keeps the faster
@@ -30,11 +31,10 @@
 //!
 //! Only "Auto" sessions change rendition (`auto` on every platform, and the
 //! phones' "best", which is what they shipped as Auto); a quality the viewer
-//! picked by name, and the desktop's "best", stay put. On the phones a link
-//! that could not hold a rung is remembered for a while (the solo player only),
-//! so a restart, an audio-only screen-off swap or the next channel starts at a
-//! rung the link can carry instead of freezing on the source again. A
-//! MultiNook tile never moves its own rung: the grid shares one link.
+//! picked by name, and the desktop's "best", stay put. A start picks its rung
+//! from two timed downloads before the first frame, so a weak link starts on a
+//! rung it can carry. A MultiNook tile never moves its own rung: the grid
+//! shares one link.
 //!
 //! The decisions are pure (`Governor`, time passed in) and unit-tested; the
 //! runtime half below applies them through the stream's `Route`: a seamless
@@ -131,9 +131,9 @@ pub const TWITCH_SEGMENT_SECS: f64 = 2.0;
 
 /// Which decisions a session makes.
 ///
-/// `Phone` is the governor the phones shipped: stalls and lost tails step
-/// down at once, judged by an EWMA of every transfer, and a relay restart is
-/// an acceptable way to switch. `Desktop` is held to a player that must never
+/// `Phone` is the governor the phones first shipped (kept for its tests):
+/// stalls and lost tails step down at once, judged by an EWMA of every
+/// transfer, and a relay restart is an acceptable way to switch. `Desktop` is held to a player that must never
 /// hitch: it judges only warm samples, steps down only when the measured link
 /// cannot carry what the rung measurably needs, and moves only where the
 /// switch is seamless (spliced into the playlist the player already reads).
@@ -1005,11 +1005,11 @@ pub fn enabled() -> bool {
     !OFF.load(Ordering::Relaxed)
 }
 
-/// The phones' players follow the cushion, and their origin waits longer for
-/// a late tail. The desktop players learn their own cushion per channel and
-/// keep the origin's home deadlines.
+/// The old phone rules, kept only for their unit tests. Every app runs the
+/// desktop's rules: its players learn their own cushion per channel and the
+/// origin keeps its home deadlines.
 pub fn phone_rules() -> bool {
-    cfg!(mobile) || PHONE_RULES.load(Ordering::Relaxed)
+    PHONE_RULES.load(Ordering::Relaxed)
 }
 
 /// What applying a switch returns: the URL the player reloads on, or None
@@ -1543,6 +1543,9 @@ pub fn note_player_segment(stream_id: &str, bytes: u64, secs: f64, content_secs:
 
 /// A stall the player reported.
 pub fn note_stall(stream_id: &str, secs: f64, ended: bool) {
+    if ended {
+        info!("[LinkAdapt] {}: stall ended after {:.0} ms", stream_id, secs * 1000.0);
+    }
     with_session(stream_id, |g, now| g.note_stall(secs, ended, now));
 }
 
