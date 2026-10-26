@@ -1912,18 +1912,25 @@ export const useAppStore = create<AppState>((set, get) => ({
     // A live toast, or one carrying an action (Undo), leaves its timer to the
     // surface that draws it, so hovering holds it: an Undo must never vanish
     // under the pointer. Other toasts use the simple auto-dismiss.
+    // A toast added with an id that is already showing replaces it in place:
+    // same position and same createdAt, with the old auto-dismiss timer cleared
+    // so it cannot remove the replacement.
+    const showing = get().toasts.find(t => t.id === id);
+    if (showing?.timeoutId) clearTimeout(showing.timeoutId);
+    const place = (toast: Toast) => set(state => ({
+      toasts: state.toasts.some(t => t.id === id)
+        ? state.toasts.map(t => (t.id === id ? { ...toast, createdAt: t.createdAt } : t))
+        : [...state.toasts, toast],
+    }));
+
     if (type === 'live' || options?.sticky || action) {
-      set(state => ({
-        toasts: [...state.toasts, { id, message, type, action, duration, createdAt }]
-      }));
+      place({ id, message, type, action, duration, createdAt });
     } else {
       const timeoutId = setTimeout(() => {
         set(state => ({ toasts: state.toasts.filter(t => t.id !== id) }));
       }, duration);
 
-      set(state => ({
-        toasts: [...state.toasts, { id, message, type, action, timeoutId, duration, createdAt }]
-      }));
+      place({ id, message, type, action, timeoutId, duration, createdAt });
     }
   },
   removeToast: (id) => {

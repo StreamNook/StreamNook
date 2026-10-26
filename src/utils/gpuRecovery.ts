@@ -40,6 +40,11 @@ export function shouldOfferRestart(atStart: DrawingMode, checks: DrawingMode[]):
 
 const RECHECK_MS = [3000, 10_000];
 
+/** The restart toast's id. Toast ids otherwise come from `Date.now() +
+ *  Math.random()`, which is never negative, so this cannot collide. Every
+ *  driver reset shows the one toast instead of stacking another. */
+export const GPU_RESTART_TOAST_ID = -1;
+
 async function restartForDrawing(): Promise<void> {
   await captureResumeSnapshot();
   if (import.meta.env.DEV) {
@@ -74,7 +79,7 @@ export function startGpuRecoveryWatch(): () => void {
               'Video and chat are drawing without the graphics card since a graphics driver reset, which makes them lag. Restart StreamNook to fix it; your stream reopens.',
               'warning',
               { label: 'Restart', onClick: () => void restartForDrawing() },
-              { sticky: true, alwaysShow: true },
+              { sticky: true, alwaysShow: true, id: GPU_RESTART_TOAST_ID },
             );
           }
         }, delay),
