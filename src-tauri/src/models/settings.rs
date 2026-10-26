@@ -170,10 +170,11 @@ pub struct VideoPlayerSettings {
     #[serde(default = "default_true")]
     pub scroll_about_reveal: bool,
     /// A click on the video pauses and plays it (the main player and a
-    /// maximized MultiNook tile). On by default. Off, a click only moves focus
-    /// out of a text box so the player keys work. Pausing stops the download
-    /// whichever way it happens, so this changes only what a click does.
-    #[serde(default = "default_true")]
+    /// maximized MultiNook tile). Off by default, as a click was before 8.8.16:
+    /// it only moves focus out of a text box so the player keys work. Pausing
+    /// stops the download whichever way it happens, so this changes only what
+    /// a click does.
+    #[serde(default)]
     pub click_to_pause: bool,
     /// Middle-clicking the player toggles mute. On by default.
     #[serde(default = "default_true")]
@@ -253,7 +254,7 @@ impl Default for VideoPlayerSettings {
             background_mode: default_background_mode(),
             scroll_volume: true,
             scroll_about_reveal: true,
-            click_to_pause: true,
+            click_to_pause: false,
             middle_click_mute: true,
             middle_click_multinook: true,
             wheel_volume_step: 0.05,
