@@ -410,6 +410,11 @@ pub(crate) fn toast_xml(
         xml.push_str(&format!("<image placement=\"hero\" src=\"{}\"/>", src(path)));
     }
     xml.push_str(&format!("<text hint-maxLines=\"1\">{}</text>", xml_escape(&notice.title)));
+    // The quoted line sits between the title and the body, one line, in the
+    // body's quieter ink (Windows only keeps text order for top-level lines).
+    if let Some(quote) = notice.quote.as_deref().filter(|q| !q.is_empty()) {
+        xml.push_str(&format!("<text hint-maxLines=\"1\">{}</text>", xml_escape(quote)));
+    }
     if !notice.body.is_empty() {
         xml.push_str(&format!("<text>{}</text>", xml_escape(&notice.body)));
     }
@@ -764,6 +769,7 @@ mod tests {
             kind: "mention".into(),
             title: "Viewer mentioned you in <somechannel>".into(),
             body: "hey @you & \"friends\"".into(),
+            quote: None,
             image_url: None,
             round_image: true,
             action_label: Some("Open chat".into()),
@@ -800,6 +806,17 @@ mod tests {
         assert_eq!(attr("arguments", 2), attr("launch", 1));
         let send = ToastArgs::decode(&attr("arguments", 1)).unwrap();
         assert!(send.send && send.reply.is_some());
+    }
+
+    #[test]
+    fn a_quote_sits_between_the_title_and_the_body_escaped() {
+        let quoted = MirroredNotice { quote: Some("\u{201C}a <b> & \"c\"\u{201D}".into()), ..notice() };
+        let xml = toast_xml(&quoted, None, None, &[]);
+        let quote = "<text hint-maxLines=\"1\">\u{201C}a &lt;b&gt; &amp; &quot;c&quot;\u{201D}</text>";
+        let (title, body) = (xml.find("you in &lt;somechannel&gt;").unwrap(), xml.find("hey @you").unwrap());
+        let at = xml.find(quote).expect("the quote line, escaped");
+        assert!(title < at && at < body, "title, quote, body: {xml}");
+        assert!(!toast_xml(&notice(), None, None, &[]).contains("\u{201C}"), "no quote, no line");
     }
 
     #[test]

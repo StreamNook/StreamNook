@@ -51,6 +51,8 @@ export interface MirroredNotice {
   kind: MirroredNoticeKind;
   title: string;
   body: string;
+  /** A quieter line above the body: the message a reply answers (yours). */
+  quote?: string | null;
   imageUrl?: string | null;
   /** A person's picture (round) rather than box art or a badge (square). */
   roundImage?: boolean;

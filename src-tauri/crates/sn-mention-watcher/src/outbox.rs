@@ -188,6 +188,7 @@ mod tests {
             text: "hi".into(),
             kind: "mention",
             reply_parent_id: None,
+            reply_parent_text: None,
             at_ms: 0,
         }
     }
@@ -232,10 +233,11 @@ mod tests {
         let keys: Vec<&str> = json[0].as_object().unwrap().keys().map(String::as_str).collect();
         for key in [
             "user_id", "msg_id", "channel_id", "channel_login", "sender_id", "sender_login", "sender_name",
-            "color", "text", "kind", "reply_parent_id", "at_ms",
+            "color", "text", "kind", "reply_parent_id", "reply_parent_text", "at_ms",
         ] {
             assert!(keys.contains(&key), "missing {key}");
         }
         assert!(json[0]["reply_parent_id"].is_null());
+        assert!(json[0]["reply_parent_text"].is_null());
     }
 }

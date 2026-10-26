@@ -100,11 +100,17 @@ pub async fn open_mention(id: String) -> Option<MentionEntry> {
     if let Some(entry) = mention_inbox::open(&id) {
         return Some(entry);
     }
-    match crate::services::mention_watch::client::pull().await {
-        Ok(_) => mention_inbox::open(&id),
-        Err(e) => {
+    // A pull already running is waited for (its page may hold this very
+    // mention), but a tap never hangs on a slow network.
+    match tokio::time::timeout(std::time::Duration::from_secs(15), crate::services::mention_watch::client::pull()).await {
+        Ok(Ok(_)) => mention_inbox::open(&id),
+        Ok(Err(e)) => {
             log::warn!("[MentionWatch] pull for an opened mention failed: {e}");
             None
+        }
+        Err(_) => {
+            log::warn!("[MentionWatch] pull for an opened mention timed out");
+            mention_inbox::open(&id)
         }
     }
 }

@@ -12,26 +12,22 @@
 
 use crate::commands::notification_mirror::{MirroredNotice, NoticeAction, NoticeReply};
 use crate::models::chat_layout::ChatMessage;
-use crate::services::mention_inbox::{open_key, room_key, MentionKind};
+use crate::services::mention_inbox::{open_key, room_key, MentionNotice};
 
-/// The notice for `msg`. `avatar` is the sender's picture when it was found.
-fn notice_for(msg: &ChatMessage, kind: MentionKind, avatar: Option<String>) -> MirroredNotice {
+/// The desktop notice for `msg`, in the words and with the face every app's
+/// notification uses (`mention_inbox::notice_for`).
+fn mirrored(msg: &ChatMessage, notice: &MentionNotice) -> MirroredNotice {
     let room = room_key(&msg.provider, &msg.channel);
     let channel = room.split_once(':').map(|(_, slug)| slug.to_string()).unwrap_or_else(|| room.clone());
-    let name = if msg.display_name.is_empty() { msg.username.clone() } else { msg.display_name.clone() };
-    let title = match kind {
-        MentionKind::Reply => format!("{name} replied to you in {channel}"),
-        MentionKind::Mention => format!("{name} mentioned you in {channel}"),
-        MentionKind::Word => format!("{name} in {channel}"),
-    };
     // Only Twitch takes a threaded reply from the notification.
     let twitch = !room.contains(':');
     MirroredNotice {
         id: format!("mention-{}", msg.id),
         kind: "mention".into(),
-        title,
-        body: msg.content.clone(),
-        image_url: avatar,
+        title: notice.notice.headline.clone(),
+        body: notice.notice.body.clone(),
+        quote: notice.notice.quote.clone(),
+        image_url: notice.sender_avatar.clone(),
         round_image: true,
         action_label: Some("Open chat".into()),
         action: Some(NoticeAction::Mention { id: msg.id.clone(), channel: open_key(&msg.provider, &msg.channel) }),
@@ -39,32 +35,62 @@ fn notice_for(msg: &ChatMessage, kind: MentionKind, avatar: Option<String>) -> M
             channel,
             broadcaster_id: msg.tags.get("room-id").cloned(),
             parent_id: msg.id.clone(),
-            to_name: name,
+            to_name: notice.notice.title.clone(),
         }),
     }
 }
 
 /// Show the notification for an entry `mention_inbox` decided to announce.
-pub fn deliver(msg: &ChatMessage, kind: MentionKind) {
+pub async fn deliver(msg: &ChatMessage, notice: &MentionNotice) {
     let Some(app) = crate::services::providers::app_handle() else { return };
-    let msg = msg.clone();
-    tauri::async_runtime::spawn(async move {
-        let avatar = if msg.provider.is_empty() || msg.provider.eq_ignore_ascii_case("twitch") {
-            match crate::services::twitch_service::TwitchService::get_user_by_id(&msg.user_id).await {
-                Ok(user) => user.profile_image_url,
-                Err(_) => None,
-            }
-        } else {
-            None
-        };
-        crate::commands::notification_mirror::deliver(app, notice_for(&msg, kind, avatar)).await;
-    });
+    crate::commands::notification_mirror::deliver(app, mirrored(msg, notice)).await;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::mention_inbox::{entry_for, notice_text, MentionKind};
     use std::collections::HashMap;
+
+    /// The desktop notice for `msg` as `mention_inbox` would announce it.
+    fn notice_for(msg: &ChatMessage, kind: MentionKind, avatar: Option<&str>) -> MirroredNotice {
+        let entry = entry_for(msg, kind, 0);
+        let notice = MentionNotice {
+            notice: notice_text(&entry),
+            entry,
+            sender_avatar: avatar.map(Into::into),
+            channel_avatar: None,
+        };
+        mirrored(msg, &notice)
+    }
+
+    #[test]
+    fn a_reply_shows_its_face_and_quotes_your_message() {
+        let mut msg = ChatMessage {
+            id: "r-1".into(),
+            user_id: "42".into(),
+            username: "viewer".into(),
+            display_name: "Viewer".into(),
+            color: None,
+            badges: vec![],
+            timestamp: "0".into(),
+            content: "yeah it was".into(),
+            provider: "twitch".into(),
+            channel: "#chan".into(),
+            emotes: vec![],
+            tags: HashMap::new(),
+            layout: Default::default(),
+            segments: vec![],
+            metadata: Default::default(),
+        };
+        msg.tags.insert("reply-parent-msg-body".into(), "did\\syou\\ssee\\sthat".into());
+        let n = notice_for(&msg, MentionKind::Reply, Some("https://static-cdn.jtvnw.net/v.png"));
+        assert_eq!(n.quote.as_deref(), Some("\u{201C}did you see that\u{201D}"));
+        assert_eq!(n.body, "yeah it was");
+        assert_eq!(n.image_url.as_deref(), Some("https://static-cdn.jtvnw.net/v.png"));
+        assert!(n.round_image);
+        assert_eq!(notice_for(&msg, MentionKind::Mention, None).quote, None);
+    }
 
     #[test]
     fn the_notice_opens_the_message_and_replies_in_its_thread() {
@@ -125,7 +151,7 @@ mod tests {
             metadata: Default::default(),
         };
         let n = notice_for(&msg, MentionKind::Mention, None);
-        assert_eq!(n.title, "Kicker mentioned you in someslug");
+        assert_eq!(n.title, "Kicker mentioned you in SomeSlug on Kick");
         // The click opens the chat by its own case; the room key stays lowercase.
         assert_eq!(n.action, Some(NoticeAction::Mention { id: "k-1".into(), channel: "kick:SomeSlug".into() }));
         assert_eq!(n.reply, None);

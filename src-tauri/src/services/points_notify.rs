@@ -556,6 +556,7 @@ fn points_notice(id: String, look: &PointsLook, title: String, body: String, sys
         kind: "channel_points".into(),
         title,
         body,
+        quote: None,
         image_url: look.avatar_url.clone(),
         round_image: true,
         // The system notification opens the channel from its body; a MultiChat
@@ -792,6 +793,7 @@ fn prediction_started_notice(
         kind: "channel_points".into(),
         title: format!("{} started a prediction", look.display_name),
         body: p.title.clone(),
+        quote: None,
         image_url: look.avatar_url.clone(),
         round_image: true,
         action_label: Some("Open prediction".into()),
@@ -875,6 +877,7 @@ fn prediction_result_notice(
         kind: "channel_points".into(),
         title,
         body,
+        quote: None,
         image_url: look.avatar_url.clone(),
         round_image: true,
         action_label: (!system).then(|| "Watch".to_string()),

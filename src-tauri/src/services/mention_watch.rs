@@ -149,6 +149,9 @@ pub struct RemoteMention {
     pub text: String,
     #[serde(default)]
     pub reply_parent_id: Option<String>,
+    /// The message a reply answers (yours), as the watcher read it.
+    #[serde(default)]
+    pub reply_parent_text: Option<String>,
     pub at_ms: i64,
 }
 
@@ -186,6 +189,12 @@ impl RemoteMention {
             parts: Vec::new(),
             kind,
             reply_parent_id: self.reply_parent_id.filter(|p| !p.is_empty()),
+            reply_parent_text: match kind {
+                MentionKind::Reply => {
+                    self.reply_parent_text.as_deref().and_then(crate::services::mention_inbox::parent_text)
+                }
+                _ => None,
+            },
             at_ms: self.at_ms,
             read: false,
             removed: false,
@@ -265,7 +274,9 @@ pub mod client {
 
     static GENERATION: AtomicU64 = AtomicU64::new(0);
     static INPUTS: Mutex<Option<Inputs>> = Mutex::new(None);
-    static PULLING: AtomicBool = AtomicBool::new(false);
+    /// One pull at a time; a caller that finds one running waits for it, so a
+    /// tapped mention the running pull is filing is found.
+    static PULL_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     static LOOP_STARTED: AtomicBool = AtomicBool::new(false);
     static LAST_PULL: Mutex<Option<Instant>> = Mutex::new(None);
     /// Twitch logins already resolved to ids.
@@ -444,14 +455,13 @@ pub mod client {
     }
 
     /// Pulls what the server holds past this account's cursor into the inbox.
-    /// Answers how many entries were new. One pull at a time.
+    /// Answers how many entries were new. One pull at a time; a second caller
+    /// waits its turn.
     pub async fn pull() -> Result<u32, String> {
         if !inputs().away_alerts {
             return Ok(0);
         }
-        if PULLING.swap(true, Ordering::SeqCst) {
-            return Ok(0);
-        }
+        let _gate = PULL_GATE.lock().await;
         let out = pull_pages().await;
         // Only a pull that worked holds the next one off: one tried before
         // sign-in must not delay the pull sign-in starts.
@@ -460,7 +470,6 @@ pub mod client {
                 *l = Some(Instant::now());
             }
         }
-        PULLING.store(false, Ordering::SeqCst);
         out
     }
 

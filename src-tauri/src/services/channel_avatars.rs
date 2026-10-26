@@ -48,6 +48,8 @@ struct Cache {
 }
 
 static CACHE: Lazy<Mutex<Cache>> = Lazy::new(|| Mutex::new(Cache::default()));
+/// Woken after every lookup resolves (found or not), for `wait_for`.
+static LANDED: tokio::sync::Notify = tokio::sync::Notify::const_new();
 
 /// One channel a page wants a face for: its platform and the id that
 /// platform's avatar lookup takes (Twitch and YouTube ids, Kick slugs).
@@ -190,6 +192,49 @@ pub fn request(app: &AppHandle, requests: Vec<AvatarRequest>) -> HashMap<String,
     hits
 }
 
+/// Avatars for `requests` like `request`, but a lookup that lands within
+/// `timeout` is in the answer too (a notification about to go out waits a
+/// moment for a face rather than going without). Returns as soon as nothing
+/// it asked for is still being looked up.
+pub async fn wait_for(app: &AppHandle, requests: Vec<AvatarRequest>, timeout: Duration) -> HashMap<String, String> {
+    let keys: Vec<String> = requests.iter().filter(|r| !r.id.is_empty()).map(|r| key(&r.provider, &r.id)).collect();
+    let mut found = request(app, requests);
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        // Registered before the cache is read again, so a lookup that lands
+        // in between still wakes this.
+        let landed = LANDED.notified();
+        tokio::pin!(landed);
+        landed.as_mut().enable();
+        if !settle(&keys, &mut found) {
+            return found;
+        }
+        if tokio::time::timeout_at(deadline, landed).await.is_err() {
+            return found;
+        }
+    }
+}
+
+/// Copies what the cache holds now for `keys` into `found`. Whether any of
+/// them is still being looked up.
+fn settle(keys: &[String], found: &mut HashMap<String, String>) -> bool {
+    let Ok(cache) = CACHE.lock() else { return false };
+    let now = unix_now();
+    let mut waiting = false;
+    for k in keys {
+        if found.contains_key(k) {
+            continue;
+        }
+        match cache.known.get(k) {
+            Some(e) if now.saturating_sub(e.at) < TTL_SECS => {
+                found.insert(k.clone(), e.url.clone());
+            }
+            _ => waiting |= cache.in_flight.contains(k),
+        }
+    }
+    waiting
+}
+
 async fn look_up(app: &AppHandle, provider: &str, ids: Vec<String>) {
     let found: HashMap<String, String> = match provider {
         "twitch" => crate::services::twitch_service::TwitchService::users_by_ids(&ids)
@@ -230,6 +275,7 @@ async fn look_up(app: &AppHandle, provider: &str, ids: Vec<String>) {
             schedule_save(&mut cache);
         }
     }
+    LANDED.notify_waiters();
     if !landed.is_empty() {
         let _ = app.emit(EVENT, &landed);
     }
@@ -243,6 +289,23 @@ mod tests {
     fn keys_are_per_platform_and_case_blind() {
         assert_eq!(key("youtube", "UCabc"), "youtube:ucabc");
         assert_ne!(key("kick", "123"), key("twitch", "123"));
+    }
+
+    #[test]
+    fn settle_takes_cached_faces_and_waits_only_for_lookups_running() {
+        let (hit, busy, gone) = ("twitch:settle-hit", "twitch:settle-busy", "twitch:settle-gone");
+        {
+            let mut cache = CACHE.lock().unwrap();
+            cache.known.insert(hit.into(), Entry { url: "https://static-cdn.jtvnw.net/h.png".into(), at: unix_now() });
+            cache.in_flight.insert(busy.into());
+        }
+        let keys = [hit.to_string(), busy.to_string(), gone.to_string()];
+        let mut found = HashMap::new();
+        assert!(settle(&keys, &mut found), "a lookup is still running");
+        assert_eq!(found.get(hit).map(String::as_str), Some("https://static-cdn.jtvnw.net/h.png"));
+        CACHE.lock().unwrap().in_flight.remove(busy);
+        assert!(!settle(&keys, &mut found), "nothing left to wait for: a miss never holds a notification");
+        assert_eq!(found.len(), 1);
     }
 
     #[test]

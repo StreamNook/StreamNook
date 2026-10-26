@@ -19,6 +19,8 @@ pub struct Privmsg {
     pub reply_parent_user_id: Option<String>,
     pub reply_parent_login: Option<String>,
     pub reply_parent_display: Option<String>,
+    /// The message replied to, as Twitch quotes it.
+    pub reply_parent_body: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -121,6 +123,7 @@ pub fn parse(line: &str) -> Line {
                 reply_parent_user_id: opt("reply-parent-user-id"),
                 reply_parent_login: opt("reply-parent-user-login"),
                 reply_parent_display: opt("reply-parent-display-name"),
+                reply_parent_body: opt("reply-parent-msg-body"),
             }))
         }
         _ => Line::Other,
@@ -158,6 +161,7 @@ mod tests {
         assert_eq!(m.reply_parent_user_id.as_deref(), Some("100"));
         assert_eq!(m.reply_parent_login.as_deref(), Some("brandon"));
         assert_eq!(m.reply_parent_display.as_deref(), Some("Brandon"));
+        assert_eq!(m.reply_parent_body.as_deref(), Some("nice one"));
         assert_eq!(m.text, "@Brandon agreed");
         assert_eq!(unescape("nice\\sone\\:\\\\"), "nice one;\\");
     }

@@ -683,6 +683,8 @@ export interface MentionEntry {
   text: string;
   kind: MentionKind;
   reply_parent_id?: string | null;
+  /** The message a reply answers (yours), on one line. Replies only. */
+  reply_parent_text?: string | null;
   at_ms: number;
   read: boolean;
   /** A moderator deleted the message after it was filed. */

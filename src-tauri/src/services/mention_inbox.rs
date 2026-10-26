@@ -39,9 +39,17 @@ pub const MAX_AGE_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 pub const MAX_TOMBSTONES: usize = 2000;
 /// Message text kept per entry, in characters.
 const MAX_TEXT: usize = 500;
+/// A reply's parent message kept per entry, in characters.
+const MAX_PARENT: usize = 200;
+/// The replied-to line a notification shows, in characters as people count
+/// them (an emoji built of several code points is one).
+const QUOTE_GRAPHEMES: usize = 60;
+/// How long a notification waits for a face that is not cached yet.
+const FACES_WAIT: Duration = Duration::from_millis(1500);
 pub const CHANGED_EVENT: &str = "mention-inbox-changed";
-/// An entry to show as a notification now (the payload is the entry): the
-/// phones' notification and the desktop island's preview.
+/// An entry to show as a notification now (the payload is a `MentionNotice`:
+/// the entry's own fields, its words and its faces): the phones'
+/// notification and the desktop island's preview.
 pub const NOTIFY_EVENT: &str = "mention-notify";
 /// A live entry just filed unread (its chat is not on screen): the phones'
 /// inbox card over the message bar. Payload `{entry, avatar}`. Not sent for
@@ -56,6 +64,44 @@ pub struct Arrival {
     /// looked up and lands as `channel-avatars`.
     pub avatar: Option<String>,
 }
+
+/// A mention notification's words, the same on every app. The mention
+/// server's pushes follow `crates/sn-mention-rule/tests/notice_fixtures.json`
+/// too, so a pushed notification reads like the app's own.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct NoticeText {
+    /// The sender's name.
+    pub title: String,
+    /// What happened and where: "Replied to you in bigstreamer".
+    pub subtitle: String,
+    /// The whole thing on one line, for a notification with no subtitle:
+    /// "Viewer replied to you in bigstreamer".
+    pub headline: String,
+    /// The message they replied to (yours), quoted on one line. Replies only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quote: Option<String>,
+    /// Their message.
+    pub body: String,
+    /// The chat as a notification names it: "bigstreamer", "SomeSlug on Kick".
+    pub chat_title: String,
+}
+
+/// The `mention-notify` payload. The entry's fields stay at the top level, so
+/// everything that reads the entry keeps working; the words sit under
+/// `notice` (never beside the entry's own `text`).
+#[derive(Serialize, Clone, Debug)]
+pub struct MentionNotice {
+    #[serde(flatten)]
+    pub entry: MentionEntry,
+    pub notice: NoticeText,
+    /// The sender's picture, when cached or found within `FACES_WAIT`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sender_avatar: Option<String>,
+    /// The channel's picture, the same way.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel_avatar: Option<String>,
+}
+
 /// One chat notifies at most this often, so a chat that keeps @-ing you is
 /// one notification, not a stack.
 const NOTIFY_COOLDOWN: Duration = Duration::from_secs(20);
@@ -103,6 +149,10 @@ pub struct MentionEntry {
     pub kind: MentionKind,
     #[serde(default)]
     pub reply_parent_id: Option<String>,
+    /// The message a reply answers (yours), its words on one line, for the
+    /// notification to quote. Replies only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_parent_text: Option<String>,
     pub at_ms: i64,
     pub read: bool,
     /// A moderator deleted the message after it was filed.
@@ -595,10 +645,116 @@ pub fn entry_for(msg: &ChatMessage, kind: MentionKind, now_ms: i64) -> MentionEn
         parts: parts_for(&msg.segments),
         kind,
         reply_parent_id: msg.tags.get("reply-parent-msg-id").cloned(),
+        reply_parent_text: if kind == MentionKind::Reply { reply_parent_of(msg) } else { None },
         at_ms: sent_at_ms(msg).unwrap_or(now_ms),
         read: false,
         removed: false,
     }
+}
+
+/// A reply's parent words: from the parsed reply (Twitch, its history
+/// replay and Kick fill it), else Twitch's raw tag.
+fn reply_parent_of(msg: &ChatMessage) -> Option<String> {
+    msg.metadata
+        .reply_info
+        .as_ref()
+        .and_then(|r| parent_text(&r.parent_msg_body))
+        .or_else(|| {
+            msg.tags
+                .get("reply-parent-msg-body")
+                .and_then(|raw| parent_text(&crate::services::irc_service::unescape_irc_tag(raw)))
+        })
+}
+
+/// A parent message as kept: its words on one line, at most `MAX_PARENT`
+/// characters. None when it has none.
+pub fn parent_text(raw: &str) -> Option<String> {
+    raw_line(raw).map(|line| line.chars().take(MAX_PARENT).collect())
+}
+
+/// The replied-to line: the parent's words in quotes, cut at
+/// `QUOTE_GRAPHEMES` (never through an emoji) with an ellipsis.
+fn quote_line(parent: &str) -> Option<String> {
+    use unicode_segmentation::UnicodeSegmentation;
+    let line = raw_line(parent)?;
+    let graphemes: Vec<&str> = line.graphemes(true).collect();
+    let words = if graphemes.len() > QUOTE_GRAPHEMES {
+        format!("{}\u{2026}", graphemes[..QUOTE_GRAPHEMES].concat().trim_end())
+    } else {
+        line
+    };
+    Some(format!("\u{201C}{words}\u{201D}"))
+}
+
+/// The words on one line: whitespace runs and line breaks become one space.
+fn raw_line(raw: &str) -> Option<String> {
+    let line = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!line.is_empty()).then_some(line)
+}
+
+/// A platform's name where a notification names it; none for Twitch.
+fn platform_label(platform: &str) -> Option<String> {
+    match platform {
+        "" | "twitch" => None,
+        "kick" => Some("Kick".into()),
+        "youtube" => Some("YouTube".into()),
+        "tiktok" => Some("TikTok".into()),
+        other => {
+            let mut chars = other.chars();
+            chars.next().map(|first| first.to_uppercase().chain(chars).collect())
+        }
+    }
+}
+
+/// A notification's words for an entry.
+pub fn notice_text(entry: &MentionEntry) -> NoticeText {
+    let name = if entry.sender_name.trim().is_empty() { entry.sender_login.clone() } else { entry.sender_name.clone() };
+    let chat_title = match platform_label(&entry.platform) {
+        Some(label) => format!("{} on {label}", entry.channel_login),
+        None => entry.channel_login.clone(),
+    };
+    let (subtitle, what) = match entry.kind {
+        MentionKind::Reply => ("Replied to you in", "replied to you in"),
+        MentionKind::Mention => ("Mentioned you in", "mentioned you in"),
+        MentionKind::Word => ("In", "in"),
+    };
+    NoticeText {
+        subtitle: format!("{subtitle} {chat_title}"),
+        headline: format!("{name} {what} {chat_title}"),
+        quote: match entry.kind {
+            MentionKind::Reply => entry.reply_parent_text.as_deref().and_then(quote_line),
+            _ => None,
+        },
+        body: entry.text.clone(),
+        title: name,
+        chat_title,
+    }
+}
+
+/// The face lookup for an entry's channel: Twitch by channel id, Kick by
+/// slug, YouTube by channel id (what `channel_avatars` takes).
+pub fn channel_avatar_request(entry: &MentionEntry) -> Option<crate::services::channel_avatars::AvatarRequest> {
+    let id = match entry.platform.as_str() {
+        "twitch" => entry.channel_id.clone().unwrap_or_default(),
+        "kick" | "youtube" => entry.channel_login.clone(),
+        _ => return None,
+    };
+    (!id.trim().is_empty()).then(|| crate::services::channel_avatars::AvatarRequest { provider: entry.platform.clone(), id })
+}
+
+/// The notice for an entry the core decided to announce: its words, and the
+/// sender's and channel's faces when cached or found within `FACES_WAIT`.
+pub async fn notice_for(entry: MentionEntry) -> MentionNotice {
+    let requests: Vec<_> = [avatar_request(&entry), channel_avatar_request(&entry)].into_iter().flatten().collect();
+    let faces = match crate::services::providers::app_handle() {
+        Some(app) if !requests.is_empty() => {
+            crate::services::channel_avatars::wait_for(&app, requests, FACES_WAIT).await
+        }
+        _ => HashMap::new(),
+    };
+    let sender_avatar = avatar_of(&entry, &faces);
+    let channel_avatar = channel_avatar_request(&entry).and_then(|r| faces.get(&avatar_key(&r)).cloned());
+    MentionNotice { notice: notice_text(&entry), entry, sender_avatar, channel_avatar }
 }
 
 // ---------------------------------------------------------------------------
@@ -617,6 +773,8 @@ struct State {
     owner: String,
     inbox: Inbox,
     dirty: bool,
+    /// Other accounts' inbox keys already folded into this one since it loaded.
+    merged: HashSet<String>,
 }
 
 static STATE: OnceLock<Mutex<Option<State>>> = OnceLock::new();
@@ -704,39 +862,126 @@ fn write(owner: &str, file: &InboxFile) -> Result<(), String> {
     std::fs::rename(&tmp, &path).map_err(|e| e.to_string())
 }
 
-/// Run `f` on the signed-in account's inbox, loading it (and flushing the
-/// previous account's) when the account changed. None when nobody is signed
-/// in to Twitch. `f` returns whether it changed anything.
+/// The Twitch owner of the inbox: the signed-in Twitch account, known from
+/// launch (and the account the mention server's pull reads for), or the
+/// chat's own identity before the account is. Without one, `with_inbox`
+/// keeps the first signed-in Kick, YouTube or TikTok account's inbox.
+fn owner_id(account: Option<String>, chat: Option<(String, String)>) -> Option<String> {
+    account
+        .filter(|id| !id.is_empty())
+        .or_else(|| chat.map(|(_, id)| id).filter(|id| !id.is_empty()))
+}
+
+fn twitch_owner() -> Option<String> {
+    owner_id(crate::services::account_roster::twitch_user_id(), ChatRules::own_identity())
+}
+
+/// The state for a newly loaded owner: its stored inbox, with the rooms on
+/// screen carried over (they did not change with the account).
+fn next_state(old_visible: HashSet<String>, owner: String, mut inbox: Inbox) -> State {
+    inbox.visible = old_visible;
+    State { owner, inbox, dirty: false, merged: HashSet::new() }
+}
+
+/// Which other accounts' inboxes still have to be folded into `owner`'s.
+fn pending_sources(owner: &str, merged: &HashSet<String>, sources: Vec<String>) -> Vec<String> {
+    sources.into_iter().filter(|k| k != owner && !merged.contains(k)).collect()
+}
+
+/// File every source inbox's entries into `owner` (dedupe and tombstones
+/// apply) and keep its tombstones. Answers the sources that held anything,
+/// which the caller empties only once `owner` is safely written.
+fn merge_sources(owner: &mut Inbox, sources: Vec<(String, Inbox)>, now_ms: i64) -> Vec<String> {
+    let mut held = Vec::new();
+    for (key, source) in sources {
+        if source.entries.is_empty() && source.tombstones.is_empty() {
+            continue;
+        }
+        for t in &source.tombstones {
+            owner.tombstone(t);
+        }
+        for e in source.entries {
+            owner.file(e, now_ms);
+        }
+        held.push(key);
+    }
+    held
+}
+
+/// Run `f` on the signed-in account's inbox: the Twitch account's, else the
+/// first signed-in Kick, YouTube or TikTok account's. `f` returns whether it
+/// changed anything. None when no account is known yet.
 fn with_inbox<R>(f: impl FnOnce(&mut Inbox) -> (R, bool)) -> Option<R> {
-    let owner = ChatRules::own_identity().map(|(_, id)| id).filter(|id| !id.is_empty())?;
-    let (out, changed, counts) = {
+    let sources = ChatRules::platform_owners();
+    let owner = twitch_owner().or_else(|| sources.first().cloned())?;
+    with_inbox_of(owner, sources, f)
+}
+
+/// The Twitch account's inbox only. The mention server pulls and answers
+/// for Twitch accounts, so a session without one has nothing to say there.
+fn with_twitch_inbox<R>(f: impl FnOnce(&mut Inbox) -> (R, bool)) -> Option<R> {
+    let owner = twitch_owner()?;
+    with_inbox_of(owner, ChatRules::platform_owners(), f)
+}
+
+/// `with_inbox` for a known owner, loading its inbox (and flushing the
+/// previous owner's) when the owner changed.
+fn with_inbox_of<R>(owner: String, sources: Vec<String>, f: impl FnOnce(&mut Inbox) -> (R, bool)) -> Option<R> {
+    let (out, dirty, counts) = {
         let mut guard = state().lock().ok()?;
+        let mut loaded = false;
         if guard.as_ref().map(|s| s.owner != owner).unwrap_or(true) {
+            let mut visible = HashSet::new();
             if let Some(old) = guard.take() {
                 if old.dirty {
                     let _ = write(&old.owner, &old.inbox.to_file());
                 }
+                visible = old.inbox.visible;
             }
-            *guard = Some(State { owner: owner.clone(), inbox: load(&owner), dirty: false });
-            // A new account's counts replace the old one's.
-            let counts = guard.as_ref().map(|s| s.inbox.unread_by_room()).unwrap_or_default();
-            unread_tx().send_replace(Arc::new(counts));
+            *guard = Some(next_state(visible, owner.clone(), load(&owner)));
+            loaded = true;
         }
         let st = guard.as_mut()?;
+        // Accounts signed in together are one person: mentions kept under a
+        // Kick or YouTube account (before Twitch was known, or on another
+        // platform) follow into this inbox, each key once per load.
+        let pending = pending_sources(&st.owner, &st.merged, sources);
+        let mut adopted = false;
+        if !pending.is_empty() {
+            let loaded_sources: Vec<(String, Inbox)> = pending.iter().map(|k| (k.clone(), load(k))).collect();
+            let held = merge_sources(&mut st.inbox, loaded_sources, now_ms());
+            if !held.is_empty() {
+                adopted = true;
+                // The new home is written before any source is emptied, so a
+                // crash in between leaves a copy (refiling it adds nothing twice).
+                match write(&st.owner, &st.inbox.to_file()) {
+                    Ok(()) => {
+                        for k in &held {
+                            let _ = write(k, &InboxFile { version: 2, ..Default::default() });
+                        }
+                    }
+                    Err(_) => st.dirty = true,
+                }
+            }
+            st.merged.extend(pending);
+        }
         let (out, changed) = f(&mut st.inbox);
         if changed {
             st.dirty = true;
         }
-        let counts = changed.then(|| (st.inbox.unread_by_room(), st.inbox.unread_total()));
-        (out, changed, counts)
+        // A newly loaded account is announced like a change: its counts replace
+        // the old account's, and a list read before the account was known
+        // (empty) reads again.
+        let counts = (changed || loaded || adopted).then(|| (st.inbox.unread_by_room(), st.inbox.unread_total()));
+        (out, st.dirty, counts)
     };
-    if changed {
+    if dirty {
         ensure_flush_task();
-        if let Some((by_room, total)) = counts {
-            unread_tx().send_replace(Arc::new(by_room));
-            if let Some(app) = crate::services::providers::app_handle() {
-                let _ = app.emit(CHANGED_EVENT, serde_json::json!({ "unread_total": total }));
-            }
+    }
+    if let Some((by_room, total)) = counts {
+        unread_tx().send_replace(Arc::new(by_room));
+        if let Some(app) = crate::services::providers::app_handle() {
+            let _ = app.emit(CHANGED_EVENT, serde_json::json!({ "unread_total": total }));
         }
     }
     Some(out)
@@ -833,14 +1078,20 @@ pub fn on_verdict(msg: &ChatMessage, verdict: &Verdict) {
     if !fire {
         return;
     }
-    // Desktop: the system notification (or MultiChat's card) for when the
-    // main window is not in use. Every app: the entry, for the page to show
-    // (the phones' notification, the desktop island's preview).
+    // One task, off the chat lane: the faces get a moment to arrive (most are
+    // cached), then every app's notice goes out (the phones' notification,
+    // the desktop island's preview) and, on desktop, the system notification
+    // (or MultiChat's card) for when the main window is not in use.
     #[cfg(desktop)]
-    crate::services::mention_notify::deliver(msg, kind);
-    if let Some(app) = crate::services::providers::app_handle() {
-        let _ = app.emit(NOTIFY_EVENT, &entry);
-    }
+    let msg = msg.clone();
+    tauri::async_runtime::spawn(async move {
+        let notice = notice_for(entry).await;
+        if let Some(app) = crate::services::providers::app_handle() {
+            let _ = app.emit(NOTIFY_EVENT, &notice);
+        }
+        #[cfg(desktop)]
+        crate::services::mention_notify::deliver(&msg, &notice).await;
+    });
 }
 
 /// A message from a chat's history backlog (what was said before you joined):
@@ -937,7 +1188,7 @@ pub fn clear() {
 pub fn merge_remote(remote: Vec<MentionEntry>, next: i64) -> Option<usize> {
     let cfg = config();
     let remote: Vec<MentionEntry> = remote.into_iter().filter(|e| !cfg.muted.contains(&e.room)).collect();
-    with_inbox(|inbox| {
+    with_twitch_inbox(|inbox| {
         let filed = inbox.merge_remote(remote, now_ms());
         if next > inbox.remote_cursor_ms {
             inbox.remote_cursor_ms = next;
@@ -948,15 +1199,15 @@ pub fn merge_remote(remote: Vec<MentionEntry>, next: i64) -> Option<usize> {
 
 /// How far the signed-in account has pulled from the mention server.
 pub fn remote_cursor() -> Option<i64> {
-    with_inbox(|inbox| (inbox.remote_cursor_ms, false))
+    with_twitch_inbox(|inbox| (inbox.remote_cursor_ms, false))
 }
 
 /// Whether this app already holds the message (it caught it itself), or its
 /// chat is on screen now: a push for it would only repeat what is in front of
-/// the viewer. False when nobody is signed in in this process.
+/// the viewer. False when no Twitch account is signed in in this process.
 pub fn caught_here(id: &str, room: &str) -> bool {
     let room = room.to_lowercase();
-    with_inbox(|inbox| (inbox.get(id).is_some() || inbox.visible.contains(&room), false)).unwrap_or(false)
+    with_twitch_inbox(|inbox| (inbox.get(id).is_some() || inbox.visible.contains(&room), false)).unwrap_or(false)
 }
 
 /// Opening an entry marks it read and returns it.
@@ -992,6 +1243,7 @@ mod tests {
             text: "hi @brandon".into(),
             kind: MentionKind::Mention,
             reply_parent_id: None,
+            reply_parent_text: None,
             at_ms,
             read: false,
             removed: false,
@@ -1000,6 +1252,136 @@ mod tests {
     }
 
     const NOW: i64 = 1_800_000_000_000;
+
+    /// One case of the wording the app and the mention server share.
+    #[derive(Deserialize)]
+    struct NoticeCase {
+        name: String,
+        input: NoticeInput,
+        want: NoticeWant,
+    }
+
+    #[derive(Deserialize)]
+    struct NoticeInput {
+        kind: MentionKind,
+        platform: String,
+        channel: String,
+        sender_name: String,
+        sender_login: String,
+        text: String,
+        parent: Option<String>,
+    }
+
+    #[derive(Deserialize, Debug, PartialEq)]
+    struct NoticeWant {
+        title: String,
+        subtitle: String,
+        headline: String,
+        quote: Option<String>,
+        body: String,
+        chat_title: String,
+    }
+
+    #[test]
+    fn notice_words_match_the_shared_fixtures() {
+        let cases: Vec<NoticeCase> =
+            serde_json::from_str(include_str!("../../crates/sn-mention-rule/tests/notice_fixtures.json")).unwrap();
+        assert!(cases.len() >= 9);
+        for c in cases {
+            let mut e = entry("m1", &c.input.channel.to_lowercase(), NOW);
+            e.platform = c.input.platform;
+            e.channel_login = c.input.channel;
+            e.sender_name = c.input.sender_name;
+            e.sender_login = c.input.sender_login;
+            e.text = c.input.text;
+            e.kind = c.input.kind;
+            e.reply_parent_text = c.input.parent.as_deref().and_then(parent_text);
+            let got = notice_text(&e);
+            let got = NoticeWant {
+                title: got.title,
+                subtitle: got.subtitle,
+                headline: got.headline,
+                quote: got.quote,
+                body: got.body,
+                chat_title: got.chat_title,
+            };
+            assert_eq!(got, c.want, "{}", c.name);
+        }
+    }
+
+    #[test]
+    fn the_notice_keeps_the_entry_text_beside_its_words() {
+        let mut e = entry("m1", "bigstreamer", NOW);
+        e.kind = MentionKind::Reply;
+        e.reply_parent_text = Some("did you see that".into());
+        let notice = MentionNotice {
+            notice: notice_text(&e),
+            entry: e,
+            sender_avatar: Some("https://static-cdn.jtvnw.net/a.png".into()),
+            channel_avatar: None,
+        };
+        let json = serde_json::to_value(&notice).unwrap();
+        assert_eq!(json["text"], "hi @brandon", "the entry's own text stays a string");
+        assert_eq!(json["id"], "m1");
+        assert_eq!(json["notice"]["quote"], "\u{201C}did you see that\u{201D}");
+        assert_eq!(json["notice"]["body"], "hi @brandon");
+        assert_eq!(json["sender_avatar"], "https://static-cdn.jtvnw.net/a.png");
+        assert!(json.get("channel_avatar").is_none());
+        // Every field once: a duplicate key would read as the last one in JS.
+        let raw = serde_json::to_string(&notice).unwrap();
+        assert_eq!(raw.matches("\"text\":").count(), 1);
+    }
+
+    #[test]
+    fn parent_text_is_one_bounded_line() {
+        assert_eq!(parent_text("  a\n\nb  c "), Some("a b c".into()));
+        assert_eq!(parent_text(" \n "), None);
+        assert_eq!(parent_text(&"x".repeat(500)).map(|t| t.chars().count()), Some(MAX_PARENT));
+    }
+
+    #[test]
+    fn a_reply_keeps_its_parent_words_and_a_mention_does_not() {
+        let mut msg = ChatMessage {
+            id: "r1".into(),
+            user_id: "2".into(),
+            username: "fan".into(),
+            display_name: "Fan".into(),
+            color: None,
+            badges: vec![],
+            timestamp: "0".into(),
+            content: "agreed".into(),
+            provider: "twitch".into(),
+            channel: "#chan".into(),
+            emotes: vec![],
+            tags: HashMap::new(),
+            layout: Default::default(),
+            segments: vec![],
+            metadata: Default::default(),
+        };
+        msg.tags.insert("reply-parent-msg-body".into(), "hello\\schat".into());
+        assert_eq!(entry_for(&msg, MentionKind::Reply, NOW).reply_parent_text.as_deref(), Some("hello chat"));
+        assert_eq!(entry_for(&msg, MentionKind::Mention, NOW).reply_parent_text, None);
+        // The parsed reply wins over the raw tag (it is where Kick puts it).
+        msg.metadata.reply_info = Some(crate::models::chat_layout::ReplyInfo {
+            parent_msg_id: "p".into(),
+            parent_display_name: "Brandon".into(),
+            parent_msg_body: "from the parse".into(),
+            parent_user_id: "1".into(),
+            parent_user_login: "brandon".into(),
+            ..Default::default()
+        });
+        assert_eq!(entry_for(&msg, MentionKind::Reply, NOW).reply_parent_text.as_deref(), Some("from the parse"));
+    }
+
+    #[test]
+    fn the_account_owns_the_inbox_before_any_chat() {
+        let chat = Some(("brandon".to_string(), "999".to_string()));
+        assert_eq!(owner_id(Some("42".into()), chat.clone()), Some("42".into()));
+        assert_eq!(owner_id(None, chat.clone()), Some("999".into()));
+        assert_eq!(owner_id(Some(String::new()), chat), Some("999".into()));
+        assert_eq!(owner_id(None, Some(("brandon".into(), String::new()))), None);
+        assert_eq!(owner_id(None, None), None);
+    }
 
     #[test]
     fn parts_keep_emotes_in_place_and_merge_words() {
@@ -1281,5 +1663,57 @@ mod tests {
         let v1 = r#"{"version":1,"entries":[]}"#;
         let old = Inbox::from_file(serde_json::from_str(v1).unwrap(), 2_000);
         assert!(old.tombstones.is_empty() && old.remote_cursor_ms == 0);
+    }
+
+    #[test]
+    fn merging_moves_entries_once_and_keeps_tombstones() {
+        let mut kick = Inbox::default();
+        let mut e = entry("k1", "kick:xqc", NOW);
+        e.platform = "kick".into();
+        assert!(kick.file(e.clone(), NOW));
+        kick.tombstone("gone");
+        let mut twitch = Inbox::default();
+        let held = merge_sources(&mut twitch, vec![("kick-5550001".into(), kick), ("kick-name-x".into(), Inbox::default())], NOW);
+        assert_eq!(held, vec!["kick-5550001".to_string()]);
+        assert_eq!(twitch.unread_total(), 1);
+        assert!(twitch.tombstones.iter().any(|t| t == "gone"));
+        // The same entry again (a source not yet emptied) files nothing twice.
+        let again = Inbox { entries: vec![e], ..Default::default() };
+        merge_sources(&mut twitch, vec![("kick-5550001".into(), again)], NOW);
+        assert_eq!(twitch.unread_total(), 1);
+    }
+
+    #[test]
+    fn a_removed_mention_stays_removed_after_a_merge() {
+        let mut source = Inbox::default();
+        let mut e = entry("k2", "kick:xqc", NOW);
+        e.platform = "kick".into();
+        source.file(e, NOW);
+        let mut owner = Inbox::default();
+        owner.tombstone("k2");
+        merge_sources(&mut owner, vec![("kick-5550001".into(), source)], NOW);
+        assert_eq!(owner.unread_total(), 0);
+    }
+
+    #[test]
+    fn every_other_signed_in_account_is_folded_in_once() {
+        let mut merged = HashSet::new();
+        // Kick kept mentions before Twitch was known; a later boot knows Twitch first.
+        let sources = vec!["kick-5550001".to_string(), "kick-name-x".to_string(), "youtube-UCme".to_string()];
+        assert_eq!(pending_sources("12345", &merged, sources.clone()), sources);
+        merged.extend(sources.clone());
+        assert!(pending_sources("12345", &merged, sources.clone()).is_empty());
+        // A YouTube-only account that signs in to Kick: the owner becomes Kick,
+        // and the YouTube inbox is folded in, not hidden.
+        let pending = pending_sources("kick-5550001", &HashSet::new(), sources);
+        assert_eq!(pending, vec!["kick-name-x".to_string(), "youtube-UCme".to_string()]);
+    }
+
+    #[test]
+    fn the_rooms_on_screen_survive_an_owner_switch() {
+        let visible: HashSet<String> = ["kick:xqc".to_string()].into_iter().collect();
+        let st = next_state(visible, "kick-5550001".into(), Inbox::default());
+        assert!(st.inbox.visible.contains("kick:xqc"));
+        assert!(!st.dirty && st.merged.is_empty());
     }
 }

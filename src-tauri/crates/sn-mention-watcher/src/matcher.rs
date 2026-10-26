@@ -10,6 +10,8 @@ use crate::targets::LiveSet;
 
 /// The longest text handed on, in characters.
 pub const TEXT_MAX: usize = 500;
+/// The longest quoted parent handed on, in characters.
+pub const PARENT_MAX: usize = 200;
 
 /// One match, as `POST /watcher/mentions` takes it.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -25,7 +27,16 @@ pub struct Mention {
     pub text: String,
     pub kind: &'static str,
     pub reply_parent_id: Option<String>,
+    /// The message a reply answers (the watcher's user's own), on one line,
+    /// for the notification to quote. Replies only.
+    pub reply_parent_text: Option<String>,
     pub at_ms: i64,
+}
+
+/// A reply's parent words on one line, at most `PARENT_MAX` characters.
+fn parent_line(body: Option<&str>) -> Option<String> {
+    let line = body?.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!line.is_empty()).then(|| line.chars().take(PARENT_MAX).collect())
 }
 
 /// Every watcher of the message's channel it names or replies to.
@@ -63,6 +74,7 @@ pub fn matches(msg: &Privmsg, live: &LiveSet) -> Vec<Mention> {
             text: text.chars().take(TEXT_MAX).collect(),
             kind: kind.as_str(),
             reply_parent_id: msg.reply_parent_msg_id.clone(),
+            reply_parent_text: if kind.as_str() == "reply" { parent_line(msg.reply_parent_body.as_deref()) } else { None },
             at_ms: msg.sent_ms,
         });
     }
@@ -107,7 +119,7 @@ mod tests {
 
     #[test]
     fn a_reply_is_judged_on_the_text_without_the_parent() {
-        let m = privmsg("@display-name=Bob;id=m2;reply-parent-display-name=Brandon;reply-parent-msg-id=p9;reply-parent-user-id=100;reply-parent-user-login=brandon;room-id=1;tmi-sent-ts=1;user-id=8 :bob!bob@bob.tmi.twitch.tv PRIVMSG #forsen :@Brandon alice said hi");
+        let m = privmsg("@display-name=Bob;id=m2;reply-parent-display-name=Brandon;reply-parent-msg-body=did\\syou\\n\\nsee\\sthat;reply-parent-msg-id=p9;reply-parent-user-id=100;reply-parent-user-login=brandon;room-id=1;tmi-sent-ts=1;user-id=8 :bob!bob@bob.tmi.twitch.tv PRIVMSG #forsen :@Brandon alice said hi");
         let got = matches(&m, &live());
         // Brandon gets the reply; Alice hid Bob, so her name in it does not count.
         assert_eq!(got.len(), 1);
@@ -115,6 +127,14 @@ mod tests {
         assert_eq!(got[0].kind, "reply");
         assert_eq!(got[0].text, "alice said hi");
         assert_eq!(got[0].reply_parent_id.as_deref(), Some("p9"));
+        assert_eq!(got[0].reply_parent_text.as_deref(), Some("did you see that"), "one line");
+    }
+
+    #[test]
+    fn a_long_parent_is_cut_and_a_mention_carries_none() {
+        assert_eq!(parent_line(Some(&"y".repeat(400))).map(|t| t.chars().count()), Some(PARENT_MAX));
+        assert_eq!(parent_line(Some("  ")), None);
+        assert_eq!(parent_line(None), None);
     }
 
     #[test]

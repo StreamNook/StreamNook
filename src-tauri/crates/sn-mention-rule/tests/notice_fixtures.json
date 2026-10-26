@@ -1,0 +1,182 @@
+[
+  {
+    "name": "a reply quotes your message",
+    "input": {
+      "platform": "twitch",
+      "channel": "bigstreamer",
+      "sender_name": "Viewer",
+      "sender_login": "viewer",
+      "text": "yeah that clutch was insane",
+      "kind": "reply",
+      "parent": "did you see that clutch"
+    },
+    "want": {
+      "title": "Viewer",
+      "subtitle": "Replied to you in bigstreamer",
+      "headline": "Viewer replied to you in bigstreamer",
+      "quote": "“did you see that clutch”",
+      "body": "yeah that clutch was insane",
+      "chat_title": "bigstreamer"
+    }
+  },
+  {
+    "name": "a mention has no quote, even inside a reply",
+    "input": {
+      "platform": "twitch",
+      "channel": "bigstreamer",
+      "sender_name": "Viewer",
+      "sender_login": "viewer",
+      "text": "yeah that clutch was insane",
+      "kind": "mention",
+      "parent": "someone else said this"
+    },
+    "want": {
+      "title": "Viewer",
+      "subtitle": "Mentioned you in bigstreamer",
+      "headline": "Viewer mentioned you in bigstreamer",
+      "quote": null,
+      "body": "yeah that clutch was insane",
+      "chat_title": "bigstreamer"
+    }
+  },
+  {
+    "name": "a highlight phrase",
+    "input": {
+      "platform": "twitch",
+      "channel": "bigstreamer",
+      "sender_name": "Viewer",
+      "sender_login": "viewer",
+      "text": "yeah that clutch was insane",
+      "kind": "word",
+      "parent": null
+    },
+    "want": {
+      "title": "Viewer",
+      "subtitle": "In bigstreamer",
+      "headline": "Viewer in bigstreamer",
+      "quote": null,
+      "body": "yeah that clutch was insane",
+      "chat_title": "bigstreamer"
+    }
+  },
+  {
+    "name": "a long parent is cut at 60 characters",
+    "input": {
+      "platform": "twitch",
+      "channel": "bigstreamer",
+      "sender_name": "Viewer",
+      "sender_login": "viewer",
+      "text": "yeah that clutch was insane",
+      "kind": "reply",
+      "parent": "this is a really long message that keeps on going well past the sixty character cut point"
+    },
+    "want": {
+      "title": "Viewer",
+      "subtitle": "Replied to you in bigstreamer",
+      "headline": "Viewer replied to you in bigstreamer",
+      "quote": "“this is a really long message that keeps on going well past…”",
+      "body": "yeah that clutch was insane",
+      "chat_title": "bigstreamer"
+    }
+  },
+  {
+    "name": "an emoji at the cut stays whole",
+    "input": {
+      "platform": "twitch",
+      "channel": "bigstreamer",
+      "sender_name": "Viewer",
+      "sender_login": "viewer",
+      "text": "yeah that clutch was insane",
+      "kind": "reply",
+      "parent": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 👨‍👩‍👧 family"
+    },
+    "want": {
+      "title": "Viewer",
+      "subtitle": "Replied to you in bigstreamer",
+      "headline": "Viewer replied to you in bigstreamer",
+      "quote": "“aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 👨‍👩‍👧…”",
+      "body": "yeah that clutch was insane",
+      "chat_title": "bigstreamer"
+    }
+  },
+  {
+    "name": "newlines and runs of spaces fold to one line",
+    "input": {
+      "platform": "twitch",
+      "channel": "bigstreamer",
+      "sender_name": "Viewer",
+      "sender_login": "viewer",
+      "text": "yeah that clutch was insane",
+      "kind": "reply",
+      "parent": "  first line\n\nsecond   line  "
+    },
+    "want": {
+      "title": "Viewer",
+      "subtitle": "Replied to you in bigstreamer",
+      "headline": "Viewer replied to you in bigstreamer",
+      "quote": "“first line second line”",
+      "body": "yeah that clutch was insane",
+      "chat_title": "bigstreamer"
+    }
+  },
+  {
+    "name": "an empty parent leaves no quote",
+    "input": {
+      "platform": "twitch",
+      "channel": "bigstreamer",
+      "sender_name": "Viewer",
+      "sender_login": "viewer",
+      "text": "yeah that clutch was insane",
+      "kind": "reply",
+      "parent": "   "
+    },
+    "want": {
+      "title": "Viewer",
+      "subtitle": "Replied to you in bigstreamer",
+      "headline": "Viewer replied to you in bigstreamer",
+      "quote": null,
+      "body": "yeah that clutch was insane",
+      "chat_title": "bigstreamer"
+    }
+  },
+  {
+    "name": "Kick names its platform",
+    "input": {
+      "platform": "kick",
+      "channel": "SomeSlug",
+      "sender_name": "Viewer",
+      "sender_login": "viewer",
+      "text": "yeah that clutch was insane",
+      "kind": "mention",
+      "parent": null
+    },
+    "want": {
+      "title": "Viewer",
+      "subtitle": "Mentioned you in SomeSlug on Kick",
+      "headline": "Viewer mentioned you in SomeSlug on Kick",
+      "quote": null,
+      "body": "yeah that clutch was insane",
+      "chat_title": "SomeSlug on Kick"
+    }
+  },
+  {
+    "name": "no display name falls back to the login",
+    "input": {
+      "platform": "twitch",
+      "channel": "bigstreamer",
+      "sender_name": "",
+      "sender_login": "viewer",
+      "text": "yeah that clutch was insane",
+      "kind": "reply",
+      "parent": "hi"
+    },
+    "want": {
+      "title": "viewer",
+      "subtitle": "Replied to you in bigstreamer",
+      "headline": "viewer replied to you in bigstreamer",
+      "quote": "“hi”",
+      "body": "yeah that clutch was insane",
+      "chat_title": "bigstreamer"
+    }
+  }
+]

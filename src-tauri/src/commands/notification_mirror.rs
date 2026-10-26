@@ -201,6 +201,9 @@ pub struct MirroredNotice {
     pub title: String,
     #[serde(default)]
     pub body: String,
+    /// A quieter line above the body: the message a reply answers (yours).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quote: Option<String>,
     #[serde(default)]
     pub image_url: Option<String>,
     /// Round picture (a person) rather than a square one (box art, a badge).
@@ -350,6 +353,7 @@ pub async fn test_system_notification(app: AppHandle) {
         kind: "update".into(),
         title: "StreamNook".into(),
         body: "System notifications are on. They show while StreamNook is in the background.".into(),
+        quote: None,
         image_url: None,
         round_image: false,
         action_label: None,
@@ -495,6 +499,7 @@ async fn send_reply(app: AppHandle, target: NoticeReply, text: String) {
             kind: "update".into(),
             title: format!("Your reply to {to} was not sent"),
             body: e,
+            quote: None,
             image_url: None,
             round_image: false,
             action_label: None,
