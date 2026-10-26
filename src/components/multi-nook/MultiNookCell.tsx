@@ -232,7 +232,7 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
   const socialEnabled = isFocused && !isMinimized;
   const playerOverlayButtons = useAppStore((s) => s.settings.player_overlay_buttons);
   const mediaGlowEnabled = useAppStore((s) => s.settings.media_glow !== false);
-  const clickToPause = useAppStore((s) => s.settings.video_player?.click_to_pause !== false);
+  const clickToPause = useAppStore((s) => s.settings.video_player?.click_to_pause === true);
   const {
     isFollowing,
     followLoading,

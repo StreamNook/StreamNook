@@ -2857,7 +2857,7 @@ const VideoPlayer = () => {
     if (!video) return;
     return attachPauseRoutes(video, {
       togglePlay: () => playerRef.current?.togglePlay(),
-      clickToPause: () => playerSettingsRef.current.click_to_pause !== false,
+      clickToPause: () => playerSettingsRef.current.click_to_pause === true,
       releaseFocus: releaseTypingFocus,
       reportPaused: () => {
         invoke('report_player_state', { state: 'paused' }).catch(() => {});

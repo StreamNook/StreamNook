@@ -79,8 +79,8 @@ export interface VideoPlayerSettings {
    *  true. Moves to Shift + scroll down while `scroll_volume` is also on. */
   scroll_about_reveal?: boolean;
   /** A click on the video pauses and plays it (the main player and a
-   *  maximized MultiNook tile). Default true. Off, a click only moves focus out
-   *  of a text box so the player keys work. Typed in Rust. */
+   *  maximized MultiNook tile). Default false: a click only moves focus out of
+   *  a text box so the player keys work. Typed in Rust. */
   click_to_pause?: boolean;
   /** Middle-click the player to toggle mute. Default true. */
   middle_click_mute?: boolean;
