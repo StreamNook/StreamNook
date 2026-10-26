@@ -720,13 +720,13 @@ async fn check_for_bundle_update_streamnook() -> Result<BundleUpdateStatus, Stri
     // left this future pending forever: the check never completed, never
     // errored, and never logged, which is indistinguishable from "checked and
     // found nothing". `services::http` sets 30s for exactly this reason (its own
-    // comment says a network stall used to hang forever).
+    // comment says a network stall used to hang forever). The StreamNook
+    // transport keeps that cap and adds the relay route, so a network that
+    // drops the site's addresses still checks.
     let client = crate::services::http::client();
 
     let manifest: UpdateManifest = match async {
-        client
-            .get(UPDATE_MANIFEST_URL)
-            .send()
+        crate::services::sn_transport::send(client.get(UPDATE_MANIFEST_URL))
             .await
             .map_err(|e| format!("Failed to fetch update manifest: {}", e))?
             .error_for_status()

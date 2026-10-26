@@ -128,9 +128,7 @@ pub async fn streamnook_api_request(
         "POST" => client.post(&url).json(&body.unwrap_or(serde_json::Value::Null)),
         other => return Err(format!("method_not_allowed: {}", other)),
     };
-    let resp = req
-        .bearer_auth(&token)
-        .send()
+    let resp = crate::services::sn_transport::send(req.bearer_auth(&token))
         .await
         .map_err(|e| format!("network: {}", e))?;
     let status = resp.status();
@@ -177,12 +175,14 @@ pub(crate) async fn post_json(
             .map_err(|e| format!("no_token: {}", e))?,
     };
 
-    let client = crate::services::http::client();
-    let resp = client
+    // Through the StreamNook transport, so a network that drops the site's
+    // addresses still delivers watch minutes, the version report and every
+    // other write here by the relay.
+    let request = crate::services::http::client()
         .post(format!("{}{}", API_BASE, path))
         .bearer_auth(&token)
-        .json(body)
-        .send()
+        .json(body);
+    let resp = crate::services::sn_transport::send(request)
         .await
         .map_err(|e| format!("network: {}", e))?;
 

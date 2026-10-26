@@ -59,11 +59,11 @@ async fn collect_badges() -> Vec<OutItem> {
         badge: BadgeNotification,
     }
 
-    let client = crate::services::http::client().clone();
-    let Ok(resp) = client
-        .get("https://modroom.streamnook.app/badges/latest.json")
-        .send()
-        .await
+    let client = crate::services::http::client();
+    let Ok(resp) = crate::services::sn_transport::send(
+        client.get("https://modroom.streamnook.app/badges/latest.json"),
+    )
+    .await
     else {
         return Vec::new();
     };

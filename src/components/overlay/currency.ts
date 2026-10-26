@@ -1,9 +1,28 @@
 // Portable Super Chat currency conversion for the overlay renderer. Kept dependency-
 // free (no Tauri, no app services) so it runs identically in the in-app builder
-// preview and on the hosted overlay page. Rates come from streamnook.app/api/fx-rates
-// (a Functions proxy of frankfurter.app), cached in memory + per-day localStorage.
+// preview and on the hosted overlay page. On the website, rates come from
+// streamnook.app/api/fx-rates (a Functions proxy of frankfurter.app); the app swaps
+// in its Rust fetch through `setRatesLoader`. Cached in memory + per-day localStorage.
 
 const RATES_URL = 'https://streamnook.app/api/fx-rates';
+
+/** USD-based rates, or null when none could be read. */
+export type RatesLoader = () => Promise<Record<string, number> | null>;
+
+const fetchRatesProxy: RatesLoader = async () => {
+  const res = await fetch(RATES_URL);
+  if (!res.ok) return null;
+  const data = (await res.json()) as { rates?: Record<string, number> };
+  return data.rates ?? null;
+};
+
+let ratesLoader: RatesLoader = fetchRatesProxy;
+
+/** Replaces where rates come from. The app calls it once at startup so the in-app
+ *  preview reads rates through Rust instead of fetching streamnook.app from the page. */
+export function setRatesLoader(loader: RatesLoader): void {
+  ratesLoader = loader;
+}
 
 // YouTube Super Chat currency symbols → ISO code. Longer prefixes first so "CA$"
 // isn't mistaken for "$".
@@ -64,18 +83,15 @@ export function loadRates(): Promise<void> {
   if (loading) return loading;
   loading = (async () => {
     try {
-      const res = await fetch(RATES_URL);
-      if (res.ok) {
-        const data = (await res.json()) as { rates?: Record<string, number> };
-        if (data.rates && Object.keys(data.rates).length > 0) {
-          rates = data.rates;
-          ratesDay = day;
-          if (typeof localStorage !== 'undefined') {
-            try {
-              localStorage.setItem('sn_overlay_fx', JSON.stringify({ day, rates }));
-            } catch {
-              /* ignore */
-            }
+      const loaded = await ratesLoader();
+      if (loaded && Object.keys(loaded).length > 0) {
+        rates = loaded;
+        ratesDay = day;
+        if (typeof localStorage !== 'undefined') {
+          try {
+            localStorage.setItem('sn_overlay_fx', JSON.stringify({ day, rates }));
+          } catch {
+            /* ignore */
           }
         }
       }

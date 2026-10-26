@@ -60,11 +60,10 @@ pub fn parse(body: &serde_json::Value) -> ClientConfig {
 }
 
 async fn fetch() -> Result<ClientConfig, String> {
-    let body: serde_json::Value = crate::services::http::client()
-        .get(MANIFEST_URL)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?
+    let body: serde_json::Value =
+        crate::services::sn_transport::send(crate::services::http::client().get(MANIFEST_URL))
+            .await
+            .map_err(|e| e.to_string())?
         .error_for_status()
         .map_err(|e| e.to_string())?
         .json()

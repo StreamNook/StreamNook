@@ -1737,6 +1737,8 @@ export interface AndroidRelease {
   version: string;
   published_at: string | null;
   changes: { title: string; body: string; topic: AndroidChangeTopic }[];
+  /** The APK's size in bytes, when the manifest names it. */
+  size: number | null;
 }
 
 /** A rise in one of the viewer's balances on a channel (Rust `WalletGain`),

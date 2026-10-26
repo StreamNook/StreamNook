@@ -116,6 +116,7 @@ pub mod ffz_room_badges;
 pub mod file_log;
 pub mod app_exit;
 pub mod http;
+pub mod sn_transport;
 pub mod hype_train_watch;
 pub mod irc_service;
 pub mod ivr;

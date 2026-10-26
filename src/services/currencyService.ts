@@ -7,6 +7,7 @@
 // background fetch and returns null (caller shows the original until rates land).
 
 import { invoke } from '@tauri-apps/api/core';
+import { setRatesLoader } from '../components/overlay/currency';
 import { Logger } from '../utils/logger';
 
 // YouTube Super Chat currency symbols -> ISO code. Longer prefixes first so "CA$"
@@ -23,6 +24,14 @@ const SYMBOL_TO_CODE: Array<[string, string]> = [
 // The list lives with the overlay's pure currency module so the overlay builder
 // can use it on the website too.
 export { CURRENCY_OPTIONS } from '../components/overlay/currency';
+
+// That module fetches streamnook.app itself, which is right on the website. In the
+// app its rates come from the same Rust fetch as chat's, so the builder preview
+// does not depend on the page reaching streamnook.app.
+setRatesLoader(async () => {
+  const r = await invoke<Record<string, number>>('fetch_exchange_rates', { base: 'USD' });
+  return r && Object.keys(r).length > 0 ? { USD: 1, ...r } : null;
+});
 
 const CODE_SYMBOL: Record<string, string> = {
   USD: '$', EUR: '€', GBP: '£', JPY: '¥', CAD: 'CA$', AUD: 'A$', NZD: 'NZ$',

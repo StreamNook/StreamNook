@@ -25,12 +25,13 @@
 //! fail to send (offline, 5xx, 429) stay queued and go with the next send; the
 //! server skips minutes older than 25 minutes, so the queue drops those first.
 
+use crate::services::sn_transport::{self, Host, LogThrottle};
 use chrono::{DateTime, DurationRound, TimeDelta, Utc};
 use log::{debug, warn};
 use once_cell::sync::Lazy;
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const PATH: &str = "/api/v1/watch/minute";
 const BATCH_PATH: &str = "/api/v1/watch/minutes";
@@ -83,6 +84,10 @@ struct State {
     playing_hint: BTreeMap<String, bool>,
     pending: VecDeque<Queued>,
     running: bool,
+    /// Sends that are waiting for a retry. Logged at `warn` so a member whose
+    /// minutes do not arrive has the reason in their own log, throttled so an
+    /// outage of hours stays a few lines.
+    deferred: LogThrottle,
 }
 
 static STATE: Lazy<Mutex<State>> = Lazy::new(|| Mutex::new(State::default()));
@@ -325,8 +330,8 @@ fn minute_body(q: &Queued) -> serde_json::Value {
 enum Sent {
     /// Sent, or refused in a way a retry would not change.
     Done,
-    /// These were not sent and should wait for the next send.
-    Deferred(Vec<Queued>),
+    /// These were not sent and should wait for the next send; why, for the log.
+    Deferred(Vec<Queued>, String),
     /// No StreamNook account is signed in: nothing can be credited.
     NoToken,
 }
@@ -339,11 +344,11 @@ async fn send_singly(member: &str, items: Vec<Queued>) -> Sent {
         match crate::commands::streamnook_api::post_json(PATH, &minute_body(q), Some(member)).await {
             Ok(resp) if resp.ok => {
                 debug!("[WatchMinutes] {} sent ({})", q.minute, resp.body);
+                note_sent();
             }
             // Rate limited or a server fault: keep it for the next send.
             Ok(resp) if resp.status == 429 || resp.status >= 500 => {
-                warn!("[WatchMinutes] {} deferred: HTTP {}", q.minute, resp.status);
-                return Sent::Deferred(items.into());
+                return Sent::Deferred(items.into(), format!("HTTP {}", resp.status));
             }
             // Any other refusal (stale, malformed, signed out server-side) will
             // not change on retry.
@@ -352,8 +357,7 @@ async fn send_singly(member: &str, items: Vec<Queued>) -> Sent {
             }
             Err(e) if is_no_account(&e) => return Sent::NoToken,
             Err(e) => {
-                debug!("[WatchMinutes] {} deferred: {}", q.minute, e);
-                return Sent::Deferred(items.into());
+                return Sent::Deferred(items.into(), e.to_string());
             }
         }
         items.pop_front();
@@ -376,12 +380,12 @@ async fn send_batch(member: &str, mut items: Vec<Queued>) -> Sent {
         match crate::commands::streamnook_api::post_json(BATCH_PATH, &body, Some(member)).await {
             Ok(resp) if resp.ok => {
                 debug!("[WatchMinutes] {} minute(s) sent ({})", items.len(), resp.body);
+                note_sent();
                 return Sent::Done;
             }
             Ok(resp) if resp.status == 404 || resp.status == 405 => return send_singly(member, items).await,
             Ok(resp) if resp.status == 429 || resp.status >= 500 => {
-                warn!("[WatchMinutes] batch deferred: HTTP {}", resp.status);
-                return Sent::Deferred(items);
+                return Sent::Deferred(items, format!("HTTP {}", resp.status));
             }
             Ok(resp) if resp.status == 400 => match rejected_index(&resp.body, items.len()) {
                 Some(index) => {
@@ -399,8 +403,7 @@ async fn send_batch(member: &str, mut items: Vec<Queued>) -> Sent {
             }
             Err(e) if is_no_account(&e) => return Sent::NoToken,
             Err(e) => {
-                debug!("[WatchMinutes] batch deferred: {}", e);
-                return Sent::Deferred(items);
+                return Sent::Deferred(items, e.to_string());
             }
         }
     }
@@ -419,8 +422,9 @@ async fn flush() {
         };
         match send_batch(&member, items).await {
             Sent::Done | Sent::NoToken => {}
-            Sent::Deferred(unsent) => {
+            Sent::Deferred(unsent, why) => {
                 with_state(|s| put_back(&mut s.pending, unsent));
+                note_deferred(&why);
                 return;
             }
         }
@@ -441,6 +445,35 @@ pub fn flush_on_exit() -> Option<std::sync::mpsc::Receiver<()>> {
         let _ = done_tx.send(());
     });
     Some(done_rx)
+}
+
+/// A send that went through ends a deferred run: it is logged once, with the
+/// route that carried it.
+fn note_sent() {
+    if let Some(run) = with_state(|s| s.deferred.recover()) {
+        warn!(
+            "[WatchMinutes] sending again ({} route) after {} deferred attempt{}",
+            sn_transport::route(Host::Site).as_str(),
+            run,
+            if run == 1 { "" } else { "s" }
+        );
+    }
+}
+
+/// A send that will be retried on the next tick. The first of a run is logged,
+/// then one line per `sn_transport::LOG_EVERY`. Never the token: `detail` is an
+/// HTTP status or the transport's error, which names the URL only.
+fn note_deferred(detail: &str) {
+    let (held, waiting) = with_state(|s| (s.deferred.hit(Instant::now(), sn_transport::LOG_EVERY), s.pending.len()));
+    if let Some(held) = held {
+        warn!(
+            "[WatchMinutes] {} minute{} waiting to send: {}{}",
+            waiting,
+            if waiting == 1 { "" } else { "s" },
+            detail,
+            if held == 0 { String::new() } else { format!(" ({held} more attempts since the last line)") }
+        );
+    }
 }
 
 #[cfg(test)]

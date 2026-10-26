@@ -11,10 +11,11 @@
 // for exactly that). Downloading an APK ourselves would mean owning storage,
 // permissions, integrity checking and the installer intent, to arrive at the
 // same place the browser reaches on its own.
+import { invoke } from '@tauri-apps/api/core';
+import type { AndroidRelease } from '../types';
 import { Logger } from '../utils/logger';
 import { openExternal } from '../utils/openExternal';
 
-const MANIFEST_URL = 'https://streamnook.app/api/v1/update-android';
 const DOWNLOAD_URL = 'https://streamnook.app/download/android';
 
 /**
@@ -42,7 +43,6 @@ export async function getAppVersion(): Promise<string> {
 export interface AndroidUpdate {
   current: string;
   latest: string;
-  notes?: string;
   /** Bytes, for showing the size before someone commits to a download. */
   size?: number;
 }
@@ -68,18 +68,17 @@ function isNewer(latest: string, current: string): boolean {
 export async function checkForAndroidUpdate(): Promise<AndroidUpdate | null> {
   try {
     const current = await getAppVersion();
-    // no-store: an edge-cached manifest is how a release goes out and nobody
-    // hears about it for an hour.
-    const res = await fetch(MANIFEST_URL, { cache: 'no-store' });
-    // 503 is the documented "no build published yet" state, not a failure.
-    if (!res.ok) return null;
-    const m = (await res.json()) as { version?: string; notes?: string; size?: number };
+    // Read by Rust (services/changelog.rs), which reaches streamnook.app by the
+    // relay on a network that drops the site's addresses. Rust keeps no HTTP
+    // cache, so a new release is seen as soon as the edge serves it. Null is
+    // the documented "no build published yet" state, not a failure.
+    const m = await invoke<AndroidRelease | null>('get_android_changelog');
     // Logged at warn because Logger.debug is silenced by default and a phone
     // has no devtools. This is the line that would have caught the version
     // mismatch immediately instead of costing a release.
-    Logger.warn(`[Update] running ${current}, published ${m.version ?? 'none'}`);
-    if (!m.version || !isNewer(m.version, current)) return null;
-    return { current, latest: m.version, notes: m.notes, size: m.size };
+    Logger.warn(`[Update] running ${current}, published ${m?.version ?? 'none'}`);
+    if (!m?.version || !isNewer(m.version, current)) return null;
+    return { current, latest: m.version, size: m.size ?? undefined };
   } catch (err) {
     // A failed check must never block the app or nag. Silence is correct here:
     // the user did not ask for this, and it retries next launch.

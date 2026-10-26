@@ -199,12 +199,8 @@ pub async fn resolve(keys: Vec<String>) -> ResolveOutcome {
             .join(",")
     );
 
-    let fetched = match crate::services::http::client()
-        .get(&url)
-        .timeout(Duration::from_secs(8))
-        .send()
-        .await
-    {
+    let request = crate::services::http::client().get(&url).timeout(Duration::from_secs(8));
+    let fetched = match crate::services::sn_transport::send(request).await {
         Ok(resp) if resp.status().is_success() => resp.json::<ResolveResponse>().await.ok(),
         Ok(resp) => {
             log::warn!("[MemberAlias] resolve HTTP {}", resp.status());
