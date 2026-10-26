@@ -182,6 +182,7 @@ const BY_TITLE: Record<string, LucideIcon> = {
   'Retry delay': RefreshCw,
   'Scroll volume': Mouse,
   'Scroll for About': MousePointer2,
+  'Click to pause': MousePointerClick,
   'Middle-click mute': MousePointerClick,
   'Middle-click opens MultiNook': LayoutGrid,
   Autoplay: Play,

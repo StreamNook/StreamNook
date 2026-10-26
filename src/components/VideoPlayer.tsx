@@ -109,7 +109,7 @@ import { followLiveAfterResync } from '../utils/liveResync';
 import { HLS_START_CONFIG, resumeLoadAfterRecover, startLoadOnManifest } from '../utils/hlsStartLoad';
 import { watchStalls } from '../utils/stallWatchdog';
 import { createRecovery } from '../utils/recovery';
-import { attachPauseRoutes } from '../utils/pauseRoutes';
+import { attachPauseRoutes, releaseTypingFocus } from '../utils/pauseRoutes';
 import { recognizeNowPlaying, announceSong } from '../utils/songId';
 import {
   ignoresPlayerMouse,
@@ -2857,6 +2857,8 @@ const VideoPlayer = () => {
     if (!video) return;
     return attachPauseRoutes(video, {
       togglePlay: () => playerRef.current?.togglePlay(),
+      clickToPause: () => playerSettingsRef.current.click_to_pause !== false,
+      releaseFocus: releaseTypingFocus,
       reportPaused: () => {
         invoke('report_player_state', { state: 'paused' }).catch(() => {});
       },

@@ -87,6 +87,7 @@ const PlayerSettings = () => {
 
   const scrollVolume = videoPlayer?.scroll_volume ?? true;
   const scrollAboutReveal = videoPlayer?.scroll_about_reveal ?? true;
+  const clickToPause = videoPlayer?.click_to_pause ?? true;
   const middleClickMute = videoPlayer?.middle_click_mute ?? true;
   const middleClickMultiNook = videoPlayer?.middle_click_multinook ?? true;
   const resumeVodPlayback = videoPlayer?.resume_vod_playback ?? true;
@@ -342,6 +343,19 @@ const PlayerSettings = () => {
         label="Mouse Controls"
         description="Drive the player one-handed with the mouse. The player controls apply to the main player and to each MultiNook tile."
       >
+        <SettingsRow
+          title="Click to pause"
+          onReset={resetFor(['video_player.click_to_pause', true])}
+          description="Click the video to pause or play it. Off, a click only leaves the chat box, so Space, M and the other player keys work."
+          help="Double-click still goes full screen. A paused stream stops downloading however you pause it."
+          control={
+            <Toggle
+              enabled={clickToPause}
+              onChange={() => setVideoPlayer({ click_to_pause: !clickToPause })}
+            />
+          }
+        />
+
         <SettingsRow
           title="Scroll volume"
           onReset={resetFor(['video_player.scroll_volume', true])}
