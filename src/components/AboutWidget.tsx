@@ -5,6 +5,9 @@ import { useEffect, useState } from 'react';
 import { Tooltip } from './ui/Tooltip';
 
 import { Logger } from '../utils/logger';
+import { useClientPlatform } from '../hooks/useClientPlatform';
+import { OtherPlatformLinks } from './OtherPlatformLinks';
+import { PlatformLogo } from './ui/PlatformLogo';
 import streamnookLogo from '../assets/streamnook-logo.png';
 
 interface AboutWidgetProps {
@@ -12,15 +15,10 @@ interface AboutWidgetProps {
 }
 
 const AboutWidget = ({ onClose }: AboutWidgetProps) => {
-  const [appVersion, setAppVersion] = useState('1.0.0');
+  const { current, others, version: appVersion } = useClientPlatform();
   const [appName, setAppName] = useState('StreamNook');
 
   useEffect(() => {
-    // Fetch app version from Cargo.toml
-    invoke<string>('get_app_version')
-      .then(version => setAppVersion(version))
-      .catch(err => Logger.error('Failed to get app version:', err));
-
     invoke<string>('get_app_name')
       .then(name => setAppName(name))
       .catch(err => Logger.error('Failed to get app name:', err));
@@ -168,11 +166,18 @@ const AboutWidget = ({ onClose }: AboutWidgetProps) => {
             </div>
           </div>
 
+          {/* The other platforms, each to the downloads page */}
+          <div>
+            <p className="text-textPrimary font-semibold mb-3 text-center">Also on your other devices</p>
+            <OtherPlatformLinks platforms={others} className="mx-auto" />
+          </div>
+
           {/* Version & Links */}
           <div className="pt-4 border-t border-borderSubtle">
             <div className="flex items-center justify-between">
-              <p className="text-xs text-textSecondary">
-                Version {appVersion}
+              <p className="inline-flex items-center gap-1.5 text-xs text-textSecondary">
+                <PlatformLogo platform={current.key} size={12} />
+                <span>{appVersion ? `${current.name} · Version ${appVersion}` : current.name}</span>
               </p>
               <Tooltip content="View on GitHub" side="top">
               <ExternalAnchor
