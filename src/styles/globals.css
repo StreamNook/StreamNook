@@ -5155,9 +5155,11 @@ html[data-watching] .drops-progress-inline {
   font-family: "Satoshi", -apple-system, BlinkMacSystemFont, sans-serif;
 }
 
-/* Poster */
+/* Poster. It sits over the <video> at full size, so it takes no pointer
+   events: a click on the picture has to reach the video under it. */
 .video-player-container .plyr__poster {
   background-color: #000;
+  pointer-events: none;
 }
 
 /* Quality badge in menu */
