@@ -76,10 +76,10 @@ export function startGpuRecoveryWatch(): () => void {
           );
           if (i === RECHECK_MS.length - 1 && shouldOfferRestart(start.mode, checks)) {
             useAppStore.getState().addToast(
-              'Video and chat are drawing without the graphics card since a graphics driver reset, which makes them lag. Restart StreamNook to fix it; your stream reopens.',
+              'A graphics driver reset left them without the graphics card. Restart to fix it; your stream reopens.',
               'warning',
               { label: 'Restart', onClick: () => void restartForDrawing() },
-              { sticky: true, alwaysShow: true, id: GPU_RESTART_TOAST_ID },
+              { sticky: true, alwaysShow: true, id: GPU_RESTART_TOAST_ID, title: 'Video and chat are lagging' },
             );
           }
         }, delay),

@@ -70,6 +70,9 @@ describe('the restart toast', () => {
       expect(call[3]).toMatchObject({ sticky: true, alwaysShow: true, id: GPU_RESTART_TOAST_ID });
     }
     expect(GPU_RESTART_TOAST_ID).toBeLessThan(0);
+    for (const call of addToast.mock.calls) {
+      expect(call[3]).toMatchObject({ title: 'Video and chat are lagging' });
+    }
     stop();
   });
 });

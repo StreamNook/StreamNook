@@ -101,6 +101,8 @@ function logQualityFallback(requested: string, actual: string) {
 
 export interface Toast {
   id: number;
+  /** A short heading drawn above the message. */
+  title?: string;
   message: string | React.ReactNode;
   type: 'info' | 'success' | 'warning' | 'error' | 'live' | 'channel_points';
   action?: {
@@ -542,7 +544,7 @@ interface AppState {
   patchCurrentStream: (partial: Partial<TwitchStream>) => void;
   /** `sticky` keeps the toast on screen until it is dismissed or removed by
    *  id; pass `id` to be able to remove it. */
-  addToast: (message: string | React.ReactNode, type: 'info' | 'success' | 'warning' | 'error' | 'live' | 'channel_points', action?: { label: string; onClick: () => void }, options?: { skipIsland?: boolean; alwaysShow?: boolean; avatarUrl?: string; avatarSevenTvId?: string; source?: 'plugin'; sticky?: boolean; id?: number }) => void;
+  addToast: (message: string | React.ReactNode, type: 'info' | 'success' | 'warning' | 'error' | 'live' | 'channel_points', action?: { label: string; onClick: () => void }, options?: { skipIsland?: boolean; alwaysShow?: boolean; avatarUrl?: string; avatarSevenTvId?: string; source?: 'plugin'; sticky?: boolean; id?: number; title?: string }) => void;
   removeToast: (id: number) => void;
   loadSettings: () => Promise<void>;
   updateSettings: (newSettings: Settings) => Promise<void>;
@@ -1869,12 +1871,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     // notifications use. The passive callers (live/whisper/drop/badge...) pass
     // { skipIsland: true } because they already register their own island entry,
     // and the rich JSX toasts can't ride the (string-only) event bus anyway, so
-    // this only fires for the ~80 string action toasts.
-    if (!options?.skipIsland && typeof message === 'string') {
+    // this only fires for the ~80 string action toasts. A toast whose id is
+    // already showing is the same notification updated in place, so it adds no
+    // second entry.
+    const alreadyShowing = options?.id !== undefined && get().toasts.some(t => t.id === options.id);
+    if (!options?.skipIsland && !alreadyShowing && typeof message === 'string') {
       const islandOn = !ln || (ln.enabled !== false && ln.use_dynamic_island !== false);
       if (islandOn) {
         emit('action-notification', {
-          text: message,
+          text: options?.title ? `${options.title}. ${message}` : message,
           level: type,
           // Only the callers that are about a PERSON pass this; everything else
           // keeps the level glyph.
@@ -1924,13 +1929,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     }));
 
     if (type === 'live' || options?.sticky || action) {
-      place({ id, message, type, action, duration, createdAt });
+      place({ id, title: options?.title, message, type, action, duration, createdAt });
     } else {
       const timeoutId = setTimeout(() => {
         set(state => ({ toasts: state.toasts.filter(t => t.id !== id) }));
       }, duration);
 
-      place({ id, message, type, action, timeoutId, duration, createdAt });
+      place({ id, title: options?.title, message, type, action, timeoutId, duration, createdAt });
     }
   },
   removeToast: (id) => {
