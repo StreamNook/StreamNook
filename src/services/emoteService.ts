@@ -6,6 +6,7 @@ import { Logger } from '../utils/logger';
 import { onAssetsCached, requestAssetCaching, setAssetCacheBurst, forgetAssetRequests } from './assetCacheQueue';
 import { IS_MOBILE } from '../utils/platform';
 import { listsByPrecedence } from '../utils/emotePrecedence';
+import { boundedSet } from '../utils/boundedMap';
 export interface Emote {
   id: string;
   name: string;
@@ -64,6 +65,7 @@ export interface EmoteSet {
 // each emote set this window loads, and from Rust's answers to caching
 // requests (a file already on disk is answered at once).
 const cachedEmoteFiles: Map<string, string> = new Map();
+const CACHED_EMOTE_FILES_MAX = 5000;
 
 // Lazily-built per-set name indexes, keyed by set identity. Emote sets are only
 // ever replaced wholesale (never mutated in place), so a WeakMap entry lives
@@ -104,7 +106,9 @@ export function getEmoteLookup(set: EmoteSet): { byName: Map<string, Emote>; low
 export function enhanceRustEmotes(emotes: any[], tier: EmoteTier = inlineEmoteTier()): Emote[] {
   return (emotes ?? []).map((emote) => {
     const { local_url: localPath, ...rest } = emote as { local_url?: string } & Record<string, unknown>;
-    if (localPath) cachedEmoteFiles.set(emoteCacheKey(emote.id, emote.provider, tier), localPath);
+    if (localPath) {
+      boundedSet(cachedEmoteFiles, emoteCacheKey(emote.id, emote.provider, tier), localPath, CACHED_EMOTE_FILES_MAX);
+    }
     const zeroWidth = emote.is_zero_width !== undefined ? emote.is_zero_width : emote.isZeroWidth;
     return {
       ...rest,
@@ -222,7 +226,7 @@ function emoteCacheKey(id: string, provider?: string, tier: EmoteTier = inlineEm
 // moment the user is waiting on emotes), when they burst five at a time.
 onAssetsCached('emote', {
   arrived: (files) => {
-    for (const [id, path] of Object.entries(files)) cachedEmoteFiles.set(id, path);
+    for (const [id, path] of Object.entries(files)) boundedSet(cachedEmoteFiles, id, path, CACHED_EMOTE_FILES_MAX);
   },
   cleared: () => cachedEmoteFiles.clear(),
 });
@@ -260,7 +264,7 @@ export function getCachedEmoteUrl(
  *  (load_channel_history stamps them): remember it before the row paints, so
  *  its first paint is the disk copy instead of the CDN. */
 export function rememberRowEmoteFile(id: string, path: string): void {
-  cachedEmoteFiles.set(emoteCacheKey(id, '7tv', inlineEmoteTier()), path);
+  boundedSet(cachedEmoteFiles, emoteCacheKey(id, '7tv', inlineEmoteTier()), path, CACHED_EMOTE_FILES_MAX);
 }
 
 /**

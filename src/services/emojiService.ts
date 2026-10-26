@@ -7,6 +7,7 @@ import { invoke } from '@tauri-apps/api/core';
 
 import { Logger } from '../utils/logger';
 import { LruMap } from './cosmeticsCache';
+import { boundedAdd } from '../utils/boundedMap';
 // LRU-bounded cache for proxied emoji URLs (codepoint -> data URL). 256 entries
 // × ~5 KB per Apple emoji = ~1.3 MB ceiling. Twitch chat uses emojis sparingly
 // in practice so this rarely fills; the cap protects against an edge-case
@@ -19,6 +20,7 @@ const pendingEmojiFetches = new Set<string>();
 // Cache for failed emoji fetches (codepoints that returned 404)
 // These are permanently excluded from re-fetching
 const failedEmojiCodepoints = new Set<string>();
+const FAILED_EMOJI_CODEPOINTS_MAX = 1000;
 
 // Queue for batch emoji caching
 let emojiCacheQueue: string[] = [];
@@ -62,7 +64,7 @@ async function flushEmojiCacheQueue() {
                 proxiedEmojiCache.set(codepoint, dataUrl);
             } catch (error) {
                 // Add to failed cache to prevent re-queueing
-                failedEmojiCodepoints.add(codepoint);
+                boundedAdd(failedEmojiCodepoints, codepoint, FAILED_EMOJI_CODEPOINTS_MAX);
                 Logger.warn(`[EmojiService] Failed to cache emoji ${codepoint} (will not retry):`, error);
             } finally {
                 pendingEmojiFetches.delete(codepoint);

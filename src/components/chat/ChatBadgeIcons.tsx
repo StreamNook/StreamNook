@@ -10,6 +10,7 @@ import { CHANNEL_SPECIFIC_TWITCH_BADGES } from '../../utils/badgeOrder';
 import { queueBadgeForCaching, getCachedBadgeUrl } from '../../services/badgeImageCacheService';
 import type { ThirdPartyBadge } from '../../services/badgeService';
 import { Logger } from '../../utils/logger';
+import { boundedAdd } from '../../utils/boundedMap';
 
 /** What a resolved Twitch badge carries (twitchBadges.parseBadges), or a
  *  Kick / YouTube / TikTok badge in the same slot (`provider` set). */
@@ -42,6 +43,7 @@ const isTwitchBadgeCdn = (url: string | undefined): boolean =>
 
 // A badge that fails fails on every row that shows it; one line per source.
 const reportedBadgeFailures = new Set<string>();
+const REPORTED_BADGE_FAILURES_MAX = 1000;
 
 /**
  * Get the best URL for a Twitch badge, with reactive caching.
@@ -146,7 +148,7 @@ export function ChatBadgeIcons({
               }
               const failed = el.dataset.remote ? remote : src;
               if (failed && !reportedBadgeFailures.has(failed)) {
-                reportedBadgeFailures.add(failed);
+                boundedAdd(reportedBadgeFailures, failed, REPORTED_BADGE_FAILURES_MAX);
                 Logger.warn('[Badge] Failed to load badge:', badge.key, failed);
               }
               el.style.display = 'none';
