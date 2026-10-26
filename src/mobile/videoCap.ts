@@ -56,15 +56,28 @@ function displayShortEdgePx(): number {
   }
 }
 
+// The cap last sent. A display change that lands on the same rung (a
+// refresh-rate flip, a rotation) sends nothing.
+let lastCap = 0;
+
+/** The cap to send for this short edge, or null when there is none or it is unchanged. */
+export function nextCap(px: number, last: number): number | null {
+  if (px <= 0) return null;
+  const cap = snapDown(px);
+  return cap === last ? null : cap;
+}
+
 async function push(): Promise<void> {
   const px = displayShortEdgePx();
-  if (px <= 0) return;
-  const cap = snapDown(px);
+  const cap = nextCap(px, lastCap);
+  if (cap === null) return;
+  lastCap = cap;
   try {
     await invoke('set_max_video_height', { height: cap });
     Logger.info(`[videoCap] display short edge ${px}px -> capping auto quality at ${cap}p`);
   } catch (err) {
     // Non-fatal: an uncapped resolve is the old behaviour, not a broken one.
+    lastCap = 0;
     Logger.warn('[videoCap] could not set the video height cap', err);
   }
 }
@@ -86,6 +99,16 @@ async function push(): Promise<void> {
 export function installVideoCap(): () => void {
   void push();
   const onChange = () => void push();
+  // Every return to the app tries again too: sn:display-changed now fires only
+  // on a size change, so a boot push that failed would otherwise never retry.
+  // An unchanged rung sends nothing (nextCap).
+  const onVisible = () => {
+    if (document.visibilityState === 'visible') void push();
+  };
   window.addEventListener('sn:display-changed', onChange);
-  return () => window.removeEventListener('sn:display-changed', onChange);
+  document.addEventListener('visibilitychange', onVisible);
+  return () => {
+    window.removeEventListener('sn:display-changed', onChange);
+    document.removeEventListener('visibilitychange', onVisible);
+  };
 }

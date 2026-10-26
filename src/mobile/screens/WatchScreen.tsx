@@ -30,6 +30,7 @@ import { useMobileNavStore } from '../navStore';
 import { useRoomPins } from '../chat/useRoomPins';
 import { useChatTabsStore } from '../chat/chatTabsStore';
 import { useWindowShape } from '../ui/useWindowShape';
+import { usePageState } from '../ui/usePageState';
 import {
   readWatchLayout,
   readWatchSplit,
@@ -78,6 +79,7 @@ import {
   setScreenBrightness,
 } from '../nativeBridge';
 import { DialIndicator, type DialAxis, type DialReading } from '../watch/DialIndicator';
+import { dialCanStart } from '../watch/dialZone';
 import { ChatOverlayChrome } from '../watch/ChatOverlayChrome';
 import type { FullscreenChatSettings } from '../../types';
 import { hapticStep } from '../ui/haptics';
@@ -266,6 +268,8 @@ export const WatchScreen: React.FC = () => {
     vy: number;
     progress: number;
     moved: boolean;
+    /** Absent when the press began in an edge strip (dialZone): that
+     *  gesture is a tap or nothing, never a dial. */
     dial?: {
       axis: DialAxis;
       /** The level when the finger landed; the drag is relative to it. */
@@ -678,6 +682,8 @@ export const WatchScreen: React.FC = () => {
   // TV screen mode needs the screen on too: Android only shows the TV picture
   // while the app is visible, and most phones stop mirroring when it sleeps.
   const videoPaused = useLiveVideoPaused();
+  // Whether anyone can see the page at all; an unseen chat pane holds still.
+  const pageVisible = usePageState().visible;
   const keepAwake = (playingHere && !videoPaused) || tvOwns;
   useEffect(() => {
     holdScreenOn('player', keepAwake);
@@ -695,9 +701,10 @@ export const WatchScreen: React.FC = () => {
     // PiP eligibility is what makes leaving the app auto-enter a floating
     // window, and it comes first whatever Background play says: that setting
     // only decides what happens when the video cannot float (the system's PiP
-    // permission is off, the window was closed, the screen went off), where the
-    // stream drops to its audio rendition behind the media notification. The
-    // audio-only rendition has no picture, so it never floats.
+    // permission is off, the window was closed, the screen went off): on, the
+    // stream drops to its audio rendition behind the media notification; off,
+    // it pauses (lockScreenAudio). The audio-only rendition has no picture,
+    // so it never floats.
     setPipEligible(playingHere && !audioOnly);
     return () => {
       setPreferredRefreshRate(0);
@@ -793,6 +800,28 @@ export const WatchScreen: React.FC = () => {
         // click (controls toggle), because nothing commits until the finger
         // has moved past the slop.
         const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+        // A press in the strip along the screen's top or bottom edge, where the
+        // shade and the bars are pulled (immersive mode hands those swipes to
+        // us too), never dials. It is still recorded, so a tap there toggles
+        // the controls and a swipe there is swallowed.
+        const ins = readInsets();
+        if (!dialCanStart(e.clientY, window.innerHeight, ins.gestureTop, ins.gestureBottom)) {
+          gesture.current = {
+            id: e.pointerId,
+            kind: 'dial',
+            x: e.clientX,
+            y: e.clientY,
+            px: 0,
+            py: 0,
+            lastY: e.clientY,
+            lastT: e.timeStamp,
+            vy: 0,
+            progress: 0,
+            moved: false,
+          };
+          suppressClick.current = false;
+          return;
+        }
         const axis: DialAxis = e.clientX - rect.left < rect.width / 2 ? 'brightness' : 'volume';
         const start = axis === 'brightness' ? getScreenBrightness() : getMediaVolume();
         gesture.current = {
@@ -852,9 +881,11 @@ export const WatchScreen: React.FC = () => {
       if (!g.moved && (Math.abs(dx) > TAP_SLOP_PX || Math.abs(dy) > TAP_SLOP_PX)) {
         // A dial is a mostly vertical swipe. One that leaves the slop sideways
         // (a stray swipe across the picture, a thumb resting while the phone
-        // is held) is not a dial and not a tap: the gesture ends here, touching
-        // neither brightness nor volume, and its trailing click is swallowed.
-        if (g.kind === 'dial' && Math.abs(dy) <= Math.abs(dx)) {
+        // is held), or one that began in an edge strip (the shade or bar pull
+        // the OS also sees), is not a dial and not a tap: the gesture ends
+        // here, touching neither brightness nor volume, and its trailing click
+        // is swallowed.
+        if (g.kind === 'dial' && (!g.dial || Math.abs(dy) <= Math.abs(dx))) {
           gesture.current = null;
           suppressClick.current = true;
           return;
@@ -1573,6 +1604,9 @@ export const WatchScreen: React.FC = () => {
 
           <MobileChatPane
             readOnly={chatOverlay}
+            // Hidden under the mini player, in PiP or a chat-less landscape, or
+            // the app in the background: the list holds still until seen.
+            idle={chatClass === 'hidden' || !pageVisible}
             top={
               // Poll + prediction cards are exactly the desktop components:
               // they self-fetch off the channel. Either can be turned off.

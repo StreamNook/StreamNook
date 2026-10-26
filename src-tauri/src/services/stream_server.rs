@@ -222,6 +222,8 @@ fn reset_ad_state() {
     note_solo_plain_request_at(0);
     *AD_STATE.lock().unwrap_or_else(|e| e.into_inner()) = AdDetectionState::default();
     // Tear down the LL-HLS origin (background reader + live edge) for the old stream.
+    // No park carries over to the next stream.
+    crate::services::earning_gate::reset_main_park();
     crate::services::ll_origin::stop();
     crate::services::relay_probe::reset();
     // Drop the stable-projection segment map for the old stream so a synthetic
@@ -1217,6 +1219,11 @@ impl StreamServer {
                 // hls.js asks only while it loads; AVPlayer's first load carries no
                 // directives. A paused AVPlayer's blocking reloads do not count.
                 let wakes = wakes_parked_origin(apple, msn);
+                if wakes && crate::services::ll_origin::is_parked() {
+                    // The phones' park timer learns the relay woke (a no-op when it
+                    // is not parked); the origin itself wakes just below.
+                    crate::services::earning_gate::relay_wake();
+                }
                 crate::services::ll_origin::wake_for_request(wakes);
                 if wakes {
                     // A loading player is not a parked one, whichever path serves it.
@@ -1968,6 +1975,13 @@ mod relay_rewrite_tests {
         assert!(held().is_none());
 
         note_solo_plain_request_at(0);
+    }
+
+    #[test]
+    fn only_a_loading_player_wakes_a_parked_origin() {
+        assert!(wakes_parked_origin(false, Some(1)));
+        assert!(wakes_parked_origin(true, None));
+        assert!(!wakes_parked_origin(true, Some(1)));
     }
 
     #[test]

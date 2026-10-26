@@ -29,6 +29,8 @@ pub const INTERNAL_OWNER: &str = "@internal";
 const IDLE_POLL: Duration = Duration::from_secs(15);
 const ACTIVE_POLL: Duration = Duration::from_secs(3);
 const IMMINENT_POLL: Duration = Duration::from_secs(1);
+/// A parked player or a backgrounded phone: nobody is watching the train.
+const QUIET_POLL: Duration = Duration::from_secs(60);
 const IMMINENT_RATIO: f64 = 0.85;
 
 struct Watch {
@@ -134,6 +136,13 @@ async fn poll(app: AppHandle, key: String, channel_id: Option<String>) {
         if !still_watched(&app, &key) {
             return;
         }
+        if crate::services::window_visibility::phone_idle() {
+            tokio::select! {
+                _ = tokio::time::sleep(QUIET_POLL) => {}
+                _ = crate::services::window_visibility::until_shown() => {}
+            }
+            continue;
+        }
         let mut next = IDLE_POLL;
         if channel_id.is_none() {
             channel_id = resolve_id(&key).await;
@@ -176,7 +185,20 @@ async fn poll(app: AppHandle, key: String, channel_id: Option<String>) {
                 }
             }
         }
-        tokio::time::sleep(next).await;
+        let presence = (crate::services::app_presence::main_parked(), crate::services::app_presence::low_power());
+        tokio::time::sleep(pace(next, presence.0, presence.1)).await;
+    }
+}
+
+/// The next poll's wait: a parked player hears about trains once a minute, Low
+/// Power Mode never polls faster than an active train's 3 s.
+fn pace(next: Duration, parked: bool, low_power: bool) -> Duration {
+    if parked {
+        next.max(QUIET_POLL)
+    } else if low_power {
+        next.max(ACTIVE_POLL)
+    } else {
+        next
     }
 }
 
@@ -188,6 +210,13 @@ pub fn watched() -> Vec<(String, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pace_slows_for_a_parked_player_and_low_power() {
+        assert_eq!(pace(IMMINENT_POLL, false, true), ACTIVE_POLL);
+        assert_eq!(pace(ACTIVE_POLL, true, false), QUIET_POLL);
+        assert_eq!(pace(IDLE_POLL, false, false), IDLE_POLL);
+    }
 
     fn owners(login: &str) -> Option<usize> {
         with_watches(|w| w.get(login).map(|e| e.owners.values().sum()))

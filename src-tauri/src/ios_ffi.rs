@@ -151,8 +151,8 @@ pub fn lifecycle(state: String) {
     match state.as_str() {
         "background" => {
             info!("[iOS] moved to the background; flushing stores");
-            crate::services::window_visibility::set_native_shell_shown(false);
-            crate::flush_debounced_stores();
+            // Also flushes the debounced stores.
+            crate::services::app_presence::set_foreground(false);
             // iOS keeps the process briefly after backgrounding, long enough
             // for these sends to start; nothing waits on them here.
             let _ = crate::services::member_stats::flush_on_exit();
@@ -164,7 +164,7 @@ pub fn lifecycle(state: String) {
         }
         "foreground" => {
             info!("[iOS] back in the foreground");
-            crate::services::window_visibility::set_native_shell_shown(true);
+            crate::services::app_presence::set_foreground(true);
             sn_tauri_headless::async_runtime::spawn(foregrounded());
             // A grant (or revocation) may have landed while suspended, with the
             // realtime socket down: re-read the StreamNook registries.

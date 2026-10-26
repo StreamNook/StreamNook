@@ -209,6 +209,9 @@ impl BackgroundService {
     /// desired state already matches, so repeated drops-settings saves don't
     /// churn the task.
     pub async fn set_automation_active(&self, active: bool) {
+        // The phones run no process plugins, so nothing there earns points this
+        // poll could surface.
+        let active = automation_poll_wanted(active, cfg!(desktop));
         let mut guard = self.points_poll.lock().await;
         if active {
             if guard.is_some() {
@@ -504,9 +507,21 @@ impl BackgroundService {
     }
 }
 
+/// The Autopilot points poll runs only where process plugins can run.
+fn automation_poll_wanted(toggle: bool, desktop: bool) -> bool {
+    toggle && desktop
+}
+
 #[cfg(test)]
 mod poll_dedupe_tests {
     use super::*;
+
+    #[test]
+    fn automation_poll_never_runs_on_the_phones() {
+        assert!(automation_poll_wanted(true, true));
+        assert!(!automation_poll_wanted(true, false));
+        assert!(!automation_poll_wanted(false, true));
+    }
 
     fn row(id: &str, balance: i32) -> (String, String, String, i32) {
         (id.to_string(), format!("{id}_login"), id.to_string(), balance)

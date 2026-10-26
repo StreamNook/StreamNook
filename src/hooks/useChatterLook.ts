@@ -19,6 +19,7 @@ import { cosmeticsKey } from '../utils/chatterIdentity';
 import { memberIdFor } from '../utils/memberIdentity';
 import { getColorOverride, getDisplayedName } from '../utils/userChatOverrides';
 import { useNameColorAdjust } from './useNameColor';
+import { useLowPower } from '../utils/lowPower';
 import type { ProviderId } from '../types/providers';
 
 const NO_TWITCH_BADGES: ResolvedTwitchBadge[] = [];
@@ -107,11 +108,13 @@ export function useChatterLook({ provider, userId, name, login, shownName, color
     [showBadges, showThirdParty, hiddenProviders, twitchBadges, seventvBadgeRaw, thirdPartyAll],
   );
 
+  // Battery Saver draws the paint's first frame (utils/lowPower), as chat rows do.
+  const stillPaint = useLowPower();
   const baseColor = adjustNameColor(getColorOverride(key, overrides) ?? (color || storeColor || null));
   const nameStyle = useMemo<CSSProperties>(() => {
-    if (paint) return computePaintStyle(paint, baseColor, paintShadowMode);
+    if (paint) return computePaintStyle(paint, baseColor, paintShadowMode, stillPaint);
     return baseColor ? { color: baseColor } : {};
-  }, [paint, baseColor, paintShadowMode]);
+  }, [paint, baseColor, paintShadowMode, stillPaint]);
 
   const memberId = memberIdFor(key);
   const streamNookMemberId = visible.streamNook && memberId && isStreamNookUser(memberId) ? memberId : null;

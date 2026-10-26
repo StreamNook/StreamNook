@@ -2,6 +2,7 @@ import React, { useRef, useEffect, useLayoutEffect, useCallback, useMemo, useSta
 import ChatMessage from './ChatMessage';
 import HeldMessageRow from './chat/HeldMessageRow';
 import { isHiddenEvent } from '../utils/chatEvents';
+import { observeOffscreen } from '../utils/offscreenPause';
 import { EmoteSet } from '../services/emoteService';
 import { BackendChatMessage } from '../services/twitchChat';
 import { ModerationContext } from '../hooks/useTwitchChat';
@@ -173,9 +174,28 @@ const MessageRow = memo(function MessageRow({
     }),
     [paintAlways, intrinsicSizeCSS],
   );
+  // An Atmosphere or Cologne row paints always (above), so its infinite wash
+  // would keep animating while scrolled out of the list. The observer marks it
+  // off-screen and globals.css pauses the wash until it scrolls back.
+  const rowRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = rowRef.current;
+    if (!hasAtmosphere || !el) return;
+    return observeOffscreen(el);
+  }, [hasAtmosphere]);
+  // One ref for both jobs: the off-screen observer above reads the row, and a
+  // row that leaves the list releases its images.
+  const attachRow = useCallback((el: HTMLDivElement | null) => {
+    rowRef.current = el;
+    const release = releaseRowImagesOnUnmount(el);
+    return () => {
+      rowRef.current = null;
+      release?.();
+    };
+  }, []);
   return (
     <div
-      ref={releaseRowImagesOnUnmount}
+      ref={attachRow}
       data-message-id={messageId || undefined}
       className={`chat-message-row${isModFocus ? ' is-mod-focus' : ''}${
         typeof message !== 'string' && message.metadata?.from_backfill ? ' is-backfill' : ''

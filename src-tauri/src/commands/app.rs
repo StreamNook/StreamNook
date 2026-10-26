@@ -316,16 +316,35 @@ pub async fn flush_persistent_stores() -> Result<(), String> {
     let _ = crate::services::member_stats::flush_on_exit();
     let _ = crate::services::watch_minutes::flush_on_exit();
     // On the blocking pool: each flush writes a file.
-    tauri::async_runtime::spawn_blocking(|| {
-        let _ = crate::commands::settings::flush_settings_now();
-        let _ = crate::services::universal_cache_service::flush_manifest_now();
-        let _ = crate::services::mod_log_storage_service::ModLogStorageService::flush_now();
-        let _ = crate::services::whisper_storage_service::WhisperStorageService::flush_now();
-        let _ = crate::services::vod_progress_service::flush_now();
-        let _ = crate::services::chat_logger_service::ChatLoggerService::flush_all();
-    })
-    .await
-    .map_err(|e| e.to_string())
+    tauri::async_runtime::spawn_blocking(crate::flush_debounced_stores)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The phone app moved to the front or background (PiP counts as front). The one
+/// presence signal Rust pollers read; the iPhone reaches it via ios_ffi::lifecycle.
+/// Going to the background also flushes stores. Allowed only by mobile-commands.toml.
+#[cfg(mobile)]
+#[command]
+pub fn set_app_foreground(foreground: bool) -> Result<(), String> {
+    crate::services::app_presence::set_foreground(foreground);
+    Ok(())
+}
+
+/// System battery saver (Android Battery Saver, iPhone Low Power Mode). Allowed
+/// only by mobile-commands.toml.
+#[cfg(mobile)]
+#[command]
+pub fn set_low_power(on: bool) -> Result<(), String> {
+    crate::services::app_presence::set_low_power(on);
+    Ok(())
+}
+
+/// The core's view of the app, for a shell starting up (changes arrive as `app-presence`).
+#[cfg(mobile)]
+#[command]
+pub fn get_app_presence() -> crate::services::app_presence::AppPresence {
+    crate::services::app_presence::snapshot()
 }
 
 #[command]

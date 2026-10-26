@@ -46,3 +46,36 @@ describe('computePaintStyleUncached', () => {
     expect(computePaintStyleUncached(paint).backgroundImage).toBe(`url("${BASE}/1x.webp")`);
   });
 });
+
+describe('still paints (Battery Saver)', () => {
+  it('a still paint draws the first scale-1 image', () => {
+    const paint: PaintV4 = {
+      id: 'still',
+      name: 'still',
+      data: {
+        layers: [
+          {
+            id: 'layer',
+            ty: { __typename: 'PaintLayerTypeImage', images: [image('1x_static.webp', 1, 1), image('1x.webp', 1, 20)] },
+            opacity: 1,
+          },
+        ],
+        shadows: [],
+      },
+    };
+    expect(computePaintStyleUncached(paint, undefined, 'all', true).backgroundImage).toBe(`url("${BASE}/1x_static.webp")`);
+    expect(computePaintStyleUncached(paint, undefined, 'all').backgroundImage).toBe(`url("${BASE}/1x.webp")`);
+  });
+});
+
+describe('still paints keep a still layer as it is', () => {
+  it('a layer that never moves keeps its cached file under Battery Saver', () => {
+    const cached = { ...image('1x.webp', 1, 1), localUrl: 'asset://paint-layer' };
+    const paint: PaintV4 = {
+      id: 'flat',
+      name: 'flat',
+      data: { layers: [{ id: 'layer', ty: { __typename: 'PaintLayerTypeImage', images: [cached] }, opacity: 1 }], shadows: [] },
+    };
+    expect(computePaintStyleUncached(paint, undefined, 'all', true).backgroundImage).toBe('url("asset://paint-layer")');
+  });
+});

@@ -14,6 +14,9 @@ import { useCurrentStreamStats } from '../utils/useCurrentStreamStats';
 import { installBackHandler, useMobileNavStore } from './navStore';
 import { installLifecycle } from './lifecycle';
 import { installVideoCap } from './videoCap';
+import { installLowPower } from './lowPower';
+import { installAppPresence } from './appPresence';
+import { usePageState } from './ui/usePageState';
 import { MobileTabBar } from './MobileTabBar';
 import { MobileOnboarding } from './MobileOnboarding';
 // The real wizard, not a phone-shaped rewrite of it. SetupWizard is already
@@ -90,6 +93,10 @@ const MobileApp: React.FC = () => {
   const playerMode = useMobileNavStore((s) => s.playerMode);
   const streamUrl = useAppStore((s) => s.streamUrl);
   const shellCovered = playerMode === 'full' && !!streamUrl && streamUrl !== 'offline';
+  // PiP shows nothing of the shell either. Kept apart from shellCovered so the
+  // tab bar does not re-enter around a PiP round trip.
+  const page = usePageState();
+  const shellHidden = shellCovered || page.pip;
 
   // Same backstop the desktop gate uses, and it matters MORE here: the wizard's
   // own comment records that `setup_complete` has been seen reverting to false
@@ -145,6 +152,10 @@ const MobileApp: React.FC = () => {
   useEffect(() => installWhisperInbox(), []);
   // Teach the resolver what this screen can show, before any stream resolves.
   useEffect(() => installVideoCap(), []);
+  // Follow the system Battery Saver: still emotes, decorative motion off, 60 Hz.
+  useEffect(() => installLowPower(), []);
+  // The core's presence snapshot: the player reads whether Rust parked the relay.
+  useEffect(() => installAppPresence(), []);
   useEffect(() => {
     applyNativeInsetsOnce();
   }, []);
@@ -182,7 +193,7 @@ const MobileApp: React.FC = () => {
         <>
           <div
             className="flex-1 min-h-0 flex flex-col relative overflow-hidden"
-            data-sn-covered={shellCovered ? 'true' : undefined}
+            data-sn-covered={shellHidden ? 'true' : undefined}
             style={{ paddingTop: 'var(--sn-safe-t, 0px)' }}
           >
             <AnimatePresence mode="popLayout" initial={false} custom={direction}>
@@ -202,7 +213,7 @@ const MobileApp: React.FC = () => {
             </AnimatePresence>
             {chatsKept && (
               <KeptSurface ref={chatsRef} shown={chatsShown} style={{ paddingTop: 'var(--sn-safe-t, 0px)' }}>
-                <ChatsScreen shown={chatsShown} />
+                <ChatsScreen shown={chatsShown} idle={shellHidden || !page.visible} />
               </KeptSurface>
             )}
           </div>

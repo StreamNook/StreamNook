@@ -73,6 +73,7 @@ import { useFitAbove } from '../../hooks/useFitAbove';
 import { useOutsidePress } from '../../hooks/useOutsidePress';
 import { MenuSwitcher, type MenuSwitcherTab } from './MenuSwitcher';
 import { staticEmoteUrl } from '../../utils/staticEmoteUrl';
+import { useLowPower } from '../../utils/lowPower';
 import { fitAmount } from '../../utils/fitNumber';
 import { fitHeaderDensity } from './fitHeaderDensity';
 import { ACCENT_BUTTON, ACCENT_FILL, GLAZE_PILL } from '../ui/glazeButtons';
@@ -639,6 +640,8 @@ export function EmotePickerPanel({
   // "Animate emotes" setting allows: during a scroll every cell going past
   // draws its first frame, so a fling never decodes hundreds of animations.
   const animateSetting = useAppStore((s) => s.settings.chat_design?.animate_emotes) ?? 'always';
+  // Battery Saver holds the grid on first frames too (utils/lowPower).
+  const lowPower = useLowPower();
   const [scrollSettled, setScrollSettled] = useState(true);
   useEffect(() => {
     const el = scrollRef.current;
@@ -655,7 +658,7 @@ export function EmotePickerPanel({
       if (timer) clearTimeout(timer);
     };
   }, [mounted]);
-  const animateGrid = animateSetting === 'always' && scrollSettled;
+  const animateGrid = !lowPower && animateSetting === 'always' && scrollSettled;
   const hoverPreviewSize = useAppStore((s) => s.settings.chat_design?.emote_hover_size) ?? 96;
 
   // ── Twitch chat GIFs ───────────────────────────────────────────────────────

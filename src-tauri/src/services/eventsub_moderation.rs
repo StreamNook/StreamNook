@@ -35,8 +35,6 @@ use tokio_tungstenite::tungstenite::Message;
 use crate::services::eventsub_service::{EventSubService, LiveSession, PendingSession, SeenMessages, SocketOwner};
 use crate::services::twitch_service::TwitchService;
 
-const EVENTSUB_URL: &str = "wss://eventsub.wss.twitch.tv/ws";
-const RECONNECT_DELAY_SECS: u64 = 5;
 
 #[derive(Clone)]
 struct ChannelSub {
@@ -283,6 +281,9 @@ async fn connection_loop(
     mut cmd_rx: mpsc::UnboundedReceiver<Cmd>,
 ) {
     let mut budget_retry = crate::services::eventsub_budget::OVER_BUDGET_MIN_SECS;
+    // Backs off like the other two sockets, so a network that keeps failing
+    // cannot spin a reconnect every 5 s.
+    let mut retry_secs = crate::services::eventsub_service::RECONNECT_MIN_SECS;
     loop {
         // Don't hold an idle socket: Twitch closes a subscription-less session
         // ~10s after welcome. Wait for the first channel before connecting.
@@ -297,6 +298,7 @@ async fn connection_loop(
             }
         }
 
+        let started = std::time::Instant::now();
         let ended = match connect_and_run(&app_handle, &subs, &mut cmd_rx).await {
             Ok(ended) => ended,
             Err(e) => {
@@ -334,7 +336,10 @@ async fn connection_loop(
 
         // Only reconnect if channels still want coverage.
         if !subs.read().await.is_empty() {
-            sleep(Duration::from_secs(RECONNECT_DELAY_SECS)).await;
+            let healthy = started.elapsed() >= crate::services::eventsub_service::HEALTHY_CONNECTION;
+            let (wait, next) = crate::services::eventsub_service::reconnect_backoff(retry_secs, healthy);
+            retry_secs = next;
+            sleep(Duration::from_secs(wait)).await;
             debug!("[EventSub Mod] reconnecting...");
         }
     }
@@ -345,7 +350,7 @@ async fn connect_and_run(
     subs: &Arc<RwLock<HashMap<String, ChannelSub>>>,
     cmd_rx: &mut mpsc::UnboundedReceiver<Cmd>,
 ) -> Result<ModEnded> {
-    let (ws, session) = EventSubService::open_session(EVENTSUB_URL.to_string()).await?;
+    let (ws, session) = EventSubService::open_session(crate::services::eventsub_service::session_url()).await?;
     let (mut write, mut read) = ws.split();
     let mut session_id = session.id;
     let mut keepalive_secs = session.keepalive_timeout_seconds.unwrap_or(30);

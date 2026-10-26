@@ -2813,6 +2813,14 @@ body {
   box-shadow: inset 3px 0 0 0 var(--color-accent);
 }
 
+/* An Atmosphere or Cologne row scrolled out of the list (utils/offscreenPause):
+   its wash pauses until it scrolls back, resuming from the same phase. */
+.chat-message-row[data-sn-off] .sn-aurora-1,
+.chat-message-row[data-sn-off] .sn-aurora-2,
+.chat-message-row[data-sn-off] .cologne-wash {
+  animation-play-state: paused;
+}
+
 /* Realistic physical keycap (AuraKey recipe, scaled for inline UI). The radial
    gradient pools light toward the bottom-centre like a real keycap face; the
    stacked shadows are a dark bottom edge for depth, a crisp outline, an inset
@@ -3879,9 +3887,28 @@ html[data-motion="reduced"] .sub-progress-fill {
   animation: hype-train-pulse 2s ease-in-out infinite;
 }
 
-/* Rainbow iridescent progress bar (default) */
-.hype-train-progress-rainbow {
-  background: linear-gradient(
+/* Rainbow iridescent progress bar (default). The gradient rides a wide
+   ::before that slides on transform, so the flow is composited instead of
+   repainting the bar every frame. The tile is twice the bar's width and moves
+   one tile per 15 s, as the old background-position flow did. */
+.hype-train-progress-rainbow,
+.hype-train-progress-golden {
+  overflow: hidden;
+}
+.hype-train-progress-rainbow::before,
+.hype-train-progress-golden::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 400%;
+  background-size: 50% 100%;
+  will-change: transform;
+  animation: hype-train-flow-x 15s linear infinite;
+}
+.hype-train-progress-rainbow::before {
+  background-image: linear-gradient(
     90deg,
     var(--color-highlight-pink) 0%,
     var(--color-highlight-purple) 14%,
@@ -3892,8 +3919,6 @@ html[data-motion="reduced"] .sub-progress-fill {
     var(--color-highlight-blue) 85%,
     var(--color-highlight-pink) 100%
   );
-  background-size: 200% 100%;
-  animation: hype-train-flow-seamless 15s linear infinite;
 }
 
 /* The remaining/time label on the strip, stepped down by fitHeaderDensity
@@ -3915,9 +3940,9 @@ html[data-motion="reduced"] .sub-progress-fill {
   display: none;
 }
 
-/* Golden progress bar for Golden Kappa trains */
-.hype-train-progress-golden {
-  background: linear-gradient(
+/* Golden progress bar for Golden Kappa trains (same flow as the rainbow one) */
+.hype-train-progress-golden::before {
+  background-image: linear-gradient(
     90deg,
     #B8860B 0%,
     #FFD700 25%,
@@ -3925,14 +3950,13 @@ html[data-motion="reduced"] .sub-progress-fill {
     #FFD700 75%,
     #B8860B 100%
   );
-  background-size: 200% 100%;
-  animation: hype-train-flow-seamless 15s linear infinite;
 }
 
-/* Seamless horizontal flow - gradient is doubled and slides left */
-@keyframes hype-train-flow-seamless {
-  from { background-position: 100% 0; }
-  to { background-position: -100% 0; }
+/* Seamless horizontal flow: the 400% layer holds two tiles, and sliding it by
+   one tile (50% of itself) lands on the same picture it started from. */
+@keyframes hype-train-flow-x {
+  from { transform: translateX(-50%); }
+  to { transform: translateX(0); }
 }
 
 /* Fallback purple progress bar */
@@ -6548,8 +6572,8 @@ html[data-engine="webkitgtk"] .automation-progress-bar,
 html[data-engine="webkitgtk"] .mining-card-border::before,
 html[data-engine="webkitgtk"] .hype-train-header,
 html[data-engine="webkitgtk"] .hype-train-progress-bar,
-html[data-engine="webkitgtk"] .hype-train-progress-golden,
-html[data-engine="webkitgtk"] .hype-train-progress-rainbow,
+html[data-engine="webkitgtk"] .hype-train-progress-golden::before,
+html[data-engine="webkitgtk"] .hype-train-progress-rainbow::before,
 html[data-engine="webkitgtk"] .blue-drop-animation,
 html[data-engine="webkitgtk"] .green-drop-animation,
 html[data-engine="webkitgtk"] .rainbow-drop-animation,

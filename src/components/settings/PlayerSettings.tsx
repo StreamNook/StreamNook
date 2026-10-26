@@ -449,11 +449,11 @@ const PlayerSettings = () => {
         {IS_MOBILE && (
           <SettingsRow
             title="Background play"
-            onReset={resetFor(['video_player.background_mode', 'pip'])}
+            onReset={resetFor(['video_player.background_mode', 'audio'])}
             description={
               (videoPlayer?.background_mode ?? 'pip') === 'audio'
-                ? 'Leaving the app floats the video in picture-in-picture. Close the window and the audio keeps going behind a media notification.'
-                : 'Leaving the app floats the video in picture-in-picture. Closing the window ends the stream.'
+                ? 'Leaving the app floats the video in picture-in-picture. Close the window or lock the phone and the audio keeps going behind a media notification.'
+                : 'Leaving the app floats the video in picture-in-picture. Closing the window ends the stream; locking the phone pauses it.'
             }
             control={
               <Toggle

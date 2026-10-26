@@ -3488,10 +3488,10 @@ impl LlOrigin {
                 })
                 .await;
             // A hold that runs out answers with the held playlist (wait_for is
-            // true at its deadline), so a paused player costs one loopback
-            // request per hold and never reaches the upstream relay. Only an
-            // edge that went away falls through.
-            if !held {
+            // true at its deadline), parked or not, so a paused player costs one
+            // loopback request per hold and never reaches the upstream relay.
+            // Only an edge that went away falls through.
+            if !held && !self.is_parked() {
                 return PlaylistServe::Inactive;
             }
         }
@@ -5501,6 +5501,21 @@ mod tests {
         let woke = origin.last_playlist_ms.load(Ordering::SeqCst);
         assert_ne!(woke, asked, "the unpark noted a request");
         assert!(!origin.idle_park_due_at(woke), "not idle right after the unpark");
+    }
+
+    #[test]
+    fn a_parked_origin_answers_a_timed_out_apple_reload() {
+        // A paused AVPlayer keeps making blocking reloads. One the edge never
+        // satisfies runs out its hold and gets the held playlist back, parked or
+        // not, so the relay never goes upstream for it.
+        let origin = LlOrigin::new(6);
+        *origin.live_edge.lock().unwrap() = Some(ts_edge_with_one_segment());
+        let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+        let unparked = rt.block_on(origin.serve_playlist_apple(Some(1_000), None, "http://x/", 2));
+        assert!(matches!(unparked, PlaylistServe::Playlist(_)));
+        assert!(origin.park());
+        let parked = rt.block_on(origin.serve_playlist_apple(Some(1_000), None, "http://x/", 2));
+        assert!(matches!(parked, PlaylistServe::Playlist(_)));
     }
 
     #[test]

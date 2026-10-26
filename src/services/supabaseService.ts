@@ -197,6 +197,8 @@ export const trackPresence = async (
         Logger.debug('[Supabase] Skipping presence tracking - not configured');
         return null;
     }
+    lastPresenceArgs = [userId, displayName, appVersion];
+    presenceSuspended = false;
 
     try {
         const nextKey = buildPresenceKey(userId);
@@ -246,6 +248,29 @@ export const trackPresence = async (
         Logger.error('[Supabase] Failed to track presence:', error);
         return null;
     }
+};
+
+// The last identity trackPresence joined with, so a phone returning from the
+// background can rejoin as the same presence.
+let lastPresenceArgs: [string | undefined, string | undefined, string | undefined] | null = null;
+let presenceSuspended = false;
+
+/**
+ * Leave global presence while the phone app is in the background. Nothing in
+ * the app reads global-presence joins/leaves; a backgrounded phone was waking
+ * for every one.
+ */
+export const suspendPresence = (): void => {
+    if (!presenceChannel) return;
+    presenceSuspended = true;
+    disposePresence();
+};
+
+/** Rejoin after suspendPresence, as the identity last tracked. */
+export const resumePresence = async (): Promise<void> => {
+    if (!presenceSuspended || !lastPresenceArgs) return;
+    presenceSuspended = false;
+    await trackPresence(...lastPresenceArgs);
 };
 
 const disposePresence = () => {
