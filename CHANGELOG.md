@@ -1,3 +1,8 @@
+## [8.8.18] - 2026-10-26
+
+### 🐛 Bug Fixes
+- A click on the video no longer pauses it. It moves focus out of the chat box instead, so Space, M and the other player keys work right away. To have a click pause and play again, turn on Click to pause in Settings > Player. A paused stream still stops downloading however you pause it.
+
 ## [8.8.17] - 2026-10-26
 
 ### 🐛 Bug Fixes
