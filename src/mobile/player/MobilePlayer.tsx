@@ -2,7 +2,7 @@
 // overlay. No Plyr; hls.js runs via useMobileHlsEngine.
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ArrowClockwise, Bell, BellSlash, CaretLeft, ChatTeardropText, Columns, Gear, MoonStars, Pause, Play, Rows, Screencast, ShareNetwork, SpeakerHigh, SpeakerSlash, Star, UsersThree, CaretDown, X, CornersIn, CornersOut } from 'phosphor-react';
-import { setPipMuted, shareText } from '../nativeBridge';
+import { shareText } from '../nativeBridge';
 import { toggleChannelMuted } from '../notifyChannels';
 import { useVisibleInterval } from '../../utils/useVisibleInterval';
 import { shareLinkFor } from '../../utils/shareLink';
@@ -16,7 +16,7 @@ import { useMobileHlsEngine, type MobilePlayerFailure } from './useMobileHlsEngi
 import { useVodProgressReporter } from '../../hooks/useVodProgressReporter';
 import { listenSleepTimer, sleepTimerRunning, useSleepTimer } from './sleepTimer';
 import { makeKey } from '../../utils/providerKey';
-import { setLiveVideo } from './liveVideo';
+import { setLiveVideo, toggleLiveMute } from './liveVideo';
 import { attachLockScreenAudio, releaseLockScreenAudio, updateNowPlaying } from './lockScreenAudio';
 import { QualitySheet } from './QualitySheet';
 import PenroseMarch from '../../components/PenroseMarch';
@@ -426,17 +426,26 @@ export const MobilePlayer: React.FC<{
     };
   }, [scheduleHide]);
 
+  // Back to full size from the mini box (or picture in picture), the controls
+  // show for their usual spell, as on the iPhone. The watch layer takes every
+  // press until it has landed, so they cannot be pressed mid-flight.
+  const [prevCompact, setPrevCompact] = useState(compact);
+  if (prevCompact !== compact) {
+    setPrevCompact(compact);
+    if (!compact) setControlsVisible(true);
+  }
+  useEffect(() => {
+    if (!compact) scheduleHide();
+  }, [compact, scheduleHide]);
+
   // Mute from the system PiP window. Web content cannot draw usable controls
   // there, so the toggle is a native RemoteAction; MainActivity broadcasts back
-  // into the WebView, and we push the resulting state out again so the OS can
-  // flip its icon between mute and unmute.
+  // into the WebView, and the shared toggle pushes the resulting state out
+  // again so the OS can flip its icon between mute and unmute.
   useEffect(() => {
     const onPipMute = () => {
-      const video = videoRef.current;
-      if (!video) return;
-      video.muted = !video.muted;
-      setMuted(video.muted);
-      setPipMuted(video.muted);
+      const next = toggleLiveMute();
+      if (next !== null) setMuted(next);
     };
     window.addEventListener('sn:pip-mute', onPipMute);
     return () => window.removeEventListener('sn:pip-mute', onPipMute);
@@ -541,12 +550,10 @@ export const MobilePlayer: React.FC<{
 
   const toggleMute = (e: React.MouseEvent) => {
     e.stopPropagation();
-    const video = videoRef.current;
-    if (!video) return;
-    video.muted = !video.muted;
-    setMuted(video.muted);
-    // Keep the PiP action's icon in step with the in-app control.
-    setPipMuted(video.muted);
+    // The shared toggle also keeps the PiP action's icon in step.
+    const next = toggleLiveMute();
+    if (next === null) return;
+    setMuted(next);
     scheduleHide();
   };
 
@@ -777,7 +784,10 @@ export const MobilePlayer: React.FC<{
           category, viewers, uptime) so nothing has to sit between the player
           and chat, matching how the Twitch app does it. */}
       <div
-        className={`absolute inset-0 transition-opacity duration-200 ${
+        // No fade into the mini box: the controls go the moment a minimize
+        // starts (as Xtra hides its controller), rather than fading out while
+        // the player shrinks under them.
+        className={`absolute inset-0 ${compact ? '' : 'transition-opacity duration-200'} ${
           controlsVisible && !compact && !offline ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
         style={{
