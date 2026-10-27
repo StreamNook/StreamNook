@@ -1600,7 +1600,11 @@ pub fn run() {
                             // multi-account registry. Cheap once recorded; self-heals if
                             // the user later signs in as a different account. Best-effort.
                             if let Some(uid) = status.user_id.as_deref() {
-                                services::account_store::AccountStore::reconcile_primary(uid).await;
+                                services::account_store::AccountStore::reconcile_primary(
+                                    uid,
+                                    status.login.as_deref(),
+                                )
+                                .await;
                             }
                         } else {
                             debug!(

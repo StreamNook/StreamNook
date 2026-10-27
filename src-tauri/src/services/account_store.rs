@@ -65,6 +65,12 @@ pub struct StoredAccount {
 
 pub struct AccountStore;
 
+/// Whether Twitch reports a different login than the one on file. Logins are
+/// lowercase on Twitch, so a case difference alone is not a rename.
+fn login_changed(stored: &str, validated: &str) -> bool {
+    !validated.is_empty() && !stored.eq_ignore_ascii_case(validated)
+}
+
 impl AccountStore {
     // ----- registry (metadata) persistence -------------------------------
 
@@ -235,13 +241,13 @@ impl AccountStore {
 
     /// Record the current login as the main account in the registry, and keep a
     /// backup copy of its token so it can be demoted losslessly later. Called on
-    /// startup with the user id Twitch's validate endpoint already returned.
+    /// startup with the user id and login Twitch's validate endpoint returned.
     ///
     /// Non-destructive: when a DIFFERENT account is found occupying the primary
     /// slot (a re-login as someone else), the previous main is demoted to a
     /// linked account rather than deleted. Always best-effort: any failure is
     /// logged and swallowed so login is never broken.
-    pub async fn reconcile_primary(validated_user_id: &str) {
+    pub async fn reconcile_primary(validated_user_id: &str, validated_login: Option<&str>) {
         let accounts = Self::list();
         let current_primary = accounts.iter().find(|a| a.is_primary).cloned();
 
@@ -251,6 +257,9 @@ impl AccountStore {
         // to a usable linked account without losing its token.
         if let Some(p) = &current_primary {
             if p.user_id == validated_user_id {
+                if let Some(login) = validated_login.filter(|l| login_changed(&p.login, l)) {
+                    Self::record_rename(accounts, validated_user_id, login).await;
+                }
                 if let Ok(token) = TwitchService::load_primary_token().await {
                     let _ = Self::store_secondary_token(validated_user_id, &token);
                 }
@@ -301,6 +310,40 @@ impl AccountStore {
         match Self::save(&next) {
             Ok(_) => debug!("[accounts] primary reconciled (non-destructive)"),
             Err(e) => warn!("[accounts] failed to record primary: {}", e),
+        }
+    }
+
+    /// The main account was renamed on Twitch: its id stayed, its login did not.
+    /// Everything that reads the login from here (the badge collection, `/me`,
+    /// the send limiter's own-login check) would keep asking for a name that is
+    /// gone. Takes the display name and avatar from Twitch too when it answers;
+    /// otherwise the validated login alone is recorded.
+    async fn record_rename(mut accounts: Vec<StoredAccount>, user_id: &str, login: &str) {
+        let info = TwitchService::get_user_info()
+            .await
+            .ok()
+            .filter(|i| i.id == user_id);
+        let Some(account) = accounts.iter_mut().find(|a| a.user_id == user_id) else {
+            return;
+        };
+        let previous = std::mem::replace(&mut account.login, login.to_string());
+        match info {
+            Some(i) => {
+                account.login = i.login;
+                account.display_name = i.display_name;
+                account.avatar_url = i.profile_image_url;
+            }
+            None => account.display_name = login.to_string(),
+        }
+        match Self::save(&accounts) {
+            Ok(_) => debug!(
+                "[accounts] main account renamed on Twitch: @{} is now @{}",
+                previous, login
+            ),
+            Err(e) => warn!(
+                "[accounts] failed to record the main account's new login: {}",
+                e
+            ),
         }
     }
 
@@ -556,5 +599,17 @@ fn wipe_default_webview_store() {
                 warn!("[accounts] force-reauth: could not remove {path:?}: {e}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::login_changed;
+
+    #[test]
+    fn a_new_login_for_the_same_id_is_a_rename() {
+        assert!(login_changed("shaiza__", "1shaiza"));
+        assert!(!login_changed("BR_Winters", "br_winters"));
+        assert!(!login_changed("shaiza__", ""));
     }
 }
