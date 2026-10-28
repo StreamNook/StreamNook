@@ -13,8 +13,9 @@ import { nameColorReadsLight } from '../../utils/nameColor';
  * land on the same base. One with nothing to sit on renders as a normal emote.
  * `attached` maps a base index to its overlay indices; `skip` holds the
  * overlays and the spaces they bridged, which render inside the stack instead.
- * `drawsImage` says whether an overlay will draw as a picture: one shown as its
- * typed word (a hidden personal emote) stays in the text flow, never on top.
+ * `drawsImage` says whether an emote will draw as a picture: one shown as its
+ * typed word (a hidden personal emote) stays in the text flow, never on top,
+ * and carries no overlay of its own.
  */
 export function zeroWidthLayout(
   segs: MessageSegment[],
@@ -38,7 +39,7 @@ export function zeroWidthLayout(
       gap = i;
       return;
     }
-    const canCarry = s.type === 'emote' || s.type === 'emoji';
+    const canCarry = (s.type === 'emote' && drawsImage(s)) || s.type === 'emoji';
     base = canCarry ? i : -1;
     gap = -1;
   });

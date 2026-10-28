@@ -60,3 +60,10 @@ test('an overlay that will render as its word stays in the text flow', () => {
   assert.equal(attached.size, 0);
   assert.equal(skip.size, 0);
 });
+
+test('an emote shown as its word carries no overlay', () => {
+  // A hidden personal emote shows the typed word; a hat stacked on it would print over the text.
+  const personal = emote('myEmote', false, { is_personal: true });
+  const { attached } = zeroWidthLayout([personal, text(' '), emote('RainTime', true)], (s) => s !== personal);
+  assert.equal(attached.size, 0);
+});
