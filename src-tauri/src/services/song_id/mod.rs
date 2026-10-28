@@ -9,11 +9,12 @@
 
 mod algorithm;
 mod hanning;
+pub mod history;
 mod odesli;
 mod shazam;
 mod signature_format;
 
-pub use shazam::{SongMatch};
+pub use shazam::{Provider, SongMatch};
 
 use algorithm::SignatureGenerator;
 
@@ -52,6 +53,7 @@ pub async fn identify(samples: Vec<i16>) -> Result<Option<SongMatch>, String> {
         // real platform URL and Odesli had nothing to resolve.
         if song.providers.is_empty() {
             song.providers = shazam::search_links(&song.artist, &song.title);
+            song.links_are_searches = true;
         }
     }
 

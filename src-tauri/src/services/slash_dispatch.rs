@@ -26,6 +26,7 @@
 //!   (`composer` is "poll" or "prediction").
 //! - `create_clip`: `/clip [title]` clips the room it was typed in.
 //! - `identify_song`: `/song` listens to the player's audio.
+//! - `open_songs`: `/songs` opens Your songs, every song you identified.
 //! - `reload_stream`: `/reload` restarts the playing stream and its chat.
 //! - `reload_chat`: `/reconnect` empties and reconnects this room's chat.
 //! - `refresh_emotes`: `/refresh` already refetched in Rust; the page drops its
@@ -104,6 +105,7 @@ pub enum Ui {
     /// titled with the words after `/clip` (empty: the stream's title).
     CreateClip { channel: String, channel_id: String, title: String },
     IdentifySong,
+    OpenSongs,
     ReloadStream,
     ReloadChat,
     RefreshEmotes,
@@ -1244,6 +1246,9 @@ async fn core(c: &Call<'_>, o: &mut Outcome) -> Result<Flow, String> {
             o.say("Listening to identify the song...");
             o.ui = Some(Ui::IdentifySong);
         }
+        "songs" => {
+            o.ui = Some(Ui::OpenSongs);
+        }
         "ban" => {
             if c.args.is_empty() {
                 return Ok(Flow::Usage);
@@ -1932,7 +1937,7 @@ async fn nuke_command(c: &Call<'_>, o: &mut Outcome) {
 pub const PLATFORM_NEUTRAL: &[&str] = &[
     "help", "copy", "echo", "say", "tts", "shrug", "lurk", "squishy", "barrelroll", "party", "exporttext", "openfile",
     "proc", "screenshot", "setting", "timer", "chain", "foreach", "debug-env", "debug-chat", "debug-eventsub",
-    "debug-logs", "debug-logging", "openstreamhighlights",
+    "debug-logs", "debug-logging", "openstreamhighlights", "song", "songs",
 ];
 
 const SQUISHY: &str =

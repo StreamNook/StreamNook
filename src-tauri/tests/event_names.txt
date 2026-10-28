@@ -109,6 +109,7 @@ seventv-connected-account
 seventv-profile-pictures
 sleep-timer://state
 sn-registry-changed
+song-history-changed
 stream-manager-state
 streamer-mode-changed
 streamer-went-live

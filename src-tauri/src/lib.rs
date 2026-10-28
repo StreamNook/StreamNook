@@ -662,6 +662,7 @@ pub(crate) fn flush_debounced_stores() {
     #[cfg(desktop)]
     let _ = commands::popout_window::flush_now();
     let _ = services::activity_history_service::flush_now();
+    let _ = services::song_id::history::flush_now();
     let _ = services::chat_logger_service::ChatLoggerService::flush_all();
 }
 
@@ -2003,8 +2004,13 @@ pub fn run() {
             report_vod_position,
             get_vod_progress,
             clear_vod_progress,
-            // Song recognition
+            // Song recognition and Your songs
             identify_song,
+            get_song_history,
+            get_song,
+            remove_song,
+            restore_song,
+            clear_song_history,
             // Multi-stream commands (desktop-only — not part of the phone app)
             #[cfg(desktop)]
             start_multi_nook,

@@ -304,28 +304,7 @@ fn search_page(resp: &serde_json::Value) -> Vec<CategoryRow> {
 /// A category name as search compares it: trimmed, lowercase, with Latin
 /// accents folded, so "pokemon" typed on any keyboard matches "Pokémon".
 fn fold_category_name(s: &str) -> String {
-    s.trim()
-        .chars()
-        .flat_map(char::to_lowercase)
-        .map(|c| match c {
-            'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' | 'ā' | 'ă' | 'ą' => 'a',
-            'ç' | 'ć' | 'č' => 'c',
-            'ď' | 'đ' => 'd',
-            'è' | 'é' | 'ê' | 'ë' | 'ē' | 'ė' | 'ę' | 'ě' => 'e',
-            'ğ' => 'g',
-            'ì' | 'í' | 'î' | 'ï' | 'ī' | 'į' | 'ı' => 'i',
-            'ł' => 'l',
-            'ñ' | 'ń' | 'ň' => 'n',
-            'ò' | 'ó' | 'ô' | 'õ' | 'ö' | 'ø' | 'ō' | 'ő' => 'o',
-            'ř' => 'r',
-            'ś' | 'š' | 'ş' => 's',
-            'ť' => 't',
-            'ù' | 'ú' | 'û' | 'ü' | 'ū' | 'ů' | 'ű' => 'u',
-            'ý' | 'ÿ' => 'y',
-            'ź' | 'ż' | 'ž' => 'z',
-            c => c,
-        })
-        .collect()
+    crate::utils::text_fold::fold_search(s.trim())
 }
 
 /// Category search order: the category named exactly what was typed first

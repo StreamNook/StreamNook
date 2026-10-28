@@ -10,13 +10,13 @@ use std::sync::LazyLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rand::seq::IndexedRandom;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
 use super::signature_format::DecodedSignature;
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Provider {
     pub name: String,
     pub url: String,
@@ -36,6 +36,12 @@ pub struct SongMatch {
     /// A real platform URL used to seed Odesli enrichment. Not sent to the UI.
     #[serde(skip)]
     pub seed_url: Option<String>,
+    /// Its key in Your songs once it is filed there (history.rs).
+    pub key: Option<String>,
+    /// `providers` are search pages (`search_links`), not the track's own
+    /// links. Not sent to the UI.
+    #[serde(skip)]
+    pub links_are_searches: bool,
 }
 
 // A handful of real Android device user-agents; one is picked per request. The
@@ -162,6 +168,8 @@ fn parse_track(json: &Value) -> Option<SongMatch> {
         song_link: None,
         providers,
         seed_url,
+        key: None,
+        links_are_searches: false,
     })
 }
 

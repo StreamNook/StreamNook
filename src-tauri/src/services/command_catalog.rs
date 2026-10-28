@@ -10,6 +10,7 @@ use serde_json::Value;
 const LOCAL: u8 = 1;
 const DESKTOP_ONLY: u8 = 2;
 const DEV_ONLY: u8 = 4;
+const SONG_ID: u8 = 8;
 
 /// One built-in command.
 pub struct Builtin {
@@ -36,6 +37,11 @@ impl Builtin {
     /// Works only in development builds.
     pub fn dev_only(&self) -> bool {
         self.flags & DEV_ONLY != 0
+    }
+    /// Song identification, which listens through the WebView's audio tap. The
+    /// iPhone app plays through AVPlayer and has none, so its list leaves these out.
+    pub fn song_id(&self) -> bool {
+        self.flags & SONG_ID != 0
     }
 }
 
@@ -102,7 +108,8 @@ pub static BUILTINS: &[Builtin] = &[
     cmd("setgame", &[], "Broadcaster", "/setgame <category>", "Set the stream category by name (broadcaster only)", "The name is matched against the Twitch category list, so spell it the way Twitch does.", &["/setgame Just Chatting", "/setgame Elden Ring"], 0),
     cmd("overlay", &[], "Everyone", "/overlay [channel]", "Float this (or another) channel in a see-through always-on-top chat window", "A see-through, always-on-top chat you can park over a game. Ctrl+Alt+N makes every overlay click-through or clickable again.", &["/overlay", "/overlay someone"], LOCAL | DESKTOP_ONLY),
     cmd("uptime", &[], "Everyone", "/uptime", "Show this channel's current stream uptime", "", &[], LOCAL),
-    cmd("song", &[], "Everyone", "/song", "Identify the music currently playing in the stream", "Listens to a few seconds of the stream audio and looks the track up. Nothing is posted to chat unless you paste the result.", &[], LOCAL),
+    cmd("song", &[], "Everyone", "/song", "Identify the music currently playing in the stream", "Listens to a few seconds of the stream audio and looks the track up. Nothing is posted to chat unless you paste the result.", &[], LOCAL | SONG_ID),
+    cmd("songs", &[], "Everyone", "/songs", "Open Your songs: every song you identified", "Every song /song or the player's music button found, newest first, with its links and where you heard it.", &[], LOCAL | SONG_ID),
     cmd("remind", &[], "Everyone", "/remind every 20m <message>", "Auto-post reminders to chat: every N min, after a delay, at a time, at uptime, or on a keyword. Manage with /remind list, remove, enable, disable, clear. Add x3 to repeat.", "Reminders are posted by StreamNook while the app is open. Manage them with /remind list, remove, enable, disable and clear.", &["/remind every 20m Drink water", "/remind in 10m Check the queue", "/remind at 21:30 Raid time", "/remind on !discord Discord link is in the panel"], LOCAL),
     cmd("usercard", &["userinfo"], "Everyone", "/usercard <user>", "Open a user's StreamNook profile card", "", &["/usercard someuser"], LOCAL),
     cmd("user", &[], "Everyone", "/user <user>", "Open a user's StreamNook profile card", "", &["/user someuser"], LOCAL),
@@ -335,6 +342,13 @@ fn custom_rows(commands: &[UserCommand]) -> Vec<(CatalogRow, String)> {
         .collect()
 }
 
+/// Whether a built-in is offered: desktop-only ones never on a phone, song
+/// identification never on the iPhone, development-only ones only in
+/// development builds.
+fn listed(b: &Builtin, phone: bool, ios: bool, dev: bool) -> bool {
+    !(phone && b.desktop_only()) && !(ios && b.song_id()) && (dev || !b.dev_only())
+}
+
 /// The command list in table order, then the viewer's own commands, filtered
 /// by `query`. A phone leaves out desktop-only commands; a release build
 /// leaves out development-only ones.
@@ -342,7 +356,7 @@ pub fn catalog(phone: bool, is_moderator: bool, is_broadcaster: bool, user_comma
     let dev = cfg!(debug_assertions);
     let mut rows: Vec<CatalogRow> = BUILTINS
         .iter()
-        .filter(|b| !(phone && b.desktop_only()) && (dev || !b.dev_only()))
+        .filter(|b| listed(b, phone, cfg!(target_os = "ios"), dev))
         .filter(|b| {
             let hay = format!("{} {} {} {} {}", b.name, b.usage, b.description, b.details, b.examples.join(" "));
             matches(&hay, query)
@@ -438,5 +452,13 @@ mod tests {
         assert_eq!(last.usage, "/Hype <arg1> <arg2...>");
         assert_eq!(last.label, "Your commands");
         assert!(!rows.iter().any(|r| r.name == "off" || r.name == "plain"));
+    }
+
+    #[test]
+    fn the_iphone_list_leaves_song_id_out() {
+        let song = BUILTINS.iter().find(|b| b.name == "song").unwrap();
+        assert!(!listed(song, true, true, false));
+        assert!(listed(song, true, false, false));
+        assert!(listed(song, false, false, false));
     }
 }

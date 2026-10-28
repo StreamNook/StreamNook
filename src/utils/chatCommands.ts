@@ -4,6 +4,7 @@
 // the phone's command sheet; a Rust test fails when the two drift apart.
 
 import type { UserSlashCommand } from '../types';
+import { AUDIO_GRAPH_SUPPORTED } from './audioBoost';
 
 export interface CommandDefinition {
   name: string;
@@ -84,6 +85,7 @@ export const COMMAND_DEFINITIONS: CommandDefinition[] = [
   { name: 'overlay', usage: '/overlay [channel]', description: 'Float this (or another) channel in a see-through always-on-top chat window', category: 'Everyone' , local: true, desktopOnly: true, examples: ['/overlay', '/overlay someone'], details: 'A see-through, always-on-top chat you can park over a game. Ctrl+Alt+N makes every overlay click-through or clickable again.' },
   { name: 'uptime', usage: '/uptime', description: "Show this channel's current stream uptime", category: 'Everyone' , local: true },
   { name: 'song', usage: '/song', description: 'Identify the music currently playing in the stream', category: 'Everyone' , local: true, details: 'Listens to a few seconds of the stream audio and looks the track up. Nothing is posted to chat unless you paste the result.' },
+  { name: 'songs', usage: '/songs', description: 'Open Your songs: every song you identified', category: 'Everyone' , local: true, details: "Every song /song or the player's music button found, newest first, with its links and where you heard it." },
   { name: 'remind', usage: '/remind every 20m <message>', description: 'Auto-post reminders to chat: every N min, after a delay, at a time, at uptime, or on a keyword. Manage with /remind list, remove, enable, disable, clear. Add x3 to repeat.', category: 'Everyone' , local: true, examples: ['/remind every 20m Drink water', '/remind in 10m Check the queue', '/remind at 21:30 Raid time', '/remind on !discord Discord link is in the panel'], details: 'Reminders are posted by StreamNook while the app is open. Manage them with /remind list, remove, enable, disable and clear.' },
   { name: 'usercard', aliases: ['userinfo'], usage: '/usercard <user>', description: "Open a user's StreamNook profile card", category: 'Everyone' , local: true, examples: ['/usercard someuser'] },
   { name: 'user', usage: '/user <user>', description: "Open a user's StreamNook profile card", category: 'Everyone' , local: true, examples: ['/user someuser'] },
@@ -201,6 +203,15 @@ export const COMMAND_DEFINITIONS: CommandDefinition[] = [
   { name: 'editor', usage: '/editor <username>', description: 'Make someone an editor of your channel', category: 'Broadcaster' , details: 'Editors can change your title, category, ads and more, so it asks you to confirm.' },
   { name: 'uneditor', usage: '/uneditor <username>', description: 'Remove an editor', category: 'Broadcaster' },
 ];
+
+// Song identification listens through the audio tap macOS's video engine
+// keeps from the app, so its commands are not offered there.
+if (!AUDIO_GRAPH_SUPPORTED) {
+  for (const name of ['song', 'songs']) {
+    const at = COMMAND_DEFINITIONS.findIndex((c) => c.name === name);
+    if (at >= 0) COMMAND_DEFINITIONS.splice(at, 1);
+  }
+}
 
 /** Alias -> the command it runs (`b` -> `ban`). */
 export const COMMAND_ALIASES: ReadonlyMap<string, string> = new Map(

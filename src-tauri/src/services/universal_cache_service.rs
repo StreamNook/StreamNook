@@ -2501,7 +2501,7 @@ fn rename_is_refused(e: &std::io::Error) -> bool {
 /// `rename_is_refused` says is retried after each wait in `RENAME_RETRY_MS`. Any
 /// other failure, or the last refusal, deletes the temp file and returns the
 /// error.
-fn write_atomic_with<B, R>(dest: &Path, bytes: B, mut rename: R) -> std::io::Result<()>
+pub(crate) fn write_atomic_with<B, R>(dest: &Path, bytes: B, mut rename: R) -> std::io::Result<()>
 where
     B: AsRef<[u8]>,
     R: FnMut(&Path, &Path) -> std::io::Result<()>,

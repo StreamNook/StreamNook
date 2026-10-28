@@ -871,6 +871,21 @@ async fn phones_refuse_desktop_only_commands_and_the_builders() {
 }
 
 #[tokio::test]
+async fn songs_opens_your_songs_on_every_platform() {
+    let fake = Fake::new();
+    for platform in [Platform::Desktop, Platform::Android, Platform::Ios] {
+        let o = dispatch(ctx(&fake, "chan", platform), "/songs".into(), 0).await;
+        assert!(o.handled);
+        assert_eq!(o.ui, Some(Ui::OpenSongs));
+        assert!(o.notices.is_empty());
+        assert!(o.send.is_none());
+    }
+    // Any platform's chat: neither needs a Twitch call.
+    assert_eq!(run_in(&fake, "kick:somechan", "/songs").await.ui, Some(Ui::OpenSongs));
+    assert_eq!(run_in(&fake, "kick:somechan", "/song").await.ui, Some(Ui::IdentifySong));
+}
+
+#[tokio::test]
 async fn phones_get_a_profile_sheet_and_a_local_clear() {
     let fake = Fake::new();
     let o = dispatch(ctx(&fake, "chan", Platform::Ios), "/usercard @Bob".into(), 0).await;

@@ -33,7 +33,7 @@ vi.mock('../stores/chatConnectionStore', () => ({
   systemSourceFor: () => undefined,
 }));
 vi.mock('./logger', () => ({ Logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() } }));
-vi.mock('./platform', () => ({ IS_MOBILE: false, IS_ANDROID: false }));
+vi.mock('./platform', () => ({ IS_MOBILE: false, IS_ANDROID: false, IS_MAC: false }));
 
 const dispatched: string[] = [];
 (globalThis as unknown as { window: EventTarget }).window = new EventTarget();
