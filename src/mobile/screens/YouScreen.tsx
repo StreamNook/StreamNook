@@ -3,7 +3,7 @@
 // every picture, name and cosmetic), the accounts you are signed in with (each
 // with its own sign in / sign out), then settings sections inline.
 import React, { useEffect, useState } from 'react';
-import { ArrowCircleDown, At, ChatCircle } from 'phosphor-react';
+import { ArrowCircleDown, At, ChatCircle, MusicNotes } from 'phosphor-react';
 import { useMentionsStore } from '../mentions/mentionInbox';
 import { useWhispersStore } from '../whispers/whisperInbox';
 import { WHISPER_WORDS } from '../whispers/whisperModel';
@@ -33,6 +33,7 @@ export const YouScreen: React.FC = () => {
   const mentionsUnread = useMentionsStore((s) => s.unreadTotal);
   const openWhispers = useMobileNavStore((s) => s.openWhispers);
   const whispersUnread = useWhispersStore((s) => s.unreadTotal);
+  const openSongs = useMobileNavStore((s) => s.openSongs);
   const startTab = usePhonePrefs((s) => s.startTab);
   const setStartTab = usePhonePrefs((s) => s.setStartTab);
   const addToast = useAppStore((s) => s.addToast);
@@ -99,7 +100,8 @@ export const YouScreen: React.FC = () => {
 
       {/* Your mentions, first among the things that are about you, then your
           whispers (Twitch's, so only with a Twitch sign-in; here until the chat
-          inbox opens them). The dot is the only mark unread gets here. */}
+          inbox opens them), then the songs you identified. The dot is the only
+          mark unread gets here. */}
       <div className="px-4 mb-4">
         <div className="glass-panel w-full overflow-hidden">
           <button
@@ -137,6 +139,18 @@ export const YouScreen: React.FC = () => {
               </button>
             </>
           )}
+          <div className="ml-[46px] border-t border-borderSubtle" />
+          <button
+            onClick={() => openSongs()}
+            className="w-full flex items-center gap-3 px-3.5 py-3 text-left active:bg-surface-active"
+          >
+            <MusicNotes size={20} className="text-textSecondary shrink-0" />
+            <span className="flex-1 min-w-0">
+              <span className="block text-[15px] font-medium text-textPrimary">Songs</span>
+              <span className="block text-[12.5px] text-textMuted truncate">Every song you identified</span>
+            </span>
+            <ChevronRight size={16} className="text-textMuted shrink-0" />
+          </button>
         </div>
       </div>
 

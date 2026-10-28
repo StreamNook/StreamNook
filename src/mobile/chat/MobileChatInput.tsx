@@ -347,10 +347,28 @@ const MobileChatInputImpl: React.FC<Props> = ({
     };
     const failed = (why: string) => setFailureFor(key, { text: message, why });
     if (!isTwitch) {
-      // Slash commands are Twitch calls; typed here they would post as text.
+      // Commands that need no Twitch API (text tools, /song, /songs, your own
+      // commands) run in Rust for any platform's chat, the desktop's rule; Rust
+      // answers "not mine" for the rest, which would post as text here.
+      let body = message;
       if (message.startsWith('/')) {
-        useAppStore.getState().addToast('Commands only work in Twitch chats', 'info');
-        return;
+        const answer = await runSlashCommand(message, '', key).catch((err: unknown) => {
+          Logger.warn('[MobileChatInput] run_slash_command failed:', err);
+          return null;
+        });
+        if (!answer?.handled) {
+          useAppStore.getState().addToast('Commands only work in Twitch chats', 'info');
+          return;
+        }
+        const reply: { text?: string } = {};
+        await applySlashOutcome(answer, key, '', (msg) => {
+          reply.text = msg;
+        });
+        if (reply.text === undefined) {
+          sent();
+          return;
+        }
+        body = reply.text;
       }
       setSending(true);
       try {
@@ -361,7 +379,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
           {
             provider,
             channel: channel.toLowerCase(),
-            text: message,
+            text: body,
             replyTo: replyTo?.messageId ?? null,
           },
         );

@@ -40,6 +40,7 @@ import { CosmeticsScreen } from './screens/CosmeticsScreen';
 import { MentionsScreen } from './screens/MentionsScreen';
 import { installMentionInbox } from './mentions/mentionInbox';
 import { WhispersScreen } from './screens/WhispersScreen';
+import { SongsScreen } from './screens/SongsScreen';
 import { installWhisperInbox } from './whispers/whisperInbox';
 import { MobileClipSheet } from './watch/MobileClipSheet';
 import { MobileChannelSheet } from './watch/MobileChannelSheet';
@@ -228,6 +229,8 @@ const MobileApp: React.FC = () => {
           <MentionsScreen />
           {/* Over Mentions too: a whisper notification tap opens it from anywhere. */}
           <WhispersScreen />
+          {/* Over Whispers: a song card in any chat opens it too. */}
+          <SongsScreen />
           {/* Consumes the same `clipModal` store field the desktop <ClipModal />
               does. Without a mobile consumer, tapping a clip in chat flipped
               that state and rendered nothing. Portals to z-[9000] via
