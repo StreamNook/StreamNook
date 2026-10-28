@@ -289,6 +289,21 @@
   },
   {
    "page": "player",
+   "section": "Song Identification",
+   "title": "Your songs",
+   "paths": [],
+   "nested": false,
+   "logo": null,
+   "detail": "Every song you identified, newest first, with its links and where you heard it.",
+   "aliases": [
+    "song history",
+    "identified songs",
+    "remember song names"
+   ],
+   "hidden_on_ios": true
+  },
+  {
+   "page": "player",
    "section": "Latency & Buffering",
    "title": "Target latency",
    "paths": [

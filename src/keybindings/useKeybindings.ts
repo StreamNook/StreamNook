@@ -105,6 +105,7 @@ export function createKeybindingDispatcher(target: KeyTarget): (e: KeyboardEvent
       state.showDropsOverlay ||
       state.showBadgesOverlay ||
       state.showWhispersOverlay ||
+      state.songsPanel ||
       state.showDashboardOverlay ||
       state.profileModalUser
     ) {

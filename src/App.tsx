@@ -48,6 +48,7 @@ import DropProgressController from './components/plugins/DropProgressController'
 import EmoteSpotlight from './components/EmoteSpotlight';
 import BadgeSpotlightHost from './components/BadgeSpotlightHost';
 import WhispersWidget from './components/WhispersWidget';
+import { SongsPanelHost } from './components/songs/SongsPanelHost';
 import PluginRuntimeBridge from './components/plugins/PluginRuntimeBridge';
 import Sidebar from './components/Sidebar';
 import TwitchOverlay from './components/TwitchOverlay';
@@ -2532,6 +2533,7 @@ function App() {
         isOpen={showWhispersOverlay}
         onClose={() => setShowWhispersOverlay(false)}
       />
+      <SongsPanelHost />
       <PluginRuntimeBridge />
       <PluginUiHost />
       <PluginUpdatesChecker />

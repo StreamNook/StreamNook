@@ -323,6 +323,13 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Player',
     section: 'Song Identification',
     sectionId: 'settings-section-song-id',
+    title: 'Your songs',
+    description: 'Every song you identified, newest first, with its links and where you heard it. Song history, a list of identified songs, remember song names.'
+  },
+  {
+    tab: 'Player',
+    section: 'Song Identification',
+    sectionId: 'settings-section-song-id',
     title: 'Listen time',
     description: 'How many seconds of audio to fingerprint; longer matches more reliably over talking or noise, but the result takes a little longer to appear.'
   },

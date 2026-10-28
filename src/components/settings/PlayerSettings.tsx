@@ -14,6 +14,8 @@ import {
   AUDIO_GRAPH_REFUSAL,
 } from '../../utils/audioBoost';
 import { reportCodecPreference } from '../../utils/codecPreference';
+import { openSongs } from '../../utils/songHistory';
+import { GLAZE_PILL } from '../ui/glazeButtons';
 import { invoke } from '@tauri-apps/api/core';
 import { thenRun, useSettingReset } from './settingReset';
 import { AUTO_GAP } from '../../utils/latency';
@@ -885,6 +887,17 @@ const PlayerSettings = () => {
         {/* Recognition listens through the same tap Audio Boost uses, so it is
             closed on exactly the same shells. */}
         <div className={AUDIO_GRAPH_SUPPORTED ? '' : 'opacity-50 pointer-events-none'}>
+        {AUDIO_GRAPH_SUPPORTED && (
+          <SettingsRow
+            title="Your songs"
+            description="Every song you identified, newest first, with its links and where you heard it."
+            control={
+              <button type="button" onClick={() => openSongs()} className={`${GLAZE_PILL} h-8 px-3.5 text-[12.5px]`}>
+                Open
+              </button>
+            }
+          />
+        )}
         <SettingsRow
           title={`Listen time: ${songId.capture_seconds}s`}
           onReset={resetFor(['video_player.song_id.capture_seconds', DEFAULT_SONG_ID.capture_seconds])}

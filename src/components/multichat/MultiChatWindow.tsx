@@ -110,6 +110,7 @@ import type { MentionEntry, TwitchStream } from '../../types';
 import streamNookLogoUrl from '../../assets/streamnook-logo-128.webp';
 import SplitLayout from './SplitLayout';
 import BadgeSpotlightHost from '../BadgeSpotlightHost';
+import { SongsPanelHost } from '../songs/SongsPanelHost';
 import { registerPaneFocusController } from '../../keybindings/paneFocusController';
 import {
   columnCount,
@@ -1962,6 +1963,8 @@ export default function MultiChatWindow() {
     <div className="flex h-screen flex-col bg-background text-textPrimary">
       {/* Badge clicks here open their card in this window, not main. */}
       <BadgeSpotlightHost />
+      {/* Your songs opens here too: /songs and a song card's link in this window. */}
+      <SongsPanelHost />
       {/* This window has no full ToastManager (that one also fires live-stream
           notifications); a minimal surface paints add-channel feedback etc. */}
       <MultiChatToasts />

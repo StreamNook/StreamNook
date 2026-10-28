@@ -32,6 +32,7 @@ import {
 import { Tooltip } from './ui/Tooltip';
 import { ProviderIcon } from './overlay/ProviderIcon';
 import { SevenTvAvatar } from './SevenTvAvatar';
+import { openSongs } from '../utils/songHistory';
 import { islandSurfaceGeometry } from '../utils/islandGeometry';
 import type { ProviderId } from '../types/providers';
 import type {
@@ -373,6 +374,10 @@ const renderPreviewIcon = (n: IslandItem): React.ReactNode => {
             // glyph, and a source beats a status. This drives BOTH the stacked
             // faces on the trigger and the pop-up preview, so the two can never
             // disagree with the list they came from.
+            // A song's cover is square: it is a record sleeve, not a face.
+            if (d.song_key && d.avatar_url) {
+                return <img src={d.avatar_url} alt="" className="w-4 h-4 rounded-[3px] object-cover flex-shrink-0" />;
+            }
             if (d.avatar_url) {
                 return <SevenTvAvatar cosmeticsId={d.avatar_seventv_id} px={16} src={d.avatar_url} alt="" className="w-4 h-4 rounded-full object-cover flex-shrink-0" />;
             }
@@ -910,16 +915,17 @@ const DynamicIsland = () => {
             avatarUrl?: string;
             avatarSevenTvId?: string;
             source?: SystemNotificationData['source'];
+            songKey?: string;
         }>('action-notification', (event) => {
             if (!notificationsEnabled || !useDynamicIsland) return;
-            const { text, level, avatarUrl, avatarSevenTvId, source } = event.payload;
+            const { text, level, avatarUrl, avatarSevenTvId, source, songKey } = event.payload;
             if (!text) return;
             addNotification({
                 id: `system-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
                 type: 'system',
                 timestamp: Date.now(),
                 read: false,
-                data: { title: '', message: text, level, avatar_url: avatarUrl, avatar_seventv_id: avatarSevenTvId, source } as SystemNotificationData,
+                data: { title: '', message: text, level, avatar_url: avatarUrl, avatar_seventv_id: avatarSevenTvId, source, song_key: songKey } as SystemNotificationData,
             });
         });
         return () => { unlisten.then((fn) => fn()); };
@@ -1869,6 +1875,10 @@ const DynamicIsland = () => {
             // Open badges overlay
             setShowBadgesOverlay(true);
             setIsExpanded(false);
+        } else if (notification.type === 'system' && (notification.data as SystemNotificationData).song_key) {
+            // A song you identified: open it in Your songs.
+            openSongs((notification.data as SystemNotificationData).song_key ?? null);
+            setIsExpanded(false);
         }
     };
 
@@ -2751,7 +2761,9 @@ const DynamicIsland = () => {
                                                                 return (
                                                                     <>
                                                                         <div className="relative flex-shrink-0">
-                                                                            {d.avatar_url ? (
+                                                                            {d.song_key && d.avatar_url ? (
+                                                                                <img src={d.avatar_url} alt="" loading="lazy" className="w-[34px] h-[34px] rounded-md object-cover" />
+                                                                            ) : d.avatar_url ? (
                                                                                 <>
                                                                                     <SevenTvAvatar
                                                                                         cosmeticsId={d.avatar_seventv_id}

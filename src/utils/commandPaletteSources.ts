@@ -28,6 +28,8 @@ import { favoriteIdOf, favoriteMetaOf } from './favorites';
 import { currentCategoryTarget } from './streamCategory';
 import { sevenTvIdForStream } from '../services/sevenTvPictures';
 import { useSnippetStore } from '../stores/snippetStore';
+import { AUDIO_GRAPH_SUPPORTED } from './audioBoost';
+import { openSongs } from './songHistory';
 import { WATCHABLE_PROVIDERS, providerLabel, type ProviderId } from '../types/providers';
 import { usePluginUiRegistry } from '../plugins-ui/registry';
 import { Logger } from './logger';
@@ -208,6 +210,17 @@ function buildPlatformItems(): PaletteItem[] {
   });
 }
 
+// Offered where song identification runs (not macOS, whose video engine
+// keeps stream audio from the app).
+const YOUR_SONGS_ITEM: PaletteItem = {
+  id: 'qa.openSongs',
+  section: 'Quick Actions',
+  title: 'Open Your songs',
+  subtitle: 'Every song you identified, with its links',
+  keywords: 'songs your songs song history identified music shazam what song track name remember',
+  run: () => openSongs(),
+};
+
 function buildQuickActions(): PaletteItem[] {
   const items: PaletteItem[] = [];
 
@@ -261,6 +274,7 @@ function buildQuickActions(): PaletteItem[] {
       keywords: 'whispers dms messages inbox',
       run: () => useAppStore.getState().setShowWhispersOverlay(true),
     },
+    ...(AUDIO_GRAPH_SUPPORTED ? [YOUR_SONGS_ITEM] : []),
     {
       id: 'qa.openProfile',
       section: 'Quick Actions',
@@ -832,7 +846,7 @@ const SETTINGS_CATALOG: SettingsEntry[] = [
   { tab: 'Player', section: 'Latency & Buffering', sectionId: 'settings-section-latency', keywords: 'latency buffering target latency how close to live live edge gap delay low latency buffer ahead stutter' },
   { tab: 'Player', section: 'Picture', keywords: 'picture 16:9 window aspect ratio lock keep the window cinema mode letterbox bars black color match theme floating pillarbox ambient glow glow with the stream backdrop hide title bar while watching auto-hide top bar hover toolbar edge to edge distraction free' },
   { tab: 'Player', section: 'Audio Boost', sectionId: 'settings-section-audio-boost', keywords: 'audio boost leveling turn on audio boost compressor makeup gain louder volume normalize even out loud quiet clipping threshold ratio knee attack release' },
-  { tab: 'Player', section: 'Song Identification', sectionId: 'settings-section-song-id', keywords: 'song identification identify music what song is this shazam recognize now playing track name spotify apple music song.link listen time retries retries when nothing matches capture detection' },
+  { tab: 'Player', section: 'Song Identification', sectionId: 'settings-section-song-id', keywords: 'song identification identify music what song is this shazam recognize now playing track name spotify apple music song.link listen time retries retries when nothing matches capture detection your songs song history list of identified songs' },
 
   // Theme
   { tab: 'Theme', keywords: 'theme color accent skin dark light palette glassiness font' },

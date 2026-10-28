@@ -78,6 +78,7 @@ import {
   List,
   ListChecks,
   ListFilter,
+  ListMusic,
   ListOrdered,
   ListVideo,
   Maximize,
@@ -201,6 +202,7 @@ const BY_TITLE: Record<string, LucideIcon> = {
   Leveling: AudioLines,
   'Listen time': Ear,
   Retries: Repeat,
+  'Your songs': ListMusic,
   Languages: Languages,
 
   // Chat

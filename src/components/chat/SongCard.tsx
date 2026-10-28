@@ -6,13 +6,16 @@ import { Tooltip } from '../ui/Tooltip';
 // was - `@tauri-apps/plugin-shell`'s open has no Android implementation.
 import { openExternal } from '../../utils/openExternal';
 import type { SongMatch } from '../../utils/songId';
+import { hasSongsSurface, openSongs } from '../../utils/songHistory';
 
 // The "/song" result rendered inline in chat: cover art, title/artist, and a row
 // of borderless service links (Spotify, Apple Music, ...) plus the song.link
-// aggregator. Each link opens in the browser.
+// aggregator. Each link opens in the browser. The last, quieter link opens the
+// song in Your songs, where it is kept, in windows that can show that list.
 export const SongCard = memo(function SongCard({ card }: { card: SongMatch }) {
   const links = [...card.providers];
   if (card.song_link) links.push({ name: 'song.link', url: card.song_link });
+  const kept = card.key && hasSongsSurface() ? card.key : null;
 
   return (
     <div className="glass-panel rounded-lg p-2 flex items-start gap-3 max-w-[320px]">
@@ -40,7 +43,7 @@ export const SongCard = memo(function SongCard({ card }: { card: SongMatch }) {
           {card.album ? ` · ${card.album}` : ''}
         </div>
 
-        {links.length > 0 && (
+        {(links.length > 0 || kept) && (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-1.5">
             {links.map((l) => (
               <Tooltip key={l.url} content={l.url} side="top">
@@ -54,6 +57,14 @@ export const SongCard = memo(function SongCard({ card }: { card: SongMatch }) {
                 </button>
               </Tooltip>
             ))}
+            {kept && (
+              <button
+                onClick={() => openSongs(kept)}
+                className="text-xs font-medium text-white/45 hover:text-accent transition-colors duration-150"
+              >
+                Your songs
+              </button>
+            )}
           </div>
         )}
       </div>
