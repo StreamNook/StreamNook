@@ -32,6 +32,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use tauri::Emitter;
 
+use super::services;
 use super::shazam::{Provider, SongMatch};
 use crate::rt::AppHandle;
 use crate::services::cache_service::get_app_data_dir;
@@ -184,12 +185,19 @@ fn web_url(url: &Option<String>) -> Option<String> {
     url.as_ref().filter(|u| is_web_url(u)).cloned()
 }
 
+/// `url` when it is a web link to the service called `name` (services.rs).
+fn service_url(url: &Option<String>, name: &str) -> Option<String> {
+    web_url(url).filter(|u| services::is_link_to(name, u))
+}
+
+/// The links kept: each named for a service and going to that service's own
+/// host, so no link is ever drawn with a logo it does not go to.
 fn web_providers(providers: &[Provider]) -> Vec<Provider> {
     providers
         .iter()
-        .filter(|p| is_web_url(&p.url) && !p.name.trim().is_empty())
+        .filter(|p| is_web_url(&p.url) && services::is_link_to(p.name.trim(), &p.url))
         .map(|p| Provider {
-            name: clip(p.name.trim()),
+            name: p.name.trim().to_string(),
             url: p.url.clone(),
         })
         .collect()
@@ -206,8 +214,8 @@ fn kept_match(song: &SongMatch) -> SongMatch {
             .map(|a| clip_to(a.trim(), MAX_TEXT))
             .filter(|a| !a.is_empty()),
         album_art: web_url(&song.album_art),
-        shazam_url: web_url(&song.shazam_url),
-        song_link: web_url(&song.song_link),
+        shazam_url: service_url(&song.shazam_url, "Shazam"),
+        song_link: service_url(&song.song_link, "song.link"),
         providers: web_providers(&song.providers),
         seed_url: None,
         key: None,
@@ -283,8 +291,8 @@ impl SongEntry {
     /// places newest first and bounded, and its search words built.
     fn tidy(&mut self) {
         self.album_art = web_url(&self.album_art);
-        self.shazam_url = web_url(&self.shazam_url);
-        self.song_link = web_url(&self.song_link);
+        self.shazam_url = service_url(&self.shazam_url, "Shazam");
+        self.song_link = service_url(&self.song_link, "song.link");
         self.providers = web_providers(&self.providers);
         for sighting in &mut self.sightings {
             sighting.source = sighting.source.take().and_then(SongSource::cleaned);
@@ -1200,6 +1208,48 @@ mod tests {
             Some("https://www.shazam.com/track/1")
         );
         assert_eq!(kept.providers.len(), 1);
+    }
+
+    #[test]
+    fn a_link_is_kept_only_under_the_service_it_goes_to() {
+        let link = |name: &str, url: &str| Provider {
+            name: name.into(),
+            url: url.into(),
+        };
+        let mut s = song("A", "One");
+        s.providers = vec![
+            link(
+                " Apple Music ",
+                "https://geo.music.apple.com/us/album/_/1?i=2",
+            ),
+            link("Spotify", "https://x.example/?u=open.spotify.com"),
+            link("YouTube", "https://music.youtube.com/watch?v=1"),
+            link("Amazon Music", "https://www.amazon.com/dp/B0"),
+            link("Listen", "https://open.spotify.com/track/1"),
+        ];
+        s.shazam_url = Some("https://shazam.com.x.example/track/1".into());
+        s.song_link = Some("https://song.link/s/1".into());
+        let mut h = History::default();
+        h.file(&s, None, 0);
+        let kept = &h.songs[0];
+        assert_eq!(kept.providers.len(), 1);
+        assert_eq!(kept.providers[0].name, "Apple Music");
+        assert_eq!(kept.shazam_url, None);
+        assert_eq!(kept.song_link.as_deref(), Some("https://song.link/s/1"));
+
+        // A stored file (an older build's, or edited) is held to the same rule.
+        let stored: SongEntry = serde_json::from_str(
+            r#"{"key":"a\u001fone","title":"One","artist":"A","providers":[{"name":"Spotify","url":"https://open.spotify.com/track/1"},{"name":"Spotify","url":"https://open.spotify.com.x.example/"},{"name":"Amazon Music","url":"https://www.amazon.com/dp/B0"}],"song_link":"https://x.example/song.link"}"#,
+        )
+        .unwrap();
+        let h = History::from_stored(Stored {
+            songs: vec![stored],
+            newer: false,
+        });
+        let s = &h.songs[0];
+        assert_eq!(s.providers.len(), 1);
+        assert_eq!(s.providers[0].url, "https://open.spotify.com/track/1");
+        assert_eq!(s.song_link, None);
     }
 
     #[test]

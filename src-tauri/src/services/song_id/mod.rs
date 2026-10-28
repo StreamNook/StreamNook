@@ -11,6 +11,7 @@ mod algorithm;
 mod hanning;
 pub mod history;
 mod odesli;
+mod services;
 mod shazam;
 mod signature_format;
 

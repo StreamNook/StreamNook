@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
+use super::services;
 use super::signature_format::DecodedSignature;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -137,7 +138,7 @@ fn parse_track(json: &Value) -> Option<SongMatch> {
                 .and_then(Value::as_str)
                 .map(str::to_string)
         })
-        .filter(|u| is_real_link(u));
+        .filter(|u| is_real_link(u) && services::is_link_to("Shazam", u));
 
     // Album lives in the SONG section's metadata rows.
     let album = track
@@ -195,11 +196,16 @@ fn extract_links(track: &Value) -> (Vec<Provider>, Option<String>) {
     // One link per platform, first occurrence wins.
     let mut providers: Vec<Provider> = Vec::new();
     for url in urls {
-        let name = platform_label(&url).to_string();
-        if providers.iter().any(|p| p.name == name) {
+        let Some(service) = services::service_of(&url) else {
+            continue;
+        };
+        if providers.iter().any(|p| p.name == service.name) {
             continue;
         }
-        providers.push(Provider { name, url });
+        providers.push(Provider {
+            name: service.name.to_string(),
+            url,
+        });
     }
 
     let seed = pick_seed(&providers);
@@ -220,59 +226,17 @@ fn push_action_urls(actions: Option<&Value>, out: &mut Vec<String>) {
     }
 }
 
-// Accept only real on-platform track links; reject store pages, app-install
-// links, and subscribe/upsell pages that Shazam also lists in the hub.
+// Accept only real on-platform track links: a streaming service's own host
+// (services.rs), and not the subscribe/upsell or app pages Shazam also lists
+// in the hub (store and install links are on other hosts and fall out there).
 fn is_streaming_track_url(url: &str) -> bool {
-    let u = url.to_ascii_lowercase();
-    if !u.starts_with("http") {
+    if !services::service_of(url).is_some_and(|s| s.streams) {
         return false;
     }
-    if u.contains("play.google.com")
-        || u.contains("itunes.apple.com")
-        || u.contains("/apps/details")
-        || u.contains("/subscribe")
-        || u.contains("unsupported.shazam")
-    {
-        return false;
-    }
-    const HOSTS: &[&str] = &[
-        "music.apple.com",
-        "open.spotify.com",
-        "music.youtube.com",
-        "youtube.com",
-        "youtu.be",
-        "soundcloud.com",
-        "tidal.com",
-        "deezer.com",
-        "music.amazon.com",
-        "pandora.com",
-    ];
-    HOSTS.iter().any(|host| u.contains(host))
-}
-
-fn platform_label(url: &str) -> &'static str {
-    let u = url.to_ascii_lowercase();
-    if u.contains("music.apple.com") {
-        "Apple Music"
-    } else if u.contains("spotify.com") {
-        "Spotify"
-    } else if u.contains("music.youtube.com") {
-        "YouTube Music"
-    } else if u.contains("youtube.com") || u.contains("youtu.be") {
-        "YouTube"
-    } else if u.contains("soundcloud.com") {
-        "SoundCloud"
-    } else if u.contains("tidal.com") {
-        "Tidal"
-    } else if u.contains("deezer.com") {
-        "Deezer"
-    } else if u.contains("amazon.com") {
-        "Amazon Music"
-    } else if u.contains("pandora.com") {
-        "Pandora"
-    } else {
-        "Listen"
-    }
+    let path = url::Url::parse(url)
+        .map(|u| u.path().to_ascii_lowercase())
+        .unwrap_or_default();
+    !path.contains("/subscribe") && !path.contains("/apps/")
 }
 
 // Odesli resolves every platform from one seed; prefer the links Shazam carries
@@ -316,4 +280,122 @@ fn str_field(v: &Value, key: &str) -> Option<String> {
 // deep-link; treat only real off-Shazam http(s) links as usable.
 fn is_real_link(url: &str) -> bool {
     url.starts_with("http") && !url.contains("unsupported.shazam")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn names(providers: &[Provider]) -> Vec<&str> {
+        providers.iter().map(|p| p.name.as_str()).collect()
+    }
+
+    #[test]
+    fn the_hub_keeps_each_services_own_track_link_once() {
+        let track = json!({
+            "hub": {
+                "actions": [
+                    { "uri": "https://music.apple.com/us/album/nuevayol/1787022393?i=1787022572" },
+                    { "uri": "https://music.apple.com/us/subscribe?itscg=1" },
+                    { "uri": "https://itunes.apple.com/us/album/1787022393" }
+                ],
+                "options": [
+                    { "actions": [
+                        { "uri": "https://play.google.com/store/apps/details?id=com.apple.android.music" },
+                        { "uri": "intent://music.apple.com/us/album/1" }
+                    ] }
+                ],
+                "providers": [
+                    { "actions": [
+                        { "uri": "spotify:search:nuevayol" },
+                        { "uri": "https://x.example/?u=https://open.spotify.com/track/1" },
+                        { "uri": "https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT" },
+                        { "uri": "https://open.spotify.com/track/second" }
+                    ] },
+                    { "actions": [
+                        { "uri": "https://www.youtube.com/watch?v=6U4n4bkOGs4" },
+                        { "uri": "https://music.youtube.com/watch?v=6U4n4bkOGs4" },
+                        { "uri": "https://www.amazon.com/dp/B0DQ8XYZ" },
+                        { "uri": "https://www.shazam.com/track/1" }
+                    ] }
+                ]
+            }
+        });
+        let (providers, seed) = extract_links(&track);
+        assert_eq!(
+            names(&providers),
+            vec!["Apple Music", "Spotify", "YouTube", "YouTube Music"]
+        );
+        for p in &providers {
+            assert!(
+                services::is_link_to(&p.name, &p.url),
+                "{} -> {}",
+                p.name,
+                p.url
+            );
+        }
+        assert_eq!(
+            providers[1].url,
+            "https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT"
+        );
+        assert_eq!(
+            seed.as_deref(),
+            Some("https://music.apple.com/us/album/nuevayol/1787022393?i=1787022572")
+        );
+    }
+
+    #[test]
+    fn search_links_go_to_each_services_own_search_with_the_words_encoded() {
+        let links = search_links("AC/DC & Queen", "Who's #1?");
+        assert_eq!(
+            names(&links),
+            vec!["Spotify", "YouTube Music", "Apple Music"]
+        );
+        for p in &links {
+            assert!(
+                services::is_link_to(&p.name, &p.url),
+                "{} -> {}",
+                p.name,
+                p.url
+            );
+        }
+        let q = "AC%2FDC%20%26%20Queen%20Who%27s%20%231%3F";
+        assert_eq!(links[0].url, format!("https://open.spotify.com/search/{q}"));
+        assert_eq!(
+            links[1].url,
+            format!("https://music.youtube.com/search?q={q}")
+        );
+        assert_eq!(
+            links[2].url,
+            format!("https://music.apple.com/us/search?term={q}")
+        );
+        let spotify = url::Url::parse(&links[0].url).unwrap();
+        assert_eq!(
+            spotify.path_segments().unwrap().count(),
+            2,
+            "the words stay one path part"
+        );
+        let youtube = url::Url::parse(&links[1].url).unwrap();
+        assert_eq!(
+            youtube.query_pairs().collect::<Vec<_>>(),
+            vec![("q".into(), "AC/DC & Queen Who's #1?".into())]
+        );
+    }
+
+    #[test]
+    fn the_shazam_link_is_kept_only_when_it_is_shazams_own_page() {
+        let parsed = |url: &str| {
+            parse_track(&json!({ "track": { "title": "One", "subtitle": "A", "url": url } }))
+                .unwrap()
+                .shazam_url
+        };
+        assert_eq!(
+            parsed("https://www.shazam.com/track/726543210/nuevayol").as_deref(),
+            Some("https://www.shazam.com/track/726543210/nuevayol")
+        );
+        assert_eq!(parsed("https://unsupported.shazam.com/x"), None);
+        assert_eq!(parsed("https://x.example/?shazam.com"), None);
+        assert_eq!(parsed("shazam://track/1"), None);
+    }
 }

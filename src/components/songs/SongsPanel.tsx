@@ -52,6 +52,7 @@ import { ProviderLogo } from '../ProviderLogo';
 import { SocialLogo } from '../ui/SocialLogo';
 import { Tooltip } from '../ui/Tooltip';
 import { ACCENT_BUTTON, DANGER_FILL, GLAZE_PILL } from '../ui/glazeButtons';
+import { markOf } from './serviceMarks';
 import { useSongPages } from './useSongPages';
 
 /** Row height, art size and type for each shell: the phone's rows are roomier,
@@ -71,19 +72,6 @@ const MARK_STYLE = {
   boxShadow:
     'inset 0 1px 0 rgba(255, 255, 255, 0.14), inset 0 0 0 1px color-mix(in srgb, var(--color-accent) 28%, transparent)',
 } as const;
-
-/** A music service's mark, by the name Rust gives its link. */
-const SERVICE_MARK: Record<string, string> = {
-  Spotify: 'spotify',
-  'Apple Music': 'applemusic',
-  'YouTube Music': 'youtubemusic',
-  YouTube: 'youtube',
-  SoundCloud: 'soundcloud',
-  Tidal: 'tidal',
-  Pandora: 'pandora',
-  Shazam: 'shazam',
-  'song.link': 'links',
-};
 
 /** Open a song's link, and say so when the system would not open it. */
 function openLink(url: string): void {
@@ -600,7 +588,7 @@ function SongDetail({
                     onClick={() => openLink(l.url)}
                     className={`${GLAZE_PILL} flex h-9 items-center gap-2 pl-2.5 pr-3.5 text-[12.5px]`}
                   >
-                    <SocialLogo platform={SERVICE_MARK[l.name] ?? 'music'} size={17} />
+                    <SocialLogo platform={markOf(l.name)} size={17} />
                     {l.name}
                   </button>
                 </Tooltip>
