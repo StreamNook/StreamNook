@@ -63,13 +63,18 @@ const MAX_FIELD: usize = 120;
 const MAX_TEXT: usize = 300;
 /// Characters kept of a link; a longer one is dropped, not cut.
 const MAX_URL: usize = 2048;
+/// How far into a broadcast or video a hearing is kept as being; past this
+/// it is not a real position.
+const MAX_POSITION_SECS: u32 = 30 * 24 * 60 * 60;
 /// Why a change is refused while the file is a newer app's.
 const NEWER_FILE: &str =
     "Your songs were saved by a newer StreamNook, so this one only shows them.";
 /// Payload: `Change`. Every window hears it, since any of them may show the list.
 pub const CHANGED_EVENT: &str = "song-history-changed";
 
-/// Where a song was playing: the channel the captured player showed.
+/// Where a song was playing: the channel the captured player showed, and the
+/// stream, video or clip it showed then. Every field past `media` came later
+/// and is missing from hearings kept before it.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 #[serde(default)]
 pub struct SongSource {
@@ -78,6 +83,33 @@ pub struct SongSource {
     pub channel_name: Option<String>,
     /// "live", "video" or "clip".
     pub media: Option<String>,
+    /// The stream's, video's or clip's title at the time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// The category it was in ("Just Chatting").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    /// The channel's picture, a small copy when its host draws one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub avatar: Option<String>,
+    /// How far in it was heard: the broadcast's run time when live, the
+    /// video's own time on a VOD.
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_secs"
+    )]
+    pub position_secs: Option<u32>,
+}
+
+/// A position as any number, a fraction cut off. Anything that is no real
+/// position (negative, too far, not a number) is left out, so it never costs
+/// the rest of the source.
+fn lenient_secs<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<u32>, D::Error> {
+    let value = Option::<serde_json::Value>::deserialize(d)?;
+    Ok(value
+        .and_then(|v| v.as_f64())
+        .filter(|s| s.is_finite() && *s >= 0.0 && *s <= f64::from(MAX_POSITION_SECS))
+        .map(|s| s as u32))
 }
 
 impl SongSource {
@@ -100,11 +132,28 @@ impl SongSource {
             .media
             .map(|m| m.trim().to_ascii_lowercase())
             .filter(|m| matches!(m.as_str(), "live" | "video" | "clip"));
+        let title = self
+            .title
+            .map(|t| clip_to(t.trim(), MAX_TEXT))
+            .filter(|t| !t.is_empty());
+        let category = self
+            .category
+            .map(|c| clip(c.trim()))
+            .filter(|c| !c.is_empty());
+        let avatar = web_url(&self.avatar).map(|url| small_avatar(&url).unwrap_or(url));
+        // A clip's own time says nothing about where in the broadcast it was.
+        let position_secs = self
+            .position_secs
+            .filter(|s| *s <= MAX_POSITION_SECS && media.as_deref() != Some("clip"));
         Some(SongSource {
             provider,
             channel_login,
             channel_name,
             media,
+            title,
+            category,
+            avatar,
+            position_secs,
         })
     }
 
@@ -289,6 +338,8 @@ pub struct SongPage {
     pub total: usize,
     /// Places heard name more than one platform: rows then mark theirs.
     pub mixed_platforms: bool,
+    /// Channels the songs held were heard on.
+    pub channels: usize,
 }
 
 /// What changed, for a window showing the list or a song.
@@ -436,29 +487,39 @@ impl History {
             }
             matched += 1;
         }
+        let (mixed_platforms, channels) = self.places();
         SongPage {
             rows,
             matched,
             total: self.songs.len(),
-            mixed_platforms: self.mixed_platforms(),
+            mixed_platforms,
+            channels,
         }
     }
 
-    fn mixed_platforms(&self) -> bool {
-        let mut seen: Option<&str> = None;
+    /// Whether the places heard name more than one platform, and how many
+    /// channels they name (a login in any case is one channel).
+    fn places(&self) -> (bool, usize) {
+        let mut first: Option<&str> = None;
+        let mut mixed = false;
+        let mut channels: HashSet<(&str, String)> = HashSet::new();
         for source in self
             .songs
             .iter()
             .flat_map(|s| &s.sightings)
             .filter_map(|s| s.source.as_ref())
         {
-            match seen {
-                None => seen = Some(source.provider.as_str()),
-                Some(p) if p != source.provider => return true,
+            match first {
+                None => first = Some(source.provider.as_str()),
+                Some(p) if p != source.provider => mixed = true,
                 _ => {}
             }
+            channels.insert((
+                source.provider.as_str(),
+                source.channel_login.to_ascii_lowercase(),
+            ));
         }
-        false
+        (mixed, channels.len())
     }
 
     /// Take one song out, kept aside for Undo. False when it was not there.
@@ -554,6 +615,25 @@ pub fn thumb_of(url: &str) -> Option<String> {
     Some(format!("{head}/96x96{suffix}.{ext}"))
 }
 
+/// A small copy of a channel's picture. Twitch's image host keeps each
+/// picture at fixed sizes named in the file name, and Your songs draws one at
+/// 40 px at most, so a 300x300 picture is kept as its 70x70 copy. None for
+/// any other host or file name.
+fn small_avatar(url: &str) -> Option<String> {
+    const MARK: &str = "-profile_image-";
+    if !url.starts_with("https://static-cdn.jtvnw.net/jtv_user_pictures/") {
+        return None;
+    }
+    let (head, file) = url.rsplit_once(MARK)?;
+    let (size, ext) = file.split_once('.')?;
+    let (w, h) = size.split_once('x')?;
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    if !digits(w) || !digits(h) || !matches!(ext, "png" | "jpg" | "jpeg" | "webp") {
+        return None;
+    }
+    Some(format!("{head}{MARK}70x70.{ext}"))
+}
+
 fn haystack_of(song: &SongEntry) -> String {
     let mut out = format!("{} {}", song.title, song.artist);
     if let Some(album) = &song.album {
@@ -563,9 +643,12 @@ fn haystack_of(song: &SongEntry) -> String {
     for source in song.sightings.iter().filter_map(|s| s.source.as_ref()) {
         out.push(' ');
         out.push_str(&source.channel_login);
-        if let Some(name) = &source.channel_name {
+        for word in [&source.channel_name, &source.category]
+            .into_iter()
+            .flatten()
+        {
             out.push(' ');
-            out.push_str(name);
+            out.push_str(word);
         }
     }
     fold(&out)
@@ -927,8 +1010,8 @@ mod tests {
         Some(SongSource {
             provider: "twitch".into(),
             channel_login: login.into(),
-            channel_name: None,
             media: Some("live".into()),
+            ..Default::default()
         })
     }
 
@@ -1142,7 +1225,9 @@ mod tests {
             provider: "kick".into(),
             channel_login: "adinross".into(),
             channel_name: Some("AdinRoss".into()),
-            media: None,
+            category: Some("Just Chatting".into()),
+            title: Some("late night music".into()),
+            ..Default::default()
         };
         h.file(&a, Some(kick), 0);
         h.file(&song("Sleep Token", "Telomeres"), on("xqc"), 1);
@@ -1151,7 +1236,35 @@ mod tests {
         assert_eq!(h.page("xqc", 0, 50).rows[0].title, "Telomeres");
         assert_eq!(h.page("daft telomeres", 0, 50).matched, 0);
         assert_eq!(h.page("  ", 0, 50).matched, 2);
+        assert_eq!(h.page("chatting", 0, 50).rows[0].title, "Veridis Quo");
+        assert_eq!(
+            h.page("late night", 0, 50).matched,
+            0,
+            "a stream's title is shown, not searched"
+        );
         assert!(h.page("", 0, 50).mixed_platforms);
+    }
+
+    #[test]
+    fn pages_count_the_channels_heard_on() {
+        let mut h = History::default();
+        assert_eq!(h.page("", 0, 50).channels, 0);
+        h.file(&song("A", "One"), on("xqc"), 0);
+        h.file(&song("A", "Two"), on("XQC"), 1);
+        h.file(&song("A", "Three"), on("zackrawrr"), 2);
+        h.file(&song("A", "Four"), None, 3);
+        let kick = SongSource {
+            provider: "kick".into(),
+            channel_login: "xqc".into(),
+            ..Default::default()
+        };
+        h.file(&song("A", "Five"), Some(kick), 4);
+        let page = h.page("one", 0, 50);
+        assert_eq!(page.matched, 1);
+        assert_eq!(
+            page.channels, 3,
+            "every song counts, whatever matched; Kick's xqc is its own channel"
+        );
     }
 
     #[test]
@@ -1211,6 +1324,7 @@ mod tests {
             channel_login: " xqc ".into(),
             channel_name: Some("  ".into()),
             media: Some("LIVE".into()),
+            ..Default::default()
         }
         .cleaned()
         .unwrap();
@@ -1233,13 +1347,110 @@ mod tests {
         let long = SongSource {
             provider: "kick".into(),
             channel_login: "a".repeat(500),
-            channel_name: None,
             media: Some("radio".into()),
+            title: Some("t".repeat(900)),
+            category: Some("c".repeat(500)),
+            position_secs: Some(MAX_POSITION_SECS + 1),
+            ..Default::default()
         }
         .cleaned()
         .unwrap();
         assert_eq!(long.channel_login.chars().count(), MAX_FIELD);
         assert_eq!(long.media, None);
+        assert_eq!(long.title.unwrap().chars().count(), MAX_TEXT);
+        assert_eq!(long.category.unwrap().chars().count(), MAX_FIELD);
+        assert_eq!(long.position_secs, None);
+    }
+
+    #[test]
+    fn a_source_keeps_the_stream_it_heard() {
+        let live = SongSource {
+            provider: "twitch".into(),
+            channel_login: "xqc".into(),
+            media: Some("live".into()),
+            title: Some("  react andy  ".into()),
+            category: Some(" ".into()),
+            avatar: Some("javascript:alert(1)".into()),
+            position_secs: Some(8040),
+            ..Default::default()
+        }
+        .cleaned()
+        .unwrap();
+        assert_eq!(live.title.as_deref(), Some("react andy"));
+        assert_eq!(live.category, None);
+        assert_eq!(live.avatar, None, "only web links are kept");
+        assert_eq!(live.position_secs, Some(8040));
+        let clip = SongSource {
+            provider: "twitch".into(),
+            channel_login: "xqc".into(),
+            media: Some("clip".into()),
+            position_secs: Some(12),
+            ..Default::default()
+        }
+        .cleaned()
+        .unwrap();
+        assert_eq!(clip.position_secs, None, "a clip's own time is no position");
+        let sent = |position: &str| {
+            serde_json::from_str::<SongSource>(&format!(
+                r#"{{"provider":"twitch","channel_login":"x","media":"video","position_secs":{position}}}"#
+            ))
+            .unwrap()
+            .position_secs
+        };
+        assert_eq!(sent("8040.7"), Some(8040));
+        assert_eq!(sent("-3"), None);
+        assert_eq!(sent("\"soon\""), None);
+        assert_eq!(sent("null"), None);
+    }
+
+    #[test]
+    fn hearings_kept_before_the_stream_fields_still_read() {
+        let old: SongEntry = serde_json::from_str(
+            r#"{"key":"a\u001fone","title":"One","artist":"A","sightings":[{"at_ms":5,"source":{"provider":"twitch","channel_login":"x","channel_name":"X","media":"live"}}]}"#,
+        )
+        .unwrap();
+        let source = old.sightings[0].source.as_ref().unwrap();
+        assert_eq!(
+            (
+                &source.title,
+                &source.category,
+                &source.avatar,
+                source.position_secs
+            ),
+            (&None, &None, &None, None)
+        );
+        let json = serde_json::to_string(source).unwrap();
+        assert!(
+            !json.contains("title") && !json.contains("position_secs"),
+            "missing fields stay out of the file: {json}"
+        );
+    }
+
+    #[test]
+    fn twitch_pictures_are_kept_small() {
+        let url = |file: &str| format!("https://static-cdn.jtvnw.net/jtv_user_pictures/{file}");
+        assert_eq!(
+            small_avatar(&url("abc-profile_image-300x300.png")),
+            Some(url("abc-profile_image-70x70.png"))
+        );
+        assert_eq!(
+            small_avatar(&url("a-b-c-profile_image-600x600.jpeg")),
+            Some(url("a-b-c-profile_image-70x70.jpeg"))
+        );
+        assert_eq!(small_avatar(&url("abc-banner-1920x480.png")), None);
+        assert_eq!(
+            small_avatar("https://files.kick.com/images/user/1/profile_image/x.webp"),
+            None
+        );
+        let kept = SongSource {
+            provider: "twitch".into(),
+            channel_login: "x".into(),
+            avatar: Some(url("abc-profile_image-300x300.png")),
+            ..Default::default()
+        }
+        .cleaned()
+        .unwrap();
+        assert_eq!(kept.avatar, Some(url("abc-profile_image-70x70.png")));
     }
 
     #[test]

@@ -24,12 +24,21 @@ export function getActiveVideo(): HTMLVideoElement | null {
 }
 
 /** The channel a player shows, as Your songs records where a song was heard
- *  (the `source` of `identify_song`). */
+ *  (the `source` of `identify_song`), and the stream, video or clip it
+ *  shows. The fields after `media` are missing from songs kept before them. */
 export interface PlayerSource {
   provider: ProviderId;
   channel_login: string;
   channel_name: string | null;
   media: 'live' | 'video' | 'clip' | null;
+  /** The stream's, video's or clip's title. */
+  title?: string | null;
+  /** Its category ("Just Chatting"). */
+  category?: string | null;
+  /** The channel's picture. */
+  avatar?: string | null;
+  /** Seconds in: the broadcast's run time live, the video's own time on a VOD. */
+  position_secs?: number | null;
 }
 
 // What each player other than the main one (a MultiNook tile) says it shows.

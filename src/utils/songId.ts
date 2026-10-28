@@ -45,15 +45,22 @@ export type RecognizeResult =
   | { status: 'no-match' }
   | { status: 'error'; message: string };
 
-/** What the main player shows (VideoPlayer, the phone's player), for Your
- *  songs' "heard on" line. */
+/** What the main player shows (VideoPlayer, the phone's player), for where
+ *  Your songs says a song was heard. */
 function mainPlayerSource(): PlayerSource | null {
   const app = useAppStore.getState();
   const stream = app.currentStream;
   if (!stream?.user_login) return null;
   const provider = stream.provider ?? 'twitch';
+  // An offline room plays the channel's latest broadcast, a VOD.
   const media =
-    app.currentMediaType === 'clip' ? 'clip' : app.currentMediaType === 'video' || app.liveRewind ? 'video' : 'live';
+    app.currentMediaType === 'clip'
+      ? 'clip'
+      : app.currentMediaType === 'video' || app.currentMediaType === 'offline_chat' || app.liveRewind
+        ? 'video'
+        : 'live';
+  // Live, how long the broadcast has run (a VOD's place comes from its player).
+  const started = media === 'live' ? Date.parse(stream.started_at) : NaN;
   return {
     provider,
     // A YouTube row's login can be one broadcast's video id; the channel's own
@@ -61,7 +68,18 @@ function mainPlayerSource(): PlayerSource | null {
     channel_login: provider === 'youtube' && stream.user_id?.startsWith('UC') ? stream.user_id : stream.user_login,
     channel_name: stream.user_name || null,
     media,
+    title: stream.title?.trim() || null,
+    category: stream.game_name?.trim() || null,
+    avatar: stream.profile_image_url || null,
+    position_secs: Number.isFinite(started) ? Math.max(0, Math.floor((Date.now() - started) / 1000)) : null,
   };
+}
+
+/** `source` with how far into its video `el` was, for a VOD heard (a
+ *  live source already carries its run time, and a clip has no place). */
+function withPosition(source: PlayerSource | null, el: HTMLMediaElement): PlayerSource | null {
+  if (source?.media !== 'video' || !Number.isFinite(el.currentTime)) return source;
+  return { ...source, position_secs: Math.floor(el.currentTime) };
 }
 
 // Capture from the active player and identify the song. `video` defaults to the
@@ -91,8 +109,9 @@ export async function recognizeNowPlaying(
   };
   const captureSeconds = Math.min(30, Math.max(3, cfg.capture_seconds || DEFAULT_SONG_ID.capture_seconds));
   const attempts = 1 + Math.min(3, Math.max(0, cfg.retries ?? DEFAULT_SONG_ID.retries));
-  // Where it is playing, read once: every attempt listens to the same player.
-  const source = sourceOfVideo(target, mainPlayerSource);
+  // Where it is playing, read once (as the listening starts): every attempt
+  // listens to the same player.
+  const source = withPosition(sourceOfVideo(target, mainPlayerSource), target);
 
   // Each attempt listens again (the next window of audio), so a missed window
   // (ad break, quiet moment) gets another shot. A real match returns

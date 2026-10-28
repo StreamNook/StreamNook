@@ -54,6 +54,8 @@ export interface SongPage {
   total: number;
   /** Places heard name more than one platform: rows then mark theirs. */
   mixed_platforms: boolean;
+  /** Channels the songs held were heard on. */
+  channels: number;
 }
 
 export type SongHistoryChange = { kind: 'filed'; key: string } | { kind: 'removed'; key: string } | { kind: 'cleared' };

@@ -22,6 +22,8 @@ interface Counts {
   total: number;
   /** Places heard name more than one platform. */
   mixed: boolean;
+  /** Channels the songs were heard on. */
+  channels: number;
 }
 
 export function useSongPages(query: string) {
@@ -29,7 +31,7 @@ export function useSongPages(query: string) {
   // it for render.
   const state = useRef<PageState<SongRow>>(emptyPages());
   const [pages, setPages] = useState<ReadonlyMap<number, SongRow[]>>(() => new Map());
-  const [counts, setCounts] = useState<Counts>({ matched: null, total: 0, mixed: false });
+  const [counts, setCounts] = useState<Counts>({ matched: null, total: 0, mixed: false, channels: 0 });
   const [failed, setFailed] = useState(false);
   // Page -> the generation it was asked under, so a page is asked once per generation.
   const inflight = useRef(new Map<number, number>());
@@ -52,7 +54,12 @@ export function useSongPages(query: string) {
           const next = pageLanded(state.current, gen, page, answer.rows, visible.current);
           if (!next) return;
           commit(next);
-          setCounts({ matched: answer.matched, total: answer.total, mixed: answer.mixed_platforms });
+          setCounts({
+            matched: answer.matched,
+            total: answer.total,
+            mixed: answer.mixed_platforms,
+            channels: answer.channels,
+          });
           setFailed(false);
         })
         .catch((e: unknown) => {
@@ -106,5 +113,5 @@ export function useSongPages(query: string) {
     [pages],
   );
 
-  return { matched: counts.matched, total: counts.total, mixed: counts.mixed, rowAt, ensure, failed, retry };
+  return { ...counts, rowAt, ensure, failed, retry };
 }
