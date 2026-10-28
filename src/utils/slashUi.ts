@@ -15,6 +15,7 @@ export type SlashUi =
   | { kind: 'open_poll_composer'; channel: string; composer: 'poll' | 'prediction' }
   | { kind: 'create_clip'; channel: string; channel_id: string; title: string }
   | { kind: 'identify_song' }
+  | { kind: 'open_songs' }
   | { kind: 'reload_stream' }
   | { kind: 'reload_chat' }
   | { kind: 'refresh_emotes' }
@@ -134,7 +135,13 @@ export async function applySlashUi(ui: SlashUi, channel: string, channelId: stri
         return;
       case 'identify_song': {
         const { recognizeNowPlaying, announceSong } = await import('./songId');
-        void recognizeNowPlaying().then(announceSong);
+        // The answer goes to the room the command was typed in.
+        void recognizeNowPlaying().then((result) => announceSong(result, channel || null));
+        return;
+      }
+      case 'open_songs': {
+        const { openSongs } = await import('./songHistory');
+        openSongs();
         return;
       }
       case 'reload_stream': {

@@ -8,7 +8,7 @@ import Plyr from 'plyr';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Loader2, RefreshCcw, LayoutGrid, Shield, ShieldCheck, ShieldAlert, Clapperboard, Music, Share2, Check, VolumeX } from 'lucide-react';
 import { Heart, HeartBreak, ArrowLeft, CaretRight, X as XIcon } from 'phosphor-react';
-import { useAppStore, type AutoReloadReason } from '../stores/AppStore';
+import { mainChatRoom, useAppStore, type AutoReloadReason } from '../stores/AppStore';
 import { streamProvider } from '../utils/streamProvider';
 import { currentCategoryTarget } from '../utils/streamCategory';
 import { makeKey } from '../utils/providerKey';
@@ -583,9 +583,9 @@ const VideoPlayer = () => {
     setIsIdentifyingSong(true);
     try {
       const result = await recognizeNowPlaying(videoRef.current);
-      // Also drop the clickable card into chat (where the links live); the toast
-      // below is just the quick on-player confirmation.
-      announceSong(result);
+      // Also drop the clickable card into the playing stream's chat (where the
+      // links live); the toast below is just the quick on-player confirmation.
+      announceSong(result, mainChatRoom());
       if (result.status === 'match') {
         const s = result.song;
         const provider = s.providers[0];
@@ -601,6 +601,8 @@ const VideoPlayer = () => {
                 },
               }
             : undefined,
+          // The island row shows the cover and opens the song in Your songs.
+          { avatarUrl: s.album_art ?? undefined, songKey: s.key ?? undefined },
         );
       } else if (result.status === 'no-match') {
         addToast("Couldn't identify the song. Try again when the music is clearer.", 'info');

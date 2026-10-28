@@ -40,6 +40,11 @@ interface MobileNavState {
   whispersOpen: boolean;
   /** The conversation open in its bottom sheet, by its inbox key. */
   whisperKey: string | null;
+  /** Your songs, over everything else like Mentions (a song card in any chat
+   *  opens it too). */
+  songsOpen: boolean;
+  /** The song open in its detail, by its history key; null shows the list. */
+  songsFocus: string | null;
   /** Watch presentation: full screen, or the draggable in-app mini player
    *  (the tab shell stays live behind it). System PiP is separate: that hands
    *  the whole activity to the OS window. */
@@ -81,8 +86,12 @@ interface MobileNavState {
   closeWhisper: () => void;
   /** Close the whispers layer entirely. */
   closeWhispers: () => void;
+  /** Your songs, on one song's detail when `focus` is given. */
+  openSongs: (focus?: string | null) => void;
+  closeSongs: () => void;
+  setSongsFocus: (key: string | null) => void;
   setPlayerMode: (mode: 'full' | 'mini') => void;
-  /** Back chain: top sheet (a whisper conversation is one) -> whispers -> mentions -> settings -> cosmetics -> minimize the watch layer
+  /** Back chain: top sheet (a whisper conversation is one) -> a song's detail -> songs -> whispers -> mentions -> settings -> cosmetics -> minimize the watch layer
    *  -> category drill -> a tab other than the start tab -> not consumed
    *  (native backgrounds the task). */
   handleBack: () => boolean;
@@ -101,6 +110,8 @@ export const useMobileNavStore = create<MobileNavState>((set, get) => ({
   mentionsOpen: false,
   whispersOpen: false,
   whisperKey: null,
+  songsOpen: false,
+  songsFocus: null,
   playerMode: 'full',
   focusDropCampaignId: null,
   chatsReturnTab: startTab() === 'chats' ? 'following' : startTab(),
@@ -151,6 +162,9 @@ export const useMobileNavStore = create<MobileNavState>((set, get) => ({
   openWhisper: (key) => set({ whisperKey: key, mentionsOpen: false }),
   closeWhisper: () => set({ whisperKey: null }),
   closeWhispers: () => set({ whispersOpen: false, whisperKey: null }),
+  openSongs: (focus = null) => set({ songsOpen: true, songsFocus: focus }),
+  closeSongs: () => set({ songsOpen: false, songsFocus: null }),
+  setSongsFocus: (key) => set({ songsFocus: key }),
   setPlayerMode: (mode) => set({ playerMode: mode }),
 
   handleBack: () => {
@@ -159,6 +173,11 @@ export const useMobileNavStore = create<MobileNavState>((set, get) => ({
     if (sheetStack.length > 0) {
       const top = sheetStack[sheetStack.length - 1];
       window.dispatchEvent(new CustomEvent('sn:close-sheet', { detail: top }));
+      return true;
+    }
+    if (get().songsOpen) {
+      if (get().songsFocus) set({ songsFocus: null });
+      else get().closeSongs();
       return true;
     }
     if (get().whispersOpen) {

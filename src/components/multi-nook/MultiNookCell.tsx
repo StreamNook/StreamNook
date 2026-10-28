@@ -48,6 +48,7 @@ import { SevenTvAvatar } from '../SevenTvAvatar';
 import { slotSevenTvId } from './slotSevenTvId';
 import { tileClickAction } from './tileClick';
 import { CLICK_TOGGLE_DELAY_MS, releaseTypingFocus } from '../../utils/pauseRoutes';
+import { setVideoSource } from '../../utils/activeVideo';
 
 interface MultiNookCellProps {
   slot: MultiNookSlot;
@@ -219,6 +220,21 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
       if (el) releaseAudioGraphOnceGone(el);
     };
   }, [videoRef]);
+
+  // What this tile plays, so a song identified from its audio says where it
+  // was heard in Your songs (utils/activeVideo.ts). A YouTube tile's login
+  // can be one broadcast's video id; the channel's own id (UC...) stays.
+  useEffect(() => {
+    const el = videoRef.current;
+    if (!el) return;
+    setVideoSource(el, {
+      provider: provider ?? 'twitch',
+      channel_login: provider === 'youtube' && channelId?.startsWith('UC') ? channelId : channelLogin,
+      channel_name: channelName ?? null,
+      media: 'live',
+    });
+    return () => setVideoSource(el, null);
+  }, [videoRef, provider, channelLogin, channelName, channelId]);
 
   // Volume readout for this tile's wheel/middle-click changes.
   const { osd, showOsd } = useVolumeOsd();

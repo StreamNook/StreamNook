@@ -424,6 +424,10 @@ interface AppState {
   // a cross-channel "add to a set" picker. Set by clicking an emote in chat.
   emoteSpotlight: { id: string; name: string } | null;
   showWhispersOverlay: boolean;
+  /** Your songs (components/songs/SongsPanelHost): open, with the song shown
+   *  in detail by its history key, or null for the list. Presentation only;
+   *  the songs are Rust's. */
+  songsPanel: { focus: string | null } | null;
   showDashboardOverlay: boolean;
   whisperTargetUser: { id: string; login: string; display_name: string; profile_image_url?: string } | null;
   // Whisper import state (persistent across wizard open/close)
@@ -547,7 +551,7 @@ interface AppState {
   patchCurrentStream: (partial: Partial<TwitchStream>) => void;
   /** `sticky` keeps the toast on screen until it is dismissed or removed by
    *  id; pass `id` to be able to remove it. */
-  addToast: (message: string | React.ReactNode, type: 'info' | 'success' | 'warning' | 'error' | 'live' | 'channel_points', action?: { label: string; onClick: () => void }, options?: { skipIsland?: boolean; alwaysShow?: boolean; avatarUrl?: string; avatarSevenTvId?: string; source?: 'plugin'; sticky?: boolean; id?: number; title?: string }) => void;
+  addToast: (message: string | React.ReactNode, type: 'info' | 'success' | 'warning' | 'error' | 'live' | 'channel_points', action?: { label: string; onClick: () => void }, options?: { skipIsland?: boolean; alwaysShow?: boolean; avatarUrl?: string; avatarSevenTvId?: string; source?: 'plugin'; sticky?: boolean; id?: number; title?: string; songKey?: string }) => void;
   removeToast: (id: number) => void;
   loadSettings: () => Promise<void>;
   updateSettings: (newSettings: Settings) => Promise<void>;
@@ -648,6 +652,9 @@ interface AppState {
   openEmoteSpotlight: (emoteId: string, name: string) => void;
   setEmoteSpotlight: (e: { id: string; name: string } | null) => void;
   setShowWhispersOverlay: (show: boolean) => void;
+  openSongs: (focus?: string | null) => void;
+  closeSongs: () => void;
+  setSongsFocus: (key: string | null) => void;
   setShowDashboardOverlay: (show: boolean) => void;
   openWhisperWithUser: (user: { id: string; login: string; display_name: string; profile_image_url?: string }) => void;
   clearWhisperTargetUser: () => void;
@@ -1563,6 +1570,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   emoteSetsOverlayInitialTab: null,
   emoteSpotlight: null,
   showWhispersOverlay: false,
+  songsPanel: null,
   showDashboardOverlay: false,
   whisperTargetUser: null,
   isHomeActive: true,
@@ -1895,6 +1903,8 @@ export const useAppStore = create<AppState>((set, get) => ({
           // That person's cosmetics id, so the entry draws their 7TV picture.
           avatarSevenTvId: options?.avatarSevenTvId,
           source: options?.source,
+          // A song you identified: its island row opens it in Your songs.
+          songKey: options?.songKey,
         }).catch(() => {});
       }
     }
@@ -3373,6 +3383,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     // Clear target user when closing
     if (!show) set({ whisperTargetUser: null });
   },
+  openSongs: (focus = null) => {
+    trackActivity('Opened Your songs');
+    set({ songsPanel: { focus } });
+  },
+  closeSongs: () => set({ songsPanel: null }),
+  setSongsFocus: (key) => set((s) => (s.songsPanel ? { songsPanel: { focus: key } } : s)),
   setShowDashboardOverlay: (show: boolean) => {
     if (show) trackActivity('Opened Dashboard');
     set({ showDashboardOverlay: show });
@@ -4230,3 +4246,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
   },
 }));
+
+/** The chat room the main view holds for the playing stream (a chat slice
+ *  key): the provider room it acquired, or the Twitch channel's login. Null
+ *  when it holds none. */
+export function mainChatRoom(): string | null {
+  if (mainProviderChatKey) return mainProviderChatKey;
+  const stream = useAppStore.getState().currentStream;
+  return stream?.user_login && streamProvider(stream) === 'twitch' ? stream.user_login.toLowerCase() : null;
+}

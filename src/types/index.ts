@@ -2719,6 +2719,9 @@ export interface SystemNotificationData {
   avatar_url?: string;
   /** The cosmetics id of whoever `avatar_url` shows, for their 7TV picture. */
   avatar_seventv_id?: string;
+  /** A song you identified (its key in Your songs): the row draws
+   *  `avatar_url` as the song's cover, square, and opens the song there. */
+  song_key?: string;
   title: string;
   message: string;
   icon?: string;
