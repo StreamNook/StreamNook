@@ -79,11 +79,29 @@ export const onSongHistoryChanged = (cb: (change: SongHistoryChange) => void): P
 // stream overlay, leaves the chat card's link out rather than offering one
 // that opens nothing.
 const surfaces = { panel: 0, screen: 0 };
+// Chat cards that show the Your songs control, told when a surface comes or
+// goes (a card can draw in the same pass that mounts the surface).
+const surfaceWatchers = new Set<() => void>();
+
+function surfacesChanged(): void {
+  for (const watcher of surfaceWatchers) watcher();
+}
 
 export function registerSongsSurface(kind: 'panel' | 'screen'): () => void {
   surfaces[kind] += 1;
+  surfacesChanged();
   return () => {
     surfaces[kind] -= 1;
+    surfacesChanged();
+  };
+}
+
+/** For useSyncExternalStore: hear when this window gains or loses a surface
+ *  that draws Your songs. */
+export function subscribeSongsSurface(onChange: () => void): () => void {
+  surfaceWatchers.add(onChange);
+  return () => {
+    surfaceWatchers.delete(onChange);
   };
 }
 

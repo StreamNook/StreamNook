@@ -6,6 +6,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { FixedSizeList as List, type ListChildComponentProps } from 'react-window';
 import { ArrowLeft, Check, Copy, Music, Search, Trash2, X } from 'lucide-react';
+import { ArrowLeft as PhoneArrowLeft, Trash as PhoneTrash } from 'phosphor-react';
 import { useAppStore } from '../../stores/AppStore';
 import { AUDIO_GRAPH_SUPPORTED } from '../../utils/audioBoost';
 import { Logger } from '../../utils/logger';
@@ -26,7 +27,14 @@ import { Tooltip } from '../ui/Tooltip';
 import { ACCENT_BUTTON, DANGER_FILL, GLAZE_PILL } from '../ui/glazeButtons';
 import { useSongPages } from './useSongPages';
 
-const ROW_HEIGHT = 60;
+/** Row height, art size and type for each shell: the phone's rows are roomier,
+ *  like the You screen's. */
+const ROW = {
+  modal: { height: 60, art: 40, title: 'text-[13.5px]', detail: 'text-[12px]' },
+  screen: { height: 64, art: 44, title: 'text-[15px]', detail: 'text-[12.5px]' },
+} as const;
+
+const songsCount = (n: number) => (n === 1 ? '1 song' : `${n.toLocaleString('en-US')} songs`);
 
 /** Open a song's link, and say so when the system would not open it. */
 function openLink(url: string): void {
@@ -36,10 +44,12 @@ function openLink(url: string): void {
 }
 
 /** A cover, or the music mark when there is none or it will not load. Tries
- *  `fallback` (the full cover) when a small copy is refused. Callers key it by
- *  `src`, so a new cover starts over. */
+ *  `fallback` (the full cover) when a small copy is refused, and fades in once
+ *  it has loaded so it never paints in as a strip. Callers key it by `src`, so
+ *  a new cover starts over. */
 function SongArt({ src, fallback, px }: { src: string | null; fallback?: string | null; px: number }) {
   const [step, setStep] = useState(0);
+  const [loaded, setLoaded] = useState(false);
   const url = step === 0 ? src : step === 1 ? (fallback ?? null) : null;
   if (!url) {
     return (
@@ -53,17 +63,22 @@ function SongArt({ src, fallback, px }: { src: string | null; fallback?: string 
     );
   }
   return (
-    <img
-      src={url}
-      alt=""
-      width={px}
-      height={px}
-      loading="lazy"
-      decoding="async"
-      onError={() => setStep((s) => (s === 0 && fallback ? 1 : 2))}
-      className="shrink-0 rounded-md object-cover"
-      style={{ width: px, height: px }}
-    />
+    <span className="relative block shrink-0 rounded-md bg-white/5" style={{ width: px, height: px }}>
+      <img
+        src={url}
+        alt=""
+        width={px}
+        height={px}
+        loading="lazy"
+        decoding="async"
+        onLoad={() => setLoaded(true)}
+        onError={() => {
+          setLoaded(false);
+          setStep((s) => (s === 0 && fallback ? 1 : 2));
+        }}
+        className={`absolute inset-0 h-full w-full rounded-md object-cover transition-opacity duration-150 ${loaded ? 'opacity-100' : 'opacity-0'}`}
+      />
+    </span>
   );
 }
 
@@ -72,15 +87,17 @@ interface RowData {
   open: (key: string) => void;
   /** The list mixes platforms: each place carries its platform's logo. */
   mixed: boolean;
+  screen: boolean;
 }
 
 const SongListRow = memo(function SongListRow({ index, style, data }: ListChildComponentProps<RowData>) {
+  const size = data.screen ? ROW.screen : ROW.modal;
   const row = data.rowAt(index);
   if (!row) {
     return (
-      <div style={style} className="px-2" aria-hidden="true">
+      <div style={style} className="pl-2" aria-hidden="true">
         <div className="flex h-full items-center gap-3 px-2">
-          <div className="h-10 w-10 shrink-0 rounded-md bg-white/5" />
+          <div className="shrink-0 rounded-md bg-white/5" style={{ width: size.art, height: size.art }} />
           <div className="flex min-w-0 flex-1 flex-col gap-1.5">
             <div className="h-3 w-2/5 rounded bg-white/5" />
             <div className="h-2.5 w-3/5 rounded bg-white/[0.04]" />
@@ -90,7 +107,7 @@ const SongListRow = memo(function SongListRow({ index, style, data }: ListChildC
     );
   }
   return (
-    <div style={style} className="px-2">
+    <div style={style} className="pl-2">
       <button
         type="button"
         data-song-row={index}
@@ -98,28 +115,28 @@ const SongListRow = memo(function SongListRow({ index, style, data }: ListChildC
         onClick={() => data.open(row.key)}
         className="flex h-full w-full items-center gap-3 rounded-lg px-2 text-left outline-none transition-colors duration-150 hover:bg-glass-hover focus-visible:bg-glass-hover"
       >
-        <SongArt key={row.art ?? ''} src={row.art} fallback={row.art_full} px={40} />
+        <SongArt key={row.art ?? ''} src={row.art} fallback={row.art_full} px={size.art} />
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-[13.5px] font-semibold text-textPrimary">{row.title}</span>
-          <span className="flex min-w-0 items-center gap-1 text-[12px] text-textMuted">
-            <span className="truncate">{row.artist}</span>
-            {row.heard && (
-              <>
-                <span aria-hidden="true">·</span>
-                {data.mixed && <ProviderLogo provider={row.heard.provider} size={11} />}
-                <span className="truncate">{placeOf(row.heard)}</span>
-              </>
-            )}
-            {row.count > 1 && (
-              <>
-                <span aria-hidden="true">·</span>
-                <span className="shrink-0">{row.count} times</span>
-              </>
-            )}
+          <span className="flex items-baseline gap-3">
+            <span className={`min-w-0 flex-1 truncate font-semibold text-textPrimary ${size.title}`}>{row.title}</span>
+            <span className="shrink-0 text-[11px] tabular-nums text-textMuted">{heardAgo(row.last_ms)}</span>
           </span>
-        </span>
-        <span className="shrink-0 self-start pt-[12px] text-[11px] tabular-nums text-textMuted">
-          {heardAgo(row.last_ms)}
+          {/* One run of text, so a cut never leaves a gap before what follows it. */}
+          <span className={`flex items-baseline gap-3 text-textMuted ${size.detail}`}>
+            <span className="min-w-0 flex-1 truncate">
+              {row.artist}
+              {row.heard && (
+                <>
+                  <span aria-hidden="true"> · </span>
+                  {data.mixed && (
+                    <ProviderLogo provider={row.heard.provider} size={11} className="mr-1 inline-block align-[-1px]" />
+                  )}
+                  {placeOf(row.heard)}
+                </>
+              )}
+            </span>
+            {row.count > 1 && <span className="shrink-0 text-[11px] tabular-nums">{row.count} times</span>}
+          </span>
         </span>
       </button>
     </div>
@@ -131,7 +148,7 @@ function EmptyState({ searched }: { searched: string | null }) {
     <div className="flex h-full flex-col items-center justify-center gap-2 px-8 text-center">
       <Music size={28} className="text-white/25" />
       {searched ? (
-        <p className="text-[13.5px] text-textSecondary">No songs match “{searched}”.</p>
+        <p className="text-[13.5px] text-textSecondary">No songs match “{searched}”</p>
       ) : (
         <>
           <p className="text-[13.5px] font-medium text-textPrimary">Songs you identify land here</p>
@@ -160,17 +177,52 @@ function LoadFailed({ what, onRetry }: { what: string; onRetry: () => void }) {
   );
 }
 
-function BackBar({ onBack }: { onBack: () => void }) {
+/** The panel's Close, in the same place on the list and on a song. */
+function CloseButton({ onClose }: { onClose: () => void }) {
   return (
-    <div className="flex h-12 shrink-0 items-center px-2">
+    <Tooltip content="Close" side="bottom">
+      <button
+        type="button"
+        onClick={onClose}
+        aria-label="Close"
+        className="-mr-2.5 flex h-8 w-8 items-center justify-center rounded-full text-textMuted transition-colors hover:text-textPrimary"
+      >
+        <X size={18} />
+      </button>
+    </Tooltip>
+  );
+}
+
+/** A song's top bar. The phone keeps the list's own header row and arrow (the
+ *  song's title below names the page); the modal keeps its Close where the
+ *  list has it, on the list title's line. */
+function BackBar({ screen, onBack, onClose }: { screen: boolean; onBack: () => void; onClose: () => void }) {
+  if (screen) {
+    return (
+      <div className="flex h-10 shrink-0 items-center pl-1 pr-[2.5px]">
+        <button
+          type="button"
+          onClick={onBack}
+          aria-label="Back to Songs"
+          className="sn-touch -mr-1 flex items-center justify-center text-textSecondary"
+        >
+          <PhoneArrowLeft size={22} />
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div className="flex shrink-0 items-center gap-2 pb-3 pl-2 pr-4 pt-4">
       <button
         type="button"
         onClick={onBack}
-        className="flex h-9 items-center gap-1.5 rounded-lg px-2 text-[13px] font-medium text-textSecondary transition-colors hover:bg-glass-hover hover:text-textPrimary"
+        className="flex h-8 items-center gap-1.5 rounded-lg px-2 text-[13px] font-medium text-textSecondary transition-colors hover:bg-glass-hover hover:text-textPrimary"
       >
         <ArrowLeft size={18} />
         Your songs
       </button>
+      <span className="flex-1" />
+      <CloseButton onClose={onClose} />
     </div>
   );
 }
@@ -180,11 +232,13 @@ function SongDetail({
   mixed,
   screen,
   onBack,
+  onClose,
 }: {
   songKey: string;
   mixed: boolean;
   screen: boolean;
   onBack: () => void;
+  onClose: () => void;
 }) {
   // undefined while loading, null once it is gone (removed, cleared, never kept).
   const [song, setSong] = useState<SongEntry | null | undefined>(undefined);
@@ -239,7 +293,7 @@ function SongDetail({
   if (failed && song === undefined) {
     return (
       <div className="absolute inset-0 flex min-h-0 flex-col">
-        <BackBar onBack={onBack} />
+        <BackBar screen={screen} onBack={onBack} onClose={onClose} />
         <LoadFailed what="Couldn't open this song." onRetry={() => setAttempt((n) => n + 1)} />
       </div>
     );
@@ -285,9 +339,9 @@ function SongDetail({
 
   return (
     <div className="absolute inset-0 flex min-h-0 flex-col">
-      <BackBar onBack={onBack} />
+      <BackBar screen={screen} onBack={onBack} onClose={onClose} />
       <div
-        className={`custom-scrollbar min-h-0 flex-1 overflow-y-auto px-5 ${screen ? '' : 'pb-5'}`}
+        className={`custom-scrollbar min-h-0 flex-1 overflow-y-auto px-4 ${screen ? '' : 'pb-5'}`}
         style={screen ? { paddingBottom: 'calc(var(--sn-safe-b, 0px) + 20px)' } : undefined}
       >
         <div className="flex items-start gap-4">
@@ -306,7 +360,7 @@ function SongDetail({
                 <button
                   type="button"
                   onClick={() => openLink(l.url)}
-                  className="text-[13px] font-medium text-textSecondary transition-colors duration-150 hover:text-accent"
+                  className="text-[13px] font-medium text-textPrimary transition-colors duration-150 hover:text-accent"
                 >
                   {l.name}
                 </button>
@@ -315,8 +369,12 @@ function SongDetail({
           </div>
         )}
 
-        <div className="mt-4 flex items-center gap-2">
-          <button type="button" onClick={copyName} className={`${GLAZE_PILL} flex h-8 items-center gap-1.5 px-3.5 text-[12.5px]`}>
+        <div className="mt-3 flex items-center gap-1">
+          <button
+            type="button"
+            onClick={copyName}
+            className="-ml-3 flex h-8 items-center gap-1.5 rounded-full px-3 text-[12.5px] font-medium text-textMuted transition-colors hover:text-textPrimary"
+          >
             {copied ? <Check size={14} /> : <Copy size={14} />}
             {/* Both words hold the space, so the row never shifts when the label changes. */}
             <span className="grid">
@@ -339,7 +397,7 @@ function SongDetail({
         {places.length > 0 && (
           <div className="mt-6">
             <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-textMuted">
-              {song.count > 1 ? `Heard ${song.count} times` : 'Heard on'}
+              {song.count > 1 ? `Heard ${song.count.toLocaleString('en-US')} times` : 'Heard on'}
             </div>
             <div className="flex flex-col">
               {places.map((p) => (
@@ -418,7 +476,7 @@ export default function SongsPanel({ variant, focus, onFocus, onClose, registerE
 
   const open = useCallback((key: string) => onFocus(key), [onFocus]);
   const back = useCallback(() => onFocus(null), [onFocus]);
-  const itemData = useMemo<RowData>(() => ({ rowAt, open, mixed }), [rowAt, open, mixed]);
+  const itemData = useMemo<RowData>(() => ({ rowAt, open, mixed, screen }), [rowAt, open, mixed, screen]);
 
   // Arrow keys walk the list: Down from the search to the first song, Up and
   // Down between songs, Up from the first back to the search.
@@ -495,22 +553,27 @@ export default function SongsPanel({ variant, focus, onFocus, onClose, registerE
         <div className={screen ? 'flex h-10 shrink-0 items-center pl-1 pr-[2.5px]' : 'flex shrink-0 items-center gap-2 px-4 pb-3 pt-4'}>
           {screen && (
             <button type="button" onClick={onClose} className="sn-touch -mr-1 flex items-center justify-center text-textSecondary" aria-label="Back">
-              <ArrowLeft size={22} />
+              <PhoneArrowLeft size={22} />
             </button>
           )}
           <span className="flex min-w-0 items-baseline gap-2">
             <span className="text-[16px] font-bold tracking-tight text-textPrimary">{screen ? 'Songs' : 'Your songs'}</span>
-            {total > 0 && (
-              <span className="text-[12.5px] font-medium tabular-nums text-textMuted">
-                {total === 1 ? '1 song' : `${total} songs`}
-              </span>
-            )}
+            {total > 0 && <span className="text-[12.5px] font-medium tabular-nums text-textMuted">{songsCount(total)}</span>}
           </span>
           <span className="flex-1" />
           {total > 0 &&
             (confirmClear ? (
               <button type="button" onClick={clearAll} className={`${ACCENT_BUTTON} h-8 px-3.5 text-[12.5px]`} style={DANGER_FILL}>
-                {total === 1 ? 'Clear 1 song' : `Clear ${total} songs`}
+                {`Clear ${songsCount(total)}`}
+              </button>
+            ) : screen ? (
+              <button
+                type="button"
+                onClick={clearAll}
+                aria-label="Clear all"
+                className="-mr-1.5 flex h-9 w-9 items-center justify-center text-textMuted active:text-textPrimary"
+              >
+                <PhoneTrash size={18} />
               </button>
             ) : (
               <Tooltip content="Clear all" side="bottom">
@@ -524,18 +587,7 @@ export default function SongsPanel({ variant, focus, onFocus, onClose, registerE
                 </button>
               </Tooltip>
             ))}
-          {!screen && (
-            <Tooltip content="Close" side="bottom">
-              <button
-                type="button"
-                onClick={onClose}
-                aria-label="Close"
-                className="flex h-8 w-8 items-center justify-center rounded-full text-textMuted transition-colors hover:text-textPrimary"
-              >
-                <X size={18} />
-              </button>
-            </Tooltip>
-          )}
+          {!screen && <CloseButton onClose={onClose} />}
         </div>
 
         {total > 0 && (
@@ -589,10 +641,11 @@ export default function SongsPanel({ variant, focus, onFocus, onClose, registerE
               <List<RowData>
                 ref={listRef}
                 className="custom-scrollbar"
+                style={{ scrollbarGutter: 'stable' }}
                 height={listHeight}
                 width="100%"
                 itemCount={matched}
-                itemSize={ROW_HEIGHT}
+                itemSize={screen ? ROW.screen.height : ROW.modal.height}
                 itemData={itemData}
                 itemKey={(index, data) => data.rowAt(index)?.key ?? `pending-${index}`}
                 overscanCount={6}
@@ -605,7 +658,7 @@ export default function SongsPanel({ variant, focus, onFocus, onClose, registerE
         </div>
       </div>
 
-      {focus && <SongDetail key={focus} songKey={focus} mixed={mixed} screen={screen} onBack={back} />}
+      {focus && <SongDetail key={focus} songKey={focus} mixed={mixed} screen={screen} onBack={back} onClose={onClose} />}
     </div>
   );
 }

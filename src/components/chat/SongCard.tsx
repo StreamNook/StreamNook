@@ -1,21 +1,23 @@
-import { memo } from 'react';
-import { Music } from 'lucide-react';
+import { memo, useSyncExternalStore } from 'react';
+import { ListMusic, Music } from 'lucide-react';
 import { Tooltip } from '../ui/Tooltip';
 // Shared helper, not a local copy: this card renders inline in chat, so on
 // Android its service links were dead for the same reason every other chat link
 // was - `@tauri-apps/plugin-shell`'s open has no Android implementation.
 import { openExternal } from '../../utils/openExternal';
 import type { SongMatch } from '../../utils/songId';
-import { hasSongsSurface, openSongs } from '../../utils/songHistory';
+import { hasSongsSurface, openSongs, subscribeSongsSurface } from '../../utils/songHistory';
 
 // The "/song" result rendered inline in chat: cover art, title/artist, and a row
 // of borderless service links (Spotify, Apple Music, ...) plus the song.link
-// aggregator. Each link opens in the browser. The last, quieter link opens the
-// song in Your songs, where it is kept, in windows that can show that list.
+// aggregator. Each link opens in the browser. A quiet button at the end of the
+// title opens the song in Your songs, where it is kept, in windows that can
+// show that list (it appears once that list's surface is mounted).
 export const SongCard = memo(function SongCard({ card }: { card: SongMatch }) {
   const links = [...card.providers];
   if (card.song_link) links.push({ name: 'song.link', url: card.song_link });
-  const kept = card.key && hasSongsSurface() ? card.key : null;
+  const canOpen = useSyncExternalStore(subscribeSongsSurface, hasSongsSurface);
+  const kept = card.key && canOpen ? card.key : null;
 
   return (
     <div className="glass-panel rounded-lg p-2 flex items-start gap-3 max-w-[320px]">
@@ -32,18 +34,32 @@ export const SongCard = memo(function SongCard({ card }: { card: SongMatch }) {
         </div>
       )}
 
-      <div className="min-w-0 flex flex-col gap-0.5">
-        <Tooltip content={card.title}>
-          <div className="text-sm font-semibold text-white truncate">
-            {card.title}
-          </div>
-        </Tooltip>
-        <div className="text-xs text-white/60 truncate">
+      <div className="min-w-0 flex-1 flex flex-col gap-0.5 -mt-0.5">
+        <div className="flex items-center gap-1.5">
+          <Tooltip content={card.title}>
+            <div className="min-w-0 truncate text-sm font-semibold text-textPrimary">
+              {card.title}
+            </div>
+          </Tooltip>
+          {kept && (
+            <Tooltip content="Open in Your songs">
+              <button
+                type="button"
+                aria-label="Open in Your songs"
+                onClick={() => openSongs(kept)}
+                className="ml-auto -my-0.5 flex h-5 w-5 shrink-0 items-center justify-center text-textMuted transition-colors hover:text-textPrimary"
+              >
+                <ListMusic size={14} />
+              </button>
+            </Tooltip>
+          )}
+        </div>
+        <div className="text-xs text-textSecondary truncate">
           {card.artist}
           {card.album ? ` · ${card.album}` : ''}
         </div>
 
-        {(links.length > 0 || kept) && (
+        {links.length > 0 && (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-1.5">
             {links.map((l) => (
               <Tooltip key={l.url} content={l.url} side="top">
@@ -51,20 +67,12 @@ export const SongCard = memo(function SongCard({ card }: { card: SongMatch }) {
                   onClick={() => {
                     void openExternal(l.url);
                   }}
-                  className="text-xs font-medium text-white/70 hover:text-accent transition-colors duration-150"
+                  className="text-xs font-medium text-textSecondary hover:text-accent transition-colors duration-150"
                 >
                   {l.name}
                 </button>
               </Tooltip>
             ))}
-            {kept && (
-              <button
-                onClick={() => openSongs(kept)}
-                className="text-xs font-medium text-white/45 hover:text-accent transition-colors duration-150"
-              >
-                Your songs
-              </button>
-            )}
           </div>
         )}
       </div>
