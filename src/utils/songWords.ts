@@ -38,8 +38,10 @@ export function heardInto(source: PlayerSource): string | null {
   return minutes % 60 ? `${hours}h ${minutes % 60}m in` : `${hours}h in`;
 }
 
-/** How long ago, short: "just now", "12m ago", "5h ago", "3d ago", then the date. */
-export function heardAgo(ms: number, now: number = Date.now()): string {
+/** How long ago, short: "just now", "12m ago", "5h ago", "3d ago", then the
+ *  date. `compact` gives another year's date as month and year ("Oct 2025"),
+ *  for a slot too narrow for the day as well. */
+export function heardAgo(ms: number, now: number = Date.now(), compact = false): string {
   const seconds = Math.max(0, Math.round((now - ms) / 1000));
   if (seconds < 60) return 'just now';
   const minutes = Math.floor(seconds / 60);
@@ -48,18 +50,20 @@ export function heardAgo(ms: number, now: number = Date.now()): string {
   if (hours < 24) return `${hours}h ago`;
   const days = Math.floor(hours / 24);
   if (days < 7) return `${days}d ago`;
-  return dateOf(ms, now);
+  return dateOf(ms, now, compact);
 }
 
-function dateOf(ms: number, now: number): string {
+function dateOf(ms: number, now: number, compact = false): string {
   const date = new Date(ms);
-  const otherYear = date.getFullYear() !== new Date(now).getFullYear();
-  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(otherYear ? { year: 'numeric' } : {}) });
+  if (date.getFullYear() === new Date(now).getFullYear()) {
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  }
+  return date.toLocaleDateString('en-US', compact ? { month: 'short', year: 'numeric' } : { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
 /** The day it was heard: "Today", "Yesterday", else the date ("Oct 26"),
- *  with the year when it is not this year. */
-export function heardDay(ms: number, now: number = Date.now()): string {
+ *  with the year when it is not this year (`compact`: as in heardAgo). */
+export function heardDay(ms: number, now: number = Date.now(), compact = false): string {
   const day = (t: number) => {
     const d = new Date(t);
     return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
@@ -70,7 +74,16 @@ export function heardDay(ms: number, now: number = Date.now()): string {
   const yesterday = new Date(today);
   yesterday.setDate(yesterday.getDate() - 1);
   if (then === yesterday.getTime()) return 'Yesterday';
-  return dateOf(ms, now);
+  return dateOf(ms, now, compact);
+}
+
+/** The album to show under a song, or null when it only repeats the title
+ *  (a single: "Solita" on "Solita - Single"). */
+export function albumLine(album: string | null, title: string): string | null {
+  if (!album) return null;
+  const words = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
+  const bare = words(album).replace(/\s*[-–]\s*(single|ep)$/, '');
+  return bare === words(title) ? null : album;
 }
 
 /** The time of day it was heard: "9:14 PM". NFKC makes the narrow space

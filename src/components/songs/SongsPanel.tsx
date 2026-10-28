@@ -23,6 +23,7 @@ import {
   Disc3,
   Headphones,
   History,
+  Link2,
   Music,
   RadioTower,
   Repeat,
@@ -47,12 +48,12 @@ import {
   type SongRow,
   type SongSource,
 } from '../../utils/songHistory';
-import { channelOf, heardAgo, heardClock, heardDay, heardInto, mediaMark } from '../../utils/songWords';
+import { albumLine, channelOf, heardAgo, heardClock, heardDay, heardInto, mediaMark } from '../../utils/songWords';
 import { ProviderLogo } from '../ProviderLogo';
 import { SocialLogo } from '../ui/SocialLogo';
 import { Tooltip } from '../ui/Tooltip';
 import { ACCENT_BUTTON, DANGER_FILL, GLAZE_PILL } from '../ui/glazeButtons';
-import { markOf } from './serviceMarks';
+import { markOf, markSize } from './serviceMarks';
 import { useSongPages } from './useSongPages';
 
 /** Row height, art size and type for each shell: the phone's rows are roomier,
@@ -101,16 +102,16 @@ function SongArt({
   if (!url) {
     return (
       <div
-        className={`flex shrink-0 items-center justify-center bg-white/[0.06] ${round}`}
+        className={`flex shrink-0 items-center justify-center bg-glass-hover ${round}`}
         style={{ width: px, height: px }}
         aria-hidden="true"
       >
-        <Music size={Math.round(px * 0.38)} className="text-white/35" />
+        <Music size={Math.round(px * 0.38)} className="text-textMuted" />
       </div>
     );
   }
   return (
-    <span className={`relative block shrink-0 bg-white/[0.06] ${round}`} style={{ width: px, height: px }}>
+    <span className={`relative block shrink-0 bg-glass-hover ${round}`} style={{ width: px, height: px }}>
       <img
         src={url}
         alt=""
@@ -137,7 +138,7 @@ function ChannelFace({ src, name, px }: { src?: string | null; name: string; px:
   if (!src || failed) {
     return (
       <span
-        className="flex shrink-0 items-center justify-center rounded-full bg-white/10 font-semibold leading-none text-textSecondary"
+        className="flex shrink-0 items-center justify-center rounded-full bg-glass-hover font-semibold leading-none text-textSecondary"
         style={{ width: px, height: px, fontSize: Math.max(8, Math.round(px * 0.46)) }}
         aria-hidden="true"
       >
@@ -146,7 +147,7 @@ function ChannelFace({ src, name, px }: { src?: string | null; name: string; px:
     );
   }
   return (
-    <span className="relative block shrink-0 rounded-full bg-white/10" style={{ width: px, height: px }} aria-hidden="true">
+    <span className="relative block shrink-0 rounded-full bg-glass-hover" style={{ width: px, height: px }} aria-hidden="true">
       <img
         src={src}
         alt=""
@@ -167,7 +168,7 @@ function MediaChip({ source }: { source: SongSource }) {
   const mark = mediaMark(source);
   if (!mark) return null;
   return (
-    <span className="shrink-0 rounded-[5px] bg-white/[0.08] px-1.5 py-px text-[10.5px] font-semibold leading-[15px] text-textSecondary">
+    <span className="shrink-0 rounded-[5px] bg-glass-hover px-1.5 py-px text-[11px] font-semibold leading-[15px] text-textSecondary">
       {mark}
     </span>
   );
@@ -199,13 +200,13 @@ const SongListRow = memo(function SongListRow({ index, style, data }: ListChildC
   const row = data.rowAt(index);
   if (!row) {
     return (
-      <div style={style} className="pl-2" aria-hidden="true">
+      <div style={style} className="pl-1.5" aria-hidden="true">
         <div className="flex h-full items-center gap-3.5 px-2.5">
-          <div className="shrink-0 rounded-lg bg-white/[0.05]" style={{ width: size.art, height: size.art }} />
+          <div className="shrink-0 rounded-lg bg-glass-hover" style={{ width: size.art, height: size.art }} />
           <div className="flex min-w-0 flex-1 flex-col gap-2">
-            <div className="h-3 w-2/5 rounded bg-white/[0.06]" />
-            <div className="h-2.5 w-1/3 rounded bg-white/[0.04]" />
-            <div className="h-2.5 w-1/2 rounded bg-white/[0.04]" />
+            <div className="h-3 w-2/5 rounded bg-glass-hover" />
+            <div className="h-2.5 w-1/3 rounded bg-glass-hover opacity-70" />
+            <div className="h-2.5 w-1/2 rounded bg-glass-hover opacity-70" />
           </div>
         </div>
       </div>
@@ -213,7 +214,7 @@ const SongListRow = memo(function SongListRow({ index, style, data }: ListChildC
   }
   const heard = row.heard;
   return (
-    <div style={style} className="pl-2">
+    <div style={style} className="pl-1.5">
       <button
         type="button"
         data-song-row={index}
@@ -259,9 +260,7 @@ function EmptyState({ searched }: { searched: string | null }) {
   if (searched) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 px-8 pb-10 text-center">
-        <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/[0.06] text-textMuted" aria-hidden="true">
-          <Search size={22} />
-        </span>
+        <PanelMark px={48} icon={Search} />
         <div className="flex flex-col gap-1">
           <p className="text-[14px] font-semibold text-textPrimary">No songs match “{searched}”</p>
           <p className="text-[12.5px] text-textMuted">Search by song, artist, channel or category.</p>
@@ -271,13 +270,14 @@ function EmptyState({ searched }: { searched: string | null }) {
   }
   return (
     <div className="flex h-full flex-col items-center justify-center gap-4 px-8 pb-10 text-center">
-      <PanelMark px={60} />
+      {/* The player's own music note, so the mark teaches the button. */}
+      <PanelMark px={60} icon={Music} />
       <div className="flex max-w-[280px] flex-col gap-1.5">
         <p className="text-[15px] font-semibold text-textPrimary">Songs you identify land here</p>
         {AUDIO_GRAPH_SUPPORTED && (
-          <p className="text-[12.5px] leading-[19px] text-textMuted">
+          <p className="text-[12.5px] leading-[19px] text-textMuted [text-wrap:balance]">
             {IS_MOBILE ? 'Type ' : 'Press the music note on the player, or type '}
-            <kbd className="rounded-md border border-white/10 bg-white/[0.08] px-1.5 py-px font-mono text-[11.5px] text-textSecondary">
+            <kbd className="rounded-md border border-borderSubtle bg-glass-hover px-1.5 py-px font-mono text-[11.5px] text-textSecondary">
               /song
             </kbd>
             {IS_MOBILE ? ' in a chat while a stream plays.' : ' in chat.'}
@@ -310,7 +310,7 @@ function CloseButton({ onClose }: { onClose: () => void }) {
         aria-label="Close"
         className="-mr-2.5 flex h-8 w-8 items-center justify-center rounded-full text-textMuted transition-colors hover:text-textPrimary"
       >
-        <X size={18} />
+        <X size={20} />
       </button>
     </Tooltip>
   );
@@ -318,11 +318,12 @@ function CloseButton({ onClose }: { onClose: () => void }) {
 
 /** A song's top bar. The phone keeps the list's own header row and arrow (the
  *  song's title below names the page); the modal keeps its Close where the
- *  list has it. */
+ *  list has it. Both put the arrow and Close exactly where the list's header
+ *  does, so nothing moves going in and out of a song. */
 function BackBar({ screen, onBack, onClose }: { screen: boolean; onBack: () => void; onClose: () => void }) {
   if (screen) {
     return (
-      <div className="flex h-10 shrink-0 items-center pl-1 pr-[2.5px]">
+      <div className="flex h-14 shrink-0 items-center pl-1 pr-[2.5px]">
         <button
           type="button"
           onClick={onBack}
@@ -335,7 +336,7 @@ function BackBar({ screen, onBack, onClose }: { screen: boolean; onBack: () => v
     );
   }
   return (
-    <div className="flex shrink-0 items-center gap-2 pb-2 pl-2 pr-4 pt-4">
+    <div className="flex shrink-0 items-center gap-2 pl-[5px] pr-4 pt-[11px]">
       <button
         type="button"
         onClick={onBack}
@@ -350,8 +351,19 @@ function BackBar({ screen, onBack, onClose }: { screen: boolean; onBack: () => v
   );
 }
 
-/** A part of a song's page: its accent mark and name over what it holds. */
-function Section({ icon: Icon, title, children }: { icon: LucideIcon; title: string; children: ReactNode }) {
+/** A part of a song's page: its accent mark and name over what it holds, and
+ *  a quiet action at the end of the name's line when it has one. */
+function Section({
+  icon: Icon,
+  title,
+  aside,
+  children,
+}: {
+  icon: LucideIcon;
+  title: string;
+  aside?: ReactNode;
+  children: ReactNode;
+}) {
   return (
     <section className="mt-6">
       <div className="mb-2.5 flex items-center gap-2">
@@ -363,13 +375,15 @@ function Section({ icon: Icon, title, children }: { icon: LucideIcon; title: str
           <Icon size={12.5} strokeWidth={2.3} />
         </span>
         <h3 className="text-[13px] font-semibold text-textPrimary">{title}</h3>
+        {aside}
       </div>
       {children}
     </section>
   );
 }
 
-/** One fact in the song's facts card: its name over its value. */
+/** One fact in the song's facts card: its name over its value, which starts
+ *  with a capital beside the others ("Just now" by "Yesterday"). */
 function Fact({ icon: Icon, label, value }: { icon: LucideIcon; label: string; value: string }) {
   return (
     <div className="flex min-w-0 flex-col gap-1 px-3 py-2.5">
@@ -377,8 +391,41 @@ function Fact({ icon: Icon, label, value }: { icon: LucideIcon; label: string; v
         <Icon size={12} strokeWidth={2.2} aria-hidden="true" className="shrink-0" />
         <span className="truncate">{label}</span>
       </span>
-      <span className="whitespace-nowrap text-[14px] font-semibold tabular-nums text-textPrimary">{value}</span>
+      <span className="whitespace-nowrap text-[14px] font-semibold tabular-nums text-textPrimary">
+        {value.charAt(0).toUpperCase() + value.slice(1)}
+      </span>
     </div>
+  );
+}
+
+/** Fades what scrolls past an edge of a scroller into the surface under it,
+ *  instead of cutting it flat. A still layer over the scroller, so scrolling
+ *  repaints nothing: the surface's own fill, masked into a gradient. */
+function EdgeFade({
+  edge,
+  screen,
+  shown = true,
+  offset = '0px',
+}: {
+  edge: 'top' | 'bottom';
+  screen: boolean;
+  shown?: boolean;
+  /** How far in from the edge the scroller ends (the phone's safe area). */
+  offset?: string;
+}) {
+  const toward = edge === 'top' ? 'to top' : 'to bottom';
+  return (
+    <div
+      aria-hidden="true"
+      className={`pointer-events-none absolute inset-x-0 h-4 transition-opacity duration-150 ${shown ? 'opacity-100' : 'opacity-0'}`}
+      style={{
+        [edge]: offset,
+        // The phone screen sits on the page; the modal on the flyout's base.
+        background: screen ? 'var(--color-background)' : 'var(--flyout-heading-fill)',
+        maskImage: `linear-gradient(${toward}, transparent, #000)`,
+        WebkitMaskImage: `linear-gradient(${toward}, transparent, #000)`,
+      }}
+    />
   );
 }
 
@@ -486,7 +533,7 @@ function SongDetail({
 
   const links = [...song.providers];
   if (song.shazam_url) links.push({ name: 'Shazam', url: song.shazam_url });
-  if (song.song_link) links.push({ name: 'song.link', url: song.song_link });
+  const album = albumLine(song.album, song.title);
   const places = song.sightings.flatMap((s) => (s.source ? [{ at: s.at_ms, source: s.source }] : []));
   const cover = screen ? 116 : 128;
 
@@ -526,97 +573,122 @@ function SongDetail({
   return (
     <div className="absolute inset-0 flex min-h-0 flex-col">
       <BackBar screen={screen} onBack={onBack} onClose={onClose} />
-      <div
-        className={`custom-scrollbar min-h-0 flex-1 overflow-y-auto ${screen ? 'px-4' : 'px-5 pb-6'}`}
-        style={screen ? { paddingBottom: 'calc(var(--sn-safe-b, 0px) + 24px)' } : undefined}
-      >
-        <div className="flex items-start gap-5 pt-2">
-          {/* The cover lights the panel under it with its own colors, a soft
-              glow below and around it that never reaches the words. */}
-          <div className="relative shrink-0" style={{ width: cover, height: cover }}>
-            {song.album_art && (
-              <img
-                src={song.album_art}
-                alt=""
-                aria-hidden="true"
-                className="pointer-events-none absolute left-[8%] top-[14%] h-[90%] w-[84%] rounded-xl object-cover opacity-55 blur-xl saturate-150"
-              />
-            )}
-            <span className="relative block rounded-xl shadow-[0_12px_28px_-14px_rgba(0,0,0,0.8)] ring-1 ring-inset ring-white/10">
-              <SongArt key={song.album_art ?? ''} src={song.album_art} px={cover} round="rounded-xl" />
-            </span>
-          </div>
-          <div className="flex min-w-0 flex-1 flex-col pt-1">
-            <h2 className="line-clamp-3 break-words text-[20px] font-bold leading-[25px] tracking-tight text-textPrimary">
-              {song.title}
-            </h2>
-            <p className="mt-1.5 break-words text-[14.5px] font-medium leading-[19px] text-textSecondary">{song.artist}</p>
-            {song.album && (
-              <p className="mt-1.5 flex min-w-0 items-start gap-1.5 text-[12.5px] leading-[17px] text-textMuted">
-                <Disc3 size={13} className="mt-[2px] shrink-0" aria-hidden="true" />
-                <span className="break-words">{song.album}</span>
-              </p>
-            )}
-            <div className="mt-3.5">
-              <button type="button" onClick={copyName} className={`${GLAZE_PILL} flex h-7 items-center gap-1.5 px-3 text-[12px]`}>
-                {copied ? <Check size={13} /> : <Copy size={13} />}
-                {/* Both words hold the space, so the button never changes size. */}
-                <span className="grid">
-                  <span className={`col-start-1 row-start-1 ${copied ? 'invisible' : ''}`}>Copy name</span>
-                  <span className={`col-start-1 row-start-1 ${copied ? '' : 'invisible'}`} aria-live="polite">
-                    {copied ? 'Copied' : ''}
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        <div
+          className={`custom-scrollbar min-h-0 flex-1 overflow-y-auto px-4 ${screen ? '' : 'pb-6'}`}
+          style={screen ? { paddingBottom: 'calc(var(--sn-safe-b, 0px) + 24px)' } : undefined}
+        >
+          <div className="flex items-start gap-5 pt-4">
+            {/* The cover lights the panel under it with its own colors, a soft
+                glow below and around it that never reaches the words, and
+                starts low enough that the scroller's top edge never cuts it. */}
+            <div className="relative shrink-0" style={{ width: cover, height: cover }}>
+              {song.album_art && (
+                <img
+                  src={song.album_art}
+                  alt=""
+                  aria-hidden="true"
+                  className="pointer-events-none absolute left-[8%] top-[30%] h-[76%] w-[84%] rounded-xl object-cover opacity-55 blur-xl saturate-150"
+                />
+              )}
+              <span className="relative block rounded-xl shadow-[0_12px_28px_-14px_rgba(0,0,0,0.8)] ring-1 ring-inset ring-white/10">
+                <SongArt key={song.album_art ?? ''} src={song.album_art} px={cover} round="rounded-xl" />
+              </span>
+            </div>
+            {/* Pulled up so the title's capitals line up with the cover's top. */}
+            <div className="-mt-[3px] flex min-w-0 flex-1 flex-col">
+              <h2 className="line-clamp-3 break-words text-[20px] font-bold leading-[25px] tracking-tight text-textPrimary">
+                {song.title}
+              </h2>
+              <p className="mt-1.5 break-words text-[14.5px] font-medium leading-[19px] text-textSecondary">{song.artist}</p>
+              {album && (
+                <p className="mt-1.5 flex min-w-0 items-start gap-1.5 text-[12.5px] leading-[17px] text-textMuted">
+                  <Disc3 size={13} className="mt-[2px] shrink-0" aria-hidden="true" />
+                  <span className="break-words">{album}</span>
+                </p>
+              )}
+              <div className="mt-3.5">
+                <button type="button" onClick={copyName} className={`${GLAZE_PILL} flex h-7 items-center gap-1.5 px-3 text-[12px]`}>
+                  {copied ? <Check size={13} /> : <Copy size={13} />}
+                  {/* Both words hold the space, so the button never changes size. */}
+                  <span className="grid">
+                    <span className={`col-start-1 row-start-1 ${copied ? 'invisible' : ''}`}>Copy name</span>
+                    <span className={`col-start-1 row-start-1 ${copied ? '' : 'invisible'}`} aria-live="polite">
+                      {copied ? 'Copied' : ''}
+                    </span>
                   </span>
-                </span>
-              </button>
+                </button>
+              </div>
             </div>
           </div>
+
+          <div className="glass-tile mt-6 grid grid-cols-3 divide-x divide-borderSubtle">
+            <Fact icon={Repeat} label="Times heard" value={song.count.toLocaleString('en-US')} />
+            <Fact icon={CalendarClock} label="First heard" value={heardDay(song.first_ms, undefined, true)} />
+            <Fact icon={History} label="Last heard" value={heardAgo(song.last_ms, undefined, true)} />
+          </div>
+
+          {(links.length > 0 || song.song_link) && (
+            <Section
+              icon={Headphones}
+              title={song.links_are_searches ? 'Find it on' : 'Listen on'}
+              aside={
+                song.song_link && (
+                  <Tooltip content={song.song_link} side="top" describe>
+                    <button
+                      type="button"
+                      onClick={() => openLink(song.song_link!)}
+                      className="ml-auto flex h-7 items-center gap-1 text-[12px] font-medium text-textMuted transition-colors hover:text-textPrimary"
+                    >
+                      <Link2 size={13} aria-hidden="true" />
+                      All services
+                    </button>
+                  </Tooltip>
+                )
+              }
+            >
+              {/* The phone lays its pills out two to a row, so three never wrap raggedly. */}
+              <div className={screen ? 'grid grid-cols-2 gap-2' : 'flex flex-wrap gap-2'}>
+                {links.map((l) => (
+                  <Tooltip key={l.url} content={l.url} side="top" describe>
+                    <button
+                      type="button"
+                      onClick={() => openLink(l.url)}
+                      className={`${GLAZE_PILL} flex h-9 min-w-0 items-center gap-2 pl-2.5 pr-3.5 text-[12.5px] ${screen ? 'w-full' : ''}`}
+                    >
+                      <span className="flex h-[17px] w-[17px] shrink-0 items-center justify-center">
+                        <SocialLogo platform={markOf(l.name)} size={markSize(l.name, 17)} />
+                      </span>
+                      <span className="truncate">{l.name}</span>
+                    </button>
+                  </Tooltip>
+                ))}
+              </div>
+            </Section>
+          )}
+
+          {places.length > 0 && (
+            <Section icon={RadioTower} title="Where you heard it">
+              <div className="glass-tile divide-y divide-borderSubtle overflow-hidden">
+                {places.map((p) => (
+                  <Place key={p.at} at={p.at} source={p.source} mixed={mixed} />
+                ))}
+              </div>
+            </Section>
+          )}
+
+          <div className="mt-6 flex justify-center">
+            <button
+              type="button"
+              onClick={remove}
+              className="flex h-8 items-center gap-1.5 rounded-full px-3.5 text-[12.5px] font-medium text-textMuted transition-colors hover:text-red-400"
+            >
+              <Trash2 size={14} />
+              Remove from Your songs
+            </button>
+          </div>
         </div>
-
-        <div className="glass-tile mt-6 grid grid-cols-3 divide-x divide-white/[0.06]">
-          <Fact icon={Repeat} label="Times heard" value={song.count.toLocaleString('en-US')} />
-          <Fact icon={CalendarClock} label="First heard" value={heardDay(song.first_ms)} />
-          <Fact icon={History} label="Last heard" value={heardAgo(song.last_ms)} />
-        </div>
-
-        {links.length > 0 && (
-          <Section icon={Headphones} title={song.links_are_searches ? 'Find it on' : 'Listen on'}>
-            <div className="flex flex-wrap gap-2">
-              {links.map((l) => (
-                <Tooltip key={l.url} content={l.url} side="top" describe>
-                  <button
-                    type="button"
-                    onClick={() => openLink(l.url)}
-                    className={`${GLAZE_PILL} flex h-9 items-center gap-2 pl-2.5 pr-3.5 text-[12.5px]`}
-                  >
-                    <SocialLogo platform={markOf(l.name)} size={17} />
-                    {l.name}
-                  </button>
-                </Tooltip>
-              ))}
-            </div>
-          </Section>
-        )}
-
-        {places.length > 0 && (
-          <Section icon={RadioTower} title="Where you heard it">
-            <div className="glass-tile divide-y divide-white/[0.06] overflow-hidden">
-              {places.map((p) => (
-                <Place key={p.at} at={p.at} source={p.source} mixed={mixed} />
-              ))}
-            </div>
-          </Section>
-        )}
-
-        <div className="mt-6 flex justify-center">
-          <button
-            type="button"
-            onClick={remove}
-            className="flex h-8 items-center gap-1.5 rounded-full px-3.5 text-[12.5px] font-medium text-textMuted transition-colors hover:text-red-400"
-          >
-            <Trash2 size={14} />
-            Remove from Your songs
-          </button>
-        </div>
+        <EdgeFade edge="bottom" screen={screen} />
       </div>
     </div>
   );
@@ -647,6 +719,8 @@ export default function SongsPanel({ variant, focus, onFocus, onClose, registerE
   useEffect(() => {
     listRef.current?.scrollTo(0);
   }, [query]);
+  // Rows have scrolled up under the search field: the top edge fades them.
+  const [scrolled, setScrolled] = useState(false);
 
   // Measure the list area so react-window has a concrete height to virtualize.
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -777,35 +851,38 @@ export default function SongsPanel({ variant, focus, onFocus, onClose, registerE
             <span className={`font-bold leading-[21px] tracking-tight text-textPrimary ${screen ? 'text-[17px]' : 'text-[16px]'}`}>
               {screen ? 'Songs' : 'Your songs'}
             </span>
-            <span className="truncate text-[12px] font-medium leading-[16px] tabular-nums text-textMuted">{summary}</span>
+            <span className="truncate text-[12px] font-medium leading-[16px] text-textMuted">{summary}</span>
           </span>
-          {total > 0 &&
-            (confirmClear ? (
-              <button type="button" onClick={clearAll} className={`${ACCENT_BUTTON} h-8 px-3.5 text-[12.5px]`} style={DANGER_FILL}>
-                {`Clear ${songsCount(total)}`}
-              </button>
-            ) : screen ? (
-              <button
-                type="button"
-                onClick={clearAll}
-                aria-label="Clear all"
-                className="-mr-1.5 flex h-9 w-9 items-center justify-center text-textMuted active:text-textPrimary"
-              >
-                <PhoneTrash size={18} />
-              </button>
-            ) : (
-              <Tooltip content="Clear all" side="bottom">
+          {/* The actions sit on the title's line, not the middle of the two. */}
+          <div className={`flex items-center gap-3 self-start ${screen ? 'mt-[4px]' : '-mt-[5px]'}`}>
+            {total > 0 &&
+              (confirmClear ? (
+                <button type="button" onClick={clearAll} className={`${ACCENT_BUTTON} h-8 px-3.5 text-[12.5px]`} style={DANGER_FILL}>
+                  {`Clear ${songsCount(total)}`}
+                </button>
+              ) : screen ? (
                 <button
                   type="button"
                   onClick={clearAll}
                   aria-label="Clear all"
-                  className="flex h-8 w-8 items-center justify-center rounded-full text-textMuted transition-colors hover:text-textPrimary"
+                  className="-mr-1.5 flex h-9 w-9 items-center justify-center text-textMuted active:text-textPrimary"
                 >
-                  <Trash2 size={16} />
+                  <PhoneTrash size={18} />
                 </button>
-              </Tooltip>
-            ))}
-          {!screen && <CloseButton onClose={onClose} />}
+              ) : (
+                <Tooltip content="Clear all" side="bottom">
+                  <button
+                    type="button"
+                    onClick={clearAll}
+                    aria-label="Clear all"
+                    className="flex h-8 w-8 items-center justify-center rounded-full text-textMuted transition-colors hover:text-textPrimary"
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                </Tooltip>
+              ))}
+            {!screen && <CloseButton onClose={onClose} />}
+          </div>
         </div>
 
         {total > 0 && (
@@ -845,7 +922,7 @@ export default function SongsPanel({ variant, focus, onFocus, onClose, registerE
 
         <div
           ref={bodyRef}
-          className="min-h-0 flex-1"
+          className="relative min-h-0 flex-1"
           data-taps-through-keyboard=""
           onKeyDown={onListKeyDown}
           style={screen ? { paddingBottom: 'var(--sn-safe-b, 0px)' } : undefined}
@@ -868,11 +945,18 @@ export default function SongsPanel({ variant, focus, onFocus, onClose, registerE
                 itemKey={(index, data) => data.rowAt(index)?.key ?? `pending-${index}`}
                 overscanCount={6}
                 onItemsRendered={({ overscanStartIndex, overscanStopIndex }) => ensure(overscanStartIndex, overscanStopIndex)}
+                onScroll={({ scrollOffset }) => setScrolled(scrollOffset > 0)}
               >
                 {SongListRow}
               </List>
             )
           )}
+          {matched ? (
+            <>
+              <EdgeFade edge="top" screen={screen} shown={scrolled} />
+              <EdgeFade edge="bottom" screen={screen} offset={screen ? 'var(--sn-safe-b, 0px)' : undefined} />
+            </>
+          ) : null}
         </div>
       </div>
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { channelOf, heardAgo, heardClock, heardDay, heardInto, mediaMark } from './songWords';
+import { albumLine, channelOf, heardAgo, heardClock, heardDay, heardInto, mediaMark } from './songWords';
 
 const NOW = new Date(2026, 9, 27, 12, 0, 0).getTime();
 
@@ -42,5 +42,23 @@ describe('Your songs words', () => {
     expect(heardDay(new Date(2026, 9, 21, 9).getTime(), NOW)).toBe('Oct 21');
     expect(heardDay(new Date(2025, 11, 31, 9).getTime(), NOW)).toBe('Dec 31, 2025');
     expect(heardClock(new Date(2026, 9, 27, 21, 14).getTime())).toBe('9:14 PM');
+  });
+
+  it('gives another year as month and year where the slot is narrow', () => {
+    const lastYear = new Date(2025, 9, 25, 9).getTime();
+    expect(heardDay(lastYear, NOW, true)).toBe('Oct 2025');
+    expect(heardAgo(lastYear, NOW, true)).toBe('Oct 2025');
+    expect(heardDay(new Date(2026, 9, 21, 9).getTime(), NOW, true)).toBe('Oct 21');
+    expect(heardDay(NOW, NOW, true)).toBe('Today');
+  });
+
+  it('leaves out an album that only repeats the title', () => {
+    expect(albumLine('Solita - Single', 'Solita')).toBe(null);
+    expect(albumLine('un x100to – Single', 'un x100to')).toBe(null);
+    expect(albumLine('Telomeres - EP', 'telomeres')).toBe(null);
+    expect(albumLine('NUEVAYoL', 'NUEVAYoL')).toBe(null);
+    expect(albumLine('DeBÍ TiRAR MáS FOToS', 'NUEVAYoL')).toBe('DeBÍ TiRAR MáS FOToS');
+    expect(albumLine('Single Ladies - Single', 'Halo')).toBe('Single Ladies - Single');
+    expect(albumLine(null, 'x')).toBe(null);
   });
 });

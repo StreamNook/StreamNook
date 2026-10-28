@@ -2,13 +2,14 @@
 // colored SVGs. Falls back to a brand-color dot for providers whose logo isn't
 // bundled yet. Used on MultiChat tabs, per-column headers, and mod-panel cells.
 
-import { useEffect, useState } from 'react';
+import { useSyncExternalStore } from 'react';
 import { Tooltip } from './ui/Tooltip';
 import twitchLogo from '../assets/provider-logos/twitch.svg?url';
 import kickLogo from '../assets/provider-logos/kick.svg?url';
 import youtubeLogo from '../assets/provider-logos/youtube.svg?url';
 import tiktokLogo from '../assets/provider-logos/tiktok.svg?url';
 import tiktokLogoLight from '../assets/provider-logos/tiktok-light.svg?url';
+import kickLogoLight from '../assets/provider-logos/kick-light.svg?url';
 import { isThemeDark } from '../themes';
 import { PROVIDERS, type ProviderId } from '../types/providers';
 
@@ -25,9 +26,13 @@ const LOGOS: Partial<Record<ProviderId, string>> = {
  *  white. On a light panel that copy disappears and all that is left is the
  *  cyan and magenta offset fringes, which reads as a rendering fault rather
  *  than as a logo. The variant swaps that one layer for the brand's own dark
- *  body, which is what TikTok itself uses on light backgrounds. */
+ *  body, which is what TikTok itself uses on light backgrounds.
+ *
+ *  Kick's neon green is about 1.2:1 on a light panel, so there it sits on
+ *  the near-black tile Kick's own app icon uses. */
 const LOGOS_ON_LIGHT: Partial<Record<ProviderId, string>> = {
   tiktok: tiktokLogoLight,
+  kick: kickLogoLight,
 };
 
 /** The bundled brand-logo URL for a provider, or undefined if not bundled. */
@@ -39,15 +44,26 @@ export function providerLogo(provider: ProviderId, onLight = false): string | un
  *
  *  Themes are the app's own, not the OS's, so a media query cannot see them.
  *  `applyTheme` announces each change on the window, which is also what the
- *  phone's status-bar code listens to. */
+ *  phone's status-bar code listens to. One window listener serves every mark,
+ *  since chat rows draw them too. */
+const themeWatchers = new Set<() => void>();
+let hearingThemes = false;
+
+function subscribeTheme(onChange: () => void): () => void {
+  if (!hearingThemes) {
+    hearingThemes = true;
+    window.addEventListener('sn:theme-applied', () => {
+      for (const watcher of themeWatchers) watcher();
+    });
+  }
+  themeWatchers.add(onChange);
+  return () => {
+    themeWatchers.delete(onChange);
+  };
+}
+
 function useThemeIsDark(): boolean {
-  const [dark, setDark] = useState(isThemeDark);
-  useEffect(() => {
-    const onApplied = () => setDark(isThemeDark());
-    window.addEventListener('sn:theme-applied', onApplied);
-    return () => window.removeEventListener('sn:theme-applied', onApplied);
-  }, []);
-  return dark;
+  return useSyncExternalStore(subscribeTheme, isThemeDark);
 }
 
 /** Optical correction, not a layout fudge. Every logo ships on a 24x24 canvas
@@ -138,7 +154,8 @@ export function ProviderLogo({
   opticalAlign?: OpticalAlign;
 }) {
   const meta = PROVIDERS[provider];
-  const src = providerLogo(provider);
+  const isDark = useThemeIsDark();
+  const src = providerLogo(provider, !isDark);
   if (src) {
     return (
       <Tooltip content={meta.label}>

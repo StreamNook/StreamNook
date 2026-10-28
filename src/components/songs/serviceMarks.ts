@@ -20,3 +20,7 @@ export const SERVICE_MARK: Readonly<Record<string, string>> = {
 
 /** The mark for a link Rust named `name`. */
 export const markOf = (name: string): string => SERVICE_MARK[name] ?? 'music';
+
+/** The size to draw a mark at so it reads as large as the round ones beside
+ *  it: Apple Music's square fills more of its box. */
+export const markSize = (name: string, px: number): number => (name === 'Apple Music' ? px - 1.5 : px);
