@@ -2,13 +2,40 @@
 // without a page (songWords.test.ts).
 import type { PlayerSource } from './activeVideo';
 
-/** Where a song was heard, as its line says it: the channel's name, and
- *  "VOD" or "clip" when it was not live. */
-export function placeOf(source: PlayerSource): string {
-  const name = source.channel_name || source.channel_login;
-  if (source.media === 'video') return `${name} · VOD`;
-  if (source.media === 'clip') return `${name} · clip`;
-  return name;
+/** The channel a song was heard on, by its shown name. */
+export function channelOf(source: PlayerSource): string {
+  return source.channel_name || source.channel_login;
+}
+
+/** The mark beside the channel when it was not heard live: "VOD" or "Clip". */
+export function mediaMark(source: PlayerSource): 'VOD' | 'Clip' | null {
+  if (source.media === 'video') return 'VOD';
+  if (source.media === 'clip') return 'Clip';
+  return null;
+}
+
+/** A video time as players show it: "1:23:45", "4:05". */
+function clock(seconds: number): string {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  const two = (n: number) => String(n).padStart(2, '0');
+  return h > 0 ? `${h}:${two(m)}:${two(s)}` : `${m}:${two(s)}`;
+}
+
+/** How far in it was heard: "2h 14m in" for a broadcast, "at 1:23:45" on a
+ *  VOD, null when that was not kept. */
+export function heardInto(source: PlayerSource): string | null {
+  const secs = source.position_secs;
+  if (secs == null || !Number.isFinite(secs) || secs < 0) return null;
+  const whole = Math.floor(secs);
+  if (source.media === 'video') return `at ${clock(whole)}`;
+  if (source.media === 'clip') return null;
+  const minutes = Math.floor(whole / 60);
+  if (minutes < 1) return 'at the start';
+  const hours = Math.floor(minutes / 60);
+  if (hours === 0) return `${minutes}m in`;
+  return minutes % 60 ? `${hours}h ${minutes % 60}m in` : `${hours}h in`;
 }
 
 /** How long ago, short: "just now", "12m ago", "5h ago", "3d ago", then the date. */
@@ -21,21 +48,33 @@ export function heardAgo(ms: number, now: number = Date.now()): string {
   if (hours < 24) return `${hours}h ago`;
   const days = Math.floor(hours / 24);
   if (days < 7) return `${days}d ago`;
-  const date = new Date(ms);
-  const otherYear = date.getFullYear() !== new Date(now).getFullYear();
-  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', ...(otherYear ? { year: 'numeric' } : {}) });
+  return dateOf(ms, now);
 }
 
-/** A hearing's date and time ("Oct 26, 9:14 PM"), with the year when it is
- *  not this year. */
-export function heardAt(ms: number, now: number = Date.now()): string {
+function dateOf(ms: number, now: number): string {
   const date = new Date(ms);
   const otherYear = date.getFullYear() !== new Date(now).getFullYear();
-  return date.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    ...(otherYear ? { year: 'numeric' } : {}),
-    hour: 'numeric',
-    minute: '2-digit',
-  });
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(otherYear ? { year: 'numeric' } : {}) });
+}
+
+/** The day it was heard: "Today", "Yesterday", else the date ("Oct 26"),
+ *  with the year when it is not this year. */
+export function heardDay(ms: number, now: number = Date.now()): string {
+  const day = (t: number) => {
+    const d = new Date(t);
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  };
+  const today = day(now);
+  const then = day(ms);
+  if (then === today) return 'Today';
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (then === yesterday.getTime()) return 'Yesterday';
+  return dateOf(ms, now);
+}
+
+/** The time of day it was heard: "9:14 PM". NFKC makes the narrow space
+ *  newer ICU puts before the PM an ordinary one. */
+export function heardClock(ms: number): string {
+  return new Date(ms).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }).normalize('NFKC');
 }

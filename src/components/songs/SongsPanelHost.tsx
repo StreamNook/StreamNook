@@ -5,7 +5,9 @@
 // --sn-z-over-player-lift), so a song card's link in the full-screen chat
 // opens it in place. No blur on the backdrop: a full-window blur over a
 // playing stream repaints every video frame, so the panel drops its own blur
-// too; its dark film keeps the text readable over a moving stream.
+// too and paints the over-video flyout's solid theme base (glass-flyout
+// no-live-blur), which keeps it readable over a moving stream on light
+// themes and dark ones alike.
 import { lazy, Suspense, useCallback, useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useAppStore } from '../../stores/AppStore';
@@ -108,8 +110,7 @@ export function SongsPanelHost() {
             animate={{ scale: 1, opacity: 1 }}
             exit={{ scale: 0.96, opacity: 0 }}
             transition={{ type: 'spring', stiffness: 300, damping: 30 }}
-            className="glass-panel glass-panel--dark flex h-[620px] max-h-[86vh] w-[520px] max-w-[calc(100vw-32px)] flex-col overflow-hidden shadow-[0_20px_50px_rgba(0,0,0,0.5)] outline-none"
-            style={{ backdropFilter: 'none' }}
+            className="glass-flyout no-live-blur flex h-[620px] max-h-[86vh] w-[520px] max-w-[calc(100vw-32px)] flex-col overflow-hidden !rounded-2xl !p-0 shadow-[0_20px_50px_rgba(0,0,0,0.5)] outline-none"
           >
             <Suspense fallback={null}>
               <SongsPanel
