@@ -1,8 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type React from 'react';
 import { CaretDown, Clock, Prohibit, Trash, X } from 'phosphor-react';
 
-import { armedFor, moderateWithToast, useModTimeoutSteps, type ModOutcome, type ModRequest } from '../../services/moderation';
+import { armedFor, holdForPicker, moderateWithToast, useModTimeoutSteps, type ModOutcome, type ModRequest } from '../../services/moderation';
 import { useAppStore } from '../../stores/AppStore';
 import { Tooltip } from '../ui/Tooltip';
 import { ReasonPicker } from './ReasonPicker';
@@ -91,6 +91,14 @@ export function HoverModButtons({
   // Ban waiting for its second press (Ban confirmation on).
   const [banArmed, setBanArmed] = useState(false);
   const altHint = target ? ' Alt-click to pick a reason.' : '';
+  // The list holds still while the picker is open, so the row it belongs to
+  // stays put under it (ChatMessageList).
+  useEffect(() => {
+    const row = picking?.anchor.closest('.chat-message-row');
+    if (!row) return;
+    holdForPicker(row, true);
+    return () => holdForPicker(row, false);
+  }, [picking]);
 
   // A plain click acts (Shift hands it to the composer, the caller's part);
   // Alt opens the picker under the dock, and Alt on the same button again

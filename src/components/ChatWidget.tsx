@@ -295,6 +295,10 @@ interface ChatMessagesPanelProps {
   pinnedIds?: ReadonlySet<string>;
   /** Filled with the list's own glide to the live bottom (ChatMessageList). */
   scrollToBottomRef?: React.RefObject<(() => void) | null>;
+  /** Chat Paused, drawn over this panel's own bottom edge: clear of the strips
+   *  and the composer below, and where the hover hold's pill sits
+   *  (ChatMessageList). */
+  pausedPill?: React.ReactNode;
 }
 
 /** How many consecutive untagged messages end the shared-chat indicator. */
@@ -338,6 +342,7 @@ const ChatMessagesPanel = ({
   headerInset,
   pinnedIds,
   scrollToBottomRef,
+  pausedPill,
 }: ChatMessagesPanelProps) => {
   const live = useChannelChat(override ? null : channelKey);
   const src: ChatMessagesPanelSource = override ?? live;
@@ -360,6 +365,8 @@ const ChatMessagesPanel = ({
     const required = localViewKey.split(',');
     return base.filter((m) => passesLocalViews(m, required));
   }, [src.messages, filterId, localViewKey]);
+  // Which feed the list draws, so a hold in it lets go when this changes.
+  const feedKey = `${channelKey ?? ''}|${override ? 'override' : 'live'}|${filterId ?? ''}|${localViewKey}`;
   const addUser = useChatUserStore((state) => state.addUser);
   /** Consecutive Twitch messages seen with no source-room-id tag. Drives the
    *  shared-chat session-end detection below. */
@@ -590,7 +597,7 @@ const ChatMessagesPanel = ({
 
   return (
     <div
-      className="flex-1 overflow-hidden animate-panel-slide-down"
+      className="relative flex-1 overflow-hidden animate-panel-slide-down"
       onMouseEnter={() => { hoveringRef.current = true; }}
       onMouseLeave={() => { hoveringRef.current = false; }}
     >
@@ -630,9 +637,11 @@ const ChatMessagesPanel = ({
             headerInset={headerInset}
             pinnedIds={pinnedIds}
             scrollToBottomRef={scrollToBottomRef}
+            feedKey={feedKey}
           />
         </ErrorBoundary>
       )}
+      {pausedPill}
     </div>
   );
 };
@@ -5633,6 +5642,17 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
             headerInset={chromeHeight}
             pinnedIds={pinnedIds}
             scrollToBottomRef={listScrollToBottomRef}
+            pausedPill={
+              isPaused ? (
+                <div className="absolute bottom-3 left-1/2 transform -translate-x-1/2 z-50 pointer-events-auto">
+                  <button onMouseDown={(e) => e.preventDefault()} onClick={handleResume} className="flex items-center gap-2 whitespace-nowrap px-4 py-2 chrome-glaze chrome-glaze--control chrome-glaze--frosted text-white text-sm font-medium shadow-lg">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                    <span>Chat Paused<PausedNewCount sliceKeys={pausedCountKeys} isPaused={isPaused} /></span>
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                  </button>
+                </div>
+              ) : null
+            }
           />
         )}
         {/* AutoMod held-message queue (moderators, Twitch). Rust owns the
@@ -5644,17 +5664,6 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
             strip mirrors it and sends Approve / Deny to Helix. */}
         {activeView === 'chat' && isModerator && isTwitch && panelChannelKey && currentStream?.user_id && (
           <UnbanRequestsStrip channel={panelChannelKey} channelId={currentStream.user_id} />
-        )}
-
-        {/* Chat Paused indicator - positioned above input */}
-        {activeView === 'chat' && isPaused && (
-          <div className="absolute bottom-[60px] left-1/2 transform -translate-x-1/2 z-50 pointer-events-auto">
-            <button onClick={handleResume} className="flex items-center gap-2 whitespace-nowrap px-4 py-2 chrome-glaze chrome-glaze--control chrome-glaze--frosted text-white text-sm font-medium shadow-lg">
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
-              <span>Chat Paused<PausedNewCount sliceKeys={pausedCountKeys} isPaused={isPaused} /></span>
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
-            </button>
-          </div>
         )}
 
         {/* Input container - static flex item at bottom (hidden when About view active) */}
