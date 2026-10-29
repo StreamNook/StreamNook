@@ -3462,6 +3462,42 @@ html[data-motion="reduced"] .sub-progress-fill {
   }
 }
 
+/* The hover hold's pill (HoverHoldPill). It waits unseen until the list says
+   it may show, and steps aside while the pointer is near it (the list writes
+   data-near on its node). When it may show is timed in JS, because the
+   Motion Off rule above zeroes every animation-delay; the fade plays each
+   time it appears. */
+[data-hold-pill]:not([data-due]),
+[data-hold-pill][data-near] {
+  visibility: hidden;
+}
+@keyframes sn-hold-pill-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+[data-hold-pill][data-due]:not([data-near]) .sn-hold-pill {
+  animation: sn-hold-pill-in 150ms ease-out both;
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-hold-pill][data-due]:not([data-near]) .sn-hold-pill {
+    animation: none;
+  }
+}
+/* Disarmed (ChatMessageList): rows moved under a pointer that did not move
+   with them, so the mod buttons now under it belong to a row nobody aimed
+   at. They hide on that row until the pointer moves again. A line's buttons
+   shown on hover give back their room on rows that slide under, so their
+   text holds still; the row that was under the pointer when it happened
+   (data-hold-kept) keeps its room for the same reason. */
+[data-hold-disarmed] .chat-message-row:hover :is([data-row-dock], [data-mod-act], .sn-mod-line) {
+  visibility: hidden;
+}
+[data-hold-disarmed] [data-line-show='hover'] .chat-message-row:hover:not([data-hold-kept]) .sn-mod-line {
+  width: 0;
+  margin-right: 0;
+  animation: none;
+}
+
 /* The chat dock's tab row unfolding: the wrapped lines reveal downward from
    the row's own line, so the row reads as opening rather than a menu
    appearing over it. clip-path only: nothing about the layout animates. */
