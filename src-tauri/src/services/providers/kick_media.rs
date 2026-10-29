@@ -28,13 +28,27 @@ use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::future::Future;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 const API: &str = "https://api.kick.com/public";
 /// Kick's `channels` endpoint takes at most 50 slugs per call.
 const CHANNELS_BATCH: usize = 50;
+/// Kick documents each `slug` as "max 25 characters", and its usernames are
+/// capped at 25 too. A follow list can still hold a longer one (seen: a
+/// 32-character hex slug), and sending it fails its whole batch with
+/// 400 "Invalid request", so it never leaves the app.
+const SLUG_MAX: usize = 25;
+/// Extra requests one sweep may spend per batch splitting a refused batch:
+/// enough to isolate one bad slug among 50, few enough that an endpoint
+/// refusing everything costs a bounded handful per sweep.
+const SPLITS_PER_BATCH: usize = 12;
+
+/// Slugs Kick refused (too long, or a 400 on their own). Later sweeps leave
+/// them out instead of splitting a batch again every minute.
+static REFUSED_SLUGS: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 /// How long a parsed master stays usable for quality switching before we
 /// re-resolve. Short, because the master URL carries a signed, expiring token.
 const MASTER_TTL: Duration = Duration::from_secs(110);
@@ -202,6 +216,28 @@ async fn token() -> Result<String> {
         .ok_or_else(|| anyhow!("Kick app credentials are not configured in this build"))
 }
 
+/// A non-success answer from the official API. Typed so a caller can tell a
+/// request Kick refused (400) from one that never got an answer.
+#[derive(Debug)]
+struct ApiStatus {
+    url: String,
+    status: reqwest::StatusCode,
+    body: String,
+}
+
+impl std::fmt::Display for ApiStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Kick API {} returned {}: {}", self.url, self.status, self.body)
+    }
+}
+
+impl std::error::Error for ApiStatus {}
+
+fn is_refused(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<ApiStatus>()
+        .is_some_and(|s| s.status == reqwest::StatusCode::BAD_REQUEST)
+}
+
 async fn api_get<T: for<'de> Deserialize<'de>>(url: &str) -> Result<Vec<T>> {
     let tok = token().await?;
     let resp = HTTP
@@ -213,14 +249,102 @@ async fn api_get<T: for<'de> Deserialize<'de>>(url: &str) -> Result<Vec<T>> {
     let status = resp.status();
     if !status.is_success() {
         let body = resp.text().await.unwrap_or_default();
-        return Err(anyhow!(
-            "Kick API {} returned {}: {}",
-            url,
+        return Err(ApiStatus {
+            url: url.to_string(),
             status,
-            body.chars().take(180).collect::<String>()
-        ));
+            body: body.chars().take(180).collect(),
+        }
+        .into());
     }
     Ok(resp.json::<ApiEnvelope<T>>().await?.data)
+}
+
+// TRAP: `slug[]=` silently returns an EMPTY array. Kick wants the parameter
+// repeated: `?slug=a&slug=b`. Verified 2026-08-20.
+fn channels_url(batch: &[String]) -> String {
+    let query = batch
+        .iter()
+        .map(|c| format!("slug={}", urlencoding::encode(c)))
+        .collect::<Vec<_>>()
+        .join("&");
+    format!("{}/v1/channels?{}", API, query)
+}
+
+fn fits_slug_limit(slug: &str) -> bool {
+    !slug.is_empty() && slug.chars().count() <= SLUG_MAX
+}
+
+/// The follow list as slugs the channels endpoint can take: lowercased, with
+/// anything Kick refused before, or can never accept, left out.
+fn queryable_slugs(channels: &[String]) -> Vec<String> {
+    let lowered = channels.iter().map(|c| c.to_lowercase());
+    let Ok(mut refused) = REFUSED_SLUGS.lock() else {
+        return lowered.filter(|c| fits_slug_limit(c)).collect();
+    };
+    let mut out = Vec::with_capacity(channels.len());
+    for slug in lowered {
+        if refused.contains(&slug) {
+            continue;
+        }
+        if !fits_slug_limit(&slug) {
+            log::warn!("[Kick] '{}' is longer than any Kick slug; leaving it out of live checks", slug);
+            refused.insert(slug);
+            continue;
+        }
+        out.push(slug);
+    }
+    out
+}
+
+/// What one sweep over the channels endpoint got back.
+struct ChannelSweep {
+    rows: Vec<ChannelRow>,
+    /// Slugs Kick refused on their own.
+    refused: Vec<String>,
+    /// Some batch was answered, so a refusal is about its slug, not the request.
+    answered: bool,
+    /// A refused batch ran out of splits before its bad slug was found.
+    unresolved: bool,
+}
+
+/// Rows for `slugs`, `CHANNELS_BATCH` at a time. A batch Kick refuses (400) is
+/// split until the slug behind it stands alone, so one bad follow costs its
+/// own row instead of every row in its batch. Any other failure is an error.
+async fn channels_in_batches<F, Fut>(slugs: &[String], mut fetch: F) -> Result<ChannelSweep>
+where
+    F: FnMut(Vec<String>) -> Fut,
+    Fut: Future<Output = Result<Vec<ChannelRow>>>,
+{
+    let mut pending: Vec<Vec<String>> = slugs.chunks(CHANNELS_BATCH).rev().map(<[String]>::to_vec).collect();
+    let mut splits_left = pending.len() * SPLITS_PER_BATCH;
+    let mut sweep = ChannelSweep {
+        rows: Vec::new(),
+        refused: Vec::new(),
+        answered: false,
+        unresolved: false,
+    };
+    while let Some(batch) = pending.pop() {
+        match fetch(batch.clone()).await {
+            Ok(rows) => {
+                sweep.answered = true;
+                sweep.rows.extend(rows);
+            }
+            Err(e) if is_refused(&e) => {
+                if batch.len() == 1 {
+                    sweep.refused.extend(batch);
+                } else if splits_left >= 2 {
+                    splits_left -= 2;
+                    let (first, second) = batch.split_at(batch.len() / 2);
+                    pending.push(second.to_vec());
+                    pending.push(first.to_vec());
+                } else {
+                    sweep.unresolved = true;
+                }
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(sweep)
 }
 
 fn row_from_channel(row: ChannelRow, avatar: Option<String>, name: Option<String>) -> ProviderStream {
@@ -628,31 +752,46 @@ impl StreamSource for KickSource {
     }
 
     async fn live_check(&self, channels: &[String]) -> Result<Vec<ProviderStream>> {
-        if channels.is_empty() {
+        let slugs = queryable_slugs(channels);
+        if slugs.is_empty() {
             return Ok(vec![]);
         }
-        let mut out = Vec::with_capacity(channels.len());
-        for chunk in channels.chunks(CHANNELS_BATCH) {
-            // TRAP: `slug[]=` silently returns an EMPTY array. Kick wants the
-            // parameter repeated: `?slug=a&slug=b`. Verified 2026-08-20.
-            let query: String = chunk
-                .iter()
-                .map(|c| format!("slug={}", urlencoding::encode(&c.to_lowercase())))
-                .collect::<Vec<_>>()
-                .join("&");
-            let rows: Vec<ChannelRow> = api_get(&format!("{}/v1/channels?{}", API, query)).await?;
-
-            // One extra batched call fills in display names + avatars, which the
-            // channels endpoint omits but every browse tile wants.
-            let ids: Vec<u64> = rows.iter().filter_map(|r| r.broadcaster_user_id).collect();
-            let mut users = users_by_id(&ids).await;
-            for row in rows {
-                let (name, avatar) = row
-                    .broadcaster_user_id
-                    .and_then(|id| users.remove(&id))
-                    .unwrap_or((None, None));
-                out.push(row_from_channel(row, avatar, name));
+        let sweep = channels_in_batches(&slugs, |batch: Vec<String>| async move {
+            api_get::<ChannelRow>(&channels_url(&batch)).await
+        })
+        .await?;
+        // A refusal counts only once Kick has answered something this sweep: an
+        // endpoint refusing every request says nothing about any one slug.
+        if sweep.answered && !sweep.refused.is_empty() {
+            if let Ok(mut refused) = REFUSED_SLUGS.lock() {
+                for slug in &sweep.refused {
+                    if refused.insert(slug.clone()) {
+                        log::warn!("[Kick] the channels API refuses '{}'; leaving it out of live checks", slug);
+                    }
+                }
             }
+        }
+        // Publishing a sweep that missed channels would report them offline, so
+        // the last known list stays up instead (the next sweep skips what this
+        // one learned to leave out).
+        if !sweep.answered {
+            return Err(anyhow!("Kick refused every channels lookup for {} followed channel(s)", slugs.len()));
+        }
+        if sweep.unresolved {
+            return Err(anyhow!("Kick refused a channels batch this sweep could not narrow down"));
+        }
+
+        // One extra batched call fills in display names + avatars, which the
+        // channels endpoint omits but every browse tile wants.
+        let ids: Vec<u64> = sweep.rows.iter().filter_map(|r| r.broadcaster_user_id).collect();
+        let mut users = users_by_id(&ids).await;
+        let mut out = Vec::with_capacity(sweep.rows.len());
+        for row in sweep.rows {
+            let (name, avatar) = row
+                .broadcaster_user_id
+                .and_then(|id| users.remove(&id))
+                .unwrap_or((None, None));
+            out.push(row_from_channel(row, avatar, name));
         }
 
         // TRAP: the official API can report `is_live: false` for a channel
@@ -666,17 +805,17 @@ impl StreamSource for KickSource {
             .map(|r| r.user_login.clone())
             .collect();
         const V2_SPOTCHECK_MAX: usize = 12;
-        let missing: Vec<String> = channels
+        let missing: Vec<String> = slugs
             .iter()
-            .map(|c| c.to_lowercase())
-            .filter(|c| !live_slugs.contains(c))
+            .filter(|c| !live_slugs.contains(*c))
             .take(V2_SPOTCHECK_MAX)
+            .cloned()
             .collect();
-        if channels.len() > live_slugs.len() + V2_SPOTCHECK_MAX {
+        if slugs.len() > live_slugs.len() + V2_SPOTCHECK_MAX {
             log::debug!(
                 "[Kick] live spot-check covering {} of {} offline-reported channels this sweep",
                 V2_SPOTCHECK_MAX,
-                channels.len() - live_slugs.len()
+                slugs.len() - live_slugs.len()
             );
         }
         for slug in missing {
@@ -786,5 +925,125 @@ mod channel_row_tests {
     fn no_stream_record_is_offline() {
         let row = row_from_channel(channel(serde_json::Value::Null), None, None);
         assert!(!row.is_live);
+    }
+}
+
+// One follow Kick will not take used to fail its batch of 50 with a 400, and
+// the `?` on that batch skipped every batch after it: nobody on Kick showed live.
+#[cfg(test)]
+mod live_batch_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    const HEX_SLUG: &str = "5a1ae58d6e95443487b265aac0be1a5c";
+
+    fn row(slug: &str) -> ChannelRow {
+        serde_json::from_value(serde_json::json!({ "slug": slug })).unwrap()
+    }
+
+    fn api_error(status: reqwest::StatusCode) -> anyhow::Error {
+        ApiStatus {
+            url: "https://api.kick.com/public/v1/channels".into(),
+            status,
+            body: r#"{"data":{},"message":"Invalid request"}"#.into(),
+        }
+        .into()
+    }
+
+    fn follows(n: usize) -> Vec<String> {
+        (0..n).map(|i| format!("chan{}", i)).collect()
+    }
+
+    /// Answers like Kick did in the report: a batch holding any slug in `bad`
+    /// is refused whole. Returns the sweep and how many requests it made.
+    async fn sweep(slugs: &[String], bad: &[String]) -> (Result<ChannelSweep>, usize) {
+        let calls = Arc::new(Mutex::new(0usize));
+        let counter = calls.clone();
+        let bad = bad.to_vec();
+        let result = channels_in_batches(slugs, move |batch: Vec<String>| {
+            *counter.lock().unwrap() += 1;
+            let refuse = batch.iter().any(|s| bad.contains(s));
+            async move {
+                if refuse {
+                    Err(api_error(reqwest::StatusCode::BAD_REQUEST))
+                } else {
+                    Ok(batch.iter().map(|s| row(s)).collect())
+                }
+            }
+        })
+        .await;
+        let n = *calls.lock().unwrap();
+        (result, n)
+    }
+
+    #[test]
+    fn a_slug_longer_than_kick_allows_never_reaches_the_api() {
+        assert!(!fits_slug_limit(HEX_SLUG));
+        assert!(!fits_slug_limit(""));
+        assert!(fits_slug_limit("maj3r"));
+        assert!(fits_slug_limit(&"a".repeat(SLUG_MAX)));
+
+        let long = "x".repeat(SLUG_MAX + 1);
+        assert_eq!(queryable_slugs(&["MAJ3R".to_string(), long.clone()]), vec!["maj3r"]);
+        assert!(REFUSED_SLUGS.lock().unwrap().contains(&long));
+    }
+
+    #[tokio::test]
+    async fn one_refused_slug_costs_only_its_own_row() {
+        let slugs = follows(50);
+        let (result, calls) = sweep(&slugs, &["chan49".to_string()]).await;
+        let sweep = result.expect("a 400 is narrowed down, not returned");
+        assert_eq!(sweep.rows.len(), 49);
+        assert_eq!(sweep.refused, vec!["chan49"]);
+        assert!(sweep.answered && !sweep.unresolved);
+        assert!(calls <= 1 + SPLITS_PER_BATCH, "{} requests", calls);
+    }
+
+    #[tokio::test]
+    async fn a_refused_batch_no_longer_hides_the_batch_after_it() {
+        let slugs = follows(100);
+        let (result, _) = sweep(&slugs, &["chan0".to_string()]).await;
+        let sweep = result.unwrap();
+        assert_eq!(sweep.rows.len(), 99);
+        assert!(sweep.rows.iter().any(|r| r.slug == "chan99"));
+        assert_eq!(sweep.refused, vec!["chan0"]);
+    }
+
+    #[tokio::test]
+    async fn bad_slugs_beyond_one_sweep_are_found_by_the_next() {
+        let slugs = follows(50);
+        let bad = vec!["chan3".to_string(), "chan40".to_string()];
+        let (first, _) = sweep(&slugs, &bad).await;
+        let first = first.unwrap();
+        assert!(first.answered);
+        assert!(!first.refused.is_empty(), "the first sweep isolates at least one");
+
+        let rest: Vec<String> = slugs.iter().filter(|s| !first.refused.contains(s)).cloned().collect();
+        let (second, _) = sweep(&rest, &bad).await;
+        let second = second.unwrap();
+        assert!(!second.unresolved);
+        let mut found: Vec<String> = first.refused.into_iter().chain(second.refused).collect();
+        found.sort();
+        assert_eq!(found, bad);
+        assert_eq!(second.rows.len(), 48);
+    }
+
+    #[tokio::test]
+    async fn an_endpoint_refusing_everything_marks_no_slug_and_stays_bounded() {
+        let slugs = follows(100);
+        let (result, calls) = sweep(&slugs, &slugs).await;
+        let sweep = result.unwrap();
+        assert!(!sweep.answered, "nothing answered, so no refusal can be blamed on a slug");
+        assert!(calls <= 2 + 2 * SPLITS_PER_BATCH, "{} requests", calls);
+    }
+
+    #[tokio::test]
+    async fn any_other_failure_is_an_error_as_before() {
+        let slugs = follows(60);
+        let result = channels_in_batches(&slugs, |_batch: Vec<String>| async {
+            Err::<Vec<ChannelRow>, _>(api_error(reqwest::StatusCode::INTERNAL_SERVER_ERROR))
+        })
+        .await;
+        assert!(result.is_err());
     }
 }
