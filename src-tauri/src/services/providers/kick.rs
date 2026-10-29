@@ -2341,12 +2341,14 @@ async fn resolve_via_http(slug: &str) -> Option<ResolvedChannel> {
 /// the response only when it succeeded. Shared by the channel resolve and the
 /// native-emote fetch so both present identically.
 /// `browser_get` plus caller-supplied headers — used by the account sync to
-/// attach the session cookie and bearer it read from the webview.
+/// attach the session cookie and bearer it read from the webview. A failure
+/// keeps its reason, because the follow import treats "signed out" (401),
+/// "slow down" (429) and "gone" (404) differently.
 pub(crate) async fn browser_get_with(
     url: &str,
     slug: &str,
     extra: &[(&str, String)],
-) -> Option<reqwest::Response> {
+) -> Result<reqwest::Response, GetFailure> {
     let mut headers = browser_headers(slug);
     for (name, value) in extra {
         if let (Ok(n), Ok(v)) = (
@@ -2360,14 +2362,23 @@ pub(crate) async fn browser_get_with(
         Ok(r) => r,
         Err(e) => {
             log::warn!("[Kick] request to {} failed: {}", url, e);
-            return None;
+            return Err(GetFailure::Network);
         }
     };
     if !resp.status().is_success() {
         log::warn!("[Kick] {} returned {}", url, resp.status());
-        return None;
+        return Err(GetFailure::Status(resp.status().as_u16()));
     }
-    Some(resp)
+    Ok(resp)
+}
+
+/// Why `browser_get_with` came back without a usable response.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GetFailure {
+    /// No answer at all: DNS, TLS, a dropped connection or a timeout.
+    Network,
+    /// Kick answered with this non-success status.
+    Status(u16),
 }
 
 pub(crate) async fn browser_get(url: &str, slug: &str) -> Option<reqwest::Response> {

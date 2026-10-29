@@ -2,8 +2,9 @@
 //!
 //! Kick's OFFICIAL API (api.kick.com) has no "channels this user follows"
 //! endpoint — verified against their docs. Their website's own API does:
-//! `GET kick.com/api/v2/channels/followed` and `/api/v2/user/subscriptions`,
-//! both of which answer 401 rather than 404 when signed out, so they exist and
+//! `GET kick.com/api/v2/channels/followed-page` (the /following page's list),
+//! `/api/v2/channels/followed` (the sidebar's) and `/api/v2/user/subscriptions`,
+//! all of which answer 401 rather than 404 when signed out, so they exist and
 //! simply want the site session.
 //!
 //! Getting at them needs a kick.com login, not the OAuth connection: OAuth
@@ -191,6 +192,7 @@ fn import_script(label: &str, interactive: bool) -> String {
     // How long to WAIT for the user to finish signing in. This is a local cookie
     // watch rather than a request loop, so a generous window costs nothing.
     let wait_seconds = if interactive { 300 } else { 0 };
+    let page_cap = FOLLOW_PAGE_CAP;
     format!(
         r#"(function() {{
   var label = {js_label};
@@ -245,14 +247,17 @@ fn import_script(label: &str, interactive: bool) -> String {
 
   // The payload shape is undocumented, so read it tolerantly: accept a bare
   // array, {{data:[...]}} or {{channels:[...]}}, and pull each field from any of
-  // the places Kick's API has historically put it.
+  // the places Kick's API has historically put it. null means the reply holds
+  // no list at all: a changed reply, never "no follows".
   function rows(body) {{
     if (Array.isArray(body)) return body;
-    if (!body) return [];
+    if (!body) return null;
     if (Array.isArray(body.data)) return body.data;
     if (Array.isArray(body.channels)) return body.channels;
+    // /api/v2/user/subscriptions: {{ subscriptions, new_subscriptions, new_gifts }}.
+    if (Array.isArray(body.subscriptions)) return body.subscriptions;
     if (body.data && Array.isArray(body.data.channels)) return body.data.channels;
-    return [];
+    return null;
   }}
 
   // The live shape is
@@ -288,30 +293,78 @@ fn import_script(label: &str, interactive: bool) -> String {
     return false;
   }}
 
-  // Cursor pagination: the response carries `nextCursor`, and a null/absent one
-  // ends it. The page cap is a defensive stop so a cursor that never terminates
-  // can't spin forever.
-  function collect(base, cursor, acc, shape, page) {{
-    var sep = base.indexOf('?') >= 0 ? '&' : '?';
-    return getJson(base + sep + 'cursor=' + cursor + '&_cb=' + Date.now()).then(function(res) {{
-      if (res.status === 401 || res.status === 403) return {{ unauth: true, items: acc, shape: shape }};
-      if (res.status !== 200) diag(base + ' returned ' + res.status);
+  // A 429 or a server error is asked again after a pause; anything else is
+  // the answer.
+  function getJsonPatiently(url, retries) {{
+    return getJson(url).then(function(res) {{
+      if ((res.status === 429 || res.status >= 500) && retries < 2) {{
+        return new Promise(function(done) {{ setTimeout(done, retries === 0 ? 1500 : 4000); }})
+          .then(function() {{ return getJsonPatiently(url, retries + 1); }});
+      }}
+      return res;
+    }});
+  }}
+
+  // Kick pages with an offset cursor, the way kick.com's own pager reads it:
+  // no cursor on the first page (pass null), then `nextCursor` sent back as
+  // received while it is truthy. The sidebar list holds only 5 rows a page,
+  // so the old 20-page stop capped imports at 100; PAGE_CAP only guards
+  // against a cursor that never ends. A page that cannot be read marks the
+  // whole result `failed`: a partial list must never be reported as the list,
+  // because the sync replaces every imported follow with it.
+  var PAGE_CAP = {page_cap};
+  function collect(base, cursor, acc, shape, page, sent) {{
+    var query = (cursor === null ? '' : 'cursor=' + encodeURIComponent(String(cursor)) + '&') + '_cb=' + Date.now();
+    var done = function(extra) {{
+      var out = {{ unauth: false, failed: false, items: acc, shape: shape, pages: page }};
+      for (var k in extra) out[k] = extra[k];
+      return out;
+    }};
+    return getJsonPatiently(base + (base.indexOf('?') >= 0 ? '&' : '?') + query, 0).then(function(res) {{
+      if (res.status === 401 || res.status === 403) return done({{ unauth: true }});
+      if (res.status !== 200) {{
+        diag(base + ' page ' + (page + 1) + ' returned ' + res.status);
+        return done({{ failed: true }});
+      }}
       var list = rows(res.body);
-      if (page === 0 && list.length === 0 && res.body) {{
-        // 200 but nothing parsed: the payload shape moved. Log its top-level
-        // keys so the mismatch is visible instead of looking like "no follows".
-        diag('no rows parsed from ' + base + '; keys: ' + (typeof res.body === 'object' ? Object.keys(res.body).join(',') : typeof res.body));
+      if (!list) {{
+        // 200 but no list: the payload shape moved. Log its top-level keys so
+        // the mismatch is visible instead of looking like "no follows".
+        diag('no rows parsed from ' + base + '; keys: ' + (res.body && typeof res.body === 'object' ? Object.keys(res.body).join(',') : typeof res.body));
+        return done({{ failed: true }});
       }}
       if (!shape && res.body && typeof res.body === 'object' && !Array.isArray(res.body)) {{
         shape = Object.keys(res.body).join(',');
       }}
       acc = acc.concat(list);
-      var next = res.body && res.body.nextCursor;
-      if (list.length === 0 || next === null || next === undefined || page >= 20) {{
-        return {{ unauth: false, items: acc, shape: shape }};
+      page += 1;
+      var next = Array.isArray(res.body) ? null : res.body.nextCursor;
+      if (!next || next === '0' || list.length === 0) return done({{}});
+      var key = String(next);
+      if (sent[key]) {{
+        diag(base + ' repeated a page cursor after ' + page + ' page(s)');
+        return done({{}});
       }}
-      return collect(base, next, acc, shape, page + 1);
-    }}).catch(function() {{ return {{ unauth: false, items: acc, shape: shape }}; }});
+      sent[key] = true;
+      if (page >= PAGE_CAP) {{
+        diag(base + ' still had more after ' + page + ' pages');
+        return done({{}});
+      }}
+      return collect(base, next, acc, shape, page, sent);
+    }}).catch(function(e) {{
+      diag(base + ' page ' + (page + 1) + ' failed: ' + e);
+      return done({{ failed: true }});
+    }});
+  }}
+
+  // The /following page's list holds far more rows a page than the sidebar's,
+  // so it goes first; the sidebar list is read only when it gives no page.
+  function readFollows() {{
+    return collect('https://kick.com/api/v2/channels/followed-page', null, [], null, 0, {{}}).then(function(r) {{
+      if (r.pages > 0) return r;
+      diag('followed-page gave no page (' + (r.unauth ? 'not signed in' : 'failed') + '); reading the sidebar list');
+      return collect('https://kick.com/api/v2/channels/followed', null, [], null, 0, {{}});
+    }});
   }}
 
   // Wait for the sign-in by watching document.cookie, which costs no requests at
@@ -347,8 +400,8 @@ fn import_script(label: &str, interactive: bool) -> String {
 
   function run() {{
     tries++;
-    collect('https://kick.com/api/v2/channels/followed', 0, [], null, 0).then(function(followed) {{
-      if (followed.unauth) {{
+    readFollows().then(function(followed) {{
+      if (followed.unauth && followed.pages === 0) {{
         // Not signed in YET — the user may still be mid-login. Fall back into
         // the waiting loop rather than ending the flow; it only gives up once
         // the whole window expires.
@@ -358,13 +411,18 @@ fn import_script(label: &str, interactive: bool) -> String {
         setTimeout(waitForSession, 3000);
         return;
       }}
-      diag('authenticated; followed rows: ' + followed.items.length);
+      if (followed.failed || followed.unauth) {{
+        diag('follow list read stopped after ' + followed.pages + ' page(s); reporting an error, not a partial list');
+        report('error', [], followed.shape);
+        return;
+      }}
+      diag('authenticated; followed rows: ' + followed.items.length + ' over ' + followed.pages + ' page(s)');
       // Subscriptions are a bonus: never let their failure lose the follow list.
       // v2 first — Kick bot-walls several /api/v1 routes with a 403 "security
       // policy", so v1 is only a fallback.
-      collect('https://kick.com/api/v2/user/subscriptions', 0, [], null, 0).then(function(subs) {{
-        return subs.unauth || subs.items.length === 0
-          ? collect('https://kick.com/api/v1/subscriptions', 0, [], null, 0)
+      collect('https://kick.com/api/v2/user/subscriptions', 0, [], null, 0, {{}}).then(function(subs) {{
+        return subs.unauth || subs.failed || subs.items.length === 0
+          ? collect('https://kick.com/api/v1/subscriptions', 0, [], null, 0, {{}})
           : subs;
       }}).then(function(subs) {{
         var subSlugs = {{}};
@@ -770,8 +828,8 @@ fn without_edge_cookies(mut jar: HashMap<String, String>) -> HashMap<String, Str
 }
 
 /// Pull the follow list with a kick.com site session read from a cookie jar.
-/// None means the jar holds no usable session yet, which is what the sign-in
-/// loops poll on.
+/// None means the jar holds no usable session yet, or the list could not be
+/// read whole this time; the sign-in loops poll on it either way.
 ///
 /// This exists because page script CANNOT see an HttpOnly cookie. The injected
 /// script built its `Authorization: Bearer` from `document.cookie`, so if Kick
@@ -802,66 +860,313 @@ async fn follows_from_jar(jar: &HashMap<String, String>) -> Option<Vec<KickFollo
         if session == *raw_session { "un" } else { "" }
     );
 
-    let mut out: Vec<KickFollowedChannel> = Vec::new();
-    let mut cursor = 0u32;
-    for _ in 0..20 {
-        let url = format!(
-            "https://kick.com/api/v2/channels/followed?cursor={}",
-            cursor
-        );
-        let mut headers = vec![
-            ("Authorization", format!("Bearer {}", session)),
-            ("Cookie", cookie_header.clone()),
-        ];
-        // Kick's own web client sends the CSRF token on these calls. It is not
-        // required for a GET, but matching what the site does costs nothing and
-        // removes a variable if the endpoint ever starts checking.
-        if let Some(x) = jar.get("XSRF-TOKEN") {
-            let decoded = urlencoding::decode(x)
-                .map(|s| s.into_owned())
-                .unwrap_or_else(|_| x.clone());
-            headers.push(("X-XSRF-TOKEN", decoded));
+    let mut headers = vec![
+        ("Authorization", format!("Bearer {}", session)),
+        ("Cookie", cookie_header),
+    ];
+    // Kick's own web client sends the CSRF token on these calls. It is not
+    // required for a GET, but matching what the site does costs nothing and
+    // removes a variable if the endpoint ever starts checking.
+    if let Some(x) = jar.get("XSRF-TOKEN") {
+        let decoded = urlencoding::decode(x)
+            .map(|s| s.into_owned())
+            .unwrap_or_else(|_| x.clone());
+        headers.push(("X-XSRF-TOKEN", decoded));
+    }
+    let headers = &headers;
+    let walk = read_follows(
+        move |list, cursor| {
+            let url = follow_page_url(list, cursor.as_deref());
+            async move { fetch_follow_page(&url, headers).await }
+        },
+        &FOLLOW_RETRY_PAUSES,
+    )
+    .await;
+    imported_follows(walk)
+}
+
+// --- Reading the whole follow list ------------------------------------------
+//
+// Kick pages follows with an OFFSET cursor: the first page goes out with no
+// cursor, each reply carries `nextCursor` (5, 10, ...), and the last page has
+// none. The sidebar list (`/followed`) holds a fixed 5 rows a page and ignores
+// any size parameter, so the old 20-page loop could never read past 100. The
+// /following page's list (`/followed-page`) holds far more a page, so it goes
+// first and the sidebar list is only the fallback. Verified live 2026-10-29.
+
+/// The follow lists, in the order they are tried.
+const FOLLOW_LISTS: [&str; 2] = ["/api/v2/channels/followed-page", "/api/v2/channels/followed"];
+
+/// A guard against a cursor that never ends, far above any real list: even
+/// the 5-row sidebar list reaches 2,500 follows before it.
+const FOLLOW_PAGE_CAP: usize = 500;
+
+/// Waits before re-asking for a page Kick refused with "slow down" (429) or a
+/// server error. One entry per retry.
+const FOLLOW_RETRY_PAUSES: [Duration; 2] = [Duration::from_millis(1500), Duration::from_secs(4)];
+
+/// One page request's outcome, as the pager sees it.
+#[derive(Debug, Clone)]
+enum FollowFetch {
+    /// A 200 with a JSON body.
+    Page(serde_json::Value),
+    /// 401 or 403: no usable session.
+    Unauthorized,
+    /// Worth asking again shortly: 429, a 5xx, no answer, or a cut-off body.
+    Busy(String),
+    /// Asking again will not help (404 and the like).
+    Failed(String),
+}
+
+/// How reading one follow list ended.
+#[derive(Debug, Clone, PartialEq)]
+enum WalkEnd {
+    /// Kick said there are no more pages.
+    Complete,
+    /// Kick sent back a cursor it had already given. Everything before it was
+    /// read; asking again would only loop.
+    RepeatedCursor,
+    /// `FOLLOW_PAGE_CAP` pages read and Kick still offered more.
+    Capped,
+    /// No usable session.
+    Unauthorized,
+    /// A page could not be read, so the list is not known to be whole.
+    Failed(String),
+}
+
+#[derive(Debug)]
+struct FollowWalk {
+    list: &'static str,
+    channels: Vec<KickFollowedChannel>,
+    pages: usize,
+    end: WalkEnd,
+}
+
+fn follow_page_url(list: &str, cursor: Option<&str>) -> String {
+    match cursor {
+        Some(c) => format!("https://kick.com{}?cursor={}", list, urlencoding::encode(c)),
+        None => format!("https://kick.com{}", list),
+    }
+}
+
+async fn fetch_follow_page(url: &str, headers: &[(&str, String)]) -> FollowFetch {
+    use crate::services::providers::kick::{browser_get_with, GetFailure};
+    match browser_get_with(url, "following", headers).await {
+        Ok(resp) => match resp.json::<serde_json::Value>().await {
+            Ok(body) => FollowFetch::Page(body),
+            Err(e) => FollowFetch::Busy(format!("unreadable reply: {}", e)),
+        },
+        Err(GetFailure::Status(401 | 403)) => FollowFetch::Unauthorized,
+        Err(GetFailure::Status(s)) if s == 429 || s >= 500 => FollowFetch::Busy(format!("HTTP {}", s)),
+        Err(GetFailure::Status(s)) => FollowFetch::Failed(format!("HTTP {}", s)),
+        Err(GetFailure::Network) => FollowFetch::Busy("no answer".to_string()),
+    }
+}
+
+/// The cursor for the next page, as kick.com's own pager reads it: sent back
+/// as received while it is truthy. A number, or a string in case Kick ever
+/// switches to opaque cursors. `0`, `""`, `"0"`, null and absent all end the list.
+fn next_cursor(body: &serde_json::Value) -> Option<String> {
+    use serde_json::Value;
+    match body.get("nextCursor")? {
+        Value::Number(n) => n.as_f64().is_some_and(|f| f > 0.0).then(|| n.to_string()),
+        Value::String(s) => {
+            let s = s.trim();
+            (!s.is_empty() && s != "0").then(|| s.to_string())
         }
-        let resp =
-            crate::services::providers::kick::browser_get_with(&url, "following", &headers).await?;
-        let body: serde_json::Value = resp.json().await.ok()?;
-        let rows = body
-            .get("channels")
-            .and_then(|c| c.as_array())
-            .cloned()
-            .unwrap_or_default();
-        if rows.is_empty() {
-            break;
-        }
-        for r in &rows {
-            let Some(slug) = r
-                .get("channel_slug")
-                .and_then(|v| v.as_str())
-                .or_else(|| r.get("slug").and_then(|v| v.as_str()))
-            else {
-                continue;
-            };
-            out.push(KickFollowedChannel {
-                slug: slug.to_lowercase(),
-                username: r
-                    .get("user_username")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string()),
-                profile_pic: r
-                    .get("profile_picture")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string()),
-                is_live: r.get("is_live").and_then(|v| v.as_bool()).unwrap_or(false),
-                subscribed: false,
-            });
-        }
-        match body.get("nextCursor").and_then(|v| v.as_u64()) {
-            Some(next) => cursor = next as u32,
-            None => break,
+        _ => None,
+    }
+}
+
+/// The page's rows, wherever Kick put them. None when the reply holds no list
+/// at all, which is a changed reply and never "no follows".
+fn follow_rows(body: &serde_json::Value) -> Option<&Vec<serde_json::Value>> {
+    body.as_array()
+        .or_else(|| body.get("channels").and_then(|v| v.as_array()))
+        .or_else(|| body.get("data").and_then(|v| v.as_array()))
+        .or_else(|| body.pointer("/data/channels").and_then(|v| v.as_array()))
+}
+
+fn followed_channel(row: &serde_json::Value) -> Option<KickFollowedChannel> {
+    let text = |path: &str| {
+        row.pointer(path)
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    };
+    let slug = text("/channel_slug")
+        .or_else(|| text("/slug"))
+        .or_else(|| text("/channel/slug"))?;
+    Some(KickFollowedChannel {
+        slug: slug.to_lowercase(),
+        username: text("/user_username").or_else(|| text("/username")).map(str::to_string),
+        profile_pic: text("/profile_picture").or_else(|| text("/profile_pic")).map(str::to_string),
+        is_live: row.get("is_live").and_then(|v| v.as_bool()).unwrap_or(false),
+        subscribed: false,
+    })
+}
+
+/// The top-level keys of a reply, for the log when it has no list.
+fn reply_keys(body: &serde_json::Value) -> String {
+    match body.as_object() {
+        Some(o) => o.keys().cloned().collect::<Vec<_>>().join(","),
+        None => "not an object".to_string(),
+    }
+}
+
+/// One page, asking again after each pause while Kick says "slow down".
+async fn fetch_patiently<F, Fut>(
+    fetch: &mut F,
+    list: &'static str,
+    cursor: Option<String>,
+    pauses: &[Duration],
+) -> Result<serde_json::Value, WalkEnd>
+where
+    F: FnMut(&'static str, Option<String>) -> Fut,
+    Fut: std::future::Future<Output = FollowFetch>,
+{
+    let mut retries = 0;
+    loop {
+        match fetch(list, cursor.clone()).await {
+            FollowFetch::Page(body) => return Ok(body),
+            FollowFetch::Unauthorized => return Err(WalkEnd::Unauthorized),
+            FollowFetch::Failed(why) => return Err(WalkEnd::Failed(why)),
+            FollowFetch::Busy(why) => match pauses.get(retries) {
+                Some(pause) => {
+                    retries += 1;
+                    log::debug!("[Kick] {} busy ({}); asking again in {:?}", list, why, pause);
+                    tokio::time::sleep(*pause).await;
+                }
+                None => return Err(WalkEnd::Failed(why)),
+            },
         }
     }
-    log::info!("[Kick] read {} follow(s) from the webview session", out.len());
-    Some(out)
+}
+
+/// Every page of one follow list, each channel once.
+async fn walk_follow_list<F, Fut>(fetch: &mut F, list: &'static str, pauses: &[Duration]) -> FollowWalk
+where
+    F: FnMut(&'static str, Option<String>) -> Fut,
+    Fut: std::future::Future<Output = FollowFetch>,
+{
+    let mut channels: Vec<KickFollowedChannel> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut sent = std::collections::HashSet::new();
+    let mut cursor: Option<String> = None;
+    let mut pages = 0;
+    let end = loop {
+        if pages >= FOLLOW_PAGE_CAP {
+            break WalkEnd::Capped;
+        }
+        let body = match fetch_patiently(fetch, list, cursor.clone(), pauses).await {
+            Ok(body) => body,
+            Err(end) => break end,
+        };
+        let Some(rows) = follow_rows(&body) else {
+            break WalkEnd::Failed(format!("reply holds no follow list (keys: {})", reply_keys(&body)));
+        };
+        pages += 1;
+        let before = channels.len();
+        for row in rows {
+            if let Some(ch) = followed_channel(row) {
+                if seen.insert(ch.slug.clone()) {
+                    channels.push(ch);
+                }
+            }
+        }
+        let next = next_cursor(&body);
+        log::debug!(
+            "[Kick] {} page {}: {} row(s), {} new, {}",
+            list,
+            pages,
+            rows.len(),
+            channels.len() - before,
+            if next.is_some() { "more to come" } else { "last page" }
+        );
+        // A cursor on an empty page leads nowhere.
+        let Some(next) = next.filter(|_| !rows.is_empty()) else {
+            break WalkEnd::Complete;
+        };
+        if !sent.insert(next.clone()) {
+            break WalkEnd::RepeatedCursor;
+        }
+        cursor = Some(next);
+    };
+    FollowWalk { list, channels, pages, end }
+}
+
+/// The whole follow list: the /following page's list, or the sidebar list
+/// when that one gives no page at all (Kick moved it, or its edge refused it).
+/// A list that fails partway is not swapped for the other: that would restart
+/// the read from scratch on the list with the smaller pages.
+async fn read_follows<F, Fut>(mut fetch: F, pauses: &[Duration]) -> FollowWalk
+where
+    F: FnMut(&'static str, Option<String>) -> Fut,
+    Fut: std::future::Future<Output = FollowFetch>,
+{
+    let mut walk = walk_follow_list(&mut fetch, FOLLOW_LISTS[0], pauses).await;
+    for &list in &FOLLOW_LISTS[1..] {
+        let gave_nothing =
+            walk.pages == 0 && matches!(walk.end, WalkEnd::Unauthorized | WalkEnd::Failed(_));
+        if !gave_nothing {
+            break;
+        }
+        log::debug!("[Kick] {} gave no page ({:?}); reading {}", walk.list, walk.end, list);
+        walk = walk_follow_list(&mut fetch, list, pauses).await;
+    }
+    walk
+}
+
+/// The import's answer from a finished read. A read that failed partway is
+/// never handed back as the follow list: the sync REPLACES every imported Kick
+/// follow with it, so a partial list would quietly unfollow the rest. None
+/// tells the sign-in loops to try again. The two guard stops (a repeated
+/// cursor, the page cap) keep what they read, because reading again would
+/// only stop at the same place.
+fn imported_follows(walk: FollowWalk) -> Option<Vec<KickFollowedChannel>> {
+    let FollowWalk { list, channels, pages, end } = walk;
+    match end {
+        WalkEnd::Complete => {
+            log::info!(
+                "[Kick] read {} follow(s) from the webview session ({} page(s) of {})",
+                channels.len(),
+                pages,
+                list
+            );
+            Some(channels)
+        }
+        WalkEnd::RepeatedCursor => {
+            log::warn!(
+                "[Kick] {} repeated a page cursor after {} page(s); kept the {} follow(s) read before it",
+                list,
+                pages,
+                channels.len()
+            );
+            Some(channels)
+        }
+        WalkEnd::Capped => {
+            log::warn!(
+                "[Kick] {} still had more after {} pages; kept the first {} follow(s)",
+                list,
+                pages,
+                channels.len()
+            );
+            Some(channels)
+        }
+        WalkEnd::Unauthorized => {
+            log::debug!("[Kick] {} answered not signed in after {} page(s)", list, pages);
+            None
+        }
+        WalkEnd::Failed(why) => {
+            log::warn!(
+                "[Kick] follow list read stopped on {} page {} ({}); nothing imported this time",
+                list,
+                pages + 1,
+                why
+            );
+            None
+        }
+    }
 }
 
 #[cfg(test)]
@@ -905,5 +1210,316 @@ mod tests {
         assert!(is_new_site_session(&new, Some("12%7Cold")), "signing in replaced it");
         let out = jar_from_header("XSRF-TOKEN=x");
         assert!(!is_new_site_session(&out, Some("12%7Cold")), "signed out is not new");
+    }
+}
+
+#[cfg(test)]
+mod follow_pager_tests {
+    use super::*;
+    use serde_json::json;
+
+    const PAGE: &str = "/api/v2/channels/followed-page";
+    const SIDEBAR: &str = "/api/v2/channels/followed";
+    const NO_PAUSE: [Duration; 2] = [Duration::ZERO, Duration::ZERO];
+
+    /// One page of a list of `total` follows, `size` rows a page, answered the
+    /// way Kick answers: an offset cursor, and none on the last page.
+    fn kick_page(total: usize, size: usize, cursor: Option<&str>) -> FollowFetch {
+        let from = cursor.map(|c| c.parse::<usize>().expect("an offset cursor")).unwrap_or(0);
+        let to = from.saturating_add(size).min(total);
+        let channels: Vec<_> = (from..to)
+            .map(|i| {
+                json!({
+                    "channel_slug": format!("Chan{}", i),
+                    "user_username": format!("Chan{}", i),
+                    "profile_picture": "https://files.kick.com/p.webp",
+                    "is_live": i == 0,
+                    "viewer_count": 0,
+                })
+            })
+            .collect();
+        let mut body = json!({ "channels": channels });
+        if to < total {
+            body["nextCursor"] = json!(to);
+        }
+        FollowFetch::Page(body)
+    }
+
+    fn slugs(walk: &FollowWalk) -> Vec<&str> {
+        walk.channels.iter().map(|c| c.slug.as_str()).collect()
+    }
+
+    #[tokio::test]
+    async fn the_five_row_sidebar_list_is_read_past_a_hundred() {
+        let walk = read_follows(
+            |list, cursor: Option<String>| {
+                std::future::ready(match list {
+                    PAGE => FollowFetch::Failed("HTTP 404".into()),
+                    _ => kick_page(137, 5, cursor.as_deref()),
+                })
+            },
+            &NO_PAUSE,
+        )
+        .await;
+        assert_eq!(walk.list, SIDEBAR);
+        assert_eq!(walk.end, WalkEnd::Complete);
+        assert_eq!(walk.pages, 28);
+        assert_eq!(walk.channels.len(), 137, "the old 20-page loop stopped at 100");
+        assert_eq!(walk.channels[136].slug, "chan136");
+    }
+
+    #[tokio::test]
+    async fn the_following_page_list_goes_first_and_its_cursor_goes_back_as_received() {
+        let mut calls = Vec::new();
+        let walk = read_follows(
+            |list, cursor: Option<String>| {
+                calls.push((list, cursor.clone()));
+                std::future::ready(kick_page(130, 50, cursor.as_deref()))
+            },
+            &NO_PAUSE,
+        )
+        .await;
+        assert_eq!(walk.list, PAGE);
+        assert_eq!(walk.channels.len(), 130);
+        assert_eq!(
+            calls,
+            vec![
+                (PAGE, None),
+                (PAGE, Some("50".to_string())),
+                (PAGE, Some("100".to_string()))
+            ],
+            "the first page sends no cursor, like kick.com's own pager"
+        );
+    }
+
+    #[test]
+    fn cursors_are_read_the_way_kick_com_reads_them() {
+        assert_eq!(next_cursor(&json!({ "nextCursor": 5 })).as_deref(), Some("5"));
+        assert_eq!(next_cursor(&json!({ "nextCursor": "100" })).as_deref(), Some("100"));
+        assert_eq!(next_cursor(&json!({ "nextCursor": "eyJpZCI6NX0=" })).as_deref(), Some("eyJpZCI6NX0="));
+        for end in [
+            json!({}),
+            json!({ "nextCursor": null }),
+            json!({ "nextCursor": 0 }),
+            json!({ "nextCursor": "" }),
+            json!({ "nextCursor": "0" }),
+            json!({ "nextCursor": false }),
+            json!({ "nextCursor": -5 }),
+        ] {
+            assert_eq!(next_cursor(&end), None, "{} ends the list", end);
+        }
+    }
+
+    #[test]
+    fn the_first_page_has_no_cursor_and_later_cursors_are_url_encoded() {
+        assert_eq!(follow_page_url(PAGE, None), "https://kick.com/api/v2/channels/followed-page");
+        assert_eq!(
+            follow_page_url(SIDEBAR, Some("10")),
+            "https://kick.com/api/v2/channels/followed?cursor=10"
+        );
+        assert_eq!(
+            follow_page_url(PAGE, Some("a b/c=")),
+            "https://kick.com/api/v2/channels/followed-page?cursor=a%20b%2Fc%3D"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_opaque_string_cursor_keeps_paging() {
+        let walk = read_follows(
+            |_, cursor: Option<String>| {
+                std::future::ready(FollowFetch::Page(match cursor.as_deref() {
+                    None => json!({ "channels": [{ "channel_slug": "a" }], "nextCursor": "p2==" }),
+                    Some("p2==") => json!({ "channels": [{ "channel_slug": "b" }], "nextCursor": "p3==" }),
+                    Some("p3==") => json!({ "channels": [{ "channel_slug": "c" }] }),
+                    other => panic!("unexpected cursor {:?}", other),
+                }))
+            },
+            &NO_PAUSE,
+        )
+        .await;
+        assert_eq!(walk.end, WalkEnd::Complete);
+        assert_eq!(slugs(&walk), ["a", "b", "c"]);
+    }
+
+    #[tokio::test]
+    async fn a_cursor_kick_already_gave_stops_the_read_instead_of_looping() {
+        let mut calls = 0;
+        let walk = read_follows(
+            |_, _| {
+                calls += 1;
+                std::future::ready(FollowFetch::Page(
+                    json!({ "channels": [{ "channel_slug": "same" }], "nextCursor": 5 }),
+                ))
+            },
+            &NO_PAUSE,
+        )
+        .await;
+        assert_eq!(walk.end, WalkEnd::RepeatedCursor);
+        assert_eq!(calls, 2);
+        assert_eq!(slugs(&walk), ["same"]);
+    }
+
+    #[tokio::test]
+    async fn a_channel_seen_on_two_pages_is_kept_once() {
+        // A channel going live mid-read moves up Kick's live-first order, so
+        // an offset page can repeat a row.
+        let walk = read_follows(
+            |_, cursor: Option<String>| {
+                std::future::ready(FollowFetch::Page(match cursor {
+                    None => json!({ "channels": [{ "channel_slug": "A" }, { "channel_slug": "b" }], "nextCursor": 2 }),
+                    Some(_) => json!({ "channels": [
+                        { "channel_slug": "b" }, { "channel_slug": "c" }, { "slug": " " }, { "user_username": "noslug" }
+                    ] }),
+                }))
+            },
+            &NO_PAUSE,
+        )
+        .await;
+        assert_eq!(slugs(&walk), ["a", "b", "c"]);
+    }
+
+    #[tokio::test]
+    async fn a_list_that_fails_partway_imports_nothing() {
+        let mut lists = Vec::new();
+        let walk = read_follows(
+            |list, cursor: Option<String>| {
+                lists.push(list);
+                std::future::ready(match cursor.as_deref() {
+                    Some("100") => FollowFetch::Failed("HTTP 404".into()),
+                    c => kick_page(300, 50, c),
+                })
+            },
+            &NO_PAUSE,
+        )
+        .await;
+        assert_eq!(walk.end, WalkEnd::Failed("HTTP 404".into()));
+        assert_eq!(walk.pages, 2);
+        assert!(
+            lists.iter().all(|l| *l == PAGE),
+            "a list that failed partway is not restarted on the other one"
+        );
+        assert!(imported_follows(walk).is_none(), "a partial list would unfollow the rest");
+    }
+
+    #[tokio::test]
+    async fn a_slow_down_answer_is_asked_again_then_given_up_on() {
+        let mut tries = 0;
+        let walk = read_follows(
+            |_, cursor: Option<String>| {
+                tries += 1;
+                std::future::ready(if tries == 2 {
+                    FollowFetch::Busy("HTTP 429".into())
+                } else {
+                    kick_page(60, 50, cursor.as_deref())
+                })
+            },
+            &NO_PAUSE,
+        )
+        .await;
+        assert_eq!(walk.end, WalkEnd::Complete);
+        assert_eq!(walk.channels.len(), 60);
+        assert_eq!(tries, 3);
+
+        // Busy past every pause on the first page counts as giving nothing, so
+        // the sidebar list is read instead.
+        let mut tries = 0;
+        let walk = read_follows(
+            |list, cursor: Option<String>| {
+                tries += 1;
+                std::future::ready(if list == PAGE {
+                    FollowFetch::Busy("HTTP 503".into())
+                } else {
+                    kick_page(3, 5, cursor.as_deref())
+                })
+            },
+            &NO_PAUSE,
+        )
+        .await;
+        assert_eq!(tries, 1 + NO_PAUSE.len() + 1);
+        assert_eq!((walk.list, walk.channels.len()), (SIDEBAR, 3));
+    }
+
+    #[tokio::test]
+    async fn the_sidebar_list_is_read_only_when_the_following_page_list_gives_nothing() {
+        for refusal in [
+            FollowFetch::Unauthorized,
+            FollowFetch::Failed("HTTP 404".into()),
+            FollowFetch::Page(json!({ "message": "Not Found" })),
+        ] {
+            let walk = read_follows(
+                |list, cursor: Option<String>| {
+                    std::future::ready(if list == PAGE {
+                        refusal.clone()
+                    } else {
+                        kick_page(12, 5, cursor.as_deref())
+                    })
+                },
+                &NO_PAUSE,
+            )
+            .await;
+            assert_eq!(
+                (walk.list, walk.channels.len(), walk.end),
+                (SIDEBAR, 12, WalkEnd::Complete),
+                "after {:?}",
+                refusal
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn an_account_that_follows_nobody_imports_an_empty_list() {
+        let walk = read_follows(
+            |_, _| std::future::ready(FollowFetch::Page(json!({ "channels": [] }))),
+            &NO_PAUSE,
+        )
+        .await;
+        assert_eq!((walk.list, &walk.end), (PAGE, &WalkEnd::Complete));
+        assert_eq!(imported_follows(walk).map(|c| c.len()), Some(0));
+    }
+
+    #[tokio::test]
+    async fn signed_out_on_both_lists_is_no_session() {
+        let walk = read_follows(|_, _| std::future::ready(FollowFetch::Unauthorized), &NO_PAUSE).await;
+        assert_eq!(walk.end, WalkEnd::Unauthorized);
+        assert!(imported_follows(walk).is_none());
+    }
+
+    #[tokio::test]
+    async fn a_list_that_never_ends_stops_at_the_page_cap() {
+        let mut calls = 0;
+        let walk = read_follows(
+            |_, cursor: Option<String>| {
+                calls += 1;
+                std::future::ready(kick_page(usize::MAX, 1, cursor.as_deref()))
+            },
+            &NO_PAUSE,
+        )
+        .await;
+        assert_eq!(walk.end, WalkEnd::Capped);
+        assert_eq!(calls, FOLLOW_PAGE_CAP);
+        assert_eq!(walk.channels.len(), FOLLOW_PAGE_CAP);
+    }
+
+    #[test]
+    fn rows_in_the_shapes_both_lists_send_are_read() {
+        // The keys each list sent on 2026-10-29.
+        let sidebar = json!({ "nextCursor": 5, "channels": [{
+            "category_name": "Just Chatting", "channel_slug": "SomeStreamer", "is_live": true,
+            "is_reserved": false, "profile_picture": "https://files.kick.com/a.webp",
+            "session_title": "hi", "show_view_count": true, "user_username": "SomeStreamer",
+            "viewer_count": 10
+        }] });
+        let page = json!({ "channels": [{
+            "banner_picture": null, "category_name": null, "channel_slug": "another",
+            "is_live": false, "profile_picture": null, "show_view_count": true,
+            "user_username": "Another", "viewer_count": 0
+        }] });
+        let a = followed_channel(&follow_rows(&sidebar).unwrap()[0]).unwrap();
+        assert_eq!((a.slug.as_str(), a.username.as_deref(), a.is_live), ("somestreamer", Some("SomeStreamer"), true));
+        assert_eq!(a.profile_pic.as_deref(), Some("https://files.kick.com/a.webp"));
+        let b = followed_channel(&follow_rows(&page).unwrap()[0]).unwrap();
+        assert_eq!((b.slug.as_str(), b.username.as_deref(), b.profile_pic.as_deref(), b.is_live), ("another", Some("Another"), None, false));
+        assert!(follow_rows(&json!({ "message": "Unauthenticated." })).is_none());
+        assert_eq!(follow_rows(&json!([{ "slug": "x" }])).map(Vec::len), Some(1));
     }
 }
