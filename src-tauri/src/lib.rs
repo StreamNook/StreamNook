@@ -411,6 +411,7 @@ fn load_settings_from_file() -> Result<Settings, Box<dyn std::error::Error>> {
     settings.lift_custom_theme_muted();
     settings.map_legacy_event_keys();
     settings.retire_oled_v2();
+    settings.adopt_multi_nook_start_volume_once();
     Ok(settings)
 }
 

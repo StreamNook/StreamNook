@@ -1151,6 +1151,11 @@ pub struct Settings {
     pub multi_nook_slots: Vec<MultiNookSlot>,
     #[serde(default)]
     pub multi_nook_chat_hidden: bool,
+    /// Set once saved grid tiles at the old fixed 50% have moved to the
+    /// player's Start volume. Absent on older files (false), so the move runs
+    /// once there; `Default` is true, so a fresh install never runs it.
+    #[serde(default)]
+    pub multi_nook_start_volume_adopted: bool,
     /// How the MultiNook tiles are arranged (grid, or one main tile with the
     /// rest small).
     #[serde(default)]
@@ -1713,6 +1718,7 @@ impl Default for Settings {
             error_reporting_enabled: true, // Diagnostics enabled by default
             multi_nook_slots: Vec::new(),
             multi_nook_chat_hidden: false,
+            multi_nook_start_volume_adopted: true,
             multi_nook_layout: MultiNookLayout::default(),
             show_mod_logs: false,
             keybindings: HashMap::new(),
@@ -1912,6 +1918,23 @@ impl Settings {
         }
     }
 
+    /// One-time move of saved MultiNook tiles from the old fixed 50% to the
+    /// player's Start volume. Every tile opened before Start volume applied
+    /// to the grid was saved at exactly 0.5, a value nobody chose.
+    pub fn adopt_multi_nook_start_volume_once(&mut self) {
+        if self.multi_nook_start_volume_adopted {
+            return;
+        }
+        let start = self.video_player.volume;
+        let start = if start.is_finite() { start.clamp(0.0, 1.0) } else { 1.0 };
+        for slot in &mut self.multi_nook_slots {
+            if slot.volume == 0.5 {
+                slot.volume = start;
+            }
+        }
+        self.multi_nook_start_volume_adopted = true;
+    }
+
     /// One-time reset of the global combined-chat platform switches, for
     /// installs written while the chat header's marks still wrote them. Almost
     /// every `false` there came from a header click aimed at one streamer, and
@@ -2099,6 +2122,51 @@ mod backup_persistence_tests {
         let mut parsed: Settings = serde_json::from_value(json).expect("parse");
         parsed.enable_low_latency_engine_once();
         assert!(parsed.video_player.experimental_low_latency);
+    }
+
+    #[test]
+    fn saved_tiles_at_the_old_half_volume_adopt_start_volume_once() {
+        assert!(Settings::default().multi_nook_start_volume_adopted);
+
+        // A file from before the flag: two tiles, one at the old fixed 50%.
+        let mut value = serde_json::to_value(Settings::default()).expect("serialize");
+        let obj = value.as_object_mut().expect("settings is an object");
+        obj.remove("multi_nook_start_volume_adopted");
+        obj.insert(
+            "multi_nook_slots".into(),
+            serde_json::json!([
+                { "id": "cell-1", "channelLogin": "a", "volume": 0.5, "muted": false, "isFocused": true },
+                { "id": "cell-2", "channelLogin": "b", "volume": 0.4, "muted": true, "isFocused": false }
+            ]),
+        );
+        let mut old: Settings = serde_json::from_value(value).expect("parse");
+        assert!(!old.multi_nook_start_volume_adopted);
+        old.video_player.volume = 0.09;
+        old.adopt_multi_nook_start_volume_once();
+        assert_eq!(old.multi_nook_slots[0].volume, 0.09);
+        assert_eq!(old.multi_nook_slots[1].volume, 0.4);
+        assert!(old.multi_nook_start_volume_adopted);
+
+        // A tile set to 50% afterwards stays at 50% on the next load.
+        old.multi_nook_slots[1].volume = 0.5;
+        old.video_player.volume = 0.3;
+        old.adopt_multi_nook_start_volume_once();
+        assert_eq!(old.multi_nook_slots[0].volume, 0.09);
+        assert_eq!(old.multi_nook_slots[1].volume, 0.5);
+
+        // An unusable Start volume never lands on a tile as-is.
+        let mut bad = old.clone();
+        bad.multi_nook_start_volume_adopted = false;
+        bad.multi_nook_slots[0].volume = 0.5;
+        bad.video_player.volume = f32::NAN;
+        bad.adopt_multi_nook_start_volume_once();
+        assert_eq!(bad.multi_nook_slots[0].volume, 1.0);
+        let mut loud = old.clone();
+        loud.multi_nook_start_volume_adopted = false;
+        loud.multi_nook_slots[0].volume = 0.5;
+        loud.video_player.volume = 1.7;
+        loud.adopt_multi_nook_start_volume_once();
+        assert_eq!(loud.multi_nook_slots[0].volume, 1.0);
     }
 
     #[test]

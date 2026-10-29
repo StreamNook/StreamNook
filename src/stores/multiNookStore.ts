@@ -87,6 +87,12 @@ function pickActiveChatChannel(slots: MultiNookSlot[]): string | null {
   return choice ? slotKey(choice) : null;
 }
 
+/** A new tile opens at the player's Start volume (only the first one is audible). */
+export function tileStartVolume(): number {
+  const raw = useAppStore.getState().settings?.video_player?.volume;
+  return typeof raw === 'number' && Number.isFinite(raw) ? Math.min(1, Math.max(0, raw)) : 1;
+}
+
 /** The slot the chat pane is currently showing, or null. Exported so App can
  *  route a non-Twitch active tile to the provider chat surface. */
 export function activeChatSlot(
@@ -524,7 +530,7 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
       profileImageUrl: ch.profileImageUrl || undefined,
       quality: ch.quality || undefined,
       audioBoost: ch.audioBoost,
-      volume: 0.5,
+      volume: tileStartVolume(),
       muted: i > 0,
       isFocused: i === 0,
     }));
@@ -842,6 +848,11 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
         }
       }
 
+      // Volume, mute and Audio Boost changes are written in place by Rust and
+      // never refresh this window's copy of the saved grid; re-entering
+      // restores from that copy, so bring it up to date before clearing.
+      if (currentSlots.length > 0) await get().saveSlots();
+
       set({ activeChatChannelId: null, isChatPinned: false, slots: [], maximizedSlotId: null, isAllMuted: false }); // Maintain chat hidden state
 
       // Restore Home view if no single stream is playing
@@ -949,7 +960,7 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
       gameName: resolvedGameName || undefined,
       title: resolvedTitle || undefined,
       broadcasterType: resolvedBroadcasterType || undefined,
-      volume: 0.5,
+      volume: tileStartVolume(),
       muted: slots.length > 0, // Auto-mute if it's not the first one
       isFocused: slots.length === 0, // First slot is focused by default
     };

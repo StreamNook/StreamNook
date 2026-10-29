@@ -1435,6 +1435,7 @@ export interface Settings {
   oled_accent?: string; // Accent hex (#rrggbb) for the OLED theme, which lets you pick any accent. Default DEFAULT_OLED_ACCENT.
   multi_nook_slots?: MultiNookSlot[]; // Persisted multi-nook grid configurations
   multi_nook_chat_hidden?: boolean; // Whether the chat panel is globally hidden in MultiNook
+  multi_nook_start_volume_adopted?: boolean; // Set once saved tiles at the old fixed 50% moved to Start volume
   /** How the MultiNook tiles are arranged. Rust reads it leniently and fills the default. */
   multi_nook_layout?: MultiNookLayout;
   multi_nook_presets?: MultiNookPreset[]; // Saved, named channel sets openable into the grid in one click
