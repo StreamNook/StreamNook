@@ -254,8 +254,6 @@ fn import_script(label: &str, interactive: bool) -> String {
     if (!body) return null;
     if (Array.isArray(body.data)) return body.data;
     if (Array.isArray(body.channels)) return body.channels;
-    // /api/v2/user/subscriptions: {{ subscriptions, new_subscriptions, new_gifts }}.
-    if (Array.isArray(body.subscriptions)) return body.subscriptions;
     if (body.data && Array.isArray(body.data.channels)) return body.data.channels;
     return null;
   }}
@@ -275,12 +273,14 @@ fn import_script(label: &str, interactive: bool) -> String {
     return (e && (e.user_username
       || (e.user && e.user.username)
       || e.username
+      || (e.channel && e.channel.username)
       || (e.channel && e.channel.user && e.channel.user.username)
       || e.name)) || null;
   }}
   function picOf(e) {{
     return (e && ((e.user && e.user.profile_pic)
       || e.profile_pic
+      || (e.channel && e.channel.profile_image)
       || (e.channel && e.channel.user && e.channel.user.profile_pic)
       || e.profile_picture)) || null;
   }}
@@ -357,6 +357,38 @@ fn import_script(label: &str, interactive: bool) -> String {
     }});
   }}
 
+  // kick.com's own Subscriptions page reads `new_subscriptions` from the v2
+  // reply {{ subscriptions, new_subscriptions, new_gifts }}; `subscriptions` is
+  // read too in case older ones are listed there, and `new_gifts` are subs
+  // given to other people. One unpaged reply. v1 (a bare array) is only the
+  // fallback. Resolves to the current rows, [] when neither can be read.
+  function readSubs() {{
+    return getJsonPatiently('https://kick.com/api/v2/user/subscriptions', 0).then(function(res) {{
+      var list = res.status === 200 ? subRows(res.body) : null;
+      if (list) return list;
+      diag('subscriptions v2 gave ' + res.status + (res.status === 200 ? ' with no list' : '') + '; trying v1');
+      return getJsonPatiently('https://kick.com/api/v1/subscriptions', 0).then(function(v1) {{
+        return (v1.status === 200 && subRows(v1.body)) || [];
+      }});
+    }}).catch(function(e) {{ diag('subscriptions read failed: ' + e); return []; }});
+  }}
+  function subRows(body) {{
+    if (Array.isArray(body)) return body.filter(currentSub);
+    if (!body || typeof body !== 'object') return null;
+    var fresh = Array.isArray(body.new_subscriptions) ? body.new_subscriptions : null;
+    var older = Array.isArray(body.subscriptions) ? body.subscriptions : null;
+    if (!fresh && !older) return null;
+    return (fresh || []).concat(older || []).filter(currentSub);
+  }}
+  // A canceled subscription keeps its benefits until it runs out; an expired
+  // one is over.
+  function currentSub(s) {{
+    if (!s || s.status === 'expired') return false;
+    if (!s.expires_at) return true;
+    var ends = Date.parse(s.expires_at);
+    return isNaN(ends) || ends > Date.now();
+  }}
+
   // The /following page's list holds far more rows a page than the sidebar's,
   // so it goes first; the sidebar list is read only when it gives no page.
   function readFollows() {{
@@ -418,15 +450,9 @@ fn import_script(label: &str, interactive: bool) -> String {
       }}
       diag('authenticated; followed rows: ' + followed.items.length + ' over ' + followed.pages + ' page(s)');
       // Subscriptions are a bonus: never let their failure lose the follow list.
-      // v2 first — Kick bot-walls several /api/v1 routes with a 403 "security
-      // policy", so v1 is only a fallback.
-      collect('https://kick.com/api/v2/user/subscriptions', 0, [], null, 0, {{}}).then(function(subs) {{
-        return subs.unauth || subs.failed || subs.items.length === 0
-          ? collect('https://kick.com/api/v1/subscriptions', 0, [], null, 0, {{}})
-          : subs;
-      }}).then(function(subs) {{
+      readSubs().then(function(subItems) {{
         var subSlugs = {{}};
-        subs.items.forEach(function(s) {{ var sl = slugOf(s); if (sl) subSlugs[String(sl).toLowerCase()] = true; }});
+        subItems.forEach(function(s) {{ var sl = slugOf(s); if (sl) subSlugs[String(sl).toLowerCase()] = true; }});
         var seen = {{}};
         var out = [];
         followed.items.forEach(function(e) {{
@@ -445,7 +471,7 @@ fn import_script(label: &str, interactive: bool) -> String {
         }});
         // A subscribed channel the user doesn't formally follow still belongs
         // in the list — they clearly care about it.
-        subs.items.forEach(function(s) {{
+        subItems.forEach(function(s) {{
           var slug = slugOf(s);
           if (!slug) return;
           slug = String(slug).toLowerCase();
@@ -874,15 +900,32 @@ async fn follows_from_jar(jar: &HashMap<String, String>) -> Option<Vec<KickFollo
         headers.push(("X-XSRF-TOKEN", decoded));
     }
     let headers = &headers;
-    let walk = read_follows(
+    read_account(
         move |list, cursor| {
             let url = follow_page_url(list, cursor.as_deref());
             async move { fetch_follow_page(&url, headers).await }
         },
         &FOLLOW_RETRY_PAUSES,
+        chrono::Utc::now(),
     )
-    .await;
-    imported_follows(walk)
+    .await
+}
+
+/// The follow list with the user's subscriptions folded in. Subscriptions are
+/// a bonus: a failed read of them never costs the follow list.
+async fn read_account<F, Fut>(
+    mut fetch: F,
+    pauses: &[Duration],
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<Vec<KickFollowedChannel>>
+where
+    F: FnMut(&'static str, Option<String>) -> Fut,
+    Fut: std::future::Future<Output = FollowFetch>,
+{
+    let mut channels = imported_follows(read_follows(&mut fetch, pauses).await)?;
+    let subs = read_subscriptions(&mut fetch, pauses, now).await;
+    fold_subscriptions(&mut channels, subs);
+    Some(channels)
 }
 
 // --- Reading the whole follow list ------------------------------------------
@@ -1165,6 +1208,132 @@ fn imported_follows(walk: FollowWalk) -> Option<Vec<KickFollowedChannel>> {
                 why
             );
             None
+        }
+    }
+}
+
+// --- Subscriptions ----------------------------------------------------------
+//
+// kick.com's own Subscriptions page (/transactions/subscriptions) reads
+// `new_subscriptions` from `/api/v2/user/subscriptions`, one unpaged reply of
+// `{ subscriptions, new_subscriptions, new_gifts }`. A row is
+// `{ channel: { slug, username, profile_image }, status, expires_at,
+// provider, provider_id, created_at }`, status one of active, canceled and
+// expired. `subscriptions` is read as well in case older subscriptions are
+// still listed there; `new_gifts` are subs given to other people. Read from
+// the site's bundle 2026-10-29.
+
+/// The subscription lists, in the order they are tried. v1 is a bare array
+/// and only the fallback.
+const SUBSCRIPTION_LISTS: [&str; 2] = ["/api/v2/user/subscriptions", "/api/v1/subscriptions"];
+
+/// The channels the user is subscribed to right now. Never fails: a list that
+/// cannot be read is logged and counts as none.
+async fn read_subscriptions<F, Fut>(
+    mut fetch: F,
+    pauses: &[Duration],
+    now: chrono::DateTime<chrono::Utc>,
+) -> Vec<KickFollowedChannel>
+where
+    F: FnMut(&'static str, Option<String>) -> Fut,
+    Fut: std::future::Future<Output = FollowFetch>,
+{
+    for list in SUBSCRIPTION_LISTS {
+        match fetch_patiently(&mut fetch, list, None, pauses).await {
+            Ok(body) => match subscribed_channels(&body, now) {
+                Some(subs) => {
+                    log::debug!("[Kick] {}: {} current subscription(s)", list, subs.len());
+                    return subs;
+                }
+                None => log::debug!(
+                    "[Kick] {} holds no subscription list (keys: {})",
+                    list,
+                    reply_keys(&body)
+                ),
+            },
+            Err(end) => log::debug!("[Kick] {} could not be read ({:?})", list, end),
+        }
+    }
+    Vec::new()
+}
+
+/// The current subscriptions in a reply, each channel once. None when the
+/// reply holds no subscription list at all.
+fn subscribed_channels(
+    body: &serde_json::Value,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<Vec<KickFollowedChannel>> {
+    let rows: Vec<&serde_json::Value> = match body {
+        serde_json::Value::Array(rows) => rows.iter().collect(),
+        serde_json::Value::Object(o) => {
+            let lists: Vec<&Vec<serde_json::Value>> = ["new_subscriptions", "subscriptions"]
+                .iter()
+                .filter_map(|k| o.get(*k).and_then(|v| v.as_array()))
+                .collect();
+            if lists.is_empty() {
+                return None;
+            }
+            lists.into_iter().flatten().collect()
+        }
+        _ => return None,
+    };
+    let mut seen = std::collections::HashSet::new();
+    Some(
+        rows.into_iter()
+            .filter(|row| subscription_is_current(row, now))
+            .filter_map(subscribed_channel)
+            .filter(|ch| seen.insert(ch.slug.clone()))
+            .collect(),
+    )
+}
+
+/// A canceled subscription keeps its benefits until it runs out; an expired
+/// one is over.
+fn subscription_is_current(row: &serde_json::Value, now: chrono::DateTime<chrono::Utc>) -> bool {
+    if row.get("status").and_then(|v| v.as_str()) == Some("expired") {
+        return false;
+    }
+    match row
+        .get("expires_at")
+        .and_then(|v| v.as_str())
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+    {
+        Some(ends) => ends.with_timezone(&chrono::Utc) > now,
+        None => true,
+    }
+}
+
+fn subscribed_channel(row: &serde_json::Value) -> Option<KickFollowedChannel> {
+    let text = |path: &str| {
+        row.pointer(path)
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    };
+    let username = text("/channel/username").or_else(|| text("/channel/user/username"));
+    // kick.com links a subscription to `slug ?? username`, so do the same.
+    let slug = text("/channel/slug")
+        .or_else(|| text("/channel_slug"))
+        .or(username)?;
+    Some(KickFollowedChannel {
+        slug: slug.to_lowercase(),
+        username: username.or_else(|| text("/user_username")).map(str::to_string),
+        profile_pic: text("/channel/profile_image")
+            .or_else(|| text("/channel/profile_pic"))
+            .or_else(|| text("/channel/user/profile_pic"))
+            .map(str::to_string),
+        is_live: false,
+        subscribed: true,
+    })
+}
+
+/// Mark followed channels the user subscribes to, and add the ones they
+/// subscribe to without following: they clearly care about those too.
+fn fold_subscriptions(channels: &mut Vec<KickFollowedChannel>, subs: Vec<KickFollowedChannel>) {
+    for sub in subs {
+        match channels.iter_mut().find(|ch| ch.slug == sub.slug) {
+            Some(followed) => followed.subscribed = true,
+            None => channels.push(sub),
         }
     }
 }
@@ -1521,5 +1690,131 @@ mod follow_pager_tests {
         assert_eq!((b.slug.as_str(), b.username.as_deref(), b.profile_pic.as_deref(), b.is_live), ("another", Some("Another"), None, false));
         assert!(follow_rows(&json!({ "message": "Unauthenticated." })).is_none());
         assert_eq!(follow_rows(&json!([{ "slug": "x" }])).map(Vec::len), Some(1));
+    }
+
+    const NOW: &str = "2026-10-29T12:00:00Z";
+
+    fn at(s: &str) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&chrono::Utc)
+    }
+
+    /// A `new_subscriptions` row as kick.com's Subscriptions page reads it.
+    fn sub(slug: &str, status: &str, expires_at: &str) -> serde_json::Value {
+        json!({
+            "channel": { "slug": slug, "username": slug.to_uppercase(), "profile_image": "https://files.kick.com/s.webp" },
+            "status": status, "expires_at": expires_at, "provider": "stripe",
+            "provider_id": "sub_1", "created_at": "2026-09-01T00:00:00.000000Z"
+        })
+    }
+
+    #[test]
+    fn current_subscriptions_are_read_from_the_list_kick_com_reads() {
+        let body = json!({
+            "new_subscriptions": [
+                sub("active", "active", "2026-11-28T08:49:03.000000Z"),
+                sub("canceled-running", "canceled", "2026-11-02T00:00:00.000000Z"),
+                sub("canceled-over", "canceled", "2026-10-01T00:00:00.000000Z"),
+                sub("expired", "expired", "2026-12-01T00:00:00.000000Z"),
+                sub("active", "active", "2026-11-28T08:49:03.000000Z"),
+            ],
+            "subscriptions": [{ "channel": { "username": "Older_One" } }],
+            "new_gifts": [sub("gifted", "active", "2026-11-28T00:00:00.000000Z")],
+        });
+        let subs = subscribed_channels(&body, at(NOW)).unwrap();
+        let slugs: Vec<_> = subs.iter().map(|c| c.slug.as_str()).collect();
+        assert_eq!(slugs, ["active", "canceled-running", "older_one"], "gifts and lapsed subs are left out");
+        assert!(subs.iter().all(|c| c.subscribed && !c.is_live));
+        assert_eq!(subs[0].username.as_deref(), Some("ACTIVE"));
+        assert_eq!(subs[0].profile_pic.as_deref(), Some("https://files.kick.com/s.webp"));
+    }
+
+    #[test]
+    fn a_reply_with_no_subscription_list_is_none_and_an_empty_one_is_empty() {
+        assert!(subscribed_channels(&json!({ "message": "Unauthenticated." }), at(NOW)).is_none());
+        let empty = json!({ "subscriptions": [], "new_subscriptions": [], "new_gifts": [] });
+        assert_eq!(subscribed_channels(&empty, at(NOW)).map(|s| s.len()), Some(0));
+        let v1 = json!([sub("v1", "active", "2027-01-01T00:00:00Z")]);
+        assert_eq!(subscribed_channels(&v1, at(NOW)).map(|s| s.len()), Some(1));
+    }
+
+    #[tokio::test]
+    async fn subscriptions_mark_follows_and_add_the_ones_not_followed() {
+        let mut lists = Vec::new();
+        let channels = read_account(
+            |list, cursor: Option<String>| {
+                lists.push(list);
+                std::future::ready(match list {
+                    PAGE => kick_page(3, 50, cursor.as_deref()),
+                    _ => FollowFetch::Page(json!({
+                        "new_subscriptions": [
+                            sub("chan1", "active", "2026-11-28T00:00:00Z"),
+                            sub("onlysubbed", "canceled", "2026-11-05T00:00:00Z"),
+                        ],
+                        "subscriptions": [], "new_gifts": []
+                    })),
+                })
+            },
+            &NO_PAUSE,
+            at(NOW),
+        )
+        .await
+        .expect("the follow list");
+        let subbed: Vec<_> = channels.iter().filter(|c| c.subscribed).map(|c| c.slug.as_str()).collect();
+        assert_eq!(subbed, ["chan1", "onlysubbed"]);
+        assert_eq!(channels.len(), 4, "a channel subscribed to but not followed joins the list");
+        assert_eq!(lists, [PAGE, "/api/v2/user/subscriptions"]);
+    }
+
+    #[tokio::test]
+    async fn the_v1_list_is_read_only_when_v2_gives_none() {
+        let channels = read_account(
+            |list, cursor: Option<String>| {
+                std::future::ready(match list {
+                    PAGE => kick_page(2, 50, cursor.as_deref()),
+                    "/api/v2/user/subscriptions" => FollowFetch::Page(json!({ "message": "moved" })),
+                    _ => FollowFetch::Page(json!([sub("chan0", "active", "2027-01-01T00:00:00Z")])),
+                })
+            },
+            &NO_PAUSE,
+            at(NOW),
+        )
+        .await
+        .expect("the follow list");
+        assert!(channels[0].subscribed);
+        assert!(!channels[1].subscribed);
+    }
+
+    #[tokio::test]
+    async fn a_failed_subscription_read_never_costs_the_follow_list() {
+        let channels = read_account(
+            |list, cursor: Option<String>| {
+                std::future::ready(match list {
+                    PAGE => kick_page(3, 50, cursor.as_deref()),
+                    _ => FollowFetch::Failed("HTTP 404".into()),
+                })
+            },
+            &NO_PAUSE,
+            at(NOW),
+        )
+        .await
+        .expect("follows survive");
+        assert_eq!(channels.len(), 3);
+        assert!(channels.iter().all(|c| !c.subscribed));
+    }
+
+    #[tokio::test]
+    async fn a_follow_list_that_fails_is_none_and_never_asks_for_subscriptions() {
+        let mut lists = Vec::new();
+        let result = read_account(
+            |list, _| {
+                lists.push(list);
+                std::future::ready(FollowFetch::Failed("HTTP 404".into()))
+            },
+            &NO_PAUSE,
+            at(NOW),
+        )
+        .await;
+        assert!(result.is_none());
+        assert_eq!(lists, [PAGE, SIDEBAR]);
     }
 }
