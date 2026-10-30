@@ -14,7 +14,6 @@ import { elapsedText } from './discordPreviewFormat';
 import { animateCard, animateRow, pick, plateVideo, type LookPair } from './discordPreviewLook';
 import { Tooltip } from '../../ui/Tooltip';
 import twitchLogo from '../../../assets/provider-logos/twitch.svg?url';
-import youtubeLogo from '../../../assets/provider-logos/youtube.svg?url';
 
 export type PreviewTab = 'live' | 'replay' | 'grid' | 'offline' | 'browsing';
 
@@ -96,11 +95,17 @@ const TIMER = '#45a366';
 const FALLBACK_AVATAR = 'https://cdn.discordapp.com/embed/avatars/0.png';
 const DEFAULT_BANNER = 'linear-gradient(135deg,#5865f2,#3b42a8)';
 
+/** YouTube's mark in one color with the play triangle cut out, as Discord's
+ *  grey mark draws it (the brand logo's white triangle would fill in as a mask). */
+const YOUTUBE_MARK = `data:image/svg+xml,${encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M23.5 6.19a3.02 3.02 0 0 0-2.12-2.14C19.5 3.55 12 3.55 12 3.55s-7.5 0-9.38.5A3.02 3.02 0 0 0 .5 6.19C0 8.07 0 12 0 12s0 3.93.5 5.81a3.02 3.02 0 0 0 2.12 2.14c1.88.5 9.38.5 9.38.5s7.5 0 9.38-.5a3.02 3.02 0 0 0 2.12-2.14C24 15.93 24 12 24 12s0-3.93-.5-5.81ZM9.55 15.57V8.43L15.82 12l-6.27 3.57Z"/></svg>',
+)}`;
+
 /** Names Discord draws its own grey platform mark after, matched exactly
  *  (proven live for Twitch and YouTube; Kick and TikTok get none). */
 const PLATFORM_MARKS: Record<string, string> = {
   Twitch: twitchLogo,
-  YouTube: youtubeLogo,
+  YouTube: YOUTUBE_MARK,
 };
 
 // Discord's nameplate palettes, as the tint under the art.
