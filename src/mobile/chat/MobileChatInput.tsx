@@ -57,6 +57,7 @@ import { ManageChannelSheet } from './ManageChannelSheet';
 import { ModerationSheet } from './ModerationSheet';
 import { useHiddenPinWaiting, usePinsOpen } from '../watch/pinsOpen';
 import { useOutsidePress } from '../../hooks/useOutsidePress';
+import { measureText, pickFittingText } from './placeholderFit';
 
 // The emote menu takes the keyboard's place, at the keyboard's last height,
 // the platform's own emoji-keyboard pattern: the emote button swaps one for
@@ -226,6 +227,9 @@ const MobileChatInputImpl: React.FC<Props> = ({
   // behaves the same; the gap between the two thresholds keeps it from
   // flickering at the edge.
   const [trayFolded, setTrayFolded] = useState(false);
+  // The field's text width and font, so its prompt can be the wording that
+  // fits on its one line (placeholderFit.ts).
+  const [fieldBox, setFieldBox] = useState<{ width: number; font: string }>({ width: 0, font: '' });
   const inboxUnread = useMentionsStore((s) => s.unreadTotal);
   const [commandsOpen, setCommandsOpen] = useState(false);
   const [sending, setSending] = useState(false);
@@ -541,18 +545,22 @@ const MobileChatInputImpl: React.FC<Props> = ({
   // slow-mode wait, else "Send a message" (nothing when Settings hides it). A
   // mode that only may hold you back is said once, by its icon at the field's
   // end; the chat menu names it in full.
-  const placeholder = gating.warning
-    ? gating.warning.prompt
+  // Longest wording first; the field shows the first that fits on its line.
+  const placeholderWordings: string[] = gating.warning
+    ? [gating.warning.prompt]
     : shareArmed
     ? // The armed share rides the next send: the field says what it is for.
-      `Add a message to your ${shareArmed === 'watch' ? 'watch streak' : 'resub'}`
+      [`Add a message to your ${shareArmed === 'watch' ? 'watch streak' : 'resub'}`]
     : gating.blocked
-    ? (gating.reason ?? 'Chat restricted')
+    ? [gating.reason ?? 'Chat restricted']
     : slowWait > 0
-      ? `Slow mode: you can send again in ${slowWait}s`
+      ? [`Slow mode: you can send again in ${slowWait}s`, `Send again in ${slowWait}s`]
       : hidePlaceholder
-        ? ''
-        : ((roomModesAsPrompt ? roomModes?.prompt : null) ?? 'Send a message');
+        ? []
+        : roomModesAsPrompt && roomModes?.prompt
+          ? [roomModes.prompt, roomModes.prompt_short ?? roomModes.prompt]
+          : ['Send a message'];
+  const placeholder = pickFittingText(placeholderWordings, fieldBox.width - 2, (t) => measureText(t, fieldBox.font));
   // Characters as Twitch counts them (code points, so an emoji is one).
   const charCount = text.length >= COUNTER_FROM ? Array.from(text).length : text.length;
 
@@ -578,6 +586,11 @@ const MobileChatInputImpl: React.FC<Props> = ({
     const el = inputRef.current;
     if (!el) return;
     const read = () => {
+      const style = getComputedStyle(el);
+      const textWidth = el.clientWidth - parseFloat(style.paddingLeft || '0') - parseFloat(style.paddingRight || '0');
+      setFieldBox((prev) =>
+        prev.width === textWidth && prev.font === style.font ? prev : { width: textWidth, font: style.font },
+      );
       // Typing hides the tray anyway, so the bar's resting width is not on
       // screen to judge by; the call waits for the keyboard to go.
       if (document.activeElement === el) return;
