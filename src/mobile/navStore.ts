@@ -97,6 +97,21 @@ interface MobileNavState {
   handleBack: () => boolean;
 }
 
+/** What takes Back before the full player shrinks, in handleBack's order: an
+ *  open sheet, Songs, Whispers, Mentions, Settings, Cosmetics. The watch
+ *  layer's claim on chat's screen edge reads it too (SN-30), so a new Back
+ *  consumer ahead of the player belongs here as well as in handleBack. */
+export function backTakenBeforePlayer(s: {
+  sheetStack: string[];
+  songsOpen: boolean;
+  whispersOpen: boolean;
+  mentionsOpen: boolean;
+  settingsView: string | null;
+  cosmeticsOpen: boolean;
+}): boolean {
+  return s.sheetStack.length > 0 || s.songsOpen || s.whispersOpen || s.mentionsOpen || !!s.settingsView || s.cosmeticsOpen;
+}
+
 export const useMobileNavStore = create<MobileNavState>((set, get) => ({
   // The chosen start tab, read synchronously so the very first frame is the
   // right tab rather than Following flashing before an effect corrects it.
@@ -170,30 +185,36 @@ export const useMobileNavStore = create<MobileNavState>((set, get) => ({
   handleBack: () => {
     const { sheetStack, activeTab, settingsView, browseCategory, cosmeticsOpen, mentionsOpen, playerMode } =
       get();
-    if (sheetStack.length > 0) {
-      const top = sheetStack[sheetStack.length - 1];
-      window.dispatchEvent(new CustomEvent('sn:close-sheet', { detail: top }));
-      return true;
-    }
-    if (get().songsOpen) {
-      if (get().songsFocus) set({ songsFocus: null });
-      else get().closeSongs();
-      return true;
-    }
-    if (get().whispersOpen) {
-      set({ whispersOpen: false });
-      return true;
-    }
-    if (mentionsOpen) {
-      set({ mentionsOpen: false });
-      return true;
-    }
-    if (settingsView) {
-      get().closeSettings();
-      return true;
-    }
-    if (cosmeticsOpen) {
-      set({ cosmeticsOpen: false });
+    // Only what backTakenBeforePlayer lists may take Back before the player: a
+    // consumer added here without it never runs, so the watch layer's claim on
+    // chat's edge cannot drift from this list.
+    if (backTakenBeforePlayer(get())) {
+      if (sheetStack.length > 0) {
+        const top = sheetStack[sheetStack.length - 1];
+        window.dispatchEvent(new CustomEvent('sn:close-sheet', { detail: top }));
+        return true;
+      }
+      if (get().songsOpen) {
+        if (get().songsFocus) set({ songsFocus: null });
+        else get().closeSongs();
+        return true;
+      }
+      if (get().whispersOpen) {
+        set({ whispersOpen: false });
+        return true;
+      }
+      if (mentionsOpen) {
+        set({ mentionsOpen: false });
+        return true;
+      }
+      if (settingsView) {
+        get().closeSettings();
+        return true;
+      }
+      if (cosmeticsOpen) {
+        set({ cosmeticsOpen: false });
+        return true;
+      }
       return true;
     }
     // Back from the full watch view shrinks into the in-app mini player, so

@@ -1,0 +1,52 @@
+{
+  "fill": [
+    { "box": [2400, 1080], "video": [1920, 1080], "scale": 1.25 },
+    { "box": [2520, 1080], "video": [1920, 1080], "scale": 1.3125 },
+    { "box": [1920, 1080], "video": [1920, 1080], "scale": 1 },
+    { "box": [1930, 1080], "video": [1920, 1080], "scale": 1 },
+    { "box": [1600, 1080], "video": [1920, 1080], "scale": 1 },
+    { "box": [2400, 1080], "video": [1440, 1080], "scale": 1.5 },
+    { "box": [2400, 1080], "video": [1080, 1920], "scale": 1.5 },
+    { "box": [0, 1080], "video": [1920, 1080], "scale": 1 },
+    { "box": [2400, 1080], "video": [0, 0], "scale": 1 }
+  ],
+  "preview": [
+    { "startFill": false, "fill": 1.25, "ratio": 1, "scale": 1 },
+    { "startFill": false, "fill": 1.25, "ratio": 2, "scale": 1.4375 },
+    { "startFill": false, "fill": 1.25, "ratio": 0.5, "scale": 0.85 },
+    { "startFill": true, "fill": 1.25, "ratio": 1, "scale": 1.25 },
+    { "startFill": true, "fill": 1.25, "ratio": 0.8, "scale": 1 },
+    { "startFill": false, "fill": 1, "ratio": 1.1, "scale": 1.1 },
+    { "startFill": false, "fill": 1, "ratio": 2, "scale": 1.15 }
+  ],
+  "decision": [
+    { "startFill": false, "fill": 1.25, "ratio": 1.1, "want": false },
+    { "startFill": false, "fill": 1.25, "ratio": 1.11, "want": true },
+    { "startFill": true, "fill": 1.25, "ratio": 0.9, "want": true },
+    { "startFill": true, "fill": 1.25, "ratio": 0.89, "want": false },
+    { "startFill": false, "fill": 1.25, "ratio": 0.5, "want": false },
+    { "startFill": true, "fill": 1.25, "ratio": 1.5, "want": true },
+    { "startFill": false, "fill": 1, "ratio": 2, "want": false },
+    { "startFill": true, "fill": 1, "ratio": 0.5, "want": true }
+  ],
+  "tick": [
+    { "startFill": false, "fill": 1.25, "ratios": [1, 1.12, 1.08, 1.12, 1.04, 1.12], "ticks": [false, true, false, false, false, true] },
+    { "startFill": true, "fill": 1.25, "ratios": [1, 0.88, 0.93, 0.88, 0.96, 0.88], "ticks": [false, true, false, false, false, true] },
+    { "startFill": false, "fill": 1, "ratios": [1.2, 1.5], "ticks": [false, false] }
+  ],
+  "swipe": [
+    { "dx": -60, "dy": 5, "vx": 0, "side": "right", "open": false, "intent": "open" },
+    { "dx": 60, "dy": 5, "vx": 0, "side": "right", "open": true, "intent": "close" },
+    { "dx": 60, "dy": 0, "vx": 0, "side": "right", "open": false, "intent": null },
+    { "dx": -60, "dy": 0, "vx": 0, "side": "right", "open": true, "intent": null },
+    { "dx": 60, "dy": 0, "vx": 0, "side": "left", "open": false, "intent": "open" },
+    { "dx": -60, "dy": 0, "vx": 0, "side": "left", "open": true, "intent": "close" },
+    { "dx": -48, "dy": 32, "vx": 0, "side": "right", "open": false, "intent": "open" },
+    { "dx": -48, "dy": 33, "vx": 0, "side": "right", "open": false, "intent": null },
+    { "dx": -47, "dy": 0, "vx": 0, "side": "right", "open": false, "intent": null },
+    { "dx": -24, "dy": 0, "vx": -0.5, "side": "right", "open": false, "intent": "open" },
+    { "dx": -23, "dy": 0, "vx": -1, "side": "right", "open": false, "intent": null },
+    { "dx": -30, "dy": 0, "vx": -0.49, "side": "right", "open": false, "intent": null },
+    { "dx": -30, "dy": 31, "vx": -0.6, "side": "right", "open": false, "intent": null }
+  ]
+}
