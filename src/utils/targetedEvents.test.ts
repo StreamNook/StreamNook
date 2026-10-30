@@ -15,6 +15,12 @@ const LITERALS = [
   'emote-palette://target',
   'emote-palette://insert',
   'chat-overlay-click-through',
+  // A window with no player asking the main window about the song (songListening.ts).
+  'song-identify-request',
+  'song-identify-state',
+  'song-identify-level',
+  'song-identify-result',
+  'song-identify-cancel',
 ];
 
 const GLOBAL_LISTEN = [

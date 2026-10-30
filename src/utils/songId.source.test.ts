@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // What the main player tells Rust about where a song was heard.
 const app: { current: Record<string, unknown> } = { current: {} };
 const invoke = vi.fn();
-vi.mock('../stores/AppStore', () => ({ useAppStore: { getState: () => app.current } }));
+vi.mock('../stores/AppStore', () => ({ useAppStore: { getState: () => app.current }, mainChatRoom: () => null }));
 vi.mock('../stores/chatConnectionStore', () => ({
   injectSystemMessage: vi.fn(),
   systemSourceFor: () => undefined,
@@ -30,7 +30,15 @@ const stream = {
 };
 
 function player(currentTime: number): HTMLVideoElement {
-  const el = { paused: false, muted: false, readyState: 4, currentTime } as unknown as HTMLVideoElement;
+  const el = {
+    paused: false,
+    muted: false,
+    readyState: 4,
+    currentTime,
+    // The listening ends as canceled if the player is rebuilt or paused under it.
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  } as unknown as HTMLVideoElement;
   setActiveVideo(el);
   return el;
 }

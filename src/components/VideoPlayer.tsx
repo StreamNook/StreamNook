@@ -583,6 +583,8 @@ const VideoPlayer = () => {
     setIsIdentifyingSong(true);
     try {
       const result = await recognizeNowPlaying(videoRef.current);
+      // A canceled listening, or one asked for while one runs, says nothing.
+      if (result.status === 'canceled' || result.status === 'busy') return;
       // Also drop the clickable card into the playing stream's chat (where the
       // links live); the toast below is just the quick on-player confirmation.
       announceSong(result, mainChatRoom());

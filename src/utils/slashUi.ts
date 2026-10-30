@@ -134,9 +134,18 @@ export async function applySlashUi(ui: SlashUi, channel: string, channelId: stri
           });
         return;
       case 'identify_song': {
+        // The answer goes to the room the command was typed in, and the
+        // listening strip shows over that room's composer.
+        const room = channel || null;
+        const listening = await import('./songListening');
+        // A window with no player (a MultiChat window, a chat popout) listens
+        // through the main window's.
+        if (listening.listensRemotely()) {
+          await listening.requestRemoteIdentify(room);
+          return;
+        }
         const { recognizeNowPlaying, announceSong } = await import('./songId');
-        // The answer goes to the room the command was typed in.
-        void recognizeNowPlaying().then((result) => announceSong(result, channel || null));
+        void recognizeNowPlaying(null, { room }).then((result) => announceSong(result, room));
         return;
       }
       case 'open_songs': {

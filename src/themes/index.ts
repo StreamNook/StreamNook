@@ -471,6 +471,30 @@ const writeSurfaceGlass = (strength: number): void => {
     root.style.setProperty('--color-surface-active', blendSurfaceForGlass(surfaceActive, tertiary, strength));
 };
 
+// ─── Theme version ───────────────────────────────────────────────────────────
+// Bumped by every writer of the colors a page reads back from the live CSS
+// (applyTheme, Rust's floors landing late, the glass setters), so a surface
+// that measured them (a song page fitting its cover's colors) knows to measure
+// again. For useSyncExternalStore.
+
+let themeVersionNow = 0;
+const themeListeners = new Set<() => void>();
+
+const bumpThemeVersion = (): void => {
+    themeVersionNow += 1;
+    for (const listener of [...themeListeners]) listener();
+};
+
+/** Changes whenever the painted theme colors may have. */
+export const themeVersion = (): number => themeVersionNow;
+
+export const subscribeTheme = (cb: () => void): (() => void) => {
+    themeListeners.add(cb);
+    return () => {
+        themeListeners.delete(cb);
+    };
+};
+
 // ─── Rust's contrast floors ──────────────────────────────────────────────────
 // The core (`lift_theme_palette`, services/theme_palette.rs) lifts muted and
 // secondary text to their contrast floors and floors the accent for cards.
@@ -498,11 +522,18 @@ let floorSeq = 0;
 let flooredThemeId: string | null = null;
 
 const paintFloors = (root: HTMLElement, values: Partial<Record<FlooredKey, unknown>>): void => {
+    let changed = false;
     for (const [key, cssVar] of FLOORED_VARS) {
         const value = values[key];
         if (typeof value !== 'string' || !value) continue;
-        if (root.style.getPropertyValue(cssVar) !== value) root.style.setProperty(cssVar, value);
+        if (root.style.getPropertyValue(cssVar) !== value) {
+            root.style.setProperty(cssVar, value);
+            changed = true;
+        }
     }
+    // Rust's answer lands after applyTheme returned: whatever read the muted
+    // text or the accent before it reads again.
+    if (changed) bumpThemeVersion();
 };
 
 const askRustFloors = (root: HTMLElement, themeId: string, painted: ThemePalette, fallback: Record<FlooredKey, string>): void => {
@@ -647,6 +678,7 @@ export const applyTheme = (
             textSecondary: palette.textSecondary,
         },
     );
+    bumpThemeVersion();
 };
 
 // Default glassiness (percent). 100 = full frosted glass — the look every
@@ -668,6 +700,7 @@ export const applyGlassStrength = (transparency: number): void => {
     root.style.setProperty('--glass-strength', String(strength));
     writeSurfaceGlass(strength);
     root.setAttribute('data-glass', clamped === 0 ? 'off' : 'on');
+    bumpThemeVersion();
 };
 
 // The default when a settings object carries no `glass_blur`. Rust fills the
@@ -680,8 +713,12 @@ export const DEFAULT_GLASS_BLUR = true;
 // at the capped strength so the glass stays readable without frost.
 export const applyGlassBlur = (enabled: boolean): void => {
     document.documentElement.setAttribute('data-blur', enabled ? 'on' : 'off');
-    // Blur starts on, and stays on everywhere but Linux: repaint only on a change.
-    if (enabled === glassBlurEnabled) return;
+    // Blur starts on, and stays on everywhere but Linux: repaint only on a change
+    // (applyGlassStrength bumps the version then).
+    if (enabled === glassBlurEnabled) {
+        bumpThemeVersion();
+        return;
+    }
     glassBlurEnabled = enabled;
     applyGlassStrength(lastGlassStrength * 100);
 };

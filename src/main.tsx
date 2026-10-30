@@ -104,6 +104,9 @@ const isEmotePalette = hash.startsWith('#/emote-palette');
 // The main window beats so a page that freezes leaves a [PageHang] line.
 if (!IS_MOBILE && !isProfileCard && !isMultiChat && !isChatOverlay && !isPluginWindow && !isEmotePalette) {
   void import('./utils/pageHeartbeat').then((m) => m.startPageHeartbeat());
+  // The main window listens for the song a window with no player asks about
+  // (/song in a MultiChat window or a chat popout), from its first moment.
+  void import('./utils/songListening').then((m) => m.installSongIdentifyHost());
 }
 
 // The dedicated mobile shell (src/mobile/: bottom tabs, sheets, touch player,

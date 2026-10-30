@@ -9,6 +9,7 @@ import { usePinStore } from '../stores/pinStore';
 import { Logger } from './logger';
 import { IS_ANDROID, IS_MOBILE } from './platform';
 import { applySlashUi, noticeIn, type SlashUi } from './slashUi';
+import { getListening } from './songListening';
 
 export { noticeIn } from './slashUi';
 
@@ -94,10 +95,14 @@ export async function applySlashOutcome(
 ): Promise<void> {
   const addToast = useAppStore.getState().addToast;
   for (const t of outcome.toasts) addToast(t.text, t.kind);
+  // Android says "Listening..." in chat for /song; a /song while a listening
+  // already runs says nothing. Read before the ui runs, which starts this
+  // command's own listening.
+  const quiet = IS_ANDROID && outcome.ui?.kind === 'identify_song' && getListening() !== null;
   // Before the lines, so /clearmessages prints into the emptied chat and
   // /reconnect says so after the reload.
   if (outcome.ui) await applySlashUi(outcome.ui, channel, broadcasterId);
-  for (const line of outcome.notices) noticeIn(channel, line);
+  if (!quiet) for (const line of outcome.notices) noticeIn(channel, line);
   if (outcome.send != null) {
     if (outcome.reply_to || outcome.pin_after_send) {
       await sendSpecial(channel, outcome.send, outcome.reply_to, !!outcome.pin_after_send);

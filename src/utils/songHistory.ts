@@ -5,7 +5,9 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { useAppStore } from '../stores/AppStore';
+import type { SongGroup } from '../components/songs/songGroups';
 import type { PlayerSource } from './activeVideo';
+import type { CoverTint } from './coverTint';
 import type { SongProvider } from './songId';
 
 export type SongSource = PlayerSource;
@@ -23,6 +25,10 @@ export interface SongRow {
   count: number;
   /** The latest place it was heard that named a channel. */
   heard: SongSource | null;
+  /** The cover's colors: missing while they may still come (a `tinted`
+   *  change names the song when they do), `main: null` for a gray cover, a
+   *  cover that cannot be read, or none. */
+  tint?: CoverTint | null;
 }
 
 export interface SongSighting {
@@ -39,13 +45,22 @@ export interface SongEntry {
   album_art: string | null;
   shazam_url: string | null;
   song_link: string | null;
+  /** The track's own links first, then search pages (`search: true`), then
+   *  services kept from older lookups. */
   providers: SongProvider[];
-  /** `providers` are search pages, not the track's own links. */
+  /** Every provider is a search page (written for older builds). */
   links_are_searches?: boolean;
+  /** The recording's ISRC, when one is known, and where it came from. */
+  isrc?: string | null;
+  isrc_from?: 'shazam' | 'text' | null;
+  /** When a link lookup last answered cleanly (ms); missing is never. */
+  links_checked_ms?: number;
   first_ms: number;
   last_ms: number;
   count: number;
   sightings: SongSighting[];
+  /** The cover's colors, as on a row. */
+  tint?: CoverTint | null;
 }
 
 export interface SongPage {
@@ -56,14 +71,41 @@ export interface SongPage {
   mixed_platforms: boolean;
   /** Channels the songs held were heard on. */
   channels: number;
+  /** Where each time group of the matched songs starts, newest first; empty
+   *  when no bounds were sent. */
+  groups: SongGroup[];
 }
 
-export type SongHistoryChange = { kind: 'filed'; key: string } | { kind: 'removed'; key: string } | { kind: 'cleared' };
+export type SongHistoryChange =
+  | { kind: 'filed'; key: string }
+  | { kind: 'removed'; key: string }
+  | { kind: 'cleared' }
+  /** These songs' covers got their colors. */
+  | { kind: 'tinted'; keys: string[] };
 
-export const fetchSongPage = (query: string, offset: number, limit: number): Promise<SongPage> =>
-  invoke<SongPage>('get_song_history', { query: query || null, offset, limit });
+/** A page of the list. `bounds` (ms, strictly newest first, songGroups
+ *  `boundsFor`) asks for the time groups of every matched song. */
+export const fetchSongPage = (query: string, offset: number, limit: number, bounds?: number[]): Promise<SongPage> =>
+  invoke<SongPage>('get_song_history', { query: query || null, offset, limit, bounds: bounds ?? null });
 
+/** One song's detail. Opening it is what asks Rust for its cover's colors
+ *  and, when they may be stale, its links again. */
 export const fetchSong = (key: string): Promise<SongEntry | null> => invoke<SongEntry | null>('get_song', { key });
+
+/** What a change means for an open song's detail: read it again (it was
+ *  filed again, or its cover got its colors), it is gone, or nothing. */
+export function detailChange(change: SongHistoryChange, key: string): 'reload' | 'gone' | null {
+  switch (change.kind) {
+    case 'cleared':
+      return 'gone';
+    case 'removed':
+      return change.key === key ? 'gone' : null;
+    case 'filed':
+      return change.key === key ? 'reload' : null;
+    case 'tinted':
+      return change.keys.includes(key) ? 'reload' : null;
+  }
+}
 
 export const removeSong = (key: string): Promise<boolean> => invoke<boolean>('remove_song', { key });
 

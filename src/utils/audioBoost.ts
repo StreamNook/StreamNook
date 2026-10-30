@@ -285,16 +285,66 @@ function toMono16kPcm(input: Float32Array, inRate: number, outRate: number): Int
   return out;
 }
 
+/** The sound level goes out at most this often (about 30 a second). */
+export const LEVEL_MS = 33;
+
+export interface CaptureOptions {
+  /** Stops the capture early; an aborted capture returns null. */
+  signal?: AbortSignal;
+  /** The sound level as it plays (RMS, 0 to 1), at most every LEVEL_MS. */
+  onLevel?: (level: number) => void;
+  /** The tap is connected: the listening has really started. */
+  onStart?: () => void;
+}
+
+/** Wait `ms`, or less when `signal` aborts first. Its abort listener goes
+ *  either way. */
+export function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve();
+      return;
+    }
+    const done = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal?.addEventListener('abort', done);
+  });
+}
+
+/** The RMS of what the tap heard since the last level, sent at most every
+ *  LEVEL_MS. */
+function levelMeter(onLevel: (level: number) => void, now: () => number = Date.now) {
+  let sum = 0;
+  let frames = 0;
+  let sentAt = -Infinity;
+  return (chunk: Float32Array) => {
+    for (let i = 0; i < chunk.length; i++) sum += chunk[i] * chunk[i];
+    frames += chunk.length;
+    const t = now();
+    if (t - sentAt < LEVEL_MS || frames === 0) return;
+    sentAt = t;
+    onLevel(Math.min(1, Math.sqrt(sum / frames)));
+    sum = 0;
+    frames = 0;
+  };
+}
+
 /**
  * Record `seconds` of the player's audio and return it as mono 16 kHz PCM, or
- * null if capture isn't possible. Safe to call regardless of the boost feature
- * state; it leaves playback untouched.
+ * null if capture isn't possible or `signal` aborted it. Safe to call
+ * regardless of the boost feature state; it leaves playback untouched.
  */
 export async function captureStreamSamples(
   video: HTMLMediaElement | null,
   seconds: number,
+  opts: CaptureOptions = {},
 ): Promise<Int16Array | null> {
-  if (!video) return null;
+  const { signal, onLevel, onStart } = opts;
+  if (!video || signal?.aborted) return null;
   if (!AUDIO_GRAPH_SUPPORTED) return null;
 
   // This may be the first time the element is ever tapped (boost never enabled).
@@ -319,6 +369,7 @@ export async function captureStreamSamples(
       /* best effort; a muted/paused element is handled by the caller */
     }
   }
+  if (signal?.aborted) return null;
 
   try {
     await ensureCaptureWorklet(ctx);
@@ -326,33 +377,39 @@ export async function captureStreamSamples(
     Logger.warn('[AudioBoost] capture worklet load failed:', e);
     return null;
   }
+  if (signal?.aborted) return null;
 
   const node = new AudioWorkletNode(ctx, 'sn-capture');
   const chunks: Float32Array[] = [];
+  const meter = onLevel ? levelMeter(onLevel) : null;
   node.port.onmessage = (e) => {
-    chunks.push(e.data as Float32Array);
+    const chunk = e.data as Float32Array;
+    chunks.push(chunk);
+    meter?.(chunk);
   };
 
-  // The node must reach the destination to be pulled by the graph; it writes no
-  // output, so this branch is silent and doesn't double the audio.
-  graph.source.connect(node);
-  node.connect(ctx.destination);
-
-  await new Promise((resolve) => setTimeout(resolve, Math.round(seconds * 1000)));
-
   try {
-    graph.source.disconnect(node);
-  } catch {
-    /* ignore */
+    // The node must reach the destination to be pulled by the graph; it writes
+    // no output, so this branch is silent and doesn't double the audio.
+    graph.source.connect(node);
+    node.connect(ctx.destination);
+    onStart?.();
+    await abortableSleep(Math.round(seconds * 1000), signal);
+  } finally {
+    try {
+      graph.source.disconnect(node);
+    } catch {
+      /* ignore */
+    }
+    try {
+      node.disconnect();
+    } catch {
+      /* ignore */
+    }
+    node.port.onmessage = null;
   }
-  try {
-    node.disconnect();
-  } catch {
-    /* ignore */
-  }
-  node.port.onmessage = null;
 
-  if (chunks.length === 0) return null;
+  if (signal?.aborted || chunks.length === 0) return null;
 
   let total = 0;
   for (const c of chunks) total += c.length;

@@ -6,13 +6,16 @@ import {
 } from './audioBoost';
 import { getActiveVideo, sourceOfVideo, type PlayerSource } from './activeVideo';
 import { Logger } from './logger';
-import { useAppStore } from '../stores/AppStore';
+import { beginListening, isListening } from './songListening';
+import { mainChatRoom, useAppStore } from '../stores/AppStore';
 import { injectSystemMessage, systemSourceFor, useChatConnectionStore } from '../stores/chatConnectionStore';
 import { DEFAULT_SONG_ID } from '../types';
 
 export interface SongProvider {
   name: string;
   url: string;
+  /** A search page on the service, not the track's own link. */
+  search?: boolean;
 }
 
 export interface SongMatch {
@@ -43,7 +46,24 @@ function pcmToBase64(pcm: Int16Array): string {
 export type RecognizeResult =
   | { status: 'match'; song: SongMatch }
   | { status: 'no-match' }
-  | { status: 'error'; message: string };
+  | { status: 'error'; message: string }
+  /** Cancel was pressed, or the player changed under the listening. */
+  | { status: 'canceled' }
+  /** A listening already runs in this window. */
+  | { status: 'busy' };
+
+/** Says nothing: a listening canceled, or one asked for while one runs. */
+export const isQuietResult = (r: RecognizeResult): r is Extract<RecognizeResult, { status: 'canceled' | 'busy' }> =>
+  r.status === 'canceled' || r.status === 'busy';
+
+export interface RecognizeOptions {
+  /** The chat room the answer goes to (a chat-slice key), which the
+   *  listening strip shows in; null names none. */
+  room?: string | null;
+  /** Listening for another window (its request's id): the state and level
+   *  are sent there as it listens. */
+  remote?: { window: string; id: string } | null;
+}
 
 /** What the main player shows (VideoPlayer, the phone's player), for where
  *  Your songs says a song was heard. */
@@ -84,9 +104,13 @@ function withPosition(source: PlayerSource | null, el: HTMLMediaElement): Player
 
 // Capture from the active player and identify the song. `video` defaults to the
 // registered active element, so the chat command can call it with no argument.
+// One listening runs per window (songListening.ts holds it, for the strip and
+// the note): a second while one runs answers busy and says nothing.
 export async function recognizeNowPlaying(
   video?: HTMLMediaElement | null,
+  opts: RecognizeOptions = {},
 ): Promise<RecognizeResult> {
+  if (isListening()) return { status: 'busy' };
   const target = video ?? getActiveVideo();
   if (!target) {
     return { status: 'error', message: 'No stream is playing.' };
@@ -113,39 +137,70 @@ export async function recognizeNowPlaying(
   // listens to the same player.
   const source = withPosition(sourceOfVideo(target, mainPlayerSource), target);
 
-  // Each attempt listens again (the next window of audio), so a missed window
-  // (ad break, quiet moment) gets another shot. A real match returns
-  // immediately; only a clean "nothing found" falls through to the next attempt.
-  let lastError: string | null = null;
-  for (let attempt = 0; attempt < attempts; attempt++) {
-    let pcm: Int16Array | null;
-    try {
-      pcm = await captureStreamSamples(target, captureSeconds);
-    } catch (e) {
-      Logger.warn('[SongId] capture failed:', e);
-      lastError = 'Could not capture the stream audio.';
-      continue;
-    }
-    if (!pcm || pcm.length < 16000) {
-      lastError = 'Could not capture enough audio.';
-      continue;
+  const listen = beginListening({
+    room: opts.room ?? null,
+    attempts,
+    captureMs: captureSeconds * 1000,
+    remote: opts.remote ?? null,
+  });
+  if (!listen) return { status: 'busy' };
+  const { signal } = listen;
+  // A player rebuilt or switched to another channel under the listening ends
+  // it as canceled: what it heard is no longer that stream.
+  const stop = () => listen.abort();
+  target.addEventListener('emptied', stop);
+  target.addEventListener('pause', stop);
+
+  try {
+    // Each attempt listens again (the next window of audio), so a missed window
+    // (ad break, quiet moment) gets another shot. A real match returns
+    // immediately; only a clean "nothing found" falls through to the next attempt.
+    let lastError: string | null = null;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      if (attempt > 0) listen.update({ phase: 'listening', attempt: attempt + 1, startedAt: null });
+      let pcm: Int16Array | null;
+      try {
+        pcm = await captureStreamSamples(target, captureSeconds, {
+          signal,
+          onLevel: listen.level,
+          onStart: () => listen.update({ startedAt: Date.now() }),
+        });
+      } catch (e) {
+        if (signal.aborted) return { status: 'canceled' };
+        Logger.warn('[SongId] capture failed:', e);
+        lastError = 'Could not capture the stream audio.';
+        continue;
+      }
+      if (signal.aborted) return { status: 'canceled' };
+      if (!pcm || pcm.length < 16000) {
+        lastError = 'Could not capture enough audio.';
+        continue;
+      }
+
+      listen.update({ phase: 'finding' });
+      if (signal.aborted) return { status: 'canceled' };
+      try {
+        const song = await invoke<SongMatch | null>('identify_song', {
+          audioB64: pcmToBase64(pcm),
+          source,
+        });
+        if (song && song.title) return { status: 'match', song };
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        Logger.warn('[SongId] identify failed:', message);
+        // A hard error (rate limit, network) won't improve on retry.
+        return { status: 'error', message };
+      }
     }
 
-    try {
-      const song = await invoke<SongMatch | null>('identify_song', {
-        audioB64: pcmToBase64(pcm),
-        source,
-      });
-      if (song && song.title) return { status: 'match', song };
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      Logger.warn('[SongId] identify failed:', message);
-      // A hard error (rate limit, network) won't improve on retry.
-      return { status: 'error', message };
-    }
+    return lastError ? { status: 'error', message: lastError } : { status: 'no-match' };
+  } finally {
+    target.removeEventListener('emptied', stop);
+    target.removeEventListener('pause', stop);
+    // Only now, with the capture settled: a listening started meanwhile would
+    // have overlapped it.
+    listen.end();
   }
-
-  return lastError ? { status: 'error', message: lastError } : { status: 'no-match' };
 }
 
 // Drop the result into chat as a local system message, in `room` (the chat the
@@ -160,14 +215,19 @@ function emitSongMessage(room: string | null, text: string, songCard?: SongMatch
     injectSystemMessage(room, text, songCard, systemSourceFor(room));
     return;
   }
-  // No room, or one this page does not hold (its chat lives in a popout): the
-  // page's one open chat, as before.
+  // A room this page does not hold that is no longer the one the main view
+  // holds (the viewer switched channels while it listened): the answer
+  // belongs to a chat that is gone, so it is not posted anywhere else.
+  if (room && room.toLowerCase() !== mainChatRoom()?.toLowerCase()) return;
+  // No room (a stream with no chat of its own), or the main view's room held
+  // elsewhere (its chat lives in a popout): the page's one open chat, as before.
   window.dispatchEvent(
     new CustomEvent('twitch-system-message', { detail: { message: text, songCard } }),
   );
 }
 
 export function announceSong(result: RecognizeResult, room: string | null = null): void {
+  if (isQuietResult(result)) return;
   if (result.status === 'match') {
     emitSongMessage(room, `♪ ${result.song.title} by ${result.song.artist}`, result.song);
   } else if (result.status === 'no-match') {
