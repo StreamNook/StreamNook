@@ -23,6 +23,7 @@ pub mod activity_history_service;
 pub mod ad_bypass;
 pub mod ad_detect;
 pub mod app_paths;
+pub mod asset_scope;
 #[cfg(target_os = "ios")]
 pub mod ios_sheet;
 pub mod auth_proxy;

@@ -7,6 +7,22 @@ use uuid::Uuid;
 const WEB_CLIENT_ID: &str = env!("TWITCH_WEB_CLIENT_ID");
 const GQL_URL: &str = "https://gql.twitch.tv/gql";
 
+/// A picture link from Twitch or a streamer, kept only when it is a public web
+/// address. A panel can name `http://asset.localhost/...` or a LAN host, which
+/// the page would then load from this machine.
+fn public_image(link: Option<String>) -> Option<String> {
+    link.and_then(|link| crate::services::web_link::public_web_url(&link, false))
+}
+
+/// The same rule for an `<img src>` inside a panel's HTML: a refused `src` is
+/// dropped and the rest of the tag stays.
+fn panel_image_src<'u>(element: &str, attribute: &str, value: &'u str) -> Option<std::borrow::Cow<'u, str>> {
+    if element == "img" && attribute == "src" {
+        return crate::services::web_link::public_web_url(value, false).map(std::borrow::Cow::Owned);
+    }
+    Some(std::borrow::Cow::Borrowed(value))
+}
+
 /// Sanitizer for panel descriptions.
 ///
 /// A panel description is HTML the STREAMER wrote, and the About drawer renders
@@ -38,7 +54,9 @@ fn panel_sanitizer() -> &'static ammonia::Builder<'static> {
                 ("img", std::collections::HashSet::from(["src", "alt"])),
             ]))
             .url_schemes(std::collections::HashSet::from(["http", "https"]))
-            .url_relative(ammonia::UrlRelative::Deny);
+            .url_relative(ammonia::UrlRelative::Deny)
+            // An image may only come from a public web address (`web_link`).
+            .attribute_filter(panel_image_src);
             b
         });
     &SANITIZER
@@ -68,7 +86,7 @@ fn sanitize_panel_html(raw: Option<String>) -> Option<String> {
 
 #[cfg(test)]
 mod panel_sanitizer_tests {
-    use super::sanitize_panel_html;
+    use super::{public_image, sanitize_panel_html};
 
     fn clean(s: &str) -> String {
         sanitize_panel_html(Some(s.to_string())).unwrap()
@@ -136,6 +154,38 @@ mod panel_sanitizer_tests {
         assert!(out.contains(r#"src="https://example.com/a.png""#), "lost https image: {out}");
         assert!(!out.contains("x.png"), "relative src survived: {out}");
         assert!(!out.contains("javascript"), "javascript src survived: {out}");
+    }
+
+    #[test]
+    fn images_from_this_machine_or_the_local_network_are_dropped() {
+        let out = clean(concat!(
+            "<img src=\"http://asset.localhost/C%3A%5CUsers%5Cx%5Csecret.png\" alt=\"one\">",
+            "<img src=\"http://127.0.0.1:20000/cache/token/emotes/a.png\" alt=\"two\">",
+            "<img src=\"https://192.168.1.1/a.png\" alt=\"three\">",
+            "<img src=\"https://example.com/ok.png\" alt=\"four\">",
+        ));
+        assert!(!out.contains("asset.localhost"), "asset.localhost src survived: {out}");
+        assert!(!out.contains("127.0.0.1"), "loopback src survived: {out}");
+        assert!(!out.contains("192.168"), "LAN src survived: {out}");
+        assert!(out.contains(r#"src="https://example.com/ok.png""#), "lost the public image: {out}");
+        assert!(out.contains(r#"alt="one""#), "the tag went with its src: {out}");
+    }
+
+    #[test]
+    fn a_markdown_image_with_a_local_source_is_dropped() {
+        let out = clean("![x](http://localhost:1420/a.png) ![y](http://printer.local/b.png)");
+        assert!(!out.contains("localhost"), "localhost src survived: {out}");
+        assert!(!out.contains(".local"), ".local src survived: {out}");
+    }
+
+    #[test]
+    fn a_panel_picture_must_be_a_public_link() {
+        let ok = "https://panels-images.twitch.tv/panel-1-image-x";
+        assert_eq!(public_image(Some(ok.into())).as_deref(), Some(ok));
+        assert_eq!(public_image(Some("http://asset.localhost/C%3A%5Cx.png".into())), None);
+        assert_eq!(public_image(Some("http://192.168.1.1/a.png".into())), None);
+        assert_eq!(public_image(Some("file:///C:/x.png".into())), None);
+        assert_eq!(public_image(None), None);
     }
 }
 
@@ -537,7 +587,7 @@ pub async fn get_channel_about_data(channel_login: String) -> Result<ChannelAbou
                 panel_type,
                 title: p.title,
                 description: sanitize_panel_html(p.description),
-                image_url: p.image_url,
+                image_url: public_image(p.image_url),
                 link_url: p.link_url,
             })
         })
@@ -587,7 +637,7 @@ pub async fn get_channel_about_data(channel_login: String) -> Result<ChannelAbou
         user_id: user.id,
         display_name: user.display_name,
         description: user.description,
-        profile_image_url: user.profile_image_url,
+        profile_image_url: public_image(user.profile_image_url),
         follower_count,
         panels,
         social_links,
@@ -752,5 +802,10 @@ pub async fn get_similar_channels(channel_login: String) -> Result<Vec<SimilarCh
         channels.len(),
         login
     );
+    // Both pictures come from Twitch; only a public web address is passed on.
+    for channel in &mut channels {
+        channel.profile_image_url = public_image(channel.profile_image_url.take());
+        channel.thumbnail_url = public_image(channel.thumbnail_url.take());
+    }
     Ok(channels)
 }

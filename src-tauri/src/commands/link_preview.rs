@@ -139,7 +139,7 @@ pub fn link_preview_expected(url: String) -> Option<String> {
 /// Whether `build_preview` has a dedicated card for this URL's shape (a Discord
 /// invite, a YouTube channel or video, an X profile or post, an Instagram
 /// profile, a Steam app, Spotify, a Twitch clip or VOD) rather than the generic
-/// OpenGraph scrape. Mirrors the matcher order in `build_preview`, except Reddit:
+/// OpenGraph scrape. Mirrors the matcher order in `build_card`, except Reddit:
 /// a profile link there is a subreddit or user, whose card says no more than
 /// the pill does.
 pub(crate) fn has_dedicated_card(url: &str) -> bool {
@@ -158,7 +158,31 @@ pub(crate) fn has_dedicated_card(url: &str) -> bool {
         || instagram_handle(url).is_some()
 }
 
+/// The preview for `url`, with every picture link a public web address (see
+/// [`public_pictures`]). The one exit of every card built in `build_card`.
 pub(crate) async fn build_preview(url: &str) -> Result<LinkPreview, String> {
+    build_card(url).await.and_then(public_pictures)
+}
+
+/// A card keeps its picture and avatar links only when they are public web
+/// addresses: a page chooses what it names as its image, and an
+/// `asset.localhost` or LAN address would make the chat load it from this
+/// machine. A card left with nothing to show because its only content was a
+/// refused picture is not a card.
+fn public_pictures(mut preview: LinkPreview) -> Result<LinkPreview, String> {
+    let had_picture = preview.image.is_some() || preview.author_avatar.is_some();
+    preview.image = preview.image.and_then(|link| crate::services::web_link::public_web_url(&link, false));
+    preview.author_avatar = preview
+        .author_avatar
+        .and_then(|link| crate::services::web_link::public_web_url(&link, false));
+    let has_text = [&preview.title, &preview.description, &preview.author].iter().any(|field| field.is_some());
+    if had_picture && preview.image.is_none() && preview.author_avatar.is_none() && !has_text {
+        return Err("no public picture to show".to_string());
+    }
+    Ok(preview)
+}
+
+async fn build_card(url: &str) -> Result<LinkPreview, String> {
     // twitter.com now redirects to x.com — normalize so both get identical
     // handling (and the card opens the x.com variant).
     let canonical = canonicalize_x(url);
@@ -2312,5 +2336,58 @@ mod tests {
         assert_eq!(preview.image.as_deref(), Some("https://i.redd.it/tdy7wdh3gvod1.jpg"));
         // The card still opens what was posted.
         assert_eq!(preview.url, REDDIT_VIEWER);
+    }
+
+    fn card(image: Option<&str>, avatar: Option<&str>, title: Option<&str>) -> LinkPreview {
+        LinkPreview {
+            url: "https://example.com/post".to_string(),
+            kind: "generic".to_string(),
+            title: title.map(str::to_string),
+            image: image.map(str::to_string),
+            author_avatar: avatar.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_card_keeps_its_public_pictures() {
+        let kept = public_pictures(card(
+            Some("https://i.ytimg.com/vi/x/hqdefault.jpg"),
+            Some("http://pbs.twimg.com/a.png"),
+            Some("Title"),
+        ))
+        .unwrap();
+        assert_eq!(kept.image.as_deref(), Some("https://i.ytimg.com/vi/x/hqdefault.jpg"));
+        assert_eq!(kept.author_avatar.as_deref(), Some("http://pbs.twimg.com/a.png"));
+    }
+
+    #[test]
+    fn local_and_private_picture_links_come_back_empty() {
+        for bad in [
+            "http://asset.localhost/C%3A%5CUsers%5Cx%5Ca.png",
+            "http://192.168.1.1/x.png",
+            "http://127.0.0.1:20000/cache/token/emotes/a.png",
+            "http://localhost:1420/a.png",
+            "file:///C:/x.png",
+        ] {
+            let got = public_pictures(card(Some(bad), Some(bad), Some("Title"))).unwrap();
+            assert_eq!((got.image, got.author_avatar), (None, None), "{bad}");
+            assert_eq!(got.title.as_deref(), Some("Title"), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_card_whose_only_content_was_a_refused_picture_is_not_a_card() {
+        let bad = "http://192.168.1.1/x.png";
+        assert!(public_pictures(image_preview(bad, bad)).is_err());
+        assert!(public_pictures(card(Some(bad), None, None)).is_err());
+        let ok = "https://i.redd.it/a.jpg";
+        assert!(public_pictures(image_preview(ok, ok)).is_ok());
+    }
+
+    #[test]
+    fn a_card_that_never_had_a_picture_is_left_alone() {
+        let bare = card(None, None, None);
+        assert_eq!(public_pictures(bare.clone()), Ok(bare));
     }
 }

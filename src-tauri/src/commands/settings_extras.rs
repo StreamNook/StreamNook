@@ -421,6 +421,7 @@ pub async fn add_custom_sound(app: AppHandle, path: String, state: State<'_, App
 #[tauri::command]
 pub async fn delete_custom_sound(app: AppHandle, id: String, state: State<'_, AppState>) -> Result<(), String> {
     let mut removed_path: Option<String> = None;
+    let mut path_in_use = false;
     commit_settings_patch(&app, &state, None, |current| {
         let root = serde_json::to_value(current).map_err(|e| e.to_string())?;
         let mut list = get_path(&root, "chat_highlights.custom_sounds").and_then(Value::as_array).cloned().unwrap_or_default();
@@ -429,12 +430,19 @@ pub async fn delete_custom_sound(app: AppHandle, id: String, state: State<'_, Ap
         };
         removed_path = list[at].get("path").and_then(Value::as_str).map(str::to_string);
         list.remove(at);
+        // Another entry may name the same file.
+        path_in_use = removed_path.as_deref().is_some_and(|p| list.iter().any(|s| s.get("path").and_then(Value::as_str) == Some(p)));
         let mut changes = Map::new();
         changes.insert("chat_highlights.custom_sounds".into(), Value::Array(list));
         patch_for_changes(current, &changes)
     })?;
     if let Some(path) = removed_path {
-        crate::commands::sounds::remove_custom_sound(path)?;
+        crate::commands::sounds::remove_custom_sound(path.clone())?;
+        // A sound that still pointed at the user's own file leaves the asset
+        // scope with its entry, unless another entry names the same file.
+        if !path_in_use {
+            crate::commands::sounds::forget_legacy_sound(&app, &path);
+        }
     }
     Ok(())
 }

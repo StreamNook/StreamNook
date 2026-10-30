@@ -3,15 +3,52 @@
   "app": {
     "security": {
       "assetProtocol": {
-        "scope": [
-          "**",
-          "$LOCALDATA/StreamNook/**",
-          "$LOCALDATA/com.streamnook.dev/**",
-          "$CONFIG/StreamNook/**",
-          "$APPLOCALDATA/**",
-          "$APPDATA/**",
-          "$APPCACHE/**"
-        ]
+        "scope": {
+          "allow": [
+            "$LOCALDATA/StreamNook/cache/universal/badges/*",
+            "$LOCALDATA/StreamNook/cache/universal/emotes/*",
+            "$LOCALDATA/StreamNook/cache/universal/third-party-badges/*",
+            "$LOCALDATA/StreamNook/cache/universal/cosmetics/*",
+            "$LOCALDATA/StreamNook/cache/universal/streamnook-art/*",
+            "$LOCALDATA/StreamNook/image_uploads/files/*",
+            "$LOCALDATA/StreamNook/image_uploads/thumbs/*",
+            "$LOCALDATA/StreamNook/sounds/*",
+            "$LOCALDATA/com.streamnook.dev/cache/universal/badges/*",
+            "$LOCALDATA/com.streamnook.dev/cache/universal/emotes/*",
+            "$LOCALDATA/com.streamnook.dev/cache/universal/third-party-badges/*",
+            "$LOCALDATA/com.streamnook.dev/cache/universal/cosmetics/*",
+            "$LOCALDATA/com.streamnook.dev/cache/universal/streamnook-art/*",
+            "$LOCALDATA/com.streamnook.dev/image_uploads/files/*",
+            "$LOCALDATA/com.streamnook.dev/image_uploads/thumbs/*",
+            "$LOCALDATA/com.streamnook.dev/sounds/*",
+            "$APPDATA/StreamNook/cache/universal/badges/*",
+            "$APPDATA/StreamNook/cache/universal/emotes/*",
+            "$APPDATA/StreamNook/cache/universal/third-party-badges/*",
+            "$APPDATA/StreamNook/cache/universal/cosmetics/*",
+            "$APPDATA/StreamNook/cache/universal/streamnook-art/*",
+            "$APPDATA/StreamNook/image_uploads/files/*",
+            "$APPDATA/StreamNook/image_uploads/thumbs/*",
+            "$APPDATA/StreamNook/sounds/*"
+          ],
+          "deny": [
+            "$LOCALDATA/StreamNook/*",
+            "$LOCALDATA/StreamNook/.*",
+            "$LOCALDATA/StreamNook/cache/*",
+            "$LOCALDATA/StreamNook/cache/universal/*",
+            "$LOCALDATA/StreamNook/image_uploads/*",
+            "$LOCALDATA/com.streamnook.dev/*",
+            "$LOCALDATA/com.streamnook.dev/.*",
+            "$LOCALDATA/com.streamnook.dev/cache/*",
+            "$LOCALDATA/com.streamnook.dev/cache/universal/*",
+            "$LOCALDATA/com.streamnook.dev/image_uploads/*",
+            "$APPDATA/StreamNook/*",
+            "$APPDATA/StreamNook/.*",
+            "$APPDATA/StreamNook/cache/*",
+            "$APPDATA/StreamNook/cache/universal/*",
+            "$APPDATA/StreamNook/image_uploads/*"
+          ],
+          "requireLiteralLeadingDot": true
+        }
       }
     },
     "windows": [

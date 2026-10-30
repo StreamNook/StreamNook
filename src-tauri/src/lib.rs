@@ -843,7 +843,17 @@ pub fn run() {
     services::token_vault::warm_up();
 
     // Load settings from our custom location in the same directory as cache
-    let settings = load_settings_from_file().unwrap_or_else(|_| Settings::default());
+    let loaded_settings = load_settings_from_file();
+    // Sound files that settings from before imports existed point at stay
+    // playable: they are chosen once, from the settings as the file read them.
+    // A failed read says nothing about them (nothing is chosen and the next
+    // launch tries again). A phone's read here is not its real one; it chooses
+    // inside setup, once its data folder resolves.
+    #[cfg(desktop)]
+    if let Ok(read) = &loaded_settings {
+        commands::sounds::freeze_legacy_sounds(read);
+    }
+    let settings = loaded_settings.unwrap_or_else(|_| Settings::default());
     // Compile the chat rule engine (highlights, ignores, saved filters) from
     // the loaded settings before any chat connects.
     apply_loaded_settings(&settings);
@@ -1024,6 +1034,13 @@ pub fn run() {
             // can take it.
             commands::components::report_last_update_swap();
             commands::components::log_install_context();
+            // The page and every other webview of the app may load the app's
+            // own picture and sound folders and nothing else. The config names
+            // the same folders for the first requests; this adds them as they
+            // resolve here, plus the frozen legacy sounds. A phone does the same
+            // below, once its data folder is known.
+            #[cfg(desktop)]
+            services::asset_scope::allow_app_assets(app.handle());
             // Linux builds the main window here instead of from the config
             // (tauri.linux.conf.json sets `create: false`), after every plugin
             // has registered its init script, and always opaque: the CEF
@@ -1092,6 +1109,10 @@ pub fn run() {
                     });
                 }
             }
+            // The data folder resolves above, so the asset scope can name the
+            // app's own folders as this code resolves them.
+            #[cfg(target_os = "android")]
+            services::asset_scope::allow_app_assets(app.handle());
             #[cfg(mobile)]
             services::token_vault::warm_up();
             // Before anything can start a stream: a Cast session the SDK
@@ -1121,6 +1142,12 @@ pub fn run() {
                         }
                     }
                 }
+                // The settings as the real file read them (the read at the top of
+                // run() fell back to defaults): the one time the legacy sound files
+                // are chosen. Then the page may play them.
+                commands::sounds::freeze_legacy_sounds(&loaded);
+                #[cfg(target_os = "android")]
+                services::asset_scope::allow_legacy_sounds(app.handle());
                 services::diagnostic_logger::apply_setting(loaded.error_reporting_enabled);
                 services::ll_origin::set_disabled(!loaded.video_player.experimental_low_latency);
                 services::ll_origin::set_target_gap(loaded.video_player.ll_target_latency);
