@@ -1,11 +1,11 @@
-// The listening pill in a chat's composer shelf while a song is identified
-// for that chat: a floating glass pill with bars that move with the stream's
-// sound, "Listening for the song", how far the listening has come along its
-// foot, and a quiet Cancel; then "Finding the song" while the clip is looked
-// up. When the answer comes back the pill gives its place to the answer's card
-// (SongResultCard), which folds down into the composer after a few seconds.
-// The song's card still lands in the chat as its record. Desktop only: the
-// phones keep their chat line.
+// The listening pill over a chat's composer while a song is identified for
+// that chat: a glass shape floating just above the composer (it takes no room
+// in the shelf), with bars that move with the stream's sound, "Listening for
+// the song", how far the listening has come along its foot, and a quiet
+// Cancel; then "Finding the song" while the clip is looked up; then the answer
+// (SongResultCard) in the same shape, which goes after a few seconds. One
+// object whose contents change. The song's card still lands in the chat as its
+// record. Desktop only: the phones keep their chat line.
 //
 // The listening state comes through useSyncExternalStore; the sound level
 // never does. listeningBars.ts draws every set of bars from one frame loop,
@@ -19,8 +19,10 @@ import { getListening, subscribeListening, type Listening } from '../../utils/so
 import { dismissSongResult, songResultFor, subscribeSongResults, type SongResult } from '../../utils/songResult';
 import { IS_MOBILE } from '../../utils/platform';
 import { BAR_WEIGHTS, drawBars, motionMode } from './listeningBars';
+import { subscribeTheme } from '../../themes';
+import { readSurface } from '../../utils/coverTint';
 import { SongResultView } from './SongResultCard';
-import { ANSWER_GLOW, stripCancel, stripShows } from './stripRoom';
+import { ANSWER_ROW, ANSWER_SHELL, answerShadow, stripCancel, stripShows } from './stripRoom';
 
 /** The house easing for these moves. */
 const EASE = [0.2, 0.8, 0.2, 1] as const;
@@ -86,22 +88,21 @@ function pillWords(listening: Listening): string {
   return listening.attempt > 1 ? 'Trying again' : 'Listening for the song';
 }
 
-/** The pill itself, for a listening that answers into this chat. */
+/** What the shape holds for a listening that answers into this chat. */
 export function ListeningStripView({ listening, onCancel }: { listening: Listening; onCancel: (() => void) | null }) {
   const words = pillWords(listening);
   return (
-    <div
-      role="status"
-      className="glass-flyout no-live-blur relative mb-2 flex h-11 items-center gap-3 overflow-hidden !rounded-full !py-0 !pl-4 !pr-1.5"
-      style={ANSWER_GLOW}
-    >
-      <ListeningBars key={listening.id} className="sn-listen-bars--accent" />
+    <div role="status" className={ANSWER_ROW}>
+      {/* The bars sit in the slot the answer's cover takes. */}
+      <span className="flex h-10 w-10 shrink-0 items-center justify-center" aria-hidden="true">
+        <ListeningBars key={listening.id} className="sn-listen-bars--accent" />
+      </span>
       {/* Listening and finding cross-fade in one place. */}
       <span className="grid min-w-0 flex-1">
         <AnimatePresence initial={false}>
           <motion.span
             key={words}
-            className="col-start-1 row-start-1 truncate text-[13px] font-semibold leading-[18px] text-textPrimary"
+            className="col-start-1 row-start-1 truncate text-[13.5px] font-semibold leading-[18px] text-textPrimary"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
@@ -124,7 +125,7 @@ export function ListeningStripView({ listening, onCancel }: { listening: Listeni
         tabIndex={onCancel ? undefined : -1}
         aria-hidden={onCancel ? undefined : true}
         aria-label="Cancel"
-        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-textMuted transition-[background-color,color,opacity] duration-150 hover:bg-glass-hover hover:text-textPrimary ${onCancel ? '' : 'pointer-events-none opacity-0'}`}
+        className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-textMuted transition-[background-color,color,opacity] duration-150 hover:bg-glass-hover hover:text-textPrimary ${onCancel ? '' : 'pointer-events-none opacity-0'}`}
       >
         <X size={15} strokeWidth={2.2} />
       </button>
@@ -135,26 +136,19 @@ export function ListeningStripView({ listening, onCancel }: { listening: Listeni
 
 const noListening = (): Listening | null => null;
 const noAnswer = (): SongResult | null => null;
+const lightTheme = () => readSurface('flyout').light;
+const darkOnServer = () => false;
 
 /**
- * How the strip's pieces come and go. The pill rises in and fades out; an
- * answer's card folds down into the composer when its time is up (under the
- * Reduced Motion setting it only fades, and under Off it goes at once), and
- * goes at once when a new listening takes its place.
+ * How the floating shape comes and goes: it rises in with a fade, and leaves
+ * (an answer's time up, dismissed, a Cancel) with a fade, a small drop and a
+ * slight shrink toward the composer. The Reduced Motion setting keeps only the
+ * fades (MotionScope); under Off it comes and goes at once.
  */
-type How = { replaced: boolean; off: boolean };
-const PILL = {
-  enter: { opacity: 0, y: 8 },
-  shown: { opacity: 1, y: 0, transition: { duration: 0.16, ease: EASE } },
-  leave: ({ off }: How) => ({ opacity: 0, y: 4, transition: { duration: off ? 0 : 0.12, ease: EASE } }),
-};
-const ANSWER = {
-  enter: { opacity: 0, y: 8 },
-  shown: { opacity: 1, y: 0, scaleY: 1, transition: { duration: 0.16, ease: EASE } },
-  leave: ({ replaced, off }: How) =>
-    off || replaced
-      ? { opacity: 0, transition: { duration: off ? 0 : 0.08 } }
-      : { opacity: 0, scaleY: 0.6, y: 10, transition: { duration: 0.26, ease: EASE } },
+const SHAPE = {
+  enter: { opacity: 0, y: 8, scale: 1 },
+  shown: (off: boolean) => ({ opacity: 1, y: 0, scale: 1, transition: { duration: off ? 0 : 0.16, ease: EASE } }),
+  leave: (off: boolean) => ({ opacity: 0, y: 6, scale: 0.98, transition: { duration: off ? 0 : 0.2, ease: EASE } }),
 };
 
 /** Mounted in every chat's composer shelf with that chat's room (its
@@ -169,37 +163,54 @@ export function ListeningStrip({ room }: { room: string | null }) {
   const done = useCallback(() => {
     if (answerId !== undefined) dismissSongResult(answerId);
   }, [answerId]);
+  const light = useSyncExternalStore(subscribeTheme, lightTheme, darkOnServer);
   if (IS_MOBILE) return null;
-  const how: How = { replaced: !!live, off: motionMode() === 'off' };
+  const off = motionMode() === 'off';
+  const contents = live ? `listening-${live.id}` : answer ? `answer-${answer.id}` : null;
   return (
-    // The leaving piece steps out of the layout, so the next one takes its
-    // place at once: the pill turns into the answer where it stood.
-    <AnimatePresence mode="popLayout" custom={how}>
-      {live ? (
-        <motion.div
-          key={`listening-${live.id}`}
-          custom={how}
-          variants={PILL}
-          initial="enter"
-          animate="shown"
-          exit="leave"
-        >
-          <ListeningStripView listening={live} onCancel={stripCancel(live)} />
-        </motion.div>
-      ) : answer ? (
-        <motion.div
-          key={`answer-${answer.id}`}
-          custom={how}
-          variants={ANSWER}
-          initial="enter"
-          animate="shown"
-          exit="leave"
-          style={{ transformOrigin: 'bottom center' }}
-        >
-          <SongResultView answer={answer} onDone={done} />
-        </motion.div>
-      ) : null}
-    </AnimatePresence>
+    // A zero-height anchor: the shape floats over the foot of the chat, 8 px
+    // above the composer, so nothing in the shelf or the chat moves when it
+    // comes or goes. Only the shape itself takes the pointer.
+    <div className="pointer-events-none absolute inset-x-2 bottom-full z-30 mb-4 flex justify-center">
+      <AnimatePresence custom={off}>
+        {contents && (
+          <motion.div
+            key="shape"
+            custom={off}
+            variants={SHAPE}
+            initial="enter"
+            animate="shown"
+            exit="leave"
+            className="pointer-events-auto w-full"
+            style={{ transformOrigin: 'bottom center' }}
+          >
+            {/* One shape for listening, finding and the answer: only what is
+                inside it cross-fades. */}
+            <div
+              className={`${ANSWER_SHELL} transition-transform duration-200 ease-[cubic-bezier(0.2,0.8,0.2,1)] [html[data-motion=full]_&:has([data-song-open]:hover)]:-translate-y-px`}
+              style={answerShadow(light)}
+            >
+              <AnimatePresence initial={false}>
+                <motion.div
+                  key={contents}
+                  className="absolute inset-0"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: off ? 0 : 0.16, ease: EASE }}
+                >
+                  {live ? (
+                    <ListeningStripView listening={live} onCancel={stripCancel(live)} />
+                  ) : answer ? (
+                    <SongResultView answer={answer} onDone={done} />
+                  ) : null}
+                </motion.div>
+              </AnimatePresence>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
   );
 }
 

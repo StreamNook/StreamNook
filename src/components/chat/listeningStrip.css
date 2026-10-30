@@ -68,12 +68,12 @@ html[data-motion="off"] .sn-listen-dots > i {
 }
 
 /* How far this attempt's listening has come, a thin line along the pill's
-   foot, inset clear of its rounded ends. */
+   foot, inset clear of its 18 px corners. */
 .sn-listen-time {
   position: absolute;
-  right: 22px;
+  right: 18px;
   bottom: 0;
-  left: 22px;
+  left: 18px;
   height: 2px;
   border-radius: 9999px;
   background: var(--color-accent);

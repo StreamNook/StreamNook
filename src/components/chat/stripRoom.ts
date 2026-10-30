@@ -3,6 +3,8 @@
 // key), folded to lowercase on both sides: songListening folds the room it is
 // given, and a widget's room is folded here.
 
+import { useAppStore } from '../../stores/AppStore';
+import { openExternal } from '../../utils/openExternal';
 import { cancelListening, listensRemotely, requestRemoteIdentify, type Listening } from '../../utils/songListening';
 
 /** The strip shows in the chat whose room the answer goes to, and nowhere
@@ -23,13 +25,34 @@ export async function identifyAgain(room: string): Promise<void> {
   announceSong(result, room);
 }
 
-/** The listening pill's and the answer card's glass: the flyout's solid base
- *  (no blur over the video column), its hairline, and a soft accent glow
- *  under it, a still shadow. */
-export const ANSWER_GLOW = {
-  boxShadow:
-    'inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 0 0 1px var(--color-border-subtle), 0 10px 24px -12px color-mix(in srgb, var(--color-accent) 60%, transparent)',
-} as const;
+/** A song link opened from the answer card, with a word when the system
+ *  would not open it. */
+export function openSongLink(url: string): void {
+  void openExternal(url).then((opened) => {
+    if (!opened) useAppStore.getState().addToast("Couldn't open that link", 'error');
+  });
+}
+
+/**
+ * The one floating shape the listening pill, the finding pill and the answers
+ * share: listening, finding and the answer are one object whose contents
+ * change. 60 px tall with an 18 px radius, on the flyout's solid base (no blur
+ * over the video column).
+ */
+export const ANSWER_SHELL =
+  'glass-flyout no-live-blur relative h-[60px] w-full overflow-hidden !rounded-[18px] !p-0';
+
+/** One state's contents in the shape: a row 10 px in from every edge, with a
+ *  40 px slot on the left (the bars, the cover, an icon). */
+export const ANSWER_ROW = 'absolute inset-0 flex items-center gap-3 p-[10px]';
+
+/** The shape's lift off the chat: a quiet, neutral still shadow (lighter on a
+ *  light theme) and a hairline in the theme's subtle border. */
+export function answerShadow(light: boolean): { boxShadow: string } {
+  return {
+    boxShadow: `inset 0 0 0 1px var(--color-border-subtle), ${light ? '0 6px 16px -8px rgba(0, 0, 0, 0.2)' : '0 6px 18px -8px rgba(0, 0, 0, 0.45)'}`,
+  };
+}
 
 /** How long an answer shows over the composer before it folds away: a song
  *  long enough to catch and act on, a miss or an error briefly. */

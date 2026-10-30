@@ -10,7 +10,7 @@ vi.mock('../../stores/AppStore', () => ({ useAppStore: { getState: () => ({}) } 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
 vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn() }));
 
-import { cardLinks, songLinks, toastLink } from './songLinks';
+import { cardLinks, markedLinks, songLinks, toastLink } from './songLinks';
 import { SongCard } from '../chat/SongCard';
 import type { SongMatch } from '../../utils/songId';
 
@@ -57,6 +57,22 @@ describe('the chat card', () => {
     const searches = renderToStaticMarkup(<SongCard card={match({ providers: search })} />);
     expect(searches).toContain('Search on');
     expect(searches).toContain('Spotify');
+  });
+});
+
+describe('the answer card over the composer', () => {
+  it('has a button only for the track’s own links with a mark of their own, at most three', () => {
+    const providers = [
+      { name: 'Deezer', url: 'https://www.deezer.com/track/2' },
+      { name: 'Apple Music', url: 'https://music.apple.com/us/song/1' },
+      { name: 'Spotify', url: 'https://open.spotify.com/search/x', search: true },
+      { name: 'YouTube Music', url: 'https://music.youtube.com/watch?v=a' },
+      { name: 'Amazon Music', url: 'https://music.amazon.com/t' },
+      { name: 'YouTube', url: 'https://www.youtube.com/watch?v=a' },
+      { name: 'Tidal', url: 'https://tidal.com/browse/track/3' },
+    ];
+    expect(markedLinks(providers).map((l) => l.name)).toEqual(['Apple Music', 'YouTube Music', 'YouTube']);
+    expect(markedLinks([{ name: 'Deezer', url: 'https://www.deezer.com/track/2' }])).toEqual([]);
   });
 });
 

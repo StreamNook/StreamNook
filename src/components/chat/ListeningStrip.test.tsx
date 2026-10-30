@@ -49,8 +49,10 @@ describe('where the pill shows', () => {
     expect(stripShows(null, 'xqc')).toBe(false);
   });
 
-  it('is drawn from the shared state only (its server snapshot draws nothing)', () => {
-    expect(renderToStaticMarkup(<ListeningStrip room="xqc" />)).toBe('');
+  it('is drawn from the shared state only (its server snapshot holds only the empty anchor)', () => {
+    const html = renderToStaticMarkup(<ListeningStrip room="xqc" />);
+    expect(html).not.toContain('role="status"');
+    expect(html).toMatch(/^<div class="pointer-events-none absolute[^"]*"><\/div>$/);
   });
 });
 
@@ -61,7 +63,8 @@ describe('what the pill says and does', () => {
     expect(html).toContain('sn-listen-dots');
     expect(html).toContain('sn-listen-bars sn-listen-bars--accent');
     expect(html).toContain('sn-listen-time');
-    expect(html).toContain('!rounded-full');
+    // The bars sit in the 40 px slot the answer's cover takes.
+    expect(html).toMatch(/class="flex h-10 w-10 shrink-0 items-center justify-center"[^>]*><span[^>]*class="sn-listen-bars/);
     expect(html).toMatch(/<button[^>]*aria-label="Cancel"[^>]*>/);
     expect(html).not.toMatch(/<button[^>]*disabled[^>]*aria-label="Cancel"/);
   });
@@ -110,16 +113,20 @@ describe('the answer over the composer', () => {
     },
   };
 
-  it('a song: "Found it", its name, and at most three of its own links', () => {
+  it('a song: "Found it", its name on one line, at most three services with a mark of their own', () => {
     const html = renderToStaticMarkup(<SongResultView answer={found} onDone={() => {}} />);
     expect(html).toContain('Found it');
     expect(html).toContain('Kiss of Life');
     expect(html).toContain(' · Sade');
     expect(html).toContain('aria-label="Open in Apple Music"');
     expect(html).toContain('aria-label="Open in YouTube"');
-    expect(html).not.toContain('aria-label="Open in YouTube Music"');
+    expect(html).toContain('aria-label="Open in YouTube Music"');
+    // Deezer draws only the plain note, so it gets no button; searches never do.
+    expect(html).not.toContain('Open in Deezer');
     expect(html).not.toContain('Spotify');
     expect(html).toContain('aria-label="Dismiss"');
+    // No "Open" text button: the row is the way into Your songs.
+    expect(html).not.toMatch(/>Open</);
   });
 
   it('a miss: a short pill with Try again; an error: its own words, no Try again', () => {
@@ -137,12 +144,23 @@ describe('the answer over the composer', () => {
     expect(RESULT_MS.match).toBeGreaterThan(RESULT_MS.other);
   });
 
-  it('it folds down into the composer when its time is up, and goes at once when replaced', () => {
+  it('floats over the chat in one shape whose contents cross-fade, and leaves toward the composer', () => {
     const src = read('ListeningStrip.tsx');
+    // A zero-height anchor: nothing in the shelf moves.
+    expect(src).toContain('pointer-events-none absolute inset-x-2 bottom-full z-30 mb-4');
+    expect(src).toContain('pointer-events-auto w-full');
     expect(src).toContain("transformOrigin: 'bottom center'");
-    expect(src).toMatch(/opacity: 0, scaleY: 0\.6, y: 10/);
-    expect(src).toMatch(/off \|\| replaced/);
-    expect(src).toContain('mode="popLayout"');
+    expect(src).toMatch(/leave: \(off: boolean\) => \(\{ opacity: 0, y: 6, scale: 0\.98/);
+    expect(src).toMatch(/key=\{contents\}/);
+    // One shape: its key never changes between listening, finding and the answer.
+    expect(src).toContain('key="shape"');
+  });
+
+  it('lifts off the chat on a quiet neutral shadow, lighter on a light theme', () => {
+    const strip = read('stripRoom.ts');
+    expect(strip).toContain("'0 6px 18px -8px rgba(0, 0, 0, 0.45)'");
+    expect(strip).toContain("'0 6px 16px -8px rgba(0, 0, 0, 0.2)'");
+    expect(strip).not.toMatch(/--color-accent\) 60%/);
   });
 });
 

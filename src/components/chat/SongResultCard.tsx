@@ -1,23 +1,29 @@
-// The answer over a chat's composer, where the listening pill was: a song
-// found (its cover on a soft wash of its own colors, "Found it" in the
-// cover's ink, its name, up to three of its own links, Open in Your songs),
-// or a short pill for a miss or an error. It shows for a few seconds, held
-// while the pointer or the keyboard is on it, then folds down into the
-// composer (ListeningStrip runs the fold). The song's card in the chat stays
-// as the record; this is the moment to catch it.
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+// The answer over a chat's composer, in the listening pill's own floating
+// shape (ListeningStrip draws the shape; this draws what is inside it), so the
+// pill turning into the answer reads as one object changing. A song found: its
+// cover on a soft wash of its own colors, "Found it" in the cover's ink, its
+// name on one line, up to three of its services, and dismiss; the row itself
+// opens the song in Your songs. A miss or an error: the same row with an icon,
+// its words, and Try again for a miss. It shows for a few seconds, held while
+// the pointer or the keyboard is on it, then goes (ListeningStrip runs the
+// leave). The song's card in the chat stays as the record.
+import { useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
 import { motion } from 'framer-motion';
-import { Music, RotateCcw, X } from 'lucide-react';
+import { CircleAlert, Music, X } from 'lucide-react';
 import { CARD_LAYERS, useCoverFit, washBackground, type CoverTint } from '../../utils/coverTint';
-import { openExternal } from '../../utils/openExternal';
 import { fetchSongPage, hasSongsSurface, onSongHistoryChanged, openSongs, subscribeSongsSurface } from '../../utils/songHistory';
 import type { SongResult } from '../../utils/songResult';
 import { SocialLogo } from '../ui/SocialLogo';
 import { Tooltip } from '../ui/Tooltip';
+import { GLAZE_PILL } from '../ui/glazeButtons';
+import { markedLinks } from '../songs/songLinks';
 import { markOf, markSize } from '../songs/serviceMarks';
-import { ANSWER_GLOW, identifyAgain, RESULT_MS } from './stripRoom';
+import { ANSWER_ROW, identifyAgain, openSongLink, RESULT_MS } from './stripRoom';
 
 const noSurface = () => false;
+
+/** The wash keeps to the row's left, behind the cover and the words. */
+const WASH_MASK = 'linear-gradient(to right, #000 0%, #000 30%, transparent 78%)';
 
 /** Shows for `ms`, held while hovered or focused, then `onDone`. */
 function useShownFor(ms: number, onDone: () => void) {
@@ -67,20 +73,48 @@ function useStoredTint(key: string | null | undefined): CoverTint | null | undef
   return tint && tint.key === key ? tint.tint : undefined;
 }
 
-/** A quiet round button: dismiss, or a link's logo. */
-const ROUND =
-  'flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-textMuted transition-colors duration-150 hover:bg-glass-hover hover:text-textPrimary';
+/** A press on one of the row's own buttons is that button's, never the
+ *  row's (which would open the song). */
+const own = (act: () => void) => (e: MouseEvent) => {
+  e.stopPropagation();
+  act();
+};
 
+/** The quiet round dismiss at the row's end. */
 function Dismiss({ onClick }: { onClick: () => void }) {
   return (
-    <button type="button" onClick={onClick} aria-label="Dismiss" className={ROUND}>
+    <button
+      type="button"
+      onClick={own(onClick)}
+      aria-label="Dismiss"
+      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-textMuted transition-colors duration-150 hover:bg-glass-hover hover:text-textPrimary"
+    >
       <X size={15} strokeWidth={2.2} />
     </button>
   );
 }
 
-/** A song found: the card. */
-function FoundCard({ answer, onDone }: { answer: SongResult & { result: { status: 'match' } }; onDone: () => void }) {
+/** The 40 px slot on the row's left, for an icon where a cover would be. */
+function IconSlot({ children }: { children: ReactNode }) {
+  return (
+    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[10px] bg-glass-hover text-textMuted" aria-hidden="true">
+      {children}
+    </span>
+  );
+}
+
+/** A music note struck through: nothing was heard. */
+function NoSong() {
+  return (
+    <span className="relative flex h-[18px] w-[18px] items-center justify-center">
+      <Music size={17} strokeWidth={2} />
+      <span className="absolute left-[-1px] top-1/2 h-0.5 w-[21px] -translate-y-1/2 rotate-45 rounded-full bg-current" />
+    </span>
+  );
+}
+
+/** A song found. */
+function FoundRow({ answer, onDone }: { answer: SongResult & { result: { status: 'match' } }; onDone: () => void }) {
   const song = answer.result.song;
   const hold = useShownFor(RESULT_MS.match, onDone);
   const [host, setHost] = useState<HTMLDivElement | null>(null);
@@ -97,17 +131,54 @@ function FoundCard({ answer, onDone }: { answer: SongResult & { result: { status
   }, [host]);
   const tint = useStoredTint(song.key);
   const fit = useCoverFit(tint, 'flyout', box.w, box.h, CARD_LAYERS, true);
-  const canOpen = useSyncExternalStore(subscribeSongsSurface, hasSongsSurface, noSurface);
-  const links = song.providers.filter((p) => !p.search).slice(0, 3);
+  const canOpen = useSyncExternalStore(subscribeSongsSurface, hasSongsSurface, noSurface) && !!song.key;
+  // A narrow chat keeps room for the song's name: two services there.
+  const services = markedLinks(song.providers, box.w > 0 && box.w < 360 ? 2 : 3);
   const ink = fit?.ink ?? 'var(--color-accent-on-surface)';
+  const open = () => {
+    if (!canOpen) return;
+    openSongs(song.key ?? null);
+    onDone();
+  };
+  const onKey = (e: KeyboardEvent) => {
+    if (e.target !== e.currentTarget || (e.key !== 'Enter' && e.key !== ' ')) return;
+    e.preventDefault();
+    open();
+  };
+  const face = (
+    <span className="flex min-w-0 flex-1 items-center gap-3">
+      <span className="relative h-10 w-10 shrink-0 rounded-[10px] shadow-[0_6px_14px_-6px_rgba(0,0,0,0.6)]">
+        {song.album_art ? (
+          <img src={song.album_art} alt="" width={40} height={40} className="h-10 w-10 rounded-[10px] object-cover" />
+        ) : (
+          <IconSlot>
+            <Music size={17} strokeWidth={2} />
+          </IconSlot>
+        )}
+      </span>
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className="text-[11px] font-semibold uppercase leading-[14px] tracking-[0.06em]" style={{ color: ink }}>
+          Found it
+        </span>
+        <span className="truncate leading-[18px]">
+          <span className="text-[13.5px] font-semibold text-textPrimary">{song.title}</span>
+          <span className="text-[13px] text-textSecondary"> · {song.artist}</span>
+        </span>
+      </span>
+    </span>
+  );
   return (
     <div
       {...hold}
-      role="status"
-      className="glass-flyout no-live-blur relative mb-2 overflow-hidden !rounded-2xl !p-0"
-      style={ANSWER_GLOW}
+      data-song-open={canOpen ? '' : undefined}
+      role={canOpen ? 'button' : 'status'}
+      tabIndex={canOpen ? 0 : undefined}
+      aria-label={canOpen ? `${song.title} by ${song.artist}. Open in Your songs` : undefined}
+      onClick={open}
+      onKeyDown={onKey}
+      className={`${ANSWER_ROW} group outline-none focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[color:var(--color-accent)] ${canOpen ? 'cursor-pointer' : ''}`}
     >
-      <div ref={setHost} aria-hidden="true" className="pointer-events-none absolute inset-0">
+      <div ref={setHost} aria-hidden="true" className="pointer-events-none absolute inset-0" style={{ maskImage: WASH_MASK, WebkitMaskImage: WASH_MASK }}>
         {fit && (
           <motion.div
             className="absolute inset-0"
@@ -118,88 +189,70 @@ function FoundCard({ answer, onDone }: { answer: SongResult & { result: { status
           />
         )}
       </div>
-      <div className="relative flex items-start gap-3 py-2.5 pl-2.5 pr-1.5">
-        {song.album_art ? (
-          <img src={song.album_art} alt="" width={40} height={40} className="mt-0.5 h-10 w-10 shrink-0 rounded-lg object-cover" />
+      {/* Its base brightens a touch under the pointer. */}
+      {canOpen && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 bg-white/[0.035] opacity-0 transition-opacity duration-150 [@media(hover:hover)]:group-hover:opacity-100"
+        />
+      )}
+      <span className="relative flex min-w-0 flex-1 items-center gap-3">
+        {canOpen ? (
+          <Tooltip content="Open in Your songs" side="top">
+            {face}
+          </Tooltip>
         ) : (
-          <span className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-glass-hover" aria-hidden="true">
-            <Music size={16} className="text-textMuted" />
-          </span>
+          face
         )}
-        <div className="flex min-w-0 flex-1 flex-col">
-          <span className="text-[11px] font-semibold uppercase leading-[15px] tracking-[0.06em]" style={{ color: ink }}>
-            Found it
-          </span>
-          <span className="mt-0.5 truncate text-[13px] leading-[18px]">
-            <span className="font-semibold text-textPrimary">{song.title}</span>
-            <span className="text-textSecondary"> · {song.artist}</span>
-          </span>
-          <div className="-ml-1.5 mt-1.5 flex items-center gap-1">
-            {links.map((l) => (
-              <Tooltip key={l.url} content={l.name} side="top" describe>
-                <button
-                  type="button"
-                  aria-label={`Open in ${l.name}`}
-                  onClick={() => void openExternal(l.url)}
-                  className={ROUND}
-                >
-                  <SocialLogo platform={markOf(l.name)} size={markSize(l.name, 16)} />
-                </button>
-              </Tooltip>
-            ))}
-            {song.key && canOpen && (
+        <span className="flex shrink-0 items-center gap-1.5">
+          {services.map((l) => (
+            <Tooltip key={l.url} content={l.name} side="top">
               <button
                 type="button"
-                onClick={() => {
-                  openSongs(song.key ?? null);
-                  onDone();
-                }}
-                className="ml-auto flex h-8 items-center rounded-full px-3 text-[12.5px] font-semibold text-textPrimary transition-colors duration-150 hover:bg-glass-hover"
+                aria-label={`Open in ${l.name}`}
+                onClick={own(() => openSongLink(l.url))}
+                className={`${GLAZE_PILL} flex h-[30px] w-[30px] items-center justify-center`}
               >
-                Open
+                <SocialLogo platform={markOf(l.name)} size={markSize(l.name, 17)} />
               </button>
-            )}
-          </div>
-        </div>
-        <Dismiss onClick={onDone} />
-      </div>
+            </Tooltip>
+          ))}
+          <Dismiss onClick={onDone} />
+        </span>
+      </span>
     </div>
   );
 }
 
-/** Nothing found, or why it could not try: the short pill. */
-function AnswerPill({ answer, onDone }: { answer: SongResult; onDone: () => void }) {
+/** Nothing found, or why it could not try. */
+function OtherRow({ answer, onDone }: { answer: SongResult; onDone: () => void }) {
   const hold = useShownFor(RESULT_MS.other, onDone);
   const miss = answer.result.status === 'no-match';
   const text = answer.result.status === 'error' ? answer.result.message : "Couldn't hear a song";
   return (
-    <div
-      {...hold}
-      role="status"
-      className="glass-flyout no-live-blur relative mb-2 flex h-11 items-center gap-2.5 overflow-hidden !rounded-full !py-0 !pl-4 !pr-1.5"
-      style={ANSWER_GLOW}
-    >
-      <Music size={16} className="shrink-0 text-textMuted" aria-hidden="true" />
-      <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-textPrimary">{text}</span>
-      {miss && (
-        <button
-          type="button"
-          onClick={() => void identifyAgain(answer.room)}
-          className="flex h-8 shrink-0 items-center gap-1.5 rounded-full px-3 text-[12.5px] font-semibold text-textPrimary transition-colors duration-150 hover:bg-glass-hover"
-        >
-          <RotateCcw size={13} strokeWidth={2.3} aria-hidden="true" />
-          Try again
-        </button>
-      )}
-      <Dismiss onClick={onDone} />
+    <div {...hold} role="status" className={ANSWER_ROW}>
+      <IconSlot>{miss ? <NoSong /> : <CircleAlert size={18} strokeWidth={2} />}</IconSlot>
+      <span className="min-w-0 flex-1 truncate text-[13.5px] font-semibold leading-[18px] text-textPrimary">{text}</span>
+      <span className="flex shrink-0 items-center gap-1.5">
+        {miss && (
+          <button
+            type="button"
+            onClick={own(() => void identifyAgain(answer.room))}
+            className={`${GLAZE_PILL} flex h-[30px] items-center px-3 text-[12.5px]`}
+          >
+            Try again
+          </button>
+        )}
+        <Dismiss onClick={onDone} />
+      </span>
     </div>
   );
 }
 
-/** The answer's card or pill. */
+/** What the shape holds for an answer. */
 export function SongResultView({ answer, onDone }: { answer: SongResult; onDone: () => void }) {
   if (answer.result.status === 'match') {
-    return <FoundCard answer={answer as SongResult & { result: { status: 'match' } }} onDone={onDone} />;
+    return <FoundRow answer={answer as SongResult & { result: { status: 'match' } }} onDone={onDone} />;
   }
-  return <AnswerPill answer={answer} onDone={onDone} />;
+  return <OtherRow answer={answer} onDone={onDone} />;
 }

@@ -1,10 +1,18 @@
 // Which of a song's links each surface shows. Rust stores a song's links in
 // display order, the track's own links first, then search pages
 // (`search: true`), then services kept from older lookups (links.rs
-// sort_providers). Pure (type imports only), so it is tested without a page.
+// sort_providers). Pure, so it is tested without a page.
 
 import type { SongEntry } from '../../utils/songHistory';
 import type { SongMatch, SongProvider } from '../../utils/songId';
+import { markOf } from './serviceMarks';
+
+/** The answer card's service buttons: the track's own links whose service has
+ *  a mark of its own (a link that would only draw the plain music note gets
+ *  no button), at most `max`, in display order. */
+export function markedLinks(providers: SongProvider[], max = 3): SongProvider[] {
+  return providers.filter((p) => !p.search && markOf(p.name) !== 'music').slice(0, max);
+}
 
 /** What a song's page shows under its links. */
 export interface SongLinks {
