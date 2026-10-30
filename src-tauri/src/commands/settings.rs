@@ -177,8 +177,7 @@ pub(crate) fn commit_settings_patch(
         *state_settings = next.clone();
         (next, keys, favorites_changed, role_art_changed, source)
     };
-    after_settings_change(&settings, favorites_changed);
-    state.layout_service.set_gif_scale(settings.chat_design.gif_scale);
+    after_settings_change(&settings, favorites_changed, Some(state.layout_service.as_ref()));
     write_settings_to_disk(&settings)?;
     let _ = app.emit(SETTINGS_UPDATED_EVENT, SettingsUpdated { source, keys });
     if role_art_changed {
@@ -295,7 +294,7 @@ pub async fn set_chat_user_hidden(
         state_settings.extra.insert("chat_filters".to_string(), filters);
         state_settings.clone()
     };
-    after_settings_change(&settings, false);
+    after_settings_change(&settings, false, None);
     write_settings_to_disk(&settings)?;
     let _ = app.emit(
         SETTINGS_UPDATED_EVENT,
@@ -321,7 +320,7 @@ pub async fn set_favorite_category(
         }
         state_settings.clone()
     };
-    after_settings_change(&settings, false);
+    after_settings_change(&settings, false, None);
     write_settings_to_disk(&settings)?;
     let _ = app.emit(
         SETTINGS_UPDATED_EVENT,
@@ -348,7 +347,7 @@ pub async fn set_channel_hidden(
         }
         state_settings.clone()
     };
-    after_settings_change(&settings, false);
+    after_settings_change(&settings, false, None);
     write_settings_to_disk(&settings)?;
     let _ = app.emit(
         SETTINGS_UPDATED_EVENT,
@@ -373,7 +372,7 @@ pub async fn set_hidden_channel_realms(
         }
         state_settings.clone()
     };
-    after_settings_change(&settings, false);
+    after_settings_change(&settings, false, None);
     write_settings_to_disk(&settings)?;
     let _ = app.emit(
         SETTINGS_UPDATED_EVENT,
@@ -522,7 +521,7 @@ pub async fn set_chat_user_override(
         state_settings.extra.insert("chat_customization".to_string(), group);
         state_settings.clone()
     };
-    after_settings_change(&settings, false);
+    after_settings_change(&settings, false, None);
     write_settings_to_disk(&settings)?;
     let _ = app.emit(
         SETTINGS_UPDATED_EVENT,
@@ -632,11 +631,20 @@ fn live_settings() -> Option<Settings> {
 }
 
 /// What every settings change has to refresh, whichever path wrote it. Every
-/// caller has let go of the settings lock first.
-fn after_settings_change(saved: &Settings, favorites_changed: bool) {
+/// caller has let go of the settings lock first. `layout` is the chat layout
+/// service, from the writers that can change its GIF size (applied here, in
+/// save order, like every other hook).
+fn after_settings_change(
+    saved: &Settings,
+    favorites_changed: bool,
+    layout: Option<&crate::services::layout_service::LayoutService>,
+) {
     let _in_order = AFTER_SAVE.lock().unwrap_or_else(|p| p.into_inner());
     let live = live_settings();
     let settings = live.as_ref().unwrap_or(saved);
+    if let Some(layout) = layout {
+        layout.set_gif_scale(settings.chat_design.gif_scale);
+    }
     // Detailed logging, from whichever window saved it. Applied only when the
     // saved value changes, so a save of anything else never resets the level.
     crate::services::diagnostic_logger::apply_setting(settings.error_reporting_enabled);
@@ -845,8 +853,7 @@ pub(crate) fn apply_imported_settings(
     }
     // The same refresh set as every other write path, so imported reminders,
     // chat rules and the notification polls apply without waiting for a save.
-    after_settings_change(&imported, favorites_changed);
-    state.layout_service.set_gif_scale(imported.chat_design.gif_scale);
+    after_settings_change(&imported, favorites_changed, Some(state.layout_service.as_ref()));
     // Immediate direct write, deliberately not debounced: the frontend reloads
     // right after this returns and must find the imported file on disk.
     write_settings_to_disk_sync(&imported)?;
@@ -1162,8 +1169,18 @@ mod save_hook_order_tests {
         let body = &src[start..start + src[start..].find("\n}\n").expect("function end")];
         let lock = body.find("AFTER_SAVE.lock()").expect("hooks take the order lock");
         let live = body.find("live_settings()").expect("hooks read the live settings");
-        let first_hook = body.find("diagnostic_logger::apply_setting").expect("the first hook");
+        let first_hook = body.find("set_gif_scale(").expect("the first hook");
         assert!(lock < live && live < first_hook, "the lock, then the live read, then every hook");
+        // The caller's copy is only the stand-in for no live settings.
+        assert!(body.contains("let settings = live.as_ref().unwrap_or(saved);"));
+        assert_eq!(body.matches("(saved)").count(), 1, "the caller's copy is used only as the stand-in");
+        for other_use in ["saved;", "saved.", "&saved", "(saved,", " saved)"] {
+            assert!(!body.contains(other_use), "no hook reads the caller's copy ({other_use})");
+        }
+        // No save side effect runs outside the ordered door.
+        let outside = src.replace(body, "");
+        let outside = &outside[..outside.find("mod save_hook_order_tests").expect("these tests")];
+        assert!(!outside.contains(".set_gif_scale("), "the GIF size is applied inside the ordered door");
     }
 }
 

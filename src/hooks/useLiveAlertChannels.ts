@@ -34,7 +34,14 @@ const INACTIVE: AlertChannelsState = { list: null, failed: false };
 
 export function useLiveAlertChannels(active: boolean): AlertChannelsState {
   const mutedKey = useAppStore((s) => (s.settings.live_notifications?.muted_live_channels ?? []).join('\n'));
-  const [state, setState] = useState<AlertChannelsState>({ list: null, failed: false });
+  const [state, setState] = useState<AlertChannelsState>(INACTIVE);
+  // Switched off: drop what was read, so turning back on never shows the old
+  // counts (adjusting state while rendering, React's pattern for this).
+  const [wasActive, setWasActive] = useState(active);
+  if (wasActive !== active) {
+    setWasActive(active);
+    if (!active) setState(INACTIVE);
+  }
 
   useEffect(() => {
     if (!active) return;

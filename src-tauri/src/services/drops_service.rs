@@ -1027,10 +1027,6 @@ impl DropsService {
 
         let token = match DropsAuthService::get_token().await {
             Ok(t) => {
-                debug!(
-                    "[get_all_active_campaigns] Got token (first 10 chars): {}",
-                    &t[..10.min(t.len())]
-                );
                 t
             }
             Err(e) => {

@@ -363,24 +363,63 @@ pub struct CopyRecord {
 pub const LAST_COPY_FOR: Duration = Duration::from_secs(10 * 60);
 
 static RECORD: Mutex<Option<CopyRecord>> = Mutex::new(None);
+/// A copy whose save is still finishing: recorded under the settings lock,
+/// made the record only once that save succeeded (`keep_pending_copy`), and
+/// edited by every press meanwhile, so a press in between stays as pressed.
+/// Lock order: `PENDING`, then `RECORD`.
+static PENDING: Mutex<Option<CopyRecord>> = Mutex::new(None);
 static NEXT_COPY: AtomicU64 = AtomicU64::new(1);
 
-/// Keep a finished copy as the one Undo can take back. Returns the answer
-/// with its id.
-pub fn record_copy(account_id: &str, generation: u64, mut answer: CopyAnswer) -> CopyAnswer {
+fn new_record(account_id: &str, generation: u64, answer: &mut CopyAnswer) -> CopyRecord {
     answer.copy_id = NEXT_COPY.fetch_add(1, Ordering::SeqCst);
-    let record = CopyRecord {
+    CopyRecord {
         copy_id: answer.copy_id,
         account_id: account_id.to_string(),
         generation,
         added: answer.added.clone(),
         answer: answer.clone(),
         at: Instant::now(),
-    };
+    }
+}
+
+/// Keep a finished copy as the one Undo can take back. Returns the answer
+/// with its id.
+pub fn record_copy(account_id: &str, generation: u64, mut answer: CopyAnswer) -> CopyAnswer {
+    let record = new_record(account_id, generation, &mut answer);
     if let Ok(mut held) = RECORD.lock() {
         *held = Some(record);
     }
     answer
+}
+
+/// A copy about to be saved: held aside until `keep_pending_copy` (its save
+/// succeeded) or `drop_pending_copy` (it failed; the copy before keeps its Undo).
+pub fn record_pending_copy(account_id: &str, generation: u64, mut answer: CopyAnswer) -> CopyAnswer {
+    let record = new_record(account_id, generation, &mut answer);
+    if let Ok(mut pending) = PENDING.lock() {
+        *pending = Some(record);
+    }
+    answer
+}
+
+/// The pending copy saved: it becomes the record (with any press since).
+pub fn keep_pending_copy(copy_id: u64) {
+    let Ok(mut pending) = PENDING.lock() else { return };
+    if pending.as_ref().is_some_and(|r| r.copy_id == copy_id) {
+        let record = pending.take();
+        if let Ok(mut held) = RECORD.lock() {
+            *held = record;
+        }
+    }
+}
+
+/// The pending copy did not save: forget it.
+pub fn drop_pending_copy(copy_id: u64) {
+    if let Ok(mut pending) = PENDING.lock() {
+        if pending.as_ref().is_some_and(|r| r.copy_id == copy_id) {
+            *pending = None;
+        }
+    }
 }
 
 /// A channel edited by hand since the copy leaves its Undo: a deliberate
@@ -389,11 +428,18 @@ pub fn forget_in(record: &mut CopyRecord, keys: &[String]) {
     record.added.retain(|a| !keys.iter().any(|k| k.eq_ignore_ascii_case(a)));
 }
 
-/// `forget_in` on the held record.
+/// `forget_in` on the held record and on a copy still saving. `PENDING` is
+/// held across both, so a copy moving from one to the other is never missed.
 pub fn forget_copied(keys: &[String]) {
-    if let Ok(mut held) = RECORD.lock() {
-        if let Some(record) = held.as_mut() {
+    let pending = PENDING.lock();
+    if let Ok(mut pending) = pending {
+        if let Some(record) = pending.as_mut() {
             forget_in(record, keys);
+        }
+        if let Ok(mut held) = RECORD.lock() {
+            if let Some(record) = held.as_mut() {
+                forget_in(record, keys);
+            }
         }
     }
 }
@@ -414,19 +460,6 @@ pub fn undo_list(copy_id: u64, generation: u64) -> Result<Vec<String>, CopyError
 }
 
 /// Drop the record once its Undo saved.
-/// Take the held record out (a copy about to record its own, which may still
-/// fail to save).
-pub fn take_copy_record() -> Option<CopyRecord> {
-    RECORD.lock().ok().and_then(|mut held| held.take())
-}
-
-/// Put back the record a copy that failed to save took out.
-pub fn restore_copy_record(record: Option<CopyRecord>) {
-    if let Ok(mut held) = RECORD.lock() {
-        *held = record;
-    }
-}
-
 pub fn clear_copy(copy_id: u64) {
     if let Ok(mut held) = RECORD.lock() {
         if held.as_ref().is_some_and(|r| r.copy_id == copy_id) {
@@ -634,6 +667,22 @@ mod tests {
         let mut edited = rec.clone();
         forget_in(&mut edited, &keys_for_twitch("XQC"));
         assert_eq!(edited.added, strings(&["kamet0"]));
+    }
+
+    #[test]
+    fn a_press_while_a_copy_saves_stays_pressed_and_a_failed_copy_keeps_the_last_undo() {
+        // The only test that touches the held records.
+        let first = record_copy("1", 9, answer(&["a1", "b1"]));
+        let next = record_pending_copy("1", 9, answer(&["c1", "d1"]));
+        forget_copied(&keys_for_twitch("C1"));
+        assert_eq!(undo_list(first.copy_id, 9).unwrap(), strings(&["a1", "b1"]), "still the last saved copy");
+        keep_pending_copy(next.copy_id);
+        assert_eq!(undo_list(next.copy_id, 9).unwrap(), strings(&["d1"]), "the press made during the save stays");
+        assert_eq!(undo_list(first.copy_id, 9).unwrap_err(), CopyError::Stale);
+        let failed = record_pending_copy("1", 9, answer(&["e1"]));
+        drop_pending_copy(failed.copy_id);
+        keep_pending_copy(failed.copy_id);
+        assert_eq!(undo_list(next.copy_id, 9).unwrap(), strings(&["d1"]), "a copy that did not save leaves the last Undo");
     }
 
     #[test]

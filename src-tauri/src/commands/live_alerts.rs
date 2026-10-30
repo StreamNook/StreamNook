@@ -114,7 +114,6 @@ pub async fn copy_twitch_live_mutes(app: AppHandle, state: State<'_, AppState>) 
         return Err(CopyError::WrongAccount);
     }
     let mut outcome: Result<CopyAnswer, CopyError> = Err(CopyError::SaveFailed);
-    let mut previous = None;
     let saved = commit_settings_patch(&app, &state, None, |current| {
         // Signed in, switched or signed out while the pages were read: write nothing.
         if TwitchService::account_generation() != generation {
@@ -132,17 +131,19 @@ pub async fn copy_twitch_live_mutes(app: AppHandle, state: State<'_, AppState>) 
             added: merged.added,
         };
         // Recorded under the settings lock, so a bell pressed right after this
-        // save edits this record (its Undo never takes back a deliberate mute).
-        previous = live_mute::take_copy_record();
-        outcome = Ok(live_mute::record_copy(&account, generation, answer));
+        // save edits this copy (its Undo never takes back a deliberate mute).
+        // It stays pending until the save is known to have gone through.
+        outcome = Ok(live_mute::record_pending_copy(&account, generation, answer));
         Ok(patch)
     });
+    match (&saved, &outcome) {
+        (Ok(()), Ok(answer)) => live_mute::keep_pending_copy(answer.copy_id),
+        // A copy that did not save offers no Undo; the copy before keeps its own.
+        (Err(_), Ok(answer)) => live_mute::drop_pending_copy(answer.copy_id),
+        _ => {}
+    }
     if let Err(e) = saved {
         log::warn!("[LiveAlerts] copy save failed: {e}");
-        // A copy that did not save offers no Undo; the copy before it keeps its own.
-        if outcome.is_ok() {
-            live_mute::restore_copy_record(previous);
-        }
         return Err(CopyError::SaveFailed);
     }
     outcome
