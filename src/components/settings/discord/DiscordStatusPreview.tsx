@@ -360,7 +360,10 @@ export function DiscordStatusPreview({ model, now }: { model: PreviewModel | nul
           <div className="flex min-h-4 min-w-0 items-center gap-1 text-[12px] leading-4" style={{ color: MUTED }}>
             {a && (
               <>
-                <DiscordActivityIcon verb={a.verb} size={12} />
+                {/* The icon in Discord's green, the text in the row's grey. */}
+                <span className="flex-none" style={{ color: TIMER }}>
+                  <DiscordActivityIcon verb={a.verb} size={12} />
+                </span>
                 <span className="truncate">{a.member_line}</span>
               </>
             )}
