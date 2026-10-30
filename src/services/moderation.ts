@@ -82,13 +82,14 @@ export function holdChatRow(row: HTMLElement, on: boolean): void {
   row.dispatchEvent(new CustomEvent(ROW_HOLD_EVENT, { bubbles: true, detail: { on } }));
 }
 
-/** Fired (bubbling) on a chat row while a reason picker is open for it, so
- *  its list holds still until the picker closes. The picker sits outside the
- *  list, so pointing at it would otherwise let the list go. */
-export const PICKER_HOLD_EVENT = 'sn-picker-hold';
+/** Fired (bubbling) on a chat row when a reason picker opens for it and when
+ *  it closes. The list pauses chat while it is open, so the row stays put
+ *  under it, and resumes when it closes unless the viewer paused chat
+ *  themselves meanwhile. */
+export const PICKER_EVENT = 'sn-reason-picker';
 
-export function holdForPicker(row: Element, on: boolean): void {
-  row.dispatchEvent(new CustomEvent(PICKER_HOLD_EVENT, { bubbles: true, detail: { on } }));
+export function pickerOpen(row: Element, open: boolean): void {
+  row.dispatchEvent(new CustomEvent(PICKER_EVENT, { bubbles: true, detail: { open } }));
 }
 
 /** A timeout length the viewer typed ("45m", "1h30m", "2d", a bare number of

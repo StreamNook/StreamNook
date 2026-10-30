@@ -500,9 +500,15 @@ export function BlendedChatPane({
       now - lastNavTimeRef.current < 1000
     );
   }, []);
-  const onPauseIntent = useCallback(() => {
-    if (!inGrace()) setChatPaused(true);
-  }, [inGrace, setChatPaused]);
+  // A deliberate pause (a scrollbar press) is not wheel inertia, so the grace
+  // windows never drop it: the list has already stopped following.
+  const onPauseIntent = useCallback(
+    (opts?: { deliberate?: boolean }) => {
+      if (opts?.deliberate) setChatPaused(true, { force: true });
+      else if (!inGrace()) setChatPaused(true);
+    },
+    [inGrace, setChatPaused],
+  );
   const onScroll = useCallback(
     (distanceToBottom: number, isUserScroll: boolean) => {
       if (inGrace()) return;

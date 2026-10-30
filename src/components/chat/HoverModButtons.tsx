@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type React from 'react';
 import { CaretDown, Clock, Prohibit, Trash, X } from 'phosphor-react';
 
-import { armedFor, holdForPicker, moderateWithToast, useModTimeoutSteps, type ModOutcome, type ModRequest } from '../../services/moderation';
+import { armedFor, moderateWithToast, pickerOpen, useModTimeoutSteps, type ModOutcome, type ModRequest } from '../../services/moderation';
 import { useAppStore } from '../../stores/AppStore';
 import { Tooltip } from '../ui/Tooltip';
 import { ReasonPicker } from './ReasonPicker';
@@ -24,6 +24,9 @@ function DockTimeoutPresets({
         step.action !== 'timeout' || step.seconds == null ? null : (
           <button
             key={step.seconds}
+            // Alt opens the reason picker here (ChatMessageList pauses chat at
+            // the press, before the picker opens).
+            data-mod-reason="true"
             aria-label={`Time out for ${step.label}`}
             className="h-[22px] rounded-md px-1.5 text-[11px] font-semibold leading-none text-white/70 hover:text-warning hover:bg-warning/20 transition-colors"
             onClick={(e) => {
@@ -91,13 +94,13 @@ export function HoverModButtons({
   // Ban waiting for its second press (Ban confirmation on).
   const [banArmed, setBanArmed] = useState(false);
   const altHint = target ? ' Alt-click to pick a reason.' : '';
-  // The list holds still while the picker is open, so the row it belongs to
-  // stays put under it (ChatMessageList).
+  // Chat pauses while the picker is open, so the row it belongs to stays put
+  // under it, and resumes when it closes (ChatMessageList).
   useEffect(() => {
     const row = picking?.anchor.closest('.chat-message-row');
     if (!row) return;
-    holdForPicker(row, true);
-    return () => holdForPicker(row, false);
+    pickerOpen(row, true);
+    return () => pickerOpen(row, false);
   }, [picking]);
 
   // A plain click acts (Shift hands it to the composer, the caller's part);
@@ -156,7 +159,7 @@ export function HoverModButtons({
             press(e, seconds, label);
           }}
         />
-        <Tooltip content="Close lengths" side="top">
+        <Tooltip content="Close lengths" side="top" requirePointerMove>
           <button
             aria-label="Close lengths"
             onClick={(e) => {
@@ -183,8 +186,13 @@ export function HoverModButtons({
           content={banArmed ? `Press again to ban ${targetName}` : `Ban ${targetName}. Shift-click to add a reason.${altHint}`}
           side="top"
           disabled={picking != null}
+          // Only on a real move: a row that slid under a still pointer is not
+          // aimed at yet, and its Ban is still gray. The armed swap mounts a
+          // new tooltip under the same still pointer, so it shows on enter.
+          requirePointerMove={!banArmed}
         >
           <button
+            data-mod-reason="true"
             aria-label={banArmed ? `Press again to ban ${targetName}` : `Ban ${targetName}`}
             onClick={(e) => press(e, null, null)}
             className={`p-1 rounded-md transition-colors ${
@@ -196,7 +204,7 @@ export function HoverModButtons({
         </Tooltip>
       )}
       {canDelete && (
-        <Tooltip content="Delete this message" side="top">
+        <Tooltip content="Delete this message" side="top" requirePointerMove>
           <button
             aria-label="Delete this message"
             onClick={(e) => {
@@ -216,8 +224,10 @@ export function HoverModButtons({
             content={`Time out ${targetName} for 10m. Shift-click to add a reason.${altHint}`}
             side="top"
             disabled={picking != null}
+            requirePointerMove
           >
             <button
+              data-mod-reason="true"
               aria-label={`Time out ${targetName} for 10m`}
               onClick={(e) => press(e, 600, '10m')}
               className="flex h-[22px] items-center gap-1 rounded-md px-1 text-[11px] font-semibold leading-none text-white/50 hover:text-warning hover:bg-warning/20 transition-colors"
@@ -226,7 +236,7 @@ export function HoverModButtons({
               10m
             </button>
           </Tooltip>
-          <Tooltip content="Other lengths" side="top">
+          <Tooltip content="Other lengths" side="top" requirePointerMove>
             <button
               aria-label="Other timeout lengths"
               onClick={(e) => {

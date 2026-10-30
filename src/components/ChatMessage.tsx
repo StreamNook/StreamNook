@@ -1319,7 +1319,8 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   const cologneAtm = cologne ? getAtmosphere(MAJOR_COLOGNE_THEME_ID) : null;
   const [broadcasterType] = useState<string | null>(null);
   // Hover-action DOM (copy/pin cluster + mod menu) mounts on the row's FIRST
-  // hover and stays mounted, so the CSS group-hover fade still runs on every
+  // real hover (a move over it, or a touch) and stays mounted, so the CSS
+  // group-hover fade still runs on every
   // later hover. Before this, every row carried ~30-60 hidden nodes (mods:
   // the full punitive toolbar with tooltips) whether or not it was ever
   // hovered. Keyboard and drag moderation don't need this DOM (verified:
@@ -3481,16 +3482,20 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
           ? { paddingLeft: 18, paddingRight: 18, paddingTop: 7, paddingBottom: 7, minHeight: 36 }
           : {}),
       }}
-      data-mod-dock={dockOffered ? 'true' : undefined}
-      // A row whose edge offers the slider or the line buttons: the list holds
-      // still from the moment the pointer reaches it, hover buttons or not, so
-      // a fast chat cannot slide another row under the edge on the way there.
-      data-mod-row={showModSlider || showModLine ? 'true' : undefined}
       onContextMenu={handleRowContextMenu}
-      onPointerEnter={(e) => {
-        if (!hoverArmed) setHoverArmed(true);
-        if (animateEmotes === 'hover' && e.pointerType !== 'touch') setRowHovering(true);
-      }}
+      onPointerEnter={
+        animateEmotes === 'hover'
+          ? (e) => {
+              if (e.pointerType !== 'touch') setRowHovering(true);
+            }
+          : undefined
+      }
+      // The hover dock and the slider mount on a real move over the row or a
+      // touch on it. A row that slides under a still pointer gets a
+      // pointerenter with neither, and mounted them for good on every row
+      // that passed under a resting mouse.
+      onPointerMove={hoverArmed ? undefined : () => setHoverArmed(true)}
+      onPointerDown={hoverArmed ? undefined : () => setHoverArmed(true)}
       onPointerLeave={
         animateEmotes === 'hover' || timeoutLengthsOpen
           ? () => {
@@ -3880,8 +3885,9 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
           was; for a mod the quick timeout (its length printed) comes next,
           then Delete, and Ban farthest from Copy. Inside the row every button
           belongs to the line under the pointer (a menu above the row covered
-          the line before it), and the list holds still while a mod points at
-          the row (ChatMessageList), so nothing slides away mid-aim. The other
+          the line before it), and a mod's buttons act only once the rows under
+          the pointer have held still (ChatMessageList), so nothing slides in
+          mid-aim. The other
           lengths open on a click, in place, and their close button lands on
           the chevron's own spot, so a double click only toggles. data-no-drag
           so nothing here starts a mod drag. */}
@@ -3917,7 +3923,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
           )}
           {dockOffered && (onMessageCopy || showInlinePin) && <div className="mx-0.5 h-4 w-px bg-white/10" />}
           {showInlinePin && broadcasterId && thisMessageId && parsed.provider === 'twitch' && (
-            <Tooltip content={isThisPinned ? 'Unpin message' : 'Pin message'} side="top">
+            <Tooltip content={isThisPinned ? 'Unpin message' : 'Pin message'} side="top" requirePointerMove>
               <button
                 onClick={async (e) => {
                   e.preventDefault();
@@ -3944,7 +3950,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             </Tooltip>
           )}
           {onMessageCopy && (
-            <Tooltip content="Copy message" side="top">
+            <Tooltip content="Copy message" side="top" requirePointerMove>
               <button
                 aria-label="Copy message"
                 onClick={(e) => { e.preventDefault(); onMessageCopy(parsed.content); }}

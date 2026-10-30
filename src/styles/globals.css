@@ -3462,40 +3462,43 @@ html[data-motion="reduced"] .sub-progress-fill {
   }
 }
 
-/* The hover hold's pill (HoverHoldPill). It waits unseen until the list says
-   it may show, and steps aside while the pointer is near it (the list writes
-   data-near on its node). When it may show is timed in JS, because the
-   Motion Off rule above zeroes every animation-delay; the fade plays each
-   time it appears. */
-[data-hold-pill]:not([data-due]),
-[data-hold-pill][data-near] {
-  visibility: hidden;
+/* Rows moving under a moderator's pointer (ChatMessageList): the row under it
+   is not one the pointer was aimed at, so its mod buttons rest as a dim gray
+   copy and take no press until the rows have held still. Entered at once, so
+   rows sliding under a still pointer never fade from full; left over the
+   dock buttons' own 150 ms, on every surface alike. The dock's buttons dim,
+   not the dock: it sits over the message's end and must stay opaque. A held
+   message's Allow and Deny are filled buttons, which melt into their card at
+   0.28 and read as missing (Deny first), so they rest at 0.45. */
+[data-line-aim] .chat-message-row[data-rows-moving] :is([data-row-dock] button, .sn-mod-line),
+[data-line-aim] .chat-message-row[data-rows-moving] [data-mod-act] {
+  opacity: 0.28;
+  filter: grayscale(1);
+  cursor: default;
+  transition: none;
 }
-@keyframes sn-hold-pill-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
+[data-line-aim] .chat-message-row[data-rows-moving] [data-mod-act] {
+  opacity: 0.45;
 }
-[data-hold-pill][data-due]:not([data-near]) .sn-hold-pill {
-  animation: sn-hold-pill-in 150ms ease-out both;
-}
-@media (prefers-reduced-motion: reduce) {
-  [data-hold-pill][data-due]:not([data-near]) .sn-hold-pill {
-    animation: none;
-  }
-}
-/* Disarmed (ChatMessageList): rows moved under a pointer that did not move
-   with them, so the mod buttons now under it belong to a row nobody aimed
-   at. They hide on that row until the pointer moves again. A line's buttons
-   shown on hover give back their room on rows that slide under, so their
-   text holds still; the row that was under the pointer when it happened
-   (data-hold-kept) keeps its room for the same reason. */
-[data-hold-disarmed] .chat-message-row:hover :is([data-row-dock], [data-mod-act], .sn-mod-line) {
-  visibility: hidden;
-}
-[data-hold-disarmed] [data-line-show='hover'] .chat-message-row:hover:not([data-hold-kept]) .sn-mod-line {
-  width: 0;
-  margin-right: 0;
+[data-line-show='hover'][data-line-aim] .chat-message-row[data-line-open][data-rows-moving] .sn-mod-line {
   animation: none;
+}
+/* In a moderator's list the hover look stays on the row under the pointer.
+   Rows slide past a still pointer all the time: the arriving row shows its
+   highlight and dock at once (a dock fading in from clear let the text under
+   it show through, and pulsed at 10 rows a second), and the leaving row drops
+   them at once (fading out over the next row, they named the wrong row). */
+[data-line-aim] .chat-message-row[data-rows-moving]:hover > .group,
+[data-line-aim] .chat-message-row[data-rows-moving]:hover [data-row-dock],
+[data-line-aim] .chat-message-row:not(:hover) > .group,
+[data-line-aim] .chat-message-row:not(:hover) [data-row-dock] {
+  transition: none;
+}
+.chat-message-row :is([data-mod-act], .sn-mod-line) {
+  transition: opacity 150ms cubic-bezier(0.4, 0, 0.2, 1), filter 150ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.chat-message-row [data-row-dock] button {
+  transition-property: color, background-color, border-color, opacity, filter;
 }
 
 /* The chat dock's tab row unfolding: the wrapped lines reveal downward from
@@ -5805,12 +5808,18 @@ html[data-watching] .drops-progress-inline {
 }
 /* Show: On hover. Only the line under the pointer shows its buttons, and
    they push its text over; every other line keeps no room for them. The
-   strip keeps its height either way, so a line never changes height. */
-[data-line-show='hover'] .chat-message-row:not(:hover) .sn-mod-line {
+   strip keeps its height either way, so a line never changes height. In a
+   moderator's chat (data-line-aim), the line is the one a real move is over
+   or a finger last tapped (data-line-open, ChatMessageList), so a row that
+   slides under a still pointer never opens and keeps its text where it was.
+   Elsewhere (the settings preview) :hover picks it. */
+[data-line-show='hover']:not([data-line-aim]) .chat-message-row:not(:hover) .sn-mod-line,
+[data-line-show='hover'][data-line-aim] .chat-message-row:not([data-line-open]) .sn-mod-line {
   width: 0;
   margin-right: 0;
 }
-[data-line-show='hover'] .chat-message-row:hover .sn-mod-line {
+[data-line-show='hover']:not([data-line-aim]) .chat-message-row:hover .sn-mod-line,
+[data-line-show='hover'][data-line-aim] .chat-message-row[data-line-open] .sn-mod-line {
   animation: sn-line-in 120ms ease-out;
 }
 @keyframes sn-line-in {
@@ -5819,7 +5828,8 @@ html[data-watching] .drops-progress-inline {
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  [data-line-show='hover'] .chat-message-row:hover .sn-mod-line {
+  [data-line-show='hover']:not([data-line-aim]) .chat-message-row:hover .sn-mod-line,
+  [data-line-show='hover'][data-line-aim] .chat-message-row[data-line-open] .sn-mod-line {
     animation: none;
   }
 }

@@ -707,7 +707,6 @@ export function ModSlider({ provider, target, messageId, onApply, hint = false }
         // keys (ChatWidget).
         aria-hidden="true"
         data-no-drag="true"
-        data-mod-edge="true"
         className={`sn-mod-layer sn-mod-grip${step != null ? ' is-active' : ''}${hint ? ' is-hinted' : ''}`}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}

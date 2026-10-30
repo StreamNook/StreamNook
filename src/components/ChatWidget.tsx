@@ -269,7 +269,10 @@ interface ChatMessagesPanelProps {
   /** Replay-mode snapshot; null in live mode. */
   override: ChatMessagesPanelSource | null;
   isPaused: boolean;
-  onPauseIntent: () => void;
+  onPauseIntent: (opts?: { deliberate?: boolean }) => void;
+  /** Resume to live, as the Chat Paused button does (ChatMessageList calls it
+   *  when a reason picker that paused chat closes). */
+  onResumeIntent: () => void;
   onScroll: (distanceToBottom: number, isUserScroll: boolean) => void;
   onUsernameClick: React.ComponentProps<typeof ChatMessageList>['onUsernameClick'];
   onReplyClick: (parentMsgId: string) => void;
@@ -296,8 +299,7 @@ interface ChatMessagesPanelProps {
   /** Filled with the list's own glide to the live bottom (ChatMessageList). */
   scrollToBottomRef?: React.RefObject<(() => void) | null>;
   /** Chat Paused, drawn over this panel's own bottom edge: clear of the strips
-   *  and the composer below, and where the hover hold's pill sits
-   *  (ChatMessageList). */
+   *  and the composer below. */
   pausedPill?: React.ReactNode;
 }
 
@@ -322,6 +324,7 @@ const ChatMessagesPanel = ({
   override,
   isPaused,
   onPauseIntent,
+  onResumeIntent,
   onScroll,
   onUsernameClick,
   onReplyClick,
@@ -365,8 +368,6 @@ const ChatMessagesPanel = ({
     const required = localViewKey.split(',');
     return base.filter((m) => passesLocalViews(m, required));
   }, [src.messages, filterId, localViewKey]);
-  // Which feed the list draws, so a hold in it lets go when this changes.
-  const feedKey = `${channelKey ?? ''}|${override ? 'override' : 'live'}|${filterId ?? ''}|${localViewKey}`;
   const addUser = useChatUserStore((state) => state.addUser);
   /** Consecutive Twitch messages seen with no source-room-id tag. Drives the
    *  shared-chat session-end detection below. */
@@ -616,6 +617,7 @@ const ChatMessagesPanel = ({
             renderToken={src.renderToken}
             isPaused={isPaused}
             onPauseIntent={onPauseIntent}
+            onResumeIntent={onResumeIntent}
             onScroll={onScroll}
             onUsernameClick={onUsernameClick}
             onReplyClick={onReplyClick}
@@ -637,7 +639,6 @@ const ChatMessagesPanel = ({
             headerInset={headerInset}
             pinnedIds={pinnedIds}
             scrollToBottomRef={scrollToBottomRef}
-            feedKey={feedKey}
           />
         </ErrorBoundary>
       )}
@@ -2973,6 +2974,11 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     // always lands, then glide to the live bottom.
     setChatPaused(false, { scrollToBottom: true, force: true });
   };
+  // The same resume for the list (a reason picker that paused chat closing),
+  // stable so the list never re-renders for it.
+  const handleResumeIntent = useCallback(() => {
+    setChatPaused(false, { scrollToBottom: true, force: true });
+  }, [setChatPaused]);
 
   // A Twitch badge click opens its badge page in the Badges overlay with the
   // version id (the page's metadata, earn guide and window lookups key on it).
@@ -4571,12 +4577,19 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   // /usercard and /user commands) invoke the current closure.
   handleUsernameClickRef.current = handleUsernameClick;
 
-  const handlePauseIntent = useCallback(() => {
+  const handlePauseIntent = useCallback((opts?: { deliberate?: boolean }) => {
     // Fired the instant the user scrolls up by any amount. This
     // is the primary pause path — no distance threshold, just
     // like Twitch: scroll up at all and chat pauses. It is safe
     // from layout jolts because only a real wheel/touch gesture
     // reaches here (a tall message moving the scrollbar does not).
+    // A deliberate pause (a scrollbar press, a reason picker opening) is a
+    // press, not wheel inertia or a settling layout, so the windows below
+    // never drop it: the list has already stopped following.
+    if (opts?.deliberate) {
+      setChatPaused(true, { force: true });
+      return;
+    }
     const now = Date.now();
     if (now - mountTimeRef.current < 2000) return;       // initial layout settle
     if (now - lastResumeTimeRef.current < 1000) return;  // post-resume inertia
@@ -5623,6 +5636,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
             override={panelOverride}
             isPaused={isPaused}
             onPauseIntent={handlePauseIntent}
+            onResumeIntent={handleResumeIntent}
             onScroll={handleListScroll}
             onUsernameClick={handleUsernameClick}
             onReplyClick={handleReplyClick}

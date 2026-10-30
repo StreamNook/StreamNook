@@ -12,24 +12,13 @@ import { useStreamerMode } from '../utils/streamerMode';
 import { useChatUserStore } from '../stores/chatUserStore';
 import type { ProviderId } from '../types/providers';
 import { ScrollbarMarks } from './chat/ScrollbarMarks';
-import { holdChatRow, moderateWithToast, PICKER_HOLD_EVENT, ROW_HOLD_EVENT, useLineConfig, useModSliderSteps, useSliderConfig, type ModStep } from '../services/moderation';
+import { holdChatRow, moderateWithToast, PICKER_EVENT, ROW_HOLD_EVENT, useLineConfig, useModSliderSteps, useSliderConfig, type ModStep } from '../services/moderation';
+import { edgesMoved, isStill, tapAgain, type Edges, type Tap } from './chat/modPress';
 import { lineButtons, type LineButton } from './chat/modLine';
-import { bindLineStrips, bindLineWheel, isOnLineStrip, useLineArt, useLineButtons } from './chat/lineArt';
+import { bindLineStrips, bindLineWheel, useLineArt, useLineButtons } from './chat/lineArt';
 import { collectMarks, FALLBACK_MARK_KINDS } from './chat/scrollbarMarkLayout';
 import { IS_MAC, IS_MOBILE } from '../utils/platform';
 import { releaseRowImagesOnUnmount } from '../utils/releaseImages';
-import {
-  createHoverHold,
-  createMoveTrail,
-  HOLD_PILL_CLEAR_PX,
-  HOLD_PILL_MIN_MS,
-  isNear,
-  movedEnough,
-  rowsSinceHold,
-  whenPillDue,
-  type HoverHold,
-} from './chat/hoverHold';
-import { HoverHoldPill } from './chat/HoverHoldPill';
 
 /**
  * How many of the newest rows always paint (see MessageRow). Enough to fill
@@ -48,56 +37,45 @@ const PHONE_TOP_FADE: React.CSSProperties = {
 /** No slider timeouts yet: one array, so the line's hooks see no change. */
 const NO_STEPS: ModStep[] = [];
 
-/** Where the hover hold holds, besides the line buttons: a row that offers
- *  the hover dock or the slider (ChatMessage marks both), the slider grip,
- *  and a held AutoMod message's Allow and Deny. */
-const HOLD_ZONE_SELECTOR = '[data-mod-dock], [data-mod-row], [data-mod-edge], [data-mod-act]';
-
-/** Buttons that act on one press, besides the line buttons: the hover dock
- *  and a held message's Allow and Deny. These hide, and take no press, under
- *  a pointer chat slid under; the slider grip is a drag that shows its row
- *  before it acts. */
-const INSTANT_CONTROL_SELECTOR = '[data-row-dock], [data-mod-act]';
-
-function isOnHoldZone(target: EventTarget | null): boolean {
-  return target instanceof Element && (isOnLineStrip(target) || target.closest(HOLD_ZONE_SELECTOR) !== null);
-}
-
-function isOnInstantControl(target: EventTarget | null): boolean {
-  return target instanceof Element && (isOnLineStrip(target) || target.closest(INSTANT_CONTROL_SELECTOR) !== null);
-}
-
-/** The chat row an event or hit test landed in, or null. */
-function rowOf(target: EventTarget | null): Element | null {
-  return target instanceof Element ? target.closest('.chat-message-row') : null;
-}
-
-/** What a press acts on: a hover dock button, a held message's Allow or
- *  Deny, or a line's buttons. A line is one strip: which of its buttons a
- *  press hits depends only on how far along it the pointer is, which rows
- *  moving up and down never change. */
+/** A moderator's one-press buttons on a row: the hover dock's, a held
+ *  message's Allow and Deny, and a line's buttons (one strip). The slider grip
+ *  is a drag that shows its row before it acts, so it is not one. */
 const CONTROL_SELECTOR = '[data-row-dock] button, [data-mod-act] button, [data-mod-line]';
 
-/** The mod button under a pointer at `target`, or null. */
+/** The one-press mod button under `target`, or null. */
 function controlOf(target: EventTarget | null): Element | null {
   return target instanceof Element ? target.closest(CONTROL_SELECTOR) : null;
 }
 
-/** Where one-press buttons sit on a row, hidden or not. */
-const HIDDEN_SPOT_SELECTOR = '[data-row-dock], [data-mod-act], [data-mod-line]';
+/** The chat row at a point inside `list`, or null. */
+function rowAt(list: Element, x: number, y: number): Element | null {
+  const hit = document.elementFromPoint(x, y);
+  return hit && list.contains(hit) ? hit.closest('.chat-message-row') : null;
+}
 
-/** Mod buttons that follow a row's text: they can move inside a row that
- *  stays put (an emote loading above a held message's Allow and Deny). The
- *  hover dock rides on the row's top. */
-const TEXT_CONTROL_SELECTOR = '[data-mod-line], [data-mod-act]';
+/** A row's edges on screen. */
+function edgesOf(row: Element): Edges {
+  const box = row.getBoundingClientRect();
+  return { top: box.top, bottom: box.bottom };
+}
 
-/** Where a row and its mod buttons sit, to tell whether anything moved. */
-function placeOf(row: Element): string {
-  let place = `${row.getBoundingClientRect().top}`;
-  row.querySelectorAll(TEXT_CONTROL_SELECTOR).forEach((control) => {
-    place += ` ${control.getBoundingClientRect().top}`;
-  });
-  return place;
+/** Every row on the list's screen with its edges. The rows are one column, so
+ *  a binary search finds the first one reaching below the top. */
+function rowsInView(rows: HTMLCollection, top: number, bottom: number): Map<Element, Edges> {
+  let lo = 0;
+  let hi = rows.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (rows[mid].getBoundingClientRect().bottom > top) hi = mid;
+    else lo = mid + 1;
+  }
+  const view = new Map<Element, Edges>();
+  for (let i = lo; i < rows.length; i += 1) {
+    const edges = edgesOf(rows[i]);
+    if (edges.top >= bottom) break;
+    view.set(rows[i], edges);
+  }
+  return view;
 }
 
 /**
@@ -217,8 +195,11 @@ const MessageRow = memo(function MessageRow({
     () => ({
       contentVisibility: paintAlways ? ('visible' as const) : ('auto' as const),
       // Off-screen size hint, computed per-user from font size and spacing.
-      // Ignored when content-visibility is visible.
-      containIntrinsicBlockSize: paintAlways ? undefined : intrinsicSizeCSS,
+      // Set on rows that paint always too: it takes no part in their layout,
+      // but its `auto` makes the browser remember each row's real height, so a
+      // row leaving the newest few keeps its height instead of dropping to the
+      // hint (paused chat jumped by one row per arrival).
+      containIntrinsicBlockSize: intrinsicSizeCSS,
     }),
     [paintAlways, intrinsicSizeCSS],
   );
@@ -297,8 +278,13 @@ interface ChatMessageListProps {
   // keyboard), BEFORE any scroll event or distance threshold. This is the
   // reliable pause signal in fast chats — it never depends on out-racing the
   // auto-scroll snap-back, and it is naturally immune to layout jolts (a tall
-  // message moves the scrollbar but never emits a wheel event).
-  onPauseIntent?: () => void;
+  // message moves the scrollbar but never emits a wheel event). `deliberate`:
+  // a press that means pause (the scrollbar, a reason picker), which skips the
+  // host's settle windows; those are for wheel inertia and layout settling.
+  onPauseIntent?: (opts?: { deliberate?: boolean }) => void;
+  /** Resume to live, as the Chat Paused button does. Called when a reason
+   *  picker that paused chat closes and nobody paused it since. */
+  onResumeIntent?: () => void;
   onUsernameClick: (
     userId: string,
     username: string,
@@ -343,9 +329,6 @@ interface ChatMessageListProps {
   /** Filled with this list's eased scroll to the live bottom. Call it in the
    *  same handler that un-pauses, before the re-render pins the list. */
   scrollToBottomRef?: React.RefObject<(() => void) | null>;
-  /** Which feed this list draws (a channel, a replay, a filter). When it
-   *  changes, every hold lets go: the held rows belong to the old feed. */
-  feedKey?: string;
 }
 
 /**
@@ -365,6 +348,7 @@ const ChatMessageList = memo(function ChatMessageList({
   isPaused,
   onScroll,
   onPauseIntent,
+  onResumeIntent,
   onUsernameClick,
   onReplyClick,
   onMessageCopy,
@@ -386,15 +370,14 @@ const ChatMessageList = memo(function ChatMessageList({
   headerInset = 40,
   pinnedIds,
   scrollToBottomRef,
-  feedKey,
 }: ChatMessageListProps) {
-  // While a moderator points where a mod action starts (the hover effect
-  // below), presses a row to slide or drag it, or picks a reason for it, the
+  // While a moderator presses a mod button, or a row to slide or drag it, the
   // list keeps drawing the rows that were on screen, so nothing moves and
-  // nothing is trimmed away however fast chat runs; it catches up to live
-  // when the pointer leaves or rests, the press ends and the picker closes.
-  // The frozen array is the store's own copy-on-write snapshot, so holding it
-  // costs one reference. Everything below draws `messages`.
+  // nothing is trimmed away however fast chat runs; it catches up to live when
+  // the press ends. Chat never pauses on its own: a moderator pauses it the way
+  // everyone does, by scrolling up or grabbing the scrollbar. The frozen array
+  // is the store's own copy-on-write snapshot, so holding it costs one
+  // reference. Everything below draws `messages`.
   const [frozenView, setFrozenView] = useState<ChatMessageListProps['messages'] | null>(null);
   const messages = frozenView ?? liveMessages;
   const shownRef = useRef(messages);
@@ -402,56 +385,15 @@ const ChatMessageList = memo(function ChatMessageList({
     shownRef.current = messages;
   });
   const viewFrozenRef = useRef(false);
-  // Why the view is held: the pointer aims at a mod target, a press holds a
-  // row, a reason picker is open for one, or several of them. It thaws only
-  // when none is left.
-  const freezeRef = useRef({ hover: false, press: false, pick: false });
-  // The row whose reason picker holds the view, so a row that left the list
-  // never keeps it held.
-  const pickRowRef = useRef<Element | null>(null);
-  // The hover hold's rules (chat/hoverHold.ts), while this list has one.
-  const hoverHoldRef = useRef<HoverHold | null>(null);
-  // Its pill shows only for the hover hold: a press or a picker is a gesture
-  // under way, and the pill would only distract from it.
-  const [hoverPill, setHoverPill] = useState(false);
-  const hoverPillRef = useRef(false);
-  // The pill may show (the hold has lasted long enough).
-  const [pillDue, setPillDue] = useState(false);
-  const pillRef = useRef<HTMLDivElement>(null);
-  // The pointer in the page at its last counted move, for the pill's nearness.
-  const pointRef = useRef<{ x: number; y: number } | null>(null);
-  // The hover effect's look for rows that moved under the pointer, which the
-  // commit and resize paths below run too.
-  const checkMovedRef = useRef<(() => void) | null>(null);
+  // Whether a press holds a row. The view thaws when it ends.
+  const freezeRef = useRef({ press: false });
   const syncFreeze = useCallback(() => {
-    const { hover, press, pick } = freezeRef.current;
-    const pill = hover && !press && !pick;
-    if (pill !== hoverPillRef.current) {
-      hoverPillRef.current = pill;
-      setHoverPill(pill);
-      if (!pill) setPillDue(false);
-    }
-    const want = hover || press || pick;
+    const want = freezeRef.current.press;
     if (want === viewFrozenRef.current) return;
     viewFrozenRef.current = want;
     setFrozenView(want ? shownRef.current : null);
   }, []);
-  // The hold's clock, for when its pill may show and come back.
-  const holdHeldFor = useCallback(() => hoverHoldRef.current?.heldFor() ?? 0, []);
-  const holdRestLeft = useCallback(() => hoverHoldRef.current?.restLeft() ?? 0, []);
-  // The pill steps aside while the pointer is near it and comes back only
-  // with time left to read it. Written to its node at once, so it never
-  // paints a frame next to the pointer.
-  const notePillNear = useCallback(() => {
-    const pill = pillRef.current;
-    if (!pill) return;
-    if (isNear(pill.getBoundingClientRect(), pointRef.current, HOLD_PILL_CLEAR_PX)) pill.dataset.near = 'true';
-    else if (holdRestLeft() >= HOLD_PILL_MIN_MS) delete pill.dataset.near;
-  }, [holdRestLeft]);
   const containerRef = useRef<HTMLDivElement>(null);
-  // The list's outer box: the scroller and the hold's pill, so the hover hold
-  // hears the pointer on both.
-  const wrapperRef = useRef<HTMLDivElement>(null);
   // Inner messages-wrapper div. We observe its size with a ResizeObserver so
   // that any height change (badge/emote/cosmetic images settling in after a
   // new message's first paint, content-visibility resolving to a slightly
@@ -506,79 +448,63 @@ const ChatMessageList = memo(function ChatMessageList({
     const el = containerRef.current;
     if (!el) return;
     const freeze = freezeRef.current;
-    // The release, or the window losing focus or hiding mid-press, which
-    // may never send one.
-    const release = (e?: Event) => {
-      if (e?.type === 'visibilitychange' && !document.hidden) return;
-      window.removeEventListener('pointerup', release, true);
+    let later: number | undefined;
+    function stopListening() {
+      window.removeEventListener('pointerup', onUp, true);
       window.removeEventListener('pointercancel', release, true);
       window.removeEventListener('blur', release);
-      document.removeEventListener('visibilitychange', release);
+      document.removeEventListener('visibilitychange', onHidden);
+    }
+    function release() {
+      window.clearTimeout(later);
+      stopListening();
       freeze.press = false;
       syncFreeze();
       if (!rowHoldRef.current) return;
       rowHoldRef.current = null;
       if (isPausedRef.current || userScrolledUpRef.current) return;
       isScrollingProgrammatically.current = true;
-      el.scrollTop = el.scrollHeight;
+      el!.scrollTop = el!.scrollHeight;
       wasAtBottomRef.current = true;
       setTimeout(() => {
         isScrollingProgrammatically.current = false;
       }, 150);
-    };
+    }
+    // The pressed button's click comes after the button-up, so the thaw waits
+    // for it: thawing first can re-pin or trim the button away, and a button
+    // removed before its click gets none.
+    function onUp() {
+      window.clearTimeout(later);
+      later = window.setTimeout(release, 0);
+    }
+    // A window losing focus or hiding mid-press may never send the button-up.
+    function onHidden() {
+      if (document.hidden) release();
+    }
     const onHold = (e: Event) => {
       if ((e as CustomEvent<{ on?: boolean }>).detail?.on !== true) {
         release();
         return;
       }
       const row = e.target as HTMLElement;
+      window.clearTimeout(later);
       rowHoldRef.current = { row, top: row.getBoundingClientRect().top };
       freeze.press = true;
       syncFreeze();
-      window.addEventListener('pointerup', release, true);
+      window.addEventListener('pointerup', onUp, true);
       window.addEventListener('pointercancel', release, true);
       window.addEventListener('blur', release);
-      document.addEventListener('visibilitychange', release);
+      document.addEventListener('visibilitychange', onHidden);
     };
     el.addEventListener(ROW_HOLD_EVENT, onHold);
     return () => {
       el.removeEventListener(ROW_HOLD_EVENT, onHold);
-      window.removeEventListener('pointerup', release, true);
-      window.removeEventListener('pointercancel', release, true);
-      window.removeEventListener('blur', release);
-      document.removeEventListener('visibilitychange', release);
+      window.clearTimeout(later);
+      stopListening();
       freeze.press = false;
       syncFreeze();
     };
   }, [syncFreeze]);
-  // A reason picker open for a row (HoverModButtons) holds the view until it
-  // closes, so the row it belongs to cannot slide away while you pick.
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const freeze = freezeRef.current;
-    const onPick = (e: Event) => {
-      const on = (e as CustomEvent<{ on?: boolean }>).detail?.on === true;
-      pickRowRef.current = on ? (e.target as Element) : null;
-      freeze.pick = on;
-      syncFreeze();
-    };
-    el.addEventListener(PICKER_HOLD_EVENT, onPick);
-    return () => {
-      el.removeEventListener(PICKER_HOLD_EVENT, onPick);
-      pickRowRef.current = null;
-      freeze.pick = false;
-      syncFreeze();
-    };
-  }, [syncFreeze]);
-  // A picked row that left the list (deleted and hidden) cannot close its
-  // hold, so the list lets go itself.
-  useLayoutEffect(() => {
-    if (!pickRowRef.current || pickRowRef.current.isConnected) return;
-    pickRowRef.current = null;
-    freezeRef.current.pick = false;
-    syncFreeze();
-  });
 
   // Per-row CSS `contain-intrinsic-block-size` placeholder size. The browser
   // uses this for off-screen messages (content-visibility: auto). Picking a
@@ -638,230 +564,16 @@ const ChatMessageList = memo(function ChatMessageList({
   useLayoutEffect(() => {
     lineWheelRef.current = { nudge: nudgeLine, reset: resetLine, around: aroundLine };
   });
-  // Pointing where a mod action starts freezes the view (mouse and pen; a
-  // touch has no hover), so a fast chat cannot pull the target away while you
-  // aim, however fast it runs: a line's buttons, a row that offers the hover
-  // dock (from the row itself: by the time the pointer reaches the dock, a
-  // fast chat has already moved the row), the slider grip, a held message's
-  // Allow and Deny. Only a counted move aims: rows sliding under a resting
-  // pointer make the browser report it over each new row without moving, and
-  // a hold started from that froze chat until the mouse moved again. When it
-  // lets go, and what counts as a move, is chat/hoverHold.ts.
-  useEffect(() => {
-    const el = wrapperRef.current;
-    const scroller = containerRef.current;
-    if (!el || !scroller || !isModerator) return;
-    const hold = createHoverHold((held) => {
-      freezeRef.current.hover = held;
-      syncFreeze();
-    });
-    hoverHoldRef.current = hold;
-    const trail = createMoveTrail();
-    // Where the pointer was on screen at its last counted move, in the list
-    // or out of it.
-    let last: { x: number; y: number } | null = null;
-    // What the pointer was over at its last move over the list: the row (null
-    // between rows), where that row and its buttons sat, and the mod button
-    // under it (null on none). Kept while the pointer is outside, so rows that
-    // move under its last spot while it is just past the edge still count.
-    let under: { row: Element | null; place: string; control: Element | null } | null = null;
-    // Where the pointer was in the page then.
-    let point: { x: number; y: number } | null = null;
-    const noteUnder = (target: EventTarget | null) => {
-      const row = rowOf(target);
-      under = { row, place: row ? placeOf(row) : '', control: controlOf(target) };
-    };
-    // Disarmed: rows moved under the pointer without it, so the buttons now
-    // under it belong to a row nobody aimed at. They hide (globals.css) and
-    // take no press until a quick move; meanwhile a move does not hold
-    // either. The row that was under the pointer keeps its line buttons'
-    // room, so its text holds still.
-    let disarmed = false;
-    let kept: HTMLElement | null = null;
-    const disarm = () => {
-      if (disarmed) return;
-      disarmed = true;
-      // A move from before the rows moved must not aim again; a reach from
-      // where the pointer is now may.
-      trail.clear();
-      el.dataset.holdDisarmed = 'true';
-      kept = under?.row instanceof HTMLElement ? under.row : null;
-      if (kept) kept.dataset.holdKept = 'true';
-    };
-    const arm = () => {
-      if (!disarmed) return;
-      disarmed = false;
-      delete el.dataset.holdDisarmed;
-      if (kept) delete kept.dataset.holdKept;
-      kept = null;
-    };
-    // The look: whether the rows moved under the pointer since its last move,
-    // held or not, inside or just outside. The row it was over left the list,
-    // or something moved and a different row, or a mod button other than the
-    // one it moved onto, now sits at its spot. A row that moved with the same
-    // button, or none, under the pointer keeps the aim (its own line buttons
-    // taking room, a late re-pin), from where it now sits.
-    const checkMoved = () => {
-      const noted = under;
-      const spot = point;
-      if (disarmed || !noted || !spot) return;
-      const { row } = noted;
-      if (row && !row.isConnected) {
-        disarm();
-        return;
-      }
-      const place = row ? placeOf(row) : '';
-      // Nothing moved: the same row still covers the spot.
-      if (row && place === noted.place) return;
-      const at = document.elementFromPoint(spot.x, spot.y);
-      // Something outside the list covers the spot (a menu): the next look
-      // tells.
-      if (!at || !el.contains(at)) return;
-      const control = controlOf(at);
-      if (rowOf(at) !== row || (control !== null && control !== noted.control)) {
-        disarm();
-        return;
-      }
-      noted.place = place;
-    };
-    checkMovedRef.current = checkMoved;
-    // A press the disarm stopped: its click does nothing either.
-    let stopped = false;
-    // The trail hears the whole window, so a reach that starts outside the
-    // list counts. A move out there also counts toward the next one in here,
-    // so coming back to a spot from away counts, while a pixel of tremor
-    // across the edge does not.
-    const onAnyMove = (e: PointerEvent) => {
-      if (e.pointerType === 'touch') return;
-      trail.add(e.screenX, e.screenY);
-      const inside = e.target instanceof Node && el.contains(e.target);
-      if (!inside && movedEnough(last, e.screenX, e.screenY)) last = { x: e.screenX, y: e.screenY };
-    };
-    const onMove = (e: PointerEvent) => {
-      if (e.pointerType === 'touch') return;
-      // Rows that moved since the last move count before this one is noted:
-      // a row that grew re-pins the list, and this move can arrive before the
-      // scroll does.
-      checkMoved();
-      point = { x: e.clientX, y: e.clientY };
-      if (disarmed && trail.quick()) arm();
-      noteUnder(e.target);
-      if (!movedEnough(last, e.screenX, e.screenY)) return;
-      last = { x: e.screenX, y: e.screenY };
-      pointRef.current = { x: e.clientX, y: e.clientY };
-      if (!disarmed && isOnHoldZone(e.target)) hold.move();
-      notePillNear();
-    };
-    const onOut = (e: PointerEvent) => {
-      if (isOnHoldZone(e.target) && !isOnHoldZone(e.relatedTarget)) hold.leave();
-    };
-    const onScroll = () => checkMoved();
-    // While disarmed, where a hidden button sits on the row under the
-    // pointer: a press there meant that button, so it must not reach what
-    // lies beneath (a link or a name in the message).
-    const onHiddenSpot = (e: PointerEvent) => {
-      const row = rowOf(e.target);
-      if (!row) return false;
-      const at = { x: e.clientX, y: e.clientY };
-      return Array.from(row.querySelectorAll(HIDDEN_SPOT_SELECTOR)).some((spot) => {
-        const box = spot.getBoundingClientRect();
-        return box.width > 0 && isNear(box, at, 0);
-      });
-    };
-    const onPress = (e: PointerEvent) => {
-      stopped = false;
-      if (e.pointerType === 'touch' || e.button !== 0) return;
-      const onControl = isOnInstantControl(e.target);
-      // The last look before a button acts: whatever moved since the last
-      // move (the list's own box, a late re-pin) counts now.
-      if (onControl) checkMoved();
-      if (disarmed && (onControl || onHiddenSpot(e))) {
-        stopped = true;
-        e.preventDefault();
-        e.stopPropagation();
-        return;
-      }
-      if (onControl) hold.pressDown();
-    };
-    // The button's release, or the window losing focus or hiding mid-press,
-    // which may never send one.
-    const onRelease = (e: Event) => {
-      if (e.type === 'visibilitychange' && !document.hidden) return;
-      hold.pressUp();
-    };
-    const onClick = (e: MouseEvent) => {
-      if (!stopped || e.detail === 0) return;
-      stopped = false;
-      e.preventDefault();
-      e.stopPropagation();
-    };
-    // A wheel over the line buttons walks a timeout's length: still aiming.
-    const onWheel = (e: WheelEvent) => {
-      if (!disarmed && isOnLineStrip(e.target)) hold.move();
-    };
-    // The list's own box changing size (a bar opening above it) moves every
-    // row with it. A box that moves without resizing is caught by the look at
-    // the next move or press.
-    const boxRo = new ResizeObserver(() => checkMoved());
-    boxRo.observe(scroller);
-    window.addEventListener('pointermove', onAnyMove, { capture: true, passive: true });
-    el.addEventListener('pointermove', onMove);
-    el.addEventListener('pointerout', onOut);
-    el.addEventListener('pointerdown', onPress, true);
-    el.addEventListener('click', onClick, true);
-    el.addEventListener('wheel', onWheel, { capture: true, passive: true });
-    scroller.addEventListener('scroll', onScroll, { passive: true });
-    window.addEventListener('pointerup', onRelease, true);
-    window.addEventListener('pointercancel', onRelease, true);
-    window.addEventListener('blur', onRelease);
-    document.addEventListener('visibilitychange', onRelease);
-    return () => {
-      boxRo.disconnect();
-      window.removeEventListener('pointermove', onAnyMove, { capture: true });
-      el.removeEventListener('pointermove', onMove);
-      el.removeEventListener('pointerout', onOut);
-      el.removeEventListener('pointerdown', onPress, true);
-      el.removeEventListener('click', onClick, true);
-      el.removeEventListener('wheel', onWheel, { capture: true });
-      scroller.removeEventListener('scroll', onScroll);
-      window.removeEventListener('pointerup', onRelease, true);
-      window.removeEventListener('pointercancel', onRelease, true);
-      window.removeEventListener('blur', onRelease);
-      document.removeEventListener('visibilitychange', onRelease);
-      delete el.dataset.holdDisarmed;
-      if (kept) delete kept.dataset.holdKept;
-      checkMovedRef.current = null;
-      hoverHoldRef.current = null;
-      hold.dispose();
-    };
-  }, [isModerator, syncFreeze, notePillNear]);
-  // Another feed in this list (a channel switch, a raid, a filter): the held
-  // rows belong to the old one, so every hold lets go before it paints.
-  const feedKeyRef = useRef(feedKey);
-  useLayoutEffect(() => {
-    if (feedKeyRef.current === feedKey) return;
-    feedKeyRef.current = feedKey;
-    rowHoldRef.current = null;
-    pickRowRef.current = null;
-    freezeRef.current.press = false;
-    freezeRef.current.pick = false;
-    hoverHoldRef.current?.drop();
-    syncFreeze();
-  }, [feedKey, syncFreeze]);
   // One set of listeners on the list serves every row's line buttons.
   // - The button under the pointer lights up (`bindLineStrips`).
-  // - A press without the hover hold (touch) holds the row until it lifts.
+  // - A press holds the row until it lifts (the moderator effect below, which
+  //   first checks the rows under it held still).
   // - A press keeps the composer's focus and starts no text selection.
   // - A click picks the button under the pointer and sends it through
   //   `moderate_chatter`, with Undo in the toast for a timeout or ban.
   useEffect(() => {
     const el = containerRef.current;
     if (!el || !lineActive) return;
-    const onDown = (e: PointerEvent) => {
-      if (!isOnLineStrip(e.target) || e.button !== 0 || viewFrozenRef.current) return;
-      holdChatRow(e.target as HTMLElement, true);
-    };
-    el.addEventListener('pointerdown', onDown);
     const unbind = bindLineStrips(el, () => lineArtRef.current, (hit) => void moderateWithToast(hit.request));
     // The wheel over a line's buttons walks its timeout's length; it never
     // reaches the list's own wheel handling, so chat holds still meanwhile.
@@ -873,7 +585,6 @@ const ChatMessageList = memo(function ChatMessageList({
       (index) => lineWheelRef.current.around(index),
     );
     return () => {
-      el.removeEventListener('pointerdown', onDown);
       unbind();
       unbindWheel();
     };
@@ -885,6 +596,10 @@ const ChatMessageList = memo(function ChatMessageList({
   // Flag persists until user scrolls DOWN or reaches bottom
   const userScrolledUpRef = useRef(false);
   const lastTouchY = useRef(0);
+  // Counts the viewer's own pause gestures (a wheel or finger up, a scrollbar
+  // press), so a reason picker knows whether chat is still paused only
+  // because of it.
+  const userPausesRef = useRef(0);
 
   // Handle wheel events - detect scroll-up intent directly from deltaY.
   // The wheel gesture is the single source of truth for "the user wants to
@@ -897,16 +612,26 @@ const ChatMessageList = memo(function ChatMessageList({
       // programmatic re-pin below on the very next frame, so the snap-back
       // cannot yank the view back down before React commits the paused state.
       userScrolledUpRef.current = true;
+      userPausesRef.current += 1;
       onPauseIntent?.();
     } else if (e.deltaY > 0) {
       // Scrolling DOWN (toward bottom) - clear the flag
       userScrolledUpRef.current = false;
     }
-    // Scrolling is not aiming: a wheel over a mod target lets go of the hover
-    // hold at once, so the wheel scrolls the live feed (up pauses it as
-    // usual), and the hold waits for the pointer to move again. A press still
-    // holds its row.
-    hoverHoldRef.current?.drop();
+  }, [onPauseIntent]);
+
+  // Grabbing the scrollbar is a scroll-up like a wheel notch up: the list
+  // stops following at once and chat pauses, so a message arriving mid-drag
+  // never pulls the view back to the bottom. The rows fill the scroller's
+  // content box, so a press that lands on the scroller itself is on its
+  // scrollbar. Deliberate: a press is not wheel inertia, so the host's settle
+  // windows never drop it (a set flag with no pause would leave the list not
+  // following, with no Chat Paused to resume from).
+  const handleScrollbarPress = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.pointerType === 'touch' || e.button !== 0 || e.target !== e.currentTarget) return;
+    userPausesRef.current += 1;
+    onPauseIntent?.({ deliberate: true });
+    userScrolledUpRef.current = true;
   }, [onPauseIntent]);
 
   // Handle touch scrolling - track direction via Y position change
@@ -928,12 +653,251 @@ const ChatMessageList = memo(function ChatMessageList({
     if (fingerDelta > 0) {
       // Finger down: revealing older messages (away from the live bottom).
       userScrolledUpRef.current = true;
+      userPausesRef.current += 1;
       onPauseIntent?.();
     } else if (fingerDelta < 0) {
       // Finger up: heading back toward the live bottom - clear the flag.
       userScrolledUpRef.current = false;
     }
   }, [onPauseIntent]);
+
+  // The latest pause and resume callbacks, so a new one never restarts the
+  // moderator effect below.
+  const onPauseIntentRef = useRef(onPauseIntent);
+  const onResumeIntentRef = useRef(onResumeIntent);
+  useLayoutEffect(() => {
+    onPauseIntentRef.current = onPauseIntent;
+    onResumeIntentRef.current = onResumeIntent;
+  });
+
+  // A moderator's one-press buttons act only on rows that hold still. Chat
+  // never pauses by itself, so in a live chat rows slide under the pointer,
+  // and a press there would land on a chatter nobody aimed at.
+  // - After every paint the list samples every row on screen: rows moved when
+  //   the row at the pointer shifted (both edges moved) or just came onto the
+  //   screen, or another row now sits under a pointer that did not move
+  //   (chat/modPress.ts). Keeping all of them means a pointer that moved in
+  //   the same frame as a scroll still finds its row's last place.
+  // - Until they have held still for STILL_MS, the row under the pointer
+  //   carries data-rows-moving (its mod buttons rest dimmed), and a press on
+  //   any mod button does nothing. A press that passes holds its row until the
+  //   button comes up.
+  // - Sampling once per frame, after the frame's re-pin, reads only what was
+  //   painted. Inside a pointer handler a row is caught between its own hover
+  //   growth and the re-pin, and a pointer move arrives before a scroll's own
+  //   event.
+  // It also opens "On hover" line buttons on the row a real move is over (a
+  // row that slides under a still pointer never opens), runs the touch tap
+  // rules, and pauses chat while a reason picker is open.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || !isModerator) return;
+    el.dataset.lineAim = 'true';
+    // The pointer's last point in the list: a mouse or pen move, or a touch
+    // coming down. Null once a mouse leaves.
+    let spot: { x: number; y: number } | null = null;
+    // What the last sample saw: the pointer's point, the row under it, and
+    // every row on screen with its edges.
+    let seenSpot: { x: number; y: number } | null = null;
+    let seenRow: Element | null = null;
+    let seen = new Map<Element, Edges>();
+    let movedAt: number | null = null;
+    let dimmed: HTMLElement | null = null;
+    // The row whose line buttons show in "On hover" mode.
+    let open: HTMLElement | null = null;
+    const setOpen = (row: Element | null) => {
+      const next = row instanceof HTMLElement ? row : null;
+      if (next === open) return;
+      if (open) delete open.dataset.lineOpen;
+      open = next;
+      if (open) open.dataset.lineOpen = 'true';
+    };
+    const sample = () => {
+      const now = performance.now();
+      const box = el.getBoundingClientRect();
+      const view = contentRef.current ? rowsInView(contentRef.current.children, box.top, box.bottom) : new Map<Element, Edges>();
+      const row = spot ? rowAt(el, spot.x, spot.y) : null;
+      const still = spot !== null && seenSpot !== null && spot.x === seenSpot.x && spot.y === seenSpot.y;
+      let moved = still && row !== seenRow;
+      if (!moved && row) {
+        // However far the pointer went since, its row was on screen last
+        // time, or it has just come onto the screen and so moved.
+        const was = seen.get(row);
+        moved = was === undefined || edgesMoved(was, view.get(row) ?? edgesOf(row));
+      } else if (!moved) {
+        // No row under the pointer, so nothing grew under it: any row seen
+        // last time that shifted means the rows moved.
+        for (const [r, edges] of seen) {
+          if (r.isConnected && edgesMoved(edges, view.get(r) ?? edgesOf(r))) {
+            moved = true;
+            break;
+          }
+        }
+      }
+      if (moved) movedAt = now;
+      // A strip whose row slid away from a still pointer closes.
+      if (still && open && row !== open) setOpen(null);
+      const dim = row instanceof HTMLElement && !isStill(movedAt, now) ? row : null;
+      if (dim !== dimmed) {
+        if (dimmed) delete dimmed.dataset.rowsMoving;
+        dimmed = dim;
+        if (dimmed) dimmed.dataset.rowsMoving = 'true';
+      }
+      seen = view;
+      seenSpot = spot ? { x: spot.x, y: spot.y } : null;
+      seenRow = row;
+    };
+    // After each paint: rAF runs before the frame's layout and re-pin, the
+    // timeout after it.
+    let frame = 0;
+    let after: number | undefined;
+    const loop = () => {
+      frame = requestAnimationFrame(() => {
+        after = window.setTimeout(() => {
+          sample();
+          loop();
+        }, 0);
+      });
+    };
+    const stopLoop = () => {
+      cancelAnimationFrame(frame);
+      window.clearTimeout(after);
+      frame = 0;
+    };
+    // Rows may have moved unseen while the list was not drawn, so a start
+    // counts as a move.
+    const startLoop = () => {
+      if (frame || document.hidden) return;
+      movedAt = performance.now();
+      seen = new Map();
+      seenRow = null;
+      seenSpot = null;
+      loop();
+    };
+    const onVisibility = () => {
+      if (document.hidden) stopLoop();
+      else startLoop();
+    };
+
+    const onMove = (e: PointerEvent) => {
+      spot = { x: e.clientX, y: e.clientY };
+      if (e.pointerType === 'touch') return;
+      setOpen(e.target instanceof Element ? e.target.closest('.chat-message-row') : null);
+    };
+    const onLeave = (e: PointerEvent) => {
+      if (e.pointerType === 'touch') return;
+      spot = null;
+      setOpen(null);
+    };
+
+    // The reason picker's pause: the count of the viewer's own pauses when it
+    // paused chat, or null when it did not. It resumes only while that count
+    // is unchanged, so a pause the viewer made meanwhile stays.
+    let pickerPause: number | null = null;
+    let resumeLater: number | undefined;
+    const pauseForPicker = () => {
+      if (pickerPause !== null || isPausedRef.current || userScrolledUpRef.current) return;
+      pickerPause = userPausesRef.current;
+      onPauseIntentRef.current?.({ deliberate: true });
+      userScrolledUpRef.current = true;
+    };
+    const onPicker = (e: Event) => {
+      window.clearTimeout(resumeLater);
+      if ((e as CustomEvent<{ open?: boolean }>).detail?.open) {
+        pauseForPicker();
+        return;
+      }
+      // After this turn, so a picker that only moved to another button keeps
+      // its pause.
+      resumeLater = window.setTimeout(() => {
+        if (pickerPause !== null && pickerPause === userPausesRef.current) onResumeIntentRef.current?.();
+        pickerPause = null;
+      }, 0);
+    };
+
+    // A press, and the touch tap rules: a tap lands where the finger lifts, on
+    // whatever the touch itself brought up there (the dock mounts on a row's
+    // first touch), so a tap acts only on a mod button it came down on, and a
+    // quick second tap at the same spot cannot press one the tap before
+    // brought up.
+    let stopped = false;
+    let tapStart: Element | null = null;
+    let tapDown: Tap | null = null;
+    let lastTap: Tap | null = null;
+    const onPress = (e: PointerEvent) => {
+      stopped = false;
+      const control = controlOf(e.target);
+      spot = { x: e.clientX, y: e.clientY };
+      if (e.pointerType === 'touch') {
+        tapStart = e.target instanceof Element ? e.target : null;
+        tapDown = { x: e.clientX, y: e.clientY, t: performance.now(), box: control?.getBoundingClientRect() ?? null };
+      } else if (e.button !== 0) {
+        return;
+      }
+      if (!control) return;
+      sample();
+      const row = control.closest('.chat-message-row');
+      if (!isStill(movedAt, performance.now()) || (row instanceof HTMLElement && row.dataset.rowsMoving)) {
+        stopped = true;
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+      // Alt opens the reason picker: pause now, before the button-up's
+      // catch-up can move the row the picker will hang from.
+      if (e.altKey && control.matches('[data-mod-reason]')) pauseForPicker();
+      holdChatRow(control as HTMLElement, true);
+    };
+    const onClick = (e: MouseEvent) => {
+      if ((e as PointerEvent).pointerType === 'touch') {
+        const control = controlOf(e.target);
+        const startedOn = tapStart !== null && control !== null && control.contains(tapStart);
+        const again = tapAgain(tapDown, lastTap);
+        lastTap = tapDown;
+        tapDown = null;
+        tapStart = null;
+        if (control && (stopped || !startedOn || again)) {
+          stopped = false;
+          e.preventDefault();
+          e.stopPropagation();
+        }
+        return;
+      }
+      if (!stopped || e.detail === 0) return;
+      stopped = false;
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    // A tap opens its row's line buttons once it has landed, so the next tap
+    // can press one; the tap itself acted on what it saw.
+    const onTap = (e: MouseEvent) => {
+      if ((e as PointerEvent).pointerType !== 'touch') return;
+      setOpen(e.target instanceof Element ? e.target.closest('.chat-message-row') : null);
+    };
+
+    el.addEventListener('pointermove', onMove, { passive: true });
+    el.addEventListener('pointerleave', onLeave);
+    el.addEventListener('pointerdown', onPress, true);
+    el.addEventListener('click', onClick, true);
+    el.addEventListener('click', onTap);
+    el.addEventListener(PICKER_EVENT, onPicker);
+    document.addEventListener('visibilitychange', onVisibility);
+    startLoop();
+    return () => {
+      stopLoop();
+      window.clearTimeout(resumeLater);
+      el.removeEventListener('pointermove', onMove);
+      el.removeEventListener('pointerleave', onLeave);
+      el.removeEventListener('pointerdown', onPress, true);
+      el.removeEventListener('click', onClick, true);
+      el.removeEventListener('click', onTap);
+      el.removeEventListener(PICKER_EVENT, onPicker);
+      document.removeEventListener('visibilitychange', onVisibility);
+      setOpen(null);
+      if (dimmed) delete dimmed.dataset.rowsMoving;
+      delete el.dataset.lineAim;
+    };
+  }, [isModerator]);
 
   // ResizeObserver: re-pin to bottom whenever the inner messages-wrapper
   // grows (badge/emote images settling, paint shaders sizing, etc.). This is
@@ -944,7 +908,7 @@ const ChatMessageList = memo(function ChatMessageList({
   useEffect(() => {
     if (!contentRef.current) return;
     const target = contentRef.current;
-    const repin = () => {
+    const ro = new ResizeObserver(() => {
       if (!containerRef.current) return;
       if (isPaused) return;
       // A resume glide is driving the scroll itself; an instant re-pin here
@@ -969,13 +933,6 @@ const ChatMessageList = memo(function ChatMessageList({
       setTimeout(() => {
         isScrollingProgrammatically.current = false;
       }, 60);
-    };
-    const ro = new ResizeObserver(() => {
-      // Re-pin first, then look (the hover hold's check for rows that moved
-      // under the pointer): a row that grew or shrank moved the rows after
-      // it, and the re-pin moved them all.
-      repin();
-      checkMovedRef.current?.();
     });
     ro.observe(target);
     return () => ro.disconnect();
@@ -1215,34 +1172,8 @@ const ChatMessageList = memo(function ChatMessageList({
     [messages, getMessageId, shownKinds, pinnedIds],
   );
 
-  // What the hover hold keeps back, for its pill. Not while paused: Chat
-  // Paused already says so, in the same spot.
-  const heldNew = hoverPill && frozenView && !isPaused ? rowsSinceHold(frozenView, liveMessages, getMessageId) : 0;
-  const pillOn = heldNew > 0;
-  useEffect(() => {
-    if (!pillOn) return;
-    return whenPillDue(holdHeldFor, holdRestLeft, () => {
-      // Measured as it appears: a pill that would open next to the pointer
-      // stays hidden until the pointer moves away.
-      notePillNear();
-      setPillDue(true);
-    });
-  }, [pillOn, holdHeldFor, holdRestLeft, notePillNear]);
-  // Its count and width change with every held row, which can bring its edge
-  // to the pointer without the pointer moving.
-  useLayoutEffect(() => {
-    if (pillOn) notePillNear();
-  }, [heldNew, pillOn, pillDue, notePillNear]);
-  // After every commit, and after the pin above: rows that moved under a
-  // still pointer (a new row in a short list, a row hidden by moderation, a
-  // new feed) disarm the list before the frame paints, so no press lands in
-  // between.
-  useLayoutEffect(() => {
-    checkMovedRef.current?.();
-  });
-
   return (
-    <div ref={wrapperRef} className="relative h-full" style={IS_MOBILE ? PHONE_TOP_FADE : undefined}>
+    <div className="relative h-full" style={IS_MOBILE ? PHONE_TOP_FADE : undefined}>
       <div
         ref={containerRef}
         // On the phone the bar shows only while the list is paused (sn-chat-live
@@ -1250,6 +1181,7 @@ const ChatMessageList = memo(function ChatMessageList({
         className={`h-full overflow-y-auto overflow-x-hidden scrollbar-thin${isPaused ? '' : ' sn-chat-live'}`}
         data-line-show={lineActive ? lineShow : undefined}
         onScroll={handleScroll}
+        onPointerDown={handleScrollbarPress}
         onWheel={handleWheel}
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
@@ -1394,7 +1326,6 @@ const ChatMessageList = memo(function ChatMessageList({
           <p className="text-center text-[13px] text-textMuted">{emptyNote}</p>
         </div>
       )}
-      {pillOn && <HoverHoldPill ref={pillRef} count={heldNew} shown={pillDue} />}
     </div>
   );
 });
