@@ -6,7 +6,8 @@
 // The colors are Discord's own dark theme: this is a picture of Discord.
 
 import { useState, type CSSProperties } from 'react';
-import { Gamepad2, Headphones, Monitor } from 'lucide-react';
+import { MoreHorizontal } from 'lucide-react';
+import { DiscordActivityIcon } from './discordIcons';
 import { useAppStore } from '../../../stores/AppStore';
 import { IS_MAC } from '../../../utils/platform';
 import { elapsedText } from './discordPreviewFormat';
@@ -86,6 +87,8 @@ const CARD_BG = '#232428';
 const PANEL_BG = '#2b2d31';
 const TEXT = '#f2f3f5';
 const MUTED = '#b5bac1';
+/** The activity card's header ("Watching Twitch"), a step brighter than muted. */
+const HEADER = '#dbdee1';
 const BUTTON_BG = '#4e5058';
 const ONLINE = '#23a55a';
 const FALLBACK_AVATAR = 'https://cdn.discordapp.com/embed/avatars/0.png';
@@ -188,12 +191,6 @@ function Nameplate({ plate, animate }: { plate: PreviewNameplate; animate: boole
   );
 }
 
-/** The mark Discord puts before the elapsed time for the activity's kind. */
-function ActivityMark({ verb }: { verb: string }) {
-  const Icon = verb === 'Playing' ? Gamepad2 : verb.startsWith('Listening') ? Headphones : Monitor;
-  return <Icon size={12} strokeWidth={2.4} aria-hidden className="flex-none" />;
-}
-
 /** The server tag the viewer wears, after the name. */
 function ServerTag({ tag }: { tag: PreviewServerTag }) {
   return (
@@ -237,13 +234,12 @@ export function DiscordStatusPreview({ model, now }: { model: PreviewModel | nul
             />
           </div>
           <div className="pt-[48px]">
-            <div className="flex min-w-0 items-center gap-1.5">
-              <span className="truncate text-[18px] font-semibold leading-6">{name}</span>
+            <div className="truncate text-[18px] font-semibold leading-6">{name}</div>
+            {/* Discord's second line: the username (no @), then the server tag.
+                Always there, so the card never grows when Discord connects. */}
+            <div className="flex min-h-[20px] min-w-0 items-center gap-1.5 text-[13px] leading-[18px]">
+              <span className="truncate">{user?.username ?? ''}</span>
               {tag && <ServerTag tag={tag} />}
-            </div>
-            {/* Always there, so the card never grows when Discord connects. */}
-            <div className="min-h-[18px] truncate text-[13px] leading-[18px]" style={{ color: MUTED }}>
-              {user?.username ? `@${user.username}` : ''}
             </div>
           </div>
 
@@ -252,7 +248,7 @@ export function DiscordStatusPreview({ model, now }: { model: PreviewModel | nul
               <>
                 {/* Discord's header: the verb and the activity name ("Watching Twitch"),
                     with Discord's own grey mark for a name it knows. */}
-                <div className="mb-2 flex min-w-0 items-center gap-1 text-[12px] font-semibold" style={{ color: MUTED }}>
+                <div className="mb-2 flex min-w-0 items-center gap-1 text-[13px] font-semibold" style={{ color: HEADER }}>
                   <span className="truncate">
                     {a.verb} {a.app_name}
                   </span>
@@ -261,12 +257,14 @@ export function DiscordStatusPreview({ model, now }: { model: PreviewModel | nul
                       aria-hidden
                       className="h-[14px] w-[14px] flex-none"
                       style={{
-                        background: MUTED,
+                        background: HEADER,
                         WebkitMask: `url("${PLATFORM_MARKS[a.app_name]}") center / contain no-repeat`,
                         mask: `url("${PLATFORM_MARKS[a.app_name]}") center / contain no-repeat`,
                       }}
                     />
                   )}
+                  {/* Discord's activity menu, a quiet mark at the right. */}
+                  <MoreHorizontal size={16} aria-hidden className="ml-auto flex-none opacity-70" />
                 </div>
                 <div className="flex items-start gap-3">
                   <div className="relative h-[72px] w-[72px] flex-shrink-0">
@@ -292,8 +290,8 @@ export function DiscordStatusPreview({ model, now }: { model: PreviewModel | nul
                     {a.state && <div className="truncate">{a.state}</div>}
                     {a.start != null && (
                       <div className="mt-0.5 flex items-center gap-1 text-[12px] tabular-nums" style={{ color: ONLINE }}>
-                        {/* Discord's activity mark before the time: a screen, a gamepad, headphones. */}
-                        <ActivityMark verb={a.verb} />
+                        {/* Discord's own activity mark before the time: its screen, gamepad or headphones. */}
+                        <DiscordActivityIcon verb={a.verb} size={14} />
                         {elapsedText(a.start, now)}
                       </div>
                     )}
