@@ -6,7 +6,7 @@ import Plyr from 'plyr';
 // Plyr's CSS ships once, layered, via globals.css (@import ... layer(vendor));
 // a second unlayered copy here would beat the app's control-bar overrides.
 import { motion, AnimatePresence } from 'framer-motion';
-import { Loader2, RefreshCcw, LayoutGrid, Shield, ShieldCheck, ShieldAlert, Clapperboard, Music, Share2, Check, VolumeX } from 'lucide-react';
+import { Loader2, RefreshCcw, LayoutGrid, Shield, ShieldCheck, ShieldAlert, Clapperboard, Share2, Check, VolumeX } from 'lucide-react';
 import { Heart, HeartBreak, ArrowLeft, CaretRight, X as XIcon } from 'phosphor-react';
 import { mainChatRoom, useAppStore, type AutoReloadReason } from '../stores/AppStore';
 import { streamProvider } from '../utils/streamProvider';
@@ -110,7 +110,10 @@ import { HLS_START_CONFIG, resumeLoadAfterRecover, startLoadOnManifest } from '.
 import { watchStalls } from '../utils/stallWatchdog';
 import { createRecovery } from '../utils/recovery';
 import { attachPauseRoutes, releaseTypingFocus } from '../utils/pauseRoutes';
-import { recognizeNowPlaying, announceSong } from '../utils/songId';
+import { recognizeNowPlaying, announceSong, isQuietResult } from '../utils/songId';
+import { SongsSplitButton } from './songs/SongsFlyout';
+import { songsFlyoutOpen } from './songs/songsPopover';
+import { toastLink } from './songs/songLinks';
 import {
   ignoresPlayerMouse,
   createWheelAccumulator,
@@ -575,44 +578,43 @@ const VideoPlayer = () => {
   const [isRestarting, setIsRestarting] = useState(false);
 
   // Song identification: capture a few seconds of player audio and name the
-  // track. The button surfaces the result as a toast (it isn't tied to chat);
-  // the /song chat command posts the same result into chat instead.
-  const [isIdentifyingSong, setIsIdentifyingSong] = useState(false);
+  // track. The note surfaces the result as a toast; the card also lands in
+  // the playing stream's chat, whose composer shows the listening strip
+  // meanwhile. The note's bars and its "Stop listening" come from the
+  // window's one listening state (SongsSplitButton reads it).
   const handleIdentifySong = useCallback(async () => {
     const addToast = useAppStore.getState().addToast;
-    setIsIdentifyingSong(true);
-    try {
-      const result = await recognizeNowPlaying(videoRef.current);
-      // A canceled listening, or one asked for while one runs, says nothing.
-      if (result.status === 'canceled' || result.status === 'busy') return;
-      // Also drop the clickable card into the playing stream's chat (where the
-      // links live); the toast below is just the quick on-player confirmation.
-      announceSong(result, mainChatRoom());
-      if (result.status === 'match') {
-        const s = result.song;
-        const provider = s.providers[0];
-        const link = provider?.url || s.song_link || s.shazam_url || undefined;
-        addToast(
-          `♪ ${s.title} by ${s.artist}${s.album ? ` (${s.album})` : ''}`,
-          'success',
-          link
-            ? {
-                label: provider ? `Open in ${provider.name}` : 'Open',
-                onClick: () => {
-                  void openExternalUrl(link);
-                },
-              }
-            : undefined,
-          // The island row shows the cover and opens the song in Your songs.
-          { avatarUrl: s.album_art ?? undefined, songKey: s.key ?? undefined },
-        );
-      } else if (result.status === 'no-match') {
-        addToast("Couldn't identify the song. Try again when the music is clearer.", 'info');
-      } else {
-        addToast(result.message, 'error');
-      }
-    } finally {
-      setIsIdentifyingSong(false);
+    // The room the answer goes to, as the listening starts: a viewer who
+    // switches channels meanwhile does not get it in the new chat.
+    const room = mainChatRoom();
+    const result = await recognizeNowPlaying(videoRef.current, { room });
+    // A canceled listening, or one asked for while one runs, says nothing.
+    if (isQuietResult(result)) return;
+    // Also drop the clickable card into the playing stream's chat (where the
+    // links live); the toast below is just the quick on-player confirmation.
+    announceSong(result, room);
+    if (result.status === 'match') {
+      const s = result.song;
+      // The track's own link first; a search page says it is one.
+      const link = toastLink(s);
+      addToast(
+        `♪ ${s.title} by ${s.artist}${s.album ? ` (${s.album})` : ''}`,
+        'success',
+        link
+          ? {
+              label: link.label,
+              onClick: () => {
+                void openExternalUrl(link.url);
+              },
+            }
+          : undefined,
+        // The island row shows the cover and opens the song in Your songs.
+        { avatarUrl: s.album_art ?? undefined, songKey: s.key ?? undefined },
+      );
+    } else if (result.status === 'no-match') {
+      addToast("Couldn't identify the song. Try again when the music is clearer.", 'info');
+    } else {
+      addToast(result.message, 'error');
     }
   }, []);
 
@@ -3021,8 +3023,11 @@ const VideoPlayer = () => {
   /// Plyr marks the open menu with `aria-expanded="true"` on its toggle, which
   /// is the only reliable signal — the menu itself is only visually hidden, so
   /// checking for its presence in the DOM is always true.
+  ///
+  /// The Songs popover counts too. It is portaled to the page's body, so it
+  /// is found on the document, not inside the player.
   const isPlayerMenuOpen = useCallback(
-    () => !!containerRef.current?.querySelector('.plyr__menu [aria-expanded="true"]'),
+    () => !!containerRef.current?.querySelector('.plyr__menu [aria-expanded="true"]') || songsFlyoutOpen(document),
     [],
   );
   // The seek bar is held: a fine drag on a VOD, or Plyr's own range mid-drag.
@@ -3861,27 +3866,15 @@ const VideoPlayer = () => {
             </Tooltip>
           )}
 
-          {/* Identify Song Button — fingerprints a few seconds of player audio
-              and names the track (the /song chat command does the same). */}
+          {/* Songs: the note fingerprints a few seconds of player audio and
+              names the track (the /song chat command does the same); the
+              arrow beside it opens the Songs popover (Your songs). */}
           {overlayButtonOn('song') && (
-            <Tooltip
-              content={AUDIO_GRAPH_SUPPORTED ? 'Identify song' : AUDIO_GRAPH_REFUSAL}
-              side="bottom"
-            >
-            <button
-              onClick={() => handleIdentifySong()}
-              disabled={isIdentifyingSong || !AUDIO_GRAPH_SUPPORTED}
-              className={`flex items-center justify-center p-2 aspect-square chrome-glaze chrome-glaze--control chrome-glaze--frosted ${
-                isIdentifyingSong ? 'cursor-wait opacity-70' : ''
-              } ${!AUDIO_GRAPH_SUPPORTED ? 'opacity-40 cursor-default' : ''}`}
-            >
-              {isIdentifyingSong ? (
-                <Loader2 className="w-4 h-4 text-accent animate-spin" />
-              ) : (
-                <Music className="w-4 h-4 text-white hover:text-accent transition-colors duration-200" />
-              )}
-            </button>
-            </Tooltip>
+            <SongsSplitButton
+              onIdentify={() => void handleIdentifySong()}
+              supported={AUDIO_GRAPH_SUPPORTED}
+              refusal={AUDIO_GRAPH_REFUSAL}
+            />
           )}
 
           {/* Share button. Copies the stream's streamnook.app link; the icon

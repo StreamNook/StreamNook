@@ -7,16 +7,19 @@ import { Tooltip } from '../ui/Tooltip';
 import { openExternal } from '../../utils/openExternal';
 import type { SongMatch } from '../../utils/songId';
 import { hasSongsSurface, openSongs, subscribeSongsSurface } from '../../utils/songHistory';
+import { cardLinks } from '../songs/songLinks';
+
+const noSurface = () => false;
 
 // The "/song" result rendered inline in chat: cover art, title/artist, and a row
-// of borderless service links (Spotify, Apple Music, ...) plus the song.link
-// aggregator. Each link opens in the browser. A quiet button at the end of the
-// title opens the song in Your songs, where it is kept, in windows that can
-// show that list (it appears once that list's surface is mounted).
+// of service links plus the song.link aggregator. The track's own links come
+// first; search pages show only when it has none, marked as searches. Each
+// link opens in the browser. A quiet button at the end of the title opens the
+// song in Your songs, where it is kept, in windows that can show that list (it
+// appears once that list's surface is mounted).
 export const SongCard = memo(function SongCard({ card }: { card: SongMatch }) {
-  const links = [...card.providers];
-  if (card.song_link) links.push({ name: 'song.link', url: card.song_link });
-  const canOpen = useSyncExternalStore(subscribeSongsSurface, hasSongsSurface);
+  const { links, search } = cardLinks(card);
+  const canOpen = useSyncExternalStore(subscribeSongsSurface, hasSongsSurface, noSurface);
   const kept = card.key && canOpen ? card.key : null;
 
   return (
@@ -61,6 +64,7 @@ export const SongCard = memo(function SongCard({ card }: { card: SongMatch }) {
 
         {links.length > 0 && (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-1.5">
+            {search && <span className="text-xs text-textMuted">Search on</span>}
             {links.map((l) => (
               <Tooltip key={l.url} content={l.url} side="top">
                 <button

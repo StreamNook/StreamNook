@@ -68,7 +68,7 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Player',
     section: 'Player Buttons',
     title: 'Player Buttons',
-    description: 'Choose which action buttons (follow, subscribe, create clip, identify song, clips & vods, add to multinook, refresh, close) appear in the top-right of the video player. Previously "Player Overlay Buttons".'
+    description: 'Choose which action buttons (follow, subscribe, create clip, songs, share, clips & vods, add to multinook, refresh, close) appear in the top-right of the video player. Songs identifies the song playing and opens your songs. Previously "Player Overlay Buttons".'
   },
   {
     tab: 'Player',
@@ -317,7 +317,7 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     section: 'Song Identification',
     sectionId: 'settings-section-song-id',
     title: 'Song Identification',
-    description: 'Identify the music playing in a stream (what song is this). Powers the /song chat command and the player music button; names the track and links it on Spotify, Apple Music, and song.link. Shazam, recognize, now playing.'
+    description: 'Identify the music playing in a stream (what song is this). Powers the /song chat command and the player music button; names the track and links it on Spotify, Apple Music, YouTube Music, Deezer, Tidal and more. Shazam, recognize, now playing.'
   },
   {
     tab: 'Player',

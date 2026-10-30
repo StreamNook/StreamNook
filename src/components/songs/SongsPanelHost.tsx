@@ -91,7 +91,7 @@ export function SongsPanelHost() {
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          transition={{ duration: 0.15 }}
+          transition={{ duration: 0.2, ease: [0.2, 0.8, 0.2, 1] }}
           className="fixed inset-0 z-[calc(var(--sn-z-over-player-lift,0)_+_50)] flex items-center justify-center bg-black/60"
           // A press that starts on the backdrop closes; a text selection
           // dragged out of the panel does not.
@@ -106,11 +106,13 @@ export function SongsPanelHost() {
             aria-label="Your songs"
             tabIndex={-1}
             onKeyDown={onDialogKeyDown}
-            initial={{ scale: 0.96, opacity: 0 }}
+            // Opens and closes by scale and fade only (the Motion setting keeps
+            // just the fade).
+            initial={{ scale: 0.97, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
-            exit={{ scale: 0.96, opacity: 0 }}
-            transition={{ type: 'spring', stiffness: 300, damping: 30 }}
-            className="glass-flyout no-live-blur flex h-[620px] max-h-[86vh] w-[520px] max-w-[calc(100vw-32px)] flex-col overflow-hidden !rounded-2xl !p-0 shadow-[0_20px_50px_rgba(0,0,0,0.5)] outline-none"
+            exit={{ scale: 0.97, opacity: 0 }}
+            transition={{ duration: 0.2, ease: [0.2, 0.8, 0.2, 1] }}
+            className="glass-flyout no-live-blur flex h-[720px] max-h-[86vh] w-[600px] max-w-[calc(100vw-32px)] flex-col overflow-hidden !rounded-2xl !p-0 shadow-[0_20px_50px_rgba(0,0,0,0.5)] outline-none"
           >
             <Suspense fallback={null}>
               <SongsPanel

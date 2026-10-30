@@ -1,0 +1,84 @@
+/* The listening pill over a chat's composer and the player's note while a
+   song is identified (ListeningStrip.tsx). Everything here moves by
+   `transform` or `opacity` only, so it runs on the compositor and repaints
+   nothing over a playing stream. The bars' heights are written every frame by
+   one shared renderer (listeningBars.ts), never through React state; the time
+   line is one transition per attempt. The pill's glow is a still shadow. */
+
+.sn-listen-bars {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 3px;
+  height: 24px;
+}
+
+.sn-listen-bars > i {
+  display: block;
+  width: 4px;
+  height: 100%;
+  border-radius: 9999px;
+  background: currentColor;
+  transform: scaleY(0.25);
+  transform-origin: center;
+}
+
+/* The pill's bars, in the theme's accent, lighter at their tips. */
+.sn-listen-bars--accent > i {
+  background: linear-gradient(to top, var(--color-accent), color-mix(in srgb, var(--color-accent) 50%, white));
+}
+
+/* The player's note: the same five bars in its 16 px icon box. */
+.sn-listen-bars--small {
+  gap: 1.5px;
+  height: 14px;
+}
+.sn-listen-bars--small > i {
+  width: 2px;
+}
+
+/* "Listening for the song...": the dots come and go, by opacity. Still under
+   the Reduced and Off Motion settings. */
+.sn-listen-dots > i {
+  font-style: normal;
+  opacity: 0.25;
+  animation: sn-listen-dot 1.4s ease-in-out infinite;
+}
+.sn-listen-dots > i:nth-child(2) {
+  animation-delay: 0.2s;
+}
+.sn-listen-dots > i:nth-child(3) {
+  animation-delay: 0.4s;
+}
+html[data-motion="reduced"] .sn-listen-dots > i,
+html[data-motion="off"] .sn-listen-dots > i {
+  animation: none;
+  opacity: 1;
+}
+
+@keyframes sn-listen-dot {
+  0%,
+  80%,
+  100% {
+    opacity: 0.25;
+  }
+  40% {
+    opacity: 1;
+  }
+}
+
+/* How far this attempt's listening has come, a thin line along the pill's
+   foot, inset clear of its rounded ends. */
+.sn-listen-time {
+  position: absolute;
+  right: 22px;
+  bottom: 0;
+  left: 22px;
+  height: 2px;
+  border-radius: 9999px;
+  background: var(--color-accent);
+  opacity: 0.8;
+  transform: scaleX(0);
+  transform-origin: left;
+  pointer-events: none;
+}

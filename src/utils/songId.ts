@@ -7,6 +7,7 @@ import {
 import { getActiveVideo, sourceOfVideo, type PlayerSource } from './activeVideo';
 import { Logger } from './logger';
 import { beginListening, isListening } from './songListening';
+import { publishSongResult } from './songResult';
 import { mainChatRoom, useAppStore } from '../stores/AppStore';
 import { injectSystemMessage, systemSourceFor, useChatConnectionStore } from '../stores/chatConnectionStore';
 import { DEFAULT_SONG_ID } from '../types';
@@ -228,6 +229,9 @@ function emitSongMessage(room: string | null, text: string, songCard?: SongMatch
 
 export function announceSong(result: RecognizeResult, room: string | null = null): void {
   if (isQuietResult(result)) return;
+  // The answer also shows for a moment over that chat's composer, where the
+  // listening strip was.
+  publishSongResult(result, room);
   if (result.status === 'match') {
     emitSongMessage(room, `♪ ${result.song.title} by ${result.song.artist}`, result.song);
   } else if (result.status === 'no-match') {

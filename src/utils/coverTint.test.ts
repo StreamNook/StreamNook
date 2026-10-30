@@ -110,7 +110,13 @@ function surfaceOf(id: string, kind: SurfaceKind): Surface {
   const p = theme(id).palette;
   const floors = kind === 'flyout' ? opaqueFloors(p.background, p.backgroundTertiary, WINDOW_FLOOR) : phoneFloors(p.background, p.backgroundTertiary);
   const base = parseColor(kind === 'flyout' ? floors.tertiary : floors.background)!;
-  return makeSurface(kind, [base[0], base[1], base[2]], parseColor(p.backgroundSecondary), parseColor(p.textMuted)!);
+  return makeSurface(
+    kind,
+    [base[0], base[1], base[2]],
+    parseColor(p.backgroundSecondary),
+    parseColor(p.textMuted)!,
+    parseColor(p.surfaceHover),
+  );
 }
 
 const THEMES = ['winters-glass', 'catppuccin-latte', 'solarized-sand', 'dracula', 'prince0fdubai-oled'];
@@ -272,33 +278,77 @@ describe('what a fit costs', () => {
 });
 
 describe('a row hover tint', () => {
-  it("keeps the muted words, or falls back to the theme's own hover", () => {
+  const ROW_TINTS: [string, CoverTint][] = [
+    ...TINTS,
+    ['sepia', { main: [0.55, 0.025, 60], second: null }],
+  ];
+  /** Today's hover over a base, as the page paints bg-glass-hover. */
+  const hoverOver = (s: Surface, under: C): C => mix([s.hover[0], s.hover[1], s.hover[2]], s.hover[3], under);
+
+  it("is never less readable than today's hover, on every theme and base", () => {
     for (const id of THEMES) {
       const s = surfaceOf(id, 'flyout');
       const [plain, lit] = bases(s);
-      for (const [, tint] of TINTS) {
+      for (const [name, tint] of ROW_TINTS) {
         const tinted = rowTint(tint, s);
-        if (!tinted) continue;
-        const c = parseColor(tinted)!;
+        expect(tinted, `${id} ${name}`).not.toBeNull();
+        const c = parseColor(tinted!)!;
+        expect(c[3], 'opaque').toBe(1);
         for (const b of [plain, lit]) {
-          const need = Math.min(4.5, mutedOver(s, b.under));
-          expect(mutedOver(s, mix([c[0], c[1], c[2]], c[3], b.under))).toBeGreaterThanOrEqual(need - 1e-6);
+          const need = Math.min(4.5, mutedOver(s, hoverOver(s, b.under)));
+          expect(mutedOver(s, mix([c[0], c[1], c[2]], c[3], b.under)), `${id} ${name}`).toBeGreaterThanOrEqual(need - 1e-6);
         }
       }
     }
   });
 
-  it('is as strong as reads on a light theme', () => {
-    expect(rowTint(TINTS[0][1], surfaceOf('catppuccin-latte', 'flyout'))).toMatch(/, 0\.6\)$/);
+  it('exists on the dark themes for a vivid, a pale and a sepia cover, in the cover’s hue', () => {
+    for (const id of ['winters-glass', 'dracula', 'prince0fdubai-oled']) {
+      const s = surfaceOf(id, 'flyout');
+      for (const [name, tint] of ROW_TINTS.filter(([n]) => n !== 'deep blue')) {
+        const c = parseColor(rowTint(tint, s)!)!;
+        const [, chroma, hue] = lchOfC([c[0], c[1], c[2]]);
+        expect(chroma, `${id} ${name}`).toBeGreaterThanOrEqual(0.03);
+        const gap = Math.abs(((hue - tint.main![2] + 540) % 360) - 180);
+        expect(gap, `${id} ${name} hue`).toBeLessThan(12);
+      }
+    }
   });
 
-  it('is none when no alpha keeps the muted words', () => {
-    // Dracula's muted words sit under 4.5:1 on its flyout already, so a lighter
-    // row costs them contrast at any alpha.
-    const s = surfaceOf('dracula', 'flyout');
-    for (const [, tint] of TINTS) expect(rowTint(tint, s)).toBeNull();
+  it("lifts as much as today's hover: its light is the hover's (a step to the readable side at most)", () => {
+    for (const id of THEMES) {
+      const s = surfaceOf(id, 'flyout');
+      const [plain] = bases(s);
+      const today = hoverOver(s, plain.under);
+      for (const [name, tint] of ROW_TINTS) {
+        const c = parseColor(rowTint(tint, s)!)!;
+        expect(ratio([c[0], c[1], c[2]], today), `${id} ${name}`).toBeLessThan(1.3);
+      }
+    }
+  });
+
+  it("keeps the theme's hover for a gray or near-gray cover", () => {
+    const s = surfaceOf('winters-glass', 'flyout');
+    expect(rowTint({ main: null, second: null }, s)).toBeNull();
+    expect(rowTint({ main: [0.6, 0.01, 90], second: null }, s)).toBeNull();
+    expect(rowTint(undefined, s)).toBeNull();
   });
 });
+
+/** OKLCH of a color, the independent way (for the hue checks above). */
+function lchOfC([r8, g8, b8]: C): [number, number, number] {
+  const r = lin(r8);
+  const g = lin(g8);
+  const b = lin(b8);
+  const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+  const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+  const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+  const L = 0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s;
+  const A = 1.9779984951 * l - 2.428592205 * m + 0.4505937099 * s;
+  const B = 0.0259040371 * l + 0.7827717662 * m - 0.808675766 * s;
+  const h = (Math.atan2(B, A) * 180) / Math.PI;
+  return [L, Math.hypot(A, B), h < 0 ? h + 360 : h];
+}
 
 describe('reading colors', () => {
   it('reads computed and authored colors', () => {

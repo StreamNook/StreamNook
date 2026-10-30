@@ -838,7 +838,7 @@ interface SettingsEntry {
 const SETTINGS_CATALOG: SettingsEntry[] = [
   // Player
   { tab: 'Player', keywords: 'player video stream playback latency buffering picture overlay buttons auto switch streaming codecs audio boost song id' },
-  { tab: 'Player', section: 'Player Buttons', keywords: 'player buttons overlay buttons follow subscribe clip identify song clips vods multinook refresh close hide show customize which buttons top right' },
+  { tab: 'Player', section: 'Player Buttons', keywords: 'player buttons overlay buttons follow subscribe clip identify song songs your songs share clips vods multinook refresh close hide show customize which buttons top right' },
   { tab: 'Player', section: 'Mouse Controls', sectionId: 'settings-section-mouse-controls', keywords: 'mouse controls scroll volume step scroll for about middle-click mute wheel scroll volume louder quieter middle click mute unmute middle-click opens multinook middle click open in multinook multi view stream card sidebar one handed scroll wheel button volume step notch channel about reveal shift scroll down' },
   { tab: 'Player', section: 'Auto-Switch', sectionId: 'settings-section-auto-switch', keywords: 'auto switch stream switching destination notice follow raids stay in chat move to another stream when this one ends where to go next tell me when it switches fallback offline next stream raid redirect followed category notification stay offline chat' },
   { tab: 'Player', section: 'Streaming', sectionId: 'settings-section-streaming', keywords: 'streaming start timeout retry delay keep trying pause between attempts codecs h265 hevc av1 h264 connection timeout auto retry delay resolve' },
@@ -846,7 +846,7 @@ const SETTINGS_CATALOG: SettingsEntry[] = [
   { tab: 'Player', section: 'Latency & Buffering', sectionId: 'settings-section-latency', keywords: 'latency buffering target latency how close to live live edge gap delay low latency buffer ahead stutter' },
   { tab: 'Player', section: 'Picture', keywords: 'picture 16:9 window aspect ratio lock keep the window cinema mode letterbox bars black color match theme floating pillarbox ambient glow glow with the stream backdrop hide title bar while watching auto-hide top bar hover toolbar edge to edge distraction free' },
   { tab: 'Player', section: 'Audio Boost', sectionId: 'settings-section-audio-boost', keywords: 'audio boost leveling turn on audio boost compressor makeup gain louder volume normalize even out loud quiet clipping threshold ratio knee attack release' },
-  { tab: 'Player', section: 'Song Identification', sectionId: 'settings-section-song-id', keywords: 'song identification identify music what song is this shazam recognize now playing track name spotify apple music song.link listen time retries retries when nothing matches capture detection your songs song history list of identified songs' },
+  { tab: 'Player', section: 'Song Identification', sectionId: 'settings-section-song-id', keywords: 'song identification identify music what song is this shazam recognize now playing track name spotify apple music youtube music deezer tidal beatport song links listen time retries retries when nothing matches capture detection your songs song history list of identified songs' },
 
   // Theme
   { tab: 'Theme', keywords: 'theme color accent skin dark light palette glassiness font' },

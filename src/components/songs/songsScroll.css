@@ -1,0 +1,33 @@
+/* The Your songs panel's and the Songs popover's own scrollbar: thin, rounded,
+   in the theme's quiet thumb color (fuller under the pointer), on a clear
+   track that stops short of the rounded corners. The gutter stays reserved,
+   so rows never shift when the bar appears.
+
+   Only the webkit parts are set here: in Chromium (WebView2) a standard
+   `scrollbar-width` or `scrollbar-color` on the element switches the webkit
+   parts off and brings back the platform bar. macOS already takes the
+   standard thin bar app-wide (globals.css html[data-platform="mac"] *). */
+
+.sn-songs-scroll {
+  scrollbar-gutter: stable;
+}
+
+.sn-songs-scroll::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.sn-songs-scroll::-webkit-scrollbar-track {
+  background: transparent;
+  margin-top: 14px;
+  margin-bottom: 14px;
+}
+
+.sn-songs-scroll::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--color-scrollbar-thumb) 65%, transparent);
+  border-radius: 9999px;
+}
+
+.sn-songs-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--color-scrollbar-thumb);
+}

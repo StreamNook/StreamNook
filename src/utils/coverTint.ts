@@ -9,7 +9,8 @@
 //   light, a hovered tile);
 // - the cover's ink, its hue at a lightness that reads 4.5:1 everywhere on
 //   the wash, for accent words and marks;
-// - a list row's hover tint, or none when no tint keeps the muted words.
+// - a list row's hover tint: the cover's hue at the light of the theme's own
+//   hover, so a row lifts as much as it does today, in its cover's color.
 //
 // The heavy part (the cover's swatches) ran once in Rust. This is styling,
 // so it lives where the theme's resolved CSS lives, and it is cheap: per size
@@ -169,16 +170,28 @@ export interface Surface {
   topLight: number;
   tile: number;
   muted: Rgba;
+  /** The theme's own hover (`--color-surface-hover`, the rows' bg-glass-hover),
+   *  painted over the surface. */
+  hover: Rgba;
   /** A light theme: the plain surface's luminance is over 0.4. */
   light: boolean;
 }
+
+/** A hover when a theme names none: a faint white. */
+const DEFAULT_HOVER: Rgba = [255, 255, 255, 0.06];
 
 /** The plain surface: the base with its secondary layer. */
 const plainOf = (s: Surface): Rgb => (s.secondary ? over(rgbOf(s.secondary), s.secondary[3], s.base) : s.base);
 const rgbOf = (c: Rgba): Rgb => [c[0], c[1], c[2]];
 
 /** A surface from its painted colors, the way readSurface builds one. */
-export function makeSurface(kind: SurfaceKind, base: Rgb, secondary: Rgba | null, muted: Rgba): Surface {
+export function makeSurface(
+  kind: SurfaceKind,
+  base: Rgb,
+  secondary: Rgba | null,
+  muted: Rgba,
+  hover: Rgba | null = null,
+): Surface {
   const s: Surface = {
     kind,
     base,
@@ -186,6 +199,7 @@ export function makeSurface(kind: SurfaceKind, base: Rgb, secondary: Rgba | null
     topLight: kind === 'flyout' ? TOP_LIGHT : 0,
     tile: TILE_LIGHT,
     muted,
+    hover: hover ?? DEFAULT_HOVER,
     light: false,
   };
   const plain = plainOf(s);
@@ -217,11 +231,18 @@ export function readSurface(kind: SurfaceKind): Surface {
   };
   const baseRead = read('backgroundColor', kind === 'flyout' ? 'var(--color-background-tertiary)' : 'var(--color-background)');
   const secondary = kind === 'flyout' ? read('backgroundColor', 'var(--color-background-secondary)') : null;
+  const hover = read('backgroundColor', 'var(--color-surface-hover)');
   probe.style.backgroundColor = '';
   const muted = read('color', 'var(--color-text-muted)');
   probe.remove();
   const base: Rgb = baseRead ? over(rgbOf(baseRead), baseRead[3], UNDER) : FALLBACK.base;
-  const surface = makeSurface(kind, base, secondary && secondary[3] > 0 ? secondary : null, muted ?? FALLBACK.muted);
+  const surface = makeSurface(
+    kind,
+    base,
+    secondary && secondary[3] > 0 ? secondary : null,
+    muted ?? FALLBACK.muted,
+    hover && hover[3] > 0 ? hover : null,
+  );
   surfaces.set(kind, { version, surface });
   return surface;
 }
@@ -318,16 +339,14 @@ function lightnessAt(y: number, c: number, h: number): number {
  * surface's own luminance, a touch under it: the theme's muted words already
  * sit under 4.5:1 on its raised surfaces (Rust floors them on the page
  * background), so any lighter wash would cost them contrast, and a wash that
- * keeps the light stays as dark as the theme is. When `rows` is set, the dark
- * theme uses the lighter offsets too: a row's hover lifts, and rowTint falls
- * back to the theme's own hover when that does not read.
+ * keeps the light stays as dark as the theme is.
  */
-function toned(main: Lch, second: Lch | null, plain: Rgb, light: boolean, rows = false): Fit['colors'] {
+function toned(main: Lch, second: Lch | null, plain: Rgb, light: boolean): Fit['colors'] {
   const surfaceL = lchOf(plain)[0];
   const surfaceY = luminance(plain[0], plain[1], plain[2]);
   const tone = (src: Lch, offset: number, floor: number, darkShare: number): Rgb => {
     const c = Math.min(0.15, Math.max(floor, src[1] * 2));
-    const l = light || rows ? surfaceL + offset : lightnessAt(surfaceY * darkShare, c, src[2]);
+    const l = light ? surfaceL + offset : lightnessAt(surfaceY * darkShare, c, src[2]);
     return fromLch(l, c, src[2]);
   };
   const secondSrc: Lch = second ?? [Math.min(1, Math.max(0, main[0] + (light ? -0.14 : 0.14))), main[1], main[2]];
@@ -566,24 +585,48 @@ export function washBackground(
   return parts.join(', ');
 }
 
+/** A row tint's chroma: `clamp(source * 2, ROW_CHROMA_MIN, ROW_CHROMA_MAX)`. */
+const ROW_CHROMA_MIN = 0.06;
+const ROW_CHROMA_MAX = 0.15;
+/** A cover under this chroma reads as gray, and so does a tint the screen can
+ *  only show under ROW_MIN_SHOWN at the hover's light. */
+const ROW_SOURCE_GRAY = 0.02;
+const ROW_MIN_SHOWN = 0.03;
+/** How far a tint may step toward the readable side to keep the muted words
+ *  (their alpha blends a little differently over each hue). */
+const ROW_NUDGE = 0.004;
+const ROW_NUDGES = 12;
+
 /**
- * A list row's hover and focus fill: the cover's toned main color at the
- * largest alpha (0.6 down in 0.02 steps) that keeps the muted words on the
- * plain surface, with and without the top light. Null keeps the row's
- * ordinary hover (`bg-glass-hover`): a gray cover, or no alpha that reads.
+ * A list row's hover and focus fill: the cover's main hue at the light of the
+ * theme's own hover (`--color-surface-hover` over the surface, the rows'
+ * bg-glass-hover), opaque, so a row lifts exactly as much as it does today,
+ * only in its cover's color. The muted words keep at least the contrast they
+ * have on today's hover (with and without the top light), on dark themes and
+ * light ones alike. Null keeps the ordinary hover: a gray cover (`main: null`
+ * or near it), or a hue the screen cannot show at that light.
  */
 export function rowTint(tint: CoverTint | null | undefined, s: Surface): string | null {
   const main = tint?.main;
-  if (!main) return null;
+  if (!main || main[1] < ROW_SOURCE_GRAY) return null;
   const plain = plainOf(s);
-  const color = toned(main, tint.second ?? null, plain, s.light, true).main;
   const unders = s.topLight > 0 ? [plain, over(WHITE, s.topLight, plain)] : [plain];
-  const needs = unders.map((u) => Math.min(NEED_MAX, mutedRatio(s.muted, u)));
-  for (let step = 30; step >= 1; step--) {
-    const a = step * 0.02;
-    if (unders.every((u, i) => mutedRatio(s.muted, over(color, a, u)) >= needs[i] + MARGIN)) {
-      return `rgba(${color[0]}, ${color[1]}, ${color[2]}, ${(step * 2) / 100})`;
+  // Today's hover, where it is painted.
+  const hovers = unders.map((u) => over(rgbOf(s.hover), s.hover[3], u));
+  const needs = hovers.map((h) => Math.min(NEED_MAX, mutedRatio(s.muted, h)));
+  // The light the tint takes: the hover's, at the base where the words read
+  // best, so it keeps them on every base.
+  const best = needs.indexOf(Math.max(...needs));
+  let y = luminance(hovers[best][0], hovers[best][1], hovers[best][2]);
+  const c = Math.min(ROW_CHROMA_MAX, Math.max(ROW_CHROMA_MIN, main[1] * 2));
+  for (let i = 0; i <= ROW_NUDGES; i++) {
+    const color = fromLch(lightnessAt(y, c, main[2]), c, main[2]);
+    if (lchOf(color)[1] < ROW_MIN_SHOWN) return null;
+    if (needs.every((need) => mutedRatio(s.muted, color) >= need + MARGIN)) {
+      return `rgb(${color[0]}, ${color[1]}, ${color[2]})`;
     }
+    // Toward the side the muted words read on: darker under light words.
+    y = Math.max(0, Math.min(1, y + (s.light ? ROW_NUDGE : -ROW_NUDGE)));
   }
   return null;
 }

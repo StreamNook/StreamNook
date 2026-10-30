@@ -42,11 +42,15 @@ const Toggle = ({ enabled, onChange }: { enabled: boolean; onChange: () => void 
 
 // The action buttons that can appear in the player's top-right overlay. Ids
 // match the gating in VideoPlayer. Undefined `player_overlay_buttons` = all on.
-const OVERLAY_BUTTONS: { id: string; label: string }[] = [
+const OVERLAY_BUTTONS: { id: string; label: string; description?: string }[] = [
   { id: 'follow', label: 'Follow / Unfollow' },
   { id: 'subscribe', label: 'Subscribe / Gift' },
   { id: 'clip', label: 'Create Clip' },
-  { id: 'song', label: 'Identify Song' },
+  {
+    id: 'song',
+    label: 'Songs',
+    description: 'The music note identifies the song playing, and the arrow beside it opens your songs.',
+  },
   { id: 'share', label: 'Share' },
   { id: 'clipsvods', label: 'Clips & VODs' },
   { id: 'multinook', label: 'Add to MultiNook' },
@@ -169,6 +173,7 @@ const PlayerSettings = () => {
           <SettingsRow
             key={b.id}
             title={b.label}
+            description={b.description}
             onReset={isOverlayButtonOn(b.id) ? undefined : () => toggleOverlayButton(b.id)}
             control={
               <Toggle enabled={isOverlayButtonOn(b.id)} onChange={() => toggleOverlayButton(b.id)} />

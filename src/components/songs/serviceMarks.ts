@@ -11,6 +11,7 @@ export const SERVICE_MARK: Readonly<Record<string, string>> = {
   YouTube: 'youtube',
   SoundCloud: 'soundcloud',
   Tidal: 'tidal',
+  Beatport: 'beatport',
   Deezer: 'music',
   'Amazon Music': 'music',
   Pandora: 'pandora',

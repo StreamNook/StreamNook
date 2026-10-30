@@ -160,6 +160,7 @@ import { lastLiveLabel } from '../utils/lastLive';
 import { moderateChatter, moderateWithToast, type ModAction, type ModRequest } from '../services/moderation';
 import { openBadgeInfo } from '../stores/badgeSpotlightStore';
 import { twitchRowBadgeRef, type TwitchRowBadgeInfo } from '../utils/badgeSpotlight';
+import { ListeningStrip } from './chat/ListeningStrip';
 
 /** Lets ChatWidget render against a caller-supplied channel instead of the
  *  AppStore's currentStream — same pattern as the MultiNook synthesis branch
@@ -5875,6 +5876,10 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                   </span>
                 </div>
               )}
+              {/* While a song is identified for this chat: the listening
+                  strip. Its room is the one this widget's slash commands
+                  answer into (the Twitch login, or the provider's key). */}
+              <ListeningStrip room={isTwitch ? (currentStream?.user_login ?? null) : providerKey} />
               {replyingTo && !isResubMode && !isWatchStreakMode && (
                 <div className="mb-2 flex items-center gap-2 px-3 py-2 bg-glass rounded-lg border border-borderSubtle">
                   <svg className="w-4 h-4 text-accent flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg>

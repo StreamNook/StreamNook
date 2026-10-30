@@ -50,5 +50,6 @@ describe('music service marks', () => {
     expect(draw('youtubemusic')).toContain('#FF0000');
     expect(draw('shazam')).toContain('#0088FF');
     expect(draw('soundcloud')).toContain('#FF5500');
+    expect(draw('beatport')).toContain('#01FF95');
   });
 });
