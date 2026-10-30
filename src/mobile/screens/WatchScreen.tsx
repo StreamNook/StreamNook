@@ -94,7 +94,7 @@ import type { FullscreenChatSettings } from '../../types';
 import { hapticStep, hapticTick } from '../ui/haptics';
 import { readInsets, type ResolvedInsets } from '../nativeInsets';
 import { swallowTrailingClick } from '../ui/trailingClick';
-import { focusUnder } from '../ui/coveredSurface';
+import { focusUnder, refuseFocusIn } from '../ui/coveredSurface';
 import { isTwitchStream } from '../../utils/streamProvider';
 import { createBandTouches } from '../watch/bandTouches';
 import { backClaimSide, chatSwipeIntent, chatSwipeSide } from '../watch/chatSwipe';
@@ -1529,9 +1529,11 @@ export const WatchScreen: React.FC = () => {
   // video), and its menus stop taking taps meant for what is on screen (the column's mark below).
   const chatOutOfSight = mini || chatClass === 'hidden';
   useEffect(() => {
-    if (!chatOutOfSight) return;
+    if (!chatOutOfSight || !chatColumnEl) return;
     const field = focusUnder<Element>(chatColumnEl, document.activeElement);
     if (field instanceof HTMLElement) field.blur();
+    // Focus that arrives while it is hidden is refused too (a sheet above picking a command).
+    return refuseFocusIn(chatColumnEl);
   }, [chatOutOfSight, chatColumnEl]);
 
   return (

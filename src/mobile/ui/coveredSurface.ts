@@ -14,6 +14,18 @@ export function focusUnder<T>(surface: { contains(node: T): boolean } | null, ac
   return surface.contains(active) ? active : null;
 }
 
+/** While `surface` is out of sight, refuses any focus that arrives inside it (a sheet above it
+ *  picking a command for the composer under the player). Returns the undo. A field's own focus
+ *  handler still runs after the refusal, so it must check `document.activeElement` itself. */
+export function refuseFocusIn(surface: EventTarget): () => void {
+  const refuse = (e: Event) => {
+    const target = e.target as { blur?: () => void } | null;
+    target?.blur?.();
+  };
+  surface.addEventListener('focusin', refuse);
+  return () => surface.removeEventListener('focusin', refuse);
+}
+
 /** Whether a menu is out of sight: every part of it that has an element sits in an out-of-sight
  *  container. A part portaled out (a sheet) keeps it in sight; no element at all is in sight. */
 export function menuOutOfSight(parts: ReadonlyArray<{ closest(selector: string): unknown } | null | undefined>): boolean {

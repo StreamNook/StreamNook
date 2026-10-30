@@ -31,7 +31,12 @@ export const KeyboardDismiss: React.FC = () => {
     };
     const onFocusIn = (e: FocusEvent) => {
       const target = e.target;
-      setEditor(target instanceof HTMLTextAreaElement && target.dataset.keyboardHide !== 'own' ? target : null);
+      // Only a field that still has focus (a surface out of sight may have refused it already).
+      setEditor(
+        target instanceof HTMLTextAreaElement && target.dataset.keyboardHide !== 'own' && document.activeElement === target
+          ? target
+          : null,
+      );
     };
     const onFocusOut = () => setEditor(null);
     document.addEventListener('keydown', onKeyDown);

@@ -17,7 +17,7 @@ import { installVideoCap } from './videoCap';
 import { installLowPower } from './lowPower';
 import { installAppPresence } from './appPresence';
 import { usePageState } from './ui/usePageState';
-import { focusUnder, watchLayerUp } from './ui/coveredSurface';
+import { focusUnder, refuseFocusIn, watchLayerUp } from './ui/coveredSurface';
 import { MobileTabBar } from './MobileTabBar';
 import { MobileOnboarding } from './MobileOnboarding';
 // The real wizard, not a phone-shaped rewrite of it. SetupWizard is already
@@ -107,13 +107,18 @@ const MobileApp: React.FC = () => {
   const isLoading = useAppStore((s) => s.isLoading);
   const shellOutOfSight = watchLayerUp(playerMode, streamUrl, isLoading) || page.pip;
   // When the layer covers the shell, a field typed in under it gives up the keyboard: a mention,
-  // an alert or a link opens the player without the tap rule that would have put it away.
-  const shellRef = useRef<HTMLDivElement | null>(null);
+  // an alert or a link opens the player without the tap rule that would have put it away. Focus
+  // that arrives while it is covered is refused too (a sheet above it picking a command focuses
+  // the composer under the player).
+  // State, not a ref: the shell only renders signed in, and a remounted shell must get the
+  // listener again.
+  const [shellEl, setShellEl] = useState<HTMLDivElement | null>(null);
   useEffect(() => {
-    if (!shellOutOfSight) return;
-    const field = focusUnder<Element>(shellRef.current, document.activeElement);
+    if (!shellOutOfSight || !shellEl) return;
+    const field = focusUnder<Element>(shellEl, document.activeElement);
     if (field instanceof HTMLElement) field.blur();
-  }, [shellOutOfSight]);
+    return refuseFocusIn(shellEl);
+  }, [shellOutOfSight, shellEl]);
 
   // Same backstop the desktop gate uses, and it matters MORE here: the wizard's
   // own comment records that `setup_complete` has been seen reverting to false
@@ -209,7 +214,7 @@ const MobileApp: React.FC = () => {
       ) : (
         <>
           <div
-            ref={shellRef}
+            ref={setShellEl}
             className="flex-1 min-h-0 flex flex-col relative overflow-hidden"
             data-sn-covered={shellHidden ? 'true' : undefined}
             data-sn-out-of-sight={shellOutOfSight ? 'true' : undefined}

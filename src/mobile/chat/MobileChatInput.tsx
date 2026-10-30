@@ -811,7 +811,10 @@ const MobileChatInputImpl: React.FC<Props> = ({
               onChange={(e) => setText(e.target.value)}
               // Its own hide-keyboard button takes the menu's slot while typing.
               data-keyboard-hide="own"
-              onFocus={() => {
+              onFocus={(e) => {
+                // A surface out of sight refuses focus before this runs (refuseFocusIn): a field
+                // that is no longer focused is not being typed in.
+                if (document.activeElement !== e.currentTarget) return;
                 setTyping(true);
                 setEmotesOpen(false);
                 // The bar is for writing now: an open inbox goes first.

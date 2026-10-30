@@ -5,8 +5,35 @@ import {
   inboxPaneOnScreen,
   menuOutOfSight,
   OUT_OF_SIGHT_SELECTOR,
+  refuseFocusIn,
   watchLayerUp,
 } from './coveredSurface';
+
+/** A surface that is also the focus target, counting blurs. */
+class FakeSurface extends EventTarget {
+  blurred = 0;
+  blur() {
+    this.blurred += 1;
+  }
+}
+
+describe('refuseFocusIn', () => {
+  it('blurs whatever takes focus inside the surface while it is out of sight', () => {
+    const surface = new FakeSurface();
+    const undo = refuseFocusIn(surface);
+    surface.dispatchEvent(new Event('focusin'));
+    expect(surface.blurred).toBe(1);
+    undo();
+  });
+
+  it('lets focus be once the surface is back in sight', () => {
+    const surface = new FakeSurface();
+    const undo = refuseFocusIn(surface);
+    undo();
+    surface.dispatchEvent(new Event('focusin'));
+    expect(surface.blurred).toBe(0);
+  });
+});
 
 describe('watchLayerUp', () => {
   it('full with a stream, a load or an offline room is up', () => {
