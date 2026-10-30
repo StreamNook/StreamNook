@@ -2640,6 +2640,8 @@ pub fn run() {
             get_streamnook_identities,
             get_streamnook_identity_resolved,
             set_streamnook_identity,
+            // A member's profile card, computed by streamnook.app (first paint).
+            get_profile_snapshot,
             // Authenticated writes to StreamNook's own API. One command, path-allowlisted.
             streamnook_api_post,
             // The member's own membership status line (paid or gifted).

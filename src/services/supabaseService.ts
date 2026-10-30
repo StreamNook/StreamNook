@@ -860,6 +860,10 @@ export interface ProfilePrefs {
     // Whether the member's atmosphere (or Cologne look) also paints behind their
     // chat messages. False keeps it on the profile and hover card only.
     chatAtmosphere: boolean;
+    // True only when the read answered (a member with no saved row answers the
+    // defaults with ok true). False for a failed read, whose defaults must not be
+    // taken for what the member chose.
+    ok: boolean;
 }
 
 const defaultProfilePrefs = (): ProfilePrefs => ({
@@ -867,14 +871,17 @@ const defaultProfilePrefs = (): ProfilePrefs => ({
     profileTheme: 'tier',
     hiddenSections: [],
     chatAtmosphere: true,
+    ok: false,
 });
 
 export const getProfilePrefs = async (userId: string): Promise<ProfilePrefs> => {
     if (!userId) return defaultProfilePrefs();
     // Read in Rust (services/member_theme.rs), with the same defaults and the
-    // legacy paint_theme derivation; a failed read answers the defaults.
+    // legacy paint_theme derivation; a failed read answers the defaults with
+    // ok false.
     try {
-        return await invoke<ProfilePrefs>('get_profile_prefs', { userId });
+        const prefs = await invoke<ProfilePrefs>('get_profile_prefs', { userId });
+        return { ...prefs, ok: prefs.ok === true };
     } catch (error) {
         Logger.error('[Supabase] Failed to get profile prefs:', error);
         return defaultProfilePrefs();
@@ -1504,121 +1511,6 @@ export const whenAtmospheresReady = (): Promise<void> => {
  */
 export const refreshEntitlementRegistries = (): void => {
     void invoke('sn_refresh_registries').catch(() => {});
-};
-
-// ─── Profile snapshot cache (stale-while-revalidate) ───────────────────────
-// A per-user CACHE of a member's fully-resolved profile so the public profile
-// overlay can paint instantly from ONE read, then revalidate the live sources
-// in the background. NOT a source of truth (7TV/Twitch stay authoritative); a
-// stale row self-corrects on the next open. See migration 20260605000001.
-
-// Single JSONB blob; `v` lets the shape evolve without a migration. Cosmetic
-// sub-objects are kept loose (resolved upstream) to avoid coupling to deep 7TV
-// types — consumers treat them as opaque render data.
-export interface ProfileSnapshot {
-    v: 1;
-    identity: { login: string; displayName: string; avatar: string };
-    profileTheme: string; // 'tier' | 'paint' | <atmosphere id>
-    hiddenSections: string[];
-    memberNumber: number | null;
-    cosmeticSlug: string | null; // active StreamNook cosmetic
-    namePaint: Record<string, unknown> | null; // resolved 7TV paint style (CSSProperties)
-    seventvBadge: Record<string, unknown> | null; // active 7TV badge
-    wornBadges: {
-        twitch: { src: string; title: string } | null;
-        thirdParty: Array<{ key?: string; provider?: string; title?: string; src: string }>;
-        bttvPro: { src: string; title: string } | null;
-    };
-    counts: { paints: number; badges: number; sn: number };
-    stats: { messages: number; streams: number; hours: number } | null;
-    accolades: string[]; // earned accolade ids
-    favoriteChannel: unknown | null;
-    ivr: { followers: number | null; createdAt: string | null; roles: unknown } | null;
-}
-
-/** Read a member's cached profile snapshot (null if none / unknown version). */
-export const getProfileSnapshot = async (
-    userId: string,
-): Promise<{ snapshot: ProfileSnapshot; updatedAt: string } | null> => {
-    if (!supabase || !userId) return null;
-    try {
-        const { data, error } = await supabase
-            .from('user_profile_snapshot')
-            .select('snapshot, updated_at')
-            .eq('twitch_user_id', userId)
-            .maybeSingle();
-        if (error || !data) return null;
-        const row = data as { snapshot: ProfileSnapshot | null; updated_at: string };
-        if (!row.snapshot || row.snapshot.v !== 1) return null;
-        return { snapshot: row.snapshot, updatedAt: row.updated_at };
-    } catch (e) {
-        Logger.warn('[Supabase] getProfileSnapshot failed:', e);
-        return null;
-    }
-};
-
-/** Write/refresh a member's cached profile snapshot (cache-aside fill). */
-export const upsertProfileSnapshot = async (
-    userId: string,
-    snapshot: ProfileSnapshot,
-): Promise<void> => {
-    if (!supabase || !userId) return;
-    try {
-        const { error } = await supabase.from('user_profile_snapshot').upsert(
-            { twitch_user_id: userId, snapshot, updated_at: new Date().toISOString() },
-            { onConflict: 'twitch_user_id' },
-        );
-        if (error) Logger.warn('[Supabase] upsertProfileSnapshot failed:', error.message);
-    } catch (e) {
-        Logger.warn('[Supabase] upsertProfileSnapshot exception:', e);
-    }
-};
-
-/**
- * Optimistically patch ONLY the profileTheme of a member's cached snapshot after
- * they change their atmosphere, so the next profile-card open (theirs or anyone
- * else's) reflects it without waiting for the lazy stale-rewrite, and so the
- * instant snapshot render can't clobber the fresh prefs with the old theme. The
- * other snapshot fields are untouched (a theme change doesn't affect them), so it
- * stays consistent. No-op when no snapshot exists yet (the overlay builds fresh).
- */
-export const patchProfileSnapshotTheme = async (userId: string, theme: string): Promise<void> => {
-    if (!supabase || !userId) return;
-    try {
-        const existing = await getProfileSnapshot(userId);
-        if (!existing || existing.snapshot.profileTheme === theme) return;
-        await upsertProfileSnapshot(userId, { ...existing.snapshot, profileTheme: theme });
-    } catch (e) {
-        Logger.warn('[Supabase] patchProfileSnapshotTheme failed:', e);
-    }
-};
-
-/** Read a member's Twitch identity (login/display/avatar) from OUR `users` table,
- *  so the profile overlay can paint instantly without a Twitch Helix round-trip.
- *  Helix becomes a background revalidation. Null for users we've never recorded
- *  (e.g. non-members), which fall back to Helix. */
-export const getUserIdentity = async (
-    userId: string,
-): Promise<{ login: string; displayName: string; avatar: string } | null> => {
-    if (!supabase || !userId) return null;
-    try {
-        const { data, error } = await supabase
-            .from('users')
-            .select('username, display_name, avatar_url')
-            .eq('id', userId)
-            .maybeSingle();
-        if (error || !data) return null;
-        const row = data as { username?: string; display_name?: string; avatar_url?: string };
-        if (!row.username) return null;
-        return {
-            login: row.username,
-            displayName: row.display_name || row.username,
-            avatar: row.avatar_url || '',
-        };
-    } catch (e) {
-        Logger.warn('[Supabase] getUserIdentity failed:', e);
-        return null;
-    }
 };
 
 /**

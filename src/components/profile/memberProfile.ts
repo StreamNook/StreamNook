@@ -2,9 +2,11 @@
 // (the chat user card for a member, and the same card as your own live preview
 // in Settings), loaded one way.
 //
-// Loads stale-while-revalidate: a cached snapshot paints first, then the live
-// sources (Helix identity, cosmetics, worn badges, the profile theme) replace
-// it and refresh the snapshot for the next viewer.
+// Loads stale-while-revalidate: the card streamnook.app wrote for the member
+// (read once in Rust, or just their identity when there is none) paints first,
+// then the live sources (Helix identity, cosmetics, worn badges, the profile
+// theme) replace it. A live value always wins over the first paint, however late
+// it lands.
 
 import { useEffect, useState, useSyncExternalStore, type CSSProperties } from 'react';
 import { invoke } from '@tauri-apps/api/core';
@@ -12,7 +14,7 @@ import { helixGet } from '../../services/helix';
 import { useAppStore } from '../../stores/AppStore';
 import { Logger } from '../../utils/logger';
 import { getTierAccent, getWornBadgeCaption } from '../StreamNookBadge';
-import { getFullProfileWithFallback } from '../../services/cosmeticsCache';
+import { getFullProfileWithFallback, isUserCosmeticsHardFailed } from '../../services/cosmeticsCache';
 import { computePaintStyle } from '../../services/seventvService';
 import { getAtmosphere, type Atmosphere } from '../../services/atmospheres';
 import { getResolvedIdentity, getIdentityWithCache } from '../../services/identityService';
@@ -20,20 +22,16 @@ import { resolveBttvProUrl, BTTV_PRO_LOADOUT_KEY } from '../../services/bttvProB
 import {
   getStreamNookUserNumber,
   getOwnedCosmeticSlugs,
-  getActiveCosmeticSlug,
   getProfilePrefs,
   subscribeStreamNookRegistryVersion,
   getStreamNookRegistryVersion,
   subscribeCosmeticsVersion,
   getCosmeticsVersion,
   whenAtmospheresReady,
-  getProfileSnapshot,
-  upsertProfileSnapshot,
-  getUserIdentity,
   incrementProfileView,
   getProfileViews,
-  type ProfileSnapshot,
 } from '../../services/supabaseService';
+import { noLive, planFirstPaint, planNamePaint, planPaintTheme, planPrefs, type FirstPaint } from './memberProfileApply';
 
 // "#rrggbb" -> "r, g, b" for use inside rgba(...).
 export const hexToRgb = (hex: string): string | null => {
@@ -270,47 +268,35 @@ export function useMemberProfile(
     if (!userId) return;
     let alive = true;
 
+    // What the live sources have already set. The first paint can land after
+    // them (the server rebuilds a card in the background and a change lags by up
+    // to a minute), so it fills only what nothing live has filled yet. A flag is
+    // set only by a read that answered.
+    const live = noLive();
+
     (async () => {
       try {
-        // Instant paint from the cached snapshot (if any): hydrate everything the
-        // overlay renders from ONE read, before the live sources resolve. The live
-        // chain below revalidates and rewrites the cache (stale-while-revalidate).
-        const snapPromise = getProfileSnapshot(userId);
+        // Instant paint: one read in Rust of the card streamnook.app wrote, or
+        // just the member's identity when there is none. Both are already
+        // checked there; this only applies them.
+        const snapPromise = invoke<FirstPaint | null>('get_profile_snapshot', { userId }).catch(() => null);
         void (async () => {
-          const s = await snapPromise;
-          if (!s || !alive) return;
-          const snap = s.snapshot;
-          setInfo(snap.identity);
-          setCounts(snap.counts);
-          setNamePaint((snap.namePaint as CSSProperties) ?? null);
-          setHiddenSections(snap.hiddenSections);
+          const snap = await snapPromise;
+          if (!snap || !alive) return;
           // In live-preview mode the badge row is owned by the override path
-          // (re-resolved on each loadout edit); skip the snapshot so a late
-          // cache read can't clobber a fresher preview resolve.
-          if (!(followsLivePreview && useAppStore.getState().profileViewerPreview)) {
-            setWornBadges({
-              seventv: snap.seventvBadge,
-              twitch: snap.wornBadges.twitch,
-              thirdParty: snap.wornBadges.thirdParty,
-              bttvPro: snap.wornBadges.bttvPro,
-            });
+          // (re-resolved on each loadout edit); a late card must not clobber a
+          // fresher preview resolve.
+          const plan = planFirstPaint(snap, live, followsLivePreview && !!useAppStore.getState().profileViewerPreview);
+          if (plan.info) setInfo(plan.info);
+          if (plan.counts) setCounts(plan.counts);
+          if (plan.namePaint !== undefined) setNamePaint(plan.namePaint);
+          if (plan.hiddenSections) setHiddenSections(plan.hiddenSections);
+          if (plan.wornBadges) setWornBadges(plan.wornBadges);
+          if (plan.theme) {
+            await whenAtmospheresReady();
+            if (alive && !live.theme) setTheme(resolveProfileTheme(plan.theme.profileTheme, plan.theme.namePaint));
           }
-          await whenAtmospheresReady();
-          if (alive) {
-            setTheme(resolveProfileTheme(snap.profileTheme, (snap.namePaint as CSSProperties) ?? null));
-            setLoading(false);
-          }
-        })();
-        // No snapshot yet → read our own `users` table for instant identity
-        // (faster than the Twitch Helix call below, which then revalidates it).
-        void (async () => {
-          const s = await snapPromise;
-          if (s || !alive) return;
-          const id = await getUserIdentity(userId);
-          if (id && alive) {
-            setInfo(id);
-            setLoading(false);
-          }
+          if (alive && plan.endLoading) setLoading(false);
         })();
 
         // Kick off the profile-theme prefs IMMEDIATELY (only needs userId) so the
@@ -319,16 +305,17 @@ export function useMemberProfile(
         // paints right away instead of waiting on the whole cosmetic chain (which
         // was making the backdrop appear seconds late). Paint themes still finish
         // in the main chain since they need the 7TV paint data.
-        const prefsPromise = getProfilePrefs(userId).catch(
-          () => ({ profileTheme: 'tier', hiddenSections: [] as string[] }),
-        );
+        // A read that failed (`ok` false, or a throw) is null here: it sets
+        // nothing and marks nothing live, so the first-paint card still stands.
+        const prefsPromise = getProfilePrefs(userId).catch(() => null);
         void (async () => {
-          const prefs = await prefsPromise;
+          const plan = planPrefs(await prefsPromise);
           if (!alive) return;
-          setHiddenSections(prefs.hiddenSections ?? []);
-          if (prefs.profileTheme !== 'paint') {
+          Object.assign(live, plan.live);
+          if (plan.hiddenSections) setHiddenSections(plan.hiddenSections);
+          if (plan.theme) {
             await whenAtmospheresReady();
-            if (alive) setTheme(resolveProfileTheme(prefs.profileTheme, null));
+            if (alive) setTheme(resolveProfileTheme(plan.theme.profileTheme, null));
           }
         })();
 
@@ -341,6 +328,7 @@ export function useMemberProfile(
           return;
         }
         if (!alive) return;
+        live.info = true;
         setInfo({ login: u.login, displayName: u.display_name || u.login, avatar: u.profile_image_url || '' });
         setLoading(false);
 
@@ -348,6 +336,7 @@ export function useMemberProfile(
         try {
           const profile = await getFullProfileWithFallback(userId, u.login, userId, u.login);
           if (alive) {
+            live.counts = true;
             setCounts({
               paints: profile.seventvCosmetics?.paints?.length ?? 0,
               badges: profile.seventvCosmetics?.badges?.length ?? 0,
@@ -360,7 +349,10 @@ export function useMemberProfile(
           // the resolved values; the live-preview effect re-runs the same helper.
           const { seventv: sevenTvBadge, twitch, thirdParty, bttvPro } =
             await resolveWornBadges(userId, profile);
-          if (alive) setWornBadges({ seventv: sevenTvBadge, twitch, thirdParty, bttvPro });
+          if (alive) {
+            live.badges = true;
+            setWornBadges({ seventv: sevenTvBadge, twitch, thirdParty, bttvPro });
+          }
 
           // The member's active 7TV paint always paints their NAME (free, like
           // chat). The profile BACKGROUND theme is premium: their 7TV paint or a
@@ -368,8 +360,15 @@ export function useMemberProfile(
           const paints = profile.seventvCosmetics?.paints as Array<{ selected?: boolean }> | undefined;
           const activePaint = paints?.find((p) => p?.selected);
           const ps = activePaint ? computePaintStyle(activePaint as never, '#9146FF') : null;
+          // Whether 7TV genuinely answered (not a failed fetch). A failed read must
+          // not blank the name paint the first-paint card drew, nor mark it live.
+          const paintAnswered = !isUserCosmeticsHardFailed(userId);
           if (alive) {
-            setNamePaint(ps);
+            const namePaintPlan = planNamePaint({ answered: paintAnswered, paintStyle: ps });
+            if (namePaintPlan.set) {
+              live.paint = true;
+              setNamePaint(namePaintPlan.value);
+            }
             setActivePaint((activePaint as ({ id: string; name: string } & Record<string, unknown>) | undefined) ?? null);
             setSeventvUserId(profile.seventvCosmetics?.seventvUserId ?? null);
           }
@@ -378,47 +377,13 @@ export function useMemberProfile(
           // parallel with the cosmetic/badge fetches), and hiddenSections + any
           // Atmosphere/tier backdrop are already applied. Here we only finish the
           // PAINT theme — the one case that needs the 7TV paint data (`ps`).
-          const prefs = await prefsPromise;
-          if (prefs.profileTheme === 'paint' && ps && alive) {
-            setTheme(resolveProfileTheme('paint', ps));
+          // With no paint it clears the theme, so a stale card cannot keep one, but
+          // only when 7TV answered: after a failed fetch the card's paint aura stays.
+          const paintTheme = planPaintTheme(await prefsPromise, { answered: paintAnswered, hasPaint: !!ps });
+          if (paintTheme && alive) {
+            Object.assign(live, paintTheme.live);
+            setTheme(paintTheme.theme ? resolveProfileTheme('paint', ps) : null);
           }
-
-          // Refresh the cache (cache-aside) from the freshly-resolved values, so the
-          // next open of this member (by anyone) paints instantly. Throttled: only
-          // write when the snapshot is missing, older than 60s, or a key field
-          // changed — so popular profiles aren't rewritten on every view.
-          const existing = await snapPromise;
-          const freshSnap: ProfileSnapshot = {
-            v: 1,
-            identity: {
-              login: u.login,
-              displayName: u.display_name || u.login,
-              avatar: u.profile_image_url || '',
-            },
-            profileTheme: prefs.profileTheme,
-            hiddenSections: prefs.hiddenSections ?? [],
-            memberNumber: getStreamNookUserNumber(userId) ?? null,
-            cosmeticSlug: getActiveCosmeticSlug(userId) ?? null,
-            namePaint: ps ? (ps as Record<string, unknown>) : null,
-            seventvBadge: (sevenTvBadge as Record<string, unknown> | null) ?? null,
-            wornBadges: { twitch, thirdParty, bttvPro },
-            counts: {
-              paints: profile.seventvCosmetics?.paints?.length ?? 0,
-              badges: profile.seventvCosmetics?.badges?.length ?? 0,
-              sn: getOwnedCosmeticSlugs(userId).size,
-            },
-            stats: null,
-            accolades: [],
-            favoriteChannel: null,
-            ivr: null,
-          };
-          const stale =
-            !existing ||
-            Date.now() - new Date(existing.updatedAt).getTime() > 60_000 ||
-            existing.snapshot.profileTheme !== freshSnap.profileTheme ||
-            existing.snapshot.cosmeticSlug !== freshSnap.cosmeticSlug ||
-            existing.snapshot.identity.avatar !== freshSnap.identity.avatar;
-          if (stale) void upsertProfileSnapshot(userId, freshSnap);
         } catch { /* counts + theme stay at defaults */ }
       } catch (e) {
         Logger.error('[ProfileViewer] failed to load:', e);

@@ -39,11 +39,21 @@ pub struct ProfilePrefs {
     pub hidden_sections: Vec<String>,
     /// Whether their Atmosphere also paints behind their chat messages.
     pub chat_atmosphere: bool,
+    /// True only when the read answered; false for the defaults a failed (or
+    /// skipped) read stands in with. A member with no saved row answers true.
+    #[serde(default)]
+    pub ok: bool,
 }
 
 impl Default for ProfilePrefs {
     fn default() -> Self {
-        Self { paint_theme: false, profile_theme: "tier".into(), hidden_sections: Vec::new(), chat_atmosphere: true }
+        Self {
+            paint_theme: false,
+            profile_theme: "tier".into(),
+            hidden_sections: Vec::new(),
+            chat_atmosphere: true,
+            ok: false,
+        }
     }
 }
 
@@ -208,7 +218,7 @@ async fn read_prefs(member_id: &str) -> Result<ProfilePrefs, String> {
         &format!("select=paint_theme,profile_theme,hidden_sections,chat_atmosphere&twitch_user_id=eq.{}", encode(member_id)),
     )
     .await?;
-    Ok(prefs_from_row(rows.first()))
+    Ok(answered(&rows))
 }
 
 /// The row's values with the pages' defaults; the legacy `paint_theme` flag
@@ -223,6 +233,7 @@ pub(crate) fn prefs_from_row(row: Option<&Value>) -> ProfilePrefs {
         .unwrap_or_else(|| if row.get("paint_theme").and_then(Value::as_bool) == Some(true) { "paint" } else { "tier" }.into());
     ProfilePrefs {
         paint_theme: profile_theme == "paint",
+        ok: false,
         hidden_sections: row
             .get("hidden_sections")
             .and_then(Value::as_array)
@@ -231,6 +242,21 @@ pub(crate) fn prefs_from_row(row: Option<&Value>) -> ProfilePrefs {
         chat_atmosphere: row.get("chat_atmosphere").and_then(Value::as_bool) != Some(false),
         profile_theme,
     }
+}
+
+/// A read that answered, with its values (`ok` true; no saved row is an answer).
+fn answered(rows: &[Value]) -> ProfilePrefs {
+    ProfilePrefs { ok: true, ..prefs_from_row(rows.first()) }
+}
+
+/// The prefs of a finished read: what it answered, else the defaults with `ok`
+/// false (a failure is logged), which the pages must not take for the member's
+/// choice.
+fn prefs_or_failed(read: Result<ProfilePrefs, String>) -> ProfilePrefs {
+    read.unwrap_or_else(|e| {
+        log::warn!("[MemberTheme] profile prefs read failed: {e}");
+        ProfilePrefs::default()
+    })
 }
 
 /// A member's profile preferences, a failed read as an error: what they hide
@@ -242,16 +268,13 @@ pub async fn try_profile_prefs(member_id: &str) -> Result<ProfilePrefs, String> 
     read_prefs(member_id).await
 }
 
-/// A member's profile preferences; the defaults when none are saved or the
-/// read fails (a failure is logged).
+/// A member's profile preferences; the defaults when none are saved (`ok`
+/// true) or the read fails (`ok` false, and the failure is logged).
 pub async fn profile_prefs(member_id: &str) -> ProfilePrefs {
     if member_id.is_empty() {
         return ProfilePrefs::default();
     }
-    read_prefs(member_id).await.unwrap_or_else(|e| {
-        log::warn!("[MemberTheme] profile prefs read failed: {e}");
-        ProfilePrefs::default()
-    })
+    prefs_or_failed(read_prefs(member_id).await)
 }
 
 fn encode(id: &str) -> String {
@@ -477,6 +500,45 @@ mod tests {
         assert_eq!(row.profile_theme, "aurora");
         assert!(!row.chat_atmosphere);
         assert_eq!(row.hidden_sections, vec!["roast".to_string()]);
+    }
+
+    #[test]
+    fn a_read_that_answered_is_ok_even_with_no_saved_row() {
+        let none = answered(&[]);
+        assert!(none.ok);
+        assert_eq!(none.profile_theme, "tier");
+        let row = answered(&[json!({ "profile_theme": "aurora", "hidden_sections": ["roast"] })]);
+        assert!(row.ok);
+        assert_eq!(row.profile_theme, "aurora");
+        assert_eq!(row.hidden_sections, vec!["roast".to_string()]);
+        // Parsing a row is not an answer by itself.
+        assert!(!prefs_from_row(None).ok);
+        assert!(!prefs_from_row(Some(&json!({ "profile_theme": "aurora" }))).ok);
+    }
+
+    #[test]
+    fn a_failed_read_answers_the_defaults_and_is_not_ok() {
+        let failed = prefs_or_failed(Err("user_profile_prefs: 503".into()));
+        assert!(!failed.ok);
+        assert_eq!(failed, ProfilePrefs::default());
+        assert!(prefs_or_failed(Ok(answered(&[]))).ok);
+    }
+
+    #[tokio::test]
+    async fn no_member_to_read_is_not_ok() {
+        assert!(!profile_prefs("").await.ok);
+        assert!(!try_profile_prefs("").await.unwrap().ok);
+    }
+
+    #[test]
+    fn the_answer_carries_ok_to_the_pages() {
+        assert_eq!(serde_json::to_value(answered(&[])).unwrap()["ok"], true);
+        // A copy saved before the field existed reads as not ok.
+        let old: ProfilePrefs = serde_json::from_value(
+            json!({ "paintTheme": false, "profileTheme": "tier", "hiddenSections": [], "chatAtmosphere": true }),
+        )
+        .unwrap();
+        assert!(!old.ok);
     }
 
     #[test]

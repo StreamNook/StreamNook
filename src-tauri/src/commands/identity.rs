@@ -65,6 +65,16 @@ pub async fn get_streamnook_identity(user_id: String) -> Result<IdentityLoadout,
     }
 }
 
+/// A member's profile card for its first paint, before the live sources answer:
+/// the card streamnook.app wrote for them, with every link in it checked again
+/// here, or just their identity when there is no usable row. Also asks the
+/// server to rebuild a stale card. None for a non-member, a malformed id, or
+/// any failure.
+#[tauri::command]
+pub async fn get_profile_snapshot(user_id: String) -> Option<crate::services::profile_snapshot::FirstPaint> {
+    crate::services::profile_snapshot::first_paint(&user_id).await
+}
+
 /// Batch read for chat backfill. Returns a map keyed by twitch_user_id, with a
 /// non-customized default for any id the backend didn't return.
 #[tauri::command]
