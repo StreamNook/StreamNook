@@ -425,6 +425,20 @@ mod tests {
     }
 
     #[test]
+    fn only_after_a_colon_sits_under_emotes_and_matching_under_chatter_names() {
+        for ios in [false, true] {
+            let hit = search_on("only after a colon", 3, ios, &nothing);
+            assert_eq!(hit[0].paths, ["chat_input.emote_suggest_colon_only"]);
+            assert_eq!(hit[0].under.as_deref(), Some("Emotes"));
+        }
+        let matching = rows().iter().find(|r| r.paths.iter().any(|p| p == "chat_input.emote_tab_complete_match_mode")).unwrap();
+        assert_eq!(matching.under.as_deref(), Some("Chatter names"));
+        // A fresh install has it off, so on then off again is not a change.
+        let defaults = crate::commands::settings_fields::default_settings_value();
+        assert_eq!(defaults["chat_input"]["emote_suggest_colon_only"], serde_json::json!(false));
+    }
+
+    #[test]
     fn moderation_rows_live_on_their_own_page() {
         // Every moderation row sits on the Moderation page, none on Chat.
         for row in rows() {

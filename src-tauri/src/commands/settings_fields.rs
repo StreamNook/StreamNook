@@ -122,6 +122,7 @@ pub fn frontend_owned_defaults() -> Value {
             "emote_tab_complete_enabled": true,
             "emote_tab_complete_match_mode": "starts_with",
             "emote_tab_complete_include_chatters": true,
+            "emote_suggest_colon_only": false,
         },
     })
 }

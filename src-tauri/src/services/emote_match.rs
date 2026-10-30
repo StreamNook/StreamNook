@@ -236,6 +236,42 @@ pub fn is_short_word(word: &str) -> bool {
     rest.chars().count() < MIN_PREFIX_CHARS
 }
 
+/// Whether the viewer asked for suggestions only after a colon
+/// (chat_input.emote_suggest_colon_only, off unless turned on).
+pub fn colon_only_of(settings: &Settings) -> bool {
+    settings
+        .chat_input
+        .extra
+        .get("emote_suggest_colon_only")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+}
+
+/// Whether `word` asks for emotes with a colon: `:` then a letter, digit or
+/// `_`, and not a lone emoticon letter (`:D`, `:P`, `:O`, `:S`, `:X`), so a
+/// time, a face or a link never asks. The desktop's `:` list opens on the same
+/// rule (`emoteSearchTrigger`, the same character class);
+/// `src/utils/colonWord.fixture.json` holds both to it.
+pub fn is_colon_word(word: &str) -> bool {
+    static FIRST: OnceLock<regex::Regex> = OnceLock::new();
+    let Some(rest) = word.strip_prefix(':') else {
+        return false;
+    };
+    let first = FIRST.get_or_init(|| regex::Regex::new(r"^[\p{L}\p{N}_]").expect("colon word pattern"));
+    if !first.is_match(rest) {
+        return false;
+    }
+    !matches!(rest, "D" | "d" | "P" | "p" | "O" | "o" | "S" | "s" | "X" | "x")
+}
+
+/// Whether `match_emote_tokens` answers this ask. Only the fill menu is gated:
+/// with "Only after a colon" on, a colon word (emotes) or an `@` word
+/// (chatters) still asks and a plain word gets nothing. The Tab cycle and the
+/// emote menu's search always answer.
+pub fn fill_gate(profile: Option<&str>, word: &str, colon_only: bool) -> bool {
+    profile != Some("fill") || !colon_only || is_colon_word(word) || word.starts_with('@')
+}
+
 /// What a chatter row inserts: the display name when it differs from the
 /// login only by case, else the login (a localized display name mentions
 /// nobody), with `@` when the word had one.
@@ -1731,6 +1767,50 @@ mod tests {
         assert!(is_short_word(""));
         // A mention is a chatter lookup, not an emote word.
         assert!(!is_short_word("@"));
+    }
+
+    /// The phones' "Only after a colon" opens on the desktop's own colon rule:
+    /// every word in the fixture the vitest colonWord test reads too.
+    #[test]
+    fn colon_words_follow_the_desktop_trigger() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../../../src/utils/colonWord.fixture.json")).expect("fixture");
+        let cases = fixture["cases"].as_array().expect("cases");
+        assert!(cases.len() > 20);
+        for case in cases {
+            let word = case["word"].as_str().expect("word");
+            let colon = case["colon"].as_bool().expect("colon");
+            assert_eq!(is_colon_word(word), colon, "{word:?}");
+        }
+    }
+
+    #[test]
+    fn only_after_a_colon_answers_colon_and_at_words() {
+        let fill = Some("fill");
+        for word in ["lul", ":lul", "@lu", ":D", "12:30"] {
+            assert!(fill_gate(fill, word, false), "off: {word}");
+        }
+        for word in [":lul", ":0", ":lul:", "@lu", "@"] {
+            assert!(fill_gate(fill, word, true), "on: {word}");
+        }
+        for word in ["lul", "l", ":", ":D", ":)", "12:30", "https://x.tv", "::lo", ""] {
+            assert!(!fill_gate(fill, word, true), "on: {word}");
+        }
+        // Only the fill menu: the Tab cycle and the emote menu's search always answer.
+        for profile in [Some("cycle"), Some("search"), None] {
+            assert!(fill_gate(profile, "lul", true), "{profile:?}");
+        }
+    }
+
+    #[test]
+    fn only_after_a_colon_is_read_from_saved_settings() {
+        assert!(!colon_only_of(&Settings::default()), "off unless turned on");
+        let mut value = serde_json::to_value(Settings::default()).expect("settings");
+        value["chat_input"]["emote_suggest_colon_only"] = serde_json::json!(true);
+        let settings: Settings = serde_json::from_value(value).expect("settings");
+        assert!(colon_only_of(&settings));
+        let saved = serde_json::to_value(&settings).expect("settings");
+        assert_eq!(saved["chat_input"]["emote_suggest_colon_only"], serde_json::json!(true), "kept on save");
     }
 
     #[test]

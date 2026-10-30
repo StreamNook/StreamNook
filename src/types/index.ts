@@ -863,10 +863,14 @@ export interface ChatInputSettings {
   emote_tab_complete_enabled?: boolean;
   emote_tab_complete_match_mode?: 'starts_with' | 'includes';
   emote_tab_complete_include_chatters?: boolean;
+  // Phones: suggestions only for a word that starts with ":" (emotes) or "@"
+  // (chatters); a plain word gets none. Rust decides (emote_match.rs
+  // fill_gate). Defaults to off.
+  emote_suggest_colon_only?: boolean;
   // What Tab opens: the inline carousel (complete in place, Tab again cycles;
   // the default) or the emote list (narrows as you type). Never both.
   emote_tab_style?: 'carousel' | 'list';
-  // Typing ":" plus two letters opens the emote list. Defaults to on.
+  // Typing ":" plus a letter opens the emote list. Defaults to on.
   emote_colon_search_enabled?: boolean;
   // Underline misspelled words in the composer and offer corrections on
   // right-click. Replaces the webview's own spell check, which flags every

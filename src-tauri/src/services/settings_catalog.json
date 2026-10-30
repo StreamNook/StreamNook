@@ -1519,7 +1519,7 @@
    ],
    "nested": false,
    "logo": null,
-   "detail": "Removes the smiley from inside the message box. The emote picker still opens from the emote suggestions as you type.",
+   "detail": "Removes the smiley from inside the message box, and with it the emote picker. Emote suggestions still show above the box.",
    "aliases": []
   },
   {
@@ -1591,14 +1591,18 @@
   {
    "page": "chat",
    "section": "Tab Completion",
-   "title": "Matching",
+   "title": "Only after a colon",
    "paths": [
-    "chat_input.emote_tab_complete_match_mode"
+    "chat_input.emote_suggest_colon_only"
    ],
    "nested": true,
    "logo": null,
-   "detail": "",
-   "aliases": []
+   "detail": "Suggest emotes only for a word that starts with a colon, like :lul.",
+   "aliases": [
+    "colon",
+    "as you type",
+    "quiet suggestions"
+   ]
   },
   {
    "page": "chat",
@@ -1610,6 +1614,18 @@
    "nested": false,
    "logo": null,
    "detail": "Also suggest display names of users currently in chat.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Tab Completion",
+   "title": "Matching",
+   "paths": [
+    "chat_input.emote_tab_complete_match_mode"
+   ],
+   "nested": true,
+   "logo": null,
+   "detail": "Starts With needs the name to begin with what you typed; Contains matches it anywhere in the name.",
    "aliases": []
   },
   {

@@ -1,5 +1,6 @@
 use crate::services::emote_credit::{self as credit, CreditProvider, EmoteCredit};
 use crate::services::emote_match::{self, Collector, Context, Seed, Slot, Spec};
+use crate::models::settings::AppState;
 use crate::services::emote_picker as picker;
 use crate::services::emote_prefetch_service::emote_cache_key;
 use crate::models::chat_layout::{ChatMessage, MessageSegment};
@@ -225,7 +226,21 @@ pub async fn match_emote_tokens(
     picker: Option<bool>,
     typing: Option<bool>,
     state: State<'_, EmoteServiceState>,
+    app_state: State<'_, AppState>,
 ) -> Result<EmoteMatchResult, String> {
+    // The phones' "Only after a colon": the fill menu answers a plain word
+    // with nothing, before any emote set is locked. Read from the settings
+    // Rust holds right now, so the next keystroke after a save, or after a
+    // phone's launch reload, already follows it.
+    let colon_only = profile.as_deref() == Some("fill")
+        && app_state
+            .settings
+            .lock()
+            .map(|s| emote_match::colon_only_of(&s))
+            .unwrap_or_else(|e| emote_match::colon_only_of(&e.into_inner()));
+    if !emote_match::fill_gate(profile.as_deref(), &query, colon_only) {
+        return Ok(EmoteMatchResult { rows: Vec::new(), total: 0, ready: true, counts: emote_match::ProviderCounts::new() });
+    }
     // `typing`: asked as the viewer types (the fill menu), not on Tab; a word
     // under `MIN_PREFIX_CHARS` finds only an exact emote name.
     let request = emote_match::Request::resolve(profile.as_deref(), order.as_deref(), limit, typing);
