@@ -201,6 +201,37 @@ describe('the sound level never goes through React', () => {
   });
 });
 
+describe('the bars draw cleanly', () => {
+  const css = readFileSync(resolve(__dirname, 'listeningStrip.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+  const rule = (selector: string) => {
+    const at = css.indexOf(`${selector} {`);
+    expect(at, selector).toBeGreaterThanOrEqual(0);
+    return css.slice(at, css.indexOf('}', at));
+  };
+  const px = (body: string, prop: string) => Number(new RegExp(`${prop}:\\s*([\\d.]+)px`).exec(body)?.[1]);
+
+  it('each bar is its own layer, only scaled, so no repainted edge is left behind', () => {
+    expect(rule('.sn-listen-bars > i')).toMatch(/will-change: transform;/);
+    expect(rule('.sn-listen-bars > i')).toMatch(/transform-origin: center;/);
+  });
+
+  it('every bar sits on whole pixels, with its soft edge inside the group’s box', () => {
+    const group = rule('.sn-listen-bars');
+    const bar = rule('.sn-listen-bars > i');
+    const small = rule('.sn-listen-bars--small');
+    const smallBar = rule('.sn-listen-bars--small > i');
+    for (const v of [px(group, 'gap'), px(bar, 'width'), px(small, 'gap'), px(smallBar, 'width')]) {
+      expect(Number.isInteger(v), String(v)).toBe(true);
+    }
+    expect(group).toMatch(/padding: 0 1px;/);
+    // Five bars and four gaps, plus a pixel each side: the pill's 40 px slot
+    // centers them on a whole pixel, and the note's fit its 16 px box exactly.
+    const width = (b: number, g: number) => 2 + 5 * b + 4 * g;
+    expect((40 - width(px(bar, 'width'), px(group, 'gap'))) % 2).toBe(0);
+    expect(width(px(smallBar, 'width'), px(small, 'gap'))).toBe(16);
+  });
+});
+
 describe('every chat mounts it in its composer shelf', () => {
   const widget = readFileSync(resolve(__dirname, '..', 'ChatWidget.tsx'), 'utf8');
 

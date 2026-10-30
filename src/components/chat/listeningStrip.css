@@ -5,22 +5,31 @@
    one shared renderer (listeningBars.ts), never through React state. How far
    the listening has come is a ring around Cancel (ListeningStrip.tsx). */
 
+/* Whole pixels throughout (4 px bars, 3 px gaps), and a pixel of room on
+   each side: a bar's anti-aliased edge stays inside its group's box. The
+   heights change every frame, so each bar is its own compositor layer and is
+   only scaled, never repainted. Repainted bars left a sliver: as the first bar
+   shrank, the soft edge it had drawn just outside the group's box (where it
+   had been taller) was never cleared. */
 .sn-listen-bars {
   display: inline-flex;
-  flex-shrink: 0;
+  flex: none;
   align-items: center;
   gap: 3px;
   height: 24px;
+  padding: 0 1px;
 }
 
 .sn-listen-bars > i {
   display: block;
+  flex: none;
   width: 4px;
   height: 100%;
   border-radius: 9999px;
   background: currentColor;
   transform: scaleY(0.25);
   transform-origin: center;
+  will-change: transform;
 }
 
 /* The pill's bars, in the theme's accent, lighter at their tips. */
@@ -28,17 +37,18 @@
   background: linear-gradient(to top, var(--color-accent), color-mix(in srgb, var(--color-accent) 50%, white));
 }
 
-/* The player's note: the same five bars in its 16 px icon box. */
+/* The player's note: the same five bars in its 16 px icon box (2 px bars,
+   1 px gaps, a pixel each side). */
 .sn-listen-bars--small {
-  gap: 1.5px;
+  gap: 1px;
   height: 14px;
 }
 .sn-listen-bars--small > i {
   width: 2px;
 }
 
-/* "Listening for the song...": the dots come and go, by opacity. Still under
-   the Reduced and Off Motion settings. */
+/* The dots after a phrase that is still going ("Tuning in..."): they come and
+   go, by opacity. Still under the Reduced and Off Motion settings. */
 .sn-listen-dots > i {
   font-style: normal;
   opacity: 0.25;
