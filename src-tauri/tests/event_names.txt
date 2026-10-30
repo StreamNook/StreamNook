@@ -36,6 +36,8 @@ chat-mention-ping
 chat-overlay-click-through
 chat-rebuilt
 chat-tabs
+discord-presence://changed
+discord-presence://page
 drop-claimed
 drop-ready
 drops-login-complete

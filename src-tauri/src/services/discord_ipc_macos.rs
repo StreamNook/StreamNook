@@ -49,6 +49,7 @@ const MAX_SOCKET_INDEX: u8 = 10;
 /// run. After that it is one line of noise per stream open, because
 /// `update_presence` retries the connection every time it has no client.
 static REPORTED_MISSING: AtomicBool = AtomicBool::new(false);
+static REPORTED_REFUSED: AtomicBool = AtomicBool::new(false);
 
 /// Minimal Discord IPC client for macOS.
 pub struct MacDiscordIpcClient {
@@ -154,6 +155,7 @@ impl DiscordIpc for MacDiscordIpcClient {
 
         match UnixStream::connect(&path) {
             Ok(socket) => {
+                REPORTED_REFUSED.store(false, Ordering::Relaxed);
                 self.socket = Some(socket);
                 Ok(())
             }
@@ -161,10 +163,13 @@ impl DiscordIpc for MacDiscordIpcClient {
                 // Distinct from IPCNotFound on purpose: the socket exists and
                 // Discord still refused us, which is a different problem
                 // (permissions, a dead socket left by a crashed client).
-                log::warn!(
-                    "[Discord] IPC socket at {} exists but would not connect: {e}",
-                    path.display()
-                );
+                // Once per streak: presence retries every 15 s while Discord is closed.
+                if !REPORTED_REFUSED.swap(true, Ordering::Relaxed) {
+                    log::warn!(
+                        "[Discord] IPC socket at {} exists but would not connect: {e}",
+                        path.display()
+                    );
+                }
                 Err(Error::IPCConnectionFailed)
             }
         }

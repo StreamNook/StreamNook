@@ -100,10 +100,3 @@ pub async fn open_offline_room(app: AppHandle, login: String) -> Result<OfflineR
     }
     Ok(room)
 }
-
-/// Republish Discord presence for the current session (Discord was switched on).
-#[tauri::command]
-pub async fn watch_session_refresh_presence(app: AppHandle) -> Result<(), String> {
-    watch_session::refresh_presence(app).await;
-    Ok(())
-}

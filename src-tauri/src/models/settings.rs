@@ -1074,6 +1074,9 @@ pub struct Settings {
     pub current_account: String,
     pub hide_search_bar_on_startup: bool,
     pub discord_rpc_enabled: bool,
+    /// How the Discord status looks (Settings > Integrations > Customize).
+    #[serde(default)]
+    pub discord_presence: DiscordPresenceSettings,
     pub video_player: VideoPlayerSettings,
     pub cache: CacheSettings,
     #[serde(default)]
@@ -1314,6 +1317,71 @@ pub struct CustomSnippet {
     pub content: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keywords: Option<String>,
+}
+
+/// How the Discord status looks. Mirrors the frontend `DiscordPresenceSettings`.
+/// Every choice is a plain string, so a value a newer build adds reads here as
+/// the default (`services::discord_presence` treats unknown values that way)
+/// instead of failing the whole settings file; keys this build does not know
+/// ride `extra` and survive its saves.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct DiscordPresenceSettings {
+    /// "category" | "streamer" | "streamnook"
+    pub large_image: String,
+    /// "platform" | "streamer" | "category" | "none"
+    pub small_image: String,
+    /// "watching" | "playing" | "listening"
+    pub activity_type: String,
+    /// What the member list shows: "app" | "top" | "bottom"
+    pub status_display: String,
+    /// "watching" | "uptime" | "off"
+    pub timer: String,
+    /// The top line (and a streamer picture) link to the channel.
+    pub link_text: bool,
+    pub watching_top: String,
+    pub watching_bottom: String,
+    pub replay_top: String,
+    pub replay_bottom: String,
+    pub grid_top: String,
+    pub grid_bottom: String,
+    pub offline_top: String,
+    pub offline_bottom: String,
+    pub watch_button: bool,
+    pub watch_button_label: String,
+    pub promo_button: bool,
+    /// While browsing: "phrases" | "custom" | "hidden"
+    pub idle_mode: String,
+    pub idle_text: String,
+    #[serde(flatten)]
+    pub extra: HashMap<String, serde_json::Value>,
+}
+
+impl Default for DiscordPresenceSettings {
+    fn default() -> Self {
+        Self {
+            large_image: "category".into(),
+            small_image: "platform".into(),
+            activity_type: "watching".into(),
+            status_display: "app".into(),
+            timer: "watching".into(),
+            link_text: false,
+            watching_top: "Watching {streamer}".into(),
+            watching_bottom: "{title}".into(),
+            replay_top: "Watching {streamer}".into(),
+            replay_bottom: "{kind}: {title}".into(),
+            grid_top: "Watching {count} Streams".into(),
+            grid_bottom: "{streamers}".into(),
+            offline_top: "In {streamer}'s chat".into(),
+            offline_bottom: "Offline".into(),
+            watch_button: true,
+            watch_button_label: "Watch {kind}".into(),
+            promo_button: true,
+            idle_mode: "phrases".into(),
+            idle_text: "Browsing streams".into(),
+            extra: HashMap::new(),
+        }
+    }
 }
 
 /// The message box. Mirrors the frontend `ChatInputSettings`.
@@ -1683,6 +1751,7 @@ impl Default for Settings {
             current_account: "".to_string(),
             hide_search_bar_on_startup: true,
             discord_rpc_enabled: true,
+            discord_presence: DiscordPresenceSettings::default(),
             video_player: VideoPlayerSettings::default(),
             cache: CacheSettings::default(),
             streamlink: StreamlinkSettings::default(),

@@ -274,17 +274,53 @@ fn settings_view(mut current: Value) -> SettingsView {
 /// Set one or more settings by dotted path (`chat_design.font_size`), each a
 /// read-modify-write on the canonical settings: every other key of the group
 /// is kept as Rust holds it. A null value removes the key.
+///
+/// `order` numbers one stream of edits (one editor in one page): a write
+/// numbered at or below one already applied on that stream is dropped, so a
+/// flush on unload that overtakes the write still in flight never loses to it.
 #[tauri::command]
 pub async fn set_settings_fields(
     app: AppHandle,
     changes: Map<String, Value>,
     source: Option<String>,
+    order: Option<WriteOrder>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     if changes.is_empty() {
         return Ok(());
     }
-    commit_settings_patch(&app, &state, source, |current| patch_for_changes(current, &changes))
+    commit_settings_patch(&app, &state, source, |current| {
+        // Under the settings lock, so the check and the write are one step.
+        if let Some(order) = &order {
+            let mut applied = APPLIED_ORDERS.lock().unwrap_or_else(|e| e.into_inner());
+            if !newest_write(&mut applied, order) {
+                return Ok(Map::new());
+            }
+        }
+        patch_for_changes(current, &changes)
+    })
+}
+
+/// One numbered write of a stream of field edits.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct WriteOrder {
+    pub stream: String,
+    pub n: u64,
+}
+
+static APPLIED_ORDERS: once_cell::sync::Lazy<std::sync::Mutex<std::collections::HashMap<String, u64>>> =
+    once_cell::sync::Lazy::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+/// Whether `order` is newer than every write applied on its stream; records it
+/// when it is.
+fn newest_write(applied: &mut std::collections::HashMap<String, u64>, order: &WriteOrder) -> bool {
+    match applied.get(&order.stream) {
+        Some(&last) if order.n <= last => false,
+        _ => {
+            applied.insert(order.stream.clone(), order.n);
+            true
+        }
+    }
 }
 
 /// Put the given dotted paths back to a fresh install's values (removing the
@@ -314,6 +350,17 @@ pub async fn reset_settings(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn an_older_write_never_lands_after_a_newer_one() {
+        let mut applied = std::collections::HashMap::new();
+        let w = |n| WriteOrder { stream: "discord_presence:page-a".into(), n };
+        assert!(newest_write(&mut applied, &w(2)), "the flush lands first");
+        assert!(!newest_write(&mut applied, &w(1)), "the write it overtook is dropped");
+        assert!(newest_write(&mut applied, &w(3)));
+        let other = WriteOrder { stream: "discord_presence:page-b".into(), n: 1 };
+        assert!(newest_write(&mut applied, &other), "a new page counts on its own");
+    }
 
     #[test]
     fn set_path_creates_and_removes() {

@@ -995,6 +995,9 @@ pub fn run() {
         // sessions are released as it starts loading. The first load finds none.
         .on_page_load(|webview, payload| {
             if webview.label() == "main" && payload.event() == tauri::webview::PageLoadEvent::Started {
+                // What the old page declared to Discord presence goes with it.
+                #[cfg(desktop)]
+                services::discord_presence::page_ended();
                 tauri::async_runtime::spawn(async {
                     services::tiktok_relay::stop_all_except("");
                     services::youtube_dash::stop_all_except("").await;
@@ -1453,6 +1456,10 @@ pub fn run() {
 
             // Manage AppState directly, not wrapped in Arc
             app.manage(app_state);
+
+            // Discord Rich Presence reads the switch and the style from AppState.
+            #[cfg(desktop)]
+            services::discord_presence::init(&app_handle);
 
             // Who's-live polling for followed channels on non-Twitch platforms.
             // Separate from the Twitch live-notification service: it reads the
@@ -2208,17 +2215,15 @@ pub fn run() {
             stream_manager_act,
             get_reward_queue,
             search_raid_targets,
-            // Discord commands (desktop-only — Discord Rich Presence)
+            // Discord Rich Presence (desktop only)
             #[cfg(desktop)]
-            connect_discord,
+            discord_presence_preview,
             #[cfg(desktop)]
-            disconnect_discord,
+            discord_presence_page,
             #[cfg(desktop)]
-            set_idle_discord_presence,
+            discord_presence_set_grid,
             #[cfg(desktop)]
-            update_discord_presence,
-            #[cfg(desktop)]
-            clear_discord_presence,
+            discord_presence_set_media,
             // Settings commands
             load_settings,
             patch_settings,
@@ -2511,7 +2516,6 @@ pub fn run() {
             watch_session_start,
             watch_session_stop,
             watch_session_resolve_offline,
-            watch_session_refresh_presence,
             open_offline_room,
             hype_train_watch,
             hype_train_unwatch,
@@ -2832,6 +2836,9 @@ pub fn run() {
                 // the main window emits when it boots.
                 if label == "main" {
                     use tauri::Emitter;
+                    // What the main page declared to Discord presence goes with it.
+                    #[cfg(desktop)]
+                    services::discord_presence::page_ended();
                     // Its player is gone without a `stop_stream`: file where
                     // the viewer left the live stream it was showing. On the
                     // runtime, so the progress store's flush task can start.

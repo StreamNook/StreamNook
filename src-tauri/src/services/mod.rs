@@ -82,6 +82,9 @@ pub mod webkit_failures;
 // Desktop-only: Discord Rich Presence (IPC to a running Discord client).
 #[cfg(desktop)]
 pub mod discord_service;
+// Desktop-only: what the Discord status says, and the pump that sends it.
+#[cfg(desktop)]
+pub mod discord_presence;
 // macOS supplies its own socket discovery; see the file header for why the
 // crate's Unix finder cannot locate Discord there.
 #[cfg(target_os = "macos")]

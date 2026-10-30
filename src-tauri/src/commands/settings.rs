@@ -645,6 +645,10 @@ fn after_settings_change(settings: &Settings, favorites_changed: bool) {
     #[cfg(mobile)]
     crate::services::push_alerts::server::refresh(settings);
     crate::services::hidden_channels::refresh(settings);
+    // Discord presence follows the switch and the style (it re-reads the
+    // settings Rust holds, so two saves never apply out of order).
+    #[cfg(desktop)]
+    crate::services::discord_presence::refresh();
     // Home's unified Discover list leaves out live favourites, so a heart
     // toggled anywhere changes it. Unhearting in particular is announced by
     // nothing else: the favourites sweep only notices on its next pass.

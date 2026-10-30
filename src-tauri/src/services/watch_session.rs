@@ -107,6 +107,12 @@ pub struct WatchTarget {
     /// chat. The session waits for it to go live instead of for it to end.
     #[serde(default)]
     pub offline: bool,
+    /// The channel's avatar, when the row that started the session had one.
+    #[serde(default)]
+    pub avatar_url: String,
+    /// The platform's own picture of the category (Kick ships one per row).
+    #[serde(default)]
+    pub category_art: String,
 }
 
 struct Session {
@@ -185,15 +191,7 @@ fn is_current_broadcaster(broadcaster_id: &str, login: &str) -> Option<u64> {
     })
 }
 
-fn provider_label(provider: &str) -> &'static str {
-    match provider {
-        "kick" => "Kick",
-        "youtube" => "YouTube",
-        "tiktok" => "TikTok",
-        _ => "Twitch",
-    }
-}
-
+#[cfg_attr(not(all(desktop, not(test))), allow(dead_code))]
 fn watch_url(target: &WatchTarget) -> String {
     if target.provider == "twitch" {
         format!("https://twitch.tv/{}", target.login)
@@ -202,78 +200,33 @@ fn watch_url(target: &WatchTarget) -> String {
     }
 }
 
-async fn publish_presence(app: &AppHandle, target: &WatchTarget) {
-    let state = app.state::<AppState>();
-    let enabled = state.settings.lock().map(|s| s.discord_rpc_enabled).unwrap_or(false);
-    if !enabled {
-        return;
-    }
-    let name = if target.user_name.is_empty() { &target.login } else { &target.user_name };
-    if target.offline {
-        let started = u64::try_from(now_ms()).unwrap_or_default();
-        let small = format!("{}_logo", target.provider);
-        if let Err(e) = discord::watching(&format!("In {name}'s chat"), "Offline", &small, started, "", &watch_url(target), &state).await {
-            log::debug!("[WatchSession] Discord presence not updated (Discord may not be running): {e}");
-        }
-        return;
-    }
-    let activity = if target.title.is_empty() {
-        format!("Live on {}", provider_label(&target.provider))
-    } else {
-        target.title.clone()
-    };
-    let small = format!("{}_logo", target.provider);
-    let started = u64::try_from(now_ms()).unwrap_or_default();
-    if let Err(e) = discord::watching(&format!("Watching {name}"), &activity, &small, started, &target.game_name, &watch_url(target), &state).await {
-        log::debug!("[WatchSession] Discord presence not updated (Discord may not be running): {e}");
+/// What Discord presence shows for this target.
+#[cfg(all(desktop, not(test)))]
+fn presence_scene(target: &WatchTarget) -> crate::services::discord_presence::Scene {
+    use crate::services::discord_presence::{Scene, SceneKind};
+    Scene {
+        kind: if target.offline { SceneKind::Offline } else { SceneKind::Live },
+        provider: target.provider.clone(),
+        login: target.login.clone(),
+        user_id: target.user_id.clone(),
+        name: target.user_name.clone(),
+        title: target.title.clone(),
+        category: target.game_name.clone(),
+        category_art: target.category_art.clone(),
+        avatar_url: target.avatar_url.clone(),
+        started_at: chrono::DateTime::parse_from_rfc3339(&target.started_at).ok().map(|d| d.timestamp()),
+        url: watch_url(target),
     }
 }
 
-/// Discord Rich Presence exists only on desktop; on the phone these do nothing.
-mod discord {
-    use crate::models::settings::AppState;
-
-    #[cfg(desktop)]
-    pub async fn watching(
-        details: &str,
-        activity: &str,
-        small_image: &str,
-        started: u64,
-        game: &str,
-        url: &str,
-        state: &AppState,
-    ) -> Result<(), String> {
-        crate::services::discord_service::DiscordService::update_presence(
-            details, activity, "icon_256x256", small_image, started, game, url, state,
-        )
-        .await
-        .map_err(|e| e.to_string())
-    }
-
-    #[cfg(desktop)]
-    pub async fn idle(state: &AppState) -> Result<(), String> {
-        crate::services::discord_service::DiscordService::set_idle_presence(state)
-            .await
-            .map_err(|e| e.to_string())
-    }
-
-    #[cfg(not(desktop))]
-    pub async fn watching(
-        _details: &str,
-        _activity: &str,
-        _small_image: &str,
-        _started: u64,
-        _game: &str,
-        _url: &str,
-        _state: &AppState,
-    ) -> Result<(), String> {
-        Ok(())
-    }
-
-    #[cfg(not(desktop))]
-    pub async fn idle(_state: &AppState) -> Result<(), String> {
-        Ok(())
-    }
+/// Discord presence follows the session: called inside the session's own
+/// lock, so the two always agree. The phones have no Discord client, and unit
+/// tests leave the shared presence state to its own tests.
+fn presence(target: Option<&WatchTarget>) {
+    #[cfg(all(desktop, not(test)))]
+    crate::services::discord_presence::set_solo(target.map(presence_scene));
+    #[cfg(not(all(desktop, not(test))))]
+    let _ = target;
 }
 
 // ---- Lifecycle ----------------------------------------------------------------
@@ -290,6 +243,7 @@ pub async fn start(app: AppHandle, target: WatchTarget) {
         // raid target.
         let last_raid_ms = s.as_ref().map(|p| p.last_raid_ms).unwrap_or(0);
         let last_raid_to = s.as_ref().and_then(|p| p.last_raid_to.clone());
+        presence(Some(&target));
         s.replace(Session {
             seq,
             target: target.clone(),
@@ -370,7 +324,6 @@ pub async fn start(app: AppHandle, target: WatchTarget) {
             tasks.push(tauri::async_runtime::spawn(watch_youtube_broadcast(app.clone(), seq)));
         }
     }
-    publish_presence(&app, &target).await;
 
     let orphaned = with_session(|s| match s.as_mut().filter(|s| s.seq == seq) {
         Some(session) => {
@@ -387,10 +340,13 @@ pub async fn start(app: AppHandle, target: WatchTarget) {
 
 /// End the session. `preserve_backend` hands the channel to MultiNook: the
 /// watch socket stays on it until the grid declares its focus
-/// (`set_grid_focus`), and the grid publishes its own presence.
+/// (`set_grid_focus`), and the grid declares its own presence.
 pub async fn stop(app: AppHandle, preserve_backend: bool) {
     crate::services::watch_start::supersede();
-    let previous = with_session(|s| s.take());
+    let previous = with_session(|s| {
+        presence(None);
+        s.take()
+    });
     crate::services::watch_minutes::set_source(crate::services::watch_minutes::MAIN, None);
     let Some(prev) = previous else { return };
     release(prev);
@@ -400,23 +356,29 @@ pub async fn stop(app: AppHandle, preserve_backend: bool) {
     // Down, unless MultiNook's focused tile holds the socket.
     aim_watch_socket(&app).await;
     refresh_raid_fallback(&app);
-    let state = app.state::<AppState>();
-    if let Err(e) = discord::idle(&state).await {
-        log::debug!("[WatchSession] Could not set idle Discord presence: {e}");
-    }
 }
 
-/// Publish Discord presence for what is being watched, or idle when nothing
-/// is (Discord was just switched on in settings).
-pub async fn refresh_presence(app: AppHandle) {
-    let target = with_session(|s| s.as_ref().map(|s| s.target.clone()));
-    match target {
-        Some(target) => publish_presence(&app, &target).await,
-        None => {
-            let state = app.state::<AppState>();
-            let _ = discord::idle(&state).await;
+/// End the session without superseding a start in flight. The chat-only room
+/// a failed switch opens calls this after its own ticket check; `still_current`
+/// (that ticket) is read inside the session lock, so a session a newer start
+/// put in place is never the one taken.
+pub async fn end_session(app: AppHandle, still_current: impl Fn() -> bool) {
+    let Some(prev) = take_if(still_current) else { return };
+    crate::services::watch_minutes::set_source(crate::services::watch_minutes::MAIN, None);
+    release(prev);
+    aim_watch_socket(&app).await;
+    refresh_raid_fallback(&app);
+}
+
+/// The session, taken only while `still_current` holds, read inside the lock.
+fn take_if(still_current: impl Fn() -> bool) -> Option<Session> {
+    with_session(|s| {
+        if !still_current() {
+            return None;
         }
-    }
+        presence(None);
+        s.take()
+    })
 }
 
 /// Stop what a finished session was running.
@@ -835,6 +797,7 @@ pub fn on_channel_update(app: &AppHandle, update: &ChannelUpdateEvent) {
         session.target.title = update.title.clone();
         session.target.game_name = update.category_name.clone();
         session.target.game_id = Some(update.category_id.clone()).filter(|id| !id.is_empty());
+        presence(Some(&session.target));
         Some(session.target.clone())
     });
     let _ = app.emit(
@@ -845,13 +808,9 @@ pub fn on_channel_update(app: &AppHandle, update: &ChannelUpdateEvent) {
             "game_id": update.category_id,
         }),
     );
-    if let Some(target) = target {
-        // A new category can qualify for a watch reward the old one did not.
-        if target.provider == "twitch" {
-            crate::services::member_rewards::watching_changed();
-        }
-        let app = app.clone();
-        tauri::async_runtime::spawn(async move { publish_presence(&app, &target).await });
+    // A new category can qualify for a watch reward the old one did not.
+    if target.is_some_and(|t| t.provider == "twitch") {
+        crate::services::member_rewards::watching_changed();
     }
 }
 
@@ -893,6 +852,23 @@ async fn poll_provider_live(app: AppHandle, seq: u64) {
             Ok(rows) => match rows.first() {
                 Some(row) if row.is_live => {
                     strikes = 0;
+                    // A new title or category reaches the session (and Discord),
+                    // as `channel.update` does for Twitch.
+                    with_session(|s| {
+                        if let Some(session) = s.as_mut().filter(|s| s.seq == seq) {
+                            let art = row.category_thumbnail.clone().unwrap_or_default();
+                            if session.target.title != row.title
+                                || session.target.game_name != row.game_name
+                                || session.target.category_art != art
+                            {
+                                session.target.title = row.title.clone();
+                                session.target.game_name = row.game_name.clone();
+                                session.target.game_id = Some(row.game_id.clone()).filter(|id| !id.is_empty());
+                                session.target.category_art = art;
+                                presence(Some(&session.target));
+                            }
+                        }
+                    });
                     let _ = app.emit(
                         STREAM_UPDATE_EVENT,
                         json!({
@@ -1326,6 +1302,8 @@ mod tests {
             started_at: String::new(),
             authenticated: true,
             offline,
+            avatar_url: String::new(),
+            category_art: String::new(),
         }
     }
 
@@ -1391,6 +1369,8 @@ mod tests {
                     started_at: String::new(),
                     authenticated: true,
                     offline: false,
+                    avatar_url: String::new(),
+                    category_art: String::new(),
                 },
                 tasks: Vec::new(),
                 last_raid_ms: 0,
@@ -1410,6 +1390,11 @@ mod tests {
         assert_eq!(offline_room_login().as_deref(), Some("chan"));
         assert!(current_target().is_none());
         assert!(current_twitch_watch().is_none());
+        // A chat-only room ends the session only while its ticket is current.
+        assert!(take_if(|| false).is_none());
+        assert_eq!(offline_room_login().as_deref(), Some("chan"), "a newer start's session stays");
+        assert!(take_if(|| true).is_some());
+        assert!(offline_room_login().is_none());
         with_session(|s| *s = None);
         assert_eq!(is_current_broadcaster("123", "chan"), None);
     }
@@ -1452,6 +1437,7 @@ mod tests {
     fn an_old_view_starts_a_live_session() {
         let target: WatchTarget = serde_json::from_value(json!({ "provider": "twitch", "login": "chan" })).unwrap();
         assert!(!target.offline, "a target without the flag is a live stream");
+        assert!(target.avatar_url.is_empty() && target.category_art.is_empty(), "the new fields default empty");
     }
 
     #[test]

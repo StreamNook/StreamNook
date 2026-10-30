@@ -31,6 +31,9 @@ pub fn init_logging() {
         // reports every malformed face in C:\Windows\Fonts on each launch,
         // which is pure noise in a log a user sends us. RUST_LOG still wins.
         builder.filter_module("fontdb", LevelFilter::Error);
+        // The Discord IPC crate warns on every attempt to find a pipe while
+        // Discord is closed (StreamNook retries every 15 s).
+        builder.filter_module("discord_rich_presence", LevelFilter::Error);
     }
     builder
         .format_timestamp_millis()

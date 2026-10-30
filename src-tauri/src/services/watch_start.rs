@@ -355,6 +355,8 @@ async fn follow_provider(app: AppHandle, ticket: u64, row: ProviderStream) {
             // EventSub is Twitch's; a provider session never subscribes.
             authenticated: false,
             offline: false,
+            avatar_url: row.profile_image_url.clone().unwrap_or_default(),
+            category_art: row.category_thumbnail.clone().unwrap_or_default(),
         },
     )
     .await;
@@ -391,6 +393,8 @@ async fn follow(app: AppHandle, ticket: u64, login: String, row: TwitchStream) {
             started_at: row.started_at.clone(),
             authenticated,
             offline: false,
+            avatar_url: row.profile_image_url.clone().unwrap_or_default(),
+            category_art: String::new(),
         },
     )
     .await;
@@ -518,9 +522,15 @@ pub async fn open_room(app: AppHandle, login: String, seed: Option<WatchSeed>, c
                 started_at: String::new(),
                 authenticated,
                 offline: true,
+                avatar_url: row.profile_image_url.clone().unwrap_or_default(),
+                category_art: String::new(),
             },
         )
         .await;
+    } else {
+        // Playback failed and only the chat opened: what the view watched
+        // before is over, unless a start that took its ticket since owns it.
+        watch_session::end_session(app, move || current(ticket)).await;
     }
     log::info!("[WatchStart] {login}: offline room open");
     RoomOpen { superseded: false, room, live: None, row: Some(row) }
