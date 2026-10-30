@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Dropdown } from '../ui/Dropdown';
 import { useAppStore } from '../../stores/AppStore';
 // Shared panel: both shells render it, so a platform branch here is legitimate.
@@ -18,6 +19,8 @@ import { openSongs } from '../../utils/songHistory';
 import { GLAZE_PILL } from '../ui/glazeButtons';
 import { invoke } from '@tauri-apps/api/core';
 import { thenRun, useSettingReset } from './settingReset';
+import { fillScale } from '../../mobile/player/videoFill';
+import { useZoomToFill, writeZoomToFill } from '../../mobile/player/zoomToFill';
 import { AUTO_GAP } from '../../utils/latency';
 import { TitleBarTuckPreview } from './TitleBarTuckPreview';
 import { GlassMultiSelect } from '../ui/GlassMultiSelect';
@@ -66,9 +69,44 @@ const refreshContinueWatching = () => {
   void invoke('refresh_home_section', { section: 'continue_watching' }).catch(() => {});
 };
 
+/** What Zoom to fill does on this phone: its own screen on its side, with a
+ *  16:9 picture fitted (bars at the sides) or filled (top and bottom trimmed).
+ *  A screen no wider than 16:9 shows a 4:3 picture, so the change shows. Uses
+ *  the player's own fillScale. */
+const FillPreview = ({ on }: { on: boolean }) => {
+  const [aspect] = useState(() => {
+    const long = Math.max(window.screen.width, window.screen.height);
+    const short = Math.min(window.screen.width, window.screen.height);
+    return short > 0 ? long / short : 19.5 / 9;
+  });
+  const picture: [number, number] = aspect > 16 / 9 + 0.01 ? [16, 9] : [4, 3];
+  const width = 168;
+  const height = Math.round(width / aspect);
+  const pictureWidth = (height * picture[0]) / picture[1];
+  const scale = on ? fillScale(aspect * 90, 90, picture[0], picture[1]) : 1;
+  return (
+    <div
+      aria-hidden
+      className="relative mx-auto mt-1 overflow-hidden rounded-[10px] bg-black ring-1 ring-borderSubtle"
+      style={{ width, height }}
+    >
+      <div
+        className="absolute top-0 bottom-0 left-1/2 transition-transform duration-200 ease-[cubic-bezier(0.2,0.8,0.2,1)]"
+        style={{
+          width: pictureWidth,
+          marginLeft: -pictureWidth / 2,
+          transform: `scale(${scale})`,
+          background: 'linear-gradient(135deg, var(--color-accent), color-mix(in srgb, var(--color-accent) 35%, #000))',
+        }}
+      />
+    </div>
+  );
+};
+
 const PlayerSettings = () => {
   const { settings, updateSettings } = useAppStore();
   const resetFor = useSettingReset();
+  const zoomToFill = useZoomToFill();
 
   // Fallback only used if settings.streamlink is somehow absent.
   const streamlinkDefaults = {
@@ -495,6 +533,19 @@ const PlayerSettings = () => {
               />
             }
           />
+        )}
+
+        {/* Phone-only: the landscape picture fills a long screen. A pinch on the
+            video sets the same thing (zoomToFill.ts is its one writer). */}
+        {IS_MOBILE && (
+          <SettingsRow
+            title="Zoom to fill"
+            onReset={zoomToFill ? () => void writeZoomToFill(false) : undefined}
+            description="On its side, the stream fills a long screen by trimming a little off the top and bottom. A pinch on the video switches it too."
+            control={<Toggle enabled={zoomToFill} onChange={() => void writeZoomToFill(!zoomToFill)} />}
+          >
+            <FillPreview on={zoomToFill} />
+          </SettingsRow>
         )}
 
         <SettingsRow

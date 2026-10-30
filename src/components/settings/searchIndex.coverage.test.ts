@@ -45,7 +45,7 @@ const COMPONENT_SECTIONS: Record<string, string> = { CompactViewSettings: 'Compa
 // dialog and the MultiChat modal) and development-build previews.
 const UNINDEXED: Record<string, { sections?: string[]; titles?: string[] }> = {
   Chat: { sections: ['Landscape Chat', 'Chats Tab'], titles: ['Vibration', 'Keep screen on', 'Inbox button'] },
-  Player: { sections: ['Discover'], titles: ['Background play'] },
+  Player: { sections: ['Discover'], titles: ['Background play', 'Zoom to fill'] },
   Support: { sections: ['Devices'], titles: ['Log export'] },
   Notifications: { titles: ['Gift sub preview', 'Reward preview'] },
   Moderation: { sections: ['Moderating Messages'] },

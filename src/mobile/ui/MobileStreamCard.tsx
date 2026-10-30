@@ -169,6 +169,19 @@ export const MobileStreamCard: React.FC<{
             <StreamTitleWithEmojis title={stream.title} />
           </h3>
           <div className="flex items-center gap-1 text-textSecondary text-[13px] leading-4">
+            {/* Whose stream it is at a glance, as the card shows it (SN-30). */}
+            {stream.profile_image_url && (
+              <SevenTvAvatar
+                cosmeticsId={sevenTvIdForStream(stream)}
+                px={16}
+                src={stream.profile_image_url}
+                alt=""
+                draggable={false}
+                loading="lazy"
+                decoding="async"
+                className="w-4 h-4 rounded-full object-cover shrink-0 ring-1 ring-borderSubtle"
+              />
+            )}
             <span className="truncate">{stream.user_name}</span>
             {collab && <TogetherTag collab={collab} compact />}
             {/* At the name's cap height: the Kick K fills its box, so 12 stood
