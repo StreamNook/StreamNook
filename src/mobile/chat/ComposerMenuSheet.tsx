@@ -1,7 +1,7 @@
 // The menu behind the composer's trailing button when there is nothing to send.
 // Send and this share one slot, so the composer never carries a dead button.
 import React, { useState } from 'react';
-import { ArrowsClockwise, BookmarkSimple, Tray, CaretRight, ChatsCircle, Heart, HeartBreak, PencilSimpleLine, PushPin, ShieldCheck, Star, Terminal, X } from 'phosphor-react';
+import { ArrowsClockwise, Bell, BellSlash, BookmarkSimple, Tray, CaretRight, ChatsCircle, Heart, HeartBreak, PencilSimpleLine, PushPin, ShieldCheck, Star, Terminal, X } from 'phosphor-react';
 import {
   Fingerprint as ModeUnique,
   Heart as ModeFollowers,
@@ -18,6 +18,8 @@ import { platformTerms } from '../../utils/platformTerms';
 import { PROVIDERS, type ProviderId } from '../../types/providers';
 import type { RoomModeKind, RoomModeView } from '../../stores/chatConnectionStore';
 import { useChatTabsStore } from './chatTabsStore';
+import { useAppStore } from '../../stores/AppStore';
+import { setLiveAlert } from '../notifyChannels';
 
 // The same glyph per mode as the composer's room-mode icon, so the icon you
 // tapped is the one you find named here.
@@ -136,6 +138,14 @@ export const ComposerMenuSheet: React.FC<Props> = ({
     if (open) setFollowSlot(null);
   }
   if (open && followSlot === null && isFollowing !== null) setFollowSlot(isFollowing ? 'bottom' : 'top');
+  // Live alerts shows for every Twitch room, followed or not (PLAN 4.12): its
+  // state is a local read, so the row is there when the sheet opens and never
+  // appears under the finger. A mute on a channel you do not follow is
+  // harmless and holds if you follow later.
+  const alertsRow = provider === 'twitch' && !!activeChannel;
+  // Subscribed, so a press here (or the player's bell) re-renders the value.
+  const mutedChannels = useAppStore((s) => s.settings.live_notifications?.muted_live_channels);
+  const alertsOn = !!activeChannel && !(mutedChannels ?? []).includes(activeChannel.trim().toLowerCase());
   // Held back until the status is known (`isFollowing` is null while
   // checking) rather than guessing a label and flipping it a moment later.
   // The sheet stays open on tap.
@@ -213,6 +223,26 @@ export const ComposerMenuSheet: React.FC<Props> = ({
           >
             {isSubscribed ? terms.paidGift : hasSubHistory ? terms.paidAgain : terms.paid}
             {!isSubscribed && activeLabel ? ` to ${activeLabel}` : ''}
+          </GroupRow>
+        )}
+
+        {/* This channel's live alerts, an On/Off setting like Keep this chat.
+            The sheet stays open, so the value flipping is the confirmation. */}
+        {alertsRow && activeChannel && (
+          <GroupRow
+            onClick={() =>
+              void setLiveAlert({ provider: 'twitch', userId: channelId ?? '', userLogin: activeChannel }, !alertsOn)
+            }
+            icon={
+              alertsOn ? (
+                <Bell size={ICON} weight="fill" className="text-accent" />
+              ) : (
+                <BellSlash size={ICON} className="text-textSecondary" />
+              )
+            }
+            value={alertsOn ? 'On' : 'Off'}
+          >
+            Live alerts
           </GroupRow>
         )}
 

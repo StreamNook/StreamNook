@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ArrowClockwise, Bell, BellSlash, CaretLeft, ChatTeardropText, Columns, Gear, MoonStars, Pause, Play, Rows, Screencast, ShareNetwork, SpeakerHigh, SpeakerSlash, Star, UsersThree, CaretDown, X, CornersIn, CornersOut } from 'phosphor-react';
 import { shareText } from '../nativeBridge';
-import { toggleChannelMuted } from '../notifyChannels';
+import { setLiveAlert } from '../notifyChannels';
 import { useVisibleInterval } from '../../utils/useVisibleInterval';
 import { shareLinkFor } from '../../utils/shareLink';
 import { buildProviderUrl, isTwitchStream, streamProvider } from '../../utils/streamProvider';
@@ -621,7 +621,12 @@ export const MobilePlayer: React.FC<{
             <button
               onClick={(e) => {
                 e.stopPropagation();
-                void toggleChannelMuted(currentStream.user_login);
+                // Off now means turn on, and the other way round: the press
+                // sends the state it wants, never a toggle.
+                void setLiveAlert(
+                  { provider: 'twitch', userId: currentStream.user_id, userLogin: currentStream.user_login },
+                  alertsOff,
+                );
               }}
               aria-label={
                 alertsOff

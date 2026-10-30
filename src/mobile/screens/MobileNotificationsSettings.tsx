@@ -20,6 +20,8 @@ import { thenRun, useSettingReset } from '../../components/settings/settingReset
 import { GROUP_ICON, GROUP_ICON_STROKE, GroupCard, GroupIcon, GroupRow } from '../ui/GroupedList';
 import { settingIcon } from './settingsIcons';
 import { NotifiedChannelsSheet } from './NotifiedChannelsSheet';
+import { alertChannels } from '../notifyChannels';
+import { whichChannelsDetail } from '../liveAlertsText';
 import {
   applyDelivery,
   ensureNotificationPermission,
@@ -170,7 +172,24 @@ const MobileNotificationsSettings: React.FC = () => {
   const [delivery, setDelivery] = useState<NotifyDelivery | null>(null);
   const [batteryExempt, setBatteryExempt] = useState<boolean | null>(null);
   const [channelsOpen, setChannelsOpen] = useState(false);
-  const mutedCount = settings.live_notifications?.muted_live_channels?.length ?? 0;
+  // Rust counts the muted channels you still follow (a muted channel you have
+  // since unfollowed does not count); the stored list's length stands in while
+  // that answer is on its way, and when the follow list cannot be read.
+  const mutedList = settings.live_notifications?.muted_live_channels;
+  const [mutedCount, setMutedCount] = useState<number | null | undefined>(undefined);
+  useEffect(() => {
+    let cancelled = false;
+    alertChannels()
+      .then((r) => {
+        if (!cancelled) setMutedCount(r.muted_count);
+      })
+      .catch(() => {
+        if (!cancelled) setMutedCount(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [mutedList]);
   const alertTypes = useAlertTypes() ?? [];
 
   // Every fix on this screen happens in Android's own settings, which means
@@ -376,7 +395,7 @@ const MobileNotificationsSettings: React.FC = () => {
                         strokeWidth: GROUP_ICON_STROKE,
                         className: 'text-textSecondary',
                       })}
-                      detail={mutedCount > 0 ? `Everything you follow except ${mutedCount}` : 'Everything you follow'}
+                      detail={whichChannelsDetail(mutedCount, mutedList?.length ?? 0)}
                       trailing={
                         <span className="flex h-6 shrink-0 items-center self-start">
                           <ChevronRight size={16} className="text-textMuted" />

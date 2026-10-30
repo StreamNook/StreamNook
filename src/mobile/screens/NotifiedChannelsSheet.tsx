@@ -1,4 +1,5 @@
-// Per-channel live-alert control over the full follow list.
+// Per-channel live-alert control over the full follow list, with Copy from
+// Twitch at the top.
 //
 // A sheet rather than a settings sub-page because `settingsView` holds one id
 // with no stack, so a nested panel's back press would land on the You tab
@@ -6,62 +7,95 @@
 // stack and pop correctly on Android back.
 //
 // Fed by get_followed_channels_for_alerts: Rust pages through every channel
-// you follow, live or not (a different endpoint from the followed-STREAMS one
-// the alerts run on), stops at a fixed number of pages and sorts by name.
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+// you follow, live or not, stops at a fixed number of pages, sorts by name and
+// says per channel whether its alerts are on. Rows show Rust's answer; a store
+// change (a press here, the player's bell, a Copy) re-reads it, and a newer
+// read always wins over an older one.
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Bell, BellSlash, MagnifyingGlass } from 'phosphor-react';
 import { MobileSheet } from '../ui/MobileSheet';
-import { isChannelMuted, toggleChannelMuted } from '../notifyChannels';
+import {
+  alertChannels,
+  copyTwitchBells,
+  setLiveAlert,
+  undoTwitchBells,
+  type AlertChannel,
+} from '../notifyChannels';
+import { copyErrorText, copyResultText, sheetIntro, undoResultText } from '../liveAlertsText';
 import { useAppStore } from '../../stores/AppStore';
 import { Logger } from '../../utils/logger';
-import type { TwitchStream } from '../../types';
 import { SevenTvAvatar } from '../../components/SevenTvAvatar';
 import { sevenTvIdForStream } from '../../services/sevenTvPictures';
 
-interface AlertChannels {
-  channels: TwitchStream[];
-  /** Rust stopped at its page cap; whatever was dropped is stated in the UI. */
-  truncated: boolean;
+/** The line under Copy from Twitch: what the last Copy or Undo did. Undo is
+ *  offered only while `copyId` is set and the sheet stays open. */
+interface ResultLine {
+  text: string;
+  copyId: number | null;
 }
 
 export const NotifiedChannelsSheet: React.FC<{ open: boolean; onClose: () => void }> = ({
   open,
   onClose,
 }) => {
-  const [channels, setChannels] = useState<TwitchStream[]>([]);
+  const [channels, setChannels] = useState<AlertChannel[]>([]);
   const [loading, setLoading] = useState(false);
   const [truncated, setTruncated] = useState(false);
+  const [mutedCount, setMutedCount] = useState<number | null | undefined>(undefined);
   const [query, setQuery] = useState('');
+  const [copying, setCopying] = useState(false);
+  const [undoing, setUndoing] = useState(false);
+  const [line, setLine] = useState<ResultLine | null>(null);
 
-  // Subscribing to the settings object keeps every row's bell in step with the
-  // store, so a toggle does not need local mirror state that could drift.
+  // A new opening starts with no line of its own; the first list read brings
+  // back the last Copy (and its Undo) when Rust still holds it, so a copy that
+  // finished after the sheet closed is never silent (PLAN 4.12).
+  const [lastOpen, setLastOpen] = useState(open);
+  if (open !== lastOpen) {
+    setLastOpen(open);
+    if (open) setLine(null);
+  }
+
+  // The stored list: its changes ask Rust again, and its length is the
+  // fallback count while Rust's answer is on its way.
   const muted = useAppStore((s) => s.settings.live_notifications?.muted_live_channels);
+  const rawLength = muted?.length ?? 0;
+
+  // Bumped by every read; an answer from an older read is dropped.
+  const readSeq = useRef(0);
 
   useEffect(() => {
     if (!open) return;
-    let cancelled = false;
+    const mine = ++readSeq.current;
 
     const load = async () => {
       setLoading(true);
       try {
-        const result = await invoke<AlertChannels>('get_followed_channels_for_alerts');
-        if (!cancelled) {
+        const result = await alertChannels();
+        if (mine === readSeq.current) {
           setChannels(result.channels);
           setTruncated(result.truncated);
+          setMutedCount(result.muted_count);
+          const last = result.last_copy;
+          if (last) {
+            setLine(
+              (prev) =>
+                prev ?? {
+                  text: copyResultText(last),
+                  copyId: last.added.length > 0 ? last.copy_id : null,
+                },
+            );
+          }
         }
       } catch (err) {
         Logger.warn('[NotifiedChannels] follow list failed:', err);
       } finally {
-        if (!cancelled) setLoading(false);
+        if (mine === readSeq.current) setLoading(false);
       }
     };
 
     void load();
-    return () => {
-      cancelled = true;
-    };
-  }, [open]);
+  }, [open, muted]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -71,20 +105,71 @@ export const NotifiedChannelsSheet: React.FC<{ open: boolean; onClose: () => voi
     );
   }, [channels, query]);
 
-  const mutedCount = muted?.length ?? 0;
+  const onToggle = useCallback((c: AlertChannel) => {
+    const shownOn = c.on !== false;
+    void setLiveAlert({ provider: 'twitch', userId: c.user_id, userLogin: c.user_login }, !shownOn).then((on) => {
+      if (typeof on !== 'boolean') return;
+      setChannels((prev) => prev.map((x) => (x.user_id === c.user_id ? { ...x, on } : x)));
+    });
+  }, []);
 
-  const onToggle = useCallback((login: string) => {
-    void toggleChannelMuted(login);
+  const onCopy = useCallback(async () => {
+    setCopying(true);
+    const result = await copyTwitchBells();
+    setCopying(false);
+    if (result.ok) {
+      setLine({
+        text: copyResultText(result.answer),
+        copyId: result.answer.added.length > 0 ? result.answer.copy_id : null,
+      });
+    } else {
+      setLine({ text: copyErrorText(result.code), copyId: null });
+    }
+  }, []);
+
+  const onUndo = useCallback(async (copyId: number) => {
+    setUndoing(true);
+    const result = await undoTwitchBells(copyId);
+    setUndoing(false);
+    setLine({ text: result.ok ? undoResultText(result.removed) : copyErrorText(result.code), copyId: null });
   }, []);
 
   return (
     <MobileSheet open={open} onClose={onClose} title="Channels to notify me about">
       <div className="flex flex-col gap-3 px-3.5 pb-3.5">
-        <p className="text-[12.5px] text-textSecondary leading-relaxed">
-          {mutedCount > 0
-            ? `Alerting for every channel you follow except ${mutedCount}.`
-            : 'Alerting for every channel you follow. Turn off any you would rather not hear about.'}
-        </p>
+        <p className="text-[12.5px] text-textSecondary leading-relaxed">{sheetIntro(mutedCount, rawLength)}</p>
+
+        {/* One tap brings Twitch's own choices over: every channel whose bell is
+            off on Twitch joins the muted list. Its result stays on one line
+            right under the button, with Undo while the sheet is open. */}
+        <div className="flex flex-col gap-1.5">
+          <button
+            onClick={() => void onCopy()}
+            disabled={copying || undoing}
+            className="glass-button w-full py-2.5 text-[14px] font-medium text-textPrimary disabled:opacity-60"
+          >
+            {copying ? 'Copying your Twitch bells…' : 'Copy from Twitch'}
+          </button>
+          {line && (
+            <p className="text-[12.5px] text-textSecondary leading-snug" aria-live="polite">
+              {line.text}
+              {line.copyId !== null && (
+                <>
+                  {' '}
+                  <button
+                    onClick={() => {
+                      if (line.copyId !== null) void onUndo(line.copyId);
+                    }}
+                    disabled={undoing}
+                    className="font-semibold text-accent disabled:opacity-60"
+                  >
+                    Undo
+                  </button>
+                </>
+              )}
+            </p>
+          )}
+        </div>
 
         <div className="relative">
           <MagnifyingGlass
@@ -108,7 +193,7 @@ export const NotifiedChannelsSheet: React.FC<{ open: boolean; onClose: () => voi
         ) : (
           <div className="glass-panel divide-y divide-borderSubtle">
             {filtered.map((c) => {
-              const off = isChannelMuted(c.user_login);
+              const off = c.on === false;
               return (
                 <div key={c.user_id} className="flex items-center gap-3 p-2.5">
                   {c.profile_image_url ? (
@@ -127,7 +212,7 @@ export const NotifiedChannelsSheet: React.FC<{ open: boolean; onClose: () => voi
                     <div className="text-[14px] text-textPrimary truncate">{c.user_name}</div>
                   </div>
                   <button
-                    onClick={() => onToggle(c.user_login)}
+                    onClick={() => onToggle(c)}
                     aria-label={off ? `Turn on alerts for ${c.user_name}` : `Turn off alerts for ${c.user_name}`}
                     aria-pressed={!off}
                     className={`sn-touch shrink-0 flex items-center justify-center transition-colors ${
