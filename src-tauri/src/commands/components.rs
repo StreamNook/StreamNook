@@ -1631,6 +1631,7 @@ pub(crate) fn flush_stores_before_hard_exit(app_handle: &crate::rt::AppHandle) {
     let _ = crate::services::mod_log_storage_service::ModLogStorageService::flush_now();
     let _ = crate::services::whisper_storage_service::WhisperStorageService::flush_now();
     let _ = crate::services::vod_progress_service::flush_now();
+    let _ = crate::services::song_id::history::flush_now();
     let _ = crate::services::chat_logger_service::ChatLoggerService::flush_all();
     // Unsent stat counts and watch minutes go out before the process dies,
     // bounded: both sends run together and share one 2 s deadline.

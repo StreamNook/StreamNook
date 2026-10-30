@@ -5,7 +5,7 @@
 //! a subdomain of one, never because the name appears somewhere in the
 //! address: `https://x.example/?u=open.spotify.com` is no Spotify link, and
 //! neither is `https://open.spotify.com.x.example/`. Shazam's hub (shazam.rs),
-//! Odesli's answer (odesli.rs) and the stored history (history.rs) all ask
+//! the link finder (links.rs) and the stored history (history.rs) all ask
 //! here. The page's logos are keyed by these names
 //! (src/components/songs/serviceMarks.ts, held to this table by its test).
 
@@ -68,6 +68,11 @@ pub const SERVICES: &[Service] = &[
         streams: true,
     },
     Service {
+        name: "Beatport",
+        hosts: &["beatport.com"],
+        streams: true,
+    },
+    Service {
         name: "Shazam",
         hosts: &["shazam.com"],
         streams: false,
@@ -103,6 +108,32 @@ pub fn service_of(url: &str) -> Option<&'static Service> {
 /// Whether `url` goes to the service called `name`.
 pub fn is_link_to(name: &str, url: &str) -> bool {
     service_of(url).is_some_and(|s| s.name == name)
+}
+
+/// Whether `url` is one of a service's search pages rather than a track: the
+/// shapes the link finder writes (links.rs `search_link`) and the ones
+/// Shazam's hub and older builds stored. A search page never counts as the
+/// track's own link.
+pub fn is_search_page(url: &str) -> bool {
+    let Some(service) = service_of(url) else {
+        return false;
+    };
+    let Ok(parsed) = Url::parse(url) else {
+        return false;
+    };
+    let path = parsed.path().to_ascii_lowercase();
+    // The first two path parts: a country part comes first on Apple Music
+    // (`/us/search`) and sometimes on Deezer (`/us/search/<words>`).
+    let mut parts = path.split('/').filter(|p| !p.is_empty());
+    let first = parts.next().unwrap_or("");
+    let second = parts.next().unwrap_or("");
+    match service.name {
+        "Apple Music" | "Deezer" => first == "search" || second == "search",
+        "YouTube" => first == "results",
+        "Tidal" => first == "search" || (first == "browse" && second == "search"),
+        "Spotify" | "YouTube Music" | "SoundCloud" | "Beatport" => first == "search",
+        _ => false,
+    }
 }
 
 /// Whether `name` is one of the services (tests hold other tables to this one).
@@ -156,6 +187,7 @@ mod tests {
             ("https://listen.tidal.com/track/412345678", "Tidal"),
             ("https://tidal.com/browse/track/412345678", "Tidal"),
             ("https://www.deezer.com/track/3112345678", "Deezer"),
+            ("https://www.beatport.com/track/-/14957156", "Beatport"),
             (
                 "https://music.amazon.com/albums/B0DQ8XYZ?trackAsin=B0DQ8ABC",
                 "Amazon Music",
@@ -214,6 +246,35 @@ mod tests {
         ));
         assert!(is_service_name("Tidal"));
         assert!(!is_service_name("Listen"));
+    }
+
+    #[test]
+    fn search_pages_are_told_from_track_links() {
+        for url in [
+            "https://open.spotify.com/search/Sade%20Kiss%20of%20Life",
+            "https://music.apple.com/us/search?term=Sade",
+            "https://music.youtube.com/search?q=Tu+Nombre&feature=shazam",
+            "https://www.youtube.com/results?search_query=Sade",
+            "https://www.deezer.com/search/Sade",
+            "https://www.deezer.com/us/search/Sade",
+            "https://tidal.com/search?q=Sade",
+            "https://soundcloud.com/search?q=Sade",
+        ] {
+            assert!(is_search_page(url), "{url}");
+        }
+        for url in [
+            "https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT",
+            "https://music.apple.com/us/song/950742158",
+            "https://music.apple.com/us/album/search/1?i=2",
+            "https://music.youtube.com/watch?v=4MOzk7-6j-I",
+            "https://www.youtube.com/watch?v=4MOzk7-6j-I",
+            "https://www.deezer.com/track/1030607572",
+            "https://tidal.com/browse/track/1",
+            "https://www.beatport.com/track/-/14957156",
+            "https://x.example/search?q=1",
+        ] {
+            assert!(!is_search_page(url), "{url}");
+        }
     }
 
     #[test]

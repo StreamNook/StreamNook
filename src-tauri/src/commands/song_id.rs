@@ -1,9 +1,12 @@
 //! Song recognition and Your songs. "/song" and the player's music button
 //! decode the captured PCM and identify the track here; every match is filed
 //! in the song history (services/song_id/history.rs), which the list's
-//! commands below read and change.
+//! commands below read and change. Rust decides the background work they
+//! start: a cover's colors when a song is found, opened or listed without
+//! them, and a link refresh when a song's links were cut short or are stale.
 
 use crate::rt::AppHandle;
+use crate::services::song_id::cover_tint::{self, Priority};
 use crate::services::song_id::{self, history, SongMatch};
 use base64::{engine::general_purpose, Engine};
 
@@ -52,8 +55,18 @@ pub async fn identify_song(
         // Filed here, where the match is made, so every surface that
         // identifies a song keeps it without asking.
         let filed = song.clone();
-        match blocking(move || history::record(&app, &filed, source)).await {
-            Ok(key) => song.key = Some(key),
+        let filer = app.clone();
+        match blocking(move || history::record(&filer, &filed, source)).await {
+            Ok(recorded) => {
+                if let Some(cover) = recorded.cover {
+                    cover_tint::enqueue(&app, vec![cover], Priority::High);
+                }
+                // The lookups the identification cut short finish now.
+                if !song.links_complete {
+                    history::queue_refresh(&app, recorded.key.clone());
+                }
+                song.key = Some(recorded.key);
+            }
             Err(e) => log::warn!("[SongId] could not keep the song in Your songs: {e}"),
         }
     }
@@ -61,27 +74,46 @@ pub async fn identify_song(
 }
 
 /// One page of Your songs, newest heard first: the songs matching every word
-/// of `query` (title, artist, album or channel), from `offset`.
+/// of `query` (title, artist, album or channel), from `offset`, grouped by
+/// the page's time `bounds` (ms, newest first; groups are empty without
+/// them). Covers on the page with no colors yet are fetched.
 #[tauri::command]
 pub async fn get_song_history(
+    app: AppHandle,
     query: Option<String>,
     offset: Option<u32>,
     limit: Option<u32>,
+    bounds: Option<Vec<i64>>,
 ) -> Result<history::SongPage, String> {
-    blocking(move || {
+    let (page, covers) = blocking(move || {
         history::page(
             query.as_deref().unwrap_or(""),
             offset.unwrap_or(0) as usize,
             limit.unwrap_or(50) as usize,
+            bounds,
         )
     })
-    .await
+    .await?;
+    cover_tint::enqueue(&app, covers, Priority::Normal);
+    Ok(page)
 }
 
-/// One song of Your songs, with its links and where it was heard.
+/// One song of Your songs, with its links, where it was heard and its
+/// cover's colors. Opening it fetches those colors first when it has none,
+/// and looks its links up again when they may have changed.
 #[tauri::command]
-pub async fn get_song(key: String) -> Result<Option<history::SongEntry>, String> {
-    blocking(move || history::get(&key)).await
+pub async fn get_song(app: AppHandle, key: String) -> Result<Option<history::SongDetail>, String> {
+    let asked = key.clone();
+    let Some(opened) = blocking(move || history::get(&asked)).await? else {
+        return Ok(None);
+    };
+    if let Some(cover) = opened.cover {
+        cover_tint::enqueue(&app, vec![cover], Priority::High);
+    }
+    if opened.refresh {
+        history::queue_refresh(&app, key);
+    }
+    Ok(Some(opened.detail))
 }
 
 /// Take one song out of Your songs, kept for an Undo. False when it was not

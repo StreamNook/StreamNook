@@ -9,12 +9,20 @@
 //! are what the WebView reads; search, order and paging happen here.
 //!
 //! Storage: `<app_data>/song_history.json`, written whole through the cache's
-//! atomic writer (flushed, then renamed) right after each change. A song is
-//! found a few times an hour at most, so there is nothing to debounce, and a
-//! phone killed in the background loses nothing. Read on first use and let go
-//! of again `IDLE_UNLOAD` after the last, so the app holds no songs while
-//! nobody looks. A file that is there but cannot be read is never written
-//! over; one that does not parse is moved aside as `song_history.json.bad-<ms>`.
+//! atomic writer (flushed, then renamed) right after each change the user
+//! makes. A song is found a few times an hour at most, so there is nothing to
+//! debounce, and a phone killed in the background loses nothing. Links a
+//! background refresh finds (links.rs) are the one exception: they are held as
+//! a pending change and written once, `DEFERRED_WRITE` later, by the unloader,
+//! or at exit. Read on first use and let go of again `IDLE_UNLOAD` after the
+//! last, so the app holds no songs while nobody looks. A file that is there
+//! but cannot be read is never written over; one that does not parse is moved
+//! aside as `song_history.json.bad-<ms>`.
+//!
+//! Cover colors (cover_tint.rs) live beside the songs in their own file,
+//! loaded and let go with them under the same lock, with their own writer
+//! and dirty flag. They are a cache: they never fail a load, never keep the
+//! songs in memory, and never ride on the history's writes.
 //!
 //! Versions: a field added later must be optional, so every app reads every
 //! file of `FILE_VERSION`. A file whose `version` is higher was written by a
@@ -22,7 +30,7 @@
 //! over it or moves it aside, so going back to an older build and forward
 //! again loses nothing.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -32,8 +40,10 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use tauri::Emitter;
 
+use super::cover_tint::{self, TintEntry, TintView, Tints};
+use super::links;
 use super::services;
-use super::shazam::{Provider, SongMatch};
+use super::shazam::{IsrcFrom, Provider, SongMatch};
 use crate::rt::AppHandle;
 use crate::services::cache_service::get_app_data_dir;
 use crate::services::providers::key::is_provider_id;
@@ -72,6 +82,18 @@ const NEWER_FILE: &str =
     "Your songs were saved by a newer StreamNook, so this one only shows them.";
 /// Payload: `Change`. Every window hears it, since any of them may show the list.
 pub const CHANGED_EVENT: &str = "song-history-changed";
+/// Time bounds a page groups its songs by, at most.
+const MAX_BOUNDS: usize = 64;
+/// Songs waiting for a link refresh, at most.
+const REFRESH_CAP: usize = 100;
+/// The link refresh's time budget (links.rs splits it between its two steps;
+/// each lookup's share starts after its host's gate).
+const REFRESH_BUDGET: Duration = Duration::from_secs(6);
+/// How long links a refresh found wait in memory before they are written.
+const DEFERRED_WRITE: Duration = Duration::from_secs(30);
+/// A song whose links were last checked longer ago than this is checked
+/// again when it is opened, while a service the finder can fill lacks a link.
+const STALE_LINKS_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 
 /// Where a song was playing: the channel the captured player showed, and the
 /// stream, video or clip it showed then. Every field past `media` came later
@@ -191,7 +213,8 @@ fn service_url(url: &Option<String>, name: &str) -> Option<String> {
 }
 
 /// The links kept: each named for a service and going to that service's own
-/// host, so no link is ever drawn with a logo it does not go to.
+/// host, so no link is ever drawn with a logo it does not go to. A search
+/// page is marked as one whatever it came marked as.
 fn web_providers(providers: &[Provider]) -> Vec<Provider> {
     providers
         .iter()
@@ -199,12 +222,37 @@ fn web_providers(providers: &[Provider]) -> Vec<Provider> {
         .map(|p| Provider {
             name: p.name.trim().to_string(),
             url: p.url.clone(),
+            search: p.search || services::is_search_page(&p.url),
         })
         .collect()
 }
 
-/// A match as the history keeps it: bounded text and web links only.
+/// One link per service: the first direct one, else the first search page.
+fn one_per_service(providers: Vec<Provider>) -> Vec<Provider> {
+    let mut out: Vec<Provider> = Vec::with_capacity(providers.len());
+    for p in providers {
+        links::put(&mut out, p);
+    }
+    out
+}
+
+/// What older builds read: every link is a search page.
+fn all_searches(providers: &[Provider]) -> bool {
+    !providers.is_empty() && providers.iter().all(|p| p.search)
+}
+
+/// A match as the history keeps it: bounded text, web links only, one per
+/// service with the track's own first, and a valid ISRC and Apple id.
 fn kept_match(song: &SongMatch) -> SongMatch {
+    let mut providers = web_providers(&song.providers);
+    if song.links_are_searches {
+        for p in &mut providers {
+            p.search = true;
+        }
+    }
+    let mut providers = one_per_service(providers);
+    links::sort_providers(&mut providers);
+    let isrc = song.isrc.as_deref().and_then(links::valid_isrc);
     SongMatch {
         title: clip_to(song.title.trim(), MAX_TEXT),
         artist: clip_to(song.artist.trim(), MAX_TEXT),
@@ -216,11 +264,37 @@ fn kept_match(song: &SongMatch) -> SongMatch {
         album_art: web_url(&song.album_art),
         shazam_url: service_url(&song.shazam_url, "Shazam"),
         song_link: service_url(&song.song_link, "song.link"),
-        providers: web_providers(&song.providers),
-        seed_url: None,
+        links_are_searches: all_searches(&providers),
+        providers,
         key: None,
-        links_are_searches: song.links_are_searches,
+        isrc_from: isrc.as_ref().map(|_| song.isrc_from.unwrap_or(IsrcFrom::Text)),
+        isrc,
+        apple_id: song.apple_id.as_deref().and_then(links::valid_apple_id),
+        links_complete: song.links_complete,
     }
+}
+
+/// A value of a field added later, or None when this build cannot read it:
+/// a newer build's value never costs the rest of the song (or the file).
+fn lenient<'de, D, T>(d: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let value = Option::<serde_json::Value>::deserialize(d)?;
+    Ok(value.and_then(|v| serde_json::from_value(v).ok()))
+}
+
+fn lenient_ms<'de, D: serde::Deserializer<'de>>(d: D) -> Result<i64, D::Error> {
+    let value = Option::<serde_json::Value>::deserialize(d)?;
+    Ok(value
+        .and_then(|v| v.as_i64())
+        .filter(|ms| *ms >= 0)
+        .unwrap_or(0))
+}
+
+fn is_zero(n: &i64) -> bool {
+    *n == 0
 }
 
 /// One time a song was heard.
@@ -243,9 +317,28 @@ pub struct SongEntry {
     pub album_art: Option<String>,
     pub shazam_url: Option<String>,
     pub song_link: Option<String>,
+    /// The track's own links first (links.rs `DISPLAY` order), then search
+    /// pages, then services off that list in the order they were kept.
     pub providers: Vec<Provider>,
-    /// `providers` are search pages, replaced by the first real links found.
+    /// Every provider is a search page. Derived from `providers` and written
+    /// for older builds, which read only this.
     pub links_are_searches: bool,
+    /// The recording's ISRC, when one is known.
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient"
+    )]
+    pub isrc: Option<String>,
+    /// Where `isrc` came from; a text search's never replaces Shazam's.
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient"
+    )]
+    pub isrc_from: Option<IsrcFrom>,
+    /// When a link lookup last answered cleanly for every service it asked
+    /// (ms); 0 is never, which asks for a refresh when the song is opened.
+    #[serde(skip_serializing_if = "is_zero", deserialize_with = "lenient_ms")]
+    pub links_checked_ms: i64,
     pub first_ms: i64,
     pub last_ms: i64,
     /// Times heard (repeats inside `REPEAT_WINDOW_MS` count once).
@@ -259,8 +352,8 @@ pub struct SongEntry {
 impl SongEntry {
     /// Take what a newer match found: it names the song (Shazam corrects
     /// titles over time), and a field it left out keeps what an earlier match
-    /// found.
-    fn refresh_from(&mut self, song: &SongMatch) {
+    /// found. Its links go through the one merge the link refresh uses.
+    fn refresh_from(&mut self, song: &SongMatch, now_ms: i64) {
         if !song.title.is_empty() {
             self.title = song.title.clone();
         }
@@ -279,21 +372,39 @@ impl SongEntry {
         if song.song_link.is_some() {
             self.song_link = song.song_link.clone();
         }
-        // Search pages never replace a track's own links; real links replace
-        // search pages.
-        if !song.providers.is_empty() && (!song.links_are_searches || self.links_are_searches) {
-            self.providers = song.providers.clone();
-            self.links_are_searches = song.links_are_searches;
-        }
+        let found = links::Resolved {
+            providers: song.providers.clone(),
+            isrc: song.isrc.clone(),
+            isrc_from: song.isrc_from,
+            cover: None,
+            complete: song.links_complete,
+        };
+        merge_links(self, &found, now_ms);
     }
 
     /// A stored row made safe to show: web links only, known platforms only,
-    /// places newest first and bounded, and its search words built.
+    /// one link per service with the track's own first, places newest first
+    /// and bounded, and its search words built. A row kept before links
+    /// carried their own search mark gets it from the old whole-row flag.
     fn tidy(&mut self) {
         self.album_art = web_url(&self.album_art);
         self.shazam_url = service_url(&self.shazam_url, "Shazam");
         self.song_link = service_url(&self.song_link, "song.link");
-        self.providers = web_providers(&self.providers);
+        let mut providers = web_providers(&self.providers);
+        if self.links_are_searches {
+            for p in &mut providers {
+                p.search = true;
+            }
+        }
+        self.providers = one_per_service(providers);
+        links::sort_providers(&mut self.providers);
+        self.links_are_searches = all_searches(&self.providers);
+        self.isrc = self.isrc.as_deref().and_then(links::valid_isrc);
+        if self.isrc.is_none() {
+            self.isrc_from = None;
+        } else if self.isrc_from.is_none() {
+            self.isrc_from = Some(IsrcFrom::Text);
+        }
         for sighting in &mut self.sightings {
             sighting.source = sighting.source.take().and_then(SongSource::cleaned);
         }
@@ -303,7 +414,7 @@ impl SongEntry {
         self.haystack = haystack_of(self);
     }
 
-    fn row(&self) -> SongRow {
+    fn row(&self, tints: &BTreeMap<String, TintEntry>) -> SongRow {
         let thumb = self.album_art.as_deref().and_then(thumb_of);
         SongRow {
             key: self.key.clone(),
@@ -314,8 +425,115 @@ impl SongEntry {
             last_ms: self.last_ms,
             count: self.count,
             heard: self.sightings.iter().find_map(|s| s.source.clone()),
+            tint: self.tint(tints),
         }
     }
+
+    /// The cover's colors as the page reads them: none yet while a color may
+    /// still come, `main: null` for a grey cover, a cover that cannot be read
+    /// or no cover at all.
+    fn tint(&self, tints: &BTreeMap<String, TintEntry>) -> Option<TintView> {
+        match self.album_art.as_deref() {
+            None => Some(TintView::GREY),
+            Some(art) => cover_tint::view(tints.get(art)),
+        }
+    }
+
+    /// The cover when it has no color to show yet and is worth fetching.
+    fn untinted_cover(&self, tints: &BTreeMap<String, TintEntry>, now_ms: i64) -> Option<String> {
+        let art = self.album_art.as_ref()?;
+        (!cover_tint::usable(tints.get(art), now_ms)).then(|| art.clone())
+    }
+
+    fn has_direct(&self, service: &str) -> bool {
+        self.providers
+            .iter()
+            .any(|p| p.name == service && !p.search)
+    }
+
+    /// The Apple Music id its Apple link names.
+    fn apple_id(&self) -> Option<String> {
+        self.providers
+            .iter()
+            .find(|p| p.name == "Apple Music" && !p.search)
+            .and_then(|p| links::apple_id_of(&p.url))
+    }
+}
+
+/// Whether opening `song` should look its links up again: never checked
+/// cleanly, or checked over `STALE_LINKS_MS` ago while a service the finder
+/// can fill for this song has no link of its own. Beatport and SoundCloud
+/// never ask (the finder fills Beatport only by ISRC, SoundCloud never).
+fn needs_refresh(song: &SongEntry, read_only: bool, now_ms: i64) -> bool {
+    if read_only {
+        return false;
+    }
+    if song.links_checked_ms == 0 {
+        return true;
+    }
+    if now_ms - song.links_checked_ms <= STALE_LINKS_MS {
+        return false;
+    }
+    links::fillable(song.isrc.is_some(), song.apple_id().is_some())
+        .iter()
+        .any(|service| !song.has_direct(service))
+}
+
+/// The one merge of found links into a kept song, for a refresh and for a
+/// song identified again: a direct link fills a missing or search slot of
+/// its service and never replaces or removes another direct link, and a
+/// search page only fills a missing slot. An ISRC from Shazam fills a
+/// missing one or replaces one a text search found; when that one differs,
+/// the links the finder made from it go and the song is checked again. A
+/// text search's ISRC never replaces any. `links_checked_ms` moves forward
+/// only on a complete lookup. Returns whether anything changed.
+fn merge_links(song: &mut SongEntry, found: &links::Resolved, now_ms: i64) -> bool {
+    let before = (
+        song.providers.clone(),
+        song.isrc.clone(),
+        song.isrc_from,
+        song.links_checked_ms,
+        song.album_art.clone(),
+    );
+    let mut replaced = false;
+    if let Some(code) = found.isrc.as_deref().and_then(links::valid_isrc) {
+        match (found.isrc_from, song.isrc.as_deref()) {
+            (_, None) => {
+                song.isrc = Some(code);
+                song.isrc_from = Some(found.isrc_from.unwrap_or(IsrcFrom::Text));
+            }
+            (Some(IsrcFrom::Shazam), Some(old)) if song.isrc_from != Some(IsrcFrom::Shazam) => {
+                if old != code {
+                    song.providers
+                        .retain(|p| p.search || !links::RESOLVER_MADE.contains(&p.name.as_str()));
+                    song.links_checked_ms = 0;
+                    replaced = true;
+                }
+                song.isrc = Some(code);
+                song.isrc_from = Some(IsrcFrom::Shazam);
+            }
+            _ => {}
+        }
+    }
+    for p in web_providers(&found.providers) {
+        links::put(&mut song.providers, p);
+    }
+    links::sort_providers(&mut song.providers);
+    song.links_are_searches = all_searches(&song.providers);
+    if found.complete && !replaced {
+        song.links_checked_ms = song.links_checked_ms.max(now_ms);
+    }
+    if song.album_art.is_none() {
+        song.album_art = web_url(&found.cover);
+    }
+    before
+        != (
+            song.providers.clone(),
+            song.isrc.clone(),
+            song.isrc_from,
+            song.links_checked_ms,
+            song.album_art.clone(),
+        )
 }
 
 /// One row of the list.
@@ -334,6 +552,17 @@ pub struct SongRow {
     pub count: u32,
     /// The latest place it was heard that named a channel.
     pub heard: Option<SongSource>,
+    /// The cover's colors (`SongEntry::tint`); left out while one may come.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tint: Option<TintView>,
+}
+
+/// Where one time group starts: `bound` indexes the page's bounds as sorted
+/// here (their count for "Older"), `start` is the first matched song in it.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct Group {
+    pub bound: usize,
+    pub start: usize,
 }
 
 /// A page of the list.
@@ -348,6 +577,33 @@ pub struct SongPage {
     pub mixed_platforms: bool,
     /// Channels the songs held were heard on.
     pub channels: usize,
+    /// The time groups of every matched song, newest first; empty when the
+    /// page sent no bounds.
+    pub groups: Vec<Group>,
+}
+
+/// One song as its detail shows it: the kept song and its cover's colors.
+#[derive(Serialize, Clone, Debug)]
+pub struct SongDetail {
+    #[serde(flatten)]
+    pub entry: SongEntry,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tint: Option<TintView>,
+}
+
+/// A song opened: its detail, and the work opening it asks for.
+pub struct Opened {
+    pub detail: SongDetail,
+    /// Its cover, when it has no color yet.
+    pub cover: Option<String>,
+    /// Its links should be looked up again (`needs_refresh`).
+    pub refresh: bool,
+}
+
+/// A match filed: its key, and its cover when it has no color yet.
+pub struct Recorded {
+    pub key: String,
+    pub cover: Option<String>,
 }
 
 /// What changed, for a window showing the list or a song.
@@ -357,6 +613,8 @@ pub enum Change {
     Filed { key: String },
     Removed { key: String },
     Cleared,
+    /// These songs' covers got their colors.
+    Tinted { keys: Vec<String> },
 }
 
 fn first_version() -> u32 {
@@ -438,7 +696,7 @@ impl History {
         };
         if let Some(i) = self.songs.iter().position(|s| s.key == key) {
             let mut entry = self.songs.remove(i);
-            entry.refresh_from(&song);
+            entry.refresh_from(&song, at_ms);
             let repeat = entry.sightings.first().is_some_and(|last| {
                 at_ms - last.at_ms < REPEAT_WINDOW_MS
                     && match (&last.source, &source) {
@@ -468,6 +726,9 @@ impl History {
                 song_link: song.song_link.clone(),
                 providers: song.providers.clone(),
                 links_are_searches: song.links_are_searches,
+                isrc: song.isrc.clone(),
+                isrc_from: song.isrc_from,
+                links_checked_ms: if song.links_complete { at_ms } else { 0 },
                 first_ms: at_ms,
                 last_ms: at_ms,
                 count: 1,
@@ -481,28 +742,55 @@ impl History {
         key
     }
 
+    #[cfg(test)]
     fn page(&self, query: &str, offset: usize, limit: usize) -> SongPage {
+        self.page_in(query, offset, limit, &[], &BTreeMap::new(), 0).0
+    }
+
+    /// One page of the songs matching `query`, with the time groups of every
+    /// matched song for `bounds` (`Groups`), and the covers of its rows that
+    /// have no color yet (at most `cover_tint::MAX_PER_PAGE`).
+    fn page_in(
+        &self,
+        query: &str,
+        offset: usize,
+        limit: usize,
+        bounds: &[i64],
+        tints: &BTreeMap<String, TintEntry>,
+        now_ms: i64,
+    ) -> (SongPage, Vec<String>) {
         let terms = terms_of(query);
         let limit = limit.clamp(1, MAX_PAGE);
+        let bounds = sorted_bounds(bounds);
+        let mut groups = Groups::default();
         let mut matched = 0;
         let mut rows = Vec::new();
+        let mut covers: Vec<String> = Vec::new();
         for song in &self.songs {
             if !terms.iter().all(|t| song.haystack.contains(t.as_str())) {
                 continue;
             }
+            groups.add(&bounds, song.last_ms, matched);
             if matched >= offset && rows.len() < limit {
-                rows.push(song.row());
+                rows.push(song.row(tints));
+                if let Some(cover) = song.untinted_cover(tints, now_ms) {
+                    if covers.len() < cover_tint::MAX_PER_PAGE && !covers.contains(&cover) {
+                        covers.push(cover);
+                    }
+                }
             }
             matched += 1;
         }
         let (mixed_platforms, channels) = self.places();
-        SongPage {
+        let page = SongPage {
             rows,
             matched,
             total: self.songs.len(),
             mixed_platforms,
             channels,
-        }
+            groups: groups.out,
+        };
+        (page, covers)
     }
 
     /// Whether the places heard name more than one platform, and how many
@@ -575,6 +863,47 @@ impl History {
     }
 }
 
+/// The page's time bounds as groups use them: newest first, each once, at
+/// most `MAX_BOUNDS`.
+fn sorted_bounds(raw: &[i64]) -> Vec<i64> {
+    let mut bounds = raw.to_vec();
+    bounds.sort_unstable_by(|a, b| b.cmp(a));
+    bounds.dedup();
+    bounds.truncate(MAX_BOUNDS);
+    bounds
+}
+
+/// Time groups built while walking the matched songs newest first. A song's
+/// own bucket is the first bound it was heard at or after (the bounds' count
+/// for "Older"); its group is never earlier than the one before it, so a
+/// song filed under a clock that jumped back stays in the group above it.
+#[derive(Default)]
+struct Groups {
+    out: Vec<Group>,
+}
+
+impl Groups {
+    fn add(&mut self, bounds: &[i64], last_ms: i64, index: usize) {
+        if bounds.is_empty() {
+            return;
+        }
+        let own = bounds
+            .iter()
+            .position(|b| last_ms >= *b)
+            .unwrap_or(bounds.len());
+        let bucket = match self.out.last() {
+            Some(last) => last.bound.max(own),
+            None => own,
+        };
+        if self.out.last().is_none_or(|last| last.bound != bucket) {
+            self.out.push(Group {
+                bound: bucket,
+                start: index,
+            });
+        }
+    }
+}
+
 /// The song's identity in the history: artist and title folded (`fold`), so
 /// the same song matched twice is one row.
 pub fn song_key(artist: &str, title: &str) -> String {
@@ -583,8 +912,9 @@ pub fn song_key(artist: &str, title: &str) -> String {
 
 /// Text as the history compares it: lowercase with Latin accents folded
 /// (`fold_search`), apostrophes dropped so "Don't", "Don’t" and "dont" are one
-/// word, and every run of spacing made one space.
-fn fold(s: &str) -> String {
+/// word, and every run of spacing made one space. The link finder matches
+/// titles from this too (links.rs).
+pub(super) fn fold(s: &str) -> String {
     let folded: String = fold_search(s)
         .chars()
         .filter(|c| !is_apostrophe(*c))
@@ -684,15 +1014,20 @@ fn now_ms() -> i64 {
 
 struct Loaded {
     history: History,
+    /// The cover colors, kept in their own file beside the songs.
+    tints: Tints,
     path: PathBuf,
     used: Instant,
 }
 
 static STORE: Mutex<Option<Loaded>> = Mutex::new(None);
-/// A change is in memory that the last write did not get to disk.
+/// A change is in memory that the last write did not get to disk (a failed
+/// write, or links a refresh found waiting for their deferred write).
 static DIRTY: AtomicBool = AtomicBool::new(false);
 /// The unloader task is running.
 static UNLOADER: AtomicBool = AtomicBool::new(false);
+/// A deferred write is waiting to run.
+static DEFERRED: AtomicBool = AtomicBool::new(false);
 
 /// The store, also after a call that panicked while holding it: one bad call
 /// never closes Your songs until a restart.
@@ -806,33 +1141,73 @@ fn persist(history: &History, path: &Path) -> Result<(), String> {
     result
 }
 
-fn with_history<R>(f: impl FnOnce(&mut History, &Path) -> R) -> Result<R, String> {
+/// Write the cover colors: only those of covers a song or the Undo slot
+/// still uses, and never while tints are off for this load.
+fn save_tints(tints: &mut Tints, history: &History) -> Result<(), String> {
+    prune_tints(&mut tints.map, history);
+    cover_tint::write_tints_file(&tints.path, &tints.map, cover_tint::is_off())
+}
+
+/// Drop the colors of covers no song uses (the Undo slot counts as a song).
+fn prune_tints(map: &mut BTreeMap<String, TintEntry>, history: &History) {
+    let used: HashSet<&str> = history
+        .songs
+        .iter()
+        .chain(history.removed.iter())
+        .filter_map(|s| s.album_art.as_deref())
+        .collect();
+    map.retain(|url, _| used.contains(url.as_str()));
+}
+
+/// Read the songs at `path` and the cover colors beside them. The history's
+/// own errors fail the load; the colors never do. Also returns whether
+/// tints are off for this load (their file is a newer app's, or could not be
+/// read or parsed).
+fn load(path: PathBuf) -> Result<(Loaded, bool), String> {
+    sweep_temps(&path);
+    let history = History::from_stored(read_file(&path)?);
+    if history.read_only {
+        log::warn!(
+            "[SongHistory] {} was saved by a newer StreamNook; shown, not changed",
+            path.display()
+        );
+    }
+    let tint_path = path.with_file_name(cover_tint::FILE);
+    sweep_temps(&tint_path);
+    let (map, off) = cover_tint::read_tints(&tint_path);
+    let loaded = Loaded {
+        history,
+        tints: Tints {
+            map,
+            path: tint_path,
+        },
+        path,
+        used: Instant::now(),
+    };
+    Ok((loaded, off))
+}
+
+fn with_store<R>(f: impl FnOnce(&mut History, &mut Tints, &Path) -> R) -> Result<R, String> {
     let out = {
         let mut guard = lock_store();
         if guard.is_none() {
             let path = get_app_data_dir()
                 .map_err(|e| format!("Failed to resolve app data dir: {e}"))?
                 .join(FILE);
-            sweep_temps(&path);
-            let history = History::from_stored(read_file(&path)?);
-            if history.read_only {
-                log::warn!(
-                    "[SongHistory] {} was saved by a newer StreamNook; shown, not changed",
-                    path.display()
-                );
-            }
-            *guard = Some(Loaded {
-                history,
-                path,
-                used: Instant::now(),
-            });
+            let (loaded, off) = load(path)?;
+            cover_tint::set_off(off);
+            *guard = Some(loaded);
         }
         let loaded = guard.as_mut().expect("seeded above");
         loaded.used = Instant::now();
-        f(&mut loaded.history, &loaded.path)
+        f(&mut loaded.history, &mut loaded.tints, &loaded.path)
     };
     schedule_unload();
     Ok(out)
+}
+
+fn with_history<R>(f: impl FnOnce(&mut History, &Path) -> R) -> Result<R, String> {
+    with_store(|history, _, path| f(history, path))
 }
 
 /// One change to `h`, written to `path` when it changed anything. Refused
@@ -859,26 +1234,67 @@ fn change<R>(f: impl FnOnce(&mut History) -> (R, bool)) -> Result<R, String> {
     Ok(out)
 }
 
-/// File a match heard now on `source`. Returns the song's key.
+/// File a match heard now on `source`. Returns the song's key, and its cover
+/// when that has no color yet.
 pub fn record(
     app: &AppHandle,
     song: &SongMatch,
     source: Option<SongSource>,
-) -> Result<String, String> {
+) -> Result<Recorded, String> {
     let at_ms = now_ms();
-    let key = change(|h| (h.file(song, source, at_ms), true))?;
+    let (key, saved, cover) = with_store(|h, t, path| {
+        let (key, saved) = apply(h, path, |h| (h.file(song, source, at_ms), true))?;
+        let cover = h
+            .songs
+            .iter()
+            .find(|s| s.key == key)
+            .and_then(|s| s.untinted_cover(&t.map, at_ms));
+        Ok::<_, String>((key, saved, cover))
+    })??;
+    if let Err(e) = saved {
+        log::warn!("[SongHistory] kept in memory, not on disk yet: {e}");
+    }
     let _ = app.emit(CHANGED_EVENT, Change::Filed { key: key.clone() });
-    Ok(key)
+    Ok(Recorded { key, cover })
 }
 
-/// The rows matching every word of `query`, from `offset`.
-pub fn page(query: &str, offset: usize, limit: usize) -> Result<SongPage, String> {
-    with_history(|h, _| h.page(query, offset, limit))
+/// The rows matching every word of `query`, from `offset`, with the time
+/// groups for the page's `bounds`, and the covers of those rows that have no
+/// color yet.
+pub fn page(
+    query: &str,
+    offset: usize,
+    limit: usize,
+    bounds: Option<Vec<i64>>,
+) -> Result<(SongPage, Vec<String>), String> {
+    let now = now_ms();
+    with_store(|h, t, _| {
+        h.page_in(
+            query,
+            offset,
+            limit,
+            bounds.as_deref().unwrap_or(&[]),
+            &t.map,
+            now,
+        )
+    })
 }
 
-/// One song, by key.
-pub fn get(key: &str) -> Result<Option<SongEntry>, String> {
-    with_history(|h, _| h.songs.iter().find(|s| s.key == key).cloned())
+/// One song, by key, with what opening it asks for: its cover's colors and
+/// a link refresh (`needs_refresh`).
+pub fn get(key: &str) -> Result<Option<Opened>, String> {
+    let now = now_ms();
+    with_store(|h, t, _| {
+        let song = h.songs.iter().find(|s| s.key == key)?;
+        Some(Opened {
+            cover: song.untinted_cover(&t.map, now),
+            refresh: needs_refresh(song, h.read_only, now),
+            detail: SongDetail {
+                tint: song.tint(&t.map),
+                entry: song.clone(),
+            },
+        })
+    })
 }
 
 /// Take one song out, kept for an Undo. False when it was not there.
@@ -917,62 +1333,175 @@ pub fn restore(app: &AppHandle, key: &str) -> Result<bool, String> {
     Ok(restored)
 }
 
-/// Forget every song.
+/// Forget every song, and the colors of their covers with them.
 pub fn clear(app: &AppHandle) -> Result<(), String> {
-    change(|h| {
-        h.songs.clear();
-        h.removed = None;
-        ((), true)
-    })?;
+    let saved = with_store(|h, t, path| {
+        let ((), saved) = apply(h, path, |h| {
+            h.songs.clear();
+            h.removed = None;
+            ((), true)
+        })?;
+        if !cover_tint::is_off() {
+            t.map.clear();
+            let written = save_tints(t, h);
+            cover_tint::TINT_DIRTY.store(written.is_err(), Ordering::Release);
+        }
+        Ok::<_, String>(saved)
+    })??;
+    if let Err(e) = saved {
+        log::warn!("[SongHistory] kept in memory, not on disk yet: {e}");
+    }
     let _ = app.emit(CHANGED_EVENT, Change::Cleared);
     Ok(())
 }
 
-/// Write a change an earlier write did not get to disk. The exit path calls
-/// it; a no-op when nothing is pending.
+/// Tell every window these songs' covers got their colors.
+pub(super) fn tinted(app: &AppHandle, keys: Vec<String>) {
+    let _ = app.emit(CHANGED_EVENT, Change::Tinted { keys });
+}
+
+/// Put fetched cover colors into the live map and write the tint file once
+/// (cover_tint.rs calls it per batch, off the async runtime). Returns the
+/// keys of the songs whose covers got an entry.
+pub(super) fn add_tints(results: Vec<(String, TintEntry)>) -> Result<Vec<String>, String> {
+    with_store(|h, t, _| {
+        land_tints(
+            h,
+            t,
+            results,
+            cover_tint::is_off(),
+            &cover_tint::TINT_DIRTY,
+            save_tints,
+        )
+    })
+}
+
+/// `add_tints` on a given store, with the flag and writer passed in so a
+/// test can fail the write. Nothing is written while tints are off.
+fn land_tints(
+    history: &History,
+    tints: &mut Tints,
+    results: Vec<(String, TintEntry)>,
+    off: bool,
+    tint_dirty: &AtomicBool,
+    write_tints: impl Fn(&mut Tints, &History) -> Result<(), String>,
+) -> Vec<String> {
+    let urls: HashSet<String> = results.iter().map(|(url, _)| url.clone()).collect();
+    tints.map.extend(results);
+    let keys = history
+        .songs
+        .iter()
+        .filter(|s| s.album_art.as_ref().is_some_and(|art| urls.contains(art)))
+        .map(|s| s.key.clone())
+        .collect();
+    if !off {
+        match write_tints(tints, history) {
+            Ok(()) => tint_dirty.store(false, Ordering::Release),
+            Err(e) => {
+                tint_dirty.store(true, Ordering::Release);
+                log::warn!("[SongTints] kept in memory, not on disk yet: {e}");
+            }
+        }
+    }
+    keys
+}
+
+/// Write what an earlier write did not get to disk, and links a refresh
+/// found. The exit path and the deferred write call it; a no-op when nothing
+/// is pending or the songs are not loaded (it never loads them).
 pub fn flush_now() -> Result<(), String> {
-    if !DIRTY.load(Ordering::Acquire) {
+    if !DIRTY.load(Ordering::Acquire) && !cover_tint::TINT_DIRTY.load(Ordering::Acquire) {
         return Ok(());
     }
-    let guard = lock_store();
-    let Some(loaded) = guard.as_ref() else {
+    let mut guard = lock_store();
+    flush_slot(
+        &mut guard,
+        &DIRTY,
+        &cover_tint::TINT_DIRTY,
+        write_file,
+        save_tints,
+    )
+}
+
+/// `flush_now` on a given slot, flags and writers. Each file is written only
+/// while its own flag is set, and a newer app's history never.
+fn flush_slot(
+    slot: &mut Option<Loaded>,
+    dirty: &AtomicBool,
+    tint_dirty: &AtomicBool,
+    write: impl Fn(&Path, &History) -> Result<(), String>,
+    write_tints: impl Fn(&mut Tints, &History) -> Result<(), String>,
+) -> Result<(), String> {
+    let Some(loaded) = slot.as_mut() else {
         return Ok(());
     };
-    persist(&loaded.history, &loaded.path)
+    let mut out = Ok(());
+    if tint_dirty.load(Ordering::Acquire) {
+        match write_tints(&mut loaded.tints, &loaded.history) {
+            Ok(()) => tint_dirty.store(false, Ordering::Release),
+            Err(e) => out = Err(e),
+        }
+    }
+    if dirty.load(Ordering::Acquire) && !loaded.history.read_only {
+        match write(&loaded.path, &loaded.history) {
+            Ok(()) => dirty.store(false, Ordering::Release),
+            Err(e) => out = Err(e),
+        }
+    }
+    out
 }
 
 /// One unloader pass over `slot`: let the songs go once they sat unused for
-/// `idle_after` with nothing left to write. `write` is the disk write
-/// (`write_file`), passed in so a test can fail it. Returns how long to wait
-/// before the next pass, or None once nothing is held.
+/// `idle_after` with nothing of theirs left to write. `write` and
+/// `write_tints` are the disk writes (`write_file`, `save_tints`), passed in
+/// so a test can fail them. The colors get one more try here and never keep
+/// the songs: only the history's own `dirty` does. A newer app's history is
+/// never written. Returns how long to wait before the next pass, or None
+/// once nothing is held.
 fn unload_pass(
     slot: &mut Option<Loaded>,
     idle_after: Duration,
     dirty: &AtomicBool,
+    tint_dirty: &AtomicBool,
     write: impl Fn(&Path, &History) -> Result<(), String>,
+    write_tints: impl Fn(&mut Tints, &History) -> Result<(), String>,
 ) -> Option<Duration> {
     let idle = slot.as_ref()?.used.elapsed();
     if idle < idle_after {
         return Some(idle_after - idle);
     }
-    if dirty.load(Ordering::Acquire) {
-        if let Some(loaded) = slot.as_ref() {
-            if write(&loaded.path, &loaded.history).is_ok() {
+    if let Some(loaded) = slot.as_mut() {
+        if tint_dirty.load(Ordering::Acquire)
+            && write_tints(&mut loaded.tints, &loaded.history).is_ok()
+        {
+            tint_dirty.store(false, Ordering::Release);
+        }
+        if dirty.load(Ordering::Acquire) {
+            // Nothing this app holds may go over a newer app's file.
+            if loaded.history.read_only || write(&loaded.path, &loaded.history).is_ok() {
                 dirty.store(false, Ordering::Release);
             }
         }
-        if dirty.load(Ordering::Acquire) {
-            // Keep the songs until a write lands; try again in a while.
-            return Some(IDLE_UNLOAD);
-        }
     }
+    if dirty.load(Ordering::Acquire) {
+        // Keep the songs until a write lands; try again in a while.
+        return Some(IDLE_UNLOAD);
+    }
+    tint_dirty.store(false, Ordering::Release);
     *slot = None;
     None
 }
 
 fn unload_step() -> Option<Duration> {
     let mut guard = lock_store();
-    unload_pass(&mut guard, IDLE_UNLOAD, &DIRTY, write_file)
+    unload_pass(
+        &mut guard,
+        IDLE_UNLOAD,
+        &DIRTY,
+        &cover_tint::TINT_DIRTY,
+        write_file,
+        save_tints,
+    )
 }
 
 fn schedule_unload() {
@@ -995,6 +1524,166 @@ fn schedule_unload() {
     });
 }
 
+/// Songs waiting for their links to be looked up again, oldest first, and
+/// the one being looked up.
+#[derive(Default)]
+struct Refreshes {
+    queued: VecDeque<String>,
+    running: Option<String>,
+}
+
+impl Refreshes {
+    /// Queue `key`. False when it is already queued or running, or the queue
+    /// is full.
+    fn push(&mut self, key: String) -> bool {
+        if self.running.as_ref() == Some(&key)
+            || self.queued.contains(&key)
+            || self.queued.len() >= REFRESH_CAP
+        {
+            return false;
+        }
+        self.queued.push_back(key);
+        true
+    }
+
+    /// The next key to look up, now the running one.
+    fn next(&mut self) -> Option<String> {
+        self.running = self.queued.pop_front();
+        self.running.clone()
+    }
+}
+
+static REFRESHES: Mutex<Refreshes> = Mutex::new(Refreshes {
+    queued: VecDeque::new(),
+    running: None,
+});
+/// The refresh runner task is running.
+static REFRESHER: AtomicBool = AtomicBool::new(false);
+
+fn refreshes() -> MutexGuard<'static, Refreshes> {
+    REFRESHES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Look the links of the song `key` up again in the background, one song at
+/// a time. Opening a song (`get` says when) and an identification whose
+/// lookups were cut short ask for it.
+pub fn queue_refresh(app: &AppHandle, key: String) {
+    if refreshes().push(key) {
+        start_refresher(app);
+    }
+}
+
+fn start_refresher(app: &AppHandle) {
+    if refreshes().queued.is_empty() {
+        return;
+    }
+    if REFRESHER
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            let next = refreshes().next();
+            let Some(key) = next else {
+                break;
+            };
+            refresh_one(&app, key).await;
+        }
+        REFRESHER.store(false, Ordering::Release);
+        // A key queued while this task was ending found it still running.
+        start_refresher(&app);
+    });
+}
+
+async fn refresh_one(app: &AppHandle, key: String) {
+    let asked = key.clone();
+    let input = tokio::task::spawn_blocking(move || with_history(|h, _| refresh_input(h, &asked)))
+        .await;
+    let Ok(Ok(Some(input))) = input else {
+        return;
+    };
+    let found = links::resolve(&input, REFRESH_BUDGET).await;
+    let at = key.clone();
+    let changed = tokio::task::spawn_blocking(move || {
+        with_history(|h, _| apply_refresh(h, &at, &found, now_ms(), &DIRTY))
+    })
+    .await;
+    if matches!(changed, Ok(Ok(true))) {
+        arm_deferred_write(&DEFERRED, DEFERRED_WRITE);
+        let _ = app.emit(CHANGED_EVENT, Change::Filed { key });
+    }
+}
+
+/// What a refresh of `key` looks up: the song as it is now. None when it is
+/// gone or the file is a newer app's.
+fn refresh_input(h: &History, key: &str) -> Option<links::ResolveInput> {
+    if h.read_only {
+        return None;
+    }
+    let song = h.songs.iter().find(|s| s.key == key)?;
+    Some(links::ResolveInput {
+        title: song.title.clone(),
+        artist: song.artist.clone(),
+        album: song.album.clone(),
+        isrc: song.isrc.clone(),
+        isrc_from: song.isrc_from,
+        apple_id: song.apple_id(),
+        known: song.providers.clone(),
+    })
+}
+
+/// Merge a refresh's links into the song `key` as it is now (`merge_links`).
+/// Nothing when it is gone or the file is a newer app's. A change is held as
+/// pending (`dirty`) for the deferred write. Returns whether it changed.
+fn apply_refresh(
+    h: &mut History,
+    key: &str,
+    found: &links::Resolved,
+    now_ms: i64,
+    dirty: &AtomicBool,
+) -> bool {
+    if h.read_only {
+        return false;
+    }
+    let Some(song) = h.songs.iter_mut().find(|s| s.key == key) else {
+        return false;
+    };
+    let changed = merge_links(song, found, now_ms);
+    if changed {
+        dirty.store(true, Ordering::Release);
+    }
+    changed
+}
+
+/// Write pending links once, `after` from now: one timer at a time, and a
+/// change that lands while one waits rides on it. False when one was
+/// already waiting.
+fn arm_deferred_write(pending: &'static AtomicBool, after: Duration) -> bool {
+    if !claim_deferred(pending) {
+        return false;
+    }
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(after).await;
+        pending.store(false, Ordering::Release);
+        if let Ok(Err(e)) = tokio::task::spawn_blocking(flush_now).await {
+            log::warn!("[SongHistory] links kept in memory, not on disk yet: {e}");
+        }
+    });
+    true
+}
+
+/// Take the one deferred-write slot. False while a write is waiting.
+fn claim_deferred(pending: &AtomicBool) -> bool {
+    pending
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1008,10 +1697,25 @@ mod tests {
             shazam_url: None,
             song_link: None,
             providers: Vec::new(),
-            seed_url: None,
             key: None,
             links_are_searches: false,
+            isrc: None,
+            isrc_from: None,
+            apple_id: None,
+            links_complete: false,
         }
+    }
+
+    fn direct(name: &str, url: &str) -> Provider {
+        Provider {
+            name: name.into(),
+            url: url.into(),
+            search: false,
+        }
+    }
+
+    fn searching(name: &str) -> Provider {
+        links::search_link(name, "A", "One").unwrap()
     }
 
     fn on(login: &str) -> Option<SongSource> {
@@ -1131,10 +1835,7 @@ mod tests {
         let mut first = song("A", "One");
         first.album = Some("Album".into());
         first.album_art = Some("https://art/1.jpg".into());
-        first.providers = vec![Provider {
-            name: "Spotify".into(),
-            url: "https://open.spotify.com/track/1".into(),
-        }];
+        first.providers = vec![direct("Spotify", "https://open.spotify.com/track/1")];
         h.file(&first, None, 0);
         h.file(&song("A", "One"), None, 2 * REPEAT_WINDOW_MS);
         let s = &h.songs[0];
@@ -1147,15 +1848,12 @@ mod tests {
     #[test]
     fn search_pages_never_replace_real_links() {
         let mut real = song("A", "One");
-        real.providers = vec![Provider {
-            name: "Spotify".into(),
-            url: "https://open.spotify.com/track/1".into(),
-        }];
+        real.providers = vec![direct("Spotify", "https://open.spotify.com/track/1")];
         let mut search = song("A", "One");
-        search.providers = vec![Provider {
-            name: "Spotify".into(),
-            url: "https://open.spotify.com/search/A%20One".into(),
-        }];
+        search.providers = vec![direct(
+            "Spotify",
+            "https://open.spotify.com/search/A%20One",
+        )];
         search.links_are_searches = true;
 
         let mut h = History::default();
@@ -1184,18 +1882,9 @@ mod tests {
         s.song_link = Some(format!("https://song.link/{}", "a".repeat(MAX_URL)));
         s.shazam_url = Some("https://www.shazam.com/track/1".into());
         s.providers = vec![
-            Provider {
-                name: "Spotify".into(),
-                url: "https://open.spotify.com/track/1".into(),
-            },
-            Provider {
-                name: "Evil".into(),
-                url: "javascript:alert(1)".into(),
-            },
-            Provider {
-                name: " ".into(),
-                url: "https://example.com".into(),
-            },
+            direct("Spotify", "https://open.spotify.com/track/1"),
+            direct("Evil", "javascript:alert(1)"),
+            direct(" ", "https://example.com"),
         ];
         let mut h = History::default();
         h.file(&s, None, 0);
@@ -1212,10 +1901,7 @@ mod tests {
 
     #[test]
     fn a_link_is_kept_only_under_the_service_it_goes_to() {
-        let link = |name: &str, url: &str| Provider {
-            name: name.into(),
-            url: url.into(),
-        };
+        let link = direct;
         let mut s = song("A", "One");
         s.providers = vec![
             link(
@@ -1624,10 +2310,7 @@ mod tests {
     fn a_stored_row_is_made_safe_to_show() {
         let mut e = entry("One", 1);
         e.album_art = Some("file:///etc/passwd".into());
-        e.providers = vec![Provider {
-            name: "X".into(),
-            url: "ms-settings:".into(),
-        }];
+        e.providers = vec![direct("X", "ms-settings:")];
         e.count = 0;
         let h = History::from_stored(stored(vec![e]));
         let s = &h.songs[0];
@@ -1718,39 +2401,746 @@ mod tests {
     fn held(used: Instant) -> Option<Loaded> {
         Some(Loaded {
             history: History::default(),
+            tints: Tints::default(),
             path: PathBuf::from("unused"),
             used,
         })
     }
 
+    fn ok(_: &Path, _: &History) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn fail(_: &Path, _: &History) -> Result<(), String> {
+        Err("disk full".to_string())
+    }
+
+    fn tints_ok(_: &mut Tints, _: &History) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn tints_fail(_: &mut Tints, _: &History) -> Result<(), String> {
+        Err("disk full".to_string())
+    }
+
     #[test]
     fn the_unloader_waits_out_the_idle_time_then_lets_go() {
         let dirty = AtomicBool::new(false);
-        let ok = |_: &Path, _: &History| Ok(());
+        let tint_dirty = AtomicBool::new(false);
         let mut slot = held(Instant::now());
-        assert!(unload_pass(&mut slot, Duration::from_secs(60), &dirty, ok).is_some());
+        let pass = |slot: &mut Option<Loaded>, idle| {
+            unload_pass(slot, idle, &dirty, &tint_dirty, ok, tints_ok)
+        };
+        assert!(pass(&mut slot, Duration::from_secs(60)).is_some());
         assert!(slot.is_some());
-        assert_eq!(unload_pass(&mut slot, Duration::ZERO, &dirty, ok), None);
+        assert_eq!(pass(&mut slot, Duration::ZERO), None);
         assert!(slot.is_none());
-        assert_eq!(
-            unload_pass(&mut slot, Duration::ZERO, &dirty, ok),
-            None,
-            "nothing held"
-        );
+        assert_eq!(pass(&mut slot, Duration::ZERO), None, "nothing held");
     }
 
     #[test]
     fn the_unloader_keeps_songs_a_write_has_not_saved() {
         let dirty = AtomicBool::new(true);
+        let tint_dirty = AtomicBool::new(false);
         let mut slot = held(Instant::now());
-        let fail = |_: &Path, _: &History| Err("disk full".to_string());
         assert_eq!(
-            unload_pass(&mut slot, Duration::ZERO, &dirty, fail),
+            unload_pass(&mut slot, Duration::ZERO, &dirty, &tint_dirty, fail, tints_ok),
             Some(IDLE_UNLOAD)
         );
         assert!(slot.is_some() && dirty.load(Ordering::Acquire));
-        let ok = |_: &Path, _: &History| Ok(());
-        assert_eq!(unload_pass(&mut slot, Duration::ZERO, &dirty, ok), None);
+        assert_eq!(
+            unload_pass(&mut slot, Duration::ZERO, &dirty, &tint_dirty, ok, tints_ok),
+            None
+        );
         assert!(slot.is_none() && !dirty.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn the_two_files_dirty_flags_never_stand_in_for_each_other() {
+        // A failing history write with a good tint write keeps the songs.
+        let dirty = AtomicBool::new(true);
+        let tint_dirty = AtomicBool::new(true);
+        let mut slot = held(Instant::now());
+        assert_eq!(
+            unload_pass(&mut slot, Duration::ZERO, &dirty, &tint_dirty, fail, tints_ok),
+            Some(IDLE_UNLOAD)
+        );
+        assert!(slot.is_some());
+        assert!(dirty.load(Ordering::Acquire), "the songs still wait for a write");
+        assert!(!tint_dirty.load(Ordering::Acquire), "the colors landed");
+
+        // A failing tint write never keeps them: after its one more try the
+        // songs go, and its flag goes with the slot.
+        let dirty = AtomicBool::new(false);
+        let tint_dirty = AtomicBool::new(true);
+        let tries = std::cell::Cell::new(0);
+        let counted_fail = |_: &mut Tints, _: &History| {
+            tries.set(tries.get() + 1);
+            Err("disk full".to_string())
+        };
+        let mut slot = held(Instant::now());
+        assert_eq!(
+            unload_pass(&mut slot, Duration::ZERO, &dirty, &tint_dirty, ok, counted_fail),
+            None
+        );
+        assert!(slot.is_none());
+        assert_eq!(tries.get(), 1);
+        assert!(
+            !tint_dirty.load(Ordering::Acquire),
+            "no flag is left over for the next load"
+        );
+    }
+
+    #[test]
+    fn a_newer_apps_history_is_never_written_by_the_unloader_or_at_exit() {
+        let writes = std::cell::Cell::new(0);
+        let counted = |_: &Path, _: &History| {
+            writes.set(writes.get() + 1);
+            Ok(())
+        };
+        let read_only = |used| {
+            let mut slot = held(used);
+            slot.as_mut().unwrap().history.read_only = true;
+            slot
+        };
+
+        let dirty = AtomicBool::new(true);
+        let tint_dirty = AtomicBool::new(false);
+        let mut slot = read_only(Instant::now());
+        assert_eq!(
+            unload_pass(&mut slot, Duration::ZERO, &dirty, &tint_dirty, counted, tints_ok),
+            None,
+            "nothing of this app's is kept for it either"
+        );
+        assert_eq!(writes.get(), 0);
+
+        let dirty = AtomicBool::new(true);
+        let mut slot = read_only(Instant::now());
+        assert!(flush_slot(&mut slot, &dirty, &tint_dirty, counted, tints_ok).is_ok());
+        assert_eq!(writes.get(), 0, "flush_now and the deferred write refuse it");
+    }
+
+    #[test]
+    fn a_pending_change_is_written_once_at_exit_and_then_nothing_is() {
+        let writes = std::cell::Cell::new(0);
+        let counted = |_: &Path, _: &History| {
+            writes.set(writes.get() + 1);
+            Ok(())
+        };
+        let dirty = AtomicBool::new(true);
+        let tint_dirty = AtomicBool::new(false);
+        let mut slot = held(Instant::now());
+        assert!(flush_slot(&mut slot, &dirty, &tint_dirty, counted, tints_ok).is_ok());
+        assert!(flush_slot(&mut slot, &dirty, &tint_dirty, counted, tints_ok).is_ok());
+        assert_eq!(writes.get(), 1);
+        assert!(!dirty.load(Ordering::Acquire));
+
+        // A failed write is reported and stays pending.
+        let dirty = AtomicBool::new(true);
+        assert!(flush_slot(&mut slot, &dirty, &tint_dirty, fail, tints_ok).is_err());
+        assert!(dirty.load(Ordering::Acquire));
+        let mut empty = None;
+        assert!(flush_slot(&mut empty, &dirty, &tint_dirty, fail, tints_fail).is_ok());
+    }
+
+    #[test]
+    fn the_update_restart_flushes_the_songs() {
+        let source = include_str!("../../commands/components.rs");
+        let start = source
+            .find("fn flush_stores_before_hard_exit")
+            .expect("the hard-exit flush exists");
+        let body = &source[start..];
+        let body = &body[..body.find("\n}").expect("its body ends")];
+        assert!(
+            body.contains("song_id::history::flush_now()"),
+            "a pending song change is written before the update restart"
+        );
+    }
+
+    // ---------------------------------------------------------------- groups
+
+    fn at(last_ms: &[i64]) -> History {
+        history(
+            last_ms
+                .iter()
+                .enumerate()
+                .map(|(i, ms)| entry(&format!("t{i}"), *ms))
+                .collect(),
+        )
+    }
+
+    fn groups(h: &History, query: &str, bounds: &[i64]) -> Vec<(usize, usize)> {
+        h.page_in(query, 0, 50, bounds, &BTreeMap::new(), 0)
+            .0
+            .groups
+            .iter()
+            .map(|g| (g.bound, g.start))
+            .collect()
+    }
+
+    #[test]
+    fn groups_split_the_songs_by_the_pages_bounds() {
+        // Today from 1000, yesterday from 500, two months back from 100.
+        let bounds = [1000, 500, 100];
+        let h = at(&[1500, 1000, 700, 300, 50]);
+        assert_eq!(
+            groups(&h, "", &bounds),
+            vec![(0, 0), (1, 2), (2, 3), (3, 4)],
+            "a song at a bound is in it; past the last is Older"
+        );
+        assert!(groups(&h, "", &[]).is_empty(), "no bounds give no groups");
+        let empty = at(&[]);
+        assert!(groups(&empty, "", &bounds).is_empty());
+        // An empty bucket is skipped.
+        assert_eq!(groups(&at(&[1500, 300]), "", &bounds), vec![(0, 0), (2, 1)]);
+        // A query counts matched songs only.
+        assert_eq!(groups(&h, "t3", &bounds), vec![(2, 0)]);
+        let page = h.page_in("", 0, 2, &bounds, &BTreeMap::new(), 0).0;
+        assert_eq!(page.rows.len(), 2);
+        assert_eq!(page.groups.len(), 4, "every page carries every group");
+        let json = serde_json::to_value(&page).unwrap();
+        assert_eq!(json["groups"][1], serde_json::json!({ "bound": 1, "start": 2 }));
+    }
+
+    #[test]
+    fn bounds_are_sorted_deduped_and_capped() {
+        let h = at(&[1500, 1000, 700, 300, 50]);
+        assert_eq!(
+            groups(&h, "", &[100, 1000, 500, 1000]),
+            groups(&h, "", &[1000, 500, 100])
+        );
+        let many: Vec<i64> = (0..100).map(|i| 2000 - i * 10).collect();
+        assert_eq!(sorted_bounds(&many).len(), MAX_BOUNDS);
+        assert_eq!(sorted_bounds(&many)[0], 2000);
+        // 1500 is the 51st bound (2000 - 50 * 10); 50 is past all 64 kept.
+        let g = groups(&at(&[1500, 50]), "", &many);
+        assert_eq!(g, vec![(50, 0), (MAX_BOUNDS, 1)]);
+    }
+
+    #[test]
+    fn a_song_from_a_clock_that_jumped_back_stays_in_the_group_above() {
+        // The second song was filed under a clock that read too early.
+        let h = at(&[1500, 300, 1200]);
+        assert_eq!(groups(&h, "", &[1000, 500, 100]), vec![(0, 0), (2, 1)]);
+    }
+
+    // ---------------------------------------------------------------- tints
+
+    fn color(h: f64) -> TintEntry {
+        TintEntry::Color {
+            main: Some([0.6, 0.15, h]),
+            second: None,
+        }
+    }
+
+    #[test]
+    fn rows_and_the_detail_carry_the_covers_colors_in_three_states() {
+        let mut tints = BTreeMap::new();
+        tints.insert("https://c/colored.jpg".to_string(), color(26.0));
+        tints.insert(
+            "https://c/grey.jpg".to_string(),
+            TintEntry::Color {
+                main: None,
+                second: None,
+            },
+        );
+        tints.insert(
+            "https://c/failed.jpg".to_string(),
+            TintEntry::Failed { failed_ms: 5 },
+        );
+        let mut h = History::default();
+        for (title, art) in [
+            ("colored", Some("https://c/colored.jpg")),
+            ("grey", Some("https://c/grey.jpg")),
+            ("failed", Some("https://c/failed.jpg")),
+            ("pending", Some("https://c/pending.jpg")),
+            ("none", None),
+        ] {
+            let mut s = song("A", title);
+            s.album_art = art.map(str::to_string);
+            h.file(&s, None, 0);
+        }
+        let (page, covers) = h.page_in("", 0, 50, &[], &tints, 10);
+        let tint_of = |title: &str| {
+            let row = page.rows.iter().find(|r| r.title == title).unwrap();
+            serde_json::to_value(row).unwrap().get("tint").cloned()
+        };
+        let grey = Some(serde_json::json!({ "main": null, "second": null }));
+        assert_eq!(
+            tint_of("colored"),
+            Some(serde_json::json!({ "main": [0.6, 0.15, 26.0], "second": null }))
+        );
+        assert_eq!(tint_of("grey"), grey);
+        assert_eq!(tint_of("failed"), grey, "nothing more will come");
+        assert_eq!(tint_of("none"), grey);
+        assert_eq!(tint_of("pending"), None, "left out while a color may come");
+        assert_eq!(covers, vec!["https://c/pending.jpg".to_string()]);
+
+        // A failure is fetched again after 30 days.
+        let (_, covers) = h.page_in("", 0, 50, &[], &tints, 5 + cover_tint::RETRY_PERMANENT_MS);
+        assert!(covers.contains(&"https://c/failed.jpg".to_string()));
+
+        let song = h.songs.iter().find(|s| s.title == "colored").unwrap();
+        let detail = SongDetail {
+            tint: song.tint(&tints),
+            entry: song.clone(),
+        };
+        let json = serde_json::to_value(&detail).unwrap();
+        assert_eq!(json["title"], "colored");
+        assert_eq!(json["tint"]["main"], serde_json::json!([0.6, 0.15, 26.0]));
+        assert_eq!(json["links_are_searches"], false, "still written for older builds");
+    }
+
+    #[test]
+    fn the_colors_kept_are_those_a_song_or_the_undo_slot_uses() {
+        let mut h = History::default();
+        for (title, art) in [("a", "https://c/a.jpg"), ("b", "https://c/b.jpg")] {
+            let mut s = song("A", title);
+            s.album_art = Some(art.to_string());
+            h.file(&s, None, 0);
+        }
+        assert!(h.remove(&song_key("A", "b")));
+        let mut map: BTreeMap<String, TintEntry> = ["a", "b", "gone"]
+            .iter()
+            .map(|n| (format!("https://c/{n}.jpg"), color(1.0)))
+            .collect();
+        prune_tints(&mut map, &h);
+        assert_eq!(
+            map.keys().cloned().collect::<Vec<_>>(),
+            vec!["https://c/a.jpg".to_string(), "https://c/b.jpg".to_string()]
+        );
+    }
+
+    #[test]
+    fn landed_colors_name_their_songs_and_write_once() {
+        let mut h = History::default();
+        for (title, art) in [("a", "https://c/same.jpg"), ("b", "https://c/same.jpg"), ("c", "https://c/c.jpg")] {
+            let mut s = song("A", title);
+            s.album_art = Some(art.to_string());
+            h.file(&s, None, 0);
+        }
+        let writes = std::cell::Cell::new(0);
+        let counted = |_: &mut Tints, _: &History| {
+            writes.set(writes.get() + 1);
+            Ok(())
+        };
+        let tint_dirty = AtomicBool::new(true);
+        let mut tints = Tints::default();
+        let mut keys = land_tints(
+            &h,
+            &mut tints,
+            vec![("https://c/same.jpg".to_string(), color(5.0))],
+            false,
+            &tint_dirty,
+            counted,
+        );
+        keys.sort();
+        assert_eq!(keys, vec![song_key("A", "a"), song_key("A", "b")]);
+        assert_eq!(writes.get(), 1);
+        assert!(!tint_dirty.load(Ordering::Acquire));
+
+        // A failed write stays pending; while tints are off nothing is
+        // written and nothing is marked pending.
+        land_tints(&h, &mut tints, vec![], false, &tint_dirty, tints_fail);
+        assert!(tint_dirty.load(Ordering::Acquire));
+        let tint_dirty = AtomicBool::new(false);
+        let writes_before = writes.get();
+        land_tints(
+            &h,
+            &mut tints,
+            vec![("https://c/c.jpg".to_string(), color(9.0))],
+            true,
+            &tint_dirty,
+            counted,
+        );
+        assert_eq!(writes.get(), writes_before);
+        assert!(!tint_dirty.load(Ordering::Acquire));
+        assert!(tints.map.contains_key("https://c/c.jpg"), "still shown this load");
+    }
+
+    #[test]
+    fn a_damaged_tint_file_is_moved_aside_and_never_stops_the_songs_loading() {
+        let mut h = History::default();
+        h.file(&song("A", "One"), None, 1);
+
+        let damaged = temp_dir("tints-damaged");
+        let path = damaged.join(FILE);
+        write_file(&path, &h).unwrap();
+        fs::write(damaged.join(cover_tint::FILE), b"{ not json").unwrap();
+        let (loaded, off) = load(path).unwrap();
+        assert_eq!(titles(&loaded.history), vec!["One"]);
+        assert!(loaded.tints.map.is_empty());
+        assert!(off, "tints are off for this load");
+        let names = names_in(&damaged);
+        assert!(!names.contains(&cover_tint::FILE.to_string()));
+        assert!(names.iter().any(|n| n.starts_with("song_tints.json.bad-")));
+
+        // A tint file that cannot be read at all is left where it is.
+        let unreadable = temp_dir("tints-unreadable");
+        let path = unreadable.join(FILE);
+        write_file(&path, &h).unwrap();
+        fs::create_dir_all(unreadable.join(cover_tint::FILE)).unwrap();
+        let (loaded, off) = load(path).unwrap();
+        assert!(off && loaded.tints.map.is_empty());
+        assert_eq!(titles(&loaded.history), vec!["One"]);
+        assert!(unreadable.join(cover_tint::FILE).is_dir());
+
+        let _ = fs::remove_dir_all(&damaged);
+        let _ = fs::remove_dir_all(&unreadable);
+    }
+
+    // ---------------------------------------------------------------- links
+
+    fn resolved(providers: Vec<Provider>, complete: bool) -> links::Resolved {
+        links::Resolved {
+            providers,
+            isrc: None,
+            isrc_from: None,
+            cover: None,
+            complete,
+        }
+    }
+
+    fn kept(e: &SongEntry) -> Vec<(String, bool)> {
+        e.providers
+            .iter()
+            .map(|p| (p.name.clone(), p.search))
+            .collect()
+    }
+
+    #[test]
+    fn an_old_search_flagged_song_turns_into_per_link_searches() {
+        let stored: SongEntry = serde_json::from_str(
+            r#"{"key":"a\u001fone","title":"One","artist":"A","links_are_searches":true,"providers":[{"name":"Spotify","url":"https://open.spotify.com/search/A%20One"},{"name":"YouTube Music","url":"https://music.youtube.com/search?q=A%20One"},{"name":"Apple Music","url":"https://music.apple.com/us/search?term=A%20One"}]}"#,
+        )
+        .unwrap();
+        // A song since Odesli closed: Shazam's hub gave a YouTube Music
+        // search page that the old build kept as a direct link.
+        let hub: SongEntry = serde_json::from_str(
+            r#"{"key":"b\u001ftwo","title":"Two","artist":"B","providers":[{"name":"Apple Music","url":"https://music.apple.com/us/album/x/1?i=2"},{"name":"YouTube Music","url":"https://music.youtube.com/search?q=Two+B&feature=shazam"}]}"#,
+        )
+        .unwrap();
+        let h = History::from_stored(super::tests::stored(vec![stored, hub]));
+        let one = h.songs.iter().find(|s| s.title == "One").unwrap();
+        assert!(one.providers.iter().all(|p| p.search));
+        assert!(one.links_are_searches, "written as derived for older builds");
+        assert_eq!(
+            kept(one),
+            vec![
+                ("Spotify".to_string(), true),
+                ("Apple Music".to_string(), true),
+                ("YouTube Music".to_string(), true)
+            ]
+        );
+        let json = serde_json::to_string(one).unwrap();
+        assert!(json.contains(r#""search":true"#));
+        let two = h.songs.iter().find(|s| s.title == "Two").unwrap();
+        assert_eq!(
+            kept(two),
+            vec![("Apple Music".to_string(), false), ("YouTube Music".to_string(), true)]
+        );
+        assert!(!two.links_are_searches);
+        assert_eq!(two.links_checked_ms, 0, "so opening it looks the links up");
+    }
+
+    #[test]
+    fn a_direct_link_fills_a_search_slot_and_never_replaces_a_direct_one() {
+        let mut e = entry("One", 1);
+        e.providers = vec![
+            direct("Spotify", "https://open.spotify.com/track/kept"),
+            searching("YouTube Music"),
+        ];
+        let found = resolved(
+            vec![
+                direct("Spotify", "https://open.spotify.com/track/other"),
+                direct("YouTube Music", "https://music.youtube.com/watch?v=4MOzk7-6j-I"),
+                searching("Deezer"),
+                searching("Spotify"),
+            ],
+            false,
+        );
+        assert!(merge_links(&mut e, &found, 50));
+        assert_eq!(
+            kept(&e),
+            vec![
+                ("Spotify".to_string(), false),
+                ("YouTube Music".to_string(), false),
+                ("Deezer".to_string(), true)
+            ]
+        );
+        assert_eq!(e.providers[0].url, "https://open.spotify.com/track/kept");
+        assert!(!merge_links(&mut e, &found, 60), "the same links again change nothing");
+    }
+
+    #[test]
+    fn links_are_stamped_only_by_a_complete_lookup() {
+        let mut e = entry("One", 1);
+        merge_links(&mut e, &resolved(vec![searching("Deezer")], false), 50);
+        assert_eq!(e.links_checked_ms, 0);
+        assert!(merge_links(&mut e, &resolved(vec![], true), 60));
+        assert_eq!(e.links_checked_ms, 60);
+        merge_links(&mut e, &resolved(vec![], true), 40);
+        assert_eq!(e.links_checked_ms, 60, "never back in time");
+    }
+
+    #[test]
+    fn a_reidentification_cut_short_keeps_earlier_links_isrc_and_stamp() {
+        let mut h = History::default();
+        let mut first = song("Sade", "Kiss of Life");
+        first.providers = vec![
+            direct("Spotify", "https://open.spotify.com/track/0123456789abcdefghijkl"),
+            direct("Deezer", "https://www.deezer.com/track/1030607572"),
+        ];
+        first.isrc = Some("GBBBM9200027".into());
+        first.isrc_from = Some(IsrcFrom::Shazam);
+        first.links_complete = true;
+        h.file(&first, None, 1_000);
+        // Heard again; this time the lookups ran out of time and Shazam gave
+        // no ISRC.
+        let mut again = song("Sade", "Kiss of Life");
+        again.providers = std::iter::once(direct("Apple Music", "https://music.apple.com/us/song/1"))
+            .chain(
+                links::DISPLAY
+                    .iter()
+                    .filter_map(|s| links::search_link(s, "Sade", "Kiss of Life")),
+            )
+            .collect();
+        h.file(&again, None, 2 * REPEAT_WINDOW_MS);
+        let s = &h.songs[0];
+        assert_eq!(s.isrc.as_deref(), Some("GBBBM9200027"));
+        assert_eq!(s.links_checked_ms, 1_000);
+        assert_eq!(
+            s.providers
+                .iter()
+                .filter(|p| !p.search)
+                .map(|p| p.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Spotify", "Apple Music", "Deezer"]
+        );
+        assert_eq!(s.providers[0].url, "https://open.spotify.com/track/0123456789abcdefghijkl");
+        assert!(s.providers.iter().skip(3).all(|p| p.search));
+    }
+
+    #[test]
+    fn a_shazam_isrc_replaces_a_text_one_and_drops_the_links_made_from_it() {
+        let mut e = entry("One", 1);
+        e.isrc = Some("GBAAA0000001".into());
+        e.isrc_from = Some(IsrcFrom::Text);
+        e.links_checked_ms = 500;
+        e.providers = vec![
+            direct("Spotify", "https://open.spotify.com/track/0123456789abcdefghijkl"),
+            direct("Apple Music", "https://music.apple.com/us/song/7"),
+            direct("Deezer", "https://www.deezer.com/track/1"),
+            direct("Beatport", "https://www.beatport.com/track/-/1"),
+            searching("SoundCloud"),
+        ];
+        let mut found = resolved(vec![], false);
+        found.isrc = Some("GBBBB0000002".into());
+        found.isrc_from = Some(IsrcFrom::Shazam);
+        assert!(merge_links(&mut e, &found, 900));
+        assert_eq!(e.isrc.as_deref(), Some("GBBBB0000002"));
+        assert_eq!(e.isrc_from, Some(IsrcFrom::Shazam));
+        assert_eq!(e.links_checked_ms, 0, "the refresh rule looks again");
+        assert_eq!(
+            kept(&e),
+            vec![("Apple Music".to_string(), false), ("SoundCloud".to_string(), true)]
+        );
+
+        // The same ISRC from Shazam only names where it came from.
+        let mut e = entry("One", 1);
+        e.isrc = Some("GBAAA0000001".into());
+        e.isrc_from = Some(IsrcFrom::Text);
+        e.links_checked_ms = 500;
+        e.providers = vec![direct("Deezer", "https://www.deezer.com/track/1")];
+        let mut found = resolved(vec![], true);
+        found.isrc = Some("GBAAA0000001".into());
+        found.isrc_from = Some(IsrcFrom::Shazam);
+        merge_links(&mut e, &found, 900);
+        assert_eq!(e.isrc_from, Some(IsrcFrom::Shazam));
+        assert_eq!(e.providers.len(), 1);
+        assert_eq!(e.links_checked_ms, 900);
+    }
+
+    #[test]
+    fn a_text_isrc_never_replaces_one() {
+        for from in [IsrcFrom::Shazam, IsrcFrom::Text] {
+            let mut e = entry("One", 1);
+            e.isrc = Some("GBAAA0000001".into());
+            e.isrc_from = Some(from);
+            e.providers = vec![direct("Deezer", "https://www.deezer.com/track/1")];
+            let mut found = resolved(vec![], false);
+            found.isrc = Some("GBBBB0000002".into());
+            found.isrc_from = Some(IsrcFrom::Text);
+            merge_links(&mut e, &found, 900);
+            assert_eq!(e.isrc.as_deref(), Some("GBAAA0000001"));
+            assert_eq!(e.isrc_from, Some(from));
+            assert_eq!(e.providers.len(), 1);
+        }
+        // A Shazam ISRC never replaces a Shazam one either.
+        let mut e = entry("One", 1);
+        e.isrc = Some("GBAAA0000001".into());
+        e.isrc_from = Some(IsrcFrom::Shazam);
+        let mut found = resolved(vec![], false);
+        found.isrc = Some("GBBBB0000002".into());
+        found.isrc_from = Some(IsrcFrom::Shazam);
+        merge_links(&mut e, &found, 900);
+        assert_eq!(e.isrc.as_deref(), Some("GBAAA0000001"));
+        // A text ISRC fills a missing one.
+        let mut e = entry("One", 1);
+        let mut found = resolved(vec![], false);
+        found.isrc = Some("gbccc0000003".into());
+        found.isrc_from = Some(IsrcFrom::Text);
+        merge_links(&mut e, &found, 900);
+        assert_eq!(
+            (e.isrc.as_deref(), e.isrc_from),
+            (Some("GBCCC0000003"), Some(IsrcFrom::Text))
+        );
+    }
+
+    #[test]
+    fn a_refresh_merges_into_the_song_as_it_is_now_or_not_at_all() {
+        let dirty = AtomicBool::new(false);
+        let found = resolved(vec![direct("Deezer", "https://www.deezer.com/track/1")], true);
+        let mut h = history(vec![entry("One", 1)]);
+        assert!(!apply_refresh(&mut h, "gone", &found, 5, &dirty));
+        assert!(!dirty.load(Ordering::Acquire), "a removed song changes nothing");
+        assert!(h.remove(&song_key("A", "One")));
+        assert!(!apply_refresh(&mut h, &song_key("A", "One"), &found, 5, &dirty));
+        assert!(!dirty.load(Ordering::Acquire), "the Undo slot is not refreshed");
+
+        let mut h = history(vec![entry("One", 1)]);
+        h.read_only = true;
+        assert!(!apply_refresh(&mut h, &song_key("A", "One"), &found, 5, &dirty));
+        assert!(!dirty.load(Ordering::Acquire), "a newer app's file is never marked");
+        assert!(h.songs[0].providers.is_empty());
+        assert!(refresh_input(&h, &song_key("A", "One")).is_none());
+
+        let mut h = history(vec![entry("One", 1)]);
+        assert!(apply_refresh(&mut h, &song_key("A", "One"), &found, 5, &dirty));
+        assert!(dirty.load(Ordering::Acquire), "held for the deferred write");
+        assert_eq!(h.songs[0].links_checked_ms, 5);
+        let input = refresh_input(&h, &song_key("A", "One")).unwrap();
+        assert_eq!(input.known, h.songs[0].providers);
+    }
+
+    #[test]
+    fn one_deferred_write_waits_at_a_time() {
+        let pending = AtomicBool::new(false);
+        assert!(claim_deferred(&pending));
+        assert!(!claim_deferred(&pending), "a second change rides on it");
+        pending.store(false, Ordering::Release);
+        assert!(claim_deferred(&pending), "after it ran, a new one can wait");
+    }
+
+    #[test]
+    fn opening_a_song_asks_for_a_refresh_only_when_a_lookup_could_add_a_link() {
+        let now = 100 * STALE_LINKS_MS;
+        let fresh = now - 1000;
+        let stale = now - STALE_LINKS_MS - 1;
+        let with = |checked: i64, isrc: bool, providers: Vec<Provider>| {
+            let mut e = entry("One", 1);
+            e.links_checked_ms = checked;
+            e.isrc = isrc.then(|| "GBBBM9200027".to_string());
+            e.providers = providers;
+            e
+        };
+        let videos_and_deezer = || {
+            vec![
+                direct("YouTube Music", "https://music.youtube.com/watch?v=4MOzk7-6j-I"),
+                direct("YouTube", "https://www.youtube.com/watch?v=4MOzk7-6j-I"),
+                direct("Deezer", "https://www.deezer.com/track/1"),
+            ]
+        };
+        assert!(needs_refresh(&with(0, false, videos_and_deezer()), false, now));
+        assert!(!needs_refresh(&with(0, false, vec![]), true, now), "never a newer app's");
+        assert!(!needs_refresh(&with(fresh, false, vec![]), false, now));
+        assert!(needs_refresh(&with(stale, false, vec![]), false, now));
+        assert!(
+            !needs_refresh(&with(stale, false, videos_and_deezer()), false, now),
+            "Spotify and Tidal need an ISRC; Beatport and SoundCloud never ask"
+        );
+        assert!(needs_refresh(&with(stale, true, videos_and_deezer()), false, now));
+        let mut every = videos_and_deezer();
+        every.push(direct("Spotify", "https://open.spotify.com/track/0123456789abcdefghijkl"));
+        every.push(direct("Tidal", "https://tidal.com/browse/track/1"));
+        every.push(searching("Apple Music"));
+        assert!(
+            !needs_refresh(&with(stale, true, every), false, now),
+            "an Apple search page names no Apple id to fill from"
+        );
+    }
+
+    #[test]
+    fn the_refresh_queue_skips_a_queued_or_running_key_and_is_capped() {
+        let mut q = Refreshes::default();
+        assert!(q.push("a".into()));
+        assert!(!q.push("a".into()), "already queued");
+        assert_eq!(q.next().as_deref(), Some("a"));
+        assert!(!q.push("a".into()), "already running");
+        assert!(q.push("b".into()));
+        assert_eq!(q.next().as_deref(), Some("b"));
+        assert!(q.push("a".into()), "a finished key can queue again");
+        for i in 0..REFRESH_CAP * 2 {
+            q.push(format!("k{i}"));
+        }
+        assert_eq!(q.queued.len(), REFRESH_CAP);
+        assert_eq!(q.queued.front().map(String::as_str), Some("a"), "oldest first");
+        let _ = q.next();
+        assert!(q.next().is_some());
+        let mut q = Refreshes::default();
+        assert_eq!(q.next(), None);
+        assert_eq!(q.running, None);
+    }
+
+    #[test]
+    fn a_new_song_is_stamped_only_when_its_lookups_were_complete() {
+        let mut h = History::default();
+        let mut s = song("A", "One");
+        s.links_complete = true;
+        s.isrc = Some("GBBBM9200027".into());
+        s.isrc_from = Some(IsrcFrom::Shazam);
+        h.file(&s, None, 77);
+        assert_eq!(h.songs[0].links_checked_ms, 77);
+        assert_eq!(h.songs[0].isrc_from, Some(IsrcFrom::Shazam));
+        let mut s = song("A", "Two");
+        s.isrc = Some("bad".into());
+        h.file(&s, None, 78);
+        assert_eq!(h.songs[0].links_checked_ms, 0);
+        assert_eq!((h.songs[0].isrc.clone(), h.songs[0].isrc_from), (None, None));
+    }
+
+    #[test]
+    fn new_fields_this_build_cannot_read_never_cost_the_song() {
+        let e: SongEntry = serde_json::from_str(
+            r#"{"key":"a\u001fone","title":"One","artist":"A","isrc":7,"isrc_from":"apple","links_checked_ms":"soon"}"#,
+        )
+        .unwrap();
+        assert_eq!((e.isrc, e.isrc_from, e.links_checked_ms), (None, None, 0));
+        let e: SongEntry = serde_json::from_str(
+            r#"{"key":"a\u001fone","title":"One","artist":"A","isrc":"GBBBM9200027","isrc_from":"text","links_checked_ms":12}"#,
+        )
+        .unwrap();
+        assert_eq!(e.isrc_from, Some(IsrcFrom::Text));
+        assert_eq!(e.links_checked_ms, 12);
+        let json = serde_json::to_value(&e).unwrap();
+        assert_eq!(json["isrc"], "GBBBM9200027");
+        assert_eq!(json["isrc_from"], "text");
+        assert_eq!(json["links_checked_ms"], 12);
+        let bare = serde_json::to_string(&entry("One", 1)).unwrap();
+        assert!(
+            !bare.contains("isrc") && !bare.contains("links_checked_ms"),
+            "unset fields stay out of the file: {bare}"
+        );
+    }
+
+    #[test]
+    fn the_tinted_change_names_its_songs() {
+        assert_eq!(
+            serde_json::to_value(Change::Tinted {
+                keys: vec!["a".into(), "b".into()]
+            })
+            .unwrap(),
+            serde_json::json!({ "kind": "tinted", "keys": ["a", "b"] })
+        );
     }
 }

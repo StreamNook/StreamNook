@@ -886,6 +886,22 @@ async fn songs_opens_your_songs_on_every_platform() {
 }
 
 #[tokio::test]
+async fn song_says_it_is_listening_only_on_android() {
+    let fake = Fake::new();
+    for (platform, notices) in [
+        (Platform::Desktop, Vec::<String>::new()),
+        (Platform::Ios, Vec::new()),
+        (Platform::Android, vec!["Listening to identify the song...".to_string()]),
+    ] {
+        let o = dispatch(ctx(&fake, "chan", platform), "/song".into(), 0).await;
+        assert!(o.handled, "{platform:?}");
+        assert_eq!(o.ui, Some(Ui::IdentifySong), "{platform:?}");
+        assert_eq!(o.notices, notices, "{platform:?}");
+        assert!(o.send.is_none(), "{platform:?}");
+    }
+}
+
+#[tokio::test]
 async fn phones_get_a_profile_sheet_and_a_local_clear() {
     let fake = Fake::new();
     let o = dispatch(ctx(&fake, "chan", Platform::Ios), "/usercard @Bob".into(), 0).await;

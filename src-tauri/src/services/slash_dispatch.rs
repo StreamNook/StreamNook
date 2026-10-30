@@ -1243,7 +1243,11 @@ async fn core(c: &Call<'_>, o: &mut Outcome) -> Result<Flow, String> {
             }
         }
         "song" => {
-            o.say("Listening to identify the song...");
+            // The desktop shows its listening strip in the chat's shelf, and
+            // the iPhone has no /song yet: only Android says it in chat.
+            if c.ctx.platform == Platform::Android {
+                o.say("Listening to identify the song...");
+            }
             o.ui = Some(Ui::IdentifySong);
         }
         "songs" => {
