@@ -80,9 +80,17 @@ import {
 } from '../nativeBridge';
 import { DialIndicator, type DialAxis, type DialReading } from '../watch/DialIndicator';
 import { dialCanStart } from '../watch/dialZone';
+import {
+  dialHundredth,
+  dialTenth,
+  layerBrightness,
+  moveBrightnessDial,
+  startBrightnessDial,
+  type BrightnessDial,
+} from '../watch/brightnessDial';
 import { ChatOverlayChrome } from '../watch/ChatOverlayChrome';
 import type { FullscreenChatSettings } from '../../types';
-import { hapticStep } from '../ui/haptics';
+import { hapticStep, hapticTick } from '../ui/haptics';
 import { readInsets, type ResolvedInsets } from '../nativeInsets';
 import { swallowTrailingClick } from '../ui/trailingClick';
 import { isTwitchStream } from '../../utils/streamProvider';
@@ -226,9 +234,17 @@ export const WatchScreen: React.FC = () => {
   // The dial being turned right now (brightness or volume), for the readout.
   const [dial, setDial] = useState<DialReading | null>(null);
   const dialHide = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Whether this session ever overrode the window brightness, so the reset
-  // when playback ends is only sent if there is something to reset.
+  // Whether a dialed brightness is in force on the window right now (the
+  // dial's Auto clears it), so the reset when playback ends is only sent if
+  // there is something to reset, and a swipe knows it starts in Auto.
   const brightnessTouched = useRef(false);
+  // The dialed level set aside while the stream is in PiP (see the layer
+  // brightness effect); null when nothing is set aside.
+  const pipBrightness = useRef<number | null>(null);
+  // How many times the layer has handed the screen back to the phone (the
+  // layer is not showing a stream full screen); a swipe that sees this move
+  // on ends instead of putting its level back.
+  const brightnessHandBacks = useRef(0);
   const [viewport, setViewport] = useState(() => ({
     w: window.innerWidth,
     h: window.innerHeight,
@@ -280,6 +296,8 @@ export const WatchScreen: React.FC = () => {
       lastStep: number;
       /** Last hundredth pushed to the bridge, so a still finger costs nothing. */
       lastPushed: number;
+      /** Brightness only: the swipe's own state (Auto, the floor, haptics). */
+      brightness: BrightnessDial | null;
     };
   } | null>(null);
 
@@ -446,7 +464,7 @@ export const WatchScreen: React.FC = () => {
   // A phone's "Beside the video" is the overlay column taken out of the
   // picture: same edge, same width and the same drag handle, still immersive,
   // but the video gets the rest of the screen to itself instead of sitting
-  // centred under an opaque column with bars at its far edge.
+  // centered under an opaque column with bars at its far edge.
   const phoneBeside = chatBeside && !shape.largeScreen;
   const overlaySide: 'left' | 'right' = fsChat?.side === 'left' ? 'left' : 'right';
   // The overlay's own controls change width and see-through IN PLACE (a drag on
@@ -652,12 +670,17 @@ export const WatchScreen: React.FC = () => {
     //      (lockScreenAudio dropped it to the audio rendition), so it stays.
     const onVisible = () => {
       if (document.visibilityState !== 'visible') return;
+      const ending = consumePipClosed() && !keepsAudioAfterPip();
+      // The stream is about to end: the level set aside for PiP must not
+      // come back on the way out (a dim flash before the reset).
+      if (ending) pipBrightness.current = null;
       const native = isInPip();
       if (native !== null) apply(native);
-      if (consumePipClosed() && !keepsAudioAfterPip()) void exitStream();
+      if (ending) void exitStream();
     };
     const onPipClosed = () => {
       if (!keepsAudioAfterPip()) {
+        pipBrightness.current = null;
         void exitStream();
         return;
       }
@@ -805,7 +828,10 @@ export const WatchScreen: React.FC = () => {
         // us too), never dials. It is still recorded, so a tap there toggles
         // the controls and a swipe there is swallowed.
         const ins = readInsets();
-        if (!dialCanStart(e.clientY, window.innerHeight, ins.gestureTop, ins.gestureBottom)) {
+        // An offline room has no picture to dial (the iPhone's room takes the
+        // touch the same way), so a press there is a tap or nothing as well.
+        const offlineRoom = useAppStore.getState().streamUrl === 'offline';
+        if (offlineRoom || !dialCanStart(e.clientY, window.innerHeight, ins.gestureTop, ins.gestureBottom)) {
           gesture.current = {
             id: e.pointerId,
             kind: 'dial',
@@ -824,6 +850,7 @@ export const WatchScreen: React.FC = () => {
         }
         const axis: DialAxis = e.clientX - rect.left < rect.width / 2 ? 'brightness' : 'volume';
         const start = axis === 'brightness' ? getScreenBrightness() : getMediaVolume();
+        const travel = Math.max(140, rect.height * 0.8);
         gesture.current = {
           id: e.pointerId,
           kind: 'dial',
@@ -839,9 +866,15 @@ export const WatchScreen: React.FC = () => {
           dial: {
             axis,
             start,
-            travel: Math.max(140, rect.height * 0.8),
-            lastStep: Math.round(start * 10),
-            lastPushed: Math.round(start * 100),
+            travel,
+            lastStep: dialTenth(start),
+            lastPushed: dialHundredth(start),
+            // No dialed level in force means the phone's own level is on the
+            // screen: the swipe starts in Auto.
+            brightness:
+              axis === 'brightness'
+                ? startBrightnessDial(start, travel, !brightnessTouched.current, brightnessHandBacks.current)
+                : null,
           },
         };
         suppressClick.current = false;
@@ -865,7 +898,7 @@ export const WatchScreen: React.FC = () => {
         moved: false,
       };
       // Only ever armed by the gesture whose click it is meant to swallow. A
-      // cancelled drag produces no click, so without this the flag would sit
+      // canceled drag produces no click, so without this the flag would sit
       // armed and eat the next real tap.
       suppressClick.current = false;
     },
@@ -916,28 +949,66 @@ export const WatchScreen: React.FC = () => {
 
       if (g.kind === 'dial' && g.dial) {
         const d = g.dial;
-        const value = Math.max(0, Math.min(1, d.start - dy / d.travel));
-        const hundredth = Math.round(value * 100);
-        if (hundredth !== d.lastPushed) {
-          d.lastPushed = hundredth;
-          if (d.axis === 'brightness') {
-            setScreenBrightness(value);
-            brightnessTouched.current = true;
-          } else {
-            setMediaVolume(value);
-          }
-          // One light tick per tenth crossed, never per frame: a buzz that
-          // tracks the finger reads as a fault, one at each notch reads as a
-          // dial.
-          const step = Math.round(value * 10);
-          if (step !== d.lastStep) {
-            d.lastStep = step;
-            hapticStep();
-          }
+        // Ends the swipe where it is: nothing more is applied, its click is
+        // swallowed, and the readout lingers for a beat and goes.
+        const endSwipe = () => {
+          gesture.current = null;
+          suppressClick.current = true;
+          setDragging(false);
+          if (dialHide.current) clearTimeout(dialHide.current);
+          dialHide.current = setTimeout(() => setDial(null), 650);
+        };
+        // The stream closed or went offline under the finger: there is no
+        // picture left to dial.
+        const { streamUrl: url, isLoading: loading } = useAppStore.getState();
+        if (url === 'offline' || (!url && !loading)) {
+          endSwipe();
+          return;
         }
         if (dialHide.current) {
           clearTimeout(dialHide.current);
           dialHide.current = null;
+        }
+        if (d.brightness) {
+          // The rule decides the level, Auto past the bottom and the haptic
+          // (brightnessDial.ts); this only applies what it says.
+          const move = moveBrightnessDial(
+            d.brightness,
+            dy,
+            brightnessTouched.current,
+            brightnessHandBacks.current,
+          );
+          // Something else handed the screen back (playback ended, PiP): the
+          // swipe ends rather than put the level back, and the readout says
+          // what is on the screen now.
+          if (move.stop) {
+            setDial(move.reading);
+            endSwipe();
+            return;
+          }
+          if (move.push !== null) {
+            setScreenBrightness(move.push);
+            brightnessTouched.current = move.push >= 0;
+          }
+          // The detent into Auto is one notch firmer than a tens digit crossed.
+          if (move.haptic === 'detent') hapticTick();
+          else if (move.haptic === 'step') hapticStep();
+          setDial(move.reading);
+          return;
+        }
+        const value = Math.max(0, Math.min(1, d.start - dy / d.travel));
+        const hundredth = dialHundredth(value);
+        if (hundredth !== d.lastPushed) {
+          d.lastPushed = hundredth;
+          setMediaVolume(value);
+          // One light tick per tens digit crossed, never per frame: a buzz
+          // that tracks the finger reads as a fault, one at each notch reads
+          // as a dial.
+          const step = dialTenth(value);
+          if (step !== d.lastStep) {
+            d.lastStep = step;
+            hapticStep();
+          }
         }
         setDial({ axis: d.axis, value });
         return;
@@ -1054,16 +1125,24 @@ export const WatchScreen: React.FC = () => {
     }
   }, [scaleModel, boxX, boxY]);
 
-  // A dialled brightness is a viewing choice, not a phone setting: it lasts
-  // while a stream plays and hands the screen back to the system slider when
-  // playback ends or the layer goes away.
+  // A dialed brightness is a viewing choice, not a phone setting: it lasts
+  // while a stream plays, steps aside while the stream is in PiP, and hands
+  // the screen back to the phone when playback ends, never starts or turns
+  // into an offline room (layerBrightness in brightnessDial.ts decides).
+  // `show` and `streamUrl` are dependencies so a closed layer and a load that
+  // becomes an offline room are seen even while `watching` stays false.
   useEffect(() => {
-    if (watching) return;
-    if (brightnessTouched.current) {
-      brightnessTouched.current = false;
-      setScreenBrightness(-1);
-    }
-  }, [watching]);
+    // Not showing a stream full screen: any swipe still under a finger ends.
+    if (!watching || pip) brightnessHandBacks.current += 1;
+    const next = layerBrightness(
+      { touched: brightnessTouched.current, saved: pipBrightness.current },
+      { watching, pip, visible: pageVisible },
+      getScreenBrightness,
+    );
+    brightnessTouched.current = next.touched;
+    pipBrightness.current = next.saved;
+    if (next.push !== null) setScreenBrightness(next.push);
+  }, [watching, show, streamUrl, pip, pageVisible]);
   useEffect(
     () => () => {
       if (brightnessTouched.current) setScreenBrightness(-1);
@@ -1259,7 +1338,7 @@ export const WatchScreen: React.FC = () => {
       initial={false}
       animate={layerGeometry}
       transition={dragging || modelJump ? { duration: 0 } : SPRING}
-      // Fires only for an animation that ran to the end (a cancelled one never
+      // Fires only for an animation that ran to the end (a canceled one never
       // reports), so this is the layer genuinely at rest.
       onAnimationComplete={() => {
         if (!dragging) settle();
