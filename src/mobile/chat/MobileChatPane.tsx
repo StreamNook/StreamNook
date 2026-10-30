@@ -8,7 +8,7 @@
 // a re-render rather than a reconnect. This pane renders whichever tab is active
 // via `useChannelChat`.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { CaretDown, HandPointing, X } from 'phosphor-react';
+import { HandPointing, X } from 'phosphor-react';
 import ChatMessageList from '../../components/ChatMessageList';
 import {
   setChannelPaused,
@@ -49,6 +49,8 @@ import { invoke } from '@tauri-apps/api/core';
 import { setVodReplayShowing, useVodReplaySnapshot, useVodReplayStore, type ReplayShowing } from '../../stores/vodReplayStore';
 import { SegmentedControl, type Segment } from '../ui/SegmentedControl';
 import { HoldWhile } from '../ui/HoldWhile';
+import { PausedOverlay } from './ResumeLiveButton';
+import { useComposerRiserLift } from './pausedOverlay';
 
 // How long a pause/resume transition is protected from being reversed. Matches
 // desktop's ChatWidget, and is what stops a touchmove and the compositor scroll
@@ -56,6 +58,8 @@ import { HoldWhile } from '../ui/HoldWhile';
 const PAUSE_SETTLE_MS = 120;
 /** Set once a swipe has run (or its hint was dismissed): the hint stays gone. */
 const SWIPE_HINT_KEY = 'sn-swipe-mod-learned';
+/** Set once a paused message has been tapped to reply: the reply hint stays gone. */
+const REPLY_HINT_KEY = 'sn-tap-reply-learned';
 
 /** What the read-only overlay leaves out of the fan. Module-level so the fan
  *  sees one array, not a fresh one per render. */
@@ -699,6 +703,22 @@ export const MobileChatPane: React.FC<{
       // Private storage is off; the hint just shows again next time.
     }
   }, []);
+  // "Tap a message to reply" shows while paused until the first reply by tap.
+  const [replyHintLearned, setReplyHintLearned] = useState(() => {
+    try {
+      return localStorage.getItem(REPLY_HINT_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
+  const learnReply = useCallback(() => {
+    setReplyHintLearned(true);
+    try {
+      localStorage.setItem(REPLY_HINT_KEY, '1');
+    } catch {
+      // Private storage is off; the hint just shows again next time.
+    }
+  }, []);
 
   // The viewer's standing here, for what Twitch allows on each message.
   const viewerRole: 'broadcaster' | 'moderator' | null = !modToolsArmed
@@ -878,9 +898,14 @@ export const MobileChatPane: React.FC<{
         username: found.username,
         channel: activeChannel ?? '',
       });
+      learnReply();
     },
-    [noSend, isPaused, press, describeMessage, activeChannel],
+    [noSend, isPaused, press, describeMessage, activeChannel, learnReply],
   );
+
+  // Rides above the composer's suggestion strip while it covers the list.
+  const paneRef = useRef<HTMLDivElement | null>(null);
+  const overlayLift = useComposerRiserLift(paneRef, listRef, isPaused);
 
 
   // The inbox over this chat: its bottom sheet, or a new mention's card. The
@@ -899,7 +924,7 @@ export const MobileChatPane: React.FC<{
     : undefined;
 
   return (
-    <div className="flex-1 min-h-0 flex flex-col">
+    <div ref={paneRef} className="flex-1 min-h-0 flex flex-col">
       {strip && <ChatTabStrip />}
       {top}
       <div className="flex-1 min-h-0 relative flex flex-col">
@@ -961,22 +986,13 @@ export const MobileChatPane: React.FC<{
             </div>
           </div>
         )}
-        {isPaused && (
-          <div className="absolute bottom-2 left-0 right-0 flex flex-col items-center gap-1 z-10 pointer-events-none">
-            {!noSend && (
-              <span className="glass-badge rounded-full px-2 py-0.5 text-[10.5px] text-textMuted">
-                Tap a message to reply
-              </span>
-            )}
-            <button
-              onClick={resumeLive}
-              className="pointer-events-auto glass-button flex items-center gap-1 whitespace-nowrap rounded-full px-3 py-1 text-[12px] font-medium text-textPrimary"
-            >
-              <CaretDown size={11} weight="bold" />
-              Resume live
-            </button>
-          </div>
-        )}
+        <PausedOverlay
+          paused={isPaused}
+          sliceKey={replayOn ? '' : (activeChannel ?? '').toLowerCase()}
+          hint={!noSend && !replyHintLearned}
+          lift={overlayLift}
+          onResume={resumeLive}
+        />
       </div>
       {/* Outside the list, so a press in them never reaches its gestures. */}
       {onScreen && !readOnly && <InboxArrival side={inboxSide} />}

@@ -58,6 +58,7 @@ import { EmoteText, useTextEmotes } from '../utils/emoteText';
 import { isImeComposing } from '../utils/imeComposing';
 import { syncComposerPlaceholder, trackComposerWidth } from '../utils/composerNarrow';
 import { LinkPreviewCard } from './chat/LinkPreviewCard';
+import { usePausedNewCount } from '../hooks/usePausedNewCount';
 import { PinnedChatter } from './chat/PinnedChatter';
 import { SevenTvAvatar } from './SevenTvAvatar';
 import { previewUrlsFromLinks, type RowLink } from '../services/linkPreviewService';
@@ -654,35 +655,13 @@ const ChatMessagesPanel = ({
   );
 };
 
-// "N new since paused": anchored to the channel's MONOTONIC live-message
-// counter at the instant pause begins (accurate under buffer trimming, unlike
-// a messages.length diff). Isolated here so its per-flush subscription
-// re-renders only this span, never the widget.
-// Takes the slice keys it should count rather than one channel: a merged feed's
-// "N new" is the total across every source, and reading only the watched channel
-// would under-count it by however much the companions said while you were away.
-// Joined into a string so the identity is stable without the caller memoizing.
+// "N new since paused". Isolated here so its per-flush subscription re-renders
+// only this span, never the widget. Takes the slice keys it should count rather
+// than one channel: a merged feed's "N new" is the total across every source,
+// and reading only the watched channel would under-count it by however much the
+// companions said while you were away.
 const PausedNewCount = ({ sliceKeys, isPaused }: { sliceKeys: string; isPaused: boolean }) => {
-  const keys = sliceKeys ? sliceKeys.split('|') : [];
-  const sumLive = () => {
-    const st = useChatConnectionStore.getState();
-    return keys.reduce((n, k) => n + (st.channels.get(k)?.liveMessageCount ?? 0), 0);
-  };
-  useChatConnectionStore((state) =>
-    isPaused ? keys.reduce((n, k) => n + (state.revisionByChannel[k] ?? 0), 0) : 0,
-  );
-  // Anchor captured once per pause via effect (never a render-time ref write).
-  const [anchor, setAnchor] = useState<number | null>(null);
-  useEffect(() => {
-    if (!isPaused || !sliceKeys) {
-      setAnchor(null);
-      return;
-    }
-    setAnchor((a) => a ?? sumLive());
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isPaused, sliceKeys]);
-  if (!isPaused || !sliceKeys || anchor === null) return null;
-  const delta = Math.max(0, sumLive() - anchor);
+  const delta = usePausedNewCount(sliceKeys, isPaused);
   // Capped at 99+: a busy room passes thousands in seconds, and the pill
   // must stay one line.
   return delta > 0 ? <> ({fitCount(delta)} new)</> : null;
