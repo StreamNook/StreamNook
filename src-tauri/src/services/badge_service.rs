@@ -742,6 +742,13 @@ impl ChattyBadge {
         self.id == "ffz" && self.version.as_deref() == Some(FFZ_BOT_BADGE_NAME)
     }
 
+    /// One of FFZ's own badges re-hosted by Chatty (Supporter, Subwoofer, ...).
+    /// FFZ's feed is the authority on these: Chatty's copy can lag it (a member
+    /// who moved from Subwoofer to Supporter is listed under both).
+    fn is_ffz_rehost(&self) -> bool {
+        self.id == "ffz"
+    }
+
     /// The largest image and the colour to paint behind it, when this badge
     /// needs one drawn for it. FFZ's own CDN draws its badges finished (see
     /// `ffz_colored_badge_url`); the rest of the feed (FFZ:AP) is a white
@@ -1022,6 +1029,11 @@ impl ThirdPartyCache {
             entry.insert(at, (Arc::clone(badge), rank));
         }
 
+        // Everyone FFZ's own feed lists. Chatty's re-hosts of FFZ badges are
+        // skipped for them below; with no FFZ feed (a failed fetch) it is
+        // empty and the re-hosts stand in, as before.
+        let mut ffz_holders: std::collections::HashSet<String> = std::collections::HashSet::new();
+
         // FFZ. `users` is keyed by badge_id (as a string) -> [numeric user_id],
         // so the holder key is each numeric id rendered back to a String.
         if let Some(ffz) = &self.ffz {
@@ -1049,6 +1061,7 @@ impl ThirdPartyCache {
                 let title_lower = arc.badge_info.title.to_lowercase();
                 if let Some(holders) = ffz.users.get(&badge.id.to_string()) {
                     for uid in holders {
+                        ffz_holders.insert(uid.to_string());
                         push(&mut by_user, uid.to_string(), &arc, &title_lower, rank);
                     }
                 }
@@ -1241,7 +1254,11 @@ impl ThirdPartyCache {
                     provider: BadgeProvider::Chatty,
                 });
                 let title_lower = arc.badge_info.title.to_lowercase();
+                let rehost = badge.is_ffz_rehost();
                 for uid in &badge.userids {
+                    if rehost && ffz_holders.contains(uid) {
+                        continue; // FFZ's own feed says which FFZ badge they hold
+                    }
                     push(&mut by_user, uid.clone(), &arc, &title_lower, rank);
                 }
             }
@@ -3792,6 +3809,46 @@ mod tests {
         assert_eq!(titles(&worn), ["FFZ Supporter", "FFZ:AP Supporter", "DankChat Supporter"]);
         let providers: Vec<_> = worn.iter().map(|b| b.provider.as_key()).collect();
         assert_eq!(providers, ["ffz", "chatty", "dankchat"]);
+    }
+
+    /// Chatty's copy of FFZ's list can lag FFZ itself: a member FFZ lists as a
+    /// Supporter was still in Chatty's Subwoofer list, and chat drew two FFZ
+    /// clouds (SN-5). FFZ's own feed wins for anyone it lists; someone only
+    /// Chatty lists keeps Chatty's copy.
+    #[test]
+    fn chatty_ffz_rehosts_give_way_to_ffzs_own_feed() {
+        let mut cache = empty_cache();
+        cache.chatty = Some(
+            serde_json::from_str(
+                r#"[{"id":"ffz","version":"subwoofer","meta_title":"FFZ Subwoofer","image_url":"https://cdn.frankerfacez.com/badge/4/1","userids":["206872719","95700001"]},
+                    {"id":"ffzap","version":"206872719","meta_title":"FFZ:AP Supporter","image_url":"https://api.ffzap.com/v1/user/badge/206872719/1","userids":["206872719"]}]"#,
+            )
+            .unwrap(),
+        );
+        let mut ffz_users = HashMap::new();
+        ffz_users.insert("3".to_string(), vec![206872719u32]);
+        cache.ffz = Some(FFZBadgesResponse {
+            badges: vec![FFZBadge {
+                id: 3,
+                title: Some("FFZ Supporter".to_string()),
+                name: Some("supporter".to_string()),
+                urls: HashMap::new(),
+                slot: Some(5),
+            }],
+            users: ffz_users,
+        });
+        let index = cache.build_by_user_index();
+
+        // FFZ lists them: its Supporter only, no stale Subwoofer; FFZ:AP is not
+        // an FFZ re-host, so it stays.
+        assert_eq!(titles(&owned(&index, "206872719")), ["FFZ Supporter", "FFZ:AP Supporter"]);
+        // Only Chatty lists them: Chatty's copy still stands in.
+        assert_eq!(titles(&owned(&index, "95700001")), ["FFZ Subwoofer"]);
+
+        // No FFZ feed at all (a failed fetch): every re-host stands in.
+        cache.ffz = None;
+        let index = cache.build_by_user_index();
+        assert_eq!(titles(&owned(&index, "206872719")), ["FFZ Subwoofer", "FFZ:AP Supporter"]);
     }
 
     /// The badge services setting hides a Homies custom badge by the key
