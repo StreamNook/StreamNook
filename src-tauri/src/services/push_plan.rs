@@ -395,6 +395,13 @@ pub fn pass_gate(holds: bool, owed: bool, force: bool, leftover_failed: bool) ->
     }
 }
 
+/// Whether this pass's register posts even with nothing owed: when asked to,
+/// or when a leftover device was left to that register (it would otherwise
+/// wait for a change that never comes).
+pub fn pass_force(force: bool, leftover: Option<LeftoverAction>) -> bool {
+    force || leftover == Some(LeftoverAction::LeaveToRegister)
+}
+
 /// After the pass's send: a failed leftover delete behind a step that would
 /// leave nothing armed (parked or done) still needs its backoff.
 pub fn leftover_retry(step: Step, leftover_failed: bool) -> bool {
@@ -938,6 +945,16 @@ mod tests {
         assert_eq!(pass_gate(true, true, true, false), Gate::Parked);
         assert_eq!(pass_gate(true, true, true, true), Gate::RetryLeftover);
         assert_eq!(pass_gate(false, false, false, true), Gate::RetryLeftover);
+    }
+
+    #[test]
+    fn a_leftover_left_to_the_register_makes_that_register_post() {
+        let force = pass_force(false, Some(LeftoverAction::LeaveToRegister));
+        assert_eq!(pass_gate(false, false, force, false), Gate::Go, "nothing owed, still posts");
+        assert!(!pass_force(false, Some(LeftoverAction::Delete)));
+        assert!(!pass_force(false, None));
+        assert!(pass_force(true, None));
+        assert_eq!(pass_gate(true, false, force, false), Gate::Parked, "a park still holds");
     }
 
     #[test]

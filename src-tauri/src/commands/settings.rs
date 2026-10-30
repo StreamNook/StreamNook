@@ -617,8 +617,26 @@ fn apply_settings_patch(
     Ok(next)
 }
 
-/// What every settings change has to refresh, whichever path wrote it.
-fn after_settings_change(settings: &Settings, favorites_changed: bool) {
+/// Saves finish in any order; their hooks run one at a time, each on the
+/// settings as they are now. A hook fed its own save's copy could otherwise
+/// run after a newer save's hook and leave every service on the older value
+/// (a hidden channel back, a mute that never reaches the push server).
+static AFTER_SAVE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// The settings Rust holds now (the managed state's own Arc), when registered.
+/// No lock is held after it returns.
+fn live_settings() -> Option<Settings> {
+    let source = SETTINGS_SOURCE.get()?;
+    let settings = source.lock().ok()?;
+    Some(settings.clone())
+}
+
+/// What every settings change has to refresh, whichever path wrote it. Every
+/// caller has let go of the settings lock first.
+fn after_settings_change(saved: &Settings, favorites_changed: bool) {
+    let _in_order = AFTER_SAVE.lock().unwrap_or_else(|p| p.into_inner());
+    let live = live_settings();
+    let settings = live.as_ref().unwrap_or(saved);
     // Detailed logging, from whichever window saved it. Applied only when the
     // saved value changes, so a save of anything else never resets the level.
     crate::services::diagnostic_logger::apply_setting(settings.error_reporting_enabled);
@@ -1133,6 +1151,20 @@ pub async fn get_release_notes(version: Option<String>) -> Result<ReleaseNotes, 
         body,
         published_at,
     })
+}
+
+#[cfg(test)]
+mod save_hook_order_tests {
+    #[test]
+    fn save_hooks_run_one_at_a_time_on_the_live_settings() {
+        let src = include_str!("settings.rs").replace("\r\n", "\n");
+        let start = src.find("fn after_settings_change(").expect("the hook door");
+        let body = &src[start..start + src[start..].find("\n}\n").expect("function end")];
+        let lock = body.find("AFTER_SAVE.lock()").expect("hooks take the order lock");
+        let live = body.find("live_settings()").expect("hooks read the live settings");
+        let first_hook = body.find("diagnostic_logger::apply_setting").expect("the first hook");
+        assert!(lock < live && live < first_hook, "the lock, then the live read, then every hook");
+    }
 }
 
 #[cfg(test)]

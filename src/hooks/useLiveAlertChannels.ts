@@ -30,6 +30,8 @@ export interface AlertChannelsState {
   failed: boolean;
 }
 
+const INACTIVE: AlertChannelsState = { list: null, failed: false };
+
 export function useLiveAlertChannels(active: boolean): AlertChannelsState {
   const mutedKey = useAppStore((s) => (s.settings.live_notifications?.muted_live_channels ?? []).join('\n'));
   const [state, setState] = useState<AlertChannelsState>({ list: null, failed: false });
@@ -50,5 +52,7 @@ export function useLiveAlertChannels(active: boolean): AlertChannelsState {
     };
   }, [active, mutedKey]);
 
-  return state;
+  // Not being read (the switches are off): the last list's counts would go
+  // stale as bells elsewhere change the list, so the stored list stands in.
+  return active ? state : INACTIVE;
 }

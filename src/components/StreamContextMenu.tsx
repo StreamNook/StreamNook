@@ -48,7 +48,7 @@ export const StreamContextMenu: React.FC = () => {
     // the pointer. Anchoring `bottom` instead means the menu meets the pointer
     // at whatever height it happens to be, and grows away from it.
     const MENU_WIDTH = 200;
-    const ESTIMATED_HEIGHT = menuType === 'input' ? 220 : 215;
+    const ESTIMATED_HEIGHT = menuType === 'input' ? 220 : 310;
     const EDGE_GAP = 8;
 
     const viewportWidth = typeof window === 'undefined' ? 0 : window.innerWidth;

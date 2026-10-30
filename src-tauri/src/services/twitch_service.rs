@@ -932,10 +932,6 @@ impl TwitchService {
                     #[cfg(desktop)]
                     crate::commands::twitch::dismiss_login_overlay(&app_handle, "twitch-login");
                     debug!(
-                        "[LOGIN] Access token (first 10 chars): {}...",
-                        &token_response.access_token[..10.min(token_response.access_token.len())]
-                    );
-                    debug!(
                         "[LOGIN] Refresh token present: {}",
                         token_response.refresh_token.is_some()
                     );

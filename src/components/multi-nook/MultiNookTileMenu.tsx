@@ -88,7 +88,7 @@ export const MultiNookTileMenu: React.FC = () => {
   // the pointer whatever height it ends up being. A tile menu is opened near the
   // bottom of the grid often enough for this to matter on every other click.
   const MENU_WIDTH = 210;
-  const ESTIMATED_HEIGHT = 300;
+  const ESTIMATED_HEIGHT = 430;
   const EDGE_GAP = 8;
   const viewportWidth = typeof window === 'undefined' ? 0 : window.innerWidth;
   const viewportHeight = typeof window === 'undefined' ? 0 : window.innerHeight;

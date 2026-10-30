@@ -261,11 +261,6 @@ impl DropsAuthService {
                     error!("[DROPS_AUTH] Failed to store token: {:?}", e);
                 }
 
-                debug!(
-                    "[DROPS_AUTH] Access token (first 10 chars): {}...",
-                    &token_response.access_token[..10.min(token_response.access_token.len())]
-                );
-
                 return Ok(token_response.access_token);
             }
 

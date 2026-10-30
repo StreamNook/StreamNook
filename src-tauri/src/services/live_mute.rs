@@ -414,6 +414,19 @@ pub fn undo_list(copy_id: u64, generation: u64) -> Result<Vec<String>, CopyError
 }
 
 /// Drop the record once its Undo saved.
+/// Take the held record out (a copy about to record its own, which may still
+/// fail to save).
+pub fn take_copy_record() -> Option<CopyRecord> {
+    RECORD.lock().ok().and_then(|mut held| held.take())
+}
+
+/// Put back the record a copy that failed to save took out.
+pub fn restore_copy_record(record: Option<CopyRecord>) {
+    if let Ok(mut held) = RECORD.lock() {
+        *held = record;
+    }
+}
+
 pub fn clear_copy(copy_id: u64) {
     if let Ok(mut held) = RECORD.lock() {
         if held.as_ref().is_some_and(|r| r.copy_id == copy_id) {

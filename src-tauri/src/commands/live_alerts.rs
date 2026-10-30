@@ -114,6 +114,7 @@ pub async fn copy_twitch_live_mutes(app: AppHandle, state: State<'_, AppState>) 
         return Err(CopyError::WrongAccount);
     }
     let mut outcome: Result<CopyAnswer, CopyError> = Err(CopyError::SaveFailed);
+    let mut previous = None;
     let saved = commit_settings_patch(&app, &state, None, |current| {
         // Signed in, switched or signed out while the pages were read: write nothing.
         if TwitchService::account_generation() != generation {
@@ -132,14 +133,15 @@ pub async fn copy_twitch_live_mutes(app: AppHandle, state: State<'_, AppState>) 
         };
         // Recorded under the settings lock, so a bell pressed right after this
         // save edits this record (its Undo never takes back a deliberate mute).
+        previous = live_mute::take_copy_record();
         outcome = Ok(live_mute::record_copy(&account, generation, answer));
         Ok(patch)
     });
     if let Err(e) = saved {
         log::warn!("[LiveAlerts] copy save failed: {e}");
-        // A copy that did not save offers no Undo.
-        if let Ok(answer) = &outcome {
-            live_mute::clear_copy(answer.copy_id);
+        // A copy that did not save offers no Undo; the copy before it keeps its own.
+        if outcome.is_ok() {
+            live_mute::restore_copy_record(previous);
         }
         return Err(CopyError::SaveFailed);
     }
@@ -151,15 +153,25 @@ pub async fn copy_twitch_live_mutes(app: AppHandle, state: State<'_, AppState>) 
 #[tauri::command]
 pub async fn undo_live_mutes(app: AppHandle, copy_id: u64, state: State<'_, AppState>) -> Result<usize, CopyError> {
     let generation = TwitchService::account_generation();
-    let added = live_mute::undo_list(copy_id, generation)?;
+    // Checked first, so a stale Undo answers without touching the settings.
+    live_mute::undo_list(copy_id, generation)?;
     let mut removed = 0usize;
-    let mut stale = false;
+    let mut refused: Option<CopyError> = None;
     commit_settings_patch(&app, &state, None, |current| {
-        // The account changed since Undo was read: take nothing back.
+        // The account changed since Undo was asked for: take nothing back.
         if TwitchService::account_generation() != generation {
-            stale = true;
+            refused = Some(CopyError::Stale);
             return Ok(Map::new());
         }
+        // Read again under the settings lock, in step with every bell's
+        // forget, so a channel pressed a moment ago stays as pressed.
+        let added = match live_mute::undo_list(copy_id, generation) {
+            Ok(added) => added,
+            Err(e) => {
+                refused = Some(e);
+                return Ok(Map::new());
+            }
+        };
         let (next, count) = live_mute::undo_in(&current.live_notifications.muted_live_channels, &added);
         removed = count;
         if count == 0 {
@@ -172,8 +184,8 @@ pub async fn undo_live_mutes(app: AppHandle, copy_id: u64, state: State<'_, AppS
         log::warn!("[LiveAlerts] undo save failed: {e}");
         CopyError::SaveFailed
     })?;
-    if stale {
-        return Err(CopyError::Stale);
+    if let Some(e) = refused {
+        return Err(e);
     }
     live_mute::clear_copy(copy_id);
     Ok(removed)

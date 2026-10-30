@@ -19,7 +19,8 @@ export interface LiveAlert {
   setOn: (on: boolean) => void;
 }
 
-export function useLiveAlert(channel: AlertChannelRef): LiveAlert {
+/** `enabled` false skips the read (a quiet control that wakes on reach). */
+export function useLiveAlert(channel: AlertChannelRef, enabled = true): LiveAlert {
   const provider = channel.provider;
   const userId = channel.userId ?? '';
   const userLogin = channel.userLogin ?? '';
@@ -29,7 +30,7 @@ export function useLiveAlert(channel: AlertChannelRef): LiveAlert {
   const counter = useRef(0);
 
   useEffect(() => {
-    if (!provider || (!userId && !userLogin)) return;
+    if (!enabled || !provider || (!userId && !userLogin)) return;
     counter.current += 1;
     const id = counter.current;
     let cancelled = false;
@@ -41,7 +42,7 @@ export function useLiveAlert(channel: AlertChannelRef): LiveAlert {
     return () => {
       cancelled = true;
     };
-  }, [provider, userId, userLogin, key, mutedKey]);
+  }, [enabled, provider, userId, userLogin, key, mutedKey]);
 
   const setOn = (on: boolean) => {
     counter.current += 1;

@@ -287,14 +287,10 @@ pub mod server {
     /// owed to the server. Only the mute list moving settles longer.
     pub fn refresh(settings: &crate::models::settings::Settings) {
         let kind = match INPUTS.lock() {
-            Ok(mut inputs) => {
-                // The live settings, read under this lock, not the caller's
-                // copy: two saves whose hooks run out of order would otherwise
-                // leave the older list here and hide the next change. Every
-                // caller has let go of the settings lock by now.
-                let next = live_inputs().unwrap_or_else(|| AlertInputs::from_settings(settings));
-                note_change(&mut inputs, next)
-            }
+            // `after_settings_change` runs the save hooks one at a time on the
+            // settings as they are now, so two saves finishing out of order
+            // never leave the older list here.
+            Ok(mut inputs) => note_change(&mut inputs, AlertInputs::from_settings(settings)),
             Err(_) => None,
         };
         if let Some(kind) = kind {
@@ -450,9 +446,7 @@ pub mod server {
 
         // A device a sign-out could not take off the server.
         let mut leftover_failed = false;
-        // A leftover left to this pass's register needs that register to
-        // post, owed or not, or it would wait for a change that never comes.
-        let mut force = force;
+        let mut leftover_action = None;
         if let Some(pending) = leftover {
             let action = push_plan::leftover_action(
                 &pending.device,
@@ -462,8 +456,9 @@ pub mod server {
                 holds,
                 paid_open,
             );
+            leftover_action = Some(action);
             match action {
-                push_plan::LeftoverAction::LeaveToRegister => force = true,
+                push_plan::LeftoverAction::LeaveToRegister => {}
                 push_plan::LeftoverAction::Forget => {
                     // The server refuses a device-only delete for so short a
                     // token; never send it, and stop owing it.
@@ -485,6 +480,8 @@ pub mod server {
             }
         }
 
+        // A leftover left to this pass's register makes that register post.
+        let force = push_plan::pass_force(force, leftover_action);
         match push_plan::pass_gate(holds, owed, force, leftover_failed) {
             push_plan::Gate::Go => {}
             push_plan::Gate::RetryLeftover => return failed(&snap, Outcome::Transient, now, device.as_ref()),
@@ -671,6 +668,14 @@ pub mod server {
     pub fn forget_restored_state() {
         if let Some(path) = state_path() {
             let _ = std::fs::remove_file(path);
+        }
+        // The iPhone's device file comes back from a backup too (Application
+        // Support is backed up): until this phone reports its own token, a
+        // pass would register the old phone's. Android's FCM token is not in
+        // its backup, and its shell writes it once; it stays.
+        #[cfg(target_os = "ios")]
+        if let Ok(dir) = cache_service::get_app_data_dir() {
+            let _ = std::fs::remove_file(dir.join(APNS_FILE));
         }
         if let Ok(mut cell) = STATE.lock() {
             *cell = None;
@@ -901,12 +906,43 @@ mod tests {
         assert_eq!(note_change(&mut cell, inputs(true, false, true, &["A"])), None, "case is not a change");
     }
 
+    /// The body of the first function in this file whose signature starts
+    /// with `sig` (the phone module's functions, indented four spaces).
+    fn phone_fn_body(sig: &str) -> String {
+        let src = include_str!("push_alerts.rs").replace("\r\n", "\n");
+        let start = src.find(sig).unwrap_or_else(|| panic!("{sig} not found"));
+        let rest = &src[start..];
+        rest[..rest.find("\n    }\n").expect("function end")].to_string()
+    }
+
+    #[test]
+    fn each_door_into_the_runner_names_why_it_may_post() {
+        assert!(phone_fn_body("pub async fn push_set_apns_device(").contains("PostReason::DeviceReport"), "the device report heals after ten minutes");
+        assert!(phone_fn_body("pub async fn push_register(").contains("PostReason::Due"));
+        assert!(phone_fn_body("pub async fn worker_pass(").contains("PostReason::Due"));
+        assert!(phone_fn_body("pub async fn push_flush(").contains("PostReason::Owed"));
+        assert!(phone_fn_body("async fn pass(").contains("push_plan::pass_force(force, leftover_action)"), "a leftover left to the register forces it");
+        assert!(phone_fn_body("pub fn refresh(").contains("note_change("));
+    }
+
+    #[test]
+    fn a_restored_install_forgets_the_old_phones_push_state_and_device() {
+        let body = phone_fn_body("pub fn forget_restored_state(");
+        assert!(body.contains("remove_file(path)") && body.contains("APNS_FILE"));
+        let lib = include_str!("../lib.rs").replace("\r\n", "\n");
+        let reconcile = lib.find("install_marker::reconcile(&data, &mut loaded)").expect("restore check");
+        let forget = lib.find("push_alerts::server::forget_restored_state()").expect("restore forgets push state");
+        let seed = lib.find("push_alerts::server::seed(&loaded)").expect("seed");
+        assert!(reconcile < forget && forget < seed, "forgotten after the restore check, before seed reads it");
+    }
+
     #[test]
     fn two_saves_whose_hooks_run_out_of_order_never_hide_the_next_mute() {
         use crate::services::push_plan::Kind;
         // Muted [a]; an unrelated save (T1) copied the settings, then an
         // unmute of a (T2) saved []. T2's hook runs first, T1's second. Both
-        // hooks read the live settings ([]), never T1's stale copy ([a]).
+        // hooks get the live settings ([]), never T1's stale copy ([a]):
+        // `after_settings_change` reads them (pinned in commands::settings).
         let mut cell = Some(inputs(true, true, true, &["a"]));
         assert_eq!(note_change(&mut cell, inputs(true, true, true, &[])), Some(Kind::MuteOnly), "T2: the unmute");
         assert_eq!(note_change(&mut cell, inputs(true, true, true, &[])), None, "T1, late, reads the live []");
