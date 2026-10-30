@@ -1,3 +1,35 @@
+## [8.8.19] - 2026-10-29
+
+## 🎉 New: Your songs
+> Every song you identify is kept now. Open Your songs from the arrow beside the player's song button, type /songs, or tap a song in the notification island. Each song wears its cover's colors and shows where you heard it, with links to play it in your music app or, through a QR code, on your phone.
+
+![Your songs](https://raw.githubusercontent.com/StreamNook/StreamNook/main/.github/assets/release-8.8.19-your-songs.webp)
+
+---
+
+### ✨ Features
+- Your songs keeps every song you identify, newest first, grouped by Today, Yesterday, This week and month. Search by song, artist, channel or category. On the phone it's under You > Songs.
+- Each song's page takes on its cover's colors and shows how often and where you heard it: the channel, the stream, and how far in.
+- Song links go straight to the track on Apple Music, Deezer, YouTube Music, YouTube and Beatport, and search the others. If you have Spotify, Apple Music, Cider, Tidal or Deezer installed, a link opens there.
+- A QR code beside each link opens the song on your phone.
+- The player's song button has an arrow that opens your recent songs. The note itself identifies, as before.
+- While a song is being identified, a small card above the chat box shows it listening, then shows the song for a few seconds before it tucks away. The song card still lands in chat.
+- /song in a MultiChat window listens to the main player.
+- The OBS chat overlay can show uploaded pictures in place of their links. It's off by default and shows pictures from trusted chatters, or from everyone.
+
+### 🐛 Bug Fixes
+- Song links work again. The service that gathered them stopped answering in July, so songs found since then only linked to Apple Music.
+- Moderators pause chat the way everyone does, by scrolling up or grabbing the scrollbar, and a resting pointer no longer freezes chat. Mod buttons act only on messages that hold still, so a click never lands on a row that scrolled under it.
+- On Kick, a follow Kick refuses no longer hides the live status of every channel you follow, every followed channel imports instead of the first 100, and subscriptions import too.
+- MultiNook tiles open at your Start volume and keep their volume when you leave and come back.
+- Emotes in pinned messages, prediction outcomes, the profile card's message history and the mod room match chat's.
+- In the OBS overlay, a zero-width emote no longer prints over a word.
+- The overlay builder's live preview shows a YouTube source's chat.
+- A renamed Twitch account's badge collection loads again.
+
+### ⚡ Performance
+- Kick and moderation connections back off between reconnects, and 7TV's live updates connect only once a chat needs them.
+
 ## [8.8.18] - 2026-10-26
 
 ### 🐛 Bug Fixes
