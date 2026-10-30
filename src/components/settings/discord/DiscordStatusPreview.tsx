@@ -6,11 +6,14 @@
 // The colors are Discord's own dark theme: this is a picture of Discord.
 
 import { useState, type CSSProperties } from 'react';
+import { Gamepad2, Headphones, Monitor } from 'lucide-react';
 import { useAppStore } from '../../../stores/AppStore';
 import { IS_MAC } from '../../../utils/platform';
 import { elapsedText } from './discordPreviewFormat';
 import { animateCard, animateRow, pick, plateVideo, type LookPair } from './discordPreviewLook';
 import { Tooltip } from '../../ui/Tooltip';
+import twitchLogo from '../../../assets/provider-logos/twitch.svg?url';
+import youtubeLogo from '../../../assets/provider-logos/youtube.svg?url';
 
 export type PreviewTab = 'live' | 'replay' | 'grid' | 'offline' | 'browsing';
 
@@ -72,6 +75,8 @@ export interface PreviewModel {
   connection: 'off' | 'connected' | 'connecting' | 'waiting';
   user: PreviewUser | null;
   look: PreviewLook | null;
+  /** A StreamNook subscriber: the subscriber options can be changed. */
+  member: boolean;
   tokens: { token: string; value: string }[];
   /** `fields` holds only what the preset sets (never browsing or the promo button). */
   presets: { id: string; label: string; blurb: string; fields: Record<string, unknown> }[];
@@ -85,6 +90,13 @@ const BUTTON_BG = '#4e5058';
 const ONLINE = '#23a55a';
 const FALLBACK_AVATAR = 'https://cdn.discordapp.com/embed/avatars/0.png';
 const DEFAULT_BANNER = 'linear-gradient(135deg,#5865f2,#3b42a8)';
+
+/** Names Discord draws its own grey platform mark after, matched exactly
+ *  (proven live for Twitch and YouTube; Kick and TikTok get none). */
+const PLATFORM_MARKS: Record<string, string> = {
+  Twitch: twitchLogo,
+  YouTube: youtubeLogo,
+};
 
 // Discord's nameplate palettes, as the tint under the art.
 const PALETTE: Record<string, string> = {
@@ -176,6 +188,12 @@ function Nameplate({ plate, animate }: { plate: PreviewNameplate; animate: boole
   );
 }
 
+/** The mark Discord puts before the elapsed time for the activity's kind. */
+function ActivityMark({ verb }: { verb: string }) {
+  const Icon = verb === 'Playing' ? Gamepad2 : verb.startsWith('Listening') ? Headphones : Monitor;
+  return <Icon size={12} strokeWidth={2.4} aria-hidden className="flex-none" />;
+}
+
 /** The server tag the viewer wears, after the name. */
 function ServerTag({ tag }: { tag: PreviewServerTag }) {
   return (
@@ -232,8 +250,23 @@ export function DiscordStatusPreview({ model, now }: { model: PreviewModel | nul
           <div className="mt-3 rounded-[8px] p-3" style={{ background: PANEL_BG }}>
             {a ? (
               <>
-                <div className="mb-2 text-[12px] font-semibold" style={{ color: MUTED }}>
-                  {a.verb}
+                {/* Discord's header: the verb and the activity name ("Watching Twitch"),
+                    with Discord's own grey mark for a name it knows. */}
+                <div className="mb-2 flex min-w-0 items-center gap-1 text-[12px] font-semibold" style={{ color: MUTED }}>
+                  <span className="truncate">
+                    {a.verb} {a.app_name}
+                  </span>
+                  {PLATFORM_MARKS[a.app_name] && (
+                    <span
+                      aria-hidden
+                      className="h-[14px] w-[14px] flex-none"
+                      style={{
+                        background: MUTED,
+                        WebkitMask: `url("${PLATFORM_MARKS[a.app_name]}") center / contain no-repeat`,
+                        mask: `url("${PLATFORM_MARKS[a.app_name]}") center / contain no-repeat`,
+                      }}
+                    />
+                  )}
                 </div>
                 <div className="flex items-start gap-3">
                   <div className="relative h-[72px] w-[72px] flex-shrink-0">
@@ -249,14 +282,18 @@ export function DiscordStatusPreview({ model, now }: { model: PreviewModel | nul
                       </Tooltip>
                     )}
                   </div>
+                  {/* Discord's body starts with the top line; the name lives in the header. */}
                   <div className="min-w-0 flex-1 text-[13px] leading-[18px]">
-                    <div className="truncate font-semibold">{a.app_name}</div>
                     {a.details && (
-                      <div className={`truncate ${a.details_url ? 'underline-offset-2 hover:underline' : ''}`}>{a.details}</div>
+                      <div className={`truncate font-semibold ${a.details_url ? 'underline-offset-2 hover:underline' : ''}`}>
+                        {a.details}
+                      </div>
                     )}
                     {a.state && <div className="truncate">{a.state}</div>}
                     {a.start != null && (
-                      <div className="mt-0.5 text-[12px] tabular-nums" style={{ color: ONLINE }}>
+                      <div className="mt-0.5 flex items-center gap-1 text-[12px] tabular-nums" style={{ color: ONLINE }}>
+                        {/* Discord's activity mark before the time: a screen, a gamepad, headphones. */}
+                        <ActivityMark verb={a.verb} />
                         {elapsedText(a.start, now)}
                       </div>
                     )}

@@ -2521,7 +2521,8 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   { tab: 'Integrations', section: 'Status', sectionId: 'discord-status-editor', title: 'Timer', description: 'Your Discord status timer: time watching, stream uptime, or off.' },
   { tab: 'Integrations', section: 'Buttons', sectionId: 'discord-status-editor', title: 'Watch button', description: 'A button friends click to open the stream, VOD or clip.' },
   { tab: 'Integrations', section: 'Buttons', sectionId: 'discord-status-editor', parent: 'Watch button', title: 'Label', description: 'The Watch button text.' },
-  { tab: 'Integrations', section: 'Buttons', sectionId: 'discord-status-editor', title: 'StreamNook button', description: 'The streamnook.app button on your Discord status.' },
+  { tab: 'Integrations', section: 'Buttons', sectionId: 'discord-status-editor', title: 'StreamNook button', description: 'The streamnook.app button on your Discord status. Subscribers can turn it off.' },
+  { tab: 'Integrations', section: 'Status', sectionId: 'discord-status-editor', title: 'Shown as', description: 'Watching Twitch instead of Watching StreamNook on your Discord status, with the platform mark. Subscribers only.' },
   { tab: 'Integrations', section: 'Links', sectionId: 'discord-status-editor', title: 'Clickable text', description: 'Your Discord status text links to the channel.' },
   {
     tab: 'Integrations',

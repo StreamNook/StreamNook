@@ -1379,7 +1379,10 @@ export interface DiscordPresenceSettings {
   offline_bottom: string;
   watch_button: boolean;
   watch_button_label: string;
+  /** Off hides the StreamNook button: subscribers only. */
   promo_button: boolean;
+  /** The name after the verb ("Watching Twitch"): subscribers only. */
+  app_name: 'streamnook' | 'platform';
   idle_mode: 'phrases' | 'custom' | 'hidden';
   idle_text: string;
 }

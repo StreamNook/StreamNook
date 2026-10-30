@@ -229,6 +229,10 @@ pub struct PayloadButton {
 /// Everything sent to Discord, already within its limits.
 #[derive(Debug, Clone, PartialEq, Default, Serialize)]
 pub struct Payload {
+    /// The name after the verb; `None` is the app's own (StreamNook). Discord
+    /// matches it exactly against its services: "Twitch" and "YouTube" get its
+    /// platform mark in the header.
+    pub name: Option<String>,
     /// 0 Playing, 2 Listening, 3 Watching; `None` leaves it unset (Playing).
     pub activity_type: Option<u8>,
     /// 1 the bottom line (State), 2 the top line (Details); `None` the app name.
@@ -263,6 +267,9 @@ impl Payload {
             }
         }
         let mut activity = Activity::new().assets(assets);
+        if let Some(name) = &self.name {
+            activity = activity.name(name.clone());
+        }
         if let Some(details) = &self.details {
             activity = activity.details(details.clone());
         }
@@ -745,6 +752,14 @@ pub(crate) struct BuildCtx<'a> {
     pub seed: u64,
     pub discord_name: Option<&'a str>,
     pub assets: &'a HashMap<String, String>,
+    /// A StreamNook subscriber: the subscriber options (hiding the StreamNook
+    /// button, the platform's name) apply. Otherwise they act as the defaults.
+    pub member: bool,
+}
+
+/// The style's subscriber options ask whether the viewer subscribes.
+fn member_wanted(style: &DiscordPresenceSettings) -> bool {
+    !style.promo_button || style.app_name == "platform"
 }
 
 /// What each token stands for in this scene: the one source for the builder
@@ -875,12 +890,16 @@ pub(crate) fn build(shown: &Shown, ctx: &BuildCtx) -> Option<Payload> {
             buttons.push(PayloadButton { label, url });
         }
     }
-    if style.promo_button {
+    // Only a subscriber can take the StreamNook button off.
+    if style.promo_button || !ctx.member {
         buttons.push(promo_button(ctx.seed));
     }
     buttons.truncate(2);
+    // "Watching Twitch" instead of "Watching StreamNook": subscribers only.
+    let name = (ctx.member && style.app_name == "platform").then(|| platform.clone());
 
     Some(Payload {
+        name,
         activity_type,
         status_display,
         details,
@@ -923,7 +942,7 @@ fn build_idle(ctx: &BuildCtx) -> Option<Payload> {
         _ => text_field(&idle_phrase(ctx.seed, ctx.discord_name)),
     };
     let mut buttons = Vec::new();
-    if style.promo_button {
+    if style.promo_button || !ctx.member {
         buttons.push(promo_button(ctx.seed));
     }
     Some(Payload {
@@ -1168,6 +1187,10 @@ struct Presence {
     assets_pending: Option<Instant>,
     preview_seen: Option<Instant>,
     discord_user: Option<DiscordUser>,
+    /// The signed-in StreamNook account subscribes (last answer; false until known).
+    member: bool,
+    /// When to ask about the subscription again (only while an option needs it).
+    member_next: Option<Instant>,
     connected: bool,
     delivered: Delivered,
     last_shown: String,
@@ -1491,6 +1514,82 @@ pub(crate) fn lookups_wanted(enabled: bool, preview_seen: Option<Instant>, now: 
     enabled || preview_seen.is_some_and(|t| now.saturating_duration_since(t) < PREVIEW_KEEPS_ART)
 }
 
+/// How often the subscription is asked again while a subscriber option is set.
+const MEMBER_RECHECK: Duration = Duration::from_secs(10 * 60);
+/// A failed ask (offline, site down) is tried again after this.
+const MEMBER_RETRY: Duration = Duration::from_secs(60);
+
+/// Whether a subscription answer is due now: only while a subscriber option
+/// is set (saved, or in the editor's draft), and not before `next`.
+pub(crate) fn member_due(wanted: bool, next: Option<Instant>, now: Instant) -> bool {
+    wanted && next.is_none_or(|t| now >= t)
+}
+
+/// The signed-in account owns the StreamNook Subscriber badge: granted on the
+/// first paid month and never taken back, so it unlocks the subscriber options
+/// for good (the same rule as Atmospheres, `cosmetics_registry::ever_subscribed`).
+/// Read from memory, no network.
+fn owns_subscriber_badge() -> bool {
+    use crate::services::cosmetics_registry;
+    crate::services::account_store::AccountStore::primary().is_some_and(|account| {
+        cosmetics_registry::ever_subscribed(
+            &cosmetics_registry::owned_slugs(&account.user_id),
+            false,
+        )
+    })
+}
+
+/// Whether the signed-in account subscribes: the Subscriber badge at once,
+/// else an active membership from streamnook.app (asked when due). Until an
+/// answer comes the subscriber options act as their defaults.
+fn check_member(p: &mut Presence, wanted: bool, now: Instant) {
+    if !wanted {
+        return;
+    }
+    if !p.member && owns_subscriber_badge() {
+        p.member = true;
+        p.rev += 1;
+    }
+    if p.member || !member_due(wanted, p.member_next, now) {
+        return;
+    }
+    p.member_next = Some(now + MEMBER_RECHECK);
+    tauri::async_runtime::spawn(async {
+        use crate::services::membership_status::{self, MembershipKind};
+        let answer = match membership_status::get(false).await {
+            Ok(Some(status)) => {
+                Some(status.kind != MembershipKind::None || owns_subscriber_badge())
+            }
+            // Not signed in to StreamNook: no subscription.
+            Ok(None) => Some(false),
+            Err(e) => {
+                log::debug!("[DiscordPresence] subscription check failed: {e}");
+                owns_subscriber_badge().then_some(true)
+            }
+        };
+        let changed = {
+            let mut p = lock();
+            match answer {
+                Some(member) => {
+                    let changed = p.member != member;
+                    p.member = member;
+                    if changed {
+                        p.rev += 1;
+                    }
+                    changed
+                }
+                None => {
+                    p.member_next = Some(Instant::now() + MEMBER_RETRY);
+                    false
+                }
+            }
+        };
+        if changed {
+            wake();
+        }
+    });
+}
+
 /// Start a lookup for each picture `scene` can use that is neither found nor
 /// being looked up, when `lookups_wanted`.
 fn spawn_lookups(p: &mut Presence, app: &AppHandle, scene: &Scene, now: Instant) {
@@ -1745,6 +1844,8 @@ async fn pump(app: AppHandle) {
             let mut p = lock();
             let (shown, _, identity) = p.shown(now);
             p.touch_meta(&identity, now);
+            let wanted = member_wanted(&p.style);
+            check_member(&mut p, wanted, now);
             if p.rev != seen_rev {
                 seen_rev = p.rev;
                 // A change retries at once instead of waiting out the backoff.
@@ -1790,6 +1891,7 @@ async fn pump(app: AppHandle) {
                 seed,
                 discord_name: name.as_deref(),
                 assets: &p.assets,
+                member: p.member,
             };
             let payload = build(&shown, &ctx);
             let connected = DiscordService::connected();
@@ -1939,6 +2041,8 @@ pub struct PreviewModel {
     pub user: Option<DiscordUser>,
     /// The viewer's own Discord look (banner, decoration, nameplate, server tag).
     pub look: Option<crate::services::discord_look::DiscordLook>,
+    /// A StreamNook subscriber: the subscriber options can be changed.
+    pub member: bool,
     pub tokens: Vec<TokenValue>,
     pub presets: Vec<Preset>,
 }
@@ -1968,13 +2072,14 @@ fn preview_activity(payload: &Payload, assets: &HashMap<String, String>) -> Prev
         Some(1) => payload.state.clone(),
         _ => None,
     };
+    let app_name = payload
+        .name
+        .clone()
+        .unwrap_or_else(|| "StreamNook".to_string());
     PreviewActivity {
         verb: verb.to_string(),
-        app_name: "StreamNook".to_string(),
-        member_line: format!(
-            "{verb} {}",
-            shown.unwrap_or_else(|| "StreamNook".to_string())
-        ),
+        member_line: format!("{verb} {}", shown.unwrap_or_else(|| app_name.clone())),
+        app_name,
         details: payload.details.clone(),
         details_url: payload.details_url.clone(),
         state: payload.state.clone(),
@@ -2071,6 +2176,9 @@ pub fn preview(
         .preview_seen
         .is_none_or(|t| now.saturating_duration_since(t) >= PREVIEW_KEEPS_ART);
     p.preview_seen = Some(now);
+    // The open editor always asks: it unlocks the subscriber options, which a
+    // subscriber on the defaults has not set yet.
+    check_member(&mut p, true, now);
     let (live_shown, _, identity) = p.shown(now);
     let shown_tab = tab_of(&live_shown);
     let live = shown_tab == tab;
@@ -2113,6 +2221,7 @@ pub fn preview(
         seed,
         discord_name: name.as_deref(),
         assets: &p.assets,
+        member: p.member,
     };
     let payload = build(&shown, &ctx);
     let connection = if !p.enabled {
@@ -2134,6 +2243,7 @@ pub fn preview(
         connection,
         user: user.clone(),
         look: None,
+        member: p.member,
         tokens: tokens_for(&shown),
         presets: presets(),
     };
@@ -2186,6 +2296,7 @@ mod tests {
             seed: 2,
             discord_name: None,
             assets,
+            member: false,
         }
     }
 
@@ -2629,10 +2740,20 @@ mod tests {
         // The same with a failing tile: its error was already known.
         let mut failing = lock().grid.clone().unwrap();
         failing[1].load_error = true;
-        assert_eq!(set_grid("main", gen, 3, Some(failing.clone())), WriteResult::Applied);
+        assert_eq!(
+            set_grid("main", gen, 3, Some(failing.clone())),
+            WriteResult::Applied
+        );
         let rev = lock().rev;
-        assert_eq!(set_grid("main", gen, 4, Some(failing)), WriteResult::Applied);
-        assert_eq!(lock().rev, rev, "an equal write with a failing tile changes nothing");
+        assert_eq!(
+            set_grid("main", gen, 4, Some(failing)),
+            WriteResult::Applied
+        );
+        assert_eq!(
+            lock().rev,
+            rev,
+            "an equal write with a failing tile changes nothing"
+        );
         page_ended();
         let cleared = {
             let p = lock();
@@ -3058,6 +3179,56 @@ mod tests {
             ("custom", "hi", false)
         );
         assert!(preset_active(&spot, &list[1]) && !preset_active(&spot, &list[0]));
+    }
+
+    #[test]
+    fn subscriber_options_apply_only_to_subscribers() {
+        let assets = HashMap::new();
+        let art = SceneArt::default();
+        let mine = DiscordPresenceSettings {
+            promo_button: false,
+            app_name: "platform".into(),
+            ..style()
+        };
+        let live_kick = Shown::Scene(live("kick", ""));
+        // Not a subscriber: the StreamNook button stays and the name is StreamNook's.
+        let free = build(&live_kick, &ctx(&mine, &art, &assets)).unwrap();
+        assert_eq!(free.name, None);
+        assert!(free.buttons.iter().any(|b| b.url == PROMO_URL));
+        let idle = build(&Shown::Idle, &ctx(&mine, &art, &assets)).unwrap();
+        assert!(idle.buttons.iter().any(|b| b.url == PROMO_URL));
+        // A subscriber: "Watching Kick", and no StreamNook button.
+        let member = BuildCtx {
+            member: true,
+            ..ctx(&mine, &art, &assets)
+        };
+        let paid = build(&live_kick, &member).unwrap();
+        assert_eq!(paid.name.as_deref(), Some("Kick"));
+        assert!(paid.buttons.iter().all(|b| b.url != PROMO_URL));
+        assert!(build(&Shown::Idle, &member).unwrap().buttons.is_empty());
+        assert_eq!(preview_activity(&paid, &assets).app_name, "Kick");
+        assert_eq!(
+            preview_activity(&paid, &assets).member_line,
+            "Watching Kick"
+        );
+        // A subscriber on the defaults keeps them.
+        let plain = build(
+            &live_kick,
+            &BuildCtx {
+                member: true,
+                ..ctx(&style(), &art, &assets)
+            },
+        )
+        .unwrap();
+        assert_eq!(plain.name, None);
+        assert!(plain.buttons.iter().any(|b| b.url == PROMO_URL));
+        // Only a set option asks about the subscription.
+        let t0 = Instant::now();
+        assert!(!member_wanted(&style()));
+        assert!(member_wanted(&mine));
+        assert!(member_due(true, None, t0));
+        assert!(!member_due(true, Some(t0 + MEMBER_RECHECK), t0));
+        assert!(!member_due(false, None, t0));
     }
 
     #[test]

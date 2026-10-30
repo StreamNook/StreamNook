@@ -43,6 +43,32 @@ const LINES: Record<Exclude<PreviewTab, 'browsing'>, [PresenceField, PresenceFie
   offline: ['offline_top', 'offline_bottom'],
 };
 
+/** Marks a setting only StreamNook subscribers can change. Locked, it opens
+ *  the subscribe page (the same link as Profile and Badges). */
+function SubscriberPill({ locked }: { locked: boolean }) {
+  const login = useAppStore((s) => s.currentUser?.login || s.currentUser?.username);
+  const pill = 'rounded-full bg-accent/15 px-1.5 py-[1px] text-[10px] font-semibold uppercase tracking-wide text-accent';
+  if (!locked) return <span className={pill}>Subscriber</span>;
+  const subscribe = () => {
+    void (async () => {
+      try {
+        const { open } = await import('@tauri-apps/plugin-shell');
+        const handle = login ? `&handle=${encodeURIComponent(login)}` : '';
+        await open(`https://streamnook.app/support?tier=subscriber${handle}`);
+      } catch {
+        /* opening the browser is best-effort */
+      }
+    })();
+  };
+  return (
+    <Tooltip content="Subscribe on streamnook.app" describe>
+      <button type="button" onClick={subscribe} className={`${pill} transition-colors hover:bg-accent/25`}>
+        Subscriber
+      </button>
+    </Tooltip>
+  );
+}
+
 /** The tab a search hit's row lives on (rows that show only on one tab). */
 function tabForRow(row: string | undefined): PreviewTab | null {
   if (row === 'Show' || row === 'Text') return 'browsing';
@@ -276,6 +302,8 @@ export default function DiscordStatusEditor({ focusRow, onClose }: { focusRow?: 
 
   const shownTab = tab ?? 'live';
   const enabled = settings.discord_rpc_enabled;
+  // Rust decides who subscribes (services/membership_status.rs).
+  const member = model?.member ?? false;
   const status =
     commitStatus === 'retrying'
       ? "Couldn't save, retrying"
@@ -487,6 +515,30 @@ export default function DiscordStatusEditor({ focusRow, onClose }: { focusRow?: 
                 }
               />
               <SettingsRow
+                title="Shown as"
+                titleBadge={<SubscriberPill locked={!member} />}
+                description={
+                  member
+                    ? 'The name after the activity word. Twitch and YouTube get their mark in Discord too.'
+                    : 'Subscribers can show the platform instead, like "Watching Twitch".'
+                }
+                onReset={member ? reset('app_name') : undefined}
+                control={
+                  // Locked: only the control dims, so the Subscriber link stays clickable.
+                  <div className={member ? undefined : 'pointer-events-none opacity-50'} aria-disabled={!member}>
+                    <SegmentedSelect
+                      value={member ? draft.app_name : 'streamnook'}
+                      onChange={(v) => change('app_name', v)}
+                      onPreview={member ? preview('app_name') : undefined}
+                      options={[
+                        { value: 'streamnook', label: 'StreamNook' },
+                        { value: 'platform', label: 'The platform' },
+                      ]}
+                    />
+                  </div>
+                }
+              />
+              <SettingsRow
                 title="Member list"
                 description="The line under your name in a server's member list."
                 onReset={reset('status_display')}
@@ -496,7 +548,7 @@ export default function DiscordStatusEditor({ focusRow, onClose }: { focusRow?: 
                     onChange={(v) => change('status_display', v)}
                     onPreview={preview('status_display')}
                     options={[
-                      { value: 'app', label: 'StreamNook' },
+                      { value: 'app', label: member && draft.app_name === 'platform' ? 'The platform' : 'StreamNook' },
                       { value: 'top', label: 'Top line' },
                       { value: 'bottom', label: 'Bottom line' },
                     ]}
@@ -550,9 +602,19 @@ export default function DiscordStatusEditor({ focusRow, onClose }: { focusRow?: 
               </SettingsRow>
               <SettingsRow
                 title="StreamNook button"
-                description="A link to streamnook.app with a rotating label."
-                onReset={reset('promo_button')}
-                control={<Toggle enabled={draft.promo_button} onChange={() => change('promo_button', !draft.promo_button)} ariaLabel="StreamNook button" />}
+                titleBadge={<SubscriberPill locked={!member} />}
+                description={
+                  member ? 'A link to streamnook.app with a rotating label.' : 'A link to streamnook.app. Subscribers can turn it off.'
+                }
+                onReset={member ? reset('promo_button') : undefined}
+                control={
+                  <Toggle
+                    enabled={member ? draft.promo_button : true}
+                    onChange={() => change('promo_button', !draft.promo_button)}
+                    disabled={!member}
+                    ariaLabel="StreamNook button"
+                  />
+                }
               />
             </SettingsSection>
 

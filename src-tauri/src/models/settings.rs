@@ -1349,7 +1349,11 @@ pub struct DiscordPresenceSettings {
     pub offline_bottom: String,
     pub watch_button: bool,
     pub watch_button_label: String,
+    /// Off hides the StreamNook button: subscribers only (others always send it).
     pub promo_button: bool,
+    /// The name after the verb: "streamnook" | "platform" ("Watching Twitch",
+    /// with Discord's own platform mark). Subscribers only.
+    pub app_name: String,
     /// While browsing: "phrases" | "custom" | "hidden"
     pub idle_mode: String,
     pub idle_text: String,
@@ -1377,6 +1381,7 @@ impl Default for DiscordPresenceSettings {
             watch_button: true,
             watch_button_label: "Watch {kind}".into(),
             promo_button: true,
+            app_name: "streamnook".into(),
             idle_mode: "phrases".into(),
             idle_text: "Browsing streams".into(),
             extra: HashMap::new(),
