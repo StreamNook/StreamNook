@@ -12,6 +12,7 @@ import { lazy, Suspense, useCallback, useEffect, useRef, type KeyboardEvent as R
 import { AnimatePresence, motion } from 'framer-motion';
 import { useAppStore } from '../../stores/AppStore';
 import { registerSongsSurface } from '../../utils/songHistory';
+import { songLayerOpen } from '../../utils/songLinks';
 
 const SongsPanel = lazy(() => import('./SongsPanel'));
 
@@ -43,7 +44,8 @@ export function SongsPanelHost() {
   useEffect(() => {
     if (!isOpen) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
+      // A song link's QR code or app menu over the panel takes this press.
+      if (e.key !== 'Escape' || songLayerOpen(document)) return;
       e.stopPropagation();
       e.preventDefault();
       if (focus) setSongsFocus(null);

@@ -2012,6 +2012,8 @@ pub fn run() {
             remove_song,
             restore_song,
             clear_song_history,
+            song_app_links,
+            open_song_link,
             // Multi-stream commands (desktop-only — not part of the phone app)
             #[cfg(desktop)]
             start_multi_nook,

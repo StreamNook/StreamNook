@@ -3,8 +3,6 @@
 // key), folded to lowercase on both sides: songListening folds the room it is
 // given, and a widget's room is folded here.
 
-import { useAppStore } from '../../stores/AppStore';
-import { openExternal } from '../../utils/openExternal';
 import { cancelListening, listensRemotely, requestRemoteIdentify, type Listening } from '../../utils/songListening';
 
 /** The strip shows in the chat whose room the answer goes to, and nowhere
@@ -23,14 +21,6 @@ export async function identifyAgain(room: string): Promise<void> {
   const { recognizeNowPlaying, announceSong } = await import('../../utils/songId');
   const result = await recognizeNowPlaying(null, { room });
   announceSong(result, room);
-}
-
-/** A song link opened from the answer card, with a word when the system
- *  would not open it. */
-export function openSongLink(url: string): void {
-  void openExternal(url).then((opened) => {
-    if (!opened) useAppStore.getState().addToast("Couldn't open that link", 'error');
-  });
 }
 
 /**

@@ -92,7 +92,6 @@ const CHAPTERS_BUTTON_HTML =
   '<span class="plyr__tooltip" role="tooltip">Chapters</span>';
 
 
-import { open as openExternalUrl } from '@tauri-apps/plugin-shell';
 import { initialLiveButtonState, LIVE_BUTTON_HTML, paintLiveButton, type LiveButtonState } from '../utils/liveButton';
 import { liveWake } from '../utils/liveWake';
 import { setActiveVideo } from '../utils/activeVideo';
@@ -114,6 +113,7 @@ import { recognizeNowPlaying, announceSong, isQuietResult } from '../utils/songI
 import { SongsSplitButton } from './songs/SongsFlyout';
 import { songsFlyoutOpen } from './songs/songsPopover';
 import { toastLink } from './songs/songLinks';
+import { openSongLink } from '../utils/songLinks';
 import {
   ignoresPlayerMouse,
   createWheelAccumulator,
@@ -604,7 +604,7 @@ const VideoPlayer = () => {
           ? {
               label: link.label,
               onClick: () => {
-                void openExternalUrl(link.url);
+                void openSongLink(link.url);
               },
             }
           : undefined,

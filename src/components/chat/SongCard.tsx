@@ -1,10 +1,10 @@
 import { memo, useSyncExternalStore } from 'react';
 import { ListMusic, Music } from 'lucide-react';
 import { Tooltip } from '../ui/Tooltip';
-// Shared helper, not a local copy: this card renders inline in chat, so on
-// Android its service links were dead for the same reason every other chat link
-// was - `@tauri-apps/plugin-shell`'s open has no Android implementation.
-import { openExternal } from '../../utils/openExternal';
+// The one song link opener: the music app on this computer when one is
+// installed, else the browser; on the phones the system's own opener (the
+// shell plugin's open has no Android implementation).
+import { openSongLink } from '../../utils/songLinks';
 import type { SongMatch } from '../../utils/songId';
 import { hasSongsSurface, openSongs, subscribeSongsSurface } from '../../utils/songHistory';
 import { cardLinks } from '../songs/songLinks';
@@ -14,7 +14,8 @@ const noSurface = () => false;
 // The "/song" result rendered inline in chat: cover art, title/artist, and a row
 // of service links plus the song.link aggregator. The track's own links come
 // first; search pages show only when it has none, marked as searches. Each
-// link opens in the browser. A quiet button at the end of the title opens the
+// link opens in its music app when one is installed, else in the browser
+// (utils/songLinks.ts). A quiet button at the end of the title opens the
 // song in Your songs, where it is kept, in windows that can show that list (it
 // appears once that list's surface is mounted).
 export const SongCard = memo(function SongCard({ card }: { card: SongMatch }) {
@@ -69,7 +70,7 @@ export const SongCard = memo(function SongCard({ card }: { card: SongMatch }) {
               <Tooltip key={l.url} content={l.url} side="top">
                 <button
                   onClick={() => {
-                    void openExternal(l.url);
+                    void openSongLink(l.url);
                   }}
                   className="text-xs font-medium text-textSecondary hover:text-accent transition-colors duration-150"
                 >

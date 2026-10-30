@@ -4,8 +4,11 @@
 //! commands below read and change. Rust decides the background work they
 //! start: a cover's colors when a song is found, opened or listed without
 //! them, and a link refresh when a song's links were cut short or are stale.
+//! A song's link opens in the music app on this computer when one is
+//! installed (services/song_id/app_links.rs).
 
 use crate::rt::AppHandle;
+use crate::services::song_id::app_links::{self, SongApp};
 use crate::services::song_id::cover_tint::{self, Priority};
 use crate::services::song_id::{self, history, SongMatch};
 use base64::{engine::general_purpose, Engine};
@@ -133,4 +136,40 @@ pub async fn restore_song(app: AppHandle, key: String) -> Result<bool, String> {
 #[tauri::command]
 pub async fn clear_song_history(app: AppHandle) -> Result<(), String> {
     blocking(move || history::clear(&app)).await
+}
+
+/// The music apps on this computer that open each service's links, each
+/// service's default first. Phones list none.
+#[tauri::command]
+pub async fn song_app_links() -> Result<Vec<SongApp>, String> {
+    blocking(|| Ok(app_links::apps())).await
+}
+
+/// Open a song's web link in a music app on this computer: `app` (a target
+/// from `song_app_links`), or its service's default app when None. The web
+/// link opens in the browser when no app here opens it or the launch fails.
+/// True when an app took it; an address that is no song link is refused.
+#[tauri::command]
+pub async fn open_song_link(
+    app_handle: AppHandle,
+    url: String,
+    app: Option<String>,
+) -> Result<bool, String> {
+    blocking(move || app_links::open(&url, app.as_deref(), &|link| open_in_os(&app_handle, link)))
+        .await
+}
+
+/// Hand a link to the system: its browser, or the app its scheme belongs to.
+#[cfg(not(target_os = "ios"))]
+fn open_in_os(app: &AppHandle, link: &str) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    app.opener()
+        .open_url(link, None::<String>)
+        .map_err(|e| format!("could not open the link: {e}"))
+}
+
+/// The iPhone's shell opens web links; it has no music app links.
+#[cfg(target_os = "ios")]
+fn open_in_os(_app: &AppHandle, link: &str) -> Result<(), String> {
+    crate::ios_ffi::open_url(link)
 }

@@ -7,9 +7,11 @@
 //! (shazam.rs). No API key or account is involved, and only the fingerprint
 //! (not audio) leaves the machine. The song's links on each music service
 //! are found from its ISRC and Apple Music id (links.rs), and its cover's
-//! colors are read in the background (cover_tint.rs).
+//! colors are read in the background (cover_tint.rs). A link opens in the
+//! music app on this computer when one is installed (app_links.rs).
 
 mod algorithm;
+pub mod app_links;
 pub mod cover_tint;
 mod hanning;
 pub mod history;

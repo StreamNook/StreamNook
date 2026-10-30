@@ -57,7 +57,6 @@ import {
   type SurfaceKind,
 } from '../../utils/coverTint';
 import { Logger } from '../../utils/logger';
-import { openExternal } from '../../utils/openExternal';
 import { IS_MOBILE } from '../../utils/platform';
 import {
   clearSongHistory,
@@ -70,14 +69,14 @@ import {
   type SongRow,
   type SongSource,
 } from '../../utils/songHistory';
+import { openSongLink, refreshSongApps } from '../../utils/songLinks';
 import { albumLine, channelOf, heardAgo, heardClock, heardDay, heardInto, mediaMark } from '../../utils/songWords';
 import { ProviderLogo } from '../ProviderLogo';
-import { SocialLogo } from '../ui/SocialLogo';
 import { Tooltip } from '../ui/Tooltip';
 import { ACCENT_BUTTON, DANGER_FILL, GLAZE_PILL } from '../ui/glazeButtons';
+import { SongLinkButtons } from './SongLinkButtons';
 import { anchorDelta, makeLayout, ROW_HEIGHT, type Layout } from './songGroups';
 import { songLinks } from './songLinks';
-import { markOf, markSize } from './serviceMarks';
 import { useSongPages } from './useSongPages';
 
 /** Row height, art size and type for each shell: the phone's rows are roomier,
@@ -120,13 +119,6 @@ const FADE_PX = 16;
 const serverVersion = () => 0;
 /** The theme's version: colors fitted to it are fitted again when it moves. */
 const useThemeVersion = () => useSyncExternalStore(subscribeTheme, themeVersion, serverVersion);
-
-/** Open a song's link, and say so when the system would not open it. */
-function openLink(url: string): void {
-  void openExternal(url).then((opened) => {
-    if (!opened) useAppStore.getState().addToast("Couldn't open that link", 'error');
-  });
-}
 
 // ---------------------------------------------------------------- measuring
 
@@ -892,7 +884,7 @@ function SongDetail({
                     <Tooltip content={links.allServices} side="top" describe>
                       <button
                         type="button"
-                        onClick={() => openLink(links.allServices!)}
+                        onClick={() => void openSongLink(links.allServices!)}
                         className="ml-auto flex h-7 items-center gap-1 text-[12px] font-medium text-textMuted transition-colors hover:text-textPrimary"
                       >
                         <Link2 size={13} aria-hidden="true" />
@@ -902,46 +894,7 @@ function SongDetail({
                   )
                 }
               >
-                {links.listen.length > 0 && (
-                  // The phone lays its pills out two to a row, so three never wrap raggedly.
-                  <div className={screen ? 'grid grid-cols-2 gap-2' : 'flex flex-wrap gap-2'}>
-                    {links.listen.map((l) => (
-                      <Tooltip key={l.url} content={l.url} side="top" describe>
-                        <button
-                          type="button"
-                          onClick={() => openLink(l.url)}
-                          className={`${GLAZE_PILL} flex h-9 min-w-0 items-center gap-2 pl-2.5 pr-3.5 text-[12.5px] ${screen ? 'w-full' : ''}`}
-                        >
-                          <span className="flex h-[17px] w-[17px] shrink-0 items-center justify-center">
-                            <SocialLogo platform={markOf(l.name)} size={markSize(l.name, 17)} />
-                          </span>
-                          <span className="truncate">{l.name}</span>
-                        </button>
-                      </Tooltip>
-                    ))}
-                  </div>
-                )}
-                {links.search.length > 0 && (
-                  // Search pages, a step quieter than the track's own links:
-                  // logos only, each named by its tooltip.
-                  <div className={`flex flex-wrap items-center gap-2 ${links.listen.length ? 'mt-3' : ''}`}>
-                    {links.listen.length > 0 && (
-                      <span className="mr-1 text-[12px] font-medium text-textMuted">Search on</span>
-                    )}
-                    {links.search.map((l) => (
-                      <Tooltip key={l.url} content={`Search on ${l.name}`} side="top">
-                        <button
-                          type="button"
-                          aria-label={`Search on ${l.name}`}
-                          onClick={() => openLink(l.url)}
-                          className={`${GLAZE_PILL} flex h-8 w-8 items-center justify-center`}
-                        >
-                          <SocialLogo platform={markOf(l.name)} size={markSize(l.name, 15)} />
-                        </button>
-                      </Tooltip>
-                    ))}
-                  </div>
-                )}
+                <SongLinkButtons links={links} title={song.title} artist={song.artist} screen={screen} />
               </Section>
             )}
 
@@ -1003,6 +956,10 @@ export default function SongsPanel({ variant, focus, onFocus, onClose, registerE
   const kind: SurfaceKind = screen ? 'screen' : 'flyout';
   const rowHeight = screen ? ROW.screen.height : ROW.modal.height;
   const version = useThemeVersion();
+  // Which music apps open song links here: asked each time Your songs opens.
+  useEffect(() => {
+    refreshSongApps();
+  }, []);
   const [draft, setDraft] = useState('');
   const [query, setQuery] = useState('');
   useEffect(() => {

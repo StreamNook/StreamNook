@@ -13,6 +13,7 @@ import { motion } from 'framer-motion';
 import { CircleAlert, Music, X } from 'lucide-react';
 import { CARD_LAYERS, useCoverFit, washBackground, type CoverTint } from '../../utils/coverTint';
 import { fetchSongPage, hasSongsSurface, onSongHistoryChanged, openSongs, subscribeSongsSurface } from '../../utils/songHistory';
+import { openSongLink } from '../../utils/songLinks';
 import type { SongResult } from '../../utils/songResult';
 import { SocialLogo } from '../ui/SocialLogo';
 import { Tooltip } from '../ui/Tooltip';
@@ -20,7 +21,7 @@ import { GLAZE_PILL } from '../ui/glazeButtons';
 import { markedLinks } from '../songs/songLinks';
 import { markOf, markSize } from '../songs/serviceMarks';
 import { phraseFor } from './listeningWords';
-import { ANSWER_ROW, identifyAgain, openSongLink, RESULT_MS } from './stripRoom';
+import { ANSWER_ROW, identifyAgain, RESULT_MS } from './stripRoom';
 
 const noSurface = () => false;
 
@@ -213,7 +214,7 @@ function FoundRow({ answer, onDone }: { answer: SongResult & { result: { status:
               <button
                 type="button"
                 aria-label={`Open in ${l.name}`}
-                onClick={own(() => openSongLink(l.url))}
+                onClick={own(() => void openSongLink(l.url))}
                 className={`${GLAZE_PILL} flex h-[30px] w-[30px] items-center justify-center`}
               >
                 <SocialLogo platform={markOf(l.name)} size={markSize(l.name, 17)} />
