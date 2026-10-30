@@ -1247,7 +1247,9 @@ export const WatchScreen: React.FC = () => {
         const intent = chatSwipeIntent({
           dx: e.clientX - g.x,
           dy: e.clientY - g.y,
-          vx: g.vx ?? 0,
+          // A finger that stopped before lifting is not a flick: pointermove
+          // stops with it, so a speed older than 50 ms is stale.
+          vx: e.timeStamp - g.lastT > 50 ? 0 : (g.vx ?? 0),
           side: s.side,
           open: s.open,
         });
