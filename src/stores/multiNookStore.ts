@@ -104,74 +104,6 @@ export function activeChatSlot(
   return slots.find((s) => slotKey(s) === want) ?? null;
 }
 
-export const broadcastMultiNookPresence = (slots: MultiNookSlot[]) => {
-  const allSlots = slots;
-  
-  if (allSlots.length === 0) return;
-
-  // Determine majority game category
-  const gameCounts: Record<string, number> = {};
-  let maxGame = '';
-  let maxCount = 0;
-  
-  for (const slot of allSlots) {
-    if (slot.gameName && slot.gameName.trim() !== '') {
-      gameCounts[slot.gameName] = (gameCounts[slot.gameName] || 0) + 1;
-      if (gameCounts[slot.gameName] > maxCount) {
-        maxCount = gameCounts[slot.gameName];
-        maxGame = slot.gameName;
-      }
-    }
-  }
-
-  // Deterministic randomize phrasing based on channel names length
-  const phraseHash = allSlots.reduce((acc, s) => acc + s.channelLogin.length, 0);
-  
-  const phrases = [
-    `Watching ${allSlots.length} Streams`,
-    `Multi-POV: ${allSlots.length} Streams`,
-    `MultiNook \u2014 ${allSlots.length} Streams`
-  ];
-  const detailsPhrase = phrases[phraseHash % phrases.length];
-
-  const details = allSlots.length === 1
-    ? `Watching ${allSlots[0].channelName || allSlots[0].channelLogin}`
-    : detailsPhrase;
-
-  // Deterministic randomize separator
-  const separators = [', ', ' \u00B7 ', ' | '];
-  const separator = separators[(phraseHash + 1) % separators.length];
-
-  let streamerNames = allSlots
-    .map(s => s.channelName || s.channelLogin)
-    .join(separator);
-  
-  if (streamerNames.length > 120) {
-    streamerNames = streamerNames.substring(0, 110) + `... +${allSlots.length} more`; // Ensure it fits Discord's 128 char limit
-  }
-
-  const activityState = allSlots.length === 1
-    ? 'MultiNook'
-    : streamerNames;
-
-  const presenceArgs = {
-    details,
-    activityState,
-    largeImage: '', // Will be resolved by rust backend based on gameName
-    smallImage: '',
-    startTime: Date.now(),
-    gameName: maxGame,
-    streamUrl: 'https://streamnook.app',
-  };
-
-  // Discord (gated by settings toggle)
-  const settings = useAppStore.getState().settings;
-  if (settings?.discord_rpc_enabled) {
-    invoke('update_discord_presence', presenceArgs).catch(() => {});
-  }
-};
-
-
 interface MultiNookState {
   isMultiNookActive: boolean;
   isChatHidden: boolean;
@@ -546,9 +478,6 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
       }
     }
 
-    if (newSlots.length > 0) {
-      broadcastMultiNookPresence(newSlots);
-    }
     await get().saveSlots();
   },
 
@@ -676,12 +605,6 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
       }
     }
     set({ slots: [], activeChatChannelId: null, isChatPinned: false, activePresetId: null, maximizedSlotId: null, isAllMuted: false });
-
-    // Revert presence to idle since nothing is playing.
-    const settings = useAppStore.getState().settings;
-    if (settings?.discord_rpc_enabled) {
-      invoke('set_idle_discord_presence').catch(() => {});
-    }
     await get().saveSlots();
   },
 
@@ -821,11 +744,10 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
         useAppStore.getState().toggleHome();
       }
       
-      // Broadcast restored slots after a short delay
+      // Register restored slots for channel points after a short delay
       setTimeout(() => {
         const currentSlots = get().slots;
         if (currentSlots.length > 0) {
-          broadcastMultiNookPresence(currentSlots);
           for (const slot of currentSlots) {
             if (slot.channelId) {
                invoke('register_active_channel', { channelId: slot.channelId }).catch(() => {});
@@ -858,12 +780,6 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
       // Restore Home view if no single stream is playing
       if (!useAppStore.getState().streamUrl) {
         useAppStore.setState({ isHomeActive: true });
-      }
-      
-      // Revert to idle presence
-      const settings = useAppStore.getState().settings;
-      if (settings?.discord_rpc_enabled) {
-        invoke('set_idle_discord_presence').catch(() => {});
       }
     }
 
@@ -981,7 +897,6 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
     // wired in the Rust IRC service, so opening a tile's chat subscribes it
     // automatically. No per-slot call needed here.
 
-    broadcastMultiNookPresence(newSlots);
     await saveSlots();
   },
 
@@ -1027,16 +942,6 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
       set({ activeChatChannelId: pickActiveChatChannel(newSlots), isChatPinned: false });
     }
     
-    if (newSlots.length > 0) {
-      broadcastMultiNookPresence(newSlots);
-    } else {
-      // Revert to idle presence since there are no streams
-      const settings = useAppStore.getState().settings;
-      if (settings?.discord_rpc_enabled) {
-        invoke('set_idle_discord_presence').catch(() => {});
-      }
-    }
-
     await saveSlots();
   },
 

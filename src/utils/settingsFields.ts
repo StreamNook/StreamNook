@@ -8,10 +8,17 @@
 
 import { invoke } from '@tauri-apps/api/core';
 
+/** One numbered write of a stream of edits (one editor in one page). Rust
+ *  drops a write numbered at or below one it already applied on that stream. */
+export interface WriteOrder {
+  stream: string;
+  n: number;
+}
+
 /** Write these dotted paths, and only these. A null value removes the key. */
-export function setSettingsFields(changes: Record<string, unknown>): Promise<void> {
+export function setSettingsFields(changes: Record<string, unknown>, order?: WriteOrder): Promise<void> {
   if (Object.keys(changes).length === 0) return Promise.resolve();
-  return invoke('set_settings_fields', { changes });
+  return invoke('set_settings_fields', order ? { changes, order } : { changes });
 }
 
 /** `{a: 1}` under `group` as `{'group.a': 1}`. */

@@ -964,6 +964,7 @@ const SETTINGS_CATALOG: SettingsEntry[] = [
   // Integrations
   { tab: 'Integrations', keywords: 'integrations discord rpc rich presence ttv lol ad block ad-free connected apps services' },
   { tab: 'Integrations', section: 'Discord Rich Presence', keywords: 'discord rpc rich presence activity status what watching' },
+  { tab: 'Integrations', section: 'Discord Rich Presence', label: 'Discord Status', sectionId: 'discord-status-editor', keywords: 'discord status customize rich presence profile picture pfp avatar streamer picture big picture badge watch button timer uptime member list text' },
   { tab: 'Integrations', section: 'Ad Blocking', keywords: 'ad block ad-free ads ttv lol proxy splice block twitch ads plugin' },
 
   // Notifications

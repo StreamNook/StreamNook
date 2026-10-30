@@ -1360,6 +1360,30 @@ export interface FullscreenChatSettings {
   phone_layout?: 'overlay' | 'beside';
 }
 
+/** How the Discord status looks. Mirrors Rust `DiscordPresenceSettings`
+ *  (models/settings.rs); Rust treats a value it does not know as the default. */
+export interface DiscordPresenceSettings {
+  large_image: 'category' | 'streamer' | 'streamnook';
+  small_image: 'platform' | 'streamer' | 'category' | 'none';
+  activity_type: 'watching' | 'playing' | 'listening';
+  status_display: 'app' | 'top' | 'bottom';
+  timer: 'watching' | 'uptime' | 'off';
+  link_text: boolean;
+  watching_top: string;
+  watching_bottom: string;
+  replay_top: string;
+  replay_bottom: string;
+  grid_top: string;
+  grid_bottom: string;
+  offline_top: string;
+  offline_bottom: string;
+  watch_button: boolean;
+  watch_button_label: string;
+  promo_button: boolean;
+  idle_mode: 'phrases' | 'custom' | 'hidden';
+  idle_text: string;
+}
+
 export interface Settings {
   quality: string;
   chat_placement: string;
@@ -1380,6 +1404,7 @@ export interface Settings {
   current_account: string;
   hide_search_bar_on_startup: boolean;
   discord_rpc_enabled: boolean;
+  discord_presence: DiscordPresenceSettings;
   video_player: VideoPlayerSettings;
   cache: CacheSettings;
   streamlink?: StreamlinkSettings;

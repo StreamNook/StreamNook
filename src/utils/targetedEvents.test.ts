@@ -14,6 +14,7 @@ const LITERALS = [
   'window-visibility',
   'emote-palette://target',
   'emote-palette://insert',
+  'discord-presence://page',
   'chat-overlay-click-through',
   // A window with no player asking the main window about the song (songListening.ts).
   'song-identify-request',

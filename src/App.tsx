@@ -73,6 +73,8 @@ import { Logger } from './utils/logger';
 import { startPageHeartbeat } from './utils/pageHeartbeat';
 import { startChatLatencyReporter } from './utils/chatLatency';
 import { startGpuRecoveryWatch } from './utils/gpuRecovery';
+import { features } from './features';
+import { installDiscordPresenceFeed } from './stores/discordPresenceFeed';
 import { ensureCacheFileServer } from './utils/cacheFileUrl';
 
 // Heavy overlays load on first open instead of riding the boot bundle. Each
@@ -987,6 +989,17 @@ function App() {
       unlistenSettingsSync = unlisten;
     });
     cleanupFunctions.push(() => unlistenSettingsSync?.());
+
+    // Discord presence: this window's MultiNook grid and player, as raw facts
+    // for Rust. Main window only (the feed checks), desktop only.
+    if (features.discordRpc) {
+      void installDiscordPresenceFeed()
+        .then((stop) => {
+          if (isMounted) cleanupFunctions.push(stop);
+          else stop();
+        })
+        .catch((e) => Logger.warn('[Discord] presence feed did not start:', e));
+    }
 
     // Stagger helper scoped to this effect: schedules a task in a boot tier and
     // wires its cancel into this effect's cleanup (mirroring the isMounted

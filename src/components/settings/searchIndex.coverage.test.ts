@@ -35,6 +35,7 @@ const TAB_FILES: Record<string, string[]> = {
   Backup: ['BackupSettings'],
   Support: ['SupportSettings'],
   Overlay: ['../overlay/builder/OverlayBuilder'],
+  Integrations: ['IntegrationsSettings', 'discord/DiscordStatusEditor'],
 };
 
 // A component that draws its own section, with rows passed in as children.
@@ -67,6 +68,8 @@ const TOPIC_SECTIONS: Record<string, string[]> = {
   Support: ['Community Discord'],
   // The overlay builder's profile picker, above its sections.
   Overlay: ['Stream Overlay'],
+  // The Discord card and the plugin panels are cards, not sections.
+  Integrations: ['Discord Rich Presence', 'Ad Blocking'],
 };
 
 // A row whose title is an expression (`title={row.label}`) is a parent the

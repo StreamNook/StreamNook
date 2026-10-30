@@ -2051,15 +2051,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     // this. Must run before chat renders, or the first frame picks the default.
     setInlineEmoteScale(settings.chat_design?.emote_scale ?? 1);
 
-    // Connect to Discord if enabled. Fire-and-forget: boot waits on
-    // loadSettings, and a Discord whose pipe never answers must not hold the
-    // boot overlay up.
-    if (settings.discord_rpc_enabled) {
-      invoke('connect_discord').catch((e) => {
-        Logger.warn('Could not connect to Discord:', e);
-      });
-    }
-
   },
   updateSettings: async (newSettings) => {
     const oldSettings = get().settings;
@@ -2084,35 +2075,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     // This window's own logger; the save above already reached Rust's.
     if (newSettings.error_reporting_enabled !== oldSettings.error_reporting_enabled) {
       setDiagnosticsEnabled(newSettings.error_reporting_enabled !== false);
-    }
-
-    // Handle Discord enable/disable toggle. Not awaited: the settings write is
-    // done, and a slow Discord must not hold up whoever awaits this save.
-    if (newSettings.discord_rpc_enabled !== oldSettings.discord_rpc_enabled) {
-      if (newSettings.discord_rpc_enabled) {
-        void (async () => {
-          try {
-            await invoke('connect_discord');
-
-            let multiNookModule;
-            try { multiNookModule = await import('./multiNookStore'); } catch { /* ignore */ }
-            const multiNookState = multiNookModule ? multiNookModule.usemultiNookStore.getState() : null;
-
-            if (multiNookState && multiNookState.isMultiNookActive && multiNookState.slots.length > 0) {
-              multiNookModule?.broadcastMultiNookPresence(multiNookState.slots);
-            } else {
-              // The watch session knows what is playing (or that nothing is).
-              invoke('watch_session_refresh_presence').catch(() => {});
-            }
-          } catch (e) {
-            Logger.warn('Could not connect to Discord:', e);
-          }
-        })();
-      } else {
-        invoke('disconnect_discord').catch((e) => {
-          Logger.warn('Could not disconnect from Discord:', e);
-        });
-      }
     }
   },
   loadFollowedStreams: async () => {

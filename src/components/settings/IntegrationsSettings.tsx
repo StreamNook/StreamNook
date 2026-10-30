@@ -1,4 +1,13 @@
-import { Plug } from 'lucide-react';
+import { lazy, Suspense, useEffect, useState } from 'react';
+import { AnimatePresence } from 'framer-motion';
+import { Plug, SlidersHorizontal } from 'lucide-react';
+import { features } from '../../features';
+import {
+  DISCORD_EDITOR_SECTION,
+  requestDiscordEditor,
+  subscribeDiscordEditorRequest,
+  takeDiscordEditorRequest,
+} from './discord/discordEditorRequest';
 import { useAppStore } from '../../stores/AppStore';
 import { usePluginUiRegistry, selectSlot } from '../../plugins-ui/registry';
 import { DiscordGlyph } from '../ui/DiscordGlyph';
@@ -6,6 +15,8 @@ import { Toggle } from '../ui/Toggle';
 import { ResetArrow } from './_primitives';
 import { useSettingReset } from './settingReset';
 import streamnookLogo from '../../assets/streamnook-logo-128.webp';
+
+const DiscordStatusEditor = lazy(() => import('./discord/DiscordStatusEditor'));
 
 const IntegrationsSettings = () => {
   const { settings, updateSettings } = useAppStore();
@@ -16,6 +27,24 @@ const IntegrationsSettings = () => {
   // whatever is contributed and names none of it; with no such plugin installed
   // the slot is empty and only the built-in integrations show.
   const pluginPanels = usePluginUiRegistry(selectSlot('integrations.settings'));
+  // The Discord Status editor, open (with a row to show) or not.
+  const [editor, setEditor] = useState<{ row?: string } | null>(null);
+  // A settings search hit or the palette asks for the editor, maybe before
+  // this tab mounted: the request waits until it is taken here.
+  useEffect(() => {
+    const take = () => {
+      const request = takeDiscordEditorRequest();
+      if (request) setEditor(request);
+    };
+    take();
+    return subscribeDiscordEditorRequest(take);
+  }, []);
+  const initialSection = useAppStore((s) => s.settingsInitialSection);
+  useEffect(() => {
+    if (initialSection !== DISCORD_EDITOR_SECTION) return;
+    useAppStore.setState({ settingsInitialSection: null });
+    requestDiscordEditor();
+  }, [initialSection]);
 
   return (
     <div className="flex min-h-full flex-col items-center py-6">
@@ -42,6 +71,7 @@ const IntegrationsSettings = () => {
 
         {/* Integration cards (room to stack as more land here) */}
         <div className="w-full space-y-3">
+        {features.discordRpc && (
         <div className="glass-panel rounded-lg p-4">
           <div className="flex items-center gap-3.5">
             {/* Just the two marks with a + between them, signalling StreamNook and
@@ -64,6 +94,16 @@ const IntegrationsSettings = () => {
                 Show what you're watching on your Discord profile.
               </p>
             </div>
+            {settings.discord_presence && (
+              <button
+                type="button"
+                onClick={() => setEditor({})}
+                className="flex flex-shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] font-medium text-textSecondary transition-colors hover:bg-white/[0.06] hover:text-textPrimary"
+              >
+                <SlidersHorizontal size={14} />
+                Customize
+              </button>
+            )}
             <Toggle
               enabled={settings.discord_rpc_enabled}
               onChange={() =>
@@ -72,6 +112,7 @@ const IntegrationsSettings = () => {
             />
           </div>
         </div>
+        )}
         {pluginPanels.map((c) => {
           return (
             <div
@@ -90,6 +131,13 @@ const IntegrationsSettings = () => {
         })}
         </div>
       </div>
+      <AnimatePresence>
+        {editor && (
+          <Suspense key="discord-status-editor" fallback={null}>
+            <DiscordStatusEditor focusRow={editor.row} onClose={() => setEditor(null)} />
+          </Suspense>
+        )}
+      </AnimatePresence>
     </div>
   );
 };
