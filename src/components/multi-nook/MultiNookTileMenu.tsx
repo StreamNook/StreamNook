@@ -316,6 +316,10 @@ export const MultiNookTileMenu: React.FC = () => {
           )}
         </button>
 
+        {/* Live alerts beside Follow, as in the card menu. Its slot is there
+            from the first frame and only its value waits, so nothing moves. */}
+        <LiveAlertMenuRow stream={stream} className={ROW} />
+
         <div className="mx-2 my-1 h-px bg-white/[0.06]" />
 
         <button
@@ -325,10 +329,6 @@ export const MultiNookTileMenu: React.FC = () => {
           <XIcon size={16} />
           <span>Close stream</span>
         </button>
-
-        {/* Live alerts: last; its slot is there from the first frame and only
-            its value waits, so Close stream never moves under the pointer. */}
-        <LiveAlertMenuRow stream={stream} className={ROW} />
       </div>
     </div>
   );

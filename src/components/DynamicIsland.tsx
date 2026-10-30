@@ -2828,7 +2828,7 @@ const DynamicIsland = () => {
                                                                     onClick={(e) => notification.type === 'mention'
                                                                         ? markMentionRead(notification.data, e)
                                                                         : markAsRead(notification.id, e)}
-                                                                    className="text-white/30hover:text-green-400 transition-all p-0.5"
+                                                                    className="text-white/60 hover:text-green-400 transition-all p-0.5"
                                                                     data-keeps-player-fullscreen
                                                                 >
                                                                     <Check size={14} />
@@ -2847,7 +2847,7 @@ const DynamicIsland = () => {
                                                                         type="button"
                                                                         aria-label={label}
                                                                         onClick={(e) => toggleMentionMute(notification.data, e)}
-                                                                        className="text-white/30hover:text-white transition-all p-0.5"
+                                                                        className="text-white/60 hover:text-white transition-all p-0.5"
                                                                         data-keeps-player-fullscreen
                                                                     >
                                                                         {muted ? <Bell size={14} /> : <BellOff size={14} />}
@@ -2862,7 +2862,7 @@ const DynamicIsland = () => {
                                                                 onClick={(e) => notification.type === 'mention'
                                                                     ? removeMention(notification.data, e)
                                                                     : clearNotification(notification.id, e)}
-                                                                className="text-white/30hover:text-white transition-all p-0.5"
+                                                                className="text-white/60 hover:text-white transition-all p-0.5"
                                                                 data-keeps-player-fullscreen
                                                             >
                                                                 <X size={14} />

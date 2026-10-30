@@ -16,7 +16,9 @@ import { setLiveAlert } from '../utils/liveAlerts';
 import { Logger } from '../utils/logger';
 import type { LiveNotificationData } from '../types';
 
-const BUTTON = 'text-white/30 hover:text-white transition-all p-0.5';
+// The row's other actions' level (60%): quieter than the row's text, still
+// well over the 3:1 a control needs.
+const BUTTON = 'text-white/60 hover:text-white transition-all p-0.5';
 
 export function LiveAlertIslandAction({ data }: { data: LiveNotificationData }) {
   const [awake, setAwake] = useState(false);

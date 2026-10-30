@@ -214,6 +214,7 @@ export default function ChannelAboutReveal({ enabled, channelLogin, children }: 
                     buttonClassName="flex items-center justify-center px-2.5 py-[7px] glass-button rounded-lg"
                     iconClassName="h-3.5 w-3.5"
                     tooltipSide="top"
+                    iconSet="lucide"
                   />
                 )}
                 {playerOverlayButtonOn(playerOverlayButtons, 'follow') && (

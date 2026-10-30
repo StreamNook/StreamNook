@@ -6,6 +6,7 @@
 // Follow under the pointer. A step quieter than Follow, at the same size.
 
 import { Bell, BellSlash } from 'phosphor-react';
+import { Bell as LucideBell, BellOff as LucideBellOff } from 'lucide-react';
 import { Tooltip } from './ui/Tooltip';
 import { useAppStore } from '../stores/AppStore';
 import { favoriteIdOf } from '../utils/favorites';
@@ -24,6 +25,9 @@ interface LiveAlertBellProps {
   /** Icon size classes, as the Follow button's icon. */
   iconClassName: string;
   tooltipSide?: 'top' | 'bottom';
+  /** The icon family of the controls beside it: phosphor beside the player's
+   *  and tiles' hearts, lucide in the About strip. */
+  iconSet?: 'phosphor' | 'lucide';
 }
 
 export function LiveAlertBell(props: LiveAlertBellProps) {
@@ -45,6 +49,7 @@ function LiveAlertBellButton({
   buttonClassName,
   iconClassName,
   tooltipSide = 'bottom',
+  iconSet = 'phosphor',
 }: LiveAlertBellProps) {
   const { on, busy, setOn } = useLiveAlert({ provider, userId, userLogin });
   if (on === null) return null;
@@ -62,7 +67,13 @@ function LiveAlertBellButton({
         aria-label={on ? `Turn off live alerts for ${name}` : `Turn on live alerts for ${name}`}
         className={`${buttonClassName} ${busy ? 'opacity-60 cursor-wait' : ''}`}
       >
-        {on ? (
+        {iconSet === 'lucide' ? (
+          on ? (
+            <LucideBell className={`${iconClassName} text-textSecondary`} />
+          ) : (
+            <LucideBellOff className={`${iconClassName} text-textMuted`} />
+          )
+        ) : on ? (
           <Bell weight="fill" className={`${iconClassName} text-textSecondary`} />
         ) : (
           <BellSlash weight="bold" className={`${iconClassName} text-textMuted`} />

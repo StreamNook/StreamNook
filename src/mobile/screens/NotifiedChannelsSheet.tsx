@@ -150,10 +150,11 @@ export const NotifiedChannelsSheet: React.FC<{ open: boolean; onClose: () => voi
           >
             {copying ? 'Copying your Twitch bells…' : 'Copy from Twitch'}
           </button>
-          {line && (
-            <p className="text-[12.5px] text-textSecondary leading-snug" aria-live="polite">
-              {line.text}
-              {line.copyId !== null && (
+          {/* Always drawn, two lines tall, so a result never moves the list
+              under the finger that just pressed Copy. */}
+          <p className="min-h-[35px] text-[12.5px] text-textSecondary leading-snug" aria-live="polite">
+            {line ? line.text : 'Mutes every channel whose notification bell is off on Twitch.'}
+            {line && line.copyId !== null && (
                 <>
                   {' '}
                   <button
@@ -167,8 +168,7 @@ export const NotifiedChannelsSheet: React.FC<{ open: boolean; onClose: () => voi
                   </button>
                 </>
               )}
-            </p>
-          )}
+          </p>
         </div>
 
         <div className="relative">

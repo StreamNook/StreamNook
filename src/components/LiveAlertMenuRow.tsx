@@ -5,10 +5,10 @@
 // So whether the row is there is decided at once, from the channel alone (any
 // channel with an identity: like the phones' row, a mute on a channel you do
 // not follow is harmless and holds if you follow later), and only its value
-// waits for Rust, in a slot that is already there ("…", disabled). The menu
+// waits for Rust, in a slot that is already there (a spinner, disabled). The menu
 // stays open on a press so the value flips in place, as the confirmation.
 
-import { Bell, BellOff } from 'lucide-react';
+import { Bell, BellOff, Loader2 } from 'lucide-react';
 import { favoriteIdOf } from '../utils/favorites';
 import { streamProvider } from '../utils/streamProvider';
 import { useLiveAlert } from '../hooks/useLiveAlert';
@@ -51,7 +51,11 @@ function LiveAlertMenuRowButton({ stream, className }: LiveAlertMenuRowProps) {
     >
       {on === false ? <BellOff size={16} /> : <Bell size={16} />}
       <span className="flex-1 text-left">Live alerts</span>
-      <span className="text-xs text-textMuted">{known ? (on ? 'On' : 'Off') : '…'}</span>
+      {/* One fixed slot: the menu's own loading glyph until Rust answers, then
+          the value, so the row never changes width. */}
+      <span className="inline-flex w-6 justify-end text-xs text-textMuted">
+        {known ? (on ? 'On' : 'Off') : <Loader2 size={12} className="animate-spin" aria-label="Loading" />}
+      </span>
     </button>
   );
 }

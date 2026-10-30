@@ -1,4 +1,4 @@
-import React, { useEffect, useId } from "react";
+import React, { useEffect, useId, useRef } from "react";
 import { useTooltipStore } from "../../stores/TooltipStore";
 import { IS_MOBILE } from "../../utils/platform";
 
@@ -83,6 +83,14 @@ export const Tooltip: React.FC<TooltipProps> = ({
     if (typeof content === 'string' && content) updateContent(tooltipId, content);
   }, [content, updateContent, tooltipId]);
 
+  // The words as they are when the delayed show fires, not when the pointer
+  // arrived: a label that changes during the delay (a state read on hover)
+  // would otherwise show its first words.
+  const latestContent = useRef(content);
+  useEffect(() => {
+    latestContent.current = content;
+  }, [content]);
+
   // Touch has no hover: on mobile every tooltip site renders its child
   // untouched (a synthesized mouseenter on tap would otherwise pop tooltips).
   if (IS_MOBILE || disabled || !content) {
@@ -92,7 +100,7 @@ export const Tooltip: React.FC<TooltipProps> = ({
   const arm = (targetElement: HTMLElement) => {
     scheduleShow(tooltipId, delay, () => {
       const rect = targetElement.getBoundingClientRect();
-      showTooltip(tooltipId, content, rect, side, containerClassName);
+      showTooltip(tooltipId, latestContent.current, rect, side, containerClassName);
       // It's okay, if we hover over something else, the store overrides it.
     });
   };

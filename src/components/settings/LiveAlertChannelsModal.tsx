@@ -161,7 +161,9 @@ export function LiveAlertChannelsModal({ onClose }: { onClose: () => void }) {
 
         <div className="flex-shrink-0 space-y-3 px-5 pt-4 pb-3">
           <p className="text-[12.5px] text-textSecondary">{intro}</p>
-          <div className="flex items-center gap-3">
+          {/* Two lines tall from the start, so a longer result never moves the
+              button just pressed or the list below. */}
+          <div className="flex min-h-[36px] items-center gap-3">
             <button
               type="button"
               onClick={copyFromTwitch}
@@ -173,7 +175,11 @@ export function LiveAlertChannelsModal({ onClose }: { onClose: () => void }) {
               Copy from Twitch
             </button>
             <p className="min-w-0 text-[12px] text-textMuted">
-              {shownLine ? shownLine.text : 'Mutes every channel whose notification bell is off on Twitch.'}
+              {copying
+                ? 'Copying your Twitch bells…'
+                : shownLine
+                  ? shownLine.text
+                  : 'Mutes every channel whose notification bell is off on Twitch.'}
               {shownLine?.undoId != null && (
                 <>
                   {' '}
@@ -221,8 +227,11 @@ export function LiveAlertChannelsModal({ onClose }: { onClose: () => void }) {
                 ) : (
                   <div className="h-8 w-8 flex-shrink-0 rounded-full bg-white/[0.06]" />
                 )}
-                {mixed && isProviderId(c.provider) && <ProviderLogo provider={c.provider} size={12} />}
-                <span className="min-w-0 flex-1 truncate text-[13.5px] text-textPrimary">{name}</span>
+                {/* The platform mark after the name, as on the alert rows and tiles. */}
+                <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                  <span className="min-w-0 truncate text-[13.5px] text-textPrimary">{name}</span>
+                  {mixed && isProviderId(c.provider) && <ProviderLogo provider={c.provider} size={12} />}
+                </span>
                 {on !== null && (
                   <Tooltip content={on ? `Live alerts on for ${name}` : `Live alerts off for ${name}`} side="left">
                     <button
@@ -235,7 +244,11 @@ export function LiveAlertChannelsModal({ onClose }: { onClose: () => void }) {
                         busy ? 'cursor-wait opacity-60' : ''
                       }`}
                     >
-                      {on ? <Bell size={16} className="text-accent" /> : <BellOff size={16} className="text-textMuted" />}
+                      {on ? (
+                        <Bell size={16} fill="currentColor" className="text-accent" />
+                      ) : (
+                        <BellOff size={16} className="text-textMuted" />
+                      )}
                     </button>
                   </Tooltip>
                 )}
