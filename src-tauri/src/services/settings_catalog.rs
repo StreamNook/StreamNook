@@ -313,6 +313,21 @@ mod tests {
     }
 
     #[test]
+    fn timestamp_position_defaults_inline_and_sits_under_timestamps() {
+        let fresh = serde_json::to_value(crate::models::settings::Settings::default()).unwrap();
+        assert_eq!(
+            crate::commands::settings_fields::get_path(&fresh, "chat_design.timestamp_position"),
+            Some(&serde_json::json!("inline"))
+        );
+        let row = rows()
+            .iter()
+            .find(|r| r.paths.iter().any(|p| p == "chat_design.timestamp_position"))
+            .expect("a Position row");
+        assert!(row.nested);
+        assert_eq!(row.under.as_deref(), Some("Timestamps"));
+    }
+
+    #[test]
     fn rows_a_build_lacks_are_hidden_from_search_and_changed() {
         // A build without combined chat (a phone) finds none of its rows, on
         // Android as well as the iPhone.

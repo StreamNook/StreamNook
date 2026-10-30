@@ -334,6 +334,10 @@ pub struct ChatDesignSettings {
     /// "12h" (default) | "24h". Read by irc_service's timestamp formatter.
     #[serde(default = "default_timestamp_format")]
     pub timestamp_format: String,
+    /// "inline" (default): the time leads the name line. "own_line": the time
+    /// sits on its own line above the message.
+    #[serde(default = "default_timestamp_position")]
+    pub timestamp_position: String,
     // The fields below were added to the TS type over time but were missing here,
     // so they silently failed to persist (serde drops unknown fields on save).
     // Each carries a serde default matching the frontend default so old
@@ -663,6 +667,7 @@ impl Default for ChatDesignSettings {
             show_timestamps: false,
             show_timestamp_seconds: false,
             timestamp_format: default_timestamp_format(),
+            timestamp_position: default_timestamp_position(),
             emote_scale: 1.0,
             animate_emotes: default_animate_emotes(),
             show_chat_gifs: true,
@@ -3083,6 +3088,10 @@ mod backup_persistence_tests {
 
 fn default_timestamp_format() -> String {
     "12h".to_string()
+}
+
+fn default_timestamp_position() -> String {
+    "inline".to_string()
 }
 
 fn default_animate_emotes() -> String {

@@ -227,6 +227,9 @@ export interface ChatDesignSettings {
   show_timestamps?: boolean; // Show timestamp next to each message
   show_timestamp_seconds?: boolean; // Include seconds in timestamps
   timestamp_format?: '12h' | '24h'; // Formatted in Rust; default 12h
+  // Where the time sits: leading the name line (default) or on its own line
+  // above the message. Typed in Rust too (ChatDesignSettings).
+  timestamp_position?: 'inline' | 'own_line';
   emote_scale?: number; // Emote size multiplier (0.5x to 3x). Default 1.
   // Animated emotes: play always (default), only while the row is hovered,
   // or never (first frame). Typed in Rust too; the CDNs serve static files.

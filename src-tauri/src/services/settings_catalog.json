@@ -865,6 +865,23 @@
   },
   {
    "page": "chat",
+   "section": "Message Layout",
+   "title": "Position",
+   "paths": [
+    "chat_design.timestamp_position"
+   ],
+   "nested": true,
+   "logo": null,
+   "detail": "Beside the name, or on its own line above the message.",
+   "aliases": [
+    "timestamp position",
+    "time on its own line",
+    "new line",
+    "beside"
+   ]
+  },
+  {
+   "page": "chat",
    "section": "Names & Badges",
    "title": "Name style",
    "paths": [
