@@ -3,6 +3,7 @@
 interface SNBridge {
   get?(): string;
   setImmersive?(immersive: boolean): void;
+  setBackExclusion?(side: string): void;
   setPlayerOrientation?(mode: string): void;
   setBarsLightContent?(light: boolean): void;
   setKeepScreenOn?(on: boolean): void;
@@ -60,6 +61,20 @@ export function setImmersive(immersive: boolean): void {
     /* bridge absent */
   }
 }
+
+/** The landscape player's chat pull (SN-30): claim chat's side edge from
+ *  Android's Back gesture, or null to hand it back. */
+export function setBackExclusion(side: 'left' | 'right' | null): void {
+  try {
+    bridge()?.setBackExclusion?.(side ?? '');
+  } catch {
+    /* bridge absent */
+  }
+}
+
+// A page reload runs no React cleanup, so a claim from the page before is
+// handed back here, before anything renders.
+setBackExclusion(null);
 
 /** Icon colour for the system bars. `light` means light CONTENT (a white clock),
  *  which is what a dark theme background needs. */

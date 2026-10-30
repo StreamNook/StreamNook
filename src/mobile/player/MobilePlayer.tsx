@@ -32,6 +32,8 @@ import { registerReplayClock } from '../../stores/vodReplayStore';
 import { VodSeekBar, VodTransport, useVodClock } from './VodControls';
 import { recordedLine, seekTarget } from '../watch/channelMedia';
 import { useChannelSheet } from '../watch/MobileChannelSheet';
+import { createZoomSurface, fillScale, registerZoomSurface, type ZoomSurface } from './videoFill';
+import { useZoomToFill } from './zoomToFill';
 
 const CONTROLS_HIDE_MS = 3000;
 // Every bottom-bar glyph at one size, so no button out-pulls another.
@@ -108,6 +110,8 @@ export const MobilePlayer: React.FC<{
   /** An offline room's card sits in a chin below the band (MobileOfflineChin),
    *  so the band draws the offline art alone. */
   offlineCardBelow?: boolean;
+  /** Landscape picture of a stream: Zoom to fill and the pinch apply. */
+  zoomable?: boolean;
 }> = ({
   immersive = false,
   onToggleFullscreen,
@@ -120,6 +124,7 @@ export const MobilePlayer: React.FC<{
   chatOpen = false,
   controlsInset,
   offlineCardBelow = false,
+  zoomable = false,
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const { state, reason } = useMobileHlsEngine(videoRef);
@@ -479,6 +484,41 @@ export const MobilePlayer: React.FC<{
     setLiveVideo(el);
   }, []);
 
+  // Zoom to fill (SN-30): the wrapper around the video is the zoom surface's,
+  // which alone writes its transform (videoFill.ts). Made once per wrapper; it
+  // follows the wrapper's box and the video's own size.
+  const zoomRef = useRef<HTMLDivElement>(null);
+  const zoomSurface = useRef<ZoomSurface | null>(null);
+  const fillWanted = useZoomToFill();
+  useLayoutEffect(() => {
+    const el = zoomRef.current;
+    if (!el) return;
+    const surface = createZoomSurface(el, () => document.documentElement.dataset.motion);
+    zoomSurface.current = surface;
+    const unregister = registerZoomSurface(surface);
+    const video = videoRef.current;
+    const measure = () =>
+      surface.setFill(fillScale(el.clientWidth, el.clientHeight, video?.videoWidth ?? 0, video?.videoHeight ?? 0));
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    video?.addEventListener('loadedmetadata', measure);
+    video?.addEventListener('resize', measure);
+    return () => {
+      observer.disconnect();
+      video?.removeEventListener('loadedmetadata', measure);
+      video?.removeEventListener('resize', measure);
+      unregister();
+      surface.dispose();
+      zoomSurface.current = null;
+    };
+  }, []);
+  // A layout effect, so a pinch's release (a discrete event) lands the new rest
+  // before the browser paints: the picture never dips through the old one.
+  useLayoutEffect(() => {
+    zoomSurface.current?.setInputs({ zoomable, want: fillWanted });
+  }, [zoomable, fillWanted]);
+
   // Header give-way (see GIVE_WAY_*), decided from hidden copies of each part
   // at full size, so the choice never depends on what is already cut.
   const identityRowRef = useRef<HTMLDivElement>(null);
@@ -683,22 +723,26 @@ export const MobilePlayer: React.FC<{
       className="relative w-full h-full bg-black overflow-hidden"
       onClick={onSurfaceTap}
     >
-      <video
-        // Callback ref so the clip sheet can duck this element's audio while a
-        // clip plays. Assigns the same ref object the engine reads, then
-        // publishes it; both are cleared on unmount when React passes null.
-        ref={attachVideo}
-        className="w-full h-full object-contain"
-        playsInline
-        autoPlay
-        // A <video> with no poster gets Android WebView's own grey play-triangle
-        // placeholder until the first frame decodes. A transparent poster
-        // suppresses it, so what shows before playback is our logo below.
-        // 16x9, not 1x1: pre-metadata the element takes its intrinsic ratio
-        // from the poster, and a square one made the loading band render
-        // square before lurching to 16:9 at first frame (see playerBandClass).
-        poster="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 9' width='16' height='9'/%3E"
-      />
+      {/* Zoom to fill's wrapper, in every mode so the video never remounts;
+          its transform belongs to the zoom surface alone. */}
+      <div ref={zoomRef} className="absolute inset-0" style={{ transformOrigin: '50% 50%' }}>
+        <video
+          // Callback ref so the clip sheet can duck this element's audio while a
+          // clip plays. Assigns the same ref object the engine reads, then
+          // publishes it; both are cleared on unmount when React passes null.
+          ref={attachVideo}
+          className="w-full h-full object-contain"
+          playsInline
+          autoPlay
+          // A <video> with no poster gets Android WebView's own grey play-triangle
+          // placeholder until the first frame decodes. A transparent poster
+          // suppresses it, so what shows before playback is our logo below.
+          // 16x9, not 1x1: pre-metadata the element takes its intrinsic ratio
+          // from the poster, and a square one made the loading band render
+          // square before lurching to 16:9 at first frame (see playerBandClass).
+          poster="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 9' width='16' height='9'/%3E"
+        />
+      </div>
 
       {logoMounted && (
         <div

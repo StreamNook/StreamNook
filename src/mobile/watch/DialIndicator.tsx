@@ -5,7 +5,7 @@
 // the gesture.
 import React from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { SpeakerHigh, SpeakerLow, SpeakerNone, Sun, SunDim } from 'phosphor-react';
+import { ArrowsInSimple, ArrowsOutSimple, SpeakerHigh, SpeakerLow, SpeakerNone, Sun, SunDim } from 'phosphor-react';
 
 export type DialAxis = 'brightness' | 'volume';
 
@@ -66,3 +66,33 @@ export const DialIndicator: React.FC<{ dial: DialReading | null }> = ({ dial }) 
     </AnimatePresence>
   );
 };
+
+/** The pinch's readout (SN-30): what the release chose, for a beat, in the
+ *  dial readout's spot and capsule. Null shows nothing. */
+export const ZoomIndicator: React.FC<{ fill: boolean | null }> = ({ fill }) => (
+  <AnimatePresence>
+    {fill !== null && (
+      <motion.div
+        key={fill ? 'fill' : 'fit'}
+        className="absolute inset-0 z-30 flex items-center justify-center pointer-events-none"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        transition={{ duration: 0.16 }}
+      >
+        <motion.div
+          className="chrome-glaze chrome-glaze--frosted flex items-center gap-2.5 px-4 h-11 text-white"
+          initial={{ scale: 0.94 }}
+          animate={{ scale: 1 }}
+          exit={{ scale: 0.96 }}
+          transition={{ type: 'spring', stiffness: 420, damping: 32 }}
+          role="status"
+          aria-live="polite"
+        >
+          {fill ? <ArrowsOutSimple size={20} weight="bold" /> : <ArrowsInSimple size={20} weight="bold" />}
+          <span className="text-[13px] font-semibold">{fill ? 'Zoomed to fill' : 'Fit to screen'}</span>
+        </motion.div>
+      </motion.div>
+    )}
+  </AnimatePresence>
+);

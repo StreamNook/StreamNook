@@ -26,7 +26,7 @@ import {
 } from 'framer-motion';
 import { SpeakerHigh, SpeakerSlash, X } from 'phosphor-react';
 import { useAppStore } from '../../stores/AppStore';
-import { useMobileNavStore } from '../navStore';
+import { backTakenBeforePlayer, useMobileNavStore } from '../navStore';
 import { useRoomPins } from '../chat/useRoomPins';
 import { useChatTabsStore } from '../chat/chatTabsStore';
 import { useWindowShape } from '../ui/useWindowShape';
@@ -77,8 +77,9 @@ import {
   setPlayerOrientation,
   setPreferredRefreshRate,
   setScreenBrightness,
+  setBackExclusion,
 } from '../nativeBridge';
-import { DialIndicator, type DialAxis, type DialReading } from '../watch/DialIndicator';
+import { DialIndicator, ZoomIndicator, type DialAxis, type DialReading } from '../watch/DialIndicator';
 import { dialCanStart } from '../watch/dialZone';
 import {
   dialHundredth,
@@ -94,6 +95,10 @@ import { hapticStep, hapticTick } from '../ui/haptics';
 import { readInsets, type ResolvedInsets } from '../nativeInsets';
 import { swallowTrailingClick } from '../ui/trailingClick';
 import { isTwitchStream } from '../../utils/streamProvider';
+import { createBandTouches } from '../watch/bandTouches';
+import { backClaimSide, chatSwipeIntent, chatSwipeSide } from '../watch/chatSwipe';
+import { currentZoomSurface, type ZoomSurface } from '../player/videoFill';
+import { writeZoomToFill } from '../player/zoomToFill';
 
 const MINI_W = 200;
 const MINI_H = Math.round((MINI_W * 9) / 16);
@@ -234,6 +239,14 @@ export const WatchScreen: React.FC = () => {
   // The dial being turned right now (brightness or volume), for the readout.
   const [dial, setDial] = useState<DialReading | null>(null);
   const dialHide = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The pinch's readout ("Zoomed to fill" / "Fit to screen"). It shares the dial
+  // readout's spot and timer, so the two never show at once.
+  const [zoomNote, setZoomNote] = useState<boolean | null>(null);
+  // Every finger on the band (bandTouches.ts): pinches and resting thumbs.
+  const [touches] = useState(createBandTouches);
+  // The zoom surface a pinch began on; a player replaced mid-pinch ends it with
+  // no write.
+  const pinchSurface = useRef<ZoomSurface | null>(null);
   // Whether a dialed brightness is in force on the window right now (the
   // dial's Auto clears it), so the reset when playback ends is only sent if
   // there is something to reset, and a swipe knows it starts in Auto.
@@ -273,8 +286,9 @@ export const WatchScreen: React.FC = () => {
     id: number;
     /** shrink: portrait drag-down to the mini box; move: dragging the mini
      *  box; dial: a vertical swipe over landscape video turning brightness
-     *  (left half) or volume (right half). */
-    kind: 'shrink' | 'move' | 'dial';
+     *  (left half) or volume (right half); swipe: a sideways swipe over
+     *  landscape video bringing chat in or out. */
+    kind: 'shrink' | 'move' | 'dial' | 'swipe';
     x: number;
     y: number;
     px: number;
@@ -284,6 +298,12 @@ export const WatchScreen: React.FC = () => {
     vy: number;
     progress: number;
     moved: boolean;
+    /** A landscape press that may become the chat swipe (SN-30): it did not
+     *  start in an edge strip. */
+    swipeOk?: boolean;
+    /** The chat swipe's last x and horizontal speed (CSS px per ms). */
+    lastX?: number;
+    vx?: number;
     /** Absent when the press began in an edge strip (dialZone): that
      *  gesture is a tap or nothing, never a dial. */
     dial?: {
@@ -508,6 +528,27 @@ export const WatchScreen: React.FC = () => {
   // bisected by the crease; elsewhere the split the viewer chose. On a phone it
   // is the chat column's width, which the column's own handle drags live.
   const playerWidth = phoneBeside ? shape.w - overlayWidth : chatBeside ? playerMain : shape.w;
+  // Where a sideways swipe on the picture brings chat in from (SN-30), or null
+  // where chat is not a side column.
+  const columnsOnReturn = watchLayout === 'auto' ? autoColumns : watchLayout === 'columns' && sideFits;
+  const swipeSide = chatSwipeSide({
+    sideBySide,
+    largeScreen: shape.largeScreen,
+    largeToggle,
+    largeChatHidden,
+    twoColumns,
+    columnsOnReturn,
+    overlaySide,
+  });
+  const chatShownNow = largeToggle ? !largeChatHidden : chatOverlay || chatBeside;
+  // Read at a swipe's release, so a turn or a toggle mid-swipe is seen.
+  const swipeState = useRef({ side: swipeSide, open: chatShownNow, largeToggle });
+  useLayoutEffect(() => {
+    swipeState.current = { side: swipeSide, open: chatShownNow, largeToggle };
+  });
+  // Zoom to fill and the pinch work on a stream's landscape picture (an offline
+  // room's VOD counts; its art does not).
+  const zoomable = sideBySide && streamUrl !== 'offline';
 
   useEffect(() => {
     const onResize = () => setViewport({ w: window.innerWidth, h: window.innerHeight });
@@ -750,6 +791,14 @@ export const WatchScreen: React.FC = () => {
   // leaving it (the mini box, picture in picture, closing) hands the screen
   // back to the sensor, so the rest of the app is never stuck on its side.
   const playerUp = show && !mini && !pip;
+  // A pull from chat's own edge brings chat in instead of running Back (which
+  // shrinks the player), while chat is away and nothing else takes Back.
+  const backTaken = useMobileNavStore(backTakenBeforePlayer);
+  const backClaim = backClaimSide({ immersive, side: swipeSide, chatOpen: chatShownNow, backTaken });
+  useEffect(() => {
+    setBackExclusion(backClaim);
+  }, [backClaim]);
+  useEffect(() => () => setBackExclusion(null), []);
   useEffect(() => {
     if (!playerUp) setPlayerOrientation('release');
   }, [playerUp]);
@@ -794,6 +843,69 @@ export const WatchScreen: React.FC = () => {
   // Pinned messages for the room on screen (shared with the Chats screen).
   const pinned = useRoomPins(watching);
 
+  // Ends the single-finger gesture in flight with no decision (a second finger
+  // began a pinch or took over from a resting thumb): a dial's readout lingers,
+  // a chat swipe never toggles, a shrink drag springs back, a box drag stays.
+  const endSingleWithoutDecision = useCallback(() => {
+    const g = gesture.current;
+    gesture.current = null;
+    if (!g?.moved) return;
+    setDragging(false);
+    if (g.kind === 'shrink' && !scaleModel) setShrink(0);
+    if (g.kind === 'move' && scaleModel) setMiniPos({ x: boxX.get(), y: boxY.get() });
+    if (g.kind === 'dial') {
+      if (dialHide.current) clearTimeout(dialHide.current);
+      dialHide.current = setTimeout(() => setDial(null), 650);
+    }
+  }, [scaleModel, boxX, boxY]);
+
+  // A pinch's end: the choice it made, said once in the readout. Nothing to
+  // fill, a pinch back to where it started, or a player replaced mid-pinch
+  // change nothing and say nothing.
+  const finishPinch = useCallback((want: boolean, startFill: boolean) => {
+    const surface = currentZoomSurface();
+    const began = pinchSurface.current;
+    pinchSurface.current = null;
+    surface?.endPreview();
+    if (!surface || surface !== began || want === startFill) return;
+    void writeZoomToFill(want);
+    if (dialHide.current) clearTimeout(dialHide.current);
+    setDial(null);
+    setZoomNote(want);
+    dialHide.current = setTimeout(() => setZoomNote(null), 900);
+  }, []);
+
+  // A pinch in flight ends with no change when the picture stops being
+  // zoomable under it (a turn to portrait, PiP, the mini box, an offline room).
+  useEffect(() => {
+    if (zoomable) return;
+    if (touches.abortPinch()) {
+      pinchSurface.current = null;
+      currentZoomSurface()?.endPreview();
+    }
+  }, [zoomable, touches]);
+
+  // No pointerup comes after the page hides or the window loses focus: every
+  // finger is forgotten and a gesture in flight ends with no decision.
+  useEffect(() => {
+    const forget = () => {
+      if (touches.reset()) {
+        pinchSurface.current = null;
+        currentZoomSurface()?.endPreview();
+      }
+      endSingleWithoutDecision();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState !== 'visible') forget();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('blur', forget);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('blur', forget);
+    };
+  }, [touches, endSingleWithoutDecision]);
+
   // ONE gesture on the band, serving both drags, bound UNCONDITIONALLY.
   //
   // This used to be two handler sets swapped by `mini` mid-gesture, and every
@@ -809,6 +921,39 @@ export const WatchScreen: React.FC = () => {
   // mid-gesture cannot reroute a drag that is already in flight.
   const onBandPointerDown = useCallback(
     (e: React.PointerEvent) => {
+      // A press inside a sheet the player opened bubbles here through React's
+      // portal; it is the sheet's, never a dial, a swipe or a pinch.
+      const own = (e.currentTarget as Node).contains(e.target as Node);
+      const surface = currentZoomSurface();
+      const touch = touches.down(
+        { id: e.pointerId, x: e.clientX, y: e.clientY, t: e.timeStamp, primary: e.isPrimary, own },
+        { pinchable: zoomable && !!surface, fill: surface?.fillScale() ?? 1, startFill: surface?.isOn() ?? false },
+      );
+      if (touch.kind === 'ignore') {
+        // A press in a sheet clears a stale swallow, as every band press did
+        // before, so the sheet's first tap is never eaten.
+        if (!own) suppressClick.current = false;
+        return;
+      }
+      if (touch.kind === 'pinch-start') {
+        endSingleWithoutDecision();
+        pinchSurface.current = surface;
+        suppressClick.current = true;
+        const band = e.currentTarget as HTMLElement;
+        for (const id of touches.pinchIds()) {
+          try {
+            band.setPointerCapture(id);
+          } catch {
+            /* that finger has already lifted */
+          }
+        }
+        return;
+      }
+      if (touch.kind === 'single' && touch.endedPinch) {
+        pinchSurface.current = null;
+        surface?.endPreview();
+      }
+      if (touch.kind === 'single-restart') endSingleWithoutDecision();
       if (pip) return;
       // Mid-flight the layer is neither the full player nor the box: let the
       // spring finish rather than freeze it half way under the finger.
@@ -831,7 +976,10 @@ export const WatchScreen: React.FC = () => {
         // An offline room has no picture to dial (the iPhone's room takes the
         // touch the same way), so a press there is a tap or nothing as well.
         const offlineRoom = useAppStore.getState().streamUrl === 'offline';
-        if (offlineRoom || !dialCanStart(e.clientY, window.innerHeight, ins.gestureTop, ins.gestureBottom)) {
+        // A press in an edge strip neither dials nor swipes; an offline room's
+        // press may swipe chat in but never dials.
+        const swipeOk = dialCanStart(e.clientY, window.innerHeight, ins.gestureTop, ins.gestureBottom);
+        if (offlineRoom || !swipeOk) {
           gesture.current = {
             id: e.pointerId,
             kind: 'dial',
@@ -844,6 +992,7 @@ export const WatchScreen: React.FC = () => {
             vy: 0,
             progress: 0,
             moved: false,
+            swipeOk,
           };
           suppressClick.current = false;
           return;
@@ -863,6 +1012,7 @@ export const WatchScreen: React.FC = () => {
           vy: 0,
           progress: 0,
           moved: false,
+          swipeOk: true,
           dial: {
             axis,
             start,
@@ -902,11 +1052,19 @@ export const WatchScreen: React.FC = () => {
       // armed and eat the next real tap.
       suppressClick.current = false;
     },
-    [pip, sideBySide, mini, miniClamped.x, miniClamped.y, scaleModel, prog, bandTop],
+    [pip, sideBySide, mini, miniClamped.x, miniClamped.y, scaleModel, prog, bandTop, touches, zoomable, endSingleWithoutDecision],
   );
 
   const onBandPointerMove = useCallback(
     (e: React.PointerEvent) => {
+      const touch = touches.move({ id: e.pointerId, x: e.clientX, y: e.clientY });
+      if (touch.kind === 'pinch') {
+        // Straight onto the zoom wrapper's transform: no render per move.
+        currentZoomSurface()?.preview(touch.scale);
+        if (touch.tick) hapticTick();
+        return;
+      }
+      if (touch.kind === 'ignore') return;
       const g = gesture.current;
       if (!g || g.id !== e.pointerId) return;
       const dx = e.clientX - g.x;
@@ -919,11 +1077,26 @@ export const WatchScreen: React.FC = () => {
         // here, touching neither brightness nor volume, and its trailing click
         // is swallowed.
         if (g.kind === 'dial' && (!g.dial || Math.abs(dy) <= Math.abs(dx))) {
+          // Sideways where chat can come in from a side column: the chat swipe
+          // (SN-30), decided on release. Captured now, so a release over the
+          // chat column still reaches the band.
+          if (g.swipeOk && Math.abs(dx) > Math.abs(dy) && swipeState.current.side) {
+            g.kind = 'swipe';
+            g.moved = true;
+            g.lastX = e.clientX;
+            g.lastT = e.timeStamp;
+            g.vx = 0;
+            (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+            touches.latch(e.pointerId, 'swipe');
+            return;
+          }
           gesture.current = null;
           suppressClick.current = true;
+          touches.drop(e.pointerId);
           return;
         }
         g.moved = true;
+        touches.latch(e.pointerId, g.kind);
         // Captured on first MOVE, not on pointerdown. Capturing straight away
         // would retarget pointerup to the band and rob the overlay's own
         // buttons (mute, share, minimize, quality) of their click.
@@ -942,6 +1115,13 @@ export const WatchScreen: React.FC = () => {
       // Everything below moves the layer, so nothing happens until the gesture
       // has committed to being a drag rather than a tap.
       if (!g.moved) return;
+      if (g.kind === 'swipe') {
+        const dtx = e.timeStamp - g.lastT;
+        if (dtx > 0) g.vx = (e.clientX - (g.lastX ?? e.clientX)) / dtx;
+        g.lastX = e.clientX;
+        g.lastT = e.timeStamp;
+        return;
+      }
       const dt = e.timeStamp - g.lastT;
       if (dt > 0) g.vy = (e.clientY - g.lastY) / dt;
       g.lastY = e.clientY;
@@ -953,6 +1133,7 @@ export const WatchScreen: React.FC = () => {
         // swallowed, and the readout lingers for a beat and goes.
         const endSwipe = () => {
           gesture.current = null;
+          touches.drop(e.pointerId);
           suppressClick.current = true;
           setDragging(false);
           if (dialHide.current) clearTimeout(dialHide.current);
@@ -969,6 +1150,7 @@ export const WatchScreen: React.FC = () => {
           clearTimeout(dialHide.current);
           dialHide.current = null;
         }
+        setZoomNote(null);
         if (d.brightness) {
           // The rule decides the level, Auto past the bottom and the haptic
           // (brightnessDial.ts); this only applies what it says.
@@ -1031,11 +1213,17 @@ export const WatchScreen: React.FC = () => {
       if (scaleModel) prog.set(g.progress);
       else setShrink(g.progress);
     },
-    [viewport.w, viewport.h, chatColumnEl, scaleModel, boxX, boxY, prog],
+    [viewport.w, viewport.h, chatColumnEl, scaleModel, boxX, boxY, prog, touches],
   );
 
   const onBandPointerUp = useCallback(
     (e: React.PointerEvent) => {
+      const touch = touches.up(e.pointerId);
+      if (touch.kind === 'pinch-end') {
+        finishPinch(touch.want, touch.startFill);
+        return;
+      }
+      if (touch.kind !== 'single') return;
       const g = gesture.current;
       if (!g || g.id !== e.pointerId) return;
       gesture.current = null;
@@ -1049,6 +1237,24 @@ export const WatchScreen: React.FC = () => {
           if (dialHide.current) clearTimeout(dialHide.current);
           dialHide.current = setTimeout(() => setDial(null), 650);
         }
+        return;
+      }
+
+      if (g.kind === 'swipe') {
+        // Re-read at release: a turn or a toggle mid-swipe changes the answer.
+        const s = swipeState.current;
+        if (!s.side) return;
+        const intent = chatSwipeIntent({
+          dx: e.clientX - g.x,
+          dy: e.clientY - g.y,
+          vx: g.vx ?? 0,
+          side: s.side,
+          open: s.open,
+        });
+        if (!intent) return;
+        if (s.largeToggle) setLargeChatHidden(intent === 'close');
+        else setLandscapeChat(intent === 'open');
+        hapticStep();
         return;
       }
 
@@ -1102,7 +1308,7 @@ export const WatchScreen: React.FC = () => {
       if (!scaleModel) setShrink(0);
       if (g.progress >= COMMIT_FRACTION || g.vy >= FLING_VY) setPlayerMode('mini');
     },
-    [viewport.w, viewport.h, setPlayerMode, scaleModel, boxX, boxY, reduceMotion],
+    [viewport.w, viewport.h, setPlayerMode, scaleModel, boxX, boxY, reduceMotion, touches, finishPinch],
   );
 
   // The OS took the gesture (edge swipe, notification shade, an incoming call).
@@ -1110,6 +1316,13 @@ export const WatchScreen: React.FC = () => {
   // The old code bound nothing here at all, which is what left a dead start
   // point live for the NEXT touch to be measured against.
   const onBandPointerCancel = useCallback((e: React.PointerEvent) => {
+    const touch = touches.cancel(e.pointerId);
+    if (touch.kind === 'pinch-cancel') {
+      pinchSurface.current = null;
+      currentZoomSurface()?.endPreview();
+      return;
+    }
+    if (touch.kind !== 'single') return;
     const g = gesture.current;
     if (!g || g.id !== e.pointerId) return;
     gesture.current = null;
@@ -1123,7 +1336,7 @@ export const WatchScreen: React.FC = () => {
       if (dialHide.current) clearTimeout(dialHide.current);
       dialHide.current = setTimeout(() => setDial(null), 650);
     }
-  }, [scaleModel, boxX, boxY]);
+  }, [scaleModel, boxX, boxY, touches]);
 
   // A dialed brightness is a viewing choice, not a phone setting: it lasts
   // while a stream plays, steps aside while the stream is in PiP, and hands
@@ -1177,7 +1390,12 @@ export const WatchScreen: React.FC = () => {
   // The band is `aspect-video w-full`, so at 200px wide it resolves to 112.5px,
   // which is MINI_H. The shrink therefore reads correctly the whole way down
   // with no class juggling, and `overflow-hidden` clips chat as it goes.
-  const fullRect = { top: 0, left: 0, width: viewport.w, height: viewport.h, borderRadius: 0 };
+  // Percent, not the integer viewport: innerWidth/innerHeight round a fractional
+  // CSS viewport, which left a device pixel or two of the page showing at the
+  // bottom and right edges (SN-30). PiP already sized this way.
+  const fullRect = { top: 0, left: 0, width: '100%', height: '100%', borderRadius: 0 };
+  // The shrink's interpolation needs numbers: the viewport in px.
+  const fullPx = { top: 0, left: 0, width: viewport.w, height: viewport.h };
   const miniRect = {
     // miniClamped, not miniPos: the clamp is applied on the way to the screen,
     // so no viewport can leave a stored position stranding the box out of reach.
@@ -1204,10 +1422,10 @@ export const WatchScreen: React.FC = () => {
       : sideBySide || shrink === 0
         ? fullRect
         : {
-            top: lerp(fullRect.top, miniRect.top, shrink),
-            left: lerp(fullRect.left, miniRect.left, shrink),
-            width: lerp(fullRect.width, miniRect.width, shrink),
-            height: lerp(fullRect.height, miniRect.height, shrink),
+            top: lerp(fullPx.top, miniRect.top, shrink),
+            left: lerp(fullPx.left, miniRect.left, shrink),
+            width: lerp(fullPx.width, miniRect.width, shrink),
+            height: lerp(fullPx.height, miniRect.height, shrink),
             borderRadius: lerp(0, miniRect.borderRadius, shrink),
           };
 
@@ -1275,12 +1493,12 @@ export const WatchScreen: React.FC = () => {
     ? 'hidden'
     : sideBySide
       ? chatBeside
-        ? 'flex-1 min-w-0 relative flex flex-col bg-background'
+        ? 'flex-1 min-w-0 relative flex flex-col bg-background sn-chat-reveal'
         : chatOverlay
           ? // Floats over the picture at the chosen edge. z-30 puts it above
             // the player's control layer, which is inset away from this edge
             // (see controlsInset below) so the two never fight for a touch.
-            `absolute top-0 bottom-0 z-30 flex flex-col sn-chat-overlay ${
+            `absolute top-0 bottom-0 z-30 flex flex-col sn-chat-overlay sn-chat-reveal ${
               overlaySide === 'left' ? 'left-0 sn-chat-overlay--left' : 'right-0'
             }`
           : 'hidden'
@@ -1398,7 +1616,8 @@ export const WatchScreen: React.FC = () => {
             // clipping against a fixed height. Only reachable on an expanded
             // screen in the stacked arrangement; phones never set it.
             ...(sideBySide
-              ? { width: playerWidth }
+              ? // Nothing beside it: the whole width, in percent like the layer.
+                { width: phoneBeside || chatBeside ? playerWidth : '100%' }
               : (resizable || tabletop) && shrink === 0
                 ? { height: playerMain }
                 : null),
@@ -1468,6 +1687,7 @@ export const WatchScreen: React.FC = () => {
               controlsInset={chatOverlay ? { side: overlaySide, px: overlayWidth } : undefined}
               layoutMode={twoColumns ? 'columns' : 'stacked'}
               offlineCardBelow={offlineChin}
+              zoomable={zoomable}
               onToggleLayout={
                 // Nothing to arrange while chat is hidden.
                 canChooseLayout && !mini && !pip && !(largeToggle && largeChatHidden)
@@ -1556,6 +1776,7 @@ export const WatchScreen: React.FC = () => {
             </div>
           )}
           <DialIndicator dial={dial} />
+          <ZoomIndicator fill={zoomNote} />
           {/* The box's hairline edge, so it reads over any thumbnail under it.
               In the band's own pixels, so it is 1 px on screen in the box. */}
           {scaleModel && mini && (

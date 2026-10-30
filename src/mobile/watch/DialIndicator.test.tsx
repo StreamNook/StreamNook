@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createElement } from 'react';
-import { DialIndicator, type DialReading } from './DialIndicator';
+import { DialIndicator, ZoomIndicator, type DialReading } from './DialIndicator';
 
 const render = (dial: DialReading | null) => renderToStaticMarkup(createElement(DialIndicator, { dial }));
 
@@ -31,5 +31,18 @@ describe('dial readout', () => {
 
   it('renders nothing without a dial', () => {
     expect(render(null)).toBe('');
+  });
+});
+
+describe('zoom readout', () => {
+  const zoom = (fill: boolean | null) => renderToStaticMarkup(createElement(ZoomIndicator, { fill }));
+
+  it('says what the pinch chose', () => {
+    expect(zoom(true)).toContain('>Zoomed to fill<');
+    expect(zoom(false)).toContain('>Fit to screen<');
+  });
+
+  it('renders nothing without a change', () => {
+    expect(zoom(null)).toBe('');
   });
 });

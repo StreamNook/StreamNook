@@ -44,6 +44,12 @@ import org.json.JSONObject
 class MainActivity : TauriActivity() {
   private var webView: WebView? = null
 
+  // The landscape player's chat pull (SN-30): the side edge claimed from the
+  // Back gesture, or null, and the gesture strips' widths in device px.
+  private var backExclusionSide: String? = null
+  private var gestureLeftPx = 0
+  private var gestureRightPx = 0
+
   // Last known insets in CSS px, readable synchronously from JS via the
   // `SNInsets` bridge (covers boot and page reloads, when the pushed CSS vars
   // have not been applied to the fresh document yet).
@@ -396,6 +402,16 @@ class MainActivity : TauriActivity() {
     }
 
     /** Hide/show the system bars (immersive playback, e.g. landscape watch). */
+    /** The landscape player's chat pull: claim one side edge ("left" or "right")
+     *  from the Back gesture, or "" to hand it back. */
+    @JavascriptInterface
+    fun setBackExclusion(side: String) {
+      runOnUiThread {
+        backExclusionSide = side.takeIf { it == "left" || it == "right" }
+        applyBackExclusion()
+      }
+    }
+
     /** The player's rotate button: hold landscape (either side) or portrait whatever the
      *  rotation lock says, or release back to the sensor when the player is left. */
     @JavascriptInterface
@@ -1142,6 +1158,9 @@ class MainActivity : TauriActivity() {
       // clear of them is cheaper and cannot be silently ignored by the system.
       val gest = insets.getInsets(WindowInsetsCompat.Type.systemGestures())
       val mand = insets.getInsets(WindowInsetsCompat.Type.mandatorySystemGestures())
+      gestureLeftPx = gest.left
+      gestureRightPx = gest.right
+      applyBackExclusion()
       fun px(v: Int): Int = (v / density).toInt()
       val kb = maxOf(0, px(ime.bottom) - px(bars.bottom))
       insetsJson = JSONObject()
@@ -1170,6 +1189,25 @@ class MainActivity : TauriActivity() {
       insets
     }
     ViewCompat.requestApplyInsets(webView)
+    // The claimed edge follows the WebView's size (a turn, a fold).
+    webView.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> applyBackExclusion() }
+  }
+
+  /** Claims the whole side edge the page asked for from the Back gesture, as
+   *  wide as that edge's gesture strip (at least 24 dp), or hands it back.
+   *  Android lifts its 200 dp cap while the bars are hidden with transient
+   *  swipe, which is the landscape player's state. */
+  private fun applyBackExclusion() {
+    val view = webView ?: return
+    val side = backExclusionSide
+    if (side == null || view.width == 0 || view.height == 0) {
+      ViewCompat.setSystemGestureExclusionRects(view, emptyList())
+      return
+    }
+    val wide = maxOf(if (side == "left") gestureLeftPx else gestureRightPx, (24 * resources.displayMetrics.density).toInt())
+    val rect =
+      if (side == "left") Rect(0, 0, wide, view.height) else Rect(view.width - wide, 0, view.width, view.height)
+    ViewCompat.setSystemGestureExclusionRects(view, listOf(rect))
   }
 
   /**
