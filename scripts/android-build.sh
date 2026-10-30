@@ -34,6 +34,20 @@ if [[ "${1:-}" == "--debug" ]]; then
   LABEL=debug
 fi
 
+# SN-235: release builds carry the push retry that relies on the push server
+# accepting removal-only registrations and device-only unregisters. Refuse to
+# build a release until that server is live (it says so at /version).
+if [[ "$LABEL" == "release" ]]; then
+  # Captured first, then searched: `curl | grep -q` under `set -o pipefail` can
+  # fail on curl's SIGPIPE when grep stops early, refusing a live server.
+  if ! ver=$(curl -fsS --max-time 10 https://notify.streamnook.app/version) \
+    || ! grep -q '"device_unregister":true' <<<"$ver"; then
+    echo "error: notify.streamnook.app/version does not report device_unregister (SN-235)." >&2
+    echo "Deploy the notify server first; phone releases rely on it." >&2
+    exit 1
+  fi
+fi
+
 # A leftover `tauri android dev` wedges a build for ~30 minutes and can leave a
 # stale APK in outputs. The bracket keeps pkill from matching its own cmdline -
 # but note it must be a SEPARATE invocation from the build, because the pattern
