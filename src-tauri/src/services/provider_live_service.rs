@@ -343,6 +343,7 @@ async fn apply(app: &AppHandle, provider: &str, from: List, rows: Vec<ProviderSt
     }
     log::info!("[ProviderLive] {}: {} went live", provider, fresh_live.len());
     for row in fresh_live {
+        let (channel, mute_keys) = crate::services::live_mute::row_alert(&row);
         crate::services::live_announce::announce(
             &app,
             LiveNotification {
@@ -359,6 +360,8 @@ async fn apply(app: &AppHandle, provider: &str, from: List, rows: Vec<ProviderSt
                 is_test: false,
                 source: None,
                 seventv_id: crate::services::seventv_cosmetics_resolver::cosmetics_id(&row.provider, &row.user_id),
+                channel,
+                mute_keys,
             },
         );
     }

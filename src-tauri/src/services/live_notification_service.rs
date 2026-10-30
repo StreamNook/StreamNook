@@ -31,6 +31,14 @@ pub struct LiveNotification {
     /// `youtube:UC...`), so the notification can draw their 7TV picture.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seventv_id: Option<String>,
+    /// The channel this go-live is about, for the alert's "Turn off alerts"
+    /// action (`set_live_alert`). `None` when it has no stable identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<crate::services::live_mute::AlertChannel>,
+    /// Every key a mute of this channel may be stored under
+    /// (`services::live_mute`). Read by the gate; never sent to a window.
+    #[serde(skip)]
+    pub mute_keys: Vec<String>,
 }
 
 pub struct LiveNotificationService {
@@ -126,6 +134,7 @@ impl LiveNotificationService {
             None
         };
 
+        let (channel, mute_keys) = crate::services::live_mute::twitch_alert(&stream.user_id, &stream.user_login);
         let notification = LiveNotification {
             streamer_name: stream.user_name.clone(),
             streamer_login: stream.user_login.clone(),
@@ -137,6 +146,8 @@ impl LiveNotificationService {
             is_test: false,
             source: None,
             seventv_id: crate::services::seventv_cosmetics_resolver::cosmetics_id("twitch", &stream.user_id),
+            channel,
+            mute_keys,
         };
 
         // Through the one gate (dedupe, cross-platform merge, the toggles).

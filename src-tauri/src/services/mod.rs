@@ -144,6 +144,8 @@ pub mod favorite_live_service;
 pub mod chat_dock_live;
 pub mod live_announce;
 pub mod live_bookmark;
+// Per-channel go-live mutes and Copy from Twitch.
+pub mod live_mute;
 pub mod live_notification_service;
 pub mod offline_room;
 pub mod onsite_notifications;

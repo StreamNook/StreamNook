@@ -973,6 +973,9 @@ pub async fn send_test_notification(
         is_test: true,
         source: None,
         seventv_id: None,
+        // A test is never muted and offers no "Turn off alerts".
+        channel: None,
+        mute_keys: Vec::new(),
     };
 
     // Emit the notification event to the frontend (for in-app notification)

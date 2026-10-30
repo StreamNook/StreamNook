@@ -101,10 +101,17 @@ pub fn retain_discover(rows: &mut Vec<DiscoverRow>, realm: Realm) {
     with_keys(realm, |keys| rows.retain(|r| !hit(keys, r.provider(), r.user_id(), r.user_login())));
 }
 
-/// Whether a go-live notice for `streamer_login` (a Twitch login, or another
-/// platform's composite key) is for a channel hidden from follows.
-pub fn hides_notification(streamer_login: &str) -> bool {
-    held().read().map(|h| h.notify.contains(&streamer_login.to_lowercase())).unwrap_or(false)
+/// Whether any of a go-live's keys names a hidden channel, ignoring case: a
+/// YouTube UC id is held with its case, and a go-live may name the channel by
+/// its `@handle` while it was hidden by its UC id.
+pub fn hides(set: &HashSet<String>, keys: &[String]) -> bool {
+    keys.iter().any(|k| set.iter().any(|h| h.eq_ignore_ascii_case(k.trim())))
+}
+
+/// Whether a go-live naming `keys` (`services::live_mute`) is for a channel
+/// hidden from follows.
+pub fn hides_notification_keys(keys: &[String]) -> bool {
+    held().read().map(|h| hides(&h.notify, keys)).unwrap_or(false)
 }
 
 /// The accounts whose chat messages are hidden, as the chat rules match them:
@@ -268,10 +275,20 @@ mod tests {
         assert_eq!(left(Realm::Browse), vec!["dave"]);
         assert_eq!(left(Realm::Search), vec!["carol", "dave"]);
         assert_eq!(left(Realm::Follows), vec!["carol", "dave"]);
-        assert!(hides_notification("bob"), "Twitch notices name the login");
-        assert!(!hides_notification("carol"));
+        assert!(hides_notification_keys(&["bob".to_string()]), "Twitch notices name the login");
+        assert!(!hides_notification_keys(&["carol".to_string()]));
         assert_eq!(chat_accounts(&settings), vec![("twitch:123".to_string(), "bob".to_string())]);
         refresh(&Settings::default());
         assert_eq!(left(Realm::Browse).len(), 3, "an empty list hides nothing");
+    }
+
+    #[test]
+    fn a_hidden_channel_is_matched_by_any_of_its_keys_in_any_case() {
+        let set: HashSet<String> =
+            ["youtube:UCabcDEF1234567890123456".to_string(), "bob".to_string()].into_iter().collect();
+        assert!(hides(&set, &["youtube:@handle".to_string(), "youtube:ucabcdef1234567890123456".to_string()]));
+        assert!(hides(&set, &["BOB".to_string()]));
+        assert!(!hides(&set, &["youtube:@handle".to_string()]));
+        assert!(!hides(&HashSet::new(), &["bob".to_string()]));
     }
 }

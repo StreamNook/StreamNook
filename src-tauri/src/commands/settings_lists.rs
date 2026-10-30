@@ -68,6 +68,9 @@ enum Kind {
     Set(&'static [&'static str]),
     /// Twitch logins toggled one at a time, trimmed and lowercased.
     Logins,
+    /// Live-alert mutes (`services::live_mute`): a bare Twitch login or
+    /// `provider:channel`, compared without case.
+    LiveChannels,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -100,7 +103,8 @@ fn kind_of(path: &str) -> Option<Kind> {
         "chat_commands.user_commands" => Kind::Entries(Entries::UserCommands),
         "chat_events.hidden_provider_events" | "chat_design.hidden_badge_providers" => Kind::Set(&[]),
         "chat_design.scrollbar_mark_kinds" => Kind::Set(MARK_KINDS),
-        "live_notifications.muted_live_channels" | "mentions.muted_channels" => Kind::Logins,
+        "live_notifications.muted_live_channels" => Kind::LiveChannels,
+        "mentions.muted_channels" => Kind::Logins,
         "chat_highlights.custom_sounds" => Kind::Entries(Entries::CustomSounds),
         "moderation.card_actions" => Kind::Entries(Entries::CardActions),
         _ => return None,
@@ -258,10 +262,14 @@ fn apply(kind: Kind, list: &[Value], edit: ListEdit) -> Result<Option<Vec<Value>
                 clean_entry(entries, &mut entry);
                 list.push(Value::Object(entry));
             }
-            Kind::Set(_) | Kind::Logins => return Err("toggle a set's values instead".to_string()),
+            Kind::Set(_) | Kind::Logins | Kind::LiveChannels => return Err("toggle a set's values instead".to_string()),
         },
         ListEdit::Remove { index, id, value } => {
             let at = match (&value, kind) {
+                (Some(value), Kind::LiveChannels) => {
+                    let wanted = value.as_str().unwrap_or_default().trim();
+                    list.iter().position(|v| v.as_str().is_some_and(|s| s.trim().eq_ignore_ascii_case(wanted)))
+                }
                 (Some(value), _) => list.iter().position(|v| v == value),
                 _ => position(&list, index, id.as_deref()),
             };
@@ -292,6 +300,16 @@ fn apply(kind: Kind, list: &[Value], edit: ListEdit) -> Result<Option<Vec<Value>
             }
             let entry = list.remove(at);
             list.insert(to, entry);
+        }
+        ListEdit::Toggle { value } if kind == Kind::LiveChannels => {
+            let Some(entry) = value.as_str().and_then(crate::services::live_mute::normalize_entry) else {
+                return Ok(None);
+            };
+            let before = list.len();
+            list.retain(|v| !v.as_str().is_some_and(|s| s.trim().eq_ignore_ascii_case(&entry)));
+            if list.len() == before {
+                list.push(json!(entry));
+            }
         }
         ListEdit::Toggle { value } if kind == Kind::Logins => {
             let login = value.as_str().unwrap_or_default().trim().to_lowercase();
@@ -346,6 +364,17 @@ pub async fn edit_settings_list(
     edit: ListEdit,
     state: State<'_, AppState>,
 ) -> Result<Value, String> {
+    // A mute edited by hand is never taken back by Copy from Twitch's Undo.
+    let touched = if path == "live_notifications.muted_live_channels" {
+        match &edit {
+            ListEdit::Toggle { value } | ListEdit::Remove { value: Some(value), .. } => {
+                value.as_str().and_then(crate::services::live_mute::normalize_entry)
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
     let mut stored = None;
     commit_settings_patch(&app, &state, None, |current| {
         let Some(next) = list_change(current, &path, edit)? else {
@@ -356,6 +385,9 @@ pub async fn edit_settings_list(
         changes.insert(path.clone(), Value::Array(next));
         patch_for_changes(current, &changes)
     })?;
+    if let Some(key) = &touched {
+        crate::services::live_mute::forget_copied(std::slice::from_ref(key));
+    }
     match stored {
         Some(list) => Ok(list),
         None => {
@@ -440,6 +472,24 @@ mod tests {
         assert_eq!(muted, vec![json!("shroud")]);
         let sets = run("chat_events.hidden_provider_events", json!([]), json!({"op": "toggle", "value": "kick:follows"})).unwrap();
         assert_eq!(sets, vec![json!("kick:follows")]);
+    }
+
+    #[test]
+    fn live_mutes_keep_platform_keys_and_compare_without_case() {
+        let path = "live_notifications.muted_live_channels";
+        let uc = "youtube:UCabcDEF1234567890123456";
+        assert_eq!(run(path, json!([]), json!({"op": "toggle", "value": uc})), Some(vec![json!(uc)]));
+        let back = run(path, json!(["youtube:ucabcdef1234567890123456"]), json!({"op": "toggle", "value": uc})).unwrap();
+        assert!(back.is_empty(), "a lowercased entry is the same channel");
+        assert_eq!(run(path, json!([]), json!({"op": "toggle", "value": "twitch:Shroud"})), Some(vec![json!("shroud")]));
+        let removed = run(path, json!(["Kick:XQC", "xqc"]), json!({"op": "remove", "value": "kick:xqc"})).unwrap();
+        assert_eq!(removed, vec![json!("xqc")]);
+        assert_eq!(run(path, json!([]), json!({"op": "toggle", "value": "  "})), None);
+        // Mentions keep plain logins.
+        assert_eq!(
+            run("mentions.muted_channels", json!([]), json!({"op": "toggle", "value": "twitch:Shroud"})),
+            Some(vec![json!("twitch:shroud")])
+        );
     }
 
     #[test]

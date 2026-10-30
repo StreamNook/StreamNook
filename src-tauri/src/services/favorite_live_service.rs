@@ -525,6 +525,7 @@ async fn apply(
         if suppress_notify.contains(&row.key) {
             continue;
         }
+        let (channel, mute_keys) = crate::services::live_mute::row_alert(&row);
         crate::services::live_announce::announce(
             &app,
             LiveNotification {
@@ -541,6 +542,8 @@ async fn apply(
                 is_test: false,
                 source: Some("favorite".to_string()),
                 seventv_id: crate::services::seventv_cosmetics_resolver::cosmetics_id(&row.provider, &row.user_id),
+                channel,
+                mute_keys,
             },
         );
     }

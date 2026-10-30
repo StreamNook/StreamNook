@@ -4,12 +4,16 @@
 
 use crate::commands::settings::commit_settings_patch;
 use crate::commands::settings_fields::{get_path, patch_for_changes};
-use crate::models::settings::AppState;
+use crate::models::settings::{AppState, FavoriteChannel, ProviderFollow};
 use crate::models::stream::TwitchStream;
 use crate::rt::AppHandle;
+use crate::services::account_store::AccountStore;
+use crate::services::live_mute::{self, CopyAnswer};
+use crate::services::providers::key::is_youtube_channel_id;
 use crate::services::twitch_service::TwitchService;
 use once_cell::sync::Lazy;
 use serde_json::{json, Map, Value};
+use std::collections::HashSet;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::State;
@@ -106,19 +110,74 @@ pub async fn get_community_invite() -> Result<CommunityInvite, String> {
     }
 }
 
-/// Every followed Twitch channel, for the live-alert sheet: sorted by name.
+/// One channel in the live-alert sheet: the Twitch row the shells already
+/// decode, plus its platform and whether its go-lives alert here.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct AlertChannelRow {
+    #[serde(flatten)]
+    pub stream: TwitchStream,
+    pub provider: String,
+    pub on: bool,
+}
+
+/// The channels the live-alert sheet lists, sorted by name.
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct AlertChannels {
-    pub channels: Vec<TwitchStream>,
-    /// The list stopped at `ALERT_PAGES` pages of follows.
+    pub channels: Vec<AlertChannelRow>,
+    /// The Twitch list stopped at `ALERT_PAGES` pages of follows.
     pub truncated: bool,
+    /// Listed channels whose alerts are off (the "except N" number); `None`
+    /// when the Twitch follows could not be read.
+    pub muted_count: Option<usize>,
+    /// The last Copy from Twitch on this account within 10 minutes, so a
+    /// reopened sheet shows its result line and Undo again.
+    pub last_copy: Option<CopyAnswer>,
 }
 
 const ALERT_PAGE: u32 = 100;
 const ALERT_PAGES: usize = 20;
+/// How long the sheet's Twitch follow list is reused. Settings screens ask on
+/// open and after every mute; only a cold or cleared cache pages Helix.
+const ALERT_FOLLOWS_TTL: Duration = Duration::from_secs(10 * 60);
 
-#[tauri::command]
-pub async fn get_followed_channels_for_alerts() -> Result<AlertChannels, String> {
+/// The Twitch follows last read for the sheet: (account, when, rows, truncated).
+type FollowCache = Option<(String, Instant, Vec<TwitchStream>, bool)>;
+
+static ALERT_FOLLOWS: Lazy<Mutex<FollowCache>> = Lazy::new(|| Mutex::new(None));
+/// Held for a cold read, so two sheets opening at once share one fetch.
+static ALERT_FOLLOWS_FETCH: Lazy<tokio::sync::Mutex<()>> = Lazy::new(|| tokio::sync::Mutex::new(()));
+
+/// Forget the cached follow list: a follow or unfollow made here changes it.
+pub fn clear_alert_follows_cache() {
+    if let Ok(mut cache) = ALERT_FOLLOWS.lock() {
+        *cache = None;
+    }
+}
+
+fn cached_follows(owner: &str) -> Option<(Vec<TwitchStream>, bool)> {
+    let cache = ALERT_FOLLOWS.lock().ok()?;
+    let (who, at, rows, truncated) = cache.as_ref()?;
+    (who == owner && at.elapsed() < ALERT_FOLLOWS_TTL).then(|| (rows.clone(), *truncated))
+}
+
+/// Every followed Twitch channel (up to `ALERT_PAGES` pages), from the cache
+/// when it is warm for this account.
+async fn twitch_follows_for_alerts() -> Result<(Vec<TwitchStream>, bool), String> {
+    // The generation moves on every sign-in, switch and sign-out, so a cache
+    // filled for one account is never served to the next.
+    let owner = format!(
+        "{}:{}",
+        TwitchService::account_generation(),
+        AccountStore::primary().map(|a| a.user_id).unwrap_or_default()
+    );
+    if let Some(hit) = cached_follows(&owner) {
+        return Ok(hit);
+    }
+    let _fetch = ALERT_FOLLOWS_FETCH.lock().await;
+    // Another sheet may have filled it while this one waited.
+    if let Some(hit) = cached_follows(&owner) {
+        return Ok(hit);
+    }
     let mut channels: Vec<TwitchStream> = Vec::new();
     let mut cursor: Option<String> = None;
     let mut truncated = false;
@@ -139,8 +198,204 @@ pub async fn get_followed_channels_for_alerts() -> Result<AlertChannels, String>
             _ => break,
         }
     }
-    channels.sort_by_key(|c| c.user_name.to_lowercase());
-    Ok(AlertChannels { channels, truncated })
+    if let Ok(mut cache) = ALERT_FOLLOWS.lock() {
+        *cache = Some((owner, Instant::now(), channels.clone(), truncated));
+    }
+    Ok((channels, truncated))
+}
+
+/// A channel known only from settings (another platform's follow, a
+/// favourite) in the row shape the sheet draws. The platform rides on
+/// `AlertChannelRow.provider`.
+fn settings_row(user_id: &str, user_login: &str, name: &str, avatar: Option<String>) -> TwitchStream {
+    TwitchStream {
+        id: String::new(),
+        user_id: user_id.to_string(),
+        user_name: name.to_string(),
+        user_login: user_login.to_string(),
+        title: String::new(),
+        viewer_count: 0,
+        game_id: String::new(),
+        game_name: String::new(),
+        thumbnail_url: String::new(),
+        started_at: String::new(),
+        broadcaster_type: None,
+        profile_image_url: avatar,
+        is_live: None,
+        tags: None,
+        language: None,
+        drops_earnable: false,
+    }
+}
+
+/// A YouTube channel stored by its UC id names that id as its user id too, so
+/// `live_mute::canonical` finds it.
+fn ids_for(provider: &str, user_id: &str, channel: &str) -> (String, String) {
+    if provider == "youtube" && user_id.is_empty() && is_youtube_channel_id(channel) {
+        (channel.to_string(), channel.to_string())
+    } else {
+        (user_id.to_string(), channel.to_string())
+    }
+}
+
+/// Add one channel unless it has no stable identity or is already listed.
+#[allow(clippy::too_many_arguments)]
+fn push_settings_row(
+    rows: &mut Vec<AlertChannelRow>,
+    seen: &mut HashSet<String>,
+    muted: &[String],
+    provider: &str,
+    user_id: &str,
+    channel: &str,
+    name: Option<&str>,
+    avatar: Option<String>,
+) {
+    let (user_id, user_login) = ids_for(provider, user_id, channel);
+    let Some(key) = live_mute::canonical(provider, &user_id, &user_login) else { return };
+    if !seen.insert(key.to_lowercase()) {
+        return;
+    }
+    let keys = live_mute::keys_for_channel(provider, &user_id, &user_login);
+    let name = name.filter(|n| !n.trim().is_empty()).unwrap_or(&user_login).to_string();
+    rows.push(AlertChannelRow {
+        stream: settings_row(&user_id, &user_login, &name, avatar),
+        provider: provider.to_string(),
+        on: !live_mute::is_muted(muted, &keys),
+    });
+}
+
+/// The sheet's rows from what was read, pure so its rules are tested: Twitch
+/// follows first, then (with `all`) the other platforms' follows and every
+/// favourite, each channel listed once by its canonical key, sorted by name.
+/// The count is the listed channels whose alerts are off, `None` when the
+/// Twitch follows could not be read.
+fn alert_rows(
+    twitch: Vec<TwitchStream>,
+    twitch_read: bool,
+    muted: &[String],
+    follows: &[ProviderFollow],
+    favs: &[FavoriteChannel],
+    all: bool,
+) -> (Vec<AlertChannelRow>, Option<usize>) {
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut channels: Vec<AlertChannelRow> = Vec::new();
+    for stream in twitch {
+        let keys = live_mute::keys_for_twitch(&stream.user_login);
+        let Some(key) = keys.first() else { continue };
+        if !seen.insert(key.clone()) {
+            continue;
+        }
+        let on = !live_mute::is_muted(muted, &keys);
+        channels.push(AlertChannelRow { stream, provider: "twitch".to_string(), on });
+    }
+    if all {
+        for f in follows {
+            push_settings_row(
+                &mut channels,
+                &mut seen,
+                muted,
+                &f.provider,
+                f.user_id.as_deref().unwrap_or_default(),
+                &f.channel,
+                f.display_name.as_deref(),
+                f.avatar.clone(),
+            );
+        }
+        for f in favs {
+            // A Twitch favourite is stored by its numeric id; its channel is the login.
+            let user_id = if f.provider == "twitch" { f.id.as_str() } else { "" };
+            push_settings_row(
+                &mut channels,
+                &mut seen,
+                muted,
+                &f.provider,
+                user_id,
+                &f.channel,
+                f.display_name.as_deref(),
+                f.avatar.clone(),
+            );
+        }
+    }
+    channels.sort_by_key(|c| c.stream.user_name.to_lowercase());
+    let muted_count = twitch_read.then(|| channels.iter().filter(|c| !c.on).count());
+    (channels, muted_count)
+}
+
+#[cfg(test)]
+mod alert_rows_tests {
+    use super::*;
+
+    fn twitch(id: &str, login: &str) -> TwitchStream {
+        settings_row(id, login, login, None)
+    }
+
+    fn favorite(id: &str, provider: &str, channel: &str) -> FavoriteChannel {
+        serde_json::from_value(serde_json::json!({ "id": id, "provider": provider, "channel": channel })).unwrap()
+    }
+
+    #[test]
+    fn a_twitch_favourite_that_is_also_followed_is_listed_once() {
+        let favs = [favorite("1001", "twitch", "kamet0")];
+        let (rows, _) = alert_rows(vec![twitch("1001", "kamet0")], true, &[], &[], &favs, true);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].provider, "twitch");
+        assert_eq!(rows[0].stream.user_login, "kamet0", "listed by login, never the numeric id");
+    }
+
+    #[test]
+    fn a_youtube_favourite_by_uc_id_is_muted_by_its_lowercased_entry() {
+        let uc = "UCabcdefghijklmnopqrstuv";
+        let favs = [favorite(&format!("youtube:{uc}"), "youtube", uc)];
+        let muted = [format!("youtube:{}", uc.to_lowercase())];
+        let (rows, count) = alert_rows(Vec::new(), true, &muted, &[], &favs, true);
+        assert_eq!(rows.len(), 1);
+        assert!(!rows[0].on, "a legacy lowercased entry still mutes it");
+        assert_eq!(count, Some(1));
+    }
+
+    #[test]
+    fn the_count_is_listed_channels_only() {
+        let muted = ["kamet0".to_string(), "unfollowed".to_string()];
+        let (rows, count) = alert_rows(vec![twitch("1", "kamet0"), twitch("2", "xqc")], true, &muted, &[], &[], false);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(count, Some(1), "an entry for a channel not listed is not counted");
+    }
+
+    #[test]
+    fn no_count_when_the_twitch_follows_could_not_be_read() {
+        let favs = [favorite("kick:xqc", "kick", "xqc")];
+        let (rows, count) = alert_rows(Vec::new(), false, &["kick:xqc".to_string()], &[], &favs, true);
+        assert_eq!(rows.len(), 1, "the other platforms still list");
+        assert_eq!(count, None);
+    }
+}
+
+/// The channels the live-alert sheet lists, each with whether it alerts.
+/// Phones list their Twitch follows; desktop (`all_platforms`) adds the
+/// other platforms' follows and every favourite, and still lists those when
+/// the Twitch follows cannot be read.
+#[tauri::command]
+pub async fn get_followed_channels_for_alerts(
+    all_platforms: Option<bool>,
+    state: State<'_, AppState>,
+) -> Result<AlertChannels, String> {
+    let all = all_platforms.unwrap_or(false);
+    let (twitch_rows, truncated, twitch_read) = match twitch_follows_for_alerts().await {
+        Ok((rows, truncated)) => (rows, truncated, true),
+        Err(e) if all => {
+            log::debug!("[LiveAlerts] Twitch follows unreadable, listing the rest: {e}");
+            (Vec::new(), false, false)
+        }
+        Err(e) => return Err(e),
+    };
+    let (muted, provider_follows, favorites): (Vec<String>, Vec<ProviderFollow>, Vec<FavoriteChannel>) = {
+        let s = state.settings.lock().map_err(|e| e.to_string())?;
+        let favorites = s.favorite_channels.iter().filter(|f| s.favorite_streamers.contains(&f.id)).cloned().collect();
+        (s.live_notifications.muted_live_channels.clone(), s.provider_follows.clone(), favorites)
+    };
+    let (channels, muted_count) = alert_rows(twitch_rows, twitch_read, &muted, &provider_follows, &favorites, all);
+    let last_copy = live_mute::last_copy_answer(TwitchService::account_generation());
+    Ok(AlertChannels { channels, truncated, muted_count, last_copy })
 }
 
 /// Copy a sound file into the app's sounds folder and add it to the custom
