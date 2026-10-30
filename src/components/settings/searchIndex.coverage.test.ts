@@ -43,8 +43,18 @@ const COMPONENT_SECTIONS: Record<string, string> = { CompactViewSettings: 'Compa
 
 // Never indexed: phone-only settings (search runs only in the desktop Settings
 // dialog and the MultiChat modal) and development-build previews.
-const UNINDEXED: Record<string, { sections?: string[]; titles?: string[] }> = {
-  Chat: { sections: ['Landscape Chat', 'Chats Tab'], titles: ['Vibration', 'Keep screen on', 'Inbox button'] },
+// `nested` skips one nested line by its parent row, for a phone-only line that
+// shares its title with a desktop one (the phones' Matching under Chatter
+// names; desktop's stays under Emotes and keeps its entry).
+const UNINDEXED: Record<
+  string,
+  { sections?: string[]; titles?: string[]; nested?: { title: string; parent: string }[] }
+> = {
+  Chat: {
+    sections: ['Landscape Chat', 'Chats Tab'],
+    titles: ['Vibration', 'Keep screen on', 'Inbox button', 'Only after a colon'],
+    nested: [{ title: 'Matching', parent: 'Chatter names' }],
+  },
   Player: { sections: ['Discover'], titles: ['Background play', 'Zoom to fill'] },
   Support: { sections: ['Devices'], titles: ['Log export'] },
   Notifications: { titles: ['Gift sub preview', 'Reward preview'] },
@@ -156,7 +166,10 @@ for (const [tab, files] of Object.entries(TAB_FILES)) {
   const rows = [...tree.rows, ...(LISTED_ROWS[tab] ?? [])];
   const skip = UNINDEXED[tab] ?? {};
   const visible = rows.filter(
-    (r) => !skip.sections?.includes(r.section) && !skip.titles?.includes(r.title),
+    (r) =>
+      !skip.sections?.includes(r.section) &&
+      !skip.titles?.includes(r.title) &&
+      !skip.nested?.some((n) => n.title === r.title && n.parent === r.parent),
   );
   const entries = SETTINGS_INDEX.filter((e) => e.tab === tab);
 

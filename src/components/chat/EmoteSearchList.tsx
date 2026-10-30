@@ -58,7 +58,7 @@ const RowName: React.FC<{ row: EmoteMatchRow }> = ({ row }) => {
 
 /**
  * The emote list: every emote the viewer can use that matches what they typed,
- * with where each one comes from. Opened by `:` plus two letters or by Tab; the
+ * with where each one comes from. Opened by `:` plus a letter or by Tab; the
  * rows arrive ranked from Rust.
  *
  * The popover itself never scrolls, so its header and key hints stay put and

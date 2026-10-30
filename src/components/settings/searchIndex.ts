@@ -840,7 +840,7 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     section: 'Tab Completion',
     sectionId: 'settings-section-emote-tab-completion',
     title: 'Colon list',
-    description: 'Type a colon and two letters to see every emote you can use and where it comes from. Previously "Show the emote list when you type :".'
+    description: 'Type a colon and a letter to see every emote you can use and where it comes from. Previously "Show the emote list when you type :".'
   },
   {
     tab: 'Chat',

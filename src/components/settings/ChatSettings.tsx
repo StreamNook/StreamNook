@@ -10,6 +10,7 @@ import { useAccountRosterStore } from '../../stores/accountRosterStore';
 // It hides rows whose backing feature does not exist on Android, so the phone
 // settings stop offering knobs that quietly do nothing.
 import { IS_MOBILE } from '../../utils/platform';
+import { setSettingsFields } from '../../utils/settingsFields';
 import PanelChannelList from '../plugins/PanelChannelList';
 import { Tooltip } from '../ui/Tooltip';
 import { Dropdown } from '../ui/Dropdown';
@@ -2649,7 +2650,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
             // On this phone the suggestions strip inserts an emote but does
             // not open the picker, so its words promise only the strip.
             IS_MOBILE
-              ? 'Removes the smiley from inside the message box, and with it the emote picker. Emote suggestions still show as you type.'
+              ? 'Removes the smiley from inside the message box, and with it the emote picker. Emote suggestions still show above the box.'
               : 'Removes the smiley from inside the message box, and with it the menu of emotes, GIFs and commands. Tab completion, : search and typing / still work.'
           }
           help={
@@ -2745,7 +2746,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         description={
           IS_MOBILE
             ? 'Type part of an emote name in chat to see matching emotes above the input. Swipe the strip to see more, tap one to use it.'
-            : 'Press Tab to complete the emote you are typing, or type : and two letters to see every emote you can use.'
+            : 'Press Tab to complete the emote you are typing, or type : and a letter to see every emote you can use.'
         }
         id="settings-section-emote-tab-completion"
       >
@@ -2759,7 +2760,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           }
           help={
             IS_MOBILE
-              ? 'Matching: Starts With needs the emote to begin with what you typed; Contains matches it anywhere in the name.'
+              ? 'Only after a colon: a plain word gets no suggestions. Start it with a colon, like :lul, to see matching emotes, or with @ to see chatters.'
               : 'Style: Carousel puts the best match straight into your message, and each Tab after that swaps in the next one (Shift+Tab goes back; on an empty spot it starts with your favorites and this channel\'s emotes). List opens every emote you can use with where it comes from; Tab or the arrows move, Enter inserts, Esc closes. Matching: Starts With needs the emote to begin with what you typed, Contains matches anywhere in the name. The : list always looks inside names, so :love finds vulpLove.'
           }
           control={
@@ -2791,20 +2792,45 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
                   }
                 />
               )}
-              <SubControl
-                title="Matching"
-                onReset={resetFor(['chat_input.emote_tab_complete_match_mode', 'starts_with'])}
-                control={
-                  <SegmentedSelect<'starts_with' | 'includes'>
-                    value={settings.chat_input?.emote_tab_complete_match_mode ?? 'starts_with'}
-                    options={[
-                      { value: 'starts_with', label: 'Starts With' },
-                      { value: 'includes', label: 'Contains' },
-                    ]}
-                    onChange={(v) => setInput({ emote_tab_complete_match_mode: v })}
-                  />
-                }
-              />
+              {!IS_MOBILE && (
+                <SubControl
+                  title="Matching"
+                  onReset={resetFor(['chat_input.emote_tab_complete_match_mode', 'starts_with'])}
+                  control={
+                    <SegmentedSelect<'starts_with' | 'includes'>
+                      value={settings.chat_input?.emote_tab_complete_match_mode ?? 'starts_with'}
+                      options={[
+                        { value: 'starts_with', label: 'Starts With' },
+                        { value: 'includes', label: 'Contains' },
+                      ]}
+                      onChange={(v) => setInput({ emote_tab_complete_match_mode: v })}
+                    />
+                  }
+                />
+              )}
+              {/* The phones' strip: Rust answers only a colon or @ word
+                  (emote_match.rs fill_gate). One path per write, so a stale
+                  copy of chat_input never writes the rest back. */}
+              {IS_MOBILE && (
+                <SubControl
+                  title="Only after a colon"
+                  onReset={
+                    (settings.chat_input?.emote_suggest_colon_only ?? false)
+                      ? () => void setSettingsFields({ 'chat_input.emote_suggest_colon_only': false }).catch(() => {})
+                      : undefined
+                  }
+                  control={
+                    <Toggle
+                      enabled={settings.chat_input?.emote_suggest_colon_only ?? false}
+                      onChange={() =>
+                        void setSettingsFields({
+                          'chat_input.emote_suggest_colon_only': !(settings.chat_input?.emote_suggest_colon_only ?? false),
+                        }).catch(() => {})
+                      }
+                    />
+                  }
+                />
+              )}
             </SubControls>
           )}
         </SettingsRow>
@@ -2812,7 +2838,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           <SettingsRow
             title="Colon list"
             onReset={resetFor(['chat_input.emote_colon_search_enabled', true])}
-            description="Type a colon and two letters to see every emote you can use and where it comes from."
+            description="Type a colon and a letter to see every emote you can use and where it comes from."
             control={
               <Toggle
                 enabled={settings.chat_input?.emote_colon_search_enabled ?? true}
@@ -2834,6 +2860,11 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
               ? 'Also suggest display names of users currently in chat.'
               : 'Also cycles through the names of people currently in chat.'
           }
+          help={
+            IS_MOBILE
+              ? 'With Only after a colon on, names show only for a word that starts with @. Matching: Starts With needs the name to begin with what you typed; Contains matches it anywhere in the name.'
+              : undefined
+          }
           control={
             <Toggle
               enabled={settings.chat_input?.emote_tab_complete_include_chatters ?? true}
@@ -2844,7 +2875,39 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
               }
             />
           }
-        />
+        >
+          {/* On the phones the strip always looks inside emote names (the
+              desktop fill), so Matching only changes which chatters match. */}
+          {IS_MOBILE &&
+            (settings.chat_input?.emote_tab_complete_enabled ?? true) &&
+            (settings.chat_input?.emote_tab_complete_include_chatters ?? true) && (
+              <SubControls>
+                <SubControl
+                  title="Matching"
+                  onReset={
+                    (settings.chat_input?.emote_tab_complete_match_mode ?? 'starts_with') !== 'starts_with'
+                      ? () =>
+                          void setSettingsFields({ 'chat_input.emote_tab_complete_match_mode': 'starts_with' }).catch(
+                            () => {},
+                          )
+                      : undefined
+                  }
+                  control={
+                    <SegmentedSelect<'starts_with' | 'includes'>
+                      value={settings.chat_input?.emote_tab_complete_match_mode ?? 'starts_with'}
+                      options={[
+                        { value: 'starts_with', label: 'Starts With' },
+                        { value: 'includes', label: 'Contains' },
+                      ]}
+                      onChange={(v) =>
+                        void setSettingsFields({ 'chat_input.emote_tab_complete_match_mode': v }).catch(() => {})
+                      }
+                    />
+                  }
+                />
+              </SubControls>
+            )}
+        </SettingsRow>
       </SettingsSection>
 
       <SettingsSection
