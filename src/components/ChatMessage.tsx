@@ -542,6 +542,7 @@ import { ModSlider } from './chat/ModSlider';
 import { HoverModButtons } from './chat/HoverModButtons';
 import { ModLineButtons } from './chat/ModLineButtons';
 import type { LineButton } from './chat/modLine';
+import { INLINE_TIME_STYLE, OWN_LINE_TIME_STYLE, timestampOnOwnLine } from './chat/chatTimestamp';
 import { WatchStreakFlame } from './icons/WatchStreakFlame';
 
 interface ChatMessageProps {
@@ -996,6 +997,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
 
   // PHASE 3.1 - THE ENDGAME: Use pre-formatted timestamps from Rust
   // Zero Date parsing on main thread!
+  const timestampOwnLine = timestampOnOwnLine(chatDesign?.timestamp_position);
   const formattedTimestamp = (() => {
     if (!chatDesign?.show_timestamps) return null;
 
@@ -3621,12 +3623,13 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
           style={{ fontSize: `${chatDesign?.font_size ?? 14}px`, lineHeight: 1.625 }}
         >
           {/* The time leads the row's inline flow, on the text's baseline, so
-              wrapped text still starts at the left edge. Left selectable so a
-              copied line keeps its time. */}
+              wrapped text still starts at the left edge; "own_line" gives it a
+              line of its own above the message. Left selectable so a copied
+              line keeps its time. */}
           {formattedTimestamp && (
             <span
-              className="text-textMuted tabular-nums whitespace-nowrap"
-              style={{ fontSize: '0.78em', marginRight: '0.45em' }}
+              className={`text-textMuted tabular-nums whitespace-nowrap${timestampOwnLine ? ' block' : ''}`}
+              style={timestampOwnLine ? OWN_LINE_TIME_STYLE : INLINE_TIME_STYLE}
             >
               {formattedTimestamp}
             </span>

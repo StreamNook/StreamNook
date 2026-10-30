@@ -71,6 +71,7 @@ const HighlightAppearanceSettings = () => {
     show_timestamps: design?.show_timestamps ?? false,
     show_timestamp_seconds: design?.show_timestamp_seconds ?? false,
     timestamp_format: design?.timestamp_format ?? '12h',
+    timestamp_position: design?.timestamp_position ?? 'inline',
     username_separator: design?.username_separator ?? (design?.username_colon ? 'colon' : 'none'),
     username_style: design?.username_style ?? 'plain',
     username_accent_source: design?.username_accent_source ?? 'user',

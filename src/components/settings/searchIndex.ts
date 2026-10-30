@@ -639,6 +639,13 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   {
     tab: 'Chat',
     section: 'Message Layout',
+    title: 'Position',
+    parent: 'Timestamps',
+    description: 'Beside the name, or on its own line above the message.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Message Layout',
     title: 'Seconds',
     parent: 'Timestamps',
     description: 'Shows seconds too, so 7:42 PM reads 7:42:30 PM. Previously "Include seconds".'

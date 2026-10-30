@@ -13,6 +13,7 @@ import { useNameColorAdjust } from '../../hooks/useNameColor';
 import { StyledChatName, type NameSeparator, type NameStyle } from '../chat/StyledChatName';
 import { deletedBodyStyle, deletedRowDimmed, type DeletedMessageStyle } from '../chat/deletedMessage';
 import { ModerationTag } from '../chat/ModerationTag';
+import { INLINE_TIME_STYLE, OWN_LINE_TIME_STYLE, timestampOnOwnLine } from '../chat/chatTimestamp';
 import { eventCardClass, eventCardStyle } from '../chat/eventCard';
 import type { ModerationContext, RoomModeView } from '../../stores/chatConnectionStore';
 import { RoomModeIndicator } from '../chat/RoomModeIndicator';
@@ -50,6 +51,7 @@ export interface PreviewDesign {
   show_timestamps: boolean;
   show_timestamp_seconds: boolean;
   timestamp_format: '12h' | '24h';
+  timestamp_position: 'inline' | 'own_line';
   username_separator: NameSeparator;
   username_style: NameStyle;
   username_accent_source: 'user' | 'theme';
@@ -177,8 +179,8 @@ const PreviewLine = ({
       >
         {design.show_timestamps && (
           <span
-            className="text-textMuted tabular-nums whitespace-nowrap"
-            style={{ fontSize: '0.78em', marginRight: '0.45em' }}
+            className={`text-textMuted tabular-nums whitespace-nowrap${timestampOnOwnLine(design.timestamp_position) ? ' block' : ''}`}
+            style={timestampOnOwnLine(design.timestamp_position) ? OWN_LINE_TIME_STYLE : INLINE_TIME_STYLE}
           >
             {sampleTime(design, minutesAgo)}
           </span>
@@ -286,6 +288,7 @@ const previewDesignOf = (stored: ChatDesignSettings | undefined): PreviewDesign 
   show_timestamps: stored?.show_timestamps ?? false,
   show_timestamp_seconds: stored?.show_timestamp_seconds ?? false,
   timestamp_format: stored?.timestamp_format ?? '12h',
+  timestamp_position: stored?.timestamp_position ?? 'inline',
   username_separator: stored?.username_separator ?? (stored?.username_colon ? 'colon' : 'none'),
   username_style: stored?.username_style ?? 'plain',
   username_accent_source: stored?.username_accent_source ?? 'user',
@@ -639,7 +642,7 @@ export const ScrollbarMarksPreview = ({
   useLayoutEffect(() => {
     const el = scrollerRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [design.font_size, design.message_spacing, design.show_timestamps]);
+  }, [design.font_size, design.message_spacing, design.show_timestamps, design.timestamp_position]);
 
   return (
     <SettingPreview caption={kinds.length ? 'ticks mark what is above, while you read back' : 'no kinds are on'}>

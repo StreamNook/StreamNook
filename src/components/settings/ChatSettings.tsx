@@ -538,6 +538,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
     show_timestamps: stored?.show_timestamps ?? false,
     show_timestamp_seconds: stored?.show_timestamp_seconds ?? false,
     timestamp_format: stored?.timestamp_format ?? '12h',
+    timestamp_position: stored?.timestamp_position ?? 'inline',
     username_separator: stored?.username_separator ?? (stored?.username_colon ? 'colon' : 'none'),
     username_style: stored?.username_style ?? 'plain',
     username_accent_source: stored?.username_accent_source ?? 'user',
@@ -1565,7 +1566,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           title="Timestamps"
           onReset={resetFor(['chat_design.show_timestamps', false])}
           description="Shows the time each message was sent, next to the name."
-          help="Clock is 12-hour (7:42 PM) or 24-hour (19:42). Seconds turns 7:42 PM into 7:42:30 PM."
+          help="Position puts the time beside the name, or on its own line above the message. Clock is 12-hour (7:42 PM) or 24-hour (19:42). Seconds turns 7:42 PM into 7:42:30 PM."
           control={
             <Toggle
               enabled={cd.show_timestamps ?? false}
@@ -1575,6 +1576,20 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         >
           {cd.show_timestamps && (
             <SubControls>
+              <SubControl
+                title="Position"
+                onReset={resetFor(['chat_design.timestamp_position', 'inline'])}
+                control={
+                  <SegmentedSelect<'inline' | 'own_line'>
+                    value={cd.timestamp_position}
+                    onChange={(timestamp_position) => setDesign({ timestamp_position })}
+                    options={[
+                      { value: 'inline', label: 'Beside' },
+                      { value: 'own_line', label: 'Own line' },
+                    ]}
+                  />
+                }
+              />
               <SubControl
                 title="Clock"
                 onReset={resetFor(['chat_design.timestamp_format', '12h'])}
