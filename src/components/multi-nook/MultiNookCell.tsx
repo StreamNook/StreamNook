@@ -24,6 +24,7 @@ import { PlayerVolumeOsd } from '../PlayerVolumeOsd';
 import { useVolumeOsd } from '../../hooks/useVolumeOsd';
 import StreamTitleWithEmojis from '../StreamTitleWithEmojis';
 import { Tooltip } from '../ui/Tooltip';
+import { LiveAlertBell } from '../LiveAlertBell';
 import { TwitchVerifiedMark } from '../ui/TwitchGlyph';
 import { ProviderLogo } from '../ProviderLogo';
 import { OfflineCard } from '../OfflineRoomScreen';
@@ -891,6 +892,19 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
 
           {/* Controls Overlay - Top Right */}
           <div className="flex items-center gap-1.5 shrink-0">
+            {/* Live alerts, left of Follow so its arrival never moves Follow. */}
+            {showFollowButton && (
+              <LiveAlertBell
+                provider={(provider ?? 'twitch') as ProviderId}
+                userId={channelId}
+                userLogin={channelLogin}
+                userName={channelName}
+                isFollowing={isFollowing}
+                buttonClassName={glassButton}
+                iconClassName="w-4 h-4"
+                tooltipSide="top"
+              />
+            )}
             {/* Follow + Subscribe — focused tile only, honoring the Player
                 Overlay Buttons setting like the single-stream player */}
             {showFollowButton && (

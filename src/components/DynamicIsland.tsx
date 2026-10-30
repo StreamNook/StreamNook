@@ -14,6 +14,7 @@ import { openMentionInMain } from '../stores/mentionJumpStore';
 import { MENTION_INBOX_CHANGED_EVENT, MENTION_NOTIFY_EVENT, toggleMentionChatMuted } from '../stores/mentionInboxStore';
 import { isProviderId } from '../types/providers';
 import { Logger } from '../utils/logger';
+import { LiveAlertIslandAction } from './LiveAlertIslandAction';
 import { formatBadgeDateInfo } from '../utils/badgeWindow';
 import { windowStatusAt, type WindowRun } from '../services/badgeStanding';
 import { lastUpdateStatus, type BundleUpdateStatus } from '../services/updateStatus';
@@ -38,6 +39,7 @@ import type { ProviderId } from '../types/providers';
 import type {
     DynamicIslandNotification,
     LiveNotificationData,
+    AlertChannel,
     WhisperNotificationData,
     UpdateNotificationData,
     DropsNotificationData,
@@ -188,6 +190,8 @@ interface LiveNotificationFromBackend {
     merge_into: string | null;
     /** The streamer's 7TV cosmetics id, keyed by Rust for their platform. */
     seventv_id?: string | null;
+    /** Every platform's channel this entry stands for (Rust's `AlertChannel`). */
+    channels?: AlertChannel[];
 }
 
 interface DropClaimedEvent {
@@ -1016,6 +1020,7 @@ const DynamicIsland = () => {
                             is_live: true,
                             is_test: true,
                             providers: data.providers,
+                            channels: data.channels,
                         } as LiveNotificationData,
                     });
                     setTimeout(() => {
@@ -1040,7 +1045,13 @@ const DynamicIsland = () => {
                                 ...n,
                                 // Unread again: something new happened on it.
                                 read: false,
-                                data: { ...(n.data as LiveNotificationData), providers: data.providers },
+                                // Rust sends every merged platform's channel, so
+                                // "Turn off alerts" mutes them all.
+                                data: {
+                                    ...(n.data as LiveNotificationData),
+                                    providers: data.providers,
+                                    channels: data.channels ?? (n.data as LiveNotificationData).channels,
+                                },
                             }
                             : n,
                     ));
@@ -1060,6 +1071,7 @@ const DynamicIsland = () => {
                             is_live: true,
                             providers: data.providers,
                             seventv_id: data.seventv_id ?? undefined,
+                            channels: data.channels,
                         } as LiveNotificationData,
                     });
                 }
@@ -2822,6 +2834,9 @@ const DynamicIsland = () => {
                                                                     <Check size={14} />
                                                                 </button>
                                                             </Tooltip>
+                                                        )}
+                                                        {notification.type === 'live' && (
+                                                            <LiveAlertIslandAction data={notification.data as LiveNotificationData} />
                                                         )}
                                                         {notification.type === 'mention' && (() => {
                                                             const muted = mutedRoomSet.has(notification.data.room.toLowerCase());

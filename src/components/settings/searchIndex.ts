@@ -2607,6 +2607,13 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   {
     tab: 'Notifications',
     section: 'Notify me about',
+    title: 'Which channels',
+    parent: 'Live channels',
+    description: 'Turn live alerts off for single channels you follow or favorited, or copy every channel whose notification bell is off on Twitch. Mute alerts, mute a channel, silence a streamer, bell.'
+  },
+  {
+    tab: 'Notifications',
+    section: 'Notify me about',
     title: 'Favorite channels live',
     description: 'When a channel you favorited goes live, even one you do not follow on Twitch. Favorites. Previously "Favorite channels".'
   },

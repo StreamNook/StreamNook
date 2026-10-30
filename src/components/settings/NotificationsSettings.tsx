@@ -32,6 +32,10 @@ import { openSystemNotifySettings, useSystemNotifyPermission } from '../../utils
 
 import { Logger } from '../../utils/logger';
 import { IS_LINUX, IS_MAC } from '../../utils/platform';
+import { fieldsIn, setSettingsFields } from '../../utils/settingsFields';
+import { useLiveAlertChannels } from '../../hooks/useLiveAlertChannels';
+import { whichChannelsDetail } from '../../utils/liveAlerts';
+import { LiveAlertChannelsModal } from './LiveAlertChannelsModal';
 
 // The "Notify me about" rows are the alert types Rust lists for desktop
 // (services/alert_types.rs, `get_alert_types`), in its order and with the
@@ -170,6 +174,7 @@ const NotificationsSettings = () => {
   // Brief green flash on press, used as the Test button's feedback instead of a
   // text/width swap. See handleTestNotification + the button's className.
   const [testFlash, setTestFlash] = useState(false);
+  const [channelsOpen, setChannelsOpen] = useState(false);
 
   const liveNotifications: LiveNotificationSettings = settings.live_notifications || {
     enabled: true,
@@ -195,15 +200,26 @@ const NotificationsSettings = () => {
 
   const soundOptions = useSoundOptions({ defaultId: 'boop' });
 
+  // One field per write: only the changed switches, never the whole group from
+  // this page's copy, which could put back a mute list another surface had
+  // just changed (a bell, Copy from Twitch).
   const updateLiveNotifications = (updates: Partial<LiveNotificationSettings>) => {
-    updateSettings({
-      ...settings,
-      live_notifications: {
-        ...liveNotifications,
-        ...updates,
-      },
+    setSettingsFields(fieldsIn('live_notifications', updates)).catch((err) => {
+      Logger.warn('[NotificationsSettings] save failed:', err);
+      addToast('Could not save that change.', 'error');
     });
   };
+
+  // Which channels: "Everything you follow except N" counts only mutes that
+  // match a channel you follow now (Rust's `muted_count`). While the list is
+  // not read (loading, or the master switch is off so it is never asked) the
+  // stored list's length stands in; when it failed, it says how many are
+  // muted. The phones' words, from `whichChannelsDetail`.
+  const alertChannels = useLiveAlertChannels(liveNotifications.enabled);
+  const rawMuted = liveNotifications.muted_live_channels?.length ?? 0;
+  const listLoaded = alertChannels.list !== null || alertChannels.failed;
+  const mutedCount = !listLoaded ? undefined : (alertChannels.list?.muted_count ?? null);
+  const whichChannelsSummary = whichChannelsDetail(mutedCount, rawMuted);
 
   // System notifications on a Mac need its permission, asked the first time
   // they would be used: when they are turned on, or when a type is turned on
@@ -294,6 +310,7 @@ const NotificationsSettings = () => {
 
   return (
     <div className="space-y-8">
+      {channelsOpen && <LiveAlertChannelsModal onClose={() => setChannelsOpen(false)} />}
       <SettingsSection label="Notifications">
         <SettingsRow
           title="Notifications"
@@ -454,7 +471,27 @@ const NotificationsSettings = () => {
                       nested under it while it is on. One expression, so a
                       type with nothing nested passes no children at all and
                       its row keeps the plain height. */}
-                  {type.id === 'drops' && on ? (
+                  {type.id === 'live' ? (
+                    // Always shown, on or off, so the line never appears and
+                    // disappears under the reader; mutes also apply to favorites.
+                    <SubControls>
+                      <SubControl
+                        title="Which channels"
+                        control={
+                          <div className="flex items-center gap-3">
+                            <span className="text-[12px] text-textSecondary">{whichChannelsSummary}</span>
+                            <button
+                              type="button"
+                              onClick={() => setChannelsOpen(true)}
+                              className="glass-button rounded-lg px-3 py-1.5 text-xs font-semibold text-textPrimary"
+                            >
+                              Choose
+                            </button>
+                          </div>
+                        }
+                      />
+                    </SubControls>
+                  ) : type.id === 'drops' && on ? (
                     <SubControls>
                       <SubControl
                         title="New drops"

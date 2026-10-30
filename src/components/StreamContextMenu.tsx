@@ -12,6 +12,7 @@ import { replaceInputRange } from '../utils/chatInputWord';
 import { addToCustomDictionary } from '../utils/spellcheck';
 import { Tooltip } from './ui/Tooltip';
 import { gridRefusal } from '../types/providers';
+import { LiveAlertMenuRow } from './LiveAlertMenuRow';
 
 export const StreamContextMenu: React.FC = () => {
     const { isOpen, x, y, stream, inputElement, selectionText, menuType, spellStatus, spell, isFollowing, isCheckingFollow, closeMenu, toggleFollow } = useContextMenuStore();
@@ -531,6 +532,13 @@ export const StreamContextMenu: React.FC = () => {
                         </>
                     )}
                 </button>
+
+                {/* Live alerts: last; its slot is there from the first frame and
+                    only its value waits, so nothing moves in either menu anchoring. */}
+                <LiveAlertMenuRow
+                    stream={stream}
+                    className="flex items-center gap-2 px-2 py-2 rounded-lg text-sm font-medium text-textSecondary hover:text-textPrimary hover:bg-white/[0.06] transition-all"
+                />
             </div>
         </div>
     );

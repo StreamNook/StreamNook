@@ -46,7 +46,11 @@ const Toggle = ({ enabled, onChange }: { enabled: boolean; onChange: () => void 
 // The action buttons that can appear in the player's top-right overlay. Ids
 // match the gating in VideoPlayer. Undefined `player_overlay_buttons` = all on.
 const OVERLAY_BUTTONS: { id: string; label: string; description?: string }[] = [
-  { id: 'follow', label: 'Follow / Unfollow' },
+  {
+    id: 'follow',
+    label: 'Follow / Unfollow',
+    description: 'The bell beside it turns live alerts on or off for that channel.',
+  },
   { id: 'subscribe', label: 'Subscribe / Gift' },
   { id: 'clip', label: 'Create Clip' },
   {

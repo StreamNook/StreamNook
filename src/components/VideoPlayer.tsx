@@ -38,6 +38,7 @@ import { useCurrentChapter } from '../hooks/useCurrentChapter';
 import VodChapterMarks from './VodChapterMarks';
 import VodChaptersMenu from './VodChaptersMenu';
 import { Tooltip } from './ui/Tooltip';
+import { LiveAlertBell } from './LiveAlertBell';
 import { TwitchVerifiedMark } from './ui/TwitchGlyph';
 import { registerPlayerControls, type PlayerControls } from '../keybindings';
 import { qualitiesEquivalent, qualityLabel } from '../utils/quality';
@@ -3770,6 +3771,19 @@ const VideoPlayer = () => {
             transition={{ duration: 0.3, ease: 'easeInOut' }}
             className="subscribe-overlay absolute top-3 right-3 z-50 flex items-center gap-2"
           >
+          {/* Live alerts, left of Follow so its arrival never moves Follow.
+              It rides the Follow overlay option. */}
+          {overlayButtonOn('follow') && (
+            <LiveAlertBell
+              provider={streamProvider(currentStream)}
+              userId={currentStream.user_id}
+              userLogin={currentStream.user_login}
+              userName={currentStream.user_name}
+              isFollowing={isFollowing}
+              buttonClassName="flex items-center justify-center p-2 aspect-square chrome-glaze chrome-glaze--control chrome-glaze--frosted"
+              iconClassName="w-4 h-4"
+            />
+          )}
           {/* Follow Button - Icon Only with Glow */}
           {overlayButtonOn('follow') && (
           <Tooltip content={checkingFollowStatus

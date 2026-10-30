@@ -19,6 +19,7 @@ import { usemultiNookStore } from '../../stores/multiNookStore';
 import { useAppStore } from '../../stores/AppStore';
 import { shareLinkFor } from '../../utils/shareLink';
 import { Logger } from '../../utils/logger';
+import { LiveAlertMenuRow } from '../LiveAlertMenuRow';
 
 const ROW =
   'flex w-full items-center gap-2 rounded-lg px-2 py-2 text-sm font-medium text-textSecondary transition-all hover:bg-white/[0.06] hover:text-white';
@@ -324,6 +325,10 @@ export const MultiNookTileMenu: React.FC = () => {
           <XIcon size={16} />
           <span>Close stream</span>
         </button>
+
+        {/* Live alerts: last; its slot is there from the first frame and only
+            its value waits, so Close stream never moves under the pointer. */}
+        <LiveAlertMenuRow stream={stream} className={ROW} />
       </div>
     </div>
   );

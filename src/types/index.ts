@@ -2734,6 +2734,16 @@ export interface LiveNotificationData {
   /** The streamer's 7TV cosmetics id from Rust (a bare Twitch id, `kick:<id>`
    *  or `youtube:UC...`), for their 7TV picture. Absent on older entries. */
   seventv_id?: string;
+  /** Each platform's channel this entry stands for, as Rust names it, so the
+   *  row's "Turn off alerts" mutes every one. Absent on older entries. */
+  channels?: AlertChannel[];
+}
+
+/** One platform's channel in a go-live, as Rust's `AlertChannel`. */
+export interface AlertChannel {
+  provider: string;
+  user_id: string;
+  user_login: string;
 }
 
 export interface WhisperNotificationData {
