@@ -246,6 +246,44 @@ impl DiscordService {
         Ok(Self::user().await)
     }
 
+    /// The account Discord is signed in to, for the editor's preview while the
+    /// status is off: one handshake, its READY read, the pipe closed again. No
+    /// activity is set and no client is kept. A stored client's account is
+    /// returned as it is. Waits out the same backoff as a connect.
+    pub async fn peek_user() -> std::result::Result<Option<DiscordUser>, SendError> {
+        if Self::busy() {
+            return Err(SendError::Busy);
+        }
+        let _connecting = CONNECT_LOCK.lock().await;
+        {
+            let guard = DISCORD_STATE.lock().await;
+            if guard.client.is_some() {
+                return Ok(guard.user.clone());
+            }
+            if !connect_allowed(guard.connect_backoff_until, Instant::now()) {
+                return Err(SendError::BackingOff);
+            }
+        }
+        let outcome = run_bounded(CONNECT_TIMEOUT, || -> Result<Option<DiscordUser>> {
+            let (mut client, user) = Self::connect_client()?;
+            let _ = client.close();
+            Ok(user)
+        })
+        .await;
+        let mut guard = DISCORD_STATE.lock().await;
+        guard.connect_backoff_until = backoff_after(outcome.is_none(), Instant::now());
+        match outcome {
+            None => Err(SendError::Unanswered),
+            Some(Ok(Ok(user))) => {
+                if user.is_some() {
+                    guard.user = user.clone();
+                }
+                Ok(user)
+            }
+            _ => Err(SendError::NoPipe),
+        }
+    }
+
     /// The account the stored client reached (refreshed on every connect,
     /// including the reconnect inside `send`).
     pub async fn user() -> Option<DiscordUser> {
@@ -539,8 +577,14 @@ impl DiscordService {
         }
         .await;
         let ok = fetched.is_some();
-        let ids = Arc::new(fetched.unwrap_or_default());
-        *ASSETS.lock().await = Some((ids.clone(), ok, Instant::now()));
+        let mut cache = ASSETS.lock().await;
+        let ids = match fetched {
+            Some(map) => Arc::new(map),
+            // A failed refresh keeps the last good list, so badges stay on
+            // their asset keys instead of flipping to links and back.
+            None => cache.as_ref().map(|(ids, _, _)| ids.clone()).unwrap_or_default(),
+        };
+        *cache = Some((ids.clone(), ok, Instant::now()));
         ids
     }
 }

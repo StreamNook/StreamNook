@@ -5,7 +5,7 @@
 // way Discord does and picks the moving or still frame (discordPreviewLook).
 // The colors are Discord's own dark theme: this is a picture of Discord.
 
-import { useState } from 'react';
+import { useState, type CSSProperties } from 'react';
 import { useAppStore } from '../../../stores/AppStore';
 import { IS_MAC } from '../../../utils/platform';
 import { elapsedText } from './discordPreviewFormat';
@@ -111,10 +111,12 @@ function Picture({ src, className, alt }: { src: string | null; className: strin
 }
 
 /** A picture over another that simply goes away when it does not load. */
-function Overlay({ src, className }: { src: string | null; className: string }) {
+function Overlay({ src, className, style }: { src: string | null; className: string; style?: CSSProperties }) {
   const [failed, setFailed] = useState<string | null>(null);
   if (!src || failed === src) return null;
-  return <img src={src} alt="" aria-hidden className={className} onError={() => setFailed(src)} draggable={false} />;
+  return (
+    <img src={src} alt="" aria-hidden className={className} style={style} onError={() => setFailed(src)} draggable={false} />
+  );
 }
 
 /** The banner area: one fixed height in every state, its color under a
@@ -146,7 +148,7 @@ function Banner({ look, animate }: { look: PreviewLook | null; animate: boolean 
 function Nameplate({ plate, animate }: { plate: PreviewNameplate; animate: boolean }) {
   const rgb = (plate.palette && PALETTE[plate.palette]) || '151, 177, 185';
   const video = plateVideo(plate.video, animate, IS_MAC);
-  const fade = {
+  const fade: CSSProperties = {
     WebkitMaskImage: 'linear-gradient(to right, transparent 0, #000 45%)',
     maskImage: 'linear-gradient(to right, transparent 0, #000 45%)',
   };
@@ -168,7 +170,7 @@ function Nameplate({ plate, animate }: { plate: PreviewNameplate; animate: boole
           style={fade}
         />
       ) : (
-        <Overlay src={plate.image} className="absolute inset-y-0 right-0 h-full w-[60%] object-cover object-right" />
+        <Overlay src={plate.image} className="absolute inset-y-0 right-0 h-full w-[60%] object-cover object-right" style={fade} />
       )}
     </span>
   );

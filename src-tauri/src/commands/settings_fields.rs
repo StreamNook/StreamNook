@@ -317,11 +317,21 @@ fn newest_write(applied: &mut std::collections::HashMap<String, u64>, order: &Wr
     match applied.get(&order.stream) {
         Some(&last) if order.n <= last => false,
         _ => {
+            // One stream per page that edits: the oldest (lowest numbered; the
+            // app numbers from the clock) goes once there are many.
+            if !applied.contains_key(&order.stream) && applied.len() >= ORDER_STREAMS_KEPT {
+                if let Some(oldest) = applied.iter().min_by_key(|(_, n)| **n).map(|(k, _)| k.clone()) {
+                    applied.remove(&oldest);
+                }
+            }
             applied.insert(order.stream.clone(), order.n);
             true
         }
     }
 }
+
+/// Streams of numbered writes remembered at once.
+const ORDER_STREAMS_KEPT: usize = 64;
 
 /// Put the given dotted paths back to a fresh install's values (removing the
 /// key where a fresh install has none), as one write.
@@ -408,5 +418,30 @@ mod tests {
         assert_eq!(get_path(&patch["chat_design"], "font_size"), Some(&json!(20)));
         assert_eq!(get_path(&patch["chat_design"], "show_badges"), Some(&json!(before)));
         assert_eq!(patch["fullscreen_chat"], json!({ "side": "left" }));
+    }
+
+    #[test]
+    fn presence_fields_patch_alone() {
+        let current = Settings::default();
+        let mut changes = Map::new();
+        changes.insert("discord_presence.large_image".into(), json!("streamer"));
+        let patch = patch_for_changes(&current, &changes).unwrap();
+        assert_eq!(get_path(&patch["discord_presence"], "large_image"), Some(&json!("streamer")));
+        assert_eq!(
+            get_path(&patch["discord_presence"], "watching_top"),
+            Some(&json!("Watching {streamer}")),
+            "the style's other fields stay"
+        );
+    }
+
+    #[test]
+    fn write_streams_are_capped() {
+        let mut applied = std::collections::HashMap::new();
+        for i in 0..(ORDER_STREAMS_KEPT as u64 + 5) {
+            let order = WriteOrder { stream: format!("discord_presence:page-{i}"), n: 1_000 + i };
+            assert!(newest_write(&mut applied, &order));
+        }
+        assert_eq!(applied.len(), ORDER_STREAMS_KEPT);
+        assert!(!applied.contains_key("discord_presence:page-0"), "the oldest goes first");
     }
 }

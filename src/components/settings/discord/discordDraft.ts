@@ -49,6 +49,9 @@ export interface CommitterDeps {
   later: (fn: () => void, ms: number) => () => void;
   /** Names this page's stream of writes. */
   stream: string;
+  /** The number before the first write. The app's committer starts at the
+   *  clock, so a reloaded module never counts below what Rust already took. */
+  first?: number;
 }
 
 export function createCommitter(deps: CommitterDeps): Committer {
@@ -57,7 +60,10 @@ export function createCommitter(deps: CommitterDeps): Committer {
   // An urgent (flush) write not answered yet: every later write carries its
   // fields too, because Rust drops an older numbered write whole.
   let urgentFlying: Pending | null = null;
-  let n = 0;
+  let n = deps.first ?? 0;
+  // The newest write that succeeded: a failed older write is not queued again
+  // once a newer one (which carried its fields) has landed.
+  let lastOk = n;
   let cancelRetry: (() => void) | null = null;
   let current: CommitStatus = 'idle';
   const listeners = new Set<() => void>();
@@ -86,12 +92,17 @@ export function createCommitter(deps: CommitterDeps): Committer {
     flying = batch;
     setStatus('saving');
     let failed = false;
+    const numbered = order();
     try {
-      await deps.write(fieldsIn('discord_presence', batch as Record<string, unknown>), order());
+      await deps.write(fieldsIn('discord_presence', batch as Record<string, unknown>), numbered);
+      lastOk = Math.max(lastOk, numbered.n);
     } catch {
-      // Newer edits queued meanwhile win over the failed batch.
-      outgoing = { ...batch, ...outgoing };
-      failed = true;
+      // Newer edits queued meanwhile win over the failed batch; a newer write
+      // that already landed carried it, so then it is not sent again.
+      if (numbered.n > lastOk) {
+        outgoing = { ...batch, ...outgoing };
+        failed = true;
+      }
     } finally {
       flying = null;
     }
@@ -127,13 +138,16 @@ export function createCommitter(deps: CommitterDeps): Committer {
       const urgent: Pending = { ...(urgentFlying ?? {}), ...flying, ...outgoing };
       outgoing = {};
       urgentFlying = urgent;
+      const numbered = order();
       deps
-        .write(fieldsIn('discord_presence', urgent as Record<string, unknown>), order())
+        .write(fieldsIn('discord_presence', urgent as Record<string, unknown>), numbered)
         .then(() => {
+          lastOk = Math.max(lastOk, numbered.n);
           if (urgentFlying === urgent) urgentFlying = null;
         })
         .catch(() => {
           if (urgentFlying === urgent) urgentFlying = null;
+          if (numbered.n <= lastOk) return;
           outgoing = { ...urgent, ...outgoing };
           // Nothing else may be running by now (the editor is closed): retry.
           if (!flying && !cancelRetry) scheduleRetry();
@@ -157,4 +171,5 @@ export const presenceCommitter: Committer = createCommitter({
     return () => clearTimeout(id);
   },
   stream: `discord_presence:${SENDER_ID}`,
+  first: Date.now(),
 });

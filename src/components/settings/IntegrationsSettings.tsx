@@ -132,7 +132,7 @@ const IntegrationsSettings = () => {
         </div>
       </div>
       <AnimatePresence>
-        {editor && (
+        {features.discordRpc && editor && (
           <Suspense key="discord-status-editor" fallback={null}>
             <DiscordStatusEditor focusRow={editor.row} onClose={() => setEditor(null)} />
           </Suspense>

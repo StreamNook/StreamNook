@@ -18,6 +18,7 @@ import { Tooltip } from '../../ui/Tooltip';
 import { DiscordGlyph } from '../../ui/DiscordGlyph';
 import { useSettingDefault, useSettingReset } from '../settingReset';
 import { flashSettingRow } from '../settingsNavigation';
+import { setSettingsFields } from '../../../utils/settingsFields';
 import { draftOf, presenceCommitter, reconcile, type Pending, type PresenceField } from './discordDraft';
 import { DiscordStatusPreview, type PreviewModel, type PreviewTab } from './DiscordStatusPreview';
 
@@ -111,7 +112,6 @@ function TemplateInput({
 
 export default function DiscordStatusEditor({ focusRow, onClose }: { focusRow?: string; onClose: () => void }) {
   const settings = useAppStore((s) => s.settings);
-  const updateSettings = useAppStore((s) => s.updateSettings);
   const motionOff = useAppStore((s) => s.settings.motion_mode) === 'off';
   const canonical = settings.discord_presence;
   const defaults = useSettingDefault('discord_presence') as DiscordPresenceSettings | undefined;
@@ -180,11 +180,17 @@ export default function DiscordStatusEditor({ focusRow, onClose }: { focusRow?: 
     };
     window.addEventListener('keydown', onKey, true);
     window.addEventListener('pagehide', flush);
+    window.addEventListener('beforeunload', flush);
     return () => {
       window.removeEventListener('keydown', onKey, true);
       window.removeEventListener('pagehide', flush);
+      window.removeEventListener('beforeunload', flush);
     };
   }, [close, flush]);
+
+  // The editor can also go away without its close button (Settings closed,
+  // the window gone): its last edits are sent first.
+  useEffect(() => () => flush(), [flush]);
 
   // The dialog takes focus, so Tab stays in it rather than in Settings behind.
   useLayoutEffect(() => {
@@ -327,7 +333,8 @@ export default function DiscordStatusEditor({ focusRow, onClose }: { focusRow?: 
           <Toggle
             enabled={enabled}
             ariaLabel="Show on Discord"
-            onChange={() => void updateSettings({ ...settings, discord_rpc_enabled: !enabled })}
+            // One field, so a style write landing meanwhile is never put back by a stale copy.
+            onChange={() => void setSettingsFields({ discord_rpc_enabled: !enabled }).catch(() => {})}
           />
           <button
             type="button"

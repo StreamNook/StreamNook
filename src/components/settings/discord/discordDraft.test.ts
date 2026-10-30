@@ -148,4 +148,27 @@ describe('committer', () => {
     });
     expect(h.writes[2].order.n).toBe(3);
   });
+
+  it('a failed write is not sent again once a newer write that carried it landed', async () => {
+    const h = harness();
+    const c = createCommitter(h.deps);
+    c.queue({ watching_top: 'ab' });
+    c.queue({ watching_top: 'abc' });
+    c.flush();
+    // The urgent write (n=2, carrying 'abc') lands first; the older one then fails.
+    h.writes[1].resolve();
+    await settle();
+    h.writes[0].reject();
+    await settle();
+    expect(h.retries, 'no retry of the older write').toHaveLength(0);
+    expect(h.writes).toHaveLength(2);
+    expect(c.status()).toBe('idle');
+  });
+
+  it('counts on from the number it was given', () => {
+    const h = harness();
+    const c = createCommitter({ ...h.deps, first: 1_000 });
+    c.queue({ watching_top: 'a' });
+    expect(h.writes[0].order.n).toBe(1_001);
+  });
 });

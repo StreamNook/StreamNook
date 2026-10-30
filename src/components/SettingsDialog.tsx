@@ -48,6 +48,7 @@ const SettingsSearchResults = lazy(() => import('./settings/SettingsSearchResult
 import type { SettingsIndexEntry } from './settings/searchIndex';
 import { findSettingTarget, flashSettingRow } from './settings/settingsNavigation';
 import { DISCORD_EDITOR_SECTION, requestDiscordEditor } from './settings/discord/discordEditorRequest';
+import { features } from '../features';
 import { Tooltip } from './ui/Tooltip';
 import { requestChangelog } from '../utils/changelogEvents';
 import { SevenTvAvatar } from './SevenTvAvatar';
@@ -200,7 +201,7 @@ const SettingsDialog = () => {
   const handleResultSelect = (entry: SettingsIndexEntry) => {
     setSearchQuery('');
     setActiveTab(entry.tab as SettingsTab);
-    if (entry.sectionId === DISCORD_EDITOR_SECTION) {
+    if (entry.sectionId === DISCORD_EDITOR_SECTION && features.discordRpc) {
       // Its rows live in the Discord Status editor, opened over the tab.
       requestDiscordEditor(entry.title);
       return;

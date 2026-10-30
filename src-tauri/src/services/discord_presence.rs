@@ -56,7 +56,9 @@ const TILE_ERROR_GRACE: Duration = Duration::from_secs(30);
 const ART_RETRY: Duration = Duration::from_secs(60);
 const ART_PENDING_LIMIT: Duration = Duration::from_secs(10);
 const ART_CAPACITY: usize = 512;
-const PREVIEW_KEEPS_ART: Duration = Duration::from_secs(30);
+/// Longer than a picture's retry plus its lookup limit, so a retry still comes
+/// due while the editor sits open untouched.
+const PREVIEW_KEEPS_ART: Duration = Duration::from_secs(90);
 const AVATAR_WAIT: Duration = Duration::from_millis(1500);
 const OFFLINE_ROOM_WAIT: Duration = Duration::from_secs(3);
 /// The sample stream's elapsed time in the preview: 1 h 12 min.
@@ -1385,7 +1387,8 @@ pub fn set_grid(label: &str, gen: u64, seq: u64, slots: Option<Vec<SlotFacts>>) 
         p.grid_seq = seq;
         let slots = slots.filter(|s| !s.is_empty());
         // A tile's error counts from when it was first reported.
-        let mut errors = std::mem::take(&mut p.tile_errors);
+        let old_errors = std::mem::take(&mut p.tile_errors);
+        let mut errors = old_errors.clone();
         if let Some(list) = &slots {
             let failing: HashSet<String> =
                 list.iter().filter(|s| s.load_error).map(tile_key).collect();
@@ -1396,7 +1399,7 @@ pub fn set_grid(label: &str, gen: u64, seq: u64, slots: Option<Vec<SlotFacts>>) 
         } else {
             errors.clear();
         }
-        let errors_changed = errors != p.tile_errors;
+        let errors_changed = errors != old_errors;
         p.tile_errors = errors;
         if p.grid == slots && !errors_changed {
             false
@@ -1508,7 +1511,11 @@ fn spawn_lookups(p: &mut Presence, app: &AppHandle, scene: &Scene, now: Instant)
             });
         }
     }
-    if !scene.category.trim().is_empty() && url_field(&scene.category_art, 256).is_none() {
+    // An offline room shows no category picture, so none is looked up for it.
+    if scene.kind != SceneKind::Offline
+        && !scene.category.trim().is_empty()
+        && url_field(&scene.category_art, 256).is_none()
+    {
         let key = category_key(scene);
         if p.art.needs_lookup(&key, now) {
             p.art.put(key.clone(), ArtEntry::Pending(now), &keep);
@@ -1746,7 +1753,12 @@ async fn pump(app: AppHandle) {
             let art = shown.scene().map(|s| p.scene_art(s)).unwrap_or_default();
             let (art_wait_until, art_retry) = match shown.scene() {
                 Some(scene) => {
-                    let keys = [avatar_key(scene), category_key(scene)];
+                    // An offline room never waits on a category picture it does not show.
+                    let keys: Vec<String> = if scene.kind == SceneKind::Offline {
+                        vec![avatar_key(scene)]
+                    } else {
+                        vec![avatar_key(scene), category_key(scene)]
+                    };
                     p.shown_keys = keys.iter().cloned().collect();
                     spawn_lookups(&mut p, &app, scene, now);
                     let wait = keys
@@ -2126,8 +2138,11 @@ pub fn preview(
         presets: presets(),
     };
     drop(p);
-    // Outside the presence lock: the look keeps its own.
-    model.look = crate::services::discord_look::resolve(app, user.as_ref(), enabled);
+    // Outside the presence lock: the look keeps its own. With the status off
+    // the editor reads the account itself (the pump never connects then).
+    let user = crate::services::discord_look::account(app, user, enabled);
+    model.user = user.clone();
+    model.look = crate::services::discord_look::resolve(app, user.as_ref());
     if first_look {
         // Pictures for the live scene start looking up now that the editor is open.
         wake();
@@ -2611,6 +2626,13 @@ mod tests {
         let same = lock().grid.clone().unwrap();
         assert_eq!(set_grid("main", gen, 2, Some(same)), WriteResult::Applied);
         assert_eq!(lock().rev, rev, "an equal write changes nothing");
+        // The same with a failing tile: its error was already known.
+        let mut failing = lock().grid.clone().unwrap();
+        failing[1].load_error = true;
+        assert_eq!(set_grid("main", gen, 3, Some(failing.clone())), WriteResult::Applied);
+        let rev = lock().rev;
+        assert_eq!(set_grid("main", gen, 4, Some(failing)), WriteResult::Applied);
+        assert_eq!(lock().rev, rev, "an equal write with a failing tile changes nothing");
         page_ended();
         let cleared = {
             let p = lock();
