@@ -176,8 +176,9 @@ const MessageRow = memo(function MessageRow({
   onUsernameRightClick,
   onBadgeClick,
 }: MessageRowProps) {
+  const atmospheresInChat = useAppStore((s) => s.settings.chat_design?.show_chat_atmospheres) !== false;
   const hasAtmosphere = useChatUserStore((s) => {
-    if (!userId) return false;
+    if (!userId || !atmospheresInChat) return false;
     const u = s.users.get(userId);
     // Cologne rows carry the same animated composited wash as an Atmosphere, so
     // they need the same always-paint treatment to dodge the ghost bug.

@@ -573,6 +573,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
     ffz_custom_role_badges: stored?.ffz_custom_role_badges ?? true,
     show_third_party_badges: stored?.show_third_party_badges ?? true,
     hidden_badge_providers: stored?.hidden_badge_providers ?? [],
+    show_chat_atmospheres: stored?.show_chat_atmospheres ?? true,
     message_entrance: (stored?.message_entrance ?? ENTRANCE_FALLBACK) as 'none' | 'fade' | 'slide' | 'rise',
     emoji_style: (stored?.emoji_style ?? 'apple') as 'system' | 'apple' | 'google' | 'twitter' | 'facebook',
     show_personal_emotes: stored?.show_personal_emotes ?? true,
@@ -1622,7 +1623,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
 
       <SettingsSection
         label="Names & Badges"
-        description="How chatter names, badges and 7TV paints look."
+        description="How chatter names, badges, 7TV paints and atmospheres look."
       >
         <SettingPreview caption="how your name looks in chat">
           <NamePrefixPreview
@@ -1917,6 +1918,18 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
             ]}
           />
         </SettingsRow>
+
+        <SettingsRow
+          title="Atmospheres"
+          onReset={resetFor(['chat_design.show_chat_atmospheres', true])}
+          description="A StreamNook member's atmosphere behind their messages. Off keeps every message plain; their profile still shows it."
+          control={
+            <Toggle
+              enabled={cd.show_chat_atmospheres}
+              onChange={() => setDesign({ show_chat_atmospheres: !cd.show_chat_atmospheres })}
+            />
+          }
+        />
       </SettingsSection>
 
       <SettingsSection

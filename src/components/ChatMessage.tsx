@@ -1252,6 +1252,9 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   // evaluations per store write across every mounted row; one tuple selector
   // has identical reactivity (shallow compare on the five fields matches the
   // per-field Object.is checks) at a fifth of the cost.
+  // The viewer can keep every member's atmosphere off their chat (profiles
+  // still show them).
+  const atmospheresInChat = chatDesign?.show_chat_atmospheres !== false;
   const {
     paint: seventvPaintRaw,
     seventvBadge: seventvBadgeRaw,
@@ -1262,7 +1265,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     useShallow((s) => {
       const u = cosmeticsKey ? s.users.get(cosmeticsKey) : undefined;
       // A member can keep their theme on their profile but off their chat rows.
-      const themeInChat = !u?.themeHiddenInChat;
+      const themeInChat = atmospheresInChat && !u?.themeHiddenInChat;
       return {
         paint: u?.paint,
         seventvBadge: u?.seventvBadge,

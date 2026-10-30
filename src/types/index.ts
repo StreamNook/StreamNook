@@ -359,6 +359,9 @@ export interface ChatDesignSettings {
   // 'ffz', 'bttv', 'chatterino', 'homies', 'moltorino', 'chatsen', 'chatty',
   // 'dankchat'). Default none.
   hidden_badge_providers?: string[];
+  // StreamNook atmospheres (and the Cologne event look) behind members' chat
+  // rows. Off keeps every row plain; profiles still show them. Default true.
+  show_chat_atmospheres?: boolean;
   // How a new message arrives: none (default), fade, slide, rise. History
   // rows loaded on join never animate.
   message_entrance?: 'none' | 'fade' | 'slide' | 'rise';

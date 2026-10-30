@@ -473,6 +473,10 @@ pub struct ChatDesignSettings {
     pub show_third_party_badges: bool,
     #[serde(default)]
     pub hidden_badge_providers: Vec<String>,
+    /// StreamNook atmospheres (and the Cologne event look) behind members' chat
+    /// rows. Profiles show them either way.
+    #[serde(default = "default_true")]
+    pub show_chat_atmospheres: bool,
     #[serde(default = "default_message_entrance")]
     pub message_entrance: String, // none | fade | slide | rise
     #[serde(default = "default_emoji_style")]
@@ -696,6 +700,7 @@ impl Default for ChatDesignSettings {
             ffz_custom_role_badges: true,
             show_third_party_badges: true,
             hidden_badge_providers: Vec::new(),
+            show_chat_atmospheres: true,
             message_entrance: default_message_entrance(),
             emoji_style: default_emoji_style(),
             show_personal_emotes: true,

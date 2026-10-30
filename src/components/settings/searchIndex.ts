@@ -1032,6 +1032,12 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   {
     tab: 'Chat',
     section: 'Names & Badges',
+    title: 'Atmospheres',
+    description: "A StreamNook member's atmosphere behind their messages. Off keeps every message plain; their profile still shows it. Hide atmospheres in chat, message backgrounds, Cologne look, member wash."
+  },
+  {
+    tab: 'Chat',
+    section: 'Names & Badges',
     title: 'Profile pictures',
     description: "Choose whose picture shows across the app: 7TV (the picture someone set on 7TV, otherwise their platform's) or Twitch (always the platform's own picture, no 7TV lookups). Previously \"7TV profile pictures\". Picture source, animated avatars, custom avatar, pfp, Twitch pfp, 7TV pfp."
   },

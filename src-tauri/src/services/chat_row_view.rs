@@ -40,6 +40,8 @@ struct Prefs {
     show_badges: bool,
     show_third_party_badges: bool,
     hidden_badge_providers: Vec<String>,
+    /// Members' atmospheres and Cologne look behind their rows.
+    atmospheres: bool,
     bttv_modifiers: bool,
     ffz_effects: bool,
     link_previews: bool,
@@ -56,6 +58,7 @@ impl Default for Prefs {
             show_badges: true,
             show_third_party_badges: true,
             hidden_badge_providers: Vec::new(),
+            atmospheres: true,
             bttv_modifiers: true,
             ffz_effects: true,
             link_previews: true,
@@ -123,6 +126,7 @@ pub fn refresh(settings: &Settings) {
         show_badges: d.show_badges,
         show_third_party_badges: d.show_third_party_badges,
         hidden_badge_providers: d.hidden_badge_providers.iter().map(|p| p.to_lowercase()).collect(),
+        atmospheres: d.show_chat_atmospheres,
         bttv_modifiers: d.bttv_emote_modifiers,
         ffz_effects: d.ffz_emote_effects,
         link_previews: d.link_previews,
@@ -1194,8 +1198,8 @@ fn alias_frame(key: &str, member: &str, theme: &crate::services::member_theme::M
     serde_json::json!({
         "type": "ROW_MEMBER",
         "user_id": key,
-        "atmosphere": theme.chat_atmosphere(),
-        "cologne": theme.chat_cologne(),
+        "atmosphere": theme.chat_atmosphere().filter(|_| prefs.atmospheres),
+        "cologne": theme.chat_cologne().filter(|_| prefs.atmospheres),
         "badge": badge,
     })
     .to_string()
@@ -1238,8 +1242,8 @@ pub fn member_frame(theme: &crate::services::member_theme::MemberTheme) -> Strin
     serde_json::json!({
         "type": "ROW_MEMBER",
         "user_id": theme.member_id,
-        "atmosphere": theme.chat_atmosphere(),
-        "cologne": theme.chat_cologne(),
+        "atmosphere": theme.chat_atmosphere().filter(|_| prefs.atmospheres),
+        "cologne": theme.chat_cologne().filter(|_| prefs.atmospheres),
         "badge": badge,
     })
     .to_string()
@@ -1279,7 +1283,7 @@ pub fn stamp_view(msg: &mut ChatMessage) {
         .as_ref()
         .and_then(|r| r.parent_segments.as_ref())
         .map(|segs| spans_with(segs, &channel, prefs.clone()));
-    let theme = known_member_theme(msg);
+    let theme = known_member_theme(msg).filter(|_| prefs.atmospheres);
     let source = if msg.metadata.is_from_shared_chat {
         crate::services::shared_chat_source::cached(msg.metadata.source_room_id.as_deref().unwrap_or_default(), prefs.dark_theme)
     } else {
