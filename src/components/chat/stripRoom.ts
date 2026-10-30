@@ -46,12 +46,17 @@ export const ANSWER_SHELL =
  *  40 px slot on the left (the bars, the cover, an icon). */
 export const ANSWER_ROW = 'absolute inset-0 flex items-center gap-3 p-[10px]';
 
-/** The shape's lift off the chat: a quiet, neutral still shadow (lighter on a
- *  light theme) and a hairline in the theme's subtle border. */
+/**
+ * The shape's lift off the chat: a hairline in the theme's subtle border, a
+ * quiet, neutral still shadow (lighter on a light theme), and under both a
+ * soft clearing in the chat's own color. The shape floats over the chat's
+ * lines, which start a little left of it, so without the clearing the first
+ * letters of a name show beside it and its rounded corners uncover more.
+ */
 export function answerShadow(light: boolean): { boxShadow: string } {
-  return {
-    boxShadow: `inset 0 0 0 1px var(--color-border-subtle), ${light ? '0 6px 16px -8px rgba(0, 0, 0, 0.2)' : '0 6px 18px -8px rgba(0, 0, 0, 0.45)'}`,
-  };
+  const drop = light ? '0 6px 16px -8px rgba(0, 0, 0, 0.2)' : '0 6px 18px -8px rgba(0, 0, 0, 0.45)';
+  const clearing = '0 0 8px 8px var(--color-background)';
+  return { boxShadow: `inset 0 0 0 1px var(--color-border-subtle), ${drop}, ${clearing}` };
 }
 
 /** How long an answer shows over the composer before it folds away: a song

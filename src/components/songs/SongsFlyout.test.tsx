@@ -154,7 +154,7 @@ describe('what the popover holds', () => {
 
   it('while a listening runs, Identify waits', () => {
     const html = body({ listening: true });
-    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>[\s\S]*?Listening for the song/);
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>[\s\S]*?Listening in/);
   });
 
   it("a recent row's hover takes its cover's tint", () => {

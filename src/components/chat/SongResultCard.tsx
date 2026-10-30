@@ -1,10 +1,11 @@
 // The answer over a chat's composer, in the listening pill's own floating
 // shape (ListeningStrip draws the shape; this draws what is inside it), so the
 // pill turning into the answer reads as one object changing. A song found: its
-// cover on a soft wash of its own colors, "Found it" in the cover's ink, its
-// name on one line, up to three of its services, and dismiss; the row itself
-// opens the song in Your songs. A miss or an error: the same row with an icon,
-// its words, and Try again for a miss. It shows for a few seconds, held while
+// cover on a soft wash of its own colors, a short label ("Got it") in the
+// cover's ink, its name on one line, up to three of its services, and
+// dismiss; the row itself opens the song in Your songs. A miss or an error:
+// the same row with an icon, its words, and Try again for a miss (the words
+// are picked per answer, listeningWords.ts). It shows for a few seconds, held while
 // the pointer or the keyboard is on it, then goes (ListeningStrip runs the
 // leave). The song's card in the chat stays as the record.
 import { useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
@@ -18,6 +19,7 @@ import { Tooltip } from '../ui/Tooltip';
 import { GLAZE_PILL } from '../ui/glazeButtons';
 import { markedLinks } from '../songs/songLinks';
 import { markOf, markSize } from '../songs/serviceMarks';
+import { phraseFor } from './listeningWords';
 import { ANSWER_ROW, identifyAgain, openSongLink, RESULT_MS } from './stripRoom';
 
 const noSurface = () => false;
@@ -87,9 +89,10 @@ function Dismiss({ onClick }: { onClick: () => void }) {
       type="button"
       onClick={own(onClick)}
       aria-label="Dismiss"
-      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-textMuted transition-colors duration-150 hover:bg-glass-hover hover:text-textPrimary"
+      // The listening pill's Cancel box, so the X stays put as the contents change.
+      className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full text-textMuted transition-colors duration-150 hover:bg-glass-hover hover:text-textPrimary"
     >
-      <X size={15} strokeWidth={2.2} />
+      <X size={14} strokeWidth={2.2} />
     </button>
   );
 }
@@ -158,7 +161,7 @@ function FoundRow({ answer, onDone }: { answer: SongResult & { result: { status:
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="text-[11px] font-semibold uppercase leading-[14px] tracking-[0.06em]" style={{ color: ink }}>
-          Found it
+          {phraseFor('found', answer.id)}
         </span>
         <span className="truncate leading-[18px]">
           <span className="text-[13.5px] font-semibold text-textPrimary">{song.title}</span>
@@ -228,7 +231,7 @@ function FoundRow({ answer, onDone }: { answer: SongResult & { result: { status:
 function OtherRow({ answer, onDone }: { answer: SongResult; onDone: () => void }) {
   const hold = useShownFor(RESULT_MS.other, onDone);
   const miss = answer.result.status === 'no-match';
-  const text = answer.result.status === 'error' ? answer.result.message : "Couldn't hear a song";
+  const text = answer.result.status === 'error' ? answer.result.message : phraseFor('miss', answer.id);
   return (
     <div {...hold} role="status" className={ANSWER_ROW}>
       <IconSlot>{miss ? <NoSong /> : <CircleAlert size={18} strokeWidth={2} />}</IconSlot>
@@ -238,7 +241,7 @@ function OtherRow({ answer, onDone }: { answer: SongResult; onDone: () => void }
           <button
             type="button"
             onClick={own(() => void identifyAgain(answer.room))}
-            className={`${GLAZE_PILL} flex h-[30px] items-center px-3 text-[12.5px]`}
+            className={`${GLAZE_PILL} flex h-[30px] items-center px-2.5 text-[12.5px]`}
           >
             Try again
           </button>

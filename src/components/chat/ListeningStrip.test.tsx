@@ -15,6 +15,10 @@ vi.mock('@tauri-apps/api/webviewWindow', () => ({ getCurrentWebviewWindow: () =>
 import { ListeningStrip, ListeningStripView } from './ListeningStrip';
 import { SongResultView } from './SongResultCard';
 import { RESULT_MS, stripCancel, stripShows } from './stripRoom';
+import { FINDING_PHRASES, FOUND_LABELS, isOngoing, LISTENING_PHRASES, MISS_PHRASES, phraseFor } from './listeningWords';
+
+/** Text as the server renderer writes it. */
+const esc = (s: string) => s.replace(/'/g, '&#x27;');
 import type { Listening } from '../../utils/songListening';
 import type { SongResult } from '../../utils/songResult';
 
@@ -57,27 +61,34 @@ describe('where the pill shows', () => {
 });
 
 describe('what the pill says and does', () => {
-  it('listening: the bars, the words with their dots, the time line, and Cancel', () => {
+  it('listening: the bars, its phrase (dots only when still going), and Cancel ringed by the time', () => {
+    const words = phraseFor('listening', 'l1');
     const html = renderToStaticMarkup(<ListeningStripView listening={listening()} onCancel={() => {}} />);
-    expect(html).toContain('Listening for the song');
-    expect(html).toContain('sn-listen-dots');
+    expect(LISTENING_PHRASES).toContain(words);
+    expect(html).toContain(esc(words));
+    expect(html.includes('sn-listen-dots')).toBe(isOngoing(words));
     expect(html).toContain('sn-listen-bars sn-listen-bars--accent');
-    expect(html).toContain('sn-listen-time');
     // The bars sit in the 40 px slot the answer's cover takes.
     expect(html).toMatch(/class="flex h-10 w-10 shrink-0 items-center justify-center"[^>]*><span[^>]*class="sn-listen-bars/);
-    expect(html).toMatch(/<button[^>]*aria-label="Cancel"[^>]*>/);
+    // No line along the foot: the time is a ring around Cancel, from 12 o'clock.
+    expect(html).not.toContain('sn-listen-time');
+    expect(html).toMatch(/<button[^>]*aria-label="Cancel"[^>]*><svg[^>]*class="[^"]*-rotate-90[^"]*"/);
+    expect(html).toContain('stroke="var(--color-accent)"');
     expect(html).not.toMatch(/<button[^>]*disabled[^>]*aria-label="Cancel"/);
   });
 
-  it('a second attempt says so', () => {
+  it('keeps its words through a second attempt', () => {
+    const words = phraseFor('listening', 'l1');
     const html = renderToStaticMarkup(<ListeningStripView listening={listening({ attempt: 2 })} onCancel={() => {}} />);
-    expect(html).toContain('Trying again');
+    expect(html).toContain(esc(words));
   });
 
-  it('finding: the words change, and Cancel holds its place without acting', () => {
+  it('finding: its own phrase, and neither ring nor X (their place is kept)', () => {
+    const words = phraseFor('finding', 'l1');
     const html = renderToStaticMarkup(<ListeningStripView listening={listening({ phase: 'finding' })} onCancel={null} />);
-    expect(html).toContain('Finding the song');
-    expect(html).toMatch(/<button[^>]*disabled=""[^>]*class="[^"]*opacity-0[^"]*"/);
+    expect(FINDING_PHRASES).toContain(words);
+    expect(html).toContain(esc(words));
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*class="[^"]*pointer-events-none opacity-0[^"]*"/);
   });
 
   it('Cancel is wired only while listening', () => {
@@ -113,9 +124,11 @@ describe('the answer over the composer', () => {
     },
   };
 
-  it('a song: "Found it", its name on one line, at most three services with a mark of their own', () => {
+  it('a song: its label, its name on one line, at most three services with a mark of their own', () => {
+    const label = phraseFor('found', found.id);
     const html = renderToStaticMarkup(<SongResultView answer={found} onDone={() => {}} />);
-    expect(html).toContain('Found it');
+    expect(FOUND_LABELS).toContain(label);
+    expect(html).toContain(esc(label));
     expect(html).toContain('Kiss of Life');
     expect(html).toContain(' · Sade');
     expect(html).toContain('aria-label="Open in Apple Music"');
@@ -130,8 +143,10 @@ describe('the answer over the composer', () => {
   });
 
   it('a miss: a short pill with Try again; an error: its own words, no Try again', () => {
+    const words = phraseFor('miss', 2);
     const miss = renderToStaticMarkup(<SongResultView answer={{ id: 2, room: 'xqc', result: { status: 'no-match' } }} onDone={() => {}} />);
-    expect(miss).toContain('Couldn&#x27;t hear a song');
+    expect(MISS_PHRASES).toContain(words);
+    expect(miss).toContain(esc(words));
     expect(miss).toContain('Try again');
     const error = renderToStaticMarkup(
       <SongResultView answer={{ id: 3, room: 'xqc', result: { status: 'error', message: 'No stream is playing.' } }} onDone={() => {}} />,

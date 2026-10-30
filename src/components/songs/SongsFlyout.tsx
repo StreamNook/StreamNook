@@ -121,7 +121,7 @@ export function SongsFlyoutBody({
           style={ACCENT_FILL}
         >
           {listening ? <ListeningBars small className="text-white" /> : <Music size={18} aria-hidden="true" />}
-          {listening ? 'Listening for the song' : 'Identify this song'}
+          {listening ? 'Listening in' : 'Identify this song'}
         </button>
         <p className="mt-2.5 px-2 text-center text-[12px] leading-[17px] text-textMuted [text-wrap:balance]">
           {supported ? 'Listens to the stream for a few seconds' : refusal}
@@ -345,7 +345,7 @@ export function SongsSplitButton({ onIdentify, supported, refusal }: SongsSplitB
     : capturing
       ? 'Stop listening'
       : finding
-        ? 'Finding the song'
+        ? 'Looking it up'
         : 'Identify song';
   const open = placement !== null;
   // The note, the bars and the spinner cross-fade in one place.

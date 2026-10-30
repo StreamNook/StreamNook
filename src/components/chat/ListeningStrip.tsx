@@ -1,9 +1,10 @@
 // The listening pill over a chat's composer while a song is identified for
 // that chat: a glass shape floating just above the composer (it takes no room
-// in the shelf), with bars that move with the stream's sound, "Listening for
-// the song", how far the listening has come along its foot, and a quiet
-// Cancel; then "Finding the song" while the clip is looked up; then the answer
-// (SongResultCard) in the same shape, which goes after a few seconds. One
+// in the shelf), with bars that move with the stream's sound, a short phrase
+// ("Ears up", picked per capture, listeningWords.ts), and a quiet Cancel ringed
+// by how far the listening has come; then another phrase ("Let me cook") while
+// the clip is looked up; then the answer (SongResultCard) in the same shape,
+// which goes after a few seconds. One
 // object whose contents change. The song's card still lands in the chat as its
 // record. Desktop only: the phones keep their chat line.
 //
@@ -19,6 +20,7 @@ import { getListening, subscribeListening, type Listening } from '../../utils/so
 import { dismissSongResult, songResultFor, subscribeSongResults, type SongResult } from '../../utils/songResult';
 import { IS_MOBILE } from '../../utils/platform';
 import { BAR_WEIGHTS, drawBars, motionMode } from './listeningBars';
+import { isOngoing, phraseFor } from './listeningWords';
 import { subscribeTheme } from '../../themes';
 import { readSurface } from '../../utils/coverTint';
 import { SongResultView } from './SongResultCard';
@@ -52,45 +54,76 @@ export function ListeningBars({ small = false, className = '' }: { small?: boole
   );
 }
 
-/** How far this attempt's listening has come: one transform transition from
- *  where it is now to the end, started again for each attempt. */
-function TimeLine({ listening }: { listening: Listening }) {
-  const lineRef = useRef<HTMLDivElement>(null);
+/** The ring's radius and length, in a 30 px box. */
+const RING_R = 14;
+const RING_C = 2 * Math.PI * RING_R;
+
+/**
+ * Cancel, with how far this attempt's listening has come as a ring around it:
+ * from 12 o'clock, clockwise, one transition per attempt (a 30 px SVG, so its
+ * repaint is nothing). Under Reduced Motion the ring moves in quarters; under
+ * Off there is no ring, only the X. While the clip is looked up neither shows
+ * (the bars' slow wave says it is working), and its place is kept.
+ */
+function CancelRing({ listening, onCancel }: { listening: Listening; onCancel: (() => void) | null }) {
+  const arcRef = useRef<SVGCircleElement>(null);
   const { phase, startedAt, captureMs, attempt } = listening;
+  const mode = motionMode();
   useLayoutEffect(() => {
-    const line = lineRef.current;
-    if (!line) return;
-    // With Motion off a filling line would only jump to its end.
-    line.style.opacity = motionMode() === 'off' ? '0' : '';
-    if (phase === 'finding') {
-      line.style.transition = 'transform 200ms ease-out';
-      line.style.transform = 'scaleX(1)';
-      return;
-    }
-    line.style.transition = 'none';
+    const arc = arcRef.current;
+    if (!arc) return;
+    arc.style.transition = 'none';
     if (startedAt === null || !(captureMs > 0)) {
-      line.style.transform = 'scaleX(0)';
+      arc.style.strokeDashoffset = String(RING_C);
       return;
     }
     const done = Math.min(1, Math.max(0, (Date.now() - startedAt) / captureMs));
-    line.style.transform = `scaleX(${done})`;
+    const quarters = mode === 'reduced';
+    const from = quarters ? Math.floor(done * 4) / 4 : done;
+    arc.style.strokeDashoffset = String(RING_C * (1 - from));
     // Drawn where it is before it moves, so the transition starts there.
-    void line.offsetWidth;
-    line.style.transition = `transform ${Math.round(captureMs * (1 - done))}ms linear`;
-    line.style.transform = 'scaleX(1)';
-  }, [phase, startedAt, captureMs, attempt]);
-  return <div ref={lineRef} aria-hidden="true" className="sn-listen-time" />;
-}
-
-/** What the pill says for a listening. */
-function pillWords(listening: Listening): string {
-  if (listening.phase === 'finding') return 'Finding the song';
-  return listening.attempt > 1 ? 'Trying again' : 'Listening for the song';
+    void arc.getBoundingClientRect();
+    const left = Math.round(captureMs * (1 - done));
+    const steps = Math.max(1, 4 - Math.floor(done * 4));
+    arc.style.transition = `stroke-dashoffset ${left}ms ${quarters ? `steps(${steps}, end)` : 'linear'}`;
+    arc.style.strokeDashoffset = '0';
+  }, [startedAt, captureMs, attempt, mode]);
+  const finding = phase === 'finding';
+  return (
+    <button
+      type="button"
+      onClick={onCancel ?? undefined}
+      disabled={!onCancel}
+      tabIndex={onCancel ? undefined : -1}
+      aria-hidden={onCancel ? undefined : true}
+      aria-label="Cancel"
+      className={`relative flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full text-textMuted transition-[background-color,color,opacity] duration-150 hover:bg-glass-hover hover:text-textPrimary ${onCancel && !finding ? '' : 'pointer-events-none opacity-0'}`}
+    >
+      {mode !== 'off' && (
+        <svg aria-hidden="true" width={30} height={30} viewBox="0 0 30 30" className="pointer-events-none absolute inset-0 -rotate-90">
+          <circle cx={15} cy={15} r={RING_R} fill="none" stroke="currentColor" strokeOpacity={0.16} strokeWidth={2} />
+          <circle
+            ref={arcRef}
+            cx={15}
+            cy={15}
+            r={RING_R}
+            fill="none"
+            stroke="var(--color-accent)"
+            strokeWidth={2}
+            strokeDasharray={RING_C}
+            strokeDashoffset={RING_C}
+          />
+        </svg>
+      )}
+      <X size={14} strokeWidth={2.2} />
+    </button>
+  );
 }
 
 /** What the shape holds for a listening that answers into this chat. */
 export function ListeningStripView({ listening, onCancel }: { listening: Listening; onCancel: (() => void) | null }) {
-  const words = pillWords(listening);
+  // Its words, picked for this capture: one for listening, one for finding.
+  const words = phraseFor(listening.phase === 'finding' ? 'finding' : 'listening', listening.id);
   return (
     <div role="status" className={ANSWER_ROW}>
       {/* The bars sit in the slot the answer's cover takes. */}
@@ -109,27 +142,19 @@ export function ListeningStripView({ listening, onCancel }: { listening: Listeni
             transition={{ duration: 0.16, ease: EASE }}
           >
             {words}
-            <span className="sn-listen-dots" aria-hidden="true">
-              <i>.</i>
-              <i>.</i>
-              <i>.</i>
-            </span>
+            {/* Dots only after words that are still going. */}
+            {isOngoing(words) && (
+              <span className="sn-listen-dots" aria-hidden="true">
+                <i>.</i>
+                <i>.</i>
+                <i>.</i>
+              </span>
+            )}
           </motion.span>
         </AnimatePresence>
       </span>
       {/* Held in place while the song is looked up, so nothing shifts. */}
-      <button
-        type="button"
-        onClick={onCancel ?? undefined}
-        disabled={!onCancel}
-        tabIndex={onCancel ? undefined : -1}
-        aria-hidden={onCancel ? undefined : true}
-        aria-label="Cancel"
-        className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-textMuted transition-[background-color,color,opacity] duration-150 hover:bg-glass-hover hover:text-textPrimary ${onCancel ? '' : 'pointer-events-none opacity-0'}`}
-      >
-        <X size={15} strokeWidth={2.2} />
-      </button>
-      <TimeLine listening={listening} />
+      <CancelRing listening={listening} onCancel={onCancel} />
     </div>
   );
 }

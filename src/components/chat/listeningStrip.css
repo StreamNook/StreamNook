@@ -2,8 +2,8 @@
    song is identified (ListeningStrip.tsx). Everything here moves by
    `transform` or `opacity` only, so it runs on the compositor and repaints
    nothing over a playing stream. The bars' heights are written every frame by
-   one shared renderer (listeningBars.ts), never through React state; the time
-   line is one transition per attempt. The pill's glow is a still shadow. */
+   one shared renderer (listeningBars.ts), never through React state. How far
+   the listening has come is a ring around Cancel (ListeningStrip.tsx). */
 
 .sn-listen-bars {
   display: inline-flex;
@@ -67,18 +67,3 @@ html[data-motion="off"] .sn-listen-dots > i {
   }
 }
 
-/* How far this attempt's listening has come, a thin line along the pill's
-   foot, inset clear of its 18 px corners. */
-.sn-listen-time {
-  position: absolute;
-  right: 18px;
-  bottom: 0;
-  left: 18px;
-  height: 2px;
-  border-radius: 9999px;
-  background: var(--color-accent);
-  opacity: 0.8;
-  transform: scaleX(0);
-  transform-origin: left;
-  pointer-events: none;
-}
