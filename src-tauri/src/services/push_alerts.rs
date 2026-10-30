@@ -115,6 +115,22 @@ impl AlertInputs {
     }
 }
 
+/// What kind of change `next` is after the inputs the last save left in
+/// `cell`, keeping `next` there. `None` when nothing the server holds moved;
+/// `MuteOnly` when only the muted channels did.
+pub fn note_change(cell: &mut Option<AlertInputs>, next: AlertInputs) -> Option<crate::services::push_plan::Kind> {
+    use crate::services::push_plan::Kind;
+    let kind = match cell.as_ref() {
+        Some(prev) if *prev == next => None,
+        Some(prev) if prev.enabled == next.enabled && prev.live == next.live && prev.push == next.push => {
+            Some(Kind::MuteOnly)
+        }
+        _ => Some(Kind::Switch),
+    };
+    *cell = Some(next);
+    kind
+}
+
 /// What the server should hold for this phone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Plan {
@@ -270,18 +286,14 @@ pub mod server {
     /// After every settings save: a change of the switches or the mute list is
     /// owed to the server. Only the mute list moving settles longer.
     pub fn refresh(settings: &crate::models::settings::Settings) {
-        let next = AlertInputs::from_settings(settings);
         let kind = match INPUTS.lock() {
             Ok(mut inputs) => {
-                let kind = match inputs.as_ref() {
-                    Some(prev) if *prev == next => None,
-                    Some(prev) if prev.enabled == next.enabled && prev.live == next.live && prev.push == next.push => {
-                        Some(Kind::MuteOnly)
-                    }
-                    _ => Some(Kind::Switch),
-                };
-                *inputs = Some(next);
-                kind
+                // The live settings, read under this lock, not the caller's
+                // copy: two saves whose hooks run out of order would otherwise
+                // leave the older list here and hide the next change. Every
+                // caller has let go of the settings lock by now.
+                let next = live_inputs().unwrap_or_else(|| AlertInputs::from_settings(settings));
+                note_change(&mut inputs, next)
             }
             Err(_) => None,
         };
@@ -336,7 +348,7 @@ pub mod server {
             if with_state(|s| s.due_ms) != Some(due) {
                 return;
             }
-            if let Err(e) = flush(FLUSH_BUDGET, false).await {
+            if let Err(e) = flush(FLUSH_BUDGET, push_plan::PostReason::Owed).await {
                 log::warn!("[PushAlerts] pass did not finish: {e}");
             }
         });
@@ -349,18 +361,18 @@ pub mod server {
     }
 
     /// Up to `MAX_RUNS` passes under the runner, all within `budget`.
-    /// `force` posts the first pass even with nothing owed (a launch, a
-    /// worker run, a device report). A pass cut off by the budget leaves its
-    /// intent on disk and is tried again shortly.
-    async fn flush(budget: Duration, force: bool) -> Result<String, String> {
+    /// `reason` says whether the first pass posts even with nothing owed (a
+    /// launch, a worker run, a device report). A pass cut off by the budget
+    /// leaves its intent on disk and is tried again shortly.
+    async fn flush(budget: Duration, reason: push_plan::PostReason) -> Result<String, String> {
         let run = async {
             let runner = RunnerGuard { _held: RUNNER.lock().await };
             // Decided under the runner: a pass that ran while this one waited
             // (the launch pass before `push_register`) may have made it moot.
-            let force = force && {
+            let force = {
                 let device = device();
                 let now = now_ms();
-                with_state(|s| push_plan::should_post(s, now, app_version(), device.as_ref()))
+                with_state(|s| push_plan::first_pass_posts(s, reason, now, app_version(), device.as_ref()))
             };
             run_passes(&runner, force).await
         };
@@ -438,6 +450,9 @@ pub mod server {
 
         // A device a sign-out could not take off the server.
         let mut leftover_failed = false;
+        // A leftover left to this pass's register needs that register to
+        // post, owed or not, or it would wait for a change that never comes.
+        let mut force = force;
         if let Some(pending) = leftover {
             let action = push_plan::leftover_action(
                 &pending.device,
@@ -448,7 +463,7 @@ pub mod server {
                 paid_open,
             );
             match action {
-                push_plan::LeftoverAction::LeaveToRegister => {}
+                push_plan::LeftoverAction::LeaveToRegister => force = true,
                 push_plan::LeftoverAction::Forget => {
                     // The server refuses a device-only delete for so short a
                     // token; never send it, and stop owing it.
@@ -630,13 +645,8 @@ pub mod server {
     /// The live settings when this process holds them, else the saved file
     /// (the Android worker, an iPhone background refresh before load).
     fn current_inputs() -> AlertInputs {
-        if let Some(app) = crate::services::providers::app_handle() {
-            use tauri::Manager;
-            if let Some(state) = app.try_state::<crate::models::settings::AppState>() {
-                if let Ok(settings) = state.settings.lock() {
-                    return AlertInputs::from_settings(&settings);
-                }
-            }
+        if let Some(inputs) = live_inputs() {
+            return inputs;
         }
         let saved = cache_service::get_app_data_dir()
             .ok()
@@ -644,6 +654,27 @@ pub mod server {
             .and_then(|s| serde_json::from_str::<Value>(&s).ok())
             .unwrap_or(Value::Null);
         AlertInputs::from_json(saved.get("live_notifications"))
+    }
+
+    /// The settings this process holds now, when it holds them.
+    fn live_inputs() -> Option<AlertInputs> {
+        use tauri::Manager;
+        let app = crate::services::providers::app_handle()?;
+        let state = app.try_state::<crate::models::settings::AppState>()?;
+        let settings = state.settings.lock().ok()?;
+        Some(AlertInputs::from_settings(&settings))
+    }
+
+    /// A restored install (a backup, a phone transfer) carries another
+    /// phone's push state, a device left to delete included: start over,
+    /// before `seed` reads it.
+    pub fn forget_restored_state() {
+        if let Some(path) = state_path() {
+            let _ = std::fs::remove_file(path);
+        }
+        if let Ok(mut cell) = STATE.lock() {
+            *cell = None;
+        }
     }
 
     /// This phone's device, when it has reported one.
@@ -759,7 +790,7 @@ pub mod server {
     #[cfg(target_os = "ios")]
     pub async fn wake() {
         if owed_now() {
-            let _ = flush(FLUSH_BUDGET, false).await;
+            let _ = flush(FLUSH_BUDGET, push_plan::PostReason::Owed).await;
         }
     }
 
@@ -771,7 +802,7 @@ pub mod server {
         if left < POLL_FLUSH_MIN || !owed_now() {
             return;
         }
-        let _ = flush(left.min(FLUSH_BUDGET), false).await;
+        let _ = flush(left.min(FLUSH_BUDGET), push_plan::PostReason::Owed).await;
     }
 
     /// After the Android worker's check (this process may hold no app at all).
@@ -781,7 +812,7 @@ pub mod server {
         let now = now_ms();
         let post = with_state(|s| push_plan::should_post(s, now, app_version(), device.as_ref()));
         if post {
-            let _ = flush(FLUSH_BUDGET, true).await;
+            let _ = flush(FLUSH_BUDGET, push_plan::PostReason::Due).await;
         }
     }
 
@@ -795,7 +826,7 @@ pub mod server {
         if !post {
             return Ok("current".to_string());
         }
-        flush(FLUSH_BUDGET, true).await
+        flush(FLUSH_BUDGET, push_plan::PostReason::Due).await
     }
 
     /// Send what is owed, answering by `deadline_ms` (an absolute Unix time in
@@ -811,7 +842,7 @@ pub mod server {
         if !owed_now() {
             return Ok("current".to_string());
         }
-        flush(Duration::from_millis(left).min(FLUSH_BUDGET), false).await
+        flush(Duration::from_millis(left).min(FLUSH_BUDGET), push_plan::PostReason::Owed).await
     }
 
     /// The iPhone's APNs device, as the system reported it: the token in hex,
@@ -834,7 +865,7 @@ pub mod server {
         if with_state(|s| push_plan::apns_repeat_skip(s, &device, now, app_version())) {
             return Ok("unchanged".to_string());
         }
-        flush(FLUSH_BUDGET, true).await
+        flush(FLUSH_BUDGET, push_plan::PostReason::DeviceReport).await
     }
 }
 
@@ -857,6 +888,29 @@ mod tests {
             "muted_live_channels": muted,
         });
         AlertInputs::from_json(Some(&notif))
+    }
+
+    #[test]
+    fn a_change_is_a_switch_a_mute_or_nothing() {
+        use crate::services::push_plan::Kind;
+        let mut cell = None;
+        assert_eq!(note_change(&mut cell, inputs(true, true, true, &[])), Some(Kind::Switch), "first save");
+        assert_eq!(note_change(&mut cell, inputs(true, true, true, &[])), None);
+        assert_eq!(note_change(&mut cell, inputs(true, true, true, &["a"])), Some(Kind::MuteOnly));
+        assert_eq!(note_change(&mut cell, inputs(true, false, true, &["a"])), Some(Kind::Switch));
+        assert_eq!(note_change(&mut cell, inputs(true, false, true, &["A"])), None, "case is not a change");
+    }
+
+    #[test]
+    fn two_saves_whose_hooks_run_out_of_order_never_hide_the_next_mute() {
+        use crate::services::push_plan::Kind;
+        // Muted [a]; an unrelated save (T1) copied the settings, then an
+        // unmute of a (T2) saved []. T2's hook runs first, T1's second. Both
+        // hooks read the live settings ([]), never T1's stale copy ([a]).
+        let mut cell = Some(inputs(true, true, true, &["a"]));
+        assert_eq!(note_change(&mut cell, inputs(true, true, true, &[])), Some(Kind::MuteOnly), "T2: the unmute");
+        assert_eq!(note_change(&mut cell, inputs(true, true, true, &[])), None, "T1, late, reads the live []");
+        assert_eq!(note_change(&mut cell, inputs(true, true, true, &["a"])), Some(Kind::MuteOnly), "muting a again is seen");
     }
 
     #[test]

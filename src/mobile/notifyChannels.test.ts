@@ -71,4 +71,13 @@ describe('live alert presses', () => {
     expect(notify.isChannelMuted('ALPHA')).toBe(true);
     expect(notify.isChannelMuted('bravo')).toBe(false);
   });
+
+  it('matches a stored entry whatever its case, like Rust does', () => {
+    expect(notify.mutedIncludes(['Kamet0'], 'kamet0')).toBe(true);
+    expect(notify.mutedIncludes([' KAMET0 '], 'Kamet0')).toBe(true);
+    expect(notify.mutedIncludes(['kamet0'], 'kamet')).toBe(false);
+    expect(notify.mutedIncludes(['kick:kamet0'], 'kamet0')).toBe(false);
+    expect(notify.mutedIncludes(undefined, 'kamet0')).toBe(false);
+    expect(notify.mutedIncludes(['kamet0'], '')).toBe(false);
+  });
 });

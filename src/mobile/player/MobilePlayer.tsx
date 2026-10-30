@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ArrowClockwise, Bell, BellSlash, CaretLeft, ChatTeardropText, Columns, Gear, MoonStars, Pause, Play, Rows, Screencast, ShareNetwork, SpeakerHigh, SpeakerSlash, Star, UsersThree, CaretDown, X, CornersIn, CornersOut } from 'phosphor-react';
 import { shareText } from '../nativeBridge';
-import { setLiveAlert } from '../notifyChannels';
+import { mutedIncludes, setLiveAlert } from '../notifyChannels';
 import { useVisibleInterval } from '../../utils/useVisibleInterval';
 import { shareLinkFor } from '../../utils/shareLink';
 import { buildProviderUrl, isTwitchStream, streamProvider } from '../../utils/streamProvider';
@@ -297,7 +297,7 @@ export const MobilePlayer: React.FC<{
   // Subscribed rather than read through the helper, so toggling the bell
   // re-renders this overlay instead of leaving a stale icon behind.
   const mutedChannels = useAppStore((s) => s.settings.live_notifications?.muted_live_channels);
-  const alertsOff = !!currentStream && (mutedChannels ?? []).includes(currentStream.user_login.toLowerCase());
+  const alertsOff = !!currentStream && mutedIncludes(mutedChannels, currentStream.user_login);
 
   const [controlsVisible, setControlsVisible] = useState(true);
   const [paused, setPaused] = useState(false);

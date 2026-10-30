@@ -19,7 +19,7 @@ import { PROVIDERS, type ProviderId } from '../../types/providers';
 import type { RoomModeKind, RoomModeView } from '../../stores/chatConnectionStore';
 import { useChatTabsStore } from './chatTabsStore';
 import { useAppStore } from '../../stores/AppStore';
-import { setLiveAlert } from '../notifyChannels';
+import { mutedIncludes, setLiveAlert } from '../notifyChannels';
 
 // The same glyph per mode as the composer's room-mode icon, so the icon you
 // tapped is the one you find named here.
@@ -145,7 +145,7 @@ export const ComposerMenuSheet: React.FC<Props> = ({
   const alertsRow = provider === 'twitch' && !!activeChannel;
   // Subscribed, so a press here (or the player's bell) re-renders the value.
   const mutedChannels = useAppStore((s) => s.settings.live_notifications?.muted_live_channels);
-  const alertsOn = !!activeChannel && !(mutedChannels ?? []).includes(activeChannel.trim().toLowerCase());
+  const alertsOn = !!activeChannel && !mutedIncludes(mutedChannels, activeChannel);
   // Held back until the status is known (`isFollowing` is null while
   // checking) rather than guessing a label and flipping it a moment later.
   // The sheet stays open on tap.

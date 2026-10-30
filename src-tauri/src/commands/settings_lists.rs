@@ -377,6 +377,10 @@ pub async fn edit_settings_list(
     };
     let mut stored = None;
     commit_settings_patch(&app, &state, None, |current| {
+        // Under the settings lock, in step with a copy's record.
+        if let Some(key) = &touched {
+            crate::services::live_mute::forget_copied(std::slice::from_ref(key));
+        }
         let Some(next) = list_change(current, &path, edit)? else {
             return Ok(Map::new());
         };
@@ -385,9 +389,6 @@ pub async fn edit_settings_list(
         changes.insert(path.clone(), Value::Array(next));
         patch_for_changes(current, &changes)
     })?;
-    if let Some(key) = &touched {
-        crate::services::live_mute::forget_copied(std::slice::from_ref(key));
-    }
     match stored {
         Some(list) => Ok(list),
         None => {

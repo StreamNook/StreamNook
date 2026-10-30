@@ -1114,6 +1114,11 @@ pub fn run() {
                         if let Err(e) = commands::settings::write_settings_to_disk_sync(&loaded) {
                             log::warn!("[Setup] could not save the install's setup state: {e}");
                         }
+                        // A restored install's push state is the old phone's
+                        // (its device, a device left to delete): start over.
+                        if !loaded.setup_complete {
+                            services::push_alerts::server::forget_restored_state();
+                        }
                     }
                 }
                 services::diagnostic_logger::apply_setting(loaded.error_reporting_enabled);

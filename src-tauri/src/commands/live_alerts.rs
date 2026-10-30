@@ -79,12 +79,14 @@ pub async fn set_live_alert(
     };
     let keys = live_mute::keys_for_channel(&provider, &user_id, &user_login);
     commit_settings_patch(&app, &state, None, |current| {
+        // Under the settings lock, in step with a copy's record: a press right
+        // after a copy's save edits that copy's record, never the one before.
+        live_mute::forget_copied(&keys);
         match live_mute::set_in(&current.live_notifications.muted_live_channels, &keys, Some(&canonical), on) {
             Some(next) => list_patch(current, next),
             None => Ok(Map::new()),
         }
     })?;
-    live_mute::forget_copied(&keys);
     let settings = state.settings.lock().map_err(|e| e.to_string())?;
     Ok(Some(!live_mute::is_muted(&settings.live_notifications.muted_live_channels, &keys)))
 }
@@ -111,32 +113,37 @@ pub async fn copy_twitch_live_mutes(app: AppHandle, state: State<'_, AppState>) 
     if fetched.user_id != account {
         return Err(CopyError::WrongAccount);
     }
-    let mut outcome: Result<Merge, CopyError> = Err(CopyError::SaveFailed);
-    commit_settings_patch(&app, &state, None, |current| {
+    let mut outcome: Result<CopyAnswer, CopyError> = Err(CopyError::SaveFailed);
+    let saved = commit_settings_patch(&app, &state, None, |current| {
         // Signed in, switched or signed out while the pages were read: write nothing.
         if TwitchService::account_generation() != generation {
             outcome = Err(CopyError::WrongAccount);
             return Ok(Map::new());
         }
-        let merged = live_mute::merge_bells(&current.live_notifications.muted_live_channels, &fetched.bells_off);
+        let merged: Merge = live_mute::merge_bells(&current.live_notifications.muted_live_channels, &fetched.bells_off);
         let patch = if merged.added.is_empty() { Map::new() } else { list_patch(current, merged.list.clone())? };
-        outcome = Ok(merged);
+        let answer = CopyAnswer {
+            copy_id: 0,
+            bells_off: fetched.bells_off.len(),
+            already: merged.already,
+            skipped: fetched.skipped,
+            truncated: fetched.truncated,
+            added: merged.added,
+        };
+        // Recorded under the settings lock, so a bell pressed right after this
+        // save edits this record (its Undo never takes back a deliberate mute).
+        outcome = Ok(live_mute::record_copy(&account, generation, answer));
         Ok(patch)
-    })
-    .map_err(|e| {
+    });
+    if let Err(e) = saved {
         log::warn!("[LiveAlerts] copy save failed: {e}");
-        CopyError::SaveFailed
-    })?;
-    let merged = outcome?;
-    let answer = CopyAnswer {
-        copy_id: 0,
-        bells_off: fetched.bells_off.len(),
-        already: merged.already,
-        skipped: fetched.skipped,
-        truncated: fetched.truncated,
-        added: merged.added,
-    };
-    Ok(live_mute::record_copy(&account, generation, answer))
+        // A copy that did not save offers no Undo.
+        if let Ok(answer) = &outcome {
+            live_mute::clear_copy(answer.copy_id);
+        }
+        return Err(CopyError::SaveFailed);
+    }
+    outcome
 }
 
 /// Take back what copy `copy_id` muted, unless another copy or an account

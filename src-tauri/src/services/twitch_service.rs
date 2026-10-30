@@ -1142,11 +1142,6 @@ impl TwitchService {
         #[cfg(mobile)]
         crate::services::push_alerts::server::schedule();
 
-        debug!(
-            "Access token: {}...",
-            &token_response.access_token[..10.min(token_response.access_token.len())]
-        );
-
         Ok("Login successful".to_string())
     }
 
@@ -8393,11 +8388,11 @@ mod slot_tests {
         let blocked = tokio::time::timeout(std::time::Duration::from_millis(100), TwitchService::get_token()).await;
         assert!(blocked.is_err(), "get_token took the slot while it was held");
         drop(held);
-        // Once the slot is free it answers (a token or a typed reason), never hangs.
-        tokio::time::timeout(std::time::Duration::from_secs(5), TwitchService::get_token())
+        // Once free, the slot is taken again at once. (Not `get_token` itself:
+        // that would read, and could refresh, this machine's real sign-in.)
+        tokio::time::timeout(std::time::Duration::from_secs(5), TwitchService::primary_slot())
             .await
-            .expect("get_token finishes once the slot is free")
-            .ok();
+            .expect("the slot is free again once dropped");
     }
 
     #[test]

@@ -29,10 +29,17 @@ function mutedList(): string[] {
   return useAppStore.getState().settings.live_notifications?.muted_live_channels ?? [];
 }
 
+/** Whether `list` mutes this Twitch login, ignoring case on both sides, the
+ *  way Rust matches an entry (a hand-typed `Kamet0` still mutes `kamet0`). */
+export function mutedIncludes(list: readonly string[] | undefined, login: string): boolean {
+  if (!login) return false;
+  const want = key(login);
+  return (list ?? []).some((entry) => key(entry) === want);
+}
+
 /** For display only: whether this Twitch login is on the muted list now. */
 export function isChannelMuted(login: string): boolean {
-  if (!login) return false;
-  return mutedList().includes(key(login));
+  return mutedIncludes(mutedList(), login);
 }
 
 /** A channel as Rust keys it for live alerts. */

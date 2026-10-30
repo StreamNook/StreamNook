@@ -228,6 +228,35 @@ pub fn apns_repeat_skip(state: &PushState, device: &PushDevice, now: u64, app_ve
         && now.saturating_sub(state.sent_at_ms) < APNS_REPEAT_MS
 }
 
+/// Why a flush may post its first pass with nothing owed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PostReason {
+    /// Only what is owed (a debounce, a background flush, a wake).
+    Owed,
+    /// Also when the device changed or the last send is six hours old (a
+    /// launch, the Android worker).
+    Due,
+    /// The iPhone's device report: also once the same device went out more
+    /// than `APNS_REPEAT_MS` ago.
+    DeviceReport,
+}
+
+/// Whether the first pass posts even with nothing owed, decided under the
+/// runner (a pass that ran while this one waited may have made it moot).
+pub fn first_pass_posts(
+    state: &PushState,
+    reason: PostReason,
+    now: u64,
+    app_version: &str,
+    device: Option<&PushDevice>,
+) -> bool {
+    match reason {
+        PostReason::Owed => false,
+        PostReason::Due => should_post(state, now, app_version, device),
+        PostReason::DeviceReport => device.is_some_and(|d| !apns_repeat_skip(state, d, now, app_version)),
+    }
+}
+
 /// A launch: every park gets one fresh try, and the backoff starts over.
 pub fn on_launch(state: &mut PushState) {
     state.park = None;
@@ -798,6 +827,20 @@ mod tests {
         let mut owed = s;
         schedule_change(&mut owed, Kind::Switch, 1);
         assert!(!apns_repeat_skip(&owed, &fcm("a"), 2, V));
+    }
+
+    #[test]
+    fn a_repeat_device_report_posts_after_ten_minutes_though_the_six_hour_rule_would_not() {
+        let s = registered();
+        let a = fcm("a");
+        let later = APNS_REPEAT_MS + 1;
+        assert!(!should_post(&s, later, V, Some(&a)), "the launch rule waits six hours");
+        assert!(first_pass_posts(&s, PostReason::DeviceReport, later, V, Some(&a)), "the device report does not");
+        assert!(!first_pass_posts(&s, PostReason::DeviceReport, APNS_REPEAT_MS - 1, V, Some(&a)));
+        assert!(!first_pass_posts(&s, PostReason::DeviceReport, later, V, None));
+        assert!(!first_pass_posts(&s, PostReason::Due, later, V, Some(&a)));
+        assert!(first_pass_posts(&s, PostReason::Due, RESEND_AFTER_MS, V, Some(&a)));
+        assert!(!first_pass_posts(&s, PostReason::Owed, RESEND_AFTER_MS, V, Some(&a)), "owed alone never forces");
     }
 
     #[test]
