@@ -6,16 +6,16 @@
 // card waits for it, so it never sits over what is being written.
 import React, { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { dismissArrival, openMention, useMentionsStore } from './mentionInbox';
+import { dismissArrival, openMention, useMentionsStore, type InboxSurface } from './mentionInbox';
 import { InboxFace, InboxMessage } from './InboxParts';
 import { INBOX_SPRING, whereWords } from './inboxText';
 
 /** How long a card stays up before it folds into the count. */
 export const ARRIVAL_MS = 4000;
 
-export const InboxArrival: React.FC<{ side: 'left' | 'right' }> = ({ side }) => {
+export const InboxArrival: React.FC<{ side: 'left' | 'right'; surface: InboxSurface }> = ({ side, surface }) => {
   const arrival = useMentionsStore((s) => s.arrival);
-  const busy = useMentionsStore((s) => s.composerBusy);
+  const busy = useMentionsStore((s) => s.composerBusy[surface]);
   const sheetOpen = useMentionsStore((s) => s.sheetIn !== null);
   const shown = !!arrival && !busy && !sheetOpen;
   const seq = arrival?.seq ?? 0;

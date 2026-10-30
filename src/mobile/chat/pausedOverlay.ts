@@ -1,7 +1,7 @@
 // Where a paused phone chat's overlay sits (ResumeLiveButton.tsx draws it).
 import type React from 'react';
 import { useEffect, useState } from 'react';
-import { useMentionsStore } from '../mentions/mentionInbox';
+import { useMentionsStore, type InboxSurface } from '../mentions/mentionInbox';
 
 /**
  * How far the strip the composer raises over the chat (the emote suggestions
@@ -13,8 +13,10 @@ export function useComposerRiserLift(
   rootRef: React.RefObject<HTMLElement | null>,
   listRef: React.RefObject<HTMLElement | null>,
   enabled: boolean,
+  /** This pane's chat: only its own composer's riser lifts it. */
+  surface: InboxSurface,
 ): number {
-  const busy = useMentionsStore((s) => s.composerBusy);
+  const busy = useMentionsStore((s) => s.composerBusy[surface]);
   const [lift, setLift] = useState(0);
   const watching = enabled && busy;
   useEffect(() => {

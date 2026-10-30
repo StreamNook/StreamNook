@@ -94,6 +94,7 @@ import type { FullscreenChatSettings } from '../../types';
 import { hapticStep, hapticTick } from '../ui/haptics';
 import { readInsets, type ResolvedInsets } from '../nativeInsets';
 import { swallowTrailingClick } from '../ui/trailingClick';
+import { focusUnder } from '../ui/coveredSurface';
 import { isTwitchStream } from '../../utils/streamProvider';
 import { createBandTouches } from '../watch/bandTouches';
 import { backClaimSide, chatSwipeIntent, chatSwipeSide } from '../watch/chatSwipe';
@@ -342,9 +343,17 @@ export const WatchScreen: React.FC = () => {
   let forceFullNow = forceFull;
   if (show && !prevShow) {
     setPrevShow(true);
+    // A drag the last layer never finished (a finger that crossed the slop during its exit gets
+    // no pointerup) must not carry into this one.
+    setDragging(false);
+    setShrink(0);
     forceFullNow = true;
   } else if (!show && prevShow) {
     setPrevShow(false);
+    // A layer closed mid-drag (a second finger on the X) gets no pointerup: the drag ends here,
+    // or the next expand's backstop would wait on it and the next open would start half-shrunk.
+    setDragging(false);
+    setShrink(0);
     forceFullNow = false;
   } else if (forceFull && playerMode === 'full') {
     forceFullNow = false;
@@ -1515,6 +1524,15 @@ export const WatchScreen: React.FC = () => {
           mini || landing
           ? 'hidden'
           : 'flex-1 min-h-0 relative flex flex-col sn-chat-reveal';
+  // The player's chat out of sight (the mini box, PiP, landscape with chat away): its composer
+  // gives up the keyboard (keys would go into a composer nobody can see, over the tabs or the
+  // video), and its menus stop taking taps meant for what is on screen (the column's mark below).
+  const chatOutOfSight = mini || chatClass === 'hidden';
+  useEffect(() => {
+    if (!chatOutOfSight) return;
+    const field = focusUnder<Element>(chatColumnEl, document.activeElement);
+    if (field instanceof HTMLElement) field.blur();
+  }, [chatOutOfSight, chatColumnEl]);
 
   return (
     <AnimatePresence>
@@ -1821,6 +1839,7 @@ export const WatchScreen: React.FC = () => {
         <motion.div
           ref={setChatColumnEl}
           className={chatClass}
+          data-sn-out-of-sight={chatOutOfSight ? 'true' : undefined}
           style={
             // Side by side, the row deliberately carries no top padding so the
             // video runs edge to edge under the status bar. Chat is not video:

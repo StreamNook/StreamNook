@@ -51,6 +51,7 @@ import { SegmentedControl, type Segment } from '../ui/SegmentedControl';
 import { HoldWhile } from '../ui/HoldWhile';
 import { PausedOverlay } from './ResumeLiveButton';
 import { useComposerRiserLift } from './pausedOverlay';
+import { inboxPaneOnScreen, watchLayerUp } from '../ui/coveredSurface';
 
 // How long a pause/resume transition is protected from being reversed. Matches
 // desktop's ChatWidget, and is what stops a touchmove and the compositor scroll
@@ -905,17 +906,22 @@ export const MobileChatPane: React.FC<{
 
   // Rides above the composer's suggestion strip while it covers the list.
   const paneRef = useRef<HTMLDivElement | null>(null);
-  const overlayLift = useComposerRiserLift(paneRef, listRef, isPaused);
+  const overlayLift = useComposerRiserLift(paneRef, listRef, isPaused, surface);
 
 
-  // The inbox over this chat: its bottom sheet, or a new mention's card. The
-  // watch pane stays mounted under the mini player and behind Chats, so the
-  // card rises only where the chat is on screen.
-  const navTab = useMobileNavStore((s) => s.activeTab);
-  const playerFull = useMobileNavStore((s) => s.playerMode === 'full');
-  const onScreen = !paused && !idle && (surface === 'chats' || (navTab !== 'chats' && playerFull));
+  // The inbox over this chat: its bottom sheet, or a new mention's card, only
+  // where the chat is on screen. The full watch layer sits over everything,
+  // Chats included, from its first frame (a stream, a load, an offline room):
+  // while it is up its chat is the one on screen, and Chats' only while it is
+  // not. The layer rule rules out the mini box; the watch pane's own `idle`
+  // covers PiP and landscape with chat away.
+  const playerMode = useMobileNavStore((s) => s.playerMode);
+  const streamUrl = useAppStore((s) => s.streamUrl);
+  const isLoading = useAppStore((s) => s.isLoading);
+  const onScreen = inboxPaneOnScreen(surface, watchLayerUp(playerMode, streamUrl, isLoading), idle, paused);
   const inboxSide = useAppStore((s) => (s.settings.chat_input?.inbox_button_side === 'right' ? 'right' : 'left'));
-  const cardHere = useMentionsStore((s) => !!s.arrival && !s.composerBusy && !s.sheetIn) && onScreen && !readOnly;
+  const cardHere =
+    useMentionsStore((s) => !!s.arrival && !s.composerBusy[surface] && !s.sheetIn) && onScreen && !readOnly;
   // Rows under the card fade out above it instead of showing as slivers; the
   // top fade stays when the pane draws one.
   const clear = cardHere ? '62px' : null;
@@ -995,7 +1001,7 @@ export const MobileChatPane: React.FC<{
         />
       </div>
       {/* Outside the list, so a press in them never reaches its gestures. */}
-      {onScreen && !readOnly && <InboxArrival side={inboxSide} />}
+      {onScreen && !readOnly && <InboxArrival side={inboxSide} surface={surface} />}
       <InboxSheet surface={surface} />
       </div>
       {/* The landscape overlay has no room for it and shows whichever is chosen. */}

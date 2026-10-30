@@ -578,9 +578,9 @@ const MobileChatInputImpl: React.FC<Props> = ({
   // and wallet panels), so the card waits while one is up and shows once it
   // clears, after the send. A taller draft lifts the card with the bar.
   useEffect(() => {
-    setComposerBusy(showSuggestions || emotesOpen || pointsOpen);
-  }, [showSuggestions, emotesOpen, pointsOpen]);
-  useEffect(() => () => setComposerBusy(false), []);
+    setComposerBusy(inboxSurface, showSuggestions || emotesOpen || pointsOpen);
+  }, [inboxSurface, showSuggestions, emotesOpen, pointsOpen]);
+  useEffect(() => () => setComposerBusy(inboxSurface, false), [inboxSurface]);
 
   useEffect(() => {
     const el = inputRef.current;

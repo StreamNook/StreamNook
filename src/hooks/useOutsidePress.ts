@@ -2,6 +2,7 @@ import { useCallback, useEffect, useEffectEvent, useRef } from 'react';
 import type { RefObject } from 'react';
 import { IS_MOBILE } from '../utils/platform';
 import { isTap } from '../mobile/ui/outsideTap';
+import { closesCoveredMenu, menuOutOfSight, OUT_OF_SIGHT_SELECTOR } from '../mobile/ui/coveredSurface';
 
 /** What counts as the menu: a ref, or a selector for a part drawn by another
  *  component that the menu holds no ref to (a toggle in a header). */
@@ -40,6 +41,11 @@ export function useOutsidePress(
     ),
   );
   const close = useEffectEvent(() => onOutside());
+  // The menu sits in a surface out of sight (Chats under the full player, the player's hidden
+  // chat): a selector part names something drawn elsewhere and does not count.
+  const menuCovered = useEffectEvent(() =>
+    menuOutOfSight(inside.map((part) => (part && typeof part !== 'string' ? part.current : null))),
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -47,8 +53,14 @@ export function useOutsidePress(
       let press: { id: number; x: number; y: number } | null = null;
       const onDown = (e: PointerEvent) => {
         pressedInsideRef.current = false;
+        const target = e.target instanceof Element ? e.target : null;
+        // A menu out of sight lets a press on what is on screen land where it was aimed.
         press =
-          e.target instanceof Element && !isInside(e.target) ? { id: e.pointerId, x: e.clientX, y: e.clientY } : null;
+          target &&
+          !isInside(target) &&
+          closesCoveredMenu(menuCovered(), target.closest(OUT_OF_SIGHT_SELECTOR) !== null)
+            ? { id: e.pointerId, x: e.clientX, y: e.clientY }
+            : null;
       };
       const onMove = (e: PointerEvent) => {
         if (press && press.id === e.pointerId && !isTap(e.clientX - press.x, e.clientY - press.y)) press = null;

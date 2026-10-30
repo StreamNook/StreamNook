@@ -15,6 +15,7 @@ import { useMobileNavStore } from '../navStore';
 import { Logger } from '../../utils/logger';
 import type { ProviderId } from '../../types/providers';
 import type { InboxFilterId, InboxRowView, InboxView, MentionArrival, MentionEntry, MentionPage } from '../../types';
+import { NO_COMPOSER_BUSY, withComposerBusy, type ComposerBusy } from './composerBusy';
 
 export type { InboxFilterId, InboxRowView, InboxView, MentionArrival, MentionEntry, MentionPage };
 
@@ -54,9 +55,9 @@ interface MentionsState {
   sheetIn: InboxSurface | null;
   /** The latest arrival waiting for, or showing as, the card over the bar. */
   arrival: (MentionArrival & { seq: number }) | null;
-  /** The composer holds a long draft or its suggestions strip: an arrival
-   *  waits rather than sit over what is being written. */
-  composerBusy: boolean;
+  /** Which chat's composer holds a riser (the suggestions strip, the emote or
+   *  wallet panel): an arrival in that chat waits rather than sit over it. */
+  composerBusy: ComposerBusy;
 }
 
 export const useMentionsStore = create<MentionsState>(() => ({
@@ -66,7 +67,7 @@ export const useMentionsStore = create<MentionsState>(() => ({
   contextCard: null,
   sheetIn: null,
   arrival: null,
-  composerBusy: false,
+  composerBusy: NO_COMPOSER_BUSY,
 }));
 
 /** The tray's tap: open this chat's sheet, or close it when it is open. An
@@ -83,8 +84,9 @@ export function dismissArrival(seq: number): void {
   if (useMentionsStore.getState().arrival?.seq === seq) useMentionsStore.setState({ arrival: null });
 }
 
-export function setComposerBusy(busy: boolean): void {
-  if (useMentionsStore.getState().composerBusy !== busy) useMentionsStore.setState({ composerBusy: busy });
+export function setComposerBusy(surface: InboxSurface, busy: boolean): void {
+  const next = withComposerBusy(useMentionsStore.getState().composerBusy, surface, busy);
+  if (next) useMentionsStore.setState({ composerBusy: next });
 }
 
 /** One page of the timeline for a chip: Rust filters, folds identical

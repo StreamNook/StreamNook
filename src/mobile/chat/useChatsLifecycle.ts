@@ -12,6 +12,7 @@ import { useAppStore } from '../../stores/AppStore';
 import { useMobileNavStore } from '../navStore';
 import { streamProvider } from '../../utils/streamProvider';
 import { useChatTabsStore } from './chatTabsStore';
+import { watchLayerUp } from '../ui/coveredSurface';
 
 export function useChatsLifecycle(): void {
   const currentStream = useAppStore((s) => s.currentStream);
@@ -57,7 +58,9 @@ export function useChatsLifecycle(): void {
     document.addEventListener('visibilitychange', on);
     return () => document.removeEventListener('visibilitychange', on);
   }, []);
-  const playerFull = !!streamUrl && playerMode === 'full';
+  // The watch layer's own rule: a stream still loading at full size covers the tabs too.
+  const isLoading = useAppStore((s) => s.isLoading);
+  const playerFull = watchLayerUp(playerMode, streamUrl, isLoading);
   const shown = pageVisible && !!activeChannel && (playerFull || activeTab === 'chats');
   const onScreen = shown ? activeChannel : null;
   useEffect(() => {
