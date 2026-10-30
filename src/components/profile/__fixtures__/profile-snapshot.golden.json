@@ -1,0 +1,51 @@
+{
+  "v": 1,
+  "identity": {
+    "login": "golden_member",
+    "displayName": "Golden_Member",
+    "avatar": "https://static-cdn.jtvnw.net/jtv_user_pictures/golden-profile_image-300x300.png"
+  },
+  "profileTheme": "dispersion",
+  "hiddenSections": ["roast"],
+  "memberNumber": 42,
+  "cosmeticSlug": "streamnook-penrose",
+  "namePaint": {
+    "backgroundColor": "#9146FF",
+    "WebkitBackgroundClip": "text",
+    "backgroundClip": "text",
+    "backgroundSize": "100% 100%",
+    "backgroundPosition": "center",
+    "backgroundRepeat": "no-repeat",
+    "color": "transparent",
+    "backgroundImage": "linear-gradient(90deg, #ff0000 0%, #0000ff 100%), url(\"https://cdn.7tv.app/paint/01GOLDENPAINT0000000000000/layer/01GOLDENLAYERIMAGE00000000/1x.webp\")",
+    "filter": "drop-shadow(#000000 0px 1px 2px)"
+  },
+  "seventvBadge": {
+    "id": "01KYQHQ7FVRR3X4S0F2KG74207",
+    "name": "XDX",
+    "tooltip": "XDX"
+  },
+  "wornBadges": {
+    "twitch": {
+      "src": "https://static-cdn.jtvnw.net/badges/v1/0d2d0ac5-5ec3-4c3e-a2b4-3eaa5d6f7a3b/3",
+      "title": "Twitch Recap 2025"
+    },
+    "thirdParty": [
+      {
+        "key": "ffz:ffz-3",
+        "provider": "ffz",
+        "title": "FFZ Supporter",
+        "src": "https://cdn.frankerfacez.com/badge/3/4/rounded"
+      }
+    ],
+    "bttvPro": {
+      "src": "https://cdn.betterttv.net/badges/pro/97c7dfb8-d2a5-4ab0-9e42-e9e14630da5b.webp",
+      "title": "BTTV Pro"
+    }
+  },
+  "counts": { "paints": 12, "badges": 7, "sn": 3 },
+  "stats": null,
+  "accolades": [],
+  "favoriteChannel": null,
+  "ivr": null
+}
