@@ -4035,23 +4035,100 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[test]
-    fn a_long_queue_of_deletions_keeps_what_an_entry_names_and_never_holds_up_a_store() {
+    /// A cache root with `FILES` emote files, a manifest that names the ones at
+    /// `kept`, and a deletion queue of every file.
+    fn long_deletion_queue(
+        name: &str,
+        kept: &[usize],
+    ) -> (PathBuf, Vec<PathBuf>, RwLock<UniversalCacheManifest>, Vec<PendingDelete>) {
         const FILES: usize = 3000;
         let names: Vec<String> = (0..FILES).map(|i| format!("f{i}-aaaaaaaa.png")).collect();
         let name_refs: Vec<&str> = names.iter().map(String::as_str).collect();
-        let (root, files) = emote_files("delete-long-queue", &name_refs);
+        let (root, files) = emote_files(name, &name_refs);
         let type_dir = root.join("emotes");
-        let kept = [0, 63, 64, 1500, FILES - 1];
         let memory = RwLock::new(UniversalCacheManifest::default());
         {
             let mut guard = memory.write().unwrap();
-            for &i in &kept {
+            for &i in kept {
                 let id = format!("file:{i}");
                 guard.entries.insert(id.clone(), entry_with_file(&id, &files[i]));
             }
         }
         let queue: Vec<PendingDelete> = files.iter().map(|f| (type_dir.clone(), f.clone())).collect();
+        (root, files, memory, queue)
+    }
+
+    #[test]
+    fn a_long_queue_of_deletions_keeps_what_an_entry_names_and_never_holds_up_a_store() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let kept = [0, 63, 64, 1500, 2999];
+        let (root, files, memory, queue) = long_deletion_queue("delete-long-queue", &kept);
+        let fresh = root.join("emotes").join("fresh-bbbbbbbb.png");
+        fs::write(&fresh, b"fresh").unwrap();
+        let pending = Mutex::new(Vec::new());
+        let deleting = Mutex::new(HashSet::new());
+
+        // The batch stops after the files at `stops` and goes on only once a
+        // store, taking MANIFEST_LOCK as a download does, has finished. A batch
+        // that held the lock while it deleted could never be answered, so the
+        // store is counted mid-batch or the test fails. The timeout only turns
+        // that deadlock into a failure; nothing waits on it when the code is right.
+        let stops = [1, 1501, 2997];
+        let deleted = AtomicUsize::new(0);
+        let (asked_tx, asked_rx) = std::sync::mpsc::channel::<usize>();
+        let (stored_tx, stored_rx) = std::sync::mpsc::channel::<()>();
+        let mut stores = Vec::new();
+        std::thread::scope(|scope| {
+            let (queue, memory, deleting, files, deleted) = (&queue, &memory, &deleting, &files, &deleted);
+            let delete = scope.spawn(move || {
+                delete_unnamed_files_hooked(
+                    queue,
+                    memory,
+                    deleting,
+                    || {},
+                    |done| {
+                        deleted.fetch_add(1, Ordering::SeqCst);
+                        let Some(&at) = stops.iter().find(|&&i| files[i].as_path() == done) else {
+                            return;
+                        };
+                        asked_tx.send(at).unwrap();
+                        stored_rx
+                            .recv_timeout(std::time::Duration::from_secs(60))
+                            .expect("a store waited behind the deletion queue");
+                    },
+                );
+            });
+            // Ends once the batch is over and drops its sender.
+            for at in asked_rx {
+                let _lock = MANIFEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+                let entry = vec![entry_with_file(&format!("file:fresh-{at}"), &fresh)];
+                let out = super::store_entries(memory, &root, &pending, deleting, entry).unwrap();
+                stores.push((at, deleted.load(Ordering::SeqCst), out.stored));
+                let _ = stored_tx.send(());
+            }
+            delete.join().unwrap();
+        });
+
+        // Each store landed with exactly the deletes before its stop done and
+        // the rest of the batch still to go: 2995 files are deleted in all.
+        assert_eq!(stores, [(1, 1, 1), (1501, 1498, 1), (2997, 2994, 1)]);
+        assert_eq!(deleted.load(Ordering::SeqCst), 2995);
+        for (i, file) in files.iter().enumerate() {
+            assert_eq!(file.exists(), kept.contains(&i), "file {i}");
+        }
+        assert!(fresh.exists());
+        assert_eq!(memory.read().unwrap().entries.len(), kept.len() + stops.len());
+        assert!(deleting.lock().unwrap().is_empty());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Opt-in bench: how long a store waits for MANIFEST_LOCK while a long
+    /// batch is deleted. Wall-clock, so it never gates a shared run. Run with
+    /// `cargo test --lib bench_store_wait -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn bench_store_wait_during_a_long_queue_of_deletions() {
+        let (root, _files, memory, queue) = long_deletion_queue("delete-long-queue-bench", &[0, 63, 64, 1500, 2999]);
 
         // The longest a store's lock was waited for while the batch was deleted.
         let done = AtomicBool::new(false);
@@ -4070,10 +4147,7 @@ mod tests {
             delete.join().unwrap();
         });
 
-        assert!(longest < std::time::Duration::from_millis(50), "a store waited {longest:?}");
-        for (i, file) in files.iter().enumerate() {
-            assert_eq!(file.exists(), kept.contains(&i), "file {i}");
-        }
+        println!("the longest store wait during a 3000-file batch: {longest:?}");
         let _ = fs::remove_dir_all(&root);
     }
 
