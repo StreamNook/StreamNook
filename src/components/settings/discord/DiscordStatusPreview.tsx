@@ -91,6 +91,8 @@ const MUTED = '#b5bac1';
 const HEADER = '#dbdee1';
 const BUTTON_BG = '#4e5058';
 const ONLINE = '#23a55a';
+/** The elapsed timer and its activity icon, in Discord's own green. */
+const TIMER = '#45a366';
 const FALLBACK_AVATAR = 'https://cdn.discordapp.com/embed/avatars/0.png';
 const DEFAULT_BANNER = 'linear-gradient(135deg,#5865f2,#3b42a8)';
 
@@ -289,7 +291,7 @@ export function DiscordStatusPreview({ model, now }: { model: PreviewModel | nul
                     )}
                     {a.state && <div className="truncate">{a.state}</div>}
                     {a.start != null && (
-                      <div className="mt-0.5 flex items-center gap-1 text-[12px] tabular-nums" style={{ color: ONLINE }}>
+                      <div className="mt-0.5 flex items-center gap-1 text-[12px] tabular-nums" style={{ color: TIMER }}>
                         {/* Discord's own activity mark before the time: its screen, gamepad or headphones. */}
                         <DiscordActivityIcon verb={a.verb} size={14} />
                         {elapsedText(a.start, now)}

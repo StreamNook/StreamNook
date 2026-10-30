@@ -8,7 +8,9 @@ import { createPortal } from 'react-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { motion } from 'framer-motion';
-import { X } from 'lucide-react';
+import { ArrowUpRight, X } from 'lucide-react';
+import { GLAZE_PILL } from '../../ui/glazeButtons';
+import { COSMETIC_ASSET_CHAT_BY_SLUG } from '../../cosmeticAssets';
 import { useAppStore } from '../../../stores/AppStore';
 import type { DiscordPresenceSettings } from '../../../types';
 import { ResetArrow, SegmentedSelect, SettingsRow, SettingsSection } from '../_primitives';
@@ -43,12 +45,32 @@ const LINES: Record<Exclude<PreviewTab, 'browsing'>, [PresenceField, PresenceFie
   offline: ['offline_top', 'offline_bottom'],
 };
 
-/** Marks a setting only StreamNook subscribers can change. Locked, it opens
- *  the subscribe page (the same link as Profile and Badges). */
+/** A section's rows on a lit glaze card (the shared rows and dividers inside). */
+const GLAZE_CARD = 'settings-card glaze-inset relative rounded-xl px-4';
+
+/** Marks a setting only StreamNook subscribers can change: a glaze capsule
+ *  with the real Subscriber badge. Locked, it is the way to subscribe (the
+ *  same link as Profile and Badges). */
 function SubscriberPill({ locked }: { locked: boolean }) {
   const login = useAppStore((s) => s.currentUser?.login || s.currentUser?.username);
-  const pill = 'rounded-full bg-accent/15 px-1.5 py-[1px] text-[10px] font-semibold uppercase tracking-wide text-accent';
-  if (!locked) return <span className={pill}>Subscriber</span>;
+  const capsule = `${GLAZE_PILL} inline-flex h-[22px] items-center gap-1 pl-1 pr-2 text-[11px] leading-none`;
+  const badge = (
+    <img
+      src={COSMETIC_ASSET_CHAT_BY_SLUG['streamnook-subscriber']}
+      alt=""
+      aria-hidden
+      draggable={false}
+      className="h-4 w-4 flex-none object-contain"
+    />
+  );
+  if (!locked) {
+    return (
+      <span className={capsule}>
+        {badge}
+        Subscriber
+      </span>
+    );
+  }
   const subscribe = () => {
     void (async () => {
       try {
@@ -61,9 +83,11 @@ function SubscriberPill({ locked }: { locked: boolean }) {
     })();
   };
   return (
-    <Tooltip content="Subscribe on streamnook.app" describe>
-      <button type="button" onClick={subscribe} className={`${pill} transition-colors hover:bg-accent/25`}>
-        Subscriber
+    <Tooltip content="Subscribe on streamnook.app to unlock" describe>
+      <button type="button" onClick={subscribe} className={capsule} style={{ color: 'var(--color-accent)' }}>
+        {badge}
+        Subscribe
+        <ArrowUpRight size={12} aria-hidden className="-mr-0.5" />
       </button>
     </Tooltip>
   );
@@ -348,7 +372,7 @@ export default function DiscordStatusEditor({ focusRow, onClose }: { focusRow?: 
         animate={{ opacity: 1, scale: 1 }}
         exit={motionOff ? undefined : { opacity: 0, scale: 0.98 }}
         transition={{ duration: 0.16, ease: 'easeOut' }}
-        className="liquid-glass-panel flex flex-col overflow-hidden rounded-2xl outline-none"
+        className="glass-modal flex flex-col overflow-hidden outline-none"
         style={{ width: 'min(980px, 94vw)', height: 'min(680px, 90vh)' }}
       >
         <div className="flex h-14 flex-shrink-0 items-center gap-3 border-b border-white/[0.06] px-5">
@@ -368,14 +392,14 @@ export default function DiscordStatusEditor({ focusRow, onClose }: { focusRow?: 
             type="button"
             onClick={close}
             aria-label="Close"
-            className="ml-1 rounded-lg p-1.5 text-textMuted transition-colors hover:bg-white/[0.06] hover:text-textPrimary"
+            className="ml-1 rounded-full p-1.5 text-textMuted transition-colors duration-150 hover:bg-white/[0.06] hover:text-textPrimary"
           >
             <X size={16} />
           </button>
         </div>
 
         <div className="flex min-h-0 flex-1">
-          <div ref={leftRef} className="custom-scrollbar w-[48%] min-w-0 space-y-6 overflow-y-auto px-5 py-5">
+          <div ref={leftRef} className="custom-scrollbar w-[54%] min-w-0 space-y-6 overflow-y-auto px-5 py-5">
             <SettingsSection label="Presets" bare>
               <div className="grid grid-cols-3 gap-2">
                 {(model?.presets ?? []).map((p) => (
@@ -387,9 +411,18 @@ export default function DiscordStatusEditor({ focusRow, onClose }: { focusRow?: 
                     onMouseLeave={() => setHover(null)}
                     onFocus={() => setHover(p.fields as Pending)}
                     onBlur={() => setHover(null)}
-                    className={`glass-tile rounded-xl px-3 py-2.5 text-left transition-colors ${
-                      presetActive(p.fields) ? 'ring-1 ring-accent/60' : ''
+                    className={`glaze-inset relative rounded-xl px-3 py-2.5 text-left transition-colors ${
+                      presetActive(p.fields) ? '' : 'bg-white/[0.03] hover:bg-white/[0.06]'
                     }`}
+                    // The active look: an accent tint and rim, mixed over the glass so it stays solid at Glassiness 0.
+                    style={
+                      presetActive(p.fields)
+                        ? {
+                            background: 'color-mix(in srgb, var(--color-accent) 14%, var(--glass-under, transparent))',
+                            boxShadow: 'inset 0 0 0 1px color-mix(in srgb, var(--color-accent) 55%, transparent)',
+                          }
+                        : undefined
+                    }
                   >
                     <div className="text-[13px] font-semibold text-textPrimary">{p.label}</div>
                     <div className="mt-0.5 text-[11px] leading-snug text-textSecondary">{p.blurb}</div>
@@ -398,7 +431,8 @@ export default function DiscordStatusEditor({ focusRow, onClose }: { focusRow?: 
               </div>
             </SettingsSection>
 
-            <SettingsSection label="Pictures">
+            <SettingsSection label="Pictures" bare>
+              <div className={GLAZE_CARD}>
               <SettingsRow
                 title="Big picture"
                 description="The large image on your status."
@@ -434,9 +468,11 @@ export default function DiscordStatusEditor({ focusRow, onClose }: { focusRow?: 
                   />
                 }
               />
+              </div>
             </SettingsSection>
 
-            <SettingsSection label="Text" description={`For ${TABS.find((t) => t.id === shownTab)?.label ?? 'Live'}, the tab in the preview.`}>
+            <SettingsSection label="Text" bare description={`For ${TABS.find((t) => t.id === shownTab)?.label ?? 'Live'}, the tab in the preview.`}>
+              <div className={GLAZE_CARD}>
               {lines ? (
                 <>
                   <SettingsRow title="Top line" onReset={reset(lines[0])}>
@@ -494,9 +530,11 @@ export default function DiscordStatusEditor({ focusRow, onClose }: { focusRow?: 
                   )}
                 </SettingsRow>
               )}
+              </div>
             </SettingsSection>
 
-            <SettingsSection label="Status">
+            <SettingsSection label="Status" bare>
+              <div className={GLAZE_CARD}>
               <SettingsRow
                 title="Activity"
                 description="The word Discord puts before StreamNook."
@@ -572,9 +610,11 @@ export default function DiscordStatusEditor({ focusRow, onClose }: { focusRow?: 
                   />
                 }
               />
+              </div>
             </SettingsSection>
 
-            <SettingsSection label="Buttons">
+            <SettingsSection label="Buttons" bare>
+              <div className={GLAZE_CARD}>
               <SettingsRow
                 title="Watch button"
                 description="Opens the channel, VOD or clip for friends who click it."
@@ -616,20 +656,28 @@ export default function DiscordStatusEditor({ focusRow, onClose }: { focusRow?: 
                   />
                 }
               />
+              </div>
             </SettingsSection>
 
-            <SettingsSection label="Links">
+            <SettingsSection label="Links" bare>
+              <div className={GLAZE_CARD}>
               <SettingsRow
                 title="Clickable text"
                 description="The top line, and a streamer picture, open the channel."
                 onReset={reset('link_text')}
                 control={<Toggle enabled={draft.link_text} onChange={() => change('link_text', !draft.link_text)} ariaLabel="Clickable text" />}
               />
+              </div>
             </SettingsSection>
           </div>
 
           <div ref={rightRef} className="flex min-w-0 flex-1 flex-col items-center gap-4 overflow-y-auto border-l border-white/[0.06] bg-black/10 px-5 py-5">
-            <div className="flex flex-wrap justify-center gap-1" role="tablist" aria-label="Preview">
+            {/* One flat glaze capsule (the panel already frosts what is behind it). */}
+            <div
+              className="chrome-glaze chrome-glaze--flat relative inline-flex max-w-full flex-none items-center gap-0.5 p-1"
+              role="tablist"
+              aria-label="Preview"
+            >
               {TABS.map((t) => (
                 <button
                   key={t.id}
@@ -637,8 +685,10 @@ export default function DiscordStatusEditor({ focusRow, onClose }: { focusRow?: 
                   role="tab"
                   aria-selected={shownTab === t.id}
                   onClick={() => setTab(t.id)}
-                  className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[12px] font-medium transition-colors ${
-                    shownTab === t.id ? 'bg-white/[0.1] text-textPrimary' : 'text-textSecondary hover:text-textPrimary'
+                  className={`flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 text-[12px] font-medium transition-colors duration-150 ${
+                    shownTab === t.id
+                      ? 'bg-white/[0.12] text-textPrimary'
+                      : 'text-textSecondary hover:bg-white/[0.05] hover:text-textPrimary'
                   }`}
                 >
                   {model?.shown === t.id && enabled && (
