@@ -623,6 +623,13 @@ fn tint_of_bytes(bytes: &[u8]) -> Result<TintEntry, CoverError> {
     Ok(palette(&swatches(&sample(bytes)?)))
 }
 
+/// A picture's dominant color: the largest group of its main colors, read
+/// under the same size and memory limits as a cover. None when it will not
+/// decode or has no opaque pixel. (The Discord Status preview's banner strip.)
+pub(crate) fn dominant_rgb(bytes: &[u8]) -> Option<[u8; 3]> {
+    swatches(&sample(bytes).ok()?).first().map(|s| s.rgb)
+}
+
 fn linear(c: f64) -> f64 {
     let v = c / 255.0;
     if v <= 0.04045 {
@@ -942,6 +949,30 @@ mod tests {
             "a header within the limits gets as far as its missing data"
         );
         assert_eq!(sample(b"not a picture"), Err(CoverError::Decode));
+    }
+
+    #[test]
+    fn dominant_rgb_is_the_largest_group() {
+        let encode = |img: image::RgbaImage| {
+            let mut png = Vec::new();
+            image::DynamicImage::ImageRgba8(img)
+                .write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
+                .unwrap();
+            png
+        };
+        // 60% red, 40% blue: red, not the purple a mean would give.
+        let png = encode(image::RgbaImage::from_fn(50, 50, |x, _| {
+            if x < 30 {
+                image::Rgba([220, 20, 30, 255])
+            } else {
+                image::Rgba([20, 40, 220, 255])
+            }
+        }));
+        let [r, g, b] = dominant_rgb(&png).expect("a color");
+        assert!(r > 180 && g < 60 && b < 80, "red wins: {r} {g} {b}");
+        let clear = encode(image::RgbaImage::from_pixel(16, 16, image::Rgba([0, 0, 0, 0])));
+        assert_eq!(dominant_rgb(&clear), None, "nothing opaque");
+        assert_eq!(dominant_rgb(&png_header(20_000, 20_000)), None, "over the limits");
     }
 
     #[test]

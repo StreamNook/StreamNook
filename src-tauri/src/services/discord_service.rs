@@ -44,10 +44,20 @@ const ASSETS_RETRY: Duration = Duration::from_secs(5 * 60);
 pub struct DiscordService;
 
 /// The Discord account on the other end of the pipe, from its READY frame.
+/// Every URL is built from a checked id and hash only.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct DiscordUser {
+    /// The account id; empty when READY's was not a Discord id.
+    pub id: String,
     pub name: String,
+    /// The @handle.
+    pub username: String,
+    /// The avatar, moving when the account has an animated one.
     pub avatar_url: String,
+    /// Its first frame (the same picture when it does not move).
+    pub avatar_still: String,
+    pub decoration: Option<String>,
+    pub decoration_still: Option<String>,
 }
 
 struct DiscordState {
@@ -148,26 +158,70 @@ fn close_detached(mut client: IpcClient) {
     }));
 }
 
-/// The account a READY frame names: its display name, and its avatar (or the
-/// default avatar Discord draws for it).
+/// A Discord picture hash: 32 lowercase hex digits, `a_` first when it moves.
+fn image_hash(s: &str) -> bool {
+    let h = s.strip_prefix("a_").unwrap_or(s);
+    h.len() == 32 && h.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// A Discord id: 17 to 20 digits.
+fn snowflake(s: &str) -> bool {
+    (17..=20).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// The account a READY frame names: its id, names, avatar (moving and still,
+/// or the default avatar Discord draws for it) and avatar decoration.
 pub(crate) fn parse_ready(value: &Value) -> Option<DiscordUser> {
     let user = value.get("data")?.get("user")?;
     let text = |key: &str| user.get(key).and_then(Value::as_str).filter(|s| !s.is_empty());
     let name = text("global_name").or_else(|| text("username"))?.to_string();
-    let id = text("id").unwrap_or("");
-    let avatar_url = match text("avatar") {
-        Some(hash) if !id.is_empty() => format!("https://cdn.discordapp.com/avatars/{id}/{hash}.png?size=128"),
+    let username = text("username").unwrap_or("").to_string();
+    let raw_id = text("id").unwrap_or("");
+    let id = if snowflake(raw_id) { raw_id } else { "" };
+    let (avatar_url, avatar_still) = match text("avatar").filter(|h| image_hash(h)) {
+        Some(hash) if !id.is_empty() => {
+            let still = format!("https://cdn.discordapp.com/avatars/{id}/{hash}.webp?size=128");
+            let moving = if hash.starts_with("a_") {
+                format!("{still}&animated=true")
+            } else {
+                still.clone()
+            };
+            (moving, still)
+        }
         _ => {
             let discriminator = text("discriminator").and_then(|d| d.parse::<u64>().ok()).unwrap_or(0);
             let index = if discriminator != 0 {
                 discriminator % 5
             } else {
-                id.parse::<u64>().map(|n| (n >> 22) % 6).unwrap_or(0)
+                raw_id.parse::<u64>().map(|n| (n >> 22) % 6).unwrap_or(0)
             };
-            format!("https://cdn.discordapp.com/embed/avatars/{index}.png")
+            let url = format!("https://cdn.discordapp.com/embed/avatars/{index}.png");
+            (url.clone(), url)
         }
     };
-    Some(DiscordUser { name, avatar_url })
+    let asset = user
+        .get("avatar_decoration_data")
+        .and_then(|d| d.get("asset"))
+        .and_then(Value::as_str)
+        .filter(|h| image_hash(h));
+    let (decoration, decoration_still) = match asset {
+        Some(asset) => (
+            Some(format!(
+                "https://cdn.discordapp.com/avatar-decoration-presets/{asset}.png?size=160&passthrough=true"
+            )),
+            Some(format!("https://cdn.discordapp.com/avatar-decoration-presets/{asset}.png?size=160")),
+        ),
+        None => (None, None),
+    };
+    Some(DiscordUser {
+        id: id.to_string(),
+        name,
+        username,
+        avatar_url,
+        avatar_still,
+        decoration,
+        decoration_still,
+    })
 }
 
 impl DiscordService {
@@ -643,21 +697,48 @@ mod tests {
 
     #[test]
     fn ready_frame_gives_the_discord_user() {
-        let with_avatar = json!({ "evt": "READY", "data": { "user": {
-            "id": "80351110224678912", "username": "nelly", "global_name": "Nelly", "avatar": "abc", "discriminator": "0"
+        let id = "80351110224678912";
+        let hash = "0123456789abcdef0123456789abcdef";
+        let deco = "fedcba9876543210fedcba9876543210";
+        let moving = json!({ "evt": "READY", "data": { "user": {
+            "id": id, "username": "nelly", "global_name": "Nelly", "avatar": format!("a_{hash}"), "discriminator": "0",
+            "avatar_decoration_data": { "asset": deco, "sku_id": "1144058522808614923" }
         }}});
         assert_eq!(
-            parse_ready(&with_avatar),
+            parse_ready(&moving),
             Some(DiscordUser {
+                id: id.into(),
                 name: "Nelly".into(),
-                avatar_url: "https://cdn.discordapp.com/avatars/80351110224678912/abc.png?size=128".into(),
+                username: "nelly".into(),
+                avatar_url: format!("https://cdn.discordapp.com/avatars/{id}/a_{hash}.webp?size=128&animated=true"),
+                avatar_still: format!("https://cdn.discordapp.com/avatars/{id}/a_{hash}.webp?size=128"),
+                decoration: Some(format!(
+                    "https://cdn.discordapp.com/avatar-decoration-presets/{deco}.png?size=160&passthrough=true"
+                )),
+                decoration_still: Some(format!("https://cdn.discordapp.com/avatar-decoration-presets/{deco}.png?size=160")),
             })
         );
-        let new_default = json!({ "data": { "user": { "id": "80351110224678912", "username": "nelly", "global_name": "" } } });
+        let still = json!({ "data": { "user": { "id": id, "username": "nelly", "avatar": hash } } });
+        let u = parse_ready(&still).unwrap();
+        assert_eq!(u.avatar_url, u.avatar_still, "a still avatar is one picture");
+        assert_eq!(u.decoration, None);
+        // A hash or id that is not Discord's never reaches a URL.
+        let forged = json!({ "data": { "user": {
+            "id": id, "username": "x", "avatar": "../../evil?", "avatar_decoration_data": { "asset": "x\"y" }
+        }}});
+        let u = parse_ready(&forged).unwrap();
+        assert!(u.avatar_url.starts_with("https://cdn.discordapp.com/embed/avatars/"));
+        assert_eq!((u.decoration, u.decoration_still), (None, None));
+        let bad_id = json!({ "data": { "user": { "id": "12/../3", "username": "x", "avatar": hash } } });
+        let u = parse_ready(&bad_id).unwrap();
+        assert_eq!(u.id, "");
+        assert_eq!(u.avatar_url, "https://cdn.discordapp.com/embed/avatars/0.png");
+
+        let new_default = json!({ "data": { "user": { "id": id, "username": "nelly", "global_name": "" } } });
         let expected = (80351110224678912u64 >> 22) % 6;
         assert_eq!(
-            parse_ready(&new_default).map(|u| u.avatar_url),
-            Some(format!("https://cdn.discordapp.com/embed/avatars/{expected}.png"))
+            parse_ready(&new_default).map(|u| (u.name, u.avatar_url)),
+            Some(("nelly".into(), format!("https://cdn.discordapp.com/embed/avatars/{expected}.png")))
         );
         let legacy = json!({ "data": { "user": { "id": "1", "username": "old", "discriminator": "1337" } } });
         assert_eq!(

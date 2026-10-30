@@ -85,6 +85,9 @@ pub mod discord_service;
 // Desktop-only: what the Discord status says, and the pump that sends it.
 #[cfg(desktop)]
 pub mod discord_presence;
+// Desktop-only: the viewer's own Discord look for the Discord Status preview.
+#[cfg(desktop)]
+pub mod discord_look;
 // macOS supplies its own socket discovery; see the file header for why the
 // crate's Unix finder cannot locate Discord there.
 #[cfg(target_os = "macos")]

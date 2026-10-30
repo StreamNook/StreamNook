@@ -10,6 +10,7 @@ use tauri::State;
 /// The editor's card for one tab, built with the draft style.
 #[tauri::command]
 pub async fn discord_presence_preview(
+    app: crate::rt::AppHandle,
     style: DiscordPresenceSettings,
     scene: String,
     state: State<'_, AppState>,
@@ -29,7 +30,7 @@ pub async fn discord_presence_preview(
             })
             .collect()
     };
-    Ok(discord_presence::preview(&style, &scene, &favorites))
+    Ok(discord_presence::preview(&app, &style, &scene, &favorites))
 }
 
 /// The main window's page generation, read when its feed starts and again

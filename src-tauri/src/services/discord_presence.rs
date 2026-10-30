@@ -1925,6 +1925,8 @@ pub struct PreviewModel {
     /// off, connected, connecting (Discord open, status on its way) or waiting (Discord closed).
     pub connection: &'static str,
     pub user: Option<DiscordUser>,
+    /// The viewer's own Discord look (banner, decoration, nameplate, server tag).
+    pub look: Option<crate::services::discord_look::DiscordLook>,
     pub tokens: Vec<TokenValue>,
     pub presets: Vec<Preset>,
 }
@@ -2046,6 +2048,7 @@ fn tokens_for(shown: &Shown) -> Vec<TokenValue> {
 
 /// The editor's card for `tab` with `style` (the draft, not yet saved).
 pub fn preview(
+    app: &AppHandle,
     style: &DiscordPresenceSettings,
     tab: &str,
     favorites: &[SampleChannel],
@@ -2110,16 +2113,21 @@ pub fn preview(
     } else {
         "waiting"
     };
-    let model = PreviewModel {
+    let user = p.discord_user.clone();
+    let enabled = p.enabled;
+    let mut model = PreviewModel {
         activity: payload.as_ref().map(|pl| preview_activity(pl, &p.assets)),
         shown: shown_tab,
         live,
         connection,
-        user: p.discord_user.clone(),
+        user: user.clone(),
+        look: None,
         tokens: tokens_for(&shown),
         presets: presets(),
     };
     drop(p);
+    // Outside the presence lock: the look keeps its own.
+    model.look = crate::services::discord_look::resolve(app, user.as_ref(), enabled);
     if first_look {
         // Pictures for the live scene start looking up now that the editor is open.
         wake();
