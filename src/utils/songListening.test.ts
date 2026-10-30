@@ -184,15 +184,51 @@ describe('asking the main window', () => {
 
   it('lets the listening go quietly when its answer never comes', async () => {
     const id = await ask();
-    // Two attempts of 5 s each, 10 s of slack apiece: 30 s from the request.
+    // Two attempts of 5 s each, and each one's finding step (22 s): 54 s from the request.
+    expect(L.FINDING_MS).toBe(22_000);
     fire('song-identify-state', { id, phase: 'listening', attempt: 1, attempts: 2, captureMs: 5000, startedAt: null });
-    await vi.advanceTimersByTimeAsync(29_999);
+    await vi.advanceTimersByTimeAsync(53_999);
     expect(L.getListening()).not.toBeNull();
     await vi.advanceTimersByTimeAsync(1);
     await vi.dynamicImportSettled();
     expect(L.getListening()).toBeNull();
     expect(h.announce).not.toHaveBeenCalled();
     expect(sent('song-identify-cancel')).toEqual([]);
+  });
+
+  it('gives the finding step its full time from when the clip is sent', async () => {
+    const id = await ask();
+    const state = (phase: string, attempt = 1) =>
+      fire('song-identify-state', { id, phase, attempt, attempts: 1, captureMs: 5000, startedAt: null });
+    state('listening');
+    // The listening ran long: the clip goes 10 s in, so the answer may take
+    // until 32 s, past the listening's own 27 s.
+    await vi.advanceTimersByTimeAsync(10_000);
+    state('finding');
+    await vi.advanceTimersByTimeAsync(21_999);
+    expect(L.getListening()?.phase).toBe('finding');
+    const result = { status: 'match', song: { title: 'One', artist: 'A' } };
+    fire('song-identify-result', { id, result });
+    await vi.dynamicImportSettled();
+    expect(h.announce).toHaveBeenCalledWith(result, 'XQC');
+  });
+
+  it('lets it go 22 s after the clip is sent when no answer comes', async () => {
+    const id = await ask();
+    const state = (phase: string) =>
+      fire('song-identify-state', { id, phase, attempt: 1, attempts: 1, captureMs: 5000, startedAt: null });
+    state('listening');
+    await vi.advanceTimersByTimeAsync(10_000);
+    state('finding');
+    // A repeat of the same step does not move it again.
+    await vi.advanceTimersByTimeAsync(5_000);
+    state('finding');
+    await vi.advanceTimersByTimeAsync(16_999);
+    expect(L.getListening()).not.toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.dynamicImportSettled();
+    expect(L.getListening()).toBeNull();
+    expect(h.announce).not.toHaveBeenCalled();
   });
 
   it('cancels through the main window, and posts nothing', async () => {

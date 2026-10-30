@@ -118,12 +118,51 @@ pub struct Resolved {
     pub complete: bool,
 }
 
-/// Find the song's links within `budget`. Half of it goes to Deezer, half to
-/// the lookups that run together after it (YouTube Music, Beatport,
-/// streamnook.app); each lookup's share starts once its host's gate lets it
-/// through, so waiting for a gate never eats it.
+/// Find the song's links for the refresh runner. Half of `budget` goes to
+/// Deezer, half to the lookups that run together after it (YouTube Music,
+/// Beatport, streamnook.app); each lookup's share starts once its host's gate
+/// lets it through, so waiting for a gate never eats it.
 pub async fn resolve(input: &ResolveInput, budget: Duration) -> Resolved {
-    resolve_on(&NET, input, budget).await
+    resolve_on(&NET, input, Budget::PerLookup(budget)).await
+}
+
+/// Find the song's links at identify time: everything ends `budget` from
+/// now, gate waits included, so the identify answer never waits past it
+/// (Deezer has until half of it). Lookups cut short are finished by a
+/// refresh after the song is filed.
+pub async fn resolve_within(input: &ResolveInput, budget: Duration) -> Resolved {
+    resolve_on(&NET, input, Budget::Total(budget)).await
+}
+
+/// How a resolve spends its time.
+#[derive(Debug, Clone, Copy)]
+enum Budget {
+    /// Half each to Deezer and to the lookups after it, counted from the
+    /// moment each host's gate lets it through.
+    PerLookup(Duration),
+    /// One end for everything, this long from now.
+    Total(Duration),
+}
+
+impl From<Duration> for Budget {
+    fn from(budget: Duration) -> Self {
+        Budget::PerLookup(budget)
+    }
+}
+
+/// How long one lookup may take.
+#[derive(Debug, Clone, Copy)]
+enum Time {
+    /// This long from the moment its host's gate lets it through.
+    Share(Duration),
+    /// Until this moment, its gate wait included.
+    Until(tokio::time::Instant),
+}
+
+impl From<Duration> for Time {
+    fn from(share: Duration) -> Self {
+        Time::Share(share)
+    }
 }
 
 // ------------------------------------------------------------------ links
@@ -205,11 +244,33 @@ fn tidal_track_url(raw: &str) -> Option<String> {
         .map(|id| format!("https://tidal.com/browse/track/{id}"))
 }
 
+/// The most a search's words take in its address, encoded. A title in a
+/// script that encodes to 9 bytes a character (CJK) would otherwise make an
+/// address too long to show as a QR code, and no search needs more.
+const SEARCH_WORDS_MAX: usize = 200;
+
+/// `words` encoded for an address, cut to `SEARCH_WORDS_MAX` bytes between
+/// two characters (never inside one's escapes), with no space left at the cut.
+fn encoded_words(words: &str) -> String {
+    let mut out = String::new();
+    let mut buf = [0u8; 4];
+    for ch in words.trim().chars() {
+        let piece = urlencoding::encode(ch.encode_utf8(&mut buf));
+        if out.len() + piece.len() > SEARCH_WORDS_MAX {
+            break;
+        }
+        out.push_str(&piece);
+    }
+    while out.ends_with("%20") {
+        out.truncate(out.len() - 3);
+    }
+    out
+}
+
 /// The search page for the song's words on `service`, for every service on
 /// `DISPLAY` but Beatport (a search there is noise for most songs).
 pub fn search_link(service: &str, artist: &str, title: &str) -> Option<Provider> {
-    let words = format!("{artist} {title}");
-    let q = urlencoding::encode(words.trim()).into_owned();
+    let q = encoded_words(&format!("{artist} {title}"));
     let url = match service {
         "Spotify" => format!("https://open.spotify.com/search/{q}"),
         "Apple Music" => format!("https://music.apple.com/us/search?term={q}"),
@@ -1020,27 +1081,43 @@ impl Net {
         f(&mut hosts[host as usize])
     }
 
-    /// One call: wait for the host's gate, then give it `share` of the
-    /// budget. A host whose breaker is open is not called.
+    /// One call: wait for the host's gate, then give it its `time` (a share
+    /// from the gate, or until a set end). A host whose breaker is open is not
+    /// called, nor one whose gate opens only after the end.
     async fn look<T>(
         &self,
         host: Host,
         request: Request,
-        share: Duration,
+        time: Time,
         parse: impl FnOnce(&Reply) -> Parsed<T>,
     ) -> Look<T> {
         let start = self.state(host, |s| {
             let now = Instant::now();
-            (!s.is_open(now)).then(|| s.reserve(now))
+            if s.is_open(now) {
+                return Err(Look::Open);
+            }
+            let opens = s.next_at.map_or(now, |at| at.max(now));
+            if let Time::Until(end) = time {
+                if opens >= end.into_std() {
+                    return Err(Look::Cut);
+                }
+            }
+            Ok(s.reserve(now))
         });
-        let Some(start) = start else {
-            return Look::Open;
+        let start = match start {
+            Ok(start) => start,
+            Err(look) => return look,
         };
         tokio::time::sleep_until(tokio::time::Instant::from_std(start)).await;
         if self.state(host, |s| s.is_open(Instant::now())) {
             return Look::Open;
         }
-        let parsed = match tokio::time::timeout(share, self.http.send(host, request)).await {
+        let call = self.http.send(host, request);
+        let answered = match time {
+            Time::Share(share) => tokio::time::timeout(share, call).await,
+            Time::Until(end) => tokio::time::timeout_at(end, call).await,
+        };
+        let parsed = match answered {
             Err(_) => return Look::Cut,
             Ok(Sent::Failed) => Parsed::Bad,
             Ok(Sent::Reply(reply)) => parse(&reply),
@@ -1064,17 +1141,21 @@ impl Net {
         }
     }
 
-    async fn deezer_by_isrc(&self, isrc: &str, share: Duration) -> Look<DeezerTrack> {
+    async fn deezer_by_isrc(&self, isrc: &str, time: impl Into<Time>) -> Look<DeezerTrack> {
         let request = Request {
             url: format!("https://api.deezer.com/track/isrc:{isrc}"),
             json: None,
             headers: JSON_HEADERS,
         };
-        self.look(Host::Deezer, request, share, parse_deezer_track)
+        self.look(Host::Deezer, request, time.into(), parse_deezer_track)
             .await
     }
 
-    async fn deezer_by_text(&self, input: &ResolveInput, share: Duration) -> Look<DeezerTrack> {
+    async fn deezer_by_text(
+        &self,
+        input: &ResolveInput,
+        time: impl Into<Time>,
+    ) -> Look<DeezerTrack> {
         let request = Request {
             url: format!(
                 "https://api.deezer.com/search?q={}&limit={DEEZER_HITS}",
@@ -1083,7 +1164,7 @@ impl Net {
             json: None,
             headers: JSON_HEADERS,
         };
-        self.look(Host::Deezer, request, share, |r| {
+        self.look(Host::Deezer, request, time.into(), |r| {
             parse_deezer_search(r, input)
         })
         .await
@@ -1093,7 +1174,7 @@ impl Net {
         &self,
         input: &ResolveInput,
         reference: Option<u32>,
-        share: Duration,
+        time: impl Into<Time>,
     ) -> Look<String> {
         let request = Request {
             url: "https://music.youtube.com/youtubei/v1/search?prettyPrint=false".to_string(),
@@ -1109,13 +1190,18 @@ impl Net {
             })),
             headers: YTM_HEADERS,
         };
-        self.look(Host::YouTubeMusic, request, share, |r| {
+        self.look(Host::YouTubeMusic, request, time.into(), |r| {
             parse_ytm(r, input, reference)
         })
         .await
     }
 
-    async fn beatport(&self, input: &ResolveInput, isrc: &str, share: Duration) -> Look<String> {
+    async fn beatport(
+        &self,
+        input: &ResolveInput,
+        isrc: &str,
+        time: impl Into<Time>,
+    ) -> Look<String> {
         let request = Request {
             url: format!(
                 "https://www.beatport.com/search/tracks?q={}",
@@ -1124,17 +1210,20 @@ impl Net {
             json: None,
             headers: PAGE_HEADERS,
         };
-        self.look(Host::Beatport, request, share, |r| parse_beatport(r, isrc))
-            .await
+        self.look(Host::Beatport, request, time.into(), |r| {
+            parse_beatport(r, isrc)
+        })
+        .await
     }
 
-    async fn site(&self, isrc: &str, share: Duration) -> Look<SiteLinks> {
+    async fn site(&self, isrc: &str, time: impl Into<Time>) -> Look<SiteLinks> {
         let request = Request {
             url: format!("https://streamnook.app/api/v1/song-links?isrc={isrc}"),
             json: None,
             headers: JSON_HEADERS,
         };
-        self.look(Host::Site, request, share, parse_site).await
+        self.look(Host::Site, request, time.into(), parse_site)
+            .await
     }
 }
 
@@ -1145,8 +1234,15 @@ fn words_of(input: &ResolveInput) -> String {
         .to_string()
 }
 
-async fn resolve_on(net: &Net, input: &ResolveInput, budget: Duration) -> Resolved {
-    let share = budget / 2;
+async fn resolve_on(net: &Net, input: &ResolveInput, budget: impl Into<Budget>) -> Resolved {
+    // Deezer's time, then the time of the lookups that run after it.
+    let (first, rest) = match budget.into() {
+        Budget::PerLookup(budget) => (Time::Share(budget / 2), Time::Share(budget / 2)),
+        Budget::Total(budget) => {
+            let now = tokio::time::Instant::now();
+            (Time::Until(now + budget / 2), Time::Until(now + budget))
+        }
+    };
     let mut providers: Vec<Provider> = Vec::new();
     for p in &input.known {
         put(&mut providers, p.clone());
@@ -1174,8 +1270,8 @@ async fn resolve_on(net: &Net, input: &ResolveInput, budget: Duration) -> Resolv
     // and on the text path it may name the ISRC the rest look up by.
     if !has_direct(&providers, "Deezer") || isrc.is_none() || wants_video {
         let look = match &isrc {
-            Some(code) => net.deezer_by_isrc(code, share).await,
-            None => net.deezer_by_text(input, share).await,
+            Some(code) => net.deezer_by_isrc(code, first).await,
+            None => net.deezer_by_text(input, first).await,
         };
         complete &= look.clean();
         if let Look::Found(track) = look {
@@ -1204,21 +1300,21 @@ async fn resolve_on(net: &Net, input: &ResolveInput, budget: Duration) -> Resolv
     let (video, beatport, site) = tokio::join!(
         async {
             if wants_video {
-                Some(net.youtube_music(input, reference, share).await)
+                Some(net.youtube_music(input, reference, rest).await)
             } else {
                 None
             }
         },
         async {
             if wants_beatport {
-                Some(net.beatport(input, &code, share).await)
+                Some(net.beatport(input, &code, rest).await)
             } else {
                 None
             }
         },
         async {
             if wants_site {
-                Some(net.site(&code, share).await)
+                Some(net.site(&code, rest).await)
             } else {
                 None
             }
@@ -2171,6 +2267,80 @@ mod tests {
         assert!(
             matches!(look, Look::Found(ref t) if t.id == "1030607572"),
             "{look:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn at_identify_time_a_slow_gate_never_holds_the_answer_past_its_budget() {
+        let others = every_host_answers(found_site());
+        let (net, fake) = fake_net(move |host, request: &Request| match host {
+            // streamnook.app answers after the budget.
+            Host::Site => (Sent::Reply(found_site()), Duration::from_secs(2)),
+            _ => others(host, request),
+        });
+        // Another lookup holds Deezer's gate past the whole budget, and
+        // YouTube Music's past half of it.
+        net.state(Host::Deezer, |s| {
+            s.next_at = Some(Instant::now() + Duration::from_secs(2))
+        });
+        net.state(Host::YouTubeMusic, |s| {
+            s.next_at = Some(Instant::now() + Duration::from_millis(200))
+        });
+        let began = Instant::now();
+        let r = resolve_on(
+            &net,
+            &kiss_of_life(),
+            Budget::Total(Duration::from_millis(300)),
+        )
+        .await;
+        let took = began.elapsed();
+        assert!(took >= Duration::from_millis(290), "{took:?}");
+        assert!(took < Duration::from_millis(600), "{took:?}");
+        assert!(!r.complete);
+        // A gate that opens only after the end is not waited for or called.
+        assert_eq!(fake.calls_to(Host::Deezer), 0);
+        // One that opens before it is still called.
+        assert_eq!(fake.calls_to(Host::YouTubeMusic), 1);
+        // A cut is no failure.
+        assert_eq!(net.state(Host::Site, |s| s.fails), 0);
+    }
+
+    #[tokio::test]
+    async fn the_refresh_runner_still_waits_for_a_gate_and_gives_each_lookup_its_share() {
+        let (net, fake) = fake_net(every_host_answers(found_site()));
+        net.state(Host::Deezer, |s| {
+            s.next_at = Some(Instant::now() + Duration::from_millis(300))
+        });
+        let began = Instant::now();
+        let r = resolve_on(&net, &kiss_of_life(), Duration::from_millis(200)).await;
+        assert!(began.elapsed() >= Duration::from_millis(300));
+        assert_eq!(fake.calls_to(Host::Deezer), 1);
+        assert!(r.complete, "{:?}", links_of(&r));
+    }
+
+    #[test]
+    fn a_long_title_cuts_the_search_words_between_two_characters() {
+        let title = "あ".repeat(140);
+        let link = search_link("Spotify", "アーティスト", &title).unwrap();
+        let q = link
+            .url
+            .strip_prefix("https://open.spotify.com/search/")
+            .unwrap();
+        assert!(q.len() <= SEARCH_WORDS_MAX, "{}", q.len());
+        // Nine bytes a character: whole characters only, nothing half-escaped.
+        let words = urlencoding::decode(q).unwrap();
+        assert!(format!("アーティスト {title}").starts_with(words.as_ref()));
+        assert!(words.chars().count() > 10);
+        assert!(!words.ends_with(' '));
+        // A short song keeps every word.
+        assert_eq!(
+            search_link("Spotify", "Sade", "Kiss of Life").unwrap().url,
+            "https://open.spotify.com/search/Sade%20Kiss%20of%20Life"
+        );
+        // A cut that lands after a space leaves none at the end.
+        assert_eq!(
+            encoded_words(&format!("{} bc", "a".repeat(197))),
+            "a".repeat(197)
         );
     }
 

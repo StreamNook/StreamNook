@@ -15,6 +15,9 @@ vi.mock('../stores/AppStore', () => ({
   mainChatRoom: () => main.room,
 }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
+// The answer over a chat's composer.
+const publish = vi.fn();
+vi.mock('./songResult', () => ({ publishSongResult: (...args: unknown[]) => publish(...args) }));
 
 import { announceSong, type RecognizeResult } from './songId';
 
@@ -27,6 +30,7 @@ describe('where a song answer is posted', () => {
   const dispatchEvent = vi.fn();
   beforeEach(() => {
     inject.mockClear();
+    publish.mockClear();
     dispatchEvent.mockClear();
     rooms.clear();
     main.room = null;
@@ -63,6 +67,18 @@ describe('where a song answer is posted', () => {
     announceSong(match, 'kick:gone');
     expect(inject).not.toHaveBeenCalled();
     expect(dispatchEvent).not.toHaveBeenCalled();
+    // Nor does its answer show over any composer.
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it('shows the answer over the composer only where it was posted', () => {
+    rooms.set('xqc', {});
+    announceSong(match, 'XQC');
+    expect(publish).toHaveBeenCalledWith(match, 'XQC');
+    main.room = 'youtube:UCAbc';
+    announceSong({ status: 'no-match' }, 'YOUTUBE:ucabc');
+    expect(publish).toHaveBeenLastCalledWith({ status: 'no-match' }, 'YOUTUBE:ucabc');
+    expect(publish).toHaveBeenCalledTimes(2);
   });
 
   it('says nothing for a canceled listening or one refused while another ran', () => {

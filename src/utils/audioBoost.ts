@@ -315,6 +315,52 @@ export function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> 
   });
 }
 
+/** How long a capture waits for the audio context to wake, and then for its
+ *  tap to load, before it gives up. */
+export const CAPTURE_START_MS = 3000;
+/** What a capture that could not start throws (songId shows it). */
+export const CAPTURE_FAILED = 'Could not capture the stream audio.';
+const ABORTED = Symbol('aborted');
+const TIMED_OUT = Symbol('timed out');
+
+/** `work`'s value, or ABORTED when `signal` aborts first, or TIMED_OUT once
+ *  `ms` pass. A rejection passes through. Its timer and listener go either way. */
+function settleWithin<T>(
+  work: Promise<T>,
+  ms: number,
+  signal?: AbortSignal,
+): Promise<T | typeof ABORTED | typeof TIMED_OUT> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      resolve(ABORTED);
+      return;
+    }
+    const finish = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+    };
+    const onAbort = () => {
+      finish();
+      resolve(ABORTED);
+    };
+    const timer = setTimeout(() => {
+      finish();
+      resolve(TIMED_OUT);
+    }, ms);
+    signal?.addEventListener('abort', onAbort);
+    work.then(
+      (value) => {
+        finish();
+        resolve(value);
+      },
+      (e: unknown) => {
+        finish();
+        reject(e instanceof Error ? e : new Error(String(e)));
+      },
+    );
+  });
+}
+
 /** The RMS of what the tap heard since the last level, sent at most every
  *  LEVEL_MS. */
 function levelMeter(onLevel: (level: number) => void, now: () => number = Date.now) {
@@ -362,20 +408,34 @@ export async function captureStreamSamples(
     }
   }
 
+  // Waking the context and loading the tap each get a few seconds, and a
+  // Cancel stops either wait at once: a promise that never settles must not
+  // hold the listening (and every identify after it) forever.
   if (ctx.state === 'suspended') {
-    try {
-      await ctx.resume();
-    } catch {
-      /* best effort; a muted/paused element is handled by the caller */
+    // Best effort; a muted/paused element is handled by the caller.
+    const woke = await settleWithin(ctx.resume().catch(() => {}), CAPTURE_START_MS, signal);
+    if (woke === ABORTED) return null;
+    if (woke === TIMED_OUT) {
+      Logger.warn('[AudioBoost] the audio context did not wake for the capture');
+      throw new Error(CAPTURE_FAILED);
     }
   }
   if (signal?.aborted) return null;
 
+  let loaded: void | typeof ABORTED | typeof TIMED_OUT;
   try {
-    await ensureCaptureWorklet(ctx);
+    loaded = await settleWithin(ensureCaptureWorklet(ctx), CAPTURE_START_MS, signal);
   } catch (e) {
+    // The next capture loads it again.
+    captureWorkletReady.delete(ctx);
     Logger.warn('[AudioBoost] capture worklet load failed:', e);
     return null;
+  }
+  if (loaded === ABORTED) return null;
+  if (loaded === TIMED_OUT) {
+    captureWorkletReady.delete(ctx);
+    Logger.warn('[AudioBoost] the capture worklet did not load');
+    throw new Error(CAPTURE_FAILED);
   }
   if (signal?.aborted) return null;
 

@@ -1,5 +1,5 @@
-/* The listening pill over a chat's composer and the player's note while a
-   song is identified (ListeningStrip.tsx). Everything here moves by
+/* The listening pill over a chat's last messages and the player's note while
+   a song is identified (ListeningStrip.tsx). Everything here moves by
    `transform` or `opacity` only, so it runs on the compositor and repaints
    nothing over a playing stream. The bars' heights are written every frame by
    one shared renderer (listeningBars.ts), never through React state. How far
@@ -75,5 +75,17 @@ html[data-motion="off"] .sn-listen-dots > i {
   40% {
     opacity: 1;
   }
+}
+
+/* While the pill shows at the foot of a chat's messages (60 px tall, 8 px
+   above the foot), Chat Paused rises by its height and an 8 px gap, so the
+   two stack instead of fighting for the same place. By transform only;
+   Tailwind's `transform` class on Chat Paused reads this translate. The Off
+   Motion setting makes the move instant (globals.css). */
+.sn-chat-paused {
+  transition: transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.sn-chat-panel:has([data-listening-shape]) .sn-chat-paused {
+  --tw-translate-y: -68px;
 }
 

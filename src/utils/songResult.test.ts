@@ -12,7 +12,14 @@ vi.mock('./songListening', () => ({
   },
 }));
 
-import { dismissSongResult, publishSongResult, songResultFor, subscribeSongResults } from './songResult';
+import {
+  ANSWER_MS,
+  dismissSongResult,
+  holdSongResult,
+  publishSongResult,
+  songResultFor,
+  subscribeSongResults,
+} from './songResult';
 
 const miss = { status: 'no-match' as const };
 
@@ -42,6 +49,22 @@ describe('the answer over a chat', () => {
     expect(songResultFor('a')).not.toBeNull();
     dismissSongResult(shown.id);
     expect(songResultFor('a')).toBeNull();
+  });
+
+  it('is old news past its card’s 8 s: a chat drawn later never shows it', () => {
+    expect(ANSWER_MS).toBe(8000);
+    publishSongResult(miss, 'late', 1_000);
+    expect(songResultFor('late', 1_000 + ANSWER_MS)?.at).toBe(1_000);
+    expect(songResultFor('late', 1_000 + ANSWER_MS + 1)).toBeNull();
+  });
+
+  it('stays past its time while its card is held, and goes once let go', () => {
+    publishSongResult(miss, 'held', 1_000);
+    const shown = songResultFor('held', 1_000)!;
+    holdSongResult(shown.id, true);
+    expect(songResultFor('held', 60_000)?.id).toBe(shown.id);
+    holdSongResult(shown.id, false);
+    expect(songResultFor('held', 60_000)).toBeNull();
   });
 
   it('a new listening in the room takes its place at once', () => {

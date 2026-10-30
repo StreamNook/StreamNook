@@ -1,14 +1,36 @@
-// The song link's QR code: encoded at level H for every link length, the
-// logo's square centered and small enough for level H to cover, clear of the
-// finder patterns, the timing rows and the format areas, and every other dark
-// module drawn as one rounded square of its own.
+// The song link's QR code: encoded at level H for an ordinary link, at a
+// lighter level for a long one, and not at all (no code, no button) for one
+// too long for any; the logo's square centered and small enough for its level
+// to cover, clear of the finder patterns, the timing rows and the format
+// areas; and every other dark module drawn as one rounded square of its own.
 import { describe, expect, it } from 'vitest';
 import { QrCodeDataType } from 'uqr';
-import { inBox, KNOCKOUT_SHARE, qrHeading, qrModel, shortLink, type QrModel } from './songQr';
+import {
+  inBox,
+  KNOCKOUT_SHARE,
+  QR_MAX_BYTES,
+  qrFits,
+  qrHeading,
+  qrModel,
+  RECOVERY,
+  shortLink,
+  type QrModel,
+} from './songQr';
 
 const LONG_APPLE =
   'https://music.apple.com/us/album/debi-tirar-mas-fotos-collectors-edition/1787022393?i=1787022572&l=en-US';
 const SHORT_DEEZER = 'https://www.deezer.com/track/3112345678';
+/** A Spotify search for 146 kana (9 bytes each once encoded): 1349 characters. */
+const KANA_SEARCH = `https://open.spotify.com/search/${'%E3%81%82'.repeat(146)}xyz`;
+/** Past what level M holds. */
+const TOO_LONG = `https://open.spotify.com/search/${'%E3%81%82'.repeat(260)}`;
+
+/** A model that must exist. */
+const model = (url: string): QrModel => {
+  const m = qrModel(url);
+  if (!m) throw new Error(`no code for ${url}`);
+  return m;
+};
 
 /** The error correction level the code says it uses, read back from its
  *  format bits (the copy beside the top-left finder, unmasked). */
@@ -26,19 +48,44 @@ const KEPT = new Set([QrCodeDataType.Position, QrCodeDataType.Timing, QrCodeData
 
 describe('the song link’s QR code', () => {
   it('is encoded at level H, long link or short', () => {
-    const long = qrModel(LONG_APPLE);
-    const short = qrModel(SHORT_DEEZER);
+    const long = model(LONG_APPLE);
+    const short = model(SHORT_DEEZER);
     expect(eccOf(long)).toBe('H');
     expect(eccOf(short)).toBe('H');
+    expect(long.level).toBe('H');
     // A longer link needs a larger code at the same level.
     expect(long.size).toBeGreaterThan(short.size);
   });
 
+  it('gives a link too long for level H a code at a lighter level, never a crash', () => {
+    expect(KANA_SEARCH).toHaveLength(1349);
+    const kana = model(KANA_SEARCH);
+    expect(kana.level).toBe('Q');
+    expect(eccOf(kana)).toBe('Q');
+    // Its logo still shows, on a square inside what Q recovers.
+    expect(kana.knockout.size).toBeGreaterThanOrEqual(3);
+    expect(kana.knockout.size / kana.size).toBeLessThanOrEqual(KNOCKOUT_SHARE.Q);
+    expect((kana.knockout.size / kana.size) ** 2).toBeLessThan(RECOVERY.Q / 4);
+    // Level M holds more again, with no logo.
+    const longer = model(`https://open.spotify.com/search/${'%E3%81%82'.repeat(220)}`);
+    expect(longer.level).toBe('M');
+    expect(longer.knockout.size).toBe(0);
+  });
+
+  it('gives no code at all for a link too long for level M', () => {
+    expect(new TextEncoder().encode(TOO_LONG).length).toBeGreaterThan(QR_MAX_BYTES);
+    expect(qrFits(TOO_LONG)).toBe(false);
+    expect(() => qrModel(TOO_LONG)).not.toThrow();
+    expect(qrModel(TOO_LONG)).toBeNull();
+    expect(qrFits(KANA_SEARCH)).toBe(true);
+    expect(qrFits('')).toBe(false);
+  });
+
   it('clears a centered square for the logo, at most 22% of the side, touching no finder, timing or format module', () => {
     for (const url of [LONG_APPLE, SHORT_DEEZER, 'https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT']) {
-      const { size, knockout, logo, types } = qrModel(url);
+      const { size, knockout, logo, types } = model(url);
       expect(knockout.size, url).toBeGreaterThanOrEqual(3);
-      expect(knockout.size / size, url).toBeLessThanOrEqual(KNOCKOUT_SHARE);
+      expect(knockout.size / size, url).toBeLessThanOrEqual(KNOCKOUT_SHARE.H);
       // Centered on the middle module.
       expect(knockout.x, url).toBe((size - knockout.size) / 2);
       expect(knockout.y, url).toBe(knockout.x);
@@ -54,21 +101,21 @@ describe('the song link’s QR code', () => {
   });
 
   it('draws one rounded square per dark module outside the finders and the knockout', () => {
-    const model = qrModel(LONG_APPLE);
+    const code = model(LONG_APPLE);
     let expected = 0;
-    for (let y = 0; y < model.size; y++) {
-      for (let x = 0; x < model.size; x++) {
-        if (model.dark[y][x] && model.types[y][x] !== QrCodeDataType.Position && !inBox(model.knockout, x, y)) {
+    for (let y = 0; y < code.size; y++) {
+      for (let x = 0; x < code.size; x++) {
+        if (code.dark[y][x] && code.types[y][x] !== QrCodeDataType.Position && !inBox(code.knockout, x, y)) {
           expected++;
         }
       }
     }
-    const squares = model.modules.match(/M/g) ?? [];
+    const squares = code.modules.match(/M/g) ?? [];
     expect(squares.length).toBe(expected);
     // Each one rounded at all four corners.
-    expect(model.modules.match(/a0\.35 0\.35/g)?.length).toBe(expected * 4);
+    expect(code.modules.match(/a0\.35 0\.35/g)?.length).toBe(expected * 4);
     // The finders: three rings, three holes, three dots.
-    expect(model.finders.match(/M/g)?.length).toBe(9);
+    expect(code.finders.match(/M/g)?.length).toBe(9);
   });
 });
 

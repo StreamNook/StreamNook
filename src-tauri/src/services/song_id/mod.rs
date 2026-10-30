@@ -57,7 +57,9 @@ pub async fn identify(samples: Vec<i16>) -> Result<Option<SongMatch>, String> {
             apple_id: song.apple_id.clone(),
             known: song.providers.clone(),
         };
-        let found = links::resolve(&input, LINKS_BUDGET).await;
+        // One end for every lookup, gate waits included: the answer never
+        // waits past the budget.
+        let found = links::resolve_within(&input, LINKS_BUDGET).await;
         song.links_are_searches = !found.providers.is_empty() && found.providers.iter().all(|p| p.search);
         song.providers = found.providers;
         song.isrc = found.isrc;

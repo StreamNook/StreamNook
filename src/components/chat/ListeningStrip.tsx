@@ -1,6 +1,7 @@
-// The listening pill over a chat's composer while a song is identified for
-// that chat: a glass shape floating just above the composer (it takes no room
-// in the shelf), with bars that move with the stream's sound, a short phrase
+// The listening pill over a chat's last messages while a song is identified
+// for that chat: a glass shape floating at the foot of the messages panel (it
+// takes no room, and never covers the moderator strips or the composer below
+// it), with bars that move with the stream's sound, a short phrase
 // ("Ears up", picked per capture, listeningWords.ts), and a quiet Cancel ringed
 // by how far the listening has come; then another phrase ("Let me cook") while
 // the clip is looked up; then the answer (SongResultCard) in the same shape,
@@ -13,7 +14,7 @@
 // writing their transforms straight to the elements, so the pill renders once
 // per phase, not per level.
 import './listeningStrip.css';
-import { useCallback, useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { X } from 'lucide-react';
 import { getListening, subscribeListening, type Listening } from '../../utils/songListening';
@@ -176,11 +177,14 @@ const SHAPE = {
   leave: (off: boolean) => ({ opacity: 0, y: 6, scale: 0.98, transition: { duration: off ? 0 : 0.2, ease: EASE } }),
 };
 
-/** Mounted in every chat's composer shelf with that chat's room (its
+/** Mounted at the foot of every chat's messages with that chat's room (its
  *  chat-slice key); shows while a listening answers into that room, and its
- *  answer for a few seconds after. */
-export function ListeningStrip({ room }: { room: string | null }) {
+ *  answer for a few seconds after. Its room is a stable string, so the chat's
+ *  own renders pass it by. */
+export const ListeningStrip = memo(function ListeningStrip({ room }: { room: string | null }) {
   const listening = useSyncExternalStore(subscribeListening, getListening, noListening);
+  // An answer older than its card's time is old news (it was filed while this
+  // chat was not on screen), unless its card is held under the pointer.
   const stored = useSyncExternalStore(subscribeSongResults, () => songResultFor(room), noAnswer);
   const live = listening && stripShows(listening, room) ? listening : null;
   const answer = live ? null : stored;
@@ -193,14 +197,17 @@ export function ListeningStrip({ room }: { room: string | null }) {
   const off = motionMode() === 'off';
   const contents = live ? `listening-${live.id}` : answer ? `answer-${answer.id}` : null;
   return (
-    // A zero-height anchor: the shape floats over the foot of the chat, 8 px
-    // above the composer, so nothing in the shelf or the chat moves when it
-    // comes or goes. Only the shape itself takes the pointer.
-    <div className="pointer-events-none absolute inset-x-2 bottom-full z-30 mb-4 flex justify-center">
+    // Anchored inside the messages panel, 8 px above its foot: the shape
+    // floats over the last messages and never over the strips or the
+    // composer below, and nothing moves when it comes or goes. Only the shape
+    // itself takes the pointer. While it shows, Chat Paused rises above it
+    // (listeningStrip.css, by the shape's mark).
+    <div className="pointer-events-none absolute inset-x-2 bottom-2 z-30 flex justify-center">
       <AnimatePresence custom={off}>
         {contents && (
           <motion.div
             key="shape"
+            data-listening-shape=""
             custom={off}
             variants={SHAPE}
             initial="enter"
@@ -237,6 +244,6 @@ export function ListeningStrip({ room }: { room: string | null }) {
       </AnimatePresence>
     </div>
   );
-}
+});
 
 export default ListeningStrip;

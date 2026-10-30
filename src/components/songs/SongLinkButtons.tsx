@@ -28,7 +28,7 @@ import { GLAZE_PILL } from '../ui/glazeButtons';
 import { markOf, markSize } from './serviceMarks';
 import { SongQrDialog } from './SongQrDialog';
 import type { SongLinks } from './songLinks';
-import type { SongQrRequest } from './songQr';
+import { qrFits, type SongQrRequest } from './songQr';
 
 /** The house easing. */
 const EASE = [0.2, 0.8, 0.2, 1] as const;
@@ -202,6 +202,8 @@ function ListenPill({
   const [menuAt, setMenuAt] = useState<MenuPlace | null>(null);
   const closeMenu = useCallback(() => setMenuAt(null), []);
   const several = apps.length > 1;
+  // A link too long for any code has no QR part.
+  const coded = qrFits(link.url);
   return (
     <span ref={shellRef} className={`${PILL_SHELL} text-[12.5px]`}>
       <Tooltip content={songLinkTip(link.url, apps)} side="top" describe>
@@ -234,17 +236,21 @@ function ListenPill({
           </button>
         </Tooltip>
       )}
-      <span aria-hidden="true" className="my-2 w-px shrink-0 bg-white/[0.14]" />
-      <Tooltip content="Open on your phone" side="top">
-        <button
-          type="button"
-          aria-label={`Show a QR code for ${link.name}`}
-          onClick={(e) => onQr(e.currentTarget)}
-          className={`${PART} w-9 justify-center pr-0.5 text-textMuted hover:text-textPrimary`}
-        >
-          <QrCode size={15} aria-hidden="true" />
-        </button>
-      </Tooltip>
+      {coded && (
+        <>
+          <span aria-hidden="true" className="my-2 w-px shrink-0 bg-white/[0.14]" />
+          <Tooltip content="Open on your phone" side="top">
+            <button
+              type="button"
+              aria-label={`Show a QR code for ${link.name}`}
+              onClick={(e) => onQr(e.currentTarget)}
+              className={`${PART} w-9 justify-center pr-0.5 text-textMuted hover:text-textPrimary`}
+            >
+              <QrCode size={15} aria-hidden="true" />
+            </button>
+          </Tooltip>
+        </>
+      )}
       {several && (
         <AppMenu url={link.url} service={link.name} apps={apps} at={menuAt} toggle={chevronRef} onClose={closeMenu} />
       )}
@@ -313,7 +319,7 @@ export function SongLinkButtons({ links, title, artist, screen }: SongLinkButton
                   <SocialLogo platform={markOf(l.name)} size={markSize(l.name, 15)} />
                 </button>
               </Tooltip>
-              {desk && (
+              {desk && qrFits(l.url) && (
                 // Shown under the pointer or the keyboard; its room is kept,
                 // so nothing beside it moves.
                 <Tooltip content="Open this search on your phone" side="top">

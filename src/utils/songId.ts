@@ -208,35 +208,37 @@ export async function recognizeNowPlaying(
 // command was typed in, or the room the main view holds for the playing
 // stream) when this page holds that room. A match also carries the structured
 // card (album art + clickable service links); misses and errors are plain text.
-function emitSongMessage(room: string | null, text: string, songCard?: SongMatch): void {
+// True when it was posted.
+function emitSongMessage(room: string | null, text: string, songCard?: SongMatch): boolean {
   // Chat slices are stored under the lowercased key whatever case a room key
   // arrives in (a YouTube channel id keeps its case in makeKey), so the lookup
   // folds the same way; injectSystemMessage folds on its own.
   if (room && useChatConnectionStore.getState().channels.has(room.toLowerCase())) {
     injectSystemMessage(room, text, songCard, systemSourceFor(room));
-    return;
+    return true;
   }
   // A room this page does not hold that is no longer the one the main view
   // holds (the viewer switched channels while it listened): the answer
   // belongs to a chat that is gone, so it is not posted anywhere else.
-  if (room && room.toLowerCase() !== mainChatRoom()?.toLowerCase()) return;
+  if (room && room.toLowerCase() !== mainChatRoom()?.toLowerCase()) return false;
   // No room (a stream with no chat of its own), or the main view's room held
   // elsewhere (its chat lives in a popout): the page's one open chat, as before.
   window.dispatchEvent(
     new CustomEvent('twitch-system-message', { detail: { message: text, songCard } }),
   );
+  return true;
 }
 
 export function announceSong(result: RecognizeResult, room: string | null = null): void {
   if (isQuietResult(result)) return;
+  const posted =
+    result.status === 'match'
+      ? emitSongMessage(room, `♪ ${result.song.title} by ${result.song.artist}`, result.song)
+      : result.status === 'no-match'
+        ? emitSongMessage(room, "Couldn't identify the song. Try again when the music is clearer.")
+        : emitSongMessage(room, `Song ID: ${result.message}`);
   // The answer also shows for a moment over that chat's composer, where the
-  // listening strip was.
-  publishSongResult(result, room);
-  if (result.status === 'match') {
-    emitSongMessage(room, `♪ ${result.song.title} by ${result.song.artist}`, result.song);
-  } else if (result.status === 'no-match') {
-    emitSongMessage(room, "Couldn't identify the song. Try again when the music is clearer.");
-  } else {
-    emitSongMessage(room, `Song ID: ${result.message}`);
-  }
+  // listening strip was: only where it was posted, never over a chat that is
+  // gone.
+  if (posted) publishSongResult(result, room);
 }

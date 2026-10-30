@@ -302,6 +302,10 @@ interface ChatMessagesPanelProps {
   /** Chat Paused, drawn over this panel's own bottom edge: clear of the strips
    *  and the composer below. */
   pausedPill?: React.ReactNode;
+  /** The listening pill (and the answer after it), floating over the last
+   *  messages at this panel's foot: never over the strips or the composer
+   *  below. Chat Paused rises above it while it shows (listeningStrip.css). */
+  listeningPill?: React.ReactNode;
 }
 
 /** How many consecutive untagged messages end the shared-chat indicator. */
@@ -347,6 +351,7 @@ const ChatMessagesPanel = ({
   pinnedIds,
   scrollToBottomRef,
   pausedPill,
+  listeningPill,
 }: ChatMessagesPanelProps) => {
   const live = useChannelChat(override ? null : channelKey);
   const src: ChatMessagesPanelSource = override ?? live;
@@ -599,7 +604,7 @@ const ChatMessagesPanel = ({
 
   return (
     <div
-      className="relative flex-1 overflow-hidden animate-panel-slide-down"
+      className="sn-chat-panel relative flex-1 overflow-hidden animate-panel-slide-down"
       onMouseEnter={() => { hoveringRef.current = true; }}
       onMouseLeave={() => { hoveringRef.current = false; }}
     >
@@ -643,6 +648,7 @@ const ChatMessagesPanel = ({
           />
         </ErrorBoundary>
       )}
+      {listeningPill}
       {pausedPill}
     </div>
   );
@@ -5659,7 +5665,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
             scrollToBottomRef={listScrollToBottomRef}
             pausedPill={
               isPaused ? (
-                <div className="absolute bottom-3 left-1/2 transform -translate-x-1/2 z-50 pointer-events-auto">
+                <div className="sn-chat-paused absolute bottom-3 left-1/2 transform -translate-x-1/2 z-50 pointer-events-auto">
                   <button onMouseDown={(e) => e.preventDefault()} onClick={handleResume} className="flex items-center gap-2 whitespace-nowrap px-4 py-2 chrome-glaze chrome-glaze--control chrome-glaze--frosted text-white text-sm font-medium shadow-lg">
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
                     <span>Chat Paused<PausedNewCount sliceKeys={pausedCountKeys} isPaused={isPaused} /></span>
@@ -5667,6 +5673,12 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                   </button>
                 </div>
               ) : null
+            }
+            listeningPill={
+              // While a song is identified for this chat, and its answer
+              // after. Its room is the one this widget's slash commands
+              // answer into (the Twitch login, or the provider's key).
+              <ListeningStrip room={isTwitch ? (currentStream?.user_login ?? null) : providerKey} />
             }
           />
         )}
@@ -5876,10 +5888,6 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                   </span>
                 </div>
               )}
-              {/* While a song is identified for this chat: the listening
-                  strip. Its room is the one this widget's slash commands
-                  answer into (the Twitch login, or the provider's key). */}
-              <ListeningStrip room={isTwitch ? (currentStream?.user_login ?? null) : providerKey} />
               {replyingTo && !isResubMode && !isWatchStreakMode && (
                 <div className="mb-2 flex items-center gap-2 px-3 py-2 bg-glass rounded-lg border border-borderSubtle">
                   <svg className="w-4 h-4 text-accent flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg>

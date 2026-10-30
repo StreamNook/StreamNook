@@ -4,6 +4,7 @@
 // given, and a widget's room is folded here.
 
 import { cancelListening, listensRemotely, requestRemoteIdentify, type Listening } from '../../utils/songListening';
+import { ANSWER_MS } from '../../utils/songResult';
 
 /** The strip shows in the chat whose room the answer goes to, and nowhere
  *  else (two widgets on that room both show it). */
@@ -50,8 +51,9 @@ export function answerShadow(light: boolean): { boxShadow: string } {
 }
 
 /** How long an answer shows over the composer before it folds away: a song
- *  long enough to catch and act on, a miss or an error briefly. */
-export const RESULT_MS = { match: 8000, other: 4000 } as const;
+ *  long enough to catch and act on, a miss or an error briefly. A found
+ *  song's time is the store's own limit (songResult ANSWER_MS). */
+export const RESULT_MS = { match: ANSWER_MS, other: 4000 } as const;
 
 /** Cancel only while listening: once the clip is sent the song is filed
  *  within a second. */

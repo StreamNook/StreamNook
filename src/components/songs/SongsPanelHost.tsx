@@ -12,6 +12,7 @@ import { lazy, Suspense, useCallback, useEffect, useRef, type KeyboardEvent as R
 import { AnimatePresence, motion } from 'framer-motion';
 import { useAppStore } from '../../stores/AppStore';
 import { registerSongsSurface } from '../../utils/songHistory';
+import ErrorBoundary from '../ErrorBoundary';
 import { songLayerOpen } from '../../utils/songLinks';
 
 const SongsPanel = lazy(() => import('./SongsPanel'));
@@ -23,7 +24,33 @@ function tabStops(root: HTMLElement): HTMLElement[] {
   );
 }
 
+/** What shows when the panel fails: nothing, and the panel is closed, so the
+ *  window's keys come back (they stand down while it is open). Closing it
+ *  changes the boundary's key, which draws the host afresh for the next open. */
+function ClosedAfterFault() {
+  const closeSongs = useAppStore((s) => s.closeSongs);
+  useEffect(() => closeSongs(), [closeSongs]);
+  return null;
+}
+
+/** The panel behind its own boundary: a fault in it (or in a song link's QR
+ *  dialog, drawn from inside it) closes it and leaves the stream and the chat
+ *  running. */
 export function SongsPanelHost() {
+  const panel = useAppStore((s) => s.songsPanel);
+  return (
+    <ErrorBoundary
+      componentName="Your songs"
+      reportToLogService
+      resetKeys={[panel]}
+      fallbackRender={() => <ClosedAfterFault />}
+    >
+      <PanelHost />
+    </ErrorBoundary>
+  );
+}
+
+function PanelHost() {
   const panel = useAppStore((s) => s.songsPanel);
   const closeSongs = useAppStore((s) => s.closeSongs);
   const setSongsFocus = useAppStore((s) => s.setSongsFocus);

@@ -19,7 +19,7 @@ import { SocialLogo } from '../ui/SocialLogo';
 import { Tooltip } from '../ui/Tooltip';
 import { GLAZE_PILL } from '../ui/glazeButtons';
 import { markOf, markSize } from './serviceMarks';
-import { QUIET_ZONE, qrHeading, qrModel, shortLink, type SongQrRequest } from './songQr';
+import { QUIET_ZONE, qrHeading, qrModel, shortLink, type QrModel, type SongQrRequest } from './songQr';
 
 /** The code's tile, quiet zone included. */
 const QR_PX = 300;
@@ -34,9 +34,8 @@ const HEADING: CSSProperties = {
   letterSpacing: '-0.02em',
 };
 
-/** The code for `url`, on a transparent ground (the tile is the white). */
-function QrCode({ url }: { url: string }) {
-  const model = useMemo(() => qrModel(url), [url]);
+/** The code, on a transparent ground (the tile is the white). */
+function QrCode({ model }: { model: QrModel }) {
   const side = model.size + QUIET_ZONE * 2;
   const { knockout, logo } = model;
   return (
@@ -95,6 +94,8 @@ export function SongQrCard({ request, title, artist, apps, headingId, onClose, o
       .catch(() => useAppStore.getState().addToast('Could not copy the link', 'error'));
   };
   const mark = markOf(request.service);
+  // Null for a link too long for any code: the dialog still opens it and copies it.
+  const model = useMemo(() => qrModel(request.url), [request.url]);
 
   return (
     <div className="flex flex-col">
@@ -127,13 +128,23 @@ export function SongQrCard({ request, title, artist, apps, headingId, onClose, o
         </Tooltip>
       </div>
 
-      <div
-        className="mx-auto mt-5 overflow-hidden rounded-[20px] bg-white shadow-[0_14px_32px_-18px_rgba(0,0,0,0.75)] ring-1 ring-black/[0.06]"
-        style={{ width: QR_PX, height: QR_PX }}
-      >
-        <QrCode url={request.url} />
-      </div>
-      <p className="mt-3 text-center text-[12.5px] leading-[17px] text-textMuted">Point your phone's camera at the code</p>
+      {model ? (
+        <>
+          <div
+            className="mx-auto mt-5 overflow-hidden rounded-[20px] bg-white shadow-[0_14px_32px_-18px_rgba(0,0,0,0.75)] ring-1 ring-black/[0.06]"
+            style={{ width: QR_PX, height: QR_PX }}
+          >
+            <QrCode model={model} />
+          </div>
+          <p className="mt-3 text-center text-[12.5px] leading-[17px] text-textMuted">
+            Point your phone's camera at the code
+          </p>
+        </>
+      ) : (
+        <p className="glass-tile mt-5 flex h-20 items-center justify-center !rounded-[20px] px-6 text-center text-[13px] leading-[18px] text-textMuted">
+          This link is too long for a QR code
+        </p>
+      )}
 
       <div className="glass-tile mt-5 flex h-11 items-center gap-2.5 !rounded-xl pl-3.5 pr-1.5">
         <Link2 size={14} className="shrink-0 text-textMuted" aria-hidden="true" />

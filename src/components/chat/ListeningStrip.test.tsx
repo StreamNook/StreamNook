@@ -103,6 +103,7 @@ describe('the answer over the composer', () => {
   const found: SongResult = {
     id: 1,
     room: 'xqc',
+    at: 0,
     result: {
       status: 'match',
       song: {
@@ -144,12 +145,12 @@ describe('the answer over the composer', () => {
 
   it('a miss: a short pill with Try again; an error: its own words, no Try again', () => {
     const words = phraseFor('miss', 2);
-    const miss = renderToStaticMarkup(<SongResultView answer={{ id: 2, room: 'xqc', result: { status: 'no-match' } }} onDone={() => {}} />);
+    const miss = renderToStaticMarkup(<SongResultView answer={{ id: 2, room: 'xqc', at: 0, result: { status: 'no-match' } }} onDone={() => {}} />);
     expect(MISS_PHRASES).toContain(words);
     expect(miss).toContain(esc(words));
     expect(miss).toContain('Try again');
     const error = renderToStaticMarkup(
-      <SongResultView answer={{ id: 3, room: 'xqc', result: { status: 'error', message: 'No stream is playing.' } }} onDone={() => {}} />,
+      <SongResultView answer={{ id: 3, room: 'xqc', at: 0, result: { status: 'error', message: 'No stream is playing.' } }} onDone={() => {}} />,
     );
     expect(error).toContain('No stream is playing.');
     expect(error).not.toContain('Try again');
@@ -161,8 +162,12 @@ describe('the answer over the composer', () => {
 
   it('floats over the chat in one shape whose contents cross-fade, and leaves toward the composer', () => {
     const src = read('ListeningStrip.tsx');
-    // A zero-height anchor: nothing in the shelf moves.
-    expect(src).toContain('pointer-events-none absolute inset-x-2 bottom-full z-30 mb-4');
+    // Anchored 8 px above the messages panel's foot: nothing in the shelf moves.
+    expect(src).toContain('pointer-events-none absolute inset-x-2 bottom-2 z-30 flex justify-center');
+    expect(src).not.toContain('bottom-full');
+    expect(src).toContain('data-listening-shape=""');
+    // The chat's own renders pass it by.
+    expect(src).toMatch(/export const ListeningStrip = memo\(function ListeningStrip/);
     expect(src).toContain('pointer-events-auto w-full');
     expect(src).toContain("transformOrigin: 'bottom center'");
     expect(src).toMatch(/leave: \(off: boolean\) => \(\{ opacity: 0, y: 6, scale: 0\.98/);
@@ -232,16 +237,29 @@ describe('the bars draw cleanly', () => {
   });
 });
 
-describe('every chat mounts it in its composer shelf', () => {
+describe('every chat mounts it at the foot of its messages', () => {
   const widget = readFileSync(resolve(__dirname, '..', 'ChatWidget.tsx'), 'utf8');
+  const css = readFileSync(resolve(__dirname, 'listeningStrip.css'), 'utf8');
 
-  it('with the room its slash commands answer into, above the reply bar', () => {
+  it('with the room its slash commands answer into, inside the messages panel, above the moderator strips', () => {
     const mount = widget.indexOf('<ListeningStrip room={isTwitch ? (currentStream?.user_login ?? null) : providerKey} />');
     expect(mount).toBeGreaterThan(0);
-    expect(widget.indexOf('{replyingTo && !isResubMode && !isWatchStreakMode && (', mount)).toBeGreaterThan(mount);
-    // Inside the shelf, which only draws on the chat view.
-    const shelf = widget.lastIndexOf("{activeView === 'chat' &&", mount);
-    expect(shelf).toBeGreaterThan(widget.lastIndexOf('<ChatMessagesPanel', mount));
-    expect(widget.slice(shelf, mount)).toContain('border-t border-borderSubtle');
+    // Handed to the messages panel, which draws it in its own box...
+    const panel = widget.lastIndexOf('<ChatMessagesPanel', mount);
+    expect(panel).toBeGreaterThan(0);
+    expect(widget.slice(panel, mount)).toContain('listeningPill={');
+    expect(widget).toMatch(/\{listeningPill\}\s*\{pausedPill\}/);
+    expect(widget).toContain('className="sn-chat-panel relative flex-1 overflow-hidden');
+    // ...so it sits above the AutoMod and unban strips, never over them.
+    expect(widget.indexOf('<AutomodQueueStrip', mount)).toBeGreaterThan(mount);
+    expect(widget.indexOf('<UnbanRequestsStrip', mount)).toBeGreaterThan(mount);
+    // Only once.
+    expect(widget.indexOf('<ListeningStrip room=', mount + 1)).toBe(-1);
+  });
+
+  it('Chat Paused rises above the pill while it shows, by transform', () => {
+    expect(widget).toContain('className="sn-chat-paused absolute bottom-3');
+    expect(css).toMatch(/\.sn-chat-panel:has\(\[data-listening-shape\]\) \.sn-chat-paused \{[^}]*--tw-translate-y: -68px;/);
+    expect(css).toMatch(/\.sn-chat-paused \{[^}]*transition: transform/);
   });
 });

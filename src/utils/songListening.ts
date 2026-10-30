@@ -256,8 +256,10 @@ interface IdentifyState {
 /** No first state in this long: the main window holds no player (or is not
  *  there), and the request is called off. */
 export const FIRST_STATE_MS = 3000;
-/** Each attempt's slack on top of its listening, for the deadline. */
-export const ATTEMPT_SLACK_MS = 10_000;
+/** The longest the main window's finding step can take: Shazam's client
+ *  timeout (15 s, shazam.rs), the links budget (3 s), the longest host gate
+ *  (1 s) and 3 s of slack. Each attempt's time on top of its listening. */
+export const FINDING_MS = 15_000 + 3_000 + 1_000 + 3_000;
 
 function finishRequest(req: Active, result?: RecognizeResult, room?: string | null): void {
   req.release?.();
@@ -299,21 +301,34 @@ export async function requestRemoteIdentify(room: string | null): Promise<void> 
   const timers: ReturnType<typeof setTimeout>[] = [];
   const stops: Promise<() => void>[] = [];
   let heard = false;
+  let deadline: ReturnType<typeof setTimeout> | null = null;
   req.release = () => {
     for (const t of timers) clearTimeout(t);
+    if (deadline) clearTimeout(deadline);
     for (const stop of stops) void stop.then((f) => f()).catch(() => {});
   };
   const live = () => active === req;
+  // The main window answers by `at`, or this window lets the listening go
+  // quietly (it reloaded, or lost it). Each step restarts it.
+  const answerBy = (at: number) => {
+    if (deadline) clearTimeout(deadline);
+    deadline = setTimeout(() => live() && finishRequest(req), Math.max(0, at - Date.now()));
+  };
 
   stops.push(
     win.listen<IdentifyState>(STATE, ({ payload }) => {
       if (payload.id !== id || !live() || !shown || shown.id !== id) return;
+      const attempts = Math.max(1, payload.attempts);
       if (!heard) {
         heard = true;
-        // The main window listens: it answers within its attempts, or this
-        // window lets the listening go quietly (it reloaded, or lost it).
-        const deadline = asked + Math.max(1, payload.attempts) * (payload.captureMs + ATTEMPT_SLACK_MS);
-        timers.push(setTimeout(() => live() && finishRequest(req), Math.max(0, deadline - Date.now())));
+        // Every attempt's listening and its finding step.
+        answerBy(asked + attempts * (payload.captureMs + FINDING_MS));
+      } else if (payload.phase === 'finding' && shown.phase !== 'finding') {
+        // The clip is sent: Shazam and the links have their full time from now.
+        answerBy(Date.now() + FINDING_MS);
+      } else if (payload.phase === 'listening' && payload.attempt > shown.attempt) {
+        // Another attempt: its listening and finding, and any after it.
+        answerBy(Date.now() + (attempts - payload.attempt + 1) * (payload.captureMs + FINDING_MS));
       }
       show({
         ...shown,

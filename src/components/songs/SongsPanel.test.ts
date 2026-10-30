@@ -40,6 +40,12 @@ describe("a song's page", () => {
     expect(src).toMatch(/\{ opacity: 0, x: -12, transitionEnd: \{ visibility: 'hidden' \} \}/);
   });
 
+  it('a fault in the panel (or a QR dialog drawn from it) closes it and leaves the app running', () => {
+    expect(host).toContain("import ErrorBoundary from '../ErrorBoundary';");
+    expect(host).toMatch(/<ErrorBoundary[\s\S]*resetKeys=\{\[panel\]\}[\s\S]*fallbackRender=\{\(\) => <ClosedAfterFault \/>\}[\s\S]*<PanelHost \/>/);
+    expect(host).toMatch(/function ClosedAfterFault\(\) \{[\s\S]*useEffect\(\(\) => closeSongs\(\), \[closeSongs\]\);[\s\S]*return null;/);
+  });
+
   it('its cover is larger in the larger panel', () => {
     expect(src).toContain('const cover = screen ? 116 : 152;');
     expect(host).toContain('h-[720px]');

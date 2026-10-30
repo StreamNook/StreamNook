@@ -14,7 +14,7 @@ import { CircleAlert, Music, X } from 'lucide-react';
 import { CARD_LAYERS, useCoverFit, washBackground, type CoverTint } from '../../utils/coverTint';
 import { fetchSongPage, hasSongsSurface, onSongHistoryChanged, openSongs, subscribeSongsSurface } from '../../utils/songHistory';
 import { openSongLink } from '../../utils/songLinks';
-import type { SongResult } from '../../utils/songResult';
+import { holdSongResult, type SongResult } from '../../utils/songResult';
 import { SocialLogo } from '../ui/SocialLogo';
 import { Tooltip } from '../ui/Tooltip';
 import { GLAZE_PILL } from '../ui/glazeButtons';
@@ -28,8 +28,9 @@ const noSurface = () => false;
 /** The wash keeps to the row's left, behind the cover and the words. */
 const WASH_MASK = 'linear-gradient(to right, #000 0%, #000 30%, transparent 78%)';
 
-/** Shows for `ms`, held while hovered or focused, then `onDone`. */
-function useShownFor(ms: number, onDone: () => void) {
+/** Shows for `ms`, held while hovered or focused, then `onDone`. The store
+ *  hears the hold, so answer `id` outlives its time while held. */
+function useShownFor(ms: number, onDone: () => void, id: number) {
   const [held, setHeld] = useState(false);
   const left = useRef(ms);
   useEffect(() => {
@@ -41,6 +42,10 @@ function useShownFor(ms: number, onDone: () => void) {
       left.current -= Date.now() - started;
     };
   }, [held, onDone]);
+  useEffect(() => {
+    holdSongResult(id, held);
+    return () => holdSongResult(id, false);
+  }, [id, held]);
   return {
     onPointerEnter: () => setHeld(true),
     onPointerLeave: () => setHeld(false),
@@ -120,7 +125,7 @@ function NoSong() {
 /** A song found. */
 function FoundRow({ answer, onDone }: { answer: SongResult & { result: { status: 'match' } }; onDone: () => void }) {
   const song = answer.result.song;
-  const hold = useShownFor(RESULT_MS.match, onDone);
+  const hold = useShownFor(RESULT_MS.match, onDone, answer.id);
   const [host, setHost] = useState<HTMLDivElement | null>(null);
   const [box, setBox] = useState({ w: 0, h: 0 });
   useEffect(() => {
@@ -230,7 +235,7 @@ function FoundRow({ answer, onDone }: { answer: SongResult & { result: { status:
 
 /** Nothing found, or why it could not try. */
 function OtherRow({ answer, onDone }: { answer: SongResult; onDone: () => void }) {
-  const hold = useShownFor(RESULT_MS.other, onDone);
+  const hold = useShownFor(RESULT_MS.other, onDone, answer.id);
   const miss = answer.result.status === 'no-match';
   const text = answer.result.status === 'error' ? answer.result.message : phraseFor('miss', answer.id);
   return (

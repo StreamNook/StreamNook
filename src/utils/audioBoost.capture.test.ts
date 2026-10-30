@@ -2,7 +2,7 @@
 // at once, every await is followed by a check, the wait ends early, the tap
 // is always disconnected, and the level goes out at most every 33 ms.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { abortableSleep, captureStreamSamples, LEVEL_MS } from './audioBoost';
+import { abortableSleep, CAPTURE_FAILED, CAPTURE_START_MS, captureStreamSamples, LEVEL_MS } from './audioBoost';
 
 class FakeNode {
   connected = 0;
@@ -116,6 +116,60 @@ describe('captureStreamSamples', () => {
     expect(await run).toBeNull();
     expect(FakeWorkletNode.made).toHaveLength(0);
     expect(FakeContext.made[0].audioWorklet.addModule).not.toHaveBeenCalled();
+  });
+
+  it('a Cancel stops a context that never wakes, and its tap that never loads', async () => {
+    vi.useFakeTimers();
+    FakeContext.resume = () => new Promise<void>(() => {});
+    const ctl = new AbortController();
+    const run = captureStreamSamples(element(), 5, { signal: ctl.signal });
+    await vi.advanceTimersByTimeAsync(1000);
+    ctl.abort();
+    expect(await run).toBeNull();
+    expect(FakeWorkletNode.made).toHaveLength(0);
+
+    FakeContext.resume = async () => {};
+    const stuck = new AbortController();
+    const loading = captureStreamSamples(element(), 5, { signal: stuck.signal });
+    // Its context exists at once; the tap is asked for after it wakes.
+    FakeContext.made[1].audioWorklet.addModule.mockImplementation(() => new Promise<void>(() => {}));
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(FakeContext.made[1].audioWorklet.addModule).toHaveBeenCalledTimes(1);
+    stuck.abort();
+    expect(await loading).toBeNull();
+    expect(FakeWorkletNode.made).toHaveLength(0);
+  });
+
+  it('gives up after 3 s on a context that never wakes, saying it could not capture', async () => {
+    vi.useFakeTimers();
+    FakeContext.resume = () => new Promise<void>(() => {});
+    const run = captureStreamSamples(element(), 5);
+    const failed = expect(run).rejects.toThrow(CAPTURE_FAILED);
+    await vi.advanceTimersByTimeAsync(CAPTURE_START_MS - 1);
+    expect(FakeWorkletNode.made).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1);
+    await failed;
+    expect(CAPTURE_FAILED).toBe('Could not capture the stream audio.');
+  });
+
+  it('gives up after 3 s on a tap that never loads, and loads it afresh next time', async () => {
+    vi.useFakeTimers();
+    const video = element();
+    const first = captureStreamSamples(video, 1);
+    const ctx = FakeContext.made[0];
+    ctx.audioWorklet.addModule.mockImplementationOnce(() => new Promise<void>(() => {}));
+    const failed = expect(first).rejects.toThrow(CAPTURE_FAILED);
+    await vi.advanceTimersByTimeAsync(CAPTURE_START_MS);
+    await failed;
+    expect(FakeWorkletNode.made).toHaveLength(0);
+
+    // The same element's next capture asks for the tap again, and records.
+    const second = captureStreamSamples(video, 1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ctx.audioWorklet.addModule).toHaveBeenCalledTimes(2);
+    FakeWorkletNode.made[0].port.onmessage?.({ data: new Float32Array(16000).fill(0.2) });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(await second).toHaveLength(16000);
   });
 
   it('ends the wait early on a cancel and always disconnects the tap', async () => {

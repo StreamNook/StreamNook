@@ -58,6 +58,25 @@ describe('the QR dialog', () => {
     expect(html).toContain("Point your phone&#x27;s camera at the code");
   });
 
+  it('still opens and copies a link too long for a code, saying so where the code would be', () => {
+    const url = `https://open.spotify.com/search/${'%E3%81%82'.repeat(260)}`;
+    const html = renderToStaticMarkup(
+      <SongQrCard
+        request={{ url, service: 'Spotify', search: true }}
+        title="Kiss of Life"
+        artist="Sade"
+        apps={[]}
+        onClose={() => {}}
+        onOpen={() => {}}
+      />,
+    );
+    expect(html).toContain('This link is too long for a QR code');
+    expect(html).not.toContain('aria-label="QR code"');
+    expect(html).not.toContain('camera');
+    expect(html).toContain('Copy link');
+    expect(html).toContain('Open in your browser');
+  });
+
   it('offers each app on this computer, then the browser', () => {
     const html = card([cider, apple]);
     expect(html).toContain('Open in Cider');
@@ -83,6 +102,25 @@ describe('the song page’s link buttons', () => {
     expect(html).toContain('aria-label="Show a QR code for Spotify"');
     expect(html).toContain('aria-label="Show a QR code for Apple Music"');
     expect(html).toContain('aria-label="Show a QR code for the Tidal search"');
+  });
+
+  it('draw no QR button for a link too long for any code', () => {
+    const long = `https://open.spotify.com/search/${'%E3%81%82'.repeat(260)}`;
+    const html = renderToStaticMarkup(
+      <SongLinkButtons
+        links={{
+          listen: [{ name: 'Spotify', url: long }],
+          search: [{ name: 'Tidal', url: `https://tidal.com/search?q=${'%E3%81%82'.repeat(260)}`, search: true }],
+          allServices: null,
+        }}
+        title="Kiss of Life"
+        artist="Sade"
+        screen={false}
+      />,
+    );
+    expect(html).toContain('Spotify');
+    expect(html).toContain('aria-label="Search on Tidal"');
+    expect(html).not.toContain('QR code');
   });
 
   it('draw no QR controls on a phone', () => {
