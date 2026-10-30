@@ -355,8 +355,15 @@ export function DiscordStatusPreview({ model, now }: { model: PreviewModel | nul
             <span className="truncate text-[14px] font-medium leading-[18px]">{name}</span>
             {tag && <ServerTag tag={tag} />}
           </div>
-          <div className="truncate text-[12px] leading-4" style={{ color: MUTED }}>
-            {a ? a.member_line : ''}
+          {/* Discord's member list: its activity icon and the line, no verb word.
+              Always one line tall, so the row never changes height. */}
+          <div className="flex min-h-4 min-w-0 items-center gap-1 text-[12px] leading-4" style={{ color: MUTED }}>
+            {a && (
+              <>
+                <DiscordActivityIcon verb={a.verb} size={12} />
+                <span className="truncate">{a.member_line}</span>
+              </>
+            )}
           </div>
         </div>
       </div>

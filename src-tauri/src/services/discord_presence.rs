@@ -2010,7 +2010,8 @@ pub struct PreviewActivity {
     /// "Watching", "Playing" or "Listening to".
     pub verb: String,
     pub app_name: String,
-    /// The line the member list shows: "Watching StreamNook" or the chosen line.
+    /// The text the member list shows after Discord's activity icon (no verb):
+    /// the activity name ("StreamNook") or the chosen line ("HutchMF").
     pub member_line: String,
     pub details: Option<String>,
     pub details_url: Option<String>,
@@ -2078,7 +2079,7 @@ fn preview_activity(payload: &Payload, assets: &HashMap<String, String>) -> Prev
         .unwrap_or_else(|| "StreamNook".to_string());
     PreviewActivity {
         verb: verb.to_string(),
-        member_line: format!("{verb} {}", shown.unwrap_or_else(|| app_name.clone())),
+        member_line: shown.unwrap_or_else(|| app_name.clone()),
         app_name,
         details: payload.details.clone(),
         details_url: payload.details_url.clone(),
@@ -2554,15 +2555,16 @@ mod tests {
         };
         let p = build(&Shown::Scene(live("twitch", "")), &ctx(&top, &art, &assets)).unwrap();
         assert_eq!(p.status_display, Some(2));
-        assert_eq!(preview_activity(&p, &assets).member_line, "Watching Caster");
-        // Spotlight's own top line never doubles the verb.
+        // The member list shows Discord's icon and the line, never a verb word.
+        assert_eq!(preview_activity(&p, &assets).member_line, "Caster");
+        // Spotlight's own top line is the line as it is.
         let spot = apply_look(&style(), &presets().remove(1).fields);
         let p = build(
             &Shown::Scene(live("twitch", "")),
             &ctx(&spot, &art, &assets),
         )
         .unwrap();
-        assert_eq!(preview_activity(&p, &assets).member_line, "Watching Caster");
+        assert_eq!(preview_activity(&p, &assets).member_line, "Caster");
         let bottom = DiscordPresenceSettings {
             status_display: "bottom".into(),
             watching_bottom: "x".into(),
@@ -2584,10 +2586,8 @@ mod tests {
             &ctx(&listening, &art, &assets),
         )
         .unwrap();
-        assert_eq!(
-            preview_activity(&p, &assets).member_line,
-            "Listening to StreamNook"
-        );
+        assert_eq!(preview_activity(&p, &assets).member_line, "StreamNook");
+        assert_eq!(preview_activity(&p, &assets).verb, "Listening to");
         let unknown = DiscordPresenceSettings {
             activity_type: "dancing".into(),
             ..style()
@@ -3207,10 +3207,7 @@ mod tests {
         assert!(paid.buttons.iter().all(|b| b.url != PROMO_URL));
         assert!(build(&Shown::Idle, &member).unwrap().buttons.is_empty());
         assert_eq!(preview_activity(&paid, &assets).app_name, "Kick");
-        assert_eq!(
-            preview_activity(&paid, &assets).member_line,
-            "Watching Kick"
-        );
+        assert_eq!(preview_activity(&paid, &assets).member_line, "Kick");
         // A subscriber on the defaults keeps them.
         let plain = build(
             &live_kick,
