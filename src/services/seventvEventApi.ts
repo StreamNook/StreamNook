@@ -105,7 +105,9 @@ export async function handleSeventvEmoteSetUpdate(payload: EmoteSetUpdatePayload
 
 export interface CosmeticUpdatePayload {
   twitch_id: string;
-  action: string; // 'create' | 'update' | 'delete'
+  // 'create' | 'update' | 'delete' from 7TV, or 'settle': Rust asking again
+  // after 7TV's read lag, once a real badge or paint change came in.
+  action: string;
 }
 
 /**

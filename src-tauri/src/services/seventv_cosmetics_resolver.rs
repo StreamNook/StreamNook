@@ -1173,6 +1173,29 @@ pub fn invalidate(id: &str) {
     }
 }
 
+/// Whether a live 7TV entitlement for a paint or badge (`kind` "PAINT" or
+/// "BADGE", `ref_id` the cosmetic it names) disagrees with what the cache says
+/// this chatter wears: a new one put on, or the worn one taken off. The burst
+/// 7TV replays on every subscribe names what people already wear, so it says
+/// no; so does a chatter nobody has looked up yet, whose first lookup asks 7TV
+/// anyway. Reads the cache without touching its order or age.
+pub fn entitlement_is_change(id: &str, kind: &str, action: &str, ref_id: Option<&str>) -> bool {
+    let Some(ref_id) = ref_id else { return false };
+    let Ok(guard) = USERS.lock() else { return false };
+    let Some(entry) = guard.as_ref().and_then(|lru| lru.peek(id)) else { return false };
+    let list = match kind {
+        "BADGE" => &entry.data.badges,
+        "PAINT" => &entry.data.paints,
+        _ => return false,
+    };
+    let worn = list.first().and_then(|v| v.get("id")).and_then(Value::as_str);
+    if action == "delete" {
+        worn == Some(ref_id)
+    } else {
+        worn != Some(ref_id)
+    }
+}
+
 pub fn clear() {
     if let Ok(mut guard) = USERS.lock() {
         *guard = None;
@@ -1594,6 +1617,35 @@ mod tests {
 
     fn wearing(picture_id: &str) -> UserCosmetics {
         UserCosmetics { picture_id: Some(picture_id.into()), ..Default::default() }
+    }
+
+    fn worn(badge: Option<&str>, paint: Option<&str>) -> UserCosmetics {
+        UserCosmetics {
+            badges: badge.map(|b| vec![json!({ "id": b, "selected": true })]).unwrap_or_default(),
+            paints: paint.map(|p| vec![json!({ "id": p, "selected": true })]).unwrap_or_default(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn an_entitlement_is_a_change_only_when_it_disagrees_with_the_worn_cosmetic() {
+        put_cached("90000201", worn(Some("b-old"), Some("p-old")), Duration::from_secs(1), true);
+        // The subscribe replay names what is already worn: no change.
+        assert!(!entitlement_is_change("90000201", "BADGE", "create", Some("b-old")));
+        assert!(!entitlement_is_change("90000201", "PAINT", "create", Some("p-old")));
+        // A different badge or paint put on, or the worn one taken off: a change.
+        assert!(entitlement_is_change("90000201", "BADGE", "create", Some("b-new")));
+        assert!(entitlement_is_change("90000201", "PAINT", "update", Some("p-new")));
+        assert!(entitlement_is_change("90000201", "BADGE", "delete", Some("b-old")));
+        // Taking off something they were not wearing changes nothing.
+        assert!(!entitlement_is_change("90000201", "BADGE", "delete", Some("b-other")));
+        // Putting one on when nothing was worn is a change.
+        put_cached("90000202", worn(None, None), Duration::from_secs(1), true);
+        assert!(entitlement_is_change("90000202", "BADGE", "create", Some("b-first")));
+        // Nobody looked them up yet, an emote set, or no cosmetic named: not ours to recheck.
+        assert!(!entitlement_is_change("90000299", "BADGE", "create", Some("b-new")));
+        assert!(!entitlement_is_change("90000201", "EMOTE_SET", "create", Some("set")));
+        assert!(!entitlement_is_change("90000201", "BADGE", "create", None));
     }
 
     #[test]

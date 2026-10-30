@@ -1338,6 +1338,13 @@ fn handle_entitlement(d: &Value, dispatch_type: &str, app_handle: &AppHandle) {
         return; // delete events without a user object, or non-twitch users
     };
 
+    // Judged before the refresh below clears this chatter from the cache.
+    let ref_id = body.pointer("/object/ref_id").and_then(|v| v.as_str());
+    let changed = crate::services::seventv_cosmetics_resolver::cosmetics_id("twitch", twitch_id)
+        .is_some_and(|id| {
+            crate::services::seventv_cosmetics_resolver::entitlement_is_change(&id, kind, action, ref_id)
+        });
+
     let _ = app_handle.emit(
         "7tv://cosmetic-update",
         json!({ "twitch_id": twitch_id, "action": action }),
@@ -1346,6 +1353,54 @@ fn handle_entitlement(d: &Value, dispatch_type: &str, app_handle: &AppHandle) {
     let tid = twitch_id.to_string();
     tokio::spawn(async move {
         crate::services::chat_row_view::repaint_changed_author(&tid).await;
+    });
+    if changed {
+        schedule_settle_recheck(twitch_id.to_string(), app_handle.clone());
+    }
+}
+
+// 7TV's reads lag its own writes by a few seconds, so the lookup a live badge
+// or paint change sets off can bring the OLD one back, and that answer is then
+// cached (5 minutes here, the whole session on the page). A real change is
+// asked about again once the lag has passed. A newer change for the same
+// chatter restarts the schedule.
+const SETTLE_RECHECKS: [Duration; 2] = [Duration::from_secs(4), Duration::from_secs(15)];
+static SETTLE_GENERATION: OnceLock<std::sync::Mutex<HashMap<String, u64>>> = OnceLock::new();
+
+fn settle_generation() -> &'static std::sync::Mutex<HashMap<String, u64>> {
+    SETTLE_GENERATION.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
+fn schedule_settle_recheck(twitch_id: String, app_handle: AppHandle) {
+    let generation = {
+        let Ok(mut map) = settle_generation().lock() else { return };
+        let next = map.get(&twitch_id).copied().unwrap_or(0).wrapping_add(1);
+        map.insert(twitch_id.clone(), next);
+        next
+    };
+    tokio::spawn(async move {
+        let mut waited = Duration::ZERO;
+        for at in SETTLE_RECHECKS {
+            sleep(at.saturating_sub(waited)).await;
+            waited = at;
+            let current = settle_generation().lock().ok().and_then(|m| m.get(&twitch_id).copied());
+            if current != Some(generation) {
+                return; // a newer change for this chatter took over
+            }
+            if let Some(id) = crate::services::seventv_cosmetics_resolver::cosmetics_id("twitch", &twitch_id) {
+                crate::services::seventv_cosmetics_resolver::invalidate(&id);
+            }
+            let _ = app_handle.emit(
+                "7tv://cosmetic-update",
+                json!({ "twitch_id": twitch_id, "action": "settle" }),
+            );
+            crate::services::chat_row_view::repaint_changed_author(&twitch_id).await;
+        }
+        if let Ok(mut map) = settle_generation().lock() {
+            if map.get(&twitch_id).copied() == Some(generation) {
+                map.remove(&twitch_id);
+            }
+        }
     });
 }
 
