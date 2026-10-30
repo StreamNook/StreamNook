@@ -20,8 +20,12 @@ describe('colon words', () => {
 
   it('are checked in Rust before the fill runs', () => {
     const src = readFileSync(resolve(__dirname, '../../src-tauri/src/commands/emotes.rs'), 'utf8');
-    const gate = src.indexOf('emote_match::fill_gate(');
-    expect(gate).toBeGreaterThan(-1);
-    expect(gate).toBeLessThan(src.indexOf('emote_match::Request::resolve('));
+    const resolveAt = src.indexOf('emote_match::Request::resolve(');
+    // The saved switch is read, and its answer decides, before the fill runs.
+    const read = src.indexOf('emote_match::colon_only_of(&s)');
+    const gate = src.indexOf('if !emote_match::fill_gate(profile.as_deref(), &query, colon_only) {');
+    expect(read).toBeGreaterThan(-1);
+    expect(gate).toBeGreaterThan(read);
+    expect(gate).toBeLessThan(resolveAt);
   });
 });

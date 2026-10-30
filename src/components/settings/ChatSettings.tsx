@@ -2745,7 +2745,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         shownLabel={IS_MOBILE ? 'Suggestions' : undefined}
         description={
           IS_MOBILE
-            ? 'Type part of an emote name in chat to see matching emotes above the input. Swipe the strip to see more, tap one to use it.'
+            ? 'Type part of an emote name in chat to see matching emotes above the input. Swipe the strip to see more, tap one to use it. With Only after a colon on, start the word with a colon.'
             : 'Press Tab to complete the emote you are typing, or type : and a letter to see every emote you can use.'
         }
         id="settings-section-emote-tab-completion"

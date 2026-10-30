@@ -1597,7 +1597,7 @@
    ],
    "nested": true,
    "logo": null,
-   "detail": "Suggest emotes only for a word that starts with a colon, like :lul.",
+   "detail": "Suggest emotes only for a word that starts with a colon, like :lul, and chatter names only after @.",
    "aliases": [
     "colon",
     "as you type",
