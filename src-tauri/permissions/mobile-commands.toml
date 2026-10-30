@@ -15,7 +15,7 @@ allow = [
   "get_mobile_login_cookies",
   "clear_mobile_login_cookies",
   "push_register",
-  "push_unregister",
+  "push_flush",
   "push_set_apns_device",
   "live_poll_check",
   "live_poll_seen",

@@ -1790,7 +1790,7 @@ pub fn run() {
             #[cfg(mobile)]
             services::push_alerts::server::push_register,
             #[cfg(mobile)]
-            services::push_alerts::server::push_unregister,
+            services::push_alerts::server::push_flush,
             #[cfg(target_os = "ios")]
             services::push_alerts::server::push_set_apns_device,
             #[cfg(target_os = "ios")]

@@ -503,12 +503,20 @@ pub mod poll {
     #[cfg(target_os = "ios")]
     #[tauri::command]
     pub async fn live_poll_check(delivered: Vec<Sighting>) -> Result<CheckRun, String> {
+        // iOS gives a background refresh about 30 s; the send after the check
+        // gets what is left of 25 s, and none below 5 s.
+        let start = std::time::Instant::now();
+        let left = || std::time::Duration::from_secs(25).saturating_sub(start.elapsed());
         let settings = read_settings();
         if !live_on(&settings) {
+            // A switch turned off while away may still be owed to the server.
+            crate::services::push_alerts::server::flush_if_owed(left()).await;
             return Ok(CheckRun { active: false, alerts: Vec::new() });
         }
         let alerts = collect(&settings, &delivered, push_cover().as_ref()).await;
         log::info!("[LivePoll] refresh: {} delivered on screen, {} to post", delivered.len(), alerts.len());
+        // The check first; then a registration still owed, in what is left.
+        crate::services::push_alerts::server::flush_if_owed(left()).await;
         Ok(CheckRun { active: true, alerts })
     }
 

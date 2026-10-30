@@ -166,6 +166,8 @@ pub fn lifecycle(state: String) {
             info!("[iOS] back in the foreground");
             crate::services::app_presence::set_foreground(true);
             sn_tauri_headless::async_runtime::spawn(foregrounded());
+            // A change made just before the app went away may still be owed.
+            sn_tauri_headless::async_runtime::spawn(crate::services::push_alerts::server::wake());
             // A grant (or revocation) may have landed while suspended, with the
             // realtime socket down: re-read the StreamNook registries.
             sn_tauri_headless::async_runtime::spawn(crate::services::cosmetics_registry::refresh());

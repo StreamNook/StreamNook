@@ -163,6 +163,9 @@ pub mod alert_types;
 // Phones only: go-live push registration. Its rules are tested on desktop.
 #[cfg(any(mobile, test))]
 pub mod push_alerts;
+// The registration's state machine, pure, so its rules are tested on desktop.
+#[cfg(any(mobile, test))]
+pub mod push_plan;
 // Phones only: the background go-live check and its never-twice record. Its
 // rules are tested on desktop.
 #[cfg(any(mobile, test))]

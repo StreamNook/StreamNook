@@ -674,6 +674,67 @@ fn refresh_failure_message(kind: RefreshFailure, cause: &str) -> String {
     }
 }
 
+/// Why the primary Twitch token could not be had. Attached as the source of
+/// `get_token`'s error, under the same words it always carried (the pages
+/// read those), so a caller that needs the reason downcasts instead of
+/// matching text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TokenError {
+    /// No token is stored (signed out), or the stored one can never be read.
+    NoToken,
+    /// The credential store did not answer this time.
+    VaultUnavailable,
+    /// Twitch turned the refresh down: the sign-in is over.
+    Refused,
+    /// Twitch was not reached for a refresh; the sign-in holds.
+    Unreachable,
+}
+
+impl std::fmt::Display for TokenError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::NoToken => "no usable Twitch token is stored",
+            Self::VaultUnavailable => "the credential store did not answer",
+            Self::Refused => "Twitch refused the token refresh",
+            Self::Unreachable => "Twitch was not reached for a token refresh",
+        })
+    }
+}
+
+impl std::error::Error for TokenError {}
+
+impl TokenError {
+    /// This reason under `text`, which is all `{e}` shows.
+    pub(crate) fn into_error(self, text: impl Into<String>) -> anyhow::Error {
+        anyhow::Error::new(self).context(text.into())
+    }
+}
+
+/// A stable fingerprint of an access token (SHA-256, hex), for remembering
+/// which token a server refused without keeping the token.
+#[cfg_attr(not(mobile), allow(dead_code))]
+pub(crate) fn token_hash(access_token: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(access_token.as_bytes());
+    hasher.finalize().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// The one lock on the primary token slot. Held from a read of the slot to
+/// the write that follows it, by every writer (a refresh, a sign-in, an
+/// account switch, a sign-out), so none of them can file a token under the
+/// wrong account. Never take the push runner while holding it.
+static REFRESH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Proof of holding `REFRESH_LOCK`: the slot's writers take one.
+pub(crate) struct SlotGuard {
+    _held: tokio::sync::MutexGuard<'static, ()>,
+}
+
+/// Moves when the signed-in Twitch account changes (a sign-in, a switch, a
+/// sign-out), never on a refresh of the same account's token.
+static ACCOUNT_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Token health status returned by verify_token_health
 #[derive(Debug, Clone, Serialize)]
 pub struct TokenHealthStatus {
@@ -743,6 +804,24 @@ pub fn helix_refusal_text(status: u16, body: &str) -> String {
 pub struct TwitchService;
 
 impl TwitchService {
+    /// Take the primary token slot (see `REFRESH_LOCK`).
+    pub(crate) async fn primary_slot() -> SlotGuard {
+        SlotGuard { _held: REFRESH_LOCK.lock().await }
+    }
+
+    /// Which signed-in account this is, as a number that moves only when the
+    /// account changes. Read it before a read that must belong to one account,
+    /// and compare after.
+    pub fn account_generation() -> u64 {
+        ACCOUNT_GENERATION.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Called by the account doors only, after their slot write, while
+    /// holding the slot.
+    pub(crate) fn bump_account_generation() {
+        ACCOUNT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
     fn get_token_file_path() -> Result<PathBuf> {
         let mut path = get_app_data_dir()?;
 
@@ -775,20 +854,30 @@ impl TwitchService {
         token_vault::load_json(&Self::get_token_file_path()?)
     }
 
-    fn delete_token_file() -> Result<()> {
+    /// Empty the primary slot (a sign-out). An account door: it moves the
+    /// account generation.
+    fn delete_token_file(_slot: &SlotGuard) -> Result<()> {
         let result = token_vault::remove(&Self::get_token_file_path()?);
         crate::services::account_roster::set_twitch_identity(None);
+        Self::bump_account_generation();
+        #[cfg(mobile)]
+        crate::services::push_alerts::server::token_changed(None);
         result
     }
 
     /// Write a token to the primary slot. This is the single definition of
     /// "occupying the primary slot", so login, refresh, and account-switch all
-    /// persist it identically. `refresh_token` deliberately does NOT call this:
-    /// keeping refresh a pure transform is what stops a SECONDARY account's
-    /// refresh (via `AccountStore::get_token_for`) from silently clobbering the
-    /// primary's token.
-    pub(crate) async fn persist_primary_token(token: &StorableToken) -> Result<()> {
-        Self::store_token_to_file(token)
+    /// persist it identically, each holding the slot from its read to this
+    /// write. `refresh_token` deliberately does NOT call this: keeping refresh
+    /// a pure transform is what stops a SECONDARY account's refresh (via
+    /// `AccountStore::get_token_for`) from silently clobbering the primary's
+    /// token. A refresh never moves the account generation; the account doors
+    /// move it themselves after this.
+    pub(crate) async fn persist_primary_token(_slot: &SlotGuard, token: &StorableToken) -> Result<()> {
+        Self::store_token_to_file(token)?;
+        #[cfg(mobile)]
+        crate::services::push_alerts::server::token_changed(Some(&token_hash(&token.access_token)));
+        Ok(())
     }
 
     /// Read whatever token currently occupies the primary slot. The account
@@ -890,7 +979,14 @@ impl TwitchService {
         app_handle: &crate::rt::AppHandle,
         storable_token: StorableToken,
     ) {
-        let store_result = Self::persist_primary_token(&storable_token).await;
+        let store_result = {
+            let slot = Self::primary_slot().await;
+            let stored = Self::persist_primary_token(&slot, &storable_token).await;
+            if stored.is_ok() {
+                Self::bump_account_generation();
+            }
+            stored
+        };
 
         // The web-session reads (stream resolver, follow/unfollow, entitlement
         // checks) gate on a logged_out flag that twitch_logout sets. A fresh
@@ -1036,8 +1132,15 @@ impl TwitchService {
             expires_at: expires_at.timestamp(),
         };
 
-        Self::persist_primary_token(&storable_token).await?;
+        {
+            let slot = Self::primary_slot().await;
+            Self::persist_primary_token(&slot, &storable_token).await?;
+            Self::bump_account_generation();
+        }
         crate::services::twitch_signin::clear();
+        // A phone's go-live pushes register under the account that signed in.
+        #[cfg(mobile)]
+        crate::services::push_alerts::server::schedule();
 
         debug!(
             "Access token: {}...",
@@ -1189,9 +1292,21 @@ impl TwitchService {
         }
     }
 
+    /// Sign the primary account out. Every sign-out path comes through here
+    /// (`AccountStore::sign_out_active`, `reset_all`, `twitch_logout`). On a
+    /// phone it first takes this device's go-live pushes off the server with
+    /// the leaving account's token, holding the push runner (taken before the
+    /// slot, the one lock order) until the token is deleted, so no queued
+    /// registration can put that account back in between.
     pub async fn logout() -> Result<()> {
-        // Delete token from file storage
-        let _ = Self::delete_token_file();
+        #[cfg(mobile)]
+        let runner = crate::services::push_alerts::server::unregister_before_sign_out().await;
+        {
+            let slot = Self::primary_slot().await;
+            let _ = Self::delete_token_file(&slot);
+        }
+        #[cfg(mobile)]
+        drop(runner);
 
         debug!("[LOGOUT] Complete - all tokens cleared from all storage locations");
         Ok(())
@@ -1241,50 +1356,98 @@ impl TwitchService {
         Ok(new_storable_token)
     }
 
-    pub async fn get_token() -> Result<String> {
-        // Serialized end to end. Two callers landing inside the 5-minute
-        // expiry buffer would otherwise BOTH refresh, and whichever persists
-        // last can write back a stale refresh token, killing the session until
-        // the user logs in again. The no-refresh path this also serializes is
-        // a file read, so contention costs nothing. (On Android the background
-        // notification worker shares this path with the running app, which
-        // widened the race enough to be worth closing.)
-        static REFRESH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-        let _guard = REFRESH_LOCK.lock().await;
+    /// Why a slot read gave no token, or `None` when it gave one. No file is
+    /// signed out; a file that can never be parsed is as good as none; a store
+    /// that did not answer may answer next time.
+    pub(crate) fn token_error_for(load: &Result<Option<StorableToken>>) -> Option<TokenError> {
+        match load {
+            Ok(Some(_)) => None,
+            Ok(None) => Some(TokenError::NoToken),
+            Err(e) if e.chain().any(|c| c.is::<serde_json::Error>()) => Some(TokenError::NoToken),
+            Err(_) => Some(TokenError::VaultUnavailable),
+        }
+    }
 
-        let mut token = match Self::load_primary_token().await {
-            Ok(token) => token,
-            Err(e) => {
-                debug!("[GET_TOKEN] No usable stored token: {:#}", e);
-                return Err(anyhow::anyhow!(
-                    "Not authenticated. Please log in to Twitch first."
-                ));
+    /// The token in the primary slot, read while holding it, with a typed
+    /// reason when there is none.
+    fn load_slot_token(_slot: &SlotGuard) -> Result<StorableToken> {
+        const SIGNED_OUT: &str = "Not authenticated. Please log in to Twitch first.";
+        let load = Self::load_token_from_file();
+        if let Some(kind) = Self::token_error_for(&load) {
+            match &load {
+                Err(e) => debug!("[GET_TOKEN] No usable stored token: {:#}", e),
+                Ok(_) => debug!("[GET_TOKEN] No stored token"),
             }
+            return Err(kind.into_error(SIGNED_OUT));
+        }
+        match load {
+            Ok(Some(token)) => Ok(token),
+            _ => Err(TokenError::NoToken.into_error(SIGNED_OUT)),
+        }
+    }
+
+    /// A refresh failure as `get_token` reports it: today's words, typed.
+    fn refresh_error(e: anyhow::Error) -> anyhow::Error {
+        let kind = refresh_failure_kind(&e);
+        error!("[GET_TOKEN] Failed to refresh token ({kind:?}): {:?}", e);
+        let typed = match kind {
+            RefreshFailure::Unreachable => TokenError::Unreachable,
+            RefreshFailure::Refused => TokenError::Refused,
         };
+        typed.into_error(refresh_failure_message(kind, &format!("{e:#}")))
+    }
+
+    pub async fn get_token() -> Result<String> {
+        // Serialized end to end through the primary slot. Two callers landing
+        // inside the 5-minute expiry buffer would otherwise BOTH refresh, and
+        // whichever persists last can write back a stale refresh token,
+        // killing the session until the user logs in again. The no-refresh path
+        // this also serializes is a file read, so contention costs nothing. (On
+        // Android the background notification worker shares this path with the
+        // running app, which widened the race enough to be worth closing.)
+        let slot = Self::primary_slot().await;
+        let mut token = Self::load_slot_token(&slot)?;
 
         // Refresh when expired or within 5 minutes of expiring.
         let buffer_time = 300;
         if Utc::now().timestamp() >= (token.expires_at - buffer_time) {
             if token.refresh_token.is_empty() {
-                return Err(anyhow::anyhow!(
-                    "Token expired and no refresh token available. Please log in again."
-                ));
+                return Err(TokenError::Refused
+                    .into_error("Token expired and no refresh token available. Please log in again."));
             }
             debug!("[GET_TOKEN] Token expired or expiring soon, refreshing...");
             match Self::refresh_token(&token.refresh_token).await {
                 Ok(new_token) => {
                     token = new_token;
-                    let _ = Self::persist_primary_token(&token).await;
+                    let _ = Self::persist_primary_token(&slot, &token).await;
                 }
-                Err(e) => {
-                    let kind = refresh_failure_kind(&e);
-                    error!("[GET_TOKEN] Failed to refresh token ({kind:?}): {:?}", e);
-                    return Err(anyhow::anyhow!(refresh_failure_message(kind, &format!("{e:#}"))));
-                }
+                Err(e) => return Err(Self::refresh_error(e)),
             }
         }
 
         Ok(token.access_token)
+    }
+
+    /// After a server refused `rejected`: the token now in the slot, refreshed
+    /// first only if it is still that same token. Holds the slot throughout,
+    /// so a sign-in or switch that landed meanwhile is never overwritten.
+    #[cfg_attr(not(mobile), allow(dead_code))]
+    pub(crate) async fn get_token_after_reject(rejected: &str) -> Result<String> {
+        let slot = Self::primary_slot().await;
+        let token = Self::load_slot_token(&slot)?;
+        if token.access_token != rejected {
+            return Ok(token.access_token);
+        }
+        if token.refresh_token.is_empty() {
+            return Err(TokenError::Refused.into_error("No refresh token available. Please log in again."));
+        }
+        match Self::refresh_token(&token.refresh_token).await {
+            Ok(new_token) => {
+                Self::persist_primary_token(&slot, &new_token).await?;
+                Ok(new_token.access_token)
+            }
+            Err(e) => Err(Self::refresh_error(e)),
+        }
     }
 
     /// Verify the current token's health and return detailed status
@@ -1428,6 +1591,7 @@ impl TwitchService {
 
     /// Force refresh the token even if it hasn't expired yet
     pub async fn force_refresh_token() -> Result<String> {
+        let slot = Self::primary_slot().await;
         let token = Self::load_primary_token().await?;
 
         if token.refresh_token.is_empty() {
@@ -1440,7 +1604,7 @@ impl TwitchService {
         let new_token = Self::refresh_token(&token.refresh_token).await?;
 
         // This is an explicit PRIMARY refresh, so persist it to the primary slot.
-        let _ = Self::persist_primary_token(&new_token).await;
+        let _ = Self::persist_primary_token(&slot, &new_token).await;
 
         debug!("[Auth Debug] Token refreshed successfully!");
         Ok(new_token.access_token)
@@ -1740,9 +1904,12 @@ impl TwitchService {
             .header(AUTHORIZATION, format!("Bearer {}", token))
             .header("Client-Id", CLIENT_ID)
             .send()
-            .await?
-            .json::<serde_json::Value>()
             .await?;
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            // A revoked token: typed, so the push runner refreshes once.
+            return Err(TokenError::Refused.into_error("Failed to get user info"));
+        }
+        let response = response.json::<serde_json::Value>().await?;
 
         let data = response
             .get("data")
@@ -8211,5 +8378,84 @@ mod blocked_term_tests {
         .to_string();
         assert_eq!(blocked_terms_refusal(403, &body), "You are not a moderator in this channel");
         assert_eq!(blocked_terms_refusal(502, ""), "Twitch answered HTTP 502");
+    }
+}
+
+#[cfg(test)]
+mod slot_tests {
+    use super::*;
+
+    /// `get_token` waits for a held slot before it reads anything: with the
+    /// slot held it cannot finish (it would, reading the vault, without E11).
+    #[tokio::test]
+    async fn get_token_waits_for_the_slot() {
+        let held = TwitchService::primary_slot().await;
+        let blocked = tokio::time::timeout(std::time::Duration::from_millis(100), TwitchService::get_token()).await;
+        assert!(blocked.is_err(), "get_token took the slot while it was held");
+        drop(held);
+        // Once the slot is free it answers (a token or a typed reason), never hangs.
+        tokio::time::timeout(std::time::Duration::from_secs(5), TwitchService::get_token())
+            .await
+            .expect("get_token finishes once the slot is free")
+            .ok();
+    }
+
+    #[test]
+    fn a_slot_read_names_why_it_has_no_token() {
+        assert_eq!(TwitchService::token_error_for(&Ok(None)), Some(TokenError::NoToken));
+        let unparsable: Result<Option<StorableToken>> =
+            Err(anyhow::Error::from(serde_json::from_str::<serde_json::Value>("{").unwrap_err()));
+        assert_eq!(TwitchService::token_error_for(&unparsable), Some(TokenError::NoToken));
+        let io: Result<Option<StorableToken>> =
+            Err(anyhow::Error::from(std::io::Error::new(std::io::ErrorKind::Other, "vault busy")));
+        assert_eq!(TwitchService::token_error_for(&io), Some(TokenError::VaultUnavailable));
+    }
+
+    /// The body of the first function whose signature starts with `sig`.
+    /// `src` must already have `\r\n` folded to `\n`.
+    fn body<'a>(src: &'a str, sig: &str) -> &'a str {
+        let start = src.find(sig).unwrap_or_else(|| panic!("{sig} not found"));
+        let rest = &src[start..];
+        &rest[..rest.find("\n    }\n").expect("function end")]
+    }
+
+    #[test]
+    fn only_the_account_doors_move_the_generation_never_a_refresh() {
+        // The Windows checkout is CRLF (core.autocrlf), so fold line ends first.
+        let service = include_str!("twitch_service.rs").replace("\r\n", "\n");
+        let service = service.as_str();
+        for refresh in [
+            "pub async fn get_token()",
+            "pub(crate) async fn get_token_after_reject(",
+            "pub async fn force_refresh_token()",
+            "pub(crate) async fn persist_primary_token(",
+        ] {
+            assert!(!body(service, refresh).contains("bump_account_generation"), "{refresh} is a refresh");
+        }
+        for door in [
+            "pub(crate) async fn complete_primary_login(",
+            "pub async fn complete_device_login(",
+            "fn delete_token_file(_slot",
+        ] {
+            assert!(body(service, door).contains("bump_account_generation"), "{door} changes the account");
+        }
+        let store = include_str!("account_store.rs").replace("\r\n", "\n");
+        for door in ["pub async fn set_active(", "pub async fn sign_out_active("] {
+            assert!(body(&store, door).contains("bump_account_generation"), "{door} changes the account");
+        }
+    }
+
+    #[test]
+    fn a_token_fingerprint_is_stable_and_not_the_token() {
+        let h = token_hash("abc");
+        assert_eq!(h, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+        assert_ne!(token_hash("abd"), h);
+    }
+
+    #[test]
+    fn get_token_words_stay_what_the_pages_read() {
+        let e = TokenError::VaultUnavailable.into_error("Not authenticated. Please log in to Twitch first.");
+        assert_eq!(e.to_string(), "Not authenticated. Please log in to Twitch first.");
+        assert_eq!(e.chain().find_map(|c| c.downcast_ref::<TokenError>()), Some(&TokenError::VaultUnavailable));
     }
 }

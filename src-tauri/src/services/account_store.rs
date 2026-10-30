@@ -378,17 +378,24 @@ impl AccountStore {
             )
         })?;
 
-        // Preserve the outgoing main losslessly: copy its slot token into its own
-        // store so it becomes a normal linked account.
-        if let Some(old) = accounts.iter().find(|a| a.is_primary) {
-            if let Ok(old_token) = TwitchService::load_primary_token().await {
-                let _ = Self::store_secondary_token(&old.user_id, &old_token);
+        // Hold the primary slot from reading the outgoing main to writing the
+        // new one, so a token refresh can never land in between and be filed
+        // under the wrong account.
+        {
+            let slot = TwitchService::primary_slot().await;
+            // Preserve the outgoing main losslessly: copy its slot token into its
+            // own store so it becomes a normal linked account.
+            if let Some(old) = accounts.iter().find(|a| a.is_primary) {
+                if let Ok(old_token) = TwitchService::load_primary_token().await {
+                    let _ = Self::store_secondary_token(&old.user_id, &old_token);
+                }
             }
-        }
 
-        // Move the target's token into the primary slot, then drop its secondary
-        // copy so the token has exactly one home.
-        TwitchService::persist_primary_token(&target_token).await?;
+            // Move the target's token into the primary slot.
+            TwitchService::persist_primary_token(&slot, &target_token).await?;
+            TwitchService::bump_account_generation();
+        }
+        // Then drop its secondary copy so the token has exactly one home.
         let _ = Self::delete_secondary_token(user_id);
 
         let mut next = accounts;
@@ -396,6 +403,9 @@ impl AccountStore {
             a.is_primary = a.user_id == user_id;
         }
         Self::save(&next)?;
+        // A phone's go-live pushes move to the account now in front.
+        #[cfg(mobile)]
+        crate::services::push_alerts::server::schedule();
         debug!("[accounts] switched main account to @{}", target.login);
         Self::get(user_id).ok_or_else(|| anyhow::anyhow!("Account vanished after switch"))
     }
@@ -438,7 +448,11 @@ impl AccountStore {
 
         if let Some((next, next_token)) = promote {
             // Promote the chosen account into the now-empty primary slot.
-            TwitchService::persist_primary_token(&next_token).await?;
+            {
+                let slot = TwitchService::primary_slot().await;
+                TwitchService::persist_primary_token(&slot, &next_token).await?;
+                TwitchService::bump_account_generation();
+            }
             let _ = Self::delete_secondary_token(&next.user_id);
 
             let mut rebuilt: Vec<StoredAccount> = Self::list()
@@ -449,6 +463,10 @@ impl AccountStore {
                 a.is_primary = a.user_id == next.user_id;
             }
             Self::save(&rebuilt)?;
+            // `logout` above took this device off the server; it registers again
+            // under the promoted account.
+            #[cfg(mobile)]
+            crate::services::push_alerts::server::schedule();
             debug!("[accounts] signed out main; promoted @{}", next.login);
             return Ok(Some(next));
         }

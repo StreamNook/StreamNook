@@ -252,6 +252,9 @@ pub extern "system" fn Java_app_streamnook_NotifyBridge_pollOnce<'local>(
     };
 
     let items = runtime.block_on(collect_all());
+    // Then the push registration, when it is owed, the device rotated, or six
+    // hours passed (the server converges even if the app is never opened).
+    runtime.block_on(crate::services::push_alerts::server::worker_pass());
     // The badge collector stores each drop's earn window in the universal
     // cache, whose manifest only reaches disk on a 30 s debounce. This process
     // is often gone well before that, while the feed state recording the drop
