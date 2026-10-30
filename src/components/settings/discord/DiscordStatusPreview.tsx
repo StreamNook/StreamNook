@@ -252,7 +252,9 @@ export function DiscordStatusPreview({ model, now }: { model: PreviewModel | nul
                     with Discord's own grey mark for a name it knows. */}
                 <div className="mb-2 flex min-w-0 items-center gap-1 text-[13px] font-semibold" style={{ color: HEADER }}>
                   <span className="truncate">
-                    {a.verb} {a.app_name}
+                    {/* A service Discord knows goes in the header; any other name
+                        (StreamNook) is the card's bold first line instead. */}
+                    {PLATFORM_MARKS[a.app_name] ? `${a.verb} ${a.app_name}` : a.verb}
                   </span>
                   {PLATFORM_MARKS[a.app_name] && (
                     <span
@@ -282,10 +284,16 @@ export function DiscordStatusPreview({ model, now }: { model: PreviewModel | nul
                       </Tooltip>
                     )}
                   </div>
-                  {/* Discord's body starts with the top line; the name lives in the header. */}
+                  {/* Discord's body: a known service's card starts with the top line (bold);
+                      any other name's card starts with the name (bold), then the top line. */}
                   <div className="min-w-0 flex-1 text-[13px] leading-[18px]">
+                    {!PLATFORM_MARKS[a.app_name] && <div className="truncate font-semibold">{a.app_name}</div>}
                     {a.details && (
-                      <div className={`truncate font-semibold ${a.details_url ? 'underline-offset-2 hover:underline' : ''}`}>
+                      <div
+                        className={`truncate ${PLATFORM_MARKS[a.app_name] ? 'font-semibold' : ''} ${
+                          a.details_url ? 'underline-offset-2 hover:underline' : ''
+                        }`}
+                      >
                         {a.details}
                       </div>
                     )}
