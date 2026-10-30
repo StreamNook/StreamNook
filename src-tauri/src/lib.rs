@@ -382,6 +382,23 @@ mod services;
 mod twitch_login_plugin;
 mod utils;
 
+/// What the saved settings feed at launch: the chat rule engine (highlights,
+/// ignores, saved filters, the composer's emote matching and chatter names),
+/// streamer mode, the mention and whisper inboxes, mentions while you're away
+/// and hidden channels. Runs on the file read at the top of `run()`, and again
+/// on a phone once its data folder resolves, since that first read falls back
+/// to the defaults there.
+fn apply_loaded_settings(settings: &Settings) {
+    services::chat_rules::ChatRules::refresh(settings);
+    services::streamer_mode::StreamerMode::refresh(settings);
+    services::mention_ping::refresh(settings);
+    services::mention_inbox::refresh(settings);
+    // Mentions while you're away: told once at launch when on, then pulled.
+    services::mention_watch::client::seed(settings);
+    services::whisper_inbox::refresh_settings(settings);
+    services::hidden_channels::refresh(settings);
+}
+
 /// Load settings from the custom location in the same directory as cache
 fn load_settings_from_file() -> Result<Settings, Box<dyn std::error::Error>> {
     let app_dir = cache_service::get_app_data_dir()?;
@@ -829,14 +846,7 @@ pub fn run() {
     let settings = load_settings_from_file().unwrap_or_else(|_| Settings::default());
     // Compile the chat rule engine (highlights, ignores, saved filters) from
     // the loaded settings before any chat connects.
-    services::chat_rules::ChatRules::refresh(&settings);
-    services::streamer_mode::StreamerMode::refresh(&settings);
-    services::mention_ping::refresh(&settings);
-    services::mention_inbox::refresh(&settings);
-    // Mentions while you're away: told once at launch when on, then pulled.
-    services::mention_watch::client::seed(&settings);
-    services::whisper_inbox::refresh_settings(&settings);
-    services::hidden_channels::refresh(&settings);
+    apply_loaded_settings(&settings);
 
     // Apply persisted diagnostic logging setting immediately after loading settings
     services::diagnostic_logger::apply_setting(settings.error_reporting_enabled);
@@ -1111,6 +1121,8 @@ pub fn run() {
                 services::ll_origin::set_target_gap(loaded.video_player.ll_target_latency);
                 // What the go-live push registration compares each save against.
                 services::push_alerts::server::seed(&loaded);
+                // Everything else launch fed from the defaults above.
+                apply_loaded_settings(&loaded);
                 let drops_settings = loaded.drops.clone();
                 if let Ok(mut s) = settings_arc.lock() {
                     *s = loaded;
