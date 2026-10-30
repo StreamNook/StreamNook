@@ -100,19 +100,23 @@ pub fn note_mentions(channel: &str, unread: u32) {
 }
 
 /// The open rooms and the one on screen (the saved chats, restored, at launch).
+/// Reading can restore another account's chats first: the rooms that leaves go
+/// out with the answer for the shell to leave.
 #[tauri::command]
-pub fn chat_tabs_get(app: AppHandle) -> ChatTabsView {
-    let _ = APP.set(app);
+pub fn chat_tabs_get(app: AppHandle) -> ChatTabsChange {
+    let _ = APP.set(app.clone());
     ensure_mentions_feed();
     push_mention_counts();
-    chat_tabs::view()
+    let (change, ()) = chat_tabs::apply_settled(|_| (Default::default(), ()));
+    settle(&app, &change);
+    change
 }
 
 /// Points the stream tab at the watched stream, or drops it with `None` when
 /// the player closed (a kept one stays as one of your chats).
 #[tauri::command]
 pub fn chat_tabs_sync_stream(app: AppHandle, room: Option<ChatRoomInput>) -> ChatTabsChange {
-    let (change, ()) = chat_tabs::apply(|t| (t.sync_stream(room.as_ref()), ()));
+    let (change, ()) = chat_tabs::apply_settled(|t| (t.sync_stream(room.as_ref()), ()));
     settle(&app, &change);
     change
 }
@@ -122,7 +126,7 @@ pub fn chat_tabs_sync_stream(app: AppHandle, room: Option<ChatRoomInput>) -> Cha
 /// a moment later, as another `chat-tabs` event.
 #[tauri::command]
 pub fn chat_tabs_add(app: AppHandle, room: ChatRoomInput) -> ChatTabsChange {
-    let (change, needs_meta) = chat_tabs::apply(|t| t.add(&room));
+    let (change, needs_meta) = chat_tabs::apply_settled(|t| t.add(&room));
     settle(&app, &change);
     if needs_meta {
         if let Some(tab) = chat_tabs::ChatTabs::tab_for(&room, false) {
@@ -150,26 +154,24 @@ pub fn chat_tabs_add(app: AppHandle, room: ChatRoomInput) -> ChatTabsChange {
 /// Closes one of your chats (on the stream tab: stops keeping it).
 #[tauri::command]
 pub fn chat_tabs_remove(app: AppHandle, channel: String) -> ChatTabsChange {
-    let (change, ()) = chat_tabs::apply(|t| (t.remove(&channel), ()));
+    let (change, ()) = chat_tabs::apply_settled(|t| (t.remove(&channel), ()));
     settle(&app, &change);
     change
 }
 
 /// Puts an open room on screen.
 #[tauri::command]
-pub fn chat_tabs_set_active(app: AppHandle, channel: String) -> ChatTabsView {
-    let (change, changed) = chat_tabs::apply(|t| (Default::default(), t.set_active(&channel)));
-    if changed {
-        emit(&app, &change.view);
-    }
-    change.view
+pub fn chat_tabs_set_active(app: AppHandle, channel: String) -> ChatTabsChange {
+    let (change, _) = chat_tabs::apply_settled(|t| (Default::default(), t.set_active(&channel)));
+    settle(&app, &change);
+    change
 }
 
 /// Joins every chat not joined yet: the Chats screen's first look, or the
 /// return from a park.
 #[tauri::command]
 pub fn chat_tabs_connect(app: AppHandle) -> ChatTabsChange {
-    let (change, ()) = chat_tabs::apply(|t| (t.connect(), ()));
+    let (change, ()) = chat_tabs::apply_settled(|t| (t.connect(), ()));
     settle(&app, &change);
     change
 }
@@ -177,7 +179,7 @@ pub fn chat_tabs_connect(app: AppHandle) -> ChatTabsChange {
 /// Leaves every chat after a while in the background with no player (Android).
 #[tauri::command]
 pub fn chat_tabs_park(app: AppHandle) -> ChatTabsChange {
-    let (change, ()) = chat_tabs::apply(|t| (t.park(), ()));
+    let (change, ()) = chat_tabs::apply_settled(|t| (t.park(), ()));
     settle(&app, &change);
     change
 }
@@ -194,12 +196,10 @@ pub fn chat_tabs_visible(rooms: Vec<String>) {
 
 /// Keeps the stream's chat after the player closes, or lets it close with it.
 #[tauri::command]
-pub fn chat_tabs_keep(app: AppHandle, channel: String, keep: bool) -> ChatTabsView {
-    let (change, changed) = chat_tabs::apply(|t| (Default::default(), t.keep(&channel, keep)));
-    if changed {
-        emit(&app, &change.view);
-    }
-    change.view
+pub fn chat_tabs_keep(app: AppHandle, channel: String, keep: bool) -> ChatTabsChange {
+    let (change, _) = chat_tabs::apply_settled(|t| (Default::default(), t.keep(&channel, keep)));
+    settle(&app, &change);
+    change
 }
 
 /// Rebuilds the Twitch chat with every room this window holds (see

@@ -156,6 +156,10 @@ pub struct ChatTabs {
     /// Whose chats these are: the signed-in Twitch id, or "anon".
     owner: Option<String>,
     revision: u64,
+    /// Rooms an account restore let go, held until a command that settles hands
+    /// them to the shell: a read (`view`, a live line, a mention count) can be the
+    /// first call after a switch, and it hands nothing over.
+    parked_release: Vec<ChatTab>,
 }
 
 #[derive(Default)]
@@ -279,6 +283,17 @@ impl ChatTabs {
         self.mentions.clear();
         self.owner = Some(owner);
         fx
+    }
+
+    /// Restores another account's chats and parks what that lets go.
+    fn restore_parked(&mut self, owner: String, saved: SavedChats) {
+        let fx = self.restore(owner, saved);
+        self.parked_release.extend(fx.release);
+    }
+
+    /// What a restore let go, handed over once.
+    fn take_parked(&mut self) -> Effects {
+        Effects { acquire: Vec::new(), release: std::mem::take(&mut self.parked_release) }
     }
 
     /// What is saved: your chats, with the stream's own chat left out unless
@@ -558,15 +573,13 @@ pub fn apply<X>(f: impl FnOnce(&mut ChatTabs) -> (Effects, X)) -> (ChatTabsChang
     let owner = owner_now();
     let mut guard = TABS.lock().unwrap_or_else(|e| e.into_inner());
     let tabs = guard.get_or_insert_with(ChatTabs::default);
-    let mut first = Effects::default();
     if tabs.owner.as_deref() != Some(owner.as_str()) {
         let saved = load_all().remove(&owner).unwrap_or_default();
-        first = tabs.restore(owner.clone(), saved);
+        tabs.restore_parked(owner.clone(), saved);
         tabs.revision += 1;
     }
     let before = (tabs.shown(), tabs.saved());
     let (fx, out) = f(tabs);
-    let fx = first.and(fx);
     let saved = tabs.saved();
     if tabs.shown() != before.0 {
         tabs.revision += 1;
@@ -575,6 +588,16 @@ pub fn apply<X>(f: impl FnOnce(&mut ChatTabs) -> (Effects, X)) -> (ChatTabsChang
         save(&owner, &saved);
     }
     (tabs.change(fx), out)
+}
+
+/// `apply` for a command whose answer the shell applies (`settle`): it also
+/// hands over what an account restore let go, before the change's own effects.
+pub fn apply_settled<X>(f: impl FnOnce(&mut ChatTabs) -> (Effects, X)) -> (ChatTabsChange, X) {
+    apply(|t| {
+        let parked = t.take_parked();
+        let (fx, out) = f(t);
+        (parked.and(fx), out)
+    })
 }
 
 /// A name that is only the login's lowercase ("xqc", what a start from a login alone carries)
@@ -897,5 +920,52 @@ mod tests {
         t.remove("a");
         t.add(&room("twitch", "a", Some("1"), "A"));
         assert_eq!((t.view().tabs[0].live, t.view().mention_total), (None, 0), "a closed tab forgets both");
+    }
+
+    #[test]
+    fn closing_the_video_keeps_the_streams_chat_joined_and_on_screen() {
+        let mut t = ChatTabs::default();
+        t.sync_stream(Some(&room("twitch", "s", Some("2"), "S")));
+        assert!(t.keep("s", true));
+        assert!(t.tabs[0].pinned_to_stream && t.tabs[0].kept, "what stop_chat reads while the player closes");
+        let fx = t.sync_stream(None);
+        assert!(fx.release.is_empty() && fx.acquire.is_empty(), "still joined");
+        assert_eq!(keys(&t), ["s"]);
+        assert!(!t.tabs[0].pinned_to_stream && t.tabs[0].kept);
+        assert_eq!(t.active.as_deref(), Some("s"));
+        assert_eq!(t.saved().tabs.iter().map(|t| t.channel.as_str()).collect::<Vec<_>>(), ["s"]);
+    }
+
+    #[test]
+    fn closing_the_video_leaves_the_room_being_read_in_front() {
+        let mut t = ChatTabs::default();
+        t.add(&room("twitch", "other", Some("3"), "Other"));
+        t.sync_stream(Some(&room("kick", "XQC", None, "xQc")));
+        assert_eq!(t.active.as_deref(), Some("other"));
+        assert!(t.keep("kick:xqc", true));
+        assert!(t.sync_stream(None).release.is_empty());
+        assert_eq!(keys(&t), ["kick:xqc", "other"]);
+        assert_eq!(t.active.as_deref(), Some("other"), "the room the viewer was reading stays in front");
+    }
+
+    #[test]
+    fn a_keep_undone_after_a_switch_lets_the_old_room_go() {
+        let mut t = ChatTabs::default();
+        t.sync_stream(Some(&room("twitch", "s", Some("2"), "S")));
+        assert!(t.keep("s", true));
+        t.sync_stream(Some(&room("twitch", "next", Some("4"), "Next")));
+        assert_eq!(keys(&t), ["next", "s"]);
+        assert_eq!(names(&t.remove("s").release), ["twitch:s"]);
+        assert_eq!(keys(&t), ["next"]);
+    }
+
+    #[test]
+    fn an_account_restore_parks_what_it_lets_go_until_a_command_takes_it() {
+        let mut t = ChatTabs::default();
+        t.add(&room("twitch", "a", Some("1"), "A"));
+        t.restore_parked("other".into(), SavedChats::default());
+        assert!(t.tabs.is_empty());
+        assert_eq!(names(&t.take_parked().release), ["twitch:a"]);
+        assert!(t.take_parked().release.is_empty(), "handed over once");
     }
 }
