@@ -146,6 +146,26 @@
   {
    "page": "player",
    "section": "Playback",
+   "title": "Zoom to fill",
+   "paths": [
+    "video_player.zoom_to_fill"
+   ],
+   "nested": false,
+   "logo": null,
+   "detail": "On its side, the stream fills a long screen by trimming a little off the top and bottom. A pinch on the video switches it too.",
+   "aliases": [
+    "zoom",
+    "fill",
+    "crop",
+    "pinch",
+    "aspect ratio",
+    "stretch",
+    "full screen"
+   ]
+  },
+  {
+   "page": "player",
+   "section": "Playback",
    "title": "Start quality",
    "paths": [
     "quality"

@@ -73,6 +73,10 @@ export interface VideoPlayerSettings {
    *           media notification that taps back into the app.
    */
   background_mode?: 'pip' | 'audio';
+  /** Phones only: on its side the stream fills a long screen by trimming its
+   *  top and bottom (never its sides, at most 1.5x). Set by a pinch on the
+   *  video or the Player switch. Default false. Typed in Rust. */
+  zoom_to_fill?: boolean;
   /** Scroll over the player to adjust volume. Default true. */
   scroll_volume?: boolean;
   /** Scroll down over the player to open the channel About drawer. Default

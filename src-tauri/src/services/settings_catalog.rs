@@ -300,6 +300,19 @@ mod tests {
     }
 
     #[test]
+    fn zoom_to_fill_row_on_both_phones() {
+        for ios in [false, true] {
+            let hit = search_on("zoom to fill", 3, ios, &nothing);
+            assert_eq!(hit.first().map(|r| r.title.as_str()), Some("Zoom to fill"), "ios {ios}");
+            assert_eq!(hit[0].paths, vec!["video_player.zoom_to_fill".to_string()]);
+            let changed = changed_rows_on(&["video_player.zoom_to_fill".to_string()], ios, &nothing);
+            assert!(titles(&changed).contains(&"Zoom to fill"), "ios {ios}");
+        }
+        let fresh = serde_json::to_value(crate::models::settings::Settings::default()).unwrap();
+        assert!(crate::commands::settings_fields::get_path(&fresh, "video_player.zoom_to_fill").is_some());
+    }
+
+    #[test]
     fn rows_a_build_lacks_are_hidden_from_search_and_changed() {
         // A build without combined chat (a phone) finds none of its rows, on
         // Android as well as the iPhone.

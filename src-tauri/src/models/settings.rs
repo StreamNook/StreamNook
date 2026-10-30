@@ -223,6 +223,11 @@ pub struct VideoPlayerSettings {
     /// nothing to render, so it survives.
     #[serde(default = "default_background_mode")]
     pub background_mode: String,
+    /// Phones only. On its side the stream fills a long screen by trimming its
+    /// top and bottom (never its sides, at most 1.5x). A pinch on the video or
+    /// the Player settings switch sets it. The desktop player ignores it.
+    #[serde(default)]
+    pub zoom_to_fill: bool,
 }
 
 fn default_background_mode() -> String {
@@ -266,6 +271,7 @@ impl Default for VideoPlayerSettings {
             wheel_volume_step: 0.05,
             resume_vod_playback: true,
             sync_vod_progress: true,
+            zoom_to_fill: false,
         }
     }
 }
@@ -2549,6 +2555,17 @@ mod backup_persistence_tests {
     fn a_fresh_install_keeps_audio_and_old_files_keep_pip() {
         assert_eq!(Settings::default().video_player.background_mode, "audio");
         assert_eq!(default_background_mode(), "pip");
+    }
+
+    #[test]
+    fn zoom_to_fill_defaults_off_and_round_trips() {
+        assert!(!Settings::default().video_player.zoom_to_fill);
+        let mut value = serde_json::to_value(Settings::default()).expect("serialize");
+        value["video_player"]["zoom_to_fill"] = serde_json::Value::Bool(true);
+        let parsed: Settings = serde_json::from_value(value).expect("parse");
+        assert!(parsed.video_player.zoom_to_fill);
+        let saved = serde_json::to_value(&parsed).expect("serialize");
+        assert_eq!(saved["video_player"]["zoom_to_fill"], serde_json::Value::Bool(true));
     }
 
     #[test]
