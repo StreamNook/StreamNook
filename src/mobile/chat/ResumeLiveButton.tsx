@@ -56,7 +56,9 @@ const ResumeButton: React.FC<{ sliceKey: string; onResume: () => void }> = ({ sl
       // The glaze of the composer's round button below it, frosted like the
       // glaze controls that float over busy content, so the count reads over
       // chat text.
-      className="pointer-events-auto absolute right-2.5 top-0 h-10 w-10 chrome-glaze chrome-glaze--control chrome-glaze--frosted text-textPrimary"
+      // A capsule one width in both states, so it never changes shape as the
+      // count arrives.
+      className="pointer-events-auto absolute right-2.5 top-0 h-10 w-14 chrome-glaze chrome-glaze--control chrome-glaze--frosted text-textPrimary"
     >
       <motion.span
         aria-hidden
@@ -106,9 +108,9 @@ export const PausedOverlay: React.FC<{
   <motion.div
     className="pointer-events-none absolute bottom-2 left-0 right-0 z-10 grid h-10 items-center"
     // The hint in the middle column: centred while both sides have room, and
-    // in a narrow chat it gives up the centre (never the button's 56 px) before
-    // it would cut its words.
-    style={{ gridTemplateColumns: 'minmax(10px, 1fr) minmax(0, max-content) minmax(56px, 1fr)' }}
+    // in a narrow chat it gives up the centre (never the button's 72 px: its
+    // 56 px and the 10 px margin, plus a gap) before it would cut its words.
+    style={{ gridTemplateColumns: 'minmax(10px, 1fr) minmax(0, max-content) minmax(72px, 1fr)' }}
     initial={false}
     animate={{ y: -lift }}
     transition={LIFT}
