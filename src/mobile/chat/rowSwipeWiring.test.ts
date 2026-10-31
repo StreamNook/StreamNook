@@ -49,4 +49,16 @@ describe('the pane', () => {
   it('hands the list its pause ratio only where rows take swipes', () => {
     expect(pane).toContain('touchPauseRatio={rowSwipeOn ? touchPauseRatio : undefined}');
   });
+
+  it('lets the hold menu decide Reply and the mod tiles once, when it arms', () => {
+    expect(pane).toContain('setFanArm({ canReply: rules.canReply(messageId), reach: rules.reach(messageId) });');
+    expect(pane).toContain("const noReply: FanAction[] = !noSend && fanTarget && !fanArm.canReply ? ['reply'] : [];");
+    expect(pane).toContain("const reach = fanTarget ? fanArm.reach : 'all';");
+    expect(pane).not.toContain('replyFor(fanTarget.messageId)');
+    expect(pane).toContain('const row = replyRowOf(messageId, parsed, provider, activeProvider);');
+  });
+
+  it('logs a lost reply swipe too', () => {
+    expect(swipe).toContain("if (press?.target || kind === 'reply') trace('the browser took the touch (pointercancel)');");
+  });
 });
