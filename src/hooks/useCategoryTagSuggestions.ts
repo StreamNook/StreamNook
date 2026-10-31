@@ -39,6 +39,8 @@ export function useCategoryTagSuggestions(ask: TagSuggestionsAsk): TagView | nul
   const { query, selected, limit, enabled, revision, row = false } = ask;
   const name = ask.gameName ?? '';
   const [answer, setAnswer] = useState<TagAnswer | null>(null);
+  // The last answer for an empty box, drawn when the box is cleared.
+  const [blank, setBlank] = useState<TagAnswer | null>(null);
   const [retries, setRetries] = useState(0);
   const latest = useRef(0);
   const retry = useRef<RetryState>(NO_RETRY);
@@ -76,7 +78,9 @@ export function useCategoryTagSuggestions(ask: TagSuggestionsAsk): TagView | nul
     })
       .then((got) => {
         if (!live || !acceptAnswer(reqId, latest.current)) return;
-        setAnswer({ ...got, gameName: name, query });
+        const kept = { ...got, gameName: name, query };
+        setAnswer(kept);
+        if (!query.trim()) setBlank(kept);
         const step = retryStep(retry.current, revisionKey, got);
         retry.current = step.state;
         if (step.delay !== null) timer = setTimeout(() => setRetries((n) => n + 1), step.delay);
@@ -90,5 +94,5 @@ export function useCategoryTagSuggestions(ask: TagSuggestionsAsk): TagView | nul
     // themselves are read through the refs above.
   }, [enabled, name, query, key, limit, revision, retries]);
 
-  return tagView(answer, name, query);
+  return tagView(answer, name, query, blank);
 }

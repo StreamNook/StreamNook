@@ -12,6 +12,8 @@ import PenroseMarch from '../../components/PenroseMarch';
 
 const ARM_THRESHOLD_PX = 72;
 const MAX_PULL_PX = 120;
+/** A finger's first few pixels say nothing about its direction. */
+const SLOP_PX = 10;
 
 export const PullToRefresh: React.FC<{
   onRefresh: () => Promise<unknown>;
@@ -77,6 +79,9 @@ export const PullToRefresh: React.FC<{
         // scrolling, so a sideways scroller in the list (a card's tag line)
         // keeps its swipe.
         const dx = e.touches[0].clientX - startX;
+        // Decide only once the finger is past the slop: inside it neither claim
+        // nor hand back.
+        if (Math.abs(dx) < SLOP_PX && Math.abs(dy) < SLOP_PX) return;
         if (dy <= 0 || dy <= Math.abs(dx) || el.scrollTop > 0) {
           startY = null;
           return;

@@ -136,15 +136,25 @@ export interface TagView {
 }
 
 /** The newest answer for this category stays drawn while an ask for newer text
- *  is in flight, so the list never blanks between keystrokes. Until the new
- *  answer lands, the "Filter by tag" row keeps its place and shows the text on
- *  screen, so no row appears or goes per key. */
-export function tagView(answer: TagAnswer | null, gameName: string, query: string): TagView | null {
-  if (!answer || answer.gameName !== gameName) return null;
-  if (answer.query === query) return { labels: answer.labels, typed: answer.offer_typed, current: true };
+ *  is in flight, so the list never blanks between keystrokes; a cleared box
+ *  draws `blank`, the last answer for an empty box. Until the new answer lands,
+ *  the "Filter by tag" row keeps its place and shows the text on screen under
+ *  Rust's own rule (at most 64 characters, never when a drawn tag is it), so no
+ *  row appears or goes per key. */
+export function tagView(
+  answer: TagAnswer | null,
+  gameName: string,
+  query: string,
+  blank: TagAnswer | null = null,
+): TagView | null {
   const text = query.trim();
-  const keepsRow = answer.offer_typed !== null || answer.query.trim() === '';
-  return { labels: answer.labels, typed: text && keepsRow ? text : null, current: false };
+  const drawn = !text && answer && answer.query.trim() !== '' && blank?.gameName === gameName ? blank : answer;
+  if (!drawn || drawn.gameName !== gameName) return null;
+  if (drawn.query === query) return { labels: drawn.labels, typed: drawn.offer_typed, current: true };
+  const shown = [...text].slice(0, 64).join('');
+  const keepsRow = drawn.offer_typed !== null || drawn.query.trim() === '';
+  const isListed = drawn.labels.some((l) => l.trim().toLowerCase() === shown.toLowerCase());
+  return { labels: drawn.labels, typed: shown && keepsRow && !isListed ? shown : null, current: false };
 }
 
 /** The one-retry rule for a category whose own tags could not be read. `key`

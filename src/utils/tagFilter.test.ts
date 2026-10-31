@@ -121,6 +121,19 @@ describe('answers', () => {
     expect(tagView(offered, 'Art', '')).toEqual({ labels: ['x'], typed: null, current: false });
   });
 
+  it('a cleared box draws the last empty-box answer, not the last search', () => {
+    const search = { ...answer('Art', 'sp'), labels: ['Speedrun'] };
+    const blank = { ...answer('Art', ''), labels: ['English', 'Speedrun'] };
+    expect(tagView(search, 'Art', '', blank)).toEqual({ labels: ['English', 'Speedrun'], typed: null, current: true });
+    expect(tagView(search, 'Art', '', { ...blank, gameName: 'Chess' })?.labels).toEqual(['Speedrun']);
+  });
+
+  it('the stand-in typed row keeps Rust rule: no row for a listed tag, 64 characters at most', () => {
+    const offered = { ...answer('Art', 'eng'), labels: ['English'], offer_typed: 'eng' };
+    expect(tagView(offered, 'Art', 'english')?.typed).toBeNull();
+    expect(tagView(offered, 'Art', 'a'.repeat(70))?.typed).toBe('a'.repeat(64));
+  });
+
   it('retries once per revision, and a retry never re-arms itself', () => {
     const failing = { labels: [], offer_typed: null, retry_after_ms: 30000 };
     const first = retryStep(NO_RETRY, '1', failing);
