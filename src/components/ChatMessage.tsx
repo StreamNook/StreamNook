@@ -37,7 +37,8 @@ import { isStreamNookUser, getStreamNookUserNumber, subscribeStreamNookRegistryV
 import { MemberReveal, MEMBER_REVEAL_CARD_CLASS } from './StreamNookBadge';
 import { EmoteCreditLine } from './chat/EmoteCreditLine';
 import { canCredit } from '../services/emoteCredit';
-import { openEmoteCard, useEmoteCardStore } from '../stores/emoteCardStore';
+import { openEmoteCard, useEmoteCardStore, type EmoteCardTarget } from '../stores/emoteCardStore';
+import { emoteClickRoute, emoteRef, stackTargets } from '../utils/emoteClick';
 import { chatBodyWeight } from '../utils/chatBodyWeight';
 import { AtmosphereBackground } from './AtmosphereBackground';
 import { MajorCologneChrome } from './MajorCologneChrome';
@@ -563,6 +564,9 @@ interface ChatMessageProps {
   isHighlighted?: boolean;
   moderationContext?: { type: 'timeout' | 'ban' | 'deleted'; duration?: number; by?: string; reason?: string } | null; // Moderation context from CLEARMSG/CLEARCHAT, named by EventSub for moderators
   onEmoteRightClick?: (emoteName: string) => void;
+  /** The phone's emote sheet: a tap on any image of an emote (or of a stack) hands it the
+   *  stack's creditable emotes, the one to show first. Desktop passes none and keeps its card. */
+  onEmoteOpen?: (shown: EmoteCardTarget, stack: EmoteCardTarget[]) => void;
   onMessageCopy?: (content: string) => void;
   onUsernameRightClick?: (messageId: string, username: string) => void;
   onBadgeClick?: (badgeKey: string, badgeInfo: { url?: string; image_url_4x?: string }) => void;
@@ -913,7 +917,7 @@ function UsernameWithCosmetics({
   );
 }
 
-const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, onReplyClick, isHighlighted = false, moderationContext = null, onEmoteRightClick, onMessageCopy, onUsernameRightClick, onBadgeClick, emotes, isModerator = false, broadcasterId, homeProvider = 'twitch', sourceMark, modLine = null }: ChatMessageProps) {
+const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, onReplyClick, isHighlighted = false, moderationContext = null, onEmoteRightClick, onEmoteOpen, onMessageCopy, onUsernameRightClick, onBadgeClick, emotes, isModerator = false, broadcasterId, homeProvider = 'twitch', sourceMark, modLine = null }: ChatMessageProps) {
   // Field selectors, NOT a whole-store subscription. This component is mounted
   // once per chat row, so subscribing to the entire store made every row
   // re-render on every unrelated store tick (hours-watched, viewer count, etc.).
@@ -1536,6 +1540,9 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     // Gigantified render: 4x-size art and 8em sizing for the plucked emote
     // (and its whole group, so overlays keep covering their base).
     giant: boolean = false,
+    // The images of the stack this one belongs to (the hidden modifiers left out): on a phone a
+    // tap on any of them opens the stack, since a finger cannot aim between them.
+    stack?: EmoteSegment[],
   ) => {
     const gridStyle = inGrid ? { gridArea: '1/1' } : {};
     const marginClass = inGrid ? '' : 'mx-0.5';
@@ -1551,32 +1558,17 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       // Provider detection up front (reused for tiered caching, disk-first
       // render, srcSet, and the hover preview below). BTTV IDs are ALSO 24 hex
       // characters, so the other CDNs are excluded explicitly.
-      const is7TVEmote = !!segment.emoteId && (
-        emoteUrl.includes('7tv') ||
-        ((segment.emoteId.length === 24 || segment.emoteId.length === 26) &&
-          !emoteUrl.includes('jtvnw.net') &&
-          !emoteUrl.includes('frankerfacez') &&
-          !emoteUrl.includes('betterttv'))
-      );
+      // One rule with Rust's native rows (utils/emoteClick.ts `emoteRef`).
+      const source = emoteRef(emoteUrl, segment.emoteId);
+      const is7TVEmote = source === '7tv';
       const emoteTier = giant ? ('4x' as const) : inlineEmoteTier();
 
       // Resolve the real provider so the cache key matches the provider-
       // namespaced key the picker + prefetch write (otherwise disk-first
       // silently misses). 7TV stays per-tier; others key by `{provider}-{id}`.
-      const emoteProvider = is7TVEmote
-        ? '7tv'
-        : emoteUrl.includes('jtvnw.net')
-          ? 'twitch'
-          : emoteUrl.includes('betterttv')
-            ? 'bttv'
-            : emoteUrl.includes('frankerfacez')
-              ? 'ffz'
-              : // Kick's own emotes: the same `kick-<id>` file the emote picker
-                // and Rust's prefetch keep. Without a provider they were cached
-                // again under the bare id, two files for one image.
-                emoteUrl.includes('files.kick.com')
-                ? 'kick'
-                : undefined;
+      // Kick's own emotes included: the same `kick-<id>` file the emote picker
+      // and Rust's prefetch keep.
+      const emoteProvider = source ?? undefined;
 
       // Giant art URL. Only 7TV cache keys are per-tier; the other providers
       // key by bare id, so caching 4x bytes there would overwrite the
@@ -1646,19 +1638,26 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
         },
         referrerPolicy: 'no-referrer',
         onClick: () => {
+          // The phone's sheet: any image of a stack opens the stack (its base, or its first
+          // member the core can credit).
+          if (onEmoteOpen) {
+            const targets = stackTargets(stack ?? [segment], creditRoom);
+            if (targets.length > 0) onEmoteOpen(targets[0], targets);
+            return;
+          }
           if (!segment.emoteId) return;
           // A 7TV emote opens the 7TV spotlight where this window has it (main:
           // add to any channel you edit, creator chip). Everything creditable
           // elsewhere, and every Twitch / BTTV / FFZ emote, opens the emote
           // card with its creators. Kick and YouTube emotes have none to show.
-          if (is7TVEmote && useEmoteCardStore.getState().seventvSpotlight) {
+          const route = emoteClickRoute(source, useEmoteCardStore.getState().seventvSpotlight);
+          if (route === 'spotlight') {
             useAppStore.getState().openEmoteSpotlight(segment.emoteId, segment.content);
             return;
           }
-          const provider = is7TVEmote ? '7tv' : emoteProvider;
-          if (provider && canCredit(provider)) {
+          if (route === 'card' && source) {
             openEmoteCard({
-              provider,
+              provider: source,
               id: segment.emoteId,
               name: segment.content ?? '',
               url: emoteUrl,
@@ -2158,6 +2157,10 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
         .filter((s) => s.modifierFlags != null && memberContributes(s))
         .map((s) => s.content);
 
+      // The images a tap on any of them opens on a phone (hidden modifiers draw nothing).
+      const stackMembers = group.filter(
+        (seg, i) => !(i > 0 && memberContributes(seg) && ((seg.modifierFlags ?? 0) & MOD_HIDDEN) !== 0),
+      );
       const gridSpan = (
         <span
           key={effectBits ? undefined : `group-${index}`}
@@ -2184,6 +2187,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
                   }
                 : undefined,
               giant,
+              stackMembers,
             );
           })}
         </span>
@@ -3591,12 +3595,9 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
         <Tooltip content="Click to view parent message" side="top">
           <div
             className="mb-1 pl-2 border-l-2 border-textSecondary/40 cursor-pointer hover:border-textSecondary/60 transition-colors"
-            // This line owns its own tap. Without the marker, a tap on mobile
-            // ALSO reaches MobileChatPane's tap-to-reply handler on the list, so
-            // jumping to the parent would simultaneously start a reply to the
-            // child. `data-no-drag` is the existing repo convention for exactly
-            // this (see the mod-drag handles below and StyledChatName), and it
-            // is inert on desktop, which has no competing parent click handler.
+            // This line owns its own tap: `data-no-drag` marks it as a control the
+            // phone's row gestures leave alone (the repo's convention, see the
+            // mod-drag handles below and StyledChatName); inert on desktop.
             data-no-drag="true"
             onClick={() => onReplyClick?.(parsed.replyInfo!.parentMsgId)}
           >

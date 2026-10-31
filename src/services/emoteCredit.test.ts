@@ -7,8 +7,9 @@ vi.mock('@tauri-apps/api/core', () => ({
 }));
 vi.mock('@tauri-apps/api/event', () => ({ listen: () => Promise.resolve(() => {}) }));
 
-import { canCredit, creatorRoleLabel, creditLines, emoteLargeUrl, emoteProviderLabel, fetchEmoteCredit } from './emoteCredit';
+import { canCredit, creditLines, emoteLargeUrl, emoteProviderLabel, fetchEmoteCredit } from './emoteCredit';
 import { matchEmotes } from './emoteMatch';
+import wire from './emoteCardWire.json';
 
 describe('creditLines', () => {
   it('credits the Twitch artist and names the owning channel', () => {
@@ -67,6 +68,17 @@ describe('fetchEmoteCredit', () => {
       detail: null,
     });
     expect(c).toEqual({ provider: 'twitch', ownerName: 'pokimane', artistName: 'Seabii', originalName: undefined, kindLabel: 'Sub emote' });
+  });
+
+  it('maps the click card Rust sends, words included, asking with the shared argument names', async () => {
+    invoke.mockResolvedValueOnce(wire.bttv.wire);
+    const a = wire.args;
+    const c = await fetchEmoteCredit({ provider: a.provider, id: a.id, name: a.name, channel: a.channel, channelId: a.channelId, detail: a.detail });
+    expect(invoke).toHaveBeenCalledWith('emote_credit', a);
+    expect(c).toEqual(wire.bttv.mapped);
+    invoke.mockResolvedValueOnce(wire.bttvNobody.wire);
+    const nobody = await fetchEmoteCredit({ provider: 'bttv', id: a.id, detail: true });
+    expect(nobody?.emptyLine).toBe("BetterTTV doesn't list who made this one.");
   });
 
   it('never asks for a provider it cannot credit', async () => {
@@ -150,9 +162,6 @@ describe('emote card detail', () => {
   });
 
   it('labels each chip by role and picks the largest image per provider', () => {
-    expect(creatorRoleLabel('artist')).toBe('Art by');
-    expect(creatorRoleLabel('uploader')).toBe('Made by');
-    expect(creatorRoleLabel('channel')).toBe('From the channel');
     expect(emoteLargeUrl('twitch', 'x', 'https://static-cdn.jtvnw.net/emoticons/v2/x/default/dark/1.0')).toBe(
       'https://static-cdn.jtvnw.net/emoticons/v2/x/default/dark/3.0',
     );

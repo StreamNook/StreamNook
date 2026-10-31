@@ -12,6 +12,7 @@ import { useStreamerMode } from '../utils/streamerMode';
 import { useChatUserStore } from '../stores/chatUserStore';
 import type { ProviderId } from '../types/providers';
 import { ScrollbarMarks } from './chat/ScrollbarMarks';
+import type { EmoteCardTarget } from '../stores/emoteCardStore';
 import { holdChatRow, moderateWithToast, PICKER_EVENT, ROW_HOLD_EVENT, useLineConfig, useModSliderSteps, useSliderConfig, type ModStep } from '../services/moderation';
 import { edgesMoved, isStill, tapAgain, type Edges, type Tap } from './chat/modPress';
 import { armThaw, touchPauseIntent } from './chat/chatHold';
@@ -118,6 +119,7 @@ interface MessageRowProps {
   onReplyClick: ChatMessageListProps['onReplyClick'];
   onMessageCopy?: ChatMessageListProps['onMessageCopy'];
   onEmoteRightClick: ChatMessageListProps['onEmoteRightClick'];
+  onEmoteOpen?: ChatMessageListProps['onEmoteOpen'];
   onUsernameRightClick: ChatMessageListProps['onUsernameRightClick'];
   onBadgeClick: ChatMessageListProps['onBadgeClick'];
 }
@@ -174,6 +176,7 @@ const MessageRow = memo(function MessageRow({
   onReplyClick,
   onMessageCopy,
   onEmoteRightClick,
+  onEmoteOpen,
   onUsernameRightClick,
   onBadgeClick,
 }: MessageRowProps) {
@@ -244,6 +247,7 @@ const MessageRow = memo(function MessageRow({
         isHighlighted={isHighlighted}
         moderationContext={moderationContext}
         onEmoteRightClick={onEmoteRightClick}
+        onEmoteOpen={onEmoteOpen}
         onUsernameRightClick={onUsernameRightClick}
         onBadgeClick={onBadgeClick}
         emotes={emotes}
@@ -302,6 +306,9 @@ interface ChatMessageListProps {
   onReplyClick: (parentMsgId: string) => void;
   onMessageCopy?: (content: string) => void;
   onEmoteRightClick: (emoteName: string) => void;
+  /** The phone's emote sheet (ChatMessage `onEmoteOpen`). Must keep one identity: rows ignore a
+   *  new callback. */
+  onEmoteOpen?: (shown: EmoteCardTarget, stack: EmoteCardTarget[]) => void;
   onUsernameRightClick: (messageId: string, username: string) => void;
   onBadgeClick: (badgeKey: string, badgeInfo: Record<string, unknown>) => void;
   highlightedMessageId: string | null;
@@ -360,6 +367,7 @@ const ChatMessageList = memo(function ChatMessageList({
   onReplyClick,
   onMessageCopy,
   onEmoteRightClick,
+  onEmoteOpen,
   onUsernameRightClick,
   onBadgeClick,
   highlightedMessageId,
@@ -1334,6 +1342,7 @@ const ChatMessageList = memo(function ChatMessageList({
                 onReplyClick={onReplyClick}
                 onMessageCopy={onMessageCopy}
                 onEmoteRightClick={onEmoteRightClick}
+                onEmoteOpen={onEmoteOpen}
                 onUsernameRightClick={onUsernameRightClick}
                 onBadgeClick={onBadgeClick}
               />

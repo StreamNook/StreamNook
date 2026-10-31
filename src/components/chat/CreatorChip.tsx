@@ -43,26 +43,47 @@ function CreatorAvatar({ name, url, px }: { name: string; url?: string; px: numb
   );
 }
 
-/** Where a creator's click goes, as the line under their name. */
+/** Where a creator's click goes, as the line under their name: Rust's words, or (for a creator
+ *  built outside Rust, the emote sets page) the same words made here. */
 function destination(creator: EmoteCreator): string {
+  if (creator.destination) return creator.destination;
   return creator.link.kind === 'twitch' ? 'Twitch profile' : `${creator.link.site} profile`;
 }
 
-function openCreator(creator: EmoteCreator, onLeave?: () => void): void {
+/** Where a creator's click goes: their page on a site; a Twitch account into the phone's profile
+ *  sheet (`shell`) or the app's own profile view (`app`); Twitch's page with no account id. */
+export type CreatorRoute =
+  | { kind: 'web'; url: string }
+  | { kind: 'shell' }
+  | { kind: 'app'; id: string; login: string }
+  | { kind: 'twitch-web'; url: string };
+
+export function creatorRoute(creator: EmoteCreator, shellOpens: boolean): CreatorRoute {
   const link = creator.link;
-  if (link.kind === 'web') {
-    void openExternal(link.url);
-    return;
-  }
-  if (link.id) {
-    onLeave?.();
-    void import('../../utils/openBadgesInMain').then((m) =>
-      m.openTwitchProfileInMain({ id: link.id!, login: link.login, displayName: creator.name, avatarUrl: creator.avatarUrl }),
-    );
-    return;
-  }
+  if (link.kind === 'web') return { kind: 'web', url: link.url };
+  if (link.id) return shellOpens ? { kind: 'shell' } : { kind: 'app', id: link.id, login: link.login };
   // No account id to open in the app: Twitch's own page still finds them.
-  void openExternal(`https://www.twitch.tv/${link.login}`);
+  return { kind: 'twitch-web', url: `https://www.twitch.tv/${link.login}` };
+}
+
+function openCreator(creator: EmoteCreator, onLeave?: () => void, onOpenTwitch?: (creator: EmoteCreator) => void): void {
+  const route = creatorRoute(creator, !!onOpenTwitch);
+  switch (route.kind) {
+    case 'web':
+    case 'twitch-web':
+      void openExternal(route.url);
+      return;
+    case 'shell':
+      onLeave?.();
+      onOpenTwitch?.(creator);
+      return;
+    case 'app':
+      onLeave?.();
+      void import('../../utils/openBadgesInMain').then((m) =>
+        m.openTwitchProfileInMain({ id: route.id, login: route.login, displayName: creator.name, avatarUrl: creator.avatarUrl }),
+      );
+      return;
+  }
 }
 
 /**
@@ -73,11 +94,14 @@ export function CreatorChip({
   creator,
   compact = false,
   onLeave,
+  onOpenTwitch,
 }: {
   creator: EmoteCreator;
   compact?: boolean;
   /** Runs before a click leaves for the in-app profile (close the card). */
   onLeave?: () => void;
+  /** The phone: a Twitch account opens the pane's own profile sheet instead of the main window's. */
+  onOpenTwitch?: (creator: EmoteCreator) => void;
 }) {
   const external = creator.link.kind === 'web';
   const Icon = external ? ExternalLink : UserRound;
@@ -86,7 +110,7 @@ export function CreatorChip({
     return (
       <button
         type="button"
-        onClick={() => openCreator(creator, onLeave)}
+        onClick={() => openCreator(creator, onLeave, onOpenTwitch)}
         aria-label={label}
         className="group inline-flex max-w-full items-center gap-1.5 rounded-full py-0.5 pl-0.5 pr-2 text-xs text-textSecondary transition-colors hover:bg-glass hover:text-textPrimary focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/70"
       >
@@ -99,7 +123,7 @@ export function CreatorChip({
   return (
     <button
       type="button"
-      onClick={() => openCreator(creator, onLeave)}
+      onClick={() => openCreator(creator, onLeave, onOpenTwitch)}
       aria-label={label}
       className="group flex w-full items-center gap-2.5 rounded-lg border border-borderSubtle bg-glass/40 px-2.5 py-2 text-left transition-colors hover:border-white/20 hover:bg-glass focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/70"
     >

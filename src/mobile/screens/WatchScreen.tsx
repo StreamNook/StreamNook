@@ -1947,6 +1947,7 @@ export const WatchScreen: React.FC = () => {
             // Hidden under the mini player, in PiP or a chat-less landscape, or
             // the app in the background: the list holds still until seen.
             idle={chatClass === 'hidden' || !pageVisible}
+            hidden={chatClass === 'hidden'}
             top={
               // Poll + prediction cards are exactly the desktop components:
               // they self-fetch off the channel. Either can be turned off.

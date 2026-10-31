@@ -17,6 +17,12 @@ export interface EmoteCredit {
   creators?: EmoteCreator[];
   /** Click card only: the emote's own page on its provider (not Twitch). */
   pageUrl?: string;
+  /** Click card only: Rust's line under the name ("Alias of x · 7TV channel emote"). */
+  subtitle?: string;
+  /** Click card only: the page button's words ("Open on 7TV"). */
+  pageLabel?: string;
+  /** Click card only, when the provider answered and credits nobody. */
+  emptyLine?: string;
 }
 
 /** Where a creator chip goes. Rust builds every link from validated ids. */
@@ -30,6 +36,10 @@ export interface EmoteCreator {
   name: string;
   avatarUrl?: string;
   link: EmoteCreatorLink;
+  /** Rust's label over the chip ("Art by", "Made by", "From the channel"). */
+  roleLabel?: string;
+  /** Rust's words for where the chip goes ("Twitch profile"). Absent on a creator built here. */
+  destination?: string;
 }
 
 export interface EmoteCreditQuery {
@@ -49,8 +59,18 @@ interface WireCredit {
   artist_name?: string;
   original_name?: string;
   kind_label?: string;
-  creators?: { role: EmoteCreator['role']; name: string; avatar_url?: string; link: EmoteCreatorLink }[];
+  creators?: {
+    role: EmoteCreator['role'];
+    name: string;
+    avatar_url?: string;
+    link: EmoteCreatorLink;
+    role_label?: string;
+    destination?: string;
+  }[];
   page_url?: string;
+  subtitle?: string;
+  page_label?: string;
+  empty_line?: string;
 }
 
 /** The providers Rust can credit. Kick and YouTube emotes have no lookup. */
@@ -76,8 +96,18 @@ export async function fetchEmoteCredit(q: EmoteCreditQuery): Promise<EmoteCredit
       artistName: c.artist_name,
       originalName: c.original_name,
       kindLabel: c.kind_label,
-      creators: c.creators?.map((p) => ({ role: p.role, name: p.name, avatarUrl: p.avatar_url, link: p.link })),
+      creators: c.creators?.map((p) => ({
+        role: p.role,
+        name: p.name,
+        avatarUrl: p.avatar_url,
+        link: p.link,
+        roleLabel: p.role_label,
+        destination: p.destination,
+      })),
       pageUrl: c.page_url,
+      subtitle: c.subtitle,
+      pageLabel: c.page_label,
+      emptyLine: c.empty_line,
     };
   } catch {
     return null;
@@ -134,9 +164,4 @@ export function emoteLargeUrl(provider: string, id: string, url: string): string
     default:
       return url;
   }
-}
-
-/** The small label over a creator chip. */
-export function creatorRoleLabel(role: EmoteCreator['role']): string {
-  return role === 'artist' ? 'Art by' : role === 'channel' ? 'From the channel' : 'Made by';
 }

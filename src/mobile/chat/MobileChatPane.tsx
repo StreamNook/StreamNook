@@ -24,6 +24,10 @@ import { Logger } from '../../utils/logger';
 import { moderateWithToast } from '../../services/moderation';
 import { MobileChatInput, type ChatGating } from './MobileChatInput';
 import { UserProfileSheet, type SheetUser } from '../profile/UserProfileSheet';
+import { EmoteSheet } from './EmoteSheet';
+import type { EmoteCardTarget } from '../../stores/emoteCardStore';
+import type { EmoteCreator } from '../../services/emoteCredit';
+import { openExternal } from '../../utils/openExternal';
 import { ChatTabStrip } from './ChatTabStrip';
 import { AddChatSheet } from './AddChatSheet';
 import { useChatTabsStore } from './chatTabsStore';
@@ -118,7 +122,10 @@ export const MobileChatPane: React.FC<{
   idle?: boolean;
   top?: React.ReactNode;
   surface?: InboxSurface;
-}> = ({ readOnly = false, strip = true, paused = false, idle = false, top, surface = 'watch' }) => {
+  /** The watch chat is not on screen (mini player, landscape with chat off): sheets that belong
+   *  to its rows close. The app going to the background is not this. */
+  hidden?: boolean;
+}> = ({ readOnly = false, strip = true, paused = false, idle = false, top, surface = 'watch', hidden = false }) => {
   const currentUser = useAppStore((s) => s.currentUser);
   const addToast = useAppStore((s) => s.addToast);
 
@@ -861,6 +868,46 @@ export const MobileChatPane: React.FC<{
     return refused.length ? [...(base ?? []), ...refused] : base;
   }, [isTwitchRoom, noSend, holdModButtons, fanTarget, reachOf, replyFor]);
 
+  // An emote tapped in a row opens its sheet (SN-38); a creator chip's profile opens once that
+  // sheet has gone. The opener keeps one identity (rows ignore a new callback) and reads the hold
+  // menu through a ref: an armed or open hold menu wins over the emote under it.
+  const [emoteSheet, setEmoteSheet] = useState<{ target: EmoteCardTarget; stack: EmoteCardTarget[] } | null>(null);
+  const [emoteOpen, setEmoteOpen] = useState(false);
+  const pendingProfile = useRef<SheetUser | null>(null);
+  const fanBusyRef = useRef<() => boolean>(() => false);
+  useEffect(() => {
+    fanBusyRef.current = () => press.isArmed() || fanTarget != null;
+  });
+  const onEmoteOpen = useCallback((target: EmoteCardTarget, stack: EmoteCardTarget[]) => {
+    if (fanBusyRef.current()) return;
+    pendingProfile.current = null;
+    setEmoteSheet({ target, stack });
+    setEmoteOpen(true);
+  }, []);
+  const closeEmote = useCallback(() => setEmoteOpen(false), []);
+  const switchEmote = useCallback(
+    (target: EmoteCardTarget) => setEmoteSheet((s) => (s ? { ...s, target } : s)),
+    [],
+  );
+  const onCreatorTwitch = useCallback(
+    (c: EmoteCreator) => {
+      const link = c.link;
+      if (link.kind !== 'twitch') return;
+      if (!isTwitchRoom || !link.id) {
+        void openExternal(`https://www.twitch.tv/${link.login}`);
+        return;
+      }
+      pendingProfile.current = { userId: link.id, username: link.login, displayName: c.name, color: '' };
+    },
+    [isTwitchRoom],
+  );
+  const onEmoteExited = useCallback(() => {
+    const profile = pendingProfile.current;
+    pendingProfile.current = null;
+    setEmoteSheet(null);
+    if (profile) setSheetUser(profile);
+  }, []);
+
   // Out of sight, nothing of this room stays up: the fan and the sheets draw
   // outside the pane, so hiding the pane would not hide them.
   useEffect(() => {
@@ -868,7 +915,15 @@ export const MobileChatPane: React.FC<{
     closeFan();
     setSheetUser(null);
     setAddChatOpen(false);
+    setEmoteOpen(false);
+    pendingProfile.current = null;
   }, [paused, closeFan]);
+  // The watch chat hidden (mini player, landscape with chat off): its emote sheet goes with it.
+  useEffect(() => {
+    if (!hidden) return;
+    setEmoteOpen(false);
+    pendingProfile.current = null;
+  }, [hidden]);
 
   const runFanAction = useCallback(
     (action: FanAction, timeoutSecs?: number) => {
@@ -1017,6 +1072,7 @@ export const MobileChatPane: React.FC<{
             onUsernameClick={onUsernameClick}
             onReplyClick={handleReplyClick}
             onEmoteRightClick={() => {}}
+            onEmoteOpen={onEmoteOpen}
             onUsernameRightClick={() => {}}
             onBadgeClick={() => {}}
             highlightedMessageId={null}
@@ -1102,6 +1158,15 @@ export const MobileChatPane: React.FC<{
         onClose={handleCloseSheet}
       />
       <AddChatSheet open={addChatOpen} onClose={handleCloseAddChat} />
+      <EmoteSheet
+        open={emoteOpen}
+        target={emoteSheet?.target ?? null}
+        stack={emoteSheet?.stack ?? []}
+        onClose={closeEmote}
+        onExited={onEmoteExited}
+        onSwitch={switchEmote}
+        onOpenTwitch={onCreatorTwitch}
+      />
       {/* Long-press fan-out. Owns every per-message action now, for everyone:
           moderators simply get more buckets. */}
       <SwipeModerator

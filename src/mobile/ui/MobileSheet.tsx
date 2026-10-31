@@ -27,6 +27,9 @@ export interface MobileSheetProps {
    *  header and paging): the body neither pads nor scrolls, and its child fills
    *  it. Use with `fill`. */
   flush?: boolean;
+  /** The sheet's exit has played: a hand-off to another sheet starts here, so two never dim the
+   *  screen at once. */
+  onExited?: () => void;
 }
 
 const DISMISS_DISTANCE = 96;
@@ -165,7 +168,7 @@ const SheetSurface: React.FC<Omit<MobileSheetProps, 'open'>> = ({
   );
 };
 
-export const MobileSheet: React.FC<MobileSheetProps> = ({ open, onClose, ...rest }) => {
+export const MobileSheet: React.FC<MobileSheetProps> = ({ open, onClose, onExited, ...rest }) => {
   const sheetId = useId();
   const pushSheet = useMobileNavStore((s) => s.pushSheet);
   const popSheet = useMobileNavStore((s) => s.popSheet);
@@ -187,7 +190,7 @@ export const MobileSheet: React.FC<MobileSheetProps> = ({ open, onClose, ...rest
   // The portal stays mounted so AnimatePresence has somewhere to play the exit.
   // An empty portal container costs nothing.
   return createPortal(
-    <AnimatePresence>
+    <AnimatePresence onExitComplete={onExited}>
       {open && <SheetSurface key="sheet" onClose={onClose} {...rest} />}
     </AnimatePresence>,
     document.body,
