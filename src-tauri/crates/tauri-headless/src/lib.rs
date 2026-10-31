@@ -511,6 +511,14 @@ impl<R: Runtime> Builder<R> {
         self
     }
 
+    /// No page ever loads, so the handler is never called.
+    pub fn on_page_load<F>(self, _handler: F) -> Self
+    where
+        F: Fn(&Webview<R>, &webview::PageLoadPayload<'_>) + Send + Sync + 'static,
+    {
+        self
+    }
+
     pub fn build(self, mut context: Context) -> Result<App<R>> {
         // The app's version is the shell's own line (the version it passed to
         // `host_install`), not the crate version the context was built with.
@@ -1465,6 +1473,10 @@ pub mod webview {
                     Err(Error::Unsupported("navigating a webview"))
                 }
 
+                pub fn reload(&self) -> Result<()> {
+                    Err(Error::Unsupported("reloading a webview"))
+                }
+
                 pub fn window(&self) -> super::Window<R> {
                     super::Window::placeholder(self.app.clone())
                 }
@@ -1542,6 +1554,30 @@ pub mod webview {
 
     placeholder_view!(Webview, "webview");
     placeholder_view!(WebviewWindow, "webview window");
+
+    /// Where a page load is. No page loads on iOS, so none is ever reported.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum PageLoadEvent {
+        Started,
+        Finished,
+    }
+
+    /// What `Builder::on_page_load` hands its handler.
+    #[derive(Debug, Clone)]
+    pub struct PageLoadPayload<'a> {
+        pub(crate) url: &'a Url,
+        pub(crate) event: PageLoadEvent,
+    }
+
+    impl PageLoadPayload<'_> {
+        pub fn url(&self) -> &Url {
+            self.url
+        }
+
+        pub fn event(&self) -> PageLoadEvent {
+            self.event
+        }
+    }
 
     /// A cookie a webview holds. No webview holds any on iOS.
     #[derive(Debug, Clone)]
