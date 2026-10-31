@@ -8,6 +8,7 @@ import { TooltipManager } from './components/ui/TooltipManager';
 // Side-effect import: starts the settings IPC now, before the lazy route
 // imports below, so it overlaps chunk loading.
 import './bootPreload';
+import { awaitCacheFileServer, waitsForCacheFileServer } from './utils/cacheFileUrl';
 
 // Route components are lazy so each window only downloads/parses the code it
 // actually renders. The MultiChat / profile / plugin popouts no longer pull in
@@ -193,7 +194,7 @@ if (import.meta.env.DEV) {
     (window as unknown as { __snStore?: unknown }).__snStore = m.useAppStore;
   });
 }
-root.render(
+const paint = () => root.render(
   <React.StrictMode>
     <MotionScope>
       <Suspense fallback={null}>
@@ -210,3 +211,7 @@ root.render(
     </MotionScope>
   </React.StrictMode>,
 );
+// Android learns the cached-art server first, so no row starts on the asset
+// protocol and switches; every other window paints at once.
+if (waitsForCacheFileServer()) void awaitCacheFileServer().finally(paint);
+else paint();

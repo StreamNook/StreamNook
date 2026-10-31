@@ -1338,7 +1338,7 @@ pub fn run() {
             // its `ad-pivot` reload event to the player.
             services::stream_server::set_app_handle(app_handle.clone());
             services::providers::set_app_handle(app_handle.clone());
-            // Cached art over loopback, off the UI thread (Windows only).
+            // Cached art over loopback, off the UI thread (Windows and Android).
             services::cache_file_server::start();
 
             // Start the shared 7TV EventAPI WebSocket client (live emote set

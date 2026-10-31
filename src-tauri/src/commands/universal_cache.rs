@@ -249,8 +249,14 @@ pub fn asset_cache_set_burst(app: crate::rt::AppHandle, window: crate::rt::Webvi
 }
 
 /// The loopback server for cached images (`services/cache_file_server.rs`), or
-/// none (not Windows, not bound yet, or the bind failed).
+/// none (not Windows or Android, not bound yet, or the bind failed). On Android
+/// a server that gave up answers `unavailable`, so the page stops waiting for
+/// it; Windows answers as before.
 #[command]
-pub async fn cache_file_server() -> Option<crate::services::cache_file_server::CacheFileServer> {
-    crate::services::cache_file_server::info()
+pub async fn cache_file_server() -> Result<Option<crate::services::cache_file_server::CacheFileServer>, String> {
+    let info = crate::services::cache_file_server::info();
+    if info.is_none() && cfg!(target_os = "android") && crate::services::cache_file_server::gave_up() {
+        return Err("unavailable".to_string());
+    }
+    Ok(info)
 }

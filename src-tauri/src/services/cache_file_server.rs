@@ -3,8 +3,11 @@
 //! WebResourceRequested handler, which runs on the UI thread, so a cached image
 //! waited for whatever that thread was doing while a CDN image did not. Here
 //! requests go through WebView2's network service and files are read on the
-//! blocking pool, a few at a time. Windows only: the page keeps the asset
-//! protocol everywhere else (utils/cacheFileUrl.ts).
+//! blocking pool, a few at a time. On Android the asset protocol's replies are
+//! stamped `no-store` (wry's WebView client), so every row re-read its images;
+//! these replies carry cache headers the WebView keeps. Windows and Android
+//! only (`serves_on`): every other platform keeps the asset protocol
+//! (utils/cacheFileUrl.ts).
 //!
 //! URL: `http://127.0.0.1:{port}/cache/{token}/{folder}/{file}`. The token is
 //! kept per install and the port is reused when it is free, so a cached
@@ -13,6 +16,7 @@
 //! beside them.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 
 use serde::Serialize;
@@ -38,6 +42,9 @@ const READ_PERMITS: usize = 4;
 
 static READS: Semaphore = Semaphore::const_new(READ_PERMITS);
 static SERVER: OnceLock<CacheFileServer> = OnceLock::new();
+/// Set when `start()` gave up (no folder, no port), so a page that waits for the
+/// address can stop asking.
+static GAVE_UP: AtomicBool = AtomicBool::new(false);
 
 /// Where the page fetches cache files.
 #[derive(Clone, Debug, Serialize)]
@@ -51,10 +58,21 @@ pub fn info() -> Option<CacheFileServer> {
     SERVER.get().cloned()
 }
 
+/// Whether `start()` gave up, so the server will never answer this launch.
+pub fn gave_up() -> bool {
+    GAVE_UP.load(Ordering::Relaxed)
+}
+
+/// Whether the server runs on this OS (`std::env::consts::OS`): Windows and
+/// Android. The page asks on the same two (utils/cacheFileUrl.ts `usesLoopback`).
+pub fn serves_on(os: &str) -> bool {
+    matches!(os, "windows" | "android")
+}
+
 /// Bind once, on the loopback port used last time when it is free and on one
 /// the OS picks otherwise. A failure leaves the page on the asset protocol.
 pub fn start() {
-    if !cfg!(windows) || SERVER.get().is_some() {
+    if !serves_on(std::env::consts::OS) || SERVER.get().is_some() {
         return;
     }
     tauri::async_runtime::spawn(async {
@@ -72,10 +90,12 @@ pub fn start() {
             Ok(Ok(setup)) => setup,
             Ok(Err(e)) => {
                 log::warn!("[CacheFiles] no cache folder ({e}); cached images stay on the asset protocol");
+                GAVE_UP.store(true, Ordering::Relaxed);
                 return;
             }
             Err(e) => {
                 log::warn!("[CacheFiles] the setup task failed ({e}); cached images stay on the asset protocol");
+                GAVE_UP.store(true, Ordering::Relaxed);
                 return;
             }
         };
@@ -83,6 +103,7 @@ pub fn start() {
             Ok(l) => l,
             Err(e) => {
                 log::warn!("[CacheFiles] no loopback port ({e}); cached images stay on the asset protocol");
+                GAVE_UP.store(true, Ordering::Relaxed);
                 return;
             }
         };
@@ -90,6 +111,7 @@ pub fn start() {
             Ok(a) => a.port(),
             Err(e) => {
                 log::warn!("[CacheFiles] no local address ({e}); cached images stay on the asset protocol");
+                GAVE_UP.store(true, Ordering::Relaxed);
                 return;
             }
         };
@@ -457,6 +479,23 @@ mod tests {
         // `CacheType::dir_name` is private, so its arms are counted in the source.
         let arms = src.lines().filter(|l| l.trim_start().starts_with("CacheType::") && l.contains("=> \"")).count();
         assert_eq!(arms, CACHE_DIRS.len(), "every CacheType folder is in CACHE_DIRS");
+    }
+
+    #[test]
+    fn the_server_runs_on_windows_and_android_only() {
+        assert!(serves_on("windows"));
+        assert!(serves_on("android"));
+        for os in ["macos", "linux", "ios", "freebsd", ""] {
+            assert!(!serves_on(os), "{os}");
+        }
+        // The code above the tests, so this line's own text cannot match.
+        let src = include_str!("cache_file_server.rs").replace("\r\n", "\n");
+        let body = src.split("\n#[cfg(test)]\nmod tests").next().unwrap_or_default();
+        assert!(
+            body.contains("pub fn start() {\n    if !serves_on(std::env::consts::OS) || SERVER.get().is_some() {"),
+            "start() asks serves_on"
+        );
+        assert_eq!(body.matches("GAVE_UP.store(true, Ordering::Relaxed);").count(), 4, "every give-up path says so");
     }
 
     /// Links the folder `link` to `target`. Windows uses a directory junction,
