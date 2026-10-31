@@ -1,7 +1,9 @@
 // Holding a channel's card offers what else you can do with it: open its chat
-// without watching (it joins your chats, and the Chats tab shows it) or watch
-// it. A tap still watches, as it always has.
-import React, { useCallback, useRef, useState } from 'react';
+// without watching (it joins your chats, and the Chats tab shows it), watch
+// it, or favorite it. A tap still watches, as it always has. The sheet is
+// hosted once (ChannelHoldSheet, mounted in MobileApp), so a card that moves
+// after a press or unmounts never takes the sheet with it.
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { ChatsCircle, Play } from 'phosphor-react';
 import type { TwitchStream } from '../../types';
 import { MobileSheet } from './MobileSheet';
@@ -10,6 +12,10 @@ import { useMobileNavStore } from '../navStore';
 import { streamProvider } from '../../utils/streamProvider';
 import { hapticCommit } from './haptics';
 import { createHoldFlag } from './holdFlag';
+import { useChannelHoldSheet } from './channelHoldStore';
+import { FavoriteStar, favoriteLabel } from './menuIcons';
+import { favoriteRefOf, setFavoriteChannel, useIsFavorite } from '../../utils/favoriteDoor';
+import { useAppStore } from '../../stores/AppStore';
 
 /** How long a press must rest before it is a hold. */
 const HOLD_MS = 450;
@@ -30,9 +36,8 @@ export function openChatOnly(stream: TwitchStream): void {
   useMobileNavStore.getState().setTab('chats');
 }
 
-/** Press handlers for a card, plus the sheet a hold opens. */
+/** Press handlers for a card. A hold opens the one hold sheet for this card. */
 export function useChannelHold(stream: TwitchStream, onPress: (stream: TwitchStream) => void) {
-  const [open, setOpen] = useState(false);
   const press = useRef<{ x: number; y: number; timer: ReturnType<typeof setTimeout> } | null>(null);
   const [held] = useState(createHoldFlag);
 
@@ -52,7 +57,7 @@ export function useChannelHold(stream: TwitchStream, onPress: (stream: TwitchStr
           press.current = null;
           held.set();
           hapticCommit();
-          setOpen(true);
+          useChannelHoldSheet.getState().open({ stream, onPress });
         }, HOLD_MS),
       };
     },
@@ -71,38 +76,80 @@ export function useChannelHold(stream: TwitchStream, onPress: (stream: TwitchStr
     },
   };
 
-  const close = () => setOpen(false);
-  const row = 'sn-touch flex items-center gap-3 px-2 text-[15px] text-textPrimary active:opacity-70';
-  const sheet = (
-    <MobileSheet open={open} onClose={close} title={stream.user_name || stream.user_login} maxHeightFraction={0.4}>
-      <div className="flex flex-col">
-        <button
-          className={row}
-          onClick={() => {
-            close();
-            openChatOnly(stream);
-          }}
-        >
-          <span className="flex w-6 h-6 items-center justify-center">
-            <ChatsCircle size={22} className="text-textSecondary" />
-          </span>
-          <span className="flex-1 text-left">Open chat</span>
-        </button>
-        <button
-          className={row}
-          onClick={() => {
-            close();
-            onPress(stream);
-          }}
-        >
-          <span className="flex w-6 h-6 items-center justify-center">
-            <Play size={22} className="text-textSecondary" />
-          </span>
-          <span className="flex-1 text-left">Watch</span>
-        </button>
-      </div>
+  return { handlers, consumeHeld: held.consume };
+}
+
+const ROW = 'sn-touch flex items-center gap-3 px-2 text-[15px] text-textPrimary active:opacity-70';
+
+/** The hold sheet, for whichever card was held last. Mounted once, in MobileApp. */
+export const ChannelHoldSheet: React.FC = () => {
+  const held = useChannelHoldSheet((s) => s.held);
+  const close = useChannelHoldSheet((s) => s.close);
+  // Until Rust's lists land the row holds its place and ignores a press.
+  const followingApplied = useAppStore((s) => s.followingApplied);
+  const stream = held?.stream ?? null;
+  const provider = stream ? streamProvider(stream) : null;
+  // Favorites on the phone are Twitch and Kick channels, named by an id or a login.
+  const favoriteRef = useMemo(
+    () =>
+      stream && (provider === 'twitch' || provider === 'kick') && (stream.user_id || stream.user_login)
+        ? favoriteRefOf(stream)
+        : null,
+    [stream, provider],
+  );
+  const isFavorite = useIsFavorite(favoriteRef);
+
+  return (
+    <MobileSheet
+      open={held !== null}
+      onClose={close}
+      title={stream ? stream.user_name || stream.user_login : ''}
+      maxHeightFraction={0.4}
+    >
+      {held && stream && (
+        <div className="flex flex-col">
+          <button
+            className={ROW}
+            onClick={() => {
+              close();
+              openChatOnly(stream);
+            }}
+          >
+            <span className="flex w-6 h-6 items-center justify-center">
+              <ChatsCircle size={22} className="text-textSecondary" />
+            </span>
+            <span className="flex-1 text-left">Open chat</span>
+          </button>
+          <button
+            className={ROW}
+            onClick={() => {
+              close();
+              held.onPress(stream);
+            }}
+          >
+            <span className="flex w-6 h-6 items-center justify-center">
+              <Play size={22} className="text-textSecondary" />
+            </span>
+            <span className="flex-1 text-left">Watch</span>
+          </button>
+          {favoriteRef && (
+            <button
+              className={ROW}
+              aria-disabled={followingApplied ? undefined : true}
+              onClick={() => {
+                if (!followingApplied) return;
+                close();
+                void setFavoriteChannel(favoriteRef, !isFavorite);
+              }}
+            >
+              <span className="flex w-6 h-6 items-center justify-center">
+                <FavoriteStar on={isFavorite} size={22} />
+              </span>
+              <span className="flex-1 text-left">{favoriteLabel(isFavorite)}</span>
+            </button>
+          )}
+        </div>
+      )}
     </MobileSheet>
   );
-
-  return { handlers, sheet, consumeHeld: held.consume };
-}
+};

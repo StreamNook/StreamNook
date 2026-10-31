@@ -1,5 +1,7 @@
 // Followed live channels: card feed or compact list, user's choice persisted.
+// Live favorites sit on their own shelf above the rest, as on desktop.
 import React, { useEffect, useMemo, useState } from 'react';
+import { Star } from 'phosphor-react';
 import { invoke } from '@tauri-apps/api/core';
 import { SettleIn, useSettleIn } from '../ui/SettleIn';
 import { useAppStore } from '../../stores/AppStore';
@@ -9,8 +11,8 @@ import { PullToRefresh } from '../ui/PullToRefresh';
 import { SkeletonCards } from '../ui/SkeletonCards';
 import { AdaptiveGrid } from '../ui/AdaptiveGrid';
 import type { TwitchStream } from '../../types';
-import { isTwitchStream, streamKey, streamProvider } from '../../utils/streamProvider';
-import { followsKick, phoneFollowedLive } from '../followingMerge';
+import { isTwitchStream, streamKey } from '../../utils/streamProvider';
+import { followingSections, followsKick } from '../followingMerge';
 import { PROVIDERS } from '../../types/providers';
 import { ALL_PLATFORMS, KICK_PLATFORM, PlatformMenu, TWITCH_PLATFORM } from '../ui/PlatformMenu';
 import { EmptyNote } from '../ui/EmptyNote';
@@ -53,26 +55,25 @@ export function writeStreamView(mode: StreamViewMode): void {
 
 export const FollowingScreen: React.FC = () => {
   const followedStreams = useAppStore((s) => s.followedStreams);
-  // Every live follow across platforms, merged and ranked in Rust.
+  // Live favorites, then every other live follow, merged and ranked in Rust.
   const following = useAppStore((s) => s.following);
-  const merged = useMemo(() => phoneFollowedLive(following), [following]);
   // The filter only exists once there is a second platform to filter by.
   const hasKick = followsKick(following);
   const [filter, setFilter] = useState<PlatformFilter>(readFilter);
   const activeFilter = hasKick ? filter : null;
-  const rows = useMemo(
-    () => (activeFilter ? merged.filter((s) => streamProvider(s) === activeFilter) : merged),
-    [merged, activeFilter],
-  );
+  const sections = useMemo(() => followingSections(following, activeFilter), [following, activeFilter]);
+  const favorites = sections.favorites;
+  const rows = sections.rest;
+  const total = favorites.length + rows.length;
   // The menu's choice: everything, or one platform.
   const chooseFilter = (choice: 'all' | 'twitch' | 'kick') => {
     const next = choice === 'all' ? null : choice;
     setFilter(next);
     writeFilter(next);
   };
-  // Kick rows wear Kick's mark only where the list mixes platforms; a list of
-  // one platform (filtered, or simply all Twitch right now) needs no marks.
-  const mixed = useMemo(() => new Set(rows.map((s) => streamProvider(s))).size > 1, [rows]);
+  // Kick rows wear Kick's mark only where the screen mixes platforms (the
+  // shelf and the list together); one platform needs no marks.
+  const mixed = sections.mixed;
   const loadFollowedStreams = useAppStore((s) => s.loadFollowedStreams);
   const startStream = useAppStore((s) => s.startStream);
   const activeHypeTrainChannels = useAppStore((s) => s.activeHypeTrainChannels);
@@ -85,7 +86,7 @@ export const FollowingScreen: React.FC = () => {
   // row changes shape and size in that swap, which is a big enough visual
   // change to deserve being animated rather than snapping; a refresh, where the
   // same cards stay the same shape, still does not replay.
-  const settled = useSettleIn(!firstLoad && rows.length > 0, `${view}:${activeFilter ?? 'all'}`);
+  const settled = useSettleIn(!firstLoad && total > 0, `${view}:${activeFilter ?? 'all'}`);
 
   const setViewPersisted = (mode: StreamViewMode) => {
     setView(mode);
@@ -124,6 +125,22 @@ export const FollowingScreen: React.FC = () => {
     void startStream(stream.user_login, stream);
   };
 
+  // One entrance order across the shelf and the list, so the two settle as one.
+  const card = (s: TwitchStream, i: number) => (
+    <SettleIn key={streamKey(s)} index={i} settled={settled}>
+      <MobileStreamCard
+        stream={s}
+        hypeTrain={isTwitchStream(s) ? (activeHypeTrainChannels.get(s.user_id) ?? undefined) : undefined}
+        watchStreak={isTwitchStream(s) ? watchStreaks[s.user_id] : undefined}
+        onPress={onPress}
+        variant={view === 'list' ? 'row' : 'card'}
+        showPlatform={mixed}
+      />
+    </SettleIn>
+  );
+  const gridVariant = view === 'list' ? 'row' : 'card';
+  const gridGap = view === 'list' ? 8 : 12;
+
   return (
     <div className="flex-1 min-h-0 flex flex-col">
       {/* The filter only exists once you follow someone on Kick, and sits in
@@ -146,7 +163,7 @@ export const FollowingScreen: React.FC = () => {
       >
         {firstLoad ? (
           <SkeletonCards />
-        ) : rows.length === 0 ? (
+        ) : total === 0 ? (
           <EmptyNote
             text={
               activeFilter
@@ -155,24 +172,38 @@ export const FollowingScreen: React.FC = () => {
             }
           />
         ) : (
-          <AdaptiveGrid
-            variant={view === 'list' ? 'row' : 'card'}
-            gap={view === 'list' ? 8 : 12}
-            className="px-4 sn-tabbar-clearance"
-          >
-            {rows.map((s, i) => (
-              <SettleIn key={streamKey(s)} index={i} settled={settled}>
-                <MobileStreamCard
-                  stream={s}
-                  hypeTrain={isTwitchStream(s) ? (activeHypeTrainChannels.get(s.user_id) ?? undefined) : undefined}
-                  watchStreak={isTwitchStream(s) ? watchStreaks[s.user_id] : undefined}
-                  onPress={onPress}
-                  variant={view === 'list' ? 'row' : 'card'}
-                  showPlatform={mixed}
-                />
-              </SettleIn>
-            ))}
-          </AdaptiveGrid>
+          <div className="sn-tabbar-clearance">
+            {favorites.length > 0 && (
+              <section aria-label="Favorites">
+                {/* The shelf's mark is the gold star; the label keeps the
+                    phone's quiet group style and the count sits beside it. */}
+                <h2 className="flex items-center gap-1.5 px-5 pb-2 text-[12px] font-semibold uppercase tracking-wide text-textMuted">
+                  <Star size={14} weight="fill" className="text-yellow-400" aria-hidden />
+                  <span>Favorites</span>
+                  <span className="tabular-nums">{favorites.length}</span>
+                </h2>
+                <AdaptiveGrid variant={gridVariant} gap={gridGap} className="px-4">
+                  {favorites.map((s, i) => card(s, i))}
+                </AdaptiveGrid>
+                {/* Feathered at both ends, only when more rows follow. */}
+                {rows.length > 0 && (
+                  <div
+                    aria-hidden
+                    className="mx-4 my-5 h-px bg-borderSubtle/70"
+                    style={{
+                      WebkitMaskImage: 'linear-gradient(to right, transparent, black 26%, black 74%, transparent)',
+                      maskImage: 'linear-gradient(to right, transparent, black 26%, black 74%, transparent)',
+                    }}
+                  />
+                )}
+              </section>
+            )}
+            {rows.length > 0 && (
+              <AdaptiveGrid variant={gridVariant} gap={gridGap} className="px-4">
+                {rows.map((s, i) => card(s, favorites.length + i))}
+              </AdaptiveGrid>
+            )}
+          </div>
         )}
       </PullToRefresh>
     </div>

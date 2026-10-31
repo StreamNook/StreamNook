@@ -1,7 +1,7 @@
 // The menu behind the composer's trailing button when there is nothing to send.
 // Send and this share one slot, so the composer never carries a dead button.
-import React, { useState } from 'react';
-import { ArrowsClockwise, Bell, BellSlash, BookmarkSimple, Tray, CaretRight, ChatsCircle, Heart, HeartBreak, PencilSimpleLine, PushPin, ShieldCheck, Star, Terminal, X } from 'phosphor-react';
+import React, { useMemo, useState } from 'react';
+import { ArrowsClockwise, Bell, BellSlash, BookmarkSimple, Tray, CaretRight, ChatsCircle, Heart, HeartBreak, PencilSimpleLine, PushPin, ShieldCheck, Terminal, X } from 'phosphor-react';
 import {
   Fingerprint as ModeUnique,
   Heart as ModeFollowers,
@@ -15,11 +15,13 @@ import { fitCount } from '../../utils/fitNumber';
 import { GroupCard, GroupFooter, GroupLabel, GroupRow } from '../ui/GroupedList';
 import { useChannelSocial } from '../../hooks/useChannelSocial';
 import { platformTerms } from '../../utils/platformTerms';
-import { PROVIDERS, type ProviderId } from '../../types/providers';
+import { type ProviderId } from '../../types/providers';
 import type { RoomModeKind, RoomModeView } from '../../stores/chatConnectionStore';
 import { useChatTabsStore } from './chatTabsStore';
 import { useAppStore } from '../../stores/AppStore';
 import { mutedIncludes, setLiveAlert } from '../notifyChannels';
+import { setFavoriteChannel, useIsFavorite, type FavoriteRef } from '../../utils/favoriteDoor';
+import { FavoriteStar, SubscribeBadge, favoriteLabel } from '../ui/menuIcons';
 
 // The same glyph per mode as the composer's room-mode icon, so the icon you
 // tapped is the one you find named here.
@@ -128,6 +130,28 @@ export const ComposerMenuSheet: React.FC<Props> = ({
   const terms = platformTerms(provider);
   const canSubscribe = !!activeChannel && (provider === 'twitch' || provider === 'kick');
 
+  // Favorite, for the room you are in: a Twitch room by its id when known (by
+  // its login until then; Rust resolves it), a Kick room by its slug. The
+  // row is there for every Twitch and Kick room when the menu opens.
+  const roomAvatar = useChatTabsStore((s) => s.tabs.find((t) => t.channel === s.activeChannel)?.avatar ?? null);
+  const favoriteRef = useMemo<FavoriteRef | null>(
+    () =>
+      activeChannel && (provider === 'twitch' || provider === 'kick')
+        ? {
+            provider,
+            userId: provider === 'twitch' ? channelId : null,
+            userLogin: activeChannel,
+            userName: activeLabel,
+            avatar: roomAvatar,
+          }
+        : null,
+    [activeChannel, provider, channelId, activeLabel, roomAvatar],
+  );
+  const isFavorite = useIsFavorite(favoriteRef);
+  // Until Rust's lists land the row holds its place and ignores a press, so
+  // nothing appears or moves under the finger; its label settles in place.
+  const followingApplied = useAppStore((s) => s.followingApplied);
+
   // Follow sits at the top; Unfollow at the bottom with the other row that
   // takes something away. Where the row sits is decided once per opening, so
   // a tap flips its label in place (the confirmation) instead of moving it.
@@ -212,13 +236,7 @@ export const ComposerMenuSheet: React.FC<Props> = ({
               onClose();
               void handleSubscribeClick();
             }}
-            icon={
-              subscriberBadgeUrl ? (
-                <img src={subscriberBadgeUrl} alt="" draggable={false} className="w-[22px] h-[22px]" />
-              ) : (
-                <Star size={ICON} style={{ color: PROVIDERS[provider].color }} />
-              )
-            }
+            icon={<SubscribeBadge url={subscriberBadgeUrl ?? null} size={ICON} />}
             value={isSubscribed ? 'Subscribed' : undefined}
           >
             {isSubscribed ? terms.paidGift : hasSubHistory ? terms.paidAgain : terms.paid}
@@ -243,6 +261,21 @@ export const ComposerMenuSheet: React.FC<Props> = ({
             value={alertsOn ? 'On' : 'Off'}
           >
             Live alerts
+          </GroupRow>
+        )}
+
+        {/* Favorite, right before Add a chat: after Live alerts on Twitch,
+            after Subscribe on Kick. The sheet stays open; the star and the
+            words flipping are the confirmation. */}
+        {favoriteRef && (
+          <GroupRow
+            onClick={() => {
+              if (followingApplied) void setFavoriteChannel(favoriteRef, !isFavorite);
+            }}
+            aria-disabled={followingApplied ? undefined : true}
+            icon={<FavoriteStar on={isFavorite} size={ICON} />}
+          >
+            {favoriteLabel(isFavorite)}
           </GroupRow>
         )}
 

@@ -92,7 +92,7 @@ export const MobileStreamCard: React.FC<{
   // Rust stamps it on every Twitch row it serves; a Kick stream in the same
   // category earns nothing.
   const hasDrops = isTwitch && !!stream.drops_earnable;
-  // A tap watches; a hold offers the chat on its own.
+  // A tap watches; a hold opens the one hold sheet (chat, watch, favorite).
   const hold = useChannelHold(stream, onPress);
   // The row's live-dot ping rests while the row is scrolled out of view
   // (utils/offscreenPause, mobile.css).
@@ -224,7 +224,6 @@ export const MobileStreamCard: React.FC<{
           </div>
         </div>
       </button>
-      {hold.sheet}
       </>
     );
   }
@@ -329,7 +328,6 @@ export const MobileStreamCard: React.FC<{
       ) : (
         card
       )}
-      {hold.sheet}
     </>
   );
 };

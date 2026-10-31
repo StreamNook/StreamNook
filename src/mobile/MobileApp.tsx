@@ -46,6 +46,7 @@ import { SongsScreen } from './screens/SongsScreen';
 import { installWhisperInbox } from './whispers/whisperInbox';
 import { MobileClipSheet } from './watch/MobileClipSheet';
 import { MobileChannelSheet } from './watch/MobileChannelSheet';
+import { ChannelHoldSheet } from './ui/ChannelHold';
 import LoadingWidget from '../components/LoadingWidget';
 import DeviceLoginOverlay from '../components/DeviceLoginOverlay';
 import ToastManager from '../components/ToastManager';
@@ -267,6 +268,9 @@ const MobileApp: React.FC = () => {
           <MobileClipSheet />
           {/* A channel's videos and clips, from the player's avatar and the offline room. */}
           <MobileChannelSheet />
+          {/* A held card's sheet: one for every card, so a card that moves or
+              goes away after a press never takes the sheet with it. */}
+          <ChannelHoldSheet />
         </>
       )}
 

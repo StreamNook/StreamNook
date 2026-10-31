@@ -1,7 +1,8 @@
 // Touch-first player surface: the video element plus a tap-driven glass control
 // overlay. No Plyr; hls.js runs via useMobileHlsEngine.
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ArrowClockwise, Bell, BellSlash, CaretLeft, ChatTeardropText, Columns, Gear, MoonStars, Pause, Play, Rows, Screencast, ShareNetwork, SpeakerHigh, SpeakerSlash, Star, UsersThree, CaretDown, X, CornersIn, CornersOut } from 'phosphor-react';
+import { ArrowClockwise, Bell, BellSlash, CaretLeft, ChatTeardropText, Columns, Gear, MoonStars, Pause, Play, Rows, Screencast, ShareNetwork, SpeakerHigh, SpeakerSlash, UsersThree, CaretDown, X, CornersIn, CornersOut } from 'phosphor-react';
+import { SubscribeBadge } from '../ui/menuIcons';
 import { shareText } from '../nativeBridge';
 import { mutedIncludes, setLiveAlert } from '../notifyChannels';
 import { useVisibleInterval } from '../../utils/useVisibleInterval';
@@ -682,11 +683,7 @@ export const MobilePlayer: React.FC<{
     'shrink-0 flex items-center gap-1 pl-1.5 pr-2 py-[3px] rounded-full bg-white/15 text-[12px] font-medium text-white/75 leading-none whitespace-nowrap';
   const subscribeInk = (
     <>
-      {sub.subscriberBadgeUrl ? (
-        <img src={sub.subscriberBadgeUrl} alt="" draggable={false} className="w-3.5 h-3.5" />
-      ) : (
-        <Star size={12} weight="fill" />
-      )}
+      <SubscribeBadge url={sub.subscriberBadgeUrl ?? null} size={14} />
       {subLabel}
     </>
   );

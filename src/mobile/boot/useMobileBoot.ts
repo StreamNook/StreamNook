@@ -15,7 +15,7 @@
 import { useEffect } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
-import { useAppStore } from '../../stores/AppStore';
+import { useAppStore, ensureHomeSnapshotSync } from '../../stores/AppStore';
 import {
   handleSeventvCosmeticUpdate,
   handleSeventvEmoteSetUpdate,
@@ -118,6 +118,11 @@ export function useMobileBoot(): void {
         // failed; either way drop the boot overlay.
         if (isMounted) useAppStore.setState({ isBooting: false });
       }
+
+      // Rust's Following lists (favorites included) for every start tab, not
+      // only the ones that show them: the chat menu's and the hold sheet's
+      // Favorite rows read them. Idempotent; listener first, then the read.
+      void ensureHomeSnapshotSync();
 
       // Rust announces every settings write: a list edit, a field write, a
       // reset. Re-read so the phone's screens follow, as desktop's App.tsx
