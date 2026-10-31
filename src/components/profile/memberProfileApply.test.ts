@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   noLive,
@@ -5,7 +7,8 @@ import {
   planNamePaint,
   planPaintTheme,
   planPrefs,
-  planSevenTvParts,
+  sevenTvBadgesStep,
+  sevenTvCountsStep,
   type FirstPaint,
   type FirstPaintCard,
   type LivePaint,
@@ -160,20 +163,58 @@ describe('planPaintTheme', () => {
   });
 });
 
-describe('planSevenTvParts', () => {
-  const empty = { paints: 0, badges: 0, sn: 3 };
+describe('the live 7TV read steps', () => {
+  const failedCounts = { paints: 0, badges: 0, sn: 5 };
+  const onScreen = { paints: 12, badges: 7, sn: 3 };
+  const cardBadge = { id: '01KYQHQ7FVRR3X4S0F2KG74207', name: 'XDX', tooltip: 'XDX' };
+  type Row = {
+    seventv: typeof cardBadge | null;
+    twitch: { src: string; title: string } | null;
+    thirdParty: unknown[];
+    bttvPro: { src: string; title: string } | null;
+  };
+  const liveRow: Row = {
+    seventv: null,
+    twitch: { src: 'https://static-cdn.jtvnw.net/badges/v1/new/3', title: 'New' },
+    thirdParty: [],
+    bttvPro: null,
+  };
 
-  it('a failed 7TV read keeps the card counts and its 7TV badge and marks nothing live', () => {
-    const plan = planSevenTvParts({ answered: false, counts: empty });
-    expect(plan).toEqual({ counts: null, badgesLive: false });
-    // Nothing marked live: a late card still paints its 12 paints, 7 badges and 7TV badge.
-    const first = planFirstPaint(snap(), noLive(), false);
-    expect(first.counts).toEqual({ paints: 12, badges: 7, sn: 3 });
-    expect(first.wornBadges?.seventv).toEqual({ id: '01KYQHQ7FVRR3X4S0F2KG74207', name: 'XDX', tooltip: 'XDX' });
+  it('a failed read keeps the 7TV counts on screen, updates the StreamNook count, marks nothing live', () => {
+    const step = sevenTvCountsStep({ answered: false, counts: failedCounts });
+    expect(step.markLive).toBe(false);
+    expect(step.apply(onScreen)).toEqual({ paints: 12, badges: 7, sn: 5 });
+    // With no card yet the StreamNook count still shows.
+    expect(step.apply({ paints: 0, badges: 0, sn: 0 })).toEqual({ paints: 0, badges: 0, sn: 5 });
   });
 
-  it('an answered read sets its counts, even zero, and the badge row is live', () => {
-    expect(planSevenTvParts({ answered: true, counts: empty })).toEqual({ counts: empty, badgesLive: true });
+  it('an answered read sets its counts, even zero, and marks them live', () => {
+    const step = sevenTvCountsStep({ answered: true, counts: failedCounts });
+    expect(step.markLive).toBe(true);
+    expect(step.apply(onScreen)).toEqual(failedCounts);
+  });
+
+  it('a failed read keeps the 7TV badge on screen, applies the other badges, marks nothing live', () => {
+    const step = sevenTvBadgesStep({ answered: false, row: liveRow });
+    expect(step.markLive).toBe(false);
+    const before = { seventv: cardBadge, twitch: null, thirdParty: [], bttvPro: null };
+    expect(step.apply(before)).toEqual({ ...liveRow, seventv: cardBadge });
+  });
+
+  it('an answered read replaces the whole row, a missing 7TV badge included, and marks it live', () => {
+    const step = sevenTvBadgesStep({ answered: true, row: liveRow });
+    expect(step.markLive).toBe(true);
+    expect(step.apply({ seventv: cardBadge, twitch: null, thirdParty: [], bttvPro: null })).toEqual(liveRow);
+  });
+
+  it('the card hook marks counts and badges live only through these steps', () => {
+    const hook = readFileSync(resolve(__dirname, 'memberProfile.ts'), 'utf8');
+    const marks = hook.match(/live\.(counts|badges) = true/g) ?? [];
+    expect(marks).toHaveLength(2);
+    expect(hook).toContain('if (countsStep.markLive) live.counts = true;');
+    expect(hook).toContain('setCounts(countsStep.apply);');
+    expect(hook).toContain('if (badgesStep.markLive) live.badges = true;');
+    expect(hook).toContain('setWornBadges(badgesStep.apply);');
   });
 });
 

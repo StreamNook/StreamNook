@@ -189,23 +189,35 @@ export function planNamePaint(read: { answered: boolean; paintStyle: CSSProperti
   return read.answered ? { set: true, value: read.paintStyle } : { set: false };
 }
 
-/** What the live 7TV read decides for the counts and the worn-badge row. */
-export interface SevenTvPartsPlan {
-  /** The counts to set and mark live, or null to keep the first-paint card's. */
-  counts: FirstPaintCard['counts'] | null;
-  /**
-   * Whether the live badge row (7TV badge included) replaces the card's and is
-   * marked live. False after a failed read: the row's other badges are still
-   * applied, the card's 7TV badge stays, and nothing is marked live.
-   */
-  badgesLive: boolean;
+/**
+ * One state write from the live 7TV read: whether it marks its field live, and
+ * the functional update the hook hands its setter as is.
+ */
+export interface LiveStep<T> {
+  markLive: boolean;
+  apply: (prev: T) => T;
+}
+
+type Counts = FirstPaintCard['counts'];
+
+/**
+ * The counts after the live 7TV read. A failed read answers empty cosmetics, so
+ * taking its numbers would turn the card's 12 paints into 0: it keeps the 7TV
+ * numbers on screen and marks nothing live. The StreamNook count is the app's
+ * own and applies either way.
+ */
+export function sevenTvCountsStep(read: { answered: boolean; counts: Counts }): LiveStep<Counts> {
+  if (read.answered) return { markLive: true, apply: () => read.counts };
+  return { markLive: false, apply: (prev) => ({ ...prev, sn: read.counts.sn }) };
 }
 
 /**
- * The counts and badges the 7TV read feeds. A failed read answers empty
- * cosmetics, so taking its numbers would blank the card's 12 paints to 0 and
- * drop its 7TV badge; only an answered read sets them.
+ * The worn-badge row after the live reads. The Twitch, third-party and BTTV
+ * badges come from their own sources and always apply; the 7TV badge only from
+ * an answered 7TV read. After a failed one the badge on screen (the card's)
+ * stays and the row is not marked live.
  */
-export function planSevenTvParts(read: { answered: boolean; counts: FirstPaintCard['counts'] }): SevenTvPartsPlan {
-  return read.answered ? { counts: read.counts, badgesLive: true } : { counts: null, badgesLive: false };
+export function sevenTvBadgesStep<Row extends { seventv: unknown }>(read: { answered: boolean; row: Row }): LiveStep<Row> {
+  if (read.answered) return { markLive: true, apply: () => read.row };
+  return { markLive: false, apply: (prev) => ({ ...read.row, seventv: prev.seventv }) };
 }

@@ -31,7 +31,7 @@ import {
   incrementProfileView,
   getProfileViews,
 } from '../../services/supabaseService';
-import { noLive, planFirstPaint, planNamePaint, planPaintTheme, planPrefs, planSevenTvParts, type FirstPaint } from './memberProfileApply';
+import { noLive, planFirstPaint, planNamePaint, planPaintTheme, planPrefs, sevenTvBadgesStep, sevenTvCountsStep, type FirstPaint } from './memberProfileApply';
 
 // "#rrggbb" -> "r, g, b" for use inside rgba(...).
 export const hexToRgb = (hex: string): string | null => {
@@ -339,7 +339,7 @@ export function useMemberProfile(
           // not blank the counts, 7TV badge or name paint the first-paint card
           // drew, nor mark them live.
           const paintAnswered = !isUserCosmeticsHardFailed(userId);
-          const sevenTv = planSevenTvParts({
+          const countsStep = sevenTvCountsStep({
             answered: paintAnswered,
             counts: {
               paints: profile.seventvCosmetics?.paints?.length ?? 0,
@@ -347,9 +347,9 @@ export function useMemberProfile(
               sn: getOwnedCosmeticSlugs(userId).size,
             },
           });
-          if (alive && sevenTv.counts) {
-            live.counts = true;
-            setCounts(sevenTv.counts);
+          if (alive) {
+            if (countsStep.markLive) live.counts = true;
+            setCounts(countsStep.apply);
           }
 
           // Worn identity badges, resolved the same way chat does (see
@@ -357,13 +357,13 @@ export function useMemberProfile(
           // the resolved values; the live-preview effect re-runs the same helper.
           const { seventv: sevenTvBadge, twitch, thirdParty, bttvPro } =
             await resolveWornBadges(userId, profile);
+          const badgesStep = sevenTvBadgesStep<typeof wornBadges>({
+            answered: paintAnswered,
+            row: { seventv: sevenTvBadge, twitch, thirdParty, bttvPro },
+          });
           if (alive) {
-            if (sevenTv.badgesLive) {
-              live.badges = true;
-              setWornBadges({ seventv: sevenTvBadge, twitch, thirdParty, bttvPro });
-            } else {
-              setWornBadges((current) => ({ ...current, twitch, thirdParty, bttvPro }));
-            }
+            if (badgesStep.markLive) live.badges = true;
+            setWornBadges(badgesStep.apply);
           }
 
           // The member's active 7TV paint always paints their NAME (free, like
