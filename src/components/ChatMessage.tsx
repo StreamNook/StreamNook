@@ -46,7 +46,7 @@ import { features } from '../features';
 import { MAJOR_COLOGNE_THEME_ID } from '../services/cologneEvent';
 import type { HighlightMatch } from '../utils/chatHighlightMatcher';
 import { useStreamerMode } from '../utils/streamerMode';
-import { sevenTvSrcSet, staticEmoteUrl, static7tvSrcSet } from '../utils/staticEmoteUrl';
+import { hasNoStillFrame, markNoStillFrame, sevenTvSrcSet, staticEmoteUrl, static7tvSrcSet } from '../utils/staticEmoteUrl';
 import { emoteImageRetry } from '../utils/emoteImageRetry';
 import { flashTitle } from '../utils/titleFlasher';
 import { useLowPower } from '../utils/lowPower';
@@ -1593,7 +1593,16 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       // Static mode: the CDN's first-frame file, bypassing the animated disk
       // cache (a static URL under the animated key would corrupt it).
       // Battery Saver stills the gigantified emote too, the costliest one.
-      const wantStatic = stillEmotes || (!giant && (animateEmotes === 'never' || (animateEmotes === 'hover' && !rowHovering)));
+      // 7TV and BTTV publish a first frame only for emotes that animate, so an
+      // emote known to be still (the channel set says so, or its first frame
+      // already answered 404) draws its normal file, disk copy included.
+      const setEmote = emotes && segment.emoteId ? getEmoteLookup(emotes).byName.get(segment.content) : undefined;
+      const knownStill =
+        (setEmote?.id === segment.emoteId && setEmote?.animated === false) ||
+        hasNoStillFrame(emoteProvider, segment.emoteId);
+      const wantStatic =
+        !knownStill &&
+        (stillEmotes || (!giant && (animateEmotes === 'never' || (animateEmotes === 'hover' && !rowHovering))));
       const cachedEmoteUrl = !wantStatic && segment.emoteId && (!giant || emoteProvider === '7tv')
         ? getCachedEmoteUrl(segment.emoteId, emoteProvider, emoteTier)
         : undefined;
@@ -1664,6 +1673,16 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
         },
         onError: (e) => {
           const t = e.currentTarget;
+          // No first frame: the emote does not animate. It draws its normal
+          // file now, and every later row skips the still for it.
+          if (wantStatic && !t.dataset.stillFallback) {
+            t.dataset.stillFallback = '1';
+            markNoStillFrame(emoteProvider, segment.emoteId);
+            if (is7TVEmote && segment.emoteId && !giant) t.srcset = sevenTvSrcSet(segment.emoteId, 'avif');
+            else t.removeAttribute('srcset');
+            t.src = displayUrl;
+            return;
+          }
           // Giant 4x URL failed: retry once with the inline-size URL upscaled
           // (FFZ-equivalent degradation) before the cache/CDN ladder below.
           if (giant && displayUrl !== emoteUrl && !t.dataset.giantFallback) {
@@ -1688,8 +1707,9 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
           // Android phones) cannot decode AVIF at all.
           if (is7TVEmote && segment.emoteId && !t.dataset.webpFallback) {
             t.dataset.webpFallback = '1';
-            const still = wantStatic ? '_static' : '';
-            t.srcset = sevenTvSrcSet(segment.emoteId, 'webp', wantStatic);
+            const drawStill = wantStatic && !t.dataset.stillFallback;
+            const still = drawStill ? '_static' : '';
+            t.srcset = sevenTvSrcSet(segment.emoteId, 'webp', drawStill);
             t.src = `https://cdn.7tv.app/emote/${segment.emoteId}/${emoteTier}${still}.webp`;
             return;
           }

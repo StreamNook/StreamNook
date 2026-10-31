@@ -72,7 +72,7 @@ import ImageUploadSection from './ImageUploadSection';
 import { useFitAbove } from '../../hooks/useFitAbove';
 import { useOutsidePress } from '../../hooks/useOutsidePress';
 import { MenuSwitcher, type MenuSwitcherTab } from './MenuSwitcher';
-import { staticEmoteUrl } from '../../utils/staticEmoteUrl';
+import { hasNoStillFrame, markNoStillFrame, staticEmoteUrl } from '../../utils/staticEmoteUrl';
 import { useLowPower } from '../../utils/lowPower';
 import { fitAmount } from '../../utils/fitNumber';
 import { fitHeaderDensity } from './fitHeaderDensity';
@@ -213,11 +213,6 @@ export function useSwappingSmiley() {
 }
 
 // ── grid item ────────────────────────────────────────────────────────────────
-/** Emotes found to have no first-frame file (`provider:id`). The CDNs publish
- *  one only for emotes that animate, so an emote whose animation is unknown
- *  answers 404 for it; once seen, it is drawn live and never asked again. */
-const noStillFrame = new Set<string>();
-
 const EmoteGridItem = memo(
   ({
     emote,
@@ -256,8 +251,7 @@ const EmoteGridItem = memo(
     const emoteTier = inlineEmoteTier();
     const liveLocal = getCachedEmoteUrl(emote.id, emote.provider, emoteTier);
     // An emote known to be still has no frames to save: it keeps its disk copy.
-    const stillKey = `${emote.provider}:${emote.id}`;
-    const showStill = still && !hovered && emote.animated !== false && !noStillFrame.has(stillKey);
+    const showStill = still && !hovered && emote.animated !== false && !hasNoStillFrame(emote.provider, emote.id);
     const liveSrc = is7tv
       ? liveLocal || emote.localUrl || sevenTvTierUrl(emote.id, emoteTier)
       : liveLocal || emote.localUrl || emote.url;
@@ -385,7 +379,7 @@ const EmoteGridItem = memo(
                 const t = e.currentTarget;
                 if (showStill && t.src !== liveSrc) {
                   // No first frame published: the emote does not animate.
-                  noStillFrame.add(stillKey);
+                  markNoStillFrame(emote.provider, emote.id);
                   t.src = liveSrc;
                   return;
                 }
@@ -1514,8 +1508,7 @@ export function EmotePickerPanel({
                       {(still) =>
                         block.map((emote, idx) => {
                           const isFavorited = isFavoriteEmote(emote.id);
-                          const stillKey = `${emote.provider}:${emote.id}`;
-                          const drawStill = still && emote.animated !== false && !noStillFrame.has(stillKey);
+                          const drawStill = still && emote.animated !== false && !hasNoStillFrame(emote.provider, emote.id);
                           const liveSrc = drawStill
                             ? staticEmoteUrl(emote.url)
                             : getCachedEmoteUrl(emote.id, emote.provider) || emote.localUrl || emote.url;
@@ -1562,7 +1555,7 @@ export function EmotePickerPanel({
                                     className="w-8 h-8 object-contain"
                                     onError={(e) => {
                                       const target = e.currentTarget;
-                                      if (drawStill) noStillFrame.add(stillKey);
+                                      if (drawStill) markNoStillFrame(emote.provider, emote.id);
                                       if (target.src !== emote.url) target.src = emote.url;
                                       else target.style.display = 'none';
                                     }}
