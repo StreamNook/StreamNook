@@ -1,5 +1,5 @@
 // What floats over a paused phone chat: the round resume button at the bottom
-// right, and the tap-to-reply hint until it has been learned.
+// right, and the swipe-to-reply hint until it has been learned.
 //
 // The button is a chevron in an accent circle; once new messages arrive, the
 // chevron turns into how many (capped "99+", so the number always fits the
@@ -61,12 +61,14 @@ export const PausedOverlay: React.FC<{
   paused: boolean;
   /** The chat's slice key for the count; empty counts nothing (a replay). */
   sliceKey: string;
-  /** Show "Tap a message to reply" (paused, can reply, not learned yet). */
+  /** Show the reply hint (paused, the room can take a reply, not learned yet). */
   hint: boolean;
+  /** The hint's words, fitted to its column ("Swipe left on a message to reply", or shorter). */
+  hintWords: string;
   /** How far to rise over the composer's strip. */
   lift: number;
   onResume: () => void;
-}> = ({ paused, sliceKey, hint, lift, onResume }) => (
+}> = ({ paused, sliceKey, hint, hintWords, lift, onResume }) => (
   <motion.div
     className="pointer-events-none absolute bottom-2 left-0 right-0 z-10 grid h-10 items-center"
     // The hint in the middle column: centred while both sides have room, and
@@ -87,7 +89,7 @@ export const PausedOverlay: React.FC<{
           transition={POP}
           className="col-start-2 glass-badge truncate rounded-full px-2 py-0.5 text-[10.5px] text-textMuted"
         >
-          Tap a message to reply
+          {hintWords}
         </motion.span>
       )}
     </AnimatePresence>

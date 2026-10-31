@@ -1,30 +1,49 @@
-// Swipe right on a message to moderate it: the desktop mod slider with a
-// finger, the same on Android as on the iPhone. Rust lays the slider out for
-// each press, from where the thumb landed, and says every word with the
-// chatter's name in it (`get_touch_mod_slider`, services/touch_mod_slider.rs);
-// this follows the finger, draws the chosen style over the row, buzzes on each
-// step and on release sends the armed step through the one mod door.
+// A sideways swipe on a chat row, the same on Android as on the iPhone:
 //
-// One move, one direction: the pull only goes right. Short of the cancel zone,
-// or with the finger strayed `leash` px above or below the message, the chip
-// says "Let go to cancel" and a release does nothing. Ban sits at the end of
-// the pull and arms only after the finger rests there; a release before it
-// arms cancels, so a flick past the end does nothing at all.
+// - Swipe RIGHT to moderate (moderators): the desktop mod slider with a finger.
+//   Rust lays the slider out for each press, from where the thumb landed, and
+//   says every word with the chatter's name in it (`get_touch_mod_slider`,
+//   services/touch_mod_slider.rs); this follows the finger, draws the chosen
+//   style over the row, buzzes on each step and on release sends the armed step
+//   through the one mod door. Short of the cancel zone, or with the finger
+//   strayed `leash` px above or below the message, the chip says "Let go to
+//   cancel" and a release does nothing. Ban sits at the end of the pull and arms
+//   only after the finger rests there; a release before it arms cancels, so a
+//   flick past the end does nothing at all.
+// - Swipe LEFT to reply (anyone the room lets type): the row follows the finger,
+//   an arrow comes in at its right and, past the arm point, an accent disc fills
+//   behind it with one light tick; letting go there starts the reply
+//   (replySwipe.ts holds the numbers, shared with the iPhone).
 //
-// The thumb landing on a row the viewer moderates holds the list at once
-// (`holdChatRow`) and captures the chatter, so in a fast chat the row pressed
-// is the row acted on. It listens on the list element natively and keeps its
-// own state, so a moving finger re-renders this overlay and nothing else: the
-// pane's re-render storms are what once dropped chat swipes. A non-passive
-// touchmove stops the list scrolling under the pull.
+// One move, one direction: the press is decided once, at the slop. Every press
+// on a row holds the list at once (`holdChatRow`), so in a fast chat the row
+// pressed is the row acted on, and a tap's click lands on the row it came down
+// on: a plain lift leaves the thaw to the list, which waits for that click. It
+// listens on the list element natively and keeps its own state, so a moving
+// finger re-renders this overlay and nothing else: the pane's re-render storms
+// are what once dropped chat swipes. A non-passive touchmove stops the list
+// scrolling under the pull, and stops the list's own touch handler, so a swipe
+// never pauses chat.
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
+import { Reply } from 'lucide-react';
 import { holdChatRow, moderateWithToast } from '../../services/moderation';
 import { Logger } from '../../utils/logger';
 import { readInsets } from '../nativeInsets';
-import { hapticCommit, hapticDestructive, hapticStep } from '../ui/haptics';
+import { hapticCommit, hapticDestructive, hapticStep, hapticTick } from '../ui/haptics';
 import { isThemeDark } from '../../themes';
-import { inGrabZone, slideStart, stepAction, stepKeeping, stepTint, type SwipeTarget, type TouchSlider } from './swipeSteps';
+import {
+  GRAB_RATIO,
+  inGrabZone,
+  inRightGrabZone,
+  slideStart,
+  stepAction,
+  stepKeeping,
+  stepTint,
+  type SwipeTarget,
+  type TouchSlider,
+} from './swipeSteps';
+import { REPLY_DRAG_START, REPLY_ENGAGE, replyStep, snapBackMs, type ReplyTarget } from './replySwipe';
 
 export type { SwipeTarget, TouchSlider } from './swipeSteps';
 
@@ -41,43 +60,88 @@ interface View {
   resting: boolean;
 }
 
+/** The row a reply swipe moves, relative to the list element. */
+interface ReplyView {
+  top: number;
+  left: number;
+  width: number;
+  height: number;
+}
+
 interface Props {
   listRef: React.RefObject<HTMLElement | null>;
-  /** Swiping is on here (moderator tools on, not the read-only overlay). */
-  enabled: boolean;
+  /** Swiping right to moderate is on here (moderator tools on, not the read-only overlay). */
+  modEnabled: boolean;
+  /** Swiping left to reply is on here (the room can take a reply). */
+  replyEnabled: boolean;
   broadcasterId: string | null;
   /** The chatter behind a row the viewer may swipe, or null. */
   targetFor: (messageId: string) => SwipeTarget | null;
+  /** The reply a row would start, or null (`canReplyTo`). */
+  replyFor: (messageId: string) => ReplyTarget | null;
   /** The core's slider for a press `startX` px into a row `width` px wide, on `target`'s message. */
   sliderFor: (width: number, startX: number, target: SwipeTarget) => Promise<TouchSlider | null>;
   /** The long-press fan owns the finger once armed. */
   fanArmed: () => boolean;
-  /** A swipe started (the one-time hint goes). */
+  /** Gives up the hold menu's pending press: a swipe took the finger. */
+  cancelHold: () => void;
+  /** A mod swipe started (its one-time hint goes). */
   onDone: () => void;
+  /** A reply swipe was let go armed: starts the reply, inside the touch's own handler. */
+  onReply: (target: ReplyTarget) => void;
+  /** Filled with this swipe's pause ratio for the list's touch rule (`touchPauseIntent`). */
+  pauseRatioRef: React.MutableRefObject<() => number | undefined>;
 }
 
-export function SwipeModerator({ listRef, enabled, broadcasterId, targetFor, sliderFor, fanArmed, onDone }: Props) {
+export function SwipeModerator({
+  listRef,
+  modEnabled,
+  replyEnabled,
+  broadcasterId,
+  targetFor,
+  replyFor,
+  sliderFor,
+  fanArmed,
+  cancelHold,
+  onDone,
+  onReply,
+  pauseRatioRef,
+}: Props) {
   const [view, setView] = useState<View | null>(null);
   const [shown, setShown] = useState<TouchSlider | null>(null);
+  const [replyView, setReplyView] = useState<ReplyView | null>(null);
+  // The list the overlays draw into, set once it exists, so the arrow is there for a first swipe.
+  const [host, setHost] = useState<HTMLElement | null>(null);
+  const replyIcon = useRef<HTMLSpanElement | null>(null);
   // Everything the native listeners read, kept current without re-binding them.
-  const live = useRef({ enabled, broadcasterId, targetFor, sliderFor, fanArmed, onDone });
-  live.current = { enabled, broadcasterId, targetFor, sliderFor, fanArmed, onDone };
+  const live = useRef({ modEnabled, replyEnabled, broadcasterId, targetFor, replyFor, sliderFor, fanArmed, cancelHold, onDone, onReply });
+  live.current = { modEnabled, replyEnabled, broadcasterId, targetFor, replyFor, sliderFor, fanArmed, cancelHold, onDone, onReply };
 
   useEffect(() => {
     const list = listRef.current;
     if (!list) return;
+    setHost(list);
     let press: {
       id: number;
       x: number;
       y: number;
       row: HTMLElement;
       messageId: string;
-      target: SwipeTarget;
+      /** The chatter a mod swipe acts on, or null where none can start. */
+      target: SwipeTarget | null;
+      /** The reply a left swipe starts, or null where none can. */
+      reply: ReplyTarget | null;
       slider: TouchSlider | null;
-      /** The press landed in the grab zone. */
+      /** The core answered for the slider (or no slider was asked for). */
+      sliderSettled: boolean;
+      /** The press landed in the left grab zone (mod). */
       grab: boolean;
+      /** The press landed in the right grab zone (reply). */
+      rightGrab: boolean;
     } | null = null;
-    let engaged = false;
+    /** What the press became at the slop; null while undecided. */
+    let kind: 'mod' | 'reply' | null = null;
+    let drag = REPLY_DRAG_START;
     let step: number | null = null;
     /** The step zone under the finger, before Ban's rest is applied. */
     let zone: number | null = null;
@@ -85,36 +149,96 @@ export function SwipeModerator({ listRef, enabled, broadcasterId, targetFor, sli
     let rest: { timer: ReturnType<typeof setTimeout>; anchor: number; armed: boolean } | null = null;
     let rowRect: DOMRect | null = null;
     let listRect: DOMRect | null = null;
+    /** Rows still sliding back, with the timer that clears their transition. */
+    const settling = new Map<HTMLElement, ReturnType<typeof setTimeout>>();
+    /** The one stray click a swipe's release may make, eaten until the next press. */
+    let swallow: (() => void) | null = null;
 
     const body = (row: HTMLElement) => row.querySelector<HTMLElement>('[data-mod-body]');
+    const clearTransition = (row: HTMLElement) => {
+      const t = settling.get(row);
+      if (t) clearTimeout(t);
+      settling.delete(row);
+      row.style.transition = '';
+    };
     const restore = (row: HTMLElement) => {
+      clearTransition(row);
+      // No slide back while Interface > Motion drops movement.
+      const ms = snapBackMs(document.documentElement.dataset.motion);
+      if (ms) row.style.transition = `transform ${ms}ms ease-out`;
       row.style.transform = '';
       row.style.maskImage = '';
-      row.style.transition = 'transform 220ms ease-out';
       const b = body(row);
       if (b) {
         b.style.opacity = '';
         b.style.textDecoration = '';
       }
-      setTimeout(() => (row.style.transition = ''), 240);
+      if (ms) {
+        settling.set(
+          row,
+          setTimeout(() => {
+            settling.delete(row);
+            row.style.transition = '';
+          }, ms + 20),
+        );
+      }
+    };
+    const resetIcon = () => {
+      const icon = replyIcon.current;
+      if (!icon) return;
+      icon.style.opacity = '0';
+      icon.style.transform = 'scale(0.6)';
+      icon.classList.remove('bg-accent', 'sn-send-ink');
+      icon.classList.add('text-textSecondary');
+    };
+    const stopSwallow = () => {
+      swallow?.();
+      swallow = null;
+    };
+    const armSwallow = () => {
+      stopSwallow();
+      const eat = (e: MouseEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        stopSwallow();
+      };
+      const timer = setTimeout(stopSwallow, 400);
+      window.addEventListener('click', eat, true);
+      swallow = () => {
+        clearTimeout(timer);
+        window.removeEventListener('click', eat, true);
+      };
     };
     const stopRest = () => {
       if (rest) clearTimeout(rest.timer);
       rest = null;
     };
     const resting = () => rest != null && !rest.armed;
-    /** The press ends: the list is let go, and with `apply` an armed step runs. */
+    /** The press ends. With `apply` (the finger came up) an armed step or reply runs. */
     const end = (apply: boolean) => {
       const p = press;
       press = null;
+      const was = kind;
+      kind = null;
       const s = p?.slider ?? null;
-      const armedStep = apply && engaged && !offRow && !resting() && step != null && s ? s.steps[step] : null;
+      const armedStep = apply && was === 'mod' && !offRow && !resting() && step != null && s ? s.steps[step] : null;
+      const replyArmed = apply && was === 'reply' && drag.armed;
       stopRest();
       if (p) {
-        if (engaged) restore(p.row);
-        holdChatRow(p.row, false);
+        if (was) {
+          restore(p.row);
+          list.removeAttribute('data-row-swipe');
+          resetIcon();
+          // A swipe makes no tap: the list is let go now, and a stray click from the lift is eaten.
+          holdChatRow(p.row, false);
+          if (apply) armSwallow();
+        } else if (!apply) {
+          // Gave way to a scroll, the hold menu, or the browser: let go now.
+          holdChatRow(p.row, false);
+        }
+        // A plain lift (a tap) leaves the thaw to the list, which waits for the tap's click.
         const bid = live.current.broadcasterId;
-        if (armedStep && bid) {
+        if (armedStep && bid && p.target) {
           if (armedStep.action === 'delete') hapticCommit();
           else hapticDestructive();
           void moderateWithToast({
@@ -126,12 +250,14 @@ export function SwipeModerator({ listRef, enabled, broadcasterId, targetFor, sli
             useSavedReason: armedStep.action !== 'delete',
           });
         }
+        if (replyArmed && p.reply) live.current.onReply(p.reply);
       }
-      engaged = false;
+      drag = REPLY_DRAG_START;
       step = null;
       zone = null;
       offRow = false;
       setView(null);
+      setReplyView(null);
     };
 
     const draw = (slide: number) => {
@@ -161,58 +287,145 @@ export function SwipeModerator({ listRef, enabled, broadcasterId, targetFor, sli
       });
     };
 
+    /** The reply swipe follows the finger: style writes only, no render per move. */
+    const trackReply = (dx: number) => {
+      const p = press;
+      if (!p) return;
+      const r = replyStep(drag, Math.max(0, -dx));
+      drag = r.drag;
+      p.row.style.transform = `translateX(${-r.shown}px)`;
+      // The part slid past the list's left edge fades out rather than being cut mid-word.
+      p.row.style.maskImage = `linear-gradient(to right, transparent ${r.shown}px, #000 ${r.shown + 24}px)`;
+      const icon = replyIcon.current;
+      if (icon) {
+        icon.style.opacity = String(r.progress);
+        icon.style.transform = `scale(${0.6 + 0.4 * r.progress})`;
+        if (r.armedChanged) {
+          icon.classList.toggle('bg-accent', drag.armed);
+          icon.classList.toggle('sn-send-ink', drag.armed);
+          icon.classList.toggle('text-textSecondary', !drag.armed);
+        }
+      }
+      if (r.armedChanged && drag.armed) hapticTick();
+    };
+
+    // The list's touch rule asks this on every move: a swipe that could still start keeps a
+    // sideways drag from pausing chat; once the press is decided or gone, the list's own rule.
+    pauseRatioRef.current = () => {
+      if (!press || kind) return undefined;
+      if (press.target && press.grab) return GRAB_RATIO;
+      if (press.target || press.reply) return 1;
+      return undefined;
+    };
+
     const onDown = (e: PointerEvent) => {
-      if (!e.isPrimary || !live.current.enabled || press) return;
+      if (!e.isPrimary || press) return;
       const row = (e.target as HTMLElement).closest<HTMLElement>('[data-message-id]');
       const messageId = row?.getAttribute('data-message-id');
-      const target = messageId ? live.current.targetFor(messageId) : null;
-      if (!row || !messageId || !target) return;
-      // Hold the list now: the row under the thumb is the row a swipe acts on.
+      if (!row || !messageId) return;
+      const l = live.current;
+      const target = l.modEnabled ? l.targetFor(messageId) : null;
+      const reply = l.replyEnabled ? l.replyFor(messageId) : null;
+      // Hold the list now, on every surface: the row under the thumb is the row a swipe acts on,
+      // and the row a tap's click lands on.
       holdChatRow(row, true);
       const r = row.getBoundingClientRect();
-      // The system's left strip (the back gesture, or the cutout and bars) never reaches the page,
-      // so the grab zone starts where it ends.
+      const lr = list.getBoundingClientRect();
+      // The system's edge strips (the back gesture, or the cutout and bars) never reach the page,
+      // and a list beside the player starts mid-screen: each grab zone starts where both allow.
       const insets = readInsets();
-      const grab = inGrabZone(e.clientX, Math.max(insets.gestureLeft, insets.left));
-      const current = { id: e.pointerId, x: e.clientX, y: e.clientY, row, messageId, target, slider: null as TouchSlider | null, grab };
+      const leftEdge = Math.max(insets.gestureLeft, insets.left, lr.left);
+      const rightEdge = Math.min(lr.right, window.innerWidth - Math.max(insets.gestureRight, insets.right));
+      const current = {
+        id: e.pointerId,
+        x: e.clientX,
+        y: e.clientY,
+        row,
+        messageId,
+        target,
+        reply,
+        slider: null as TouchSlider | null,
+        sliderSettled: !target,
+        grab: !!target && inGrabZone(e.clientX, leftEdge),
+        rightGrab: !!reply && inRightGrabZone(e.clientX, rightEdge),
+      };
       press = current;
+      if (!target) return;
       trace(`down on ${messageId} at x ${Math.round(e.clientX - r.left)} of ${Math.round(r.width)}; slider requested`);
-      void live.current.sliderFor(r.width, e.clientX - r.left, target).then((s) => {
+      void l.sliderFor(r.width, e.clientX - r.left, target).then((s) => {
         trace(s ? `slider ready: enabled ${s.enabled} steps ${s.steps.length} start ${Math.round(s.start)}` : 'slider missing');
-        if (press === current) current.slider = s;
+        if (press !== current) return;
+        current.slider = s;
+        current.sliderSettled = true;
+        if (kind !== 'mod') return;
+        // A slide that latched before the slider came: the core says no and the press ends, or
+        // yes and the one-time hint goes.
+        if (!s?.enabled) end(false);
+        else live.current.onDone();
       });
     };
 
     const onMove = (e: PointerEvent) => {
       if (!press || e.pointerId !== press.id) return;
-      const s = press.slider;
       const dx = e.clientX - press.x;
       const dy = e.clientY - press.y;
-      if (!engaged) {
-        // In the grab zone a thumb reaching in from the edge starts a slide sooner and on a
-        // steeper angle; everywhere else a slide needs a mostly sideways move.
-        const move = slideStart(dx, dy, s?.engage ?? 10, press.grab);
-        // A vertical move is the list's scroll, and the fan owns a hold that armed.
-        if (live.current.fanArmed() || move === 'scroll') {
-          trace(live.current.fanArmed() ? 'gave way to the hold menu' : 'gave way to a scroll');
+      if (!kind) {
+        // The fan owns a hold that armed.
+        if (live.current.fanArmed()) {
+          if (press.target) trace('gave way to the hold menu');
           end(false);
           return;
         }
-        // Sideways and rightward claims the finger, once the core has laid the slider out.
-        if (!s?.enabled || move !== 'slide') return;
-        engaged = true;
-        trace('slider drawn');
+        const move = slideStart(dx, dy, press.slider?.engage ?? REPLY_ENGAGE, press.grab, {
+          mod: !!press.target,
+          reply: !!press.reply,
+          rightGrab: press.rightGrab,
+        });
+        // A vertical move is the list's scroll; a sideways one nothing here takes lets the row go.
+        if (move === 'scroll' || move === 'none') {
+          if (press.target) trace(move === 'scroll' ? 'gave way to a scroll' : 'nothing to swipe that way');
+          end(false);
+          return;
+        }
+        if (move === 'wait') return;
+        // The core already said this press never slides.
+        if (move === 'slide' && press.sliderSettled && !press.slider?.enabled) {
+          end(false);
+          return;
+        }
+        kind = move === 'slide' ? 'mod' : 'reply';
+        live.current.cancelHold();
         // The pull may leave the list; its release still comes here.
         try {
           list.setPointerCapture(e.pointerId);
         } catch {
           // The pointer is already gone; the next up or cancel ends the pull.
         }
+        list.setAttribute('data-row-swipe', '');
+        // A slide back still running on this row would make it lag the finger.
+        clearTransition(press.row);
         rowRect = press.row.getBoundingClientRect();
         listRect = list.getBoundingClientRect();
-        // The gesture is found: the one-time hint goes now, before the chip could meet it.
-        live.current.onDone();
+        if (kind === 'mod') {
+          trace('slider drawn');
+          // The gesture is found: the one-time hint goes now, before the chip could meet it (or,
+          // with the slider still on its way, once the core says it is on).
+          if (press.slider?.enabled) live.current.onDone();
+        } else {
+          setReplyView({
+            top: rowRect.top - listRect.top,
+            left: rowRect.left - listRect.left,
+            width: rowRect.width,
+            height: rowRect.height,
+          });
+        }
       }
+      if (kind === 'reply') {
+        trackReply(dx);
+        return;
+      }
+      const s = press.slider;
+      // The slider is on its way; until then the finger just pulls.
       if (!s) return;
       const slide = Math.min(Math.max(0, dx), s.end - 0.5);
       offRow = rowRect != null && (e.clientY < rowRect.top - s.leash || e.clientY > rowRect.bottom + s.leash);
@@ -256,19 +469,24 @@ export function SwipeModerator({ listRef, enabled, broadcasterId, targetFor, sli
     const onUp = (e: PointerEvent) => {
       if (!press || e.pointerId !== press.id) return;
       const s = press.slider;
-      if (s && rowRect) offRow = e.clientY < rowRect.top - s.leash || e.clientY > rowRect.bottom + s.leash;
-      if (engaged) trace(`released: ${!offRow && !resting() && step != null ? 'ran the armed step' : 'cancelled'}`);
+      if (kind === 'mod' && s && rowRect) offRow = e.clientY < rowRect.top - s.leash || e.clientY > rowRect.bottom + s.leash;
+      if (kind === 'mod') trace(`released: ${!offRow && !resting() && step != null ? 'ran the armed step' : 'cancelled'}`);
       end(true);
     };
     const onCancel = (e: PointerEvent) => {
       if (press && e.pointerId !== press.id) return;
       // The browser took the touch for a pan of its own: the rows' pan-y should have stopped that.
-      if (press) trace('the browser took the touch (pointercancel)');
+      if (press?.target) trace('the browser took the touch (pointercancel)');
       end(false);
     };
     const onTouchMove = (e: TouchEvent) => {
-      if (engaged) e.preventDefault();
+      if (!kind) return;
+      e.preventDefault();
+      // The list's own touch handler would read a swipe's jitter as a read-back and pause chat.
+      e.stopPropagation();
     };
+    // A new press anywhere is the user's own: nothing of an earlier swipe eats it.
+    const onAnyDown = () => stopSwallow();
     const onHidden = () => document.visibilityState === 'hidden' && end(false);
     const onBlur = () => end(false);
 
@@ -277,28 +495,61 @@ export function SwipeModerator({ listRef, enabled, broadcasterId, targetFor, sli
     list.addEventListener('pointerup', onUp);
     list.addEventListener('pointercancel', onCancel);
     list.addEventListener('touchmove', onTouchMove, { passive: false });
+    window.addEventListener('pointerdown', onAnyDown, true);
     window.addEventListener('blur', onBlur);
     document.addEventListener('visibilitychange', onHidden);
     return () => {
       end(false);
+      stopSwallow();
+      for (const [row, t] of settling) {
+        clearTimeout(t);
+        row.style.transition = '';
+      }
+      settling.clear();
+      pauseRatioRef.current = () => undefined;
       list.removeEventListener('pointerdown', onDown);
       list.removeEventListener('pointermove', onMove);
       list.removeEventListener('pointerup', onUp);
       list.removeEventListener('pointercancel', onCancel);
       list.removeEventListener('touchmove', onTouchMove);
+      window.removeEventListener('pointerdown', onAnyDown, true);
       window.removeEventListener('blur', onBlur);
       document.removeEventListener('visibilitychange', onHidden);
     };
-  }, [listRef]);
+  }, [listRef, pauseRatioRef]);
 
-  const host = listRef.current;
-  if (!view || !shown || !host) return null;
-  return createPortal(<SwipeOverlay view={view} slider={shown} />, host);
+  if (!host) return null;
+  return (
+    <>
+      {view && shown && createPortal(<SwipeOverlay view={view} slider={shown} />, host)}
+      {createPortal(<ReplyArrow view={replyView} iconRef={replyIcon} />, host)}
+    </>
+  );
 }
 
-/** One line per step of a swipe in the app log, so a phone that does nothing can say why. */
+/** One line per step of a mod swipe in the app log, so a phone that does nothing can say why. */
 function trace(line: string): void {
   Logger.warn('[Swipe]', line);
+}
+
+/** The arrow a reply swipe pulls in at the row's right. Always mounted, so a swipe's first move
+ *  already has it to write to; the swipe sets its opacity, scale and armed look directly. */
+function ReplyArrow({ view, iconRef }: { view: ReplyView | null; iconRef: React.RefObject<HTMLSpanElement | null> }) {
+  return (
+    <div
+      className="pointer-events-none absolute z-30"
+      style={view ? { top: view.top, left: view.left, width: view.width, height: view.height } : { display: 'none' }}
+      aria-hidden
+    >
+      <span
+        ref={iconRef}
+        className="absolute right-3 flex h-8 w-8 items-center justify-center rounded-full text-textSecondary"
+        style={{ top: 'calc(50% - 16px)', opacity: 0, transform: 'scale(0.6)' }}
+      >
+        <Reply size={16} strokeWidth={2.25} />
+      </span>
+    </div>
+  );
 }
 
 /** The list fades its top edge; the chip stays below that. */

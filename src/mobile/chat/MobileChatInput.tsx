@@ -124,6 +124,12 @@ interface Props {
   emotes: EmoteSet | null;
   replyTo?: { messageId: string; username: string } | null;
   onCancelReply?: () => void;
+  /** A send finished, with the reply it went out with: the pane clears the draft only if it is
+   *  still that one. */
+  onReplySent?: (sentWith: string | null) => void;
+  /** Set to this box's reply focus while it is mounted: the keyboard, or the emote panel in an
+   *  emote-only room. The pane calls it inside the touch that started the reply. */
+  focusRef?: React.MutableRefObject<(() => void) | null>;
   isModerator: boolean;
   modToolsOn: boolean;
   onToggleModTools: () => void;
@@ -151,6 +157,8 @@ const MobileChatInputImpl: React.FC<Props> = ({
   emotes,
   replyTo,
   onCancelReply,
+  onReplySent,
+  focusRef,
   isModerator,
   modToolsOn,
   onToggleModTools,
@@ -234,6 +242,20 @@ const MobileChatInputImpl: React.FC<Props> = ({
   const [commandsOpen, setCommandsOpen] = useState(false);
   const [sending, setSending] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  // The pane starts a reply from inside a touch handler and calls this there, so the keyboard
+  // rises with it. In an emote-only room the emote panel is how one types, so it opens instead.
+  const emoteOnly = gating.blocked === 'emote_only';
+  useEffect(() => {
+    if (!focusRef) return;
+    const focus = () => {
+      if (emoteOnly) setEmotesOpen(true);
+      else inputRef.current?.focus();
+    };
+    focusRef.current = focus;
+    return () => {
+      if (focusRef.current === focus) focusRef.current = null;
+    };
+  }, [focusRef, emoteOnly]);
   // A streak share the banner armed: the next send goes to it instead of to
   // chat, with whatever is typed (nothing typed is fine).
   const armedShare = useRef<ArmedShare | null>(null);
@@ -350,6 +372,8 @@ const MobileChatInputImpl: React.FC<Props> = ({
       setFailureFor(key, null);
     };
     const failed = (why: string) => setFailureFor(key, { text: message, why });
+    // The reply this send goes out with: a reply started while it is on its way is kept.
+    const sentWith = replyTo?.messageId ?? null;
     if (!isTwitch) {
       // Commands that need no Twitch API (text tools, /song, /songs, your own
       // commands) run in Rust for any platform's chat, the desktop's rule; Rust
@@ -393,7 +417,8 @@ const MobileChatInputImpl: React.FC<Props> = ({
         }
         sent();
         startSlowWait(key, channel);
-        onCancelReply?.();
+        if (onReplySent) onReplySent(sentWith);
+        else onCancelReply?.();
       } catch (err) {
         Logger.warn('[MobileChatInput] send failed:', err);
         failed(failureWords(err));
@@ -488,7 +513,8 @@ const MobileChatInputImpl: React.FC<Props> = ({
       }
       sent();
       startSlowWait(key, channel);
-      onCancelReply?.();
+      if (onReplySent) onReplySent(sentWith);
+      else onCancelReply?.();
     } catch (err) {
       Logger.error('[MobileChatInput] send failed:', err);
       failed(failureWords(err));

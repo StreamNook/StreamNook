@@ -8465,10 +8465,10 @@ html[data-motion="reduced"] .sn-tbt-pointer {
 }
 
 /* The phones' swipe slider: the bar under its chip fills while Ban's hold runs. */
-/* Swipe to moderate (phones): a sideways move on a row never becomes the browser's own pan, so
-   the swipe keeps its pointer events. Set on the rows, inside the list's scroll container, where
-   the browser reads it. */
-.sn-swipe-mod [data-message-id] {
+/* Row swipes (phones: right to moderate, left to reply): a sideways move on a row never becomes
+   the browser's own pan, so the swipe keeps its pointer events. Set on the rows, inside the list's
+   scroll container, where the browser reads it. */
+.sn-row-swipe [data-message-id] {
   touch-action: pan-y;
 }
 
