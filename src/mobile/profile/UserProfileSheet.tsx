@@ -488,9 +488,10 @@ const ProfileBody: React.FC<{
           <div className="mt-4 text-[12.5px] text-textMuted">No badges to show for this user.</div>
         )}
 
-        {/* Chat order (oldest first, newest at the bottom), the way the eye
-            already reads the room. Plain text: the point is what was said,
-            and an emote's code says that as well as its picture. */}
+        {/* Newest first: what they said last is what you opened the sheet
+            for, so it sits at the top without scrolling. Plain text: the point
+            is what was said, and an emote's code says that as well as its
+            picture. */}
         <div className="mt-5">
           <SectionHeader
             title="Recent messages"
@@ -504,7 +505,7 @@ const ProfileBody: React.FC<{
             // ("12:34 PM" on a 12-hour phone, "12:34" on a 24-hour one), so
             // a time never wraps and the messages start on one line.
             <ul className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-2.5 gap-y-1.5">
-              {history.map((row) => (
+              {[...history].reverse().map((row) => (
                 <li key={row.id} className="col-span-2 grid grid-cols-subgrid text-[14px] leading-snug">
                   <span className="whitespace-nowrap tabular-nums text-textMuted text-[12px] pt-[2px]">
                     {clock(row.at)}
