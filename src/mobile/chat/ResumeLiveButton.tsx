@@ -17,6 +17,9 @@ const POP = { duration: 0.18, ease: EASE };
 const ROLL = { duration: 0.2, ease: EASE };
 const LIFT = { duration: 0.2, ease: EASE };
 const MARK = 'absolute inset-0 flex items-center justify-center';
+/** The button's widths: a circle, and the capsule a two-digit count needs. */
+const CIRCLE_W = 40;
+const CAPSULE_W = 56;
 
 /** The count the circle shows: follows `count`, but steps at most every
  *  `RESUME_COUNT_STEP_MS`, so in fast chat each roll lands before the next. */
@@ -43,22 +46,23 @@ const ResumeButton: React.FC<{ sliceKey: string; onResume: () => void }> = ({ sl
   const shown = useSteppedCount(count);
   const text = resumeCountText(shown);
   const counting = text !== '';
+  // A circle for the arrow and +1 to +9; from +10 ("+10" to "99+", three
+  // characters) it stretches left into a capsule, its right edge kept.
+  const width = text.length >= 3 ? CAPSULE_W : CIRCLE_W;
   return (
     <motion.button
       type="button"
       onClick={onResume}
       aria-label={resumeLabel(count)}
-      initial={{ opacity: 0, scale: 0.8 }}
-      animate={{ opacity: 1, scale: 1 }}
+      initial={{ opacity: 0, scale: 0.8, width: CIRCLE_W }}
+      animate={{ opacity: 1, scale: 1, width }}
       exit={{ opacity: 0, scale: 0.8 }}
       whileTap={{ scale: 0.92 }}
       transition={POP}
       // The glaze of the composer's round button below it, frosted like the
       // glaze controls that float over busy content, so the count reads over
       // chat text.
-      // A capsule one width in both states, so it never changes shape as the
-      // count arrives.
-      className="pointer-events-auto absolute right-2.5 top-0 h-10 w-14 chrome-glaze chrome-glaze--control chrome-glaze--frosted text-textPrimary"
+      className="pointer-events-auto absolute right-2.5 top-0 h-10 chrome-glaze chrome-glaze--control chrome-glaze--frosted text-textPrimary"
     >
       <motion.span
         aria-hidden
