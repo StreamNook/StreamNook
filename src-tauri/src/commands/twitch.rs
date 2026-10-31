@@ -864,9 +864,7 @@ pub async fn twitch_logout(state: State<'_, AppState>) -> Result<(), String> {
 pub async fn get_category_info(
     game_name: String,
 ) -> Result<Option<crate::models::stream::CategoryInfo>, String> {
-    TwitchService::get_category_info(&game_name)
-        .await
-        .map_err(|e| e.to_string())
+    crate::services::category_tags::category_info(&game_name).await
 }
 
 /// Clear WebView2 browsing data (cookies, cache, etc.) to force re-login
@@ -1777,6 +1775,7 @@ pub async fn get_streams_by_game(
         .map_err(|e| e.to_string())?;
     crate::services::hidden_channels::retain_twitch(&mut streams, crate::services::hidden_channels::Realm::Browse);
     crate::services::home_snapshot::stamp_drops(&mut streams).await;
+    crate::services::category_tags::record_streams(&streams);
     Ok((streams, next))
 }
 
@@ -1805,7 +1804,24 @@ pub async fn get_streams_by_game_with_tags(
         .await
         .map_err(|e| e.to_string())?;
     crate::services::hidden_channels::retain_twitch(&mut streams, crate::services::hidden_channels::Realm::Browse);
+    crate::services::home_snapshot::stamp_drops(&mut streams).await;
+    crate::services::category_tags::record_streams(&streams);
     Ok((streams, next))
+}
+
+/// The tag filter's choices for a category, for the desktop search box and
+/// both phones: with an empty `query`, the screen's row (new picks first, then
+/// what it already `shown`s, then the category's own tags and common tags of its
+/// live streams); otherwise the matches for the typed text.
+#[tauri::command]
+pub async fn category_tag_suggestions(
+    game_name: String,
+    query: String,
+    selected: Vec<String>,
+    shown: Vec<String>,
+    limit: u32,
+) -> Result<crate::services::category_tags::TagSuggestions, String> {
+    Ok(crate::services::category_tags::suggestions(&game_name, &query, &selected, &shown, limit).await)
 }
 
 #[tauri::command]
@@ -1984,6 +2000,7 @@ pub async fn get_streams_by_game_name(
     .await
     .map_err(|e| e.to_string())?;
     crate::services::hidden_channels::retain_twitch(&mut streams, crate::services::hidden_channels::Realm::Browse);
+    crate::services::category_tags::record_streams(&streams);
     Ok((streams, next))
 }
 
@@ -2007,6 +2024,7 @@ pub async fn get_streams_by_game_id(
     .await
     .map_err(|e| e.to_string())?;
     crate::services::hidden_channels::retain_twitch(&mut streams, crate::services::hidden_channels::Realm::Browse);
+    crate::services::category_tags::record_streams(&streams);
     Ok((streams, next))
 }
 

@@ -2036,6 +2036,7 @@ pub fn run() {
             get_streams_by_game_name,
             get_streams_by_game_id,
             get_streams_by_game_with_tags,
+            category_tag_suggestions,
             get_clips_by_game,
             get_clips_by_broadcaster,
             get_clip_reactions,

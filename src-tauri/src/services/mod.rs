@@ -31,6 +31,7 @@ pub mod cache_service;
 pub mod cast_pick;
 #[cfg(target_os = "android")]
 pub mod cast_session;
+pub mod category_tags;
 pub mod changelog;
 pub mod channel_media;
 pub mod channel_avatars;
