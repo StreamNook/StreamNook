@@ -106,6 +106,7 @@ export default function ChannelAboutReveal({ enabled, channelLogin, children }: 
     isSubscribed,
     hasSubHistory,
     subscriberBadgeUrl,
+    subscriberBadgePending,
     handleSubscribeClick,
     offersMembership,
   } = useChannelSocial({
@@ -244,6 +245,8 @@ export default function ChannelAboutReveal({ enabled, channelLogin, children }: 
                 >
                   {subscriberBadgeUrl ? (
                     <img src={subscriberBadgeUrl} alt="" className="h-4 w-4 object-contain" referrerPolicy="no-referrer" />
+                  ) : subscriberBadgePending ? (
+                    <span aria-hidden className="h-4 w-4" />
                   ) : (
                     <Star className="h-3.5 w-3.5 text-accent" />
                   )}

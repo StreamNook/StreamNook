@@ -6,8 +6,7 @@
 // this row" — it is the identifier that platform's live check actually accepts,
 // and that differs per platform. See `favoriteIdOf`.
 
-import type { FavoriteChannel, TwitchStream } from '../types';
-import type { ProviderId } from '../types/providers';
+import type { TwitchStream } from '../types';
 import { makeKey } from './providerKey.ts';
 import { streamProvider } from './streamProvider.ts';
 
@@ -36,8 +35,9 @@ import { streamProvider } from './streamProvider.ts';
  * Rust twin: `favorite_id` in src-tauri/src/services/providers/key.rs. The two
  * must agree exactly: Rust drops a live favourite from the unified Discover
  * list by that one while the Favourites section is chosen by this one, so a
- * disagreement shows a channel twice or not at all. Change both together; their
- * tests share one table.
+ * disagreement shows a channel twice or not at all. Change both together; both
+ * read the `favorite_id` cases in providerTwins.fixtures.json, and so does the
+ * iPhone's twin.
  */
 export function favoriteIdOf(
   stream: Pick<TwitchStream, 'provider' | 'user_id' | 'user_login'> | null | undefined,
@@ -45,63 +45,35 @@ export function favoriteIdOf(
   if (!stream) return null;
   const provider = streamProvider(stream);
 
+  const userId = stripOwnPrefix(provider, stream.user_id ?? '');
+  const login = stripOwnPrefix(provider, stream.user_login ?? '');
+
   if (provider === 'twitch') {
-    return stream.user_id || null;
+    return userId || null;
   }
 
   if (provider === 'youtube') {
     // A UC id is the channel. A handle also addresses one, so it is an
     // acceptable fallback; a bare video id is not, and returning null here is
-    // what makes the caller resolve rather than persist something broken.
-    const uc = stream.user_id;
-    if (uc && uc.startsWith('UC')) return makeKey('youtube', uc);
-    const login = stream.user_login;
-    if (login && login.startsWith('@')) return makeKey('youtube', login);
+    // what makes Rust resolve the channel rather than persist something broken.
+    if (userId.startsWith('UC')) return makeKey('youtube', userId);
+    if (login.startsWith('@')) return makeKey('youtube', login);
     return null;
   }
 
-  return stream.user_login ? makeKey(provider, stream.user_login) : null;
+  return login ? makeKey(provider, login) : null;
 }
 
-/**
- * A favourite id the OLD sidebar wrote as a raw `stream.user_id`.
- *
- * On a YouTube row that id is the channel's `UC…`, stored with no provider
- * prefix, so `parseKey` reads it back as a Twitch login: the heart never fills
- * again, the channel shows up in no list, and the backend sweep hands the UC id
- * to Helix as a Twitch user id. Found in real settings data.
- *
- * A 24-character id starting `UC` is YouTube's own channel-id shape (the same
- * test `first_channel_id` applies in `youtube_media.rs`), and a Twitch id is
- * always numeric, so this cannot mistake one for the other.
- */
-export function isStrayYouTubeFavoriteId(id: string): boolean {
-  return id.length === 24 && id.startsWith('UC');
-}
-
-/** The identity sidecar row for a stream, captured at favourite time so the
- *  channel can still be drawn (a name and a face) once it goes offline. */
-export function favoriteMetaOf(stream: TwitchStream, id: string): FavoriteChannel {
-  const provider = streamProvider(stream);
-  return {
-    id,
-    provider,
-    // The identifier chat and playback address, which for YouTube is the
-    // channel and NOT the video the row happened to arrive as.
-    channel: channelOf(stream, provider),
-    display_name: stream.user_name || undefined,
-    avatar: stream.profile_image_url || undefined,
-    added_at: new Date().toISOString(),
-  };
-}
-
-function channelOf(stream: TwitchStream, provider: ProviderId): string {
-  if (provider === 'twitch') return stream.user_login;
-  if (provider === 'youtube') {
-    if (stream.user_id?.startsWith('UC')) return stream.user_id;
-    return stream.user_login;
+/** `id` trimmed and without leading copies of its own provider's prefix
+ *  (`kick:xqc` on Kick is `xqc`), compared without case. Rust twin:
+ *  `strip_own_prefix` in key.rs. */
+function stripOwnPrefix(provider: string, id: string): string {
+  const prefix = `${provider}:`;
+  let rest = id.trim();
+  while (rest.length > prefix.length && rest.slice(0, prefix.length).toLowerCase() === prefix) {
+    rest = rest.slice(prefix.length);
   }
-  return stream.user_login;
+  return rest;
 }
 
 /**

@@ -17,7 +17,7 @@ import { ProviderLogo } from './ProviderLogo';
 import { SevenTvAvatar } from './SevenTvAvatar';
 import { sevenTvIdForStream } from '../services/sevenTvPictures';
 import { useFollowsStore } from '../stores/followsStore';
-import { favoriteIdOf, favoriteMetaOf } from '../utils/favorites';
+import { favoriteKeyOf, favoriteRefOf, isFavoriteNow, setFavoriteChannel } from '../utils/favoriteDoor';
 import { streamProvider, streamKey } from '../utils/streamProvider';
 import { streamMiddleClickHandlers } from '../utils/openInMultiNook';
 import { useStreamAvatars } from '../hooks/useStreamAvatars';
@@ -338,7 +338,6 @@ const Sidebar = ({ side = 'left' }: { side?: 'left' | 'right' }) => {
         loadFollowedStreams,
         loadRecommendedStreams,
         loadMoreRecommendedStreams,
-        isFavoriteStreamer,
     } = useAppStore.getState();
     // StreamNook signed you out of Twitch itself; the empty state says so.
     const twitchSignInOwed = useTwitchSignInReason() !== null;
@@ -366,14 +365,10 @@ const Sidebar = ({ side = 'left' }: { side?: 'left' | 'right' }) => {
             watchStreaks: s.watchStreaks,
             collaborations: s.collaborations,
             sharedChats: s.sharedChats,
-            // Not destructured, and still load-bearing: `isFavoriteStreamer` is
-            // called during render (the Favorites section, the heart on each
-            // row) and reads settings.favorite_streamers, which is not itself
-            // reactive. Tracking the slice here is what re-renders on a toggle.
-            // Only the membership list: the identity sidecar
-            // (settings.favorite_channels) feeds Home's offline roster, and the
-            // sidebar lists live channels only.
-            favoriteStreamers: s.settings.favorite_streamers,
+            // Not destructured, and still load-bearing: the heart on each row
+            // reads its label during render (utils/favoriteDoor), and this
+            // counter is what moves when a label can change.
+            favoriteVersion: s.favoriteVersion,
         })),
     );
 
@@ -748,13 +743,10 @@ const Sidebar = ({ side = 'left' }: { side?: 'left' | 'right' }) => {
     const handleFavoriteClick = useCallback((e: React.MouseEvent, stream: TwitchStream) => {
         e.stopPropagation();
 
-        // `favoriteIdOf`, never `stream.user_id`: Kick and Twitch both use
-        // numeric ids, so a Kick row could read as a Twitch favourite (a filled
-        // heart on the wrong channel) and write a colliding key.
-        const id = favoriteIdOf(stream);
-        if (!id) return;
-
-        const { isFavoriteStreamer, toggleFavoriteStreamer } = useAppStore.getState();
+        // Rust names the channel from the row's own fields; this key only
+        // tracks the heart on this row.
+        const ref = favoriteRefOf(stream);
+        const id = favoriteKeyOf(ref);
 
         const pending = heartBreakTimers.current.get(id);
         if (pending) {
@@ -767,7 +759,7 @@ const Sidebar = ({ side = 'left' }: { side?: 'left' | 'right' }) => {
             });
         }
 
-        if (isFavoriteStreamer(id)) {
+        if (isFavoriteNow(ref)) {
             setAnimatingHearts(prev => new Set(prev).add(id));
             const timer = setTimeout(() => {
                 heartBreakTimers.current.delete(id);
@@ -776,11 +768,11 @@ const Sidebar = ({ side = 'left' }: { side?: 'left' | 'right' }) => {
                     next.delete(id);
                     return next;
                 });
-                void toggleFavoriteStreamer(id);
+                void setFavoriteChannel(ref, false);
             }, 1000);
             heartBreakTimers.current.set(id, timer);
         } else {
-            void toggleFavoriteStreamer(id, favoriteMetaOf(stream, id));
+            void setFavoriteChannel(ref, true);
         }
     }, []);
 
@@ -903,14 +895,14 @@ const Sidebar = ({ side = 'left' }: { side?: 'left' | 'right' }) => {
             showFavorite={showFavorite}
             showExpanded={showExpanded}
             isCurrentStream={currentStream?.user_login === stream.user_login}
-            isFavorite={(() => { const id = favoriteIdOf(stream); return !!id && isFavoriteStreamer(id); })()}
+            isFavorite={isFavoriteNow(favoriteRefOf(stream))}
             isSubscribed={subscribedKeys.has(streamKey(stream))}
             showPlatformBadge={onAll}
             hasDrops={stream.game_name ? dropsGameNames.has(stream.game_name.toLowerCase()) : false}
             hypeTrainStatus={activeHypeTrainChannels.get(stream.user_id)}
             watchStreak={watchStreaks[stream.user_id] ?? 0}
             collab={groupFor(collaborations, sharedChats, stream)}
-            isHeartAnimating={(() => { const id = favoriteIdOf(stream); return !!id && animatingHearts.has(id); })()}
+            isHeartAnimating={animatingHearts.has(favoriteKeyOf(favoriteRefOf(stream)))}
             profileImage={getProfileImage(stream)}
             onStreamClick={handleStreamClick}
             onFavoriteClick={handleFavoriteClick}

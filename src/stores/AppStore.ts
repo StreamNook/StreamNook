@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, emit } from '@tauri-apps/api/event';
-import type { Settings, TwitchUser, TwitchStream, UserInfo, TwitchCategory, HypeTrainData, ModLogEvent, DropProgressStatus, FavoriteChannel, VodStartInfo, LiveRewindInfo, HomeSnapshot, HomeSnapshotUpdate, HypeTrainBulkStatus, ContinueWatchingItem, FollowingLists, Collaboration, SharedChat, OfflineRoom } from '../types';
+import type { Settings, TwitchUser, TwitchStream, UserInfo, TwitchCategory, HypeTrainData, ModLogEvent, DropProgressStatus, VodStartInfo, LiveRewindInfo, HomeSnapshot, HomeSnapshotUpdate, HypeTrainBulkStatus, ContinueWatchingItem, FollowingLists, Collaboration, SharedChat, OfflineRoom } from '../types';
 import { trackActivity } from '../services/logService';
 import { Logger, setDiagnosticsEnabled } from '../utils/logger';
 import { getAppVersion } from '../utils/appVersion';
@@ -15,7 +15,7 @@ import { patchSettings, settingsDiff } from '../utils/settingsBroadcast';
 import { IS_MOBILE } from '../utils/platform';
 import { makeKey, parseKey } from '../utils/providerKey';
 import { clearPauseIntent, forgetOwnChannel, holdOwnChannel } from '../utils/pausePark';
-import { isStrayYouTubeFavoriteId } from '../utils/favorites';
+import { favoritesDiffer, RUST_ONLY_KEYS, settlePending, type FavoritePending } from '../utils/favoriteLabel';
 import { buildProviderUrl, streamProvider } from '../utils/streamProvider';
 import { categoryNavigation, type StreamCategoryTarget } from '../utils/streamCategory';
 import { signInRequiredFrom } from '../utils/signInRequired';
@@ -225,7 +225,7 @@ export interface WhisperImportState {
   error: string | null;
 }
 
-interface AppState {
+export interface AppState {
   settings: Settings;
   followedStreams: TwitchStream[];
   offlineFollowedChannels: TwitchStream[];
@@ -262,6 +262,17 @@ interface AppState {
    *  snapshot section): live favourites, the other live follows and the
    *  offline roster. Home and the Sidebar only filter to their platform. */
   following: FollowingLists;
+  /** The revision of the `following` lists held, -1 before any arrived. */
+  followingRev: number;
+  /** Rust's lists have arrived in this window (a snapshot or a push). */
+  followingApplied: boolean;
+  /** Favorite presses on their way, by tagged key (utils/favoriteLabel). */
+  favoritePending: Record<string, FavoritePending>;
+  /** A row's key to the `id:` key Rust stored it under, when they differ. */
+  favoriteAlias: Record<string, string>;
+  /** Moves on every change a favorite label can read: lists rendering
+   *  hearts select it. */
+  favoriteVersion: number;
   /** The unified Categories tab's "On other platforms" row, built in Rust. */
   otherCategories: ProviderCategory[];
   /** The Categories tab's favorites row, built in Rust with live counts. */
@@ -676,15 +687,10 @@ interface AppState {
   /** Internal: refresh watched identity + follows + accounts + chat after the primary slot changes. */
   reestablishIdentityAfterSwitch: () => Promise<void>;
   checkAuthStatus: () => Promise<void>;
-  /** Add or remove a favorite. `id` comes from `favoriteIdOf` (utils/favorites),
-   *  never from a raw `user_id`: platform ids collide across services. `meta` is
-   *  the identity sidecar, captured from the row so the channel can still be
-   *  drawn once it is offline. */
-  toggleFavoriteStreamer: (id: string, meta?: FavoriteChannel) => Promise<void>;
+  /** Whether the favorite id (from `favoriteIdOf`) shows as a favorite: a
+   *  press on its way, else Rust's pushed ids. Writes go through
+   *  utils/favoriteDoor. */
   isFavoriteStreamer: (id: string) => boolean;
-  /** Fill in identity for favorites saved as bare ids, before the sidecar
-   *  existed. Resolves nothing and writes nothing when they all already have it. */
-  backfillFavoriteIdentities: () => Promise<void>;
   toggleHome: () => void;
   exitStream: (options?: { preserveBackend?: boolean }) => Promise<void>;
   // Navigation actions for deep linking
@@ -1398,10 +1404,6 @@ async function teardownProviderSession(): Promise<void> {
 // share one promise) plus a short TTL (back-to-back callers skip) collapse it.
 let followedInFlight: Promise<void> | null = null;
 let followedFetchedAt = 0;
-/** Serializes every write to the favorites lists. See `toggleFavoriteStreamer`:
- *  settings are persisted before the in-memory copy is updated, so concurrent
- *  writers would read stale state and drop each other's changes. */
-let favoriteWriteChain: Promise<void> = Promise.resolve();
 let recommendedInFlight: Promise<void> | null = null;
 let recommendedFetchedAt = 0;
 const STREAMS_GUARD_TTL_MS = 10_000;
@@ -1471,9 +1473,11 @@ function ensureHomeSnapshotListener(): Promise<unknown> {
 /** Register the `home-snapshot` listener once per window and hydrate the
  *  store from the current snapshot. Idempotent; safe from any window. */
 export function ensureHomeSnapshotSync(): Promise<void> {
-  void ensureHomeSnapshotListener();
   if (!homeSnapshotHydration) {
-    homeSnapshotHydration = invoke<HomeSnapshot>('get_home_snapshot')
+    // Listening first: a push sent between the read and the listener would be
+    // lost, and the revision guard could not tell.
+    homeSnapshotHydration = ensureHomeSnapshotListener()
+      .then(() => invoke<HomeSnapshot>('get_home_snapshot'))
       .then((snapshot) => useAppStore.getState().applyHomeSnapshot(snapshot))
       .catch((e) => {
         homeSnapshotHydration = null;
@@ -1481,6 +1485,29 @@ export function ensureHomeSnapshotSync(): Promise<void> {
       });
   }
   return homeSnapshotHydration;
+}
+
+/** The store fields one applied Following list set changes: the lists, their
+ *  revision, and the favorite labels when the favorites moved. */
+function followingFields(
+  s: Pick<AppState, 'following' | 'favoritePending' | 'favoriteVersion'>,
+  next: FollowingLists,
+  rev: number,
+): Partial<AppState> {
+  const ids = next.favorite_ids ?? [];
+  const list = next.favorites_list ?? [];
+  const moved = favoritesDiffer(
+    { ids: s.following.favorite_ids ?? [], list: s.following.favorites_list ?? [] },
+    { ids, list },
+  );
+  return {
+    following: { ...next, favorite_ids: ids, favorites_list: list },
+    followingRev: rev,
+    followingApplied: true,
+    ...(moved
+      ? { favoritePending: settlePending(s.favoritePending, ids), favoriteVersion: s.favoriteVersion + 1 }
+      : {}),
+  };
 }
 
 /** Publish hype-train statuses only when the content changed (see the
@@ -1528,7 +1555,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   isLoadingMore: false,
   unifiedDiscover: [],
   sidebarDiscover: null,
-  following: { favorites: [], live: [], offline: [], followed_live: [], platforms: [] },
+  following: { favorites: [], live: [], offline: [], followed_live: [], platforms: [], favorite_ids: [], favorites_list: [] },
+  followingRev: -1,
+  followingApplied: false,
+  favoritePending: {},
+  favoriteAlias: {},
+  favoriteVersion: 0,
   otherCategories: [],
   favoriteCategories: [],
   streamUrl: null,
@@ -1762,7 +1794,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     if (snapshot.unified_discover_at !== null) set({ unifiedDiscover: snapshot.unified_discover });
     // `!= null`: a snapshot from a build without these sections leaves them undefined.
-    if (snapshot.following_at != null && snapshot.following) set({ following: snapshot.following });
+    // At least as new as every push at or below its revision (Rust builds it
+    // under the same lock), so it applies at an equal revision; an older one
+    // would roll the labels back. A build without revisions always applies.
+    if (snapshot.following_at != null && snapshot.following) {
+      const held = get().followingRev;
+      const rev = snapshot.following_rev ?? held;
+      if (snapshot.following_rev == null || rev >= held) set(followingFields(get(), snapshot.following, rev));
+    }
     if (snapshot.other_categories_at != null && snapshot.other_categories) {
       set({ otherCategories: snapshot.other_categories });
     }
@@ -1813,17 +1852,28 @@ export const useAppStore = create<AppState>((set, get) => ({
       case 'sidebar_discover':
         set({ sidebarDiscover: { scope: update.scope, streams: update.streams } });
         break;
-      case 'following':
-        set({
-          following: {
-            favorites: update.favorites,
-            live: update.live,
-            offline: update.offline,
-            followed_live: update.followed_live ?? [],
-            platforms: update.platforms ?? [],
-          },
-        });
+      case 'following': {
+        // Newer than held only: a push at or below the held revision is older
+        // than what a snapshot already gave this window.
+        const held = get().followingRev;
+        if (update.rev != null && update.rev <= held) break;
+        set(
+          followingFields(
+            get(),
+            {
+              favorites: update.favorites,
+              live: update.live,
+              offline: update.offline,
+              followed_live: update.followed_live ?? [],
+              platforms: update.platforms ?? [],
+              favorite_ids: update.favorite_ids ?? [],
+              favorites_list: update.favorites_list ?? [],
+            },
+            update.rev ?? held,
+          ),
+        );
         break;
+      }
       case 'other_categories':
         set({ otherCategories: update.categories });
         break;
@@ -1989,33 +2039,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!settings.cache) {
       settings.cache = { enabled: true, expiry_days: 7 };
     }
-    // Ensure favorite_streamers has a default if not present
-    if (!settings.favorite_streamers) {
-      settings.favorite_streamers = [];
-    }
-    if (!settings.favorite_channels) {
-      settings.favorite_channels = [];
-    }
-    // Repair favorites the OLD sidebar wrote as a raw `stream.user_id`.
-    //
-    // On a YouTube row that id is the channel's `UC…`, stored with no provider
-    // prefix, so `parseKey` reads it back as a TWITCH login: the heart never
-    // fills again, the channel appears in no list, and the backend sweep hands
-    // the UC id to Helix as a Twitch user id. Found in real settings data, not
-    // theorised. A 24-character `UC` id is YouTube's own shape (the same test
-    // `first_channel_id` uses in youtube_media.rs), so this can't catch a
-    // Twitch id, which is always numeric.
-    const strayYouTubeIds = (settings.favorite_streamers || []).filter(isStrayYouTubeFavoriteId);
-    if (strayYouTubeIds.length > 0) {
-      const stray = new Set(strayYouTubeIds);
-      settings.favorite_streamers = (settings.favorite_streamers || []).map((id) =>
-        stray.has(id) ? makeKey('youtube', id) : id,
-      );
-      settings.favorite_channels = (settings.favorite_channels || []).map((f) =>
-        stray.has(f.id) ? { ...f, id: makeKey('youtube', f.id), provider: 'youtube' as const } : f,
-      );
-      Logger.info(`[favorites] re-keyed ${strayYouTubeIds.length} YouTube favorite(s) written without a provider prefix`);
-    }
+    // The favorite lists come from Rust, repaired there on every load
+    // (services/favorite_channels.rs), and always serialized.
     // Restore the platform the app was last scoped to, ignoring a platform whose
     // watch support isn't in this build (so removing one can't strand the user
     // in an empty context).
@@ -2038,17 +2063,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     // of reading the file again (utils/settingsOnceLoaded.ts).
     settleFirstSettings(settings);
 
-    // The favorites re-key above has to reach DISK, not just this store: the
-    // backend's who's-live sweep reads `favorite_streamers` from its own copy of
-    // settings, so an in-memory-only repair would leave it handing a YouTube UC
-    // id to Helix as a Twitch user id forever. The patch writes through to that
-    // copy. One-time and idempotent: it stops matching once repaired.
-    if (strayYouTubeIds.length > 0) {
-      patchSettings({ favorite_streamers: settings.favorite_streamers }).catch((e) => {
-        Logger.warn('[favorites] could not persist the YouTube favorite re-key:', e);
-      });
-    }
-
     // This window's own logger. Rust applies the saved setting to its logging
     // itself (at boot and when a save changes it), so a second window loading
     // its settings never turns the app's logging up or down.
@@ -2069,20 +2083,26 @@ export const useAppStore = create<AppState>((set, get) => ({
     const oldSettings = get().settings;
 
     // Write only the keys this change touched; Rust announces the write to the
-    // other windows. Nothing changed means nothing to write.
-    const patch = settingsDiff(oldSettings, newSettings);
+    // other windows. Nothing changed means nothing to write. The favorite
+    // lists are Rust's alone: a caller's copy of them (often an older spread)
+    // is never sent, and the store keeps the copy it holds.
+    const patch = settingsDiff(oldSettings, newSettings) as Record<string, unknown>;
+    for (const key of RUST_ONLY_KEYS) delete patch[key];
     if (Object.keys(patch).length === 0) {
       return;
     }
 
-    await patchSettings(patch);
+    await patchSettings(patch as Parameters<typeof patchSettings>[0]);
 
     const state = get();
+    const kept: Record<string, unknown> = {};
+    for (const key of RUST_ONLY_KEYS) kept[key] = (state.settings as unknown as Record<string, unknown>)[key];
+    const next = { ...newSettings, ...kept } as Settings;
     if (state.isTheaterMode) {
       // Don't un-hide the chat if we're in compact/theater mode, just quietly update the original placement
-      set({ settings: newSettings, originalChatPlacement: newSettings.chat_placement });
+      set({ settings: next, originalChatPlacement: next.chat_placement });
     } else {
-      set({ settings: newSettings, chatPlacement: newSettings.chat_placement });
+      set({ settings: next, chatPlacement: next.chat_placement });
     }
 
     // This window's own logger; the save above already reached Rust's.
@@ -3816,99 +3836,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  toggleFavoriteStreamer: (id: string, meta?: FavoriteChannel) => {
-    // SERIALIZED, and that is the whole point of the chain. `updateSettings`
-    // awaits `patch_settings` BEFORE it calls `set`, so two toggles in flight
-    // both read the pre-write settings and the second one silently drops the
-    // first. That was survivable when the heart lived on one tab; now that it
-    // is on every card, favoriting several in a row is the expected use.
-    // Each link re-reads `get().settings` only once the previous write landed.
-    favoriteWriteChain = favoriteWriteChain.then(async () => {
-      const currentSettings = get().settings;
-      const favorites = currentSettings.favorite_streamers || [];
-      const identities = currentSettings.favorite_channels || [];
-      const isFavorite = favorites.includes(id);
-
-      const newSettings = {
-        ...currentSettings,
-        favorite_streamers: isFavorite
-          ? favorites.filter(f => f !== id)
-          : [...favorites, id],
-        // Membership and identity move together, in ONE write. Two writes would
-        // reopen the same lost-update race this chain exists to close.
-        favorite_channels: isFavorite
-          ? identities.filter(f => f.id !== id)
-          : meta
-            ? [...identities.filter(f => f.id !== id), meta]
-            : identities,
-      };
-
-      await get().updateSettings(newSettings);
-
-      // Check this one channel now rather than at the next cadence tick, so a
-      // channel that is live right now appears in the sidebar immediately. Fire
-      // and forget: failing to refresh early costs a minute, never correctness.
-      if (!isFavorite) {
-        invoke('refresh_favorites', { key: id }).catch(() => {});
-      }
-    }).catch(err => {
-      // One failed write must not poison every later toggle: an unhandled
-      // rejection here would leave the chain permanently rejected.
-      Logger.error('Failed to update favorites:', err);
-    });
-
-    return favoriteWriteChain;
-  },
-
   isFavoriteStreamer: (id: string) => {
-    const favorites = get().settings.favorite_streamers || [];
-    return favorites.includes(id);
-  },
-
-  backfillFavoriteIdentities: async () => {
-    const settings = get().settings;
-    const favorites = settings.favorite_streamers || [];
-    const identities = settings.favorite_channels || [];
-    const known = new Set(identities.map(f => f.id));
-    // Only bare Twitch ids: a composite key already carries its channel, and a
-    // provider identity would need that platform's own lookup.
-    const missing = favorites.filter(id => !known.has(id) && !id.includes(':'));
-    if (missing.length === 0) return;
-
-    let resolved: Record<string, [string, string, string | null]>;
-    try {
-      resolved = await invoke('get_users_by_ids', { userIds: missing });
-    } catch (e) {
-      Logger.warn('[favorites] identity backfill failed:', e);
-      return;
-    }
-
-    const rows: FavoriteChannel[] = Object.entries(resolved).map(([id, [login, displayName, avatar]]) => ({
-      id,
-      provider: 'twitch' as const,
-      channel: login,
-      display_name: displayName || login,
-      avatar: avatar || undefined,
-      added_at: '',
-    }));
-    if (rows.length === 0) return;
-
-    // Through the same chain as a toggle, so a backfill landing mid-click can't
-    // clobber the favorite the user just added.
-    favoriteWriteChain = favoriteWriteChain.then(async () => {
-      const current = get().settings;
-      const existing = current.favorite_channels || [];
-      const have = new Set(existing.map(f => f.id));
-      const added = rows.filter(r => !have.has(r.id));
-      if (added.length === 0) return;
-      await get().updateSettings({
-        ...current,
-        favorite_channels: [...existing, ...added],
-      });
-      Logger.info(`[favorites] filled in identity for ${added.length} channel(s)`);
-    }).catch(err => Logger.error('[favorites] identity backfill write failed:', err));
-
-    return favoriteWriteChain;
+    const s = get();
+    const pending = s.favoritePending[`id:${id}`];
+    if (pending) return pending.wanted;
+    return (s.following.favorite_ids ?? []).includes(id);
   },
 
   toggleHome: () => {

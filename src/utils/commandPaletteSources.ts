@@ -24,7 +24,7 @@ import { useAppStore, clipSourceOf, type SettingsTab } from '../stores/AppStore'
 import { sectionIdFromLabel } from '../components/settings/sectionId';
 import { useChatUserStore } from '../stores/chatUserStore';
 import { useFollowsStore } from '../stores/followsStore';
-import { favoriteIdOf, favoriteMetaOf } from './favorites';
+import { favoriteRefOf, isFavoriteNow, setFavoriteChannel } from './favoriteDoor';
 import { currentCategoryTarget } from './streamCategory';
 import { sevenTvIdForStream } from '../services/sevenTvPictures';
 import { useSnippetStore } from '../stores/snippetStore';
@@ -452,10 +452,8 @@ function buildQuickActions(): PaletteItem[] {
       run: async () => {
         const stream = requireStream();
         if (!stream) return;
-        // `favoriteIdOf`, not `user_id`: platform ids collide across services.
-        const id = favoriteIdOf(stream);
-        if (!id) return;
-        await useAppStore.getState().toggleFavoriteStreamer(id, favoriteMetaOf(stream, id));
+        const ref = favoriteRefOf(stream);
+        await setFavoriteChannel(ref, !isFavoriteNow(ref));
       },
     },
     {

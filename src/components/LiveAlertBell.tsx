@@ -8,8 +8,7 @@
 import { Bell, BellSlash } from 'phosphor-react';
 import { Bell as LucideBell, BellOff as LucideBellOff } from 'lucide-react';
 import { Tooltip } from './ui/Tooltip';
-import { useAppStore } from '../stores/AppStore';
-import { favoriteIdOf } from '../utils/favorites';
+import { useIsFavorite } from '../utils/favoriteDoor';
 import { useLiveAlert } from '../hooks/useLiveAlert';
 import type { ProviderId } from '../types/providers';
 
@@ -31,12 +30,9 @@ interface LiveAlertBellProps {
 }
 
 export function LiveAlertBell(props: LiveAlertBellProps) {
-  const favoriteId = favoriteIdOf({
-    provider: props.provider,
-    user_id: props.userId ?? '',
-    user_login: props.userLogin ?? '',
-  });
-  const favorited = useAppStore((s) => !!favoriteId && (s.settings.favorite_streamers ?? []).includes(favoriteId));
+  const favorited = useIsFavorite(
+    props.userLogin ? { provider: props.provider, userId: props.userId, userLogin: props.userLogin } : null,
+  );
   if (props.isFollowing !== true && !favorited) return null;
   return <LiveAlertBellButton {...props} />;
 }

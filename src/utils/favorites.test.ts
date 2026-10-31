@@ -4,14 +4,13 @@
 // the platform's live check won't accept is a favourite that silently never
 // shows up as live, which is indistinguishable from the channel being offline.
 //
-// The favoriteIdOf cases are mirrored in Rust by
-// `favorite_id_agrees_with_its_typescript_twin` (src-tauri/src/services/providers/key.rs),
-// because the unified Discover list applies the Rust twin. Add a case to both.
+// The cases the Rust and iPhone twins must also meet live in
+// providerTwins.fixtures.json (`favorite_id`), read by providerTwins.test.ts.
 
 import { test } from 'vitest';
 import assert from 'node:assert/strict';
 
-import { dedupeByFavoriteId, favoriteIdOf, favoriteMetaOf, isStrayYouTubeFavoriteId } from './favorites.ts';
+import { dedupeByFavoriteId, favoriteIdOf } from './favorites.ts';
 
 test('twitch favourites key by the bare numeric user id', () => {
   // Every favourite that predates multi-platform browsing is stored this way,
@@ -61,26 +60,10 @@ test('tiktok favourites key by handle', () => {
   );
 });
 
-test('the sidecar records the CHANNEL, not the broadcast that was on screen', () => {
-  const meta = favoriteMetaOf(
-    {
-      id: 'v1',
-      user_id: 'UCabcDEF123',
-      user_login: 'AGr94tpNVkw',
-      user_name: 'Some Channel',
-      title: '',
-      viewer_count: 0,
-      game_name: '',
-      thumbnail_url: '',
-      started_at: '',
-      provider: 'youtube',
-      profile_image_url: 'https://example.invalid/a.png',
-    },
-    'youtube:UCabcDEF123',
-  );
-  assert.equal(meta.channel, 'UCabcDEF123');
-  assert.equal(meta.provider, 'youtube');
-  assert.equal(meta.display_name, 'Some Channel');
+test('a login written as its own provider key names the bare channel', () => {
+  // A Kick room's key is `kick:slug`; it must name the same favorite as the slug.
+  assert.equal(favoriteIdOf({ provider: 'kick', user_id: '', user_login: 'kick:XQC' }), 'kick:xqc');
+  assert.equal(favoriteIdOf({ provider: 'youtube', user_id: '', user_login: 'youtube:@chan' }), 'youtube:@chan');
 });
 
 test('dedupe collapses a youtube browse row and its live-check row', () => {
@@ -111,15 +94,4 @@ test('dedupe keeps genuinely different channels', () => {
     { provider: 'kick' as const, user_id: '1', user_login: 'a', user_name: 'a' },
   ] as never[];
   assert.equal(dedupeByFavoriteId(rows).length, 3);
-});
-
-test('the stray-id repair catches a bare UC id and nothing else', () => {
-  // Real data: the old sidebar wrote stream.user_id raw, so a YouTube favorite
-  // landed as a bare UC id that parseKey reads back as a Twitch login.
-  assert.equal(isStrayYouTubeFavoriteId('UCMNEVbszv8ZyvSXoTn3yhpQ'), true);
-  // Must never touch a Twitch id (always numeric) or an already-keyed entry.
-  assert.equal(isStrayYouTubeFavoriteId('180118013'), false);
-  assert.equal(isStrayYouTubeFavoriteId('youtube:UCMNEVbszv8ZyvSXoTn3yhpQ'), false);
-  // A Twitch login that happens to start with UC is not 24 characters of id.
-  assert.equal(isStrayYouTubeFavoriteId('ucantseeme'), false);
 });

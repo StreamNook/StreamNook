@@ -1969,6 +1969,8 @@ export interface HomeSnapshot {
    *  platform whose rows they show. */
   following: FollowingLists;
   following_at: number | null;
+  /** The Following revision this snapshot's lists carry (see `followingRev`). */
+  following_rev?: number;
   /** The unified Categories tab's "On other platforms" row, built in Rust from
    *  each platform's cached categories. */
   other_categories: ProviderCategory[];
@@ -2014,6 +2016,19 @@ export interface FollowingLists {
   followed_live?: TwitchStream[];
   /** The platforms you follow at least one channel on, in platform order. */
   platforms?: string[];
+  /** Every favorite id, as Rust holds them: what every favorite label reads. */
+  favorite_ids?: string[];
+  /** Each favorite with its kept channel, so a row known only by login (a
+   *  Twitch room before its id arrives) can still be labelled. */
+  favorites_list?: FavoriteListEntry[];
+}
+
+/** One favorite as Rust pushes it with the Following lists. */
+export interface FavoriteListEntry {
+  id: string;
+  provider: string;
+  /** Login, slug, handle or UC id; empty when only a bare id is known. */
+  channel: string;
 }
 
 /** One card in Home's Continue Watching row. Rust builds these from the local
@@ -2061,6 +2076,10 @@ export type HomeSnapshotUpdate =
       offline: TwitchStream[];
       followed_live?: TwitchStream[];
       platforms?: string[];
+      favorite_ids?: string[];
+      favorites_list?: FavoriteListEntry[];
+      /** Process-wide and only rising; a push applies when newer than held. */
+      rev?: number;
       at: number;
     }
   | { section: 'other_categories'; categories: ProviderCategory[]; at: number }

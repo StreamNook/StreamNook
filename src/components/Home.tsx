@@ -25,7 +25,8 @@ import { usePlatformAccountStore } from '../stores/platformAccountStore';
 import { PlatformLoginButton } from './PlatformLoginButton';
 import { WATCHABLE_PROVIDERS, PROVIDER_WATCH, providerLabel, type ProviderId, type ProviderCategory } from '../types/providers';
 import { useFollowsStore } from '../stores/followsStore';
-import { favoriteIdOf, favoriteMetaOf } from '../utils/favorites';
+import { favoriteIdOf } from '../utils/favorites';
+import { favoriteKeyOf, favoriteRefOf, isFavoriteNow, setFavoriteChannel } from '../utils/favoriteDoor';
 import { streamProvider, streamKey, followIdentifier, isTwitchStream } from '../utils/streamProvider';
 import { streamCategoryTarget } from '../utils/streamCategory';
 import { lastLiveLabel } from '../utils/lastLive';
@@ -183,8 +184,6 @@ const Home = () => {
     const {
         loadMoreRecommendedStreams,
         startStream,
-        toggleFavoriteStreamer,
-        isFavoriteStreamer,
         loginToTwitch,
         setHomeActiveTab,
         setHomeSelectedCategory,
@@ -256,10 +255,9 @@ const Home = () => {
             videosSort: s.videosSort,
             videosPeriod: s.videosPeriod,
             mediaSearchQuery: s.mediaSearchQuery,
-            // Selected, never read: `isFavoriteStreamer` is called during render
-            // (the hearts) and reads settings.favorite_streamers, which isn't
-            // itself reactive, so this slice is what re-renders on a toggle.
-            favoriteStreamers: s.settings.favorite_streamers,
+            // Selected, never read: the hearts read their label during render
+            // (utils/favoriteDoor), and this counter is what moves with it.
+            favoriteVersion: s.favoriteVersion,
         })),
     );
     const externalDropsProvider = useAppStore((s) => s.externalDropsProvider);
@@ -270,14 +268,6 @@ const Home = () => {
     const offlineLastBroadcasts = useAppStore((s) => s.offlineLastBroadcasts);
     const offlineFollowsAt = useAppStore((s) => s.offlineFollowsAt);
     const isLoadingOfflineChannels = isAuthenticated && offlineFollowsAt === null;
-
-    // Fill in identity for favourites saved as bare ids, before the sidecar
-    // existed. Without a name and a face those can't be drawn in the offline
-    // roster at all. One batched lookup, and it stops matching once filled.
-    useEffect(() => {
-        if (homeActiveTab !== 'following' || !isAuthenticated) return;
-        void useAppStore.getState().backfillFavoriteIdentities();
-    }, [homeActiveTab, isAuthenticated]);
 
 
     // MultiNook ghost card state
@@ -1494,31 +1484,14 @@ const Home = () => {
         };
     }, []);
 
-    const handleFavoriteClick = async (e: React.MouseEvent, stream: TwitchStream) => {
+    const handleFavoriteClick = (e: React.MouseEvent, stream: TwitchStream) => {
         e.stopPropagation();
 
-        let id = favoriteIdOf(stream);
-        if (!id) {
-            // Only a YouTube row with no channel identity gets here: it is
-            // addressed by video id, which names one broadcast and would sit in
-            // the list resolving a finished stream forever. Resolve the channel
-            // rather than persisting something that can never match.
-            try {
-                const meta = await invoke<{ user_id?: string }>('provider_channel_meta', {
-                    provider: 'youtube',
-                    channel: stream.user_login,
-                });
-                if (meta?.user_id) id = makeKey('youtube', meta.user_id);
-            } catch (err) {
-                Logger.warn('[favorites] could not resolve a channel for this row:', err);
-            }
-            if (!id) {
-                useAppStore.getState().addToast("Couldn't work out which channel this is", 'error');
-                return;
-            }
-        }
-
-        const favoriteId = id;
+        // Rust names the channel (a YouTube row known only by its video
+        // included) and says when it could not; this key only tracks the heart
+        // on this card.
+        const ref = favoriteRefOf(stream);
+        const favoriteId = favoriteKeyOf(ref);
         const pending = heartBreakTimers.current.get(favoriteId);
         if (pending) {
             // A break was already queued for this channel and the user has
@@ -1532,7 +1505,7 @@ const Home = () => {
             });
         }
 
-        if (isFavoriteStreamer(favoriteId)) {
+        if (isFavoriteNow(ref)) {
             setAnimatingHearts(prev => new Set(prev).add(favoriteId));
             const timer = setTimeout(() => {
                 heartBreakTimers.current.delete(favoriteId);
@@ -1541,13 +1514,11 @@ const Home = () => {
                     next.delete(favoriteId);
                     return next;
                 });
-                void toggleFavoriteStreamer(favoriteId);
+                void setFavoriteChannel(ref, false);
             }, 1000);
             heartBreakTimers.current.set(favoriteId, timer);
         } else {
-            // The identity rides along so the channel can still be drawn once it
-            // goes offline: `favorite_streamers` is only ids.
-            void toggleFavoriteStreamer(favoriteId, favoriteMetaOf(stream, favoriteId));
+            void setFavoriteChannel(ref, true);
         }
     };
 
@@ -1863,10 +1834,10 @@ const Home = () => {
     // already has its own duplicate of this card, and a third copy would be
     // a third place for the two to drift apart.
     const renderStreamCard = (stream: TwitchStream) => {
-                                        // May be null for a YouTube row with no channel identity;
-                                        // the click handler resolves one before writing.
-                                        const favoriteId = favoriteIdOf(stream);
-                                        const isFavorite = !!favoriteId && isFavoriteStreamer(favoriteId);
+                                        // The heart's key; Rust names the channel when it is saved.
+                                        const favoriteRef = favoriteRefOf(stream);
+                                        const favoriteId = favoriteKeyOf(favoriteRef);
+                                        const isFavorite = isFavoriteNow(favoriteRef);
                                         // Check if stream's game has active drops
                                         const streamDropsCampaign = stream.game_name ? dropsGameNames.get(stream.game_name.toLowerCase()) : undefined;
                                         const hasDrops = !!streamDropsCampaign;
@@ -2300,8 +2271,9 @@ const Home = () => {
                                                             you want to be told about when it comes back. Sits above the
                                                             hover overlay so it stays clickable. */}
                                                         {(() => {
-                                                            const offlineFavoriteId = favoriteIdOf(user);
-                                                            const offlineIsFavorite = !!offlineFavoriteId && isFavoriteStreamer(offlineFavoriteId);
+                                                            const offlineFavoriteRef = favoriteRefOf(user);
+                                                            const offlineFavoriteId = favoriteKeyOf(offlineFavoriteRef);
+                                                            const offlineIsFavorite = isFavoriteNow(offlineFavoriteRef);
                                                             return (
                                                                 <Tooltip content={offlineIsFavorite ? 'Remove from favorites' : 'Add to favorites'} side="top">
                                                                     <button
@@ -3495,8 +3467,9 @@ const Home = () => {
                                             // Drops indicator is elevated to the hero banner in Category view!
                                             // We explicitly disable drops badging on individual stream cards here to reduce noise.
                                             const hasDrops = false;
-                                            const favoriteId = favoriteIdOf(stream);
-                                            const isFavorite = !!favoriteId && isFavoriteStreamer(favoriteId);
+                                            const favoriteRef = favoriteRefOf(stream);
+                                            const favoriteId = favoriteKeyOf(favoriteRef);
+                                            const isFavorite = isFavoriteNow(favoriteRef);
 
                                             return (() => {
                                                 const isQueued = isInMultiNook(stream.user_login, streamProvider(stream));
