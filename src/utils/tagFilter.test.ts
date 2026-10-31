@@ -126,6 +126,8 @@ describe('answers', () => {
     const blank = { ...answer('Art', ''), labels: ['English', 'Speedrun'] };
     expect(tagView(search, 'Art', '', blank)).toEqual({ labels: ['English', 'Speedrun'], typed: null, current: true });
     expect(tagView(search, 'Art', '', { ...blank, gameName: 'Chess' })?.labels).toEqual(['Speedrun']);
+    // Back from another category before its answer: nothing from before the trip.
+    expect(tagView({ ...search, gameName: 'Chess' }, 'Art', '', blank)).toBeNull();
   });
 
   it('the stand-in typed row keeps Rust rule: no row for a listed tag, 64 characters at most', () => {

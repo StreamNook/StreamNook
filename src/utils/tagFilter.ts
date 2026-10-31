@@ -148,7 +148,10 @@ export function tagView(
   blank: TagAnswer | null = null,
 ): TagView | null {
   const text = query.trim();
-  const drawn = !text && answer && answer.query.trim() !== '' && blank?.gameName === gameName ? blank : answer;
+  // Only while the newest answer is for this category too, so a trip to another
+  // one and back never brings back an empty-box answer from before it.
+  const swap = !text && answer?.gameName === gameName && answer.query.trim() !== '' && blank?.gameName === gameName;
+  const drawn = swap ? blank : answer;
   if (!drawn || drawn.gameName !== gameName) return null;
   if (drawn.query === query) return { labels: drawn.labels, typed: drawn.offer_typed, current: true };
   const shown = [...text].slice(0, 64).join('');
