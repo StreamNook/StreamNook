@@ -68,22 +68,24 @@ const ResumeButton: React.FC<{ sliceKey: string; onResume: () => void }> = ({ sl
         <CaretDown size={18} weight="bold" />
       </motion.span>
       {/* Every change rolls: the old number rises out as the new one rises in,
-          clipped to the circle. */}
-      <span aria-hidden className={`${MARK} overflow-hidden rounded-full`}>
-        <AnimatePresence initial={false} mode="popLayout">
-          {counting && (
-            <motion.span
-              key={text}
-              className="text-[13px] font-bold leading-none tabular-nums"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              transition={ROLL}
-            >
-              {text}
-            </motion.span>
-          )}
-        </AnimatePresence>
+          clipped to the number's own line, so two are never stacked. */}
+      <span aria-hidden className={MARK}>
+        <span className="relative inline-flex h-4 items-center justify-center overflow-hidden">
+          <AnimatePresence initial={false} mode="popLayout">
+            {counting && (
+              <motion.span
+                key={text}
+                className="block text-[13px] font-bold leading-4 tabular-nums"
+                initial={{ opacity: 0, y: '100%' }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: '-100%' }}
+                transition={ROLL}
+              >
+                {text}
+              </motion.span>
+            )}
+          </AnimatePresence>
+        </span>
       </span>
     </motion.button>
   );
