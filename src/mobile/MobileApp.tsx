@@ -2,7 +2,8 @@
 // services, same theme system, phone-shaped chrome (bottom tabs, sheets,
 // safe-area frame). Boot orchestration is deliberately replicated, not shared;
 // see boot/useMobileBoot.ts for the contract with App.tsx.
-import React, { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { createRevealRise } from './ui/revealRise';
 import { AnimatePresence, motion } from 'framer-motion';
 import './mobile.css';
 import { useAppStore } from '../stores/AppStore';
@@ -154,14 +155,12 @@ const MobileApp: React.FC = () => {
   if (activeTab === 'chats' && !chatsKept) setChatsKept(true);
   const chatsShown = activeTab === 'chats';
   const chatsRef = useRef<HTMLDivElement | null>(null);
-  // Chats shown while the full player covers the shell (Close video lands there)
-  // is already in place when the player fades: it does not rise as well.
-  const coveredRef = useRef(shellHidden);
-  useLayoutEffect(() => {
-    coveredRef.current = shellHidden;
-  });
+  // Chats shown while the full player covered the shell (Close video lands
+  // there) is already in place when the player fades: it does not rise as well
+  // (revealRise.ts reads "covered" from the render before).
+  const [chatsRise] = useState(() => createRevealRise(chatsShown, shellHidden));
   useEffect(() => {
-    if (!chatsShown || !chatsRef.current || coveredRef.current) return;
+    if (!chatsRise(chatsShown, shellHidden) || !chatsRef.current) return;
     // A surface over the tabs (no tab bar there), so it rises into place.
     chatsRef.current.animate(
       [
@@ -170,7 +169,7 @@ const MobileApp: React.FC = () => {
       ],
       { duration: 200, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' },
     );
-  }, [chatsShown]);
+  });
 
   useEffect(() => installBackHandler(), []);
   useEffect(() => installLifecycle(), []);
