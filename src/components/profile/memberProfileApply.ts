@@ -61,10 +61,24 @@ export interface LiveFlags {
   hidden: boolean;
   /** The worn 7TV badge (7TV's worn read answered). */
   seventvBadge: boolean;
-  /** The Twitch, third-party and BTTV badges (their own reads answered). */
-  otherBadges: boolean;
+  /** The Twitch badge (Twitch answered). */
+  twitchBadge: boolean;
+  /** The third-party badges (the resolved identity read answered). */
+  thirdPartyBadges: boolean;
+  /** The BTTV Pro badge (the loadout read answered). */
+  bttvBadge: boolean;
   theme: boolean;
 }
+
+/** Which non-7TV badge reads answered (see `resolveWornBadges`). */
+export interface WornBadgeAnswers {
+  twitch: boolean;
+  thirdParty: boolean;
+  bttv: boolean;
+}
+
+/** The Settings live preview shows the member's own edit as resolved. */
+export const PREVIEW_OTHERS: WornBadgeAnswers = { twitch: true, thirdParty: true, bttv: true };
 
 export const noLive = (): LiveFlags => ({
   info: false,
@@ -73,7 +87,9 @@ export const noLive = (): LiveFlags => ({
   paint: false,
   hidden: false,
   seventvBadge: false,
-  otherBadges: false,
+  twitchBadge: false,
+  thirdPartyBadges: false,
+  bttvBadge: false,
   theme: false,
 });
 
@@ -124,13 +140,9 @@ export function planFirstPaint(snap: FirstPaint | null, live: LiveFlags, preview
   if (!previewOwnsBadges) {
     const badges: NonNullable<FirstPaintPlan['wornBadges']> = {};
     if (!live.seventvBadge) badges.seventv = card.seventvBadge;
-    if (!live.otherBadges) {
-      Object.assign(badges, {
-        twitch: card.wornBadges.twitch,
-        thirdParty: card.wornBadges.thirdParty,
-        bttvPro: card.wornBadges.bttvPro,
-      });
-    }
+    if (!live.twitchBadge) badges.twitch = card.wornBadges.twitch;
+    if (!live.thirdPartyBadges) badges.thirdParty = card.wornBadges.thirdParty;
+    if (!live.bttvBadge) badges.bttvPro = card.wornBadges.bttvPro;
     if (Object.keys(badges).length > 0) plan.wornBadges = badges;
   }
   if (!live.theme) plan.theme = { profileTheme: card.profileTheme, namePaint: paint };
@@ -242,24 +254,29 @@ export function sevenTvCountsStep(read: { answered: boolean; snAnswered: boolean
 /**
  * The worn-badge row after the live reads, each part only from a read that
  * answered: the 7TV badge from 7TV's worn read (`answered`), the Twitch,
- * third-party and BTTV badges from theirs (`othersAnswered`; those reads stand
+ * third-party and BTTV badges each from its own (`others`; those reads stand
  * in with empty defaults when they fail). A part that did not answer keeps what
  * is on screen and stays unmarked, so a card arriving later still fills it.
  */
 export function sevenTvBadgesStep<
   Row extends { seventv: unknown; twitch: unknown; thirdParty: unknown; bttvPro: unknown },
->(read: { answered: boolean; othersAnswered: boolean; row: Row }): LiveStep<Row> {
+>(read: { answered: boolean; others: WornBadgeAnswers; row: Row }): LiveStep<Row> {
+  const { answered, others, row } = read;
   return {
     marks: {
-      ...(read.answered ? { seventvBadge: true } : {}),
-      ...(read.othersAnswered ? { otherBadges: true } : {}),
+      ...(answered ? { seventvBadge: true } : {}),
+      ...(others.twitch ? { twitchBadge: true } : {}),
+      ...(others.thirdParty ? { thirdPartyBadges: true } : {}),
+      ...(others.bttv ? { bttvBadge: true } : {}),
     },
     apply: (prev) => ({
       ...prev,
-      seventv: read.answered ? read.row.seventv : prev.seventv,
-      twitch: read.othersAnswered ? read.row.twitch : prev.twitch,
-      thirdParty: read.othersAnswered ? read.row.thirdParty : prev.thirdParty,
-      bttvPro: read.othersAnswered ? read.row.bttvPro : prev.bttvPro,
+      seventv: answered ? row.seventv : prev.seventv,
+      // Without Twitch's answer the loadout's copy (in `row`) still fills an
+      // empty slot, unmarked, so a card arriving later replaces it.
+      twitch: others.twitch ? row.twitch : (prev.twitch ?? row.twitch),
+      thirdParty: others.thirdParty ? row.thirdParty : prev.thirdParty,
+      bttvPro: others.bttv ? row.bttvPro : prev.bttvPro,
     }),
   };
 }

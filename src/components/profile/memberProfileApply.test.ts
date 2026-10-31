@@ -67,7 +67,10 @@ describe('planFirstPaint', () => {
   });
 
   it('leaves every field a live source already set alone', () => {
-    const all = { info: true, counts: true, sn: true, paint: true, hidden: true, seventvBadge: true, otherBadges: true, theme: true };
+    const all = {
+      info: true, counts: true, sn: true, paint: true, hidden: true,
+      seventvBadge: true, twitchBadge: true, thirdPartyBadges: true, bttvBadge: true, theme: true,
+    };
     expect(planFirstPaint(snap(), all, false)).toEqual({ endLoading: false });
     expect(planFirstPaint(snap(), { ...noLive(), info: true }, false).info).toBeUndefined();
     expect(planFirstPaint(snap(), { ...noLive(), counts: true, sn: true }, false).counts).toBeUndefined();
@@ -75,9 +78,13 @@ describe('planFirstPaint', () => {
     expect(planFirstPaint(snap(), { ...noLive(), sn: true }, false).counts).toEqual({ paints: 12, badges: 7 });
     expect(planFirstPaint(snap(), { ...noLive(), paint: true }, false).namePaint).toBeUndefined();
     expect(planFirstPaint(snap(), { ...noLive(), hidden: true }, false).hiddenSections).toBeUndefined();
-    expect(planFirstPaint(snap(), { ...noLive(), seventvBadge: true, otherBadges: true }, false).wornBadges).toBeUndefined();
+    const badgesLive = { seventvBadge: true, twitchBadge: true, thirdPartyBadges: true, bttvBadge: true };
+    expect(planFirstPaint(snap(), { ...noLive(), ...badgesLive }, false).wornBadges).toBeUndefined();
     expect(Object.keys(planFirstPaint(snap(), { ...noLive(), seventvBadge: true }, false).wornBadges ?? {}).sort()).toEqual(['bttvPro', 'thirdParty', 'twitch']);
-    expect(Object.keys(planFirstPaint(snap(), { ...noLive(), otherBadges: true }, false).wornBadges ?? {})).toEqual(['seventv']);
+    expect(Object.keys(planFirstPaint(snap(), { ...noLive(), ...badgesLive, seventvBadge: false }, false).wornBadges ?? {})).toEqual(['seventv']);
+    expect(Object.keys(planFirstPaint(snap(), { ...noLive(), ...badgesLive, twitchBadge: false }, false).wornBadges ?? {})).toEqual(['twitch']);
+    expect(Object.keys(planFirstPaint(snap(), { ...noLive(), ...badgesLive, thirdPartyBadges: false }, false).wornBadges ?? {})).toEqual(['thirdParty']);
+    expect(Object.keys(planFirstPaint(snap(), { ...noLive(), ...badgesLive, bttvBadge: false }, false).wornBadges ?? {})).toEqual(['bttvPro']);
     expect(planFirstPaint(snap(), { ...noLive(), theme: true }, false).theme).toBeUndefined();
   });
 
@@ -215,30 +222,54 @@ describe('the live 7TV read steps', () => {
     expect(both.apply(onScreen)).toEqual(failedCounts);
   });
 
+  const NONE = { twitch: false, thirdParty: false, bttv: false };
+  const ALL = { twitch: true, thirdParty: true, bttv: true };
+
   it('each badge part is set and marked only by the read that answered it', () => {
-    const neither = sevenTvBadgesStep({ answered: false, othersAnswered: false, row: liveRow });
+    const neither = sevenTvBadgesStep({ answered: false, others: NONE, row: liveRow });
     expect(neither.marks).toEqual({});
     expect(neither.apply(cardRow)).toEqual(cardRow);
 
-    const othersOnly = sevenTvBadgesStep({ answered: false, othersAnswered: true, row: liveRow });
-    expect(othersOnly.marks).toEqual({ otherBadges: true });
+    const othersOnly = sevenTvBadgesStep({ answered: false, others: ALL, row: liveRow });
+    expect(othersOnly.marks).toEqual({ twitchBadge: true, thirdPartyBadges: true, bttvBadge: true });
     expect(othersOnly.apply(cardRow)).toEqual({ ...liveRow, seventv: cardBadge });
 
-    const sevenTvOnly = sevenTvBadgesStep({ answered: true, othersAnswered: false, row: liveRow });
+    const sevenTvOnly = sevenTvBadgesStep({ answered: true, others: NONE, row: liveRow });
     expect(sevenTvOnly.marks).toEqual({ seventvBadge: true });
     // An answered "wears no 7TV badge" clears it; the card's other badges stay.
     expect(sevenTvOnly.apply(cardRow)).toEqual({ ...cardRow, seventv: null });
 
-    const both = sevenTvBadgesStep({ answered: true, othersAnswered: true, row: liveRow });
-    expect(both.marks).toEqual({ seventvBadge: true, otherBadges: true });
+    const both = sevenTvBadgesStep({ answered: true, others: ALL, row: liveRow });
+    expect(both.marks).toEqual({ seventvBadge: true, twitchBadge: true, thirdPartyBadges: true, bttvBadge: true });
     expect(both.apply(cardRow)).toEqual(liveRow);
+  });
+
+  it('Twitch failing alone keeps the answered third-party and BTTV badges', () => {
+    const row: Row = { ...liveRow, thirdParty: [{ key: 'ffz:ffz-9', provider: 'ffz' }], twitch: null };
+    const step = sevenTvBadgesStep({ answered: true, others: { twitch: false, thirdParty: true, bttv: true }, row });
+    expect(step.marks).toEqual({ seventvBadge: true, thirdPartyBadges: true, bttvBadge: true });
+    // With no card yet the answered parts show; Twitch stays empty, unmarked.
+    expect(step.apply(emptyRow)).toEqual(row);
+    // With the card on screen its Twitch badge stays.
+    expect(step.apply(cardRow).twitch).toEqual(cardRow.twitch);
+  });
+
+  it("without Twitch's answer the loadout's copy fills an empty slot, unmarked, and a later card replaces it", () => {
+    const fromKey = { src: 'https://static-cdn.jtvnw.net/badges/v1/key/3', title: 'Twitch' };
+    const keyRow: Row = { ...liveRow, twitch: fromKey };
+    const step = sevenTvBadgesStep({ answered: true, others: { twitch: false, thirdParty: true, bttv: true }, row: keyRow });
+    expect(step.marks.twitchBadge).toBeUndefined();
+    const shown = step.apply(emptyRow);
+    expect(shown.twitch).toEqual(fromKey);
+    const live = { ...noLive(), ...step.marks };
+    expect(merge(shown, planFirstPaint(snap(), live, false).wornBadges as Partial<Row>).twitch).toEqual(cardRow.twitch);
   });
 
   it('reads that failed first, card second: the card fills every part that did not answer', () => {
     const live = noLive();
     // 7TV, the identity reads and the registry all failed or had not loaded.
     const counts = sevenTvCountsStep({ answered: false, snAnswered: false, counts: { paints: 0, badges: 0, sn: 0 } });
-    const badges = sevenTvBadgesStep({ answered: false, othersAnswered: false, row: emptyRow });
+    const badges = sevenTvBadgesStep({ answered: false, others: NONE, row: emptyRow });
     Object.assign(live, counts.marks, badges.marks);
     const countsOnScreen = counts.apply({ paints: 0, badges: 0, sn: 0 });
     const rowOnScreen = badges.apply(emptyRow);
@@ -251,7 +282,7 @@ describe('the live 7TV read steps', () => {
   it('only 7TV failed, first; card second: the card fills only the 7TV parts', () => {
     const live = noLive();
     const counts = sevenTvCountsStep({ answered: false, snAnswered: true, counts: failedCounts });
-    const badges = sevenTvBadgesStep({ answered: false, othersAnswered: true, row: liveRow });
+    const badges = sevenTvBadgesStep({ answered: false, others: ALL, row: liveRow });
     Object.assign(live, counts.marks, badges.marks);
     const countsOnScreen = counts.apply({ paints: 0, badges: 0, sn: 0 });
     const rowOnScreen = badges.apply(emptyRow);
@@ -266,26 +297,27 @@ describe('the live 7TV read steps', () => {
     const cardCounts = merge({ paints: 0, badges: 0, sn: 0 }, plan.counts);
     const shownRow = merge(emptyRow, plan.wornBadges as Partial<Row>);
     expect(sevenTvCountsStep({ answered: false, snAnswered: false, counts: failedCounts }).apply(cardCounts)).toEqual(onScreen);
-    expect(sevenTvBadgesStep({ answered: false, othersAnswered: false, row: emptyRow }).apply(shownRow)).toEqual(cardRow);
+    expect(sevenTvBadgesStep({ answered: false, others: NONE, row: emptyRow }).apply(shownRow)).toEqual(cardRow);
   });
 
   it('the card hook takes each answer from its own read and applies these steps as they are', () => {
     const hook = readFileSync(resolve(__dirname, 'memberProfile.ts'), 'utf8');
-    expect(hook.match(/live\.(counts|badges|seventvBadge|sn|otherBadges) = true/g) ?? []).toHaveLength(0);
+    expect(hook.match(/live\.(counts|badges|seventvBadge|sn|twitchBadge|thirdPartyBadges|bttvBadge) = true/g) ?? []).toHaveLength(0);
     expect(hook).not.toContain('isUserCosmeticsHardFailed');
     expect(hook).toContain('const paintAnswered = profile.wornAnswered === true;');
     expect(hook).toContain('answered: profile.inventoryAnswered === true,');
     expect(hook).toContain('snAnswered: isCosmeticsRegistryLoaded(),');
     expect(hook).toContain('Object.assign(live, countsStep.marks);');
     expect(hook).toContain('setCounts(countsStep.apply);');
-    expect(hook).toContain('othersAnswered,\n            row: { seventv: sevenTvBadge, twitch, thirdParty, bttvPro },'.replace(/\n/g, hook.includes('\r\n') ? '\r\n' : '\n'));
+    expect(hook).toContain('others: answers,');
     expect(hook).toContain('Object.assign(live, badgesStep.marks);');
     expect(hook).toContain('setWornBadges(badgesStep.apply);');
-    // resolveWornBadges reports failed identity reads instead of passing their defaults off as answers.
-    expect(hook).toContain('!isIdentityFallback(resolved) &&');
-    expect(hook).toContain('!isIdentityFallback(rawLoadout) &&');
-    // The Settings preview re-resolve uses the same step.
-    expect(hook).toContain('sevenTvBadgesStep<typeof wornBadges>({ answered: profile.wornAnswered === true, othersAnswered, row });');
+    // resolveWornBadges: each part from its own read, failed identity reads not passed off as answers.
+    expect(hook).toContain('twitch: liveTwitch !== undefined,');
+    expect(hook).toContain('thirdParty: resolved !== null && !isIdentityFallback(resolved),');
+    expect(hook).toContain('bttv: rawLoadout !== null && !isIdentityFallback(rawLoadout),');
+    // The Settings preview applies the member's own edit, keeping the 7TV badge on a failed read.
+    expect(hook).toContain('others: PREVIEW_OTHERS,');
     // A first paint is merged, never set whole.
     expect(hook).toContain('setCounts((prev) => ({ ...prev, ...cardCounts }));');
     expect(hook).toContain('setWornBadges((prev) => ({ ...prev, ...cardBadges }));');
