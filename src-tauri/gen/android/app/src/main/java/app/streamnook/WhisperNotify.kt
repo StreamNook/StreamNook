@@ -5,14 +5,11 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.graphics.BitmapFactory
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.Person
 import androidx.core.app.RemoteInput
 import androidx.core.graphics.drawable.IconCompat
-import java.net.HttpURLConnection
-import java.net.URL
 
 /**
  * The whisper notification: one conversation per person in messaging style,
@@ -59,19 +56,10 @@ object WhisperNotifier {
 
   private fun me() = Person.Builder().setName("You").build()
 
-  /** Best effort: a missing picture costs the face, never the notification. */
-  private fun icon(url: String): IconCompat? {
-    if (url.isEmpty()) return null
-    return try {
-      val conn = URL(url).openConnection() as HttpURLConnection
-      conn.connectTimeout = 3000
-      conn.readTimeout = 3000
-      conn.inputStream.use { BitmapFactory.decodeStream(it) }?.let { IconCompat.createWithBitmap(it) }
-    } catch (e: Exception) {
-      Log.w(NotifyRenderer.TAG, "whisper avatar fetch failed", e)
-      null
-    }
-  }
+  /** Best effort: a missing picture costs the face, never the notification.
+   *  The URL comes from the core's own whisper inbox, never a push. */
+  private fun icon(url: String): IconCompat? =
+    NotifyFaces.load(url, pushed = false)?.let { IconCompat.createWithBitmap(NotifyFaces.circle(it)) }
 
   private fun sender(item: Item): Person {
     val builder = Person.Builder()

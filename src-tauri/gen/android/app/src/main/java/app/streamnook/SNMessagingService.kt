@@ -13,8 +13,9 @@ import java.io.File
  * against the same state file the WorkManager poll uses. That single authority
  * is what makes a push+poll overlap render exactly one notification.
  *
- * Runs on FCM's background thread; `runBlocking` here only covers the avatar
- * fetch, well inside the handler's time budget.
+ * Runs on FCM's background thread; the only waiting here is picture fetches
+ * (the live avatar, a mention's two faces), each bounded to 5 s, well inside
+ * the handler's time budget.
  */
 class SNMessagingService : FirebaseMessagingService() {
 
@@ -75,6 +76,8 @@ class SNMessagingService : FirebaseMessagingService() {
     }
     Log.i(NotifyRenderer.TAG, "mention push -> ${if (show) "post" else "suppressed"}")
     if (!show) return
+    // The notice words and pictures are newer keys; an older server leaves
+    // them out and the notification falls back to the plain message.
     MentionNotifier.post(
       this,
       MentionNotifier.Item(
@@ -87,6 +90,13 @@ class SNMessagingService : FirebaseMessagingService() {
         text = data["body"] ?: "",
         kind = data["kind"] ?: "mention",
         atMs = data["at_ms"]?.toLongOrNull() ?: System.currentTimeMillis(),
+        quote = data["quote"] ?: "",
+        chatTitle = data["chat_title"] ?: "",
+        senderAvatar = data["avatar"] ?: "",
+        channelAvatar = data["channel_avatar"] ?: "",
+        // Pushed URLs keep to Twitch's picture host. Both pictures load side
+        // by side within one 5 s budget, well inside this handler's window.
+        pushed = true,
       ),
     )
   }

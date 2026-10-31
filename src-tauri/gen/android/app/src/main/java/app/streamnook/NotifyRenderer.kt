@@ -149,6 +149,7 @@ object NotifyRenderer {
  * Which pictures a notification fetches, the same rules as the iPhone's go-live
  * banner extension (`ios/Sources/SNPush/LiveAvatar.swift`): HTTPS from
  * `static-cdn.jtvnw.net` only (no other port, no user info), 5 s timeouts, 1 MB.
+ * Chat notification faces ([NotifyFaces]) use the same limits.
  */
 internal object AvatarRules {
   const val HOST = "static-cdn.jtvnw.net"
@@ -162,13 +163,23 @@ internal object AvatarRules {
     null
   }
 
-  /** The URL when it is HTTPS on Twitch's picture host, else null. */
-  fun allowed(raw: String): URL? {
+  /**
+   * The URL when it is HTTPS on any host, else null. For pictures the app's own
+   * core handed over (its avatar cache), never for a URL that came in a push.
+   */
+  fun https(raw: String): URL? {
     if (raw.length > 2048) return null
     val url = parse(raw) ?: return null
     if (!url.protocol.equals("https", true)) return null
-    if (!url.host.equals(HOST, true)) return null
+    if (url.host.isNullOrEmpty()) return null
     if (url.userInfo != null) return null
+    return url
+  }
+
+  /** The URL when it is HTTPS on Twitch's picture host, else null. */
+  fun allowed(raw: String): URL? {
+    val url = https(raw) ?: return null
+    if (!url.host.equals(HOST, true)) return null
     if (url.port != -1 && url.port != 443) return null
     return url
   }
