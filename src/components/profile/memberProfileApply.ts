@@ -188,3 +188,24 @@ export type NamePaintPlan = { set: false } | { set: true; value: CSSProperties |
 export function planNamePaint(read: { answered: boolean; paintStyle: CSSProperties | null }): NamePaintPlan {
   return read.answered ? { set: true, value: read.paintStyle } : { set: false };
 }
+
+/** What the live 7TV read decides for the counts and the worn-badge row. */
+export interface SevenTvPartsPlan {
+  /** The counts to set and mark live, or null to keep the first-paint card's. */
+  counts: FirstPaintCard['counts'] | null;
+  /**
+   * Whether the live badge row (7TV badge included) replaces the card's and is
+   * marked live. False after a failed read: the row's other badges are still
+   * applied, the card's 7TV badge stays, and nothing is marked live.
+   */
+  badgesLive: boolean;
+}
+
+/**
+ * The counts and badges the 7TV read feeds. A failed read answers empty
+ * cosmetics, so taking its numbers would blank the card's 12 paints to 0 and
+ * drop its 7TV badge; only an answered read sets them.
+ */
+export function planSevenTvParts(read: { answered: boolean; counts: FirstPaintCard['counts'] }): SevenTvPartsPlan {
+  return read.answered ? { counts: read.counts, badgesLive: true } : { counts: null, badgesLive: false };
+}

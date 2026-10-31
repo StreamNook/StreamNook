@@ -5,6 +5,7 @@ import {
   planNamePaint,
   planPaintTheme,
   planPrefs,
+  planSevenTvParts,
   type FirstPaint,
   type FirstPaintCard,
   type LivePaint,
@@ -156,6 +157,23 @@ describe('planPaintTheme', () => {
     const live = noLive();
     Object.assign(live, planPaintTheme(prefs({ profileTheme: 'paint' }), paint({ hasPaint: false }))?.live);
     expect(planFirstPaint(snap({ profileTheme: 'paint' }), live, false).theme).toBeUndefined();
+  });
+});
+
+describe('planSevenTvParts', () => {
+  const empty = { paints: 0, badges: 0, sn: 3 };
+
+  it('a failed 7TV read keeps the card counts and its 7TV badge and marks nothing live', () => {
+    const plan = planSevenTvParts({ answered: false, counts: empty });
+    expect(plan).toEqual({ counts: null, badgesLive: false });
+    // Nothing marked live: a late card still paints its 12 paints, 7 badges and 7TV badge.
+    const first = planFirstPaint(snap(), noLive(), false);
+    expect(first.counts).toEqual({ paints: 12, badges: 7, sn: 3 });
+    expect(first.wornBadges?.seventv).toEqual({ id: '01KYQHQ7FVRR3X4S0F2KG74207', name: 'XDX', tooltip: 'XDX' });
+  });
+
+  it('an answered read sets its counts, even zero, and the badge row is live', () => {
+    expect(planSevenTvParts({ answered: true, counts: empty })).toEqual({ counts: empty, badgesLive: true });
   });
 });
 

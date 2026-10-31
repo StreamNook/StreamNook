@@ -31,7 +31,7 @@ import {
   incrementProfileView,
   getProfileViews,
 } from '../../services/supabaseService';
-import { noLive, planFirstPaint, planNamePaint, planPaintTheme, planPrefs, type FirstPaint } from './memberProfileApply';
+import { noLive, planFirstPaint, planNamePaint, planPaintTheme, planPrefs, planSevenTvParts, type FirstPaint } from './memberProfileApply';
 
 // "#rrggbb" -> "r, g, b" for use inside rgba(...).
 export const hexToRgb = (hex: string): string | null => {
@@ -335,13 +335,21 @@ export function useMemberProfile(
         // Cosmetic counts + optional 7TV paint theme (best effort).
         try {
           const profile = await getFullProfileWithFallback(userId, u.login, userId, u.login);
-          if (alive) {
-            live.counts = true;
-            setCounts({
+          // Whether 7TV genuinely answered (not a failed fetch). A failed read must
+          // not blank the counts, 7TV badge or name paint the first-paint card
+          // drew, nor mark them live.
+          const paintAnswered = !isUserCosmeticsHardFailed(userId);
+          const sevenTv = planSevenTvParts({
+            answered: paintAnswered,
+            counts: {
               paints: profile.seventvCosmetics?.paints?.length ?? 0,
               badges: profile.seventvCosmetics?.badges?.length ?? 0,
               sn: getOwnedCosmeticSlugs(userId).size,
-            });
+            },
+          });
+          if (alive && sevenTv.counts) {
+            live.counts = true;
+            setCounts(sevenTv.counts);
           }
 
           // Worn identity badges, resolved the same way chat does (see
@@ -350,8 +358,12 @@ export function useMemberProfile(
           const { seventv: sevenTvBadge, twitch, thirdParty, bttvPro } =
             await resolveWornBadges(userId, profile);
           if (alive) {
-            live.badges = true;
-            setWornBadges({ seventv: sevenTvBadge, twitch, thirdParty, bttvPro });
+            if (sevenTv.badgesLive) {
+              live.badges = true;
+              setWornBadges({ seventv: sevenTvBadge, twitch, thirdParty, bttvPro });
+            } else {
+              setWornBadges((current) => ({ ...current, twitch, thirdParty, bttvPro }));
+            }
           }
 
           // The member's active 7TV paint always paints their NAME (free, like
@@ -360,9 +372,6 @@ export function useMemberProfile(
           const paints = profile.seventvCosmetics?.paints as Array<{ selected?: boolean }> | undefined;
           const activePaint = paints?.find((p) => p?.selected);
           const ps = activePaint ? computePaintStyle(activePaint as never, '#9146FF') : null;
-          // Whether 7TV genuinely answered (not a failed fetch). A failed read must
-          // not blank the name paint the first-paint card drew, nor mark it live.
-          const paintAnswered = !isUserCosmeticsHardFailed(userId);
           if (alive) {
             const namePaintPlan = planNamePaint({ answered: paintAnswered, paintStyle: ps });
             if (namePaintPlan.set) {
