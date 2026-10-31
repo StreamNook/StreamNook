@@ -291,6 +291,20 @@ body:has(.sn-mobile) .glass-input:focus {
   contain-intrinsic-size: auto 118px;
 }
 
+/* A card's tag line on a category screen (SN-78). The masked track sits inside
+   a content-visibility box with a fixed height, so cards scrolled out of view
+   skip the mask. The fades are 10px, the track's own inset, so the first pill
+   starts where the fade ends and lines up with the card's text. */
+.sn-mobile .sn-tag-line {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 42px;
+}
+
+.sn-mobile .sn-tag-track {
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 10px, #000 calc(100% - 10px), transparent 100%);
+  mask-image: linear-gradient(90deg, transparent 0, #000 10px, #000 calc(100% - 10px), transparent 100%);
+}
+
 /* While the full-screen player covers the tab shell, the cards behind it keep
    their backdrop filters as live compositor effects nobody can see. Off until
    the shell is visible again; nothing about the covered cards is on screen. */

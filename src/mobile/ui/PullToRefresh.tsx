@@ -17,7 +17,10 @@ export const PullToRefresh: React.FC<{
   onRefresh: () => Promise<unknown>;
   className?: string;
   children: React.ReactNode;
-}> = ({ onRefresh, className, children }) => {
+  /** Gets the list's scroller, for a screen that scrolls it itself (to the top
+   *  on a new tag filter). */
+  scrollerRef?: React.MutableRefObject<HTMLDivElement | null>;
+}> = ({ onRefresh, className, children, scrollerRef }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [pull, setPull] = useState(0);
   const [dragging, setDragging] = useState(false);
@@ -29,6 +32,17 @@ export const PullToRefresh: React.FC<{
   useEffect(() => {
     onRefreshRef.current = onRefresh;
   });
+
+  // Hands the scroller to a screen that asked for it. Copied out, never passed
+  // as the element's `ref`: this component's own touch listeners hang off
+  // `scrollRef`.
+  useEffect(() => {
+    if (!scrollerRef) return;
+    scrollerRef.current = scrollRef.current;
+    return () => {
+      scrollerRef.current = null;
+    };
+  }, [scrollerRef]);
 
   useEffect(() => {
     const el = scrollRef.current;

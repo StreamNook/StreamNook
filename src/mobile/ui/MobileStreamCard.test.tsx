@@ -12,7 +12,7 @@ vi.mock('../../components/SevenTvAvatar', async () => {
 vi.mock('../../stores/AppStore', () => ({
   useAppStore: (select: (s: unknown) => unknown) => select({ collaborations: {}, sharedChats: {} }),
 }));
-vi.mock('./ChannelHold', () => ({ useChannelHold: () => ({ handlers: {}, sheet: null }) }));
+vi.mock('./ChannelHold', () => ({ useChannelHold: () => ({ handlers: {}, sheet: null, consumeHeld: () => false }) }));
 vi.mock('../../services/sevenTvPictures', () => ({ sevenTvIdForStream: () => null }));
 vi.mock('../../utils/offscreenPause', () => ({ observeOffscreen: () => undefined }));
 vi.mock('../followRefresh', () => ({ previewStamp: () => 1 }));
@@ -21,6 +21,7 @@ vi.mock('../../components/StreamTitleWithEmojis', () => ({ default: ({ title }: 
 vi.mock('../../components/ProviderLogo', () => ({ ProviderMark: () => null }));
 
 import { MobileStreamCard } from './MobileStreamCard';
+import type { CardTagFilter } from './StreamCardTags';
 
 const stream = {
   id: '1',
@@ -45,5 +46,38 @@ describe('stream row', () => {
 
   it('draws no picture for a row without one', () => {
     expect(row({ ...stream, profile_image_url: '' } as TwitchStream)).not.toContain('data-face');
+  });
+});
+
+const card = (s: TwitchStream, tagFilter?: CardTagFilter) =>
+  renderToStaticMarkup(createElement(MobileStreamCard, { stream: s, onPress: () => {}, tagFilter }));
+
+describe('card tags (SN-78)', () => {
+  const filter: CardTagFilter = { selected: ['English'], onToggle: () => {} };
+
+  it('draws no tag line without a filter', () => {
+    const html = card({ ...stream, tags: ['English'] } as TwitchStream);
+    expect(html).not.toContain('sn-tag-line');
+    expect(html).not.toContain('data-tag-chip');
+  });
+
+  it('draws the line after the card button, the picked tag pressed', () => {
+    const html = card({ ...stream, tags: ['English', 'Chill'] } as TwitchStream, filter);
+    const cardEnd = html.indexOf('</button>');
+    expect(html.indexOf('data-tag-chip')).toBeGreaterThan(cardEnd);
+    const chips = html.slice(cardEnd).split('data-tag-chip').slice(1);
+    expect(chips).toHaveLength(2);
+    expect(chips[0]).toContain('aria-pressed="true"');
+    expect(chips[0]).toContain('English');
+    expect(chips[1]).toContain('aria-pressed="false"');
+    expect(chips[1]).toContain('Chill');
+  });
+
+  it('reserves the line on every card of the screen, tags or not', () => {
+    for (const tags of [undefined, null, []]) {
+      const html = card({ ...stream, tags } as unknown as TwitchStream, filter);
+      expect(html).toContain('sn-tag-line');
+      expect(html).not.toContain('data-tag-chip');
+    }
   });
 });

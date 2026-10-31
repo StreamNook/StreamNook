@@ -9,6 +9,7 @@ import { useChatTabsStore } from '../chat/chatTabsStore';
 import { useMobileNavStore } from '../navStore';
 import { streamProvider } from '../../utils/streamProvider';
 import { hapticCommit } from './haptics';
+import { createHoldFlag } from './holdFlag';
 
 /** How long a press must rest before it is a hold. */
 const HOLD_MS = 450;
@@ -33,7 +34,7 @@ export function openChatOnly(stream: TwitchStream): void {
 export function useChannelHold(stream: TwitchStream, onPress: (stream: TwitchStream) => void) {
   const [open, setOpen] = useState(false);
   const press = useRef<{ x: number; y: number; timer: ReturnType<typeof setTimeout> } | null>(null);
-  const held = useRef(false);
+  const [held] = useState(createHoldFlag);
 
   const clear = useCallback(() => {
     if (press.current) clearTimeout(press.current.timer);
@@ -42,14 +43,14 @@ export function useChannelHold(stream: TwitchStream, onPress: (stream: TwitchStr
 
   const handlers = {
     onPointerDown: (e: React.PointerEvent) => {
-      held.current = false;
+      held.clear();
       clear();
       press.current = {
         x: e.clientX,
         y: e.clientY,
         timer: setTimeout(() => {
           press.current = null;
-          held.current = true;
+          held.set();
           hapticCommit();
           setOpen(true);
         }, HOLD_MS),
@@ -65,10 +66,7 @@ export function useChannelHold(stream: TwitchStream, onPress: (stream: TwitchStr
     onContextMenu: (e: React.MouseEvent) => e.preventDefault(),
     onClick: () => {
       // The finger lifting after a hold is not a tap.
-      if (held.current) {
-        held.current = false;
-        return;
-      }
+      if (held.consume()) return;
       onPress(stream);
     },
   };
@@ -106,5 +104,5 @@ export function useChannelHold(stream: TwitchStream, onPress: (stream: TwitchStr
     </MobileSheet>
   );
 
-  return { handlers, sheet };
+  return { handlers, sheet, consumeHeld: held.consume };
 }

@@ -1,6 +1,11 @@
 // Category drill: live streams for one category, layered above the tab shell
 // (and below the watch layer, so back exits the stream first).
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+//
+// A chip row under the title filters the list by Twitch's free-form tags (every
+// picked tag must match; Twitch filters server-side). The picks live in this
+// screen's state: it stays mounted under the watch layer, so watching a stream
+// and coming back keeps them, and leaving the category unmounts it, so they go.
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CaretLeft } from 'phosphor-react';
 import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../../stores/AppStore';
@@ -13,7 +18,20 @@ import { SettleIn, useSettleIn } from '../ui/SettleIn';
 import { PullToRefresh } from '../ui/PullToRefresh';
 import { SkeletonCards } from '../ui/SkeletonCards';
 import { EmptyNote } from '../ui/EmptyNote';
+import { CategoryTagRail } from '../ui/CategoryTagRail';
+import { CategoryTagSheet } from '../ui/CategoryTagSheet';
+import { useCategoryTagSuggestions } from '../../hooks/useCategoryTagSuggestions';
 import { Logger } from '../../utils/logger';
+import {
+  applyPage,
+  beginMore,
+  failPage,
+  newTagList,
+  NO_TAGS,
+  refreshTagList,
+  toggleTag,
+  type TagList,
+} from '../../utils/tagFilter';
 import type { TwitchStream } from '../../types';
 import { bumpPreviewStamp } from '../followRefresh';
 
@@ -24,6 +42,8 @@ type Category = NonNullable<ReturnType<typeof useMobileNavStore.getState>['brows
 const PAGE = 40;
 /** Ceiling on how much of a category the infinite scroll will accumulate. */
 const MAX_LOADED_STREAMS = 320;
+/** The chip row asks for everything Rust would add; no row comes near it. */
+const ROW_LIMIT = 200;
 
 export const CategoryStreamsScreen: React.FC = () => {
   const category = useMobileNavStore((s) => s.browseCategory);
@@ -40,10 +60,10 @@ export const CategoryStreamsScreen: React.FC = () => {
       style={{ paddingTop: 'var(--sn-safe-t, 0px)' }}
     >
       {/* Keyed on the category, so opening a different one MOUNTS A FRESH
-          component with an empty list already loading. The alternative -
-          clearing state in an effect - paints the previous category's streams
-          under the new title for a frame first, and costs an extra render
-          every time. */}
+          component with an empty list already loading (and no picks). The
+          alternative - clearing state in an effect - paints the previous
+          category's streams under the new title for a frame first, and costs
+          an extra render every time. */}
       {last && <CategoryStreamsList key={last.id} category={last} />}
     </DrillInScreen>
   );
@@ -61,10 +81,23 @@ const CategoryStreamsList: React.FC<{ category: Category }> = ({ category }) => 
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const moreSentinel = useRef<HTMLDivElement | null>(null);
+  const scroller = useRef<HTMLDivElement | null>(null);
+
+  // The tag filter. `selectedRef` is the picks' one writer's copy, so two quick
+  // taps in one frame each toggle from the other's result.
+  const [selected, setSelected] = useState<string[]>([]);
+  const selectedRef = useRef<string[]>([]);
+  const [tagList, setTagList] = useState<TagList>(() => newTagList(0, false));
+  const tagGen = useRef(0);
+  // Every landed page and every refresh: Rust may know new tags for the row.
+  const [pages, setPages] = useState(0);
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const tagMode = selected.length > 0;
+  const listed = tagMode ? tagList.streams : streams;
 
   // This screen fetched no statuses and passed no badge, so a category drill
   // showed no hype trains at all.
-  useHypeTrains(streams);
+  useHypeTrains(listed);
 
   // One identity: the component is already keyed by category, so opening a
   // different one remounts and settles again on its own.
@@ -80,6 +113,7 @@ const CategoryStreamsList: React.FC<{ category: Category }> = ({ category }) => 
       setStreams(res[0] ?? []);
       setCursor(res[1]);
       setHasMore(!!res[1]);
+      setPages((n) => n + 1);
     } catch (err) {
       Logger.warn('[CategoryStreams] load failed:', err);
       setStreams([]);
@@ -88,6 +122,53 @@ const CategoryStreamsList: React.FC<{ category: Category }> = ({ category }) => 
       setLoading(false);
     }
   }, [category]);
+
+  // One tag-filtered page for generation `gen`; a page for older picks is
+  // dropped by the reducer.
+  const fetchTagPage = useCallback(
+    async (gen: number, tags: string[], after: string | null, append: boolean) => {
+      try {
+        const res = await invoke<[TwitchStream[], string | null]>('get_streams_by_game_with_tags', {
+          gameName: category.name,
+          tags,
+          cursor: after,
+          limit: PAGE,
+        });
+        setTagList((list) => applyPage(list, gen, res[0] ?? [], res[1], append, MAX_LOADED_STREAMS));
+        setPages((n) => n + 1);
+      } catch (err) {
+        Logger.warn('[CategoryStreams] tag page failed:', err);
+        setTagList((list) => failPage(list, gen, append));
+      }
+    },
+    [category],
+  );
+
+  // A change of picks starts a new list at the top. Driven from the tap, never
+  // from an effect, so opening the screen neither scrolls nor refetches.
+  const toggle = useCallback(
+    (tag: string) => {
+      const next = toggleTag(selectedRef.current, tag);
+      selectedRef.current = next;
+      setSelected(next);
+      const gen = ++tagGen.current;
+      setTagList(newTagList(gen, next.length > 0));
+      scroller.current?.scrollTo({ top: 0 });
+      if (next.length > 0) void fetchTagPage(gen, next, null, false);
+    },
+    [fetchTagPage],
+  );
+  const tagFilter = useMemo(() => ({ selected, onToggle: toggle }), [selected, toggle]);
+
+  const row = useCategoryTagSuggestions({
+    gameName: category.name,
+    query: '',
+    selected,
+    limit: ROW_LIMIT,
+    enabled: true,
+    revision: pages,
+    row: true,
+  });
 
   // A busy category runs to hundreds of live channels. The cursor for them was
   // already coming back and being thrown away, so the list stopped at the first
@@ -98,6 +179,13 @@ const CategoryStreamsList: React.FC<{ category: Category }> = ({ category }) => 
     // once you tap into a stream, so an unbounded scroll leaves every card, its
     // thumbnail and its blur layers resident for the rest of the session. Eight
     // pages of a category is already far more than anyone scrolls.
+    if (tagMode) {
+      if (tagList.loading || tagList.loadingMore || !tagList.hasMore || !tagList.cursor) return;
+      const gen = tagList.gen;
+      setTagList((list) => beginMore(list, gen));
+      await fetchTagPage(gen, selectedRef.current, tagList.cursor, true);
+      return;
+    }
     if (streams.length >= MAX_LOADED_STREAMS) return;
     if (loadingMore || !hasMore || !cursor) return;
     setLoadingMore(true);
@@ -116,13 +204,25 @@ const CategoryStreamsList: React.FC<{ category: Category }> = ({ category }) => 
       });
       setCursor(res[1]);
       setHasMore(!!res[1] && page.length > 0);
+      setPages((n) => n + 1);
     } catch (err) {
       Logger.warn('[CategoryStreams] page failed:', err);
       setHasMore(false);
     } finally {
       setLoadingMore(false);
     }
-  }, [category, cursor, hasMore, loadingMore, streams.length]);
+  }, [category, cursor, hasMore, loadingMore, streams.length, tagMode, tagList, fetchTagPage]);
+
+  // A pull asks for the current state of everything, previews included. In tag
+  // mode the rows stay on screen until the new first page replaces them.
+  const refresh = useCallback(() => {
+    bumpPreviewStamp();
+    setPages((n) => n + 1);
+    if (selectedRef.current.length === 0) return load();
+    const gen = ++tagGen.current;
+    setTagList((list) => refreshTagList(list, gen));
+    return fetchTagPage(gen, selectedRef.current, null, false);
+  }, [load, fetchTagPage]);
 
   useEffect(() => {
     void load();
@@ -144,6 +244,13 @@ const CategoryStreamsList: React.FC<{ category: Category }> = ({ category }) => 
     return () => io.disconnect();
   }, [loadMore]);
 
+  const firstLoading = tagMode ? tagList.loading : loading;
+  const empty = tagMode
+    ? selected.length === 1
+      ? 'No live streams match that tag.'
+      : 'No live streams match those tags.'
+    : 'No live streams in this category.';
+
   // The full-screen frame (position, z, background, top inset) belongs to the
   // DrillInScreen wrapper now, so this is just the contents.
   return (
@@ -158,17 +265,18 @@ const CategoryStreamsList: React.FC<{ category: Category }> = ({ category }) => 
         </button>
         <h1 className="text-lg font-bold text-textPrimary truncate">{category.name}</h1>
       </div>
-      <PullToRefresh
-        onRefresh={() => {
-          // A pull asks for the current state of everything, previews included.
-          bumpPreviewStamp();
-          return load();
-        }}
-      >
-        {loading ? (
+      {/* Fixed under the title, so the filter in use never scrolls away. */}
+      <CategoryTagRail
+        labels={row?.labels ?? NO_TAGS}
+        selected={selected}
+        onToggle={toggle}
+        onSearch={() => setSheetOpen(true)}
+      />
+      <PullToRefresh onRefresh={refresh} scrollerRef={scroller}>
+        {firstLoading ? (
           <SkeletonCards />
-        ) : streams.length === 0 ? (
-          <EmptyNote text="No live streams in this category." hint={null} />
+        ) : listed.length === 0 ? (
+          <EmptyNote text={empty} hint={null} />
         ) : (
           // Was `grid-cols-1 md:grid-cols-2 xl:grid-cols-3`, which is the exact
           // anti-pattern AdaptiveGrid was written for: Tailwind's breakpoints
@@ -178,7 +286,7 @@ const CategoryStreamsList: React.FC<{ category: Category }> = ({ category }) => 
           // now matches Following and Browse rather than having its own rules.
           <>
             <AdaptiveGrid variant="card" gap={12} className="px-4">
-              {streams.map((s, i) => (
+              {listed.map((s, i) => (
                 <SettleIn key={s.id} index={i} settled={settled}>
                   <MobileStreamCard
                     stream={s}
@@ -189,6 +297,7 @@ const CategoryStreamsList: React.FC<{ category: Category }> = ({ category }) => 
                     onPress={(stream) => void startStream(stream.user_login, stream)}
                     // The screen's title already names the category.
                     showCategory={false}
+                    tagFilter={tagFilter}
                   />
                 </SettleIn>
               ))}
@@ -196,7 +305,7 @@ const CategoryStreamsList: React.FC<{ category: Category }> = ({ category }) => 
             {/* Below the grid, so seeing it means the list is running out. The
                 tab-bar clearance rides here to stay the last thing on the page. */}
             <div ref={moreSentinel} className="sn-tabbar-clearance">
-              {loadingMore && (
+              {(tagMode ? tagList.loadingMore : loadingMore) && (
                 <div className="py-4 text-center text-[12px] text-textMuted">
                   Loading more streams
                 </div>
@@ -205,6 +314,14 @@ const CategoryStreamsList: React.FC<{ category: Category }> = ({ category }) => 
           </>
         )}
       </PullToRefresh>
+      <CategoryTagSheet
+        open={sheetOpen}
+        onClose={() => setSheetOpen(false)}
+        gameName={category.name}
+        selected={selected}
+        onToggle={toggle}
+        revision={pages}
+      />
     </>
   );
 };

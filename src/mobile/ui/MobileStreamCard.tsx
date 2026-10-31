@@ -20,6 +20,8 @@ import { SevenTvAvatar } from '../../components/SevenTvAvatar';
 import { sevenTvIdForStream } from '../../services/sevenTvPictures';
 import { useChannelHold } from './ChannelHold';
 import { observeOffscreen } from '../../utils/offscreenPause';
+import { StreamCardTags, type CardTagFilter } from './StreamCardTags';
+import { NO_TAGS } from '../../utils/tagFilter';
 
 // The stamp is what makes a refreshed list show refreshed previews: Twitch's
 // preview URL is fixed per channel and the WebView caches it, so without a
@@ -71,7 +73,10 @@ export const MobileStreamCard: React.FC<{
   variant?: 'card' | 'row';
   /** Off where the screen already names the category (a category's own list). */
   showCategory?: boolean;
-}> = ({ stream, hypeTrain, watchStreak, onPress, variant = 'card', showPlatform = true, showCategory = true }) => {
+  /** A category screen's tag filter: the card then draws the stream's tags in
+   *  a line its pills toggle (card variant only). */
+  tagFilter?: CardTagFilter;
+}> = ({ stream, hypeTrain, watchStreak, onPress, variant = 'card', showPlatform = true, showCategory = true, tagFilter }) => {
   // The icon means "you can earn drops HERE", not "this game has drops".
   //
   // It used to mean the latter, which put a gift on every channel in a
@@ -224,11 +229,10 @@ export const MobileStreamCard: React.FC<{
     );
   }
 
-  return (
-    <>
+  const card = (
     <button
       {...hold.handlers}
-      className="w-full text-left glass-panel media-card p-2 active:opacity-80 transition-opacity select-none [-webkit-touch-callout:none]"
+      className={`w-full text-left glass-panel media-card p-2 active:opacity-80 transition-opacity select-none [-webkit-touch-callout:none]${tagFilter ? ' h-full' : ''}`}
     >
       <div className="sn-card-thumb relative mb-2 overflow-hidden">
         <img
@@ -302,9 +306,30 @@ export const MobileStreamCard: React.FC<{
             {stream.game_name && <span className="line-clamp-1">{stream.game_name}</span>}
           </div>
         )}
+        {/* The tag line's band: reserved on every card of a screen that
+            filters by tags, so cards in a row keep one baseline. The line is
+            drawn over it from outside this button (no nested buttons). */}
+        {tagFilter && <div aria-hidden className="h-8" />}
       </div>
     </button>
-    {hold.sheet}
+  );
+
+  return (
+    <>
+      {tagFilter ? (
+        <div className="relative h-full">
+          {card}
+          <StreamCardTags
+            tags={stream.tags ?? NO_TAGS}
+            filter={tagFilter}
+            bandHandlers={hold.handlers}
+            consumeHeld={hold.consumeHeld}
+          />
+        </div>
+      ) : (
+        card
+      )}
+      {hold.sheet}
     </>
   );
 };
