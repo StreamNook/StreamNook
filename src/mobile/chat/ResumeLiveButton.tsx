@@ -1,28 +1,48 @@
 // What floats over a paused phone chat: the round resume button at the bottom
 // right, and the swipe-to-reply hint until it has been learned.
 //
-// The button is a chevron in an accent circle; once new messages arrive, the
-// chevron turns into how many (capped "99+", so the number always fits the
-// circle). Tapping it goes back to the newest messages and resumes live. The
+// The button is a chevron in a glazed circle; once new messages arrive, the
+// chevron turns into how many ("+3", then "99+", so it always fits the circle),
+// and every change rolls the number up. Tapping it goes back to the newest messages and resumes live. The
 // pair rides above the composer's suggestion strip while that strip covers the
 // bottom of the chat, and settles back when it goes.
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { CaretDown } from 'phosphor-react';
 import { usePausedNewCount } from '../../hooks/usePausedNewCount';
-import { fitCount } from '../../utils/fitNumber';
-import { resumeLabel } from './resumeLabel';
+import { RESUME_COUNT_STEP_MS, resumeCountText, resumeLabel } from './resumeLabel';
 
 const EASE = [0.2, 0.8, 0.2, 1] as const;
 const POP = { duration: 0.18, ease: EASE };
+const ROLL = { duration: 0.2, ease: EASE };
 const LIFT = { duration: 0.2, ease: EASE };
 const MARK = 'absolute inset-0 flex items-center justify-center';
+
+/** The count the circle shows: follows `count`, but steps at most every
+ *  `RESUME_COUNT_STEP_MS`, so in fast chat each roll lands before the next. */
+function useSteppedCount(count: number): number {
+  const [shown, setShown] = useState(count);
+  const lastStep = useRef(0);
+  useEffect(() => {
+    if (count === shown) return;
+    // Back to nothing (a resume) goes at once; a rise waits out the step.
+    const wait = count === 0 ? 0 : Math.max(0, RESUME_COUNT_STEP_MS - (performance.now() - lastStep.current));
+    const timer = setTimeout(() => {
+      lastStep.current = performance.now();
+      setShown(count);
+    }, wait);
+    return () => clearTimeout(timer);
+  }, [count, shown]);
+  return shown;
+}
 
 const ResumeButton: React.FC<{ sliceKey: string; onResume: () => void }> = ({ sliceKey, onResume }) => {
   // Its own leaf: the count re-renders on every flush while paused, and only
   // this button should.
   const count = usePausedNewCount(sliceKey, true);
-  const counting = count > 0;
+  const shown = useSteppedCount(count);
+  const text = resumeCountText(shown);
+  const counting = text !== '';
   return (
     <motion.button
       type="button"
@@ -33,7 +53,10 @@ const ResumeButton: React.FC<{ sliceKey: string; onResume: () => void }> = ({ sl
       exit={{ opacity: 0, scale: 0.8 }}
       whileTap={{ scale: 0.92 }}
       transition={POP}
-      className="pointer-events-auto absolute right-2.5 top-0 h-10 w-10 rounded-full bg-accent sn-send-ink ring-1 ring-white/15 shadow-[0_4px_14px_rgba(0,0,0,0.35)]"
+      // The glaze of the composer's round button below it, frosted like the
+      // glaze controls that float over busy content, so the count reads over
+      // chat text.
+      className="pointer-events-auto absolute right-2.5 top-0 h-10 w-10 chrome-glaze chrome-glaze--control chrome-glaze--frosted text-textPrimary"
     >
       <motion.span
         aria-hidden
@@ -44,15 +67,24 @@ const ResumeButton: React.FC<{ sliceKey: string; onResume: () => void }> = ({ sl
       >
         <CaretDown size={18} weight="bold" />
       </motion.span>
-      <motion.span
-        aria-hidden
-        className={`${MARK} text-[13px] font-bold leading-none tabular-nums`}
-        initial={false}
-        animate={{ opacity: counting ? 1 : 0, scale: counting ? 1 : 0.7 }}
-        transition={POP}
-      >
-        {counting ? fitCount(count) : ''}
-      </motion.span>
+      {/* Every change rolls: the old number rises out as the new one rises in,
+          clipped to the circle. */}
+      <span aria-hidden className={`${MARK} overflow-hidden rounded-full`}>
+        <AnimatePresence initial={false} mode="popLayout">
+          {counting && (
+            <motion.span
+              key={text}
+              className="text-[13px] font-bold leading-none tabular-nums"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={ROLL}
+            >
+              {text}
+            </motion.span>
+          )}
+        </AnimatePresence>
+      </span>
     </motion.button>
   );
 };

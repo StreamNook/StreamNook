@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resumeLabel } from './resumeLabel';
-import { fitCount } from '../../utils/fitNumber';
+import { resumeCountText, resumeLabel } from './resumeLabel';
 
 describe('the paused chat resume button', () => {
   it('says where it goes before anything new arrives', () => {
@@ -14,8 +13,12 @@ describe('the paused chat resume button', () => {
     expect(resumeLabel(1200)).toBe('1200 new messages, scrolls to the latest messages');
   });
 
-  it('never draws more than three characters in the circle', () => {
-    for (const n of [1, 9, 42, 99, 100, 5000]) expect(fitCount(n).length).toBeLessThanOrEqual(3);
-    expect(fitCount(100)).toBe('99+');
+  it('counts as +N, never more than three characters in the circle', () => {
+    expect(resumeCountText(0)).toBe('');
+    expect(resumeCountText(1)).toBe('+1');
+    expect(resumeCountText(42)).toBe('+42');
+    expect(resumeCountText(99)).toBe('+99');
+    expect(resumeCountText(100)).toBe('99+');
+    for (const n of [1, 9, 42, 99, 100, 5000]) expect(resumeCountText(n).length).toBeLessThanOrEqual(3);
   });
 });
