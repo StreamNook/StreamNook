@@ -34,6 +34,27 @@ export function emoteClickRoute(source: EmoteSource | null, spotlightHere: boole
   return canCredit(source) ? 'card' : 'none';
 }
 
+/** Whether `id` is an id the core can look up for `source`: Rust's `valid_id` (emote_credit.rs),
+ *  so the sheet never offers an emote the core would answer with nothing. */
+export function validCreditId(source: EmoteSource, id: string): boolean {
+  switch (source) {
+    // ULID (26) or a legacy 24-hex ObjectId.
+    case '7tv':
+      return (id.length === 24 || id.length === 26) && /^[A-Za-z0-9]+$/.test(id);
+    case 'bttv':
+      return /^[0-9A-Fa-f]{24}$/.test(id);
+    case 'ffz':
+      return /^[0-9]{1,12}$/.test(id);
+    // `25`, `emotesv2_<32 hex>`.
+    case 'twitch': {
+      const body = id.startsWith('emotesv2_') ? id.slice('emotesv2_'.length) : id;
+      return id.length <= 64 && /^[A-Za-z0-9]+$/.test(body);
+    }
+    default:
+      return false;
+  }
+}
+
 /** One image of a row's emote, or of a stack of them (a base and the zero-width ones over it). */
 export interface StackMember {
   emoteId?: string;
@@ -42,17 +63,21 @@ export interface StackMember {
 }
 
 /** The phone's sheet for a tapped stack: every member the core can credit, in stack order (the
- *  first is the one the sheet opens on). Empty when none can be credited. */
+ *  first is the one the sheet opens on), each emote once. Empty when none can be credited. */
 export function stackTargets(
   members: readonly StackMember[],
   room: { login?: string | null; id?: string | null } | null | undefined,
 ): EmoteCardTarget[] {
   const out: EmoteCardTarget[] = [];
+  const seen = new Set<string>();
   for (const m of members) {
     if (!m.emoteId) continue;
     const url = m.emoteUrl || `https://static-cdn.jtvnw.net/emoticons/v2/${m.emoteId}/default/dark/2.0`;
     const source = emoteRef(url, m.emoteId);
-    if (!source || !canCredit(source)) continue;
+    if (!source || !canCredit(source) || !validCreditId(source, m.emoteId)) continue;
+    const key = `${source}:${m.emoteId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
     out.push({
       provider: source,
       id: m.emoteId,

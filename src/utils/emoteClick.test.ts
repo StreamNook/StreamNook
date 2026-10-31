@@ -42,6 +42,17 @@ describe('what a phone tap on a stack opens', () => {
     expect(stackTargets([kick], room)).toEqual([]);
   });
 
+  it('offers only what the core can look up, by the cases Rust tests too', () => {
+    for (const c of cases) {
+      const t = stackTargets([{ emoteId: c.id ?? undefined, emoteUrl: c.url, content: 'x' }], null);
+      expect(t[0]?.provider ?? null, `${c.url} ${c.id}`).toBe(c.credit);
+    }
+  });
+
+  it('lists an emote stacked twice once', () => {
+    expect(stackTargets([twitch, seventv, seventv, twitch], room).map((x) => x.provider)).toEqual(['twitch', '7tv']);
+  });
+
   it("fills a Twitch emote's image the way rows draw it", () => {
     expect(stackTargets([{ emoteId: '25', content: 'Kappa' }], null)[0].url).toBe(
       'https://static-cdn.jtvnw.net/emoticons/v2/25/default/dark/2.0',

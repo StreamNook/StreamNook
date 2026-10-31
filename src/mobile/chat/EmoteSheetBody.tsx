@@ -51,7 +51,7 @@ export function EmoteSheetBody({ target, stack, credit, done, onClose, onSwitch,
       </span>
       <h2 className="mt-3 text-[18px] font-semibold leading-tight text-textPrimary [overflow-wrap:anywhere]">{target.name}</h2>
       {/* Held at its height from the first frame, so nothing moves when Rust's line lands. */}
-      <p className="mt-1 min-h-[18px] text-[13px] leading-[18px] text-textSecondary">{done ? (credit?.subtitle ?? '') : ''}</p>
+      <p className="mt-1 min-h-[18px] max-w-full truncate text-[13px] leading-[18px] text-textSecondary">{done ? (credit?.subtitle ?? '') : ''}</p>
       {stack.length > 1 && (
         // Every emote of the stack, the one shown marked: a tap moves only the mark.
         <div className="mt-3 flex max-w-full gap-2 overflow-x-auto px-1 py-1" role="tablist" aria-label="Emotes stacked here">
