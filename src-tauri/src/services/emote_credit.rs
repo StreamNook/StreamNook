@@ -441,22 +441,32 @@ pub async fn resolve(
 fn card_words(credit: &mut EmoteCredit, provider: CreditProvider, definite: bool) {
     let label = provider.label();
     let kind = match credit.kind_label {
-        Some(k) => {
-            let mut chars = k.chars();
-            match chars.next() {
-                Some(first) => format!("{label} {}{}", first.to_lowercase(), chars.as_str()),
-                None => label.to_string(),
-            }
-        }
-        None => label.to_string(),
+        Some(k) if !k.is_empty() => format!("{label} {}", kind_after_label(k)),
+        _ => label.to_string(),
     };
     credit.subtitle = Some(match &credit.original_name {
         Some(own) => format!("Alias of {own} · {kind}"),
         None => kind,
     });
     credit.page_label = credit.page_url.as_ref().map(|_| format!("Open on {label}"));
-    credit.empty_line =
-        (definite && credit.creators.is_empty()).then(|| format!("{label} doesn't list who made this one."));
+    // Only when the provider named nobody at all: a named owner whose link failed the checks still
+    // shows on the hover line, so "nobody listed" would contradict it.
+    credit.empty_line = (definite && credit.creators.is_empty() && !credit.has_credit())
+        .then(|| format!("{label} doesn't list who made this one."));
+}
+
+/// A kind as it reads after the provider's name: a plain word is lowered ("Twitch sub emote"),
+/// Twitch's own product names keep their capitals ("Twitch Channel Points emote").
+fn kind_after_label(kind: &str) -> String {
+    const PRODUCTS: [&str; 5] = ["Bits ", "Channel Points ", "Hype Train ", "Prime ", "Turbo "];
+    if PRODUCTS.iter().any(|p| kind.starts_with(p)) {
+        return kind.to_string();
+    }
+    let mut chars = kind.chars();
+    match chars.next() {
+        Some(first) => format!("{}{}", first.to_lowercase(), chars.as_str()),
+        None => String::new(),
+    }
 }
 
 /// An emote found in a set Rust holds, with where it sat.
@@ -942,6 +952,30 @@ mod tests {
         assert_eq!(c.empty_line, None);
         card_words(&mut c, CreditProvider::SevenTv, true);
         assert_eq!(c.empty_line.as_deref(), Some("7TV doesn't list who made this one."));
+    }
+
+    #[test]
+    fn a_named_owner_without_a_chip_is_never_called_nobody() {
+        // The provider named someone, but no link passed the checks, so no chip was made.
+        let mut c = EmoteCredit { provider: "7tv", owner_name: Some("Alpha".into()), ..Default::default() };
+        card_words(&mut c, CreditProvider::SevenTv, true);
+        assert!(c.creators.is_empty());
+        assert_eq!(c.empty_line, None);
+    }
+
+    #[test]
+    fn kind_words_keep_twitch_product_names() {
+        let words = |kind: &'static str| {
+            let mut c = EmoteCredit { provider: "twitch", kind_label: Some(kind), ..Default::default() };
+            card_words(&mut c, CreditProvider::Twitch, false);
+            c.subtitle.unwrap()
+        };
+        assert_eq!(words("Sub emote"), "Twitch sub emote");
+        assert_eq!(words("Global emote"), "Twitch global emote");
+        assert_eq!(words("Channel Points emote"), "Twitch Channel Points emote");
+        assert_eq!(words("Hype Train emote"), "Twitch Hype Train emote");
+        assert_eq!(words("Bits emote"), "Twitch Bits emote");
+        assert_eq!(words("Prime emote"), "Twitch Prime emote");
     }
 
     #[test]
