@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { GRAB_ZONE, inGrabZone, messageReach, slideStart, stepAction, stepAt, stepKeeping, stepTint, type TouchSlider } from './swipeSteps';
+import cases from './replySwipeCases.json';
+import { GRAB_ZONE, inGrabZone, inRightGrabZone, messageReach, slideStart, stepAction, stepAt, stepKeeping, stepTint, type TouchSlider } from './swipeSteps';
 
 // Rust's own test ruler (touch_mod_slider.rs): Delete, 1m, 10m, 1h, a gap, Ban on a 390 px row.
 const slider: TouchSlider = {
@@ -99,5 +100,27 @@ describe('where a slide can start', () => {
     expect(slideStart(4, 20, 10, true)).toBe('scroll');
     // Leftward never slides.
     expect(slideStart(-8, 1, 10, true)).toBe('wait');
+  });
+});
+
+describe('where a reply can start (swipe left)', () => {
+  it('follows the shared table', () => {
+    for (const c of cases.start) {
+      const got = slideStart(c.dx, c.dy, cases.numbers.engage, c.grab, { mod: c.mod, reply: c.reply, rightGrab: c.rightGrab });
+      expect(got, `${c.dx},${c.dy} grab ${c.grab} right ${c.rightGrab} mod ${c.mod} reply ${c.reply}`).toBe(c.want);
+    }
+  });
+
+  it('starts a reply on a leftward move, where it once waited', () => {
+    expect(slideStart(-12, 3, 10, false, { mod: false, reply: true, rightGrab: false })).toBe('reply');
+    expect(slideStart(-12, 3, 10, false)).toBe('wait');
+  });
+
+  it('has a grab zone a thumb wide inside the right edge', () => {
+    // The usable right edge at 360: the zone runs from just past 304 to 360.
+    expect(inRightGrabZone(361, 360)).toBe(false);
+    expect(inRightGrabZone(360, 360)).toBe(true);
+    expect(inRightGrabZone(360 - GRAB_ZONE + 1, 360)).toBe(true);
+    expect(inRightGrabZone(360 - GRAB_ZONE, 360)).toBe(false);
   });
 });

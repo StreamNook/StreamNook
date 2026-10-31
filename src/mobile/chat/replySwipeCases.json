@@ -1,0 +1,106 @@
+{
+  "numbers": {
+    "engage": 10,
+    "arm": 64,
+    "disarm": 52,
+    "reach": 88,
+    "resistance": 0.25,
+    "iconFrom": 16,
+    "grabZone": 56,
+    "grabEngage": 6,
+    "grabRatio": 0.5,
+    "snapBackMs": 220,
+    "hintShows": 5
+  },
+  "words": { "hint": "Swipe left on a message to reply", "hintShort": "Swipe left to reply" },
+  "shown": [
+    { "pull": -5, "shown": 0 },
+    { "pull": 0, "shown": 0 },
+    { "pull": 40, "shown": 40 },
+    { "pull": 64, "shown": 64 },
+    { "pull": 84, "shown": 69 },
+    { "pull": 104, "shown": 74 },
+    { "pull": 200, "shown": 88 }
+  ],
+  "armed": [
+    { "pull": 63, "was": false, "armed": false },
+    { "pull": 64, "was": false, "armed": true },
+    { "pull": 100, "was": false, "armed": true },
+    { "pull": 60, "was": true, "armed": true },
+    { "pull": 52, "was": true, "armed": true },
+    { "pull": 51, "was": true, "armed": false },
+    { "pull": 0, "was": true, "armed": false }
+  ],
+  "progress": [
+    { "pull": 0, "progress": 0 },
+    { "pull": 16, "progress": 0 },
+    { "pull": 28, "progress": 0.25 },
+    { "pull": 40, "progress": 0.5 },
+    { "pull": 64, "progress": 1 },
+    { "pull": 120, "progress": 1 }
+  ],
+  "snapBack": [
+    { "motion": "full", "ms": 220 },
+    { "motion": "reduced", "ms": 0 },
+    { "motion": "off", "ms": 0 },
+    { "motion": null, "ms": 220 }
+  ],
+  "start": [
+    { "dx": -12, "dy": 3, "grab": false, "rightGrab": false, "mod": false, "reply": true, "want": "reply" },
+    { "dx": -8, "dy": 2, "grab": false, "rightGrab": false, "mod": false, "reply": true, "want": "wait" },
+    { "dx": -10, "dy": -10, "grab": false, "rightGrab": false, "mod": false, "reply": true, "want": "reply" },
+    { "dx": -11, "dy": -11, "grab": false, "rightGrab": false, "mod": false, "reply": true, "want": "scroll" },
+    { "dx": -4, "dy": 14, "grab": false, "rightGrab": false, "mod": false, "reply": true, "want": "scroll" },
+    { "dx": -7, "dy": 2, "grab": false, "rightGrab": true, "mod": false, "reply": true, "want": "reply" },
+    { "dx": -7, "dy": 2, "grab": false, "rightGrab": false, "mod": false, "reply": true, "want": "wait" },
+    { "dx": -7, "dy": 9, "grab": false, "rightGrab": true, "mod": false, "reply": true, "want": "scroll" },
+    { "dx": 12, "dy": 3, "grab": false, "rightGrab": false, "mod": true, "reply": true, "want": "slide" },
+    { "dx": 12, "dy": 3, "grab": false, "rightGrab": false, "mod": false, "reply": true, "want": "none" },
+    { "dx": -12, "dy": 3, "grab": false, "rightGrab": false, "mod": true, "reply": false, "want": "none" },
+    { "dx": 7, "dy": 2, "grab": true, "rightGrab": false, "mod": true, "reply": false, "want": "slide" },
+    { "dx": 9, "dy": 16, "grab": true, "rightGrab": false, "mod": true, "reply": true, "want": "slide" },
+    { "dx": 0, "dy": 0, "grab": false, "rightGrab": false, "mod": true, "reply": true, "want": "wait" }
+  ],
+  "kind": [
+    { "dx": -9, "dy": -1.5, "slider": "none", "reply": true, "grab": false, "want": "reply" },
+    { "dx": -8, "dy": 8, "slider": "none", "reply": true, "grab": false, "want": "reply" },
+    { "dx": -5, "dy": 9, "slider": "none", "reply": true, "grab": false, "want": null },
+    { "dx": -8, "dy": 2, "slider": "on", "reply": false, "grab": false, "want": null },
+    { "dx": 9, "dy": 2, "slider": "pending", "reply": true, "grab": false, "want": "moderate" },
+    { "dx": 9, "dy": 2, "slider": "on", "reply": true, "grab": false, "want": "moderate" },
+    { "dx": 9, "dy": 2, "slider": "off", "reply": true, "grab": false, "want": null },
+    { "dx": 9, "dy": 2, "slider": "none", "reply": true, "grab": false, "want": null },
+    { "dx": 5, "dy": 9, "slider": "on", "reply": false, "grab": true, "want": "moderate" },
+    { "dx": 5, "dy": 9, "slider": "on", "reply": false, "grab": false, "want": null },
+    { "dx": 0, "dy": 10, "slider": "on", "reply": true, "grab": false, "want": null }
+  ],
+  "target": [
+    { "id": "a1", "username": "alpha", "system": false, "systemMsg": false, "held": false, "provider": "twitch", "readOnly": false, "blocked": null, "warning": false, "kickSignedOut": false, "want": true },
+    { "id": "a2", "username": "System", "system": true, "systemMsg": false, "held": false, "provider": "twitch", "readOnly": false, "blocked": null, "warning": false, "kickSignedOut": false, "want": false },
+    { "id": "a3", "username": "alpha", "system": false, "systemMsg": true, "held": false, "provider": "twitch", "readOnly": false, "blocked": null, "warning": false, "kickSignedOut": false, "want": false },
+    { "id": "a4", "username": "alpha", "system": false, "systemMsg": false, "held": true, "provider": "twitch", "readOnly": false, "blocked": null, "warning": false, "kickSignedOut": false, "want": false },
+    { "id": "local-123", "username": "me", "system": false, "systemMsg": false, "held": false, "provider": "twitch", "readOnly": false, "blocked": null, "warning": false, "kickSignedOut": false, "want": false },
+    { "id": "kick-local-9", "username": "me", "system": false, "systemMsg": false, "held": false, "provider": "kick", "readOnly": false, "blocked": null, "warning": false, "kickSignedOut": false, "want": false },
+    { "id": "y1", "username": "alpha", "system": false, "systemMsg": false, "held": false, "provider": "youtube", "readOnly": false, "blocked": null, "warning": false, "kickSignedOut": false, "want": false },
+    { "id": "t1", "username": "alpha", "system": false, "systemMsg": false, "held": false, "provider": "tiktok", "readOnly": false, "blocked": null, "warning": false, "kickSignedOut": false, "want": false },
+    { "id": "a5", "username": "alpha", "system": false, "systemMsg": false, "held": false, "provider": "twitch", "readOnly": false, "blocked": "followers_only", "warning": false, "kickSignedOut": false, "want": false },
+    { "id": "a6", "username": "alpha", "system": false, "systemMsg": false, "held": false, "provider": "twitch", "readOnly": false, "blocked": "emote_only", "warning": false, "kickSignedOut": false, "want": true },
+    { "id": "a7", "username": "alpha", "system": false, "systemMsg": false, "held": false, "provider": "twitch", "readOnly": false, "blocked": null, "warning": true, "kickSignedOut": false, "want": false },
+    { "id": "k1", "username": "alpha", "system": false, "systemMsg": false, "held": false, "provider": "kick", "readOnly": false, "blocked": null, "warning": false, "kickSignedOut": true, "want": false },
+    { "id": "k2", "username": "alpha", "system": false, "systemMsg": false, "held": false, "provider": "kick", "readOnly": false, "blocked": null, "warning": false, "kickSignedOut": false, "want": true },
+    { "id": "a8", "username": "alpha", "system": false, "systemMsg": false, "held": false, "provider": "twitch", "readOnly": true, "blocked": null, "warning": false, "kickSignedOut": false, "want": false },
+    { "id": "a9", "username": "", "system": false, "systemMsg": false, "held": false, "provider": "twitch", "readOnly": false, "blocked": null, "warning": false, "kickSignedOut": false, "want": false }
+  ],
+  "sequence": [
+    { "name": "a firm pull replies", "pulls": [12, 30, 50, 64, 70], "armedChanges": [false, false, false, true, false], "replies": true },
+    { "name": "a short pull does nothing", "pulls": [12, 40], "armedChanges": [false, false], "replies": false },
+    { "name": "pulled back under the disarm point does nothing", "pulls": [30, 70, 45], "armedChanges": [false, true, true], "replies": false },
+    { "name": "a wobble at the edge arms once", "pulls": [64, 60, 64, 58, 63], "armedChanges": [true, false, false, false, false], "replies": true }
+  ],
+  "afterSend": [
+    { "draft": "a", "sent": "a", "clear": true },
+    { "draft": "b", "sent": "a", "clear": false },
+    { "draft": null, "sent": "a", "clear": false },
+    { "draft": "a", "sent": null, "clear": false }
+  ]
+}
