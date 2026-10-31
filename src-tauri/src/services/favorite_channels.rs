@@ -16,7 +16,8 @@ use tauri::Manager;
 use crate::models::settings::{AppState, FavoriteChannel, Settings};
 use crate::rt::AppHandle;
 use crate::services::providers::key::{
-    favorite_id, is_provider_id, is_youtube_channel_id, make_key, normalize_channel, strip_own_prefix,
+    favorite_id, is_provider_id, is_youtube_channel_id, make_key, normalize_channel,
+    strip_own_prefix,
 };
 use crate::services::twitch_service::TwitchService;
 
@@ -128,18 +129,27 @@ pub fn apply(
             return None;
         }
         let next_ids: Vec<String> = ids.iter().filter(|i| **i != id).cloned().collect();
-        let next_channels: Vec<FavoriteChannel> = channels.iter().filter(|c| c.id != id).cloned().collect();
+        let next_channels: Vec<FavoriteChannel> =
+            channels.iter().filter(|c| c.id != id).cloned().collect();
         return Some((next_ids, next_channels));
     }
     let old = channels.iter().find(|c| c.id == id);
     let added_at = if listed {
-        old.map(|o| o.added_at.clone()).filter(|a| !a.is_empty()).unwrap_or_else(|| identity.added_at.clone())
+        old.map(|o| o.added_at.clone())
+            .filter(|a| !a.is_empty())
+            .unwrap_or_else(|| identity.added_at.clone())
     } else {
         identity.added_at.clone()
     };
     let merged = FavoriteChannel {
-        display_name: identity.display_name.clone().or_else(|| old.and_then(|o| o.display_name.clone())),
-        avatar: identity.avatar.clone().or_else(|| old.and_then(|o| o.avatar.clone())),
+        display_name: identity
+            .display_name
+            .clone()
+            .or_else(|| old.and_then(|o| o.display_name.clone())),
+        avatar: identity
+            .avatar
+            .clone()
+            .or_else(|| old.and_then(|o| o.avatar.clone())),
         added_at,
         ..identity
     };
@@ -148,7 +158,8 @@ pub fn apply(
         next_ids.push(id.clone());
     }
     let at = channels.iter().position(|c| c.id == id);
-    let mut next_channels: Vec<FavoriteChannel> = channels.iter().filter(|c| c.id != id).cloned().collect();
+    let mut next_channels: Vec<FavoriteChannel> =
+        channels.iter().filter(|c| c.id != id).cloned().collect();
     let at = at.unwrap_or(next_channels.len()).min(next_channels.len());
     next_channels.insert(at, merged);
     if next_ids.as_slice() == ids && next_channels.as_slice() == channels {
@@ -163,12 +174,18 @@ pub fn favorite_patch(
     identity: FavoriteChannel,
     favorite: bool,
 ) -> Option<(Vec<String>, Vec<FavoriteChannel>)> {
-    apply(&current.favorite_streamers, &current.favorite_channels, identity, favorite)
+    apply(
+        &current.favorite_streamers,
+        &current.favorite_channels,
+        identity,
+        favorite,
+    )
 }
 
 /// Whether a save changed either favorite list.
 pub fn favorites_changed(before: &Settings, after: &Settings) -> bool {
-    before.favorite_streamers != after.favorite_streamers || before.favorite_channels != after.favorite_channels
+    before.favorite_streamers != after.favorite_streamers
+        || before.favorite_channels != after.favorite_channels
 }
 
 /// An id as it should be stored: a bare 24-character `UC` id (written by an
@@ -192,7 +209,10 @@ fn rekey(id: &str) -> String {
 /// the earliest `added_at` and any name or face a later duplicate had).
 /// Answers whether anything changed.
 pub fn repair(settings: &mut Settings) -> bool {
-    let before = (settings.favorite_streamers.clone(), settings.favorite_channels.clone());
+    let before = (
+        settings.favorite_streamers.clone(),
+        settings.favorite_channels.clone(),
+    );
     let mut seen = HashSet::new();
     let ids: Vec<String> = settings
         .favorite_streamers
@@ -219,7 +239,9 @@ pub fn repair(settings: &mut Settings) -> bool {
                 if first.avatar.is_none() {
                     first.avatar = entry.avatar.clone();
                 }
-                if !entry.added_at.is_empty() && (first.added_at.is_empty() || entry.added_at < first.added_at) {
+                if !entry.added_at.is_empty()
+                    && (first.added_at.is_empty() || entry.added_at < first.added_at)
+                {
                     first.added_at = entry.added_at.clone();
                 }
             }
@@ -228,7 +250,10 @@ pub fn repair(settings: &mut Settings) -> bool {
     }
     settings.favorite_streamers = ids;
     settings.favorite_channels = channels;
-    (settings.favorite_streamers.clone(), settings.favorite_channels.clone()) != before
+    (
+        settings.favorite_streamers.clone(),
+        settings.favorite_channels.clone(),
+    ) != before
 }
 
 // ---- The identity fill ------------------------------------------------------
@@ -266,13 +291,21 @@ pub fn backoff_after(failures: u32) -> Duration {
 /// Forget the counts when the account changed; then whether a try may run now.
 fn fill_due(state: &mut FillState, generation: u64, now: Instant) -> bool {
     if state.generation != generation {
-        *state = FillState { generation, ..FillState::default() };
+        *state = FillState {
+            generation,
+            ..FillState::default()
+        };
     }
     state.next_at.map_or(true, |at| now >= at)
 }
 
 /// Record one try: `missing` was asked for and `found` came back.
-fn record_fill(state: &mut FillState, missing: &[String], found: &HashMap<String, (String, String, Option<String>)>, now: Instant) {
+fn record_fill(
+    state: &mut FillState,
+    missing: &[String],
+    found: &HashMap<String, (String, String, Option<String>)>,
+    now: Instant,
+) {
     let partial = missing.iter().any(|id| !found.contains_key(id));
     if partial {
         for id in missing.iter().filter(|id| !found.contains_key(*id)) {
@@ -288,7 +321,11 @@ fn record_fill(state: &mut FillState, missing: &[String], found: &HashMap<String
 
 /// The bare Twitch ids listed with no identity, minus those skipped.
 fn missing_identities(settings: &Settings, misses: &HashMap<String, u32>) -> Vec<String> {
-    let have: HashSet<&str> = settings.favorite_channels.iter().map(|c| c.id.as_str()).collect();
+    let have: HashSet<&str> = settings
+        .favorite_channels
+        .iter()
+        .map(|c| c.id.as_str())
+        .collect();
     settings
         .favorite_streamers
         .iter()
@@ -305,7 +342,11 @@ pub fn fill_patch(
     current: &Settings,
     found: &HashMap<String, (String, String, Option<String>)>,
 ) -> Option<(Vec<String>, Vec<FavoriteChannel>)> {
-    let have: HashSet<&str> = current.favorite_channels.iter().map(|c| c.id.as_str()).collect();
+    let have: HashSet<&str> = current
+        .favorite_channels
+        .iter()
+        .map(|c| c.id.as_str())
+        .collect();
     let added: Vec<FavoriteChannel> = current
         .favorite_streamers
         .iter()
@@ -333,10 +374,14 @@ pub fn fill_patch(
 /// Fill in a name and face for favorites saved as bare Twitch ids. Called
 /// after each successful followed poll; a no-op until its backoff allows.
 pub fn spawn_fill_identities(app: AppHandle) {
-    let Some(state) = app.try_state::<AppState>() else { return };
+    let Some(state) = app.try_state::<AppState>() else {
+        return;
+    };
     let generation = TwitchService::account_generation();
     let missing = {
-        let Ok(settings) = state.settings.lock() else { return };
+        let Ok(settings) = state.settings.lock() else {
+            return;
+        };
         let Ok(mut fill) = FILL.lock() else { return };
         if !fill_due(&mut fill, generation, Instant::now()) {
             return;
@@ -355,8 +400,13 @@ pub fn spawn_fill_identities(app: AppHandle) {
         }
         if !found.is_empty() && TwitchService::account_generation() == generation {
             if let Some(state) = app.try_state::<AppState>() {
-                match crate::commands::settings::commit_favorite_patch(&app, &state, |current| fill_patch(current, &found)) {
-                    Ok(true) => log::info!("[Favorites] filled in identity for {} channel(s)", found.len()),
+                match crate::commands::settings::commit_favorite_patch(&app, &state, |current| {
+                    fill_patch(current, &found)
+                }) {
+                    Ok(true) => log::info!(
+                        "[Favorites] filled in identity for {} channel(s)",
+                        found.len()
+                    ),
                     Ok(false) => {}
                     Err(e) => log::warn!("[Favorites] identity fill write failed: {e}"),
                 }
@@ -387,15 +437,48 @@ mod tests {
 
     #[test]
     fn identity_keys_and_addresses_each_platform() {
-        let t = identity(&ChannelPick::new("twitch", Some("71092938".into()), "XQC", Some("xQc".into()), Some("a.png".into())), "T").unwrap();
-        assert_eq!((t.id.as_str(), t.provider.as_str(), t.channel.as_str()), ("71092938", "twitch", "xqc"));
-        assert_eq!((t.display_name.as_deref(), t.avatar.as_deref(), t.added_at.as_str()), (Some("xQc"), Some("a.png"), "T"));
+        let t = identity(
+            &ChannelPick::new(
+                "twitch",
+                Some("71092938".into()),
+                "XQC",
+                Some("xQc".into()),
+                Some("a.png".into()),
+            ),
+            "T",
+        )
+        .unwrap();
+        assert_eq!(
+            (t.id.as_str(), t.provider.as_str(), t.channel.as_str()),
+            ("71092938", "twitch", "xqc")
+        );
+        assert_eq!(
+            (
+                t.display_name.as_deref(),
+                t.avatar.as_deref(),
+                t.added_at.as_str()
+            ),
+            (Some("xQc"), Some("a.png"), "T")
+        );
         let k = identity(&pick("kick", "12345", "kick:XQC"), "T").unwrap();
         assert_eq!((k.id.as_str(), k.channel.as_str()), ("kick:xqc", "xqc"));
-        let y = identity(&pick("youtube", "UCMNEVbszv8ZyvSXoTn3yhpQ", "AGr94tpNVkw"), "T").unwrap();
-        assert_eq!((y.id.as_str(), y.channel.as_str()), ("youtube:UCMNEVbszv8ZyvSXoTn3yhpQ", "UCMNEVbszv8ZyvSXoTn3yhpQ"));
+        let y = identity(
+            &pick("youtube", "UCMNEVbszv8ZyvSXoTn3yhpQ", "AGr94tpNVkw"),
+            "T",
+        )
+        .unwrap();
+        assert_eq!(
+            (y.id.as_str(), y.channel.as_str()),
+            (
+                "youtube:UCMNEVbszv8ZyvSXoTn3yhpQ",
+                "UCMNEVbszv8ZyvSXoTn3yhpQ"
+            )
+        );
         let h = identity(&pick("youtube", "", "@Chan"), "T").unwrap();
-        assert_eq!((h.id.as_str(), h.channel.as_str()), ("youtube:@Chan", "@Chan"));
+        assert_eq!(
+            (h.id.as_str(), h.channel.as_str()),
+            ("youtube:@Chan", "@Chan")
+        );
         assert_eq!(identity(&pick("youtube", "", "AGr94tpNVkw"), "T"), None);
         assert_eq!(identity(&pick("twitch", "", "xqc"), "T"), None);
         // Empty names and faces are none, so they never overwrite a kept one.
@@ -405,10 +488,19 @@ mod tests {
 
     #[test]
     fn a_pick_says_what_it_still_needs() {
-        assert_eq!(lookup_needed(&pick("twitch", "", "xqc")), Lookup::TwitchByLogin);
+        assert_eq!(
+            lookup_needed(&pick("twitch", "", "xqc")),
+            Lookup::TwitchByLogin
+        );
         assert_eq!(lookup_needed(&pick("twitch", "1", "xqc")), Lookup::None);
-        assert_eq!(lookup_needed(&pick("youtube", "", "AGr94tpNVkw")), Lookup::YouTubeChannel);
-        assert_eq!(lookup_needed(&pick("youtube", "UCabc", "AGr94tpNVkw")), Lookup::None);
+        assert_eq!(
+            lookup_needed(&pick("youtube", "", "AGr94tpNVkw")),
+            Lookup::YouTubeChannel
+        );
+        assert_eq!(
+            lookup_needed(&pick("youtube", "UCabc", "AGr94tpNVkw")),
+            Lookup::None
+        );
         assert_eq!(lookup_needed(&pick("kick", "", "xqc")), Lookup::None);
         assert_eq!(lookup_needed(&pick("twitch", "", "")), Lookup::None);
     }
@@ -419,8 +511,14 @@ mod tests {
         let channels = vec![fav("1", "twitch", "one")];
         let (ids2, ch2) = apply(&ids, &channels, fav("kick:two", "kick", "two"), true).unwrap();
         assert_eq!(ids2, vec!["1", "kick:two"]);
-        assert_eq!(ch2.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), vec!["1", "kick:two"]);
-        assert_eq!(apply(&ids2, &ch2, fav("kick:two", "kick", "two"), true), None);
+        assert_eq!(
+            ch2.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
+            vec!["1", "kick:two"]
+        );
+        assert_eq!(
+            apply(&ids2, &ch2, fav("kick:two", "kick", "two"), true),
+            None
+        );
     }
 
     #[test]
@@ -447,16 +545,26 @@ mod tests {
         old.avatar = Some("kept.png".into());
         old.display_name = Some("One".into());
         let channels = vec![old.clone()];
-        assert_eq!(apply(&ids, &channels, fav("1", "twitch", "one"), true), None);
+        assert_eq!(
+            apply(&ids, &channels, fav("1", "twitch", "one"), true),
+            None
+        );
     }
 
     #[test]
     fn removing_drops_every_entry_with_the_id_and_nothing_else() {
         let ids = vec!["1".to_string(), "2".to_string(), "1".to_string()];
-        let channels = vec![fav("1", "twitch", "one"), fav("2", "twitch", "two"), fav("1", "twitch", "one")];
+        let channels = vec![
+            fav("1", "twitch", "one"),
+            fav("2", "twitch", "two"),
+            fav("1", "twitch", "one"),
+        ];
         let (ids2, ch2) = apply(&ids, &channels, fav("1", "twitch", "one"), false).unwrap();
         assert_eq!(ids2, vec!["2"]);
-        assert_eq!(ch2.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), vec!["2"]);
+        assert_eq!(
+            ch2.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
+            vec!["2"]
+        );
         assert_eq!(apply(&ids2, &ch2, fav("1", "twitch", "one"), false), None);
     }
 
@@ -486,7 +594,13 @@ mod tests {
     fn repair_rekeys_legacy_ids_collapses_prefixes_and_dedupes() {
         let uc = "UCMNEVbszv8ZyvSXoTn3yhpQ";
         let mut s = Settings::default();
-        s.favorite_streamers = vec![uc.into(), "kick:kick:xqc".into(), "kick:xqc".into(), "180118013".into(), format!("youtube:{uc}")];
+        s.favorite_streamers = vec![
+            uc.into(),
+            "kick:kick:xqc".into(),
+            "kick:xqc".into(),
+            "180118013".into(),
+            format!("youtube:{uc}"),
+        ];
         let mut first = fav("kick:xqc", "kick", "xqc");
         first.added_at = "2026-05-01T00:00:00.000Z".into();
         let mut doubled = fav("kick:kick:xqc", "kick", "kick:xqc");
@@ -494,7 +608,14 @@ mod tests {
         doubled.avatar = Some("face.png".into());
         s.favorite_channels = vec![fav(uc, "twitch", uc), first, doubled];
         assert!(repair(&mut s));
-        assert_eq!(s.favorite_streamers, vec![format!("youtube:{uc}"), "kick:xqc".to_string(), "180118013".to_string()]);
+        assert_eq!(
+            s.favorite_streamers,
+            vec![
+                format!("youtube:{uc}"),
+                "kick:xqc".to_string(),
+                "180118013".to_string()
+            ]
+        );
         assert_eq!(s.favorite_channels.len(), 2);
         assert_eq!(s.favorite_channels[0].id, format!("youtube:{uc}"));
         assert_eq!(s.favorite_channels[0].provider, "youtube");
@@ -509,7 +630,11 @@ mod tests {
     #[test]
     fn repair_leaves_good_ids_alone() {
         let mut s = Settings::default();
-        s.favorite_streamers = vec!["180118013".into(), "youtube:UCMNEVbszv8ZyvSXoTn3yhpQ".into(), "ucantseeme".into()];
+        s.favorite_streamers = vec![
+            "180118013".into(),
+            "youtube:UCMNEVbszv8ZyvSXoTn3yhpQ".into(),
+            "ucantseeme".into(),
+        ];
         assert!(!repair(&mut s));
     }
 
@@ -519,13 +644,29 @@ mod tests {
         s.favorite_streamers = vec!["1".into(), "2".into()];
         s.favorite_channels = vec![fav("2", "twitch", "two")];
         let mut found = HashMap::new();
-        found.insert("1".to_string(), ("One".to_string(), "One".to_string(), Some("1.png".to_string())));
-        found.insert("2".to_string(), ("Two".to_string(), "Two".to_string(), None));
+        found.insert(
+            "1".to_string(),
+            (
+                "One".to_string(),
+                "One".to_string(),
+                Some("1.png".to_string()),
+            ),
+        );
+        found.insert(
+            "2".to_string(),
+            ("Two".to_string(), "Two".to_string(), None),
+        );
         // Removed while the lookup ran: never re-added.
-        found.insert("3".to_string(), ("Three".to_string(), "Three".to_string(), None));
+        found.insert(
+            "3".to_string(),
+            ("Three".to_string(), "Three".to_string(), None),
+        );
         let (ids, ch) = fill_patch(&s, &found).unwrap();
         assert_eq!(ids, s.favorite_streamers);
-        assert_eq!(ch.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), vec!["2", "1"]);
+        assert_eq!(
+            ch.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
+            vec!["2", "1"]
+        );
         assert_eq!(ch[1].channel, "one");
         assert_eq!(ch[1].avatar.as_deref(), Some("1.png"));
         s.favorite_channels = ch;
@@ -564,11 +705,16 @@ mod tests {
         assert!(fill_due(&mut state, 6, now));
         assert_eq!((state.failures, state.misses.len()), (0, 0));
         // A full answer clears the wait.
-        record_fill(&mut state, &missing, &{
-            let mut all = found.clone();
-            all.insert("2".to_string(), ("b".to_string(), "B".to_string(), None));
-            all
-        }, now);
+        record_fill(
+            &mut state,
+            &missing,
+            &{
+                let mut all = found.clone();
+                all.insert("2".to_string(), ("b".to_string(), "B".to_string(), None));
+                all
+            },
+            now,
+        );
         assert_eq!((state.failures, state.next_at), (0, None));
     }
 
@@ -577,6 +723,8 @@ mod tests {
         assert!(is_rust_only_path("favorite_streamers"));
         assert!(is_rust_only_path("favorite_channels.0.avatar"));
         assert!(!is_rust_only_path("favorite_categories"));
-        assert!(!is_rust_only_path("live_notifications.show_favorite_live_notifications"));
+        assert!(!is_rust_only_path(
+            "live_notifications.show_favorite_live_notifications"
+        ));
     }
 }

@@ -18,13 +18,15 @@ const KICK_RESOLVE_BUDGET: Duration = Duration::from_secs(5);
 /// The tier 1 badge a channel's ladder shows at `months`: the rung held, else
 /// the lowest rung (what a new subscriber would wear).
 pub fn ladder_art(ladder: &[SubBadgeRung], months: i64) -> Option<String> {
-    sub_standing::tenure_badges(ladder, None, months).0.or_else(|| {
-        ladder
-            .iter()
-            .filter(|r| r.version < 1000)
-            .min_by_key(|r| r.version)
-            .map(|r| r.art.clone())
-    })
+    sub_standing::tenure_badges(ladder, None, months)
+        .0
+        .or_else(|| {
+            ladder
+                .iter()
+                .filter(|r| r.version < 1000)
+                .min_by_key(|r| r.version)
+                .map(|r| r.art.clone())
+        })
 }
 
 /// The first non-empty art, in the order given, else `standard`.
@@ -90,12 +92,20 @@ mod tests {
     use super::*;
 
     fn rung(version: u32, art: &str) -> SubBadgeRung {
-        SubBadgeRung { version, art: art.into() }
+        SubBadgeRung {
+            version,
+            art: art.into(),
+        }
     }
 
     #[test]
     fn the_ladder_gives_the_rung_held_else_the_lowest() {
-        let ladder = vec![rung(3, "m3"), rung(6, "m6"), rung(12, "m12"), rung(2000, "t2")];
+        let ladder = vec![
+            rung(3, "m3"),
+            rung(6, "m6"),
+            rung(12, "m12"),
+            rung(2000, "t2"),
+        ];
         assert_eq!(ladder_art(&ladder, 7).as_deref(), Some("m6"));
         assert_eq!(ladder_art(&ladder, 12).as_deref(), Some("m12"));
         // Below the first rung: a new subscriber on a ladder that starts at 3.
@@ -105,10 +115,19 @@ mod tests {
 
     #[test]
     fn the_first_art_found_wins_else_the_standard() {
-        assert_eq!(first_art([Some("a".into()), Some("b".into()), None], "std"), "a");
-        assert_eq!(first_art([None, Some("b".into()), Some("c".into())], "std"), "b");
+        assert_eq!(
+            first_art([Some("a".into()), Some("b".into()), None], "std"),
+            "a"
+        );
+        assert_eq!(
+            first_art([None, Some("b".into()), Some("c".into())], "std"),
+            "b"
+        );
         assert_eq!(first_art([None, None, Some(String::new())], "std"), "std");
-        assert_eq!(first_art([None, None, None], TWITCH_STANDARD_SUB_BADGE), TWITCH_STANDARD_SUB_BADGE);
+        assert_eq!(
+            first_art([None, None, None], TWITCH_STANDARD_SUB_BADGE),
+            TWITCH_STANDARD_SUB_BADGE
+        );
     }
 
     #[test]
@@ -123,7 +142,8 @@ mod tests {
 
     #[test]
     fn kick_s_standard_sparkle_is_bundled() {
-        let art = crate::services::chat_row_view::kick_badge_art("subscriber").expect("bundled sparkle");
+        let art =
+            crate::services::chat_row_view::kick_badge_art("subscriber").expect("bundled sparkle");
         assert!(art.starts_with("data:image/png;base64,"));
     }
 
@@ -134,7 +154,10 @@ mod tests {
             .find("let Some(me) = crate::services::account_store::AccountStore::primary() else {")
             .expect("the signed-in check");
         let end = src[start..].find("};").expect("the end of its else");
-        assert!(src[start..start + end].contains("sub_badge::twitch_art("), "signed out, the control still gets art");
+        assert!(
+            src[start..start + end].contains("sub_badge::twitch_art("),
+            "signed out, the control still gets art"
+        );
         assert!(src.contains("let badge_url = Some(crate::services::sub_badge::twitch_art(channel_login, Some(channel_id), months).await);"));
     }
 }
