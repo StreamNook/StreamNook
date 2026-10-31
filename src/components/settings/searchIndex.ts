@@ -224,6 +224,13 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   },
   {
     tab: 'Player',
+    section: 'Playback',
+    sectionId: 'settings-section-video-player',
+    title: 'Media keys',
+    description: 'The keyboard play/pause key controls the stream. Turn it off so the media keys go to your music player instead; applies after a restart. Ignore media keys, hardware keys, Windows media controls.'
+  },
+  {
+    tab: 'Player',
     section: 'Latency & Buffering',
     sectionId: 'settings-section-latency',
     title: 'Target latency',

@@ -91,6 +91,11 @@ export interface VideoPlayerSettings {
   /** Middle-click a stream card or sidebar row to open it in MultiNook.
    *  Default true. */
   middle_click_multinook?: boolean;
+  /** The keyboard's media keys reach the player. Default true. Off keeps the
+   *  app out of the system media controls so the keys go to your music player;
+   *  read at launch on Windows, so a change applies on the next start. Typed
+   *  in Rust. */
+  media_keys?: boolean;
   /** Volume moved per wheel notch, 0.01-0.25. Default 0.05. */
   wheel_volume_step?: number;
   /** Reopen a VOD where you left off. Default true. Typed in Rust. */

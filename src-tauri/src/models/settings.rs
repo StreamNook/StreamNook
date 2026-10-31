@@ -183,6 +183,12 @@ pub struct VideoPlayerSettings {
     /// by default.
     #[serde(default = "default_true")]
     pub middle_click_multinook: bool,
+    /// The keyboard's media keys (play/pause, next, previous) reach the player.
+    /// On by default. Off keeps StreamNook out of the system media controls so
+    /// the keys go to the viewer's music player instead. Read once at launch
+    /// (Windows): it is a browser switch, so a change applies on the next start.
+    #[serde(default = "default_true")]
+    pub media_keys: bool,
     /// How much one wheel notch moves the volume (0.01-0.25). Default 5%.
     #[serde(default = "default_wheel_volume_step")]
     pub wheel_volume_step: f32,
@@ -268,6 +274,7 @@ impl Default for VideoPlayerSettings {
             click_to_pause: false,
             middle_click_mute: true,
             middle_click_multinook: true,
+            media_keys: true,
             wheel_volume_step: 0.05,
             resume_vod_playback: true,
             sync_vod_progress: true,

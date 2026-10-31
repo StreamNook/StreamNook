@@ -3,7 +3,7 @@ import { Dropdown } from '../ui/Dropdown';
 import { useAppStore } from '../../stores/AppStore';
 // Shared panel: both shells render it, so a platform branch here is legitimate.
 // Hides rows whose backing feature does not exist on Android.
-import { IS_MOBILE } from '../../utils/platform';
+import { IS_LINUX, IS_MAC, IS_MOBILE } from '../../utils/platform';
 import { SettingsSection, SettingsRow, SegmentedSelect } from './_primitives';
 import { InlineSlider, SubControl, SubControls } from '../plugins/settingsPageKit';
 import { DEFAULT_AUDIO_BOOST, DEFAULT_SONG_ID } from '../../types';
@@ -138,6 +138,7 @@ const PlayerSettings = () => {
   const clickToPause = videoPlayer?.click_to_pause ?? false;
   const middleClickMute = videoPlayer?.middle_click_mute ?? true;
   const middleClickMultiNook = videoPlayer?.middle_click_multinook ?? true;
+  const mediaKeys = videoPlayer?.media_keys ?? true;
   const resumeVodPlayback = videoPlayer?.resume_vod_playback ?? true;
   const syncVodProgress = videoPlayer?.sync_vod_progress ?? true;
   const targetLatencyLabel =
@@ -506,6 +507,24 @@ const PlayerSettings = () => {
             />
           }
         />
+
+        {/* Windows only: Rust reads it at launch and turns off the webview's
+            media key handling, which is what puts the player in Windows' media
+            controls. */}
+        {!IS_MOBILE && !IS_MAC && !IS_LINUX && (
+          <SettingsRow
+            title="Media keys"
+            onReset={resetFor(['video_player.media_keys', true])}
+            description="Your keyboard's play/pause key pauses and plays the stream. Turn it off to keep the media keys for your music player."
+            help="Off, StreamNook also leaves the Windows media panel. The change applies the next time StreamNook starts."
+            control={
+              <Toggle
+                enabled={mediaKeys}
+                onChange={() => setVideoPlayer({ media_keys: !mediaKeys })}
+              />
+            }
+          />
+        )}
 
         {/* Phone-only: a desktop has nothing to leave the app INTO, and no
             picture-in-picture window to choose against. */}

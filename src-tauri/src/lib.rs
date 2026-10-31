@@ -665,6 +665,15 @@ mod webview_args_tests {
             "--disable-features=A,B,C --force-color-profile=srgb --disable-direct-composition-video-overlays"
         );
     }
+
+    #[test]
+    fn media_keys_off_joins_the_one_disable_features_switch() {
+        let launch = merge_webview_args("A,B", Some("--force-color-profile=srgb"));
+        assert_eq!(
+            merge_webview_args("HardwareMediaKeyHandling", Some(&launch)),
+            "--disable-features=HardwareMediaKeyHandling,A,B --force-color-profile=srgb"
+        );
+    }
 }
 
 /// Flush every debounced store before the process dies; each is a no-op when
@@ -854,6 +863,19 @@ pub fn run() {
         commands::sounds::freeze_legacy_sounds(read);
     }
     let settings = loaded_settings.unwrap_or_else(|_| Settings::default());
+    // Media keys off: Chromium's media key handling is what puts the webview in
+    // Windows' media controls, where it takes play/pause from the viewer's music
+    // player. It is a browser switch, so it joins the arguments here, after the
+    // settings read and before the first webview starts.
+    #[cfg(windows)]
+    if !settings.video_player.media_keys {
+        let current = std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").ok();
+        std::env::set_var(
+            "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+            merge_webview_args("HardwareMediaKeyHandling", current.as_deref()),
+        );
+        info!("[WebView2] Media keys off: the player stays out of the system media controls");
+    }
     // Compile the chat rule engine (highlights, ignores, saved filters) from
     // the loaded settings before any chat connects.
     apply_loaded_settings(&settings);
