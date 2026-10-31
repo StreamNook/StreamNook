@@ -63,6 +63,7 @@ export function favoriteRefOf(
 /** The label right now. For render paths that already re-render on
  *  `favoriteVersion` (Home, Sidebar) or on every store write. */
 export function isFavoriteNow(ref: FavoriteRef): boolean {
+  ensureFollowingLoaded();
   return labelFavorite(ref, labelStateOf(useAppStore.getState()));
 }
 
@@ -72,13 +73,6 @@ export function useIsFavorite(ref: FavoriteRef | null): boolean {
   return useAppStore((s) => (ref ? labelFavorite(ref, labelStateOf(s)) : false));
 }
 
-/** Whether Rust's lists have arrived in this window: before that a row keeps
- *  its place and waits. */
-export function useFavoritesReady(): boolean {
-  useEffect(() => ensureFollowingLoaded(), []);
-  return useAppStore((s) => s.followingApplied);
-}
-
 /** Favorite (`on`) or unfavorite one channel. Answers the stored state, or
  *  null when Rust could not name the channel or the write failed. */
 export function setFavoriteChannel(ref: FavoriteRef, on: boolean): Promise<boolean | null> {
@@ -86,10 +80,14 @@ export function setFavoriteChannel(ref: FavoriteRef, on: boolean): Promise<boole
   const key = favoriteKeyOf(ref);
   const seq = (seqs.get(key) ?? 0) + 1;
   seqs.set(key, seq);
-  useAppStore.setState((s) => ({
-    favoritePending: { ...s.favoritePending, [key]: { wanted: on, seq, answered: false } },
-    favoriteVersion: s.favoriteVersion + 1,
-  }));
+  useAppStore.setState((s) => {
+    const pending = { ...s.favoritePending, [key]: { wanted: on, seq, answered: false, settlesAtRev: 0 } };
+    // A settled press at this row's stored id would show again once this one
+    // lands: this press supersedes it.
+    const target = s.favoriteAlias[key];
+    if (target && target !== key && pending[target]?.answered) delete pending[target];
+    return { favoritePending: pending, favoriteVersion: s.favoriteVersion + 1 };
+  });
   const run = chain.then(() =>
     invoke<FavoriteAnswer | null>('set_favorite_channel', {
       provider: ref.provider,
@@ -130,10 +128,15 @@ function settle(key: string, seq: number, wanted: boolean, answer: FavoriteAnswe
       // room by login): the row reads that id from now on, and the press waits
       // there for the push.
       if (stored !== key) alias[key] = stored;
-      if (!pending[stored]) pending[stored] = { wanted, seq: 0, answered: true };
+      // A press still on its way at the stored id owns the label; a settled one
+      // is replaced by this newer answer.
+      const there = pending[stored];
+      if (!there || there.answered) {
+        pending[stored] = { wanted, seq: 0, answered: true, settlesAtRev: answer.rev ?? 0 };
+      }
     }
     return {
-      favoritePending: settlePending(pending, s.following.favorite_ids ?? []),
+      favoritePending: settlePending(pending, s.followingRev),
       favoriteAlias: alias,
       favoriteVersion: s.favoriteVersion + 1,
     };

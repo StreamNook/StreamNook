@@ -687,10 +687,6 @@ export interface AppState {
   /** Internal: refresh watched identity + follows + accounts + chat after the primary slot changes. */
   reestablishIdentityAfterSwitch: () => Promise<void>;
   checkAuthStatus: () => Promise<void>;
-  /** Whether the favorite id (from `favoriteIdOf`) shows as a favorite: a
-   *  press on its way, else Rust's pushed ids. Writes go through
-   *  utils/favoriteDoor. */
-  isFavoriteStreamer: (id: string) => boolean;
   toggleHome: () => void;
   exitStream: (options?: { preserveBackend?: boolean }) => Promise<void>;
   // Navigation actions for deep linking
@@ -1500,12 +1496,14 @@ function followingFields(
     { ids: s.following.favorite_ids ?? [], list: s.following.favorites_list ?? [] },
     { ids, list },
   );
+  // Every applied list settles the presses its revision holds.
+  const settled = settlePending(s.favoritePending, rev);
   return {
     following: { ...next, favorite_ids: ids, favorites_list: list },
     followingRev: rev,
     followingApplied: true,
-    ...(moved
-      ? { favoritePending: settlePending(s.favoritePending, ids), favoriteVersion: s.favoriteVersion + 1 }
+    ...(moved || settled !== s.favoritePending
+      ? { favoritePending: settled, favoriteVersion: s.favoriteVersion + 1 }
       : {}),
   };
 }
@@ -3834,13 +3832,6 @@ export const useAppStore = create<AppState>((set, get) => ({
         );
       }
     }
-  },
-
-  isFavoriteStreamer: (id: string) => {
-    const s = get();
-    const pending = s.favoritePending[`id:${id}`];
-    if (pending) return pending.wanted;
-    return (s.following.favorite_ids ?? []).includes(id);
   },
 
   toggleHome: () => {

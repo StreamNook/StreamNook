@@ -44,7 +44,7 @@ describe('labelFavorite', () => {
     const state: FavoriteLabelState = {
       ...empty,
       ids: ['7'],
-      pending: { 'id:7': { wanted: false, seq: 1, answered: false } },
+      pending: { 'id:7': { wanted: false, seq: 1, answered: false, settlesAtRev: 0 } },
     };
     expect(labelFavorite({ provider: 'twitch', userId: '7', userLogin: 'xqc' }, state)).toBe(false);
   });
@@ -60,19 +60,20 @@ describe('labelFavorite', () => {
 });
 
 describe('settlePending', () => {
-  it('drops an answered press once the ids agree and keeps the rest', () => {
+  it('drops an answered press once a list at or past its revision is applied, and keeps the rest', () => {
     const pending = {
-      'id:7': { wanted: true, seq: 1, answered: true },
-      'id:8': { wanted: true, seq: 1, answered: false },
-      'id:9': { wanted: false, seq: 2, answered: true },
+      'id:7': { wanted: true, seq: 1, answered: true, settlesAtRev: 4 },
+      'login:twitch:xqc': { wanted: true, seq: 1, answered: true, settlesAtRev: 5 },
+      'id:8': { wanted: true, seq: 1, answered: false, settlesAtRev: 0 },
     };
-    expect(Object.keys(settlePending(pending, ['7', '8', '9']))).toEqual(['id:8', 'id:9']);
-    expect(Object.keys(settlePending(pending, ['8']))).toEqual(['id:7', 'id:8']);
+    expect(Object.keys(settlePending(pending, 3))).toEqual(['id:7', 'login:twitch:xqc', 'id:8']);
+    expect(Object.keys(settlePending(pending, 4))).toEqual(['login:twitch:xqc', 'id:8']);
+    expect(Object.keys(settlePending(pending, 5))).toEqual(['id:8']);
   });
 
   it('returns the same object when nothing settles', () => {
-    const pending = { 'id:7': { wanted: true, seq: 1, answered: false } };
-    expect(settlePending(pending, ['7'])).toBe(pending);
+    const pending = { 'id:7': { wanted: true, seq: 1, answered: false, settlesAtRev: 0 } };
+    expect(settlePending(pending, 9)).toBe(pending);
   });
 });
 

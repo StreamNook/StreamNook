@@ -2019,7 +2019,7 @@ export interface FollowingLists {
   /** Every favorite id, as Rust holds them: what every favorite label reads. */
   favorite_ids?: string[];
   /** Each favorite with its kept channel, so a row known only by login (a
-   *  Twitch room before its id arrives) can still be labelled. */
+   *  Twitch room before its id arrives) can still be labeled. */
   favorites_list?: FavoriteListEntry[];
 }
 

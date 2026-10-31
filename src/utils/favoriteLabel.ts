@@ -21,18 +21,23 @@ export interface FavoriteRef {
   avatar?: string | null;
 }
 
-/** Rust's answer to `set_favorite_channel`. */
+/** Rust's answer to `set_favorite_channel`. `rev` is the Following revision
+ *  that holds the write (absent from an older core, read as 0). */
 export interface FavoriteAnswer {
   favorite: boolean;
   id: string;
+  rev?: number;
 }
 
 /** A press on its way, per key. `answered` turns on once Rust answered the
- *  latest press and its answer matched; the entry then waits for the push. */
+ *  latest press and its answer matched; the entry then shows until this window
+ *  has applied the Following list at `settlesAtRev` (the answer's `rev`) or a
+ *  later one. */
 export interface FavoritePending {
   wanted: boolean;
   seq: number;
   answered: boolean;
+  settlesAtRev: number;
 }
 
 export interface FavoriteLabelState {
@@ -80,15 +85,17 @@ export function labelFavorite(ref: FavoriteRef, state: FavoriteLabelState): bool
   return storedFavorite(ref, key, state);
 }
 
-/** Drops answered presses that Rust's pushed ids now agree with. */
+/** Drops answered presses once this window has applied the Following list at
+ *  their write's revision or a later one: from then on Rust's list decides
+ *  (a list built before the write never settles a press). Presses still on
+ *  their way stay. */
 export function settlePending(
   pending: Record<string, FavoritePending>,
-  ids: readonly string[],
+  rev: number,
 ): Record<string, FavoritePending> {
   let next: Record<string, FavoritePending> | null = null;
   for (const [key, p] of Object.entries(pending)) {
-    if (!p.answered || !key.startsWith('id:')) continue;
-    if (ids.includes(key.slice(3)) !== p.wanted) continue;
+    if (!p.answered || rev < p.settlesAtRev) continue;
     next ??= { ...pending };
     delete next[key];
   }

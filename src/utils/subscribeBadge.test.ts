@@ -15,6 +15,8 @@ describe('subscribeBadgePending', () => {
 
   it('the hook asks Rust for the art and every desktop control keeps the slot', () => {
     expect(read('hooks/useChannelSocial.ts')).toContain("'channel_sub_badge'");
+    // Asked only while no art is known, so a cold MultiNook makes no extra calls.
+    expect(read('hooks/useChannelSocial.ts')).toContain('const artKey = !knownArt &&');
     for (const rel of ['components/VideoPlayer.tsx', 'components/multi-nook/MultiNookCell.tsx', 'components/ChannelAboutReveal.tsx']) {
       expect(read(rel), rel).toContain('subscriberBadgePending ?');
     }

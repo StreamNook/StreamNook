@@ -294,7 +294,9 @@ export function useChannelSocial({ provider: providerProp, userId, userLogin, us
   // Twitch and Kick: the channel's badge, else the platform's standard one,
   // signed in or not. Used when the relationship and chat have none, so the
   // control never shows a placeholder.
-  const artKey = enabled && userLogin && (provider === 'twitch' || provider === 'kick')
+  // Art already known (the relationship's or a chatter's badge) needs no ask.
+  const knownArt = (pushed ? pushed.badge_url : subscriberBadgeUrl) || chatMemberBadge;
+  const artKey = !knownArt && enabled && userLogin && (provider === 'twitch' || provider === 'kick')
     ? `${provider}:${userLogin.toLowerCase()}`
     : '';
   const [channelArt, setChannelArt] = useState<{ key: string; url: string } | null>(null);

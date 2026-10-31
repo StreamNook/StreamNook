@@ -47,7 +47,7 @@ beforeEach(() => {
     favoritePending: {},
     favoriteAlias: {},
     favoriteVersion: 0,
-    followingRev: -1,
+    followingRev: 0,
     followingApplied: false,
     following: { favorites: [], live: [], offline: [], followed_live: [], platforms: [], favorite_ids: [], favorites_list: [] },
     toasts: [],
@@ -77,7 +77,7 @@ describe('setFavoriteChannel', () => {
   it('keeps the label until the push agrees, then reads the push', async () => {
     const done = setFavoriteChannel(xqc, true);
     await flush();
-    mock.answers[0]({ favorite: true, id: '7' });
+    mock.answers[0]({ favorite: true, id: '7', rev: 1 });
     await done;
     expect(useAppStore.getState().favoritePending['id:7']?.answered).toBe(true);
     expect(isFavoriteNow(xqc)).toBe(true);
@@ -121,7 +121,7 @@ describe('setFavoriteChannel', () => {
     const video = { provider: 'youtube', userId: '', userLogin: 'AGr94tpNVkw' };
     const done = setFavoriteChannel(video, true);
     await flush();
-    mock.answers[0]({ favorite: true, id: 'youtube:UCabc' });
+    mock.answers[0]({ favorite: true, id: 'youtube:UCabc', rev: 1 });
     await done;
     const s = useAppStore.getState();
     expect(s.favoriteAlias['login:youtube:agr94tpnvkw']).toBe('id:youtube:UCabc');
@@ -143,6 +143,65 @@ describe('setFavoriteChannel', () => {
       at: 0,
     });
     expect(isFavoriteNow({ provider: 'twitch', userLogin: 'XQC' })).toBe(true);
+  });
+
+  it('a room by login pressed twice before any push ends as last pressed, never stuck', async () => {
+    const room = { provider: 'twitch', userId: '', userLogin: 'xqc' };
+    const first = setFavoriteChannel(room, true);
+    await flush();
+    mock.answers[0]({ favorite: true, id: '7', rev: 1 });
+    await first;
+    expect(isFavoriteNow(room)).toBe(true);
+    const second = setFavoriteChannel(room, false);
+    expect(isFavoriteNow(room)).toBe(false);
+    // The settled first press at the stored id is gone: it can never show again.
+    expect(useAppStore.getState().favoritePending['id:7']).toBeUndefined();
+    await flush();
+    // The second answer lands before the first write's push.
+    mock.answers[1]({ favorite: false, id: '7', rev: 2 });
+    await second;
+    expect(isFavoriteNow(room)).toBe(false);
+    // The first write's push does not settle the second press.
+    push(['7'], 1);
+    expect(isFavoriteNow(room)).toBe(false);
+    // The push that holds the second write settles it; the list decides.
+    push([], 2);
+    expect(useAppStore.getState().favoritePending).toEqual({});
+    expect(isFavoriteNow(room)).toBe(false);
+  });
+
+  it('a push older than the write leaves the press; the push that holds it settles it', async () => {
+    const done = setFavoriteChannel(xqc, true);
+    await flush();
+    mock.answers[0]({ favorite: true, id: '7', rev: 7 });
+    await done;
+    push([], 6);
+    expect(useAppStore.getState().favoritePending['id:7']).toMatchObject({ answered: true, settlesAtRev: 7 });
+    expect(isFavoriteNow(xqc)).toBe(true);
+    push(['7'], 7);
+    expect(useAppStore.getState().favoritePending).toEqual({});
+    expect(isFavoriteNow(xqc)).toBe(true);
+  });
+
+  it('the push that holds the write settles the press even when another writer changed it since', async () => {
+    const done = setFavoriteChannel(xqc, true);
+    await flush();
+    mock.answers[0]({ favorite: true, id: '7', rev: 3 });
+    await done;
+    // `/unfavorite` in another window landed before this rebuild: the list says no.
+    push([], 3);
+    expect(useAppStore.getState().favoritePending).toEqual({});
+    expect(isFavoriteNow(xqc)).toBe(false);
+  });
+
+  it('an answer whose revision this window already holds settles at once', async () => {
+    push(['7'], 2);
+    const done = setFavoriteChannel(xqc, true);
+    await flush();
+    mock.answers[0]({ favorite: true, id: '7', rev: 2 });
+    await done;
+    expect(useAppStore.getState().favoritePending).toEqual({});
+    expect(isFavoriteNow(xqc)).toBe(true);
   });
 
   it('sends the row fields Rust names the channel from', async () => {
