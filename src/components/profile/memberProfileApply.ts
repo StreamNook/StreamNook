@@ -53,34 +53,46 @@ export interface FirstPaint {
 /** Which fields a live source has already set; a first paint never overwrites them. */
 export interface LiveFlags {
   info: boolean;
+  /** All counts (the 7TV inventory answered). */
   counts: boolean;
+  /** Only the StreamNook count (the app's own), after a failed 7TV read. */
+  sn: boolean;
   paint: boolean;
   hidden: boolean;
+  /** The whole badge row, 7TV badge included. */
   badges: boolean;
+  /** The Twitch, third-party and BTTV badges, after a failed 7TV read. */
+  otherBadges: boolean;
   theme: boolean;
 }
 
 export const noLive = (): LiveFlags => ({
   info: false,
   counts: false,
+  sn: false,
   paint: false,
   hidden: false,
   badges: false,
+  otherBadges: false,
   theme: false,
 });
 
 export interface FirstPaintPlan {
-  /** Each field is set only when present (undefined leaves the state alone). */
+  /**
+   * Each field is set only when present (undefined leaves the state alone).
+   * `counts` and `wornBadges` are merged into the state: after a failed 7TV
+   * read they hold only the 7TV parts, so the live parts already on screen stay.
+   */
   info?: FirstPaintIdentity;
-  counts?: FirstPaintCard['counts'];
+  counts?: Partial<FirstPaintCard['counts']>;
   namePaint?: CSSProperties | null;
   hiddenSections?: string[];
-  wornBadges?: {
+  wornBadges?: Partial<{
     seventv: FirstPaintCard['seventvBadge'];
     twitch: FirstPaintBadge | null;
     thirdParty: FirstPaintThirdPartyBadge[];
     bttvPro: FirstPaintBadge | null;
-  };
+  }>;
   /** Resolved once the atmosphere catalog is ready, if still no live theme. */
   theme?: { profileTheme: string; namePaint: CSSProperties | null };
   /** The identity is on screen: the loading state can end. */
@@ -102,16 +114,22 @@ export function planFirstPaint(snap: FirstPaint | null, live: LiveFlags, preview
   const card = snap.card;
   if (!card) return plan;
   const paint = card.namePaint as CSSProperties | null;
-  if (!live.counts) plan.counts = card.counts;
+  if (!live.counts) {
+    plan.counts = live.sn
+      ? { paints: card.counts.paints, badges: card.counts.badges }
+      : card.counts;
+  }
   if (!live.paint) plan.namePaint = paint;
   if (!live.hidden) plan.hiddenSections = card.hiddenSections;
   if (!live.badges && !previewOwnsBadges) {
-    plan.wornBadges = {
-      seventv: card.seventvBadge,
-      twitch: card.wornBadges.twitch,
-      thirdParty: card.wornBadges.thirdParty,
-      bttvPro: card.wornBadges.bttvPro,
-    };
+    plan.wornBadges = live.otherBadges
+      ? { seventv: card.seventvBadge }
+      : {
+          seventv: card.seventvBadge,
+          twitch: card.wornBadges.twitch,
+          thirdParty: card.wornBadges.thirdParty,
+          bttvPro: card.wornBadges.bttvPro,
+        };
   }
   if (!live.theme) plan.theme = { profileTheme: card.profileTheme, namePaint: paint };
   return plan;
@@ -190,34 +208,36 @@ export function planNamePaint(read: { answered: boolean; paintStyle: CSSProperti
 }
 
 /**
- * One state write from the live 7TV read: whether it marks its field live, and
- * the functional update the hook hands its setter as is.
+ * One state write from a live read: the live flags it sets (`Object.assign`ed
+ * onto the hook's flags) and the functional update the hook hands its setter
+ * as is.
  */
 export interface LiveStep<T> {
-  markLive: boolean;
+  marks: Partial<LiveFlags>;
   apply: (prev: T) => T;
 }
 
 type Counts = FirstPaintCard['counts'];
 
 /**
- * The counts after the live 7TV read. A failed read answers empty cosmetics, so
- * taking its numbers would turn the card's 12 paints into 0: it keeps the 7TV
- * numbers on screen and marks nothing live. The StreamNook count is the app's
- * own and applies either way.
+ * The counts after the live reads. `answered` is whether 7TV's inventory
+ * answered: a failed one gives empty lists, so taking its numbers would turn the
+ * card's 12 paints into 0. Then the 7TV numbers on screen stay and only the
+ * StreamNook count (the app's own) is set and marked live, so a card arriving
+ * later fills the 7TV numbers without undoing it.
  */
 export function sevenTvCountsStep(read: { answered: boolean; counts: Counts }): LiveStep<Counts> {
-  if (read.answered) return { markLive: true, apply: () => read.counts };
-  return { markLive: false, apply: (prev) => ({ ...prev, sn: read.counts.sn }) };
+  if (read.answered) return { marks: { counts: true, sn: true }, apply: () => read.counts };
+  return { marks: { sn: true }, apply: (prev) => ({ ...prev, sn: read.counts.sn }) };
 }
 
 /**
  * The worn-badge row after the live reads. The Twitch, third-party and BTTV
- * badges come from their own sources and always apply; the 7TV badge only from
- * an answered 7TV read. After a failed one the badge on screen (the card's)
- * stays and the row is not marked live.
+ * badges come from their own sources and always apply and are marked live; the
+ * 7TV badge only from an answered 7TV read. After a failed one the badge on
+ * screen (the card's) stays, and a card arriving later still fills it.
  */
 export function sevenTvBadgesStep<Row extends { seventv: unknown }>(read: { answered: boolean; row: Row }): LiveStep<Row> {
-  if (read.answered) return { markLive: true, apply: () => read.row };
-  return { markLive: false, apply: (prev) => ({ ...read.row, seventv: prev.seventv }) };
+  if (read.answered) return { marks: { badges: true, otherBadges: true }, apply: () => read.row };
+  return { marks: { otherBadges: true }, apply: (prev) => ({ ...read.row, seventv: prev.seventv }) };
 }

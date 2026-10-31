@@ -50,7 +50,7 @@ describe('planFirstPaint', () => {
     expect(plan.namePaint).toEqual({ backgroundColor: '#9146FF', color: 'transparent' });
     expect(plan.hiddenSections).toEqual(['roast']);
     expect(plan.wornBadges?.seventv?.id).toBe('01KYQHQ7FVRR3X4S0F2KG74207');
-    expect(plan.wornBadges?.thirdParty[0].provider).toBe('ffz');
+    expect(plan.wornBadges?.thirdParty?.[0].provider).toBe('ffz');
     expect(plan.theme).toEqual({ profileTheme: 'dispersion', namePaint: plan.namePaint });
     expect(plan.endLoading).toBe(true);
   });
@@ -67,7 +67,7 @@ describe('planFirstPaint', () => {
   });
 
   it('leaves every field a live source already set alone', () => {
-    const all = { info: true, counts: true, paint: true, hidden: true, badges: true, theme: true };
+    const all = { info: true, counts: true, sn: true, paint: true, hidden: true, badges: true, otherBadges: true, theme: true };
     expect(planFirstPaint(snap(), all, false)).toEqual({ endLoading: false });
     expect(planFirstPaint(snap(), { ...noLive(), info: true }, false).info).toBeUndefined();
     expect(planFirstPaint(snap(), { ...noLive(), counts: true }, false).counts).toBeUndefined();
@@ -180,41 +180,73 @@ describe('the live 7TV read steps', () => {
     bttvPro: null,
   };
 
-  it('a failed read keeps the 7TV counts on screen, updates the StreamNook count, marks nothing live', () => {
+  // What the hook does with a first-paint plan: merge its partial fields.
+  const merge = <T extends object>(prev: T, part: Partial<T> | undefined): T => (part ? { ...prev, ...part } : prev);
+
+  it('a failed inventory read keeps the 7TV counts on screen and marks only the StreamNook count live', () => {
     const step = sevenTvCountsStep({ answered: false, counts: failedCounts });
-    expect(step.markLive).toBe(false);
+    expect(step.marks).toEqual({ sn: true });
     expect(step.apply(onScreen)).toEqual({ paints: 12, badges: 7, sn: 5 });
     // With no card yet the StreamNook count still shows.
     expect(step.apply({ paints: 0, badges: 0, sn: 0 })).toEqual({ paints: 0, badges: 0, sn: 5 });
   });
 
-  it('an answered read sets its counts, even zero, and marks them live', () => {
+  it('an answered read sets its counts, even zero, and marks them all live', () => {
     const step = sevenTvCountsStep({ answered: true, counts: failedCounts });
-    expect(step.markLive).toBe(true);
+    expect(step.marks).toEqual({ counts: true, sn: true });
     expect(step.apply(onScreen)).toEqual(failedCounts);
   });
 
-  it('a failed read keeps the 7TV badge on screen, applies the other badges, marks nothing live', () => {
+  it('a failed read keeps the 7TV badge on screen and marks only the other badges live', () => {
     const step = sevenTvBadgesStep({ answered: false, row: liveRow });
-    expect(step.markLive).toBe(false);
+    expect(step.marks).toEqual({ otherBadges: true });
     const before = { seventv: cardBadge, twitch: null, thirdParty: [], bttvPro: null };
     expect(step.apply(before)).toEqual({ ...liveRow, seventv: cardBadge });
   });
 
   it('an answered read replaces the whole row, a missing 7TV badge included, and marks it live', () => {
     const step = sevenTvBadgesStep({ answered: true, row: liveRow });
-    expect(step.markLive).toBe(true);
+    expect(step.marks).toEqual({ badges: true, otherBadges: true });
     expect(step.apply({ seventv: cardBadge, twitch: null, thirdParty: [], bttvPro: null })).toEqual(liveRow);
   });
 
-  it('the card hook marks counts and badges live only through these steps', () => {
+  it('failed read first, card second: the card fills only the 7TV parts', () => {
+    const live = noLive();
+    const counts = sevenTvCountsStep({ answered: false, counts: failedCounts });
+    const badges = sevenTvBadgesStep({ answered: false, row: liveRow });
+    Object.assign(live, counts.marks, badges.marks);
+    const countsOnScreen = counts.apply({ paints: 0, badges: 0, sn: 0 });
+    const rowOnScreen = badges.apply({ seventv: null, twitch: null, thirdParty: [], bttvPro: null });
+
+    const plan = planFirstPaint(snap(), live, false);
+    expect(merge(countsOnScreen, plan.counts)).toEqual({ paints: 12, badges: 7, sn: 5 });
+    expect(merge(rowOnScreen, plan.wornBadges as Partial<Row>)).toEqual({ ...liveRow, seventv: cardBadge });
+  });
+
+  it('card first, failed read second: the card stays where the read did not answer', () => {
+    const live = noLive();
+    const plan = planFirstPaint(snap(), live, false);
+    const cardCounts = merge({ paints: 0, badges: 0, sn: 0 }, plan.counts);
+    const cardRow = merge({ seventv: null, twitch: null, thirdParty: [], bttvPro: null } as Row, plan.wornBadges as Partial<Row>);
+    expect(sevenTvCountsStep({ answered: false, counts: failedCounts }).apply(cardCounts)).toEqual({ paints: 12, badges: 7, sn: 5 });
+    expect(sevenTvBadgesStep({ answered: false, row: liveRow }).apply(cardRow)).toEqual({ ...liveRow, seventv: cardBadge });
+  });
+
+  it('the card hook takes its answers from the profile and applies these steps as they are', () => {
     const hook = readFileSync(resolve(__dirname, 'memberProfile.ts'), 'utf8');
-    const marks = hook.match(/live\.(counts|badges) = true/g) ?? [];
-    expect(marks).toHaveLength(2);
-    expect(hook).toContain('if (countsStep.markLive) live.counts = true;');
+    expect(hook.match(/live\.(counts|badges|sn|otherBadges) = true/g) ?? []).toHaveLength(0);
+    expect(hook).not.toContain('isUserCosmeticsHardFailed');
+    expect(hook).toContain('const paintAnswered = profile.wornAnswered === true;');
+    expect(hook).toContain('answered: profile.inventoryAnswered === true,');
+    expect(hook).toContain('Object.assign(live, countsStep.marks);');
     expect(hook).toContain('setCounts(countsStep.apply);');
-    expect(hook).toContain('if (badgesStep.markLive) live.badges = true;');
+    expect(hook).toContain('Object.assign(live, badgesStep.marks);');
     expect(hook).toContain('setWornBadges(badgesStep.apply);');
+    // The Settings preview re-resolve uses the same step.
+    expect(hook).toContain('sevenTvBadgesStep<typeof wornBadges>({ answered: profile.wornAnswered === true, row: wb });');
+    // A first paint is merged, never set whole.
+    expect(hook).toContain('setCounts((prev) => ({ ...prev, ...cardCounts }));');
+    expect(hook).toContain('setWornBadges((prev) => ({ ...prev, ...cardBadges }));');
   });
 });
 

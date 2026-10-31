@@ -14,7 +14,7 @@ import { helixGet } from '../../services/helix';
 import { useAppStore } from '../../stores/AppStore';
 import { Logger } from '../../utils/logger';
 import { getTierAccent, getWornBadgeCaption } from '../StreamNookBadge';
-import { getFullProfileWithFallback, isUserCosmeticsHardFailed } from '../../services/cosmeticsCache';
+import { getFullProfileWithFallback } from '../../services/cosmeticsCache';
 import { computePaintStyle } from '../../services/seventvService';
 import { getAtmosphere, type Atmosphere } from '../../services/atmospheres';
 import { getResolvedIdentity, getIdentityWithCache } from '../../services/identityService';
@@ -288,10 +288,12 @@ export function useMemberProfile(
           // fresher preview resolve.
           const plan = planFirstPaint(snap, live, followsLivePreview && !!useAppStore.getState().profileViewerPreview);
           if (plan.info) setInfo(plan.info);
-          if (plan.counts) setCounts(plan.counts);
+          const cardCounts = plan.counts;
+          if (cardCounts) setCounts((prev) => ({ ...prev, ...cardCounts }));
           if (plan.namePaint !== undefined) setNamePaint(plan.namePaint);
           if (plan.hiddenSections) setHiddenSections(plan.hiddenSections);
-          if (plan.wornBadges) setWornBadges(plan.wornBadges);
+          const cardBadges = plan.wornBadges;
+          if (cardBadges) setWornBadges((prev) => ({ ...prev, ...cardBadges }));
           if (plan.theme) {
             await whenAtmospheresReady();
             if (alive && !live.theme) setTheme(resolveProfileTheme(plan.theme.profileTheme, plan.theme.namePaint));
@@ -335,12 +337,13 @@ export function useMemberProfile(
         // Cosmetic counts + optional 7TV paint theme (best effort).
         try {
           const profile = await getFullProfileWithFallback(userId, u.login, userId, u.login);
-          // Whether 7TV genuinely answered (not a failed fetch). A failed read must
-          // not blank the counts, 7TV badge or name paint the first-paint card
-          // drew, nor mark them live.
-          const paintAnswered = !isUserCosmeticsHardFailed(userId);
+          // Whether 7TV genuinely answered, decided when this profile was fetched
+          // and kept on it: the inventory for the counts, the worn read for the
+          // paint and badge. A failed read must not blank what the first-paint
+          // card drew, nor mark it live.
+          const paintAnswered = profile.wornAnswered === true;
           const countsStep = sevenTvCountsStep({
-            answered: paintAnswered,
+            answered: profile.inventoryAnswered === true,
             counts: {
               paints: profile.seventvCosmetics?.paints?.length ?? 0,
               badges: profile.seventvCosmetics?.badges?.length ?? 0,
@@ -348,7 +351,7 @@ export function useMemberProfile(
             },
           });
           if (alive) {
-            if (countsStep.markLive) live.counts = true;
+            Object.assign(live, countsStep.marks);
             setCounts(countsStep.apply);
           }
 
@@ -362,7 +365,7 @@ export function useMemberProfile(
             row: { seventv: sevenTvBadge, twitch, thirdParty, bttvPro },
           });
           if (alive) {
-            if (badgesStep.markLive) live.badges = true;
+            Object.assign(live, badgesStep.marks);
             setWornBadges(badgesStep.apply);
           }
 
@@ -417,7 +420,10 @@ export function useMemberProfile(
       const profile = await getFullProfileWithFallback(userId, login, userId, login).catch(() => null);
       if (!profile || !alive) return;
       const wb = await resolveWornBadges(userId, profile);
-      if (alive) setWornBadges(wb);
+      // The same step as the first open: a failed 7TV read keeps the 7TV badge
+      // the preview already shows.
+      const step = sevenTvBadgesStep<typeof wornBadges>({ answered: profile.wornAnswered === true, row: wb });
+      if (alive) setWornBadges(step.apply);
     })();
     return () => { alive = false; };
     // info is read at call time on purpose; the only trigger is a revision bump.

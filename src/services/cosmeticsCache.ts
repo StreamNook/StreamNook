@@ -24,6 +24,17 @@ export interface CachedProfile {
   seventvCosmetics: CachedCosmetics;
   thirdPartyBadges: any[];
   lastUpdated: number;
+  /**
+   * Whether 7TV's full inventory answered (the owned counts are real). False
+   * when it failed or the account has no 7TV, and `seventvCosmetics` is the
+   * worn-only fallback. Absent on profiles built by the lighter paths.
+   */
+  inventoryAnswered?: boolean;
+  /**
+   * Whether the worn paint and badge are a real 7TV answer, decided for THIS
+   * fetch (a later read clearing the failure mark does not change it).
+   */
+  wornAnswered?: boolean;
 }
 
 // Small bounded LRU. Touch-on-hit keeps recently-used entries warm; least-recently
@@ -466,10 +477,16 @@ export async function getFullProfileWithFallback(
       // cannot be reused here. Falls back to the worn-only shape if the heavier
       // query fails, so a profile still paints rather than showing nothing.
       const { fetchUserInventory } = await import('./seventvService');
-      const [badgeData, seventvCosmetics] = await Promise.all([
+      const [badgeData, sevenTv] = await Promise.all([
         getAllUserBadgesWithEarned(userId, username, effectiveChannelId, effectiveChannelName),
-        fetchUserInventory(userId).then((inv) => inv ?? getCosmeticsWithFallback(userId)),
+        fetchUserInventory(userId).then(async (inv) => {
+          if (inv) return { cosmetics: inv as CachedCosmetics, inventoryAnswered: true, wornAnswered: true };
+          const cosmetics = await getCosmeticsWithFallback(userId);
+          // Read right after this fetch, so the answer describes this data.
+          return { cosmetics, inventoryAnswered: false, wornAnswered: !hasHardFailMark(userId) };
+        }),
       ]);
+      const seventvCosmetics = sevenTv.cosmetics;
 
       // Merge display and earned Twitch badges, then strip cache-dead fields.
       const uniqueTwitchBadges = new Map<string, any>();
@@ -494,7 +511,9 @@ export async function getFullProfileWithFallback(
         displayBadgeIds: badgeData.displayBadges.map((badge: any) => badge.id),
         seventvCosmetics,
         thirdPartyBadges,
-        lastUpdated: Date.now()
+        lastUpdated: Date.now(),
+        inventoryAnswered: sevenTv.inventoryAnswered,
+        wornAnswered: sevenTv.wornAnswered,
       };
 
       // Also cache individual components
@@ -502,8 +521,10 @@ export async function getFullProfileWithFallback(
       inMemoryTwitchBadgesCache.set(twitchCacheKey, twitchBadges);
       inMemoryThirdPartyBadgesCache.set(userId, thirdPartyBadges);
 
-      // Store in memory cache for this session
-      inMemoryProfileCache.set(userId, profile);
+      // Store in memory cache for this session, unless 7TV failed for it: a
+      // failed profile kept for the session would be served on every reopen
+      // after 7TV recovers.
+      if (sevenTv.wornAnswered) inMemoryProfileCache.set(userId, profile);
 
       return profile;
     } finally {
