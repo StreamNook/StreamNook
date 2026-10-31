@@ -36,7 +36,7 @@ export const CategorySearchBox = ({
 
     // Empty box: picks first, then the category's tags, then common tags of
     // its streams. Typing: matches, prefix first. Asked only while open.
-    const answer = useCategoryTagSuggestions({
+    const view = useCategoryTagSuggestions({
         gameName,
         query: value,
         selected: selectedTags,
@@ -44,9 +44,9 @@ export const CategorySearchBox = ({
         enabled: isOpen,
         revision,
     });
-    const visibleTags = answer?.labels ?? [];
+    const visibleTags = view?.labels ?? [];
     // Set when no listed tag is the typed text: Twitch filters by any tag name.
-    const typedTag = answer?.offer_typed ?? null;
+    const typedTag = view?.typed ?? null;
     const q = value.trim();
 
     useEffect(() => {
@@ -77,7 +77,7 @@ export const CategorySearchBox = ({
                             // exactly this text, else the text itself as a tag (it
                             // is still queried server-side).
                             if (!q) return;
-                            const pick = visibleTags[0] ?? q;
+                            const pick = (view?.current ? visibleTags[0] : undefined) ?? q;
                             onToggleTag(pick); onChange(''); setIsOpen(false);
                         } else if (e.key === 'Escape') {
                             onChange(''); setIsOpen(false);

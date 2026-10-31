@@ -1,21 +1,23 @@
 // Asks Rust (category_tag_suggestions) for a category's tag choices: the chip
 // row (an empty query) or the matches for typed text. Rust pools and ranks; this
-// hook only keeps the newest answer, shows it while it is for the category and
-// text on screen, and asks once more when Rust says the category's own tags
-// could not be read yet (once per revision, so a failing category never polls).
+// hook only keeps the newest answer, draws it while it is for the category on
+// screen (`current` once it is for the text too), and asks once more when Rust
+// says the category's own tags could not be read yet (once per revision, so a
+// failing category never polls).
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Logger } from '../utils/logger';
 import {
   acceptAnswer,
-  answerFor,
   NO_RETRY,
   NO_TAGS,
   retryStep,
   tagsKey,
+  tagView,
   type RetryState,
   type TagAnswer,
   type TagSuggestions,
+  type TagView,
 } from '../utils/tagFilter';
 
 export interface TagSuggestionsAsk {
@@ -33,7 +35,7 @@ export interface TagSuggestionsAsk {
   row?: boolean;
 }
 
-export function useCategoryTagSuggestions(ask: TagSuggestionsAsk): TagAnswer | null {
+export function useCategoryTagSuggestions(ask: TagSuggestionsAsk): TagView | null {
   const { query, selected, limit, enabled, revision, row = false } = ask;
   const name = ask.gameName ?? '';
   const [answer, setAnswer] = useState<TagAnswer | null>(null);
@@ -88,5 +90,5 @@ export function useCategoryTagSuggestions(ask: TagSuggestionsAsk): TagAnswer | n
     // themselves are read through the refs above.
   }, [enabled, name, query, key, limit, revision, retries]);
 
-  return answerFor(answer, name, query);
+  return tagView(answer, name, query);
 }

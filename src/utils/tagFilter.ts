@@ -126,10 +126,25 @@ export function acceptAnswer(reqId: number, latestId: number): boolean {
   return reqId === latestId;
 }
 
-/** The answer, when it is for the category and text on screen now. */
-export function answerFor(answer: TagAnswer | null, gameName: string, query: string): TagAnswer | null {
-  if (!answer) return null;
-  return answer.gameName === gameName && answer.query === query ? answer : null;
+/** What a tag list draws. */
+export interface TagView {
+  labels: string[];
+  /** The "Filter by tag" text, or `null` for no such row. */
+  typed: string | null;
+  /** The answer is for exactly the text on screen. Only Enter needs this. */
+  current: boolean;
+}
+
+/** The newest answer for this category stays drawn while an ask for newer text
+ *  is in flight, so the list never blanks between keystrokes. Until the new
+ *  answer lands, the "Filter by tag" row keeps its place and shows the text on
+ *  screen, so no row appears or goes per key. */
+export function tagView(answer: TagAnswer | null, gameName: string, query: string): TagView | null {
+  if (!answer || answer.gameName !== gameName) return null;
+  if (answer.query === query) return { labels: answer.labels, typed: answer.offer_typed, current: true };
+  const text = query.trim();
+  const keepsRow = answer.offer_typed !== null || answer.query.trim() === '';
+  return { labels: answer.labels, typed: text && keepsRow ? text : null, current: false };
 }
 
 /** The one-retry rule for a category whose own tags could not be read. `key`

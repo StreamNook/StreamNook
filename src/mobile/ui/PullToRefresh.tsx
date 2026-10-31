@@ -49,6 +49,7 @@ export const PullToRefresh: React.FC<{
     if (!el) return;
 
     let startY: number | null = null;
+    let startX = 0;
     let pulling = false;
     let lastPull = 0;
 
@@ -63,6 +64,7 @@ export const PullToRefresh: React.FC<{
       if (refreshingRef.current) return;
       if (el.scrollTop > 0) return;
       startY = e.touches[0].clientY;
+      startX = e.touches[0].clientX;
       pulling = false;
     };
 
@@ -71,8 +73,11 @@ export const PullToRefresh: React.FC<{
       const dy = e.touches[0].clientY - startY;
       if (!pulling) {
         // Only claim the gesture when the list is at its top and the finger
-        // moves down; otherwise hand it back to native scrolling.
-        if (dy <= 0 || el.scrollTop > 0) {
+        // moves more down than sideways; otherwise hand it back to native
+        // scrolling, so a sideways scroller in the list (a card's tag line)
+        // keeps its swipe.
+        const dx = e.touches[0].clientX - startX;
+        if (dy <= 0 || dy <= Math.abs(dx) || el.scrollTop > 0) {
           startY = null;
           return;
         }

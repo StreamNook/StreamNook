@@ -18,9 +18,9 @@ export const CategoryTagSheet: React.FC<{
   revision: unknown;
 }> = ({ open, onClose, gameName, selected, onToggle, revision }) => {
   const [query, setQuery] = useState('');
-  const answer = useCategoryTagSuggestions({ gameName, query, selected, limit: 14, enabled: open, revision });
-  const labels = answer?.labels ?? [];
-  const typed = answer?.offer_typed ?? null;
+  const view = useCategoryTagSuggestions({ gameName, query, selected, limit: 14, enabled: open, revision });
+  const labels = view?.labels ?? [];
+  const typed = view?.typed ?? null;
 
   const pick = (tag: string) => {
     onToggle(tag);
@@ -51,7 +51,7 @@ export const CategoryTagSheet: React.FC<{
               if (!q) return;
               e.preventDefault();
               // The best match Rust gave for exactly this text, else the text.
-              pick(labels[0] ?? q);
+              pick((view?.current ? labels[0] : undefined) ?? q);
             }}
             enterKeyHint="search"
             placeholder="Search tags"
@@ -60,11 +60,14 @@ export const CategoryTagSheet: React.FC<{
           />
         </div>
 
-        {/* A press here picks and keeps the keyboard up for the next tag. */}
+        {/* A press here picks and keeps the keyboard up for the next tag: the
+            mark stops the outside-tap blur, and each button's pointerdown never
+            takes focus from the field. */}
         <div data-keeps-keyboard="" className="flex flex-col gap-3">
           {typed && (
             <button
               type="button"
+              onPointerDown={(e) => e.preventDefault()}
               onClick={() => pick(typed)}
               className="glass-panel flex items-center gap-3 p-3 text-left text-[14px] text-textPrimary active:opacity-70"
             >
@@ -83,6 +86,7 @@ export const CategoryTagSheet: React.FC<{
                     key={tag}
                     type="button"
                     aria-pressed={on}
+                    onPointerDown={(e) => e.preventDefault()}
                     onClick={() => pick(tag)}
                     className="flex w-full items-center gap-3 p-3 text-left text-[14px] active:opacity-70"
                   >

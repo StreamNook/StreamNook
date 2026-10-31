@@ -91,7 +91,6 @@ const CategoryStreamsList: React.FC<{ category: Category }> = ({ category }) => 
   const tagGen = useRef(0);
   // Every landed page and every refresh: Rust may know new tags for the row.
   const [pages, setPages] = useState(0);
-  const [sheetOpen, setSheetOpen] = useState(false);
   const tagMode = selected.length > 0;
   const listed = tagMode ? tagList.streams : streams;
 
@@ -159,16 +158,6 @@ const CategoryStreamsList: React.FC<{ category: Category }> = ({ category }) => 
     [fetchTagPage],
   );
   const tagFilter = useMemo(() => ({ selected, onToggle: toggle }), [selected, toggle]);
-
-  const row = useCategoryTagSuggestions({
-    gameName: category.name,
-    query: '',
-    selected,
-    limit: ROW_LIMIT,
-    enabled: true,
-    revision: pages,
-    row: true,
-  });
 
   // A busy category runs to hundreds of live channels. The cursor for them was
   // already coming back and being thrown away, so the list stopped at the first
@@ -265,13 +254,7 @@ const CategoryStreamsList: React.FC<{ category: Category }> = ({ category }) => 
         </button>
         <h1 className="text-lg font-bold text-textPrimary truncate">{category.name}</h1>
       </div>
-      {/* Fixed under the title, so the filter in use never scrolls away. */}
-      <CategoryTagRail
-        labels={row?.labels ?? NO_TAGS}
-        selected={selected}
-        onToggle={toggle}
-        onSearch={() => setSheetOpen(true)}
-      />
+      <CategoryTagControls name={category.name} selected={selected} onToggle={toggle} pages={pages} />
       <PullToRefresh onRefresh={refresh} scrollerRef={scroller}>
         {firstLoading ? (
           <SkeletonCards />
@@ -314,12 +297,45 @@ const CategoryStreamsList: React.FC<{ category: Category }> = ({ category }) => 
           </>
         )}
       </PullToRefresh>
+    </>
+  );
+};
+
+// The chip row and the tag sheet, apart from the list: a row answer or opening
+// the sheet re-renders only these, never the grid of cards. The sheet portals to
+// the page, so it sits here beside the row.
+const CategoryTagControls: React.FC<{
+  name: string;
+  selected: string[];
+  onToggle: (tag: string) => void;
+  pages: number;
+}> = ({ name, selected, onToggle, pages }) => {
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const row = useCategoryTagSuggestions({
+    gameName: name,
+    query: '',
+    selected,
+    limit: ROW_LIMIT,
+    enabled: true,
+    revision: pages,
+    row: true,
+  });
+
+  return (
+    <>
+      {/* Fixed under the title, so the filter in use never scrolls away. */}
+      <CategoryTagRail
+        labels={row?.labels ?? NO_TAGS}
+        selected={selected}
+        onToggle={onToggle}
+        onSearch={() => setSheetOpen(true)}
+      />
       <CategoryTagSheet
         open={sheetOpen}
         onClose={() => setSheetOpen(false)}
-        gameName={category.name}
+        gameName={name}
         selected={selected}
-        onToggle={toggle}
+        onToggle={onToggle}
         revision={pages}
       />
     </>

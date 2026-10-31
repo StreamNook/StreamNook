@@ -5,7 +5,6 @@ import { describe, expect, it } from 'vitest';
 import type { TwitchStream } from '../types';
 import {
   acceptAnswer,
-  answerFor,
   applyPage,
   beginMore,
   categoryKey,
@@ -19,6 +18,7 @@ import {
   refreshTagList,
   retryStep,
   tagsKey,
+  tagView,
   toggleTag,
   type TagAnswer,
 } from './tagFilter';
@@ -102,12 +102,23 @@ describe('answers', () => {
     expect(acceptAnswer(2, 3)).toBe(false);
   });
 
-  it('shows an answer only for the category and text on screen', () => {
+  it('draws an answer only for the category on screen, and marks the one for this text', () => {
     const a = answer('Art', 'sp');
-    expect(answerFor(a, 'Art', 'sp')).toBe(a);
-    expect(answerFor(a, 'Art', 'spe')).toBeNull();
-    expect(answerFor(a, 'Chess', 'sp')).toBeNull();
-    expect(answerFor(null, 'Art', 'sp')).toBeNull();
+    expect(tagView(a, 'Art', 'sp')).toEqual({ labels: ['x'], typed: null, current: true });
+    expect(tagView(a, 'Chess', 'sp')).toBeNull();
+    expect(tagView(null, 'Art', 'sp')).toBeNull();
+  });
+
+  it('keeps the last answer drawn while newer text is asked, the typed row in place', () => {
+    // No typed row before (an exact match): none until the new answer lands.
+    expect(tagView(answer('Art', 'sp'), 'Art', 'spe')).toEqual({ labels: ['x'], typed: null, current: false });
+    // A typed row before: it stays and shows the text on screen.
+    const offered = { ...answer('Art', 'sp'), offer_typed: 'sp' };
+    expect(tagView(offered, 'Art', ' spe ')).toEqual({ labels: ['x'], typed: 'spe', current: false });
+    // The first key after an empty box shows the row at once.
+    expect(tagView(answer('Art', ''), 'Art', 'a')?.typed).toBe('a');
+    // A cleared box never offers an empty tag.
+    expect(tagView(offered, 'Art', '')).toEqual({ labels: ['x'], typed: null, current: false });
   });
 
   it('retries once per revision, and a retry never re-arms itself', () => {
