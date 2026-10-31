@@ -50,19 +50,50 @@ struct PutBody {
     customized: bool,
 }
 
-/// Read a single user's applied identity. Falls back to the non-customized
-/// default (show-all) on any error so a backend hiccup never breaks rendering.
+/// What the Identity API answers: the body, plus `fallback` when the server
+/// could not read the member and sent the default in its place.
+#[derive(Deserialize)]
+struct IdentityAnswer<T> {
+    #[serde(flatten)]
+    body: T,
+    #[serde(default)]
+    fallback: bool,
+}
+
+/// One answer of the Identity API, parsed. The default body is also what a
+/// member who chose nothing gets, so a failure passed off as it would blank
+/// badges that are really worn: the server's own fallback and a body that does
+/// not parse are errors, never the default.
+fn parse_identity_answer<T: serde::de::DeserializeOwned>(text: &str) -> Result<T, String> {
+    let answer: IdentityAnswer<T> =
+        serde_json::from_str(text).map_err(|e| format!("identity answer did not parse: {e}"))?;
+    if answer.fallback {
+        return Err("identity server could not read the loadout".to_string());
+    }
+    Ok(answer.body)
+}
+
+/// One Identity API read: an error when nothing answered, the status was not a
+/// success, or the answer is not a real one (see `parse_identity_answer`).
+/// Callers that only render chat fall back on their side; the profile card
+/// tells a failed read from a member who chose nothing by this.
+async fn read_identity<T: serde::de::DeserializeOwned>(url: &str) -> Result<T, String> {
+    let client = crate::services::http::client();
+    let resp = crate::services::sn_transport::send(client.get(url))
+        .await
+        .map_err(|e| format!("identity read failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("identity read answered {}", resp.status()));
+    }
+    let text = resp.text().await.map_err(|e| format!("identity read failed: {e}"))?;
+    parse_identity_answer(&text)
+}
+
+/// Read a single user's applied identity. A failure is an error (the page
+/// falls back to show-all and marks the stand-in as a failed read).
 #[tauri::command]
 pub async fn get_streamnook_identity(user_id: String) -> Result<IdentityLoadout, String> {
-    let client = crate::services::http::client();
-    let url = format!("{}/{}", IDENTITY_API, user_id);
-    match crate::services::sn_transport::send(client.get(&url)).await {
-        Ok(resp) if resp.status().is_success() => resp
-            .json::<IdentityLoadout>()
-            .await
-            .or_else(|_| Ok(default_loadout(&user_id))),
-        _ => Ok(default_loadout(&user_id)),
-    }
+    read_identity(&format!("{}/{}", IDENTITY_API, user_id)).await
 }
 
 /// A member's profile card for its first paint, before the live sources answer:
@@ -200,28 +231,49 @@ impl ResolvedIdentity {
     }
 }
 
-fn default_resolved(user_id: &str) -> ResolvedIdentity {
-    ResolvedIdentity {
-        twitch_user_id: user_id.to_string(),
-        customized: false,
-        badges: Vec::new(),
-        seventv: serde_json::Value::Null,
-        updated_at: None,
-    }
-}
 
-/// Fetch the resolved all-in-one identity bundle for a user. Falls back to the
-/// non-customized default on any error so chat never breaks over a hiccup.
+/// Fetch the resolved all-in-one identity bundle for a user. A failure is an
+/// error: chat falls back to the default on its side, and the profile card does
+/// not take it for a member who wears nothing.
 #[tauri::command]
 pub async fn get_streamnook_identity_resolved(user_id: String) -> Result<ResolvedIdentity, String> {
-    let client = crate::services::http::client();
-    let url = format!("{}/{}?resolve=1", IDENTITY_API, user_id);
-    match crate::services::sn_transport::send(client.get(&url)).await {
-        Ok(resp) if resp.status().is_success() => Ok(resp
-            .json::<ResolvedIdentity>()
-            .await
-            .map(ResolvedIdentity::in_provider_order)
-            .unwrap_or_else(|_| default_resolved(&user_id))),
-        _ => Ok(default_resolved(&user_id)),
+    read_identity::<ResolvedIdentity>(&format!("{}/{}?resolve=1", IDENTITY_API, user_id))
+        .await
+        .map(ResolvedIdentity::in_provider_order)
+}
+
+#[cfg(test)]
+mod identity_answer_tests {
+    use super::*;
+
+    const NONE_CHOSEN: &str =
+        r#"{"twitch_user_id":"5","customized":false,"badges":[],"paint":null,"updated_at":null}"#;
+
+    #[test]
+    fn a_member_who_chose_nothing_is_an_answer() {
+        let loadout: IdentityLoadout = parse_identity_answer(NONE_CHOSEN).unwrap();
+        assert!(!loadout.customized && loadout.badges.is_empty());
+    }
+
+    #[test]
+    fn the_servers_fallback_is_an_error_not_the_default() {
+        let fallback = NONE_CHOSEN.replace("\"updated_at\":null", "\"updated_at\":null,\"fallback\":true");
+        assert!(parse_identity_answer::<IdentityLoadout>(&fallback).is_err());
+        let resolved = r#"{"twitch_user_id":"5","customized":false,"badges":[],"seventv":{"badge":null,"paint":null},"updated_at":null,"fallback":true}"#;
+        assert!(parse_identity_answer::<ResolvedIdentity>(resolved).is_err());
+    }
+
+    #[test]
+    fn a_body_that_does_not_parse_is_an_error() {
+        assert!(parse_identity_answer::<IdentityLoadout>("<html>502</html>").is_err());
+        assert!(parse_identity_answer::<ResolvedIdentity>(r#"{"badges":"nope"}"#).is_err());
+    }
+
+    #[test]
+    fn a_resolved_answer_keeps_its_badges_and_ignores_unknown_fields() {
+        let text = r#"{"twitch_user_id":"5","customized":true,"badges":[{"key":"ffz:ffz-3","provider":"ffz","title":"FFZ","image_url":"https://cdn.frankerfacez.com/badge/3/4/rounded"}],"seventv":null,"updated_at":"2026-10-30","later":1,"fallback":false}"#;
+        let resolved: ResolvedIdentity = parse_identity_answer(text).unwrap();
+        assert_eq!(resolved.badges.len(), 1);
+        assert_eq!(resolved.badges[0].provider, "ffz");
     }
 }

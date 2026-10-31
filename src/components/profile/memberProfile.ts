@@ -179,17 +179,21 @@ export const resolveWornBadges = async (
         twitch = { src: `https://static-cdn.jtvnw.net/badges/v1/${v}/3`, title: 'Twitch' };
       }
     }
+    let bttvAnswered = true;
     if (keys.includes(BTTV_PRO_LOADOUT_KEY)) {
-      const url = await resolveBttvProUrl(userId).catch(() => null);
+      // undefined: BTTV could not be asked (null is a real "no Pro").
+      const url = await resolveBttvProUrl(userId);
       if (url) bttvPro = { src: url, title: 'BTTV Pro' };
+      bttvAnswered = url !== undefined;
     }
     answers = {
       // Only Twitch itself answers; the loadout's copy may fill the badge in
       // but is not an answer, so a card arriving later still wins over it.
       twitch: liveTwitch !== undefined,
       thirdParty: resolved !== null && !isIdentityFallback(resolved),
-      // Whether the member wears BTTV Pro is read from the loadout.
-      bttv: rawLoadout !== null && !isIdentityFallback(rawLoadout),
+      // Whether the member wears BTTV Pro is read from the loadout, the badge
+      // itself from BTTV's socket.
+      bttv: rawLoadout !== null && !isIdentityFallback(rawLoadout) && bttvAnswered,
     };
   } catch { /* badges optional; nothing counts as answered */ }
   return { seventv, twitch, thirdParty, bttvPro, answers };
@@ -301,6 +305,20 @@ export function useMemberProfile(
     // to a minute), so it fills only what nothing live has filled yet. A flag is
     // set only by a read that answered.
     const live = noLive();
+
+    // The StreamNook count comes from the cosmetics registry. When it loads (or
+    // changes) after the card opened, the count is set then, through the same
+    // step as the first read: only once loaded, and the 7TV counts untouched.
+    const unsubscribeRegistry = subscribeCosmeticsVersion(() => {
+      if (!alive) return;
+      const registryStep = sevenTvCountsStep({
+        answered: false,
+        snAnswered: isCosmeticsRegistryLoaded(),
+        counts: { paints: 0, badges: 0, sn: getOwnedCosmeticSlugs(userId).size },
+      });
+      Object.assign(live, registryStep.marks);
+      setCounts(registryStep.apply);
+    });
 
     (async () => {
       try {
@@ -434,7 +452,10 @@ export function useMemberProfile(
       }
     })();
 
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+      unsubscribeRegistry();
+    };
   }, [userId, followsLivePreview]);
 
   // Live preview only: when the editor bumps badgeRevision (a loadout edit),

@@ -14,7 +14,8 @@
 // at all, so a lookup either resolves fast (Pro) or times out (everyone else).
 // We therefore resolve on demand, off the profile card's critical path, and
 // cache the answer (including the negative one) so the vast majority of non-Pro
-// users aren't re-queried on every profile open.
+// users aren't re-queried on every profile open. A socket that cannot be asked
+// is a failure, not a "not Pro", and is never cached.
 
 use futures_util::{SinkExt, StreamExt};
 use lru::LruCache;
@@ -36,7 +37,7 @@ const LOOKUP_TIMEOUT_MS: u64 = 2500;
 // hammering the socket for the (vast) majority of non-Pro users.
 const CACHE_TTL: Duration = Duration::from_secs(15 * 60);
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BttvProBadge {
     pub url: String,
     pub started_at: Option<String>,
@@ -56,12 +57,14 @@ pub async fn clear_cache() {
     CACHE.lock().await.clear();
 }
 
-/// Resolve a user's BTTV Pro loyalty badge, or `None` if they don't have Pro
-/// (or the socket didn't answer in time). Cached with a TTL; negative answers
-/// are cached too so non-Pro users aren't re-queried on every profile open.
-pub async fn resolve_bttv_pro_badge(user_id: &str) -> Option<BttvProBadge> {
+/// Resolve a user's BTTV Pro loyalty badge: `Ok(None)` when they don't have
+/// Pro (the socket took the question and stayed silent, which is how BTTV says
+/// so), `Err` when the socket could not be asked at all (no connection, a failed
+/// send, closed before answering). Answers are cached with a TTL, negative ones
+/// too; a failure is not, so the next open asks again.
+pub async fn resolve_bttv_pro_badge(user_id: &str) -> Result<Option<BttvProBadge>, String> {
     if user_id.is_empty() {
-        return None;
+        return Ok(None);
     }
 
     // Fast path: fresh cache hit (positive or negative).
@@ -76,7 +79,7 @@ pub async fn resolve_bttv_pro_badge(user_id: &str) -> Option<BttvProBadge> {
     let badge = match cached_hit {
         Some(b) => b,
         None => {
-            let b = lookup_over_socket(user_id).await;
+            let b = lookup_over_socket(user_id).await?;
             let mut cache = CACHE.lock().await;
             cache.put(
                 user_id.to_string(),
@@ -96,7 +99,7 @@ pub async fn resolve_bttv_pro_badge(user_id: &str) -> Option<BttvProBadge> {
         record_discovered_badge(&b.url);
     }
 
-    badge
+    Ok(badge)
 }
 
 // ============================================================================
@@ -240,9 +243,33 @@ pub async fn all_known_bttv_pro_badges() -> Vec<String> {
     urls
 }
 
-async fn lookup_over_socket(user_id: &str) -> Option<BttvProBadge> {
+/// How one socket lookup ended, before the timeout decides what silence means.
+#[derive(Debug, PartialEq)]
+enum LookupEnd {
+    /// BTTV answered for this user (`None`: not Pro).
+    Answered(Option<BttvProBadge>),
+    /// The socket could not be asked, or closed before answering.
+    Failed(&'static str),
+}
+
+/// What a lookup tells the caller. Silence after the question went out is how
+/// BTTV says "not Pro"; silence before it went out (a connection still opening
+/// when the time ran out) says nothing, so it is a failure.
+fn lookup_result(ended: Option<LookupEnd>, asked: bool) -> Result<Option<BttvProBadge>, String> {
+    match ended {
+        Some(LookupEnd::Answered(badge)) => Ok(badge),
+        Some(LookupEnd::Failed(why)) => Err(format!("BTTV socket: {why}")),
+        None if asked => Ok(None),
+        None => Err("BTTV socket: no connection in time".to_string()),
+    }
+}
+
+async fn lookup_over_socket(user_id: &str) -> Result<Option<BttvProBadge>, String> {
+    let asked = std::sync::atomic::AtomicBool::new(false);
     let lookup = async {
-        let (ws, _) = connect_async(BTTV_WS_URL).await.ok()?;
+        let Ok((ws, _)) = connect_async(BTTV_WS_URL).await else {
+            return LookupEnd::Failed("could not connect");
+        };
         let (mut write, mut read) = ws.split();
 
         // join_channel then broadcast_me. broadcast_me makes BTTV reply with the
@@ -254,11 +281,12 @@ async fn lookup_over_socket(user_id: &str) -> Option<BttvProBadge> {
             "name": "broadcast_me",
             "data": { "provider": "twitch", "providerId": user_id, "channel": channel }
         });
-        write.send(Message::text(join.to_string())).await.ok()?;
-        write
-            .send(Message::text(broadcast.to_string()))
-            .await
-            .ok()?;
+        if write.send(Message::text(join.to_string())).await.is_err()
+            || write.send(Message::text(broadcast.to_string())).await.is_err()
+        {
+            return LookupEnd::Failed("could not send the lookup");
+        }
+        asked.store(true, std::sync::atomic::Ordering::SeqCst);
 
         while let Some(Ok(msg)) = read.next().await {
             let txt = match msg {
@@ -281,34 +309,65 @@ async fn lookup_over_socket(user_id: &str) -> Option<BttvProBadge> {
             if data.get("providerId").and_then(|p| p.as_str()) != Some(user_id) {
                 continue;
             }
-            if data.get("pro").and_then(|p| p.as_bool()) != Some(true) {
-                return None;
-            }
-            let badge = data.get("badge");
-            let url = badge
-                .and_then(|b| b.get("url"))
-                .and_then(|u| u.as_str())?
-                .to_string();
-            return Some(BttvProBadge {
-                url,
-                started_at: badge
-                    .and_then(|b| b.get("startedAt"))
-                    .and_then(|s| s.as_str())
-                    .map(String::from),
-                glow: data.get("glow").and_then(|g| g.as_bool()).unwrap_or(false),
-            });
+            return LookupEnd::Answered(pro_badge_from(data));
         }
-        None
+        LookupEnd::Failed("closed before answering")
     };
 
-    // Either the user is Pro (fast reply) or we wait out the timeout (not Pro /
-    // socket unavailable). A timeout/connection failure is a clean "no badge".
-    timeout(Duration::from_millis(LOOKUP_TIMEOUT_MS), lookup)
-        .await
-        .unwrap_or(None)
+    // Either the user is Pro (fast reply) or we wait out the timeout (not Pro,
+    // when the question went out; a failure when it never did).
+    let ended = timeout(Duration::from_millis(LOOKUP_TIMEOUT_MS), lookup).await.ok();
+    lookup_result(ended, asked.load(std::sync::atomic::Ordering::SeqCst))
+}
+
+/// The Pro badge in a `lookup_user` reply's data, or `None` for a user without Pro.
+fn pro_badge_from(data: &Value) -> Option<BttvProBadge> {
+    if data.get("pro").and_then(|p| p.as_bool()) != Some(true) {
+        return None;
+    }
+    let badge = data.get("badge");
+    let url = badge.and_then(|b| b.get("url")).and_then(|u| u.as_str())?.to_string();
+    Some(BttvProBadge {
+        url,
+        started_at: badge.and_then(|b| b.get("startedAt")).and_then(|s| s.as_str()).map(String::from),
+        glow: data.get("glow").and_then(|g| g.as_bool()).unwrap_or(false),
+    })
 }
 
 /// Resident BTTV Pro lookups (try-lock). Diagnostics for the resource line.
 pub fn cache_len() -> Option<usize> {
     CACHE.try_lock().ok().map(|c| c.len())
+}
+
+#[cfg(test)]
+mod lookup_tests {
+    use super::*;
+
+    fn pro() -> BttvProBadge {
+        BttvProBadge { url: "https://cdn.betterttv.net/badges/pro/x.webp".into(), started_at: None, glow: false }
+    }
+
+    #[test]
+    fn silence_after_the_question_is_not_pro_and_silence_before_it_is_a_failure() {
+        assert_eq!(lookup_result(None, true), Ok(None));
+        assert!(lookup_result(None, false).is_err());
+    }
+
+    #[test]
+    fn an_answer_is_kept_and_a_broken_socket_is_a_failure() {
+        assert_eq!(lookup_result(Some(LookupEnd::Answered(Some(pro()))), true), Ok(Some(pro())));
+        assert_eq!(lookup_result(Some(LookupEnd::Answered(None)), true), Ok(None));
+        assert!(lookup_result(Some(LookupEnd::Failed("could not connect")), false).is_err());
+        assert!(lookup_result(Some(LookupEnd::Failed("closed before answering")), true).is_err());
+    }
+
+    #[test]
+    fn a_reply_reads_pro_and_its_badge() {
+        let data = json!({ "providerId": "5", "pro": true, "glow": true, "badge": { "url": "https://cdn.betterttv.net/badges/pro/x.webp", "startedAt": "2024" } });
+        let badge = pro_badge_from(&data).unwrap();
+        assert!(badge.glow);
+        assert_eq!(badge.started_at.as_deref(), Some("2024"));
+        assert_eq!(pro_badge_from(&json!({ "pro": false })), None);
+        assert_eq!(pro_badge_from(&json!({ "pro": true })), None);
+    }
 }

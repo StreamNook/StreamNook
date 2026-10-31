@@ -27,6 +27,22 @@ describe('isIdentityFallback', () => {
     expect(isIdentityFallback(await getResolvedIdentity('10'))).toBe(true);
   });
 
+  it('a failed read keeps the normal 5-minute retry, so chat never asks a down server more often', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-10-31T12:00:00Z'));
+      failing.add('12');
+      expect(isIdentityFallback(await getResolvedIdentity('12'))).toBe(true);
+      failing.delete('12');
+      vi.setSystemTime(new Date('2026-10-31T12:04:00Z'));
+      expect(isIdentityFallback(await getResolvedIdentity('12'))).toBe(true);
+      vi.setSystemTime(new Date('2026-10-31T12:05:01Z'));
+      expect(isIdentityFallback(await getResolvedIdentity('12'))).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('a real answer that chose nothing is not a fallback', async () => {
     expect(isIdentityFallback(await getIdentityWithCache('11'))).toBe(false);
     expect(isIdentityFallback(await getResolvedIdentity('11'))).toBe(false);

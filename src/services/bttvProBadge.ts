@@ -50,10 +50,11 @@ export function withBttvPro<T extends { provider?: string }>(list: T[], pro: T):
   return [...list.slice(0, at), pro, ...list.slice(at)];
 }
 
-/** Resolve a user's CURRENT BTTV Pro badge URL (it progresses with tenure), or
- *  null if they don't have Pro. Backed by the BTTV socket the app already keeps
- *  open; failures resolve to null so a hiccup never breaks badge rendering. */
-export async function resolveBttvProUrl(userId: string): Promise<string | null> {
+/** Resolve a user's CURRENT BTTV Pro badge URL (it progresses with tenure):
+ *  null if they don't have Pro, undefined when BTTV could not be asked (callers
+ *  keep whatever they already show). Never throws, so a hiccup never breaks
+ *  badge rendering. */
+export async function resolveBttvProUrl(userId: string): Promise<string | null | undefined> {
   try {
     const badge = await invoke<{ url: string; started_at: string | null; glow: boolean } | null>(
       'get_bttv_pro_badge',
@@ -61,6 +62,6 @@ export async function resolveBttvProUrl(userId: string): Promise<string | null> 
     );
     return badge?.url ?? null;
   } catch {
-    return null;
+    return undefined;
   }
 }

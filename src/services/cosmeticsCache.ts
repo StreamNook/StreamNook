@@ -450,6 +450,9 @@ export function getProfileFromMemoryCache(userId: string): CachedProfile | null 
   return inMemoryProfileCache.get(userId) || null;
 }
 
+/** Whether both 7TV reads of a cached profile answered (older entries have no flags). */
+const isFullyAnswered = (p: CachedProfile): boolean => p.inventoryAnswered !== false && p.wornAnswered !== false;
+
 /**
  * Get full profile data with cache-first strategy
  * Returns cached data immediately if available, then refreshes in background
@@ -460,9 +463,10 @@ export async function getFullProfileWithFallback(
   channelId?: string,
   channelName?: string
 ): Promise<CachedProfile> {
-  // 1. Try in-memory cache first (instant, synchronous)
+  // 1. Try in-memory cache first (instant, synchronous). A profile that 7TV
+  //    did not fully answer is kept only for the hard-fail retry window.
   const memoryCached = inMemoryProfileCache.get(userId);
-  if (memoryCached) {
+  if (memoryCached && (isFullyAnswered(memoryCached) || Date.now() - memoryCached.lastUpdated < HARD_FAIL_RETRY_MS)) {
     return memoryCached;
   }
 
@@ -490,14 +494,12 @@ export async function getFullProfileWithFallback(
       const [badgeData, sevenTv] = await Promise.all([
         getAllUserBadgesWithEarned(userId, username, effectiveChannelId, effectiveChannelName),
         fetchUserInventory(userId).then(async (inv) => {
+          // An account 7TV does not know answers an empty inventory; null is a
+          // failed read.
           if (inv) return { cosmetics: inv as CachedCosmetics, inventoryAnswered: true, wornAnswered: true };
           // The answer travels with this read, never a mark read later.
           const { data: cosmetics, hardFail } = await getCosmeticsAnswer(userId);
-          const wornAnswered = !hardFail;
-          // No inventory is also how 7TV answers an account it does not know:
-          // when the worn read says the same (no 7TV user), owning nothing is
-          // the answer. With a 7TV user it means the inventory read failed.
-          return { cosmetics, inventoryAnswered: wornAnswered && !cosmetics.seventvUserId, wornAnswered };
+          return { cosmetics, inventoryAnswered: false, wornAnswered: !hardFail };
         }),
       ]);
       const seventvCosmetics = sevenTv.cosmetics;
@@ -535,10 +537,10 @@ export async function getFullProfileWithFallback(
       inMemoryTwitchBadgesCache.set(twitchCacheKey, twitchBadges);
       inMemoryThirdPartyBadgesCache.set(userId, thirdPartyBadges);
 
-      // Store in memory cache for this session, unless 7TV failed for it (the
-      // worn read, or the inventory of a known 7TV user): a failed profile kept
-      // for the session would be served on every reopen after 7TV recovers.
-      if (sevenTv.wornAnswered && sevenTv.inventoryAnswered) inMemoryProfileCache.set(userId, profile);
+      // Store in memory cache for this session. A profile 7TV failed for keeps
+      // its flags and is served only for the retry window (see the hit check
+      // above), so a reopen after 7TV recovers reads again.
+      inMemoryProfileCache.set(userId, profile);
 
       return profile;
     } finally {

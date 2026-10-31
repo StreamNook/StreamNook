@@ -309,7 +309,9 @@ function ensureBttvProResolved(userId: string) {
       }
       return resolveBttvProUrl(userId).then((url) => {
         if (url) mergeBttvPro(userId, buildBttvProBadge(url));
-        else removeBttvPro(userId);
+        // Only a real "no Pro" takes the badge away; a lookup that could not
+        // be asked keeps what the row shows.
+        else if (url === null) removeBttvPro(userId);
       });
     })
     .catch(() => {});

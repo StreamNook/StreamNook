@@ -123,6 +123,9 @@ const failedReads = new WeakSet<object>();
 /** True when this loadout or resolved bundle is the stand-in for a failed read. */
 export const isIdentityFallback = (value: unknown): boolean =>
   typeof value === 'object' && value !== null && failedReads.has(value);
+// A failed read keeps the full TTL on purpose: chat asks for every chatter, so a
+// shorter retry would multiply the requests to a server that is already down.
+// The profile card does not need it sooner; it marks the part unanswered.
 
 /** Synchronous cache peek — null if not loaded yet. */
 export function getIdentityFromMemoryCache(userId: string): IdentityLoadout | null {

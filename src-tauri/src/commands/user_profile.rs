@@ -650,7 +650,11 @@ fn is_login_shaped(name: &str) -> bool {
 async fn fetch_seventv_cosmetics(user_id: &str) -> Result<SevenTVCosmetics, String> {
     let owned = crate::services::seventv_cosmetics_resolver::owned(user_id)
         .await
-        .ok_or_else(|| "7TV user not found".to_string())?;
+        .ok_or_else(|| "7TV did not answer".to_string())?;
+    // An account 7TV does not know answers an empty inventory with no 7TV id.
+    if owned.cosmetics.seventv_user_id.is_none() {
+        return Err("7TV user not found".to_string());
+    }
     Ok(cosmetics_from_inventory(&owned))
 }
 

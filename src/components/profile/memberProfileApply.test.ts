@@ -300,6 +300,21 @@ describe('the live 7TV read steps', () => {
     expect(sevenTvBadgesStep({ answered: false, others: NONE, row: emptyRow }).apply(shownRow)).toEqual(cardRow);
   });
 
+  it('a registry that loads after the card sets only the StreamNook count, and a later card keeps it', () => {
+    const live = noLive();
+    const beforeLoad = sevenTvCountsStep({ answered: false, snAnswered: false, counts: { paints: 0, badges: 0, sn: 0 } });
+    Object.assign(live, beforeLoad.marks);
+    let shown = beforeLoad.apply({ paints: 12, badges: 7, sn: 3 });
+    expect(shown).toEqual({ paints: 12, badges: 7, sn: 3 });
+    expect(live.sn).toBe(false);
+
+    const loaded = sevenTvCountsStep({ answered: false, snAnswered: true, counts: { paints: 0, badges: 0, sn: 6 } });
+    Object.assign(live, loaded.marks);
+    shown = loaded.apply(shown);
+    expect(shown).toEqual({ paints: 12, badges: 7, sn: 6 });
+    expect(planFirstPaint(snap(), live, false).counts).toEqual({ paints: 12, badges: 7 });
+  });
+
   it('the card hook takes each answer from its own read and applies these steps as they are', () => {
     const hook = readFileSync(resolve(__dirname, 'memberProfile.ts'), 'utf8');
     expect(hook.match(/live\.(counts|badges|seventvBadge|sn|twitchBadge|thirdPartyBadges|bttvBadge) = true/g) ?? []).toHaveLength(0);
@@ -315,7 +330,14 @@ describe('the live 7TV read steps', () => {
     // resolveWornBadges: each part from its own read, failed identity reads not passed off as answers.
     expect(hook).toContain('twitch: liveTwitch !== undefined,');
     expect(hook).toContain('thirdParty: resolved !== null && !isIdentityFallback(resolved),');
-    expect(hook).toContain('bttv: rawLoadout !== null && !isIdentityFallback(rawLoadout),');
+    expect(hook).toContain('bttv: rawLoadout !== null && !isIdentityFallback(rawLoadout) && bttvAnswered,');
+    expect(hook).toContain('bttvAnswered = url !== undefined;');
+    // A registry that loads after the card opened sets the StreamNook count through the same step.
+    expect(hook).toContain('const unsubscribeRegistry = subscribeCosmeticsVersion(() => {');
+    expect(hook).toContain('snAnswered: isCosmeticsRegistryLoaded(),\n        counts: { paints: 0, badges: 0, sn: getOwnedCosmeticSlugs(userId).size },'.replace(/\n/g, hook.includes('\r\n') ? '\r\n' : '\n'));
+    expect(hook).toContain('Object.assign(live, registryStep.marks);');
+    expect(hook).toContain('setCounts(registryStep.apply);');
+    expect(hook).toContain('unsubscribeRegistry();');
     // The Settings preview applies the member's own edit, keeping the 7TV badge on a failed read.
     expect(hook).toContain('others: PREVIEW_OTHERS,');
     // A first paint is merged, never set whole.

@@ -343,14 +343,15 @@ pub async fn get_badge_detail(
 /// subscriber enables). This is separate from the contributor badge feed above:
 /// BTTV only exposes Pro badges over its live-update WebSocket, so this does an
 /// on-demand `broadcast_me` lookup (cached, negative answers included). Returns
-/// `None` when the user has no Pro badge or the socket didn't answer in time.
+/// `None` when the user has no Pro badge, and an error when the socket could
+/// not be asked (the profile card then keeps the badge it already shows).
 /// Called by the profile card in parallel with the main profile fetch so it
 /// never blocks the card from rendering.
 #[tauri::command]
 pub async fn get_bttv_pro_badge(
     user_id: String,
 ) -> Result<Option<crate::services::bttv_pro_service::BttvProBadge>, String> {
-    Ok(crate::services::bttv_pro_service::resolve_bttv_pro_badge(&user_id).await)
+    crate::services::bttv_pro_service::resolve_bttv_pro_badge(&user_id).await
 }
 
 /// Every distinct BetterTTV Pro loyalty badge design StreamNook knows: the ones

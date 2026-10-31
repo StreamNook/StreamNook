@@ -1228,7 +1228,18 @@ async fn fetch_inventory(id: String) -> Option<Inventory> {
         "{{ id style {{ activePaint {{ id }} activeBadge {{ id description }} activeProfilePicture {{ id images {{ url mime scale frameCount }} }} }} inventory {{ paints {{ to {{ paint {PAINT_FIELDS} }} }} badges {{ to {{ badge {BADGE_FIELDS} }} }} }} }}"
     );
     let data = request_gql(&user_query(std::slice::from_ref(&id), &selection)).await?;
-    let user = data.get(alias_of(&id))?.get("userByConnection").filter(|u| !u.is_null())?;
+    inventory_from_answer(&data, &id)
+}
+
+/// One account's inventory from 7TV's answer. 7TV answered and knows no such
+/// account: owning nothing is the answer (an empty inventory with no
+/// `seventv_user_id`). `None` stays for an answer that does not cover the
+/// account, as for a request that failed, so a caller can tell the two apart.
+fn inventory_from_answer(data: &Value, id: &str) -> Option<Inventory> {
+    let entry = data.get(alias_of(id))?;
+    let Some(user) = entry.get("userByConnection").filter(|u| !u.is_null()) else {
+        return Some(Inventory::default());
+    };
     let cosmetics = owned_cosmetics(user);
     // The card's lookup already carries the images; the chat path reuses them.
     if let Some(picture) = &cosmetics.profile_picture {
@@ -1360,6 +1371,21 @@ mod tests {
         note_own_pick("pick-test", Some(None), None);
         let off = with_pick("pick-test", UserCosmetics { paints, ..Default::default() }, false);
         assert!(off.paints.is_empty());
+    }
+
+    #[test]
+    fn an_account_7tv_does_not_know_owns_nothing_and_a_missing_answer_is_none() {
+        let unknown = json!({ alias_of("424242"): { "userByConnection": null } });
+        let inv = inventory_from_answer(&unknown, "424242").expect("an answer");
+        assert!(inv.cosmetics.seventv_user_id.is_none());
+        assert!(inv.cosmetics.paints.is_empty() && inv.cosmetics.badges.is_empty());
+
+        assert!(inventory_from_answer(&json!({}), "424242").is_none());
+
+        let known = json!({ alias_of("424242"): { "userByConnection": {
+            "id": "01SEVENTV", "style": {}, "inventory": { "paints": [], "badges": [] } } } });
+        let inv = inventory_from_answer(&known, "424242").expect("an answer");
+        assert_eq!(inv.cosmetics.seventv_user_id.as_deref(), Some("01SEVENTV"));
     }
 
     #[test]
