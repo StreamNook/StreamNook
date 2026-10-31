@@ -251,6 +251,29 @@ fn tag_streams_page(resp: &serde_json::Value, game_name: &str) -> (Vec<TwitchStr
     (rows, public_next_cursor(connection))
 }
 
+/// `get_category_info`'s answer from Twitch's reply. A refusal is an error,
+/// never "no such category": the tag filter keeps a missing category for ten
+/// minutes, and a refusal must not hide one. Only `data.game: null` means "no
+/// such category".
+fn category_info_from(status: u16, value: serde_json::Value) -> Result<Option<crate::models::stream::CategoryInfo>> {
+    if !(200..300).contains(&status) {
+        return Err(anyhow::anyhow!("Twitch answered HTTP {status}"));
+    }
+    if let Some(errors) = value.get("errors").and_then(|e| e.as_array()).filter(|e| !e.is_empty()) {
+        let msg = errors
+            .iter()
+            .filter_map(|e| e.get("message").and_then(|m| m.as_str()))
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(anyhow::anyhow!("Twitch GQL error: {msg}"));
+    }
+    if value.get("data").map_or(true, |d| d.is_null()) {
+        return Err(anyhow::anyhow!("Twitch sent no data for the category"));
+    }
+    let data: crate::models::stream::GqlDataResponse = serde_json::from_value(value)?;
+    Ok(data.data.and_then(|d| d.game))
+}
+
 /// A category as the category directory and category search answer it, under
 /// Helix's `games` field names so every caller reads it as before.
 /// `viewer_count` is Twitch's own live total for the category
@@ -3908,27 +3931,11 @@ impl TwitchService {
             .send()
             .await?;
 
-        // A refusal is an error, never "no such category": the tag filter keeps
-        // a missing category for ten minutes, and a refusal must not hide one.
-        let status = response.status();
-        if !status.is_success() {
-            return Err(anyhow::anyhow!("Twitch answered HTTP {status}"));
-        }
-        let value: serde_json::Value = response.json().await?;
-        if let Some(errors) = value.get("errors").and_then(|e| e.as_array()).filter(|e| !e.is_empty()) {
-            let msg = errors
-                .iter()
-                .filter_map(|e| e.get("message").and_then(|m| m.as_str()))
-                .collect::<Vec<_>>()
-                .join("; ");
-            return Err(anyhow::anyhow!("Twitch GQL error: {msg}"));
-        }
-        // Only `data.game: null` means "no such category".
-        if value.get("data").map_or(true, |d| d.is_null()) {
-            return Err(anyhow::anyhow!("Twitch sent no data for the category"));
-        }
-        let data: crate::models::stream::GqlDataResponse = serde_json::from_value(value)?;
-        Ok(data.data.and_then(|d| d.game))
+        // A refusal's body is never read as an answer.
+        let status = response.status().as_u16();
+        let value: serde_json::Value =
+            if response.status().is_success() { response.json().await? } else { serde_json::Value::Null };
+        category_info_from(status, value)
     }
 
     /// Live streams in a category filtered by freeform tags, server-side, via
@@ -8403,5 +8410,34 @@ mod tag_stream_tests {
             .await
             .unwrap();
         assert_eq!(page, (Vec::new(), None));
+    }
+
+    #[test]
+    fn category_info_reads_a_found_category_and_its_tags() {
+        let value = serde_json::json!({ "data": { "game": { "id": "509658", "name": "Just Chatting",
+            "tags": [{ "id": "t1", "localizedName": "English" }] } } });
+        let info = category_info_from(200, value).unwrap().expect("found");
+        assert_eq!(info.name, "Just Chatting");
+        assert_eq!(info.tags.unwrap()[0].localized_name, "English");
+    }
+
+    #[test]
+    fn category_info_null_game_is_no_such_category() {
+        let value = serde_json::json!({ "data": { "game": null } });
+        assert!(category_info_from(200, value).unwrap().is_none());
+    }
+
+    #[test]
+    fn category_info_refusal_and_errors_are_errors_never_none() {
+        assert!(category_info_from(403, serde_json::Value::Null).is_err());
+        let errors = serde_json::json!({ "errors": [{ "message": "failed integrity check" }], "data": null });
+        let err = category_info_from(200, errors).unwrap_err();
+        assert!(err.to_string().contains("failed integrity check"));
+    }
+
+    #[test]
+    fn category_info_without_data_is_an_error() {
+        assert!(category_info_from(200, serde_json::json!({})).is_err());
+        assert!(category_info_from(200, serde_json::json!({ "data": null })).is_err());
     }
 }
