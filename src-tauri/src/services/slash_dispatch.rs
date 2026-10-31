@@ -1941,7 +1941,7 @@ async fn nuke_command(c: &Call<'_>, o: &mut Outcome) {
 pub const PLATFORM_NEUTRAL: &[&str] = &[
     "help", "copy", "echo", "say", "tts", "shrug", "lurk", "squishy", "barrelroll", "party", "exporttext", "openfile",
     "proc", "screenshot", "setting", "timer", "chain", "foreach", "debug-env", "debug-chat", "debug-eventsub",
-    "debug-logs", "debug-logging", "openstreamhighlights", "song", "songs",
+    "debug-logs", "debug-logging", "openstreamhighlights", "song", "songs", "favorite", "unfavorite",
 ];
 
 const SQUISHY: &str =
@@ -2752,6 +2752,10 @@ async fn setting(c: &Call<'_>, o: &mut Outcome) -> Result<(), String> {
         ext_usage(o, "setting", "/setting <get|set|reset> <name> [value]");
         return Ok(());
     }
+    if verb != "get" && crate::services::favorite_channels::RUST_ONLY_KEYS.contains(&keys[0]) {
+        o.err("Use /favorite and /unfavorite to change favorites");
+        return Ok(());
+    }
     let settings = b.settings();
     let current = get_path(&settings, &keys).cloned();
     let defaults = b.invoke("get_default_settings", json!({})).await.unwrap_or(Value::Null);
@@ -2800,7 +2804,18 @@ async fn setting(c: &Call<'_>, o: &mut Outcome) -> Result<(), String> {
 
 async fn favorite(c: &Call<'_>, o: &mut Outcome, add: bool) -> Result<(), String> {
     let b = c.b();
-    let who = Some(clean_login(c.arg(0))).filter(|s| !s.is_empty()).unwrap_or_else(|| c.login().to_string());
+    let typed = clean_login(c.arg(0));
+    // A Kick (or other platform) room favorites itself when no channel is named.
+    if typed.is_empty() {
+        if let Some((provider, channel)) = c.login().split_once(':') {
+            let Some(id) = crate::services::providers::key::favorite_id(provider, "", channel) else {
+                o.err("Couldn't work out which channel this is");
+                return Ok(());
+            };
+            return set_favorite(b, o, provider, None, channel, channel, None, &id, add).await;
+        }
+    }
+    let who = Some(typed).filter(|s| !s.is_empty()).unwrap_or_else(|| c.login().to_string());
     if who.is_empty() {
         o.err(format!("/{}: name a channel or open one", c.typed));
         return Ok(());
@@ -2812,37 +2827,54 @@ async fn favorite(c: &Call<'_>, o: &mut Outcome, add: bool) -> Result<(), String
             return Ok(());
         }
     };
-    let settings = b.settings();
-    let mut favorites: Vec<Value> = settings["favorite_streamers"].as_array().cloned().unwrap_or_default();
-    let mut identities: Vec<Value> = settings["favorite_channels"].as_array().cloned().unwrap_or_default();
-    let is_fav = favorites.iter().any(|f| f.as_str() == Some(user.id.as_str()));
-    if is_fav == add {
-        o.info(if add {
-            format!("{} is already a favorite", user.display_name)
-        } else {
-            format!("{} is not a favorite", user.display_name)
-        });
+    let id = user.id.clone();
+    set_favorite(b, o, "twitch", Some(&user.id), &user.login, &user.display_name, user.avatar.as_deref(), &id, add).await
+}
+
+/// One favorite change through the door, worded for chat. `name` is what the
+/// lines call the channel; `id` is what the settings list it under.
+#[allow(clippy::too_many_arguments)]
+async fn set_favorite(
+    b: &dyn Backend,
+    o: &mut Outcome,
+    provider: &str,
+    user_id: Option<&str>,
+    login: &str,
+    name: &str,
+    avatar: Option<&str>,
+    id: &str,
+    add: bool,
+) -> Result<(), String> {
+    let listed = b.settings()["favorite_streamers"]
+        .as_array()
+        .is_some_and(|ids| ids.iter().any(|f| f.as_str() == Some(id)));
+    if listed == add {
+        o.info(if add { format!("{name} is already a favorite") } else { format!("{name} is not a favorite") });
         return Ok(());
     }
-    identities.retain(|f| f["id"].as_str() != Some(user.id.as_str()));
-    if add {
-        favorites.push(json!(user.id));
-        identities.push(json!({
-            "id": user.id,
-            "provider": "twitch",
-            "channel": user.login,
-            "display_name": user.display_name,
-            "avatar": user.avatar,
-            "added_at": chrono::DateTime::from_timestamp_millis(b.now_ms()).unwrap_or_default().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-        }));
-    } else {
-        favorites.retain(|f| f.as_str() != Some(user.id.as_str()));
+    let user_name = if name == login { Value::Null } else { json!(name) };
+    let answer = b
+        .invoke(
+            "set_favorite_channel",
+            json!({
+                "provider": provider,
+                "userId": user_id,
+                "userLogin": login,
+                "userName": user_name,
+                "avatar": avatar,
+                "favorite": add,
+            }),
+        )
+        .await?;
+    if answer.is_null() {
+        o.err("Couldn't work out which channel this is");
+        return Ok(());
     }
-    b.invoke("patch_settings", json!({ "patch": { "favorite_streamers": favorites, "favorite_channels": identities } })).await?;
-    if add {
-        let _ = b.invoke("refresh_favorites", json!({ "key": user.id })).await;
+    if answer["favorite"].as_bool() != Some(add) {
+        o.err(format!("Couldn't change favorites for {name}"));
+        return Ok(());
     }
-    o.ok(if add { format!("{} added to favorites", user.display_name) } else { format!("{} removed from favorites", user.display_name) });
+    o.ok(if add { format!("{name} added to favorites") } else { format!("{name} removed from favorites") });
     Ok(())
 }
 

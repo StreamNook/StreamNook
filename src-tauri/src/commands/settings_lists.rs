@@ -364,6 +364,9 @@ pub async fn edit_settings_list(
     edit: ListEdit,
     state: State<'_, AppState>,
 ) -> Result<Value, String> {
+    if crate::services::favorite_channels::is_rust_only_path(&path) {
+        return Err("favorite lists change through set_favorite_channel".to_string());
+    }
     // A mute edited by hand is never taken back by Copy from Twitch's Undo.
     let touched = if path == "live_notifications.muted_live_channels" {
         match &edit {

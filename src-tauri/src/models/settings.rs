@@ -1962,6 +1962,10 @@ impl Settings {
         self.channel_links = authoritative.channel_links.clone();
         self.first_run_look_adopted = authoritative.first_run_look_adopted;
         self.install_marked = authoritative.install_marked;
+        // Favorites change only through `set_favorite_channel` and the
+        // identity fill; a window's copy of them is never written back.
+        self.favorite_streamers = authoritative.favorite_streamers.clone();
+        self.favorite_channels = authoritative.favorite_channels.clone();
     }
 
     /// One-time move of an existing install onto the first-run chat look,
@@ -2448,6 +2452,25 @@ mod backup_persistence_tests {
 
         assert_eq!(incoming.channel_links.len(), 1, "the link survived the save");
         assert_eq!(incoming.provider_follows.len(), 1, "the follow survived too");
+    }
+
+    #[test]
+    fn a_save_cannot_write_the_favorite_lists() {
+        let mut authoritative = Settings::default();
+        authoritative.favorite_streamers = vec!["1".into()];
+        authoritative.favorite_channels = vec![FavoriteChannel {
+            id: "1".into(),
+            provider: "twitch".into(),
+            channel: "one".into(),
+            display_name: None,
+            avatar: None,
+            added_at: String::new(),
+        }];
+        let mut incoming = Settings::default();
+        incoming.favorite_streamers = vec!["2".into()];
+        incoming.adopt_backend_owned(&authoritative);
+        assert_eq!(incoming.favorite_streamers, vec!["1"]);
+        assert_eq!(incoming.favorite_channels.len(), 1);
     }
 
     /// YouTube channel ids are case-SENSITIVE, and the link member is handed

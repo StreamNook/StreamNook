@@ -143,6 +143,8 @@ pub mod youtube_auth_service;
 pub mod favorite_categories;
 pub mod hidden_channels;
 pub mod favorite_live_service;
+// Every change to the favorite lists, and their repairs.
+pub mod favorite_channels;
 // The live line for the desktop chat dock and the phone chats.
 pub mod chat_dock_live;
 pub mod live_announce;

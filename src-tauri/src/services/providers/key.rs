@@ -95,8 +95,11 @@ pub fn stream_key(provider: &str, user_login: &str) -> String {
 /// The id a FAVOURITE is stored under, read off a live row, or `None` when the
 /// row names no channel.
 ///
-/// Twin of `favoriteIdOf` in `src/utils/favorites.ts`, and the two must agree
-/// EXACTLY: the unified Discover list drops a live favourite by this id while
+/// Twin of `favoriteIdOf` in `src/utils/favorites.ts` (and the iPhone's
+/// `FavoriteKey.id`), and they must agree EXACTLY, held to the `favorite_id`
+/// cases in `src/utils/providerTwins.fixtures.json`. A login that is a room key
+/// of its own platform (`kick:xqc` on Kick) names that channel. The unified
+/// Discover list drops a live favourite by this id while
 /// the Favourites section above it is still chosen by the TypeScript one, so a
 /// disagreement shows a channel twice, or in neither place. It is the
 /// identifier each platform's live check accepts:
@@ -107,6 +110,8 @@ pub fn stream_key(provider: &str, user_login: &str) -> String {
 ///   browse row's login is a VIDEO id and names one broadcast
 /// - others: `provider:<login>`
 pub fn favorite_id(provider: &str, user_id: &str, user_login: &str) -> Option<String> {
+    let user_id = strip_own_prefix(provider, user_id);
+    let user_login = strip_own_prefix(provider, user_login);
     match provider {
         "twitch" => (!user_id.is_empty()).then(|| user_id.to_string()),
         "youtube" => {
@@ -120,6 +125,22 @@ pub fn favorite_id(provider: &str, user_id: &str, user_login: &str) -> Option<St
         }
         _ => (!user_login.is_empty()).then(|| make_key(provider, user_login)),
     }
+}
+
+/// `id` without leading copies of its own platform's prefix, the way a room key
+/// names a channel (`kick:xqc` on Kick is `xqc`); anything else as given,
+/// trimmed. Shared cases: `favorite_id` in `src/utils/providerTwins.fixtures.json`.
+pub fn strip_own_prefix<'a>(provider: &str, id: &'a str) -> &'a str {
+    let prefix = format!("{provider}:");
+    let mut rest = id.trim();
+    while let Some(head) = rest.get(..prefix.len()) {
+        if rest.len() > prefix.len() && head.eq_ignore_ascii_case(&prefix) {
+            rest = &rest[prefix.len()..];
+        } else {
+            break;
+        }
+    }
+    rest
 }
 
 /// Every channel identity a row carries, in the `favorite_id` space.
@@ -168,6 +189,10 @@ mod tests {
             let parsed = parse_key(&s(&c, 0));
             assert_eq!((parsed.provider, parsed.channel), (s(&c, 1), s(&c, 2)));
         }
+        for c in cases("favorite_id") {
+            let want = c[3].as_str().map(str::to_string);
+            assert_eq!(favorite_id(&s(&c, 0), &s(&c, 1), &s(&c, 2)), want, "{c}");
+        }
     }
 
     #[test]
@@ -178,22 +203,14 @@ mod tests {
         assert_eq!(stream_key("youtube", "AGr94tpNVkw"), "youtube:AGr94tpNVkw");
     }
 
-    /// The table from `src/utils/favorites.test.ts`. The two derivations must
-    /// agree, so a case added there belongs here too.
     #[test]
-    fn favorite_id_agrees_with_its_typescript_twin() {
-        assert_eq!(favorite_id("twitch", "71092938", "xqc").as_deref(), Some("71092938"));
-        // Kick's live check queries `slug=`; the numeric id would never resolve.
-        assert_eq!(favorite_id("kick", "12345", "XQC").as_deref(), Some("kick:xqc"));
-        assert_eq!(
-            favorite_id("youtube", "UCabcDEF123", "AGr94tpNVkw").as_deref(),
-            Some("youtube:UCabcDEF123")
-        );
-        assert_eq!(favorite_id("youtube", "", "@somechannel").as_deref(), Some("youtube:@somechannel"));
-        assert_eq!(favorite_id("youtube", "", "AGr94tpNVkw"), None);
-        assert_eq!(favorite_id("tiktok", "999", "@Someone").as_deref(), Some("tiktok:@someone"));
-        assert_eq!(favorite_id("twitch", "", "xqc"), None);
-        assert_eq!(favorite_id("kick", "1", ""), None);
+    fn strip_own_prefix_takes_only_the_rows_own_platform() {
+        assert_eq!(strip_own_prefix("kick", "kick:xqc"), "xqc");
+        assert_eq!(strip_own_prefix("kick", "KICK:kick:xqc"), "xqc");
+        assert_eq!(strip_own_prefix("kick", "youtube:xqc"), "youtube:xqc");
+        assert_eq!(strip_own_prefix("kick", "kick:"), "kick:");
+        assert_eq!(strip_own_prefix("youtube", " @handle "), "@handle");
+        assert_eq!(strip_own_prefix("twitch", "é"), "é");
     }
 
     #[test]

@@ -1,5 +1,8 @@
-use crate::models::settings::{AppState, Settings};
+use crate::models::settings::{AppState, FavoriteChannel, Settings};
 use crate::services::cache_service;
+use crate::services::favorite_channels::{self, ChannelPick, Lookup};
+use crate::services::twitch_service::TwitchService;
+use std::time::Duration;
 use crate::services::live_notification_service::LiveNotification;
 use log::debug;
 use regex::Regex;
@@ -163,6 +166,9 @@ pub(crate) fn commit_settings_patch(
             return Ok(());
         }
         let keys: Vec<String> = patch.keys().cloned().collect();
+        if keys.iter().any(|k| favorite_channels::is_rust_only_path(k)) {
+            log::warn!("[Settings] a save named the favorite lists; they change only through set_favorite_channel");
+        }
         let sent_themes = patch.get("custom_themes").filter(|v| !v.is_null()).cloned();
         let next = apply_settings_patch(&state_settings, patch)?;
         // Custom themes come back with their muted text lifted to the contrast
@@ -171,7 +177,7 @@ pub(crate) fn commit_settings_patch(
             Some(sent) if next.extra.get("custom_themes") != Some(&sent) => None,
             _ => source,
         };
-        let favorites_changed = state_settings.favorite_streamers != next.favorite_streamers;
+        let favorites_changed = favorite_channels::favorites_changed(&state_settings, &next);
         let role_art_changed = state_settings.chat_design.ffz_custom_role_badges
             != next.chat_design.ffz_custom_role_badges;
         *state_settings = next.clone();
@@ -179,12 +185,49 @@ pub(crate) fn commit_settings_patch(
     };
     after_settings_change(&settings, favorites_changed, Some(state.layout_service.as_ref()));
     write_settings_to_disk(&settings)?;
+    flush_now_if_phone_idle();
     let _ = app.emit(SETTINGS_UPDATED_EVENT, SettingsUpdated { source, keys });
     if role_art_changed {
         // Every window's channel badge sets were built with the old choice.
         crate::services::ffz_room_badges::announce(None);
     }
     Ok(())
+}
+
+/// The one writer of the favorite lists (`set_favorite_channel` and the
+/// identity fill). `build` reads the settings Rust holds, under the lock, and
+/// answers the new lists, or `None` when nothing changes. Answers whether it
+/// wrote. Every other save keeps the lists (`Settings::adopt_backend_owned`).
+pub(crate) fn commit_favorite_patch(
+    app: &AppHandle,
+    state: &AppState,
+    build: impl FnOnce(&Settings) -> Option<(Vec<String>, Vec<FavoriteChannel>)>,
+) -> Result<bool, String> {
+    let settings = {
+        let mut state_settings = state.settings.lock().map_err(|e| e.to_string())?;
+        let Some((ids, channels)) = build(&state_settings) else {
+            return Ok(false);
+        };
+        state_settings.favorite_streamers = ids;
+        state_settings.favorite_channels = channels;
+        state_settings.clone()
+    };
+    after_settings_change(&settings, true, Some(state.layout_service.as_ref()));
+    write_settings_to_disk(&settings)?;
+    flush_now_if_phone_idle();
+    let keys = favorite_channels::RUST_ONLY_KEYS.iter().map(|k| k.to_string()).collect();
+    let _ = app.emit(SETTINGS_UPDATED_EVENT, SettingsUpdated { source: None, keys });
+    Ok(true)
+}
+
+/// A phone in the background can be ended at any moment, after its last
+/// flush, so a write made then goes to disk now.
+fn flush_now_if_phone_idle() {
+    if crate::services::window_visibility::phone_idle() {
+        if let Err(e) = flush_settings_now() {
+            debug!("[Settings] background flush failed: {}", e);
+        }
+    }
 }
 
 /// What a shell needs before it draws its first screen, in one answer.
@@ -330,15 +373,136 @@ pub async fn set_favorite_category(
     Ok(())
 }
 
+/// What a favorite press stored: whether the channel is a favorite now, and the
+/// id it is stored under, which can differ from what the shell keyed the press
+/// by (a YouTube row by video id, a Twitch room by login).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct FavoriteAnswer {
+    pub favorite: bool,
+    pub id: String,
+}
+
+/// How long one channel lookup may take before the press gives up.
+const FAVORITE_LOOKUP_BUDGET: Duration = Duration::from_secs(5);
+
+/// Fill in what a pick lacks before it names a channel: a Twitch room's id
+/// (from the room's own ROOMSTATE first, then Helix), a YouTube row's channel.
+/// `None` when the lookup failed or ran out of time.
+async fn complete_pick(mut pick: ChannelPick) -> Option<ChannelPick> {
+    match favorite_channels::lookup_needed(&pick) {
+        Lookup::None => Some(pick),
+        Lookup::TwitchByLogin => {
+            let login = crate::services::providers::key::strip_own_prefix("twitch", &pick.user_login).to_lowercase();
+            if let Some(id) = crate::services::chat_send_limiter::room_id_of(&login) {
+                pick.user_id = id;
+                return Some(pick);
+            }
+            let user = tokio::time::timeout(FAVORITE_LOOKUP_BUDGET, TwitchService::get_user_by_login(&login))
+                .await
+                .ok()?
+                .ok()?;
+            pick.user_id = user.id;
+            pick.user_login = user.login;
+            pick.user_name = pick.user_name.or(Some(user.display_name).filter(|n| !n.is_empty()));
+            pick.avatar = pick.avatar.or(user.profile_image_url.filter(|a| !a.is_empty()));
+            Some(pick)
+        }
+        Lookup::YouTubeChannel => {
+            let meta = tokio::time::timeout(
+                FAVORITE_LOOKUP_BUDGET,
+                crate::commands::provider_browse::provider_channel_meta("youtube".to_string(), pick.user_login.clone()),
+            )
+            .await
+            .ok()?
+            .ok()?;
+            if !meta.user_id.starts_with("UC") {
+                return None;
+            }
+            pick.user_id = meta.user_id;
+            pick.user_name = pick.user_name.or(Some(meta.user_name).filter(|n| !n.is_empty()));
+            pick.avatar = pick.avatar.or(meta.profile_image_url.filter(|a| !a.is_empty()));
+            Some(pick)
+        }
+    }
+}
+
+/// Make one channel a favorite (`favorite`) or not, edited in place under the
+/// settings lock, and answer what is stored. The shells send the state they
+/// want, never a toggle, through one chain each. `null` when the channel
+/// cannot be named. A channel just added is checked for being live at once.
+#[tauri::command]
+pub async fn set_favorite_channel(
+    app: AppHandle,
+    provider: String,
+    user_id: Option<String>,
+    user_login: String,
+    user_name: Option<String>,
+    avatar: Option<String>,
+    favorite: bool,
+    state: State<'_, AppState>,
+) -> Result<Option<FavoriteAnswer>, String> {
+    let pick = ChannelPick::new(&provider, user_id, &user_login, user_name, avatar);
+    let Some(pick) = complete_pick(pick).await else {
+        return Ok(None);
+    };
+    let Some(identity) = favorite_channels::identity(&pick, &favorite_channels::now_stamp()) else {
+        return Ok(None);
+    };
+    let id = identity.id.clone();
+    let wrote = commit_favorite_patch(&app, &state, |current| {
+        favorite_channels::favorite_patch(current, identity, favorite)
+    })?;
+    if wrote && favorite {
+        let app = app.clone();
+        let live_state: AppState = (*state).clone();
+        let key = id.clone();
+        tauri::async_runtime::spawn(async move {
+            crate::services::favorite_live_service::refresh_favorites(app, live_state, Some(key)).await;
+        });
+    }
+    let stored = state
+        .settings
+        .lock()
+        .map_err(|e| e.to_string())?
+        .favorite_streamers
+        .iter()
+        .any(|f| *f == id);
+    Ok(Some(FavoriteAnswer { favorite: stored, id }))
+}
+
 /// Hide (`hidden`) or show again one channel in every browse list, edited in
 /// place so a window with an older copy of the list cannot drop another's.
+///
+/// `channel` is a stored entry (the Settings list, unhide); a row from a list
+/// sends the field pick instead, and Rust builds the entry the way favorites
+/// are built.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn set_channel_hidden(
     app: AppHandle,
-    channel: crate::models::settings::FavoriteChannel,
+    channel: Option<FavoriteChannel>,
+    provider: Option<String>,
+    user_id: Option<String>,
+    user_login: Option<String>,
+    user_name: Option<String>,
+    avatar: Option<String>,
     hidden: bool,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    let channel = match channel {
+        Some(channel) => channel,
+        None => {
+            let pick = ChannelPick::new(
+                provider.as_deref().unwrap_or_default(),
+                user_id,
+                user_login.as_deref().unwrap_or_default(),
+                user_name,
+                avatar,
+            );
+            favorite_channels::identity(&pick, &favorite_channels::now_stamp())
+                .ok_or_else(|| "Couldn't work out which channel this is".to_string())?
+        }
+    };
     let settings = {
         let mut state_settings = state.settings.lock().map_err(|e| e.to_string())?;
         let realms = state_settings.hidden_channel_defaults;
@@ -845,8 +1009,9 @@ pub(crate) fn apply_imported_settings(
         .map_err(|e| format!("That backup isn't compatible with this version: {}", e))?;
     imported.lift_custom_theme_muted();
     imported.map_legacy_event_keys();
+    favorite_channels::repair(&mut imported);
 
-    let favorites_changed = current.favorite_streamers != imported.favorite_streamers;
+    let favorites_changed = favorite_channels::favorites_changed(&current, &imported);
     {
         let mut state_settings = state.settings.lock().map_err(|e| e.to_string())?;
         *state_settings = imported.clone();
@@ -1307,6 +1472,46 @@ mod patch_tests {
         }}]);
         let next = apply_settings_patch(&current, patch(json!({ "custom_themes": dim }))).unwrap();
         assert_eq!(next.extra["custom_themes"][0]["palette"]["textMuted"]["opacity"], 68);
+    }
+
+    #[test]
+    fn a_generic_patch_keeps_the_favorite_lists_and_applies_the_rest() {
+        let mut current = Settings::default();
+        current.favorite_streamers = vec!["1".into()];
+        let next = apply_settings_patch(
+            &current,
+            patch(json!({ "favorite_streamers": [], "favorite_channels": [{ "id": "9", "provider": "twitch", "channel": "nine" }], "theme": "dracula" })),
+        )
+        .unwrap();
+        assert_eq!(next.favorite_streamers, vec!["1"]);
+        assert!(next.favorite_channels.is_empty());
+        assert_eq!(next.theme, "dracula");
+    }
+
+    /// The source text of this file, with Windows line ends folded.
+    fn this_file() -> String {
+        include_str!("settings.rs").replace("\r\n", "\n")
+    }
+
+    #[test]
+    fn both_commit_paths_flush_a_background_phone_and_the_import_repairs() {
+        let src = this_file();
+        assert_eq!(src.matches("    flush_now_if_phone_idle();\n").count(), 2);
+        let import = &src[src.find("pub(crate) fn apply_imported_settings(").unwrap()..];
+        let import = &import[..import.find("\n}\n").unwrap()];
+        assert!(import.contains("favorite_channels::repair(&mut imported);"));
+        assert!(import.contains("favorite_channels::favorites_changed(&current, &imported)"));
+    }
+
+    #[test]
+    fn the_door_checks_a_new_favorite_and_answers_the_stored_state() {
+        let src = this_file();
+        let door = &src[src.find("pub async fn set_favorite_channel(").unwrap()..];
+        let door = &door[..door.find("\n}\n").unwrap()];
+        assert!(door.contains("if wrote && favorite {"));
+        assert!(door.contains("favorite_live_service::refresh_favorites(app, live_state, Some(key))"));
+        assert!(door.contains("commit_favorite_patch(&app, &state,"));
+        assert!(door.contains("Ok(Some(FavoriteAnswer { favorite: stored, id }))"));
     }
 
     #[test]

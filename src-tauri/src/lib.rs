@@ -429,6 +429,7 @@ fn load_settings_from_file() -> Result<Settings, Box<dyn std::error::Error>> {
     settings.map_legacy_event_keys();
     settings.retire_oled_v2();
     settings.adopt_multi_nook_start_volume_once();
+    services::favorite_channels::repair(&mut settings);
     Ok(settings)
 }
 
@@ -2026,7 +2027,6 @@ pub fn run() {
             get_all_followed_channels,
             get_offline_last_broadcasts,
             get_streams_by_user_ids,
-            get_users_by_ids,
             verify_token_health,
             force_refresh_token,
             get_twitch_token,
@@ -2299,6 +2299,7 @@ pub fn run() {
             complete_setup,
             set_chat_user_hidden,
             set_favorite_category,
+            set_favorite_channel,
             set_channel_hidden,
             set_hidden_channel_blocked,
             set_hidden_channel_realms,

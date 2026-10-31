@@ -28,5 +28,24 @@
     ["youtube", "UCa1b2c3d4e", "https://www.youtube.com/watch?v=UCa1b2c3d4e"],
     ["tiktok", "ryback", "https://www.tiktok.com/@ryback/live"],
     ["tiktok", "@ryback", "https://www.tiktok.com/@ryback/live"]
+  ],
+  "favorite_id": [
+    ["twitch", "71092938", "xqc", "71092938"],
+    ["kick", "12345", "XQC", "kick:xqc"],
+    ["youtube", "UCabcDEF123", "AGr94tpNVkw", "youtube:UCabcDEF123"],
+    ["youtube", "", "@somechannel", "youtube:@somechannel"],
+    ["youtube", "", "AGr94tpNVkw", null],
+    ["tiktok", "999", "@Someone", "tiktok:@someone"],
+    ["twitch", "", "xqc", null],
+    ["kick", "1", "", null],
+    ["kick", "1", "kick:XQC", "kick:xqc"],
+    ["kick", "1", "kick:kick:xqc", "kick:xqc"],
+    ["youtube", "youtube:UCabcDEF123", "AGr94tpNVkw", "youtube:UCabcDEF123"],
+    ["tiktok", "", "tiktok:@someone", "tiktok:@someone"],
+    ["twitch", "twitch:71092938", "xqc", "71092938"],
+    ["kick", "", "kick:xqc", "kick:xqc"],
+    ["kick", "", "Kick:XQC", "kick:xqc"],
+    ["youtube", "", "youtube:@somechannel", "youtube:@somechannel"],
+    ["tiktok", "", "tiktok:@Someone", "tiktok:@someone"]
   ]
 }

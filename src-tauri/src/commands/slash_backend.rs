@@ -221,6 +221,19 @@ impl TauriBackend {
                 let patch = a["patch"].as_object().cloned().unwrap_or_default();
                 unit(st::patch_settings(app, patch, None, self.state()).await)
             }
+            "set_favorite_channel" => to(
+                st::set_favorite_channel(
+                    app,
+                    s(&a, "provider"),
+                    os(&a, "userId"),
+                    s(&a, "userLogin"),
+                    os(&a, "userName"),
+                    os(&a, "avatar"),
+                    a["favorite"].as_bool().unwrap_or(false),
+                    self.state(),
+                )
+                .await,
+            ),
             "get_default_settings" => to(Ok(st::get_default_settings())),
             "get_app_version" => Ok(json!(crate::commands::app::get_app_version())),
             "get_system_info" => Ok(json!(crate::commands::app::get_system_info())),
@@ -389,5 +402,27 @@ impl Backend for TauriBackend {
 
     fn new_id(&self) -> String {
         uuid::Uuid::new_v4().to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// A name the dispatcher invokes with no arm here falls through to
+    /// "unknown command" in the app, while the dispatcher's fake answers any
+    /// name: this keeps the two lists together.
+    #[test]
+    fn every_command_the_dispatcher_invokes_has_an_arm() {
+        let dispatcher = include_str!("../services/slash_dispatch.rs").replace("\r\n", "\n");
+        let backend = include_str!("slash_backend.rs").replace("\r\n", "\n");
+        let called = regex::Regex::new(r#"\.invoke\(\s*"([a-z0-9_]+)""#).unwrap();
+        let arm = regex::Regex::new(r#""([a-z0-9_]+)"\s*(?:=>|\|)"#).unwrap();
+        let arms: std::collections::HashSet<&str> = arm.captures_iter(&backend).map(|c| c.get(1).unwrap().as_str()).collect();
+        let missing: Vec<&str> = called
+            .captures_iter(&dispatcher)
+            .map(|c| c.get(1).unwrap().as_str())
+            .filter(|name| !arms.contains(name))
+            .collect();
+        assert!(missing.is_empty(), "no arm in slash_backend.rs for {missing:?}");
+        assert!(arms.contains("set_favorite_channel"));
     }
 }

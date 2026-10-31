@@ -1059,20 +1059,93 @@ async fn remind_creates_lists_and_manages_reminders() {
     assert_eq!(fake.calls("post_reminder"), vec![json!({ "channel": "chan", "channelId": "42", "message": "hello", "repeat": 2 })]);
 }
 
+/// The door's answer: what was asked, stored under `id`.
+fn favorite_answer(id: &'static str) -> impl Fn(&str, &Value) -> Result<Value, String> + Send + Sync + 'static {
+    move |cmd, a| {
+        if cmd == "set_favorite_channel" {
+            Ok(json!({ "favorite": a["favorite"], "id": id }))
+        } else {
+            default_answer(cmd, a)
+        }
+    }
+}
+
 #[tokio::test]
-async fn favorite_adds_once_and_says_when_nothing_changes() {
+async fn favorite_adds_once_through_the_door_and_says_when_nothing_changes() {
     let fake = Fake::new();
+    fake.answer(favorite_answer("7"));
     *fake.settings.lock().unwrap() = json!({ "favorite_streamers": [], "favorite_channels": [] });
     let o = run(&fake, "/favorite bob").await;
     assert_eq!(toast(&o, ToastKind::Success), vec!["Bob added to favorites"]);
-    let calls = fake.calls("patch_settings");
-    let patch = &calls[0]["patch"];
-    assert_eq!(patch["favorite_streamers"], json!(["7"]));
-    assert_eq!(patch["favorite_channels"][0]["channel"], json!("bob"));
-    assert_eq!(fake.calls("refresh_favorites"), vec![json!({ "key": "7" })]);
+    assert_eq!(
+        fake.calls("set_favorite_channel"),
+        vec![json!({ "provider": "twitch", "userId": "7", "userLogin": "bob", "userName": "Bob", "avatar": null, "favorite": true })]
+    );
+    assert!(fake.calls("patch_settings").is_empty());
+    assert!(fake.calls("refresh_favorites").is_empty());
     *fake.settings.lock().unwrap() = json!({ "favorite_streamers": ["7"] });
     let o = run(&fake, "/favorite bob").await;
     assert_eq!(toast(&o, ToastKind::Info), vec!["Bob is already a favorite"]);
+    assert_eq!(fake.calls("set_favorite_channel").len(), 1);
+}
+
+#[tokio::test]
+async fn unfavorite_sends_the_wanted_state() {
+    let fake = Fake::new();
+    fake.answer(favorite_answer("7"));
+    *fake.settings.lock().unwrap() = json!({ "favorite_streamers": ["7"] });
+    let o = run(&fake, "/unfavorite bob").await;
+    assert_eq!(toast(&o, ToastKind::Success), vec!["Bob removed from favorites"]);
+    assert_eq!(fake.calls("set_favorite_channel")[0]["favorite"], json!(false));
+    *fake.settings.lock().unwrap() = json!({ "favorite_streamers": [] });
+    let o = run(&fake, "/unfavorite bob").await;
+    assert_eq!(toast(&o, ToastKind::Info), vec!["Bob is not a favorite"]);
+}
+
+#[tokio::test]
+async fn favorite_with_no_name_in_a_kick_room_favorites_the_room() {
+    let fake = Fake::new();
+    fake.answer(favorite_answer("kick:somechan"));
+    *fake.settings.lock().unwrap() = json!({ "favorite_streamers": [] });
+    let o = run_in(&fake, "kick:somechan", "/favorite").await;
+    assert_eq!(toast(&o, ToastKind::Success), vec!["somechan added to favorites"]);
+    assert_eq!(
+        fake.calls("set_favorite_channel"),
+        vec![json!({ "provider": "kick", "userId": null, "userLogin": "somechan", "userName": null, "avatar": null, "favorite": true })]
+    );
+    assert!(fake.calls("get_user_by_login").is_empty());
+    *fake.settings.lock().unwrap() = json!({ "favorite_streamers": ["kick:somechan"] });
+    let o = run_in(&fake, "kick:somechan", "/favorite").await;
+    assert_eq!(toast(&o, ToastKind::Info), vec!["somechan is already a favorite"]);
+}
+
+#[tokio::test]
+async fn favorite_says_when_the_door_could_not_do_it() {
+    let fake = Fake::new();
+    *fake.settings.lock().unwrap() = json!({ "favorite_streamers": [] });
+    // The default answer is null: no channel identity.
+    let o = run(&fake, "/favorite bob").await;
+    assert_eq!(toast(&o, ToastKind::Error), vec!["Couldn't work out which channel this is"]);
+    fake.answer(|cmd, a| {
+        if cmd == "set_favorite_channel" {
+            Ok(json!({ "favorite": false, "id": "7" }))
+        } else {
+            default_answer(cmd, a)
+        }
+    });
+    let o = run(&fake, "/favorite bob").await;
+    assert_eq!(toast(&o, ToastKind::Error), vec!["Couldn't change favorites for Bob"]);
+}
+
+#[tokio::test]
+async fn setting_refuses_to_write_the_favorite_lists() {
+    let fake = Fake::new();
+    *fake.settings.lock().unwrap() = json!({ "favorite_streamers": ["7"] });
+    let o = run(&fake, "/setting set favorite_streamers []").await;
+    assert_eq!(toast(&o, ToastKind::Error), vec!["Use /favorite and /unfavorite to change favorites"]);
+    let o = run(&fake, "/setting reset favorite_channels.0.avatar").await;
+    assert_eq!(toast(&o, ToastKind::Error), vec!["Use /favorite and /unfavorite to change favorites"]);
+    assert!(fake.calls("patch_settings").is_empty());
 }
 
 #[tokio::test]
