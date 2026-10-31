@@ -47,7 +47,6 @@ import { applySlashOutcome, handleSlashCommand, runSlashCommand, type SlashOutco
 import { StreakBanners, type ArmedShare } from './StreakBanners';
 import type { ChatWarningView, RoomModeKind, RoomModeView, SendChannelOutcome } from '../../stores/chatConnectionStore';
 import { WarningBox } from './WarningBox';
-import { RoomModeIndicator } from '../../components/chat/RoomModeIndicator';
 import type { ProviderId } from '../../types/providers';
 import { isTwitchStream } from '../../utils/streamProvider';
 import { formatShortCount } from '../../utils/streamStats';
@@ -866,11 +865,9 @@ const MobileChatInputImpl: React.FC<Props> = ({
               enterKeyHint="send"
             />
           )}
-          {/* Near Twitch's limit, the count takes the mode icon's place: quiet,
-              orange in the last 20, red past it. Otherwise the room's chat
-              modes, staying while you type; a tap opens the chat menu, which
-              lists them in full. Hidden while a mode blocks you, since the
-              placeholder already says that one. */}
+          {/* Near Twitch's limit, the count: quiet, orange in the last 20, red
+              past it. The room's chat modes have no icon here: the chat menu
+              lists them, and the placeholder names one that stops you. */}
           {!needsKickSignIn &&
             (charCount >= COUNTER_FROM ? (
               <span
@@ -885,18 +882,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
               >
                 {charCount}/{MESSAGE_LIMIT}
               </span>
-            ) : (
-              roomModes &&
-              !roomModesAsPrompt &&
-              !gating.blocked && <RoomModeIndicator
-                  view={roomModes}
-                  inline
-                  onActivate={() => {
-                    setEmotesOpen(false);
-                    setMenuOpen(true);
-                  }}
-                />
-            ))}
+            ) : null)}
           {/* The command list one tap from the field instead of two menus deep.
               Commands are Twitch calls (any other room would post the "/" as
               text), so only a Twitch room shows it. */}

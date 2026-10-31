@@ -2612,7 +2612,11 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
               ? 'Shows when a channel limits who can chat, like emote-only or slow mode.'
               : "Tells you when a channel's chat limits stop you from chatting, like followers-only, subscriber-only or slow mode."
           }
-          help={`When it limits you names the mode in place of Send a message only while it stops you from chatting, and says what to do, like Follow to chat or You can chat in 4 minutes. A mode that spares you, say as a moderator or a long-time follower, shows nothing. Always keeps one small chip at the end of the message box whenever a mode is on; ${IS_MOBILE ? 'tap' : 'hover or tap'} it for every mode. During slow mode the send button counts down until you can send again. Shown for Twitch and Kick.`}
+          help={
+            IS_MOBILE
+              ? 'While a mode stops you from chatting, the message box names it in place of Send a message and says what to do, like Follow to chat or You can chat in 4 minutes. A mode that spares you, say as a moderator or a long-time follower, shows nothing. The chat menu lists every mode that is on. During slow mode the send button counts down until you can send again. Shown for Twitch and Kick.'
+              : 'When it limits you names the mode in place of Send a message only while it stops you from chatting, and says what to do, like Follow to chat or You can chat in 4 minutes. A mode that spares you, say as a moderator or a long-time follower, shows nothing. Always keeps one small chip at the end of the message box whenever a mode is on; hover or tap it for every mode. During slow mode the send button counts down until you can send again. Shown for Twitch and Kick.'
+          }
           control={
             <Toggle
               enabled={settings.chat_input?.show_room_modes ?? true}
@@ -2620,7 +2624,8 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
             />
           }
         >
-          {(settings.chat_input?.show_room_modes ?? true) && (
+          {/* The style picks the chip in the message box, which phones do not draw. */}
+          {!IS_MOBILE && (settings.chat_input?.show_room_modes ?? true) && (
             <SubControls>
               <SubControl
                 title="Style"
@@ -2641,7 +2646,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           )}
           {(settings.chat_input?.show_room_modes ?? true) && (
             <div className="pt-3">
-              <RoomModesPreview style={roomModesStyleHover ?? settings.chat_input?.room_modes_style ?? 'prompt'} />
+              <RoomModesPreview style={IS_MOBILE ? 'prompt' : (roomModesStyleHover ?? settings.chat_input?.room_modes_style ?? 'prompt')} />
             </div>
           )}
         </SettingsRow>
