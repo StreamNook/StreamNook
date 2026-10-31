@@ -312,7 +312,7 @@ const compactThirdPartyBadges = (badges: any[]): any[] =>
   badges.map(({ link: _link, ...rest }) => rest);
 
 // Track pending requests to prevent duplicate fetches
-const pendingCosmeticsRequests = new Map<string, Promise<CachedCosmetics>>();
+const pendingCosmeticsRequests = new Map<string, Promise<CosmeticsAnswer>>();
 const pendingThirdPartyBadgesRequests = new Map<string, Promise<any[]>>();
 const pendingTwitchBadgesRequests = new Map<string, Promise<any[]>>();
 const pendingProfileRequests = new Map<string, Promise<CachedProfile>>();
@@ -332,17 +332,27 @@ export function getCosmeticsFromMemoryCache(userId: string): CachedCosmetics | n
   return cached;
 }
 
+/** Cosmetics plus whether this very read hard-failed (decided with the read). */
+interface CosmeticsAnswer {
+  data: CachedCosmetics;
+  hardFail: boolean;
+}
+
 /**
  * Get cosmetics for a user - memory cache -> API fetch with deduplication
  * Image caching is handled by the seventvService internally
  */
 export async function getCosmeticsWithFallback(userId: string): Promise<CachedCosmetics> {
+  return (await getCosmeticsAnswer(userId)).data;
+}
+
+async function getCosmeticsAnswer(userId: string): Promise<CosmeticsAnswer> {
   // 1. Try in-memory cache first (instant, synchronous). A hard-failed entry
   //    past its retry TTL is treated as a miss so a transient 7TV failure
   //    earlier in the session doesn't strand the user without a paint.
   const memoryCached = inMemoryCosmeticsCache.get(userId);
   if (memoryCached && !(hasHardFailMark(userId) && isHardFailExpired(userId))) {
-    return memoryCached;
+    return { data: memoryCached, hardFail: hasHardFailMark(userId) };
   }
 
   // 2. Check if there's already a pending request for this user (dedupe)
@@ -352,7 +362,7 @@ export async function getCosmeticsWithFallback(userId: string): Promise<CachedCo
   }
 
   // 3. Create a new request and track it
-  const request = (async (): Promise<CachedCosmetics> => {
+  const request = (async (): Promise<CosmeticsAnswer> => {
     try {
       // Fetch from API. seventvService returns a wrapper that flags hard
       // failures vs. successful responses (including legitimate empties).
@@ -362,7 +372,7 @@ export async function getCosmeticsWithFallback(userId: string): Promise<CachedCo
       // Publish so listeners (chatUserStore et al.) react.
       publishCosmetics(userId, data, hardFail, stale === true);
 
-      return data;
+      return { data, hardFail };
     } finally {
       pendingCosmeticsRequests.delete(userId);
     }
@@ -481,9 +491,13 @@ export async function getFullProfileWithFallback(
         getAllUserBadgesWithEarned(userId, username, effectiveChannelId, effectiveChannelName),
         fetchUserInventory(userId).then(async (inv) => {
           if (inv) return { cosmetics: inv as CachedCosmetics, inventoryAnswered: true, wornAnswered: true };
-          const cosmetics = await getCosmeticsWithFallback(userId);
-          // Read right after this fetch, so the answer describes this data.
-          return { cosmetics, inventoryAnswered: false, wornAnswered: !hasHardFailMark(userId) };
+          // The answer travels with this read, never a mark read later.
+          const { data: cosmetics, hardFail } = await getCosmeticsAnswer(userId);
+          const wornAnswered = !hardFail;
+          // No inventory is also how 7TV answers an account it does not know:
+          // when the worn read says the same (no 7TV user), owning nothing is
+          // the answer. With a 7TV user it means the inventory read failed.
+          return { cosmetics, inventoryAnswered: wornAnswered && !cosmetics.seventvUserId, wornAnswered };
         }),
       ]);
       const seventvCosmetics = sevenTv.cosmetics;
@@ -521,10 +535,10 @@ export async function getFullProfileWithFallback(
       inMemoryTwitchBadgesCache.set(twitchCacheKey, twitchBadges);
       inMemoryThirdPartyBadgesCache.set(userId, thirdPartyBadges);
 
-      // Store in memory cache for this session, unless 7TV failed for it: a
-      // failed profile kept for the session would be served on every reopen
-      // after 7TV recovers.
-      if (sevenTv.wornAnswered) inMemoryProfileCache.set(userId, profile);
+      // Store in memory cache for this session, unless 7TV failed for it (the
+      // worn read, or the inventory of a known 7TV user): a failed profile kept
+      // for the session would be served on every reopen after 7TV recovers.
+      if (sevenTv.wornAnswered && sevenTv.inventoryAnswered) inMemoryProfileCache.set(userId, profile);
 
       return profile;
     } finally {

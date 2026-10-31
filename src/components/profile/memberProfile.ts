@@ -17,11 +17,12 @@ import { getTierAccent, getWornBadgeCaption } from '../StreamNookBadge';
 import { getFullProfileWithFallback } from '../../services/cosmeticsCache';
 import { computePaintStyle } from '../../services/seventvService';
 import { getAtmosphere, type Atmosphere } from '../../services/atmospheres';
-import { getResolvedIdentity, getIdentityWithCache } from '../../services/identityService';
+import { getResolvedIdentity, getIdentityWithCache, isIdentityFallback } from '../../services/identityService';
 import { resolveBttvProUrl, BTTV_PRO_LOADOUT_KEY } from '../../services/bttvProBadge';
 import {
   getStreamNookUserNumber,
   getOwnedCosmeticSlugs,
+  isCosmeticsRegistryLoaded,
   getProfilePrefs,
   subscribeStreamNookRegistryVersion,
   getStreamNookRegistryVersion,
@@ -122,12 +123,19 @@ export type WornBadges = {
 // the active 7TV badge. Shared by the initial load AND the live-preview re-resolve
 // (a loadout edit), so both paths produce identical results. `profile` is the
 // result of getFullProfileWithFallback (carries the 7TV cosmetics).
-export const resolveWornBadges = async (userId: string, profile: any): Promise<WornBadges> => {
+export const resolveWornBadges = async (
+  userId: string,
+  profile: any,
+): Promise<WornBadges & { othersAnswered: boolean }> => {
   const seventv =
     (profile?.seventvCosmetics?.badges as any[] | undefined)?.find((b) => b?.selected) ?? null;
   let twitch: { src: string; title: string } | null = null;
   let thirdParty: any[] = [];
   let bttvPro: { src: string; title: string } | null = null;
+  // Whether the Twitch, third-party and BTTV parts are real answers. The reads
+  // below stand in with empty defaults when they fail, which look like a member
+  // wearing nothing, so a failure is tracked here and never marks them live.
+  let othersAnswered = false;
   try {
     const [resolved, rawLoadout, liveTwitch] = await Promise.all([
       getResolvedIdentity(userId).catch(() => null),
@@ -159,12 +167,24 @@ export const resolveWornBadges = async (userId: string, profile: any): Promise<W
         twitch = { src: `https://static-cdn.jtvnw.net/badges/v1/${v}/3`, title: 'Twitch' };
       }
     }
+    let bttvFailed = false;
     if (keys.includes(BTTV_PRO_LOADOUT_KEY)) {
-      const url = await resolveBttvProUrl(userId).catch(() => null);
+      const url = await resolveBttvProUrl(userId).catch(() => {
+        bttvFailed = true;
+        return null;
+      });
       if (url) bttvPro = { src: url, title: 'BTTV Pro' };
     }
-  } catch { /* badges optional */ }
-  return { seventv, twitch, thirdParty, bttvPro };
+    othersAnswered =
+      resolved !== null &&
+      !isIdentityFallback(resolved) &&
+      rawLoadout !== null &&
+      !isIdentityFallback(rawLoadout) &&
+      // Twitch answered, or the loadout's copy stood in for it.
+      (liveTwitch !== undefined || !!twitchKey) &&
+      !bttvFailed;
+  } catch { /* badges optional; othersAnswered stays false */ }
+  return { seventv, twitch, thirdParty, bttvPro, othersAnswered };
 };
 
 /** A live preview of the viewer's own profile (Settings edits): overrides the
@@ -344,6 +364,8 @@ export function useMemberProfile(
           const paintAnswered = profile.wornAnswered === true;
           const countsStep = sevenTvCountsStep({
             answered: profile.inventoryAnswered === true,
+            // An unloaded registry answers 0 for everyone: not an answer.
+            snAnswered: isCosmeticsRegistryLoaded(),
             counts: {
               paints: profile.seventvCosmetics?.paints?.length ?? 0,
               badges: profile.seventvCosmetics?.badges?.length ?? 0,
@@ -358,10 +380,11 @@ export function useMemberProfile(
           // Worn identity badges, resolved the same way chat does (see
           // resolveWornBadges). Destructured so the snapshot build below can reuse
           // the resolved values; the live-preview effect re-runs the same helper.
-          const { seventv: sevenTvBadge, twitch, thirdParty, bttvPro } =
+          const { seventv: sevenTvBadge, twitch, thirdParty, bttvPro, othersAnswered } =
             await resolveWornBadges(userId, profile);
           const badgesStep = sevenTvBadgesStep<typeof wornBadges>({
             answered: paintAnswered,
+            othersAnswered,
             row: { seventv: sevenTvBadge, twitch, thirdParty, bttvPro },
           });
           if (alive) {
@@ -419,10 +442,10 @@ export function useMemberProfile(
       const login = info?.login ?? '';
       const profile = await getFullProfileWithFallback(userId, login, userId, login).catch(() => null);
       if (!profile || !alive) return;
-      const wb = await resolveWornBadges(userId, profile);
-      // The same step as the first open: a failed 7TV read keeps the 7TV badge
-      // the preview already shows.
-      const step = sevenTvBadgesStep<typeof wornBadges>({ answered: profile.wornAnswered === true, row: wb });
+      const { othersAnswered, ...row } = await resolveWornBadges(userId, profile);
+      // The same step as the first open: a failed read keeps the part the
+      // preview already shows.
+      const step = sevenTvBadgesStep<typeof wornBadges>({ answered: profile.wornAnswered === true, othersAnswered, row });
       if (alive) setWornBadges(step.apply);
     })();
     return () => { alive = false; };

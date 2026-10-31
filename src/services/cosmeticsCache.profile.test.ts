@@ -12,9 +12,13 @@ vi.mock('./badgeService', () => ({
 
 let inventory: unknown = null;
 let worn: { data: { paints: unknown[]; badges: unknown[] }; hardFail: boolean } = { data: { paints: [], badges: [] }, hardFail: false };
+const wornCalls = { n: 0 };
 vi.mock('./seventvService', () => ({
   fetchUserInventory: async () => inventory,
-  getUserCosmetics: async () => worn,
+  getUserCosmetics: async () => {
+    wornCalls.n += 1;
+    return worn;
+  },
 }));
 
 import { clearCosmeticsMemoryCache, getFullProfileWithFallback } from './cosmeticsCache';
@@ -24,6 +28,7 @@ const PAINTS = [{ id: 'p1', selected: true }, { id: 'p2' }];
 beforeEach(() => {
   clearCosmeticsMemoryCache();
   badgeCalls.n = 0;
+  wornCalls.n = 0;
   inventory = null;
   worn = { data: { paints: [], badges: [] }, hardFail: false };
 });
@@ -48,14 +53,32 @@ describe('getFullProfileWithFallback answer flags', () => {
     expect(badgeCalls.n).toBe(2);
   });
 
-  it('a failed inventory with a real worn answer: the paint is an answer, the counts are not', async () => {
-    worn = { data: { paints: [PAINTS[0]], badges: [] }, hardFail: false };
+  it('a 7TV user whose inventory failed: the paint is an answer, the counts are not, and it is not kept', async () => {
+    worn = { data: { paints: [PAINTS[0]], badges: [], seventvUserId: '01SEVENTV' } as never, hardFail: false };
     const profile = await getFullProfileWithFallback('2', 'two');
     expect(profile.inventoryAnswered).toBe(false);
     expect(profile.wornAnswered).toBe(true);
-    // Kept, with its flags: a reopen still knows the counts did not answer.
-    const reopened = await getFullProfileWithFallback('2', 'two');
+    await getFullProfileWithFallback('2', 'two');
+    expect(badgeCalls.n).toBe(2);
+  });
+
+  it('an account 7TV does not know: owning nothing is the answer, and it is kept', async () => {
+    worn = { data: { paints: [], badges: [] }, hardFail: false };
+    const profile = await getFullProfileWithFallback('3', 'three');
+    expect(profile.inventoryAnswered).toBe(true);
+    expect(profile.wornAnswered).toBe(true);
+    await getFullProfileWithFallback('3', 'three');
     expect(badgeCalls.n).toBe(1);
-    expect(reopened.inventoryAnswered).toBe(false);
+  });
+
+  it('a failed worn read served again from memory still counts as failed', async () => {
+    worn = { data: { paints: [], badges: [] }, hardFail: true };
+    await getFullProfileWithFallback('4', 'four');
+    // Inside the retry window the worn cosmetics come from memory, not 7TV;
+    // the failure travels with them.
+    worn = { data: { paints: [PAINTS[0]], badges: [] }, hardFail: false };
+    const again = await getFullProfileWithFallback('4', 'four');
+    expect(wornCalls.n).toBe(1);
+    expect(again.wornAnswered).toBe(false);
   });
 });

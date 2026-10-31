@@ -53,15 +53,15 @@ export interface FirstPaint {
 /** Which fields a live source has already set; a first paint never overwrites them. */
 export interface LiveFlags {
   info: boolean;
-  /** All counts (the 7TV inventory answered). */
+  /** The 7TV paint and badge counts (7TV's inventory answered). */
   counts: boolean;
-  /** Only the StreamNook count (the app's own), after a failed 7TV read. */
+  /** The StreamNook count (the cosmetics registry had loaded). */
   sn: boolean;
   paint: boolean;
   hidden: boolean;
-  /** The whole badge row, 7TV badge included. */
-  badges: boolean;
-  /** The Twitch, third-party and BTTV badges, after a failed 7TV read. */
+  /** The worn 7TV badge (7TV's worn read answered). */
+  seventvBadge: boolean;
+  /** The Twitch, third-party and BTTV badges (their own reads answered). */
   otherBadges: boolean;
   theme: boolean;
 }
@@ -72,7 +72,7 @@ export const noLive = (): LiveFlags => ({
   sn: false,
   paint: false,
   hidden: false,
-  badges: false,
+  seventvBadge: false,
   otherBadges: false,
   theme: false,
 });
@@ -114,22 +114,24 @@ export function planFirstPaint(snap: FirstPaint | null, live: LiveFlags, preview
   const card = snap.card;
   if (!card) return plan;
   const paint = card.namePaint as CSSProperties | null;
-  if (!live.counts) {
-    plan.counts = live.sn
-      ? { paints: card.counts.paints, badges: card.counts.badges }
-      : card.counts;
-  }
+  // Each part the card holds fills in only where no live read has answered.
+  const counts: NonNullable<FirstPaintPlan['counts']> = {};
+  if (!live.counts) Object.assign(counts, { paints: card.counts.paints, badges: card.counts.badges });
+  if (!live.sn) counts.sn = card.counts.sn;
+  if (Object.keys(counts).length > 0) plan.counts = counts;
   if (!live.paint) plan.namePaint = paint;
   if (!live.hidden) plan.hiddenSections = card.hiddenSections;
-  if (!live.badges && !previewOwnsBadges) {
-    plan.wornBadges = live.otherBadges
-      ? { seventv: card.seventvBadge }
-      : {
-          seventv: card.seventvBadge,
-          twitch: card.wornBadges.twitch,
-          thirdParty: card.wornBadges.thirdParty,
-          bttvPro: card.wornBadges.bttvPro,
-        };
+  if (!previewOwnsBadges) {
+    const badges: NonNullable<FirstPaintPlan['wornBadges']> = {};
+    if (!live.seventvBadge) badges.seventv = card.seventvBadge;
+    if (!live.otherBadges) {
+      Object.assign(badges, {
+        twitch: card.wornBadges.twitch,
+        thirdParty: card.wornBadges.thirdParty,
+        bttvPro: card.wornBadges.bttvPro,
+      });
+    }
+    if (Object.keys(badges).length > 0) plan.wornBadges = badges;
   }
   if (!live.theme) plan.theme = { profileTheme: card.profileTheme, namePaint: paint };
   return plan;
@@ -220,24 +222,44 @@ export interface LiveStep<T> {
 type Counts = FirstPaintCard['counts'];
 
 /**
- * The counts after the live reads. `answered` is whether 7TV's inventory
- * answered: a failed one gives empty lists, so taking its numbers would turn the
- * card's 12 paints into 0. Then the 7TV numbers on screen stay and only the
- * StreamNook count (the app's own) is set and marked live, so a card arriving
- * later fills the 7TV numbers without undoing it.
+ * The counts after the live reads, each part only from a read that answered.
+ * `answered`: 7TV's inventory (a failed one gives empty lists, which would turn
+ * the card's 12 paints into 0). `snAnswered`: the cosmetics registry had loaded
+ * (before that it answers 0 for everyone). A part that did not answer keeps
+ * what is on screen and stays unmarked, so a card arriving later still fills it.
  */
-export function sevenTvCountsStep(read: { answered: boolean; counts: Counts }): LiveStep<Counts> {
-  if (read.answered) return { marks: { counts: true, sn: true }, apply: () => read.counts };
-  return { marks: { sn: true }, apply: (prev) => ({ ...prev, sn: read.counts.sn }) };
+export function sevenTvCountsStep(read: { answered: boolean; snAnswered: boolean; counts: Counts }): LiveStep<Counts> {
+  return {
+    marks: { ...(read.answered ? { counts: true } : {}), ...(read.snAnswered ? { sn: true } : {}) },
+    apply: (prev) => ({
+      paints: read.answered ? read.counts.paints : prev.paints,
+      badges: read.answered ? read.counts.badges : prev.badges,
+      sn: read.snAnswered ? read.counts.sn : prev.sn,
+    }),
+  };
 }
 
 /**
- * The worn-badge row after the live reads. The Twitch, third-party and BTTV
- * badges come from their own sources and always apply and are marked live; the
- * 7TV badge only from an answered 7TV read. After a failed one the badge on
- * screen (the card's) stays, and a card arriving later still fills it.
+ * The worn-badge row after the live reads, each part only from a read that
+ * answered: the 7TV badge from 7TV's worn read (`answered`), the Twitch,
+ * third-party and BTTV badges from theirs (`othersAnswered`; those reads stand
+ * in with empty defaults when they fail). A part that did not answer keeps what
+ * is on screen and stays unmarked, so a card arriving later still fills it.
  */
-export function sevenTvBadgesStep<Row extends { seventv: unknown }>(read: { answered: boolean; row: Row }): LiveStep<Row> {
-  if (read.answered) return { marks: { badges: true, otherBadges: true }, apply: () => read.row };
-  return { marks: { otherBadges: true }, apply: (prev) => ({ ...read.row, seventv: prev.seventv }) };
+export function sevenTvBadgesStep<
+  Row extends { seventv: unknown; twitch: unknown; thirdParty: unknown; bttvPro: unknown },
+>(read: { answered: boolean; othersAnswered: boolean; row: Row }): LiveStep<Row> {
+  return {
+    marks: {
+      ...(read.answered ? { seventvBadge: true } : {}),
+      ...(read.othersAnswered ? { otherBadges: true } : {}),
+    },
+    apply: (prev) => ({
+      ...prev,
+      seventv: read.answered ? read.row.seventv : prev.seventv,
+      twitch: read.othersAnswered ? read.row.twitch : prev.twitch,
+      thirdParty: read.othersAnswered ? read.row.thirdParty : prev.thirdParty,
+      bttvPro: read.othersAnswered ? read.row.bttvPro : prev.bttvPro,
+    }),
+  };
 }
