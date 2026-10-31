@@ -606,6 +606,13 @@ pub struct ViewEmote {
     /// A modifier that draws nothing itself and only lends its effect.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hidden: bool,
+    /// The emote's id on its service. Set together with `credit`, only when the core can say who
+    /// made it: a native shell's tap on the emote asks `emote_credit` with both.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// The service `emote_credit` takes for it: "twitch", "7tv", "bttv" or "ffz".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credit: Option<String>,
 }
 
 /// A 7TV paint reduced to what a renderer fills a name with.

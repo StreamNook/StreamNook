@@ -57,12 +57,22 @@ impl CreditProvider {
         }
     }
 
-    fn wire(self) -> &'static str {
+    pub fn wire(self) -> &'static str {
         match self {
             Self::Twitch => "twitch",
             Self::SevenTv => "7tv",
             Self::Bttv => "bttv",
             Self::Ffz => "ffz",
+        }
+    }
+
+    /// The provider's name as people know it, for the card's words.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Twitch => "Twitch",
+            Self::SevenTv => "7TV",
+            Self::Bttv => "BetterTTV",
+            Self::Ffz => "FrankerFaceZ",
         }
     }
 
@@ -107,6 +117,16 @@ pub struct EmoteCredit {
     /// The emote's own page on its provider (none for Twitch).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub page_url: Option<String>,
+    /// Click card only: the line under the emote's name ("Alias of PogU · 7TV channel emote").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subtitle: Option<String>,
+    /// Click card only: the words on the emote page's button ("Open on 7TV").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page_label: Option<String>,
+    /// Click card only, when the provider answered and credits nobody: "7TV doesn't list who
+    /// made this one." Never set on a lookup that failed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub empty_line: Option<String>,
 }
 
 /// One person on the emote card.
@@ -119,6 +139,24 @@ pub struct Creator {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub avatar_url: Option<String>,
     pub link: CreatorLink,
+    /// The small label over the chip: "Art by", "Made by", "From the channel".
+    pub role_label: &'static str,
+    /// Where the chip goes, in words: "Twitch profile", "7TV profile".
+    pub destination: String,
+}
+
+/// One person on the card, with the words their chip shows.
+fn creator(role: &'static str, name: String, avatar_url: Option<String>, link: CreatorLink) -> Creator {
+    let role_label = match role {
+        "artist" => "Art by",
+        "channel" => "From the channel",
+        _ => "Made by",
+    };
+    let destination = match &link {
+        CreatorLink::Twitch { .. } => "Twitch profile".to_string(),
+        CreatorLink::Web { site, .. } => format!("{site} profile"),
+    };
+    Creator { role, name, avatar_url, link, role_label, destination }
 }
 
 /// Where a creator chip goes: a Twitch account opens StreamNook's own profile
@@ -178,48 +216,48 @@ fn avatar(url: Option<String>) -> Option<String> {
 
 fn seventv_creator(id: Option<String>, name: String, avatar_url: Option<String>) -> Option<Creator> {
     let id = id.filter(|i| is_seventv_user_id(i))?;
-    Some(Creator {
-        role: "uploader",
+    Some(creator(
+        "uploader",
         name,
-        avatar_url: avatar(avatar_url),
-        link: CreatorLink::Web { url: format!("https://7tv.app/users/{id}"), site: "7TV" },
-    })
+        avatar(avatar_url),
+        CreatorLink::Web { url: format!("https://7tv.app/users/{id}"), site: "7TV" },
+    ))
 }
 
 fn bttv_creator(id: Option<String>, name: String, avatar_url: Option<String>) -> Option<Creator> {
     let id = id.filter(|i| is_bttv_user_id(i))?;
-    Some(Creator {
-        role: "uploader",
+    Some(creator(
+        "uploader",
         name,
-        avatar_url: avatar(avatar_url),
-        link: CreatorLink::Web { url: format!("https://betterttv.com/users/{id}"), site: "BetterTTV" },
-    })
+        avatar(avatar_url),
+        CreatorLink::Web { url: format!("https://betterttv.com/users/{id}"), site: "BetterTTV" },
+    ))
 }
 
 fn ffz_creator(role: &'static str, login: Option<String>, name: String) -> Option<Creator> {
     let login = login.filter(|l| is_ffz_name(l))?;
-    Some(Creator {
+    Some(creator(
         role,
         name,
-        avatar_url: None,
-        link: CreatorLink::Web {
+        None,
+        CreatorLink::Web {
             url: format!("https://www.frankerfacez.com/{}/submissions", login.to_lowercase()),
             site: "FrankerFaceZ",
         },
-    })
+    ))
 }
 
 fn twitch_creator(role: &'static str, person: &serde_json::Value) -> Option<Creator> {
     let login = non_empty(person.get("login")).filter(|l| is_twitch_login(l))?;
-    Some(Creator {
+    Some(creator(
         role,
-        name: non_empty(person.get("displayName")).unwrap_or_else(|| login.clone()),
-        avatar_url: avatar(non_empty(person.get("profileImageURL"))),
-        link: CreatorLink::Twitch {
+        non_empty(person.get("displayName")).unwrap_or_else(|| login.clone()),
+        avatar(non_empty(person.get("profileImageURL"))),
+        CreatorLink::Twitch {
             id: non_empty(person.get("id")).filter(|i| is_twitch_id(i)),
             login: login.to_lowercase(),
         },
-    })
+    ))
 }
 
 /// The emote's page on its provider. Ids were validated by the caller.
@@ -309,7 +347,11 @@ pub async fn resolve(
     if !provider.valid_id(id) {
         return None;
     }
+    // Whether the provider (or a set Rust holds) answered: only then may the card say nobody is
+    // credited. A failed request answers nothing.
+    let definite: bool;
     let mut credit = if provider == CreditProvider::Bttv {
+        definite = held.is_some();
         // No public per-id endpoint: what the sets hold is all there is.
         let mut c = held.as_ref().map(|h| credit_from_held(provider, h)).unwrap_or(EmoteCredit {
             provider: provider.wire(),
@@ -339,7 +381,10 @@ pub async fn resolve(
             .map(|h| credit_from_held(provider, h))
             .filter(EmoteCredit::has_credit);
         match from_sets {
-            Some(c) => c,
+            Some(c) => {
+                definite = true;
+                c
+            }
             None => {
                 let key = format!("{}:{}", provider.wire(), id);
                 let fetched = memo(credit_cache(), key, || async move {
@@ -351,6 +396,7 @@ pub async fn resolve(
                     }
                 })
                 .await;
+                definite = fetched.is_some();
                 let mut c = fetched.unwrap_or(EmoteCredit { provider: provider.wire(), ..Default::default() });
                 if detail && provider == CreditProvider::Ffz {
                     for person in &mut c.creators {
@@ -384,7 +430,33 @@ pub async fn resolve(
             credit.kind_label = h.kind_label;
         }
     }
+    if detail {
+        card_words(&mut credit, provider, definite);
+    }
     Some(credit)
+}
+
+/// The click card's words, once the alias and kind are settled for where the emote is shown (so
+/// they are never cached with the provider's answer).
+fn card_words(credit: &mut EmoteCredit, provider: CreditProvider, definite: bool) {
+    let label = provider.label();
+    let kind = match credit.kind_label {
+        Some(k) => {
+            let mut chars = k.chars();
+            match chars.next() {
+                Some(first) => format!("{label} {}{}", first.to_lowercase(), chars.as_str()),
+                None => label.to_string(),
+            }
+        }
+        None => label.to_string(),
+    };
+    credit.subtitle = Some(match &credit.original_name {
+        Some(own) => format!("Alias of {own} · {kind}"),
+        None => kind,
+    });
+    credit.page_label = credit.page_url.as_ref().map(|_| format!("Open on {label}"));
+    credit.empty_line =
+        (definite && credit.creators.is_empty()).then(|| format!("{label} doesn't list who made this one."));
 }
 
 /// An emote found in a set Rust holds, with where it sat.
@@ -419,6 +491,7 @@ fn credit_from_held(provider: CreditProvider, h: &HeldEmote) -> EmoteCredit {
         kind_label: h.kind_label,
         creators,
         page_url: None,
+        ..Default::default()
     }
 }
 
@@ -515,6 +588,7 @@ pub(crate) fn parse_seventv(json: &serde_json::Value) -> EmoteCredit {
         kind_label: None,
         creators,
         page_url: None,
+        ..Default::default()
     }
 }
 
@@ -550,6 +624,7 @@ pub(crate) fn parse_ffz(json: &serde_json::Value) -> EmoteCredit {
         kind_label: None,
         creators,
         page_url: None,
+        ..Default::default()
     }
 }
 
@@ -641,6 +716,7 @@ pub(crate) fn parse_twitch(json: &serde_json::Value) -> Option<EmoteCredit> {
         kind_label: e.get("type").and_then(|v| v.as_str()).and_then(twitch_kind_label),
         creators,
         page_url: None,
+        ..Default::default()
     })
 }
 
@@ -799,6 +875,83 @@ mod tests {
         });
         assert_eq!(page_url(CreditProvider::Bttv, "54fa92ee01e468494b85b553").as_deref(), Some("https://betterttv.com/emotes/54fa92ee01e468494b85b553"));
         assert_eq!(page_url(CreditProvider::Twitch, "25"), None);
+    }
+
+    fn wire() -> serde_json::Value {
+        serde_json::from_str(include_str!("../../../src/services/emoteCardWire.json")).unwrap()
+    }
+
+    fn wire_held(w: &serde_json::Value) -> HeldEmote {
+        let h = &w["bttv"]["held"];
+        HeldEmote {
+            owner_name: h["owner_name"].as_str().map(String::from),
+            original_name: h["original_name"].as_str().map(String::from),
+            kind_label: Some("Channel emote"),
+            owner_ref: h["owner_ref"].as_str().map(String::from),
+            owner_twitch_id: h["owner_twitch_id"].as_str().map(String::from),
+        }
+    }
+
+    #[tokio::test]
+    async fn the_click_card_says_its_words_on_the_wire() {
+        let w = wire();
+        let id = w["args"]["id"].as_str().unwrap();
+        let held = wire_held(&w);
+        assert!(held.owner_twitch_id.is_none(), "the case never reaches the network");
+        let c = resolve(CreditProvider::Bttv, id, Some("monkaS"), Some(held.clone()), true).await.unwrap();
+        assert_eq!(serde_json::to_value(&c).unwrap(), w["bttv"]["wire"]);
+        // Held with nobody named: the sets answered, so the card may say nobody is listed.
+        let nobody = HeldEmote { owner_name: None, owner_ref: None, ..held.clone() };
+        let c = resolve(CreditProvider::Bttv, id, Some("monkaS"), Some(nobody), true).await.unwrap();
+        assert_eq!(serde_json::to_value(&c).unwrap(), w["bttvNobody"]["wire"]);
+        // Nothing held and no endpoint: nothing answered, so no such line.
+        let c = resolve(CreditProvider::Bttv, id, Some("monkaS"), None, true).await.unwrap();
+        assert_eq!(c.subtitle.as_deref(), Some("BetterTTV"));
+        assert_eq!(c.page_label.as_deref(), Some("Open on BetterTTV"));
+        assert_eq!(c.empty_line, None);
+        // A hover asks for no words.
+        let c = resolve(CreditProvider::Bttv, id, Some("monkaS"), Some(held), false).await.unwrap();
+        assert!(c.subtitle.is_none() && c.page_label.is_none() && c.empty_line.is_none());
+    }
+
+    #[tokio::test]
+    async fn the_alias_is_said_for_where_the_emote_is_shown() {
+        let w = wire();
+        let id = w["args"]["id"].as_str().unwrap();
+        let held = HeldEmote { original_name: Some("monkaS".into()), ..wire_held(&w) };
+        let shown_as_alias = resolve(CreditProvider::Bttv, id, Some("monkaSHAKE"), Some(held.clone()), true).await.unwrap();
+        assert_eq!(shown_as_alias.subtitle.as_deref(), Some("Alias of monkaS · BetterTTV channel emote"));
+        let shown_as_itself = resolve(CreditProvider::Bttv, id, Some("monkaS"), Some(held), true).await.unwrap();
+        assert_eq!(shown_as_itself.subtitle.as_deref(), Some("BetterTTV channel emote"));
+    }
+
+    #[test]
+    fn twitch_card_words_match_the_wire() {
+        let w = wire();
+        let mut c = parse_twitch(&w["twitch"]["gql"]).unwrap();
+        card_words(&mut c, CreditProvider::Twitch, true);
+        assert_eq!(serde_json::to_value(&c).unwrap(), w["twitch"]["wire"]);
+    }
+
+    #[test]
+    fn a_failed_lookup_never_says_nobody_is_listed() {
+        let mut c = EmoteCredit { provider: "7tv", page_url: Some("https://7tv.app/emotes/x".into()), ..Default::default() };
+        card_words(&mut c, CreditProvider::SevenTv, false);
+        assert_eq!(c.subtitle.as_deref(), Some("7TV"));
+        assert_eq!(c.page_label.as_deref(), Some("Open on 7TV"));
+        assert_eq!(c.empty_line, None);
+        card_words(&mut c, CreditProvider::SevenTv, true);
+        assert_eq!(c.empty_line.as_deref(), Some("7TV doesn't list who made this one."));
+    }
+
+    #[test]
+    fn creator_words_name_the_role_and_the_destination() {
+        let artist = creator("artist", "Seabii".into(), None, CreatorLink::Twitch { login: "seabii".into(), id: None });
+        assert_eq!((artist.role_label, artist.destination.as_str()), ("Art by", "Twitch profile"));
+        let channel = creator("channel", "pokimane".into(), None, CreatorLink::Twitch { login: "pokimane".into(), id: None });
+        assert_eq!(channel.role_label, "From the channel");
+        let uploader = creator("uploader", "Alpha".into(), None, CreatorLink::Web { url: "https://7tv.app/users/x".into(), site: "7TV" });
+        assert_eq!((uploader.role_label, uploader.destination.as_str()), ("Made by", "7TV profile"));
     }
 
     #[test]

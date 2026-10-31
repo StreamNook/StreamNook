@@ -1,0 +1,98 @@
+{
+  "args": {
+    "provider": "bttv",
+    "id": "54fa92ee01e468494b85b553",
+    "name": "monkaS",
+    "channel": "forsen",
+    "channelId": "22484632",
+    "detail": true
+  },
+  "bttv": {
+    "held": {
+      "owner_name": "NightDev",
+      "original_name": null,
+      "kind_label": "Channel emote",
+      "owner_ref": "5561169bd6b9d206222a8c19",
+      "owner_twitch_id": null
+    },
+    "wire": {
+      "provider": "bttv",
+      "owner_name": "NightDev",
+      "kind_label": "Channel emote",
+      "creators": [
+        {
+          "role": "uploader",
+          "name": "NightDev",
+          "link": { "kind": "web", "url": "https://betterttv.com/users/5561169bd6b9d206222a8c19", "site": "BetterTTV" },
+          "role_label": "Made by",
+          "destination": "BetterTTV profile"
+        }
+      ],
+      "page_url": "https://betterttv.com/emotes/54fa92ee01e468494b85b553",
+      "subtitle": "BetterTTV channel emote",
+      "page_label": "Open on BetterTTV"
+    },
+    "mapped": {
+      "provider": "bttv",
+      "ownerName": "NightDev",
+      "kindLabel": "Channel emote",
+      "creators": [
+        {
+          "role": "uploader",
+          "name": "NightDev",
+          "link": { "kind": "web", "url": "https://betterttv.com/users/5561169bd6b9d206222a8c19", "site": "BetterTTV" },
+          "roleLabel": "Made by",
+          "destination": "BetterTTV profile"
+        }
+      ],
+      "pageUrl": "https://betterttv.com/emotes/54fa92ee01e468494b85b553",
+      "subtitle": "BetterTTV channel emote",
+      "pageLabel": "Open on BetterTTV"
+    }
+  },
+  "bttvNobody": {
+    "wire": {
+      "provider": "bttv",
+      "kind_label": "Channel emote",
+      "page_url": "https://betterttv.com/emotes/54fa92ee01e468494b85b553",
+      "subtitle": "BetterTTV channel emote",
+      "page_label": "Open on BetterTTV",
+      "empty_line": "BetterTTV doesn't list who made this one."
+    }
+  },
+  "twitch": {
+    "gql": {
+      "data": {
+        "emote": {
+          "type": "SUBSCRIPTIONS",
+          "artist": { "id": "73755633", "login": "seabii", "displayName": "Seabii", "profileImageURL": "https://static-cdn.jtvnw.net/a.png" },
+          "owner": { "id": "44445592", "login": "pokimane", "displayName": "pokimane" }
+        }
+      }
+    },
+    "wire": {
+      "provider": "twitch",
+      "owner_name": "pokimane",
+      "artist_name": "Seabii",
+      "kind_label": "Sub emote",
+      "creators": [
+        {
+          "role": "artist",
+          "name": "Seabii",
+          "avatar_url": "https://static-cdn.jtvnw.net/a.png",
+          "link": { "kind": "twitch", "login": "seabii", "id": "73755633" },
+          "role_label": "Art by",
+          "destination": "Twitch profile"
+        },
+        {
+          "role": "channel",
+          "name": "pokimane",
+          "link": { "kind": "twitch", "login": "pokimane", "id": "44445592" },
+          "role_label": "From the channel",
+          "destination": "Twitch profile"
+        }
+      ],
+      "subtitle": "Twitch sub emote"
+    }
+  }
+}

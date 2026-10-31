@@ -110,7 +110,8 @@ pub struct RoomModeView {
     /// The slow-mode wait that applies to the viewer; 0 when none does.
     pub slow_seconds: u64,
     /// The mode that certainly keeps the viewer from sending (sub-only, then
-    /// emote-only, then followers-only), or `None` when nothing proves it.
+    /// followers-only, then emote-only, which the emote menu still types in),
+    /// or `None` when nothing proves it.
     pub blocked: Option<ModeKind>,
     /// What a disabled message box says while `blocked` is set.
     pub reason: Option<String>,
@@ -324,7 +325,9 @@ pub fn describe_with(m: &ModesIn, standing: Standing, follow: OwnFollow) -> Room
     // Only the modes that refuse a message outright can block the box; slow
     // mode and unique chat let the viewer type. Proven only, never guessed.
     let proven = |kind: ModeKind| modes.iter().any(|r| r.kind == kind && r.applies_to_you == Some(true));
-    let blocked = [ModeKind::SubsOnly, ModeKind::EmoteOnly, ModeKind::FollowersOnly]
+    // A hard block ranks before emote-only: emote-only can still be typed in from the emote menu,
+    // so it names the block only when nothing else stops the viewer.
+    let blocked = [ModeKind::SubsOnly, ModeKind::FollowersOnly, ModeKind::EmoteOnly]
         .into_iter()
         .find(|kind| proven(*kind));
     let reason = blocked.map(|kind| match kind {
@@ -559,7 +562,7 @@ mod tests {
 
     #[test]
     fn blocks_name_the_most_limiting_proven_mode() {
-        // Sub-only beats emote-only beats followers-only.
+        // Sub-only beats followers-only beats emote-only.
         let all = ModesIn { subs_only: true, emote_only: true, followers_only_minutes: 0, ..Default::default() };
         let v = describe_with(&all, viewer(), OwnFollow::NotFollowing);
         assert_eq!(v.blocked, Some(ModeKind::SubsOnly));
@@ -579,5 +582,12 @@ mod tests {
         for standing in [Standing::Broadcaster, Standing::Moderator, Standing::Vip] {
             assert_eq!(describe_with(&all, standing, OwnFollow::NotFollowing).blocked, None);
         }
+        // Emote-only with a follow the viewer lacks: the follow is what stops them.
+        let both = ModesIn { emote_only: true, followers_only_minutes: 0, ..Default::default() };
+        let v = describe_with(&both, viewer(), OwnFollow::NotFollowing);
+        assert_eq!(v.blocked, Some(ModeKind::FollowersOnly));
+        assert_eq!(v.reason.as_deref(), Some("Follow to chat"));
+        let v = describe_with(&both, viewer(), OwnFollow::ForSecs(86_400));
+        assert_eq!(v.blocked, Some(ModeKind::EmoteOnly));
     }
 }

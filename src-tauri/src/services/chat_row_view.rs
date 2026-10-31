@@ -953,6 +953,45 @@ fn emit(units: Vec<Unit>, prefs: &Prefs) -> Vec<ViewSpan> {
     out
 }
 
+/// Which emote service an image comes from, by its URL and id: the rule `emoteRef` in
+/// `src/utils/emoteClick.ts` uses, tested on the same cases (`src/utils/emoteRefCases.json`).
+/// BetterTTV ids are 24 hex like 7TV's legacy ones, so the other CDNs are ruled out first.
+pub(crate) fn emote_source(url: &str, id: Option<&str>) -> Option<&'static str> {
+    if let Some(id) = id.filter(|i| !i.is_empty()) {
+        let seventv = url.contains("7tv")
+            || ((id.len() == 24 || id.len() == 26)
+                && !url.contains("jtvnw.net")
+                && !url.contains("frankerfacez")
+                && !url.contains("betterttv"));
+        if seventv {
+            return Some("7tv");
+        }
+    }
+    if url.contains("jtvnw.net") {
+        Some("twitch")
+    } else if url.contains("betterttv") {
+        Some("bttv")
+    } else if url.contains("frankerfacez") {
+        Some("ffz")
+    } else if url.contains("files.kick.com") {
+        Some("kick")
+    } else {
+        None
+    }
+}
+
+/// The id and the `emote_credit` service a native shell's emote tap asks about, both or neither:
+/// only an emote the core can credit, with an id of its service's shape.
+fn emote_credit_ref(url: &str, id: Option<&str>) -> (Option<String>, Option<String>) {
+    let Some(id) = id.filter(|i| !i.is_empty()) else {
+        return (None, None);
+    };
+    match emote_source(url, Some(id)).and_then(crate::services::emote_credit::CreditProvider::parse) {
+        Some(p) if p.valid_id(id) => (Some(id.to_string()), Some(p.wire().to_string())),
+        _ => (None, None),
+    }
+}
+
 /// The grouped body of a row from its segments. `channel` names the room
 /// whose emote table gives third-party emote sizes.
 pub fn spans(segments: &[MessageSegment], channel: &str, shorten_links: bool) -> Vec<ViewSpan> {
@@ -979,9 +1018,10 @@ fn spans_with(segments: &[MessageSegment], channel: &str, prefs: Prefs) -> Vec<V
             MessageSegment::Mention { content, login } => {
                 items.push(Item::Mention { text: content.clone(), login: login.clone() })
             }
-            MessageSegment::Emote { content, emote_url, is_zero_width, modifier_flags, is_personal, .. } => {
+            MessageSegment::Emote { content, emote_id, emote_url, is_zero_width, modifier_flags, is_personal, .. } => {
                 let (width, height) = crate::services::irc_service::emote_size_hint(channel, content, emote_url)
                     .map_or((None, None), |(w, h)| (Some(w), Some(h)));
+                let (id, credit) = emote_credit_ref(emote_url, emote_id.as_deref());
                 items.push(Item::Emote(EmoteItem {
                     view: ViewEmote {
                         code: content.clone(),
@@ -990,6 +1030,8 @@ fn spans_with(segments: &[MessageSegment], channel: &str, prefs: Prefs) -> Vec<V
                         height,
                         personal: is_personal.unwrap_or(false),
                         hidden: false,
+                        id,
+                        credit,
                     },
                     zero_width: is_zero_width.unwrap_or(false),
                     flags: *modifier_flags,
@@ -1483,6 +1525,50 @@ mod tests {
                 ViewSpan::Gif { text, .. } => format!("g:{text}"),
             })
             .collect()
+    }
+
+    #[derive(serde::Deserialize)]
+    struct EmoteRefCase {
+        url: String,
+        id: Option<String>,
+        source: Option<String>,
+        credit: Option<String>,
+    }
+
+    #[test]
+    fn emote_sources_follow_the_shared_cases() {
+        let cases: Vec<EmoteRefCase> = serde_json::from_str(include_str!("../../../src/utils/emoteRefCases.json")).unwrap();
+        assert!(cases.len() >= 10);
+        for c in cases {
+            assert_eq!(emote_source(&c.url, c.id.as_deref()), c.source.as_deref(), "{} {:?}", c.url, c.id);
+            let (id, credit) = emote_credit_ref(&c.url, c.id.as_deref());
+            assert_eq!(credit, c.credit, "{} {:?}", c.url, c.id);
+            assert_eq!(id.is_some(), c.credit.is_some(), "id and credit come together");
+        }
+    }
+
+    #[test]
+    fn a_creditable_view_emote_carries_its_id_and_service() {
+        let mut seventv = emote("PogU", false, None);
+        if let MessageSegment::Emote { emote_id, emote_url, .. } = &mut seventv {
+            *emote_id = Some("01G3WEGZN0000ET2J0MQP5YJ0G".into());
+            *emote_url = "https://cdn.7tv.app/emote/01G3WEGZN0000ET2J0MQP5YJ0G/1x.webp".into();
+        }
+        let mut kick = emote("kickEmote", false, None);
+        if let MessageSegment::Emote { emote_id, emote_url, .. } = &mut kick {
+            *emote_id = Some("37226".into());
+            *emote_url = "https://files.kick.com/emotes/37226/fullsize".into();
+        }
+        // The helper's own id ("Kappa") is not 7TV's shape: no tap.
+        let bad = emote("Kappa", false, None);
+        let v = serde_json::to_value(spans_with(&[seventv, text(" "), kick, text(" "), bad], "x", Prefs::default())).unwrap();
+        assert_eq!(v[0]["credit"], "7tv");
+        assert_eq!(v[0]["id"], "01G3WEGZN0000ET2J0MQP5YJ0G");
+        let rest: Vec<&serde_json::Value> = v.as_array().unwrap().iter().filter(|s| s["type"] == "emote").skip(1).collect();
+        assert_eq!(rest.len(), 2);
+        for s in rest {
+            assert!(s.get("id").is_none() && s.get("credit").is_none(), "{s}");
+        }
     }
 
     #[test]

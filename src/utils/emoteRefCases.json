@@ -1,0 +1,12 @@
+[
+  { "url": "https://cdn.7tv.app/emote/01G3WEGZN0000ET2J0MQP5YJ0G/1x.webp", "id": "01G3WEGZN0000ET2J0MQP5YJ0G", "source": "7tv", "credit": "7tv" },
+  { "url": "http://asset.localhost/emotes/60ae958e229664e8667aea38-1x.webp", "id": "60ae958e229664e8667aea38", "source": "7tv", "credit": "7tv" },
+  { "url": "https://cdn.betterttv.net/emote/54fa92ee01e468494b85b553/1x", "id": "54fa92ee01e468494b85b553", "source": "bttv", "credit": "bttv" },
+  { "url": "https://cdn.frankerfacez.com/emote/246878/1", "id": "246878", "source": "ffz", "credit": "ffz" },
+  { "url": "https://static-cdn.jtvnw.net/emoticons/v2/25/default/dark/1.0", "id": "25", "source": "twitch", "credit": "twitch" },
+  { "url": "https://static-cdn.jtvnw.net/emoticons/v2/emotesv2_07fb2f0da3534f058a9f02b31b4eaf8b/default/dark/1.0", "id": "emotesv2_07fb2f0da3534f058a9f02b31b4eaf8b", "source": "twitch", "credit": "twitch" },
+  { "url": "https://files.kick.com/emotes/37226/fullsize", "id": "37226", "source": "kick", "credit": null },
+  { "url": "https://cdn.7tv.app/emote/PogU/1x.webp", "id": "PogU", "source": "7tv", "credit": null },
+  { "url": "https://static-cdn.jtvnw.net/emoticons/v2/25/default/dark/1.0", "id": null, "source": "twitch", "credit": null },
+  { "url": "https://yt3.ggpht.com/abc=w24-h24-c-k-nd", "id": "UCx:abc", "source": null, "credit": null }
+]
