@@ -35,6 +35,7 @@ import { makeKey } from '../utils/providerKey';
 
 import { GlassSelect } from './ui/GlassSelect';
 import { CategorySearchBox } from './ui/CategorySearchBox';
+import { applyPage, beginMore, categoryKey, categoryTagsFor, failPage, newTagList, toggleTag, type TagList } from '../utils/tagFilter';
 import {
     loadRecentSearches,
     addRecentSearch,
@@ -299,6 +300,22 @@ const Home = () => {
     // Use store state directly
     const activeTab = homeActiveTab;
     const selectedCategory = homeSelectedCategory;
+    // The category page's picked tags live in the store, so they survive Home
+    // unmounting under the player. They belong to one category and go when you
+    // leave it; a search started from the category still counts as inside it.
+    const storedCategoryTags = useAppStore((s) => s.homeCategoryTags);
+    const setHomeCategoryTags = useAppStore((s) => s.setHomeCategoryTags);
+    const selectedCategoryKey = categoryKey(selectedCategory?.name);
+    const categoryTagState = categoryTagsFor({
+        activeTab,
+        searchReturnTab,
+        categoryKey: selectedCategoryKey,
+        stored: storedCategoryTags,
+    });
+    const selectedCategoryTags = categoryTagState.tags;
+    useEffect(() => {
+        if (categoryTagState.clear) setHomeCategoryTags('', []);
+    }, [categoryTagState.clear, setHomeCategoryTags]);
 
     // Wrapper functions to update store state
     const setActiveTab = (tab: HomeTab) => setHomeActiveTab(tab);
@@ -450,6 +467,7 @@ const Home = () => {
             const id = (e as CustomEvent<string>).detail;
             const keep = (s: TwitchStream) => favoriteIdOf(s) !== id;
             setCategoryStreams((prev) => prev.filter(keep));
+            setTagList((list) => ({ ...list, streams: list.streams.filter(keep) }));
             setProviderStreams((prev) => prev.filter(keep));
         };
         window.addEventListener('sn:channel-hidden', onHidden);
@@ -460,21 +478,18 @@ const Home = () => {
     const [isLoadingCategoryStreams, setIsLoadingCategoryStreams] = useState(false);
 
     // Tag-filtered live streams: fetched server-side (GQL) so a tag filter
-    // returns every matching stream by viewer count, like Twitch's directory —
-    // not just whatever happens to be on the loaded Helix pages. Active only
-    // while one or more tags are selected; otherwise the Helix `categoryStreams`
-    // above is shown.
-    const [tagStreams, setTagStreams] = useState<TwitchStream[]>([]);
-    const [tagStreamsCursor, setTagStreamsCursor] = useState<string | null>(null);
-    const [hasMoreTagStreams, setHasMoreTagStreams] = useState(false);
-    const [isLoadingTagStreams, setIsLoadingTagStreams] = useState(false);
-    const [isLoadingMoreTagStreams, setIsLoadingMoreTagStreams] = useState(false);
+    // returns every matching stream by viewer count, like Twitch's directory,
+    // not just whatever is on the loaded Helix pages. Active only while one or
+    // more tags are picked; otherwise the Helix `categoryStreams` above shows.
+    // One list per set of picks: its `gen` keeps a page asked for older picks
+    // off it.
+    // Starts loading when Home comes back with stored picks, so the first paint
+    // is the skeleton rather than "no streams match".
+    const [tagList, setTagList] = useState<TagList>(() => newTagList(0, selectedCategoryTags.length > 0));
+    const tagGenRef = useRef(0);
 
-    // Live-tab tag filter. `Draft` is the text in the search box (used to
-    // autocomplete tag suggestions); committing a tag pushes it into
-    // `selectedCategoryTags`, which drives the server-side tag fetch.
+    // The text in the live tab's search box; Rust suggests tags for it.
     const [categoryLiveDraft, setCategoryLiveDraft] = useState('');
-    const [selectedCategoryTags, setSelectedCategoryTags] = useState<string[]>([]);
 
     // Category Tabs State
     const [categoryActiveTab, setCategoryActiveTabLocal] = useState<'live' | 'clips' | 'videos'>(homeCategoryTab);
@@ -1212,44 +1227,33 @@ const Home = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [activeTab, categoryActiveTab, selectedCategory]);
 
-    // Clear the live tag/text filters when moving to a different category.
+    // Clear the search box text when moving to a different category (the picks
+    // follow categoryTagsFor above).
     useEffect(() => {
         setCategoryLiveDraft('');
-        setSelectedCategoryTags([]);
-        setTagStreams([]);
-        setTagStreamsCursor(null);
-        setHasMoreTagStreams(false);
-    }, [selectedCategory?.id]);
+    }, [selectedCategoryKey]);
 
     // Fetch tag-filtered streams server-side whenever the selected tags change.
     const selectedTagsKey = selectedCategoryTags.map(t => t.toLowerCase()).sort().join('');
+    // Every change of picks, to none included, starts a new generation, so a
+    // page still on its way for older picks never lands.
     useEffect(() => {
         const gameName = selectedCategory?.name;
-        if (!gameName || selectedCategoryTags.length === 0) {
-            setTagStreams([]);
-            setTagStreamsCursor(null);
-            setHasMoreTagStreams(false);
-            return;
-        }
-        let cancelled = false;
-        setIsLoadingTagStreams(true);
+        const active = !!gameName && selectedCategoryTags.length > 0;
+        const gen = ++tagGenRef.current;
+        setTagList(newTagList(gen, active));
+        if (!active) return;
         invoke('get_streams_by_game_with_tags', { gameName, tags: selectedCategoryTags, cursor: null, limit: 40 })
             .then(res => {
-                if (cancelled || !isMountedRef.current) return;
+                if (!isMountedRef.current) return;
                 const [streams, cursor] = res as [TwitchStream[], string | null];
-                setTagStreams(streams);
-                setTagStreamsCursor(cursor);
-                setHasMoreTagStreams(!!cursor && streams.length > 0);
+                setTagList(list => applyPage(list, gen, streams, cursor, false, Infinity));
             })
             .catch(e => {
-                if (cancelled || !isMountedRef.current) return;
+                if (!isMountedRef.current) return;
                 Logger.error('Failed to load tag-filtered streams:', e);
-                setTagStreams([]);
-                setTagStreamsCursor(null);
-                setHasMoreTagStreams(false);
-            })
-            .finally(() => { if (!cancelled && isMountedRef.current) setIsLoadingTagStreams(false); });
-        return () => { cancelled = true; };
+                setTagList(list => failPage(list, gen, false));
+            });
     // selectedTagsKey captures the tag set; selectedCategory?.name keys the category.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [selectedTagsKey, selectedCategory?.name]);
@@ -1257,32 +1261,25 @@ const Home = () => {
     const loadMoreTagStreams = useCallback(async () => {
         const gameName = selectedCategory?.name;
         if (!gameName || selectedCategoryTags.length === 0) return;
-        if (!hasMoreTagStreams || isLoadingMoreTagStreams || !tagStreamsCursor) return;
-        setIsLoadingMoreTagStreams(true);
+        if (!tagList.hasMore || tagList.loadingMore || !tagList.cursor) return;
+        const gen = tagList.gen;
+        setTagList(list => beginMore(list, gen));
         try {
             const res = await invoke('get_streams_by_game_with_tags', {
                 gameName,
                 tags: selectedCategoryTags,
-                cursor: tagStreamsCursor,
+                cursor: tagList.cursor,
                 limit: 40,
             }) as [TwitchStream[], string | null];
             if (!isMountedRef.current) return;
             const [streams, cursor] = res;
-            setTagStreams(prev => {
-                const seen = new Set(prev.map(s => s.user_id));
-                return [...prev, ...streams.filter(s => !seen.has(s.user_id))];
-            });
-            setTagStreamsCursor(cursor);
-            setHasMoreTagStreams(!!cursor && streams.length > 0);
+            setTagList(list => applyPage(list, gen, streams, cursor, true, Infinity));
         } catch (e) {
-            if (isMountedRef.current) {
-                Logger.error('Failed to load more tag-filtered streams:', e);
-                setHasMoreTagStreams(false);
-            }
-        } finally {
-            if (isMountedRef.current) setIsLoadingMoreTagStreams(false);
+            if (!isMountedRef.current) return;
+            Logger.error('Failed to load more tag-filtered streams:', e);
+            setTagList(list => failPage(list, gen, true));
         }
-    }, [selectedCategory?.name, selectedCategoryTags, hasMoreTagStreams, isLoadingMoreTagStreams, tagStreamsCursor]);
+    }, [selectedCategory?.name, selectedCategoryTags, tagList]);
 
     // Refresh clips when period changes
     useEffect(() => {
@@ -1586,8 +1583,8 @@ const Home = () => {
             // The live list is either the server-side tag-filtered set or the
             // Helix category set, depending on whether tags are selected.
             const liveTagMode = selectedCategoryTags.length > 0;
-            const liveHasMore = liveTagMode ? hasMoreTagStreams : hasMoreCategoryStreams;
-            const liveLoadingMore = liveTagMode ? isLoadingMoreTagStreams : isLoadingMoreCategoryStreams;
+            const liveHasMore = liveTagMode ? tagList.hasMore : hasMoreCategoryStreams;
+            const liveLoadingMore = liveTagMode ? tagList.loadingMore : isLoadingMoreCategoryStreams;
             if (categoryActiveTab === 'live' && liveHasMore && !liveLoadingMore && !loadingRef.current) {
                 if (scrollPercentage > 0.8) {
                     loadingRef.current = true;
@@ -1616,7 +1613,7 @@ const Home = () => {
         hasMoreGames, isLoadingMoreGames, loadMoreTopGames, 
         categoryActiveTab, selectedCategoryTags,
         hasMoreCategoryStreams, isLoadingMoreCategoryStreams, loadMoreCategoryStreams,
-        hasMoreTagStreams, isLoadingMoreTagStreams, loadMoreTagStreams,
+        tagList, loadMoreTagStreams,
         hasMoreCategoryClips, isLoadingMoreClips, loadMoreCategoryClips,
         hasMoreCategoryVideos, isLoadingMoreVideos, loadMoreCategoryVideos
     ]);
@@ -2390,43 +2387,11 @@ const Home = () => {
 
     const offlineSearchResults = activeTab === 'search' ? searchResults.filter(s => s.viewer_count === 0 && !s.is_live) : [];
 
-    // Dropdown tags are the category's own offered tags only (not the free-form
-    // tags individual streamers set). The text search can still match anything.
-    const availableCategoryTags = useMemo(() => {
-        const seen = new Set<string>();
-        const tags: string[] = [];
-        categoryDetails?.tags?.forEach(t => {
-            const label = t.localizedName.trim();
-            const key = label.toLowerCase();
-            if (label && !seen.has(key)) {
-                seen.add(key);
-                tags.push(label);
-            }
-        });
-        return tags;
-    }, [categoryDetails]);
-
-    // Broader autocomplete pool: the free-form tags carried by the loaded live
-    // streams. Folded into the tag search only while typing (not the default list).
-    const categoryStreamTags = useMemo(() => {
-        const seen = new Set<string>();
-        const tags: string[] = [];
-        categoryStreams.forEach(s => s.tags?.forEach(t => {
-            const label = t.trim();
-            const key = label.toLowerCase();
-            if (label && !seen.has(key)) {
-                seen.add(key);
-                tags.push(label);
-            }
-        }));
-        return tags;
-    }, [categoryStreams]);
-
     // The live list is the server-side tag-filtered set when tags are selected,
     // otherwise the Helix category list. Tag matching is done server-side; the
     // search box only picks tags (it doesn't fuzzy-filter the visible streams).
     const tagMode = selectedCategoryTags.length > 0;
-    const baseLiveStreams = tagMode ? tagStreams : categoryStreams;
+    const baseLiveStreams = tagMode ? tagList.streams : categoryStreams;
 
     // The offline roster: Twitch's own list, followed channels on the other
     // platforms that aren't live, and favourites live nowhere, each channel
@@ -2464,12 +2429,7 @@ const Home = () => {
     const cardAvatars = useStreamAvatars(avatarTargets);
 
     const toggleCategoryTag = (label: string) => {
-        const key = label.toLowerCase();
-        setSelectedCategoryTags(prev =>
-            prev.some(t => t.toLowerCase() === key)
-                ? prev.filter(t => t.toLowerCase() !== key)
-                : [...prev, label]
-        );
+        setHomeCategoryTags(selectedCategoryKey, toggleTag(selectedCategoryTags, label));
     };
 
     const toggleFavoriteCategory = (e: React.MouseEvent, game: TwitchCategory, favorite: boolean) => {
@@ -3413,8 +3373,8 @@ const Home = () => {
                                     <CategorySearchBox
                                         value={categoryLiveDraft}
                                         onChange={setCategoryLiveDraft}
-                                        tagOptions={availableCategoryTags}
-                                        tagSuggestions={categoryStreamTags}
+                                        gameName={selectedCategory?.name ?? null}
+                                        revision={tagMode ? tagList.streams : categoryStreams}
                                         selectedTags={selectedCategoryTags}
                                         onToggleTag={toggleCategoryTag}
                                     />
@@ -3500,7 +3460,7 @@ const Home = () => {
                                     </button>
                                 ))}
                                 <button
-                                    onClick={() => setSelectedCategoryTags([])}
+                                    onClick={() => setHomeCategoryTags('', [])}
                                     className="text-[11px] font-semibold px-2 py-1 text-textSecondary hover:text-accent transition-colors"
                                 >
                                     Clear all
@@ -3511,7 +3471,7 @@ const Home = () => {
                         {/* Rendering Logic based on categoryActiveTab */}
                         {categoryActiveTab === 'live' && (
                             <>
-                                {(tagMode ? isLoadingTagStreams : isLoadingCategoryStreams) ? (
+                                {(tagMode ? tagList.loading : isLoadingCategoryStreams) ? (
                                     <div className="flex items-center justify-center h-full">
                                         <div className="text-center">
                                             <div className="animate-spin rounded-full h-12 w-12 border-4 border-glass border-t-accent mx-auto mb-3" />
@@ -3711,13 +3671,13 @@ const Home = () => {
                                     </div>
                                 )}
                                 {/* Loading indicator for infinite scroll */}
-                                {(tagMode ? isLoadingMoreTagStreams : isLoadingMoreCategoryStreams) && (
+                                {(tagMode ? tagList.loadingMore : isLoadingMoreCategoryStreams) && (
                                     <div className="flex justify-center items-center py-6 w-full">
                                         <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-accent"></div>
                                     </div>
                                 )}
                                 {/* End of streams message */}
-                                {!(tagMode ? hasMoreTagStreams : hasMoreCategoryStreams) && baseLiveStreams.length > 0 && (
+                                {!(tagMode ? tagList.hasMore : hasMoreCategoryStreams) && baseLiveStreams.length > 0 && (
                                     <div className="text-center py-6 w-full">
                                         <p className="text-textSecondary text-xs">
                                             {tagMode ? 'No more streams with these tags' : 'No more category streams'}

@@ -1,19 +1,21 @@
-import { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Search, X, Check, Tag as TagIcon, CornerDownLeft } from 'lucide-react';
+import { useCategoryTagSuggestions } from '../../hooks/useCategoryTagSuggestions';
+import { hasTag } from '../../utils/tagFilter';
 
 export interface CategorySearchBoxProps {
-    // Live text in the box. Drives both the stream filter (in the parent) and
-    // the tag suggestions below.
+    // Text in the box: Rust's tag matches for it drop down below.
     value: string;
     onChange: (value: string) => void;
-    // The category's offered tags, shown as defaults when the box is empty.
-    tagOptions: string[];
-    // Broader pool (e.g. tags carried by live streams) folded into suggestions
-    // while typing, so autocomplete reaches beyond the offered tags.
-    tagSuggestions?: string[];
+    // The category whose tags are offered. Rust pools them (the category's own
+    // tags and the tags its loaded streams carry) and ranks the matches.
+    gameName: string | null;
+    // Changes whenever the category's loaded streams change, so the list
+    // picks up the tags they brought.
+    revision: unknown;
     // Currently active tag filters (chips live in the parent).
-    selectedTags: string[];
+    selectedTags: readonly string[];
     onToggleTag: (tag: string) => void;
     placeholder?: string;
 }
@@ -23,8 +25,8 @@ const MAX_VISIBLE = 14;
 export const CategorySearchBox = ({
     value,
     onChange,
-    tagOptions,
-    tagSuggestions = [],
+    gameName,
+    revision,
     selectedTags,
     onToggleTag,
     placeholder = '',
@@ -32,40 +34,20 @@ export const CategorySearchBox = ({
     const [isOpen, setIsOpen] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
 
-    const selectedLower = useMemo(() => new Set(selectedTags.map(t => t.toLowerCase())), [selectedTags]);
-
-    // Deduped pool of every tag we can suggest (offered first, then stream tags).
-    const pool = useMemo(() => {
-        const seen = new Set<string>();
-        const out: string[] = [];
-        for (const t of [...tagOptions, ...tagSuggestions]) {
-            const key = t.toLowerCase();
-            if (key && !seen.has(key)) {
-                seen.add(key);
-                out.push(t);
-            }
-        }
-        return out;
-    }, [tagOptions, tagSuggestions]);
-
-    const q = value.trim().toLowerCase();
-
-    // Empty box -> offered tags as defaults (falling back to the pool). Typing ->
-    // narrow to matches, prefix-first so it gets more specific letter by letter.
-    const visibleTags = useMemo(() => {
-        if (!q) {
-            const defaults = tagOptions.length > 0 ? tagOptions : pool;
-            return defaults.slice(0, MAX_VISIBLE);
-        }
-        return pool
-            .filter(t => t.toLowerCase().includes(q))
-            .sort((a, b) => {
-                const ap = a.toLowerCase().startsWith(q) ? 0 : 1;
-                const bp = b.toLowerCase().startsWith(q) ? 0 : 1;
-                return ap - bp || a.localeCompare(b);
-            })
-            .slice(0, MAX_VISIBLE);
-    }, [q, pool, tagOptions]);
+    // Empty box: picks first, then the category's tags, then common tags of
+    // its streams. Typing: matches, prefix first. Asked only while open.
+    const answer = useCategoryTagSuggestions({
+        gameName,
+        query: value,
+        selected: selectedTags,
+        limit: MAX_VISIBLE,
+        enabled: isOpen,
+        revision,
+    });
+    const visibleTags = answer?.labels ?? [];
+    // Set when no listed tag is the typed text: Twitch filters by any tag name.
+    const typedTag = answer?.offer_typed ?? null;
+    const q = value.trim();
 
     useEffect(() => {
         const handleClickOutside = (e: MouseEvent) => {
@@ -91,10 +73,12 @@ export const CategorySearchBox = ({
                     onFocus={() => setIsOpen(true)}
                     onKeyDown={(e) => {
                         if (e.key === 'Enter') {
-                            // Apply the best matching tag, or the raw typed text as a
-                            // tag if nothing matched (it's still queried server-side).
-                            const pick = visibleTags[0] ?? value.trim();
-                            if (pick) { onToggleTag(pick); onChange(''); setIsOpen(false); }
+                            // Only typed text picks: the best match Rust gave for
+                            // exactly this text, else the text itself as a tag (it
+                            // is still queried server-side).
+                            if (!q) return;
+                            const pick = visibleTags[0] ?? q;
+                            onToggleTag(pick); onChange(''); setIsOpen(false);
                         } else if (e.key === 'Escape') {
                             onChange(''); setIsOpen(false);
                         }
@@ -114,7 +98,7 @@ export const CategorySearchBox = ({
             </div>
 
             <AnimatePresence>
-                {isOpen && (visibleTags.length > 0 || q) && (
+                {isOpen && (visibleTags.length > 0 || typedTag) && (
                     <motion.div
                         initial={{ opacity: 0, y: -4 }}
                         animate={{ opacity: 1, y: 0 }}
@@ -124,11 +108,11 @@ export const CategorySearchBox = ({
                     >
                         <div className="px-3 pt-2 pb-1 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-textSecondary/50">
                             <TagIcon size={11} />
-                            {q ? `Tags matching "${value.trim()}"` : 'Suggested tags'}
+                            {q ? `Tags matching "${q}"` : 'Suggested tags'}
                         </div>
                         <div className="py-1 max-h-[280px] overflow-y-auto custom-scrollbar">
                             {visibleTags.map((tag) => {
-                                const isSelected = selectedLower.has(tag.toLowerCase());
+                                const isSelected = hasTag(selectedTags, tag);
                                 return (
                                     <button
                                         key={tag}
@@ -145,16 +129,15 @@ export const CategorySearchBox = ({
                                 );
                             })}
                         </div>
-                        {/* Always offer to apply the raw text as a tag — our suggestion
-                            list only knows tags from loaded streams, but the server can
-                            filter by any tag name (e.g. ARAM). */}
-                        {q && (
+                        {/* The typed text as a tag, whenever no listed tag is it:
+                            the server can filter by any tag name (e.g. ARAM). */}
+                        {typedTag && (
                             <button
-                                onClick={() => { onToggleTag(value.trim()); onChange(''); setIsOpen(false); }}
+                                onClick={() => { onToggleTag(typedTag); onChange(''); setIsOpen(false); }}
                                 className="w-full text-left px-3 py-2 text-sm flex items-center gap-2 border-t border-white/5 text-textSecondary hover:bg-white/10 hover:text-accent transition-colors outline-none"
                             >
                                 <CornerDownLeft size={13} className="shrink-0" />
-                                <span className="truncate">Filter by tag <span className="font-bold text-textPrimary">"{value.trim()}"</span></span>
+                                <span className="truncate">Filter by tag <span className="font-bold text-textPrimary">"{typedTag}"</span></span>
                             </button>
                         )}
                     </motion.div>

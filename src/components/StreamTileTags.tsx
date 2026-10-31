@@ -2,7 +2,7 @@ import { useState, useRef, useLayoutEffect } from 'react';
 
 interface StreamTileTagsProps {
     tags: string[];
-    selectedTags: string[];
+    selectedTags: readonly string[];
     onToggleTag: (tag: string) => void;
 }
 

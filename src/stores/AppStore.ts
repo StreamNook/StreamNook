@@ -518,6 +518,11 @@ interface AppState {
    */
   searchReturnTab: HomeTab;
   homeCategoryTab: 'live' | 'clips' | 'videos';
+  /** The category page's picked tags: one category's (its name trimmed and
+   *  lowercased, as `categoryKey` makes it) while you are in it. Kept here so
+   *  they survive Home unmounting under the player; Home clears them on leaving
+   *  the category. */
+  homeCategoryTags: { key: string; tags: string[] };
   
   // Media sorting and filtering state
   clipsPeriod: string;
@@ -699,6 +704,7 @@ interface AppState {
   openStreamCategory: (target: StreamCategoryTarget) => void;
   setSearchReturnTab: (tab: HomeTab) => void;
   setHomeCategoryTab: (tab: 'live' | 'clips' | 'videos') => void;
+  setHomeCategoryTags: (key: string, tags: string[]) => void;
   
   // Category cache actions
   setCachedTopGames: (games: TwitchCategory[], cursor: string | null, hasMore: boolean) => void;
@@ -1617,6 +1623,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   homeLastExitedProviderCategory: null,
   searchReturnTab: 'following' as HomeTab,
   homeCategoryTab: 'live' as 'live' | 'clips' | 'videos',
+  homeCategoryTags: { key: '', tags: [] },
 
   // Media sorting and filtering state
   clipsPeriod: 'all',
@@ -4038,6 +4045,10 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setHomeCategoryTab: (tab: 'live' | 'clips' | 'videos') => {
     set({ homeCategoryTab: tab });
+  },
+
+  setHomeCategoryTags: (key: string, tags: string[]) => {
+    set({ homeCategoryTags: tags.length > 0 ? { key, tags } : { key: '', tags: [] } });
   },
 
   setCachedTopGames: (games: TwitchCategory[], cursor: string | null, hasMore: boolean) => {
