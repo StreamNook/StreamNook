@@ -53,3 +53,18 @@ describe('Back before the player', () => {
     expect(useMobileNavStore.getState().playerMode).toBe('mini');
   });
 });
+
+describe('Back on Chats', () => {
+  it('leaves Chats before a category page left open under it (SN-37)', () => {
+    useMobileNavStore.setState({
+      ...base,
+      playerMode: 'mini',
+      activeTab: 'chats',
+      chatsReturnTab: 'browse',
+      browseCategory: { id: '509658', name: 'Just Chatting' } as never,
+    });
+    expect(useMobileNavStore.getState().handleBack()).toBe(true);
+    expect(useMobileNavStore.getState().activeTab).toBe('browse');
+    expect(useMobileNavStore.getState().browseCategory).not.toBeNull();
+  });
+});

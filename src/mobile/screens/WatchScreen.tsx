@@ -95,7 +95,9 @@ import { hapticStep, hapticTick } from '../ui/haptics';
 import { readInsets, type ResolvedInsets } from '../nativeInsets';
 import { swallowTrailingClick } from '../ui/trailingClick';
 import { focusUnder, refuseFocusIn } from '../ui/coveredSurface';
-import { isTwitchStream } from '../../utils/streamProvider';
+import { isTwitchStream, streamProvider } from '../../utils/streamProvider';
+import { closeVideoShown } from '../watch/closeVideoRule';
+import { closeVideo, miniCloseKeepsChatNow } from '../watch/closeVideo';
 import { createBandTouches } from '../watch/bandTouches';
 import { backClaimSide, chatSwipeIntent, chatSwipeSide } from '../watch/chatSwipe';
 import { currentZoomSurface, type ZoomSurface } from '../player/videoFill';
@@ -651,6 +653,17 @@ export const WatchScreen: React.FC = () => {
   const vodPlayback = useAppStore((s) => s.vodPlayback);
   const mediaType = useAppStore((s) => s.currentMediaType);
   const liveMuted = useLiveVideoMuted();
+  // Close video (SN-37): a live stream playing here, in the full player.
+  const closeVideoOn = closeVideoShown({
+    mini,
+    pip,
+    onTV: castOwns || tvOwns || castEnded,
+    streamUrl,
+    isLoading,
+    mediaType,
+    provider: streamProvider(currentStream),
+    userId: currentStream?.user_id ?? '',
+  });
 
   useLayoutEffect(() => {
     fitScale.set(MINI_W / viewport.w);
@@ -1555,7 +1568,8 @@ export const WatchScreen: React.FC = () => {
       className={`fixed inset-0 pointer-events-none ${pip ? 'z-[9500]' : 'z-40'}`}
       initial={{ opacity: 0, y: 40 }}
       animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: 40, transition: { duration: 0.18, ease: 'easeIn' } }}
+      // Leaving from landscape the screen turns as the layer fades: no slide on top.
+      exit={{ opacity: 0, y: shape.landscape ? 0 : 40, transition: { duration: 0.18, ease: 'easeIn' } }}
       transition={SPRING}
     >
     {/* glass-exempt: in the scale model this layer is clear on purpose; its
@@ -1710,6 +1724,7 @@ export const WatchScreen: React.FC = () => {
               layoutMode={twoColumns ? 'columns' : 'stacked'}
               offlineCardBelow={offlineChin}
               zoomable={zoomable}
+              onCloseVideo={closeVideoOn ? () => void closeVideo(true) : undefined}
               onToggleLayout={
                 // Nothing to arrange while chat is hidden.
                 canChooseLayout && !mini && !pip && !(largeToggle && largeChatHidden)
@@ -1765,7 +1780,9 @@ export const WatchScreen: React.FC = () => {
                 }}
                 onClick={(e) => {
                   e.stopPropagation();
-                  void exitStream();
+                  // On Chats reading the stream's own room, the room stays (SN-37).
+                  if (miniCloseKeepsChatNow()) void closeVideo(false);
+                  else void exitStream();
                 }}
               >
                 <span className="w-8 h-8 rounded-full bg-black/60 flex items-center justify-center text-white">

@@ -105,3 +105,49 @@ describe('reload', () => {
     expect(useChatTabsStore.getState().reloadNonce['kick:xqc']).toBe(1);
   });
 });
+
+describe('keep, load and order', () => {
+  const view = (tabs: unknown[], revision: number, release: unknown[] = []) => ({
+    tabs,
+    active_channel: null,
+    mixed_platforms: false,
+    revision,
+    acquire: [],
+    release,
+  });
+
+  it('keep answers true once Rust shows the room kept, and mirrors it', async () => {
+    const s = { ...tab('s', 'twitch', 's', '2', true), kept: true };
+    invokeMock.mockResolvedValue({ ...view([s], 3), active_channel: 's' });
+    const kept = await useChatTabsStore.getState().keep('s', true);
+    expect(kept).toBe(true);
+    expect(invokeMock).toHaveBeenCalledWith('chat_tabs_keep', { channel: 's', keep: true });
+    expect(useChatTabsStore.getState().tabs[0]).toMatchObject({ channel: 's', kept: true, pinnedToStream: true });
+  });
+
+  it('keep answers false when Rust did not keep it or the call failed', async () => {
+    invokeMock.mockResolvedValueOnce(view([tab('s', 'twitch', 's', '2', true)], 4));
+    expect(await useChatTabsStore.getState().keep('s', true)).toBe(false);
+    invokeMock.mockRejectedValueOnce(new Error('down'));
+    expect(await useChatTabsStore.getState().keep('s', true)).toBe(false);
+  });
+
+  it("load leaves the rooms another account's restore let go", async () => {
+    invokeMock.mockResolvedValue(view([], 7, [tab('a', 'twitch', 'a', '1')]));
+    useChatTabsStore.getState().load();
+    await vi.waitFor(() => expect(release).toHaveBeenCalledWith('a', 'twitch'));
+  });
+
+  it('sends each command only after the one before it answered', async () => {
+    let answerFirst: (v: unknown) => void = () => {};
+    invokeMock.mockImplementationOnce(() => new Promise((r) => (answerFirst = r)));
+    const first = useChatTabsStore.getState().keep('s', true);
+    useChatTabsStore.getState().syncStreamTab(null, null, '');
+    await Promise.resolve();
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+    answerFirst(view([], 8));
+    await first;
+    await vi.waitFor(() => expect(invokeMock).toHaveBeenCalledTimes(2));
+    expect(invokeMock.mock.calls[1]).toEqual(['chat_tabs_sync_stream', { room: null }]);
+  });
+});

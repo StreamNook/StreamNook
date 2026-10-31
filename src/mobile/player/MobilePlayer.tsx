@@ -86,6 +86,27 @@ const GAP_METRICS = 8;
  *  (the iPhone has it there already). */
 const BAR_ORDER = ['cast', 'share', 'mute', 'reload', 'settings', 'chat', 'rotate', 'minimize'] as const;
 
+/** Close video (SN-37): a bare glyph a step quieter than the name, as the
+ *  header's other controls, in a 40 px target. */
+const CloseVideoButton: React.FC<{ onClose: () => void; className: string; style?: React.CSSProperties }> = ({
+  onClose,
+  className,
+  style,
+}) => (
+  <button
+    type="button"
+    onClick={(e) => {
+      e.stopPropagation();
+      onClose();
+    }}
+    className={`${className} w-10 h-10 flex items-center justify-center text-white/80 active:opacity-60`}
+    style={style}
+    aria-label="Close video"
+  >
+    <X size={18} />
+  </button>
+);
+
 export const MobilePlayer: React.FC<{
   /** Landscape immersive mode: overlay carries no bottom rounding, adds insets. */
   immersive?: boolean;
@@ -112,6 +133,9 @@ export const MobilePlayer: React.FC<{
   offlineCardBelow?: boolean;
   /** Landscape picture of a stream: Zoom to fill and the pinch apply. */
   zoomable?: boolean;
+  /** Close video (SN-37): stops the stream; its chat carries on in Chats. Set
+   *  only where the button belongs (closeVideoShown). */
+  onCloseVideo?: () => void;
 }> = ({
   immersive = false,
   onToggleFullscreen,
@@ -125,6 +149,7 @@ export const MobilePlayer: React.FC<{
   controlsInset,
   offlineCardBelow = false,
   zoomable = false,
+  onCloseVideo,
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const { state, reason } = useMobileHlsEngine(videoRef);
@@ -528,6 +553,9 @@ export const MobilePlayer: React.FC<{
   const measureFacesRef = useRef<HTMLSpanElement>(null);
   const measureNoUptimeRef = useRef<HTMLSpanElement>(null);
   const [giveWay, setGiveWay] = useState(0);
+  // Close video shows in the header unless the failure card is up, which
+  // carries its own at the same spot (and hides the header under it).
+  const closeInHeader = !!onCloseVideo && !(state === 'error' && !offline);
   const uptimeText = formatUptime(liveStartedAt, nowMs);
   const subLabel = sub.isSubscribed ? subTerms.paidGift : sub.hasSubHistory ? subTerms.paidAgain : subTerms.paid;
   useLayoutEffect(() => {
@@ -816,6 +844,22 @@ export const MobilePlayer: React.FC<{
           className="absolute inset-0 flex flex-col items-center justify-center gap-3.5 bg-black/70 p-6"
           onClick={(e) => e.stopPropagation()}
         >
+          {/* The card takes every tap, so the controls cannot come up over it:
+              Close video is here instead, at the header button's exact spot
+              (the header's 8 px top and 12 px side, less the button's 10 px
+              overhang), clear of a landscape chat column on that side. */}
+          {onCloseVideo && (
+            <CloseVideoButton
+              onClose={onCloseVideo}
+              // Above the controls layer, which is drawn after the card and
+              // would take the first tap while the controls are up.
+              className="absolute z-10"
+              style={{
+                top: immersive ? 'calc(var(--sn-safe-t, 0px) - 2px)' : -2,
+                right: 2 + (controlsInset?.side === 'right' ? controlsInset.px : 0),
+              }}
+            />
+          )}
           <div className="text-[14px] text-white/80 text-center">{noticeLine ?? failureLine(reason)}</div>
           <button
             onClick={(e) => {
@@ -869,7 +913,7 @@ export const MobilePlayer: React.FC<{
             className="absolute inset-x-0 top-0 px-3 pt-2 [text-shadow:0_1px_2px_rgba(0,0,0,0.6)]"
             style={immersive ? { paddingTop: 'calc(var(--sn-safe-t, 0px) + 8px)' } : undefined}
           >
-            <div className="flex items-start gap-2.5">
+            <div className="relative flex items-start gap-2.5">
               {/* The face opens the channel's videos and clips (Twitch's), as on
                   the iPhone. The live red ring is for live alone. */}
               <button
@@ -906,7 +950,12 @@ export const MobilePlayer: React.FC<{
                 {/* Identity row: the name, then Subscribe, then the live
                     numbers opposite. One line always; parts give way in order
                     (GIVE_WAY_*) instead of wrapping. */}
-                <div ref={identityRowRef} className="relative flex items-center min-w-0 h-5">
+                {/* The Close video button sits over the row's corner: the row
+                    gives it room, so the give-way below measures what is left. */}
+                <div
+                  ref={identityRowRef}
+                  className={`relative flex items-center min-w-0 h-5${onCloseVideo ? ' mr-8' : ''}`}
+                >
                   <span className="flex items-center gap-1 min-w-0">{nameBlock(true)}</span>
                   {canSubscribe && giveWay < GIVE_WAY_SUBSCRIBE && (
                     <span className="ml-2 shrink-0 flex">{subscribePill(true)}</span>
@@ -965,6 +1014,10 @@ export const MobilePlayer: React.FC<{
                   </>
                 )}
               </div>
+              {/* Centered on the name line, its ink on the header's right edge. */}
+              {closeInHeader && onCloseVideo && (
+                <CloseVideoButton onClose={onCloseVideo} className="absolute -top-2.5 -right-2.5" />
+              )}
             </div>
           </div>
         )}

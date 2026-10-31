@@ -28,6 +28,7 @@ import { CollabAvatarStack } from '../../components/SharedViewers';
 import { groupFor, isTogether } from '../../utils/sharedViewers';
 import { TogetherSheet } from '../player/TogetherSheet';
 import { formatViewerCount } from '../../utils/streamStats';
+import { tabIsStream } from '../watch/closeVideoRule';
 
 /** The Chats header's room strip: 40 px capsules with 7 px of air above and
  *  below, so they sit clear of the separator under them. */
@@ -127,11 +128,16 @@ export const ChatsScreen: React.FC<{ shown?: boolean; idle?: boolean }> = ({ sho
     return () => observer.disconnect();
   }, [hasPins, pinsOpen]);
   const active = tabs.find((t) => t.channel === activeChannel) ?? null;
-  // The stream's own tab is already playing; nothing to start.
-  const canWatch = !!active && active.live === true && !active.pinnedToStream;
+  // The room the watch layer shows now (playing, loading, or its offline room):
+  // nothing to start for it. Read from the player's own state, which lets go the
+  // moment a close begins (Close video lands here), not from the stream tab's
+  // pin, which Rust drops only once the close has finished.
+  const watched = useAppStore((s) => (s.streamUrl || s.isLoading ? s.currentStream : null));
+  const activeWatched = !!active && tabIsStream(active, watched);
+  const canWatch = !!active && active.live === true && !activeWatched;
   // An offline Twitch room's way in: its channel page (latest broadcast, clips),
   // the same room a search opens. Rust starts the stream if it is live after all.
-  const canOpenRoom = !!active && active.live !== true && active.provider === 'twitch' && !active.pinnedToStream;
+  const canOpenRoom = !!active && active.live !== true && active.provider === 'twitch' && !activeWatched;
 
   const watch = useCallback(() => {
     if (active) void startStream(active.login, asStream(active));

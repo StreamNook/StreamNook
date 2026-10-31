@@ -127,5 +127,8 @@ describe('the kept Chats screen', () => {
   it('never pairs a display utility with the hidden state', () => {
     expect(keptSurfaceClass(false).split(' ').filter((c) => DISPLAY.has(c))).toEqual([]);
     expect(keptSurfaceClass(true).split(' ')).toContain('flex');
+    // Over a category page left open on Browse, under the watch layer.
+    expect(keptSurfaceClass(true).split(' ')).toContain('z-[36]');
+    expect(keptSurfaceClass(false).split(' ')).not.toContain('z-[36]');
   });
 });

@@ -815,6 +815,12 @@ type OfflineDecision =
 
 let watchSessionListening = false;
 
+/** A raid redirect follows only a stream still open in the layer: one being
+ *  closed (its URL already dropped, its row not yet) stays closed. */
+export function raidFollowAllowed(s: Pick<AppState, 'currentStream' | 'streamUrl' | 'isLoading'>): boolean {
+  return !!s.currentStream && (!!s.streamUrl || s.isLoading);
+}
+
 /** Subscribe once to the session's events, in the window that plays streams. */
 function ensureWatchSessionListeners(set: StoreSet, get: StoreGet): void {
   if (watchSessionListening) return;
@@ -826,12 +832,12 @@ function ensureWatchSessionListeners(set: StoreSet, get: StoreGet): void {
     const { target } = event.payload;
     // Phone: a raid follows a stream that is open. One closed before the
     // notice (or during it) stays closed; the raid must not reopen the layer.
-    if (IS_MOBILE && !get().currentStream) return;
+    if (IS_MOBILE && !raidFollowAllowed(get())) return;
     Logger.debug(`[WatchSession] Raid detected, joining ${target.user_login}`);
     get().addToast(`Raid starting! Joining ${target.user_login}...`, 'info');
     // Long enough to read the notice before the stream changes under it.
     await new Promise((resolve) => setTimeout(resolve, 1500));
-    if (IS_MOBILE && !get().currentStream) {
+    if (IS_MOBILE && !raidFollowAllowed(get())) {
       Logger.debug('[WatchSession] Stream closed during the raid notice; not following');
       return;
     }
@@ -2497,7 +2503,9 @@ export const useAppStore = create<AppState>((set, get) => ({
         // the viewer keeps a chat open beside the stream (a phone's Chats
         // room, a docked chat, another window), and those rooms are still on
         // screen.
-        const stopped = await invoke<boolean>('stop_chat');
+        // A failed stop reads as "still up": the shared chatter store stays,
+        // and the clear below still runs.
+        const stopped = await invoke<boolean>('stop_chat').catch(() => false);
 
         // Drop the per-chatter store (mention list + each talker's paint/badge
         // data). It is otherwise only cleared on a channel SWITCH, so a plain
@@ -2515,12 +2523,12 @@ export const useAppStore = create<AppState>((set, get) => ({
         }
       }
 
-      set({ streamUrl: null, activeQuality: null, availableQualities: [], adSource: null, playbackKind: null, currentStream: null, currentMediaType: null, currentHypeTrain: null, streamOriginCategory: null, vodPlayback: null, liveRewind: null, liveRewindAvailable: null, liveRewindAnchor: null, liveLeftOffSecs: null, offlineRoom: null, offlineRoomLive: null, offlineRoomJoining: false });
-
-
     } catch (e) {
       Logger.error('Failed to stop stream:', e);
     } finally {
+      // Whatever failed above: a half-closed stream (no URL, its row still set)
+      // would keep its chat tab pinned for good.
+      set({ streamUrl: null, activeQuality: null, availableQualities: [], adSource: null, playbackKind: null, currentStream: null, currentMediaType: null, currentHypeTrain: null, streamOriginCategory: null, vodPlayback: null, liveRewind: null, liveRewindAvailable: null, liveRewindAnchor: null, liveLeftOffSecs: null, offlineRoom: null, offlineRoomLive: null, offlineRoomJoining: false });
       finishStop();
       if (stopInFlight === stopping) stopInFlight = null;
     }

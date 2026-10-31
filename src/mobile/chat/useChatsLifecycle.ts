@@ -36,6 +36,8 @@ export function useChatsLifecycle(): void {
       currentStream?.profile_image_url ?? null,
       streamProv,
     );
+    // userId: another account's chats replace the list (and its stream tab),
+    // so the stream tab is pointed again after the load above.
   }, [
     currentStream?.user_login,
     currentStream?.user_id,
@@ -43,6 +45,7 @@ export function useChatsLifecycle(): void {
     currentStream?.profile_image_url,
     streamProv,
     syncStreamTab,
+    userId,
   ]);
 
   // The room on screen, for the mentions hub: mentions there are read as they

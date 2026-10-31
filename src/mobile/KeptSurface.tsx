@@ -8,8 +8,10 @@
 // painted over the tab in front. The display utility is only there while shown.
 import React from 'react';
 
+// Shown, it sits over a drill-in page left open on another tab (a category's
+// streams, z-[35] at the app root) and under the watch layer (z-40).
 export function keptSurfaceClass(shown: boolean): string {
-  return `absolute inset-0 flex-col ${shown ? 'flex' : 'hidden'}`;
+  return `absolute inset-0 flex-col ${shown ? 'flex z-[36]' : 'hidden'}`;
 }
 
 export const KeptSurface: React.FC<{

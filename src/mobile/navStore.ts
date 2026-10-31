@@ -224,13 +224,14 @@ export const useMobileNavStore = create<MobileNavState>((set, get) => ({
       set({ playerMode: 'mini' });
       return true;
     }
-    if (browseCategory) {
-      set({ browseCategory: null });
-      return true;
-    }
-    // Chats is a surface over the tabs: back leaves it for the tab it came from.
+    // Chats is a surface over the tabs (and over a category page left open on
+    // Browse): back leaves it for the tab it came from, category and all.
     if (activeTab === 'chats') {
       get().exitChats();
+      return true;
+    }
+    if (browseCategory) {
+      set({ browseCategory: null });
       return true;
     }
     // Back unwinds to the tab the app OPENS on, not to Following: someone who

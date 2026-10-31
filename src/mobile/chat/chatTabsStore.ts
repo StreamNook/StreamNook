@@ -132,8 +132,9 @@ interface ChatTabsState {
   connect: () => void;
   /** Leaves every chat after a while in the background (refused under a stream). */
   park: () => void;
-  /** Keeps the stream's chat after the player closes, or lets it close with it. */
-  keep: (channel: string, keep: boolean) => void;
+  /** Keeps the stream's chat after the player closes, or lets it close with it.
+   *  Answers true once Rust's list shows the room so, false otherwise. */
+  keep: (channel: string, keep: boolean) => Promise<boolean>;
 }
 
 function fromRust(t: RustTab): ChatTab {
@@ -198,9 +199,27 @@ export const useChatTabsStore = create<ChatTabsState>((set, get) => {
     );
   };
 
+  // Every command waits for the one before it to answer, so Rust applies them
+  // in the order they were sent (Close video's keep before the close's stream
+  // tab step). With nothing in flight a command goes at once.
+  let inFlight: Promise<void> | null = null;
+  const send = <T,>(command: string, args: Record<string, unknown>): Promise<T> => {
+    const run = () => invoke<T>(command, args);
+    const next = inFlight ? inFlight.then(run) : run();
+    const settled = next.then(
+      () => {},
+      () => {},
+    );
+    inFlight = settled;
+    void settled.then(() => {
+      if (inFlight === settled) inFlight = null;
+    });
+    return next;
+  };
+
   const change = (command: string, args: Record<string, unknown>) => {
     follow();
-    void invoke<RustChange>(command, args)
+    void send<RustChange>(command, args)
       .then(apply)
       .catch((err) => Logger.warn(`[ChatTabs] ${command} failed:`, err));
   };
@@ -215,12 +234,8 @@ export const useChatTabsStore = create<ChatTabsState>((set, get) => {
     revision: 0,
     reloadNonce: {},
 
-    load: () => {
-      follow();
-      void invoke<RustView>('chat_tabs_get')
-        .then(mirror)
-        .catch((err) => Logger.warn('[ChatTabs] chat_tabs_get failed:', err));
-    },
+    // Reading can restore another account's chats: apply what that leaves.
+    load: () => change('chat_tabs_get', {}),
 
     connect: () => change('chat_tabs_connect', {}),
 
@@ -228,9 +243,16 @@ export const useChatTabsStore = create<ChatTabsState>((set, get) => {
 
     keep: (channel, keep) => {
       follow();
-      void invoke<RustView>('chat_tabs_keep', { channel, keep })
-        .then(mirror)
-        .catch((err) => Logger.warn('[ChatTabs] chat_tabs_keep failed:', err));
+      const key = channel.toLowerCase();
+      return send<RustChange>('chat_tabs_keep', { channel, keep })
+        .then((answer) => {
+          apply(answer);
+          return !!answer && answer.tabs.some((t) => t.channel === key && (t.kept ?? !t.pinned_to_stream) === keep);
+        })
+        .catch((err) => {
+          Logger.warn('[ChatTabs] chat_tabs_keep failed:', err);
+          return false;
+        });
     },
 
     syncStreamTab: (channel, channelId, label, avatar, provider) =>
@@ -248,8 +270,8 @@ export const useChatTabsStore = create<ChatTabsState>((set, get) => {
       // Shown at once; Rust's answer confirms it (or puts back a room that is gone).
       const key = channel.toLowerCase();
       if (get().tabs.some((t) => t.channel === key)) set({ activeChannel: key });
-      void invoke<RustView>('chat_tabs_set_active', { channel })
-        .then(mirror)
+      void send<RustChange>('chat_tabs_set_active', { channel })
+        .then(apply)
         .catch((err) => Logger.warn('[ChatTabs] chat_tabs_set_active failed:', err));
     },
 

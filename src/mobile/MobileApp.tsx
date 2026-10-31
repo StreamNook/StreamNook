@@ -2,7 +2,7 @@
 // services, same theme system, phone-shaped chrome (bottom tabs, sheets,
 // safe-area frame). Boot orchestration is deliberately replicated, not shared;
 // see boot/useMobileBoot.ts for the contract with App.tsx.
-import React, { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import React, { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import './mobile.css';
 import { useAppStore } from '../stores/AppStore';
@@ -154,8 +154,14 @@ const MobileApp: React.FC = () => {
   if (activeTab === 'chats' && !chatsKept) setChatsKept(true);
   const chatsShown = activeTab === 'chats';
   const chatsRef = useRef<HTMLDivElement | null>(null);
+  // Chats shown while the full player covers the shell (Close video lands there)
+  // is already in place when the player fades: it does not rise as well.
+  const coveredRef = useRef(shellHidden);
+  useLayoutEffect(() => {
+    coveredRef.current = shellHidden;
+  });
   useEffect(() => {
-    if (!chatsShown || !chatsRef.current) return;
+    if (!chatsShown || !chatsRef.current || coveredRef.current) return;
     // A surface over the tabs (no tab bar there), so it rises into place.
     chatsRef.current.animate(
       [
