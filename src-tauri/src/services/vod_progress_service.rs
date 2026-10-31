@@ -547,10 +547,11 @@ pub fn is_resumable(entry: &VodProgress) -> bool {
     !entry.completed && entry.position_secs >= RESUME_MIN_SECS
 }
 
-/// Is this entry a Continue Watching card? Only a deliberately opened VOD:
-/// a live bookmark shows on its recording alone.
-pub fn is_card(entry: &VodProgress) -> bool {
-    entry.source == Source::Vod && is_resumable(entry)
+/// Is this entry a Continue Watching card? A deliberately opened VOD always;
+/// a live bookmark only when the viewer turned on live streams in the row
+/// (`continue_watching_live`), otherwise it shows on its recording alone.
+pub fn is_card(entry: &VodProgress, with_live: bool) -> bool {
+    (entry.source == Source::Vod || with_live) && is_resumable(entry)
 }
 
 /// Order the row: newest watch first, capped. Ties break on the id so the
@@ -567,9 +568,10 @@ fn rank(rows: &mut Vec<VodProgress>, limit: usize) {
 }
 
 /// Most recently watched VODs that still have somewhere to resume, newest
-/// first. Reads the local store only, so the Continue Watching row paints with
-/// no Twitch call and survives a cold start.
-pub fn recent(limit: usize) -> Vec<VodProgress> {
+/// first, with live bookmarks among them when `with_live`. Reads the local
+/// store only, so the Continue Watching row paints with no Twitch call and
+/// survives a cold start.
+pub fn recent(limit: usize, with_live: bool) -> Vec<VodProgress> {
     if limit == 0 {
         return Vec::new();
     }
@@ -578,7 +580,7 @@ pub fn recent(limit: usize) -> Vec<VodProgress> {
             .file
             .entries
             .values()
-            .filter(|p| is_card(p))
+            .filter(|p| is_card(p, with_live))
             .cloned()
             .collect();
         rank(&mut rows, limit);
@@ -1078,7 +1080,8 @@ pub fn apply_remote_dismissals(dismissals: &[(String, i64)]) -> bool {
 /// The row's entries holding a position Twitch has not seen: watched while
 /// sync was off or offline, or the last report before the app quit.
 pub fn unsynced(limit: usize) -> Vec<VodProgress> {
-    recent(limit)
+    // VOD cards only, whatever the row shows: a live bookmark never syncs.
+    recent(limit, false)
         .into_iter()
         .filter(|p| p.synced_at < p.updated_at)
         .collect()
@@ -1186,14 +1189,19 @@ mod tests {
     }
 
     #[test]
-    fn a_live_bookmark_is_never_a_card_and_never_syncs() {
+    fn a_live_bookmark_is_a_card_only_when_asked_and_never_syncs() {
         let live = live_entry("v", 1);
         assert!(is_resumable(&live));
-        assert!(!is_card(&live));
+        assert!(!is_card(&live, false));
+        assert!(is_card(&live, true));
         assert!(!may_sync(&live));
         let vod = entry("w", 900.0, 3600.0, 1);
-        assert!(is_card(&vod));
+        assert!(is_card(&vod, false));
+        assert!(is_card(&vod, true));
         assert!(may_sync(&vod));
+        // A bookmark too early in the broadcast to resume is no card either way.
+        let early = VodProgress { position_secs: 12.0, ..live_entry("x", 1) };
+        assert!(!is_card(&early, true));
     }
 
     #[test]

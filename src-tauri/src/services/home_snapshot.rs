@@ -1130,13 +1130,18 @@ async fn refresh_continue_watching(inner: &Inner) {
     //
     // Read on ONE line: `settings` is a std Mutex and its guard must not be
     // alive across the await below (same shape as streaming.rs's resume read).
-    let enabled = match app_state(&inner.app) {
-        Some(state) => state.settings.lock().unwrap().video_player.resume_vod_playback,
-        None => true,
+    // Live streams the viewer left partway through join the row only when
+    // they asked for it (Resume VODs > Live streams).
+    let (enabled, with_live) = match app_state(&inner.app) {
+        Some(state) => {
+            let s = state.settings.lock().unwrap();
+            (s.video_player.resume_vod_playback, s.video_player.continue_watching_live)
+        }
+        None => (true, false),
     };
     let items: Vec<ContinueWatchingItem> = if enabled {
-        let rows = tokio::task::spawn_blocking(|| {
-            crate::services::vod_progress_service::recent(CONTINUE_LIMIT)
+        let rows = tokio::task::spawn_blocking(move || {
+            crate::services::vod_progress_service::recent(CONTINUE_LIMIT, with_live)
         })
         .await
         .unwrap_or_default();

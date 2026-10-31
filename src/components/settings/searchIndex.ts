@@ -130,6 +130,14 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   },
   {
     tab: 'Player',
+    section: 'Playback',
+    sectionId: 'settings-section-video-player',
+    title: 'Live streams',
+    parent: 'Resume VODs',
+    description: 'Continue Watching also shows live streams you left partway through, each opening its recording where you left. Resume a livestream, pick up a stream where I left off, live resume.'
+  },
+  {
+    tab: 'Player',
     section: 'Auto-Switch',
     sectionId: 'settings-section-auto-switch',
     title: 'Auto-Switch',

@@ -141,6 +141,7 @@ const PlayerSettings = () => {
   const mediaKeys = videoPlayer?.media_keys ?? true;
   const resumeVodPlayback = videoPlayer?.resume_vod_playback ?? true;
   const syncVodProgress = videoPlayer?.sync_vod_progress ?? true;
+  const continueWatchingLive = videoPlayer?.continue_watching_live ?? false;
   const targetLatencyLabel =
     videoPlayer?.ll_target_latency == null ? 'Auto' : `${videoPlayer.ll_target_latency.toFixed(1)}s`;
   const wheelVolumeStep = videoPlayer?.wheel_volume_step ?? 0.05;
@@ -651,7 +652,7 @@ const PlayerSettings = () => {
           help={
             IS_MOBILE
               ? "Off starts every VOD from the beginning. Only past broadcasts you open yourself are remembered, never a live stream you were watching. Device sync keeps your place in each VOD the same on every StreamNook you sign in to, and saves it to your Twitch account for Twitch's own apps."
-              : "Off starts every VOD from the beginning and hides the Continue Watching row; positions are still remembered for the video cards. Only VODs you open yourself are remembered, never a live stream you were watching. Device sync keeps your Continue Watching row and your place in each VOD the same on every StreamNook you sign in to, and saves your place to your Twitch account for Twitch's own apps."
+              : "Off starts every VOD from the beginning and hides the Continue Watching row; positions are still remembered for the video cards. Live streams adds the streams you left partway through to the row, each opening its recording where you left; a stream you watched to the end or only flipped past for a couple of minutes stays off. Device sync keeps your Continue Watching row and your place in each VOD the same on every StreamNook you sign in to, and saves your place to your Twitch account for Twitch's own apps."
           }
           control={
             <Toggle
@@ -683,6 +684,26 @@ const PlayerSettings = () => {
                   />
                 }
               />
+              {/* Desktop only: the phones draw no Continue Watching row. */}
+              {!IS_MOBILE && (
+                <SubControl
+                  title="Live streams"
+                  onReset={
+                    continueWatchingLive
+                      ? thenRun(resetFor(['video_player.continue_watching_live', false]), refreshContinueWatching)
+                      : undefined
+                  }
+                  control={
+                    <Toggle
+                      enabled={continueWatchingLive}
+                      onChange={() => {
+                        setVideoPlayer({ continue_watching_live: !continueWatchingLive });
+                        refreshContinueWatching();
+                      }}
+                    />
+                  }
+                />
+              )}
             </SubControls>
           )}
         </SettingsRow>

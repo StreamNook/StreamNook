@@ -202,6 +202,12 @@ pub struct VideoPlayerSettings {
     /// `resume_vod_playback` is on.
     #[serde(default = "default_true")]
     pub sync_vod_progress: bool,
+    /// Home's Continue Watching row also shows the live broadcasts the viewer
+    /// left partway through (the `live_bookmark` entries), opening each one's
+    /// recording at that spot. Off by default: a stream you quit stays off the
+    /// row unless you ask for it. Only applies while `resume_vod_playback` is on.
+    #[serde(default)]
+    pub continue_watching_live: bool,
     /// Ad-free live playback (Android). Routes the playlist through a public
     /// relay and strips ad segments out of what the player is served. On by
     /// default, matching the behavior the phone app shipped with through 7.8.6.
@@ -278,6 +284,7 @@ impl Default for VideoPlayerSettings {
             wheel_volume_step: 0.05,
             resume_vod_playback: true,
             sync_vod_progress: true,
+            continue_watching_live: false,
             zoom_to_fill: false,
         }
     }

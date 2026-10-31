@@ -104,6 +104,10 @@ export interface VideoPlayerSettings {
    *  StreamNook installs (and your place in Twitch's apps). Only applies while
    *  resume_vod_playback is on. Default true. */
   sync_vod_progress?: boolean;
+  /** Home's Continue Watching row also shows live streams you left partway
+   *  through, opening each recording where you left. Only applies while
+   *  resume_vod_playback is on. Default false. Typed in Rust. */
+  continue_watching_live?: boolean;
 }
 
 export interface CacheSettings {
