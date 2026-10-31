@@ -100,9 +100,16 @@ describe('mod buttons act only on still rows', () => {
 
 describe('a press holds its row', () => {
   it('the thaw waits for the click, and focus loss releases', () => {
-    expect(list).toMatch(/later = window\.setTimeout\(release, 0\);/);
+    expect(list).toContain('thaw = armThaw(window, release);');
     expect(list).toContain("window.addEventListener('blur', release);");
     expect(list).toContain("document.addEventListener('visibilitychange', onHidden);");
+  });
+});
+
+describe('a touch pauses chat by the host rule', () => {
+  it('asks touchPauseIntent with the host ratio', () => {
+    expect(list).toContain('const intent = touchPauseIntent(');
+    expect(list).toContain('touchPauseRatio?.(),');
   });
 });
 

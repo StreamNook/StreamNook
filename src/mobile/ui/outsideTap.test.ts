@@ -116,4 +116,16 @@ describe('installKeyboardTaps', () => {
     expect(field.blur).toHaveBeenCalled();
     stop();
   });
+
+  it('a row swipe drifting into the keyboard does not pull it down', () => {
+    const field = el('TEXTAREA', ['data-chat-composer']);
+    const doc = page(field);
+    const stop = installKeyboardTaps(doc as unknown as Document, () => 700);
+    // The list carries data-row-swipe while a swipe has the finger.
+    const row = el('DIV', ['data-chat-list', 'data-row-swipe']);
+    fire(doc, 'touchstart', { target: row, touches: [{ clientY: 300 }] });
+    fire(doc, 'touchmove', { target: row, touches: [{ clientY: 705 }] });
+    expect(field.blur).not.toHaveBeenCalled();
+    stop();
+  });
 });

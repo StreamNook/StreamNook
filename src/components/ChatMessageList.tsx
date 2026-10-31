@@ -14,6 +14,7 @@ import type { ProviderId } from '../types/providers';
 import { ScrollbarMarks } from './chat/ScrollbarMarks';
 import { holdChatRow, moderateWithToast, PICKER_EVENT, ROW_HOLD_EVENT, useLineConfig, useModSliderSteps, useSliderConfig, type ModStep } from '../services/moderation';
 import { edgesMoved, isStill, tapAgain, type Edges, type Tap } from './chat/modPress';
+import { armThaw, touchPauseIntent } from './chat/chatHold';
 import { lineButtons, type LineButton } from './chat/modLine';
 import { bindLineStrips, bindLineWheel, useLineArt, useLineButtons } from './chat/lineArt';
 import { collectMarks, FALLBACK_MARK_KINDS } from './chat/scrollbarMarkLayout';
@@ -286,6 +287,10 @@ interface ChatMessageListProps {
   /** Resume to live, as the Chat Paused button does. Called when a reason
    *  picker that paused chat closes and nobody paused it since. */
   onResumeIntent?: () => void;
+  /** Phones whose rows take sideways swipes: the swipe's ratio while one could still start on
+   *  the touch, so a sideways drag never pauses chat (`touchPauseIntent`). Absent everywhere else,
+   *  where any downward move pauses. */
+  touchPauseRatio?: () => number | undefined;
   onUsernameClick: (
     userId: string,
     username: string,
@@ -350,6 +355,7 @@ const ChatMessageList = memo(function ChatMessageList({
   onScroll,
   onPauseIntent,
   onResumeIntent,
+  touchPauseRatio,
   onUsernameClick,
   onReplyClick,
   onMessageCopy,
@@ -449,7 +455,12 @@ const ChatMessageList = memo(function ChatMessageList({
     const el = containerRef.current;
     if (!el) return;
     const freeze = freezeRef.current;
-    let later: number | undefined;
+    // The thaw a lifted press is waiting on (its click, or the backstop).
+    let thaw: (() => void) | null = null;
+    function stopThaw() {
+      thaw?.();
+      thaw = null;
+    }
     function stopListening() {
       window.removeEventListener('pointerup', onUp, true);
       window.removeEventListener('pointercancel', release, true);
@@ -457,7 +468,7 @@ const ChatMessageList = memo(function ChatMessageList({
       document.removeEventListener('visibilitychange', onHidden);
     }
     function release() {
-      window.clearTimeout(later);
+      stopThaw();
       stopListening();
       freeze.press = false;
       syncFreeze();
@@ -473,10 +484,12 @@ const ChatMessageList = memo(function ChatMessageList({
     }
     // The pressed button's click comes after the button-up, so the thaw waits
     // for it: thawing first can re-pin or trim the button away, and a button
-    // removed before its click gets none.
+    // removed before its click gets none. On a phone the click can come a few
+    // frames after the lift, and Chromium aims it at the layout of that moment,
+    // so the thaw waits for the click itself (or a backstop).
     function onUp() {
-      window.clearTimeout(later);
-      later = window.setTimeout(release, 0);
+      stopThaw();
+      thaw = armThaw(window, release);
     }
     // A window losing focus or hiding mid-press may never send the button-up.
     function onHidden() {
@@ -488,7 +501,7 @@ const ChatMessageList = memo(function ChatMessageList({
         return;
       }
       const row = e.target as HTMLElement;
-      window.clearTimeout(later);
+      stopThaw();
       rowHoldRef.current = { row, top: row.getBoundingClientRect().top };
       freeze.press = true;
       syncFreeze();
@@ -500,7 +513,7 @@ const ChatMessageList = memo(function ChatMessageList({
     el.addEventListener(ROW_HOLD_EVENT, onHold);
     return () => {
       el.removeEventListener(ROW_HOLD_EVENT, onHold);
-      window.clearTimeout(later);
+      stopThaw();
       stopListening();
       freeze.press = false;
       syncFreeze();
@@ -597,6 +610,8 @@ const ChatMessageList = memo(function ChatMessageList({
   // Flag persists until user scrolls DOWN or reaches bottom
   const userScrolledUpRef = useRef(false);
   const lastTouchY = useRef(0);
+  // Where the touch began, for a host's sideways-swipe rule (`touchPauseRatio`).
+  const touchStartAt = useRef({ x: 0, y: 0 });
   // Counts the viewer's own pause gestures (a wheel or finger up, a scrollbar
   // press), so a reason picker knows whether chat is still paused only
   // because of it.
@@ -638,6 +653,7 @@ const ChatMessageList = memo(function ChatMessageList({
   // Handle touch scrolling - track direction via Y position change
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
     lastTouchY.current = e.touches[0].clientY;
+    touchStartAt.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
   }, []);
 
   // Touch is the INVERSE of wheel, and reading it the wheel way is what made
@@ -650,17 +666,23 @@ const ChatMessageList = memo(function ChatMessageList({
     const currentY = e.touches[0].clientY;
     const fingerDelta = currentY - lastTouchY.current; // positive = finger moved down
     lastTouchY.current = currentY;
+    const intent = touchPauseIntent(
+      fingerDelta,
+      e.touches[0].clientX - touchStartAt.current.x,
+      currentY - touchStartAt.current.y,
+      touchPauseRatio?.(),
+    );
 
-    if (fingerDelta > 0) {
+    if (intent === 'pause') {
       // Finger down: revealing older messages (away from the live bottom).
       userScrolledUpRef.current = true;
       userPausesRef.current += 1;
       onPauseIntent?.();
-    } else if (fingerDelta < 0) {
+    } else if (intent === 'clear') {
       // Finger up: heading back toward the live bottom - clear the flag.
       userScrolledUpRef.current = false;
     }
-  }, [onPauseIntent]);
+  }, [onPauseIntent, touchPauseRatio]);
 
   // The latest pause and resume callbacks, so a new one never restarts the
   // moderator effect below.

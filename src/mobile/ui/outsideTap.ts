@@ -79,7 +79,7 @@ export function installKeyboardTaps(
   let press: { id: number; x: number; y: number; verdict: KeyboardTap; field: HTMLElement } | null = null;
   // A drag on the chat list while typing: where it started, to see it head
   // down. Touch events, since a scroll cancels the pointer stream.
-  let drag: { y: number; field: HTMLElement } | null = null;
+  let drag: { y: number; field: HTMLElement; list: Element } | null = null;
 
   const onDown = (e: PointerEvent) => {
     press = null;
@@ -96,13 +96,16 @@ export function installKeyboardTaps(
     drag = null;
     const field = editingField(doc.activeElement);
     const t = e.touches[0];
-    if (field && t && e.touches.length === 1 && elementOf(e.target)?.closest('[data-chat-list]')) {
-      drag = { y: t.clientY, field };
+    const list = elementOf(e.target)?.closest('[data-chat-list]');
+    if (field && t && e.touches.length === 1 && list) {
+      drag = { y: t.clientY, field, list };
     }
   };
   const onTouchMove = (e: TouchEvent) => {
     const t = e.touches[0];
     if (!drag || !t || t.clientY <= drag.y) return;
+    // A row swipe (reply or moderate) owns this touch: drifting into the keyboard is not a pull.
+    if (drag.list.closest('[data-row-swipe]')) return;
     const top = keyboardTop();
     if (top != null && t.clientY >= top) {
       drag.field.blur();
