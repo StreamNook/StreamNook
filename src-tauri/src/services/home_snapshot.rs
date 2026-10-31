@@ -644,7 +644,7 @@ pub async fn note_app_resumed() -> bool {
     crate::services::mention_watch::client::pull_soon();
     let Some(inner) = SERVICE.get() else { return false };
     // The Favorites shelf holds channels followed nowhere, which only the
-    // favourites sweep sees: re-check them too, signed in or not.
+    // favorites sweep sees: re-check them too, signed in or not.
     let sweep = stamp_if_due(&mut *inner.last_manual.lock().await, "favorites_resume", RESUME_STALE, Instant::now());
     if sweep {
         spawn_favorites_sweep(inner);
@@ -900,19 +900,30 @@ async fn rebuild_following(inner: &Inner) {
     rebuild_into(inner, &mut slot).await;
 }
 
-/// The Following lists a reader gets, with the revision they went out under:
-/// exactly what the slot holds, built into it (and emitted) first when it is
-/// empty. Content and revision are read under one lock, so a window holding a
-/// newer event never takes an older list at the same number.
+/// The Following lists a reader gets, with the revision they went out under.
+/// Built into the slot first (and emitted when they changed), so a reader never
+/// gets lists older than their inputs, even after a change nothing announced;
+/// then exactly what the slot holds. Content and revision are read under one
+/// lock, so a window holding a newer event never takes an older list at the
+/// same number.
 async fn following_served(inner: &Inner) -> (Following, u64) {
     let mut slot = inner.following.lock().await;
-    if slot.is_none() {
-        rebuild_into(inner, &mut slot).await;
-    }
+    rebuild_into(inner, &mut slot).await;
     match slot.as_ref() {
         Some((held, rev)) => (following_shown(held.clone()), *rev),
         None => (Following::default(), 0),
     }
+}
+
+/// The revision the Following lists hold right now, built from their current
+/// inputs first (and emitted when they changed). A writer that just committed a
+/// change answers with it, so a shell knows which push carries its write. 0
+/// before the service starts.
+pub async fn following_rev_now() -> u64 {
+    let Some(inner) = SERVICE.get() else { return 0 };
+    let mut slot = inner.following.lock().await;
+    rebuild_into(inner, &mut slot).await;
+    slot.as_ref().map_or(0, |(_, rev)| *rev)
 }
 
 /// Stamp `key` and answer true, unless it was stamped less than `floor` ago.
@@ -924,7 +935,7 @@ fn stamp_if_due(last: &mut HashMap<&'static str, Instant>, key: &'static str, fl
     true
 }
 
-/// Ask every favourite's platform who is live now, off the caller's path.
+/// Ask every favorite's platform who is live now, off the caller's path.
 /// Favourites followed nowhere come only from this sweep.
 fn spawn_favorites_sweep(inner: &Inner) {
     let Some(state) = app_state(&inner.app) else { return };
@@ -2141,6 +2152,42 @@ mod tests {
         assert!(body.contains("following_served(inner).await"), "the snapshot reads the slot");
         assert!(!body.contains("unified_following::build("), "the snapshot never builds its own Following");
         assert!(body.contains("snap.following_rev = following_rev;"));
+        let served = fn_body("async fn following_served(");
+        assert!(served.contains("rebuild_into(inner, &mut slot).await;"));
+        assert!(
+            !served.contains("if slot.is_none()"),
+            "a read always rebuilds, so an unannounced change is never served stale"
+        );
+        let now = fn_body("pub async fn following_rev_now() -> u64 {");
+        assert!(now.contains("rebuild_into(inner, &mut slot).await;"), "the answered revision holds the write");
+        assert!(now.contains("slot.as_ref().map_or(0, |(_, rev)| *rev)"));
+    }
+
+    #[test]
+    fn every_follow_list_write_announces_itself() {
+        let src = include_str!("../commands/provider_browse.rs").replace("\r\n", "\n");
+        let body_of = |signature: &str| -> String {
+            let start = src.find(signature).expect(signature);
+            let end = src[start..].find("\n}\n").expect("function end");
+            src[start..start + end].to_string()
+        };
+        let persist = body_of("fn persist(state: &State<'_, AppState>)");
+        assert!(persist.contains("crate::services::home_snapshot::note_discover_inputs_changed();"));
+        for writer in [
+            "pub async fn provider_follow(",
+            "pub async fn provider_unfollow(",
+            "pub async fn kick_account_sync(",
+            "pub async fn youtube_account_sync(",
+            "pub fn clear_imported_follows(",
+        ] {
+            let body = body_of(writer);
+            assert!(
+                body.contains("persist(&state)?") || body.contains("persist(state)?"),
+                "{writer} saves through persist"
+            );
+        }
+        let backfill = body_of("fn spawn_avatar_backfill(");
+        assert!(backfill.contains("crate::services::home_snapshot::note_discover_inputs_changed();"));
     }
 
     #[test]

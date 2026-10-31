@@ -99,7 +99,7 @@ pub fn stream_key(provider: &str, user_login: &str) -> String {
 /// `FavoriteKey.id`), and they must agree EXACTLY, held to the `favorite_id`
 /// cases in `src/utils/providerTwins.fixtures.json`. A login that is a room key
 /// of its own platform (`kick:xqc` on Kick) names that channel. The unified
-/// Discover list drops a live favourite by this id while
+/// Discover list drops a live favorite by this id while
 /// the Favourites section above it is still chosen by the TypeScript one, so a
 /// disagreement shows a channel twice, or in neither place. It is the
 /// identifier each platform's live check accepts:

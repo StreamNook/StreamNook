@@ -2808,11 +2808,16 @@ async fn favorite(c: &Call<'_>, o: &mut Outcome, add: bool) -> Result<(), String
     // A Kick (or other platform) room favorites itself when no channel is named.
     if typed.is_empty() {
         if let Some((provider, channel)) = c.login().split_once(':') {
-            let Some(id) = crate::services::providers::key::favorite_id(provider, "", channel) else {
+            // A YouTube room is keyed by its channel's UC id, which the id rule
+            // reads as the user id.
+            let user_id = (provider == "youtube" && channel.starts_with("UC")).then_some(channel);
+            let Some(id) =
+                crate::services::providers::key::favorite_id(provider, user_id.unwrap_or(""), channel)
+            else {
                 o.err("Couldn't work out which channel this is");
                 return Ok(());
             };
-            return set_favorite(b, o, provider, None, channel, channel, None, &id, add).await;
+            return set_favorite(b, o, provider, user_id, channel, channel, None, &id, add).await;
         }
     }
     let who = Some(typed).filter(|s| !s.is_empty()).unwrap_or_else(|| c.login().to_string());

@@ -1120,6 +1120,19 @@ async fn favorite_with_no_name_in_a_kick_room_favorites_the_room() {
 }
 
 #[tokio::test]
+async fn favorite_with_no_name_in_a_youtube_room_names_the_channel_by_its_uc_id() {
+    let fake = Fake::new();
+    fake.answer(favorite_answer("youtube:UCabcDEF123"));
+    *fake.settings.lock().unwrap() = json!({ "favorite_streamers": [] });
+    let o = run_in(&fake, "youtube:UCabcDEF123", "/favorite").await;
+    assert_eq!(toast(&o, ToastKind::Success), vec!["UCabcDEF123 added to favorites"]);
+    assert_eq!(
+        fake.calls("set_favorite_channel"),
+        vec![json!({ "provider": "youtube", "userId": "UCabcDEF123", "userLogin": "UCabcDEF123", "userName": null, "avatar": null, "favorite": true })]
+    );
+}
+
+#[tokio::test]
 async fn favorite_says_when_the_door_could_not_do_it() {
     let fake = Fake::new();
     *fake.settings.lock().unwrap() = json!({ "favorite_streamers": [] });

@@ -5696,20 +5696,19 @@ impl TwitchService {
 
     /// `user_id -> (login, display name, avatar)` for a batch of Twitch users.
     ///
-    /// Used to back-fill identity for favourites saved before the identity
-    /// sidecar existed: those are bare ids, and without a name and a face they
-    /// can't be drawn in the offline roster at all.
+    /// Fills in identity for favorites saved as bare ids, emote owner names and
+    /// channel faces. A missing token, a failed request, a refused status or an
+    /// unreadable answer is an error, so a caller never takes a failed call for
+    /// "no such user".
     pub async fn users_by_ids(
         ids: &[String],
-    ) -> std::collections::HashMap<String, (String, String, Option<String>)> {
+    ) -> Result<std::collections::HashMap<String, (String, String, Option<String>)>, String> {
         let mut out = std::collections::HashMap::new();
         if ids.is_empty() {
-            return out;
+            return Ok(out);
         }
 
-        let Ok(token) = Self::get_token().await else {
-            return out;
-        };
+        let token = Self::get_token().await.map_err(|e| e.to_string())?;
         let client = crate::services::http::client().clone();
 
         for chunk in ids.chunks(100) {
@@ -5720,24 +5719,21 @@ impl TwitchService {
                 .join("&");
             let url = format!("https://api.twitch.tv/helix/users?{}", query);
 
-            let Ok(response) = client
+            let response = client
                 .get(&url)
                 .header("Client-Id", CLIENT_ID)
                 .header(AUTHORIZATION, format!("Bearer {}", token))
                 .send()
                 .await
-            else {
-                continue;
-            };
+                .map_err(|e| e.to_string())?;
             if !response.status().is_success() {
-                continue;
+                return Err(format!("Twitch answered {} for users", response.status()));
             }
-            let Ok(json) = response.json::<serde_json::Value>().await else {
-                continue;
-            };
-            let Some(arr) = json.get("data").and_then(|d| d.as_array()) else {
-                continue;
-            };
+            let json = response.json::<serde_json::Value>().await.map_err(|e| e.to_string())?;
+            let arr = json
+                .get("data")
+                .and_then(|d| d.as_array())
+                .ok_or_else(|| "Twitch's users answer had no data".to_string())?;
             for user in arr {
                 let Some(id) = user.get("id").and_then(|v| v.as_str()) else {
                     continue;
@@ -5762,7 +5758,7 @@ impl TwitchService {
             }
         }
 
-        out
+        Ok(out)
     }
 
     /// Get User Chat Color for a batch of users, returning `user_id -> hex color`.

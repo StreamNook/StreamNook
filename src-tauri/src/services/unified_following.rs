@@ -68,12 +68,12 @@ pub struct Following {
     /// (Favorite or Unfavorite), pushed with the lists so a label never reads
     /// a window's own settings copy.
     pub favorite_ids: Vec<String>,
-    /// Each favourite with the channel it names, so a Twitch room whose id is
+    /// Each favorite with the channel it names, so a Twitch room whose id is
     /// not known yet can still be matched by its login.
     pub favorites_list: Vec<FavoriteListEntry>,
 }
 
-/// One favourite as the shells match it.
+/// One favorite as the shells match it.
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct FavoriteListEntry {
     pub id: String,
@@ -83,7 +83,7 @@ pub struct FavoriteListEntry {
     pub channel: String,
 }
 
-/// One favourite's entry: the kept identity's channel, else the channel a
+/// One favorite's entry: the kept identity's channel, else the channel a
 /// composite id names, else empty (a bare Twitch id with no identity yet).
 fn favorite_entry(id: &str, channels: &[FavoriteChannel]) -> FavoriteListEntry {
     if let Some(f) = channels.iter().find(|f| f.id == id) {
@@ -500,7 +500,7 @@ mod tests {
     }
 
     #[test]
-    fn the_favorites_list_names_each_favourite_s_channel() {
+    fn the_favorites_list_names_each_favorite_s_channel() {
         let mut g = Given::new();
         g.favorite_ids = vec!["71092938".into(), "kick:Solo".into(), "555".into()];
         g.favorite_channels = vec![favorite("71092938", "twitch", "XQC")];
@@ -512,11 +512,11 @@ mod tests {
     }
 
     #[test]
-    fn a_new_favourite_changes_the_lists_even_when_no_row_moves() {
+    fn a_new_favorite_changes_the_lists_even_when_no_row_moves() {
         let mut g = Given::new();
         let before = g.build();
         g.favorite_ids = vec!["kick:solo".into()];
-        assert_ne!(g.build(), before, "a favourite change must emit, or the shells' labels go stale");
+        assert_ne!(g.build(), before, "a favorite change must emit, or the shells' labels go stale");
     }
 
     /// The field names the TS store and the iPhone's `FollowingLists` decode.

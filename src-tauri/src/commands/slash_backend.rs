@@ -414,14 +414,42 @@ mod tests {
     fn every_command_the_dispatcher_invokes_has_an_arm() {
         let dispatcher = include_str!("../services/slash_dispatch.rs").replace("\r\n", "\n");
         let backend = include_str!("slash_backend.rs").replace("\r\n", "\n");
-        let called = regex::Regex::new(r#"\.invoke\(\s*"([a-z0-9_]+)""#).unwrap();
         let arm = regex::Regex::new(r#""([a-z0-9_]+)"\s*(?:=>|\|)"#).unwrap();
         let arms: std::collections::HashSet<&str> = arm.captures_iter(&backend).map(|c| c.get(1).unwrap().as_str()).collect();
-        let missing: Vec<&str> = called
-            .captures_iter(&dispatcher)
-            .map(|c| c.get(1).unwrap().as_str())
-            .filter(|name| !arms.contains(name))
-            .collect();
+        // Every shape a command name reaches `invoke` through: called directly,
+        // or handed to a helper that calls it.
+        let shapes = [
+            r#"\.invoke\(\s*"([a-z0-9_]+)""#,
+            r#"\blines\(\s*"([a-z0-9_]+)""#,
+            r#"\bon_user\(\s*c,\s*o,\s*&username,\s*"([a-z0-9_]+)""#,
+            r#"\btext\(\s*"([a-z0-9_]+)""#,
+        ];
+        let mut called: Vec<String> = Vec::new();
+        for shape in shapes {
+            let re = regex::Regex::new(shape).unwrap();
+            called.extend(re.captures_iter(&dispatcher).map(|c| c.get(1).unwrap().as_str().to_string()));
+        }
+        // The moderation commands pick their name from one tuple match.
+        let tuple_start = dispatcher
+            .find("let (cmd, done, with_broadcaster) = match c.command {")
+            .expect("the tuple match");
+        let tuple = &dispatcher[tuple_start..tuple_start + dispatcher[tuple_start..].find("};").unwrap()];
+        let tuple_name = regex::Regex::new(r#"=>\s*\(\s*"([a-z0-9_]+)""#).unwrap();
+        called.extend(tuple_name.captures_iter(tuple).map(|c| c.get(1).unwrap().as_str().to_string()));
+        // `let cmd = ...;` picks a name by condition or by match.
+        let let_cmd = regex::Regex::new(r#"(?:=>|\{)\s*"([a-z0-9_]+)"\s*[,}]"#).unwrap();
+        let mut from = 0;
+        while let Some(at) = dispatcher[from..].find("let cmd = ") {
+            let start = from + at;
+            let end = start + dispatcher[start..].find(";\n").expect("statement end");
+            called.extend(let_cmd.captures_iter(&dispatcher[start..end]).map(|c| c.get(1).unwrap().as_str().to_string()));
+            from = end;
+        }
+        assert!(called.iter().any(|n| n == "slash_followage"), "the helper shapes are read");
+        assert!(called.iter().any(|n| n == "send_shoutout"), "the tuple match is read");
+        assert!(called.iter().any(|n| n == "add_blocked_term"), "`let cmd` conditions are read");
+        assert!(called.iter().any(|n| n == "slash_founders"), "`let cmd` matches are read");
+        let missing: Vec<&String> = called.iter().filter(|name| !arms.contains(name.as_str())).collect();
         assert!(missing.is_empty(), "no arm in slash_backend.rs for {missing:?}");
         assert!(arms.contains("set_favorite_channel"));
     }

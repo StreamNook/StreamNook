@@ -198,6 +198,19 @@ fn rekey(id: &str) -> String {
     if let Some((provider, _)) = id.split_once(':') {
         if is_provider_id(provider) {
             let channel = strip_own_prefix(provider, id);
+            // Nothing after the prefix, or nothing to strip: stored as written.
+            if channel.is_empty() || channel == id {
+                return id.to_string();
+            }
+            // A Twitch favorite is keyed by its bare numeric id; any other
+            // Twitch id is left as written.
+            if provider == "twitch" {
+                return if channel.chars().all(|c| c.is_ascii_digit()) {
+                    channel.to_string()
+                } else {
+                    id.to_string()
+                };
+            }
             return format!("{provider}:{channel}");
         }
     }
@@ -266,6 +279,10 @@ pub fn repair(settings: &mut Settings) -> bool {
 /// How many tries an id may go unanswered before the fill stops asking.
 const FILL_MISS_LIMIT: u32 = 3;
 
+/// How many ids one fill try asks for: one Helix page. The rest follow on the
+/// next followed poll.
+const FILL_BATCH: usize = 100;
+
 #[derive(Default)]
 struct FillState {
     /// The account the counts below belong to.
@@ -299,18 +316,25 @@ fn fill_due(state: &mut FillState, generation: u64, now: Instant) -> bool {
     state.next_at.map_or(true, |at| now >= at)
 }
 
-/// Record one try: `missing` was asked for and `found` came back.
+/// Record one try: `missing` was asked for and `found` came back (`None`: the
+/// call failed, which backs off without counting a miss against any id).
 fn record_fill(
     state: &mut FillState,
     missing: &[String],
-    found: &HashMap<String, (String, String, Option<String>)>,
+    found: Option<&HashMap<String, (String, String, Option<String>)>>,
     now: Instant,
 ) {
-    let partial = missing.iter().any(|id| !found.contains_key(id));
-    if partial {
-        for id in missing.iter().filter(|id| !found.contains_key(*id)) {
-            *state.misses.entry(id.clone()).or_default() += 1;
+    let partial = match found {
+        Some(found) => {
+            let unanswered: Vec<&String> = missing.iter().filter(|id| !found.contains_key(*id)).collect();
+            for id in &unanswered {
+                *state.misses.entry((*id).clone()).or_default() += 1;
+            }
+            !unanswered.is_empty()
         }
+        None => true,
+    };
+    if partial {
         state.failures += 1;
         state.next_at = Some(now + backoff_after(state.failures));
     } else {
@@ -378,7 +402,7 @@ pub fn spawn_fill_identities(app: AppHandle) {
         return;
     };
     let generation = TwitchService::account_generation();
-    let missing = {
+    let mut missing = {
         let Ok(settings) = state.settings.lock() else {
             return;
         };
@@ -388,24 +412,34 @@ pub fn spawn_fill_identities(app: AppHandle) {
         }
         missing_identities(&settings, &fill.misses)
     };
+    missing.truncate(FILL_BATCH);
     if missing.is_empty() || FILL_RUNNING.swap(true, Ordering::AcqRel) {
         return;
     }
     tauri::async_runtime::spawn(async move {
-        let found = TwitchService::users_by_ids(&missing).await;
+        let answer = TwitchService::users_by_ids(&missing).await;
         if let Ok(mut fill) = FILL.lock() {
             if fill.generation == generation {
-                record_fill(&mut fill, &missing, &found, Instant::now());
+                record_fill(&mut fill, &missing, answer.as_ref().ok(), Instant::now());
             }
         }
+        let found = answer.unwrap_or_else(|e| {
+            log::debug!("[Favorites] identity lookup failed: {e}");
+            HashMap::new()
+        });
         if !found.is_empty() && TwitchService::account_generation() == generation {
             if let Some(state) = app.try_state::<AppState>() {
+                let mut added = 0usize;
                 match crate::commands::settings::commit_favorite_patch(&app, &state, |current| {
-                    fill_patch(current, &found)
+                    let patch = fill_patch(current, &found);
+                    added = patch.as_ref().map_or(0, |(_, channels)| {
+                        channels.len().saturating_sub(current.favorite_channels.len())
+                    });
+                    patch
                 }) {
                     Ok(true) => log::info!(
                         "[Favorites] filled in identity for {} channel(s)",
-                        found.len()
+                        added
                     ),
                     Ok(false) => {}
                     Err(e) => log::warn!("[Favorites] identity fill write failed: {e}"),
@@ -691,15 +725,15 @@ mod tests {
         let missing = vec!["1".to_string(), "2".to_string()];
         let mut found = HashMap::new();
         found.insert("1".to_string(), ("a".to_string(), "A".to_string(), None));
-        record_fill(&mut state, &missing, &found, now);
+        record_fill(&mut state, &missing, Some(&found), now);
         assert_eq!(state.failures, 1);
         assert_eq!(state.misses.get("2"), Some(&1));
         assert!(!fill_due(&mut state, 5, now + Duration::from_secs(59)));
         assert!(fill_due(&mut state, 5, now + Duration::from_secs(60)));
-        record_fill(&mut state, &missing, &HashMap::new(), now);
+        record_fill(&mut state, &missing, None, now);
         assert_eq!(state.failures, 2);
         assert!(!fill_due(&mut state, 5, now + Duration::from_secs(299)));
-        record_fill(&mut state, &missing, &HashMap::new(), now);
+        record_fill(&mut state, &missing, None, now);
         assert_eq!(state.next_at, Some(now + Duration::from_secs(1800)));
         // Another account starts clean.
         assert!(fill_due(&mut state, 6, now));
@@ -708,11 +742,11 @@ mod tests {
         record_fill(
             &mut state,
             &missing,
-            &{
+            Some(&{
                 let mut all = found.clone();
                 all.insert("2".to_string(), ("b".to_string(), "B".to_string(), None));
                 all
-            },
+            }),
             now,
         );
         assert_eq!((state.failures, state.next_at), (0, None));
@@ -726,5 +760,79 @@ mod tests {
         assert!(!is_rust_only_path(
             "live_notifications.show_favorite_live_notifications"
         ));
+    }
+
+    #[test]
+    fn repair_keys_twitch_bare_and_leaves_odd_ids_alone() {
+        let mut s = Settings::default();
+        s.favorite_streamers = vec!["twitch:123".into(), "kick:".into(), "twitch:abc".into()];
+        s.favorite_channels = vec![fav("twitch:123", "twitch", "someone")];
+        assert!(repair(&mut s));
+        assert_eq!(
+            s.favorite_streamers,
+            vec!["123".to_string(), "kick:".to_string(), "twitch:abc".to_string()]
+        );
+        assert_eq!(s.favorite_channels[0].id, "123");
+        assert_eq!(s.favorite_channels[0].channel, "someone");
+        assert!(!repair(&mut s), "a second pass changes nothing");
+    }
+
+    #[test]
+    fn a_failed_lookup_backs_off_without_counting_misses() {
+        let now = Instant::now();
+        let mut state = FillState::default();
+        let missing = vec!["1".to_string(), "2".to_string()];
+        record_fill(&mut state, &missing, None, now);
+        assert_eq!(state.failures, 1);
+        assert!(state.misses.is_empty(), "a failed call is not a verdict on each id");
+        // Twitch answered and listed neither: both are misses.
+        record_fill(&mut state, &missing, Some(&HashMap::new()), now);
+        assert_eq!((state.misses.get("1"), state.misses.get("2")), (Some(&1), Some(&1)));
+        let mut found = HashMap::new();
+        found.insert("1".to_string(), ("a".to_string(), "A".to_string(), None));
+        record_fill(&mut state, &missing, Some(&found), now);
+        assert_eq!((state.misses.get("1"), state.misses.get("2")), (Some(&1), Some(&2)));
+    }
+
+    /// One function's text from a sibling source file, Windows line ends folded.
+    fn body_of(src: &str, signature: &str) -> String {
+        let src = src.replace("\r\n", "\n");
+        let start = src.find(signature).expect(signature);
+        let end = src[start..].find("\n}\n").expect("function end");
+        src[start..start + end].to_string()
+    }
+
+    #[test]
+    fn every_settings_load_repairs_the_favorite_lists() {
+        let load = body_of(include_str!("../lib.rs"), "fn load_settings_from_file()");
+        assert!(load.contains("services::favorite_channels::repair(&mut settings);"));
+    }
+
+    #[test]
+    fn the_guards_and_fallbacks_stay_wired() {
+        let lists = body_of(
+            include_str!("../commands/settings_lists.rs"),
+            "pub async fn edit_settings_list(",
+        );
+        assert!(lists.contains("crate::services::favorite_channels::is_rust_only_path(&path)"));
+        assert!(lists.contains("favorite lists change through set_favorite_channel"));
+        let kick = body_of(include_str!("sub_badge.rs"), "pub async fn kick_art(");
+        let resolve = kick.find("ensure_resolved(").expect("kick art resolves the channel");
+        let cache = kick.find("sub_badge_art(").expect("then reads its tiers");
+        assert!(resolve < cache, "the channel resolves before its tiers are read");
+        let hide = body_of(
+            include_str!("../commands/settings.rs"),
+            "pub async fn set_channel_hidden(",
+        );
+        assert!(hide.contains("favorite_channels::identity(&pick"));
+    }
+
+    #[test]
+    fn a_fill_try_asks_for_one_page_at_most() {
+        assert_eq!(FILL_BATCH, 100);
+        let fill = body_of(include_str!("favorite_channels.rs"), "pub fn spawn_fill_identities(");
+        let cut = fill.find("missing.truncate(FILL_BATCH);").expect("the try is cut to one page");
+        let ask = fill.find("TwitchService::users_by_ids(&missing)").expect("the lookup");
+        assert!(cut < ask, "the cut comes before the lookup");
     }
 }

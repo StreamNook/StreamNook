@@ -239,6 +239,7 @@ async fn look_up(app: &AppHandle, provider: &str, ids: Vec<String>) {
     let found: HashMap<String, String> = match provider {
         "twitch" => crate::services::twitch_service::TwitchService::users_by_ids(&ids)
             .await
+            .unwrap_or_default()
             .into_iter()
             .filter_map(|(id, (_, _, avatar))| avatar.map(|a| (id, a)))
             .collect(),

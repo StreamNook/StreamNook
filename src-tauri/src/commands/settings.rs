@@ -380,6 +380,9 @@ pub async fn set_favorite_category(
 pub struct FavoriteAnswer {
     pub favorite: bool,
     pub id: String,
+    /// The Following revision that holds this write: a shell's pending label
+    /// settles once it has applied this revision or a later one.
+    pub rev: u64,
 }
 
 /// How long one channel lookup may take before the press gives up.
@@ -467,7 +470,9 @@ pub async fn set_favorite_channel(
         .favorite_streamers
         .iter()
         .any(|f| *f == id);
-    Ok(Some(FavoriteAnswer { favorite: stored, id }))
+    // Built after the commit, so this revision's lists hold the write.
+    let rev = crate::services::home_snapshot::following_rev_now().await;
+    Ok(Some(FavoriteAnswer { favorite: stored, id, rev }))
 }
 
 /// Hide (`hidden`) or show again one channel in every browse list, edited in
@@ -1019,6 +1024,9 @@ pub(crate) fn apply_imported_settings(
     // The same refresh set as every other write path, so imported reminders,
     // chat rules and the notification polls apply without waiting for a save.
     after_settings_change(&imported, favorites_changed, Some(state.layout_service.as_ref()));
+    // An import can bring any follow, favorite or hidden list: the Following and
+    // Discover lists are rebuilt whatever the favorites did.
+    crate::services::home_snapshot::note_discover_inputs_changed();
     // Immediate direct write, deliberately not debounced: the frontend reloads
     // right after this returns and must find the imported file on disk.
     write_settings_to_disk_sync(&imported)?;
@@ -1501,6 +1509,7 @@ mod patch_tests {
         let import = &import[..import.find("\n}\n").unwrap()];
         assert!(import.contains("favorite_channels::repair(&mut imported);"));
         assert!(import.contains("favorite_channels::favorites_changed(&current, &imported)"));
+        assert!(import.contains("crate::services::home_snapshot::note_discover_inputs_changed();"));
     }
 
     #[test]
@@ -1511,7 +1520,12 @@ mod patch_tests {
         assert!(door.contains("if wrote && favorite {"));
         assert!(door.contains("favorite_live_service::refresh_favorites(app, live_state, Some(key))"));
         assert!(door.contains("commit_favorite_patch(&app, &state,"));
-        assert!(door.contains("Ok(Some(FavoriteAnswer { favorite: stored, id }))"));
+        assert!(door.contains("Ok(Some(FavoriteAnswer { favorite: stored, id, rev }))"));
+        let commit = door.find("commit_favorite_patch(&app, &state,").unwrap();
+        let rev = door
+            .find("let rev = crate::services::home_snapshot::following_rev_now().await;")
+            .expect("the door answers the revision from following_rev_now");
+        assert!(commit < rev, "the revision is read after the write");
     }
 
     #[test]

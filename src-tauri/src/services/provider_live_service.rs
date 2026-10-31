@@ -93,8 +93,48 @@ static STATE: once_cell::sync::Lazy<Arc<RwLock<LiveState>>> =
     once_cell::sync::Lazy::new(|| Arc::new(RwLock::new(LiveState::default())));
 
 /// The current who's-live snapshot across every provider, for initial paint.
+/// In key order, so two reads of the same rows list them the same way (the
+/// Following lists are compared build to build, and a map's order is not).
 pub async fn snapshot() -> Vec<ProviderStream> {
-    STATE.read().await.snapshot.values().cloned().collect()
+    rows_in_key_order(&STATE.read().await.snapshot)
+}
+
+/// A key-to-row map's rows, sorted by key.
+fn rows_in_key_order(rows: &HashMap<String, ProviderStream>) -> Vec<ProviderStream> {
+    let mut keyed: Vec<(&String, &ProviderStream)> = rows.iter().collect();
+    keyed.sort_by(|a, b| a.0.cmp(b.0));
+    keyed.into_iter().map(|(_, row)| row.clone()).collect()
+}
+
+#[cfg(test)]
+mod snapshot_order_tests {
+    use super::*;
+
+    fn row(key: &str) -> ProviderStream {
+        serde_json::from_value(serde_json::json!({
+            "provider": "kick", "key": key, "user_login": key, "user_name": key,
+            "is_live": true, "watch_url": "",
+        }))
+        .expect("a row")
+    }
+
+    #[test]
+    fn the_snapshot_lists_rows_in_key_order() {
+        let mut rows = HashMap::new();
+        for key in ["kick:zed", "kick:amy", "youtube:UCm", "kick:bob"] {
+            rows.insert(key.to_string(), row(key));
+        }
+        let keys: Vec<String> = rows_in_key_order(&rows).into_iter().map(|r| r.key).collect();
+        assert_eq!(keys, ["kick:amy", "kick:bob", "kick:zed", "youtube:UCm"]);
+    }
+
+    #[test]
+    fn the_snapshot_reads_through_the_key_order_helper() {
+        let src = include_str!("provider_live_service.rs").replace("\r\n", "\n");
+        let start = src.find("pub async fn snapshot()").expect("snapshot");
+        let body = &src[start..start + src[start..].find("\n}\n").expect("function end")];
+        assert!(body.contains("rows_in_key_order(&STATE.read().await.snapshot)"));
+    }
 }
 
 /// Send every platform's live follows again, as `provider-live-update` does on

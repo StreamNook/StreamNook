@@ -395,32 +395,70 @@ pub async fn match_emote_tokens(
 }
 
 /// Display names of subscription emote owners (and of the streamers the `@`
-/// list leads with), kept for the life of the process. An id Helix did not
-/// answer is not asked again; its section keeps the "Channel <id>" title.
-type OwnerNames = (HashMap<String, String>, HashSet<String>);
+/// list leads with), kept for the life of the process. An id Helix answered
+/// without is not asked again; its section keeps the "Channel <id>" title. The
+/// third field is when the last lookup failed outright (no token, no network,
+/// a refusal): that is no verdict on any id, and Helix waits a minute.
+type OwnerNames = (HashMap<String, String>, HashSet<String>, Option<std::time::Instant>);
 
 fn owner_names() -> &'static std::sync::Mutex<OwnerNames> {
     static NAMES: std::sync::OnceLock<std::sync::Mutex<OwnerNames>> = std::sync::OnceLock::new();
     NAMES.get_or_init(Default::default)
 }
 
+/// How long a failed owner-name lookup keeps Helix from being asked again.
+const OWNER_LOOKUP_RETRY: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Whether owner names may be asked for now: never failed, or the last failure
+/// is at least a minute old.
+fn lookup_due(failed_at: Option<std::time::Instant>, now: std::time::Instant) -> bool {
+    failed_at.map_or(true, |at| now.saturating_duration_since(at) >= OWNER_LOOKUP_RETRY)
+}
+
+#[cfg(test)]
+mod owner_lookup_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn a_failed_lookup_waits_a_minute() {
+        let now = Instant::now();
+        assert!(lookup_due(None, now), "never failed: ask");
+        assert!(!lookup_due(Some(now), now + Duration::from_secs(10)), "failed 10 s ago: wait");
+        assert!(lookup_due(Some(now), now + Duration::from_secs(61)), "failed 61 s ago: ask again");
+    }
+}
+
 /// Names for `ids`, asking Helix once (in batches of 100) for any not yet known.
 async fn resolve_owner_names(ids: Vec<String>) -> HashMap<String, String> {
     let missing: Vec<String> = {
         let guard = owner_names().lock().unwrap_or_else(|e| e.into_inner());
-        ids.iter().filter(|id| !guard.0.contains_key(*id) && !guard.1.contains(*id)).cloned().collect()
+        if lookup_due(guard.2, std::time::Instant::now()) {
+            ids.iter().filter(|id| !guard.0.contains_key(*id) && !guard.1.contains(*id)).cloned().collect()
+        } else {
+            Vec::new()
+        }
     };
     if !missing.is_empty() {
-        let found = crate::services::twitch_service::TwitchService::users_by_ids(&missing).await;
-        let mut guard = owner_names().lock().unwrap_or_else(|e| e.into_inner());
-        for id in missing {
-            match found.get(&id) {
-                Some((_, display, _)) => {
-                    guard.0.insert(id, display.clone());
+        match crate::services::twitch_service::TwitchService::users_by_ids(&missing).await {
+            Ok(found) => {
+                let mut guard = owner_names().lock().unwrap_or_else(|e| e.into_inner());
+                guard.2 = None;
+                for id in missing {
+                    match found.get(&id) {
+                        Some((_, display, _)) => {
+                            guard.0.insert(id, display.clone());
+                        }
+                        None => {
+                            guard.1.insert(id);
+                        }
+                    }
                 }
-                None => {
-                    guard.1.insert(id);
-                }
+            }
+            // A failed call names no one as missing; Helix waits a minute.
+            Err(e) => {
+                owner_names().lock().unwrap_or_else(|e| e.into_inner()).2 = Some(std::time::Instant::now());
+                log::debug!("[Emotes] owner names unanswered: {e}");
             }
         }
     }
@@ -429,14 +467,15 @@ async fn resolve_owner_names(ids: Vec<String>) -> HashMap<String, String> {
 }
 
 /// Twitch user `id`'s display name from the owner-name cache, without waiting.
-/// A miss asks Helix once in the background, so the next keystroke has it.
+/// A miss asks Helix once in the background, so the next keystroke has it,
+/// unless the last lookup failed under a minute ago.
 fn owner_name_now(id: &str) -> Option<String> {
     {
         let guard = owner_names().lock().unwrap_or_else(|e| e.into_inner());
         if let Some(name) = guard.0.get(id) {
             return Some(name.clone());
         }
-        if guard.1.contains(id) {
+        if guard.1.contains(id) || !lookup_due(guard.2, std::time::Instant::now()) {
             return None;
         }
     }

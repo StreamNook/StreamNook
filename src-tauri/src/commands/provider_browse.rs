@@ -635,6 +635,8 @@ fn spawn_avatar_backfill(state: &AppState, provider: &'static str) {
             }
             settings.clone()
         };
+        // The offline rows draw these faces, saved or not.
+        crate::services::home_snapshot::note_discover_inputs_changed();
         if let Err(e) = crate::commands::settings::write_settings_to_disk(&snapshot) {
             log::warn!("[{}] avatar backfill could not be saved: {}", provider, e);
             return;
@@ -673,7 +675,11 @@ fn persist(state: &State<'_, AppState>) -> Result<(), String> {
         let settings = state.settings.lock().map_err(|e| e.to_string())?;
         settings.clone()
     };
-    crate::commands::settings::write_settings_to_disk(&snapshot)
+    let saved = crate::commands::settings::write_settings_to_disk(&snapshot);
+    // Every caller changed the follow list in memory: the Following lists and
+    // the Discover lists that leave follows out are rebuilt either way.
+    crate::services::home_snapshot::note_discover_inputs_changed();
+    saved
 }
 
 /// Browsable categories for a platform, most-watched first. Feeds the Categories
