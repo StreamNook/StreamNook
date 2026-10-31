@@ -49,7 +49,7 @@ import { useAutomodStore } from '../../stores/automodStore';
 import { heldRowMessage, heldRows, isHeldRowId, mergeHeld } from './heldRows';
 import { SwipeModerator } from './SwipeModerator';
 import { messageReach, reachCanDelete, reachCanTimeout, type MessageReach, type SwipeTarget, type TouchSlider } from './swipeSteps';
-import { REPLY_PROVIDERS, canReplyTo, composerTakesText, replyAfterSend, replyHintWords, type ComposerState, type ReplyTarget } from './replySwipe';
+import { REPLY_PROVIDERS, canReplyTo, composerTakesText, replyAfterSend, replyHintWords, replyRowOf, type ComposerState, type ReplyTarget } from './replySwipe';
 import { learnReplyHint, replyHintOnPause, useReplyHintLearned } from './replyHint';
 import { measureText } from './placeholderFit';
 import { usePlatformAccountStore } from '../../stores/platformAccountStore';
@@ -289,6 +289,14 @@ export const MobileChatPane: React.FC<{
   // Long-press arms the fan-out over the pressed row; it owns every message
   // action now, so there is no separate action sheet.
   const [fanTarget, setFanTarget] = useState<FanTarget | null>(null);
+  // What the fan offers on its message, decided once when it arms: the live buffer keeps trimming
+  // while it is open, and a re-check would take tiles away and lay the rest out again under the
+  // finger. `armRules` holds the latest rules for the moment it arms.
+  const [fanArm, setFanArm] = useState<{ canReply: boolean; reach: MessageReach }>({ canReply: true, reach: 'all' });
+  const armRules = useRef<{ canReply: (id: string) => boolean; reach: (id: string) => MessageReach }>({
+    canReply: () => false,
+    reach: () => 'nothing',
+  });
   const [replyDraft, setReplyDraft] = useState<{
     messageId: string;
     username: string;
@@ -665,6 +673,8 @@ export const MobileChatPane: React.FC<{
     (messageId: string, x: number, y: number) => {
       const found = describeMessage(messageId);
       if (!found) return;
+      const rules = armRules.current;
+      setFanArm({ canReply: rules.canReply(messageId), reach: rules.reach(messageId) });
       setFanTarget({ ...found, originX: x, originY: y });
     },
     [describeMessage],
@@ -792,16 +802,9 @@ export const MobileChatPane: React.FC<{
         if (getMessageId(message) !== messageId) continue;
         try {
           const parsed = parseMessage(message as string | BackendChatMessage);
-          const username = parsed.username ?? '';
-          const row = {
-            id: messageId,
-            username,
-            system: username === 'System',
-            systemMsg: !!parsed.tags.get('system-msg'),
-            held: false,
-            provider: typeof message === 'string' ? activeProvider : ((message as BackendChatMessage).provider ?? activeProvider),
-          };
-          return canReplyTo(row, composer) ? { messageId, username } : null;
+          const provider = typeof message === 'string' ? undefined : (message as BackendChatMessage).provider;
+          const row = replyRowOf(messageId, parsed, provider, activeProvider);
+          return canReplyTo(row, composer) ? { messageId, username: row.username } : null;
         } catch {
           return null;
         }
@@ -810,6 +813,13 @@ export const MobileChatPane: React.FC<{
     },
     [messages, getMessageId, composer, activeProvider],
   );
+  // The rules the hold menu reads the moment it arms (`onArmFan`), kept current after each render.
+  useEffect(() => {
+    armRules.current = {
+      canReply: (id) => replyFor(id) != null,
+      reach: (id) => reachOf(id)?.reach ?? 'nothing',
+    };
+  });
 
   // Every route into a reply (the swipe, the hold menu's Reply) starts it here, inside the touch's
   // own handler, so the box's focus raises the keyboard (or opens the emote panel in an
@@ -855,18 +865,18 @@ export const MobileChatPane: React.FC<{
       : noSend
         ? OTHER_PLATFORM_READ_ONLY_HIDES
         : OTHER_PLATFORM_HIDES;
-    // The hold menu's Reply follows the reply rule, as the swipe does.
-    const noReply: FanAction[] = !noSend && fanTarget && !replyFor(fanTarget.messageId) ? ['reply'] : [];
+    // The hold menu's Reply follows the reply rule, as the swipe does, as it stood when it armed.
+    const noReply: FanAction[] = !noSend && fanTarget && !fanArm.canReply ? ['reply'] : [];
     if (!holdModButtons) return [...(base ?? []), ...MOD_TILES, ...noReply];
     // Only what Twitch allows on the held message: Delete alone on your own.
-    const reach = fanTarget ? (reachOf(fanTarget.messageId)?.reach ?? 'nothing') : 'all';
+    const reach = fanTarget ? fanArm.reach : 'all';
     const refused: FanAction[] = [
       ...noReply,
       ...(reachCanDelete(reach) ? [] : (['delete'] as FanAction[])),
       ...(reachCanTimeout(reach) ? [] : (['timeout', 'ban'] as FanAction[])),
     ];
     return refused.length ? [...(base ?? []), ...refused] : base;
-  }, [isTwitchRoom, noSend, holdModButtons, fanTarget, reachOf, replyFor]);
+  }, [isTwitchRoom, noSend, holdModButtons, fanTarget, fanArm]);
 
   // An emote tapped in a row opens its sheet (SN-38); a creator chip's profile opens once that
   // sheet has gone. The opener keeps one identity (rows ignore a new callback) and reads the hold

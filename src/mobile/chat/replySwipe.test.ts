@@ -18,6 +18,7 @@ import {
   replyArmed,
   replyHintWords,
   replyProgress,
+  replyRowOf,
   replyShown,
   replyStep,
   snapBackMs,
@@ -74,6 +75,24 @@ describe('what can be replied to', () => {
   it('counts emote-only as a room a reply can start in', () => {
     expect(composerTakesText({ readOnly: false, blocked: 'emote_only', warning: false, kickSignedOut: false })).toBe(true);
     expect(composerTakesText({ readOnly: false, blocked: 'subs_only', warning: false, kickSignedOut: false })).toBe(false);
+  });
+
+  it('reads a live line the way the rule needs it', () => {
+    const tags = (entries: [string, string][]) => new Map(entries);
+    const twitchRoom = { readOnly: false, blocked: null, warning: false, kickSignedOut: false };
+    // A plain line takes the room's platform; a line that names its own keeps it.
+    expect(replyRowOf('m1', { username: 'zoox', tags: tags([]) }, undefined, 'twitch')).toEqual({
+      id: 'm1', username: 'zoox', system: false, systemMsg: false, held: false, provider: 'twitch',
+    });
+    expect(replyRowOf('m2', { username: 'zoox', tags: tags([]) }, 'youtube', 'twitch').provider).toBe('youtube');
+    // A sub notice, the room's own notice and a nameless line cannot be replied to.
+    const sub = replyRowOf('m3', { username: 'zoox', tags: tags([['system-msg', 'zoox subscribed']]) }, undefined, 'twitch');
+    expect(sub.systemMsg).toBe(true);
+    expect(canReplyTo(sub, twitchRoom)).toBe(false);
+    expect(canReplyTo(replyRowOf('m4', { username: 'System', tags: tags([]) }, undefined, 'twitch'), twitchRoom)).toBe(false);
+    expect(canReplyTo(replyRowOf('m5', { username: null, tags: tags([]) }, undefined, 'twitch'), twitchRoom)).toBe(false);
+    expect(canReplyTo(replyRowOf('m6', { username: 'zoox', tags: tags([]) }, 'youtube', 'twitch'), twitchRoom)).toBe(false);
+    expect(canReplyTo(replyRowOf('m7', { username: 'zoox', tags: tags([]) }, undefined, 'kick'), twitchRoom)).toBe(true);
   });
 
   it('a finished send clears only the reply it went out with', () => {

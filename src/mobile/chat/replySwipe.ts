@@ -82,6 +82,28 @@ export interface ReplyRow {
   provider: string;
 }
 
+/** A parsed chat line, as far as `replyRowOf` reads it. */
+export interface ParsedLine {
+  username?: string | null;
+  tags: { get(key: string): string | undefined };
+}
+
+/**
+ * The reply rule's view of a live (never held) line. `provider` is the message's own platform when
+ * it carries one; a bare IRC line takes the room's.
+ */
+export function replyRowOf(id: string, parsed: ParsedLine, provider: string | undefined, roomProvider: string): ReplyRow {
+  const username = parsed.username ?? '';
+  return {
+    id,
+    username,
+    system: username === 'System',
+    systemMsg: !!parsed.tags.get('system-msg'),
+    held: false,
+    provider: provider ?? roomProvider,
+  };
+}
+
 /** The room's composer as the reply rule reads it. */
 export interface ComposerState {
   /** The landscape overlay or VOD replay: no composer. */

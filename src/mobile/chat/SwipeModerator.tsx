@@ -476,7 +476,7 @@ export function SwipeModerator({
     const onCancel = (e: PointerEvent) => {
       if (press && e.pointerId !== press.id) return;
       // The browser took the touch for a pan of its own: the rows' pan-y should have stopped that.
-      if (press?.target) trace('the browser took the touch (pointercancel)');
+      if (press?.target || kind === 'reply') trace('the browser took the touch (pointercancel)');
       end(false);
     };
     const onTouchMove = (e: TouchEvent) => {
