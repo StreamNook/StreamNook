@@ -2027,6 +2027,19 @@ fn match_sub_badge(subs: &[(u32, String)], months: u32) -> Option<String> {
         })
 }
 
+/// A channel's custom subscriber art for `months`: the tier held, else its
+/// lowest tier (what a new subscriber would wear). `None` when it has none.
+pub(crate) fn sub_badge_or_lowest(subs: &[(u32, String)], months: u32) -> Option<String> {
+    match_sub_badge(subs, months).or_else(|| subs.iter().min_by_key(|(m, _)| *m).map(|(_, s)| s.clone()))
+}
+
+/// The Kick channel `slug`'s custom subscriber art from the resolve cache, as
+/// `sub_badge_or_lowest` picks it.
+pub fn sub_badge_art(slug: &str, months: u32) -> Option<String> {
+    let subs = sub_badges_cache().lock().ok().and_then(|m| m.get(&slug.to_lowercase()).cloned())?;
+    sub_badge_or_lowest(&subs, months)
+}
+
 /// Split Kick content into text + emote segments. Kick inlines its native emotes
 /// as `[emote:<id>:<name>]` (image at files.kick.com); between those tokens we
 /// match words against the channel's 7TV set so 7TV emotes render too. Returns

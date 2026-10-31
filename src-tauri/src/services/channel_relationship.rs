@@ -5,8 +5,9 @@
 //!
 //! Follows come from `follow_lookup::own_follow`, so an unanswerable lookup is
 //! "unknown" (the control waits) rather than a guess. Subscription months come
-//! from IVR's sub-age record; the badge art from the channel's Helix badge set,
-//! then the global one.
+//! from IVR's sub-age record; the badge art from `sub_badge` (the channel's
+//! ladder, its Helix set, the global set, then the standard badge), signed out
+//! too.
 
 use serde::Serialize;
 
@@ -76,21 +77,18 @@ pub async fn read_twitch(channel_id: &str, channel_login: &str) -> (Relationship
         FollowAnswer::Unknown => None,
     };
     let Some(me) = crate::services::account_store::AccountStore::primary() else {
-        return (Relationship { following, ..Default::default() }, true);
+        // Signed out, the Subscribe control still wears the channel's badge (a
+        // new subscriber's), from the public badge ladder.
+        let badge_url = Some(crate::services::sub_badge::twitch_art(channel_login, Some(channel_id), 0).await);
+        return (Relationship { following, badge_url, ..Default::default() }, true);
     };
     let subage_read = crate::services::ivr::subage_summary(&me.login, channel_login).await;
     let subs_answered = subage_read.is_ok();
     let subage = subage_read.ok().flatten();
     let subscribed = subage.as_ref().is_some_and(|s| s.active_sub_type.is_some());
     let cumulative = subage.as_ref().and_then(|s| s.cumulative_months).unwrap_or(0);
-    let version = badge_version(badge_months(subscribed, cumulative));
-    let channel_set = crate::commands::badges::fetch_channel_badges(channel_id.to_string()).await.ok();
-    let mut badge_url = channel_set.as_ref().and_then(|b| badge_art(b, "subscriber", version));
-    if badge_url.is_none() {
-        if let Ok(Some(global)) = crate::commands::badges::get_cached_global_badges().await {
-            badge_url = badge_art(&global, "subscriber", version);
-        }
-    }
+    let months = badge_months(subscribed, cumulative);
+    let badge_url = Some(crate::services::sub_badge::twitch_art(channel_login, Some(channel_id), months).await);
     let relationship = Relationship {
         following,
         subscribed,

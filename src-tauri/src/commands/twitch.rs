@@ -1874,6 +1874,24 @@ pub async fn channel_relationship(
     Ok(crate::services::channel_relationship::twitch(&channel_id, &channel_login.to_lowercase()).await)
 }
 
+/// The subscriber badge art a Subscribe control shows for a Twitch or Kick
+/// channel: its own badge for `months` (0 when left out), else the platform's
+/// standard one. Never empty.
+#[tauri::command]
+pub async fn channel_sub_badge(
+    provider: String,
+    channel_id: Option<String>,
+    login: String,
+    months: Option<i64>,
+) -> Result<String, String> {
+    let months = months.unwrap_or(0).max(0);
+    match provider.as_str() {
+        "twitch" => Ok(crate::services::sub_badge::twitch_art(&login, channel_id.as_deref(), months).await),
+        "kick" => Ok(crate::services::sub_badge::kick_art(&login, months).await),
+        _ => Err("unsupported provider".to_string()),
+    }
+}
+
 #[tauri::command]
 pub async fn get_all_followed_channels(
     limit: u32,

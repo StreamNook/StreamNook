@@ -2023,6 +2023,7 @@ pub fn run() {
             follow_channel,
             unfollow_channel,
             channel_relationship,
+            channel_sub_badge,
             check_following_status,
             get_all_followed_channels,
             get_offline_last_broadcasts,

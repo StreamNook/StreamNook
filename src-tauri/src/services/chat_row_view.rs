@@ -1061,7 +1061,7 @@ fn spans_with(segments: &[MessageSegment], channel: &str, prefs: Prefs) -> Vec<V
 /// the same SVGs the webview shells bundle (`src/assets/kick-badges`), as PNG
 /// data URIs a native shell decodes without a fetch. A channel's custom
 /// subscriber art rides the row's own image URL and wins over these.
-fn kick_badge_art(name: &str) -> Option<String> {
+pub(crate) fn kick_badge_art(name: &str) -> Option<String> {
     use base64::Engine;
     static ART: std::sync::OnceLock<std::collections::HashMap<&'static str, String>> = std::sync::OnceLock::new();
     let art = ART.get_or_init(|| {

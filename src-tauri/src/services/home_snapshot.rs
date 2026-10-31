@@ -89,7 +89,7 @@ use crate::services::providers::registry;
 use crate::services::providers::source::StreamSource;
 use crate::services::twitch_service::TwitchService;
 use crate::services::unified_discover::{self, DiscoverRow, Surface, UnifiedDiscover, View};
-use crate::services::unified_following::{self, Following};
+use crate::services::unified_following::{self, FavoriteListEntry, Following};
 use crate::services::favorite_categories::{self, FavoriteCategoryRow};
 use crate::services::{favorite_live_service, provider_categories, provider_live_service};
 
@@ -181,9 +181,12 @@ pub struct HomeSnapshot {
     pub unified_discover_at: Option<u64>,
     /// Your channels across every platform, finished: live favourites, the
     /// other live follows and the offline roster (see `unified_following`).
-    /// Built when the snapshot is read, like `unified_discover`.
+    /// The lists as last emitted (see `following_served`).
     pub following: Following,
     pub following_at: Option<u64>,
+    /// The revision `following` went out under. A window keeps a snapshot's
+    /// lists only when they are at least as new as the ones it holds.
+    pub following_rev: u64,
     /// The unified Categories tab's "On other platforms" row: every other
     /// platform's own categories, from `provider_categories`' cache.
     pub other_categories: Vec<ProviderCategory>,
@@ -273,12 +276,17 @@ pub enum HomeUpdate {
         at: u64,
     },
     /// Your channels across every platform: see `HomeSnapshot::following`.
+    /// `rev` only ever rises; a window applies an event only when its `rev`
+    /// is newer than the one it holds.
     Following {
         favorites: Vec<DiscoverRow>,
         live: Vec<DiscoverRow>,
         offline: Vec<DiscoverRow>,
         followed_live: Vec<DiscoverRow>,
         platforms: Vec<String>,
+        favorite_ids: Vec<String>,
+        favorites_list: Vec<FavoriteListEntry>,
+        rev: u64,
         at: u64,
     },
     /// The unified Categories tab's "On other platforms" row.
@@ -397,10 +405,10 @@ struct Inner {
     /// signed-out reset of that struct leaves the other platforms' anonymous
     /// directories alone.
     discover: Mutex<UnifiedDiscover>,
-    /// The Following lists and the "On other platforms" row as last emitted.
-    /// Each is held for a whole rebuild, like `discover`, so two rebuilds
-    /// cannot emit out of order.
-    following: Mutex<Option<Following>>,
+    /// The Following lists as last emitted, with their revision, and the "On
+    /// other platforms" row as last emitted. Each is held for a whole rebuild,
+    /// like `discover`, so two rebuilds cannot emit out of order.
+    following: Mutex<FollowingSlot>,
     other_categories: Mutex<Option<Vec<ProviderCategory>>>,
 }
 
@@ -635,6 +643,12 @@ pub async fn note_app_resumed() -> bool {
     // What the mention server found while the app was away.
     crate::services::mention_watch::client::pull_soon();
     let Some(inner) = SERVICE.get() else { return false };
+    // The Favorites shelf holds channels followed nowhere, which only the
+    // favourites sweep sees: re-check them too, signed in or not.
+    let sweep = stamp_if_due(&mut *inner.last_manual.lock().await, "favorites_resume", RESUME_STALE, Instant::now());
+    if sweep {
+        spawn_favorites_sweep(inner);
+    }
     if !signed_in().await {
         return false;
     }
@@ -807,33 +821,117 @@ fn follow_settings(app: &AppHandle) -> (Vec<ProviderFollow>, Vec<FavoriteChannel
     lists
 }
 
-/// Rebuild the Following lists and emit them if they changed. Every input is
-/// read from its owner on every call, the same ones the Discover lists
-/// subtract, so the two never disagree about a channel.
-async fn rebuild_following(inner: &Inner) {
-    let mut last = inner.following.lock().await;
+/// The Following lists as last emitted, and the revision they went out under.
+type FollowingSlot = Option<(Following, u64)>;
+
+/// The revision the next Following emit goes out under. Process-wide and only
+/// ever rising: clearing the slot (a hide forcing a resend) never takes it
+/// back, so a window comparing revisions never mistakes newer lists for older.
+static FOLLOWING_REV: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn next_following_rev() -> u64 {
+    FOLLOWING_REV.fetch_add(1, Ordering::AcqRel) + 1
+}
+
+/// Store `build` in the slot under a new revision when it differs from what
+/// the slot holds. Answers that revision, or `None` when nothing changed.
+fn slot_update(slot: &mut FollowingSlot, build: Following, next_rev: impl FnOnce() -> u64) -> Option<u64> {
+    if slot.as_ref().is_some_and(|(held, _)| *held == build) {
+        return None;
+    }
+    let rev = next_rev();
+    *slot = Some((build, rev));
+    Some(rev)
+}
+
+/// The Following lists from every owner's current input, the same ones the
+/// Discover lists subtract, so the two never disagree about a channel. The
+/// caller holds `inner.following`, so two builds never interleave.
+async fn build_following(inner: &Inner) -> Following {
     let provider_followed_live = provider_live_service::snapshot().await;
     let favorites_live = favorite_live_service::snapshot().await;
     let favorite_ids = favorite_ids(&inner.app);
     let (provider_follows, favorite_channels) = follow_settings(&inner.app);
-    let following = {
-        let s = inner.snap.read().await;
-        unified_following::build(&unified_following::Inputs {
-            followed_live: &s.followed_live,
-            followed_offline: &s.offline_follows,
-            provider_followed_live: &provider_followed_live,
-            favorites_live: &favorites_live,
-            provider_follows: &provider_follows,
-            favorite_ids: &favorite_ids,
-            favorite_channels: &favorite_channels,
-        })
-    };
-    if last.as_ref() == Some(&following) {
-        return;
+    let s = inner.snap.read().await;
+    unified_following::build(&unified_following::Inputs {
+        followed_live: &s.followed_live,
+        followed_offline: &s.offline_follows,
+        provider_followed_live: &provider_followed_live,
+        favorites_live: &favorites_live,
+        provider_follows: &provider_follows,
+        favorite_ids: &favorite_ids,
+        favorite_channels: &favorite_channels,
+    })
+}
+
+fn emit_following(app: &AppHandle, following: Following, rev: u64) {
+    let Following { favorites, live, offline, followed_live, platforms, favorite_ids, favorites_list } =
+        following_shown(following);
+    emit(
+        app,
+        HomeUpdate::Following {
+            favorites,
+            live,
+            offline,
+            followed_live,
+            platforms,
+            favorite_ids,
+            favorites_list,
+            rev,
+            at: now_secs(),
+        },
+    );
+}
+
+/// Build into the slot and emit, when the lists changed. The caller holds the
+/// slot's lock.
+async fn rebuild_into(inner: &Inner, slot: &mut FollowingSlot) {
+    let following = build_following(inner).await;
+    if let Some(rev) = slot_update(slot, following, next_following_rev) {
+        if let Some((held, _)) = slot.as_ref() {
+            emit_following(&inner.app, held.clone(), rev);
+        }
     }
-    *last = Some(following.clone());
-    let Following { favorites, live, offline, followed_live, platforms } = following_shown(following);
-    emit(&inner.app, HomeUpdate::Following { favorites, live, offline, followed_live, platforms, at: now_secs() });
+}
+
+/// Rebuild the Following lists and emit them if they changed.
+async fn rebuild_following(inner: &Inner) {
+    let mut slot = inner.following.lock().await;
+    rebuild_into(inner, &mut slot).await;
+}
+
+/// The Following lists a reader gets, with the revision they went out under:
+/// exactly what the slot holds, built into it (and emitted) first when it is
+/// empty. Content and revision are read under one lock, so a window holding a
+/// newer event never takes an older list at the same number.
+async fn following_served(inner: &Inner) -> (Following, u64) {
+    let mut slot = inner.following.lock().await;
+    if slot.is_none() {
+        rebuild_into(inner, &mut slot).await;
+    }
+    match slot.as_ref() {
+        Some((held, rev)) => (following_shown(held.clone()), *rev),
+        None => (Following::default(), 0),
+    }
+}
+
+/// Stamp `key` and answer true, unless it was stamped less than `floor` ago.
+fn stamp_if_due(last: &mut HashMap<&'static str, Instant>, key: &'static str, floor: Duration, now: Instant) -> bool {
+    if last.get(key).is_some_and(|t| now.saturating_duration_since(*t) < floor) {
+        return false;
+    }
+    last.insert(key, now);
+    true
+}
+
+/// Ask every favourite's platform who is live now, off the caller's path.
+/// Favourites followed nowhere come only from this sweep.
+fn spawn_favorites_sweep(inner: &Inner) {
+    let Some(state) = app_state(&inner.app) else { return };
+    let app = inner.app.clone();
+    tauri::async_runtime::spawn(async move {
+        favorite_live_service::refresh_favorites(app, state, None).await;
+    });
 }
 
 /// The "On other platforms" row as it stands: every other platform's cached
@@ -1389,17 +1487,9 @@ pub async fn snapshot() -> HomeSnapshot {
     crate::services::hidden_channels::retain_discover(&mut snap.unified_discover, crate::services::hidden_channels::Realm::Browse);
     snap.unified_discover_at = Some(now_secs());
     drop(discover);
-    let (provider_follows, favorite_channels) = follow_settings(&inner.app);
-    snap.following = unified_following::build(&unified_following::Inputs {
-        followed_live: &snap.followed_live,
-        followed_offline: &snap.offline_follows,
-        provider_followed_live: &provider_followed_live,
-        favorites_live: &favorites_live,
-        provider_follows: &provider_follows,
-        favorite_ids: &favorite_ids,
-        favorite_channels: &favorite_channels,
-    });
-    snap.following = following_shown(snap.following);
+    let (following, following_rev) = following_served(inner).await;
+    snap.following = following;
+    snap.following_rev = following_rev;
     snap.followed_live = follows_shown(snap.followed_live);
     snap.offline_follows = follows_shown(snap.offline_follows);
     snap.following_at = Some(now_secs());
@@ -1486,7 +1576,18 @@ pub async fn refresh_following(app: AppHandle, state: crate::models::settings::A
             provider_live_service::refresh_provider(app.clone(), state.clone(), provider).await;
         }
     };
-    let (twitch, ()) = tokio::join!(refresh("followed_live", None, None), others);
+    // The Favorites shelf's channels followed nowhere come from their own
+    // sweep; a pull re-checks them too, under the same 15 s floor.
+    let sweep_due = match SERVICE.get() {
+        Some(inner) => stamp_if_due(&mut *inner.last_manual.lock().await, "favorites_pull", MIN_MANUAL_GAP, now),
+        None => false,
+    };
+    let sweep = async {
+        if sweep_due {
+            favorite_live_service::refresh_favorites(app.clone(), state.clone(), None).await;
+        }
+    };
+    let (twitch, (), ()) = tokio::join!(refresh("followed_live", None, None), others, sweep);
     let _ = refresh("hype_trains", None, None).await;
     twitch
 }
@@ -1603,6 +1704,9 @@ async fn refresh_followed(inner: &Inner) {
                 .notifications
                 .observe(&inner.app, &state, &streams)
                 .await;
+            // Favourites saved as bare ids get their name and face filled in
+            // (the fill backs off on its own after a failed try).
+            crate::services::favorite_channels::spawn_fill_identities(inner.app.clone());
             let (streaks_stale, offline_never, drops_never) = {
                 let s = inner.snap.read().await;
                 (
@@ -1991,5 +2095,80 @@ mod tests {
         claim_home(&mut homes, "main", "page-2", true, true);
         claim_home(&mut homes, "main", "page-2", false, true);
         assert_eq!(up(&homes), (false, false));
+    }
+
+    fn following_with(ids: &[&str]) -> Following {
+        Following { favorite_ids: ids.iter().map(|s| s.to_string()).collect(), ..Default::default() }
+    }
+
+    #[test]
+    fn the_following_revision_only_rises_even_across_a_hide() {
+        let counter = std::cell::Cell::new(0u64);
+        let next = || {
+            counter.set(counter.get() + 1);
+            counter.get()
+        };
+        let mut slot: FollowingSlot = None;
+        assert_eq!(slot_update(&mut slot, following_with(&["1"]), next), Some(1));
+        // The same lists again: nothing goes out.
+        assert_eq!(slot_update(&mut slot, following_with(&["1"]), next), None);
+        assert_eq!(slot_update(&mut slot, following_with(&["1", "2"]), next), Some(2));
+        // A hide clears the slot to force a resend: the resend is newer, never 1 again.
+        slot = None;
+        assert_eq!(slot_update(&mut slot, following_with(&["1", "2"]), next), Some(3));
+        assert_eq!(slot.as_ref().map(|(_, rev)| *rev), Some(3));
+    }
+
+    #[test]
+    fn the_slot_holds_the_lists_its_revision_names() {
+        let mut slot: FollowingSlot = None;
+        let rev = slot_update(&mut slot, following_with(&["7"]), || 41).expect("a first build goes out");
+        let (held, held_rev) = slot.clone().expect("the slot holds it");
+        assert_eq!((held.favorite_ids, held_rev), (vec!["7".to_string()], rev));
+    }
+
+    /// The body of the function whose signature line is `signature`.
+    fn fn_body(signature: &str) -> String {
+        let src = include_str!("home_snapshot.rs").replace("\r\n", "\n");
+        let start = src.find(signature).expect("function present");
+        let end = src[start..].find("\n}\n").expect("function end");
+        src[start..start + end].to_string()
+    }
+
+    #[test]
+    fn the_snapshot_serves_the_emitted_following_and_its_revision() {
+        let body = fn_body("pub async fn snapshot() -> HomeSnapshot {");
+        assert!(body.contains("following_served(inner).await"), "the snapshot reads the slot");
+        assert!(!body.contains("unified_following::build("), "the snapshot never builds its own Following");
+        assert!(body.contains("snap.following_rev = following_rev;"));
+    }
+
+    #[test]
+    fn a_favorites_sweep_waits_out_its_floor() {
+        let mut last = HashMap::new();
+        let t0 = Instant::now();
+        assert!(stamp_if_due(&mut last, "favorites_pull", MIN_MANUAL_GAP, t0));
+        assert!(!stamp_if_due(&mut last, "favorites_pull", MIN_MANUAL_GAP, t0 + Duration::from_secs(14)));
+        assert!(stamp_if_due(&mut last, "favorites_pull", MIN_MANUAL_GAP, t0 + Duration::from_secs(15)));
+        // A resume has its own key and floor.
+        assert!(stamp_if_due(&mut last, "favorites_resume", RESUME_STALE, t0));
+        assert!(!stamp_if_due(&mut last, "favorites_resume", RESUME_STALE, t0 + Duration::from_secs(59)));
+    }
+
+    #[test]
+    fn resume_and_pull_both_sweep_favorites() {
+        let resume = fn_body("pub async fn note_app_resumed() -> bool {");
+        let sweep = resume.find("\"favorites_resume\"").expect("a resume sweeps favorites");
+        let signed = resume.find("if !signed_in().await").expect("the signed-in check");
+        assert!(sweep < signed, "the sweep runs signed out too");
+        let pull = fn_body("pub async fn refresh_following(");
+        assert!(pull.contains("\"favorites_pull\""), "a pull sweeps favorites");
+        assert!(pull.contains("favorite_live_service::refresh_favorites("));
+    }
+
+    #[test]
+    fn a_successful_followed_poll_runs_the_identity_fill() {
+        let body = fn_body("async fn refresh_followed(inner: &Inner) {");
+        assert!(body.contains("crate::services::favorite_channels::spawn_fill_identities(inner.app.clone());"));
     }
 }

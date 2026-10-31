@@ -25,7 +25,7 @@ use serde::Serialize;
 use crate::models::provider_stream::ProviderStream;
 use crate::models::settings::{FavoriteChannel, ProviderFollow};
 use crate::models::stream::TwitchStream;
-use crate::services::providers::key::{favorite_id, make_key};
+use crate::services::providers::key::{favorite_id, make_key, normalize_channel, parse_key};
 use crate::services::providers::watch_urls::watch_url;
 use crate::services::unified_discover::DiscoverRow;
 
@@ -59,12 +59,46 @@ pub struct Following {
     /// other platforms' follows, then favourites followed nowhere.
     pub offline: Vec<DiscoverRow>,
     /// Every live follow on every platform, favourite or not, most watched
-    /// first (Twitch first on a tie): the phones' Following list, which has no
-    /// Favourites shelf. A phone keeps the platforms it can play.
+    /// first (Twitch first on a tie).
     pub followed_live: Vec<DiscoverRow>,
     /// The platforms you follow at least one channel on, in platform order:
     /// a phone shows its platform filter only when there is a second one.
     pub platforms: Vec<String>,
+    /// `Settings.favorite_streamers`: what every shell labels a channel by
+    /// (Favorite or Unfavorite), pushed with the lists so a label never reads
+    /// a window's own settings copy.
+    pub favorite_ids: Vec<String>,
+    /// Each favourite with the channel it names, so a Twitch room whose id is
+    /// not known yet can still be matched by its login.
+    pub favorites_list: Vec<FavoriteListEntry>,
+}
+
+/// One favourite as the shells match it.
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct FavoriteListEntry {
+    pub id: String,
+    pub provider: String,
+    /// Login, slug, handle or UC id, normalized like a channel key; empty when
+    /// only a bare Twitch id is known.
+    pub channel: String,
+}
+
+/// One favourite's entry: the kept identity's channel, else the channel a
+/// composite id names, else empty (a bare Twitch id with no identity yet).
+fn favorite_entry(id: &str, channels: &[FavoriteChannel]) -> FavoriteListEntry {
+    if let Some(f) = channels.iter().find(|f| f.id == id) {
+        return FavoriteListEntry {
+            id: id.to_string(),
+            provider: f.provider.clone(),
+            channel: normalize_channel(&f.provider, &f.channel),
+        };
+    }
+    if id.contains(':') {
+        let parsed = parse_key(id);
+        let channel = normalize_channel(&parsed.provider, &parsed.channel);
+        return FavoriteListEntry { id: id.to_string(), provider: parsed.provider, channel };
+    }
+    FavoriteListEntry { id: id.to_string(), provider: "twitch".to_string(), channel: String::new() }
 }
 
 fn row_favorite_id(row: &DiscoverRow) -> Option<String> {
@@ -241,7 +275,10 @@ pub fn build(inputs: &Inputs) -> Following {
         }
     }
 
-    Following { favorites, live, offline, followed_live, platforms }
+    let favorite_ids = inputs.favorite_ids.to_vec();
+    let favorites_list = inputs.favorite_ids.iter().map(|id| favorite_entry(id, inputs.favorite_channels)).collect();
+
+    Following { favorites, live, offline, followed_live, platforms, favorite_ids, favorites_list }
 }
 
 #[cfg(test)]
@@ -460,5 +497,38 @@ mod tests {
         assert_eq!(g.build().platforms, ["twitch"]);
         let empty = Given::new().build();
         assert!(empty.platforms.is_empty());
+    }
+
+    #[test]
+    fn the_favorites_list_names_each_favourite_s_channel() {
+        let mut g = Given::new();
+        g.favorite_ids = vec!["71092938".into(), "kick:Solo".into(), "555".into()];
+        g.favorite_channels = vec![favorite("71092938", "twitch", "XQC")];
+        let f = g.build();
+        assert_eq!(f.favorite_ids, ["71092938", "kick:Solo", "555"]);
+        let entries: Vec<(&str, &str, &str)> =
+            f.favorites_list.iter().map(|e| (e.id.as_str(), e.provider.as_str(), e.channel.as_str())).collect();
+        assert_eq!(entries, [("71092938", "twitch", "xqc"), ("kick:Solo", "kick", "solo"), ("555", "twitch", "")]);
+    }
+
+    #[test]
+    fn a_new_favourite_changes_the_lists_even_when_no_row_moves() {
+        let mut g = Given::new();
+        let before = g.build();
+        g.favorite_ids = vec!["kick:solo".into()];
+        assert_ne!(g.build(), before, "a favourite change must emit, or the shells' labels go stale");
+    }
+
+    /// The field names the TS store and the iPhone's `FollowingLists` decode.
+    #[test]
+    fn the_label_fields_serialize_under_the_names_the_shells_read() {
+        let mut g = Given::new();
+        g.favorite_ids = vec!["kick:solo".into()];
+        let json = serde_json::to_value(g.build()).expect("serializes");
+        assert_eq!(json["favorite_ids"], serde_json::json!(["kick:solo"]));
+        assert_eq!(
+            json["favorites_list"],
+            serde_json::json!([{ "id": "kick:solo", "provider": "kick", "channel": "solo" }])
+        );
     }
 }

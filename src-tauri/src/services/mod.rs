@@ -233,6 +233,7 @@ pub mod song_id;
 pub mod stream_server;
 pub mod cache_file_server;
 pub mod sub_standing;
+pub mod sub_badge;
 pub mod follow_lookup;
 pub mod streamnook_backend;
 pub mod css_fill;
