@@ -1,3 +1,37 @@
+## [8.8.20] - 2026-11-01
+
+### ✨ Features
+- Settings > Integrations has a Discord Status editor with a live preview that looks like Discord, down to your banner, avatar decoration, nameplate and server tag. StreamNook subscribers can show the platform instead, like "Watching Twitch", and hide the StreamNook button.
+- Go-live alerts can be muted per channel: a bell beside Follow, a row in the channel menus, and a Which channels list where Copy from Twitch brings over the choices you made on Twitch. Requested by zoox (SN-235).
+- Category pages filter by stream tags. On desktop the search box suggests tags as you type; on the phones a chip row and a tag search sheet do it, and each card lists its tags. Requested by pacman00700 (SN-78).
+- Timestamps can sit on their own line above the message. The choice is under Settings > Chat > Timestamps > Position, with a preview.
+- Continue Watching can include live streams you left partway through. Turn it on under Resume VODs > Live streams. Requested by haku (SN-52).
+- A Media keys setting on Windows. Turn it off and the play/pause key goes to your music player instead. Requested by haku (SN-237).
+- A switch keeps atmospheres out of chat while profiles still show them.
+- On Android and iPhone, swipe left on a chat message to reply, with the keyboard up. Requested by zoox (SN-238).
+- On the phones, tap an emote in chat to see who made it, open its 7TV, BetterTTV, FFZ or Twitch page, and see the emotes stacked with it. Requested by Pears (SN-38).
+- Favorite channels on the phones from the hold menu or the chat menu, and Following shows a Favorites shelf. Requested by zoox (SN-239).
+- On the phones, Close video stops the stream and keeps its chat open in Chats. Requested by Pears (SN-37).
+- In landscape on the phones, swipe chat in and out, pinch to fill the screen (Zoom to fill, with a preview), and see faces in stream rows. Requested by Bas (SN-30).
+- Phone landscape opens with chat beside the stream until you hide it, and remembers your choice.
+- Phone chat has a round resume button that counts new messages while paused, emote suggestions that can wait for a colon, and profiles that list recent messages newest first. The message box names a chat mode when it holds you back.
+- Mention notifications on the phones show the sender's picture, the message they replied to and the channel.
+
+### 🐛 Bug Fixes
+- When someone changes their 7TV badge or paint, chat shows the new one within seconds. Reported by PieterVMB (SN-236).
+- Chat no longer shows two FFZ badges for one person when another badge source lags behind FFZ. Reported by Pears (SN-5).
+- With Battery Saver on, or animated emotes off, still emotes like KEKW show instead of a broken image.
+- The profile card keeps its counts and badges when 7TV or another service fails to answer, instead of showing them empty.
+- On the phones, saved settings apply from launch, so link previews stay off after a restart, Discord invite cards included. Reported by zoox (SN-234).
+- The phone message box hint uses wording that fits its line in landscape. Reported by gaga_maga (SN-1).
+- Expanding the mini player over Chats no longer leaves the player and chat ignoring taps.
+
+### ⚡ Performance
+- Android keeps its copy of emotes, badges and paints it already drew, so they stop loading again on every new chat line.
+
+### 🔧 Maintenance
+- Pages inside the app can load local files only from StreamNook's own media folders.
+
 ## [8.8.19] - 2026-10-29
 
 ## 🎉 New: Your songs
