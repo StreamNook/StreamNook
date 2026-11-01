@@ -116,10 +116,9 @@ interface Props {
   channelId: string | null;
   channelLabel: string | null;
   gating: ChatGating;
-  /** The room's chat modes in Rust's words, or null while hidden or none. */
+  /** The room's chat modes in Rust's words, or null while hidden or none: a mode that holds you
+   *  back names itself in place of "Send a message". */
   roomModes?: RoomModeView | null;
-  /** Name the modes in place of "Send a message" instead of the chip. */
-  roomModesAsPrompt?: boolean;
   emotes: EmoteSet | null;
   replyTo?: { messageId: string; username: string } | null;
   onCancelReply?: () => void;
@@ -152,7 +151,6 @@ const MobileChatInputImpl: React.FC<Props> = ({
   channelLabel,
   gating,
   roomModes = null,
-  roomModesAsPrompt = false,
   emotes,
   replyTo,
   onCancelReply,
@@ -582,7 +580,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
       ? [`Slow mode: you can send again in ${slowWait}s`, `Send again in ${slowWait}s`]
       : hidePlaceholder
         ? []
-        : roomModesAsPrompt && roomModes?.prompt
+        : roomModes?.prompt
           ? [roomModes.prompt, roomModes.prompt_short ?? roomModes.prompt]
           : ['Send a message'];
   const placeholder = pickFittingText(placeholderWordings, fieldBox.width - 2, (t) => measureText(t, fieldBox.font));
