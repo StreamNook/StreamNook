@@ -43,6 +43,8 @@ pub fn frontend_owned_defaults() -> Value {
         "discovery_languages": [],
         "fullscreen_chat": {
             "phone_layout": "beside",
+            // A stream's landscape opens with chat shown until the person hides it.
+            "landscape_open": true,
             "opacity": 55,
             "width": 340,
             "side": "auto",

@@ -187,7 +187,11 @@ export const WatchScreen: React.FC = () => {
   const playerMode = useMobileNavStore((s) => s.playerMode);
   const setPlayerMode = useMobileNavStore((s) => s.setPlayerMode);
   const shape = useWindowShape();
-  const [landscapeChat, setLandscapeChat] = useState(false);
+  // Landscape chat starts as the person last left it (fullscreen_chat.landscape_open):
+  // shown beside the stream until they hide it. setLandscapeChat below saves each change.
+  const [landscapeChat, setLandscapeChatShown] = useState(
+    () => useAppStore.getState().settings.fullscreen_chat?.landscape_open ?? true,
+  );
   // A large screen shows chat by default (beside or under the video), so its
   // toggle runs the other way: it HIDES chat, and the video takes the screen.
   const [largeChatHidden, setLargeChatHidden] = useState(false);
@@ -512,6 +516,14 @@ export const WatchScreen: React.FC = () => {
     if (patch.width != null) setOverlayWidthLive(null);
     if (patch.opacity != null) setOverlayOpacityLive(null);
   }, []);
+  // Shows or hides landscape chat and remembers it, so the next stream starts the same way.
+  const setLandscapeChat = useCallback(
+    (on: boolean) => {
+      setLandscapeChatShown(on);
+      void writeOverlay({ landscape_open: on });
+    },
+    [writeOverlay],
+  );
   // The handle's range is the whole screen's (the column's background runs to
   // the edge through the cutout inset; only its text keeps clear of the cutout),
   // and the video always keeps at least 240 beside it.
@@ -1713,7 +1725,7 @@ export const WatchScreen: React.FC = () => {
                 largeToggle && !mini && !pip
                   ? () => setLargeChatHidden((v) => !v)
                   : sideBySide
-                    ? () => setLandscapeChat((v) => !v)
+                    ? () => setLandscapeChat(!landscapeChat)
                     : undefined
               }
               chatOpen={largeToggle ? !largeChatHidden : chatOverlay || chatBeside}

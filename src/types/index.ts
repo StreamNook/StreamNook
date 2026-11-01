@@ -1381,6 +1381,10 @@ export interface FullscreenChatSettings {
   // (sharing opacity, width and side with the desktop overlay) or gives it a
   // column beside the picture. Default 'overlay'.
   phone_layout?: 'overlay' | 'beside';
+  // Phone only. Whether a stream's landscape opens with chat shown (in the
+  // phone_layout), as the person last left it. Default true: chat beside the
+  // stream until they choose otherwise.
+  landscape_open?: boolean;
 }
 
 /** How the Discord status looks. Mirrors Rust `DiscordPresenceSettings`
