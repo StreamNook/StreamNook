@@ -59,6 +59,13 @@ vi.mock('../../utils/openBadgesInMain', () => routes);
 // Called as a plain function below, outside a React render: its Battery Saver
 // hook stands in as off.
 vi.mock('../../utils/lowPower', () => ({ useLowPower: () => false }));
+// Its failed-art read is a hook too, so it stands in as "nothing has failed".
+vi.mock('../../utils/badgeArtFailures', () => ({
+  useFailedBadgeArt: () => '',
+  isBadgeArtFailed: () => false,
+  failedAmong: () => '',
+  markBadgeArtFailed: vi.fn(),
+}));
 
 import { ChatBadgeIcons, type ResolvedTwitchBadge } from './ChatBadgeIcons';
 import { BadgeHoverCard } from './BadgeHoverCard';
@@ -69,8 +76,8 @@ import { Logger } from '../../utils/logger';
 
 type ClickableProps = { onClick?: () => void; 'aria-label'?: string; children?: ReactNode };
 
-/** Every element in a rendered tree (ChatBadgeIcons has no hooks, so calling
- *  it returns the tree its rows would mount). */
+/** Every element in a rendered tree (ChatBadgeIcons has no hooks besides the
+ *  mocked failed-art read, so calling it returns the tree its rows would mount). */
 function elements(node: ReactNode): ReactElement[] {
   if (Array.isArray(node)) return node.flatMap(elements);
   if (!isValidElement(node)) return [];

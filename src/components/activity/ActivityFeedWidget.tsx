@@ -4,7 +4,10 @@ import { invoke } from '@tauri-apps/api/core';
 import { useActivityStore } from '../../stores/activityStore';
 import { useChatUserStore } from '../../stores/chatUserStore';
 import { useAppStore } from '../../stores/AppStore';
-import { computePaintStyle, getBadgeImageUrl } from '../../services/seventvService';
+import { computePaintStyle } from '../../services/seventvService';
+import { ChatBadgeIcons, type ResolvedTwitchBadge } from '../chat/ChatBadgeIcons';
+import type { ThirdPartyBadge } from '../../services/badgeService';
+import { badgeFoldLimit } from '../../utils/badgeFold';
 import { activityHighlightStyle, colorForKind, labelForKind } from '../../utils/activityCategories';
 import { PROVIDERS, type ProviderId } from '../../types/providers';
 import { ProviderLogo } from '../ProviderLogo';
@@ -226,8 +229,7 @@ function detailFor(e: ActivityEvent): string {
   }
 }
 
-type TpBadge = { id: string; imageUrl?: string; title?: string };
-const EMPTY_TP_BADGES: TpBadge[] = [];
+const EMPTY_TP_BADGES: ThirdPartyBadge[] = [];
 
 // The actor's badges + their painted/colored name, matching what chat shows
 // (no avatar -- profile-pic fetches were the slow part). 7TV paint + 7TV/third-
@@ -243,9 +245,10 @@ function ActorIdentity({ e }: { e: ActivityEvent }) {
   const paint = useChatUserStore((s) => (cosmeticsKey ? s.users.get(cosmeticsKey)?.paint : undefined));
   const seventvBadge = useChatUserStore((s) => (cosmeticsKey ? s.users.get(cosmeticsKey)?.seventvBadge : undefined));
   const thirdPartyBadges = useChatUserStore((s) =>
-    cosmeticsKey ? (s.users.get(cosmeticsKey)?.thirdPartyBadges as TpBadge[] | undefined) ?? EMPTY_TP_BADGES : EMPTY_TP_BADGES,
+    cosmeticsKey ? (s.users.get(cosmeticsKey)?.thirdPartyBadges as ThirdPartyBadge[] | undefined) ?? EMPTY_TP_BADGES : EMPTY_TP_BADGES,
   );
   const paintShadowMode = useAppStore((s) => s.settings.cosmetics?.paint_shadows) ?? 'all';
+  const foldLimit = badgeFoldLimit(useAppStore((s) => s.settings.chat_design?.badge_fold_limit));
 
   const name = e.actor.display_name || e.actor.username || 'Someone';
   const nameStyle = useMemo<CSSProperties>(
@@ -255,7 +258,7 @@ function ActorIdentity({ e }: { e: ActivityEvent }) {
         : { color: e.actor.color || undefined },
     [paint, e.actor.color, paintShadowMode],
   );
-  const twitchBadges = e.actor.badges ?? [];
+  const twitchBadges: ResolvedTwitchBadge[] = (e.actor.badges ?? []).map((b) => ({ key: b.key, info: b.info ?? null }));
   const hasBadges = twitchBadges.length > 0 || !!seventvBadge || thirdPartyBadges.length > 0;
 
   return (
@@ -274,35 +277,15 @@ function ActorIdentity({ e }: { e: ActivityEvent }) {
         />
       )}
       {hasBadges && (
-        <span className="inline-flex flex-shrink-0 items-center gap-0.5">
-          {twitchBadges.map((b, i) => {
-            const url = b.info?.image_url_2x || b.info?.image_url_1x;
-            return url ? (
-              <Tooltip key={`tb-${b.key}-${i}`} content={b.info?.title ?? ''}>
-                <img
-                  src={url}
-                  alt={b.info?.title ?? ''}
-                  className="inline-block"
-                  style={{ height: '1.15em' }}
-                />
-              </Tooltip>
-            ) : null;
-          })}
-          {seventvBadge && (
-            <img src={getBadgeImageUrl(seventvBadge)} alt="" className="inline-block" style={{ height: '1.15em' }} />
-          )}
-          {thirdPartyBadges
-            .filter((b) => b?.imageUrl)
-            .map((b, i) => (
-              <Tooltip key={`tp-${b.id}-${i}`} content={b.title ?? ''}>
-                <img
-                  src={b.imageUrl}
-                  alt={b.title ?? ''}
-                  className="inline-block"
-                  style={{ height: '1.15em' }}
-                />
-              </Tooltip>
-            ))}
+        <span className="inline-flex flex-shrink-0 items-center gap-0.5 [--sn-badge-scale:0.82]">
+          <ChatBadgeIcons
+            twitchBadges={twitchBadges}
+            seventvBadge={seventvBadge}
+            thirdPartyBadges={thirdPartyBadges}
+            streamNookMemberId={null}
+            foldLimit={foldLimit}
+            keyPrefix="act"
+          />
         </span>
       )}
       <span className="truncate font-bold" style={nameStyle}>

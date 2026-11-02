@@ -35,6 +35,15 @@ import { formatDuration } from '../../utils/timeoutRamp';
 import { lineButtons, type LineButton } from '../chat/modLine';
 import { bindLineStrips, bindLineWheel, useLineArt, useLineButtons, type LineArt } from '../chat/lineArt';
 import { useLineConfig, useModSliderSteps, useSliderConfig } from '../../services/moderation';
+import { ChatBadgeIcons, type ResolvedTwitchBadge } from '../chat/ChatBadgeIcons';
+import type { ThirdPartyBadge } from '../../services/badgeService';
+import moderatorArt from '../../assets/badge-preview/moderator.png';
+import subscriberArt from '../../assets/badge-preview/subscriber.png';
+import bitsArt from '../../assets/badge-preview/bits.png';
+import ffzArt from '../../assets/badge-preview/ffz.png';
+import chatterinoArt from '../../assets/badge-preview/chatterino.png';
+import dankchatArt from '../../assets/badge-preview/dankchat.png';
+import limerinoArt from '../../assets/badge-preview/limerino.png';
 
 // A few lines of sample chat for the settings page, drawn with the viewer's own
 // chat design (text size, spacing, dividers, stripes, timestamps, name style)
@@ -697,6 +706,56 @@ const ROOM_MODE_CAPTIONS: Record<'chip' | 'prompt', string> = {
   chip: 'a followers-only room in slow mode; hover the chip for both',
   prompt: 'a 10-minute followers-only room you followed 6 minutes ago',
 };
+
+const sampleTwitchBadge = (key: string, title: string, art: string): ResolvedTwitchBadge => ({
+  key,
+  info: { title, localUrl: art, image_url_1x: art, image_url_2x: art, image_url_4x: art },
+});
+
+const SAMPLE_TWITCH: ResolvedTwitchBadge[] = [
+  sampleTwitchBadge('moderator/1', 'Moderator', moderatorArt),
+  sampleTwitchBadge('subscriber/12', '12-Month Subscriber', subscriberArt),
+  sampleTwitchBadge('bits/1000', 'Bits 1000', bitsArt),
+];
+
+const sampleAddon = (provider: string, title: string, art: string): ThirdPartyBadge => ({
+  id: `${provider}-sample`,
+  title,
+  imageUrl: art,
+  image1x: art,
+  image2x: art,
+  image4x: art,
+  provider,
+});
+
+const SAMPLE_ADDONS: ThirdPartyBadge[] = [
+  sampleAddon('ffz', 'FFZ Supporter', ffzArt),
+  sampleAddon('chatterino', 'Chatterino Supporter', chatterinoArt),
+  sampleAddon('dankchat', 'DankChat Supporter', dankchatArt),
+  sampleAddon('limerino', 'Limerino Founder', limerinoArt),
+];
+
+/** One sample row with seven badges at the chosen limit. The chip is the real
+ *  one, so hovering it shows the real strip. */
+export const BadgeFoldPreview = ({ limit }: { limit: number }) => (
+  <SettingPreview>
+    <div className="glass-panel rounded-lg px-3 py-2 text-[14px] leading-relaxed">
+      <span className="sn-badge-strip mr-1.5">
+        <ChatBadgeIcons
+          twitchBadges={SAMPLE_TWITCH}
+          seventvBadge={null}
+          thirdPartyBadges={SAMPLE_ADDONS}
+          streamNookMemberId={null}
+          foldLimit={limit}
+          interactive
+          keyPrefix="pv"
+        />
+      </span>
+      <span className="font-bold">SampleChatter</span>
+      <span>: hello chat</span>
+    </div>
+  </SettingPreview>
+);
 
 /** The message box in a room with chat modes on, drawn the chosen way: the
  *  real chip, or the prompt in place of "Send a message". */

@@ -87,6 +87,8 @@ const HOMIES_CUSTOM_ID = 'homies-custom';
  */
 export function wearCategory(b: { provider?: string; id?: string; category?: string }): string {
   const provider = providerKey(b.provider);
+  // A Limerino badge the user owns but did not pick shares the pick's group.
+  if (provider === 'limerino' && b.category === 'limerino-owned') return 'limerino:limerino';
   if (b.category) return `${provider}:${b.category.toLowerCase()}`;
   if (provider === 'homies' && b.id === HOMIES_CUSTOM_ID) return `homies:${HOMIES_CUSTOM_ID}`;
   return `${provider}:${provider}`;

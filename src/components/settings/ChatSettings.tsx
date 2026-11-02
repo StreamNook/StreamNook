@@ -57,6 +57,9 @@ import moltorinoLogo from '../../assets/moltorino-logo.svg';
 import chatsenLogo from '../../assets/chatsen-logo.png';
 import chattyLogo from '../../assets/chatty-logo.png';
 import dankchatLogo from '../../assets/dankchat-logo.png';
+import limerinoLogo from '../../assets/limerino-logo.png';
+import jilchatLogo from '../../assets/jilchat-logo.png';
+import { badgeFoldLimit } from '../../utils/badgeFold';
 
 /** Platforms that can join a combined feed. Derived from the chat-capability
  *  flags rather than hand-listed, so a newly chat-enabled platform appears here
@@ -86,7 +89,7 @@ import { useChatUserStore } from '../../stores/chatUserStore';
 import { getUserCosmetics, computePaintStyle } from '../../services/seventvService';
 import { StyledChatName, type NameSeparator, type NameStyle } from '../chat/StyledChatName';
 import type { DeletedMessageStyle } from '../chat/deletedMessage';
-import { DeletedMessagePreview, EventRowPreview, InboxButtonPreview, MentionPreview, MentionRowPreview, MessageLayoutPreview, RoomModesPreview, SettingPreview } from './ChatPreview';
+import { BadgeFoldPreview, DeletedMessagePreview, EventRowPreview, InboxButtonPreview, MentionPreview, MentionRowPreview, MessageLayoutPreview, RoomModesPreview, SettingPreview } from './ChatPreview';
 import { ProfilePicturePreview } from './ProfilePicturePreview';
 import {
   DEFAULT_PROFILE_PICTURE_ANIMATION,
@@ -397,6 +400,8 @@ const BADGE_PROVIDERS: { id: string; label: string }[] = [
   { id: 'homies', label: 'Homies' },
   { id: 'homies-custom', label: 'Homies custom' },
   { id: 'moltorino', label: 'Moltorino' },
+  { id: 'limerino', label: 'Limerino' },
+  { id: 'jilchat', label: 'JilChat' },
   { id: 'chatsen', label: 'Chatsen' },
   { id: 'chatty', label: 'Chatty' },
   { id: 'dankchat', label: 'DankChat' },
@@ -409,6 +414,8 @@ const SERVICE_ICONS: Record<string, string> = {
   homies: homiesLogo,
   'homies-custom': homiesLogo,
   moltorino: moltorinoLogo,
+  limerino: limerinoLogo,
+  jilchat: jilchatLogo,
   chatsen: chatsenLogo,
   chatty: chattyLogo,
   dankchat: dankchatLogo,
@@ -504,6 +511,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
   const [glintHover, setGlintHover] = useState<'none' | 'sheen' | 'pulse' | 'chase' | null>(null);
   const [pictureAnimationHover, setPictureAnimationHover] = useState<ProfilePictureAnimation | null>(null);
   const [pictureSourceHover, setPictureSourceHover] = useState<ProfilePictureSource | null>(null);
+  const [foldPreview, setFoldPreview] = useState<number | null>(null);
   const pictureSource = profilePictureSource(settings.cosmetics?.profile_picture_source);
   const savedPictureAnimation = (settings.cosmetics?.profile_picture_animation ??
     DEFAULT_PROFILE_PICTURE_ANIMATION) as ProfilePictureAnimation;
@@ -570,6 +578,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
     name_color_adjustment: (stored?.name_color_adjustment ?? 'hsl_loop') as 'off' | 'hsl_loop',
     show_badges: stored?.show_badges ?? true,
     badge_scale: stored?.badge_scale ?? 1,
+    badge_fold_limit: stored?.badge_fold_limit ?? 3,
     ffz_custom_role_badges: stored?.ffz_custom_role_badges ?? true,
     show_third_party_badges: stored?.show_third_party_badges ?? true,
     hidden_badge_providers: stored?.hidden_badge_providers ?? [],
@@ -1786,9 +1795,32 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         </SettingsRow>
 
         <SettingsRow
+          title="Badges before +N"
+          onReset={resetFor(['chat_design.badge_fold_limit', 3])}
+          description="When someone has more badges, the rest fold into a +N you can hover (tap on phones) to see."
+        >
+          <div className="space-y-3">
+            <SegmentedSelect<'0' | '2' | '3' | '4' | '5'>
+              fullWidth={IS_MOBILE}
+              value={String(badgeFoldLimit(cd.badge_fold_limit)) as '0' | '2' | '3' | '4' | '5'}
+              onChange={(v) => setDesign({ badge_fold_limit: Number(v) })}
+              onPreview={(v) => setFoldPreview(v === null ? null : Number(v))}
+              options={[
+                { value: '0', label: 'Show all' },
+                { value: '2', label: '2' },
+                { value: '3', label: '3' },
+                { value: '4', label: '4' },
+                { value: '5', label: '5' },
+              ]}
+            />
+            <BadgeFoldPreview limit={foldPreview ?? badgeFoldLimit(cd.badge_fold_limit)} />
+          </div>
+        </SettingsRow>
+
+        <SettingsRow
           title="Add-on badges"
           onReset={resetFor(['chat_design.show_third_party_badges', true])}
-          description="Badges from 7TV, FFZ, Chatterino, Homies and the other badge services, plus StreamNook membership badges."
+          description="Badges from 7TV, FFZ, Chatterino, Homies, Limerino, JilChat and the other badge services, plus StreamNook membership badges."
           help="Services turns individual badge services off. Lit means shown."
           control={
             <Toggle

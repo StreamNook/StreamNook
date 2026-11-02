@@ -22,6 +22,8 @@ import { Tooltip } from './ui/Tooltip';
 import chatterinoLogo from '../assets/chatterino-logo.svg';
 import homiesLogo from '../assets/homies-logo.png';
 import moltorinoLogo from '../assets/moltorino-logo.svg';
+import limerinoLogo from '../assets/limerino-logo.png';
+import jilchatLogo from '../assets/jilchat-logo.png';
 import ffzLogo from '../assets/ffz-logo.png';
 import dankchatLogo from '../assets/dankchat-logo.png';
 import chatsenLogo from '../assets/chatsen-logo.png';
@@ -36,6 +38,8 @@ export type ChatClientProvider =
   | 'chatterino'
   | 'homies'
   | 'moltorino'
+  | 'limerino'
+  | 'jilchat'
   | 'chatsen'
   | 'chatty'
   | 'dankchat';
@@ -85,6 +89,20 @@ const PROVIDERS: ProviderMeta[] = [
     blurb: 'Supporter tiers from the Moltorino fork of Chatterino.',
     homepage: 'https://moltorino.com/',
     logo: moltorinoLogo,
+  },
+  {
+    key: 'limerino',
+    label: 'Limerino',
+    blurb: 'A native Twitch chat app for iPhone.',
+    homepage: 'https://limerino.com/',
+    logo: limerinoLogo,
+  },
+  {
+    key: 'jilchat',
+    label: 'JilChat',
+    blurb: 'A Twitch chat app for iPhone, and a Chatterino fork.',
+    homepage: 'https://jil.chat/',
+    logo: jilchatLogo,
   },
   {
     key: 'ffz',

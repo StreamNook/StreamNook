@@ -31,7 +31,7 @@ export interface ThirdPartyBadge {
   image4x: string;
   provider: string;
   link?: string;
-  /** What the badge is for, when its provider says (Moltorino does). */
+  /** What the badge is for, when its provider says (Moltorino and Limerino do). */
   description?: string;
   /** The wear category (the Rust badge's `set_id`): what the provider treats
    *  as one separate thing. A chatter wears one badge per category. Absent
@@ -62,7 +62,7 @@ interface RustBadgeInfo {
 
 interface RustUserBadge {
   badge_info: RustBadgeInfo;
-  provider: 'twitch' | 'ffz' | 'bttv' | 'chatterino' | 'homies' | 'moltorino' | 'chatsen' | 'chatty' | 'dankchat';
+  provider: 'twitch' | 'ffz' | 'bttv' | 'chatterino' | 'homies' | 'moltorino' | 'limerino' | 'jilchat' | 'chatsen' | 'chatty' | 'dankchat';
 }
 
 interface RustUserBadgesResponse {
@@ -127,7 +127,7 @@ export async function getAllUserBadges(
         provider: b.provider,
         category: b.badge_info.set_id,
         link: b.badge_info.click_url,
-        // Only Moltorino writes descriptions; the rest send "".
+        // Only Moltorino and Limerino write descriptions; the rest send "".
         description: b.badge_info.description || undefined,
       };
     });
@@ -186,7 +186,7 @@ export async function getAllUserBadgesWithEarned(
         provider: b.provider,
         category: b.badge_info.set_id,
         link: b.badge_info.click_url,
-        // Only Moltorino writes descriptions; the rest send "".
+        // Only Moltorino and Limerino write descriptions; the rest send "".
         description: b.badge_info.description || undefined,
       };
     });
@@ -234,7 +234,7 @@ export async function getGlobalThirdPartyBadges(userId: string): Promise<ThirdPa
         provider: b.provider,
         category: b.badge_info.set_id,
         link: b.badge_info.click_url,
-        // Only Moltorino writes descriptions; the rest send "".
+        // Only Moltorino and Limerino write descriptions; the rest send "".
         description: b.badge_info.description || undefined,
       };
     });

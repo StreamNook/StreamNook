@@ -1562,6 +1562,12 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   {
     tab: 'Chat',
     section: 'Names & Badges',
+    title: 'Badges before +N',
+    description: 'When someone has more badges, the rest fold into a +N you can hover (tap on phones) to see.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Names & Badges',
     title: 'Add-on badges',
     description: 'Badges from 7TV, FFZ, Chatterino, Homies and the other badge services, plus StreamNook membership badges. Third-party badges.'
   },

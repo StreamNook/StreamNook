@@ -101,6 +101,7 @@ export function PinnedChatter({
             streamNookMemberId={look.streamNookMemberId}
             onBadgeClick={onBadgeClick}
             interactive={!isLine}
+            foldLimit={isLine ? undefined : look.foldLimit}
             keyPrefix="pin"
           />
         </span>

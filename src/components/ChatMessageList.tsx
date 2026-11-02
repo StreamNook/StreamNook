@@ -902,6 +902,7 @@ const ChatMessageList = memo(function ChatMessageList({
     // A tap opens its row's line buttons once it has landed, so the next tap
     // can press one; the tap itself acted on what it saw.
     const onTap = (e: MouseEvent) => {
+      if (e.target instanceof Element && e.target.closest('[data-no-row-tap]')) return;
       if ((e as PointerEvent).pointerType !== 'touch') return;
       setOpen(e.target instanceof Element ? e.target.closest('.chat-message-row') : null);
     };
@@ -1207,6 +1208,7 @@ const ChatMessageList = memo(function ChatMessageList({
     <div className="relative h-full" style={IS_MOBILE ? PHONE_TOP_FADE : undefined}>
       <div
         ref={containerRef}
+        data-scroll-root=""
         // On the phone the bar shows only while the list is paused (sn-chat-live
         // in styles/mobile.css): pinned to the newest line it moves every message.
         className={`h-full overflow-y-auto overflow-x-hidden scrollbar-thin${isPaused ? '' : ' sn-chat-live'}`}

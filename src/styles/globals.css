@@ -3384,6 +3384,74 @@ html[data-motion="reduced"] .sub-progress-fill {
   padding: 0.09em;
 }
 
+/* The "peek" pill after a row's kept badges: thumbnails of the next two hidden
+   badges overlapping, then "+N". Exactly one badge tall; grows with its text, so
+   a two-digit count never clips. Its own font is 0.72em, so its box is the
+   badge's 1.4em divided by 0.72. One element plus at most three children, only
+   on folded rows (which drop two or more badge elements), so rows get lighter. */
+.sn-badge-fold-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: calc(1.9444em * var(--sn-badge-scale, 1));
+  min-width: calc(1.9444em * var(--sn-badge-scale, 1));
+  padding: 0 0.45em 0 0.25em;
+  border-radius: 999px;
+  font-size: 0.72em;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+  color: var(--color-text-secondary);
+  background: color-mix(in srgb, currentColor 14%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 18%, transparent);
+  transition: background-color 150ms ease, color 150ms ease;
+  cursor: pointer;
+}
+.sn-badge-fold-chip:hover,
+.sn-badge-fold-chip[aria-expanded='true'] {
+  color: var(--color-text-primary);
+}
+/* Peek thumbnails: 60% of a badge (in the pill's em: 1.4 * 0.6 / 0.72), the
+   second tucked under the first's edge, each ringed in the row's background so
+   the overlap reads as a stack. */
+.sn-badge-fold-peek {
+  width: calc(1.1667em * var(--sn-badge-scale, 1));
+  height: calc(1.1667em * var(--sn-badge-scale, 1));
+  border-radius: 0.25em;
+  object-fit: contain;
+  box-shadow: 0 0 0 0.12em var(--color-background, #18181b);
+}
+.sn-badge-fold-peek + .sn-badge-fold-peek {
+  margin-left: -0.45em;
+}
+.sn-badge-fold-peek:last-of-type {
+  margin-right: 0.3em;
+}
+.sn-badge-fold-chip:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 18%, transparent), 0 0 0 1px var(--color-accent, currentColor);
+}
+/* The unfolded badges: fixed at the chip (class `fixed` keeps the glass rules
+   from making it relative), above everything but tooltips, so each badge's own
+   hover card still shows over it. Motion is framer's alone. */
+.sn-badge-fold-strip {
+  z-index: calc(var(--sn-z-tooltip) - 1);
+  transition: none;
+}
+.sn-badge-fold-strip > .sn-badge-fold-glass {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25em;
+  padding: 0.3em 0.45em;
+  border-radius: 999px;
+  transition: none;
+}
+.sn-badge-fold-strip > .sn-badge-fold-glass:has(> :nth-child(9)) {
+  border-radius: 0.6em;
+}
+
 /* A Twitch Shared Chat row from a partner channel: that channel's own color
    (--sn-src, from the core, floored for the theme; the accent until it
    answers) on a 3px left edge, washing in from it and gone by the middle, so

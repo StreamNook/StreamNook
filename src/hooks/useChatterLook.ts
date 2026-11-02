@@ -15,6 +15,7 @@ import {
 import type { ThirdPartyBadge } from '../services/badgeService';
 import type { ResolvedTwitchBadge, SevenTvBadgeLike } from '../components/chat/ChatBadgeIcons';
 import { visibleChatterBadges } from '../utils/chatterBadges';
+import { badgeFoldLimit } from '../utils/badgeFold';
 import { cosmeticsKey } from '../utils/chatterIdentity';
 import { memberIdFor } from '../utils/memberIdentity';
 import { getColorOverride, getDisplayedName } from '../utils/userChatOverrides';
@@ -51,6 +52,8 @@ export interface ChatterLook {
   thirdPartyBadges: readonly ThirdPartyBadge[];
   /** Member id for the StreamNook badge, or null when it should not show. */
   streamNookMemberId: string | null;
+  /** Badges to show before the rest fold into a "+N" chip (0 shows all). */
+  foldLimit: number;
   hasBadges: boolean;
 }
 
@@ -93,6 +96,7 @@ export function useChatterLook({ provider, userId, name, login, shownName, color
   const showBadges = useAppStore((s) => s.settings.chat_design?.show_badges);
   const showThirdParty = useAppStore((s) => s.settings.chat_design?.show_third_party_badges);
   const hiddenProviders = useAppStore((s) => s.settings.chat_design?.hidden_badge_providers);
+  const foldSetting = useAppStore((s) => s.settings.chat_design?.badge_fold_limit);
   const overrides = useAppStore((s) => s.settings.chat_customization?.user_overrides);
   const paintShadowMode = useAppStore((s) => s.settings.cosmetics?.paint_shadows) ?? 'all';
   const adjustNameColor = useNameColorAdjust();
@@ -127,6 +131,7 @@ export function useChatterLook({ provider, userId, name, login, shownName, color
     seventvBadge: visible.seventv,
     thirdPartyBadges: visible.thirdParty,
     streamNookMemberId,
+    foldLimit: badgeFoldLimit(foldSetting),
     hasBadges:
       visible.twitch.length > 0 || !!visible.seventv || visible.thirdParty.length > 0 || !!streamNookMemberId,
   };

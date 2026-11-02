@@ -366,8 +366,11 @@ export interface ChatDesignSettings {
   show_third_party_badges?: boolean;
   // Add-on badge providers to leave out (lowercase ids: 'streamnook', '7tv',
   // 'ffz', 'bttv', 'chatterino', 'homies', 'moltorino', 'chatsen', 'chatty',
-  // 'dankchat'). Default none.
+  // 'dankchat', 'limerino', 'jilchat'). Default none.
   hidden_badge_providers?: string[];
+  // How many badges a chat row shows before folding the rest into a "+N"
+  // chip that unfolds on hover (tap on phones). 0 shows all. Default 3.
+  badge_fold_limit?: number;
   // StreamNook atmospheres (and the Cologne event look) behind members' chat
   // rows. Off keeps every row plain; profiles still show them. Default true.
   show_chat_atmospheres?: boolean;

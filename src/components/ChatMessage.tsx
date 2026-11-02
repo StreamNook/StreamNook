@@ -20,6 +20,7 @@ import { computePaintStyle, getBadgeImageUrl, pickPaintLayerImage, queueCosmetic
 import { StyledChatName } from './chat/StyledChatName';
 import { ChatBadgeIcons, type ResolvedTwitchBadge } from './chat/ChatBadgeIcons';
 import { visibleChatterBadges } from '../utils/chatterBadges';
+import { badgeFoldLimit } from '../utils/badgeFold';
 import { usePinStore } from '../stores/pinStore';
 import { getCosmeticsWithFallback } from '../services/cosmeticsCache';
 import type { ThirdPartyBadge as ThirdPartyBadgeType } from '../services/badgeService';
@@ -1318,6 +1319,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       thirdPartyBadgesAll,
     ],
   );
+  const foldLimit = badgeFoldLimit(chatDesign?.badge_fold_limit);
   const atmosphere = atmosphereId ? getAtmosphere(atmosphereId) : null;
   // Frost behind the text only when the atmosphere declares it needs it (busy
   // washes); subtle ones render the text bare. A backdrop-filter per message row
@@ -2598,6 +2600,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             thirdPartyBadges={thirdPartyBadges}
             streamNookMemberId={isSN && snBadgeOn ? senderUserId : null}
             onBadgeClick={onBadgeClick}
+            foldLimit={foldLimit}
             keyPrefix="ev0"
           />
         </span>
@@ -2770,6 +2773,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             thirdPartyBadges={thirdPartyBadges}
             streamNookMemberId={isSN && snBadgeOn ? senderUserId : null}
             onBadgeClick={onBadgeClick}
+            foldLimit={foldLimit}
             keyPrefix="ev1"
           />
         </span>
@@ -2916,6 +2920,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             thirdPartyBadges={thirdPartyBadges}
             streamNookMemberId={isSN && snBadgeOn ? senderUserId : null}
             onBadgeClick={onBadgeClick}
+            foldLimit={foldLimit}
             keyPrefix="ev2"
           />
         </span>
@@ -3001,6 +3006,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             thirdPartyBadges={thirdPartyBadges}
             streamNookMemberId={isSN && snBadgeOn ? senderUserId : null}
             onBadgeClick={onBadgeClick}
+            foldLimit={foldLimit}
             keyPrefix="ev3"
           />
         </span>
@@ -3244,6 +3250,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             thirdPartyBadges={thirdPartyBadges}
             streamNookMemberId={isSN && snBadgeOn ? senderUserId : null}
             onBadgeClick={onBadgeClick}
+            foldLimit={foldLimit}
             keyPrefix="ev4"
           />
         </span>
@@ -3738,6 +3745,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
                 thirdPartyBadges={thirdPartyBadges}
                 streamNookMemberId={isSN && snBadgeOn ? senderUserId : null}
                 onBadgeClick={onBadgeClick}
+                foldLimit={foldLimit}
                 keyPrefix="badge"
               />
             </span>

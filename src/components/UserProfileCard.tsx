@@ -435,6 +435,8 @@ const THIRD_PARTY_PROVIDER_GROUPS: { key: string; label: string }[] = [
   { key: 'chatterino', label: 'Chatterino' },
   { key: 'homies', label: 'Homies' },
   { key: 'moltorino', label: 'Moltorino' },
+  { key: 'limerino', label: 'Limerino' },
+  { key: 'jilchat', label: 'JilChat' },
   { key: 'chatsen', label: 'Chatsen' },
   { key: 'chatty', label: 'Chatty' },
   { key: 'dankchat', label: 'DankChat' },

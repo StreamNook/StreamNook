@@ -1,7 +1,9 @@
+import { Fragment, type ReactNode } from 'react';
 import { Tooltip } from '../ui/Tooltip';
 import { FallbackImage } from '../FallbackImage';
 import { StreamNookBadge } from '../StreamNookBadge';
 import { BadgeHoverCard } from './BadgeHoverCard';
+import { BadgeFoldChip, BadgeFoldItem } from './BadgeFold';
 import { getBadgeImageUrl, getBadgeFallbackUrls } from '../../services/seventvService';
 import { openBadgeInfo } from '../../stores/badgeSpotlightStore';
 import { sevenTvBadgeRef, thirdPartyBadgeRef, twitchRowBadgeRef } from '../../utils/badgeSpotlight';
@@ -12,6 +14,8 @@ import { queueBadgeForCaching, getCachedBadgeUrl } from '../../services/badgeIma
 import type { ThirdPartyBadge } from '../../services/badgeService';
 import { Logger } from '../../utils/logger';
 import { boundedAdd } from '../../utils/boundedMap';
+import { foldBadges, foldKind, type FoldKind } from '../../utils/badgeFold';
+import { markBadgeArtFailed, useFailedBadgeArt } from '../../utils/badgeArtFailures';
 
 /** What a resolved Twitch badge carries (twitchBadges.parseBadges), or a
  *  Kick / YouTube / TikTok badge in the same slot (`provider` set). */
@@ -94,6 +98,9 @@ interface ChatBadgeIconsProps {
   onBadgeClick?: (badgeKey: string, badgeInfo: TwitchBadgeInfo) => void;
   /** False inside another control (a button): no nested buttons, no clicks. */
   interactive?: boolean;
+  /** Badges to show before the rest fold into a "+N" chip, normalized by
+   *  `badgeFoldLimit`. 0 (the default) folds nothing. */
+  foldLimit?: number;
   keyPrefix?: string;
 }
 
@@ -104,11 +111,23 @@ interface ChatBadgeIconsProps {
 const BADGE_BUTTON_CLASS =
   'inline-flex items-center cursor-pointer rounded-[3px] hover:scale-110 transition-transform focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/70';
 
+/** One drawable badge: its fold kind, its art url ('' for the StreamNook mark),
+ *  Twitch's own copy of that art when one exists, and its finished element. */
+interface BadgeSlot {
+  key: string;
+  kind: FoldKind;
+  url: string;
+  remote?: string;
+  node: ReactNode;
+}
+
 /**
  * A chatter's badge icons in chat order: Twitch (role, subscription, earned in
  * the channel, global), then 7TV, then the other third-party providers, then
  * the StreamNook badge rightmost, next to the name. Every chat row and the
  * pinned message draw their badges through this, inside their own strip.
+ * Past the row's limit the rest fold into a "+N" chip (`BadgeFold`; the rule is
+ * `utils/badgeFold`, shared with Rust).
  *
  * Hovering any badge shows its big-art card (only after the pointer really
  * moves over it, so cards never pop as chat scrolls under a parked cursor);
@@ -122,77 +141,128 @@ export function ChatBadgeIcons({
   streamNookMemberId,
   onBadgeClick,
   interactive = true,
+  foldLimit = 0,
   keyPrefix = 'badge',
 }: ChatBadgeIconsProps) {
   // Battery Saver: the 7TV badge's published still (utils/lowPower).
   const stillBadges = useLowPower();
   // Touch has no hover and no spotlight host on the phone shell.
   const clickable = interactive && !IS_MOBILE;
-  return (
-    <>
-      {twitchBadges.map((badge, idx) => {
-        const info = badge.info;
-        if (!info) return null;
-        const src = getTwitchBadgeUrl(badge.key, info);
-        const ref = twitchRowBadgeRef(badge.key, info, src);
-        const img = (
-          <img
-            src={src}
-            alt={info.title}
-            className="sn-chat-badge block"
-            loading="lazy"
-            decoding="async"
-            onError={(e) => {
-              // A disk copy that went missing: show Twitch's own image instead.
-              const remote = info.image_url_4x || info.image_url_1x;
-              const el = e.currentTarget;
-              if (remote && src !== remote && !el.dataset.remote) {
-                el.dataset.remote = '1';
-                el.src = remote;
-                return;
-              }
-              const failed = el.dataset.remote ? remote : src;
-              if (failed && !reportedBadgeFailures.has(failed)) {
-                boundedAdd(reportedBadgeFailures, failed, REPORTED_BADGE_FAILURES_MAX);
-                Logger.warn('[Badge] Failed to load badge:', badge.key, failed);
-              }
-              el.style.display = 'none';
-            }}
-          />
-        );
-        return (
-          <Tooltip
-            key={`${keyPrefix}-${badge.key}-${idx}`}
-            content={<BadgeHoverCard badge={ref} clickable={clickable} />}
-            side="top"
-            requirePointerMove
-          >
-            {clickable ? (
-              <button
-                type="button"
-                aria-label={ref.title}
-                className={BADGE_BUTTON_CLASS}
-                onClick={() => (onBadgeClick ? onBadgeClick(badge.key, info) : openBadgeInfo(ref))}
-              >
-                {img}
-              </button>
-            ) : (
-              img
-            )}
-          </Tooltip>
-        );
-      })}
-      {seventvBadge && (() => {
-        const ref = sevenTvBadgeRef(seventvBadge);
-        const img = (
-          <FallbackImage
-            src={getBadgeImageUrl(seventvBadge, stillBadges)}
-            fallbackUrls={getBadgeFallbackUrls(seventvBadge.id).slice(1)}
-            alt={ref.title}
-            className="sn-chat-badge block"
-          />
-        );
-        return (
+  const slots: BadgeSlot[] = [];
+
+  twitchBadges.forEach((badge, idx) => {
+    const info = badge.info;
+    if (!info) return;
+    const src = getTwitchBadgeUrl(badge.key, info);
+    const ref = twitchRowBadgeRef(badge.key, info, src);
+    const img = (
+      <img
+        src={src}
+        alt={info.title}
+        className="sn-chat-badge block"
+        loading="lazy"
+        decoding="async"
+        onError={(e) => {
+          // A disk copy that went missing: show Twitch's own image instead.
+          const remote = info.image_url_4x || info.image_url_1x;
+          const el = e.currentTarget;
+          if (remote && src !== remote && !el.dataset.remote) {
+            el.dataset.remote = '1';
+            el.src = remote;
+            return;
+          }
+          const failed = el.dataset.remote ? remote : src;
+          if (failed && !reportedBadgeFailures.has(failed)) {
+            boundedAdd(reportedBadgeFailures, failed, REPORTED_BADGE_FAILURES_MAX);
+            Logger.warn('[Badge] Failed to load badge:', badge.key, failed);
+          }
+          el.style.display = 'none';
+          markBadgeArtFailed(src);
+        }}
+      />
+    );
+    slots.push({
+      key: `${keyPrefix}-${badge.key}-${idx}`,
+      kind: foldKind(info.provider ?? 'twitch', badge.key.split('/')[0]),
+      url: src,
+      remote: info.image_url_4x || info.image_url_1x,
+      node: (
+        <Tooltip content={<BadgeHoverCard badge={ref} clickable={clickable} />} side="top" requirePointerMove>
+          {clickable ? (
+            <button
+              type="button"
+              aria-label={ref.title}
+              className={BADGE_BUTTON_CLASS}
+              onClick={() => (onBadgeClick ? onBadgeClick(badge.key, info) : openBadgeInfo(ref))}
+            >
+              {img}
+            </button>
+          ) : (
+            img
+          )}
+        </Tooltip>
+      ),
+    });
+  });
+
+  if (seventvBadge) {
+    const ref = sevenTvBadgeRef(seventvBadge);
+    const url = getBadgeImageUrl(seventvBadge, stillBadges);
+    const img = (
+      <FallbackImage
+        src={url}
+        fallbackUrls={getBadgeFallbackUrls(seventvBadge.id).slice(1)}
+        alt={ref.title}
+        className="sn-chat-badge block"
+        onError={() => markBadgeArtFailed(url)}
+      />
+    );
+    slots.push({
+      key: `${keyPrefix}-7tv`,
+      kind: 'seventv',
+      url,
+      node: (
+        <Tooltip content={<BadgeHoverCard badge={ref} clickable={clickable} />} side="top" requirePointerMove>
+          {clickable ? (
+            <button type="button" aria-label={ref.title} className={BADGE_BUTTON_CLASS} onClick={() => openBadgeInfo(ref)}>
+              {img}
+            </button>
+          ) : (
+            img
+          )}
+        </Tooltip>
+      ),
+    });
+  }
+
+  // The row is a 20px box, so the 2x variant is the right one: `imageUrl`
+  // is the 4x file, which for Moltorino is a 72px, 120-frame, ~960KB
+  // animated webp per badge. Member-loadout badges carry one URL for
+  // every size, so the fallback keeps them unchanged. The hover card
+  // loads the big file, only while it shows.
+  thirdPartyBadges
+    .filter((badge) => badge && badge.imageUrl)
+    .forEach((badge, idx) => {
+      const ref = thirdPartyBadgeRef(badge);
+      const url = badge.image2x || badge.imageUrl;
+      const img = (
+        <img
+          src={url}
+          alt={badge.title}
+          className="sn-chat-badge block object-contain"
+          loading="lazy"
+          decoding="async"
+          onError={(e) => {
+            e.currentTarget.style.display = 'none';
+            markBadgeArtFailed(url);
+          }}
+        />
+      );
+      slots.push({
+        key: `${keyPrefix}-tp-${badge.id}-${idx}`,
+        kind: 'addon',
+        url,
+        node: (
           <Tooltip content={<BadgeHoverCard badge={ref} clickable={clickable} />} side="top" requirePointerMove>
             {clickable ? (
               <button type="button" aria-label={ref.title} className={BADGE_BUTTON_CLASS} onClick={() => openBadgeInfo(ref)}>
@@ -202,51 +272,58 @@ export function ChatBadgeIcons({
               img
             )}
           </Tooltip>
-        );
-      })()}
-      {/* The row is a 20px box, so the 2x variant is the right one: `imageUrl`
-          is the 4x file, which for Moltorino is a 72px, 120-frame, ~960KB
-          animated webp per badge. Member-loadout badges carry one URL for
-          every size, so the fallback keeps them unchanged. The hover card
-          loads the big file, only while it shows. */}
-      {thirdPartyBadges.filter((badge) => badge && badge.imageUrl).map((badge, idx) => {
-        const ref = thirdPartyBadgeRef(badge);
-        const img = (
-          <img
-            src={badge.image2x || badge.imageUrl}
-            alt={badge.title}
-            className="sn-chat-badge block object-contain"
-            loading="lazy"
-            decoding="async"
-            onError={(e) => {
-              e.currentTarget.style.display = 'none';
-            }}
-          />
-        );
-        return (
-          <Tooltip
-            key={`${keyPrefix}-tp-${badge.id}-${idx}`}
-            content={<BadgeHoverCard badge={ref} clickable={clickable} />}
-            side="top"
-            requirePointerMove
-          >
-            {clickable ? (
-              <button type="button" aria-label={ref.title} className={BADGE_BUTTON_CLASS} onClick={() => openBadgeInfo(ref)}>
-                {img}
-              </button>
-            ) : (
-              img
-            )}
-          </Tooltip>
-        );
-      })}
-      {streamNookMemberId && (
+        ),
+      });
+    });
+
+  if (streamNookMemberId) {
+    slots.push({
+      key: `${keyPrefix}-sn`,
+      kind: 'streamnook',
+      url: '',
+      node: (
         <StreamNookBadge
           userId={streamNookMemberId}
           className="sn-chat-badge sn-chat-badge--sn block object-contain"
           interactive={clickable}
           requirePointerMove
         />
+      ),
+    });
+  }
+
+  // Art that finally failed to load is dropped before folding, so a dead image
+  // leaves no gap and no "+N" that opens onto nothing.
+  const failedArt = useFailedBadgeArt(slots.map((s) => s.url));
+  const drawable = slots.filter((s) => !s.url || !failedArt.includes(`${s.url}\n`));
+  const fold = foldBadges(
+    drawable.map((s) => s.kind),
+    foldLimit,
+  );
+
+  return (
+    <>
+      {fold.shown.map((i) => (
+        <Fragment key={drawable[i].key}>{drawable[i].node}</Fragment>
+      ))}
+      {fold.hidden.length > 0 && (
+        <BadgeFoldChip
+          count={fold.hidden.length}
+          peeks={fold.hidden
+            .map((i) => drawable[i])
+            .filter((s) => s.url)
+            .slice(0, 2)
+            .map((s) => ({ url: s.url, remote: s.remote }))}
+          still={!interactive}
+        >
+          {() =>
+            fold.hidden.map((i, n) => (
+              <BadgeFoldItem key={drawable[i].key} index={n}>
+                {drawable[i].node}
+              </BadgeFoldItem>
+            ))
+          }
+        </BadgeFoldChip>
       )}
     </>
   );
