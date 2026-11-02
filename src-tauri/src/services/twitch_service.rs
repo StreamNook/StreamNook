@@ -2052,6 +2052,17 @@ impl TwitchService {
                     .and_then(|v| v.as_str())
             })
             .map(String::from);
+        // The chat only shows the reason until it scrolls away, so a refusal
+        // keeps Twitch's code and wording here.
+        if !is_sent {
+            log::warn!(
+                "[Chat] Twitch refused a message to {}: {}",
+                broadcaster_id,
+                data.and_then(|d| d.get("drop_reason"))
+                    .map(|dr| dr.to_string())
+                    .unwrap_or_else(|| format!("no drop_reason (response {})", json))
+            );
+        }
         Ok((message_id, is_sent, drop_reason))
     }
 

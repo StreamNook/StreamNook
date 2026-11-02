@@ -109,11 +109,14 @@ impl ChatService {
                 // No IRC fallback for secondaries: the IRC connection belongs to the
                 // primary, so falling back would send the message from the wrong
                 // account. Surface the failure instead.
-                Err(e) => Ok(SendResult {
-                    message_id: None,
-                    is_sent: false,
-                    drop_reason: Some(format!("Could not send from this account: {}", e)),
-                }),
+                Err(e) => {
+                    log::warn!("[Chat] send from account {} failed: {}", account_id, e);
+                    Ok(SendResult {
+                        message_id: None,
+                        is_sent: false,
+                        drop_reason: Some(format!("Could not send from this account: {}", e)),
+                    })
+                }
             };
         }
 

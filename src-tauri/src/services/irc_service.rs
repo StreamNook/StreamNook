@@ -3018,8 +3018,9 @@ impl IrcService {
             }
             send_to_bridge(BridgeFrame::maybe_channel(clear.channel.as_deref(), clear.frame().to_string()), false).await;
         } else if trimmed.contains("NOTICE") {
-            // System notices — forward to frontend for user-facing handling
-            debug!("[IRC Chat] Notice: {}", trimmed);
+            // System notices — forward to frontend for user-facing handling.
+            // Info, not debug: a refused send shows only in chat otherwise.
+            info!("[IRC Chat] Notice: {}", trimmed);
 
             // Extract the msg-id tag (e.g. "msg_followersonly", "msg_subsonly")
             // Present when twitch.tv/tags capability is active (requested at connect)
