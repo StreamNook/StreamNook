@@ -1,6 +1,7 @@
 import { createContext, createElement, useContext, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { CircleHelp, RotateCcw, type LucideIcon } from 'lucide-react';
 import { Tooltip } from '../ui/Tooltip';
+import { Toggle } from '../ui/Toggle';
 import { IS_MOBILE } from '../../utils/platform';
 import { sectionIdFromLabel } from './sectionId';
 import {
@@ -449,3 +450,34 @@ export const SegmentedSelect = <T extends string>({
     </div>
   );
 };
+
+/**
+ * A set of independent on/off options, as plain switch lines: each line is the
+ * option's mark and name with its switch at the end. Settings never use a
+ * cluster of toggle chips for this (they read unclearly); this is the one way.
+ */
+export function SwitchList({
+  items,
+  isOn,
+  onToggle,
+  disabled = false,
+}: {
+  items: readonly { id: string; label: string; mark?: ReactNode }[];
+  isOn: (id: string) => boolean;
+  onToggle: (id: string) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div className={`flex w-full flex-col ${disabled ? 'pointer-events-none opacity-50' : ''}`}>
+      {items.map((item) => (
+        <div key={item.id} className={`flex items-center justify-between gap-3 ${IS_MOBILE ? 'min-h-[44px]' : 'min-h-[34px]'}`}>
+          <span className="flex min-w-0 items-center gap-2 text-[13px] text-textPrimary">
+            {item.mark}
+            <span className="truncate">{item.label}</span>
+          </span>
+          <Toggle enabled={isOn(item.id)} onChange={() => onToggle(item.id)} ariaLabel={item.label} disabled={disabled} />
+        </div>
+      ))}
+    </div>
+  );
+}

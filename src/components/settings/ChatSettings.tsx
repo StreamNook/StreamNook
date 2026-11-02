@@ -23,7 +23,7 @@ import UserOverridesSettings from './UserOverridesSettings';
 import UserCommandsSettings from './UserCommandsSettings';
 import ChatBurstSettings from './ChatBurstSettings';
 import RemindersSettings from './RemindersSettings';
-import { SettingsSection, SettingsRow, SegmentedSelect } from './_primitives';
+import { SettingsSection, SettingsRow, SegmentedSelect, SwitchList } from './_primitives';
 import { useSettingReset } from './settingReset';
 import { Toggle } from '../ui/Toggle';
 import { usePhonePrefs } from '../../mobile/phonePrefs';
@@ -1360,33 +1360,23 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         <SettingsRow
           title="Platforms"
           onReset={resetFor(['chat_events.hidden_provider_events', []])}
-          description="Turn event kinds off per platform. Lit means shown."
+          description="Turn event kinds off per platform."
         >
-          <div className="flex flex-col gap-2 w-full">
+          <div className="flex flex-col gap-3 w-full">
             {(Object.keys(PROVIDER_EVENT_CATEGORIES) as Array<keyof typeof PROVIDER_EVENT_CATEGORIES>).filter(canWatch).map((provider) => (
-              <div key={provider} className="flex flex-wrap items-center gap-1.5">
-                <span className="flex w-[78px] shrink-0 items-center gap-1 text-[12px] text-textSecondary">
+              <div key={provider} className="w-full">
+                <div className="flex items-center gap-1.5 pt-1 text-[12px] font-medium text-textSecondary">
                   <ProviderMark provider={provider} size={13} />
                   {PROVIDER_LABELS[provider] ?? provider}
-                </span>
-                {(PROVIDER_EVENT_CATEGORIES[provider] ?? []).map((cat) => {
-                  const key = `${provider}:${cat}`;
-                  const on = !hiddenEvents.includes(key);
-                  const label = PROVIDER_CATEGORY_LABELS[provider]?.[cat] ?? EVENT_CATEGORIES.find((c) => c.id === cat)?.label ?? cat;
-                  return (
-                    <button
-                      key={key}
-                      type="button"
-                      aria-pressed={on}
-                      onClick={() => toggleHiddenEvent(key)}
-                      className={`px-2.5 py-1 rounded-full text-[12px] font-medium transition-colors ${
-                        on ? 'chrome-glaze chrome-glaze--flat chrome-glaze--control text-textPrimary' : 'glass-button-static text-textMuted'
-                      }`}
-                    >
-                      {label}
-                    </button>
-                  );
-                })}
+                </div>
+                <SwitchList
+                  items={(PROVIDER_EVENT_CATEGORIES[provider] ?? []).map((cat) => ({
+                    id: `${provider}:${cat}`,
+                    label: PROVIDER_CATEGORY_LABELS[provider]?.[cat] ?? EVENT_CATEGORIES.find((c) => c.id === cat)?.label ?? cat,
+                  }))}
+                  isOn={(key) => !hiddenEvents.includes(key)}
+                  onToggle={toggleHiddenEvent}
+                />
               </div>
             ))}
           </div>
@@ -1821,7 +1811,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           title="Add-on badges"
           onReset={resetFor(['chat_design.show_third_party_badges', true])}
           description="Badges from 7TV, FFZ, Chatterino, Homies, Limerino, JilChat and the other badge services, plus StreamNook membership badges."
-          help="Services turns individual badge services off. Lit means shown."
+          help="Services turns individual badge services off."
           control={
             <Toggle
               enabled={cd.show_third_party_badges}
@@ -1836,29 +1826,11 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
                 onReset={resetFor(['chat_design.hidden_badge_providers', []])}
                 stacked
                 control={
-                  <div className="flex flex-wrap gap-1.5">
-                    {BADGE_PROVIDERS.map((p) => {
-                      const on = !badgeProviderHidden(p.id);
-                      return (
-                        <button
-                          key={p.id}
-                          type="button"
-                          aria-pressed={on}
-                          onClick={() => toggleBadgeProvider(p.id)}
-                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[12px] font-medium transition-colors ${
-                            on ? 'chrome-glaze chrome-glaze--flat chrome-glaze--control text-textPrimary' : 'glass-button-static text-textMuted'
-                          }`}
-                        >
-                          {/* The service's own mark, dimmed with its chip while
-                              that service's badges are hidden. */}
-                          <span className={`flex transition-opacity ${on ? '' : 'opacity-45'}`}>
-                            <ServiceMark id={p.id} size={14} />
-                          </span>
-                          {p.label}
-                        </button>
-                      );
-                    })}
-                  </div>
+                  <SwitchList
+                    items={BADGE_PROVIDERS.map((p) => ({ id: p.id, label: p.label, mark: <ServiceMark id={p.id} size={14} /> }))}
+                    isOn={(id) => !badgeProviderHidden(id)}
+                    onToggle={toggleBadgeProvider}
+                  />
                 }
               />
             </SubControls>

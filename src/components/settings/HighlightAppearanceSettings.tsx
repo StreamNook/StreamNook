@@ -5,7 +5,7 @@ import { Logger } from '../../utils/logger';
 // Rendered inside ChatSettings, so this reaches the phone too. Shared panel,
 // so a platform branch here is legitimate.
 import { IS_MOBILE } from '../../utils/platform';
-import { SettingsSection, SettingsRow, SegmentedSelect } from './_primitives';
+import { SettingsSection, SettingsRow, SegmentedSelect, SwitchList } from './_primitives';
 import { InlineSlider, SubControl, SubControls } from '../plugins/settingsPageKit';
 import type { ChatDesignSettings, HighlightDisplayStyle } from '../../types';
 import { useSettingReset } from './settingReset';
@@ -170,26 +170,11 @@ const HighlightAppearanceSettings = () => {
                   stacked
                   onReset={resetFor('chat_design.scrollbar_mark_kinds')}
                   control={
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      {MARK_KIND_OPTIONS.map(({ kind, label }) => {
-                        const on = markKinds.includes(kind);
-                        return (
-                          <button
-                            key={kind}
-                            type="button"
-                            aria-pressed={on}
-                            onClick={() => toggleMarkKind(kind)}
-                            className={`px-2.5 py-1 rounded-full text-[12px] font-medium transition-colors ${
-                              on
-                                ? 'chrome-glaze chrome-glaze--flat chrome-glaze--control text-textPrimary'
-                                : 'glass-button-static text-textMuted'
-                            }`}
-                          >
-                            {label}
-                          </button>
-                        );
-                      })}
-                    </div>
+                    <SwitchList
+                      items={MARK_KIND_OPTIONS.map(({ kind, label }) => ({ id: kind, label }))}
+                      isOn={(kind) => markKinds.includes(kind as (typeof markKinds)[number])}
+                      onToggle={toggleMarkKind}
+                    />
                   }
                 />
               </SubControls>
