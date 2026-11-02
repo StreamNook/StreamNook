@@ -33,34 +33,41 @@ describe('chipLeftView', () => {
 });
 
 describe('stripPlace', () => {
+  const pane = { left: 0, right: 1000 };
   it('opens rightward when the strip fits on the right', () => {
     const chip = box(100, 10, 120, 30);
-    const p = stripPlace(chip, 1000, 120);
+    const p = stripPlace(chip, pane, 1000, 120);
     expect(p.dir).toBe(1);
-    expect(p.left).toBe(chip.right + 2);
+    expect(p.left).toBe(chip.right + 4);
     expect(p.right).toBeNull();
   });
   it('opens leftward near the right edge', () => {
     const chip = box(900, 10, 920, 30);
-    const p = stripPlace(chip, 1000, 120);
+    const p = stripPlace(chip, pane, 1000, 120);
     expect(p.dir).toBe(-1);
     expect(p.left).toBeNull();
-    expect(p.right).toBe(1000 - 900 + 2);
-    expect(p.maxWidth).toBe(890);
+    expect(p.right).toBe(1000 - 900 + 4);
+    expect(p.maxWidth).toBe(888);
+  });
+  it('measures room inside the chat pane, not the window', () => {
+    // A MultiChat pane from 0 to 400 in a 1000 px window: no room on its right.
+    const p = stripPlace(box(330, 10, 350, 30), { left: 0, right: 400 }, 1000, 120);
+    expect(p.dir).toBe(-1);
+    expect(p.maxWidth).toBe(330 - 4 - 8);
   });
   it('picks the roomier side when neither fits', () => {
-    expect(stripPlace(box(400, 0, 420, 20), 700, 500).dir).toBe(-1);
-    expect(stripPlace(box(100, 0, 120, 20), 700, 900).dir).toBe(1);
+    expect(stripPlace(box(400, 0, 420, 20), { left: 0, right: 700 }, 700, 500).dir).toBe(-1);
+    expect(stripPlace(box(100, 0, 120, 20), { left: 0, right: 700 }, 700, 900).dir).toBe(1);
   });
   it('lockDir keeps the chosen side even where the other would fit', () => {
-    const p = stripPlace(box(100, 10, 120, 30), 1000, 120, -1);
+    const p = stripPlace(box(100, 10, 120, 30), pane, 1000, 120, -1);
     expect(p.dir).toBe(-1);
-    expect(p.right).toBe(1000 - 100 + 2);
+    expect(p.right).toBe(1000 - 100 + 4);
   });
   it('never has a max width under 40 and never overlaps the chip', () => {
     for (const chip of [box(0, 0, 20, 20), box(980, 0, 1000, 20), box(500, 0, 520, 20)]) {
       for (const lock of [undefined, 1, -1] as const) {
-        const p = stripPlace(chip, 1000, 200, lock);
+        const p = stripPlace(chip, pane, 1000, 200, lock);
         expect(p.maxWidth).toBeGreaterThanOrEqual(40);
         if (p.left !== null) expect(p.left).toBeGreaterThanOrEqual(chip.right);
         if (p.right !== null) expect(1000 - p.right).toBeLessThanOrEqual(chip.left);

@@ -1362,10 +1362,12 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           onReset={resetFor(['chat_events.hidden_provider_events', []])}
           description="Turn event kinds off per platform."
         >
-          <div className="flex flex-col gap-3 w-full">
+          {/* The same rule and indent as the other switch lists (Services under
+              Add-on badges), one titled group per platform. */}
+          <SubControls>
             {(Object.keys(PROVIDER_EVENT_CATEGORIES) as Array<keyof typeof PROVIDER_EVENT_CATEGORIES>).filter(canWatch).map((provider) => (
-              <div key={provider} className="w-full">
-                <div className="flex items-center gap-1.5 pt-1 text-[12px] font-medium text-textSecondary">
+              <div key={provider} className="w-full space-y-2">
+                <div className="flex min-w-0 items-center gap-1.5 text-[12.5px] font-medium text-textPrimary">
                   <ProviderMark provider={provider} size={13} />
                   {PROVIDER_LABELS[provider] ?? provider}
                 </div>
@@ -1379,7 +1381,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
                 />
               </div>
             ))}
-          </div>
+          </SubControls>
         </SettingsRow>
       </SettingsSection>
 

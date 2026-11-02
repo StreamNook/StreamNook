@@ -3395,42 +3395,52 @@ html[data-motion="reduced"] .sub-progress-fill {
   justify-content: center;
   height: calc(1.9444em * var(--sn-badge-scale, 1));
   min-width: calc(1.9444em * var(--sn-badge-scale, 1));
-  padding: 0 0.45em 0 0.25em;
+  padding: 0 0.5em 0 0.55em;
   border-radius: 999px;
   font-size: 0.72em;
-  font-weight: 700;
+  font-weight: 600;
   line-height: 1;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.01em;
   color: var(--color-text-secondary);
-  background: color-mix(in srgb, currentColor 14%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 18%, transparent);
+  /* No outline: no badge in the row has one, so a ring read as a button. */
+  background: color-mix(in srgb, currentColor 12%, transparent);
   transition: background-color 150ms ease, color 150ms ease;
   cursor: pointer;
 }
 .sn-badge-fold-chip:hover,
 .sn-badge-fold-chip[aria-expanded='true'] {
   color: var(--color-text-primary);
+  background: color-mix(in srgb, currentColor 18%, transparent);
 }
-/* Peek thumbnails: 60% of a badge (in the pill's em: 1.4 * 0.6 / 0.72), the
-   second tucked under the first's edge, each ringed in the row's background so
-   the overlap reads as a stack. */
+/* Peek thumbnails: 60% of a badge (in the pill's em: 1.4 * 0.6 / 0.72). The
+   second overlaps the first and its overlapping edge is cut away (a mask, not a
+   ring in a fixed color, which framed them and let the first show through
+   transparent art), so a sliver of the pill's own fill separates them on any
+   row background. */
 .sn-badge-fold-peek {
   width: calc(1.1667em * var(--sn-badge-scale, 1));
   height: calc(1.1667em * var(--sn-badge-scale, 1));
   border-radius: 0.25em;
   object-fit: contain;
-  box-shadow: 0 0 0 0.12em var(--color-background, #18181b);
+  transition: opacity 120ms ease;
 }
 .sn-badge-fold-peek + .sn-badge-fold-peek {
-  margin-left: -0.45em;
+  margin-left: -0.2em;
+  -webkit-mask-image: linear-gradient(to right, transparent 0.32em, #000 0.32em);
+  mask-image: linear-gradient(to right, transparent 0.32em, #000 0.32em);
 }
 .sn-badge-fold-peek:last-of-type {
   margin-right: 0.3em;
 }
+/* While open the strip shows those badges beside the pill, so its thumbnails
+   step back instead of reading twice. */
+.sn-badge-fold-chip[aria-expanded='true'] .sn-badge-fold-peek {
+  opacity: 0.35;
+}
 .sn-badge-fold-chip:focus-visible {
   outline: none;
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 18%, transparent), 0 0 0 1px var(--color-accent, currentColor);
+  box-shadow: 0 0 0 1px var(--color-accent, currentColor);
 }
 /* The unfolded badges: fixed at the chip (class `fixed` keeps the glass rules
    from making it relative), above everything but tooltips, so each badge's own
@@ -3444,7 +3454,7 @@ html[data-motion="reduced"] .sub-progress-fill {
   flex-wrap: wrap;
   align-items: center;
   gap: 0.25em;
-  padding: 0.3em 0.45em;
+  padding: 0.3em 0.6em;
   border-radius: 999px;
   transition: none;
 }

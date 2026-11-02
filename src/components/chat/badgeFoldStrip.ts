@@ -44,17 +44,29 @@ export interface StripPlace {
   dir: 1 | -1;
 }
 
+/** The strip's gap from the chip: the row's own badge rhythm. */
+const GAP = 4;
+
 /**
  * Where the strip sits: beside the chip, never over it (so the chip stays
- * clickable), centred on the chip's middle. It opens toward the side with room
- * for `needed` px (rightward when it fits or when the right has at least as
- * much room); `lockDir` keeps the side chosen at open while it rides its row.
+ * clickable), centred on the chip's middle. Room is measured inside `bounds`
+ * (the chat pane, so a MultiChat strip never crosses into its neighbor); it
+ * opens toward the side with room for `needed` px (rightward when it fits or
+ * when the right has at least as much room). `lockDir` keeps the side chosen
+ * at open while it rides its row. `viewportWidth` turns a leftward strip's
+ * edge into its CSS `right`.
  */
-export function stripPlace(chip: Box, windowWidth: number, needed: number, lockDir?: 1 | -1): StripPlace {
+export function stripPlace(
+  chip: Box,
+  bounds: { left: number; right: number },
+  viewportWidth: number,
+  needed: number,
+  lockDir?: 1 | -1,
+): StripPlace {
   const top = (chip.top + chip.bottom) / 2;
-  const roomRight = windowWidth - chip.right - 10;
-  const roomLeft = chip.left - 10;
+  const roomRight = bounds.right - chip.right - GAP - 8;
+  const roomLeft = chip.left - bounds.left - GAP - 8;
   const dir: 1 | -1 = lockDir ?? (roomRight >= needed || roomRight >= roomLeft ? 1 : -1);
-  if (dir === 1) return { left: chip.right + 2, right: null, top, maxWidth: Math.max(40, roomRight), dir };
-  return { left: null, right: windowWidth - chip.left + 2, top, maxWidth: Math.max(40, roomLeft), dir };
+  if (dir === 1) return { left: chip.right + GAP, right: null, top, maxWidth: Math.max(40, roomRight), dir };
+  return { left: null, right: viewportWidth - chip.left + GAP, top, maxWidth: Math.max(40, roomLeft), dir };
 }

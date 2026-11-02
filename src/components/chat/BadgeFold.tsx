@@ -2,7 +2,6 @@ import { createContext, useContext, useEffect, useId, useLayoutEffect, useRef, u
 import { createPortal } from 'react-dom';
 import { AnimatePresence, motion, stagger } from 'framer-motion';
 import { IS_MOBILE } from '../../utils/platform';
-import { fitCount } from '../../utils/fitNumber';
 import { markBadgeArtFailed } from '../../utils/badgeArtFailures';
 import { useOutsidePress } from '../../hooks/useOutsidePress';
 import { activeStripToken, chipLeftView, openStrip, releaseStrip, stripPlace, type StripPlace } from './badgeFoldStrip';
@@ -22,6 +21,12 @@ export interface PeekArt {
   remote?: string;
 }
 
+/** The chat pane the chip sits in (its list's box), else the window: the strip's room. */
+function paneBounds(chip: Element): { left: number; right: number } {
+  const r = chip.closest(LIST_ROOT)?.getBoundingClientRect();
+  return r ? { left: r.left, right: r.right } : { left: 0, right: window.innerWidth };
+}
+
 function applyPlace(strip: HTMLElement, p: StripPlace): void {
   strip.style.left = p.left === null ? '' : `${p.left}px`;
   strip.style.right = p.right === null ? '' : `${p.right}px`;
@@ -37,9 +42,23 @@ const STRIP = {
     y: '-50%',
     scale: 1,
     pointerEvents: 'auto' as const,
-    transition: { duration: 0.18, ease: EASE, delayChildren: stagger(0.025, { from: dir === 1 ? 'first' : 'last' }) },
+    // The glass goes opaque fast, so the row's text never ghosts through it
+    // while the badges fan out; the glass leaves last on the way back.
+    transition: {
+      duration: 0.18,
+      ease: EASE,
+      opacity: { duration: 0.06, ease: 'linear' },
+      delayChildren: stagger(0.025, { from: dir === 1 ? 'first' : 'last' }),
+    },
   }),
-  gone: (dir: 1 | -1) => ({ opacity: 0, x: -4 * dir, y: '-50%', scale: 0.96, pointerEvents: 'none' as const, transition: { duration: 0.12, ease: EASE } }),
+  gone: (dir: 1 | -1) => ({
+    opacity: 0,
+    x: -4 * dir,
+    y: '-50%',
+    scale: 0.96,
+    pointerEvents: 'none' as const,
+    transition: { duration: 0.12, ease: EASE, opacity: { duration: 0.06, delay: 0.06 } },
+  }),
 };
 
 // Each badge starts back at the pill (`i` slots away, counted from the pill)
@@ -82,7 +101,7 @@ function PeekFace({ peeks, count }: { peeks: readonly PeekArt[]; count: number }
           }}
         />
       ))}
-      {`+${fitCount(count, 99)}`}
+      {count > 99 ? '99+' : `+${count}`}
     </>
   );
 }
@@ -144,7 +163,7 @@ export function BadgeFoldChip({
     const scale = parseFloat(getComputedStyle(chip).getPropertyValue('--sn-badge-scale')) || 1;
     setFontSize(getComputedStyle(row).fontSize);
     setBadgeScale(scale);
-    setDir(stripPlace(chip.getBoundingClientRect(), window.innerWidth, needed(chip, scale)).dir);
+    setDir(stripPlace(chip.getBoundingClientRect(), paneBounds(chip), window.innerWidth, needed(chip, scale)).dir);
     setMounted(true);
     setOpen(true);
   };
@@ -160,7 +179,7 @@ export function BadgeFoldChip({
   useLayoutEffect(() => {
     const chip = chipRef.current;
     if (!open || !chip || !stripRef.current) return;
-    applyPlace(stripRef.current, stripPlace(chip.getBoundingClientRect(), window.innerWidth, 0, dir));
+    applyPlace(stripRef.current, stripPlace(chip.getBoundingClientRect(), paneBounds(chip), window.innerWidth, 0, dir));
   }, [open, mounted, dir]);
 
   // While open: ride the row each frame; fold when the chip leaves its list's
@@ -182,7 +201,7 @@ export function BadgeFoldChip({
         ? { left: r.left, top: r.top + headerInset, right: r.right, bottom: r.bottom }
         : { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight };
       if (chipLeftView(c, v)) return close();
-      if (strip) applyPlace(strip, stripPlace(c, window.innerWidth, 0, dir));
+      if (strip) applyPlace(strip, stripPlace(c, r ?? { left: 0, right: window.innerWidth }, window.innerWidth, 0, dir));
       frame = requestAnimationFrame(tick);
     };
     frame = requestAnimationFrame(tick);
