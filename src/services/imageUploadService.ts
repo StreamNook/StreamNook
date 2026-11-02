@@ -6,7 +6,7 @@
 // them (it refuses components with try/finally).
 
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
-import { ask, open } from '@tauri-apps/plugin-dialog';
+import { ask, open } from '../utils/dialog';
 import { IS_MOBILE } from '../utils/platform';
 import { useAppStore } from '../stores/AppStore';
 import type { ImageUploadPanel, UploadedImage } from '../types';

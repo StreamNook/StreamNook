@@ -58,7 +58,7 @@ const routes = vi.hoisted(() => ({
 vi.mock('../../utils/openBadgesInMain', () => routes);
 // Called as a plain function below, outside a React render: its Battery Saver
 // hook stands in as off.
-vi.mock('../../utils/lowPower', () => ({ useLowPower: () => false }));
+vi.mock('../../utils/lowPower', () => ({ useLowPower: () => false, useStillChat: () => false }));
 // Its failed-art read is a hook too, so it stands in as "nothing has failed".
 vi.mock('../../utils/badgeArtFailures', () => ({
   useFailedBadgeArt: () => '',

@@ -2,7 +2,7 @@ import { useEffect, type ReactNode } from 'react';
 import { MotionConfig } from 'framer-motion';
 import { useAppStore } from '../stores/AppStore';
 import type { MotionMode } from '../types';
-import { useLowPower } from '../utils/lowPower';
+import { useBatteryLowPower } from '../utils/lowPower';
 
 /**
  * Applies the user's Motion preference (Interface > Motion) across the whole
@@ -22,7 +22,10 @@ export function MotionScope({ children }: { children: ReactNode }) {
   const chosen: MotionMode = useAppStore((s) => s.settings.motion_mode) ?? 'full';
   // Battery Saver (phone only, utils/lowPower) steps Full down to Reduced: the
   // decorative loops stop, quick fades stay. The setting itself is untouched.
-  const lowPower = useLowPower();
+  // Desktop Performance mode does not: swapping these rules on every focus
+  // change would replay open entrances, so it finishes CSS animations at once
+  // instead (globals.css `html[data-sn-perf]`).
+  const lowPower = useBatteryLowPower();
   const mode: MotionMode = lowPower && chosen === 'full' ? 'reduced' : chosen;
 
   useEffect(() => {

@@ -103,7 +103,7 @@ export const FolderPicker = ({
 }) => {
   const browse = async () => {
     try {
-      const { open } = await import('@tauri-apps/plugin-dialog');
+      const { open } = await import('../../utils/dialog');
       const picked = await open({ directory: true, multiple: false });
       if (typeof picked === 'string' && picked) onChange(picked);
     } catch (err) {

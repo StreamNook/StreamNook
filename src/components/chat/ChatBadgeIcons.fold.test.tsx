@@ -57,7 +57,7 @@ vi.mock('../../utils/openBadgesInMain', () => ({
   openBadgesOnStreamNookInMain: vi.fn(),
   openBadgesWithTargetInMain: vi.fn(),
 }));
-vi.mock('../../utils/lowPower', () => ({ useLowPower: () => false }));
+vi.mock('../../utils/lowPower', () => ({ useLowPower: () => false, useStillChat: () => false }));
 // The failed-art read, settable per case: the row's failed urls, each ending "\n".
 const failedArt = vi.hoisted(() => ({ value: '' }));
 vi.mock('../../utils/badgeArtFailures', () => ({

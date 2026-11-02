@@ -52,6 +52,7 @@ import './styles/theme-prism.css';
 import './styles/mobile.css';
 import { initLogCapture } from './services/logService';
 import { DRAWS_OWN_FRAME, IS_LINUX, IS_MOBILE, isPortrait, onOrientationChange } from './utils/platform';
+import { installPerformanceMode, paintAfter } from './utils/performanceMode';
 
 // Drive the mobile CSS off the document element. Orientation is tracked here
 // rather than with a CSS media query because the layout branch also needs it in
@@ -212,6 +213,9 @@ const paint = () => root.render(
   </React.StrictMode>,
 );
 // Android learns the cached-art server first, so no row starts on the asset
-// protocol and switches; every other window paints at once.
+// protocol and switches. A desktop window learns whether Performance mode is
+// on first (at most 300 ms), so a window opening in Always paints its first
+// frame cheap; the phones never install it.
 if (waitsForCacheFileServer()) void awaitCacheFileServer().finally(paint);
+else if (!IS_MOBILE) void paintAfter(installPerformanceMode(), 300).then(paint);
 else paint();

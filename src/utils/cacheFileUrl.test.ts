@@ -178,10 +178,14 @@ describe('cacheFileUrl', () => {
     expect(src).toContain('void probeLost(probe, ANDROID ? 3 : 1, 700, ping)');
   });
 
-  it('Android windows learn the server before their first paint; others paint at once', () => {
+  it('Android windows learn the server before their first paint; desktop waits at most 300 ms for Performance mode', () => {
     const main = readFileSync('src/main.tsx', 'utf8').replace(/\r\n/g, '\n');
     expect(main).toContain('const paint = () => root.render(');
-    expect(main).toContain('if (waitsForCacheFileServer()) void awaitCacheFileServer().finally(paint);\nelse paint();');
+    expect(main).toContain(
+      'if (waitsForCacheFileServer()) void awaitCacheFileServer().finally(paint);\n' +
+        'else if (!IS_MOBILE) void paintAfter(installPerformanceMode(), 300).then(paint);\n' +
+        'else paint();',
+    );
     expect(main.match(/root\.render\(/g)).toHaveLength(1);
   });
 });

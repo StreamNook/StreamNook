@@ -19,3 +19,10 @@ export function takePreloadedSettings(): Promise<unknown | null> | null {
   pending = null;
   return p;
 }
+
+// Non-consuming: Performance mode reads the same answer to seed the main
+// window's first paint (utils/performanceMode); the store still takes it.
+// Null in popouts, which skip the preload, and once the store has taken it.
+export function peekPreloadedSettings(): Promise<unknown | null> | null {
+  return pending;
+}

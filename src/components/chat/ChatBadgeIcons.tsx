@@ -8,7 +8,7 @@ import { getBadgeImageUrl, getBadgeFallbackUrls } from '../../services/seventvSe
 import { openBadgeInfo } from '../../stores/badgeSpotlightStore';
 import { sevenTvBadgeRef, thirdPartyBadgeRef, twitchRowBadgeRef } from '../../utils/badgeSpotlight';
 import { IS_MOBILE } from '../../utils/platform';
-import { useLowPower } from '../../utils/lowPower';
+import { useStillChat } from '../../utils/lowPower';
 import { CHANNEL_SPECIFIC_TWITCH_BADGES } from '../../utils/badgeOrder';
 import { queueBadgeForCaching, getCachedBadgeUrl } from '../../services/badgeImageCacheService';
 import type { ThirdPartyBadge } from '../../services/badgeService';
@@ -144,8 +144,8 @@ export function ChatBadgeIcons({
   foldLimit = 0,
   keyPrefix = 'badge',
 }: ChatBadgeIconsProps) {
-  // Battery Saver: the 7TV badge's published still (utils/lowPower).
-  const stillBadges = useLowPower();
+  // Battery Saver or Freeze emotes: the 7TV badge's published still (utils/lowPower).
+  const stillBadges = useStillChat();
   // Touch has no hover and no spotlight host on the phone shell.
   const clickable = interactive && !IS_MOBILE;
   const slots: BadgeSlot[] = [];

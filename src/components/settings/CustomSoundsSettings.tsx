@@ -7,7 +7,7 @@
 
 import { EntryInput } from './entryInput';
 import { invoke } from '@tauri-apps/api/core';
-import { open } from '@tauri-apps/plugin-dialog';
+import { open } from '../../utils/dialog';
 import { FolderOpen, Play, Trash2 } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
 import { playSound } from '../../utils/notificationSound';

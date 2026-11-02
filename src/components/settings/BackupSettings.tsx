@@ -71,7 +71,7 @@ const BackupSettings = () => {
   const exportSettings = async () => {
     setBusy('export');
     try {
-      const { save } = await import('@tauri-apps/plugin-dialog');
+      const { save } = await import('../../utils/dialog');
       const path = await save({
         title: 'Export StreamNook settings',
         defaultPath: `streamnook-settings-${dateStamp()}.json`,
@@ -93,7 +93,7 @@ const BackupSettings = () => {
     let reloading = false;
     setBusy('import');
     try {
-      const { open } = await import('@tauri-apps/plugin-dialog');
+      const { open } = await import('../../utils/dialog');
       const path = await open({
         title: 'Import StreamNook settings',
         multiple: false,

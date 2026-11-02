@@ -728,7 +728,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
 
   const browseLogFolder = async () => {
     try {
-      const { open } = await import('@tauri-apps/plugin-dialog');
+      const { open } = await import('../../utils/dialog');
       const picked = await open({ directory: true, multiple: false });
       if (typeof picked === 'string' && picked) setLogging({ folder: picked });
     } catch {

@@ -44,6 +44,7 @@ import ChatMessage from './ChatMessage';
 import { useAppStore } from '../stores/AppStore';
 import type { EmoteSet } from '../services/emoteService';
 import { markNoStillFrame } from '../utils/staticEmoteUrl';
+import { setLowPower, setLowPowerSource } from '../utils/lowPower';
 
 // Still emotes (Battery Saver on a phone, or Animate emotes: Never) draw each
 // emote's first frame. 7TV and BTTV publish one only for emotes that animate,
@@ -66,9 +67,9 @@ function row(segments: unknown[]) {
   };
 }
 
-function render(segments: unknown[], emotes: EmoteSet | null = null): string {
+function render(segments: unknown[], emotes: EmoteSet | null = null, animate: 'always' | 'never' = 'never'): string {
   const initial = useAppStore.getInitialState() as unknown as { settings: Record<string, unknown> };
-  initial.settings.chat_design = { link_previews: false, animate_emotes: 'never' };
+  initial.settings.chat_design = { link_previews: false, animate_emotes: animate };
   return renderToStaticMarkup(createElement(ChatMessage, { message: row(segments) as never, emotes }));
 }
 
@@ -103,5 +104,48 @@ describe('still emotes', () => {
   it('an emote whose first frame was missing draws its normal file from then on', () => {
     markNoStillFrame('7tv', KEKW_ID);
     expect(imgTag(render([kekw]), 'KEKW')).not.toContain('_static');
+  });
+});
+
+// Animate emotes: Always, so only the still flag can stop them. Quiet alone
+// (Performance mode without Freeze emotes) keeps chat moving.
+// Rust's wire names: the row mapper reads gif_url and gif_id.
+const GIF_URL = 'https://media.giphy.com/media/sn/giphy.gif';
+const gif = { type: 'gif', content: '[cat dance]', gif_url: GIF_URL, gif_id: 'sn-gif' };
+
+describe('still follows the still flag, not quiet', () => {
+  const OFF = { quiet: false, still: false, flat: false };
+
+  it('Performance mode without Freeze emotes keeps emotes and GIFs moving', () => {
+    try {
+      setLowPowerSource('performance', { quiet: true, still: false, flat: true });
+      const html = render([catJam, gif], null, 'always');
+      expect(imgTag(html, 'catJAM')).not.toContain('_static');
+      expect(html).toContain(GIF_URL);
+    } finally {
+      setLowPowerSource('performance', OFF);
+    }
+  });
+
+  it('Freeze emotes draws first frames and GIF chips', () => {
+    try {
+      setLowPowerSource('performance', { quiet: true, still: true, flat: true });
+      const html = render([catJam, gif], null, 'always');
+      expect(imgTag(html, 'catJAM')).toContain('_static');
+      expect(html).not.toContain(GIF_URL);
+    } finally {
+      setLowPowerSource('performance', OFF);
+    }
+  });
+
+  it('Battery Saver still draws first frames and GIF chips', () => {
+    try {
+      setLowPower(true);
+      const html = render([catJam, gif], null, 'always');
+      expect(imgTag(html, 'catJAM')).toContain('_static');
+      expect(html).not.toContain(GIF_URL);
+    } finally {
+      setLowPower(false);
+    }
   });
 });
