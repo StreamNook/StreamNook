@@ -177,7 +177,7 @@ export function ChatBadgeIcons({
             Logger.warn('[Badge] Failed to load badge:', badge.key, failed);
           }
           el.style.display = 'none';
-          markBadgeArtFailed(src);
+          markBadgeArtFailed(src, remote);
         }}
       />
     );

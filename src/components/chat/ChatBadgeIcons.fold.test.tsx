@@ -58,6 +58,12 @@ vi.mock('../../utils/openBadgesInMain', () => ({
   openBadgesWithTargetInMain: vi.fn(),
 }));
 vi.mock('../../utils/lowPower', () => ({ useLowPower: () => false }));
+// The failed-art read, settable per case: the row's failed urls, each ending "\n".
+const failedArt = vi.hoisted(() => ({ value: '' }));
+vi.mock('../../utils/badgeArtFailures', () => ({
+  useFailedBadgeArt: () => failedArt.value,
+  markBadgeArtFailed: () => {},
+}));
 
 import { ChatBadgeIcons, type ResolvedTwitchBadge } from './ChatBadgeIcons';
 import type { ThirdPartyBadge } from '../../services/badgeService';
@@ -108,6 +114,7 @@ describe('ChatBadgeIcons folding', () => {
     const shown = badgeImages(markup);
     expect(shown).toHaveLength(3);
     expect(shown[0]).toContain('src="/mod.png"');
+    expect(shown[1]).toContain('01HSUB');
     expect(shown[2]).toContain('src="/sn.webp"');
     expect(markup).toContain('class="sn-badge-fold-chip"');
     expect(markup).toContain('aria-label="4 more badges"');
@@ -143,6 +150,30 @@ describe('ChatBadgeIcons folding', () => {
     expect(shown).toContain('/kick-mod.svg');
     expect(shown).not.toContain('/kick-sub.svg');
     expect(peekImages(markup)[0]).toContain('/kick-sub.svg');
+  });
+
+  it('drops a badge whose art failed before folding: the count and peeks skip it', () => {
+    failedArt.value = '/sub.png\n';
+    try {
+      const markup = html({ ...seven, foldLimit: 3 });
+      expect(badgeImages(markup)).toHaveLength(3);
+      expect(markup).toContain('aria-label="3 more badges"');
+      expect(peekImages(markup).join('')).not.toContain('/sub.png');
+      expect(markup).not.toContain('src="/sub.png"');
+    } finally {
+      failedArt.value = '';
+    }
+  });
+
+  it('a failure that leaves one badge over the limit folds nothing', () => {
+    failedArt.value = '/bits.png\n';
+    try {
+      const markup = html({ twitchBadges: [MOD, SUB, BITS], seventvBadge: SEVENTV, thirdPartyBadges: [], streamNookMemberId: '123', foldLimit: 3 });
+      expect(badgeImages(markup)).toHaveLength(4);
+      expect(markup).not.toContain('sn-badge-fold-chip');
+    } finally {
+      failedArt.value = '';
+    }
   });
 
   it('draws the pill as a plain face inside another control', () => {

@@ -100,6 +100,13 @@ describe('onePerCategory', () => {
     const list = [b('ffz', 'a'), b('chatty', 'c')];
     expect(onePerCategory(list)).toBe(list);
   });
+
+  it("puts a Limerino user's owned badges in their pick's one group", () => {
+    expect(wearCategory(b('limerino', 'limerino-founder', 'limerino-owned'))).toBe('limerino:limerino');
+    expect(wearCategory(b('limerino', 'limerino-halloween-2026', 'limerino'))).toBe('limerino:limerino');
+    const list = [b('limerino', 'limerino-halloween-2026', 'limerino'), b('limerino', 'limerino-founder', 'limerino-owned')];
+    expect(onePerCategory(list).map((x) => x.id)).toEqual(['limerino-halloween-2026']);
+  });
 });
 
 describe('toggleLoadoutBadge', () => {

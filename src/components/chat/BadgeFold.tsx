@@ -1,4 +1,14 @@
-import { createContext, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+} from 'react';
 import { createPortal } from 'react-dom';
 import { AnimatePresence, motion, stagger } from 'framer-motion';
 import { IS_MOBILE } from '../../utils/platform';
@@ -21,9 +31,21 @@ export interface PeekArt {
   remote?: string;
 }
 
-/** The chat pane the chip sits in (its list's box), else the window: the strip's room. */
+/** The box the chip scrolls in: its chat list, else its nearest scrolling
+ *  ancestor (the activity feed, a settings panel), else none (the window). */
+function scrollRootOf(chip: Element): Element | null {
+  const list = chip.closest(LIST_ROOT);
+  if (list) return list;
+  for (let el = chip.parentElement; el && el !== document.body; el = el.parentElement) {
+    const y = getComputedStyle(el).overflowY;
+    if (y === 'auto' || y === 'scroll' || y === 'hidden') return el;
+  }
+  return null;
+}
+
+/** The pane the chip sits in, else the window: the strip's room. */
 function paneBounds(chip: Element): { left: number; right: number } {
-  const r = chip.closest(LIST_ROOT)?.getBoundingClientRect();
+  const r = scrollRootOf(chip)?.getBoundingClientRect();
   return r ? { left: r.left, right: r.right } : { left: 0, right: window.innerWidth };
 }
 
@@ -97,7 +119,7 @@ function PeekFace({ peeks, count }: { peeks: readonly PeekArt[]; count: number }
               el.src = p.remote;
               return;
             }
-            markBadgeArtFailed(p.url);
+            markBadgeArtFailed(p.url, p.remote);
           }}
         />
       ))}
@@ -139,6 +161,9 @@ export function BadgeFoldChip({
   const timer = useRef<number | null>(null);
   // Opened by a click or tap: pointer-leave no longer folds it.
   const held = useRef(false);
+  // Opened from the keyboard: focus moves into the strip, so Tab reaches the
+  // folded badges the way it reaches every other badge.
+  const focusStrip = useRef(false);
   const stripId = useId();
 
   const clearTimer = () => {
@@ -180,7 +205,22 @@ export function BadgeFoldChip({
     const chip = chipRef.current;
     if (!open || !chip || !stripRef.current) return;
     applyPlace(stripRef.current, stripPlace(chip.getBoundingClientRect(), paneBounds(chip), window.innerWidth, 0, dir));
+    if (focusStrip.current) {
+      focusStrip.current = false;
+      stripRef.current.querySelector<HTMLElement>('button, [tabindex]')?.focus();
+    }
   }, [open, mounted, dir]);
+
+  // Tab past either end of the strip goes back to the pill, not to the page's end.
+  const onStripKey = (e: ReactKeyboardEvent) => {
+    if (e.key !== 'Tab' || !stripRef.current) return;
+    const stops = [...stripRef.current.querySelectorAll<HTMLElement>('button, [tabindex]')];
+    const at = stops.indexOf(document.activeElement as HTMLElement);
+    if ((e.shiftKey && at <= 0) || (!e.shiftKey && at === stops.length - 1)) {
+      e.preventDefault();
+      chipRef.current?.focus();
+    }
+  };
 
   // While open: ride the row each frame; fold when the chip leaves its list's
   // view (below the floating header), when the viewer scrolls the chat list,
@@ -188,7 +228,7 @@ export function BadgeFoldChip({
   useEffect(() => {
     if (!open) return;
     const chip0 = chipRef.current;
-    const list = chip0?.closest(LIST_ROOT) ?? null;
+    const list = chip0 ? scrollRootOf(chip0) : null;
     const headerInset = Number(list?.querySelector('[data-header-inset]')?.getAttribute('data-header-inset')) || 0;
     let frame = 0;
     const tick = () => {
@@ -282,9 +322,17 @@ export function BadgeFoldChip({
         onPointerLeave={IS_MOBILE ? undefined : () => (open ? scheduleClose() : clearTimer())}
         onClick={(e) => {
           e.stopPropagation();
-          // A hover-opened strip becomes held; a held one folds.
+          // A hover-opened strip becomes held; a held one folds. Enter or Space
+          // (a click with no pointer, detail 0) also moves focus into the strip.
           if (open && activeStripToken() === token && held.current) close();
-          else show(true);
+          else {
+            focusStrip.current = e.detail === 0;
+            if (open && focusStrip.current) {
+              focusStrip.current = false;
+              stripRef.current?.querySelector<HTMLElement>('button, [tabindex]')?.focus();
+            }
+            show(true);
+          }
         }}
       >
         <PeekFace peeks={peeks} count={count} />
@@ -318,6 +366,7 @@ export function BadgeFoldChip({
                   onTouchStart={stop}
                   onTouchMove={stop}
                   onContextMenu={stop}
+                  onKeyDown={onStripKey}
                   onClick={(e) => {
                     e.stopPropagation();
                     window.setTimeout(close, 0);

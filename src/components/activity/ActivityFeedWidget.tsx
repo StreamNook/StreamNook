@@ -855,7 +855,7 @@ export const ActivityFeedWidget = memo(function ActivityFeedWidget({
         </>,
         document.body,
       )}
-      <div ref={scrollRef} className="scrollbar-thin min-h-0 flex-1 space-y-1 overflow-y-auto px-2 pb-2">
+      <div ref={scrollRef} data-scroll-root="" className="scrollbar-thin min-h-0 flex-1 space-y-1 overflow-y-auto px-2 pb-2">
         {visible.length === 0 ? (
           <div className="px-2 py-6 text-center text-xs text-textMuted">
             Subs, raids, gifts and other events from your sources will appear here.

@@ -2,53 +2,82 @@ import { useSyncExternalStore } from 'react';
 
 // Badge art that finally failed to load (after any retry). Rows drop these
 // before folding, so a dead image never leaves a gap or a "+N" that opens empty.
-// A failure counts for RETRY_MS only, and coming back online clears them all,
-// so a short network drop never hides a badge for the rest of the session.
-// A row re-renders only when one of ITS urls fails: its snapshot is the
+// A failure is retried OFF-SCREEN (a detached Image, every RETRY_MS, and at
+// once when the network comes back): only art that really loads is cleared, so
+// a dead image never pops back into live rows and makes them jump.
+// A row re-renders only when one of ITS urls changes state: its snapshot is the
 // failed subset of its own urls, joined, which stays equal otherwise.
-const failedAt = new Map<string, number>();
+interface Failure {
+  at: number;
+  /** Twitch's own copy of a disk-cached badge: a probe tries it too. */
+  remote?: string;
+}
+const failed = new Map<string, Failure>();
 const FAILED_MAX = 2000;
 export const RETRY_MS = 60_000;
 const listeners = new Set<() => void>();
-const notify = () => listeners.forEach((l) => l());
 
-const isFailed = (url: string) => {
-  const at = failedAt.get(url);
-  return at !== undefined && Date.now() - at < RETRY_MS;
+// Many failures at once (going offline) tell rows once.
+let notifyQueued = false;
+const notify = () => {
+  if (notifyQueued) return;
+  notifyQueued = true;
+  queueMicrotask(() => {
+    notifyQueued = false;
+    listeners.forEach((l) => l());
+  });
 };
 
-// One timer at a time, for the earliest expiry: mounted rows (the pinned card,
-// the settings preview, rows scrolled back to) learn a badge may load again.
-let expiryTimer: ReturnType<typeof setTimeout> | null = null;
-function scheduleExpiry(): void {
-  if (expiryTimer !== null || failedAt.size === 0) return;
-  const earliest = Math.min(...failedAt.values());
-  expiryTimer = setTimeout(() => {
-    expiryTimer = null;
-    const now = Date.now();
-    for (const [url, at] of failedAt) if (now - at >= RETRY_MS) failedAt.delete(url);
+const loads = (src: string): Promise<boolean> =>
+  new Promise((resolve) => {
+    if (typeof Image === 'undefined') return resolve(false);
+    const img = new Image();
+    img.onload = () => resolve(true);
+    img.onerror = () => resolve(false);
+    img.src = src;
+  });
+
+async function probe(url: string): Promise<void> {
+  const entry = failed.get(url);
+  if (!entry) return;
+  const ok = (await loads(url)) || (!!entry.remote && entry.remote !== url && (await loads(entry.remote)));
+  if (ok) {
+    failed.delete(url);
     notify();
-    scheduleExpiry();
+  } else if (failed.has(url)) {
+    failed.set(url, { ...entry, at: Date.now() });
+  }
+}
+
+// One timer at a time, for the earliest retry.
+let retryTimer: ReturnType<typeof setTimeout> | null = null;
+function scheduleRetry(): void {
+  if (retryTimer !== null || failed.size === 0) return;
+  let earliest = Infinity;
+  for (const f of failed.values()) earliest = Math.min(earliest, f.at);
+  retryTimer = setTimeout(() => {
+    retryTimer = null;
+    const now = Date.now();
+    const due = [...failed].filter(([, f]) => now - f.at >= RETRY_MS).map(([url]) => url);
+    void Promise.all(due.map(probe)).then(scheduleRetry);
   }, Math.max(0, earliest + RETRY_MS - Date.now()) + 50);
 }
 
-export function markBadgeArtFailed(url: string | undefined): void {
-  if (!url || isFailed(url)) return;
-  if (failedAt.size >= FAILED_MAX) failedAt.delete(failedAt.keys().next().value as string);
-  failedAt.set(url, Date.now());
+export function markBadgeArtFailed(url: string | undefined, remote?: string): void {
+  if (!url || failed.has(url)) return;
+  if (failed.size >= FAILED_MAX) failed.delete(failed.keys().next().value as string);
+  failed.set(url, { at: Date.now(), remote });
   notify();
-  scheduleExpiry();
+  scheduleRetry();
 }
 
 export function isBadgeArtFailed(url: string | undefined): boolean {
-  return !!url && isFailed(url);
+  return !!url && failed.has(url);
 }
 
 if (typeof window !== 'undefined') {
   window.addEventListener('online', () => {
-    if (failedAt.size === 0) return;
-    failedAt.clear();
-    notify();
+    void Promise.all([...failed.keys()].map(probe)).then(scheduleRetry);
   });
 }
 
@@ -63,7 +92,7 @@ const subscribe = subscribeBadgeArtFailures;
 /** The failed ones among `urls`, as one stable string ("" when none). */
 export function failedAmong(urls: readonly string[]): string {
   let out = '';
-  for (const u of urls) if (u && isFailed(u)) out += `${u}\n`;
+  for (const u of urls) if (u && failed.has(u)) out += `${u}\n`;
   return out;
 }
 

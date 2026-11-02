@@ -61,6 +61,11 @@ describe('overlay badge fold', () => {
     expect(fold).not.toBe('');
     expect(imgs(fold)).toBe(2);
     expect(fold).toContain('+4');
+    // The peeks are the first two hidden badges, in chat order: bits, then FFZ.
+    const bitsAt = fold.search(/v1(%2F|\/)bits/);
+    const ffzAt = fold.indexOf('frankerfacez');
+    expect(bitsAt).toBeGreaterThan(-1);
+    expect(ffzAt).toBeGreaterThan(bitsAt);
   });
 
   it('shows every badge with the limit off', () => {
