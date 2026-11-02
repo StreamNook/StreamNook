@@ -26,6 +26,7 @@ import { SevenTVBadge, SevenTVPaint } from '../../types';
 import {
   getProfileFromMemoryCache,
   getFullProfileWithFallback,
+  ownedAfterRead,
   CachedProfile,
 } from '../../services/cosmeticsCache';
 import {
@@ -325,6 +326,10 @@ const ProfileSettings = () => {
 
   useEffect(() => {
     if (!isAuthenticated || !currentUser) return;
+    // 7TV's inventory read failed: the profile cache serves that answer for its
+    // 30 s retry window, so ask again just past it, a few times.
+    let inventoryRetry: ReturnType<typeof setTimeout> | undefined;
+    let inventoryRetries = 0;
 
     const loadProfile = async () => {
       // INSTANT FIRST PAINT: render the cached profile synchronously, before any
@@ -354,6 +359,11 @@ const ProfileSettings = () => {
         if (mountedRef.current) setSeventvAuthConnected(false);
       }
 
+      await fetchProfile();
+      if (mountedRef.current) setIsLoadingBadges(false);
+    };
+
+    const fetchProfile = async () => {
       const channelId = currentStream?.user_id || currentUser.user_id;
       const channelName = currentStream?.user_login || currentUser.login || currentUser.username;
 
@@ -364,15 +374,19 @@ const ProfileSettings = () => {
           channelId,
           channelName,
         );
-        if (mountedRef.current) applyProfileData(profile);
+        if (!mountedRef.current) return;
+        applyProfileData(profile);
+        if (profile.inventoryAnswered === false && inventoryRetries < 3) {
+          inventoryRetries += 1;
+          inventoryRetry = setTimeout(() => void fetchProfile(), 31_000);
+        }
       } catch (e) {
         Logger.error('[ProfileSettings] Failed to load profile:', e);
       }
-
-      if (mountedRef.current) setIsLoadingBadges(false);
     };
 
     loadProfile();
+    return () => clearTimeout(inventoryRetry);
   }, [isAuthenticated, currentUser]);
 
   // Load this member's saved loadout (which third-party badges they've chosen
@@ -539,12 +553,14 @@ const ProfileSettings = () => {
     // cache or an earlier success) down to nothing — keep the last good set until
     // 7TV answers cleanly again. A fresh non-empty set IS authoritative: apply it,
     // and clear the paint when nothing in it is selected (an unequip elsewhere).
+    // A read whose inventory failed is worn-only: it moves the marks on the
+    // owned lists already shown instead of replacing them.
     const paints = profile.seventvCosmetics.paints as SevenTVPaint[];
     const badges = profile.seventvCosmetics.badges;
     const hasFreshCosmetics = paints.length > 0 || badges.length > 0;
     if (hasFreshCosmetics) {
-      setSeventvBadges(badges);
-      setAllSeventvPaints(paints);
+      setSeventvBadges((prev) => ownedAfterRead(prev, badges, profile.inventoryAnswered));
+      setAllSeventvPaints((prev) => ownedAfterRead(prev, paints, profile.inventoryAnswered));
       const selectedPaint = paints.find((p: any) => p.selected);
       setSeventvPaint((selectedPaint as SevenTVPaint) ?? null);
     }

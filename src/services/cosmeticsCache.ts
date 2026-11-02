@@ -248,6 +248,24 @@ export function applyLocalCosmeticSelection(
 }
 
 /**
+ * The cosmetics picker's owned list after a profile read. A read whose 7TV
+ * inventory failed carries only what is WORN, which is not everything owned:
+ * shown as is, the picker offers the worn paint alone, and a click on it takes
+ * it off. So keep the owned list already on screen and move only the mark; the
+ * worn item joins the front when the shown list lacks it.
+ */
+export function ownedAfterRead<T extends { id: string; selected?: boolean }>(
+  shown: T[],
+  read: T[],
+  inventoryAnswered: boolean | undefined,
+): T[] {
+  if (inventoryAnswered !== false || shown.length === 0) return read;
+  const worn = read.find((item) => item.selected);
+  const kept = shown.map((item) => ({ ...item, selected: item.id === worn?.id }));
+  return worn && !shown.some((item) => item.id === worn.id) ? [worn, ...kept] : kept;
+}
+
+/**
  * Force a genuinely fresh cosmetics resolution: clear BOTH cache layers (this
  * module's LRU + the lower-level seventvService userCache) and re-fetch.
  *

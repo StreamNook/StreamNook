@@ -26,7 +26,7 @@ vi.mock('./seventvService', () => ({
   },
 }));
 
-import { clearCosmeticsMemoryCache, getCosmeticsWithFallback, getFullProfileWithFallback } from './cosmeticsCache';
+import { clearCosmeticsMemoryCache, getCosmeticsWithFallback, getFullProfileWithFallback, ownedAfterRead } from './cosmeticsCache';
 
 const PAINTS = [{ id: 'p1', selected: true }, { id: 'p2' }];
 const START = new Date('2026-10-31T12:00:00Z').getTime();
@@ -102,5 +102,27 @@ describe('getFullProfileWithFallback answer flags', () => {
     const profile = await getFullProfileWithFallback('4', 'four');
     expect(wornCalls.n).toBe(1);
     expect(profile.wornAnswered).toBe(false);
+  });
+});
+
+describe('ownedAfterRead', () => {
+  const owned = [{ id: 'p1', selected: true }, { id: 'p2' }, { id: 'p3' }];
+
+  it('a worn-only read keeps every owned item on screen and moves the mark', () => {
+    const next = ownedAfterRead(owned, [{ id: 'p2', selected: true }], false);
+    expect(next.map((p) => p.id)).toEqual(['p1', 'p2', 'p3']);
+    expect(next.filter((p) => p.selected).map((p) => p.id)).toEqual(['p2']);
+  });
+
+  it('a worn-only read with nothing worn clears the mark, and a worn item the list lacks joins the front', () => {
+    expect(ownedAfterRead(owned, [], false).some((p) => p.selected)).toBe(false);
+    expect(ownedAfterRead(owned, [{ id: 'p9', selected: true }], false).map((p) => p.id)).toEqual(['p9', 'p1', 'p2', 'p3']);
+  });
+
+  it('an answered inventory, or nothing shown yet, is taken as read', () => {
+    const read = [{ id: 'p2', selected: true }];
+    expect(ownedAfterRead(owned, read, true)).toBe(read);
+    expect(ownedAfterRead(owned, read, undefined)).toBe(read);
+    expect(ownedAfterRead([], read, false)).toBe(read);
   });
 });

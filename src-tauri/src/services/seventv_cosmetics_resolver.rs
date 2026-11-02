@@ -295,6 +295,7 @@ fn refresh_catalog_for_unknown(id: &str) {
 /// The query's `data`, or None once every attempt failed (network error, an
 /// errors array, or a message instead of data).
 async fn request_gql(query: &str) -> Option<Value> {
+    let mut failed = None;
     for attempt in 0..GQL_ATTEMPTS {
         match crate::commands::seventv::seventv_graphql(query.to_string()).await {
             Ok(resp) if resp.errors.is_none() && resp.message.is_none() => return resp.data,
@@ -302,11 +303,19 @@ async fn request_gql(query: &str) -> Option<Value> {
                 "[7TV-diag] gql error (attempt {attempt}): {:?}",
                 resp.message.or_else(|| resp.errors.map(|e| format!("{e:?}")))
             ),
-            Err(e) => log::debug!("[7TV] gql request failed (attempt {attempt}): {e}"),
+            Err(e) => {
+                log::debug!("[7TV] gql request failed (attempt {attempt}): {e}");
+                failed = Some(e);
+            }
         }
         if attempt + 1 < GQL_ATTEMPTS {
             tokio::time::sleep(GQL_RETRY_DELAY).await;
         }
+    }
+    // Every attempt failing is rare and leaves surfaces undecorated or a picker
+    // short, so the last reason reaches the default log.
+    if let Some(e) = failed {
+        log::warn!("[7TV] gql request gave up after {GQL_ATTEMPTS} attempts: {e}");
     }
     None
 }
