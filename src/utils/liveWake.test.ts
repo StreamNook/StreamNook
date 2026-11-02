@@ -1,27 +1,32 @@
 import { describe, expect, it } from 'vitest';
-import { liveWake } from './liveWake';
+import { liveTickWanted, liveWake } from './liveWake';
 
 describe('liveWake', () => {
-  it('resets the gate on a pause with a frame pending, and schedules nothing new', () => {
-    expect(liveWake('pause', true)).toEqual({ resetGate: true, schedule: false });
-  });
-
-  it('resets the gate and schedules a frame on a pause when the loop is asleep', () => {
-    expect(liveWake('pause', false)).toEqual({ resetGate: true, schedule: true });
-  });
-
-  it('treats play, seeking and seeked like a pause', () => {
-    for (const ev of ['play', 'seeking', 'seeked']) {
-      expect(liveWake(ev, true)).toEqual({ resetGate: true, schedule: false });
-      expect(liveWake(ev, false)).toEqual({ resetGate: true, schedule: true });
+  it('recomputes at once on play, pause, seeking and seeked', () => {
+    for (const ev of ['play', 'pause', 'seeking', 'seeked']) {
+      expect(liveWake(ev)).toEqual({ recompute: true });
     }
   });
 
-  it('does nothing on timeupdate with a frame pending', () => {
-    expect(liveWake('timeupdate', true)).toEqual({ resetGate: false, schedule: false });
+  it('recomputes nothing on timeupdate', () => {
+    expect(liveWake('timeupdate')).toEqual({ recompute: false });
+  });
+});
+
+describe('liveTickWanted', () => {
+  const playing = { live: true, paused: false, seeking: false, hidden: false };
+
+  it('runs while a live stream plays in a shown window', () => {
+    expect(liveTickWanted(playing)).toBe(true);
   });
 
-  it('wakes a sleeping loop on timeupdate', () => {
-    expect(liveWake('timeupdate', false)).toEqual({ resetGate: true, schedule: true });
+  it('runs while a paused stream seeks', () => {
+    expect(liveTickWanted({ ...playing, paused: true, seeking: true })).toBe(true);
+  });
+
+  it('sleeps while paused, hidden, or not live', () => {
+    expect(liveTickWanted({ ...playing, paused: true })).toBe(false);
+    expect(liveTickWanted({ ...playing, hidden: true })).toBe(false);
+    expect(liveTickWanted({ ...playing, live: false })).toBe(false);
   });
 });

@@ -94,9 +94,11 @@ const CHAPTERS_BUTTON_HTML =
 
 
 import { initialLiveButtonState, LIVE_BUTTON_HTML, paintLiveButton, type LiveButtonState } from '../utils/liveButton';
-import { liveWake } from '../utils/liveWake';
+import { liveTickWanted, liveWake } from '../utils/liveWake';
+import { liveReadoutRepair } from '../utils/liveReadoutRepair';
+import { useFlat } from '../utils/lowPower';
 import { setActiveVideo } from '../utils/activeVideo';
-import { isWindowHidden } from '../utils/windowVisibility';
+import { isWindowHidden, onWindowVisibility } from '../utils/windowVisibility';
 import {
   clearPauseIntent,
   createPausePark,
@@ -175,7 +177,7 @@ const VideoPlayer = () => {
   const latencyGovernorStopRef = useRef<(() => void) | null>(null);
   const behindLiveWatchdogRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const progressUpdateIntervalRef = useRef<number | null>(null);
+  const progressUpdateIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Actions are stable for the store's lifetime, so take them without
   // subscribing; state goes through a shallow-compared selector. This component
   // is mounted for the whole session, and a bare `useAppStore()` re-rendered it
@@ -222,7 +224,10 @@ const VideoPlayer = () => {
 
   // Immersive mode needs the bands, so it needs sampling on at all. Turning
   // the glow off turns this off with it rather than leaving a dead toggle.
-  const glowOn = settings?.media_glow !== false;
+  // Performance mode's flat look stops the sampler too; the setting itself is
+  // untouched, and the first reading after it ends lands whole.
+  const flat = useFlat();
+  const glowOn = settings?.media_glow !== false && !flat;
   const immersive = glowOn && settings?.immersive_glow === true && !!streamUrl;
 
   // Only immersive mode needs the decoder-driven rate. With the strip off
@@ -844,28 +849,30 @@ const VideoPlayer = () => {
   // The viewer scrubbed back inside the live buffer on purpose; the
   // low-latency watchdog must not "recover" them to the edge.
   const deliberateBehindRef = useRef(false);
+  // Stops the readout's 250 ms tick (the stream effect below starts it).
+  const stopLiveTick = useCallback(() => {
+    if (progressUpdateIntervalRef.current !== null) {
+      clearInterval(progressUpdateIntervalRef.current);
+      progressUpdateIntervalRef.current = null;
+    }
+  }, []);
   const updateLiveTimeDisplay = useCallback(() => {
-    // This frame ran; a wake may ask for the next one.
-    progressUpdateIntervalRef.current = null;
     const video = videoRef.current;
     const container = containerRef.current;
     if (!video || !container || !isLiveRef.current) return;
 
-    // Backgrounded window: keep the loop alive but skip the DOM work.
-    if (isWindowHidden()) {
-      progressUpdateIntervalRef.current = requestAnimationFrame(updateLiveTimeDisplay);
-      return;
-    }
+    // A hidden window shows nothing; the tick stops while it is hidden.
+    if (isWindowHidden()) return;
 
-    // This must run EVERY frame, not throttled: Plyr writes its own playback
-    // clock into the same node on every timeupdate (~4Hz), so any repair gap
-    // longer than a frame leaves Plyr's counter visibly alternating with ours.
-    // The per-frame cost is a few object reads and one textContent read (no
-    // layout); the expensive parts of the old loop (querySelector per frame,
-    // unconditional writes) stay gone via the node cache and the mismatch gate.
+    // Recomputes the readout and the LIVE button: on a 250 ms tick while the
+    // video plays, and at once on play, pause and seeks. Plyr writes its own
+    // playback clock into the same node on every timeupdate; liveReadoutRepair
+    // (set up with the stream) puts ours back in the same task, before the frame
+    // paints, so nothing here has to run every frame.
     const { currentMediaType, currentStream } = useAppStore.getState();
     if (currentMediaType !== 'live') {
       isLiveRef.current = false;
+      stopLiveTick();
       return;
     }
 
@@ -883,12 +890,12 @@ const VideoPlayer = () => {
       if (btn) paintLiveButton(btn, liveStateRef.current);
     }
     if (currentTimeDisplay) {
-      // The VALUE only changes about once a second, but this loop runs every
-      // frame to repair Plyr's clobbering (below). Recomputing per frame is
-      // what let the raw sawtooth reach the screen. Sample at 4 Hz, cache the
-      // result, and let the per-frame half do nothing but repair.
+      // The VALUE only changes about once a second. Recomputing it faster than
+      // the 250 ms tick is what let the raw sawtooth reach the screen, so the
+      // gate stays; it sits a little under the tick so a tick never skips, and
+      // play, pause and seeks reset it to recompute at once.
       const now = performance.now();
-      if (now - liveTextComputedAtRef.current >= 250) {
+      if (now - liveTextComputedAtRef.current >= 200) {
         liveTextComputedAtRef.current = now;
         let nextText: string | null = null;
         const nextAtLive = !liveEdgeRef.current.isBehind(video);
@@ -935,32 +942,24 @@ const VideoPlayer = () => {
         liveAtLiveRef.current = nextAtLive;
         liveStateRef.current = nextState;
         // Plyr never touches `hidden` or the button, so both are written
-        // here at 4 Hz, not in the per-frame repair below.
+        // here at 4 Hz; liveReadoutRepair only restores the text.
         if (currentTimeDisplay.hidden !== nextAtLive) currentTimeDisplay.hidden = nextAtLive;
         const btn = liveBtnNodeRef.current;
         if (btn && btn.isConnected) paintLiveButton(btn, nextState);
       }
       const nextText = liveTextRef.current;
-      // Behind the edge the readout is the broadcast timestamp, repaired per
-      // frame because Plyr writes its own session clock into this node on
-      // every timeupdate. Compare against what is ACTUALLY in the DOM, never
-      // a cached copy of our own last write, so a clobber is caught on the
-      // next frame; reading textContent does not force layout and the
-      // mismatch gate keeps steady-state writes at zero. At the edge the
-      // node is hidden (set at 4 Hz above) and the LIVE button carries the
-      // state.
+      // Behind the edge the readout is the broadcast timestamp. Written here
+      // when it changes; Plyr's own clock, written between ticks, is undone by
+      // liveReadoutRepair. Compare against what is ACTUALLY in the DOM, never a
+      // cached copy of our own last write; reading textContent does not force
+      // layout and the mismatch gate keeps steady-state writes at zero. At the
+      // edge the node is hidden (set at 4 Hz above) and the LIVE button carries
+      // the state.
       if (!liveAtLiveRef.current && currentTimeDisplay.textContent !== nextText) {
         currentTimeDisplay.textContent = nextText;
       }
     }
-
-    // Continue the animation loop. A paused player's readout and button do not
-    // change until it plays or seeks, so the loop sleeps until the video's
-    // play, pause, seek or timeupdate wakes it (see wakeLiveTime).
-    if (isLiveRef.current && !(video.paused && !video.seeking)) {
-      progressUpdateIntervalRef.current = requestAnimationFrame(updateLiveTimeDisplay);
-    }
-  }, []);
+  }, [stopLiveTick]);
 
   const createPlayer = useCallback(async () => {
     if (!videoRef.current || !streamUrl) return;
@@ -2586,23 +2585,55 @@ const VideoPlayer = () => {
     const videoElement = videoRef.current;
     if (!videoElement || !streamUrl) return;
 
-    // Start time display update loop
-    progressUpdateIntervalRef.current = requestAnimationFrame(updateLiveTimeDisplay);
-
     const video = videoElement;
 
-    // Wakes the readout loop, which sleeps while the player is paused. A
-    // play, pause or seek also reopens the 250 ms gate when a frame is already
-    // pending, so that frame recomputes the readout and the LIVE button.
-    const wakeLiveTime = (e: Event) => {
-      const wake = liveWake(e.type, progressUpdateIntervalRef.current !== null);
-      if (wake.resetGate) liveTextComputedAtRef.current = 0;
-      if (wake.schedule) {
-        progressUpdateIntervalRef.current = requestAnimationFrame(updateLiveTimeDisplay);
+    // The readout's 250 ms tick runs only while the video plays (or seeks) and
+    // the window is shown; a paused or hidden player costs no wakes at all.
+    const syncLiveTick = () => {
+      const wanted = liveTickWanted({
+        live: isLiveRef.current,
+        paused: video.paused,
+        seeking: video.seeking,
+        hidden: isWindowHidden(),
+      });
+      if (wanted && progressUpdateIntervalRef.current === null) {
+        progressUpdateIntervalRef.current = setInterval(updateLiveTimeDisplay, 250);
+      } else if (!wanted) {
+        stopLiveTick();
       }
+    };
+    // Play, pause and seeks change what the readout says, so they recompute at
+    // once instead of waiting for the next tick; every event re-checks the tick.
+    const wakeLiveTime = (e: Event) => {
+      if (liveWake(e.type).recompute) {
+        liveTextComputedAtRef.current = 0;
+        updateLiveTimeDisplay();
+      }
+      syncLiveTick();
     };
     const wakeEvents = ['play', 'pause', 'seeking', 'seeked', 'timeupdate'] as const;
     for (const ev of wakeEvents) video.addEventListener(ev, wakeLiveTime);
+    // Back on screen: recompute at once, then let the tick resume.
+    const offLiveVisibility = onWindowVisibility(() => {
+      if (!isWindowHidden()) {
+        liveTextComputedAtRef.current = 0;
+        updateLiveTimeDisplay();
+      }
+      syncLiveTick();
+    });
+    // Plyr writes its own clock into the readout on every timeupdate; this
+    // puts ours back in the same task, before the frame paints. It watches the
+    // whole player, so a rebuilt control bar is found again.
+    const liveRoot = containerRef.current;
+    const stopLiveRepair = liveRoot
+      ? liveReadoutRepair({
+          root: liveRoot,
+          find: () => liveRoot.querySelector<HTMLElement>('.plyr__time--current'),
+          text: () => (isLiveRef.current && !liveAtLiveRef.current ? liveTextRef.current : null),
+        })
+      : null;
+    updateLiveTimeDisplay();
+    syncLiveTick();
 
     // Deferred-recreate timeout id for the stream-swap path. Held in an
     // effect-scoped variable (not a partial early-return cleanup) so the SINGLE
@@ -2654,11 +2685,10 @@ const VideoPlayer = () => {
       createSeqRef.current++;
       // Clear a pending deferred-recreate so createPlayer can't fire after teardown
       if (recreateTimeoutId) clearTimeout(recreateTimeoutId);
-      // Cancel progress update animation frame
-      if (progressUpdateIntervalRef.current) {
-        cancelAnimationFrame(progressUpdateIntervalRef.current);
-        progressUpdateIntervalRef.current = null;
-      }
+      // Stop the live readout's tick, its repair observer and its visibility hook.
+      stopLiveTick();
+      stopLiveRepair?.();
+      offLiveVisibility();
 
       // Stop the live-latency governor before tearing down the instance.
       if (latencyGovernorStopRef.current) {

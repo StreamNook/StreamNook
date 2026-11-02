@@ -10,6 +10,7 @@ import { useAppStore } from '../../stores/AppStore';
 import { buildProviderUrl } from '../../utils/streamProvider';
 import { qualityLabel } from '../../utils/quality';
 import { useMediaGlow } from '../../utils/mediaGlow';
+import { useFlat } from '../../utils/lowPower';
 import { useChannelSocial } from '../../hooks/useChannelSocial';
 import {
   ignoresPlayerMouse,
@@ -253,7 +254,9 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
   // correct for this channel regardless of what the solo player last had.
   const socialEnabled = isFocused && !isMinimized;
   const playerOverlayButtons = useAppStore((s) => s.settings.player_overlay_buttons);
-  const mediaGlowEnabled = useAppStore((s) => s.settings.media_glow !== false);
+  // Performance mode's flat look stops the sampler; the setting is untouched.
+  const flat = useFlat();
+  const mediaGlowEnabled = useAppStore((s) => s.settings.media_glow !== false) && !flat;
   const clickToPause = useAppStore((s) => s.settings.video_player?.click_to_pause === true);
   const {
     isFollowing,

@@ -14,7 +14,8 @@
 // the bars (never React state), and the loop runs only while a listening
 // exists and the window is in view. The Motion setting is honored: 'off'
 // draws a still shape with no loop, 'reduced' follows the level with no
-// ripple or wave.
+// ripple or wave and loops only while it follows the level; a still shape is
+// drawn once.
 
 import { getListening, subscribeLevel, subscribeListening, type Listening } from '../../utils/songListening';
 import { isWindowHidden, onWindowVisibility } from '../../utils/windowVisibility';
@@ -76,6 +77,14 @@ export function barScales(state: BarsState, level: number, t: number, mode: Moti
   return BAR_WEIGHTS.map((_, i) => 0.22 + reach * (0.5 + 0.5 * Math.sin(t * speed - i * 0.85)));
 }
 
+/** Whether the bars move from frame to frame, so the loop has to keep
+ *  running: always in Full, and in Reduced only while they follow the level
+ *  (its breathing and finding shapes are still there). */
+export function barsMove(state: BarsState, mode: MotionMode): boolean {
+  if (mode === 'full') return true;
+  return mode === 'reduced' && state === 'level';
+}
+
 /** The window's Motion setting (MotionScope writes it on <html>). */
 export function motionMode(): MotionMode {
   const m = typeof document === 'undefined' ? undefined : document.documentElement.dataset.motion;
@@ -115,10 +124,11 @@ function tick(at: number): void {
   const dt = lastAt ? at - lastAt : FRAME_MS;
   lastAt = at;
   env = stepEnvelope(env, now.phase === 'finding' ? 0 : level, dt);
-  paint(stateOf(now), at / 1000, mode);
-  // A still shape needs no loop: it is drawn again when the setting or the
-  // listening changes.
-  if (mode !== 'off') frame = requestAnimationFrame(tick);
+  const state = stateOf(now);
+  paint(state, at / 1000, mode);
+  // A still shape needs no loop: it is drawn again when the setting, the
+  // listening or the first heard level changes.
+  if (barsMove(state, mode)) frame = requestAnimationFrame(tick);
 }
 
 /** Start the loop when there is something to draw, or draw the still shape. */
@@ -139,7 +149,11 @@ function start(): void {
   stops = [
     subscribeLevel((l) => {
       level = l;
+      // The first level turns breathing into following, which moves under
+      // Reduced too, so a resting loop starts again.
+      const first = !heard;
       heard = true;
+      if (first) wake();
     }),
     subscribeListening(wake),
     onWindowVisibility(wake),

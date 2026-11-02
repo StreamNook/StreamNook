@@ -1139,8 +1139,10 @@ const TitleBar = () => {
               beside Compact View because both are choices about how the player
               occupies the window rather than actions. Only offered while
               something is playing, and only while sampling is on — otherwise
-              there is no colour for it to pour. */}
-          {streamUrl && settings?.media_glow !== false && (
+              there is no colour for it to pour. Performance mode set to Always
+              never samples, so it hides then; In the background keeps it, so
+              the bar never shifts when the app comes back to the front. */}
+          {streamUrl && settings?.media_glow !== false && settings?.performance_mode !== 'always' && (
             <Tooltip content={settings?.immersive_glow ? 'Turn off immersive' : 'Immersive'} delay={200}>
               <button
                 onClick={() => {
