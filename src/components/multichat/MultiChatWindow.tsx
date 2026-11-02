@@ -3841,7 +3841,7 @@ function AddChannelPanel({
                 </div>
               </div>
               <span className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-error">
-                <span className="h-1.5 w-1.5 rounded-full bg-error animate-pulse" />
+                <span className="h-1.5 w-1.5 rounded-full bg-error animate-pulse sn-decor" />
                 Live
               </span>
             </button>

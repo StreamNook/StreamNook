@@ -2453,7 +2453,7 @@ const Home = () => {
                         >
                             {activeAutomationIds.has(dropsCampaign.id) ? (
                                 <>
-                                    <Pickaxe size={14} className="animate-pulse" />
+                                    <Pickaxe size={14} className="animate-pulse sn-decor" />
                                     <span>Automation</span>
                                 </>
                             ) : (

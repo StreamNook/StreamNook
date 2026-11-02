@@ -1351,7 +1351,7 @@ const ProfileSettings = () => {
             <div className="glass-panel rounded-xl p-4 flex items-center gap-4">
               {captureStage === 'recording' ? (
                 <span
-                  className="flex-shrink-0 w-2 h-2 rounded-full bg-red-500 animate-pulse"
+                  className="flex-shrink-0 w-2 h-2 rounded-full bg-red-500 animate-pulse sn-decor"
                   aria-hidden
                 />
               ) : (

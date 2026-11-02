@@ -587,7 +587,7 @@ const DraggableDockPill: React.FC<{
             className="w-5 h-5 rounded-full object-cover shadow-sm bg-black/20"
           />
         ) : (
-          <div className="w-2 h-2 ml-2 rounded-full bg-accent animate-pulse"></div>
+          <div className="w-2 h-2 ml-2 rounded-full bg-accent animate-pulse sn-decor"></div>
         )}
         <span className="text-xs font-semibold text-textPrimary truncate max-w-[100px] select-none pr-1">
           {slot.channelName || slot.channelLogin}

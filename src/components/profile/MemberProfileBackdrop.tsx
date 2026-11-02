@@ -3,10 +3,17 @@
 
 import { motion } from 'framer-motion';
 import { AtmosphereBackground } from '../AtmosphereBackground';
+import { useAppStore } from '../../stores/AppStore';
+import { useLowPower } from '../../utils/lowPower';
 import type { MemberProfileView } from './memberProfile';
 
 export function MemberProfileBackdrop({ view }: { view: MemberProfileView }) {
   const { hasAtmosphere, effectiveTheme, tierAura } = view;
+  // The cheap look and Motion Off hold the aura still. A running framer loop
+  // stops only when both `animate` and `transition` change.
+  const lowPower = useLowPower();
+  const motionOff = useAppStore((s) => s.settings.motion_mode) === 'off';
+  const holdStill = lowPower || motionOff;
   return (
     <>
       {/* Whole-overlay backdrop. Only the Atmosphere (subscriber tier) fills
@@ -25,8 +32,8 @@ export function MemberProfileBackdrop({ view }: { view: MemberProfileView }) {
         <motion.div
           className="pointer-events-none absolute -inset-10"
           style={{ background: tierAura }}
-          animate={{ opacity: [0.7, 1, 0.7] }}
-          transition={{ duration: 7, repeat: Infinity, ease: 'easeInOut' }}
+          animate={holdStill ? { opacity: 0.85 } : { opacity: [0.7, 1, 0.7] }}
+          transition={holdStill ? { duration: 0 } : { duration: 7, repeat: Infinity, ease: 'easeInOut' }}
         />
       ) : null}
     </>

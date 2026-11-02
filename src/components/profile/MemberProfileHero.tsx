@@ -12,6 +12,8 @@ import { Tooltip } from '../ui/Tooltip';
 import { AtmosphereChip, PaintChip, SevenTvProfileButton } from './IdentityChips';
 import type { MemberProfileView } from './memberProfile';
 import { isStatHidden } from '../../services/profileVisibility';
+import { useAppStore } from '../../stores/AppStore';
+import { useLowPower } from '../../utils/lowPower';
 
 export function MemberProfileHero({
   userId,
@@ -26,6 +28,11 @@ export function MemberProfileHero({
   close: () => void;
   onDragStart?: (e: ReactPointerEvent) => void;
 }) {
+  // The cheap look and Motion Off hold the paint aura still. A running framer
+  // loop stops only when both `animate` and `transition` change.
+  const lowPower = useLowPower();
+  const motionOff = useAppStore((s) => s.settings.motion_mode) === 'off';
+  const holdStill = lowPower || motionOff;
   const {
     info,
     namePaint,
@@ -68,8 +75,8 @@ export function MemberProfileHero({
             WebkitMaskImage: 'linear-gradient(to bottom, black, transparent 80%)',
             maskImage: 'linear-gradient(to bottom, black, transparent 80%)',
           }}
-          animate={{ opacity: [0.16, 0.24, 0.16] }}
-          transition={{ duration: 7, repeat: Infinity, ease: 'easeInOut' }}
+          animate={holdStill ? { opacity: 0.2 } : { opacity: [0.16, 0.24, 0.16] }}
+          transition={holdStill ? { duration: 0 } : { duration: 7, repeat: Infinity, ease: 'easeInOut' }}
         />
       )}
       {/* Top + bottom specular hairlines (catch light, seam into content). */}

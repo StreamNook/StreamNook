@@ -894,13 +894,13 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
                 <h2 className="text-xl font-bold text-textPrimary">{badge.title}</h2>
                 {isAvailable && (
                   <div className="flex items-center gap-1.5 px-2 py-1 bg-success/20 border border-success/50 rounded-full">
-                    <span className="w-2 h-2 bg-success rounded-full animate-pulse"></span>
+                    <span className="w-2 h-2 bg-success rounded-full animate-pulse sn-decor"></span>
                     <span className="text-xs font-medium text-success">Available Now</span>
                   </div>
                 )}
                 {isComingSoon && (
                   <div className="flex items-center gap-1.5 px-2 py-1 bg-info/20 border border-info/50 rounded-full">
-                    <span className="w-2 h-2 bg-info rounded-full animate-pulse"></span>
+                    <span className="w-2 h-2 bg-info rounded-full animate-pulse sn-decor"></span>
                     <span className="text-xs font-medium text-info">Coming Soon</span>
                   </div>
                 )}

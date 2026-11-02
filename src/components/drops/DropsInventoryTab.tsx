@@ -504,7 +504,7 @@ export default function DropsInventoryTab({
                                     <div className="flex items-center gap-2 shrink-0">
                                         {group.claimableDrops > 0 && (
                                             <>
-                                                <span className="px-2 py-1 text-xs font-bold rounded-lg bg-warning/20 text-warning border border-warning/30 animate-pulse">
+                                                <span className="px-2 py-1 text-xs font-bold rounded-lg bg-warning/20 text-warning border border-warning/30 animate-pulse sn-decor">
                                                     {group.claimableDrops} to claim
                                                 </span>
                                                 {/* Claim All Button */}
@@ -682,7 +682,7 @@ function CampaignSection({ item, progress, onClaimDrop, getStatusBadge }: Campai
                                     </div>
                                 )}
                                 {isClaimable && (
-                                    <div className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-warning flex items-center justify-center shadow-lg animate-pulse">
+                                    <div className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-warning flex items-center justify-center shadow-lg animate-pulse sn-decor">
                                         <span className="text-[8px] font-bold text-black">!</span>
                                     </div>
                                 )}
@@ -709,7 +709,7 @@ function CampaignSection({ item, progress, onClaimDrop, getStatusBadge }: Campai
                                     ) : isClaimed ? (
                                         <span className="text-[10px] text-success font-medium">Claimed</span>
                                     ) : isClaimable ? (
-                                        <span className="text-[10px] text-warning font-semibold animate-pulse">Ready to claim!</span>
+                                        <span className="text-[10px] text-warning font-semibold animate-pulse sn-decor">Ready to claim!</span>
                                     ) : !collectible ? (
                                         // Non-collectible drop: show what's required
                                         <span className="text-[10px] text-highlight-purple font-medium flex items-center gap-1">
@@ -740,7 +740,7 @@ function CampaignSection({ item, progress, onClaimDrop, getStatusBadge }: Campai
                                         e.stopPropagation();
                                         onClaimDrop(drop.id, dropProgress?.drop_instance_id);
                                     }}
-                                    className="px-3 py-1.5 bg-success hover:bg-success/80 text-white text-xs font-bold rounded-lg transition-all shadow-lg animate-pulse shrink-0"
+                                    className="px-3 py-1.5 bg-success hover:bg-success/80 text-white text-xs font-bold rounded-lg transition-all shadow-lg animate-pulse sn-decor shrink-0"
                                 >
                                     {claimLabel(drop, dropProgress)}
                                 </button>

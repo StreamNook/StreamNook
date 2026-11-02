@@ -111,6 +111,7 @@ export default function DeviceLoginOverlay() {
 
         <div style={{ fontSize: 12.5, color: 'rgba(255,255,255,0.45)', marginTop: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
           <span
+            className="sn-loader"
             style={{
               width: 8,
               height: 8,

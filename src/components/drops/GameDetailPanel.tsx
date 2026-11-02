@@ -1297,7 +1297,7 @@ export default function GameDetailPanel({
                                                         </div>
                                                     )}
                                                     {/* Ready badge */}
-                                                    <div className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-warning flex items-center justify-center shadow-lg animate-pulse">
+                                                    <div className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-warning flex items-center justify-center shadow-lg animate-pulse sn-decor">
                                                         <span className="text-[8px] font-bold text-black">!</span>
                                                     </div>
                                                 </div>
@@ -1317,7 +1317,7 @@ export default function GameDetailPanel({
                                                 {/* Claim Button */}
                                                 <button
                                                     onClick={() => onClaimDrop(dropId, dropInstanceId)}
-                                                    className="px-3 py-1.5 bg-success hover:bg-success/80 text-white text-xs font-bold rounded-lg transition-all shadow-lg animate-pulse shrink-0"
+                                                    className="px-3 py-1.5 bg-success hover:bg-success/80 text-white text-xs font-bold rounded-lg transition-all shadow-lg animate-pulse sn-decor shrink-0"
                                                 >
                                                     Claim
                                                 </button>

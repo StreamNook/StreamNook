@@ -712,7 +712,7 @@ export default function DropsCenter() {
                         {/* Icon with glow effect */}
                         <div className="flex justify-center mb-6">
                             <div className="relative">
-                                <div className="absolute inset-0 bg-accent/30 rounded-full blur-xl animate-pulse" />
+                                <div className="absolute inset-0 bg-accent/30 rounded-full blur-xl animate-pulse sn-decor" />
                                 <div className="relative p-5 bg-gradient-to-br from-accent/20 to-accent/5 rounded-full border border-accent/30">
                                     <Gift className="w-14 h-14 text-accent" />
                                 </div>
@@ -750,7 +750,7 @@ export default function DropsCenter() {
                                     Approve the request on Twitch to turn on drops and channel points.
                                 </p>
                                 <div className="flex items-center justify-center gap-2 mt-4 text-textSecondary text-sm">
-                                    <div className="w-2 h-2 bg-accent rounded-full animate-pulse" />
+                                    <div className="w-2 h-2 bg-accent rounded-full animate-pulse sn-decor" />
                                     <span>Waiting for authorization...</span>
                                 </div>
                             </div>

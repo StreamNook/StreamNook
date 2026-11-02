@@ -313,23 +313,9 @@ body:has(.sn-mobile) .glass-input:focus {
   backdrop-filter: none;
 }
 
-/* System Battery Saver (html[data-sn-low-power], src/mobile/lowPower.ts).
-   Motion already drops to Reduced there; these are the decorative loops
-   Reduced does not name. Each rests on its un-animated style, except the chip
-   shine whose resting place is a visible band, so it leaves the tree. */
-html[data-sn-low-power] .sn-aurora-1,
-html[data-sn-low-power] .sn-aurora-2,
-html[data-sn-low-power] .sn-atm-breathe-1,
-html[data-sn-low-power] .sn-atm-breathe-2,
-html[data-sn-low-power] .cologne-wash,
-html[data-sn-low-power] .hype-train-fill-wave,
-html[data-sn-low-power] .hype-train-progress-rainbow::before,
-html[data-sn-low-power] .hype-train-progress-golden::before {
-  animation: none !important;
-}
-html[data-sn-low-power] .card-chip-shine > span {
-  display: none;
-}
+/* System Battery Saver (html[data-sn-low-power], src/mobile/lowPower.ts): its
+   loop cap and rests live in src/styles/globals.css (Cheap draw), shared with
+   desktop Performance mode. */
 
 /* A popover with no blur behind it (the drop bar, the pinned banner, the You
    card's picture note). The house popover blurs 64px of whatever is behind

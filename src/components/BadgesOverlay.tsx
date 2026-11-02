@@ -1609,7 +1609,7 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
                       : 'hover:bg-white/5 text-textSecondary hover:text-white'
                       }`}
                   >
-                    <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+                    <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse sn-decor"></span>
                     Available Now
                   </button>
                   <button
@@ -1619,7 +1619,7 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
                       : 'hover:bg-white/5 text-textSecondary hover:text-white'
                       }`}
                   >
-                    <span className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></span>
+                    <span className="w-2 h-2 bg-blue-500 rounded-full animate-pulse sn-decor"></span>
                     Coming Soon
                   </button>
                 </div>
@@ -1700,10 +1700,10 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
                       )}
                       {/* Status indicators - only show if not collected */}
                       {!hasCollected && isAvailable && (
-                        <span className="absolute top-1 right-1 w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+                        <span className="absolute top-1 right-1 w-2 h-2 bg-green-500 rounded-full animate-pulse sn-decor"></span>
                       )}
                       {!hasCollected && isComingSoon && (
-                        <span className="absolute top-1 right-1 w-2 h-2 bg-blue-500 rounded-full animate-pulse"></span>
+                        <span className="absolute top-1 right-1 w-2 h-2 bg-blue-500 rounded-full animate-pulse sn-decor"></span>
                       )}
                       <span className={`w-full text-xs text-center line-clamp-2 [overflow-wrap:anywhere] transition-all duration-300 font-medium ${
                         hasCollected ? 'text-[#f0d78c] drop-shadow-[0_0_8px_rgba(212,168,75,0.3)]' : 'text-textSecondary group-hover:text-textPrimary'
@@ -2346,7 +2346,7 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
               
               {isAnimatedBadge(selectedSeventvBadge) && (
                 <div className="flex items-center gap-2 text-[#29b6f6]">
-                  <span className="w-2 h-2 bg-[#29b6f6] rounded-full animate-pulse"></span>
+                  <span className="w-2 h-2 bg-[#29b6f6] rounded-full animate-pulse sn-decor"></span>
                   <span className="text-sm">Animated Badge</span>
                 </div>
               )}
@@ -2533,7 +2533,7 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
 
                   {cosmetic.animated && (
                     <div className="flex items-center gap-2 text-accent">
-                      <span className="w-2 h-2 bg-accent rounded-full animate-pulse"></span>
+                      <span className="w-2 h-2 bg-accent rounded-full animate-pulse sn-decor"></span>
                       <span className="text-sm">Animated Badge</span>
                     </div>
                   )}

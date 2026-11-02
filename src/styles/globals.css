@@ -3126,13 +3126,18 @@ html[data-player-fullscreen] {
    Driven by data-motion on <html>, set by MotionScope. The JS-driven side is
    handled separately via framer-motion's MotionConfig reducedMotion. */
 
-/* Off: collapse every transition and animation to instant. Spinners are exempt
-   so loading indicators still read as "working" rather than frozen mid-spin. */
-html[data-motion="off"] *:not(.animate-spin),
-html[data-motion="off"] *:not(.animate-spin)::before,
-html[data-motion="off"] *:not(.animate-spin)::after {
+/* Off: collapse every transition and animation to instant, loops included: a
+   0.001ms duration alone leaves an infinite loop running at that period, which
+   repaints on every frame. Spinners, the Penrose rotate and marked loaders
+   (.sn-loader) are exempt so loading still reads as "working" rather than
+   frozen. Every name on the exempt list is a single class, so the selector stays
+   at 0,2,1, which the Penrose and offline-drift restatements below outrank. */
+html[data-motion="off"] *:not(.animate-spin, .animate-penrose-rotate, .sn-loader, .sn-loader *),
+html[data-motion="off"] *:not(.animate-spin, .animate-penrose-rotate, .sn-loader, .sn-loader *)::before,
+html[data-motion="off"] *:not(.animate-spin, .animate-penrose-rotate, .sn-loader, .sn-loader *)::after {
   animation-duration: 0.001ms !important;
   animation-delay: 0ms !important;
+  animation-iteration-count: 1 !important;
   transition-duration: 0.001ms !important;
   transition-delay: 0ms !important;
 }
@@ -3142,15 +3147,16 @@ html[data-motion="off"] {
 
 /* The Penrose mark IS the app's loading indicator, so it keeps marching here for
    exactly the reason spinners are exempt above: a frozen loader reads as a hung
-   app, not as a preference being honoured. The exemption above can only name one
-   class (`.animate-spin`) and the mark uses its own, so it was being collapsed to
-   0.001ms and standing perfectly still. Timing is restated verbatim from the
-   loader's own rule; it outranks the kill on specificity (0,3,1 vs 0,2,1).
+   app, not as a preference being honoured. Its cubes stay off the exempt list
+   because their timing lives on `.pm-cube`: timing and the endless loop are
+   restated verbatim from the loader's own rule, and outrank the kill on
+   specificity (0,3,1 vs 0,2,1).
    NOTE: the OS-level `prefers-reduced-motion` freeze further down is deliberate
    and stays — that one is a real accessibility signal, not an app preference. */
 html[data-motion="off"] .penrose-march .pm-cube {
   animation-duration: 1.5s !important;
   animation-delay: 0ms !important;
+  animation-iteration-count: infinite !important;
 }
 
 /* Reduced: keep quick fades, but strip the larger movements, the glass-button
@@ -5026,21 +5032,134 @@ html[data-sn-hidden] video {
 }
 
 
-html[data-watching] .automation-pulse {
+/* Held still while a stream is on screen, and in the cheap look (see Cheap
+   draw below), on a static value taken from inside each animation's range. */
+html[data-watching] .automation-pulse,
+html[data-sn-low-power] .automation-pulse {
   animation: none;
 }
-html[data-watching] .automation-pulse-shift {
+html[data-watching] .automation-pulse-shift,
+html[data-sn-low-power] .automation-pulse-shift {
   display: none;
 }
 
-html[data-watching] .update-pill {
+html[data-watching] .update-pill,
+html[data-sn-low-power] .update-pill {
   animation: none;
   box-shadow: 0 0 13px rgba(132, 255, 87, 0.32);
 }
 
 /* The badge already carries this shadow statically, so only the pulse stops. */
-html[data-watching] .drops-progress-inline {
+html[data-watching] .drops-progress-inline,
+html[data-sn-low-power] .drops-progress-inline {
   animation: none;
+}
+
+/* ===== Cheap draw =====
+   html[data-sn-low-power] is set while a window should draw cheaply: the
+   phone's Battery Saver, or desktop Performance mode (utils/lowPower.ts). Every
+   CSS loop plays at most once, so a running loop snaps to its un-animated style
+   and resumes in phase when the mode ends. The exempt list keeps loaders moving,
+   keeps emote modifiers (chat content; Freeze emotes stops them below), keeps
+   the offline room's drift (its corner hits need the loop), and keeps the
+   one-shot cues whose meaning is in their middle frames: the settings search
+   wash, the mention, reply, phrase and highlight flashes, the whisper
+   highlight, the phone's jump flash, the ban arming bars and the hype marquee.
+   The :not() takes the specificity of its most specific argument (0,2,0), so
+   the cap is 0,3,1 (0,3,2 on the pseudo elements) and its !important longhands
+   beat every other animation rule; the named rests further down still win,
+   because they set animation-name: none, which the cap never touches.
+   src/styles/loopCap.test.ts holds a decision for every animation in the app. */
+html[data-sn-low-power] *:not(
+    .animate-spin, .animate-penrose-rotate, .pm-cube, .animate-pulse:not(.sn-decor),
+    .ghost-card, .sn-listen-dots > i, .sn-loader, .sn-loader *,
+    [class*="sn-ffz-anim-"], [class*="sn-bttv-anim-"], .offline-bounce-x, .offline-bounce-y,
+    .settings-row-found, .animate-highlight-flash, .animate-mention-flash,
+    .animate-reply-flash, .animate-phrase-highlight, .whisper-highlight,
+    .chat-message-row[data-sn-flash], .sn-mod-dwell, .sn-mod-cap-dwell, .animate-hype-marquee
+  ),
+html[data-sn-low-power] *:not(
+    .animate-spin, .animate-penrose-rotate, .pm-cube, .animate-pulse:not(.sn-decor),
+    .ghost-card, .sn-listen-dots > i, .sn-loader, .sn-loader *,
+    [class*="sn-ffz-anim-"], [class*="sn-bttv-anim-"], .offline-bounce-x, .offline-bounce-y,
+    .settings-row-found, .animate-highlight-flash, .animate-mention-flash,
+    .animate-reply-flash, .animate-phrase-highlight, .whisper-highlight,
+    .chat-message-row[data-sn-flash], .sn-mod-dwell, .sn-mod-cap-dwell, .animate-hype-marquee
+  )::before,
+html[data-sn-low-power] *:not(
+    .animate-spin, .animate-penrose-rotate, .pm-cube, .animate-pulse:not(.sn-decor),
+    .ghost-card, .sn-listen-dots > i, .sn-loader, .sn-loader *,
+    [class*="sn-ffz-anim-"], [class*="sn-bttv-anim-"], .offline-bounce-x, .offline-bounce-y,
+    .settings-row-found, .animate-highlight-flash, .animate-mention-flash,
+    .animate-reply-flash, .animate-phrase-highlight, .whisper-highlight,
+    .chat-message-row[data-sn-flash], .sn-mod-dwell, .sn-mod-cap-dwell, .animate-hype-marquee
+  )::after {
+  animation-iteration-count: 1 !important;
+}
+
+/* Performance mode (html[data-sn-perf], desktop only) also completes every CSS
+   animation at once: menus, popovers, island alerts and chat rows appear
+   without their fade or slide, and a loop that mounts while it is on never
+   plays a cycle. Battery Saver keeps its quick fades. Transitions are untouched.
+   The same exempt list. */
+html[data-sn-perf] *:not(
+    .animate-spin, .animate-penrose-rotate, .pm-cube, .animate-pulse:not(.sn-decor),
+    .ghost-card, .sn-listen-dots > i, .sn-loader, .sn-loader *,
+    [class*="sn-ffz-anim-"], [class*="sn-bttv-anim-"], .offline-bounce-x, .offline-bounce-y,
+    .settings-row-found, .animate-highlight-flash, .animate-mention-flash,
+    .animate-reply-flash, .animate-phrase-highlight, .whisper-highlight,
+    .chat-message-row[data-sn-flash], .sn-mod-dwell, .sn-mod-cap-dwell, .animate-hype-marquee
+  ),
+html[data-sn-perf] *:not(
+    .animate-spin, .animate-penrose-rotate, .pm-cube, .animate-pulse:not(.sn-decor),
+    .ghost-card, .sn-listen-dots > i, .sn-loader, .sn-loader *,
+    [class*="sn-ffz-anim-"], [class*="sn-bttv-anim-"], .offline-bounce-x, .offline-bounce-y,
+    .settings-row-found, .animate-highlight-flash, .animate-mention-flash,
+    .animate-reply-flash, .animate-phrase-highlight, .whisper-highlight,
+    .chat-message-row[data-sn-flash], .sn-mod-dwell, .sn-mod-cap-dwell, .animate-hype-marquee
+  )::before,
+html[data-sn-perf] *:not(
+    .animate-spin, .animate-penrose-rotate, .pm-cube, .animate-pulse:not(.sn-decor),
+    .ghost-card, .sn-listen-dots > i, .sn-loader, .sn-loader *,
+    [class*="sn-ffz-anim-"], [class*="sn-bttv-anim-"], .offline-bounce-x, .offline-bounce-y,
+    .settings-row-found, .animate-highlight-flash, .animate-mention-flash,
+    .animate-reply-flash, .animate-phrase-highlight, .whisper-highlight,
+    .chat-message-row[data-sn-flash], .sn-mod-dwell, .sn-mod-cap-dwell, .animate-hype-marquee
+  )::after {
+  animation-duration: 0s !important;
+  animation-delay: 0s !important;
+}
+
+/* Rests where the un-animated style is not the still look. The atmosphere
+   drift and breath, the Cologne wash and the hype train's moving fills stop
+   outright; the chip shine and the automation sweep rest as visible bands and
+   the looping row glints (the chase ring above all) as a bright arc, so they
+   leave the picture. */
+html[data-sn-low-power] .sn-aurora-1,
+html[data-sn-low-power] .sn-aurora-2,
+html[data-sn-low-power] .sn-atm-breathe-1,
+html[data-sn-low-power] .sn-atm-breathe-2,
+html[data-sn-low-power] .cologne-wash,
+html[data-sn-low-power] .hype-train-fill-wave,
+html[data-sn-low-power] .hype-train-progress-rainbow::before,
+html[data-sn-low-power] .hype-train-progress-golden::before {
+  animation: none !important;
+}
+html[data-sn-low-power] .card-chip-shine > span,
+html[data-sn-low-power] .automation-shimmer-overlay::after {
+  display: none;
+}
+html[data-sn-low-power] .sn-ft-anim-ring.sn-ft-loop::after,
+html[data-sn-low-power] .sn-ft-anim-bar.sn-ft-loop::after {
+  animation: none !important;
+  opacity: 0 !important;
+}
+
+/* Freeze emotes (and the phone's Battery Saver): emote modifiers stop with the
+   emotes they move. */
+html[data-sn-still-chat] [class*="sn-ffz-anim-"],
+html[data-sn-still-chat] [class*="sn-bttv-anim-"] {
+  animation: none !important;
 }
 
 /* Deliberately NOT gated: shared chat and hype trains are rare, transient events
@@ -8469,16 +8588,19 @@ html[data-os="linux"] .sn-chat-overlay-frame {
 }
 /* The drift IS the feature, so the app's Motion preference does not stop it,
    the same call the Penrose loader makes above: Off would otherwise squeeze it
-   to 0.001ms, which on an endless alternate flickers between corners. Timing
-   is restated so it outranks the kill (0,2,2 vs 0,2,1). The OS reduced-motion
-   setting is an accessibility signal and still stills it. */
+   to 0.001ms and play it once, which ends the corner hits for good. Timing and
+   the endless loop are restated so they outrank the kill (0,2,2 vs 0,2,1); the
+   cheap-draw caps exempt the drift outright. The OS reduced-motion setting is
+   an accessibility signal and still stills it. */
 html[data-motion] div.offline-bounce-x {
   animation-duration: 24s !important;
   animation-delay: -7s !important;
+  animation-iteration-count: infinite !important;
 }
 html[data-motion] div.offline-bounce-y {
   animation-duration: 15s !important;
   animation-delay: -7s !important;
+  animation-iteration-count: infinite !important;
 }
 @media (prefers-reduced-motion: reduce) {
   html .offline-bounce-x,
@@ -8521,15 +8643,19 @@ html[data-motion] div.offline-bounce-y {
   78%, 100% { transform: translate(110px, 62px); }
 }
 /* Reduced drops decorative loops (see the Motion preferences block), so the
-   preview rests on its revealed frame there as well as with motion off. */
+   preview rests on its revealed frame there, with motion off, and in the cheap
+   look (Cheap draw). */
 html[data-motion="off"] .sn-tbt-bar,
 html[data-motion="off"] .sn-tbt-pointer,
 html[data-motion="reduced"] .sn-tbt-bar,
-html[data-motion="reduced"] .sn-tbt-pointer {
+html[data-motion="reduced"] .sn-tbt-pointer,
+html[data-sn-low-power] .sn-tbt-bar,
+html[data-sn-low-power] .sn-tbt-pointer {
   animation: none;
 }
 html[data-motion="off"] .sn-tbt-pointer,
-html[data-motion="reduced"] .sn-tbt-pointer {
+html[data-motion="reduced"] .sn-tbt-pointer,
+html[data-sn-low-power] .sn-tbt-pointer {
   transform: translate(58px, 2px);
 }
 @media (prefers-reduced-motion: reduce) {

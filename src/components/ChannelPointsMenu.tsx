@@ -1052,7 +1052,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
           </div>
 
           {/* Title */}
-          <div className="text-yellow-400 text-lg font-bold mb-4 animate-pulse">
+          <div className="text-yellow-400 text-lg font-bold mb-4 animate-pulse sn-decor">
             🎉 You unlocked an emote! 🎉
           </div>
 
