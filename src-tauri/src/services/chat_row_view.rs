@@ -557,7 +557,7 @@ fn seventv_badge(def: &Value) -> Option<ViewBadge> {
         .or_else(|| def.get("name").and_then(Value::as_str))
         .unwrap_or_default()
         .to_string();
-    Some(ViewBadge { url, title, provider: "7tv".to_string() })
+    Some(ViewBadge { url, title, provider: "7tv".to_string(), ..Default::default() })
 }
 
 /// What a chatter wears, as the view draws it.
@@ -701,7 +701,7 @@ pub fn stamp_pins(pins: &mut [Value], channel_id: &str) {
         if prefs.show_badges {
             for (set, version) in &sets {
                 let Some((url, title)) = twitch_badge_art(Some(channel_id), set, version) else { continue };
-                let badge = ViewBadge { url, title, provider: "twitch".to_string() };
+                let badge = ViewBadge { url, title, provider: "twitch".to_string(), role: role_rank(set).is_some() };
                 if let Some(rank) = role_rank(set) {
                     if role.as_ref().is_none_or(|(best, _)| rank < *best) {
                         role = Some((rank, badge.clone()));
@@ -1109,20 +1109,31 @@ fn badges(msg: &ChatMessage, prefs: &Prefs, worn: Option<&WornView>) -> Vec<View
         for badge in &msg.badges {
             let carried = badge.image_url_2x.as_ref().or(badge.image_url_4x.as_ref()).or(badge.image_url_1x.as_ref());
             if let Some(url) = carried.filter(|u| !u.is_empty()) {
+                let provider = if twitch { "twitch".to_string() } else { msg.provider.clone() };
                 out.push(ViewBadge {
                     url: url.clone(),
                     title: badge.title.clone().unwrap_or_default(),
-                    provider: if twitch { "twitch".to_string() } else { msg.provider.clone() },
+                    role: crate::services::badge_fold::fold_kind(&provider, &badge.name)
+                        == crate::services::badge_fold::FoldKind::Role,
+                    provider,
                 });
             } else if twitch {
                 if let Some((url, title)) = twitch_badge_art(room, &badge.name, &badge.version) {
-                    out.push(ViewBadge { url, title, provider: "twitch".to_string() });
+                    out.push(ViewBadge {
+                        url,
+                        title,
+                        role: crate::services::badge_fold::fold_kind("twitch", &badge.name)
+                            == crate::services::badge_fold::FoldKind::Role,
+                        provider: "twitch".to_string(),
+                    });
                 }
             } else if msg.provider == "kick" {
                 if let Some(url) = kick_badge_art(&badge.name) {
                     out.push(ViewBadge {
                         url,
                         title: badge.title.clone().unwrap_or_else(|| kick_badge_title(&badge.name)),
+                        role: crate::services::badge_fold::fold_kind("kick", &badge.name)
+                            == crate::services::badge_fold::FoldKind::Role,
                         provider: "kick".to_string(),
                     });
                 }
@@ -1146,7 +1157,7 @@ fn badges(msg: &ChatMessage, prefs: &Prefs, worn: Option<&WornView>) -> Vec<View
             let info = badge.badge_info;
             let url = [info.image_2x, info.image_4x, info.image_1x].into_iter().find(|u| !u.is_empty());
             if let Some(url) = url {
-                out.push(ViewBadge { url, title: info.title, provider: provider.to_string() });
+                out.push(ViewBadge { url, title: info.title, provider: provider.to_string(), ..Default::default() });
             }
         }
     }
@@ -1250,7 +1261,7 @@ fn alias_frame(key: &str, member: &str, theme: &crate::services::member_theme::M
 /// A member's StreamNook badge as row art, at the chat-size cut.
 fn member_badge(member_id: &str) -> Option<ViewBadge> {
     let badge = crate::services::cosmetics_registry::member_badge(member_id, true)?;
-    Some(ViewBadge { url: badge.image_url, title: badge.label, provider: "streamnook".to_string() })
+    Some(ViewBadge { url: badge.image_url, title: badge.label, provider: "streamnook".to_string(), ..Default::default() })
 }
 
 /// The theme a Twitch row's author wears, when known; for a member whose theme
@@ -1599,6 +1610,26 @@ mod tests {
     }
 
     #[test]
+    fn a_role_badge_in_a_row_is_marked_a_role() {
+        let mut msg = notice("twitch", None, &[], None);
+        let carried = |name: &str, version: &str, url: &str| crate::models::chat_layout::Badge {
+            name: name.to_string(),
+            version: version.to_string(),
+            image_url_1x: None,
+            image_url_2x: Some(url.to_string()),
+            image_url_4x: None,
+            title: None,
+            description: None,
+        };
+        msg.badges = vec![carried("subscriber", "12", "https://c/sub12/2"), carried("moderator", "1", "https://g/mod/2")];
+        let out = badges(&msg, &Prefs::default(), None);
+        let sub = out.iter().find(|b| b.url == "https://c/sub12/2").expect("the subscriber badge");
+        let moderator = out.iter().find(|b| b.url == "https://g/mod/2").expect("the moderator badge");
+        assert!(!sub.role);
+        assert!(moderator.role);
+    }
+
+    #[test]
     fn readable_colors_match_the_page_walk() {
         // Navy on a dark theme walks toward white; values from nameColor.test.ts.
         assert_eq!(readable_name_color("#000080", true), readable_name_color("#000080", true));
@@ -1737,6 +1768,8 @@ mod tests {
         let urls: Vec<&str> = view["badges"].as_array().unwrap().iter().map(|b| b["url"].as_str().unwrap()).collect();
         assert_eq!(urls, ["https://g/mod/2", "https://c/sub12/2"]);
         assert_eq!(view["role_badge"]["url"], "https://g/mod/2");
+        let moderator = view["badges"].as_array().unwrap().iter().find(|b| b["url"] == "https://g/mod/2").unwrap();
+        assert_eq!(moderator["role"], true);
         assert_ne!(view["name_color"], "#000080", "navy is lifted to read on a dark theme");
     }
 }

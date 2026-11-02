@@ -538,6 +538,10 @@ pub struct ViewBadge {
     pub title: String,
     /// "twitch" | "7tv" | another provider name.
     pub provider: String,
+    /// A platform badge naming a role (broadcaster, moderator, VIP...), which a
+    /// folded badge strip always keeps.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub role: bool,
 }
 
 /// One piece of a drawn body.

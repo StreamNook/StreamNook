@@ -1004,6 +1004,25 @@
   {
    "page": "chat",
    "section": "Names & Badges",
+   "title": "Badges before +N",
+   "paths": [
+    "chat_design.badge_fold_limit"
+   ],
+   "nested": false,
+   "logo": null,
+   "detail": "When someone has more badges, the rest fold into a +N you can hover (tap on phones) to see.",
+   "aliases": [
+    "badge limit",
+    "fold badges",
+    "plus n",
+    "more badges",
+    "overflow"
+   ],
+   "hidden_on_ios": true
+  },
+  {
+   "page": "chat",
+   "section": "Names & Badges",
    "title": "Profile pictures",
    "paths": [
     "cosmetics.profile_picture_source"

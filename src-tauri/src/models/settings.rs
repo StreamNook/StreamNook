@@ -487,6 +487,10 @@ pub struct ChatDesignSettings {
     pub show_third_party_badges: bool,
     #[serde(default)]
     pub hidden_badge_providers: Vec<String>,
+    /// How many badges a chat row shows before folding the rest into a "+N"
+    /// chip (`services::badge_fold`). 0 shows them all. Default 3.
+    #[serde(default = "default_badge_fold_limit")]
+    pub badge_fold_limit: u8,
     /// StreamNook atmospheres (and the Cologne event look) behind members' chat
     /// rows. Profiles show them either way.
     #[serde(default = "default_true")]
@@ -578,6 +582,10 @@ fn default_name_color_adjustment() -> String {
 
 fn default_badge_scale() -> f64 {
     1.0
+}
+
+fn default_badge_fold_limit() -> u8 {
+    3
 }
 
 fn default_message_entrance() -> String {
@@ -714,6 +722,7 @@ impl Default for ChatDesignSettings {
             ffz_custom_role_badges: true,
             show_third_party_badges: true,
             hidden_badge_providers: Vec::new(),
+            badge_fold_limit: default_badge_fold_limit(),
             show_chat_atmospheres: true,
             message_entrance: default_message_entrance(),
             emoji_style: default_emoji_style(),

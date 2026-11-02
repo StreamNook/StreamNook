@@ -144,6 +144,38 @@ pub fn set_web_cookies(origin: String, cookies_json: String) {
     }
 }
 
+/// One badge as the iPhone row layout knows it, for `badge_fold_plan`.
+#[derive(uniffi::Record)]
+pub struct BadgeFoldInput {
+    pub provider: String,
+    pub role: bool,
+}
+
+#[derive(uniffi::Record)]
+pub struct BadgeFoldPlan {
+    pub shown: Vec<u32>,
+    pub hidden: Vec<u32>,
+}
+
+/// The chat-row badge fold (`services::badge_fold`) for the iPhone layout:
+/// `badges` in chat order, `limit` 0 = show all.
+#[uniffi::export]
+pub fn badge_fold_plan(badges: Vec<BadgeFoldInput>, limit: u32) -> BadgeFoldPlan {
+    use crate::services::badge_fold::{fold_badges, fold_kind, FoldKind};
+    let kinds: Vec<FoldKind> = badges
+        .iter()
+        .map(|b| match fold_kind(&b.provider, "") {
+            FoldKind::Platform if b.role => FoldKind::Role,
+            kind => kind,
+        })
+        .collect();
+    let fold = fold_badges(&kinds, limit as usize);
+    BadgeFoldPlan {
+        shown: fold.shown.into_iter().map(|i| i as u32).collect(),
+        hidden: fold.hidden.into_iter().map(|i| i as u32).collect(),
+    }
+}
+
 /// The app's lifecycle as the shell sees it: `foreground`, `background`,
 /// `terminating` or `memory_warning`.
 #[uniffi::export]

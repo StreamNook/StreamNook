@@ -7,6 +7,7 @@ pub mod background_service;
 pub mod badge_feed;
 pub mod badge_polling_service;
 pub mod badge_earn;
+pub mod badge_fold;
 pub mod badge_service;
 pub mod browse_languages;
 pub mod badge_standing;

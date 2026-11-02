@@ -235,6 +235,7 @@ const BY_TITLE: Record<string, LucideIcon> = {
   Badges: BadgeCheck,
   'Badge size': Scaling,
   'Add-on badges': BadgePlus,
+  'Badges before +N': Layers,
   'Profile pictures': CircleUser,
   'Pictures in chat': CircleUserRound,
   '@ prefix': AtSign,

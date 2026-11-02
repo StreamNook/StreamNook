@@ -136,6 +136,7 @@ const FIELDS: &[(&str, Kind)] = &[
     ("showThirdPartyBadges", Kind::Bool),
     ("showAtmospheres", Kind::Bool),
     ("hiddenBadgeProviders", Kind::IdList { max_items: 32 }),
+    ("badgeLimit", Kind::Num { min: 0.0, max: 5.0, step: 1.0 }),
     ("hiddenTwitchBadgeCategories", Kind::IdList { max_items: 32 }),
     ("ffzCustomRoleBadges", Kind::Bool),
     ("emojiStyle", Kind::Choice(&["system", "apple", "google", "twitter", "facebook"])),

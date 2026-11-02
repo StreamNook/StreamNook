@@ -1,0 +1,20 @@
+{
+  "role_sets": ["broadcaster", "staff", "admin", "global_mod", "lead_moderator", "moderator", "vip", "owner"],
+  "platform_providers": ["", "twitch", "kick", "youtube", "tiktok"],
+  "cases": [
+    { "name": "empty", "kinds": [], "limit": 3, "shown": [], "hidden": [] },
+    { "name": "show all", "kinds": ["role","platform","platform","seventv","addon","addon","streamnook"], "limit": 0, "shown": [0,1,2,3,4,5,6], "hidden": [] },
+    { "name": "fits", "kinds": ["platform","seventv","streamnook"], "limit": 3, "shown": [0,1,2], "hidden": [] },
+    { "name": "one over never folds", "kinds": ["role","platform","seventv","streamnook"], "limit": 3, "shown": [0,1,2,3], "hidden": [] },
+    { "name": "smart picks", "kinds": ["role","platform","platform","seventv","addon","addon","streamnook"], "limit": 3, "shown": [0,3,6], "hidden": [1,2,4,5] },
+    { "name": "role after a sub badge (kick order)", "kinds": ["platform","role","platform","seventv","addon","streamnook"], "limit": 3, "shown": [1,3,5], "hidden": [0,2,4] },
+    { "name": "no role takes the first platform badge", "kinds": ["platform","platform","seventv","addon","addon","streamnook"], "limit": 3, "shown": [0,2,5], "hidden": [1,3,4] },
+    { "name": "no 7tv fills from the rest", "kinds": ["platform","platform","addon","addon","addon"], "limit": 3, "shown": [0,1,2], "hidden": [3,4] },
+    { "name": "add-ons and member only", "kinds": ["addon","addon","addon","addon","addon","streamnook"], "limit": 3, "shown": [0,1,5], "hidden": [2,3,4] },
+    { "name": "limit 2 keeps role and 7tv", "kinds": ["role","seventv","addon","addon","streamnook"], "limit": 2, "shown": [0,1], "hidden": [2,3,4] },
+    { "name": "limit 2 no platform", "kinds": ["seventv","addon","addon","addon"], "limit": 2, "shown": [0,1], "hidden": [2,3] },
+    { "name": "limit 5 folds two", "kinds": ["role","platform","platform","seventv","addon","addon","streamnook"], "limit": 5, "shown": [0,1,2,3,6], "hidden": [4,5] },
+    { "name": "limit 5 one over", "kinds": ["role","platform","seventv","addon","addon","streamnook"], "limit": 5, "shown": [0,1,2,3,4,5], "hidden": [] },
+    { "name": "member without platform badges", "kinds": ["seventv","addon","addon","addon","streamnook"], "limit": 3, "shown": [0,1,4], "hidden": [2,3] }
+  ]
+}
