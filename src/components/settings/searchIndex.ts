@@ -2486,6 +2486,21 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   },
   {
     tab: 'Interface',
+    section: 'Performance mode',
+    sectionId: 'settings-section-performance-mode',
+    title: 'Mode',
+    description: 'A lighter look for when a game runs next to StreamNook: no frosted blur, no player glow, no looping effects, and menus that open at once. Off, In the background (once another app has been in front for 10 seconds) or Always. Game mode, low-end PC, fps, frame drops, CPU, GPU, lag, stutter, battery.'
+  },
+  {
+    tab: 'Interface',
+    section: 'Performance mode',
+    sectionId: 'settings-section-performance-mode',
+    title: 'Freeze emotes',
+    parent: 'Mode',
+    description: 'While Performance mode is on, animated emotes, 7TV paints, animated badges and profile pictures hold their first frame, and chat GIFs show as a button you click to play. Still emotes, stop emote animations.'
+  },
+  {
+    tab: 'Interface',
     section: 'Motion',
     sectionId: 'settings-section-motion',
     title: 'Amount',

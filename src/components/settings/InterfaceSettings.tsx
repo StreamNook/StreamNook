@@ -13,8 +13,8 @@ import {
     nextDiscoveryLanguages,
 } from '../../utils/discoveryLanguages';
 import { useAppStore } from '../../stores/AppStore';
-import { IS_MAC } from '../../utils/platform';
-import type { MotionMode, CloseToTrayMode, HiddenRealms } from '../../types';
+import { IS_MAC, IS_MOBILE } from '../../utils/platform';
+import type { MotionMode, CloseToTrayMode, HiddenRealms, PerformanceMode } from '../../types';
 import { useSettingReset } from './settingReset';
 
 export type SidebarMode = 'expanded' | 'compact' | 'hidden' | 'disabled';
@@ -125,6 +125,23 @@ const InterfaceSettings = () => {
                 return 'Keeps quick fades but removes sliding, scaling, and bouncing, which is easier on the eyes and lighter on slower PCs.';
             case 'off':
                 return 'Turns animations off for an instant, snappy feel, and loading spinners still spin.';
+        }
+    })();
+
+    // Performance mode: when every StreamNook window draws the lighter look.
+    // Rust decides when it is active (it alone knows which app is in front);
+    // this row only writes the choice. Freeze emotes is always drawn, disabled
+    // while Mode is Off, so a settings search for it always lands on a line.
+    const performanceMode: PerformanceMode = settings.performance_mode ?? 'off';
+    const freezeEmotes = settings.performance_still_chat === true;
+    const performanceDescription = (() => {
+        switch (performanceMode) {
+            case 'off':
+                return 'StreamNook always shows its full look.';
+            case 'background':
+                return 'Once another app, such as a game, has been in front for 10 seconds, StreamNook switches to the lighter look, and the full look comes back the moment you click StreamNook.';
+            case 'always':
+                return 'StreamNook always uses the lighter look, even while you are using it.';
         }
     })();
 
@@ -398,6 +415,44 @@ const InterfaceSettings = () => {
                 />
 
             </SettingsSection>
+
+            {!IS_MOBILE && (
+                <SettingsSection
+                    id="settings-section-performance-mode"
+                    label="Performance mode"
+                    description="A lighter look that saves your CPU and graphics card while StreamNook plays next to a game. The stream itself never changes."
+                >
+                    <SettingsRow
+                        title="Mode"
+                        onReset={resetFor(['performance_mode', 'off'])}
+                        description={performanceDescription}
+                        help="The lighter look turns off the frosted-glass blur and the glow around the player, holds looping effects still, and shows menus and new chat lines at once instead of animating them in. Loading spinners keep spinning, and the stream is never touched."
+                    >
+                        <SegmentedSelect<PerformanceMode>
+                            value={performanceMode}
+                            onChange={(mode) => void updateSettings({ ...settings, performance_mode: mode })}
+                            options={[
+                                { value: 'off', label: 'Off' },
+                                { value: 'background', label: 'In the background' },
+                                { value: 'always', label: 'Always' },
+                            ]}
+                        />
+                        <SubControls>
+                            <SubControl
+                                title="Freeze emotes"
+                                disabled={performanceMode === 'off'}
+                                onReset={resetFor(['performance_still_chat', false])}
+                                control={
+                                    <Toggle
+                                        enabled={freezeEmotes}
+                                        onChange={() => void updateSettings({ ...settings, performance_still_chat: !freezeEmotes })}
+                                    />
+                                }
+                            />
+                        </SubControls>
+                    </SettingsRow>
+                </SettingsSection>
+            )}
 
             <SettingsSection
                 id="settings-section-motion"
