@@ -318,6 +318,10 @@ pub mod whisper_inbox;
 pub mod whisper_service;
 pub mod whisper_storage_service;
 pub mod window_visibility;
+// Desktop-only: Performance mode, the cheap look while StreamNook is in the
+// background (or always).
+#[cfg(desktop)]
+pub mod performance_mode;
 // The operating system's own notifications (desktop).
 #[cfg(desktop)]
 pub mod system_notify;

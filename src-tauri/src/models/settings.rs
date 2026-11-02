@@ -1265,6 +1265,15 @@ pub struct Settings {
     /// `chat_tabs::KEEP_AWAKE_IDLE_SECS` pass with no touch.
     #[serde(default = "default_true")]
     pub chats_keep_screen_on: bool,
+    /// Performance mode (Settings > Interface): when every window draws the
+    /// cheap look. Typed because `services::performance_mode` reads it; an
+    /// unknown value reads as Off (see its `Deserialize`).
+    #[serde(default)]
+    pub performance_mode: PerformanceMode,
+    /// Performance mode also holds chat emotes, 7TV paints and animated badges
+    /// on their first frame. Typed beside `performance_mode` for the same reason.
+    #[serde(default)]
+    pub performance_still_chat: bool,
     /// Catch-all for preference groups the frontend manages but this struct does
     /// not model field-by-field: highlight phrases, custom chat commands,
     /// moderation prefs, custom themes, the OLED accent, and any future ones.
@@ -1837,6 +1846,8 @@ impl Default for Settings {
             keybindings: HashMap::new(),
             chat_logging: ChatLoggingSettings::default(),
             close_to_tray: CloseToTrayMode::default(),
+            performance_mode: PerformanceMode::default(),
+            performance_still_chat: false,
             extra: HashMap::new(),
         }
     }
@@ -1870,6 +1881,77 @@ pub enum CloseToTrayMode {
     Always,
     /// Always quit, even with popouts open.
     Never,
+}
+
+/// When Performance mode draws the cheap look. Read leniently (see its
+/// `Deserialize`): settings load as ONE parse, so a value this build does not
+/// know must never fail the file.
+#[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum PerformanceMode {
+    /// Never.
+    #[default]
+    Off,
+    /// While StreamNook is not the app in front.
+    Background,
+    /// All the time.
+    Always,
+}
+
+impl<'de> Deserialize<'de> for PerformanceMode {
+    /// Anything but the two known names (a newer build's value, a hand edit,
+    /// a number) reads as Off.
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let v = serde_json::Value::deserialize(d)?;
+        Ok(match v.as_str() {
+            Some("background") => Self::Background,
+            Some("always") => Self::Always,
+            _ => Self::Off,
+        })
+    }
+}
+
+#[cfg(test)]
+mod performance_mode_settings_tests {
+    use super::*;
+
+    #[test]
+    fn both_fields_are_typed_and_read_leniently() {
+        let mut v = serde_json::to_value(Settings::default()).expect("defaults serialize");
+        assert_eq!(v["performance_mode"], "off");
+        assert_eq!(v["performance_still_chat"], false);
+
+        v["performance_mode"] = "always".into();
+        v["performance_still_chat"] = true.into();
+        let s: Settings = serde_json::from_value(v.clone()).expect("reads");
+        assert_eq!(s.performance_mode, PerformanceMode::Always);
+        assert!(s.performance_still_chat);
+        assert!(!s.extra.contains_key("performance_mode"), "typed, not riding extra");
+        assert!(!s.extra.contains_key("performance_still_chat"), "typed, not riding extra");
+        let back = serde_json::to_value(&s).expect("writes");
+        assert_eq!(back["performance_mode"], "always");
+
+        v["performance_mode"] = "background".into();
+        let s: Settings = serde_json::from_value(v.clone()).expect("reads");
+        assert_eq!(s.performance_mode, PerformanceMode::Background);
+
+        v["performance_mode"] = "turbo".into();
+        v["theme"] = "kept-theme".into();
+        let s: Settings = serde_json::from_value(v.clone()).expect("an unknown mode never fails the file");
+        assert_eq!(s.performance_mode, PerformanceMode::Off);
+        assert_eq!(s.theme, "kept-theme");
+
+        v["performance_mode"] = serde_json::json!(7);
+        let s: Settings = serde_json::from_value(v.clone()).expect("a number never fails the file");
+        assert_eq!(s.performance_mode, PerformanceMode::Off);
+
+        let obj = v.as_object_mut().expect("an object");
+        obj.remove("performance_mode");
+        obj.remove("performance_still_chat");
+        let s: Settings = serde_json::from_value(v).expect("an older file reads");
+        assert_eq!(s.performance_mode, PerformanceMode::Off);
+        assert!(!s.performance_still_chat);
+    }
 }
 
 /// Which of YouTube's two live-chat views to read.

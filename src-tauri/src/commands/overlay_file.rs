@@ -488,6 +488,10 @@ fn file_dialog(app: &AppHandle, window: &Window) -> tauri_plugin_dialog::FileDia
 #[tauri::command]
 pub async fn export_overlay_file(app: AppHandle, window: Window, name: String, style: Value) -> Result<Option<String>, String> {
     let text = build_overlay_file(&name, &style);
+    // The save dialog is StreamNook's own: Performance mode keeps the full
+    // look while it is open.
+    #[cfg(desktop)]
+    let _dialog = crate::services::performance_mode::DialogGuard::new(window.label());
     let (tx, rx) = tokio::sync::oneshot::channel();
     file_dialog(&app, &window)
         .set_title("Export overlay")
@@ -520,6 +524,9 @@ pub async fn export_overlay_file(_app: AppHandle, _window: Window, _name: String
 #[cfg(not(target_os = "ios"))]
 #[tauri::command]
 pub async fn import_overlay_file(app: AppHandle, window: Window) -> Result<Option<ImportedOverlay>, String> {
+    // The open dialog is StreamNook's own (see export_overlay_file).
+    #[cfg(desktop)]
+    let _dialog = crate::services::performance_mode::DialogGuard::new(window.label());
     let (tx, rx) = tokio::sync::oneshot::channel();
     file_dialog(&app, &window)
         .set_title("Import overlay")

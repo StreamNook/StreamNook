@@ -316,6 +316,9 @@ windows = { version = "0.61", features = [
     "Win32_Security",
     "Win32_Storage_FileSystem",
     "Win32_UI_WindowsAndMessaging",
+    # services/performance_mode.rs: SetWinEventHook, the foreground hook
+    # behind Performance mode's "In the background".
+    "Win32_UI_Accessibility",
     "Win32_UI_Input_KeyboardAndMouse",
     # services/window_aspect.rs: SetWindowSubclass/DefSubclassProc live in Shell,
     # GetDpiForWindow in HiDpi. The aspect lock constrains WM_SIZING live instead
@@ -347,6 +350,10 @@ tauri-plugin-updater = "2"
 [target.'cfg(target_os = "macos")'.dependencies]
 # Login-keychain store for the token vault's key (the same items keyring 3 wrote).
 apple-native-keyring-store = { version = "1", features = ["keychain"] }
+# Whether StreamNook is the active app, for Performance mode's "In the
+# background" (services/performance_mode.rs). Already in the graph through
+# objc2-web-kit's `objc2-app-kit` feature, so the lockfile keeps one copy.
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder"] }
 # System notifications, called directly from the blocking pool: the plugin's
 # show() runs this crate's blocking delivery wait (up to 2 s each) on an async
 # worker. The version tauri-plugin-notification already resolves to.

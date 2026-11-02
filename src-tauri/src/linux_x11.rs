@@ -50,6 +50,71 @@ pub fn make_transient_for(window: &WebviewWindow, owner: &WebviewWindow) -> Resu
     Ok(())
 }
 
+/// The window the window manager says is active (`_NET_ACTIVE_WINDOW` on the
+/// root). None when nothing is active, the property is missing or the display
+/// cannot be opened; XWayland reports none while a Wayland app has focus.
+pub fn active_window() -> Option<u64> {
+    use x11_dl::xlib::{AnyPropertyType, Success};
+    let xlib = x11_dl::xlib::Xlib::open().ok()?;
+    // SAFETY: Xlib calls on a display this function opens and closes itself;
+    // the returned property buffer is freed with XFree before returning.
+    unsafe {
+        let display = (xlib.XOpenDisplay)(std::ptr::null());
+        if display.is_null() {
+            return None;
+        }
+        let root = (xlib.XDefaultRootWindow)(display);
+        let atom = (xlib.XInternAtom)(display, c"_NET_ACTIVE_WINDOW".as_ptr(), 0);
+        let mut actual_type = 0;
+        let mut actual_format = 0;
+        let mut items = 0;
+        let mut after = 0;
+        let mut data: *mut u8 = std::ptr::null_mut();
+        let status = (xlib.XGetWindowProperty)(
+            display,
+            root,
+            atom,
+            0,
+            1,
+            0,
+            AnyPropertyType as u64,
+            &mut actual_type,
+            &mut actual_format,
+            &mut items,
+            &mut after,
+            &mut data,
+        );
+        let window = if status == Success as i32 && !data.is_null() && items > 0 && actual_format == 32 {
+            // Format-32 items come back as C longs.
+            *(data as *const std::os::raw::c_ulong) as u64
+        } else {
+            0
+        };
+        if !data.is_null() {
+            (xlib.XFree)(data.cast());
+        }
+        (xlib.XCloseDisplay)(display);
+        (window != 0).then_some(window)
+    }
+}
+
+/// The window `xid` is transient for (`WM_TRANSIENT_FOR`), if any.
+pub fn transient_for(xid: u64) -> Option<u64> {
+    let xlib = x11_dl::xlib::Xlib::open().ok()?;
+    // SAFETY: as above; a window that no longer exists only makes the call
+    // answer 0.
+    unsafe {
+        let display = (xlib.XOpenDisplay)(std::ptr::null());
+        if display.is_null() {
+            return None;
+        }
+        let mut owner = 0;
+        let ok = (xlib.XGetTransientForHint)(display, xid, &mut owner);
+        (xlib.XCloseDisplay)(display);
+        (ok != 0 && owner != 0).then_some(owner)
+    }
+}
+
 /// The size hints the aspect lock writes, in device pixels.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SizeHints {

@@ -34,6 +34,8 @@ allow = [
   "log_messages_batch",
   "open_logs_folder",
   "ensure_main_window",
+  "get_performance_state",
+  "set_dialog_open",
   "open_chat_overlay",
   "open_multichat_window",
   "mirror_notification",

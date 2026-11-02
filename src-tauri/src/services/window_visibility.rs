@@ -163,6 +163,10 @@ pub fn start(app: AppHandle) {
                 }
             }
             set_on_screen(on_screen);
+            // Performance mode's backstop: who is in front, asked once a
+            // second while "In the background" is picked.
+            #[cfg(desktop)]
+            crate::services::performance_mode::poll();
         }
     });
 }

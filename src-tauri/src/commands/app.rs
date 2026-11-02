@@ -347,6 +347,26 @@ pub fn get_app_presence() -> crate::services::app_presence::AppPresence {
     crate::services::app_presence::snapshot()
 }
 
+/// What Performance mode draws right now, for a window that opens after the
+/// last `performance-state` event.
+#[cfg(desktop)]
+#[command]
+pub fn get_performance_state() -> crate::services::performance_mode::PerformanceState {
+    crate::services::performance_mode::sent()
+}
+
+/// A page opened (`open: true`) or closed one of StreamNook's own dialogs.
+/// While one is open the app counts as in front for Performance mode.
+#[cfg(desktop)]
+#[command]
+pub fn set_dialog_open(window: Window, open: bool) {
+    if open {
+        crate::services::performance_mode::dialog_opened(window.label());
+    } else {
+        crate::services::performance_mode::dialog_closed(window.label());
+    }
+}
+
 #[command]
 pub async fn calculate_aspect_ratio_size(
     current_width: u32,

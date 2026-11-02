@@ -844,6 +844,10 @@ fn after_settings_change(
     // settings Rust holds, so two saves never apply out of order).
     #[cfg(desktop)]
     crate::services::discord_presence::refresh();
+    // Performance mode follows its choice and Freeze emotes (every window
+    // hears the result as `performance-state`).
+    #[cfg(desktop)]
+    crate::services::performance_mode::refresh(settings);
     // Home's unified Discover list leaves out live favourites, so a heart
     // toggled anywhere changes it. Unhearting in particular is announced by
     // nothing else: the favourites sweep only notices on its next pass.

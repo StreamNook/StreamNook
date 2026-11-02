@@ -1219,6 +1219,10 @@ export type KeybindingOverrides = Record<string, string[]>;
 // everything; 'reduced' keeps quick fades but drops movement; 'off' is instant.
 export type MotionMode = 'full' | 'reduced' | 'off';
 
+// When Performance mode (Interface > Performance mode) draws the cheap look:
+// never, while StreamNook is not the app in front, or always.
+export type PerformanceMode = 'off' | 'background' | 'always';
+
 // Which of the two floating chat cards sits on top when both are live. Twitch
 // allows a poll and a prediction to run at once, so both stack either way.
 export type ChatOverlayOrder = 'prediction-first' | 'poll-first';
@@ -1528,6 +1532,14 @@ export interface Settings {
   motion_mode?: MotionMode;
   // What closing the main window does. Read by the Rust window-event handler.
   close_to_tray?: CloseToTrayMode;
+  // Performance mode (Interface > Performance mode): when every window draws
+  // the cheap look (no blur, no player glow, decoration still, entrances
+  // instant). Typed in Rust too (services::performance_mode reads it).
+  performance_mode?: PerformanceMode;
+  // Performance mode also freezes chat emotes, 7TV paints, animated badges and
+  // pictures on their first frame and shows chat GIFs as chips. Default false.
+  // Typed in Rust too.
+  performance_still_chat?: boolean;
   // Float the window above other apps while Compact View is active, so the
   // small player stays visible over a browser. Scoped to Compact View on
   // purpose: a full-size window glued in front of everything is overbearing.

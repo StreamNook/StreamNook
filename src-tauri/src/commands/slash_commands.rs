@@ -482,6 +482,10 @@ pub async fn slash_run_program(app: AppHandle, command_line: String) -> Result<S
         return Err("Usage: /proc <program> [arguments]".into());
     };
     use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+    // The confirm is StreamNook's own: Performance mode keeps the full look
+    // while it is up. It has no window of its own to key the count on.
+    #[cfg(desktop)]
+    let _dialog = crate::services::performance_mode::DialogGuard::new("slash-run-program");
     let (tx, rx) = tokio::sync::oneshot::channel();
     app.dialog()
         .message(format!(
