@@ -166,6 +166,8 @@ pub enum BadgeProvider {
     Chatty,
     DankChat,
     Moltorino,
+    Limerino,
+    JilChat,
 }
 
 impl BadgeProvider {
@@ -194,6 +196,8 @@ impl BadgeProvider {
             BadgeProvider::Chatty => "chatty",
             BadgeProvider::DankChat => "dankchat",
             BadgeProvider::Moltorino => "moltorino",
+            BadgeProvider::Limerino => "limerino",
+            BadgeProvider::JilChat => "jilchat",
         }
     }
 }
@@ -202,7 +206,8 @@ impl BadgeProvider {
 /// the order the chat index below walks its feeds in. A member's loadout
 /// chooses which badges show, never where they sit, so every chatter's badges
 /// line up alike. The site's `PROVIDER_ORDER` is the same list.
-pub const THIRD_PARTY_ORDER: [&str; 8] = ["ffz", "bttv", "chatterino", "homies", "moltorino", "chatsen", "chatty", "dankchat"];
+pub const THIRD_PARTY_ORDER: [&str; 10] =
+    ["ffz", "bttv", "chatterino", "homies", "moltorino", "limerino", "jilchat", "chatsen", "chatty", "dankchat"];
 
 /// A provider key's place in `THIRD_PARTY_ORDER`; an unknown provider sorts
 /// last and is never dropped on that account.
@@ -250,12 +255,16 @@ fn ffz_wear_set(slot: Option<u32>) -> String {
 /// `HOMIES_CUSTOM_SET`). The chat index stores a provider's badges best-first,
 /// so the first of each category is the one the provider's own client draws.
 /// What a user owns is unchanged; this only limits what is drawn beside their
-/// name.
+/// name. A Limerino badge the user owns but did not pick (`LIMERINO_OWNED_SET`)
+/// is never worn.
 pub fn worn_third_party(badges: &[Arc<UserBadge>]) -> Vec<UserBadge> {
     let mut seen: Vec<(&BadgeProvider, &str)> = Vec::new();
     badges
         .iter()
         .filter(|b| {
+            if b.badge_info.set_id == LIMERINO_OWNED_SET {
+                return false;
+            }
             let key = (&b.provider, b.badge_info.set_id.as_str());
             if seen.contains(&key) {
                 return false;
@@ -862,6 +871,7 @@ impl MoltorinoBadge {
 
 /// Moltorino accepts only numeric Twitch ids of 1-32 digits; anything else in
 /// the feed is a typo or a future key space and must not reach the index.
+/// Also the id check for Limerino and JilChat.
 fn is_valid_moltorino_user_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 32 && id.bytes().all(|b| b.is_ascii_digit())
 }
@@ -904,6 +914,329 @@ fn moltorino_gallery_tiles(
         });
     }
     tiles
+}
+
+// Limerino (iPhone Twitch chat client): GET https://api.limerino.com/v1/badges/all.
+// A badge catalog plus `users`: Twitch id -> the badge ids that user holds,
+// FIRST = the one they picked (the rest in catalog order; a user who picked
+// None is absent). Its docs: never re-sort a user's list, refresh about every
+// 10 minutes, revalidate with the ETag. Art is immutable WebP + PNG at
+// 18/36/54/72 px under the badge's own `host.url`, which carries a revision.
+const LIMERINO_BADGES_URL: &str = "https://api.limerino.com/v1/badges/all";
+const LIMERINO_REFRESH: Duration = Duration::from_secs(10 * 60);
+const LIMERINO_MAX_BADGES: usize = 256;
+const LIMERINO_MAX_ASSIGNMENTS: usize = 250_000;
+const LIMERINO_MAX_PER_USER: usize = 64;
+/// The wear category of the badge a Limerino user picked. Every other badge
+/// they own sits in `LIMERINO_OWNED_SET`, which chat never wears, so chat shows
+/// exactly their pick (or nothing when the pick cannot be drawn).
+const LIMERINO_SET: &str = "limerino";
+const LIMERINO_OWNED_SET: &str = "limerino-owned";
+/// A request to a hobby badge feed gives up after this, so one dead host never
+/// holds the first load of every provider.
+const SMALL_FEED_TIMEOUT: Duration = Duration::from_secs(8);
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct LimerinoBadgesResponse {
+    #[serde(default)]
+    badges: Vec<LimerinoBadge>,
+    #[serde(default)]
+    users: HashMap<String, Vec<String>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct LimerinoBadge {
+    id: String,
+    #[serde(default)]
+    kind: String,
+    #[serde(default)]
+    data: LimerinoBadgeData,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct LimerinoBadgeData {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    tooltip: String,
+    #[serde(default)]
+    about: String,
+    #[serde(default)]
+    host: LimerinoHost,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct LimerinoHost {
+    #[serde(default)]
+    url: String,
+    #[serde(default)]
+    files: Vec<LimerinoFile>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct LimerinoFile {
+    /// Defaulted so one malformed file entry never fails the whole feed.
+    #[serde(default)]
+    name: String,
+}
+
+impl LimerinoBadge {
+    /// Only `BADGE` entries are badges; the docs reserve other kinds.
+    fn is_badge(&self) -> bool {
+        self.kind.is_empty() || self.kind.eq_ignore_ascii_case("BADGE")
+    }
+
+    fn title(&self) -> String {
+        [&self.data.tooltip, &self.data.name, &self.id]
+            .into_iter()
+            .map(|s| s.trim())
+            .find(|s| !s.is_empty())
+            .unwrap_or_default()
+            .to_string()
+    }
+
+    /// (1x, 2x, 4x): the WebP files when listed, else the PNGs, each missing
+    /// size falling back to the next smaller. `host.url` is protocol-relative.
+    fn image_urls(&self) -> Option<(String, String, String)> {
+        let base = self.data.host.url.trim().trim_end_matches('/');
+        let base = if let Some(rest) = base.strip_prefix("//") {
+            format!("https://{rest}")
+        } else if base.starts_with("https://") {
+            base.to_string()
+        } else {
+            return None;
+        };
+        let has = |name: &str| self.data.host.files.iter().any(|f| f.name == name);
+        let pick = |scale: &str| -> Option<String> {
+            ["webp", "png"].into_iter().map(|ext| format!("{scale}.{ext}")).find(|n| has(n))
+        };
+        let x1 = pick("1x")?;
+        let x2 = pick("2x").unwrap_or_else(|| x1.clone());
+        let x4 = pick("4x").or_else(|| pick("3x")).unwrap_or_else(|| x2.clone());
+        Some((format!("{base}/{x1}"), format!("{base}/{x2}"), format!("{base}/{x4}")))
+    }
+
+    fn badge_info(&self, (x1, x2, x4): (String, String, String), set_id: &str) -> BadgeInfo {
+        BadgeInfo {
+            id: format!("limerino-{}", self.id),
+            set_id: set_id.to_string(),
+            version: "1".to_string(),
+            title: self.title(),
+            description: self.data.about.trim().to_string(),
+            image_1x: x1,
+            image_2x: x2,
+            image_4x: x4,
+            click_action: None,
+            click_url: Some("https://limerino.com/".to_string()),
+        }
+    }
+}
+
+/// Each valid Limerino holder's list, bad ids filtered BEFORE the cap.
+fn limerino_holders(feed: &LimerinoBadgesResponse) -> impl Iterator<Item = (&str, &[String])> {
+    let mut budget = LIMERINO_MAX_ASSIGNMENTS;
+    feed.users.iter().filter_map(move |(uid, ids)| {
+        let uid = uid.trim();
+        if !is_valid_moltorino_user_id(uid) || budget == 0 {
+            return None;
+        }
+        let ids = &ids[..ids.len().min(LIMERINO_MAX_PER_USER).min(budget)];
+        budget -= ids.len();
+        Some((uid, ids))
+    })
+}
+
+/// One tile per Limerino badge, in catalog order. Holders are counted in one
+/// pass over the users; owning is enough (the gallery lists collections).
+fn limerino_gallery_tiles(feed: &LimerinoBadgesResponse, viewer_user_id: Option<&str>) -> Vec<ThirdPartyGalleryBadge> {
+    let mut counts: HashMap<&str, (usize, bool)> = HashMap::new();
+    for (uid, ids) in limerino_holders(feed) {
+        for id in ids {
+            let entry = counts.entry(id.as_str()).or_default();
+            entry.0 += 1;
+            entry.1 |= viewer_user_id == Some(uid);
+        }
+    }
+    feed.badges
+        .iter()
+        .filter(|b| b.is_badge())
+        .take(LIMERINO_MAX_BADGES)
+        .filter_map(|badge| {
+            let (x1, x2, x4) = badge.image_urls()?;
+            let (user_count, owned) = counts.get(badge.id.as_str()).copied().unwrap_or_default();
+            Some(ThirdPartyGalleryBadge {
+                id: format!("limerino-{}", badge.id),
+                provider: BadgeProvider::Limerino,
+                title: badge.title(),
+                image_1x: x1,
+                image_2x: x2,
+                image_4x: x4,
+                user_count,
+                owned,
+                click_url: Some("https://limerino.com/".to_string()),
+            })
+        })
+        .collect()
+}
+
+// JilChat (Jilence's Twitch chat app and Chatterino fork): GET
+// https://api.jil.chat/v1/badges. A top-level array of badges, each with the
+// users WEARING it (the feed lists only the badge a user picked). One image per
+// badge (128 px PNG or GIF), used at every size. The images answer CORS only
+// for jil.chat: draw them with <img>, never fetch them from a webview.
+const JILCHAT_BADGES_URL: &str = "https://api.jil.chat/v1/badges";
+const JILCHAT_REFRESH: Duration = Duration::from_secs(10 * 60);
+const JILCHAT_MAX_BADGES: usize = 256;
+const JILCHAT_MAX_ASSIGNMENTS: usize = 250_000;
+
+#[derive(Debug, Clone, Deserialize)]
+struct JilChatBadge {
+    id: String,
+    #[serde(default)]
+    slug: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    image_url: String,
+    #[serde(default)]
+    users: Vec<JilChatUser>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct JilChatUser {
+    #[serde(default)]
+    twitch_id: String,
+}
+
+impl JilChatBadge {
+    fn key(&self) -> &str {
+        if self.slug.trim().is_empty() { self.id.trim() } else { self.slug.trim() }
+    }
+
+    fn title(&self) -> String {
+        if self.name.trim().is_empty() { self.key().to_string() } else { self.name.trim().to_string() }
+    }
+
+    fn image(&self) -> Option<String> {
+        let url = self.image_url.trim();
+        url.starts_with("https://").then(|| url.to_string())
+    }
+
+    fn badge_info(&self, image: String) -> BadgeInfo {
+        BadgeInfo {
+            id: format!("jilchat-{}", self.key()),
+            set_id: "jilchat".to_string(),
+            version: "1".to_string(),
+            title: self.title(),
+            description: String::new(),
+            image_1x: image.clone(),
+            image_2x: image.clone(),
+            image_4x: image,
+            click_action: None,
+            click_url: Some("https://jil.chat/".to_string()),
+        }
+    }
+}
+
+fn jilchat_gallery_tiles(feed: &[JilChatBadge], viewer_user_id: Option<&str>) -> Vec<ThirdPartyGalleryBadge> {
+    feed.iter()
+        .take(JILCHAT_MAX_BADGES)
+        .filter_map(|badge| {
+            let image = badge.image()?;
+            let (mut user_count, mut owned) = (0usize, false);
+            for id in badge.users.iter().map(|u| u.twitch_id.trim()).filter(|id| is_valid_moltorino_user_id(id)) {
+                user_count += 1;
+                owned |= viewer_user_id == Some(id);
+            }
+            Some(ThirdPartyGalleryBadge {
+                id: format!("jilchat-{}", badge.key()),
+                provider: BadgeProvider::JilChat,
+                title: badge.title(),
+                image_1x: image.clone(),
+                image_2x: image.clone(),
+                image_4x: image,
+                user_count,
+                owned,
+                click_url: Some("https://jil.chat/".to_string()),
+            })
+        })
+        .collect()
+}
+
+/// How one own-clock feed's refresh went.
+enum SmallFeedFetch<T> {
+    Fresh(T, Option<String>),
+    /// 304 Not Modified.
+    Unchanged,
+    Failed,
+    /// Not due this round.
+    Skipped,
+}
+
+/// The stamp that makes an own-clock feed due again at the next gate.
+fn retry_at_next_gate(now: SystemTime, refresh: Duration, gate: Duration) -> SystemTime {
+    now.checked_sub(refresh.saturating_sub(gate)).unwrap_or(UNIX_EPOCH)
+}
+
+/// Applies a Limerino refresh. A 304 is success only while a feed is held; a
+/// failure keeps the last good feed and retries at the next gate without
+/// touching the shared stamp (Moltorino's rule).
+fn apply_limerino(tp: &mut ThirdPartyCache, fetch: SmallFeedFetch<LimerinoBadgesResponse>, now: SystemTime, gate: Duration) {
+    match fetch {
+        SmallFeedFetch::Skipped => {}
+        SmallFeedFetch::Fresh(feed, etag) => {
+            log::debug!("[BadgeService] Limerino roster: {} badges, {} users", feed.badges.len(), feed.users.len());
+            tp.limerino = Some(feed);
+            tp.limerino_etag = etag;
+            tp.limerino_last_updated = now;
+            tp.limerino_warned = false;
+        }
+        SmallFeedFetch::Unchanged if tp.limerino.is_some() => {
+            // Recovery after a failure is usually a 304 (the ETag survives),
+            // so it ends the failure streak too.
+            tp.limerino_last_updated = now;
+            tp.limerino_warned = false;
+        }
+        SmallFeedFetch::Unchanged | SmallFeedFetch::Failed => {
+            if !tp.limerino_warned {
+                log::warn!(
+                    "[BadgeService] Limerino badge feed failed to refresh{}; retrying at the next gate",
+                    if tp.limerino.is_some() { " (kept previous)" } else { "" }
+                );
+                tp.limerino_warned = true;
+            } else {
+                log::debug!("[BadgeService] Limerino badge feed still failing");
+            }
+            if tp.limerino.is_none() {
+                tp.limerino_etag = None;
+            }
+            tp.limerino_last_updated = retry_at_next_gate(now, LIMERINO_REFRESH, gate);
+        }
+    }
+}
+
+fn apply_jilchat(tp: &mut ThirdPartyCache, fetch: SmallFeedFetch<Vec<JilChatBadge>>, now: SystemTime, gate: Duration) {
+    match fetch {
+        SmallFeedFetch::Skipped => {}
+        SmallFeedFetch::Fresh(feed, _) => {
+            log::debug!("[BadgeService] JilChat roster: {} badges", feed.len());
+            tp.jilchat = Some(feed);
+            tp.jilchat_last_updated = now;
+            tp.jilchat_warned = false;
+        }
+        SmallFeedFetch::Unchanged | SmallFeedFetch::Failed => {
+            if !tp.jilchat_warned {
+                log::warn!(
+                    "[BadgeService] JilChat badge feed failed to refresh{}; retrying at the next gate",
+                    if tp.jilchat.is_some() { " (kept previous)" } else { "" }
+                );
+                tp.jilchat_warned = true;
+            } else {
+                log::debug!("[BadgeService] JilChat badge feed still failing");
+            }
+            tp.jilchat_last_updated = retry_at_next_gate(now, JILCHAT_REFRESH, gate);
+        }
+    }
 }
 
 // ============================================================================
@@ -955,6 +1288,16 @@ struct ThirdPartyCache {
     /// Moltorino refreshes on its own, slower clock (`MOLTORINO_REFRESH`);
     /// the seven feeds above share `last_updated`.
     moltorino_last_updated: SystemTime,
+    limerino: Option<LimerinoBadgesResponse>,
+    /// Own clock (`LIMERINO_REFRESH`), the ETag to revalidate with, and
+    /// whether its failure was already logged at warn.
+    limerino_last_updated: SystemTime,
+    limerino_etag: Option<String>,
+    limerino_warned: bool,
+    jilchat: Option<Vec<JilChatBadge>>,
+    /// Own clock (`JILCHAT_REFRESH`).
+    jilchat_last_updated: SystemTime,
+    jilchat_warned: bool,
     /// Inverted index over every provider feed: user_id -> the badges that
     /// user holds. Rebuilt once per feed refresh so per-chatter lookups are a
     /// single HashMap get instead of a scan over every holder list. One
@@ -997,6 +1340,8 @@ impl ThirdPartyCache {
     ///   `/badges2` staff badge, each its own category; within one list the
     ///   last entry listing the user (Homies' client overwrites per list).
     /// - Moltorino: the first tier in feed order (Moltorino's own rule).
+    /// - Limerino: the user's own order; only the first (their pick) is worn, the rest sit in `LIMERINO_OWNED_SET`.
+    /// - JilChat: the one badge the feed lists them under.
     /// - Chatsen, Chatty: the first entry in feed order.
     /// - DankChat: the first entry listing the user, exactly as DankChat looks
     ///   one up.
@@ -1196,6 +1541,50 @@ impl ThirdPartyCache {
                         continue;
                     }
                     assignments += 1;
+                    push(&mut by_user, uid.to_string(), &arc, &title_lower, rank);
+                }
+            }
+        }
+
+        // Limerino: each user's list in their order, first = their pick. The
+        // pick wears `LIMERINO_SET` only when it is the first id and it is
+        // actually indexed; everything else they own is `LIMERINO_OWNED_SET`.
+        if let Some(limerino) = &self.limerino {
+            let mut picked: HashMap<&str, (Arc<UserBadge>, String)> = HashMap::new();
+            let mut owned: HashMap<&str, (Arc<UserBadge>, String)> = HashMap::new();
+            for badge in limerino.badges.iter().filter(|b| b.is_badge()).take(LIMERINO_MAX_BADGES) {
+                let Some(urls) = badge.image_urls() else { continue };
+                for (set, map) in [(LIMERINO_SET, &mut picked), (LIMERINO_OWNED_SET, &mut owned)] {
+                    let arc = Arc::new(UserBadge { badge_info: badge.badge_info(urls.clone(), set), provider: BadgeProvider::Limerino });
+                    let title_lower = arc.badge_info.title.to_lowercase();
+                    map.insert(badge.id.as_str(), (arc, title_lower));
+                }
+            }
+            for (uid, ids) in limerino_holders(limerino) {
+                for (rank, id) in ids.iter().enumerate() {
+                    let map = if rank == 0 { &picked } else { &owned };
+                    if let Some((arc, title_lower)) = map.get(id.as_str()) {
+                        push(&mut by_user, uid.to_string(), arc, title_lower, rank);
+                    }
+                }
+            }
+        }
+
+        // JilChat: the feed lists each user under the one badge they wear.
+        if let Some(jilchat) = &self.jilchat {
+            let mut assigned: std::collections::HashSet<&str> = std::collections::HashSet::new();
+            for (rank, badge) in jilchat.iter().take(JILCHAT_MAX_BADGES).enumerate() {
+                let Some(image) = badge.image() else { continue };
+                let arc = Arc::new(UserBadge { badge_info: badge.badge_info(image), provider: BadgeProvider::JilChat });
+                let title_lower = arc.badge_info.title.to_lowercase();
+                for user in &badge.users {
+                    if assigned.len() >= JILCHAT_MAX_ASSIGNMENTS {
+                        break;
+                    }
+                    let uid = user.twitch_id.trim();
+                    if !is_valid_moltorino_user_id(uid) || !assigned.insert(uid) {
+                        continue;
+                    }
                     push(&mut by_user, uid.to_string(), &arc, &title_lower, rank);
                 }
             }
@@ -1483,6 +1872,12 @@ fn third_party_gallery_tiles(tp: &ThirdPartyCache, viewer_user_id: Option<&str>)
     if let Some(moltorino) = &tp.moltorino {
         out.extend(moltorino_gallery_tiles(moltorino, viewer_user_id));
     }
+    if let Some(feed) = &tp.limerino {
+        out.extend(limerino_gallery_tiles(feed, viewer_user_id));
+    }
+    if let Some(feed) = &tp.jilchat {
+        out.extend(jilchat_gallery_tiles(feed, viewer_user_id));
+    }
 
     // Collapse entries that share a (provider, title) into one tile. Some feeds
     // (notably Chatty's FFZ re-host) emit one entry PER USER under the same title
@@ -1551,6 +1946,8 @@ impl BadgeProvider {
             "chatty" => BadgeProvider::Chatty,
             "dankchat" => BadgeProvider::DankChat,
             "moltorino" => BadgeProvider::Moltorino,
+            "limerino" => BadgeProvider::Limerino,
+            "jilchat" => BadgeProvider::JilChat,
             _ => return None,
         })
     }
@@ -1567,6 +1964,8 @@ impl BadgeProvider {
             BadgeProvider::Chatty => "Chatty",
             BadgeProvider::DankChat => "DankChat",
             BadgeProvider::Moltorino => "Moltorino",
+            BadgeProvider::Limerino => "Limerino",
+            BadgeProvider::JilChat => "JilChat",
         }
     }
 
@@ -1582,6 +1981,8 @@ impl BadgeProvider {
             BadgeProvider::Chatty => "https://chatty.github.io",
             BadgeProvider::DankChat => "https://github.com/flex3r/DankChat",
             BadgeProvider::Moltorino => "https://moltorino.com/",
+            BadgeProvider::Limerino => "https://limerino.com/",
+            BadgeProvider::JilChat => "https://jil.chat/",
         }
     }
 }
@@ -1736,6 +2137,15 @@ fn badge_detail_from_cache(
                 .and_then(|b| non_empty(&b.description));
         }
     }
+    if provider == BadgeProvider::Limerino {
+        if let Some(feed) = &tp.limerino {
+            detail.description = feed
+                .badges
+                .iter()
+                .find(|b| format!("limerino-{}", b.id) == id)
+                .and_then(|b| non_empty(&b.data.about));
+        }
+    }
 
     detail
 }
@@ -1765,6 +2175,13 @@ impl BadgeCache {
                 dankchat: None,
                 moltorino: None,
                 moltorino_last_updated: UNIX_EPOCH,
+                limerino: None,
+                limerino_last_updated: UNIX_EPOCH,
+                limerino_etag: None,
+                limerino_warned: false,
+                jilchat: None,
+                jilchat_last_updated: UNIX_EPOCH,
+                jilchat_warned: false,
                 by_user: HashMap::new(),
                 backdrops: HashMap::new(),
                 painted: HashMap::new(),
@@ -1961,6 +2378,19 @@ impl BadgeService {
             .elapsed()
             .map(|e| e >= MOLTORINO_REFRESH)
             .unwrap_or(true);
+        let limerino_due = cache
+            .third_party
+            .limerino_last_updated
+            .elapsed()
+            .map(|e| e >= LIMERINO_REFRESH)
+            .unwrap_or(true);
+        let jilchat_due = cache
+            .third_party
+            .jilchat_last_updated
+            .elapsed()
+            .map(|e| e >= JILCHAT_REFRESH)
+            .unwrap_or(true);
+        let limerino_etag = if cache.third_party.limerino.is_some() { cache.third_party.limerino_etag.clone() } else { None };
         let homies_custom_due = cache
             .third_party
             .homies_custom_last_updated
@@ -2110,29 +2540,70 @@ impl BadgeService {
         // Fetch Moltorino supporter badges (single JSON snapshot, ~20 KB). A
         // hobby API run by one person: identify ourselves honestly instead of
         // the browser UA the client carries for Chatsen.
-        let moltorino_badges = if moltorino_due {
+        let user_agent = format!("StreamNook/{} (+https://streamnook.app)", crate::services::client_identity::build_version());
+        let moltorino_fut = async {
+            if !moltorino_due {
+                return None;
+            }
             match self
                 .http_client
                 .get(MOLTORINO_BADGES_URL)
-                .header(
-                    "User-Agent",
-                    format!(
-                        "StreamNook/{} (+https://streamnook.app)",
-                        crate::services::client_identity::build_version()
-                    ),
-                )
+                .timeout(SMALL_FEED_TIMEOUT)
+                .header("User-Agent", user_agent.as_str())
                 .header("Accept", "application/json")
                 .send()
                 .await
             {
-                Ok(response) if response.status().is_success() => {
-                    response.json::<MoltorinoBadgesResponse>().await.ok()
-                }
+                Ok(response) if response.status().is_success() => response.json::<MoltorinoBadgesResponse>().await.ok(),
                 _ => None,
             }
-        } else {
-            None
         };
+        let limerino_fut = async {
+            if !limerino_due {
+                return SmallFeedFetch::Skipped;
+            }
+            let mut req = self
+                .http_client
+                .get(LIMERINO_BADGES_URL)
+                .timeout(SMALL_FEED_TIMEOUT)
+                .header("User-Agent", user_agent.as_str())
+                .header("Accept", "application/json");
+            if let Some(tag) = limerino_etag.as_deref() {
+                req = req.header("If-None-Match", tag);
+            }
+            match req.send().await {
+                Ok(r) if r.status() == reqwest::StatusCode::NOT_MODIFIED => SmallFeedFetch::Unchanged,
+                Ok(r) if r.status().is_success() => {
+                    let etag = r.headers().get(reqwest::header::ETAG).and_then(|v| v.to_str().ok()).map(str::to_string);
+                    match r.json::<LimerinoBadgesResponse>().await {
+                        Ok(feed) => SmallFeedFetch::Fresh(feed, etag),
+                        Err(_) => SmallFeedFetch::Failed,
+                    }
+                }
+                _ => SmallFeedFetch::Failed,
+            }
+        };
+        let jilchat_fut = async {
+            if !jilchat_due {
+                return SmallFeedFetch::Skipped;
+            }
+            match self
+                .http_client
+                .get(JILCHAT_BADGES_URL)
+                .timeout(SMALL_FEED_TIMEOUT)
+                .header("User-Agent", user_agent.as_str())
+                .header("Accept", "application/json")
+                .send()
+                .await
+            {
+                Ok(r) if r.status().is_success() => match r.json::<Vec<JilChatBadge>>().await {
+                    Ok(feed) => SmallFeedFetch::Fresh(feed, None),
+                    Err(_) => SmallFeedFetch::Failed,
+                },
+                _ => SmallFeedFetch::Failed,
+            }
+        };
+        let (moltorino_badges, limerino_fetch, jilchat_fetch) = tokio::join!(moltorino_fut, limerino_fut, jilchat_fut);
 
         // Update cache. A provider that failed this round (network, 5xx, a
         // body that no longer parses) keeps its LAST GOOD list instead of being
@@ -2191,6 +2662,8 @@ impl BadgeService {
                 }
             }
         }
+        apply_limerino(&mut cache.third_party, limerino_fetch, SystemTime::now(), cache_duration);
+        apply_jilchat(&mut cache.third_party, jilchat_fetch, SystemTime::now(), cache_duration);
         // Homies custom badges follow the same rule: keep the last good list,
         // and a failure retries at the next 10-minute gate without back-dating
         // the shared stamp (the 4 MB list must never ride the 60-second retry).
@@ -3070,6 +3543,7 @@ impl BadgeService {
     // ========================================================================
 
     pub async fn clear_cache(&self) {
+        let _refresh = self.third_party_refresh.lock().await;
         let mut cache = self.cache.write().await;
         cache.global_badges = None;
         cache.channel_badges.clear();
@@ -3082,6 +3556,15 @@ impl BadgeService {
         cache.third_party.chatsen = None;
         cache.third_party.chatty = None;
         cache.third_party.dankchat = None;
+        cache.third_party.moltorino = None;
+        cache.third_party.moltorino_last_updated = UNIX_EPOCH;
+        cache.third_party.limerino = None;
+        cache.third_party.limerino_last_updated = UNIX_EPOCH;
+        cache.third_party.limerino_etag = None;
+        cache.third_party.limerino_warned = false;
+        cache.third_party.jilchat = None;
+        cache.third_party.jilchat_last_updated = UNIX_EPOCH;
+        cache.third_party.jilchat_warned = false;
         cache.third_party.by_user.clear();
         cache.third_party.backdrops.clear();
         cache.third_party.painted.clear();
@@ -3170,6 +3653,13 @@ mod tests {
             dankchat: None,
             moltorino: None,
             moltorino_last_updated: UNIX_EPOCH,
+            limerino: None,
+            limerino_last_updated: UNIX_EPOCH,
+            limerino_etag: None,
+            limerino_warned: false,
+            jilchat: None,
+            jilchat_last_updated: UNIX_EPOCH,
+            jilchat_warned: false,
             by_user: HashMap::new(),
             backdrops: HashMap::new(),
             painted: HashMap::new(),
@@ -3309,6 +3799,13 @@ mod tests {
             dankchat: None,
             moltorino: None,
             moltorino_last_updated: UNIX_EPOCH,
+            limerino: None,
+            limerino_last_updated: UNIX_EPOCH,
+            limerino_etag: None,
+            limerino_warned: false,
+            jilchat: None,
+            jilchat_last_updated: UNIX_EPOCH,
+            jilchat_warned: false,
             by_user: HashMap::new(),
             backdrops: HashMap::new(),
             painted: HashMap::new(),
@@ -3404,6 +3901,13 @@ mod tests {
             dankchat: None,
             moltorino: Some(feed),
             moltorino_last_updated: UNIX_EPOCH,
+            limerino: None,
+            limerino_last_updated: UNIX_EPOCH,
+            limerino_etag: None,
+            limerino_warned: false,
+            jilchat: None,
+            jilchat_last_updated: UNIX_EPOCH,
+            jilchat_warned: false,
             by_user: HashMap::new(),
             backdrops: HashMap::new(),
             painted: HashMap::new(),
@@ -3486,6 +3990,8 @@ mod tests {
             BadgeProvider::Chatty,
             BadgeProvider::DankChat,
             BadgeProvider::Moltorino,
+            BadgeProvider::Limerino,
+            BadgeProvider::JilChat,
         ] {
             let wire = serde_json::to_string(&provider).unwrap();
             assert_eq!(
@@ -3542,6 +4048,13 @@ mod tests {
             dankchat: None,
             moltorino: None,
             moltorino_last_updated: UNIX_EPOCH,
+            limerino: None,
+            limerino_last_updated: UNIX_EPOCH,
+            limerino_etag: None,
+            limerino_warned: false,
+            jilchat: None,
+            jilchat_last_updated: UNIX_EPOCH,
+            jilchat_warned: false,
             by_user: HashMap::new(),
             backdrops: HashMap::new(),
             painted: HashMap::new(),
@@ -3628,6 +4141,13 @@ mod tests {
             dankchat: None,
             moltorino: None,
             moltorino_last_updated: UNIX_EPOCH,
+            limerino: None,
+            limerino_last_updated: UNIX_EPOCH,
+            limerino_etag: None,
+            limerino_warned: false,
+            jilchat: None,
+            jilchat_last_updated: UNIX_EPOCH,
+            jilchat_warned: false,
             by_user: HashMap::new(),
             backdrops: HashMap::new(),
             painted: HashMap::new(),
@@ -3974,6 +4494,166 @@ mod tests {
         assert_eq!(anon.description.as_deref(), Some("Given to people who help build and maintain Moltorino."));
     }
 
+    const LIMERINO_FIXTURE: &str = r#"{"badges":[
+      {"id":"founder","kind":"BADGE","data":{"id":"founder","name":"Limerino Founder","tooltip":"Limerino Founder","about":"Early supporter","future":1,
+        "host":{"url":"//api.limerino.com/v1/badges/art/founder/4","files":[{"name":"1x.webp","format":"WEBP"},{"name":"1x.png"},{"name":"2x.webp"},{"name":"4x.webp"}]}}},
+      {"id":"halloween-2026","kind":"BADGE","data":{"name":"Halloween 2026","host":{"url":"//api.limerino.com/v1/badges/art/halloween-2026/2","files":[{"name":"1x.png"},{"name":"2x.png"}]}}},
+      {"id":"paint-x","kind":"PAINT","data":{"name":"x","host":{"url":"//h/x","files":[{"name":"1x.webp"}]}}}],
+      "users":{"474731":["founder","halloween-2026"],"999":["halloween-2026","founder"],"555":["paint-x","founder"],"bad-id":["founder"]}}"#;
+
+    const JILCHAT_FIXTURE: &str = r#"[
+      {"id":"d90e","slug":"owner","name":"JilChat Owner","image_url":"https://api.jil.chat/uploads/badges/a.png",
+       "users":[{"twitch_id":"438697907","twitch_login":"jilence"}]},
+      {"id":"milestone_18","slug":"milestone_18","name":"18 Months","image_url":"https://api.jil.chat/uploads/milestone-badges/b.gif","users":[]},
+      {"id":"x","slug":"x","name":"No art","image_url":"","users":[{"twitch_id":"1"}]}]"#;
+
+    fn small_feeds_cache() -> ThirdPartyCache {
+        ThirdPartyCache {
+            limerino: Some(serde_json::from_str(LIMERINO_FIXTURE).unwrap()),
+            jilchat: Some(serde_json::from_str(JILCHAT_FIXTURE).unwrap()),
+            ..empty_cache()
+        }
+    }
+
+    fn badge_ids(badges: &[Arc<UserBadge>]) -> Vec<&str> {
+        badges.iter().map(|b| b.badge_info.id.as_str()).collect()
+    }
+
+    #[test]
+    fn limerino_keeps_each_users_order() {
+        let idx = small_feeds_cache().build_by_user_index();
+        assert_eq!(badge_ids(&idx["474731"]), ["limerino-founder", "limerino-halloween-2026"]);
+        assert_eq!(badge_ids(&idx["999"]), ["limerino-halloween-2026", "limerino-founder"]);
+        assert!(idx.get("bad-id").is_none());
+        assert!(idx.values().all(|badges| badges.iter().all(|b| b.badge_info.id != "limerino-paint-x")));
+    }
+
+    #[test]
+    fn limerino_wears_only_the_pick() {
+        let idx = small_feeds_cache().build_by_user_index();
+        let worn_999: Vec<String> = worn_third_party(&idx["999"]).into_iter().map(|b| b.badge_info.id).collect();
+        assert_eq!(worn_999, ["limerino-halloween-2026"]);
+        assert!(worn_third_party(&idx["555"]).is_empty());
+        let held = &idx["555"];
+        assert!(held.iter().any(|b| b.badge_info.id == "limerino-founder" && b.badge_info.set_id == "limerino-owned"));
+    }
+
+    #[test]
+    fn limerino_art_prefers_webp_and_falls_back() {
+        let idx = small_feeds_cache().build_by_user_index();
+        let founder = idx["474731"].iter().find(|b| b.badge_info.id == "limerino-founder").unwrap();
+        assert!(founder.badge_info.image_1x.starts_with("https://api.limerino.com/"));
+        assert!(founder.badge_info.image_1x.ends_with("/founder/4/1x.webp"));
+        assert!(founder.badge_info.image_2x.ends_with("/founder/4/2x.webp"));
+        assert!(founder.badge_info.image_4x.ends_with("/founder/4/4x.webp"));
+        let halloween = idx["474731"].iter().find(|b| b.badge_info.id == "limerino-halloween-2026").unwrap();
+        assert!(halloween.badge_info.image_4x.ends_with("/halloween-2026/2/2x.png"));
+    }
+
+    #[test]
+    fn jilchat_indexes_the_worn_badge() {
+        let idx = small_feeds_cache().build_by_user_index();
+        let held = &idx["438697907"];
+        assert_eq!(held.len(), 1);
+        let info = &held[0].badge_info;
+        assert_eq!(info.id, "jilchat-owner");
+        assert_eq!(info.title, "JilChat Owner");
+        assert_eq!(info.image_1x, info.image_2x);
+        assert_eq!(info.image_2x, info.image_4x);
+        assert_eq!(info.set_id, "jilchat");
+        assert!(idx.get("1").is_none());
+    }
+
+    #[test]
+    fn gallery_lists_limerino_and_jilchat() {
+        let tp = small_feeds_cache();
+        let limerino = limerino_gallery_tiles(tp.limerino.as_ref().unwrap(), Some("999"));
+        let ids: Vec<&str> = limerino.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, ["limerino-founder", "limerino-halloween-2026"]);
+        assert_eq!(limerino[0].user_count, 3);
+        assert_eq!(limerino[1].user_count, 2);
+        assert!(limerino.iter().all(|t| t.owned));
+        let jilchat = jilchat_gallery_tiles(tp.jilchat.as_ref().unwrap(), Some("438697907"));
+        let ids: Vec<&str> = jilchat.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, ["jilchat-owner", "jilchat-milestone_18"]);
+        assert_eq!(jilchat[0].user_count, 1);
+        assert!(jilchat[0].owned);
+        assert_eq!(jilchat[1].user_count, 0);
+        assert!(!jilchat[1].owned);
+    }
+
+    #[test]
+    fn limerino_badge_detail_has_its_description() {
+        let mut tp = small_feeds_cache();
+        tp.by_user = tp.build_by_user_index();
+        let (p, id) = normalize_badge_ref("limerino", "limerino:limerino-founder").unwrap();
+        let detail = badge_detail_from_cache(&tp, p, &id, None, Some("474731"));
+        assert_eq!(detail.description.as_deref(), Some("Early supporter"));
+    }
+
+    #[test]
+    fn limerino_apply_outcomes() {
+        let now = UNIX_EPOCH + Duration::from_secs(1_000_000);
+        let gate = Duration::from_secs(600);
+        let retry = retry_at_next_gate(now, LIMERINO_REFRESH, gate);
+        let feed = || serde_json::from_str::<LimerinoBadgesResponse>(LIMERINO_FIXTURE).unwrap();
+
+        let mut tp = empty_cache();
+        apply_limerino(&mut tp, SmallFeedFetch::Fresh(feed(), Some("\"e1\"".to_string())), now, gate);
+        assert!(tp.limerino.is_some());
+        assert_eq!(tp.limerino_etag.as_deref(), Some("\"e1\""));
+        assert_eq!(tp.limerino_last_updated, now);
+        assert!(!tp.limerino_warned);
+
+        let later = now + Duration::from_secs(60);
+        apply_limerino(&mut tp, SmallFeedFetch::Unchanged, later, gate);
+        assert!(tp.limerino.is_some());
+        assert_eq!(tp.limerino_etag.as_deref(), Some("\"e1\""));
+        assert_eq!(tp.limerino_last_updated, later);
+
+        apply_limerino(&mut tp, SmallFeedFetch::Failed, now, gate);
+        assert!(tp.limerino.is_some());
+        assert!(tp.limerino_warned);
+        assert_eq!(tp.limerino_last_updated, retry);
+
+        apply_limerino(&mut tp, SmallFeedFetch::Unchanged, now, gate);
+        assert!(!tp.limerino_warned);
+        apply_limerino(&mut tp, SmallFeedFetch::Failed, now, gate);
+        assert!(tp.limerino_warned);
+
+        let before = tp.limerino_last_updated;
+        apply_limerino(&mut tp, SmallFeedFetch::Skipped, later, gate);
+        assert_eq!(tp.limerino_last_updated, before);
+        assert!(tp.limerino_warned);
+
+        let mut empty = empty_cache();
+        empty.limerino_etag = Some("\"stale\"".to_string());
+        apply_limerino(&mut empty, SmallFeedFetch::Unchanged, now, gate);
+        assert!(empty.limerino.is_none());
+        assert!(empty.limerino_etag.is_none());
+        assert_eq!(empty.limerino_last_updated, retry);
+    }
+
+    #[test]
+    fn jilchat_apply_outcomes() {
+        let now = UNIX_EPOCH + Duration::from_secs(1_000_000);
+        let gate = Duration::from_secs(600);
+        let mut tp = empty_cache();
+        let feed: Vec<JilChatBadge> = serde_json::from_str(JILCHAT_FIXTURE).unwrap();
+        apply_jilchat(&mut tp, SmallFeedFetch::Fresh(feed, None), now, gate);
+        assert_eq!(tp.jilchat.as_ref().map(Vec::len), Some(3));
+        assert_eq!(tp.jilchat_last_updated, now);
+        apply_jilchat(&mut tp, SmallFeedFetch::Failed, now, gate);
+        assert_eq!(tp.jilchat.as_ref().map(Vec::len), Some(3));
+        assert!(tp.jilchat_warned);
+    }
+
+    #[test]
+    fn third_party_order_places_new_clients_after_moltorino() {
+        assert_eq!(third_party_rank("limerino"), 5);
+        assert_eq!(third_party_rank("jilchat"), 6);
+    }
+
     #[test]
     fn badge_detail_serializes_the_wire_shape() {
         let (p, id) = normalize_badge_ref("ffz", "ffz-3").unwrap();
@@ -4002,6 +4682,40 @@ mod third_party_refresh_tests {
         assert_eq!(secs(4), 480);
         assert_eq!(secs(5), 600, "capped at the normal refresh window");
         assert_eq!(secs(40), 600);
+    }
+
+    #[tokio::test]
+    async fn clear_cache_forgets_every_feed() {
+        let service = BadgeService::new("test".into());
+        {
+            let mut cache = service.cache.write().await;
+            let tp = &mut cache.third_party;
+            tp.moltorino = Some(serde_json::from_str(r#"{"badges":[]}"#).unwrap());
+            tp.moltorino_last_updated = SystemTime::now();
+            tp.limerino = Some(LimerinoBadgesResponse::default());
+            tp.limerino_etag = Some("\"e1\"".to_string());
+            tp.limerino_last_updated = SystemTime::now();
+            tp.jilchat = Some(Vec::new());
+            tp.jilchat_last_updated = SystemTime::now();
+        }
+        service.clear_cache().await;
+        let cache = service.cache.read().await;
+        let tp = &cache.third_party;
+        assert!(tp.moltorino.is_none() && tp.limerino.is_none() && tp.jilchat.is_none());
+        assert_eq!(tp.moltorino_last_updated, UNIX_EPOCH);
+        assert_eq!(tp.limerino_last_updated, UNIX_EPOCH);
+        assert_eq!(tp.jilchat_last_updated, UNIX_EPOCH);
+        assert!(tp.limerino_etag.is_none());
+    }
+
+    #[tokio::test]
+    async fn clear_cache_waits_for_a_running_refresh() {
+        let service = BadgeService::new("test".into());
+        let running = service.third_party_refresh.lock().await;
+        let waited = tokio::time::timeout(Duration::from_millis(200), service.clear_cache()).await;
+        assert!(waited.is_err(), "clearing waits while a refresh holds the lock");
+        drop(running);
+        service.clear_cache().await;
     }
 
     #[tokio::test]

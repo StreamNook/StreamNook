@@ -132,7 +132,7 @@ pub async fn get_user_badges_with_earned_unified(
 }
 
 /// Resolve ONLY a user's real chat-client (third-party) badges — their actual
-/// BTTV / FFZ / Chatterino / Homies / Chatsen / Chatty / DankChat badges — from
+/// BTTV / FFZ / Chatterino / Homies / Moltorino / Limerino / JilChat / Chatsen / Chatty / DankChat badges — from
 /// the prefetched provider databases. Cache-only (no Twitch token, no channel,
 /// no network), so chat can call it once per chatter without the per-user round
 /// trip the full unified path needs. display_badges / earned_badges come back
@@ -207,7 +207,7 @@ pub async fn prefetch_channel_badges_unified(channel_id: String) -> Result<(), S
     service.fetch_channel_badges(&channel_id, &token).await
 }
 
-/// Pre-fetch third-party badge databases (FFZ, Chatterino, Homies)
+/// Pre-fetch third-party badge databases (FFZ, Chatterino, Homies, Moltorino, Limerino, JilChat)
 #[tauri::command]
 pub async fn prefetch_third_party_badges() -> Result<(), String> {
     let service_lock = get_service().await?;
@@ -279,7 +279,7 @@ pub async fn get_global_badge_collection(
 }
 
 /// Get the full distinct badge set for every third-party chat client (FFZ,
-/// BetterTTV, Chatterino, Homies, Chatsen, Chatty, DankChat) for the browse gallery.
+/// BetterTTV, Chatterino, Homies, Moltorino, Limerino, JilChat, Chatsen, Chatty, DankChat) for the browse gallery.
 /// Pass the current user's Twitch ID to flag which badges they own.
 #[tauri::command]
 pub async fn get_all_third_party_badges(
@@ -310,7 +310,7 @@ pub async fn get_all_third_party_badges(
 }
 
 /// What the badge spotlight shows for a clicked third-party badge (FFZ,
-/// BetterTTV, Chatterino, Homies, Moltorino, Chatsen, Chatty, DankChat):
+/// BetterTTV, Chatterino, Homies, Moltorino, Limerino, JilChat, Chatsen, Chatty, DankChat):
 /// provider name and site, and whatever the in-memory feeds know about the
 /// badge (title, art, description, holder count, whether the viewer holds
 /// it). Accepts any of the badge id spaces (`ffz-3`, `ffz:ffz-3`, `3`); a
