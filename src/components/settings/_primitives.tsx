@@ -462,7 +462,8 @@ export function SwitchList({
   onToggle,
   disabled = false,
 }: {
-  items: readonly { id: string; label: string; mark?: ReactNode }[];
+  /** `disabled` on an item grays out just that line (nothing to turn on yet). */
+  items: readonly { id: string; label: string; mark?: ReactNode; disabled?: boolean }[];
   isOn: (id: string) => boolean;
   onToggle: (id: string) => void;
   disabled?: boolean;
@@ -470,12 +471,20 @@ export function SwitchList({
   return (
     <div className={`flex w-full flex-col ${disabled ? 'pointer-events-none opacity-50' : ''}`}>
       {items.map((item) => (
-        <div key={item.id} className={`flex items-center justify-between gap-3 ${IS_MOBILE ? 'min-h-[44px]' : 'min-h-[34px]'}`}>
+        <div
+          key={item.id}
+          className={`flex items-center justify-between gap-3 ${IS_MOBILE ? 'min-h-[44px]' : 'min-h-[34px]'} ${item.disabled && !disabled ? 'opacity-50' : ''}`}
+        >
           <span className="flex min-w-0 items-center gap-2 text-[13px] text-textPrimary">
             {item.mark}
             <span className="truncate">{item.label}</span>
           </span>
-          <Toggle enabled={isOn(item.id)} onChange={() => onToggle(item.id)} ariaLabel={item.label} disabled={disabled} />
+          <Toggle
+            enabled={isOn(item.id)}
+            onChange={() => onToggle(item.id)}
+            ariaLabel={item.label}
+            disabled={disabled || item.disabled}
+          />
         </div>
       ))}
     </div>

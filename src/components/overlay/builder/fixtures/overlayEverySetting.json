@@ -77,6 +77,7 @@
       "homies-custom",
       "dankchat"
     ],
+    "badgeLimit": 0,
     "hiddenTwitchBadgeCategories": [
       "subscriber",
       "predictions",

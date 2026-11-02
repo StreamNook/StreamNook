@@ -37,13 +37,15 @@ const badges: OverlayMessage['badges'] = [
 const template = SAMPLE_MESSAGES.find((m) => (m.provider ?? 'twitch') === 'twitch' && (m.badges ?? []).length > 0)!;
 const row = (provider: OverlayMessage['provider']): OverlayMessage => ({ ...template, id: `badge-${provider}`, provider, badges });
 
+// These rows carry more badges than the default "Badges before +N" keeps, so
+// every render shows them all (badgeLimit 0); the fold has its own tests.
 const render = (provider: OverlayMessage['provider'], style: Partial<OverlayStyle>) =>
-  renderToStaticMarkup(<OverlayChat messages={[row(provider)]} style={{ ...DEFAULT_OVERLAY_STYLE, ...style }} />);
+  renderToStaticMarkup(<OverlayChat messages={[row(provider)]} style={{ ...DEFAULT_OVERLAY_STYLE, badgeLimit: 0, ...style }} />);
 const shown = (html: string) => badges.filter((b) => html.includes(`alt="${b.title}"`)).map((b) => b.name);
 
 describe('Twitch badge categories in the renderer', () => {
   it('shows every badge on a config saved before the field existed', () => {
-    const legacy: Partial<OverlayStyle> = { ...DEFAULT_OVERLAY_STYLE };
+    const legacy: Partial<OverlayStyle> = { ...DEFAULT_OVERLAY_STYLE, badgeLimit: 0 };
     delete legacy.hiddenTwitchBadgeCategories;
     const html = renderToStaticMarkup(<OverlayChat messages={[row('twitch')]} style={legacy as OverlayStyle} />);
     expect(shown(html)).toEqual(badges.map((b) => b.name));

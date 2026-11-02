@@ -12,7 +12,7 @@ import type { CSSProperties } from 'react';
 import { RotateCcw, RefreshCw, Link2, Plus, X, AlertTriangle, Play, Pause, Copy, Trash2, Pencil, Check, ChevronRight, LogIn, Download, Upload, Undo2, Redo2 } from 'lucide-react';
 import { Tooltip } from '../../ui/Tooltip';
 import { Dropdown } from '../../ui/Dropdown';
-import { SettingsSection, SettingsRow, SettingsSubGroup, SegmentedSelect } from '../../settings/_primitives';
+import { SettingsSection, SettingsRow, SettingsSubGroup, SegmentedSelect, SwitchList } from '../../settings/_primitives';
 import SectionNav from '../../settings/SectionNav';
 import { SevenTVLogo } from '../../emotesets/SevenTVLogo';
 import streamNookLogo from '../../../assets/streamnook-logo.png';
@@ -1941,26 +1941,20 @@ const OverlayEditor = () => {
             </p>
           </div>
           <SettingsRow onReset={resetFor('sources')} title="Platforms" description="Hide a platform's messages without removing its source.">
-            <div className="flex flex-wrap gap-2">
-              {SOURCE_PROVIDERS.map((id) => {
-                // Only a platform you've actually added as a source can be toggled;
-                // the rest gray out (nothing to show or hide for them).
-                const hasSource = sourceProviders.includes(id);
-                const active = hasSource && style.sources.includes(id);
-                return (
-                  <button
-                    key={id}
-                    onClick={() => hasSource && toggleSourceFilter(id)}
-                    disabled={!hasSource}
-                    style={{ borderRadius: 8 }}
-                    className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[13px] font-medium transition-all disabled:opacity-40 disabled:cursor-not-allowed ${active ? 'glass-input text-textPrimary' : 'glass-button text-textSecondary hover:text-textPrimary'}`}
-                  >
-                    <ProviderIcon provider={id} size="15px" />
-                    {PROVIDERS[id].label}
-                  </button>
-                );
-              })}
-            </div>
+            {/* Only a platform you've actually added as a source can be switched;
+                the rest gray out (nothing to show or hide for them). */}
+            <SwitchList
+              items={SOURCE_PROVIDERS.map((id) => ({
+                id,
+                label: PROVIDERS[id].label,
+                mark: <ProviderIcon provider={id} size="15px" />,
+                disabled: !sourceProviders.includes(id),
+              }))}
+              isOn={(id) => sourceProviders.includes(id as ProviderId) && style.sources.includes(id as ProviderId)}
+              onToggle={(id) => {
+                if (sourceProviders.includes(id as ProviderId)) toggleSourceFilter(id as ProviderId);
+              }}
+            />
           </SettingsRow>
           <SettingsRow onReset={resetFor('sourceTag')} title="Source tag" description="Shows which platform each message came from, as a dot, an icon, or the platform name.">
             <SegmentedSelect
@@ -2133,23 +2127,13 @@ const OverlayEditor = () => {
           <SettingsRow onReset={resetFor('showPersonalEmotes')} title="Personal emotes" titleBadge={<SourceScope sources={['twitch']} />} description="Emotes a 7TV subscriber brings into every channel from their personal set." help="A subscriber's personal 7TV set works in every channel, so chatters can show emotes your channel never added. Off renders those as the word that was typed. Your channel's own 7TV emotes are unaffected." control={<Toggle enabled={style.showPersonalEmotes !== false} onChange={() => set('showPersonalEmotes', style.showPersonalEmotes === false)} />} />
           <SettingsRow onReset={resetFor('showBadges')} title="Badges" description="Badges the platform sends: subscriber, moderator, VIP, and the rest." help="These arrive with each message from Twitch, Kick, YouTube and TikTok. Chat-client badges and the StreamNook member badge are separate, on the Add-on badges switch below, so turning this off leaves those showing." control={<Toggle enabled={style.showBadges} onChange={() => set('showBadges', !style.showBadges)} />} />
           <SettingsSubGroup>
-          <SettingsRow onReset={resetFor('hiddenTwitchBadgeCategories')} title="Twitch badges" titleBadge={<SourceScope sources={['twitch']} />} description="Pick which kinds of Twitch badges show." help="Prediction is every blue, pink and gray pick. Gifted subs is gift leaders and sub gifter badges. Bits is bits leaders and cheer badges. Authority roles is lead mod, mod and VIP. Everything else covers Prime, Turbo, and event and game badges. Your own broadcaster badge always shows." disabled={!style.showBadges}>
-            <div className="flex flex-wrap gap-2">
-              {TWITCH_BADGE_CATEGORIES.map((c) => {
-                const on = style.showBadges && !(style.hiddenTwitchBadgeCategories ?? []).includes(c.id);
-                return (
-                  <button
-                    key={c.id}
-                    onClick={() => toggleTwitchBadgeCategory(c.id)}
-                    disabled={!style.showBadges}
-                    style={{ borderRadius: 8 }}
-                    className={`px-2.5 py-1.5 text-[13px] font-medium transition-all disabled:opacity-40 disabled:cursor-not-allowed ${on ? 'glass-input text-textPrimary' : 'glass-button text-textSecondary hover:text-textPrimary'}`}
-                  >
-                    {c.label}
-                  </button>
-                );
-              })}
-            </div>
+          <SettingsRow onReset={resetFor('hiddenTwitchBadgeCategories')} title="Twitch badges" titleBadge={<SourceScope sources={['twitch']} />} description="Turn kinds of Twitch badges off." help="Prediction is every blue, pink and gray pick. Gifted subs is gift leaders and sub gifter badges. Bits is bits leaders and cheer badges. Authority roles is lead mod, mod and VIP. Everything else covers Prime, Turbo, and event and game badges. Your own broadcaster badge always shows." disabled={!style.showBadges}>
+            <SwitchList
+              items={TWITCH_BADGE_CATEGORIES.map((c) => ({ id: c.id, label: c.label }))}
+              isOn={(id) => style.showBadges && !(style.hiddenTwitchBadgeCategories ?? []).includes(id)}
+              onToggle={toggleTwitchBadgeCategory}
+              disabled={!style.showBadges}
+            />
           </SettingsRow>
           <SettingsRow onReset={resetFor('ffzCustomRoleBadges')} title="Custom mod & VIP badges" titleBadge={<SourceScope sources={['twitch']} />} description="Show your channel's own FrankerFaceZ moderator and VIP badges." help="Off shows Twitch's standard moderator and VIP badges. A channel's custom art can be anything, so it stays off until you turn it on." disabled={!style.showBadges} control={<Toggle enabled={style.ffzCustomRoleBadges === true} onChange={() => set('ffzCustomRoleBadges', style.ffzCustomRoleBadges !== true)} />} />
           </SettingsSubGroup>
@@ -2158,25 +2142,28 @@ const OverlayEditor = () => {
           <SettingsRow onReset={resetFor('badgeScale')} title="Badge size" disabled={!style.showBadges && style.showThirdPartyBadges === false}>
             <Slider value={style.badgeScale} min={OVERLAY_LIMITS.badgeScale.min} max={OVERLAY_LIMITS.badgeScale.max} step={0.05} onChange={(v) => set('badgeScale', v)} format={(v) => `${v.toFixed(2)}x`} />
           </SettingsRow>
+          <SettingsRow onReset={resetFor('badgeLimit')} title="Badges before +N" description="Badges past this many fold into a +N on the overlay.">
+            <SegmentedSelect
+              value={String(style.badgeLimit ?? 3)}
+              onChange={(v) => set('badgeLimit', Number(v))}
+              options={[
+                { value: '0', label: 'Show all' },
+                { value: '2', label: '2' },
+                { value: '3', label: '3' },
+                { value: '4', label: '4' },
+                { value: '5', label: '5' },
+              ]}
+            />
+          </SettingsRow>
           <SettingsRow onReset={resetFor('showThirdPartyBadges')} title="Add-on badges" description="Third-party badges: 7TV, FFZ, Chatterino, and more." help="Native platform badges follow the Badges toggle above." control={<Toggle enabled={style.showThirdPartyBadges} onChange={() => set('showThirdPartyBadges', !style.showThirdPartyBadges)} />} />
           <SettingsSubGroup>
-          <SettingsRow onReset={resetFor('hiddenBadgeProviders')} title="Services" description="Pick which badge services show." help="StreamNook is the member badge. The rest are third-party.">
-            <div className="flex flex-wrap gap-2">
-              {THIRD_PARTY_BADGE_PROVIDERS.map((p) => {
-                const on = style.showThirdPartyBadges !== false && !(style.hiddenBadgeProviders ?? []).includes(p.id);
-                return (
-                  <button
-                    key={p.id}
-                    onClick={() => toggleBadgeProvider(p.id)}
-                    disabled={style.showThirdPartyBadges === false}
-                    style={{ borderRadius: 8 }}
-                    className={`px-2.5 py-1.5 text-[13px] font-medium transition-all disabled:opacity-40 disabled:cursor-not-allowed ${on ? 'glass-input text-textPrimary' : 'glass-button text-textSecondary hover:text-textPrimary'}`}
-                  >
-                    {p.label}
-                  </button>
-                );
-              })}
-            </div>
+          <SettingsRow onReset={resetFor('hiddenBadgeProviders')} title="Services" description="Turn badge services off one by one." help="StreamNook is the member badge. The rest are third-party.">
+            <SwitchList
+              items={THIRD_PARTY_BADGE_PROVIDERS.map((p) => ({ id: p.id, label: p.label }))}
+              isOn={(id) => style.showThirdPartyBadges !== false && !(style.hiddenBadgeProviders ?? []).includes(id)}
+              onToggle={toggleBadgeProvider}
+              disabled={style.showThirdPartyBadges === false}
+            />
           </SettingsRow>
           </SettingsSubGroup>
         </SettingsSection>
@@ -2419,22 +2406,11 @@ const OverlayEditor = () => {
                     }))
                   : undefined}
               >
-                <div className="flex flex-wrap gap-2">
-                  {(PROVIDER_EVENT_CATEGORIES[provider] ?? []).map((cat) => {
-                    const key = `${provider}:${cat}`;
-                    const on = !(style.hiddenProviderEvents ?? []).includes(key);
-                    return (
-                      <button
-                        key={key}
-                        onClick={() => toggleProviderEvent(key)}
-                        style={{ borderRadius: 8 }}
-                        className={`px-2.5 py-1.5 text-[13px] font-medium transition-all ${on ? 'glass-input text-textPrimary' : 'glass-button text-textSecondary hover:text-textPrimary'}`}
-                      >
-                        {catLabel(provider, cat)}
-                      </button>
-                    );
-                  })}
-                </div>
+                <SwitchList
+                  items={(PROVIDER_EVENT_CATEGORIES[provider] ?? []).map((cat) => ({ id: `${provider}:${cat}`, label: catLabel(provider, cat) }))}
+                  isOn={(key) => !(style.hiddenProviderEvents ?? []).includes(key)}
+                  onToggle={toggleProviderEvent}
+                />
               </SettingsRow>
             ))}
           </SettingsSubGroup>

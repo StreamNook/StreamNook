@@ -2137,6 +2137,12 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   {
     tab: 'Overlay',
     section: 'Emotes & Badges',
+    title: 'Badges before +N',
+    description: 'Badges past this many fold into a +N on the overlay.'
+  },
+  {
+    tab: 'Overlay',
+    section: 'Emotes & Badges',
     title: 'Add-on badges',
     description: 'Third-party badges on the overlay: 7TV, FFZ, Chatterino, and more, plus the StreamNook member badge. Previously "Third-party badges".'
   },

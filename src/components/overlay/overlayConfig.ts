@@ -4,6 +4,7 @@
 // drift. Phase 1 is builder + preview only; nothing here talks to a backend.
 
 import type { ProviderId } from '../../types/providers';
+import { badgeFoldLimit } from '../../utils/badgeFold';
 
 // Overlay event categories — each stream event reflects its actual type (a watch
 // streak is a Milestone, never a Subscription). Kept here (not in OverlayChat) so
@@ -246,6 +247,9 @@ export interface OverlayStyle {
    *  '7tv'). Each provider toggles independently, on top of the global
    *  showThirdPartyBadges master. See THIRD_PARTY_BADGE_PROVIDERS. */
   hiddenBadgeProviders: string[];
+  /** Badges shown before the rest fold into a static "+N" (0 = all). The
+   *  overlay's own choice, apart from chat's. Default 3. */
+  badgeLimit: number;
   /** Twitch badge categories to hide, by id (e.g. 'predictions', 'roles'), on top
    *  of the showBadges master. See TWITCH_BADGE_CATEGORIES. */
   hiddenTwitchBadgeCategories: string[];
@@ -725,6 +729,7 @@ export const DEFAULT_OVERLAY_STYLE: OverlayStyle = {
   showThirdPartyBadges: true,
   showAtmospheres: true,
   hiddenBadgeProviders: [],
+  badgeLimit: 3,
   hiddenTwitchBadgeCategories: [],
   ffzCustomRoleBadges: false,
   emojiStyle: 'apple',
@@ -920,6 +925,7 @@ export const clampOverlayStyle = (s: OverlayStyle): OverlayStyle => {
     hidePhrases: phrases,
     hiddenEvents: [],
     hiddenProviderEvents: Array.from(providerEvents),
+    badgeLimit: badgeFoldLimit(s.badgeLimit),
     // Absent on configs saved before badge categories existed → every badge shows.
     hiddenTwitchBadgeCategories: Array.from(new Set(
       (Array.isArray(s.hiddenTwitchBadgeCategories) ? s.hiddenTwitchBadgeCategories : [])

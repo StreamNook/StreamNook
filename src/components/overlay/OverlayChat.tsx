@@ -35,6 +35,8 @@ import { AtmosphereChatWash } from './AtmosphereChatWash';
 import { convertMoneyInText, loadRates, ratesReady } from './currency';
 import { giftBombOriginOf, isGiftBombAnnouncement, isGiftBombChild } from '../../utils/giftBombCollapse';
 import { adjustNameColor } from '../../utils/nameColor';
+import { badgeFoldLimit, foldBadges, foldKind, type FoldKind } from '../../utils/badgeFold';
+import { fitCount } from '../../utils/fitNumber';
 import { cachedBadgeUrl, emoteCandidates, gifLineIndex, hiResBadgeUrl, messageLineClamp, overlayBackdropIsDark, zeroWidthLayout } from './overlayLayout';
 
 // The StreamNook identity badge on the overlay is just the member's equipped
@@ -1019,42 +1021,107 @@ const OverlayRow = ({ message, style, expiring, enterDelay }: { message: Overlay
   // badges never stack their shadows on each other.
   const shadow = overlayShadow(style);
   const badgeShadow = style.shadowOnBadges === true ? shadow?.filter(style.shadowDarkBadges === true) ?? null : null;
-  const badgesNode = anyBadge ? (
-    <span className="inline-flex items-center" style={{ gap: '0.2em', verticalAlign: '-0.18em', ...(provider === 'youtube' ? { marginLeft: '0.3em', marginRight: '0.15em' } : { marginRight: '0.4em' }), ...(badgeShadow ? { filter: badgeShadow } : null) }} data-ov-badges="">
-      {showNativeBadges && nativeBadges.map((b, i) => {
+  const badgeSlots: { key: string; kind: FoldKind; url?: string; fallbacks?: (string | undefined)[]; node: ReactNode }[] = [];
+  if (anyBadge) {
+    if (showNativeBadges) {
+      nativeBadges.forEach((b, i) => {
         // YouTube rows resolve role badges (no API image) to their own platform
         // art; everything else uses the badge's resolved image.
         const url = badgeUrl(b) || (provider === 'youtube' ? YT_ROLE_BADGES[b.name] : undefined);
-        if (!url) return null;
-        return (
-          <BadgeImg key={`tw-${b.name}-${i}-${url}`} src={url} fallbacks={badgeFallbacks(b)} alt={b.title || b.name} boxPx={badgePx} style={{ height: badgeSize, width: badgeSize }} />
-        );
-      })}
-      {showSeventvBadge && message.seventvBadgeUrl && (
-        <BadgeImg key={`seventv-${message.seventvBadgeUrl}`} src={message.seventvBadgeUrl} alt={message.seventvBadgeTitle || '7TV badge'} boxPx={badgePx} style={{ height: badgeSize, width: badgeSize }} />
-      )}
-      {showExtraBadges && visibleExtraBadges.map((b, i) => (
+        if (!url) return;
+        const fallbacks = badgeFallbacks(b);
+        const key = `tw-${b.name}-${i}-${url}`;
+        badgeSlots.push({
+          key,
+          kind: foldKind(provider, b.name),
+          url,
+          fallbacks,
+          node: <BadgeImg key={key} src={url} fallbacks={fallbacks} alt={b.title || b.name} boxPx={badgePx} style={{ height: badgeSize, width: badgeSize }} />,
+        });
+      });
+    }
+    if (showSeventvBadge && message.seventvBadgeUrl) {
+      const key = `seventv-${message.seventvBadgeUrl}`;
+      badgeSlots.push({
+        key,
+        kind: 'seventv',
+        url: message.seventvBadgeUrl,
+        node: <BadgeImg key={key} src={message.seventvBadgeUrl} alt={message.seventvBadgeTitle || '7TV badge'} boxPx={badgePx} style={{ height: badgeSize, width: badgeSize }} />,
+      });
+    }
+    if (showExtraBadges) {
+      visibleExtraBadges.forEach((b, i) => {
         // A glyph badge (FFZ:AP) carries its backdrop colour: the rounded
         // square its own client draws behind it (radius side / 9).
-        <BadgeImg
-          key={`tp-${i}-${b.url}`}
-          src={b.url}
-          alt={b.title || 'badge'}
-          boxPx={badgePx}
-          style={{ height: badgeSize, width: badgeSize, ...(b.backdrop ? { backgroundColor: b.backdrop, borderRadius: `calc(${badgeSize} / 9)` } : null) }}
-        />
-      ))}
-      {/* StreamNook identity badge sits rightmost, next to the name, mirroring
-          the real chat row (see utils/badgeOrder in the app repo). */}
-      {showSnBadge && (
-        <BadgeImg
-          key={`sn-${message.streamNookBadgeUrl || SN_DEFAULT_LOGO}`}
-          src={message.streamNookBadgeUrl || SN_DEFAULT_LOGO}
-          alt="StreamNook"
-          loading="lazy"
-          boxPx={badgePx}
-          style={{ height: badgeSize, width: badgeSize, objectFit: 'contain' }}
-        />
+        const key = `tp-${i}-${b.url}`;
+        badgeSlots.push({
+          key,
+          kind: 'addon',
+          url: b.url,
+          node: (
+            <BadgeImg
+              key={key}
+              src={b.url}
+              alt={b.title || 'badge'}
+              boxPx={badgePx}
+              style={{ height: badgeSize, width: badgeSize, ...(b.backdrop ? { backgroundColor: b.backdrop, borderRadius: `calc(${badgeSize} / 9)` } : null) }}
+            />
+          ),
+        });
+      });
+    }
+    // StreamNook identity badge sits rightmost, next to the name, mirroring
+    // the real chat row (see utils/badgeOrder in the app repo).
+    if (showSnBadge) {
+      const snUrl = message.streamNookBadgeUrl || SN_DEFAULT_LOGO;
+      const key = `sn-${snUrl}`;
+      badgeSlots.push({
+        key,
+        kind: 'streamnook',
+        url: snUrl,
+        node: (
+          <BadgeImg
+            key={key}
+            src={snUrl}
+            alt="StreamNook"
+            loading="lazy"
+            boxPx={badgePx}
+            style={{ height: badgeSize, width: badgeSize, objectFit: 'contain' }}
+          />
+        ),
+      });
+    }
+  }
+  const badgeFold = foldBadges(badgeSlots.map((s) => s.kind), badgeFoldLimit(style.badgeLimit));
+  const peekSlots = badgeFold.hidden.map((i) => badgeSlots[i]).flatMap((s) => (s.url ? [{ url: s.url, fallbacks: s.fallbacks }] : [])).slice(0, 2);
+  const peekPx = Math.round(badgePx * 0.6);
+  const badgesNode = anyBadge ? (
+    <span className="inline-flex items-center" style={{ gap: '0.2em', verticalAlign: '-0.18em', ...(provider === 'youtube' ? { marginLeft: '0.3em', marginRight: '0.15em' } : { marginRight: '0.4em' }), ...(badgeShadow ? { filter: badgeShadow } : null) }} data-ov-badges="">
+      {badgeFold.shown.map((i) => badgeSlots[i].node)}
+      {badgeFold.hidden.length > 0 && (
+        <span
+          key="fold"
+          data-ov-badge-fold=""
+          style={{
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            height: badgeSize, minWidth: badgeSize, padding: peekSlots.length > 0 ? '0 0.3em 0 0.15em' : '0 0.3em', borderRadius: 999,
+            fontSize: `calc(${badgeSize} * 0.52)`, fontWeight: 700, lineHeight: 1,
+            fontVariantNumeric: 'tabular-nums', color: 'rgba(255,255,255,0.92)',
+            background: 'rgba(255,255,255,0.16)', boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.18)',
+          }}
+        >
+          {peekSlots.map((s, n) => (
+            <BadgeImg
+              key={`pk-${n}-${s.url}`}
+              src={s.url}
+              fallbacks={s.fallbacks}
+              alt=""
+              boxPx={peekPx}
+              style={{ height: `calc(${badgeSize} * 0.6)`, width: `calc(${badgeSize} * 0.6)`, borderRadius: '0.2em', marginLeft: n === 1 ? `calc(${badgeSize} * -0.22)` : 0, marginRight: n === peekSlots.length - 1 ? '0.25em' : 0, boxShadow: '0 0 0 0.1em rgba(0,0,0,0.55)' }}
+            />
+          ))}
+          +{fitCount(badgeFold.hidden.length, 99)}
+        </span>
       )}
     </span>
   ) : null;
