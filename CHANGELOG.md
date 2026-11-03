@@ -1,3 +1,32 @@
+## [8.8.21] - 2026-11-03
+
+## 🎉 New: Badges fold into a +N pill
+> When someone has more add-on badges than your limit, the extras tuck into a small +N pill and their name stays on one line. Hover it on desktop or tap it on Android and iPhone, and the badges fan out beside it. The pill wears a foil that gets rarer as someone collects more badges: silver, gold, cosmos, then rainbow.
+
+![Badges fold into a +N pill](https://raw.githubusercontent.com/StreamNook/StreamNook/main/.github/assets/release-8.8.21-badge-fold.webp)
+
+## ⚡ New: Performance mode (desktop)
+> Settings > Interface > Performance mode keeps StreamNook light while you game or work. Run it only while another app is in front, or all the time. It draws solid surfaces instead of glass, stops decorative motion and entrance animations, and can freeze animated emotes too.
+
+---
+
+### ✨ Features
+- Desktop, Android and iPhone: add-on badges past your limit fold into a +N pill that shows the next two. Hover it on desktop or tap it on the phones and the rest fan out beside it. Twitch's own badges (moderator, VIP, subscriber, global, predictions) always show. Set the limit under Settings > Chat > Badges before +N, or pick Show all.
+- Desktop, Android and iPhone: the pill's foil depends on how many add-on badges someone has in all, whatever your limit: silver from 2, gold from 3, cosmos from 5, rainbow from 8.
+- Desktop, Android and iPhone: Limerino and JilChat badges show in chat, on profile cards and in the badge gallery, each with its own switch under Services. Requested by zoox (SN-221).
+- Desktop: the OBS chat overlay folds badges too, with its own limit in the overlay builder.
+- Desktop: Performance mode under Settings > Interface, with Off, while another app is in front, or always, plus a Freeze emotes switch.
+- Desktop, Android and iPhone: on/off lists in Settings are plain switches now instead of clusters of chips, for badge services and event kinds per platform. On desktop the scrollbar marks and the overlay builder's lists switched too.
+- Desktop, Android and iPhone: channel points messages like Highlight My Message can wear a color you pick, under Settings > Chat > Chat Events > Redemption color.
+- iPhone: a pinned message's sender shows their 7TV, chat client and StreamNook badges, folded like in chat.
+
+### 🐛 Bug Fixes
+- Desktop, Android and iPhone: in sub-only chat, subscribing or getting a gifted sub unlocks the message box right away, with no refresh.
+- Desktop, Android and iPhone: a chatter's right-to-left name or message no longer flips the line around it, and stray direction marks stay inside their own message.
+- Desktop, Android and iPhone: the profile card keeps your owned 7TV paints and badges when 7TV's inventory doesn't load.
+- Desktop and Android: Motion Off stops every looping animation.
+- All platforms: when Twitch refuses a message you sent, the log says why.
+
 ## [8.8.20] - 2026-11-01
 
 ### ✨ Features
