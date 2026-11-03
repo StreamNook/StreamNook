@@ -129,20 +129,17 @@ function PeekFace({ peeks, count }: { peeks: readonly PeekArt[]; count: number }
   );
 }
 
-/** Tilts a rare pill's foil and glare toward the pointer (the Hiyori holo). */
-function tiltFoil(el: HTMLElement, clientX: number, clientY: number): void {
+/** Slides a rare pill's light toward the pointer, at most a quarter of the
+ *  pill either way (its band rests a third of the way in). */
+function tiltFoil(el: HTMLElement, clientX: number): void {
   const r = el.getBoundingClientRect();
-  const x = ((clientX - r.left) / r.width) * 100;
-  const y = ((clientY - r.top) / r.height) * 100;
-  el.style.setProperty('--sn-foil-mx', `${x}%`);
-  el.style.setProperty('--sn-foil-my', `${y}%`);
-  el.style.setProperty('--sn-foil-px', `${50 + (x - 50) / 2.5}%`);
-  el.style.setProperty('--sn-foil-py', `${50 + (y - 50) / 2.5}%`);
+  const shift = Math.max(-0.25, Math.min(0.25, ((clientX - r.left) / r.width - 0.32) * 0.6)) * r.width;
+  el.style.setProperty('--sn-foil-band', `${shift.toFixed(1)}px`);
 }
 
-/** Back to the foil's resting angle. */
+/** Back to the light's resting place. */
 function restFoil(el: HTMLElement): void {
-  for (const k of ['--sn-foil-mx', '--sn-foil-my', '--sn-foil-px', '--sn-foil-py']) el.style.removeProperty(k);
+  el.style.removeProperty('--sn-foil-band');
 }
 
 /**
@@ -333,7 +330,7 @@ export function BadgeFoldChip({
             : (e) => {
                 // A touch drag on a touchscreen laptop is not a hover (as Tooltip skips it).
                 if (e.pointerType === 'touch') return;
-                if (tier > 0) tiltFoil(e.currentTarget, e.clientX, e.clientY);
+                if (tier > 0) tiltFoil(e.currentTarget, e.clientX);
                 if (open) return clearTimer();
                 if (timer.current === null) {
                   timer.current = window.setTimeout(() => {

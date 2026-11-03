@@ -3450,19 +3450,22 @@ html[data-motion="reduced"] .sub-progress-fill {
 }
 
 /* Rarity foil (data-tier 1 to 4, from every add-on the chatter wears, never the
-   viewer's limit): the TCG holo from Hiyori's schedule cards. More colors read
-   rarer: silver, then gold, then a cosmos nebula, then full rainbow. Only the
-   top two tiers get a rim. The foil is a still frame in chat; hovering tilts it
-   toward the pointer (--sn-foil-*, set by BadgeFold). Both layers are
-   pseudo-elements, so a rare pill adds no element to its row. */
+   viewer's limit). More colors read rarer: silver, then gold, then a cosmos
+   nebula, then full rainbow. Only the top two tiers get a rim. Two layers over
+   the tier's fill: a shimmer in the tier's own colors (::before) and the light,
+   one soft diagonal band and a thin streak (::after). Plain linear gradients
+   and blend modes only, so the iPhone draws the same layers in Core Graphics
+   (BadgeFoldPill.swift). A still frame in chat; hovering brightens it and
+   slides the light with the pointer (--sn-foil-band, set by BadgeFold). Both
+   layers are pseudo-elements, so a rare pill adds no element to its row. */
 .sn-badge-fold-chip:not([data-tier='0']) {
-  --sn-foil-o: 0.55;
+  --sn-foil-k: 1;
   position: relative;
   isolation: isolate;
   overflow: hidden;
 }
 .sn-badge-fold-chip:not([data-tier='0']):hover {
-  --sn-foil-o: 0.95;
+  --sn-foil-k: 1.4;
 }
 .sn-badge-fold-chip > .sn-badge-fold-peek,
 .sn-badge-fold-chip > .sn-badge-fold-count {
@@ -3482,67 +3485,45 @@ html[data-motion="reduced"] .sub-progress-fill {
   pointer-events: none;
   transition: opacity 350ms ease;
 }
-/* The holo: a rainbow band crossed by diagonal foil bars. */
+/* The shimmer: the tier's colors across the pill (--sn-foil-s1..s3). */
 .sn-badge-fold-chip:not([data-tier='0'])::before {
-  opacity: var(--sn-foil-o);
-  mix-blend-mode: color-dodge;
-  background-image:
-    repeating-linear-gradient(
-      0deg,
-      rgb(255, 119, 115) 0%,
-      rgb(255, 237, 95) 16.6%,
-      rgb(168, 255, 95) 33.3%,
-      rgb(131, 255, 247) 50%,
-      rgb(120, 148, 255) 66.6%,
-      rgb(216, 117, 255) 83.3%,
-      rgb(255, 119, 115) 100%
-    ),
-    repeating-linear-gradient(
-      133deg,
-      #0e152e 0%,
-      hsl(180, 10%, 60%) 3.8%,
-      hsl(180, 29%, 66%) 4.5%,
-      hsl(180, 10%, 60%) 5.2%,
-      #0e152e 10%,
-      #0e152e 12%
-    );
-  background-size: 200% 700%, 300% 300%;
-  background-position: 0% var(--sn-foil-py, 42%), var(--sn-foil-px, 38%) var(--sn-foil-py, 42%);
-  background-blend-mode: hue;
-  filter: brightness(0.85) contrast(2.2) saturate(0.75);
+  opacity: min(1, calc(var(--sn-foil-shim) * var(--sn-foil-k)));
+  mix-blend-mode: var(--sn-foil-blend, soft-light);
+  background: linear-gradient(100deg, var(--sn-foil-s1), var(--sn-foil-s2) 50%, var(--sn-foil-s3));
 }
-/* The glare: a soft highlight where the light falls. */
+/* The light: a soft band left of center and a thin streak right of it. */
 .sn-badge-fold-chip:not([data-tier='0'])::after {
-  opacity: calc(var(--sn-foil-o) * 0.8);
-  mix-blend-mode: overlay;
-  background: radial-gradient(
-    farthest-corner circle at var(--sn-foil-mx, 50%) var(--sn-foil-my, 50%),
-    rgba(255, 255, 255, 0.7) 5%,
-    rgba(255, 255, 255, 0.3) 22%,
-    rgba(0, 0, 0, 0.25) 90%
-  );
+  opacity: min(1, calc(var(--sn-foil-light) * var(--sn-foil-k)));
+  mix-blend-mode: screen;
+  background:
+    linear-gradient(115deg, transparent 56%, rgba(255, 255, 255, 0.6) 61%, transparent 65%),
+    linear-gradient(115deg, transparent 12%, rgba(255, 255, 255, 0.55) 32%, transparent 52%);
+  background-repeat: no-repeat;
+  background-position: var(--sn-foil-band, 0px) 0;
 }
-/* Uncommon: silver reverse holo, one tone. */
+/* Uncommon: silver, one tone. */
 .sn-badge-fold-chip[data-tier='1'],
 .sn-badge-fold-chip[data-tier='1']:hover {
   color: #eef1f6;
   background: #2b2f37;
+  --sn-foil-s1: #8d96a6;
+  --sn-foil-s2: #f4f7fb;
+  --sn-foil-s3: #7a8394;
+  --sn-foil-shim: 0.7;
+  --sn-foil-light: 0.35;
 }
-.sn-badge-fold-chip[data-tier='1']::before {
-  opacity: calc(var(--sn-foil-o) * 0.45);
-  filter: brightness(0.8) contrast(1.6) saturate(0);
-}
-/* Rare: gold foil, no rim. */
+/* Rare: gold, no rim. */
 .sn-badge-fold-chip[data-tier='2'],
 .sn-badge-fold-chip[data-tier='2']:hover {
   color: #fff6dc;
   background: linear-gradient(120deg, #4a3410, #7a5a1c 45%, #3e2b0c);
+  --sn-foil-s1: #c08a2a;
+  --sn-foil-s2: #ffeab0;
+  --sn-foil-s3: #a06b18;
+  --sn-foil-shim: 0.85;
+  --sn-foil-light: 0.45;
 }
-.sn-badge-fold-chip[data-tier='2']::before {
-  opacity: calc(var(--sn-foil-o) * 0.9);
-  filter: brightness(0.95) contrast(2) saturate(0.5) sepia(0.6) hue-rotate(-10deg);
-}
-/* Epic: cosmos holo, a nebula with its own stars, and a thin rim. */
+/* Epic: cosmos, a nebula with its own stars, and a thin rim. */
 .sn-badge-fold-chip[data-tier='3'],
 .sn-badge-fold-chip[data-tier='3']:hover {
   color: #fff;
@@ -3553,12 +3534,14 @@ html[data-motion="reduced"] .sub-progress-fill {
     radial-gradient(1px 1px at 62% 88%, #fff, transparent),
     radial-gradient(1.2px 1.2px at 94% 18%, #ffe9b0, transparent),
     radial-gradient(circle at 32% 40%, #b0389a, #3a1060 55%, #120720);
+  --sn-foil-s1: #a77bff;
+  --sn-foil-s2: #62e3ff;
+  --sn-foil-s3: #ff6fc8;
+  --sn-foil-shim: 0.55;
+  --sn-foil-blend: overlay;
+  --sn-foil-light: 0.4;
 }
-.sn-badge-fold-chip[data-tier='3']::before {
-  opacity: calc(var(--sn-foil-o) * 0.8);
-  filter: brightness(0.9) contrast(1.8) saturate(0.9);
-}
-/* Legendary: full rainbow holo with a prismatic rim and a glow. */
+/* Legendary: full rainbow with a prismatic rim and a glow. */
 .sn-badge-fold-chip[data-tier='4'],
 .sn-badge-fold-chip[data-tier='4']:hover {
   color: #fff;
@@ -3567,9 +3550,12 @@ html[data-motion="reduced"] .sub-progress-fill {
     linear-gradient(#1b1d2c, #1b1d2c) padding-box,
     conic-gradient(from 210deg, #ff7a7a, #ffd36b, #7dffb0, #6bc8ff, #c58bff, #ff7ad1, #ff7a7a) border-box;
   box-shadow: 0 0 10px rgba(180, 150, 255, 0.45);
+  --sn-foil-shim: 0.62;
+  --sn-foil-blend: screen;
+  --sn-foil-light: 0.45;
 }
 .sn-badge-fold-chip[data-tier='4']::before {
-  filter: brightness(1) contrast(2.2) saturate(1.1);
+  background: linear-gradient(100deg, #ff7a7a, #ffd36b 20%, #7dffb0 40%, #6bc8ff 60%, #c58bff 80%, #ff7ad1);
 }
 /* A rare pill keeps its foil when focused; the focus ring sits outside it. */
 .sn-badge-fold-chip:not([data-tier='0']):focus-visible {
