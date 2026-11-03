@@ -1,7 +1,8 @@
 // Performance mode takes the backdrop blur away without touching the viewer's
-// Blur switch: the page reads blur off AND the glass tint is capped so it stays
-// readable, a theme or glass save while it is active keeps both, and the
-// viewer's own choice comes back after.
+// Blur switch: the page reads blur off AND draws the Glassiness 0% look (solid
+// surfaces), a theme or glass save while it is active keeps both, and the
+// viewer's own choice (the 0.45 blur-off cap when their switch is off) comes
+// back after.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: () => Promise.resolve({}) }));
@@ -37,19 +38,29 @@ afterEach(() => {
 });
 
 describe('blur with Performance mode', () => {
-  it('flat turns blur off and caps the glass strength', () => {
+  it('flat turns blur off and draws solid surfaces', () => {
     expect(attrs.get('data-blur')).toBe('on');
     expect(vars.get('--glass-strength')).toBe('1');
     setPerformanceFlat(true);
     expect(attrs.get('data-blur')).toBe('off');
-    expect(vars.get('--glass-strength')).toBe('0.45');
+    expect(vars.get('--glass-strength')).toBe('0');
   });
 
-  it('a save that re-applies the Blur switch while flat keeps blur off and the cap', () => {
+  it('a save that re-applies the Blur switch while flat keeps blur off and solid surfaces', () => {
     setPerformanceFlat(true);
     applyGlassBlur(true);
     applyGlassStrength(100);
     expect(attrs.get('data-blur')).toBe('off');
+    expect(vars.get('--glass-strength')).toBe('0');
+  });
+
+  it('flat goes solid even when the Blur switch was already off', () => {
+    applyGlassBlur(false);
+    expect(vars.get('--glass-strength')).toBe('0.45');
+    setPerformanceFlat(true);
+    expect(attrs.get('data-blur')).toBe('off');
+    expect(vars.get('--glass-strength')).toBe('0');
+    setPerformanceFlat(false);
     expect(vars.get('--glass-strength')).toBe('0.45');
   });
 

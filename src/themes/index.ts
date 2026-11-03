@@ -438,12 +438,17 @@ let lastGlassStrength = 1;
 // Two things decide it: the viewer's own Blur switch, and desktop Performance
 // mode, which takes the blur away while it is active without touching the
 // setting. `glassBlurEnabled` is the result, read by the cap below.
+// Performance mode draws the Glassiness 0% look instead of the capped glass:
+// the large panels (Settings' liquid glass is a 35% tint) get their legibility
+// from the blur, and at the cap the page behind still showed through sharp.
 let viewerGlassBlur = true;
 let performanceFlat = false;
 let glassBlurEnabled = true;
 const BLUR_OFF_MAX_STRENGTH: number = builtIn.glassBlurOffMaxStrength;
-const effectiveGlassStrength = (): number =>
-    glassBlurEnabled ? lastGlassStrength : Math.min(lastGlassStrength, BLUR_OFF_MAX_STRENGTH);
+const effectiveGlassStrength = (): number => {
+    if (performanceFlat) return 0;
+    return glassBlurEnabled ? lastGlassStrength : Math.min(lastGlassStrength, BLUR_OFF_MAX_STRENGTH);
+};
 
 // Blend a translucent surface tint toward a solid colour as glassiness drops.
 // At strength 1 the original tint is returned (signature glass); at strength 0
@@ -736,12 +741,18 @@ export const applyGlassBlur = (enabled: boolean): void => {
     applyEffectiveGlassBlur();
 };
 
-// Desktop Performance mode (utils/performanceMode): no backdrop blur while it
-// is active, the viewer's own choice back after. A repeat is free.
+// Desktop Performance mode (utils/performanceMode): no backdrop blur and solid
+// surfaces while it is active, the viewer's own choice back after. A repeat is
+// free.
 export const setPerformanceFlat = (on: boolean): void => {
     if (performanceFlat === on) return;
     performanceFlat = on;
+    const blurBefore = glassBlurEnabled;
     applyEffectiveGlassBlur();
+    // The strength moves with the mode even when the blur was already off (the
+    // viewer's own Blur switch), and applyEffectiveGlassBlur repaints it only
+    // when the blur itself changed.
+    if (glassBlurEnabled === blurBefore) applyGlassStrength(lastGlassStrength * 100);
 };
 
 // ─── App font ───────────────────────────────────────────────────────────────
