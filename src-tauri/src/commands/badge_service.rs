@@ -47,6 +47,12 @@ pub fn set_worn_for_test(user_id: &str, badges: Vec<crate::services::badge_servi
     worn.get_or_insert_with(Default::default).insert(user_id.to_string(), badges);
 }
 
+/// Forgets every badge `set_worn_for_test` handed in.
+#[cfg(test)]
+pub fn clear_worn_for_test() {
+    *WORN_FOR_TEST.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
+
 /// The third-party badges a chatter wears, without waiting on the service
 /// (see `BadgeService::worn_third_party_now`); empty before it is ready.
 pub fn third_party_worn_now(user_id: &str) -> Vec<crate::services::badge_service::UserBadge> {

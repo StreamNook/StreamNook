@@ -1824,6 +1824,7 @@ mod tests {
         })];
         stamp_pins(&mut pins, "42");
         set_for_test(&[], vec![], &[], &[], vec![]);
+        crate::commands::badge_service::clear_worn_for_test();
         let badges = pins[0]["sender_view"]["badges"].as_array().unwrap().clone();
         let providers: Vec<&str> = badges.iter().map(|b| b["provider"].as_str().unwrap()).collect();
         assert_eq!(providers, ["twitch", "ffz", "streamnook"]);

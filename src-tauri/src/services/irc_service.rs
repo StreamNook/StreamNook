@@ -8110,6 +8110,9 @@ mod chat_fixture_tests {
             out.push(frame);
         }
         out.push("HEARTBEAT".to_string());
+        // Leave no seeded badges or members behind for the tests that run after.
+        crate::commands::badge_service::clear_worn_for_test();
+        crate::services::cosmetics_registry::set_for_test(&[], vec![], &[], &[], vec![]);
         (inputs, out)
     }
 
