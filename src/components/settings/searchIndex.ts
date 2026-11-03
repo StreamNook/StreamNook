@@ -510,6 +510,13 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Chat',
     section: 'Chat Events',
     sectionId: 'settings-section-chat-events',
+    title: 'Redemption color',
+    description: 'The tint behind channel points messages, like Highlight My Message. Highlighted message color, redeem color, channel points color.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Chat Events',
+    sectionId: 'settings-section-chat-events',
     title: 'Gift sub batches',
     description: "Shows one 'gifting N subs' row with the recipients attached when someone gifts a batch, instead of a row per gift. Previously \"Collapse gift-sub floods\"."
   },

@@ -1203,6 +1203,19 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         />
 
         <SettingsRow
+          title="Redemption color"
+          onReset={resetFor(['chat_events.redemption_color', ''])}
+          description="The tint behind channel points messages, like Highlight My Message."
+          help="Until you pick one, they wear your theme's cyan and blue."
+        >
+          <ColorSwatch
+            value={chatEvents.redemption_color || '#6bffc0'}
+            onChange={(color) => setEvents({ redemption_color: color })}
+            tooltip="Redemption color"
+          />
+        </SettingsRow>
+
+        <SettingsRow
           title="Gift sub batches"
           onReset={resetFor(['collapse_gift_subs', true])}
           description="One 'gifting N subs' row with the recipients attached when someone gifts a batch, instead of a row per gift."

@@ -4011,15 +4011,19 @@ html[data-motion="reduced"] .sub-progress-fill {
   }
 }
 
+/* Channel points rows. `--sn-redeem` (the viewer's Redemption color, set on
+   the row) replaces both of the theme's hues; the gradient keeps its shape. */
 .highlight-message-gradient {
+  --sn-redeem-a: var(--sn-redeem, var(--color-highlight-cyan));
+  --sn-redeem-b: var(--sn-redeem, var(--color-highlight-blue));
   background-color: var(--color-background);
   background-image: linear-gradient(
     90deg,
-    color-mix(in srgb, var(--color-highlight-cyan) 18%, transparent) 0%,
-    color-mix(in srgb, var(--color-highlight-blue) 12%, transparent) 25%,
-    color-mix(in srgb, var(--color-highlight-cyan) 10%, transparent) 50%,
-    color-mix(in srgb, var(--color-highlight-blue) 12%, transparent) 75%,
-    color-mix(in srgb, var(--color-highlight-cyan) 18%, transparent) 100%
+    color-mix(in srgb, var(--sn-redeem-a) 18%, transparent) 0%,
+    color-mix(in srgb, var(--sn-redeem-b) 12%, transparent) 25%,
+    color-mix(in srgb, var(--sn-redeem-a) 10%, transparent) 50%,
+    color-mix(in srgb, var(--sn-redeem-b) 12%, transparent) 75%,
+    color-mix(in srgb, var(--sn-redeem-a) 18%, transparent) 100%
   );
   background-size: 100% 100%;
 }
@@ -4028,11 +4032,11 @@ html[data-motion="reduced"] .sub-progress-fill {
   background-color: var(--color-background);
   background-image: linear-gradient(
     90deg,
-    color-mix(in srgb, var(--color-highlight-cyan) 25%, transparent) 0%,
-    color-mix(in srgb, var(--color-highlight-blue) 18%, transparent) 25%,
-    color-mix(in srgb, var(--color-highlight-cyan) 15%, transparent) 50%,
-    color-mix(in srgb, var(--color-highlight-blue) 18%, transparent) 75%,
-    color-mix(in srgb, var(--color-highlight-cyan) 25%, transparent) 100%
+    color-mix(in srgb, var(--sn-redeem-a) 25%, transparent) 0%,
+    color-mix(in srgb, var(--sn-redeem-b) 18%, transparent) 25%,
+    color-mix(in srgb, var(--sn-redeem-a) 15%, transparent) 50%,
+    color-mix(in srgb, var(--sn-redeem-b) 18%, transparent) 75%,
+    color-mix(in srgb, var(--sn-redeem-a) 25%, transparent) 100%
   );
   background-size: 100% 100%;
 }

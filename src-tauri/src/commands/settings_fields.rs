@@ -56,6 +56,7 @@ pub fn frontend_owned_defaults() -> Value {
             "event_animation": "none",
             "event_animate_repeat": false,
             "cheer_display": "card",
+            "redemption_color": "",
             "hidden_provider_events": [],
         },
         "chat_render": {

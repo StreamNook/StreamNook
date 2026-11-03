@@ -3494,6 +3494,10 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
         ...messageStyle,
         // A partner row's channel color (sn-shared-row's edge and wash).
         ...(isFromSharedChat && sharedSource ? ({ '--sn-src': sharedSource.color } as React.CSSProperties) : {}),
+        // The viewer's own tint for channel points rows (highlight-message-gradient).
+        ...(isRedemption && chatEvents?.redemption_color
+          ? ({ '--sn-redeem': chatEvents.redemption_color } as React.CSSProperties)
+          : {}),
         ...(mentionHoldBg ?? builtInEventBg ? { backgroundImage: mentionHoldBg ?? builtInEventBg } : {}),
         ...(ftRing ? ({ '--sn-ft-color': builtInEventColor } as React.CSSProperties) : {}),
         borderLeftColor: (isMentioned || isReplyToMe)

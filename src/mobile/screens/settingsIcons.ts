@@ -217,6 +217,7 @@ const BY_TITLE: Record<string, LucideIcon> = {
   Polls: Vote,
   Predictions: TrendingUp,
   Redemptions: Award,
+  'Redemption color': Palette,
   'Gift sub batches': Gift,
   'Clip chat replay': Scissors,
   Glint: Sparkles,

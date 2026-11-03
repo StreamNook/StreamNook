@@ -586,6 +586,23 @@
   {
    "page": "chat",
    "section": "Chat Events",
+   "title": "Redemption color",
+   "paths": [
+    "chat_events.redemption_color"
+   ],
+   "nested": false,
+   "logo": null,
+   "detail": "The tint behind channel points messages, like Highlight My Message.",
+   "aliases": [
+    "highlighted message color",
+    "highlight my message",
+    "redeem color"
+   ],
+   "hidden_on_ios": true
+  },
+  {
+   "page": "chat",
+   "section": "Chat Events",
    "title": "Gift sub batches",
    "paths": [
     "collapse_gift_subs"
