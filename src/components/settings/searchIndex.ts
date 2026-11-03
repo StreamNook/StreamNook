@@ -1576,7 +1576,7 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Chat',
     section: 'Names & Badges',
     title: 'Add-on badges',
-    description: 'Badges from 7TV, FFZ, Chatterino, Homies and the other badge services, plus StreamNook membership badges. Third-party badges.'
+    description: 'Badges from 7TV, FFZ, Chatterino, Homies, Limerino, JilChat and the other badge services, plus StreamNook membership badges. Third-party badges.'
   },
   {
     tab: 'Chat',

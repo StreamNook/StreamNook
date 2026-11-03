@@ -597,8 +597,7 @@
     "highlighted message color",
     "highlight my message",
     "redeem color"
-   ],
-   "hidden_on_ios": true
+   ]
   },
   {
    "page": "chat",
@@ -715,7 +714,7 @@
    ],
    "nested": false,
    "logo": null,
-   "detail": "Turn event kinds off per platform. Lit means shown.",
+   "detail": "Turn event kinds off per platform.",
    "aliases": []
   },
   {
@@ -998,7 +997,7 @@
    ],
    "nested": false,
    "logo": null,
-   "detail": "Badges from 7TV, FFZ, Chatterino, Homies and the other badge services, plus StreamNook membership badges.",
+   "detail": "Badges from 7TV, FFZ, Chatterino, Homies, Limerino, JilChat and the other badge services, plus StreamNook membership badges.",
    "aliases": [
     "third party badges",
     "7tv badges",
@@ -1034,8 +1033,7 @@
     "plus n",
     "more badges",
     "overflow"
-   ],
-   "hidden_on_ios": true
+   ]
   },
   {
    "page": "chat",
