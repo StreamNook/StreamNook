@@ -35,9 +35,25 @@ pub fn third_party_ready() -> bool {
     BADGE_SERVICE.try_read().is_ok_and(|guard| guard.is_some())
 }
 
+/// Worn badges a test hands in, by Twitch user id, answered ahead of the service (the
+/// iPhone's chat fixtures give a chatter chat-client badges this way).
+#[cfg(test)]
+static WORN_FOR_TEST: std::sync::Mutex<Option<std::collections::HashMap<String, Vec<crate::services::badge_service::UserBadge>>>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(test)]
+pub fn set_worn_for_test(user_id: &str, badges: Vec<crate::services::badge_service::UserBadge>) {
+    let mut worn = WORN_FOR_TEST.lock().unwrap_or_else(|e| e.into_inner());
+    worn.get_or_insert_with(Default::default).insert(user_id.to_string(), badges);
+}
+
 /// The third-party badges a chatter wears, without waiting on the service
 /// (see `BadgeService::worn_third_party_now`); empty before it is ready.
 pub fn third_party_worn_now(user_id: &str) -> Vec<crate::services::badge_service::UserBadge> {
+    #[cfg(test)]
+    if let Some(found) = WORN_FOR_TEST.lock().unwrap_or_else(|e| e.into_inner()).as_ref().and_then(|w| w.get(user_id)) {
+        return found.clone();
+    }
     let Ok(guard) = BADGE_SERVICE.try_read() else { return Vec::new() };
     guard.as_ref().map(|s| s.worn_third_party_now(user_id)).unwrap_or_default()
 }

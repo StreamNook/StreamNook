@@ -1805,11 +1805,19 @@ mod tests {
     }
 
     #[test]
-    fn a_members_pin_wears_their_streamnook_badge_after_twitchs() {
+    fn a_members_pin_wears_their_chat_client_and_streamnook_badges_after_twitchs() {
         use crate::services::cosmetics_registry::{set_for_test, TEST_LOCK};
         let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         note_twitch_badges(None, [("moderator", "1", "https://g/mod/2", "Moderator")]);
         set_for_test(&[("90210", 7)], vec![], &[], &[], vec![]);
+        let ffz: crate::services::badge_service::UserBadge = serde_json::from_value(serde_json::json!({
+            "badge_info": { "id": "ffz-3", "set_id": "ffz", "version": "1", "title": "FFZ Supporter", "description": "",
+                            "image_1x": "https://ffz/1", "image_2x": "https://ffz/2", "image_4x": "https://ffz/4",
+                            "click_action": null, "click_url": null },
+            "provider": "ffz",
+        }))
+        .unwrap();
+        crate::commands::badge_service::set_worn_for_test("90210", vec![ffz]);
         let mut pins = vec![serde_json::json!({
             "sender_id": "90210",
             "sender_badges": [{ "set_id": "moderator", "version": "1" }],
@@ -1818,7 +1826,8 @@ mod tests {
         set_for_test(&[], vec![], &[], &[], vec![]);
         let badges = pins[0]["sender_view"]["badges"].as_array().unwrap().clone();
         let providers: Vec<&str> = badges.iter().map(|b| b["provider"].as_str().unwrap()).collect();
-        assert_eq!(providers, ["twitch", "streamnook"]);
+        assert_eq!(providers, ["twitch", "ffz", "streamnook"]);
+        assert_eq!(badges[1]["url"], "https://ffz/2");
         assert_eq!(pins[0]["sender_view"]["role_badge"]["url"], "https://g/mod/2");
     }
 }
