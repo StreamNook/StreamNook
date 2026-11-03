@@ -1790,7 +1790,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           title="Badges before +N"
           onReset={resetFor(['chat_design.badge_fold_limit', 3])}
           description="Add-on badges past this many fold into a +N you can hover (tap on phones) to see. Twitch's own badges always show."
-          help="The +N wears a foil by how many add-on badges someone has in all, whatever this is set to: silver from 2, gold from 3, cosmos from 4, and rainbow from 6."
+          help="The +N wears a foil by how many add-on badges someone has in all, whatever this is set to: silver from 2, gold from 3, cosmos from 5, and rainbow from 8."
         >
           <div className="space-y-3">
             <SegmentedSelect<'0' | '2' | '3' | '4' | '5'>

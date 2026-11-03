@@ -70,10 +70,10 @@ describe('overlay badge fold', () => {
   });
 
   it('wears the rarity foil of all four add-ons, whatever the limit', () => {
-    expect(cluster(render({ badgeLimit: 2 })).fold).toContain('data-tier="3"');
+    expect(cluster(render({ badgeLimit: 2 })).fold).toContain('data-tier="2"');
     const { fold } = cluster(render({ badgeLimit: 3 }));
     expect(fold).toContain('+1');
-    expect(fold).toContain('data-tier="3"');
+    expect(fold).toContain('data-tier="2"');
   });
 
   it('shows every badge with the limit off', () => {

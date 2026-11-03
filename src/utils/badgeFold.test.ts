@@ -9,8 +9,8 @@ describe('foldBadges', () => {
       expect(foldBadges(c.kinds as FoldKind[], c.limit), c.name).toEqual({ shown: c.shown, hidden: c.hidden, tier: c.tier });
     }
   });
-  it('starts the tiers at 2, 3, 4 and 6 add-ons, like Rust', () => {
-    expect([0, 1, 2, 3, 4, 5, 6, 7].map(rarityTier)).toEqual([0, 0, 1, 2, 3, 3, 4, 4]);
+  it('starts the tiers at 2, 3, 5 and 8 add-ons, like Rust', () => {
+    expect([0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map(rarityTier)).toEqual([0, 0, 1, 2, 2, 3, 3, 3, 4, 4]);
   });
   it('names kinds like Rust', () => {
     expect(foldKind('twitch', 'moderator')).toBe('role');

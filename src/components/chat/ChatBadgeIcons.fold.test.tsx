@@ -129,10 +129,10 @@ describe('ChatBadgeIcons folding', () => {
   });
 
   it('gives the pill a rarity tier from every add-on, whatever the limit', () => {
-    expect(html({ ...seven, foldLimit: 2 })).toContain('data-tier="3"');
+    expect(html({ ...seven, foldLimit: 2 })).toContain('data-tier="2"');
     const higher = html({ ...seven, foldLimit: 3 });
     expect(higher).toContain('aria-label="1 more badge"');
-    expect(higher).toContain('data-tier="3"');
+    expect(higher).toContain('data-tier="2"');
   });
 
   it('shows every badge at limit 0', () => {
@@ -164,10 +164,13 @@ describe('ChatBadgeIcons folding', () => {
   });
 
   it('drops a badge whose art failed before folding: the count, peeks and tier skip it', () => {
+    // Five add-ons are cosmos; with FFZ's art dead the four left are gold.
+    const five = { ...seven, thirdPartyBadges: [FFZ, CHATTERINO, addon('chatty-1', 'chatty')] };
+    expect(html({ ...five, foldLimit: 2 })).toContain('data-tier="3"');
     failedArt.value = '/ffz-3.png\n';
     try {
-      const markup = html({ ...seven, foldLimit: 2 });
-      expect(markup).toContain('aria-label="1 more badge"');
+      const markup = html({ ...five, foldLimit: 2 });
+      expect(markup).toContain('aria-label="2 more badges"');
       expect(peekImages(markup).join('')).not.toContain('/ffz-3.png');
       expect(markup).not.toContain('src="/ffz-3.png"');
       expect(markup).toContain('data-tier="2"');
@@ -189,7 +192,7 @@ describe('ChatBadgeIcons folding', () => {
 
   it('draws the pill as a plain face inside another control', () => {
     const markup = html({ ...seven, foldLimit: 2, interactive: false });
-    expect(markup).toContain('<span class="sn-badge-fold-chip" data-tier="3" aria-label="2 more badges">');
+    expect(markup).toContain('<span class="sn-badge-fold-chip" data-tier="2" aria-label="2 more badges">');
     expect(markup).not.toContain('<button');
   });
 });

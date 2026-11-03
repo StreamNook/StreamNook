@@ -1,19 +1,20 @@
 {
   "role_sets": ["broadcaster", "staff", "admin", "global_mod", "lead_moderator", "moderator", "vip", "owner"],
   "platform_providers": ["", "twitch", "kick", "youtube", "tiktok"],
-  "tiers": [2, 3, 4, 6],
+  "tiers": [2, 3, 5, 8],
   "cases": [
     { "name": "empty", "kinds": [], "limit": 3, "shown": [], "hidden": [], "tier": 0 },
-    { "name": "show all still has a tier", "kinds": ["role","platform","platform","seventv","addon","addon","streamnook"], "limit": 0, "shown": [0,1,2,3,4,5,6], "hidden": [], "tier": 3 },
+    { "name": "show all still has a tier", "kinds": ["role","platform","platform","seventv","addon","addon","streamnook"], "limit": 0, "shown": [0,1,2,3,4,5,6], "hidden": [], "tier": 2 },
     { "name": "platform badges never count", "kinds": ["role","platform","platform","seventv","streamnook"], "limit": 2, "shown": [0,1,2,3,4], "hidden": [], "tier": 1 },
     { "name": "one over folds too", "kinds": ["role","seventv","addon","addon"], "limit": 2, "shown": [0,1,2], "hidden": [3], "tier": 2 },
-    { "name": "streamnook is kept first", "kinds": ["role","platform","seventv","addon","addon","streamnook"], "limit": 2, "shown": [0,1,2,5], "hidden": [3,4], "tier": 3 },
+    { "name": "streamnook is kept first", "kinds": ["role","platform","seventv","addon","addon","streamnook"], "limit": 2, "shown": [0,1,2,5], "hidden": [3,4], "tier": 2 },
     { "name": "limit 1 keeps only the member badge", "kinds": ["platform","seventv","addon","streamnook"], "limit": 1, "shown": [0,3], "hidden": [1,2], "tier": 2 },
-    { "name": "many platform badges never fold", "kinds": ["role","platform","platform","platform","seventv","addon","addon","addon","addon","addon"], "limit": 3, "shown": [0,1,2,3,4,5,6], "hidden": [7,8,9], "tier": 4 },
-    { "name": "the tier ignores the limit", "kinds": ["role","platform","platform","platform","seventv","addon","addon","addon","addon","addon"], "limit": 5, "shown": [0,1,2,3,4,5,6,7,8], "hidden": [9], "tier": 4 },
+    { "name": "many platform badges never fold", "kinds": ["role","platform","platform","platform","seventv","addon","addon","addon","addon","addon"], "limit": 3, "shown": [0,1,2,3,4,5,6], "hidden": [7,8,9], "tier": 3 },
+    { "name": "the tier ignores the limit", "kinds": ["role","platform","platform","platform","seventv","addon","addon","addon","addon","addon"], "limit": 5, "shown": [0,1,2,3,4,5,6,7,8], "hidden": [9], "tier": 3 },
     { "name": "kick order keeps every platform badge", "kinds": ["platform","role","seventv","addon","addon"], "limit": 2, "shown": [0,1,2,3], "hidden": [4], "tier": 2 },
     { "name": "one add-on is plain", "kinds": ["role","addon"], "limit": 2, "shown": [0,1], "hidden": [], "tier": 0 },
     { "name": "add-ons only, member first", "kinds": ["seventv","addon","addon","addon","streamnook"], "limit": 3, "shown": [0,1,4], "hidden": [2,3], "tier": 3 },
-    { "name": "six add-ons shown in full are legendary", "kinds": ["addon","addon","addon","addon","addon","addon"], "limit": 0, "shown": [0,1,2,3,4,5], "hidden": [], "tier": 4 }
+    { "name": "seven add-ons are still epic", "kinds": ["addon","addon","addon","addon","addon","addon","addon"], "limit": 0, "shown": [0,1,2,3,4,5,6], "hidden": [], "tier": 3 },
+    { "name": "eight add-ons shown in full are legendary", "kinds": ["addon","addon","addon","addon","addon","addon","addon","addon"], "limit": 0, "shown": [0,1,2,3,4,5,6,7], "hidden": [], "tier": 4 }
   ]
 }

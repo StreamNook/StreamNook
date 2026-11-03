@@ -158,8 +158,8 @@ mod tests {
     }
 
     #[test]
-    fn tiers_start_at_two_three_four_and_six_add_ons() {
-        let tiers: Vec<u8> = (0..=7).map(rarity_tier).collect();
-        assert_eq!(tiers, vec![0, 0, 1, 2, 3, 3, 4, 4]);
+    fn tiers_start_at_two_three_five_and_eight_add_ons() {
+        let tiers: Vec<u8> = (0..=9).map(rarity_tier).collect();
+        assert_eq!(tiers, vec![0, 0, 1, 2, 2, 3, 3, 3, 4, 4]);
     }
 }
