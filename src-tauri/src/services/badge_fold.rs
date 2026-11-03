@@ -18,10 +18,24 @@ pub enum FoldKind {
     Streamnook,
 }
 
+impl FoldKind {
+    /// An add-on badge (7TV, the chat clients, StreamNook): the only kind the
+    /// limit folds and the rarity tier counts. The platform's own badges (role,
+    /// subscriber, global, predictions) always show and count toward neither.
+    pub fn is_addon(self) -> bool {
+        matches!(
+            self,
+            FoldKind::Seventv | FoldKind::Addon | FoldKind::Streamnook
+        )
+    }
+}
+
 #[derive(Deserialize)]
 struct Rules {
     role_sets: Vec<String>,
     platform_providers: Vec<String>,
+    /// Add-on counts at which each rarity tier starts (uncommon, rare, epic, legendary).
+    tiers: Vec<usize>,
 }
 
 static RULES: LazyLock<Rules> = LazyLock::new(|| {
@@ -45,52 +59,52 @@ pub fn fold_kind(provider: &str, set_name: &str) -> FoldKind {
     }
 }
 
-/// Indices into the row's badges, each list in chat order.
+/// How rare a chatter's add-on collection is: 0 plain, then uncommon, rare,
+/// epic, legendary. It counts every add-on they wear, so the viewer's limit
+/// never changes it (a "+2" and a "+3" of the same chatter look alike).
+pub fn rarity_tier(addons: usize) -> u8 {
+    RULES.tiers.iter().filter(|start| addons >= **start).count() as u8
+}
+
+/// Indices into the row's badges, each list in chat order, and the rarity tier.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct BadgeFold {
     pub shown: Vec<usize>,
     pub hidden: Vec<usize>,
+    pub tier: u8,
 }
 
-/// Folds a row's badges for `limit` (0 = show all). Nothing folds unless two
-/// or more would hide (a "+1" chip is as wide as its badge). Kept: the
-/// chatter's role badge (else their first platform badge), their 7TV badge and
-/// their StreamNook badge, in that priority, filled from the rest in chat order.
+/// Folds a row's badges for `limit` add-ons (0 = show all). The platform's own
+/// badges always show and never count. Add-ons keep the StreamNook badge first,
+/// then the rest in chat order, up to `limit`; the rest fold into the chip,
+/// even a single one, so the setting means exactly what it says.
 pub fn fold_badges(kinds: &[FoldKind], limit: usize) -> BadgeFold {
-    if limit == 0 || kinds.len() <= limit + 1 {
+    let addons: Vec<usize> = (0..kinds.len()).filter(|&i| kinds[i].is_addon()).collect();
+    let tier = rarity_tier(addons.len());
+    if limit == 0 || addons.len() <= limit {
         return BadgeFold {
             shown: (0..kinds.len()).collect(),
             hidden: Vec::new(),
+            tier,
         };
     }
-    let first = |kind: FoldKind| kinds.iter().position(|k| *k == kind);
-    let mut picks: Vec<usize> = Vec::with_capacity(limit);
-    let platform = first(FoldKind::Role).or_else(|| first(FoldKind::Platform));
-    for i in [
-        platform,
-        first(FoldKind::Seventv),
-        first(FoldKind::Streamnook),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        if picks.len() < limit {
-            picks.push(i);
-        }
-    }
-    for i in 0..kinds.len() {
-        if picks.len() >= limit {
-            break;
-        }
-        if !picks.contains(&i) {
-            picks.push(i);
-        }
-    }
-    picks.sort_unstable();
-    let hidden = (0..kinds.len()).filter(|i| !picks.contains(i)).collect();
+    let member = addons
+        .iter()
+        .copied()
+        .filter(|&i| kinds[i] == FoldKind::Streamnook);
+    let rest = addons
+        .iter()
+        .copied()
+        .filter(|&i| kinds[i] != FoldKind::Streamnook);
+    let kept: Vec<usize> = member.chain(rest).take(limit).collect();
+    let shown = (0..kinds.len())
+        .filter(|i| !kinds[*i].is_addon() || kept.contains(i))
+        .collect();
+    let hidden = addons.into_iter().filter(|i| !kept.contains(i)).collect();
     BadgeFold {
-        shown: picks,
+        shown,
         hidden,
+        tier,
     }
 }
 
@@ -105,6 +119,7 @@ mod tests {
         limit: usize,
         shown: Vec<usize>,
         hidden: Vec<usize>,
+        tier: u8,
     }
 
     #[derive(Deserialize)]
@@ -122,7 +137,8 @@ mod tests {
                 fold_badges(&c.kinds, c.limit),
                 BadgeFold {
                     shown: c.shown,
-                    hidden: c.hidden
+                    hidden: c.hidden,
+                    tier: c.tier
                 },
                 "case {}",
                 c.name
@@ -139,5 +155,11 @@ mod tests {
         assert_eq!(fold_kind("7tv", ""), FoldKind::Seventv);
         assert_eq!(fold_kind("limerino", ""), FoldKind::Addon);
         assert_eq!(fold_kind("streamnook", ""), FoldKind::Streamnook);
+    }
+
+    #[test]
+    fn tiers_start_at_two_three_four_and_six_add_ons() {
+        let tiers: Vec<u8> = (0..=7).map(rarity_tier).collect();
+        assert_eq!(tiers, vec![0, 0, 1, 2, 3, 3, 4, 4]);
     }
 }

@@ -314,6 +314,7 @@ export function ChatBadgeIcons({
             .filter((s) => s.url)
             .slice(0, 2)
             .map((s) => ({ url: s.url, remote: s.remote }))}
+          tier={fold.tier}
           still={!interactive}
         >
           {() =>

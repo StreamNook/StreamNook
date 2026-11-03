@@ -155,10 +155,12 @@ pub struct BadgeFoldInput {
 pub struct BadgeFoldPlan {
     pub shown: Vec<u32>,
     pub hidden: Vec<u32>,
+    /// The chip's rarity, 0 plain to 4 legendary, from every add-on worn.
+    pub tier: u32,
 }
 
 /// The chat-row badge fold (`services::badge_fold`) for the iPhone layout:
-/// `badges` in chat order, `limit` 0 = show all.
+/// `badges` in chat order, `limit` add-ons (0 = show all).
 #[uniffi::export]
 pub fn badge_fold_plan(badges: Vec<BadgeFoldInput>, limit: u32) -> BadgeFoldPlan {
     use crate::services::badge_fold::{fold_badges, fold_kind, FoldKind};
@@ -173,6 +175,7 @@ pub fn badge_fold_plan(badges: Vec<BadgeFoldInput>, limit: u32) -> BadgeFoldPlan
     BadgeFoldPlan {
         shown: fold.shown.into_iter().map(|i| i as u32).collect(),
         hidden: fold.hidden.into_iter().map(|i| i as u32).collect(),
+        tier: u32::from(fold.tier),
     }
 }
 

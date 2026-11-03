@@ -1563,7 +1563,7 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Chat',
     section: 'Names & Badges',
     title: 'Badges before +N',
-    description: 'When someone has more badges, the rest fold into a +N you can hover (tap on phones) to see.'
+    description: "Add-on badges past this many fold into a +N you can hover (tap on phones) to see. Twitch's own badges always show."
   },
   {
     tab: 'Chat',
@@ -2138,7 +2138,7 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Overlay',
     section: 'Emotes & Badges',
     title: 'Badges before +N',
-    description: 'Badges past this many fold into a +N on the overlay.'
+    description: "Add-on badges past this many fold into a +N on the overlay. Twitch's own badges always show."
   },
   {
     tab: 'Overlay',

@@ -123,9 +123,26 @@ function PeekFace({ peeks, count }: { peeks: readonly PeekArt[]; count: number }
           }}
         />
       ))}
-      {count > 99 ? '99+' : `+${count}`}
+      {/* Its own box, so it sits above a rare pill's foil layers. */}
+      <span className="sn-badge-fold-count">{count > 99 ? '99+' : `+${count}`}</span>
     </>
   );
+}
+
+/** Tilts a rare pill's foil and glare toward the pointer (the Hiyori holo). */
+function tiltFoil(el: HTMLElement, clientX: number, clientY: number): void {
+  const r = el.getBoundingClientRect();
+  const x = ((clientX - r.left) / r.width) * 100;
+  const y = ((clientY - r.top) / r.height) * 100;
+  el.style.setProperty('--sn-foil-mx', `${x}%`);
+  el.style.setProperty('--sn-foil-my', `${y}%`);
+  el.style.setProperty('--sn-foil-px', `${50 + (x - 50) / 2.5}%`);
+  el.style.setProperty('--sn-foil-py', `${50 + (y - 50) / 2.5}%`);
+}
+
+/** Back to the foil's resting angle. */
+function restFoil(el: HTMLElement): void {
+  for (const k of ['--sn-foil-mx', '--sn-foil-my', '--sn-foil-px', '--sn-foil-py']) el.style.removeProperty(k);
 }
 
 /**
@@ -141,12 +158,16 @@ function PeekFace({ peeks, count }: { peeks: readonly PeekArt[]; count: number }
 export function BadgeFoldChip({
   count,
   peeks,
+  tier = 0,
   children,
   still = false,
 }: {
   count: number;
   /** Art of the first two hidden badges, for the pill's face. */
   peeks: readonly PeekArt[];
+  /** The chatter's rarity, 0 plain to 4 legendary (from every add-on they wear,
+   *  never from the viewer's limit): the pill's foil. */
+  tier?: number;
   children: () => ReactNode;
   still?: boolean;
 }) {
@@ -286,10 +307,11 @@ export function BadgeFoldChip({
   );
 
   const stop = (e: { stopPropagation(): void }) => e.stopPropagation();
+  const label = count === 1 ? '1 more badge' : `${count} more badges`;
   // A chip inside another control: the face only (after every hook).
   if (still) {
     return (
-      <span className="sn-badge-fold-chip" aria-label={`${count} more badges`}>
+      <span className="sn-badge-fold-chip" data-tier={tier} aria-label={label}>
         <PeekFace peeks={peeks} count={count} />
       </span>
     );
@@ -300,8 +322,9 @@ export function BadgeFoldChip({
         ref={chipRef}
         type="button"
         data-no-row-tap=""
+        data-tier={tier}
         className="sn-badge-fold-chip"
-        aria-label={`${count} more badges`}
+        aria-label={label}
         aria-expanded={open}
         aria-controls={open ? stripId : undefined}
         onPointerMove={
@@ -310,6 +333,7 @@ export function BadgeFoldChip({
             : (e) => {
                 // A touch drag on a touchscreen laptop is not a hover (as Tooltip skips it).
                 if (e.pointerType === 'touch') return;
+                if (tier > 0) tiltFoil(e.currentTarget, e.clientX, e.clientY);
                 if (open) return clearTimer();
                 if (timer.current === null) {
                   timer.current = window.setTimeout(() => {
@@ -319,7 +343,15 @@ export function BadgeFoldChip({
                 }
               }
         }
-        onPointerLeave={IS_MOBILE ? undefined : () => (open ? scheduleClose() : clearTimer())}
+        onPointerLeave={
+          IS_MOBILE
+            ? undefined
+            : (e) => {
+                if (tier > 0) restFoil(e.currentTarget);
+                if (open) scheduleClose();
+                else clearTimer();
+              }
+        }
         onClick={(e) => {
           e.stopPropagation();
           // A hover-opened strip becomes held; a held one folds. Enter or Space

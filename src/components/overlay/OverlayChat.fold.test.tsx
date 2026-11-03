@@ -55,17 +55,25 @@ const cluster = (html: string) => {
 const imgs = (html: string) => (html.match(/<img /g) ?? []).length;
 
 describe('overlay badge fold', () => {
-  it('keeps three badges and folds the rest into a peek pill', () => {
-    const { kept, fold } = cluster(render({ badgeLimit: 3 }));
-    expect(imgs(kept)).toBe(3);
+  it("keeps Twitch's own badges and two add-ons, and folds the rest into a peek pill", () => {
+    const { kept, fold } = cluster(render({ badgeLimit: 2 }));
+    // Three Twitch badges, then 7TV and FFZ.
+    expect(imgs(kept)).toBe(5);
     expect(fold).not.toBe('');
     expect(imgs(fold)).toBe(2);
-    expect(fold).toContain('+4');
-    // The peeks are the first two hidden badges, in chat order: bits, then FFZ.
-    const bitsAt = fold.search(/v1(%2F|\/)bits/);
-    const ffzAt = fold.indexOf('frankerfacez');
-    expect(bitsAt).toBeGreaterThan(-1);
-    expect(ffzAt).toBeGreaterThan(bitsAt);
+    expect(fold).toContain('+2');
+    // The peeks are the first two hidden add-ons, in chat order: Chatterino, then DankChat.
+    const chatterinoAt = fold.indexOf('fourtf');
+    const dankAt = fold.indexOf('dank.chat');
+    expect(chatterinoAt).toBeGreaterThan(-1);
+    expect(dankAt).toBeGreaterThan(chatterinoAt);
+  });
+
+  it('wears the rarity foil of all four add-ons, whatever the limit', () => {
+    expect(cluster(render({ badgeLimit: 2 })).fold).toContain('data-tier="3"');
+    const { fold } = cluster(render({ badgeLimit: 3 }));
+    expect(fold).toContain('+1');
+    expect(fold).toContain('data-tier="3"');
   });
 
   it('shows every badge with the limit off', () => {

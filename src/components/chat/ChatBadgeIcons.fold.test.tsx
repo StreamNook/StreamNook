@@ -102,6 +102,7 @@ const peekImages = (markup: string): string[] =>
   (markup.match(/<img[^>]*>/g) ?? []).filter((t) => t.includes('sn-badge-fold-peek'));
 
 describe('ChatBadgeIcons folding', () => {
+  // Three Twitch badges and four add-ons (7TV, FFZ, Chatterino, the member badge).
   const seven = {
     twitchBadges: [MOD, SUB, BITS],
     seventvBadge: SEVENTV,
@@ -109,21 +110,29 @@ describe('ChatBadgeIcons folding', () => {
     streamNookMemberId: '123',
   };
 
-  it('folds 7 badges at 3 into the moderator, 7TV and the member, plus a +4 pill', () => {
-    const markup = html({ ...seven, foldLimit: 3 });
+  it("always shows Twitch's own badges and keeps the member badge first among the add-ons", () => {
+    const markup = html({ ...seven, foldLimit: 2 });
     const shown = badgeImages(markup);
-    expect(shown).toHaveLength(3);
+    expect(shown).toHaveLength(5);
     expect(shown[0]).toContain('src="/mod.png"');
-    expect(shown[1]).toContain('01HSUB');
-    expect(shown[2]).toContain('src="/sn.webp"');
-    expect(markup).toContain('class="sn-badge-fold-chip"');
-    expect(markup).toContain('aria-label="4 more badges"');
+    expect(shown[1]).toContain('src="/sub.png"');
+    expect(shown[2]).toContain('src="/bits.png"');
+    expect(shown[3]).toContain('01HSUB');
+    expect(shown[4]).toContain('src="/sn.webp"');
+    expect(markup).toContain('aria-label="2 more badges"');
     const peeks = peekImages(markup);
     expect(peeks).toHaveLength(2);
-    expect(peeks[0]).toContain('src="/sub.png"');
-    expect(peeks[1]).toContain('src="/bits.png"');
-    expect(markup).toMatch(/\+4<\/button>/);
+    expect(peeks[0]).toContain('src="/ffz-3.png"');
+    expect(peeks[1]).toContain('src="/chatterino-1.png"');
+    expect(markup).toMatch(/\+2<\/span><\/button>/);
     expect(markup).not.toContain('role="group"');
+  });
+
+  it('gives the pill a rarity tier from every add-on, whatever the limit', () => {
+    expect(html({ ...seven, foldLimit: 2 })).toContain('data-tier="3"');
+    const higher = html({ ...seven, foldLimit: 3 });
+    expect(higher).toContain('aria-label="1 more badge"');
+    expect(higher).toContain('data-tier="3"');
   });
 
   it('shows every badge at limit 0', () => {
@@ -132,44 +141,46 @@ describe('ChatBadgeIcons folding', () => {
     expect(markup).not.toContain('sn-badge-fold-chip');
   });
 
-  it('does not fold one badge over the limit', () => {
-    const markup = html({ twitchBadges: [MOD, SUB], seventvBadge: SEVENTV, thirdPartyBadges: [], streamNookMemberId: '123', foldLimit: 3 });
-    expect(badgeImages(markup)).toHaveLength(4);
-    expect(markup).not.toContain('sn-badge-fold-chip');
+  it('folds a single add-on past the limit too: the setting means what it says', () => {
+    const markup = html({ twitchBadges: [MOD], seventvBadge: SEVENTV, thirdPartyBadges: [FFZ], streamNookMemberId: '123', foldLimit: 2 });
+    expect(badgeImages(markup)).toHaveLength(3);
+    expect(markup).toContain('aria-label="1 more badge"');
+    expect(peekImages(markup)[0]).toContain('/ffz-3.png');
+    expect(markup).toContain('data-tier="2"');
   });
 
-  it('keeps a Kick moderator, not the subscriber badge before it', () => {
+  it("keeps every Kick badge, the subscriber badge before the moderator's too", () => {
     const markup = html({
       twitchBadges: [twitch('subscriber/1', '/kick-sub.svg', 'kick'), twitch('moderator/1', '/kick-mod.svg', 'kick')],
       seventvBadge: SEVENTV,
       thirdPartyBadges: [FFZ, CHATTERINO, addon('chatty-1', 'chatty')],
       streamNookMemberId: '123',
-      foldLimit: 3,
+      foldLimit: 2,
     });
     const shown = badgeImages(markup).join('');
     expect(shown).toContain('/kick-mod.svg');
-    expect(shown).not.toContain('/kick-sub.svg');
-    expect(peekImages(markup)[0]).toContain('/kick-sub.svg');
+    expect(shown).toContain('/kick-sub.svg');
+    expect(markup).toContain('aria-label="3 more badges"');
   });
 
-  it('drops a badge whose art failed before folding: the count and peeks skip it', () => {
-    failedArt.value = '/sub.png\n';
+  it('drops a badge whose art failed before folding: the count, peeks and tier skip it', () => {
+    failedArt.value = '/ffz-3.png\n';
     try {
-      const markup = html({ ...seven, foldLimit: 3 });
-      expect(badgeImages(markup)).toHaveLength(3);
-      expect(markup).toContain('aria-label="3 more badges"');
-      expect(peekImages(markup).join('')).not.toContain('/sub.png');
-      expect(markup).not.toContain('src="/sub.png"');
+      const markup = html({ ...seven, foldLimit: 2 });
+      expect(markup).toContain('aria-label="1 more badge"');
+      expect(peekImages(markup).join('')).not.toContain('/ffz-3.png');
+      expect(markup).not.toContain('src="/ffz-3.png"');
+      expect(markup).toContain('data-tier="2"');
     } finally {
       failedArt.value = '';
     }
   });
 
-  it('a failure that leaves one badge over the limit folds nothing', () => {
-    failedArt.value = '/bits.png\n';
+  it('a failure that leaves the add-ons within the limit folds nothing', () => {
+    failedArt.value = '/chatterino-1.png\n';
     try {
-      const markup = html({ twitchBadges: [MOD, SUB, BITS], seventvBadge: SEVENTV, thirdPartyBadges: [], streamNookMemberId: '123', foldLimit: 3 });
-      expect(badgeImages(markup)).toHaveLength(4);
+      const markup = html({ twitchBadges: [MOD], seventvBadge: SEVENTV, thirdPartyBadges: [CHATTERINO], streamNookMemberId: '123', foldLimit: 2 });
+      expect(badgeImages(markup)).toHaveLength(3);
       expect(markup).not.toContain('sn-badge-fold-chip');
     } finally {
       failedArt.value = '';
@@ -177,8 +188,8 @@ describe('ChatBadgeIcons folding', () => {
   });
 
   it('draws the pill as a plain face inside another control', () => {
-    const markup = html({ ...seven, foldLimit: 3, interactive: false });
-    expect(markup).toContain('<span class="sn-badge-fold-chip" aria-label="4 more badges">');
+    const markup = html({ ...seven, foldLimit: 2, interactive: false });
+    expect(markup).toContain('<span class="sn-badge-fold-chip" data-tier="3" aria-label="2 more badges">');
     expect(markup).not.toContain('<button');
   });
 });

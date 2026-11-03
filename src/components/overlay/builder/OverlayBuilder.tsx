@@ -2142,7 +2142,7 @@ const OverlayEditor = () => {
           <SettingsRow onReset={resetFor('badgeScale')} title="Badge size" disabled={!style.showBadges && style.showThirdPartyBadges === false}>
             <Slider value={style.badgeScale} min={OVERLAY_LIMITS.badgeScale.min} max={OVERLAY_LIMITS.badgeScale.max} step={0.05} onChange={(v) => set('badgeScale', v)} format={(v) => `${v.toFixed(2)}x`} />
           </SettingsRow>
-          <SettingsRow onReset={resetFor('badgeLimit')} title="Badges before +N" description="Badges past this many fold into a +N on the overlay.">
+          <SettingsRow onReset={resetFor('badgeLimit')} title="Badges before +N" description="Add-on badges past this many fold into a +N on the overlay. Twitch's own badges always show.">
             <SegmentedSelect
               value={String(style.badgeLimit ?? 3)}
               onChange={(v) => set('badgeLimit', Number(v))}

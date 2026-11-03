@@ -1102,12 +1102,17 @@ const OverlayRow = ({ message, style, expiring, enterDelay }: { message: Overlay
         <span
           key="fold"
           data-ov-badge-fold=""
+          // The chatter's rarity foil (sn-ov-fold rules below), the same tiers as chat.
+          data-tier={badgeFold.tier}
+          className="sn-ov-fold"
           style={{
             display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
             height: badgeSize, minWidth: badgeSize, padding: peekSlots.length > 0 ? '0 0.3em 0 0.15em' : '0 0.3em', borderRadius: 999,
             fontSize: `calc(${badgeSize} * 0.52)`, fontWeight: 700, lineHeight: 1,
-            fontVariantNumeric: 'tabular-nums', color: 'rgba(255,255,255,0.92)',
-            background: 'rgba(255,255,255,0.16)', boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.18)',
+            fontVariantNumeric: 'tabular-nums',
+            ...(badgeFold.tier === 0
+              ? { color: 'rgba(255,255,255,0.92)', background: 'rgba(255,255,255,0.16)', boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.18)' }
+              : null),
           }}
         >
           {peekSlots.map((s, n) => (
@@ -1117,10 +1122,10 @@ const OverlayRow = ({ message, style, expiring, enterDelay }: { message: Overlay
               fallbacks={s.fallbacks}
               alt=""
               boxPx={peekPx}
-              style={{ height: `calc(${badgeSize} * 0.6)`, width: `calc(${badgeSize} * 0.6)`, borderRadius: '0.2em', marginLeft: n === 1 ? `calc(${badgeSize} * -0.22)` : 0, marginRight: n === peekSlots.length - 1 ? '0.25em' : 0, boxShadow: '0 0 0 0.1em rgba(0,0,0,0.55)' }}
+              style={{ position: 'relative', zIndex: 2, height: `calc(${badgeSize} * 0.6)`, width: `calc(${badgeSize} * 0.6)`, borderRadius: '0.2em', marginLeft: n === 1 ? `calc(${badgeSize} * -0.22)` : 0, marginRight: n === peekSlots.length - 1 ? '0.25em' : 0, boxShadow: '0 0 0 0.1em rgba(0,0,0,0.55)' }}
             />
           ))}
-          +{fitCount(badgeFold.hidden.length, 99)}
+          <span style={{ position: 'relative', zIndex: 2 }}>+{fitCount(badgeFold.hidden.length, 99)}</span>
         </span>
       )}
     </span>
@@ -2177,6 +2182,22 @@ export const OverlayChat = ({ messages, style: rawStyle, superSample = 1 }: { me
         /* Moderation retract fade — declared AFTER the entrance classes so it
            overrides them on the same row (same specificity, later wins). */
         .sn-ov-out { animation: snOvOut 260ms ease both; pointer-events: none; }
+        /* The fold pill's rarity foil, the same tiers as chat's (globals.css
+           .sn-badge-fold-chip[data-tier]), as one still frame: an overlay has no
+           pointer, so the light rests where chat's does. */
+        .sn-ov-fold:not([data-tier='0']) { position: relative; isolation: isolate; overflow: hidden; }
+        .sn-ov-fold:not([data-tier='0'])::before, .sn-ov-fold:not([data-tier='0'])::after { content: ''; position: absolute; inset: 0; z-index: 1; border-radius: inherit; pointer-events: none; }
+        .sn-ov-fold:not([data-tier='0'])::before { opacity: 0.55; mix-blend-mode: color-dodge; background-image: repeating-linear-gradient(0deg, rgb(255,119,115) 0%, rgb(255,237,95) 16.6%, rgb(168,255,95) 33.3%, rgb(131,255,247) 50%, rgb(120,148,255) 66.6%, rgb(216,117,255) 83.3%, rgb(255,119,115) 100%), repeating-linear-gradient(133deg, #0e152e 0%, hsl(180,10%,60%) 3.8%, hsl(180,29%,66%) 4.5%, hsl(180,10%,60%) 5.2%, #0e152e 10%, #0e152e 12%); background-size: 200% 700%, 300% 300%; background-position: 0% 42%, 38% 42%; background-blend-mode: hue; filter: brightness(0.85) contrast(2.2) saturate(0.75); }
+        .sn-ov-fold:not([data-tier='0'])::after { opacity: 0.44; mix-blend-mode: overlay; background: radial-gradient(farthest-corner circle at 50% 50%, rgba(255,255,255,0.7) 5%, rgba(255,255,255,0.3) 22%, rgba(0,0,0,0.25) 90%); }
+        .sn-ov-fold:not([data-tier='0']) > * { text-shadow: 0 0 2px rgba(0,0,0,0.6); }
+        .sn-ov-fold[data-tier='1'] { color: #eef1f6; background: #2b2f37; }
+        .sn-ov-fold[data-tier='1']::before { opacity: 0.25; filter: brightness(0.8) contrast(1.6) saturate(0); }
+        .sn-ov-fold[data-tier='2'] { color: #fff6dc; background: linear-gradient(120deg, #4a3410, #7a5a1c 45%, #3e2b0c); }
+        .sn-ov-fold[data-tier='2']::before { opacity: 0.5; filter: brightness(0.95) contrast(2) saturate(0.5) sepia(0.6) hue-rotate(-10deg); }
+        .sn-ov-fold[data-tier='3'] { color: #fff; box-shadow: inset 0 0 0 1px rgba(230,170,255,0.55); background: radial-gradient(1px 1px at 30% 12%, #fff, transparent), radial-gradient(1px 1px at 62% 88%, #fff, transparent), radial-gradient(1.2px 1.2px at 94% 18%, #ffe9b0, transparent), radial-gradient(circle at 32% 40%, #b0389a, #3a1060 55%, #120720); }
+        .sn-ov-fold[data-tier='3']::before { opacity: 0.44; filter: brightness(0.9) contrast(1.8) saturate(0.9); }
+        .sn-ov-fold[data-tier='4'] { color: #fff; border: 1px solid transparent; background: linear-gradient(#1b1d2c, #1b1d2c) padding-box, conic-gradient(from 210deg, #ff7a7a, #ffd36b, #7dffb0, #6bc8ff, #c58bff, #ff7ad1, #ff7a7a) border-box; box-shadow: 0 0 10px rgba(180,150,255,0.45); }
+        .sn-ov-fold[data-tier='4']::before { filter: brightness(1) contrast(2.2) saturate(1.1); }
         /* StreamNook event style — per-category washes baked from globals.css's
            event gradients (highlight colors resolved to hex) so they render
            self-contained on the hosted overlay, no theme vars needed. Each category

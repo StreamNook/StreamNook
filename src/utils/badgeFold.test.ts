@@ -1,13 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import rules from './badgeFold.rules.json';
-import { badgeFoldLimit, foldBadges, foldKind, type FoldKind } from './badgeFold';
+import { badgeFoldLimit, foldBadges, foldKind, rarityTier, type FoldKind } from './badgeFold';
 
 describe('foldBadges', () => {
   it('runs the shared case table', () => {
     expect(rules.cases.length).toBeGreaterThanOrEqual(12);
     for (const c of rules.cases) {
-      expect(foldBadges(c.kinds as FoldKind[], c.limit), c.name).toEqual({ shown: c.shown, hidden: c.hidden });
+      expect(foldBadges(c.kinds as FoldKind[], c.limit), c.name).toEqual({ shown: c.shown, hidden: c.hidden, tier: c.tier });
     }
+  });
+  it('starts the tiers at 2, 3, 4 and 6 add-ons, like Rust', () => {
+    expect([0, 1, 2, 3, 4, 5, 6, 7].map(rarityTier)).toEqual([0, 0, 1, 2, 3, 3, 4, 4]);
   });
   it('names kinds like Rust', () => {
     expect(foldKind('twitch', 'moderator')).toBe('role');
