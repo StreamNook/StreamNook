@@ -1832,7 +1832,12 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   // Dynamic chat privileges based on IRC badge context & room state
   const isSubOnly = roomState?.subsOnly || false;
   const isBroadcaster = currentUser?.login && currentStream?.user_login && currentUser.login.toLowerCase() === currentStream.user_login.toLowerCase();
-  const canBypassSubOnly = isBroadcaster || (userBadges ? /(broadcaster|moderator|subscriber|founder|vip)/i.test(userBadges) : false);
+  // Rust's verdict when it has worded the room (`blocked`, as the phone reads
+  // it): it also learns a sub made while chat is open, which the badges only
+  // show after an own message that sub-only chat would refuse.
+  const canBypassSubOnly = roomState?.modes
+    ? roomState.modes.blocked !== 'subs_only'
+    : isBroadcaster || (userBadges ? /(broadcaster|moderator|subscriber|founder|vip)/i.test(userBadges) : false);
   // Twitch always sends; Kick, YouTube and TikTok once their account is
   // connected. Disable + label the composer accordingly rather than letting a
   // no-op send swallow input.

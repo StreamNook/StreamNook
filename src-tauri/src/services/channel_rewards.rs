@@ -253,6 +253,14 @@ pub fn note_viewer_badges(login: &str, badges: &str) {
     }
 }
 
+/// The viewer subscribed in `login` (seen in its chat, before Twitch resends
+/// their badges): sub-only rewards open at once.
+pub fn note_own_sub(login: &str) {
+    if update_room(login, |r| r.viewer_is_sub = Some(true)) {
+        rejudge(login);
+    }
+}
+
 /// The channel went live or offline, or the channel-state poll answered for it
 /// the first time.
 pub fn note_live_changed(login: &str) {

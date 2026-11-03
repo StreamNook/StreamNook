@@ -2789,6 +2789,13 @@ impl IrcService {
                 let mine = crate::services::account_store::AccountStore::primary()
                     .is_some_and(|me| me.login.eq_ignore_ascii_case(&subscriber));
                 if mine {
+                    // Twitch sends the account's new badges only after its next
+                    // message, which sub-only chat refuses: the open chat (its
+                    // message box, sub-only rewards) learns the sub from here.
+                    for ch in crate::services::chat_send_limiter::note_own_sub(&room) {
+                        crate::services::channel_rewards::note_own_sub(&ch);
+                        reship_room_state(&ch).await;
+                    }
                     tauri::async_runtime::spawn(async move {
                         crate::services::channel_state::own_sub_seen(&room).await;
                     });

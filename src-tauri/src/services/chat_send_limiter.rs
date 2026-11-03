@@ -205,6 +205,19 @@ impl Limiter {
         self.channels.entry(key(channel)).or_default()
     }
 
+    /// Marks the account subscribed in every open channel whose user id is
+    /// `room_id`; the channels whose standing changed.
+    fn own_sub(&mut self, room_id: &str) -> Vec<String> {
+        let mut changed = Vec::new();
+        for (channel, facts) in self.channels.iter_mut() {
+            if facts.room_id.as_deref() == Some(room_id) && !facts.viewer_is_sub {
+                facts.viewer_is_sub = true;
+                changed.push(channel.clone());
+            }
+        }
+        changed
+    }
+
     fn role_of(&self, channel: &str) -> Role {
         let k = key(channel);
         if let Some(role) = self.channels.get(&k).and_then(|f| f.role) {
@@ -581,6 +594,15 @@ pub fn note_own_badges(channel: &str, badges: &str) -> bool {
     changed
 }
 
+/// The account subscribed in the channel whose user id is `room_id` (its own
+/// sub, or a gift to it, seen in that chat). Twitch resends USERSTATE only
+/// after an own message, which sub-only chat refuses, so this is how an open
+/// chat learns the account may talk there now. The channels whose standing
+/// changed.
+pub fn note_own_sub(room_id: &str) -> Vec<String> {
+    limiter().own_sub(room_id)
+}
+
 /// The channel's user id, from ROOMSTATE's `room-id`.
 pub fn note_room_id(channel: &str, room_id: &str) {
     let room_id = room_id.trim();
@@ -840,6 +862,23 @@ mod tests {
         assert_eq!(l.book("emotes", "hi", now), Err(Refusal::EmoteOnly));
         note_role(&mut l, "emotes", "moderator/1");
         assert!(l.book("emotes", "hi", now).is_ok());
+    }
+
+    #[test]
+    fn a_sub_seen_in_chat_opens_sub_only_chat() {
+        let mut l = lim();
+        let now = Instant::now();
+        note_role(&mut l, "subs", "");
+        l.facts("subs").modes.subs_only = Some(true);
+        l.facts("subs").room_id = Some("42".into());
+        l.facts("other").room_id = Some("7".into());
+        assert_eq!(l.book("subs", "hi", now), Err(Refusal::SubsOnly));
+        assert_eq!(l.own_sub("42"), vec!["subs".to_string()]);
+        assert!(l.book("subs", "hi", now).is_ok());
+        assert!(matches!(l.standing("subs"), Standing::Viewer { is_sub: true }));
+        assert!(!l.channels["other"].viewer_is_sub);
+        // Already known: nothing to resend.
+        assert!(l.own_sub("42").is_empty());
     }
 
     #[test]
