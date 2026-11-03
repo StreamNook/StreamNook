@@ -39,7 +39,7 @@
 //!
 //! Channels are bare lowercase Twitch logins (no `#`).
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -194,6 +194,10 @@ struct Limiter {
     sends: VecDeque<(Instant, usize)>,
     channels: HashMap<String, ChannelFacts>,
     own_login: Option<String>,
+    /// Room ids where the account's own sub (or a gift to it) showed in chat.
+    /// Kept for the account, so a chat that learns its room id later, or a
+    /// USERSTATE whose badges still lag the sub, keeps the account subscribed.
+    own_subs: HashSet<String>,
 }
 
 fn key(channel: &str) -> String {
@@ -208,6 +212,7 @@ impl Limiter {
     /// Marks the account subscribed in every open channel whose user id is
     /// `room_id`; the channels whose standing changed.
     fn own_sub(&mut self, room_id: &str) -> Vec<String> {
+        self.own_subs.insert(room_id.to_string());
         let mut changed = Vec::new();
         for (channel, facts) in self.channels.iter_mut() {
             if facts.room_id.as_deref() == Some(room_id) && !facts.viewer_is_sub {
@@ -216,6 +221,42 @@ impl Limiter {
             }
         }
         changed
+    }
+
+    /// Whether the account's own sub showed in `channel`'s room.
+    fn own_sub_seen(&self, channel: &str) -> bool {
+        self.channels
+            .get(&key(channel))
+            .and_then(|f| f.room_id.as_ref())
+            .is_some_and(|id| self.own_subs.contains(id))
+    }
+
+    /// The account's own badges in `channel`; true when its standing changed.
+    fn own_badges(&mut self, channel: &str, badges: &str) -> bool {
+        let seen = self.own_sub_seen(channel);
+        let facts = self.facts(channel);
+        let role = Some(Role::from_badges(badges));
+        let is_sub = seen
+            || badges
+                .split(',')
+                .any(|b| b.starts_with("subscriber/") || b.starts_with("founder/"));
+        let changed = facts.role != role || facts.viewer_is_sub != is_sub;
+        facts.role = role;
+        facts.viewer_is_sub = is_sub;
+        changed
+    }
+
+    /// `channel`'s user id; true when an own sub already seen in that room
+    /// changed the account's standing there.
+    fn room_id(&mut self, channel: &str, room_id: &str) -> bool {
+        let sub = self.own_subs.contains(room_id);
+        let facts = self.facts(channel);
+        facts.room_id = Some(room_id.to_string());
+        if sub && !facts.viewer_is_sub {
+            facts.viewer_is_sub = true;
+            return true;
+        }
+        false
     }
 
     fn role_of(&self, channel: &str) -> Role {
@@ -582,16 +623,7 @@ pub fn note_room_state(channel: &str, update: RoomModes) {
 /// The account's own badges in `channel`, from USERSTATE. True when the
 /// account's standing there changed (a new role, or subscribed or not).
 pub fn note_own_badges(channel: &str, badges: &str) -> bool {
-    let mut l = limiter();
-    let facts = l.facts(channel);
-    let role = Some(Role::from_badges(badges));
-    let is_sub = badges
-        .split(',')
-        .any(|b| b.starts_with("subscriber/") || b.starts_with("founder/"));
-    let changed = facts.role != role || facts.viewer_is_sub != is_sub;
-    facts.role = role;
-    facts.viewer_is_sub = is_sub;
-    changed
+    limiter().own_badges(channel, badges)
 }
 
 /// The account subscribed in the channel whose user id is `room_id` (its own
@@ -603,12 +635,11 @@ pub fn note_own_sub(room_id: &str) -> Vec<String> {
     limiter().own_sub(room_id)
 }
 
-/// The channel's user id, from ROOMSTATE's `room-id`.
-pub fn note_room_id(channel: &str, room_id: &str) {
+/// The channel's user id, from ROOMSTATE's `room-id`. True when an own sub
+/// seen there before the id was known changed the account's standing.
+pub fn note_room_id(channel: &str, room_id: &str) -> bool {
     let room_id = room_id.trim();
-    if !room_id.is_empty() {
-        limiter().facts(channel).room_id = Some(room_id.to_string());
-    }
+    !room_id.is_empty() && limiter().room_id(channel, room_id)
 }
 
 /// `channel`'s user id, once a ROOMSTATE named it.
@@ -879,6 +910,25 @@ mod tests {
         assert!(!l.channels["other"].viewer_is_sub);
         // Already known: nothing to resend.
         assert!(l.own_sub("42").is_empty());
+    }
+
+    #[test]
+    fn a_sub_seen_before_the_room_id_counts_once_the_id_arrives() {
+        let mut l = lim();
+        let now = Instant::now();
+        // The sub shows before this chat's ROOMSTATE named its room.
+        assert!(l.own_sub("42").is_empty());
+        assert!(l.own_badges("subs", ""));
+        l.facts("subs").modes.subs_only = Some(true);
+        assert_eq!(l.book("subs", "hi", now), Err(Refusal::SubsOnly));
+        assert!(l.room_id("subs", "42"));
+        assert!(l.book("subs", "hi", now).is_ok());
+        // A later USERSTATE whose badges still lag the sub keeps it.
+        assert!(!l.own_badges("subs", "premium/1"));
+        assert!(l.channels["subs"].viewer_is_sub);
+        // Another room is untouched.
+        assert!(!l.room_id("other", "7"));
+        assert!(!l.channels["other"].viewer_is_sub);
     }
 
     #[test]

@@ -1258,7 +1258,10 @@ impl IrcService {
                 },
             );
             if let Some(room_id) = Self::extract_tag_value(line, "room-id") {
-                crate::services::chat_send_limiter::note_room_id(ch, &room_id);
+                // An own sub seen before this room's id was known counts now.
+                if crate::services::chat_send_limiter::note_room_id(ch, &room_id) {
+                    crate::services::channel_rewards::note_own_sub(ch);
+                }
             }
             // Ship the merged room, with its modes in words, so the page
             // and the replay cache never hold a partial frame.
