@@ -177,7 +177,7 @@ export const PinnedBanner: React.FC<Props> = ({ pins, expanded, onToggle, channe
                         plainNameStyle={NAME_SHADOW}
                       />
                     </span>
-                    <span className="text-textPrimary">: {pin.message_text}</span>
+                    <span className="text-textPrimary">: <bdi>{pin.message_text}</bdi></span>
                   </div>
                   {canUnpin && channelId && <UnpinButton broadcasterId={channelId} messageId={pin.message_id} />}
                 </div>

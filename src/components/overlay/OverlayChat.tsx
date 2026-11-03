@@ -1483,16 +1483,20 @@ const OverlayRow = ({ message, style, expiring, enterDelay }: { message: Overlay
         }}
       >
         {replyMention && (
-          <span style={{ fontWeight: 700, opacity: 0.85 }}>@{stripAt(replyMention.parent_display_name)} </span>
+          <span style={{ fontWeight: 700, opacity: 0.85 }}>@<bdi>{stripAt(replyMention.parent_display_name)}</bdi> </span>
         )}
-        {bodySegs.map((seg, i) => {
-          if (zw.skip.has(i) || (i === giantIdx && !giantInline)) return null;
-          const giant = i === giantIdx && giantInline;
-          const overlays = zw.attached.get(i);
-          return overlays
-            ? <StackedEmote key={i} segs={[seg, ...overlays.map((o) => bodySegs[o])]} style={style} giant={giant} />
-            : <OverlaySegment key={i} segment={seg} style={style} giant={giant} images={imagesHere} />;
-        })}
+        {/* The chatter's own text is a bidi island: right-to-left text reads
+            correctly inside it and never reorders the name or badges. */}
+        <bdi>
+          {bodySegs.map((seg, i) => {
+            if (zw.skip.has(i) || (i === giantIdx && !giantInline)) return null;
+            const giant = i === giantIdx && giantInline;
+            const overlays = zw.attached.get(i);
+            return overlays
+              ? <StackedEmote key={i} segs={[seg, ...overlays.map((o) => bodySegs[o])]} style={style} giant={giant} />
+              : <OverlaySegment key={i} segment={seg} style={style} giant={giant} images={imagesHere} />;
+          })}
+        </bdi>
       </span>
     </div>
   );
@@ -1623,7 +1627,7 @@ const OverlayRow = ({ message, style, expiring, enterDelay }: { message: Overlay
         {reply && (
           <div style={{ fontSize: '0.82em', opacity: 0.7, marginBottom: '0.1em' }}>
             <span aria-hidden="true" style={{ marginRight: '0.3em' }}>↳</span>
-            Replying to <span style={{ fontWeight: 700 }}>{showAt ? '@' : ''}{stripAt(reply.parent_display_name)}</span>: {renderReplyBody(reply.parent_msg_body)}
+            Replying to <span style={{ fontWeight: 700 }}>{showAt ? '@' : ''}<bdi>{stripAt(reply.parent_display_name)}</bdi></span>: <bdi>{renderReplyBody(reply.parent_msg_body)}</bdi>
           </div>
         )}
         {atmosphereFrost ? (
@@ -2087,7 +2091,7 @@ export const OverlayChat = ({ messages, style: rawStyle, superSample = 1 }: { me
         @keyframes snOvPop { 0% { opacity: 0; transform: scale(0.5) } 62% { opacity: 1; transform: scale(1.09) } 100% { opacity: 1; transform: scale(1) } }
         @keyframes snOvStamp { 0% { opacity: 0; transform: scale(1.45) } 28% { opacity: 1 } 52% { transform: scale(0.93) } 76% { transform: scale(1.04) } 100% { opacity: 1; transform: scale(1) } }
         @keyframes snOvOut { to { opacity: 0; transform: translateX(-12px) } }
-        .sn-ov-row { word-break: break-word; overflow-wrap: anywhere; }
+        .sn-ov-row { word-break: break-word; overflow-wrap: anywhere; direction: ltr; }
         /* Border accent animations (first-time highlight + Outline events).
            They ride the BORDER only, never the fill. Ring geometry: an ::after
            masked to a band matching the em-sized border (the padding-box XOR

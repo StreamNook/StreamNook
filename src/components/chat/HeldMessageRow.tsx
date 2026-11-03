@@ -46,7 +46,7 @@ function HeldMessageRow({ row }: HeldMessageRowProps) {
         <span className="min-w-0">{held.label ?? 'Held by AutoMod'}</span>
       </div>
       <p className="text-[14.5px] leading-snug text-textPrimary [overflow-wrap:anywhere]">
-        <span className="font-bold text-accent">{name}</span>: {held.text}
+        <span className="font-bold text-accent"><bdi>{name}</bdi></span>: <bdi>{held.text}</bdi>
       </p>
       {/* data-mod-act: Allow and Deny are one-press mod buttons, so they act
           only once the rows under the pointer have held still, and rest

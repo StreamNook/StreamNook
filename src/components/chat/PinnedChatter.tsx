@@ -110,7 +110,7 @@ export function PinnedChatter({
         className={nameClassName}
         style={look.painted ? look.nameStyle : { ...look.nameStyle, ...plainNameStyle }}
       >
-        {look.displayName}
+        <bdi>{look.displayName}</bdi>
       </span>
     </>
   );

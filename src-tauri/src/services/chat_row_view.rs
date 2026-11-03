@@ -6,7 +6,8 @@
 //! native shell runs none of that TypeScript, so while it asks for it
 //! (`set_enabled`), every row the socket delivers carries `metadata.view` with
 //! those answers, and a chatter whose 7TV cosmetics arrive after their first
-//! row gets a `ROW_COSMETICS` frame. Nothing here runs for the web renderers.
+//! row gets a `ROW_COSMETICS` frame. Nothing here runs for the web renderers,
+//! except that `stamp` balances every row's bidi controls (`bidi_text`) first.
 
 use crate::models::chat_layout::{
     ChatMessage, MessageSegment, PaintLayerView, PaintShadow, PaintStop, PaintView, RowView, ViewBadge, ViewEmote,
@@ -1313,9 +1314,12 @@ pub fn post_member_frame(theme: &crate::services::member_theme::MemberTheme) {
     });
 }
 
-/// Stamps `metadata.view` on a row about to be sent, while a native shell
-/// asked for it.
+/// Balances the row's bidi controls (`bidi_text`) for every renderer, then
+/// stamps `metadata.view` on it while a native shell asked for it.
 pub fn stamp(msg: &mut ChatMessage) {
+    // Every renderer, web ones included: a bidi control a chatter leaves open
+    // ends inside the name or text it was typed in.
+    crate::services::bidi_text::balance_row(msg);
     if enabled() {
         stamp_view(msg);
     }

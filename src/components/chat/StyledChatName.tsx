@@ -91,7 +91,8 @@ export function StyledChatName({
       data-no-drag="true"
     >
       {nameStyle === 'brackets' && <span style={{ color: accentColor }}>[</span>}
-      {name}
+      {/* A bidi island: right-to-left letters or an RLO in a name stay inside it. */}
+      <bdi>{name}</bdi>
       {badge}
       {nameStyle === 'brackets' && <span style={{ color: accentColor }}>]</span>}
     </span>

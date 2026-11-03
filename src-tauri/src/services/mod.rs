@@ -42,6 +42,7 @@ pub mod chat_logger_service;
 pub mod automod_queue;
 pub mod chat_bridge_route;
 pub mod chat_history;
+pub mod bidi_text;
 pub mod chat_rules;
 pub mod chat_row_view;
 pub mod shared_chat_emotes;

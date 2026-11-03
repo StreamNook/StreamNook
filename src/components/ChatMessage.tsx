@@ -911,7 +911,7 @@ function UsernameWithCosmetics({
             }
           }}
         >
-          {getDisplayedName(userIdProp, displayName || username, userOverrides)}
+          <bdi>{getDisplayedName(userIdProp, displayName || username, userOverrides)}</bdi>
         </span>
       </Tooltip>
     </span>
@@ -1229,7 +1229,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   const replyMentionNode =
     replyStyle === 'mention' && parsed.replyInfo ? (
       <span className="font-semibold opacity-85">
-        @{getDisplayedName(overrideKey(parsed.replyInfo.parentUserId, parsed.provider ?? 'twitch'), parsed.replyInfo.parentShownName || parsed.replyInfo.parentDisplayName, userOverrides)}{' '}
+        @<bdi>{getDisplayedName(overrideKey(parsed.replyInfo.parentUserId, parsed.provider ?? 'twitch'), parsed.replyInfo.parentShownName || parsed.replyInfo.parentDisplayName, userOverrides)}</bdi>{' '}
       </span>
     ) : null;
   const giantJustify =
@@ -2202,8 +2202,12 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     return renderSegment(group, index.toString(), false, false, undefined, giant);
   };
 
-  const renderContent = (segments: EmoteSegment[]) =>
-    groupSegments(segments).map((g, i) => renderGroup(g, i));
+  // The body is a chatter's own text, so it is a bidi island (<bdi>): Arabic
+  // or Hebrew reads right to left inside it, and an RLO/RLE/RLI it opens ends
+  // at its edge instead of reordering the name, the badges or the tags after.
+  const renderContent = (segments: EmoteSegment[]) => (
+    <bdi>{groupSegments(segments).map((g, i) => renderGroup(g, i))}</bdi>
+  );
 
   // Gigantified emote (Twitch "Gigantify an Emote" power-up, msg-id
   // gigantified-emote-message): the LAST non-emoji emote leaves the inline
@@ -2217,7 +2221,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     const groups = groupSegments(segments);
     // 'inline' keeps the emote in the text at its usual size.
     if (chatDesign?.giant_emote_align === 'inline') {
-      return { inline: groups.map((g, i) => renderGroup(g, i)), giant: null };
+      return { inline: <bdi>{groups.map((g, i) => renderGroup(g, i))}</bdi>, giant: null };
     }
     let giantIdx = -1;
     for (let i = groups.length - 1; i >= 0; i--) {
@@ -2232,10 +2236,10 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       }
     }
     if (giantIdx === -1) {
-      return { inline: groups.map((g, i) => renderGroup(g, i)), giant: null };
+      return { inline: <bdi>{groups.map((g, i) => renderGroup(g, i))}</bdi>, giant: null };
     }
     return {
-      inline: groups.filter((_, i) => i !== giantIdx).map((g, i) => renderGroup(g, i)),
+      inline: <bdi>{groups.filter((_, i) => i !== giantIdx).map((g, i) => renderGroup(g, i))}</bdi>,
       giant: renderGroup(groups[giantIdx], giantIdx, true),
     };
   };
@@ -2581,7 +2585,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
               }
             }}
           >
-            {effectiveDisplayName || displayName || username}
+            <bdi>{effectiveDisplayName || displayName || username}</bdi>
           </span>
         </Tooltip>
       );
@@ -2754,7 +2758,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
               }
             }}
           >
-            {effectiveDisplayName || displayName || username}
+            <bdi>{effectiveDisplayName || displayName || username}</bdi>
           </span>
         </Tooltip>
       );
@@ -2901,7 +2905,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
               }
             }}
           >
-            {effectiveDisplayName || displayNameProp || username}
+            <bdi>{effectiveDisplayName || displayNameProp || username}</bdi>
           </span>
         </Tooltip>
       );
@@ -3290,7 +3294,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
                         }
                       }}
                     >
-                      {effectiveDisplayName || displayName}
+                      <bdi>{effectiveDisplayName || displayName}</bdi>
                     </span>
                   </Tooltip>
                   <span className="text-highlight-red font-bold">
@@ -3619,9 +3623,9 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
               <svg className="flex-shrink-0" style={{ width: '1.1em', height: '1.1em' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
               </svg>
-              <span className="font-semibold">{getDisplayedName(overrideKey(parsed.replyInfo.parentUserId, parsed.provider ?? 'twitch'), parsed.replyInfo.parentShownName || parsed.replyInfo.parentDisplayName, userOverrides)}</span>
+              <span className="font-semibold"><bdi>{getDisplayedName(overrideKey(parsed.replyInfo.parentUserId, parsed.provider ?? 'twitch'), parsed.replyInfo.parentShownName || parsed.replyInfo.parentDisplayName, userOverrides)}</bdi></span>
               <span className="truncate flex-1">
-                {replyPreviewSegments
+                <bdi>{replyPreviewSegments
                   ? replyPreviewSegments.map((seg, i) =>
                       (seg.type === 'emote' || seg.type === 'emoji') && (seg.emoteUrl || seg.emojiUrl) ? (
                         <img
@@ -3635,7 +3639,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
                         seg.content
                       ),
                     )
-                  : parsed.replyInfo.parentMsgBody}
+                  : parsed.replyInfo.parentMsgBody}</bdi>
               </span>
             </div>
           </div>

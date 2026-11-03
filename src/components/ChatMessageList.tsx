@@ -231,6 +231,9 @@ const MessageRow = memo(function MessageRow({
     <div
       ref={attachRow}
       data-message-id={messageId || undefined}
+      // The row's own order (badges, name, body) is left to right whatever a
+      // chatter types; their text is isolated inside it (ChatMessage).
+      dir="ltr"
       className={`chat-message-row${isModFocus ? ' is-mod-focus' : ''}${
         typeof message !== 'string' && message.metadata?.from_backfill ? ' is-backfill' : ''
       }`}
