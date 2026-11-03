@@ -8,6 +8,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { isPerformanceQuiet, setLowPowerSource } from './lowPower';
+import { CHEAP_EXEMPT } from './cheapExempt';
 import { setPerformanceFlat } from '../themes';
 import { peekPreloadedSettings } from '../bootPreload';
 import { Logger } from './logger';
@@ -24,34 +25,34 @@ export interface PerformanceState {
 let answered = false;
 let installing: Promise<void> | null = null;
 
-/** The finite CSS animations Performance mode is holding at zero duration.
- *  Read while the instant look is still on; finished right after it lifts, so
- *  an entrance that mounted inside its delay or duration never replays when
- *  its real timing comes back. Exempt one-shot cues keep their own duration
- *  and are left alone. */
-export function cappedAnimations(): Animation[] {
-  if (typeof document === 'undefined' || typeof document.getAnimations !== 'function') return [];
-  if (typeof CSSAnimation === 'undefined') return [];
-  const held: Animation[] = [];
-  for (const a of document.getAnimations()) {
-    if (!(a instanceof CSSAnimation)) continue;
-    const timing = a.effect?.getComputedTiming();
-    if (!timing || timing.iterations === Infinity || timing.duration !== 0) continue;
-    held.push(a);
-  }
-  return held;
+function timelineNow(): number | null {
+  if (typeof document === 'undefined') return null;
+  const t = document.timeline?.currentTime;
+  return typeof t === 'number' ? t : null;
 }
 
-/** Finish each animation in `list` (see cappedAnimations). Reading the timing
- *  first makes the engine apply the style change that just restored the real
- *  duration; finishing before that would end it at zero and let it replay. */
-export function finishFiniteAnimations(list: Animation[]): void {
-  for (const a of list) {
+/** Right after the instant look lifts: finish every finite CSS animation that
+ *  started before `uncapAt`, so an entrance that mounted inside its delay or
+ *  duration never replays when its real timing comes back (a delayed one too,
+ *  which was already gone from the page's list while capped). Exempt one-shot
+ *  cues kept their own timing all along and are left alone. Reading playState
+ *  first makes the engine apply the style change that restored the real
+ *  durations; getComputedTiming() does not, and finishing before that ends
+ *  each animation at zero and lets it replay. */
+export function finishReplays(uncapAt: number | null): void {
+  if (uncapAt === null || typeof document === 'undefined') return;
+  if (typeof document.getAnimations !== 'function' || typeof CSSAnimation === 'undefined') return;
+  const first = document.getAnimations()[0];
+  if (first) void first.playState;
+  for (const a of document.getAnimations()) {
     try {
-      a.effect?.getComputedTiming();
-      a.finish();
+      if (!(a instanceof CSSAnimation)) continue;
+      if (a.effect?.getComputedTiming().iterations === Infinity) continue;
+      const target = (a.effect as KeyframeEffect | null)?.target;
+      if (target?.matches?.(CHEAP_EXEMPT)) continue;
+      if (typeof a.startTime === 'number' && a.startTime <= uncapAt) a.finish();
     } catch {
-      // Gone from the page, or no longer finite: nothing to hold.
+      // Gone from the page meanwhile: nothing to hold.
     }
   }
 }
@@ -59,10 +60,10 @@ export function finishFiniteAnimations(list: Animation[]): void {
 export function applyPerformanceState(state: PerformanceState): void {
   const active = state.active === true;
   const leaving = !active && isPerformanceQuiet();
-  const held = leaving ? cappedAnimations() : [];
+  const uncapAt = leaving ? timelineNow() : null;
   setLowPowerSource('performance', { quiet: active, still: active && state.still_chat === true, flat: active });
   setPerformanceFlat(active);
-  if (held.length > 0) finishFiniteAnimations(held);
+  if (leaving) finishReplays(uncapAt);
 }
 
 /** Until Rust answers, a window whose settings say Always draws the cheap look

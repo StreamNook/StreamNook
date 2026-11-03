@@ -201,3 +201,55 @@ describe('paintAfter', () => {
     await expect(pm.paintAfter(Promise.reject(new Error('x')), 300)).resolves.toBeUndefined();
   });
 });
+
+describe('leaving the cheap look', () => {
+  const g = globalThis as Record<string, unknown>;
+  afterEach(() => {
+    delete g.document;
+    delete g.CSSAnimation;
+  });
+
+  it('applies the restored timing, then finishes only finite, non-exempt animations started before it', async () => {
+    const log: string[] = [];
+    const { CHEAP_EXEMPT } = await import('./cheapExempt');
+    class FakeCSSAnimation {
+      constructor(
+        readonly id: string,
+        readonly startTime: number | null,
+        private readonly iterations: number,
+        private readonly exempt: boolean,
+      ) {}
+      get playState() {
+        log.push(`playState:${this.id}`);
+        return 'running';
+      }
+      get effect() {
+        return {
+          getComputedTiming: () => ({ iterations: this.iterations }),
+          target: { matches: (sel: string) => sel === CHEAP_EXEMPT && this.exempt },
+        };
+      }
+      finish() {
+        log.push(`finish:${this.id}`);
+      }
+    }
+    const anims = [
+      new FakeCSSAnimation('entrance', 100, 1, false),
+      new FakeCSSAnimation('loop', 100, Infinity, false),
+      new FakeCSSAnimation('cue', 100, 1, true),
+      new FakeCSSAnimation('after', 900, 1, false),
+      new FakeCSSAnimation('pending', null, 1, false),
+    ];
+    g.CSSAnimation = FakeCSSAnimation;
+    g.document = {
+      timeline: { currentTime: 500 },
+      getAnimations: () => anims,
+      documentElement: { dataset: {} },
+    };
+    const { pm } = await load();
+    pm.applyPerformanceState({ active: true, still_chat: false });
+    expect(log).toEqual([]);
+    pm.applyPerformanceState({ active: false, still_chat: false });
+    expect(log).toEqual(['playState:entrance', 'finish:entrance']);
+  });
+});

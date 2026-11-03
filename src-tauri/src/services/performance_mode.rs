@@ -506,16 +506,33 @@ fn win_is_ours(pid: u32) -> Option<bool> {
     Some(verdict)
 }
 
+/// The foreground window the poll last judged: (hwnd, pid, verdict). While it
+/// stays in front the poll reuses the verdict, so it never opens a handle to
+/// that process (often a game) every second.
+#[cfg(windows)]
+static LAST_FRONT: Mutex<Option<(isize, u32, bool)>> = Mutex::new(None);
+
 #[cfg(windows)]
 fn ask(_app: &AppHandle, gen: u64) {
     use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
     // SAFETY: no arguments; a null answer is handled by window_pid.
-    let Some(pid) = window_pid(unsafe { GetForegroundWindow() }) else {
+    let hwnd = unsafe { GetForegroundWindow() };
+    let Some(pid) = window_pid(hwnd) else {
         return;
     };
-    if let Some(front) = win_is_ours(pid) {
-        apply(gen, front);
-    }
+    let key = (hwnd.0 as isize, pid);
+    let last = *LAST_FRONT.lock().unwrap_or_else(|p| p.into_inner());
+    let front = match last {
+        Some((h, p, verdict)) if (h, p) == key => verdict,
+        _ => {
+            let Some(verdict) = win_is_ours(pid) else {
+                return;
+            };
+            *LAST_FRONT.lock().unwrap_or_else(|p| p.into_inner()) = Some((key.0, key.1, verdict));
+            verdict
+        }
+    };
+    apply(gen, front);
 }
 
 /// Every foreground change on the desktop, ours or not. Runs on the main

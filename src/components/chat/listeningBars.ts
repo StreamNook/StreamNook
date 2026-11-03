@@ -19,6 +19,7 @@
 
 import { getListening, subscribeLevel, subscribeListening, type Listening } from '../../utils/songListening';
 import { isWindowHidden, onWindowVisibility } from '../../utils/windowVisibility';
+import { isLowPower, subscribeLowPower } from '../../utils/lowPower';
 
 export const BAR_WEIGHTS = [0.55, 0.85, 1, 0.8, 0.6] as const;
 /** Each bar's ripple, rad/s, and where it starts. */
@@ -85,10 +86,13 @@ export function barsMove(state: BarsState, mode: MotionMode): boolean {
   return mode === 'reduced' && state === 'level';
 }
 
-/** The window's Motion setting (MotionScope writes it on <html>). */
+/** The window's Motion setting (MotionScope writes it on <html>). The cheap
+ *  look (Performance mode, Battery Saver) draws Full like Reduced: the bars
+ *  follow the sound with no ripple and hold still otherwise. */
 export function motionMode(): MotionMode {
   const m = typeof document === 'undefined' ? undefined : document.documentElement.dataset.motion;
-  return m === 'off' || m === 'reduced' ? m : 'full';
+  if (m === 'off' || m === 'reduced') return m;
+  return isLowPower() ? 'reduced' : 'full';
 }
 
 // ---------------------------------------------------------------- the loop
@@ -157,6 +161,7 @@ function start(): void {
     }),
     subscribeListening(wake),
     onWindowVisibility(wake),
+    subscribeLowPower(wake),
   ];
   // The Motion setting can change while bars are up.
   const observer = new MutationObserver(wake);

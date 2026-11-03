@@ -1037,6 +1037,13 @@ pub fn run() {
         // relay sessions, and nothing in the new page knows their ids, so the
         // sessions are released as it starts loading. The first load finds none.
         .on_page_load(|webview, payload| {
+            // A reload drops the old page's open dialogs: its wrapper never got
+            // to say they closed, so Performance mode would read the window as
+            // in front until it closed.
+            #[cfg(desktop)]
+            if payload.event() == tauri::webview::PageLoadEvent::Started {
+                services::performance_mode::note_window_destroyed(webview.label());
+            }
             if webview.label() == "main" && payload.event() == tauri::webview::PageLoadEvent::Started {
                 // What the old page declared to Discord presence goes with it.
                 #[cfg(desktop)]

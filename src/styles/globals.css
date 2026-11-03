@@ -5035,11 +5035,13 @@ html[data-sn-hidden] video {
 /* Held still while a stream is on screen, and in the cheap look (see Cheap
    draw below), on a static value taken from inside each animation's range. */
 html[data-watching] .automation-pulse,
-html[data-sn-low-power] .automation-pulse {
+html[data-sn-low-power] .automation-pulse,
+html[data-motion="off"] .automation-pulse {
   animation: none;
 }
 html[data-watching] .automation-pulse-shift,
-html[data-sn-low-power] .automation-pulse-shift {
+html[data-sn-low-power] .automation-pulse-shift,
+html[data-motion="off"] .automation-pulse-shift {
   display: none;
 }
 
@@ -5051,7 +5053,8 @@ html[data-sn-low-power] .update-pill {
 
 /* The badge already carries this shadow statically, so only the pulse stops. */
 html[data-watching] .drops-progress-inline,
-html[data-sn-low-power] .drops-progress-inline {
+html[data-sn-low-power] .drops-progress-inline,
+html[data-motion="off"] .drops-progress-inline {
   animation: none;
 }
 
@@ -5134,7 +5137,8 @@ html[data-sn-perf] *:not(
    drift and breath, the Cologne wash and the hype train's moving fills stop
    outright; the chip shine and the automation sweep rest as visible bands and
    the looping row glints (the chase ring above all) as a bright arc, so they
-   leave the picture. */
+   leave the picture. Motion Off caps the same loops, so it rests them the
+   same way. */
 html[data-sn-low-power] .sn-aurora-1,
 html[data-sn-low-power] .sn-aurora-2,
 html[data-sn-low-power] .sn-atm-breathe-1,
@@ -5142,15 +5146,27 @@ html[data-sn-low-power] .sn-atm-breathe-2,
 html[data-sn-low-power] .cologne-wash,
 html[data-sn-low-power] .hype-train-fill-wave,
 html[data-sn-low-power] .hype-train-progress-rainbow::before,
-html[data-sn-low-power] .hype-train-progress-golden::before {
+html[data-sn-low-power] .hype-train-progress-golden::before,
+html[data-motion="off"] .sn-aurora-1,
+html[data-motion="off"] .sn-aurora-2,
+html[data-motion="off"] .sn-atm-breathe-1,
+html[data-motion="off"] .sn-atm-breathe-2,
+html[data-motion="off"] .cologne-wash,
+html[data-motion="off"] .hype-train-fill-wave,
+html[data-motion="off"] .hype-train-progress-rainbow::before,
+html[data-motion="off"] .hype-train-progress-golden::before {
   animation: none !important;
 }
 html[data-sn-low-power] .card-chip-shine > span,
-html[data-sn-low-power] .automation-shimmer-overlay::after {
+html[data-sn-low-power] .automation-shimmer-overlay::after,
+html[data-motion="off"] .card-chip-shine > span,
+html[data-motion="off"] .automation-shimmer-overlay::after {
   display: none;
 }
 html[data-sn-low-power] .sn-ft-anim-ring.sn-ft-loop::after,
-html[data-sn-low-power] .sn-ft-anim-bar.sn-ft-loop::after {
+html[data-sn-low-power] .sn-ft-anim-bar.sn-ft-loop::after,
+html[data-motion="off"] .sn-ft-anim-ring.sn-ft-loop::after,
+html[data-motion="off"] .sn-ft-anim-bar.sn-ft-loop::after {
   animation: none !important;
   opacity: 0 !important;
 }

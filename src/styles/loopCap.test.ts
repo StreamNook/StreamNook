@@ -12,6 +12,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join, relative, resolve, sep } from 'node:path';
 import postcss, { type AtRule, type Root, type Rule } from 'postcss';
+import { CHEAP_EXEMPT } from '../utils/cheapExempt';
 
 const root = resolve(__dirname, '..', '..');
 const src = resolve(root, 'src');
@@ -458,13 +459,26 @@ describe('every CSS animation has a decision for the cheap-draw modes', () => {
     expect(erased).toEqual([]);
   });
 
-  it('writes every named rest under the cheap-draw attribute', () => {
-    const selectors = new Set<string>();
-    for (const { root: sheet } of sheets) sheet.walkRules((r) => r.selectors.forEach((s) => selectors.add(norm(s))));
+  it('writes every named rest under the cheap-draw attribute and Motion Off', () => {
+    // Both cap the same loops, so both need the rest. The rest must be in the
+    // rule that names the selector: another rule naming it proves nothing.
+    const rests = (r: Rule) =>
+      declOf(r, 'animation')?.value === 'none' ||
+      declOf(r, 'animation-name')?.value === 'none' ||
+      declOf(r, 'display')?.value === 'none';
+    const rested = new Set<string>();
+    for (const { root: sheet } of sheets) {
+      sheet.walkRules((r) => {
+        if (rests(r)) r.selectors.forEach((s) => rested.add(norm(s)));
+      });
+    }
     const missing = Object.entries(CSS_ROWS)
       .filter(([, row]) => row.d === 'rest')
-      .filter(([, row]) => !selectors.has(`html[data-sn-low-power] ${row.cover}`))
-      .map(([key, row]) => `${key} -> ${row.cover}`);
+      .flatMap(([key, row]) =>
+        ['html[data-sn-low-power]', 'html[data-motion="off"]']
+          .filter((prefix) => !rested.has(`${prefix} ${row.cover}`))
+          .map((prefix) => `${key} -> ${prefix} ${row.cover}`),
+      );
     expect(missing).toEqual([]);
   });
 
@@ -476,6 +490,8 @@ describe('every CSS animation has a decision for the cheap-draw modes', () => {
       .filter((row) => EXEMPT_DECISIONS.has(row.d))
       .map((row) => row.cover!);
     expect(sorted(quiet)).toEqual(sorted([...covers, ...TSX_EXEMPT]));
+    // Leaving Performance mode skips the same cues (utils/performanceMode.ts).
+    expect(sorted(postcss.list.comma(CHEAP_EXEMPT).map(norm))).toEqual(sorted(quiet));
   });
 
   it('lists every Tailwind config animation with a decision of its kind', () => {

@@ -103,6 +103,21 @@ describe('the listening bars loop', () => {
     stop();
   });
 
+  it('Full in the cheap look draws like Reduced, and leaving it starts the loop again', async () => {
+    stubWindow('full');
+    const lp = await import('../../utils/lowPower');
+    const { drawBars } = await import('./listeningBars');
+    lp.setLowPowerSource('performance', { quiet: true, still: false, flat: true });
+    const stop = drawBars(bars());
+    runFrame();
+    expect(frames).toHaveLength(0);
+    lp.setLowPowerSource('performance', { quiet: false, still: false, flat: false });
+    expect(frames).toHaveLength(1);
+    runFrame();
+    expect(frames).toHaveLength(1);
+    stop();
+  });
+
   it('barsMove: Full always, Reduced only while following the level', async () => {
     stubWindow('full');
     const { barsMove } = await import('./listeningBars');
