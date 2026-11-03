@@ -20,10 +20,10 @@ describe('foldBadges', () => {
     expect(foldKind('limerino', '')).toBe('addon');
     expect(foldKind('streamnook', '')).toBe('streamnook');
   });
-  it('reads the setting', () => {
-    expect(badgeFoldLimit(undefined)).toBe(3);
-    expect(badgeFoldLimit(0)).toBe(0);
-    expect(badgeFoldLimit(1)).toBe(2);
-    expect(badgeFoldLimit(9)).toBe(5);
+  it('reads the setting as the shared limit cases say, like Rust', () => {
+    expect(rules.limit_cases.length).toBeGreaterThanOrEqual(8);
+    for (const c of rules.limit_cases) {
+      expect(badgeFoldLimit(c.raw ?? undefined), String(c.raw)).toBe(c.limit);
+    }
   });
 });

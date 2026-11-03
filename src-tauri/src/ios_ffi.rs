@@ -160,18 +160,12 @@ pub struct BadgeFoldPlan {
 }
 
 /// The chat-row badge fold (`services::badge_fold`) for the iPhone layout:
-/// `badges` in chat order, `limit` add-ons (0 = show all).
+/// `badges` in chat order, `limit` the "Badges before +N" setting as stored
+/// (`chat_design.badge_fold_limit`; nil reads as the default).
 #[uniffi::export]
-pub fn badge_fold_plan(badges: Vec<BadgeFoldInput>, limit: u32) -> BadgeFoldPlan {
-    use crate::services::badge_fold::{fold_badges, fold_kind, FoldKind};
-    let kinds: Vec<FoldKind> = badges
-        .iter()
-        .map(|b| match fold_kind(&b.provider, "") {
-            FoldKind::Platform if b.role => FoldKind::Role,
-            kind => kind,
-        })
-        .collect();
-    let fold = fold_badges(&kinds, limit as usize);
+pub fn badge_fold_plan(badges: Vec<BadgeFoldInput>, limit: Option<f64>) -> BadgeFoldPlan {
+    let pairs: Vec<(&str, bool)> = badges.iter().map(|b| (b.provider.as_str(), b.role)).collect();
+    let fold = crate::services::badge_fold::fold_plan(&pairs, limit);
     BadgeFoldPlan {
         shown: fold.shown.into_iter().map(|i| i as u32).collect(),
         hidden: fold.hidden.into_iter().map(|i| i as u32).collect(),

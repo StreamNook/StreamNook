@@ -2,6 +2,16 @@
   "role_sets": ["broadcaster", "staff", "admin", "global_mod", "lead_moderator", "moderator", "vip", "owner"],
   "platform_providers": ["", "twitch", "kick", "youtube", "tiktok"],
   "tiers": [2, 3, 5, 8],
+  "limit_cases": [
+    { "raw": null, "limit": 3 },
+    { "raw": 0, "limit": 0 },
+    { "raw": -1, "limit": 0 },
+    { "raw": 1, "limit": 2 },
+    { "raw": 3, "limit": 3 },
+    { "raw": 3.7, "limit": 3 },
+    { "raw": 5, "limit": 5 },
+    { "raw": 9, "limit": 5 }
+  ],
   "cases": [
     { "name": "empty", "kinds": [], "limit": 3, "shown": [], "hidden": [], "tier": 0 },
     { "name": "show all still has a tier", "kinds": ["role","platform","platform","seventv","addon","addon","streamnook"], "limit": 0, "shown": [0,1,2,3,4,5,6], "hidden": [], "tier": 2 },

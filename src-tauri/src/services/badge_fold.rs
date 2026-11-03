@@ -66,6 +66,35 @@ pub fn rarity_tier(addons: usize) -> u8 {
     RULES.tiers.iter().filter(|start| addons >= **start).count() as u8
 }
 
+/// The "Badges before +N" setting as a limit: 0 shows all, else 2 to 5 (what
+/// Settings offers); a missing or unreadable value is the default, 3.
+pub fn fold_limit(raw: Option<f64>) -> usize {
+    match raw {
+        Some(n) if n.is_finite() => {
+            let n = n.floor();
+            if n <= 0.0 {
+                0
+            } else {
+                n.clamp(2.0, 5.0) as usize
+            }
+        }
+        _ => 3,
+    }
+}
+
+/// `fold_badges` for badges given as (provider key, a platform role badge),
+/// with the setting as stored: what the native shells call.
+pub fn fold_plan(badges: &[(&str, bool)], raw_limit: Option<f64>) -> BadgeFold {
+    let kinds: Vec<FoldKind> = badges
+        .iter()
+        .map(|(provider, role)| match fold_kind(provider, "") {
+            FoldKind::Platform if *role => FoldKind::Role,
+            kind => kind,
+        })
+        .collect();
+    fold_badges(&kinds, fold_limit(raw_limit))
+}
+
 /// Indices into the row's badges, each list in chat order, and the rarity tier.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct BadgeFold {
@@ -155,6 +184,50 @@ mod tests {
         assert_eq!(fold_kind("7tv", ""), FoldKind::Seventv);
         assert_eq!(fold_kind("limerino", ""), FoldKind::Addon);
         assert_eq!(fold_kind("streamnook", ""), FoldKind::Streamnook);
+    }
+
+    #[derive(Deserialize)]
+    struct LimitCase {
+        raw: Option<f64>,
+        limit: usize,
+    }
+
+    #[derive(Deserialize)]
+    struct LimitFile {
+        limit_cases: Vec<LimitCase>,
+    }
+
+    #[test]
+    fn the_setting_reads_as_the_shared_limit_cases_say() {
+        let file: LimitFile =
+            serde_json::from_str(include_str!("../../../src/utils/badgeFold.rules.json")).unwrap();
+        assert!(file.limit_cases.len() >= 8);
+        for c in file.limit_cases {
+            assert_eq!(fold_limit(c.raw), c.limit, "raw {:?}", c.raw);
+        }
+    }
+
+    #[test]
+    fn a_native_plan_maps_roles_and_reads_the_raw_setting() {
+        // Kick order: sub, then the moderator; then 7TV, two clients and the member.
+        let badges = [
+            ("kick", false),
+            ("kick", true),
+            ("7tv", false),
+            ("ffz", false),
+            ("limerino", false),
+            ("streamnook", false),
+        ];
+        let plan = fold_plan(&badges, Some(1.0));
+        // A stored 1 reads as 2: the member and 7TV stay, both clients fold.
+        assert_eq!(plan.shown, vec![0, 1, 2, 5]);
+        assert_eq!(plan.hidden, vec![3, 4]);
+        assert_eq!(plan.tier, 2);
+        // Missing reads as 3; zero shows all.
+        assert_eq!(fold_plan(&badges, None).hidden, vec![4]);
+        assert!(fold_plan(&badges, Some(0.0)).hidden.is_empty());
+        // A role flag on an add-on changes nothing: only platform badges have roles.
+        assert_eq!(fold_plan(&[("ffz", true), ("bttv", false), ("7tv", false)], Some(2.0)).hidden, vec![2]);
     }
 
     #[test]
