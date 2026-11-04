@@ -2483,7 +2483,6 @@ pub fn run() {
             open_drop_details,
             // Prediction commands
             place_prediction,
-            get_active_prediction,
             get_channel_points_for_channel,
             // Poll commands
             vote_on_poll,

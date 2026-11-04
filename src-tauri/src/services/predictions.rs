@@ -3,7 +3,8 @@
 //! The channel topic (`predictions-channel-v1`) reports the pooled totals and
 //! the phase; the viewer's own topic (`predictions-user-v1`) is the only source
 //! for their stake and for whether they won, lost or got their points back.
-//! Rust keeps the current prediction per channel from both, so a card that
+//! Rust keeps the current prediction per channel from both, and asks Twitch's
+//! GQL once when a card opens on one it has not heard of, so a card that
 //! opens mid-prediction gets it at once (`current`), and every change goes out
 //! as one typed `prediction-state` push with every word and number already
 //! decided. Predicting spends points, so the shells only ever ask Rust what a
@@ -551,6 +552,85 @@ pub fn note_channel_event(channel_id: &str, login: Option<&str>, message: &Value
     }
 }
 
+/// The running prediction as Twitch's GQL has it, and the viewer's stake in it
+/// when signed in. Public: it answers without a token, just with no `self`.
+pub const RUNNING_QUERY: &str = "query PredictionRunning($channelID: ID!) { channel(id: $channelID) { activePredictionEvents { id status title predictionWindowSeconds createdAt outcomes { id title color totalPoints totalUsers } self { prediction { points outcome { id } } } } lockedPredictionEvents { id status title predictionWindowSeconds createdAt outcomes { id title color totalPoints totalUsers } self { prediction { points outcome { id } } } } } }";
+
+/// One GQL prediction in the channel topic's shape, so `apply_event` reads both.
+fn event_of(node: &Value) -> Value {
+    let outcomes: Vec<Value> = node["outcomes"]
+        .as_array()
+        .map(|list| {
+            list.iter()
+                .map(|o| {
+                    serde_json::json!({
+                        "id": o["id"], "title": o["title"], "color": o["color"],
+                        "total_points": o["totalPoints"], "total_users": o["totalUsers"],
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    serde_json::json!({
+        "id": node["id"], "title": node["title"], "status": node["status"],
+        "prediction_window_seconds": node["predictionWindowSeconds"],
+        "created_at": node["createdAt"],
+        "outcomes": outcomes,
+    })
+}
+
+/// Lay Twitch's answer to `RUNNING_QUERY` in, unless the channel topic got
+/// there first. True when the card changed.
+fn apply_running(kept: &mut HashMap<String, Prediction>, channel_id: &str, body: &Value) -> bool {
+    if kept.contains_key(channel_id) {
+        return false;
+    }
+    let channel = &body["data"]["channel"];
+    let Some(node) = ["activePredictionEvents", "lockedPredictionEvents"]
+        .iter()
+        .find_map(|key| channel[*key].as_array().and_then(|list| list.first()))
+    else {
+        return false;
+    };
+    if !apply_event(kept, channel_id, &event_of(node)) {
+        return false;
+    }
+    let own = &node["self"]["prediction"];
+    if let (Some(outcome_id), Some(points)) = (own["outcome"]["id"].as_str(), own["points"].as_i64()) {
+        apply_self(kept, channel_id, node["id"].as_str().unwrap_or_default(), outcome_id, points, None, None);
+    }
+    true
+}
+
+/// A card that opens after its prediction started: the channel topic only says
+/// something on the next bet, and a locked prediction takes no more bets, so
+/// it would stay hidden until it resolved. Ask Twitch once instead.
+async fn read_running(channel_id: &str) -> bool {
+    if channel_id.is_empty() || state().contains_key(channel_id) {
+        return false;
+    }
+    let body = || {
+        serde_json::json!({
+            "operationName": "PredictionRunning",
+            "query": RUNNING_QUERY,
+            "variables": { "channelID": channel_id },
+        })
+    };
+    let token = crate::services::twitch_web_gql::app_web_session().await;
+    let mut answer = crate::services::twitch_web_gql::post(token.as_deref(), body(), "Prediction").await;
+    // A stale web session refuses the whole call; the prediction itself is public.
+    if token.is_some() && answer.as_ref().map_or(true, |b| b["data"]["channel"].is_null()) {
+        answer = crate::services::twitch_web_gql::post(None, body(), "Prediction").await;
+    }
+    match answer {
+        Ok(body) => apply_running(&mut state(), channel_id, &body),
+        Err(e) => {
+            debug!("[Prediction] reading the running prediction failed: {e}");
+            false
+        }
+    }
+}
+
 /// The viewer's own message (`predictions-user-v1`).
 pub fn note_self(
     channel_id: &str,
@@ -570,6 +650,9 @@ pub fn note_self(
 pub async fn current(channel_id: &str, login: Option<&str>) -> PredictionPush {
     if let Some(login) = login.map(str::trim).filter(|l| !l.is_empty()) {
         logins().insert(channel_id.to_string(), login.to_lowercase());
+    }
+    if read_running(channel_id).await {
+        publish(channel_id);
     }
     PredictionPush { channel_id: channel_id.to_string(), view: view_now(channel_id).await }
 }
@@ -661,6 +744,57 @@ mod tests {
 
     fn nooks(balance: i64) -> ChannelPoints {
         ChannelPoints { enabled: true, balance: Some(balance), name: Some("Nooks".into()), ..Default::default() }
+    }
+
+    /// Twitch's GQL answer for a locked prediction, as `RUNNING_QUERY` gets it.
+    fn running_locked(stake: Value) -> Value {
+        json!({ "data": { "channel": {
+            "activePredictionEvents": [],
+            "lockedPredictionEvents": [{
+                "id": "p1", "status": "LOCKED", "title": "Beats it first try?",
+                "predictionWindowSeconds": 120,
+                "createdAt": chrono::DateTime::from_timestamp_millis(NOW - 200_000).unwrap().to_rfc3339(),
+                "outcomes": [
+                    { "id": "yes", "title": "Yes", "color": "BLUE", "totalPoints": 3600, "totalUsers": 412 },
+                    { "id": "no", "title": "No", "color": "PINK", "totalPoints": 6400, "totalUsers": 688 },
+                ],
+                "self": stake,
+            }],
+        } } })
+    }
+
+    #[test]
+    fn a_locked_prediction_read_from_twitch_shows_with_totals_and_stake() {
+        let mut kept = HashMap::new();
+        let body = running_locked(json!({ "prediction": { "points": 250, "outcome": { "id": "no" } } }));
+        assert!(apply_running(&mut kept, "c1", &body));
+        let p = &kept["c1"];
+        assert_eq!(p.status, "LOCKED");
+        assert_eq!(p.pool(), 10_000);
+        assert_eq!(p.outcome("yes").map(|o| o.users), Some(412));
+        assert_eq!(p.stake, Some(Stake { outcome_id: "no".into(), points: 250 }));
+        let v = view_of(p, None, NOW);
+        assert_eq!(v.phase, "locked");
+        assert!(!v.can_predict);
+    }
+
+    #[test]
+    fn the_twitch_read_signed_out_or_empty_or_late_changes_nothing_it_should_not() {
+        // Signed out: no `self`, so no stake.
+        let mut kept = HashMap::new();
+        assert!(apply_running(&mut kept, "c1", &running_locked(Value::Null)));
+        assert_eq!(kept["c1"].stake, None);
+        // Nothing running, or the query refused.
+        let mut empty = HashMap::new();
+        let none = json!({ "data": { "channel": { "activePredictionEvents": [], "lockedPredictionEvents": [] } } });
+        assert!(!apply_running(&mut empty, "c1", &none));
+        assert!(!apply_running(&mut empty, "c1", &json!({ "errors": [{ "message": "no" }] })));
+        assert!(empty.is_empty());
+        // The channel topic got there first: its newer totals stay.
+        let mut topic = kept_with(created("ACTIVE"));
+        let before = topic["c1"].clone();
+        assert!(!apply_running(&mut topic, "c1", &running_locked(Value::Null)));
+        assert_eq!(topic["c1"], before);
     }
 
     #[test]

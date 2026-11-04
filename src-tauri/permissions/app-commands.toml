@@ -534,7 +534,6 @@ allow = [
   "validate_drops_token",
   "open_drop_details",
   "place_prediction",
-  "get_active_prediction",
   "get_channel_points_for_channel",
   "vote_on_poll",
   "get_channel_rewards",

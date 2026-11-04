@@ -6,7 +6,7 @@ lazy_static::lazy_static! { static ref HTTP_CLIENT: reqwest::Client = crate::ser
 use crate::models::drops::*;
 use crate::models::settings::AppState;
 use crate::services::drops_auth_service::{DropsAuthService, DropsDeviceCodeInfo};
-use log::{debug, error, warn};
+use log::{debug, error};
 use crate::rt::AppHandle;
 use tauri::{Emitter, Manager, State};
 
@@ -979,8 +979,8 @@ pub async fn place_prediction(
 // Poll commands
 //
 // Twitch has no GQL read for polls (the web client learns them over PubSub), so
-// there's no `get_active_poll` counterpart to `get_active_prediction` — the
-// PubSub service feeds the overlay. This command is the interactive half: it
+// there's no `get_active_poll` counterpart to the running-prediction read in
+// `services::predictions` — the PubSub service feeds the overlay. This command is the interactive half: it
 // casts a free (base) vote. Auth mirrors `place_prediction`: Android client id +
 // OAuth drops token, using the persisted-query hash captured from the web vote.
 #[tauri::command]
@@ -1095,147 +1095,6 @@ pub async fn vote_on_poll(
     crate::services::slash_commands::announce_my_vote(&channel_id, &poll_id, &choice_id);
 
     Ok(result)
-}
-
-#[tauri::command]
-pub async fn get_active_prediction(
-    channel_login: String,
-) -> Result<Option<serde_json::Value>, String> {
-    use crate::services::drops_auth_service::DropsAuthService;
-    use serde_json::json;
-
-    const CLIENT_ID: &str = env!("TWITCH_ANDROID_CLIENT_ID");
-
-    let token = DropsAuthService::get_token()
-        .await
-        .map_err(|e| format!("Failed to get token: {}", e))?;
-
-    let client = HTTP_CLIENT.clone();
-
-    // GQL query to fetch active prediction for a channel
-    let query = r#"
-    query GetChannelPrediction($login: String!) {
-        channel(name: $login) {
-            id
-            activePredictionEvent {
-                id
-                status
-                title
-                predictionWindowSeconds
-                createdAt
-                lockedAt
-                endedAt
-                winningOutcome {
-                    id
-                }
-                outcomes {
-                    id
-                    title
-                    color
-                    totalPoints
-                    totalUsers
-                }
-            }
-        }
-    }
-    "#;
-
-    let response = client
-        .post("https://gql.twitch.tv/gql")
-        .header("Client-Id", CLIENT_ID)
-        .header("Authorization", format!("OAuth {}", token))
-        .json(&json!({
-            "operationName": "GetChannelPrediction",
-            "query": query,
-            "variables": {
-                "login": channel_login.to_lowercase()
-            }
-        }))
-        .send()
-        .await
-        .map_err(|e| format!("Failed to fetch prediction: {}", e))?;
-
-    let result: serde_json::Value = response
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse prediction response: {}", e))?;
-
-    // Twitch REMOVED `Channel.activePredictionEvent`, so this query now fails
-    // validation and the branch below can never be taken. Surface that instead of
-    // reporting "no active prediction", which is what made it look like a working
-    // late-join path for as long as it did.
-    //
-    // Nothing depends on it any more: the predictions-channel-v1 topic sends the
-    // full event on `event-updated`, which fires on every bet, so an already
-    // running prediction reaches the overlay within seconds of subscribing.
-    if let Some(errors) = result.get("errors") {
-        warn!(
-            "[Prediction] get_active_prediction is no longer supported by Twitch              (PubSub is the only source): {}",
-            errors
-        );
-        return Ok(None);
-    }
-
-    // Check if there's an active prediction
-    if let Some(prediction) = result["data"]["channel"]["activePredictionEvent"].as_object() {
-        let channel_id = result["data"]["channel"]["id"].as_str().unwrap_or("");
-
-        // Transform to match the format we use in PredictionOverlay
-        let status = prediction
-            .get("status")
-            .and_then(|v| v.as_str())
-            .unwrap_or("ACTIVE");
-        let prediction_id = prediction.get("id").and_then(|v| v.as_str()).unwrap_or("");
-        let title = prediction
-            .get("title")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let prediction_window = prediction
-            .get("predictionWindowSeconds")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(60);
-        let created_at = prediction
-            .get("createdAt")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-
-        let winning_outcome_id = prediction
-            .get("winningOutcome")
-            .and_then(|v| v.get("id"))
-            .and_then(|v| v.as_str());
-
-        // Transform outcomes
-        let mut outcomes = Vec::new();
-        if let Some(outcomes_array) = prediction.get("outcomes").and_then(|v| v.as_array()) {
-            for outcome in outcomes_array {
-                outcomes.push(json!({
-                    "id": outcome.get("id").and_then(|v| v.as_str()).unwrap_or(""),
-                    "title": outcome.get("title").and_then(|v| v.as_str()).unwrap_or(""),
-                    "color": outcome.get("color").and_then(|v| v.as_str()).unwrap_or("BLUE"),
-                    "total_points": outcome.get("totalPoints").and_then(|v| v.as_i64()).unwrap_or(0),
-                    "total_users": outcome.get("totalUsers").and_then(|v| v.as_i64()).unwrap_or(0)
-                }));
-            }
-        }
-
-        debug!(
-            "Found active prediction on {}: {} (status: {})",
-            channel_login, title, status
-        );
-
-        return Ok(Some(json!({
-            "channel_id": channel_id,
-            "prediction_id": prediction_id,
-            "title": title,
-            "status": status,
-            "outcomes": outcomes,
-            "prediction_window_seconds": prediction_window,
-            "created_at": created_at,
-            "winning_outcome_id": winning_outcome_id
-        })));
-    }
-
-    Ok(None)
 }
 
 #[tauri::command]
