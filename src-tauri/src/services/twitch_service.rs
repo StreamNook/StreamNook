@@ -1446,6 +1446,28 @@ impl TwitchService {
         typed.into_error(refresh_failure_message(kind, &format!("{e:#}")))
     }
 
+    /// Renew the primary token from `refresh` and seal the result, in a task
+    /// of its own that keeps the slot until the write lands. Twitch's refresh
+    /// tokens are single use: once Twitch answers, the stored one is spent, so
+    /// a caller dropped between the answer and the write (chat's reload
+    /// aborting its supervisor, an outer timeout, the phone worker winding
+    /// down) lost the new pair and ended the sign-in at the next renewal. The
+    /// detached task finishes either way.
+    async fn renew_primary(slot: SlotGuard, refresh: String) -> Result<StorableToken> {
+        tauri::async_runtime::spawn(async move {
+            let new_token = Self::refresh_token(&refresh).await.map_err(Self::refresh_error)?;
+            if let Err(e) = Self::persist_primary_token(&slot, &new_token).await {
+                warn!("[GET_TOKEN] The renewed token could not be saved; the next renewal will be refused: {e:#}");
+            }
+            Ok(new_token)
+        })
+        .await
+        .map_err(|e| {
+            TokenError::Unreachable
+                .into_error(format!("Token refresh was interrupted ({e}); the sign-in is kept and tried again"))
+        })?
+    }
+
     pub async fn get_token() -> Result<String> {
         // Serialized end to end through the primary slot. Two callers landing
         // inside the 5-minute expiry buffer would otherwise BOTH refresh, and
@@ -1465,13 +1487,7 @@ impl TwitchService {
                     .into_error("Token expired and no refresh token available. Please log in again."));
             }
             debug!("[GET_TOKEN] Token expired or expiring soon, refreshing...");
-            match Self::refresh_token(&token.refresh_token).await {
-                Ok(new_token) => {
-                    token = new_token;
-                    let _ = Self::persist_primary_token(&slot, &token).await;
-                }
-                Err(e) => return Err(Self::refresh_error(e)),
-            }
+            token = Self::renew_primary(slot, token.refresh_token).await?;
         }
 
         Ok(token.access_token)
@@ -1480,7 +1496,6 @@ impl TwitchService {
     /// After a server refused `rejected`: the token now in the slot, refreshed
     /// first only if it is still that same token. Holds the slot throughout,
     /// so a sign-in or switch that landed meanwhile is never overwritten.
-    #[cfg_attr(not(mobile), allow(dead_code))]
     pub(crate) async fn get_token_after_reject(rejected: &str) -> Result<String> {
         let slot = Self::primary_slot().await;
         let token = Self::load_slot_token(&slot)?;
@@ -1490,13 +1505,7 @@ impl TwitchService {
         if token.refresh_token.is_empty() {
             return Err(TokenError::Refused.into_error("No refresh token available. Please log in again."));
         }
-        match Self::refresh_token(&token.refresh_token).await {
-            Ok(new_token) => {
-                Self::persist_primary_token(&slot, &new_token).await?;
-                Ok(new_token.access_token)
-            }
-            Err(e) => Err(Self::refresh_error(e)),
-        }
+        Ok(Self::renew_primary(slot, token.refresh_token).await?.access_token)
     }
 
     /// Verify the current token's health and return detailed status
@@ -1650,10 +1659,8 @@ impl TwitchService {
         }
 
         debug!("[Auth Debug] Force refreshing token...");
-        let new_token = Self::refresh_token(&token.refresh_token).await?;
-
-        // This is an explicit PRIMARY refresh, so persist it to the primary slot.
-        let _ = Self::persist_primary_token(&slot, &new_token).await;
+        // An explicit PRIMARY refresh, so it is sealed into the primary slot.
+        let new_token = Self::renew_primary(slot, token.refresh_token).await?;
 
         debug!("[Auth Debug] Token refreshed successfully!");
         Ok(new_token.access_token)
@@ -8338,6 +8345,7 @@ mod slot_tests {
             "pub async fn get_token()",
             "pub(crate) async fn get_token_after_reject(",
             "pub async fn force_refresh_token()",
+            "async fn renew_primary(",
             "pub(crate) async fn persist_primary_token(",
         ] {
             assert!(!body(service, refresh).contains("bump_account_generation"), "{refresh} is a refresh");

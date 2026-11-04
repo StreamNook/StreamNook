@@ -11,7 +11,7 @@ use crate::services::emoji_service;
 use crate::services::link_detect;
 use crate::services::emote_service::{Emote, EmoteService, EmoteSet};
 use crate::services::layout_service::LayoutService;
-use crate::services::twitch_service::TwitchService;
+use crate::services::twitch_service::{TokenError, TwitchService};
 use crate::services::user_message_history_service::UserMessageHistoryService;
 use crate::services::irc_transport::{self, IrcTransport, IrcWriter};
 use anyhow::Result;
@@ -639,6 +639,18 @@ fn outage_frame(ever_established: bool) -> &'static str {
     } else {
         "IRC_CONNECT_RETRY"
     }
+}
+
+// Twitch refused to renew the sign-in: no retry brings chat back, only
+// signing in again does, so chat says that instead of "reconnecting".
+const SIGN_IN_ENDED_WARNING: &str =
+    "CONNECTION_WARNING:Your Twitch sign-in has ended. Sign out and back in to chat again.";
+
+fn sign_in_ended(e: &anyhow::Error) -> bool {
+    matches!(
+        e.chain().find_map(|c| c.downcast_ref::<TokenError>()),
+        Some(TokenError::Refused)
+    )
 }
 
 // ":tmi.twitch.tv RECONNECT" as the command token. Strips a tag prefix
@@ -2072,13 +2084,31 @@ impl IrcService {
     ) {
         irc_transport::load_hint().await;
         let mut consecutive_failures: u32 = 0;
+        // The token Twitch's PASS just refused, to renew before the next try:
+        // get_token renews only near the saved expiry, so a token voided early
+        // was re-sent every attempt until the user signed out and in.
+        let mut rejected: Option<String> = None;
+        // One forced renewal per run of refusals; a fresh token refused too
+        // is not fixed by renewing again.
+        let mut renewed_after_reject = false;
         loop {
             // Re-fetched every attempt: get_token refreshes an expiring token.
             // The old loop reused the token captured at start and died on auth
             // once it expired. A fetch error is transient (network / refresh
-            // endpoint), not proof of a bad login; only a PASS rejection is.
-            let token = match TwitchService::get_token().await {
+            // endpoint), not proof of a bad login, except a refused renewal.
+            let fetched = match rejected.take() {
+                Some(bad) => TwitchService::get_token_after_reject(&bad).await,
+                None => TwitchService::get_token().await,
+            };
+            let token = match fetched {
                 Ok(t) => t,
+                Err(e) if sign_in_ended(&e) => {
+                    consecutive_failures = consecutive_failures.saturating_add(1);
+                    record_lifecycle(&format!("Twitch sign-in ended: {}", e));
+                    send_to_bridge(SIGN_IN_ENDED_WARNING.to_string(), false).await;
+                    tokio::time::sleep(reconnect_delay(consecutive_failures, true)).await;
+                    continue;
+                }
                 Err(e) => {
                     irc_transport::note_connect_failed();
                     consecutive_failures = consecutive_failures.saturating_add(1);
@@ -2128,6 +2158,7 @@ impl IrcService {
                     // An Ok return proves IRC_CONNECTED went out this attempt
                     // (irc_session's contract), so this loss is a real one.
                     EVER_ESTABLISHED.store(true, std::sync::atomic::Ordering::Relaxed);
+                    renewed_after_reject = false;
                     send_to_bridge("IRC_RECONNECTING".to_string(), false).await;
                     crate::services::chat_outage::lost();
                     let delay = if session_lived_ms < SESSION_FLAP_THRESHOLD_MS {
@@ -2177,6 +2208,13 @@ impl IrcService {
                     )
                     .await;
                     d
+                }
+                Err(SessionError::Auth(e)) if !renewed_after_reject => {
+                    consecutive_failures = consecutive_failures.saturating_add(1);
+                    renewed_after_reject = true;
+                    rejected = Some(token);
+                    record_lifecycle(&format!("authentication rejected: {}; renewing the token", e));
+                    reconnect_delay(consecutive_failures, false)
                 }
                 Err(SessionError::Auth(e)) => {
                     consecutive_failures = consecutive_failures.saturating_add(1);
@@ -7017,6 +7055,15 @@ mod tests {
     fn outage_frame_picks_lost_vs_pre() {
         assert_eq!(outage_frame(false), "IRC_CONNECT_RETRY");
         assert_eq!(outage_frame(true), "IRC_RECONNECTING");
+    }
+
+    #[test]
+    fn only_a_refused_renewal_ends_the_sign_in() {
+        assert!(sign_in_ended(&TokenError::Refused.into_error("Please log in again.")));
+        assert!(!sign_in_ended(&TokenError::Unreachable.into_error("network")));
+        assert!(!sign_in_ended(&TokenError::VaultUnavailable.into_error("busy")));
+        assert!(!sign_in_ended(&anyhow::anyhow!("connect failed")));
+        assert!(SIGN_IN_ENDED_WARNING.starts_with("CONNECTION_WARNING:"));
     }
 
     #[test]
