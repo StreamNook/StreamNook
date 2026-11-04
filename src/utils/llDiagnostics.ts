@@ -201,6 +201,18 @@ export async function startLLDiagnostics(
     video.removeEventListener('seeking', onSeeking);
   });
 
+  // The element's own state transitions, so a start that never plays shows
+  // which step it stopped at (no `seeked`, no `canplay`, a `waiting` that never
+  // turns into `playing`).
+  const mediaEvents = ['seeked', 'waiting', 'playing', 'canplay', 'canplaythrough', 'stalled', 'pause', 'play', 'error', 'emptied'];
+  const onMediaEvent = (e: Event) => {
+    rec({ ev: 'media', t: Date.now(), type: e.type, ct: round(video.currentTime), rs: video.readyState, seeking: video.seeking });
+  };
+  for (const name of mediaEvents) video.addEventListener(name, onMediaEvent);
+  teardown.push(() => {
+    for (const name of mediaEvents) video.removeEventListener(name, onMediaEvent);
+  });
+
   // JS main-thread stall detector. A "long task" is any single block of the
   // main thread over 50ms; we only record meaningful ones (>150ms) as `jsblock`
   // events. This is the frontend counterpart of the backend `rt_stall` heartbeat
@@ -257,6 +269,11 @@ export async function startLLDiagnostics(
       t: Date.now(),
       ct,
       rate: v.playbackRate,
+      // Why a playhead inside the buffer does not move: a seek that never
+      // completed, a readyState stuck below HAVE_FUTURE_DATA, or a media error.
+      rs: v.readyState,
+      seeking: v.seeking,
+      mErr: v.error?.code ?? null,
       paused: v.paused,
       mediaEnd,
       fwd: mediaEnd != null ? +(mediaEnd - ct).toFixed(3) : null, // forward buffer
