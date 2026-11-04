@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { watchStalls } from './stallWatchdog';
+import { watchStalls, wedgedOnBuffer } from './stallWatchdog';
 
 /** A media element with settable playhead and state, and counted listeners. */
 function fakeVideo() {
@@ -107,5 +107,40 @@ describe('watchStalls', () => {
     expect(vi.getTimerCount()).toBe(0);
     vi.advanceTimersByTime(60000);
     expect(onFrozen).not.toHaveBeenCalled();
+  });
+});
+
+describe('wedgedOnBuffer', () => {
+  /** A media element at `currentTime` holding the given buffered ranges. */
+  const media = (over: Partial<{ paused: boolean; readyState: number; currentTime: number }>, ranges: [number, number][]) => ({
+    paused: false,
+    readyState: 1,
+    currentTime: 0.955,
+    ...over,
+    buffered: {
+      length: ranges.length,
+      start: (i: number) => ranges[i][0],
+      end: (i: number) => ranges[i][1],
+    } as TimeRanges,
+  });
+
+  it('reports the captured start: playing, at HAVE_METADATA, with seconds buffered over the playhead', () => {
+    expect(wedgedOnBuffer(media({}, [[0.044, 6.146]]))).toBe(true);
+    expect(wedgedOnBuffer(media({ currentTime: 8.487 }, [[0.044, 12.268]]))).toBe(true);
+  });
+
+  it('leaves an element that can show its frame alone', () => {
+    expect(wedgedOnBuffer(media({ readyState: 2 }, [[0.044, 6.146]]))).toBe(false);
+    expect(wedgedOnBuffer(media({ readyState: 4 }, [[0.044, 6.146]]))).toBe(false);
+  });
+
+  it('leaves a paused element alone', () => {
+    expect(wedgedOnBuffer(media({ paused: true }, [[0.044, 6.146]]))).toBe(false);
+  });
+
+  it('is not a wedge while the media at the playhead is still arriving', () => {
+    expect(wedgedOnBuffer(media({}, []))).toBe(false);
+    expect(wedgedOnBuffer(media({}, [[0.044, 1.5]]))).toBe(false);
+    expect(wedgedOnBuffer(media({}, [[2, 8]]))).toBe(false);
   });
 });
