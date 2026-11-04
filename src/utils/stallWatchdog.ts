@@ -17,6 +17,31 @@ const ADVANCE_SECS = 0.05;
 /** The element knows its media (HTMLMediaElement.HAVE_METADATA). */
 const HAVE_METADATA = 1;
 
+/** The element can show the frame at its playhead (HTMLMediaElement.HAVE_CURRENT_DATA). */
+const HAVE_CURRENT_DATA = 2;
+
+/** Buffered seconds ahead of the playhead that rule out a plain shortage. */
+const WEDGE_AHEAD_SECS = 1;
+
+/**
+ * WebKit can wedge a media element at the start of a stream: it is playing,
+ * the playhead sits inside a buffered range with media ahead of it, and the
+ * readyState still never climbs past HAVE_METADATA. Every seek on it then
+ * stays pending (`seeking` true for good), so the stall checks that skip a
+ * seeking element never see it. Only a fresh load gets it playing again.
+ */
+export function wedgedOnBuffer(
+  video: Pick<HTMLMediaElement, 'paused' | 'readyState' | 'currentTime' | 'buffered'>,
+): boolean {
+  if (video.paused || video.readyState >= HAVE_CURRENT_DATA) return false;
+  const b = video.buffered;
+  const t = video.currentTime;
+  for (let i = 0; i < b.length; i++) {
+    if (b.start(i) <= t && b.end(i) - t >= WEDGE_AHEAD_SECS) return true;
+  }
+  return false;
+}
+
 /**
  * Reports a playhead that stays pinned while the element is playing: not
  * paused, not seeking and holding media. A pause, a seek or a move of the

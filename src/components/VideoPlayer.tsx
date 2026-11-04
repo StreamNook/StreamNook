@@ -109,7 +109,7 @@ import {
 } from '../utils/pausePark';
 import { followLiveAfterResync } from '../utils/liveResync';
 import { HLS_START_CONFIG, resumeLoadAfterRecover, startLoadOnManifest } from '../utils/hlsStartLoad';
-import { watchStalls } from '../utils/stallWatchdog';
+import { watchStalls, wedgedOnBuffer } from '../utils/stallWatchdog';
 import { createRecovery } from '../utils/recovery';
 import { attachPauseRoutes, releaseTypingFocus } from '../utils/pauseRoutes';
 import { recognizeNowPlaying, announceSong, isQuietResult } from '../utils/songId';
@@ -1535,8 +1535,26 @@ const VideoPlayer = () => {
         let frozen = 0;
         let lastCt = -1;
         let lastRecover = 0;
+        let wedged = 0;
         behindLiveWatchdogRef.current = setInterval(() => {
           const v = (hls.media as HTMLVideoElement | null) ?? video;
+          // Checked before the seeking skip below: a wedged element's seeks
+          // never complete, so it would be skipped forever. Two ticks (~4s):
+          // an ordinary in-buffer seek, briefly at HAVE_METADATA, completes in
+          // well under a second. Reopening the stream is what gets it playing.
+          if (v && wedgedOnBuffer(v)) {
+            wedged += 1;
+            if (wedged >= 2) {
+              wedged = 0;
+              recover(
+                `[HLS] behind-live watchdog: element stuck at readyState ${v.readyState} at ${v.currentTime.toFixed(1)} with media buffered ahead; reloading the stream`,
+                true,
+                'stall',
+              );
+            }
+            return;
+          }
+          wedged = 0;
           if (!v || v.paused || v.seeking) {
             over = 0;
             frozen = 0;
@@ -1816,24 +1834,32 @@ const VideoPlayer = () => {
             const cushion =
               typeof hls.config.liveSyncDuration === 'number' ? hls.config.liveSyncDuration : 2;
             const edge = data.details.edge;
-            const pos =
+            const loadedPos =
               hls.liveSyncPosition ?? (Number.isFinite(edge) ? Math.max(0, edge - cushion) : null);
-            if (pos != null && Number.isFinite(pos) && pos > 0) {
-              video.currentTime = pos;
-            }
-            Logger.debug(
-              `[HLS] Level loaded (LL) — starting playback at ${video.currentTime.toFixed(2)}`,
-            );
-            if (holdHeldPause()) return;
-            if (!currentSettings.autoplay) {
-              // Autoplay is off: nothing plays, and the wait arms the park so
-              // the downloads stop until the viewer presses play.
-              park?.paused();
-              return;
-            }
-            video.play().catch(() => {
-              video.muted = true;
-              video.play().catch(() => Logger.debug('[HLS] LL muted autoplay also failed'));
+            // Not before the first media lands: on WebKit, a playhead set while
+            // nothing is appended can wedge the element at HAVE_METADATA for
+            // good, with every later seek left pending. The first buffered
+            // fragment or part comes a few hundred ms later.
+            hls.once(Hls.Events.FRAG_BUFFERED, () => {
+              if (hlsRef.current !== hls) return;
+              const pos = hls.liveSyncPosition ?? loadedPos;
+              if (pos != null && Number.isFinite(pos) && pos > 0) {
+                video.currentTime = pos;
+              }
+              Logger.debug(
+                `[HLS] Level loaded (LL) — starting playback at ${video.currentTime.toFixed(2)}`,
+              );
+              if (holdHeldPause()) return;
+              if (!currentSettings.autoplay) {
+                // Autoplay is off: nothing plays, and the wait arms the park so
+                // the downloads stop until the viewer presses play.
+                park?.paused();
+                return;
+              }
+              video.play().catch(() => {
+                video.muted = true;
+                video.play().catch(() => Logger.debug('[HLS] LL muted autoplay also failed'));
+              });
             });
           });
         } else {
