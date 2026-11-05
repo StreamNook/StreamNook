@@ -696,6 +696,8 @@ export const grantAccolade = async (userId: string, accoladeId: string): Promise
                 { onConflict: 'twitch_user_id,accolade_id', ignoreDuplicates: true },
             );
         if (error) Logger.error('[Supabase] Failed to grant award badge:', error.message);
+        // Rust caches the member sheet; tell it this member's profile changed.
+        else void invoke('profile_changed', { userId }).catch(() => {});
     } catch (error) {
         Logger.error('[Supabase] Failed to grant award badge:', error);
     }
@@ -1001,6 +1003,8 @@ export const setHiddenSections = async (userId: string, sections: string[]): Pro
             { onConflict: 'twitch_user_id' },
         );
         if (error) Logger.error('[Supabase] Failed to set hidden sections:', error.message);
+        // Only this fallback needs telling; the API path above bumps it in Rust.
+        else void invoke('profile_changed', { userId }).catch(() => {});
     } catch (error) {
         Logger.warn('[Supabase] setHiddenSections failed:', error);
     }
