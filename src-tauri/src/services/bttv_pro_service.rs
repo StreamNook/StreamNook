@@ -17,14 +17,13 @@
 // users aren't re-queried on every profile open. A socket that cannot be asked
 // is a failure, not a "not Pro", and is never cached.
 
+use crate::services::shared_lookup::{Lookup, SharedLookup};
 use futures_util::{SinkExt, StreamExt};
-use lru::LruCache;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::num::NonZeroUsize;
-use std::time::{Duration, Instant};
-use tokio::sync::Mutex;
+use std::sync::LazyLock;
+use std::time::Duration;
 use tokio::time::timeout;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
@@ -44,17 +43,32 @@ pub struct BttvProBadge {
     pub glow: bool,
 }
 
-struct CacheEntry {
-    badge: Option<BttvProBadge>,
-    fetched_at: Instant,
-}
+/// Every looked-up answer, positive and negative, one read per user at a time.
+/// A non-Pro user is only known after the socket's 2.5 s of silence, so the read
+/// runs detached and caches that answer even when a caller stopped waiting.
+static LOOKUPS: LazyLock<SharedLookup<Option<BttvProBadge>>> = LazyLock::new(|| SharedLookup::new(2000));
 
-static CACHE: Lazy<Mutex<LruCache<String, CacheEntry>>> =
-    Lazy::new(|| Mutex::new(LruCache::new(NonZeroUsize::new(2000).unwrap())));
+/// The longest `resolve_bttv_pro_badge` waits: the socket's own deadline and a
+/// second for the connection and the hand-off, never less than that deadline.
+const RESOLVE_BUDGET: Duration = Duration::from_millis(LOOKUP_TIMEOUT_MS + 1000);
 
 /// Forget every looked-up badge; the next profile open asks again.
 pub async fn clear_cache() {
-    CACHE.lock().await.clear();
+    LOOKUPS.clear();
+}
+
+async fn lookup(user_id: &str, budget: Duration) -> Lookup<Option<BttvProBadge>> {
+    let id = user_id.to_string();
+    LOOKUPS.lookup(user_id, CACHE_TTL, budget, move || async move { lookup_over_socket(&id).await }).await
+}
+
+/// Accumulate every distinct Pro badge image we ever see, from ANY user, so
+/// the BetterTTV tab can show the full set of discovered loyalty designs (not
+/// just the signed-in user's own). Persisted so it grows across sessions.
+fn note(badge: &Option<BttvProBadge>) {
+    if let Some(b) = badge {
+        record_discovered_badge(&b.url);
+    }
 }
 
 /// Resolve a user's BTTV Pro loyalty badge: `Ok(None)` when they don't have
@@ -66,40 +80,27 @@ pub async fn resolve_bttv_pro_badge(user_id: &str) -> Result<Option<BttvProBadge
     if user_id.is_empty() {
         return Ok(None);
     }
-
-    // Fast path: fresh cache hit (positive or negative).
-    let cached_hit = {
-        let mut cache = CACHE.lock().await;
-        match cache.get(user_id) {
-            Some(entry) if entry.fetched_at.elapsed() < CACHE_TTL => Some(entry.badge.clone()),
-            _ => None,
+    match lookup(user_id, RESOLVE_BUDGET).await {
+        Lookup::Fresh(badge) | Lookup::Stale(badge) => {
+            note(&badge);
+            Ok(badge)
         }
-    };
-
-    let badge = match cached_hit {
-        Some(b) => b,
-        None => {
-            let b = lookup_over_socket(user_id).await?;
-            let mut cache = CACHE.lock().await;
-            cache.put(
-                user_id.to_string(),
-                CacheEntry {
-                    badge: b.clone(),
-                    fetched_at: Instant::now(),
-                },
-            );
-            b
-        }
-    };
-
-    // Accumulate every distinct Pro badge image we ever see, from ANY user, so
-    // the BetterTTV tab can show the full set of discovered loyalty designs (not
-    // just the signed-in user's own). Persisted so it grows across sessions.
-    if let Some(ref b) = badge {
-        record_discovered_badge(&b.url);
+        Lookup::Failed(e) => Err(e),
+        Lookup::Pending => Err("BTTV socket: no answer in time".to_string()),
     }
+}
 
-    Ok(badge)
+/// The same lookup for a surface that cannot wait the full socket deadline (the
+/// profile sheet, the You header): `Some(answer)` (`Some(None)` is a real "not
+/// Pro"), or `None` when nothing is known yet. The read goes on in the
+/// background and the next ask finds it.
+pub async fn pro_badge_within(user_id: &str, budget: Duration) -> Option<Option<BttvProBadge>> {
+    if user_id.is_empty() {
+        return Some(None);
+    }
+    let badge = lookup(user_id, budget).await.value()?;
+    note(&badge);
+    Some(badge)
 }
 
 // ============================================================================
@@ -336,7 +337,7 @@ fn pro_badge_from(data: &Value) -> Option<BttvProBadge> {
 
 /// Resident BTTV Pro lookups (try-lock). Diagnostics for the resource line.
 pub fn cache_len() -> Option<usize> {
-    CACHE.try_lock().ok().map(|c| c.len())
+    Some(LOOKUPS.len())
 }
 
 #[cfg(test)]
@@ -369,5 +370,22 @@ mod lookup_tests {
         assert_eq!(badge.started_at.as_deref(), Some("2024"));
         assert_eq!(pro_badge_from(&json!({ "pro": false })), None);
         assert_eq!(pro_badge_from(&json!({ "pro": true })), None);
+    }
+
+    #[tokio::test]
+    async fn an_empty_id_is_not_pro_and_asks_nothing() {
+        assert_eq!(resolve_bttv_pro_badge("").await, Ok(None));
+        assert_eq!(pro_badge_within("", Duration::from_millis(10)).await, Some(None));
+    }
+
+    #[tokio::test]
+    async fn a_held_answer_serves_both_doors_and_clear_cache_forgets_it() {
+        // A negative answer is an answer: nobody asks the socket again within the TTL.
+        LOOKUPS.prime("test-bttv-held", None);
+        assert_eq!(resolve_bttv_pro_badge("test-bttv-held").await, Ok(None));
+        assert_eq!(pro_badge_within("test-bttv-held", Duration::from_millis(10)).await, Some(None));
+        assert!(cache_len().is_some_and(|n| n >= 1));
+        clear_cache().await;
+        assert_eq!(LOOKUPS.peek("test-bttv-held"), None);
     }
 }

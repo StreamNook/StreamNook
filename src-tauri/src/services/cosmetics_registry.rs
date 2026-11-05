@@ -413,6 +413,30 @@ pub fn is_member(member_id: &str) -> bool {
     member_number(member_id).is_some()
 }
 
+/// Whether the member list has loaded once. Until then "no member number" means
+/// "not known yet", not "not a member".
+pub fn members_loaded() -> bool {
+    read(|s| s.members_loaded)
+}
+
+/// The member ids alone, with the registry version and whether the list has
+/// loaded: what a phone needs to know who is a member, without the catalog and
+/// every grant the snapshot carries.
+#[derive(Serialize, Clone, Debug, Default, PartialEq)]
+pub struct MemberIds {
+    pub version: u64,
+    pub members_loaded: bool,
+    pub members: Vec<String>,
+}
+
+pub fn member_ids() -> MemberIds {
+    read(|s| {
+        let mut members: Vec<String> = s.members.keys().cloned().collect();
+        members.sort();
+        MemberIds { version: version(), members_loaded: s.members_loaded, members }
+    })
+}
+
 pub fn catalog_entry(slug: &str) -> Option<CatalogEntry> {
     read(|s| s.catalog.iter().find(|c| c.slug == slug).cloned())
 }
@@ -833,5 +857,17 @@ mod tests {
         assert_eq!(snap.worn.get("1").map(String::as_str), Some("streamnook-mobius"));
         assert!(!snap.worn.contains_key("2"));
         assert_eq!(snap.members.len(), 3);
+    }
+
+    #[test]
+    fn the_member_ids_are_the_snapshots_members_alone() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        fixture();
+        let ids = member_ids();
+        assert!(ids.members_loaded && members_loaded());
+        assert_eq!(ids.members, vec!["1".to_string(), "2".to_string(), "3".to_string()]);
+        assert_eq!(ids.version, version());
+        let wire = serde_json::to_value(&ids).unwrap();
+        assert_eq!(wire, json!({ "version": version(), "members_loaded": true, "members": ["1", "2", "3"] }));
     }
 }

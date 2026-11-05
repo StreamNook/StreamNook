@@ -13,13 +13,16 @@
 //! upserts the row).
 
 use crate::services::account_store::AccountStore;
+use crate::services::shared_lookup::{Lookup, SharedLookup};
 use crate::services::twitch_service::TwitchService;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::LazyLock;
+use std::time::Duration;
 
 const IDENTITY_API: &str = "https://streamnook.app/api/v1/identity";
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IdentityLoadout {
     pub twitch_user_id: String,
     pub customized: bool,
@@ -87,6 +90,49 @@ async fn read_identity<T: serde::de::DeserializeOwned>(url: &str) -> Result<T, S
     }
     let text = resp.text().await.map_err(|e| format!("identity read failed: {e}"))?;
     parse_identity_answer(&text)
+}
+
+/// A loadout read within this long is served as it was; a member's own save
+/// replaces it at once (`set_streamnook_identity` primes it).
+const LOADOUT_TTL: Duration = Duration::from_secs(60);
+/// The longest the profile sheet and the You header wait on a loadout read. The
+/// read itself goes on past this and fills the cache.
+pub const LOADOUT_BUDGET: Duration = Duration::from_millis(1500);
+const LOADOUT_CAP: usize = 512;
+
+/// Every loadout read for a profile surface: one read per member at a time, in a
+/// task that outlives its callers, errors never kept, the newest write winning.
+static LOADOUTS: LazyLock<SharedLookup<IdentityLoadout>> = LazyLock::new(|| SharedLookup::new(LOADOUT_CAP));
+
+/// A member's loadout for a profile surface, waiting at most `LOADOUT_BUDGET`.
+/// `Ok(None)` is a budget miss with nothing kept: the part is unknown, not empty.
+/// An unreachable server with nothing kept is an `Err`; with an older copy it is
+/// that copy.
+pub async fn identity_loadout(member_id: &str) -> Result<Option<IdentityLoadout>, String> {
+    identity_loadout_within(member_id, LOADOUT_BUDGET).await
+}
+
+/// `identity_loadout` with the caller's own wait.
+pub async fn identity_loadout_within(member_id: &str, budget: Duration) -> Result<Option<IdentityLoadout>, String> {
+    if member_id.is_empty() {
+        return Ok(None);
+    }
+    let url = format!("{}/{}", IDENTITY_API, member_id);
+    match LOADOUTS
+        .lookup(member_id, LOADOUT_TTL, budget, move || async move { read_identity::<IdentityLoadout>(&url).await })
+        .await
+    {
+        Lookup::Fresh(loadout) | Lookup::Stale(loadout) => Ok(Some(loadout)),
+        Lookup::Pending => Ok(None),
+        Lookup::Failed(e) => Err(e),
+    }
+}
+
+/// The number of the write that holds a member's cached loadout (0 when none
+/// does). A rebuild reads it after its loadout read and writes its result only
+/// while it is unchanged, so a save that landed meanwhile keeps the last word.
+pub fn loadout_stamp(member_id: &str) -> u64 {
+    LOADOUTS.stamp(member_id)
 }
 
 /// Read a single user's applied identity. A failure is an error (the page
@@ -159,6 +205,8 @@ pub async fn set_streamnook_identity(
     customized: bool,
     account_id: Option<String>,
 ) -> Result<SetIdentityResult, String> {
+    // The member this save is for: the chosen account, else the primary.
+    let acting = account_id.clone().or_else(crate::services::account_roster::twitch_user_id);
     // Authenticate the write as the chosen account when one is given (a linked
     // secondary), else the primary. The server upserts whichever account the
     // bearer token resolves to, so each account can only write its own row.
@@ -192,6 +240,16 @@ pub async fn set_streamnook_identity(
         .await
         .map_err(|e| format!("Bad response: {}", e))?;
     result.resolved = result.resolved.map(ResolvedIdentity::in_provider_order);
+    // Every phone surface now reads what was just saved: the loadout cache holds
+    // it (a read that began before the save loses to it), the member's sheets
+    // are built again, and the You header file is rebuilt, never deleted.
+    if let Some(member) = acting.filter(|m| !m.is_empty()) {
+        LOADOUTS.prime(&member, result.loadout.clone());
+        crate::services::profile_view::bump_member_epoch(&member);
+        tauri::async_runtime::spawn(async move {
+            crate::services::profile_view::rebuild_own_header(&member).await;
+        });
+    }
     Ok(result)
 }
 
@@ -275,5 +333,39 @@ mod identity_answer_tests {
         let resolved: ResolvedIdentity = parse_identity_answer(text).unwrap();
         assert_eq!(resolved.badges.len(), 1);
         assert_eq!(resolved.badges[0].provider, "ffz");
+    }
+}
+
+#[cfg(test)]
+mod loadout_tests {
+    use super::*;
+
+    fn saved(id: &str, badges: &[&str]) -> IdentityLoadout {
+        IdentityLoadout {
+            twitch_user_id: id.to_string(),
+            customized: true,
+            badges: badges.iter().map(|b| b.to_string()).collect(),
+            paint: None,
+            updated_at: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_saved_loadout_is_served_from_the_cache_without_a_read() {
+        LOADOUTS.prime("test-loadout-1", saved("test-loadout-1", &["ffz:ffz-3"]));
+        let got = identity_loadout("test-loadout-1").await.unwrap().expect("the primed loadout");
+        assert!(got.customized);
+        assert_eq!(got.badges, vec!["ffz:ffz-3".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn an_empty_id_asks_nothing_and_a_save_moves_the_stamp() {
+        assert!(matches!(identity_loadout("").await, Ok(None)));
+        assert_eq!(loadout_stamp("test-loadout-never"), 0);
+        LOADOUTS.prime("test-loadout-2", saved("test-loadout-2", &[]));
+        let first = loadout_stamp("test-loadout-2");
+        assert!(first > 0);
+        LOADOUTS.prime("test-loadout-2", saved("test-loadout-2", &["bttv:x"]));
+        assert!(loadout_stamp("test-loadout-2") > first, "a newer save is a newer stamp");
     }
 }

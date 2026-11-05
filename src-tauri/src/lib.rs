@@ -1571,6 +1571,10 @@ pub fn run() {
             );
             services::cosmetics_registry::start();
             services::member_theme::start();
+            // The update manifest's reserved words, read once in the background so
+            // the page link has the live list (the committed one stands until it
+            // answers). Nothing waits on it.
+            services::client_config::warm();
 
             // Twitch Recap hours for the signed-in member, published so the profile
             // can count the watching they did before joining. Daily, and a no-op
@@ -2578,6 +2582,9 @@ pub fn run() {
             user_profile_sheet_cached,
             own_identity_header,
             own_identity_header_cached,
+            streamnook_profile_link,
+            profile_changed,
+            sn_member_ids,
             cosmetics_picker_state,
             external_cosmetics_state,
             // Server-controlled client switches

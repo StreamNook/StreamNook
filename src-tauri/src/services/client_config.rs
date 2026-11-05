@@ -26,10 +26,38 @@ pub struct ClientConfig {
     pub write_via_api: bool,
     /// Builds below this are asked to update; empty means no floor.
     pub min_supported_version: String,
+    /// First path segments the site keeps for itself, as the manifest's
+    /// top-level `reserved_slugs` lists them (raw: the reader lowercases and
+    /// checks them). Not part of the wire shape the pages read.
+    #[serde(skip_serializing)]
+    pub reserved_slugs: Vec<String>,
 }
 
 /// Held across the fetch, so a burst of writes at login shares one request.
 static CACHE: Mutex<Option<(Instant, ClientConfig)>> = Mutex::const_new(None);
+
+/// The last config a fetch answered, readable without waiting on one (the
+/// fetch lock above is held across the request).
+static LAST: std::sync::Mutex<Option<ClientConfig>> = std::sync::Mutex::new(None);
+
+/// The last config a fetch answered; None until one has. Never asks the network.
+pub fn peek() -> Option<ClientConfig> {
+    LAST.lock().ok().and_then(|g| g.clone())
+}
+
+fn remember(config: &ClientConfig) {
+    if let Ok(mut g) = LAST.lock() {
+        *g = Some(config.clone());
+    }
+}
+
+/// Reads the config once in the background so `peek` has an answer soon after
+/// launch. Never awaited by anything that paints.
+pub fn warm() {
+    tauri::async_runtime::spawn(async {
+        let _ = get().await;
+    });
+}
 
 /// Read the switches out of a manifest body.
 ///
@@ -44,8 +72,15 @@ pub fn parse(body: &serde_json::Value) -> ClientConfig {
         .and_then(|v| v.as_str())
         .unwrap_or_default()
         .to_string();
+    // A TOP-LEVEL manifest field like `min_supported`, read before any early
+    // return so a manifest without a `client_config` block still carries it.
+    let reserved_slugs: Vec<String> = body
+        .get("reserved_slugs")
+        .and_then(|v| v.as_array())
+        .map(|list| list.iter().filter_map(|s| s.as_str().map(String::from)).collect())
+        .unwrap_or_default();
     let Some(block) = body.get("client_config").filter(|v| v.is_object()) else {
-        return ClientConfig { min_supported_version: top_level_floor, ..Default::default() };
+        return ClientConfig { min_supported_version: top_level_floor, reserved_slugs, ..Default::default() };
     };
     ClientConfig {
         // Only an explicit `true` enables it. A malformed or missing value must
@@ -56,6 +91,7 @@ pub fn parse(body: &serde_json::Value) -> ClientConfig {
             .and_then(|v| v.as_str())
             .map(String::from)
             .unwrap_or(top_level_floor),
+        reserved_slugs,
     }
 }
 
@@ -84,6 +120,7 @@ pub async fn get() -> ClientConfig {
     match fetch().await {
         Ok(config) => {
             *slot = Some((Instant::now(), config.clone()));
+            remember(&config);
             config
         }
         Err(e) => {
@@ -119,5 +156,35 @@ mod tests {
         assert_eq!(block.min_supported_version, "8.6.0");
         let fallback = parse(&json!({ "min_supported": "8.5.0", "client_config": {} }));
         assert_eq!(fallback.min_supported_version, "8.5.0");
+    }
+
+    #[test]
+    fn the_reserved_list_is_read_before_any_early_return() {
+        let bare = parse(&json!({ "reserved_slugs": ["help", "Pricing"] }));
+        assert_eq!(bare.reserved_slugs, vec!["help".to_string(), "Pricing".to_string()]);
+        let with_block = parse(&json!({ "reserved_slugs": ["a"], "client_config": { "write_via_api": true } }));
+        assert_eq!(with_block.reserved_slugs, vec!["a".to_string()]);
+        assert!(with_block.write_via_api);
+    }
+
+    #[test]
+    fn a_broken_reserved_list_reads_as_what_it_has_and_never_fails_the_parse() {
+        assert!(parse(&json!({ "reserved_slugs": "nope" })).reserved_slugs.is_empty());
+        assert!(parse(&json!({})).reserved_slugs.is_empty());
+        let mixed = parse(&json!({ "reserved_slugs": ["a", 5, null, "b"], "client_config": {} }));
+        assert_eq!(mixed.reserved_slugs, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn the_reserved_list_stays_off_the_wire_the_pages_read() {
+        let wire = serde_json::to_value(parse(&json!({ "reserved_slugs": ["a"] }))).unwrap();
+        assert!(wire.get("reserved_slugs").is_none());
+        assert!(wire.get("write_via_api").is_some() && wire.get("min_supported_version").is_some());
+    }
+
+    #[test]
+    fn peek_serves_the_last_answered_config_without_asking() {
+        remember(&parse(&json!({ "reserved_slugs": ["peeked"] })));
+        assert_eq!(peek().map(|c| c.reserved_slugs), Some(vec!["peeked".to_string()]));
     }
 }

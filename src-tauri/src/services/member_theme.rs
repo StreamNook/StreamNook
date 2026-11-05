@@ -430,6 +430,8 @@ pub fn start() {
 fn apply_row(kind: &str, record: &Value) {
     let Some(member) = record.get("twitch_user_id").and_then(Value::as_str) else { return };
     let Some(known) = peek(member) else { return };
+    // Their sheets show their theme: the next build reads the new one.
+    crate::services::profile_view::bump_member_epoch(member);
     if kind == "DELETE" {
         store(resolve_theme(member, None, false, is_own(member)));
         return;
@@ -585,5 +587,22 @@ mod tests {
         assert_eq!(now.atmosphere_id, None);
         assert_eq!(now.theme, None);
         assert!(!now.hidden_in_chat);
+    }
+
+    #[test]
+    fn a_live_prefs_row_bumps_the_sheet_epoch_of_a_known_member_only() {
+        use crate::services::profile_view::member_epoch;
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        fixture();
+        let before = member_epoch("10");
+        // Not known yet: nothing is bumped (no sheet of theirs holds a theme).
+        apply_row("UPDATE", &json!({ "twitch_user_id": "10", "profile_theme": "aurora" }));
+        assert_eq!(member_epoch("10"), before);
+        store(resolve_theme("10", Some("tier"), false, false));
+        apply_row("UPDATE", &json!({ "twitch_user_id": "10", "profile_theme": "aurora" }));
+        let after_update = member_epoch("10");
+        assert!(after_update > before, "an update moves the epoch");
+        apply_row("DELETE", &json!({ "twitch_user_id": "10" }));
+        assert!(member_epoch("10") > after_update, "so does a delete");
     }
 }

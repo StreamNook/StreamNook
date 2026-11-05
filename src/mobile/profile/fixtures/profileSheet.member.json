@@ -1,0 +1,232 @@
+{
+  "user_id": "100",
+  "login": "tyler",
+  "display_name": "Tyler",
+  "avatar_url": "https://static-cdn.jtvnw.net/avatar.png",
+  "name_color": "#9147ff",
+  "groups": [
+    {
+      "title": "Twitch",
+      "badges": [
+        { "id": "prem", "url": "P4", "fallbacks": ["P4-2x", "P4-1x"], "title": "premium title" }
+      ]
+    },
+    {
+      "title": "7TV",
+      "badges": [
+        {
+          "id": "7tvb",
+          "url": "https://cdn.7tv.app/badge/7tvb/4x.webp",
+          "fallbacks": [
+            "https://cdn.7tv.app/badge/7tvb/3x.webp",
+            "https://cdn.7tv.app/badge/7tvb/2x.webp",
+            "https://cdn.7tv.app/badge/7tvb/1x.webp"
+          ],
+          "title": "Sub 1y",
+          "name": "Sub 1y"
+        }
+      ]
+    },
+    {
+      "title": "FrankerFaceZ",
+      "badges": [
+        { "id": "ffz-3", "url": "F3", "fallbacks": ["F3-2x", "F3-1x"], "title": "ffz title", "provider": "ffz" }
+      ]
+    },
+    {
+      "title": "BetterTTV",
+      "badges": [
+        {
+          "id": "bttv-pro",
+          "url": "https://cdn.betterttv.net/badges/pro/pro1.png",
+          "title": "BTTV Pro",
+          "name": "BTTV Pro",
+          "provider": "bttv"
+        }
+      ]
+    },
+    {
+      "title": "StreamNook",
+      "badges": [
+        {
+          "id": "streamnook-mobius",
+          "url": "https://cdn.streamnook.app/badges/mobius.webp",
+          "title": "streamnook mobius",
+          "provider": "streamnook"
+        },
+        {
+          "id": "streamnook-default",
+          "url": "streamnook-house:streamnook-default",
+          "title": "streamnook default",
+          "provider": "streamnook"
+        }
+      ]
+    }
+  ],
+  "streamnook": {
+    "slug": "streamnook-mobius",
+    "image_url": "https://cdn.streamnook.app/badges/mobius.webp",
+    "label": "streamnook mobius"
+  },
+  "member": { "number": 7, "tier": "mythic", "label": "Mythic", "accent": "#FBBF24", "aura": 0.13 },
+  "cologne": { "coin": true, "frame": false },
+  "member_profile": {
+    "relics": [
+      {
+        "id": "relic-gem",
+        "url": "https://cdn.streamnook.app/relics/gem.webp",
+        "title": "relic gem",
+        "provider": "streamnook"
+      }
+    ],
+    "hours": { "label": "Hours watched", "value": "1,300", "unit": "hrs", "roast": "R flat" },
+    "twitch": {
+      "key": "twitch",
+      "title": "Tyler's Twitch",
+      "tiles": [
+        {
+          "key": "twitch_age",
+          "label": "Twitch age",
+          "value": "12 yrs, 7 mos",
+          "caption": "Cake day in 135 days",
+          "detail": "Joined March 20, 2014"
+        },
+        { "key": "followers", "label": "Followers", "value": "1,234,567" },
+        { "key": "account_type", "label": "Account type", "value": "Affiliate" }
+      ]
+    },
+    "lifetime": {
+      "key": "lifetime",
+      "title": "Lifetime in StreamNook",
+      "tiles": [
+        { "key": "messages", "label": "Messages sent", "value": "10,100", "caption": "into the void" },
+        { "key": "streams", "label": "Streams watched", "value": "300" },
+        { "key": "subs_gifted", "label": "Subs gifted", "value": "5" },
+        { "key": "cosmetics", "label": "Cosmetics", "value": "7", "caption": "2 paints, 1 badges, 4 StreamNook" },
+        { "key": "favorite_channel", "label": "Favorite channel", "value": "xQc", "caption": "313h watched" },
+        { "key": "member_rank", "label": "Member rank", "value": "#7", "caption": "Mythic" }
+      ]
+    },
+    "views": "4,322",
+    "top_emotes": [
+      { "id": "e1", "name": "OMEGALUL", "provider": "bttv", "url": "https://x/1", "count": 90, "count_text": "90" },
+      { "id": "e2", "name": "KEKW", "provider": "7tv", "url": "https://x/2", "count": 50, "count_text": "50" }
+    ],
+    "emote_totals": "12 emotes · 345 used",
+    "accolades": {
+      "earned": 6,
+      "total": 7,
+      "items": [
+        {
+          "id": "chatterbox",
+          "label": "Chatterbox",
+          "icon": "message-circle",
+          "colors": ["#6aa9ff", "#3b6fd4"],
+          "earned": true,
+          "secret": false,
+          "hint": "Messages sent: 10,100 / 1,000"
+        },
+        {
+          "id": "marathoner",
+          "label": "Marathoner",
+          "icon": "timer",
+          "colors": ["#f59e0b", "#b45309"],
+          "earned": true,
+          "secret": false,
+          "hint": "Hours watched: 1,300 / 100"
+        },
+        {
+          "id": "collector",
+          "label": "Collector",
+          "icon": "shapes",
+          "colors": ["#ec4899", "#be185d"],
+          "earned": true,
+          "secret": false,
+          "hint": "Cosmetics collected: 7 / 5"
+        },
+        {
+          "id": "veteran",
+          "label": "Veteran",
+          "icon": "medal",
+          "colors": ["#fb923c", "#c2410c"],
+          "earned": true,
+          "secret": false,
+          "hint": "Years on Twitch: 12 / 5"
+        },
+        {
+          "id": "og",
+          "label": "OG",
+          "icon": "crown",
+          "colors": ["#fbbf24", "#d97706"],
+          "earned": true,
+          "secret": false,
+          "hint": "Be one of the first 100 StreamNook members"
+        },
+        {
+          "id": "halloween",
+          "label": "Halloween",
+          "icon": "skull",
+          "colors": ["#fb923c", "#c2410c"],
+          "earned": true,
+          "secret": false,
+          "hint": "Collected"
+        },
+        {
+          "id": "dropgoblin",
+          "label": "Drop Goblin",
+          "icon": "package",
+          "colors": ["#22c55e", "#15803d"],
+          "earned": false,
+          "secret": false,
+          "hint": "Claim 25 drops"
+        }
+      ]
+    }
+  },
+  "page_link": {
+    "href": "https://streamnook.app/u/tyler",
+    "url": "https://streamnook.app/tyler",
+    "prefix": "streamnook.app/",
+    "name": "tyler",
+    "accent": "#fbbf24"
+  },
+  "worn": [
+    { "id": "prem", "url": "P4", "fallbacks": ["P4-2x", "P4-1x"], "title": "premium title" },
+    {
+      "id": "7tvb",
+      "url": "https://cdn.7tv.app/badge/7tvb/4x.webp",
+      "fallbacks": [
+        "https://cdn.7tv.app/badge/7tvb/3x.webp",
+        "https://cdn.7tv.app/badge/7tvb/2x.webp",
+        "https://cdn.7tv.app/badge/7tvb/1x.webp"
+      ],
+      "title": "Sub 1y",
+      "name": "Sub 1y",
+      "provider": "7tv"
+    },
+    { "id": "ffz-3", "url": "F3", "fallbacks": ["F3-2x", "F3-1x"], "title": "ffz title", "provider": "ffz" },
+    {
+      "id": "bttv-pro",
+      "url": "https://cdn.betterttv.net/badges/pro/pro1.png",
+      "title": "BTTV Pro",
+      "name": "BTTV Pro",
+      "provider": "bttv"
+    },
+    {
+      "id": "streamnook-mobius",
+      "url": "https://cdn.streamnook.app/badges/mobius.webp",
+      "title": "streamnook mobius",
+      "name": "streamnook mobius",
+      "provider": "streamnook"
+    }
+  ],
+  "seventv_user_id": "7tv-user",
+  "theme": "atmosphere",
+  "frame": {
+    "url": "https://cdn.streamnook.app/frames/gold.png",
+    "slice": [199, 159, 199, 159],
+    "border": [18, 14]
+  },
+  "accent": "#d6b15c",
+  "caption": "streamnook mobius"
+}

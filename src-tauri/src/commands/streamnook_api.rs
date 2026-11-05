@@ -69,6 +69,13 @@ const ALLOWED_PATHS: &[&str] = &[
     "/api/v1/vod/sync",
 ];
 
+/// Writes that change what a member's profile sheets show: their profile
+/// preferences, their cosmetics (theme, equipped badge, ...) and the Twitch Recap
+/// hours that count toward their watch time.
+fn bumps_sheets(path: &str) -> bool {
+    path.starts_with("/api/v1/profile/") || path.starts_with("/api/cosmetics/") || path == "/api/v1/stats/recap"
+}
+
 #[derive(Debug, Serialize)]
 pub struct ApiResponse {
     /// HTTP status, so the caller can distinguish "rejected" from "offline".
@@ -163,6 +170,8 @@ pub(crate) async fn post_json(
         return Err(format!("path_not_allowed: {}", path));
     }
 
+    // The member this write is for: the chosen account, else the primary.
+    let acting = account_id.map(String::from).or_else(crate::services::account_roster::twitch_user_id);
     // Authenticate as the chosen account when one is given (a linked secondary),
     // else the primary. The server upserts whichever account the bearer resolves
     // to, so each account can only ever write its own row.
@@ -182,9 +191,15 @@ pub(crate) async fn post_json(
         .post(format!("{}{}", API_BASE, path))
         .bearer_auth(&token)
         .json(body);
-    let resp = crate::services::sn_transport::send(request)
-        .await
-        .map_err(|e| format!("network: {}", e))?;
+    let sent = crate::services::sn_transport::send(request).await;
+    // A write that reached the server (or may have) changes what the member's
+    // sheets show, whatever the answer was.
+    if bumps_sheets(path) {
+        if let Some(member) = acting.as_deref() {
+            crate::services::profile_view::bump_member_epoch(member);
+        }
+    }
+    let resp = sent.map_err(|e| format!("network: {}", e))?;
 
     let status = resp.status();
     let text = resp.text().await.unwrap_or_default();
@@ -234,6 +249,19 @@ mod tests {
     fn the_single_and_batch_watch_minute_paths_are_both_allowed() {
         assert!(ALLOWED_PATHS.contains(&"/api/v1/watch/minute"));
         assert!(ALLOWED_PATHS.contains(&"/api/v1/watch/minutes"));
+    }
+
+    #[test]
+    fn epoch_paths_are_the_profile_and_cosmetics_writes() {
+        use super::bumps_sheets;
+        for path in ["/api/cosmetics/theme", "/api/cosmetics/equip", "/api/v1/profile/prefs", "/api/v1/stats/recap"] {
+            assert!(ALLOWED_PATHS.contains(&path), "{path} is a writable path");
+            assert!(bumps_sheets(path), "{path} changes what a sheet shows");
+        }
+        for path in ["/api/v1/watch/minute", "/api/v1/user/sync", "/api/v1/accounts/link", "/api/v1/vod/sync"] {
+            assert!(!bumps_sheets(path), "{path} does not");
+        }
+        assert!(bumps_sheets("/api/v1/profile/anything-new"), "a future profile path counts too");
     }
 
     #[test]
