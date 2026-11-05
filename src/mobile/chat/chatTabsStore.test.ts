@@ -151,3 +151,91 @@ describe('keep, load and order', () => {
     expect(invokeMock.mock.calls[1]).toEqual(['chat_tabs_sync_stream', { room: null }]);
   });
 });
+
+describe('the return from the background', () => {
+  const parked = tab('a', 'twitch', 'a', '1');
+  const answer = (acquire: unknown[]) => ({ tabs: [parked], active_channel: 'a', mixed_platforms: false, connection: 'connected', revision: 20, acquire, release: [] });
+
+  it('asks Rust to join a parked list and settles once the answer is applied', async () => {
+    invokeMock.mockResolvedValue(answer([parked]));
+    await useChatTabsStore.getState().connect({ resume: true });
+    expect(invokeMock).toHaveBeenCalledWith('chat_tabs_connect', { resume: true });
+    expect(acquire).toHaveBeenCalledWith('a', '1', 'twitch');
+  });
+
+  it('the first look still joins without the resume flag', async () => {
+    invokeMock.mockResolvedValue(answer([]));
+    await useChatTabsStore.getState().connect();
+    expect(invokeMock).toHaveBeenCalledWith('chat_tabs_connect', {});
+  });
+
+  it('waits for joins any tab change started, at most the cap', async () => {
+    const { settleJoins } = await import('./chatTabsStore');
+    let finish: () => void = () => {};
+    acquire.mockImplementationOnce(() => new Promise<void>((r) => (finish = r)));
+    invokeMock.mockResolvedValue({ tabs: [tab('s', 'twitch', 's', '2', true)], active_channel: 's', mixed_platforms: false, revision: 21, acquire: [tab('s', 'twitch', 's', '2', true)], release: [] });
+    useChatTabsStore.getState().syncStreamTab('s', '2', 'S');
+    await vi.waitFor(() => expect(acquire).toHaveBeenCalledWith('s', '2', 'twitch'));
+    let settled = false;
+    const waiting = settleJoins(5_000).then(() => (settled = true));
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    finish();
+    await waiting;
+    expect(settled).toBe(true);
+  });
+
+  it('also waits for a join started while it waits', async () => {
+    const { settleJoins } = await import('./chatTabsStore');
+    let finishA: () => void = () => {};
+    let finishB: () => void = () => {};
+    acquire.mockImplementationOnce(() => new Promise<void>((r) => (finishA = r)));
+    acquire.mockImplementationOnce(() => new Promise<void>((r) => (finishB = r)));
+    try {
+      invokeMock.mockResolvedValue({ tabs: [], active_channel: null, mixed_platforms: false, revision: 23, acquire: [tab('p', 'twitch', 'p', '5')], release: [] });
+      await useChatTabsStore.getState().connect({ resume: true });
+      let settled = false;
+      const waiting = settleJoins(5_000).then(() => (settled = true));
+      invokeMock.mockResolvedValue({ tabs: [], active_channel: null, mixed_platforms: false, revision: 24, acquire: [tab('q', 'twitch', 'q', '6')], release: [] });
+      await useChatTabsStore.getState().connect();
+      finishA();
+      for (let i = 0; i < 5; i += 1) await Promise.resolve();
+      expect(settled).toBe(false);
+      finishB();
+      await waiting;
+      expect(settled).toBe(true);
+    } finally {
+      finishA();
+      finishB();
+    }
+  });
+
+  it('stops waiting at the cap, and a failed join never rejects the wait', async () => {
+    vi.useFakeTimers();
+    let release: () => void = () => {};
+    try {
+      const { settleJoins } = await import('./chatTabsStore');
+      acquire.mockImplementationOnce(() => new Promise<void>((r) => (release = r)));
+      acquire.mockImplementationOnce(() => Promise.reject(new Error('join failed')));
+      invokeMock.mockResolvedValue({ tabs: [], active_channel: null, mixed_platforms: false, revision: 22, acquire: [tab('x', 'twitch', 'x', '3'), tab('y', 'twitch', 'y', '4')], release: [] });
+      await useChatTabsStore.getState().connect({ resume: true });
+      let settled = false;
+      const waiting = settleJoins(5_000).then(() => (settled = true));
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await waiting;
+      expect(settled).toBe(true);
+    } finally {
+      // The never-answering join leaves the module's pending set, so no later
+      // test waits on it.
+      release();
+      vi.useRealTimers();
+    }
+  });
+
+  it('a failed connect still settles', async () => {
+    invokeMock.mockImplementation(() => Promise.reject(new Error('core gone')));
+    await expect(useChatTabsStore.getState().connect({ resume: true })).resolves.toBeUndefined();
+  });
+});

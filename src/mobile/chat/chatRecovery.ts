@@ -6,13 +6,10 @@
 // upstream connection is gone. It is also why reloading a room never helped,
 // since a reload only PARTs and re-JOINs on a connection that no longer exists.
 //
-// Rust's IRC task can end permanently in two ways and both leave the same
-// state. A failed connect attempt ends it outright, which is what a phone hits
-// when the process thaws before the network is back or during a Wi-Fi to mobile
-// handoff. An expired token ends it too: the token is read once when the task
-// starts, so every later reconnect re-sends that same one and eventually fails
-// to authenticate. Only a stop clears that state, and the fresh start reads the
-// token again.
+// Rust's IRC supervisor retries forever and reads the token again on every
+// attempt, but a socket that died while the phone slept can still sit there
+// until the read deadline notices it, and the retries back off up to a minute.
+// A rebuild replaces the connection now instead.
 //
 // The rebuild itself is Rust's (`rebuild_chat`, services/chat_recovery.rs): it
 // stops the Twitch side and brings it back with every room this window holds,

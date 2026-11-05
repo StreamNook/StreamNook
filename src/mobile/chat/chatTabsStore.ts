@@ -3,9 +3,9 @@
 // The tab rules live in Rust (`services/chat_tabs.rs`), shared with the iPhone
 // app: the stream tab is first and not closable, a room already open is never
 // opened twice, closing the room on screen falls back to the first one left,
-// and the stream tab follows the player unless you sit on another room. Rooms
-// you open yourself are your chats: Rust saves them per account, restores them
-// at launch and joins them on the first look at the Chats screen (or when a
+// and every stream the player starts puts its own tab on screen. Rooms you open
+// yourself are your chats: Rust saves them per account, restores them at
+// launch and joins them on the first look at the Chats screen (or when a
 // stream starts). This store mirrors Rust's list (from each command's answer
 // and the `chat-tabs` event, newest revision wins) and applies the connections
 // each change asks for.
@@ -127,9 +127,10 @@ interface ChatTabsState {
   reload: (channel: string) => void;
   /** Reads the saved chats (at launch: Rust restores them, not joined yet). */
   load: () => void;
-  /** Joins every chat not joined yet: the Chats screen's first look, or the
-   *  return from a park. */
-  connect: () => void;
+  /** Joins every chat not joined yet: the Chats screen's first look. With
+   *  `resume`, the return from the background: Rust joins a parked list only.
+   *  Settles once the answer is applied (its joins started, see `settleJoins`). */
+  connect: (opts?: { resume?: boolean }) => Promise<void>;
   /** Leaves every chat after a while in the background (refused under a stream). */
   park: () => void;
   /** Keeps the stream's chat after the player closes, or lets it close with it.
@@ -159,6 +160,26 @@ function room(channel: string, channelId: string | null, label: string, avatar?:
 
 let listening = false;
 
+/** Joins a tab change started that have not settled. */
+const pendingJoins = new Set<Promise<unknown>>();
+
+/** Waits, at most `capMs`, for every room a tab change asked to join to be
+ *  joined or to have failed, joins started meanwhile included, so a rebuild
+ *  that follows cycles every room. */
+export async function settleJoins(capMs: number): Promise<void> {
+  const deadline = Date.now() + capMs;
+  while (pendingJoins.size > 0) {
+    const left = deadline - Date.now();
+    if (left <= 0) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const cap = new Promise<void>((done) => {
+      timer = setTimeout(done, left);
+    });
+    await Promise.race([Promise.allSettled([...pendingJoins]), cap]);
+    clearTimeout(timer);
+  }
+}
+
 export const useChatTabsStore = create<ChatTabsState>((set, get) => {
   /** Shows Rust's list unless a newer one is already on screen. */
   const mirror = (view: RustView | null | undefined) => {
@@ -182,9 +203,11 @@ export const useChatTabsStore = create<ChatTabsState>((set, get) => {
       void releaseChannel(t.login, t.provider).catch(() => {});
     }
     for (const t of change.acquire ?? []) {
-      void acquireChannel(t.login, t.channel_id, t.provider).catch((err) =>
+      const join = acquireChannel(t.login, t.channel_id, t.provider).catch((err) =>
         Logger.warn('[ChatTabs] acquire failed:', err),
       );
+      pendingJoins.add(join);
+      void join.finally(() => pendingJoins.delete(join));
     }
   };
 
@@ -237,7 +260,12 @@ export const useChatTabsStore = create<ChatTabsState>((set, get) => {
     // Reading can restore another account's chats: apply what that leaves.
     load: () => change('chat_tabs_get', {}),
 
-    connect: () => change('chat_tabs_connect', {}),
+    connect: (opts) => {
+      follow();
+      return send<RustChange>('chat_tabs_connect', opts?.resume ? { resume: true } : {})
+        .then(apply)
+        .catch((err) => Logger.warn('[ChatTabs] chat_tabs_connect failed:', err));
+    },
 
     park: () => change('chat_tabs_park', {}),
 

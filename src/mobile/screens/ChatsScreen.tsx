@@ -103,9 +103,11 @@ export const ChatsScreen: React.FC<{ shown?: boolean; idle?: boolean }> = ({ sho
   const pinsRef = useRef<HTMLDivElement | null>(null);
   const [pinsBox, setPinsBox] = useState(0);
 
-  // The first look joins the saved chats; a parked set comes back too.
+  // The first look joins the saved chats. Only while the page is seen: a set
+  // parked in the background comes back with the return (lifecycle's
+  // chatResume), never here behind the viewer's back.
   useEffect(() => {
-    if (shown && connection !== 'connected') connect();
+    if (shown && connection !== 'connected' && document.visibilityState === 'visible') void connect();
   }, [shown, connection, connect]);
 
   useReadingAwake(shown && keepOn && tabs.length > 0, idleSecs);

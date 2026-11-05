@@ -1,6 +1,7 @@
 // The phone chats outside any one screen: the stream tab follows the player,
 // the saved chats come back at launch, and with no player they leave their
-// rooms after a while in the background and join them again on return.
+// rooms after a while in the background (lifecycle's return joins them again,
+// see chatResume).
 //
 // Mounted once, in the shell. The stream tab used to be pointed from inside the
 // chat pane, which only exists while a pane is on screen; with the Chats screen
@@ -72,8 +73,8 @@ export function useChatsLifecycle(): void {
 
   // Background: with no player, every room is left once Rust's park delay has
   // passed (Rust refuses while a stream tab exists, so audio-only playback
-  // keeps its chat). Back in front, a parked set joins again, and the chat
-  // store's history load fills what was missed.
+  // keeps its chat). Back in front the timer stops; the return itself (a
+  // parked set joining again before any rebuild) is lifecycle's, in chatResume.
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null;
     const onChange = () => {
@@ -90,7 +91,6 @@ export function useChatsLifecycle(): void {
         clearTimeout(timer);
         timer = null;
       }
-      if (tabs.connection === 'parked') tabs.connect();
     };
     document.addEventListener('visibilitychange', onChange);
     return () => {
