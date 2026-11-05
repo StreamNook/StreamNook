@@ -4164,23 +4164,29 @@ mod tests {
         let other = entry_with_file("file:other", &files[1]);
         let doomed = entry_with_file("file:doomed", &files[0]);
         std::thread::scope(|scope| {
+            // Owned by the scope's closure, so a failed assert drops it and the
+            // paused deletion goes on: the test fails instead of hanging.
+            let resume_tx = resume_tx;
             let (memory, pending, deleting, root, queue) = (&memory, &pending, &deleting, &root, &queue);
             // The deletion is paused after the file is marked and before it is
             // deleted.
             let delete = scope.spawn(move || {
                 delete_unnamed_files_with(queue, memory, deleting, || {
                     paused_tx.send(()).unwrap();
-                    resume_rx.recv().unwrap();
+                    let _ = resume_rx.recv();
                 });
             });
             paused_rx.recv().unwrap();
             let store = scope.spawn(move || {
-                let _lock = MANIFEST_LOCK.lock().unwrap();
+                let _lock = MANIFEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
                 let out = super::store_entries(memory, root, pending, deleting, vec![other, doomed]).unwrap();
                 stored_tx.send((out.stored, out.refused)).unwrap();
             });
+            // Another test can hold MANIFEST_LOCK for a while. The timeout only
+            // turns a deletion that holds it into a failure; nothing waits on it
+            // when the code is right.
             let (stored, refused) = stored_rx
-                .recv_timeout(std::time::Duration::from_millis(50))
+                .recv_timeout(std::time::Duration::from_secs(60))
                 .expect("the store did not wait for the deletion");
             assert_eq!(stored, 1, "the entry of another file is stored");
             assert_eq!(refused, vec!["file:doomed".to_string()], "the entry naming the file being deleted is refused");
@@ -4499,12 +4505,15 @@ mod tests {
         let (resume_tx, resume_rx) = std::sync::mpsc::channel::<()>();
         let (second_tx, second_rx) = std::sync::mpsc::channel::<bool>();
         std::thread::scope(|scope| {
+            // Owned by the scope's closure, so a failed assert drops it and the
+            // paused flush goes on: the test fails instead of hanging.
+            let resume_tx = resume_tx;
             let (memory, pending, path, dirty) = (&memory, &pending, &path, &dirty);
             // The first flush cleared the flag and is paused before the write.
             let first = scope.spawn(move || {
                 flush_if_dirty_with(memory, pending, path, dirty, || {
                     paused_tx.send(()).unwrap();
-                    resume_rx.recv().unwrap();
+                    let _ = resume_rx.recv();
                 })
                 .expect("the flush writes")
             });
@@ -4559,13 +4568,16 @@ mod tests {
         let (resume_tx, resume_rx) = std::sync::mpsc::channel::<()>();
         let (stored_tx, stored_rx) = std::sync::mpsc::channel::<usize>();
         std::thread::scope(|scope| {
+            // Owned by the scope's closure, so a failed assert drops it and the
+            // paused clear goes on: the test fails instead of hanging.
+            let resume_tx = resume_tx;
             let (memory, pending, cache_dir) = (&memory, &pending, &cache_dir);
             // The clear is paused after its locks are released and before the
             // set-aside folder is deleted.
             let clear = scope.spawn(move || {
                 clear_cache_in_with(cache_dir, memory, pending, || {
                     paused_tx.send(()).unwrap();
-                    resume_rx.recv().unwrap();
+                    let _ = resume_rx.recv();
                 })
                 .expect("the clear works");
             });
@@ -4586,12 +4598,14 @@ mod tests {
             fs::write(fresh.join("new-bbbbbbbb.png"), b"new").unwrap();
             let entry = entry_with_file("file:new", &fresh.join("new-bbbbbbbb.png"));
             let store = scope.spawn(move || {
-                let _lock = MANIFEST_LOCK.lock().unwrap();
+                let _lock = MANIFEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
                 let out = store_entries(memory, cache_dir, pending, vec![entry]).unwrap();
                 stored_tx.send(out.stored).unwrap();
             });
+            // Long, as another test can hold MANIFEST_LOCK; nothing waits on it
+            // when the code is right.
             let stored = stored_rx
-                .recv_timeout(std::time::Duration::from_millis(50))
+                .recv_timeout(std::time::Duration::from_secs(60))
                 .expect("a store did not wait for the delete");
             assert_eq!(stored, 1);
             resume_tx.send(()).unwrap();
@@ -4824,6 +4838,9 @@ mod tests {
         let (resume_tx, resume_rx) = std::sync::mpsc::channel::<()>();
         let (wrote_tx, wrote_rx) = std::sync::mpsc::channel::<anyhow::Result<PathBuf>>();
         std::thread::scope(|scope| {
+            // Owned by the scope's closure, so a failed expect drops it and the
+            // paused clear goes on: the test fails instead of hanging.
+            let resume_tx = resume_tx;
             let (memory, pending, cache_dir, badges, open_gate, holder) =
                 (&memory, &pending, &cache_dir, &badges, &open_gate, &holder);
             // The clear holds the gate while it tries the rename, which is held
@@ -4841,7 +4858,7 @@ mod tests {
                     },
                     || {
                         paused_tx.send(()).unwrap();
-                        resume_rx.recv().unwrap();
+                        let _ = resume_rx.recv();
                     },
                 )
                 .expect("the clear works");
@@ -5107,6 +5124,9 @@ mod tests {
         let (resume_tx, resume_rx) = std::sync::mpsc::channel::<()>();
         let (stored_tx, stored_rx) = std::sync::mpsc::channel::<(usize, Vec<String>)>();
         std::thread::scope(|scope| {
+            // Owned by the scope's closure, so a failed assert drops it and the
+            // paused clear goes on: the test fails instead of hanging.
+            let resume_tx = resume_tx;
             let (memory, pending, cache_dir) = (&memory, &pending, &cache_dir);
             // The folder cannot be renamed, as when a file in it is held open;
             // the clear is paused after its locks are released and before the
@@ -5119,7 +5139,7 @@ mod tests {
                     |_, _| Err(Error::new(ErrorKind::PermissionDenied, "held open")),
                     || {
                         paused_tx.send(()).unwrap();
-                        resume_rx.recv().unwrap();
+                        let _ = resume_rx.recv();
                     },
                 )
                 .expect("the clear works");
@@ -5131,12 +5151,14 @@ mod tests {
             // neither waits for the delete.
             let entry = entry_with_file("file:old", &old);
             let store = scope.spawn(move || {
-                let _lock = MANIFEST_LOCK.lock().unwrap();
+                let _lock = MANIFEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
                 let out = store_entries(memory, cache_dir, pending, vec![entry]).unwrap();
                 stored_tx.send((out.stored, out.refused)).unwrap();
             });
+            // Long, as another test can hold MANIFEST_LOCK; nothing waits on it
+            // when the code is right.
             let (stored, refused) = stored_rx
-                .recv_timeout(std::time::Duration::from_millis(50))
+                .recv_timeout(std::time::Duration::from_secs(60))
                 .expect("a store did not wait for the delete");
             assert_eq!(stored, 0);
             assert_eq!(refused, vec!["file:old".to_string()]);
@@ -5172,12 +5194,15 @@ mod tests {
         let (resume_tx, resume_rx) = std::sync::mpsc::channel::<()>();
         let (second_tx, second_rx) = std::sync::mpsc::channel::<bool>();
         std::thread::scope(|scope| {
+            // Owned by the scope's closure, so a failed assert drops it and the
+            // paused flush goes on: the test fails instead of hanging.
+            let resume_tx = resume_tx;
             let (memory, pending, none, path, dirty) = (&memory, &pending, &none, &path, &dirty);
             // The first flush has written and is paused where it would delete.
             let first = scope.spawn(move || {
                 flush_if_dirty_hooked(memory, pending, path, dirty, || {}, |files| {
                     reached_tx.send(files.len()).unwrap();
-                    resume_rx.recv().unwrap();
+                    let _ = resume_rx.recv();
                 })
                 .expect("the flush writes")
             });
@@ -5189,8 +5214,10 @@ mod tests {
                 let flushed = flush_if_dirty_with(memory, none, path, dirty, || {}).expect("the flush runs");
                 second_tx.send(flushed).unwrap();
             });
+            // Long, as another test can hold the flush locks; nothing waits on
+            // it when the code is right.
             let flushed = second_rx
-                .recv_timeout(std::time::Duration::from_millis(500))
+                .recv_timeout(std::time::Duration::from_secs(60))
                 .expect("the second flush waited for the first one's deletes");
             assert!(flushed, "the second flush wrote");
             resume_tx.send(()).unwrap();
