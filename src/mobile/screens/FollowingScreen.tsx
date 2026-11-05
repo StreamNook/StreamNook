@@ -1,7 +1,7 @@
 // Followed live channels: card feed or compact list, user's choice persisted.
 // Live favorites sit on their own shelf above the rest, as on desktop.
 import React, { useEffect, useMemo, useState } from 'react';
-import { Star } from 'phosphor-react';
+import { Star, Users } from 'phosphor-react';
 import { invoke } from '@tauri-apps/api/core';
 import { SettleIn, useSettleIn } from '../ui/SettleIn';
 import { useAppStore } from '../../stores/AppStore';
@@ -199,9 +199,20 @@ export const FollowingScreen: React.FC = () => {
               </section>
             )}
             {rows.length > 0 && (
-              <AdaptiveGrid variant={gridVariant} gap={gridGap} className="px-4">
-                {rows.map((s, i) => card(s, favorites.length + i))}
-              </AdaptiveGrid>
+              <section aria-label="Followed">
+                {/* Labeled only under a Favorites shelf, so the two groups read
+                    as a pair; alone, the list is plainly the follows. */}
+                {favorites.length > 0 && (
+                  <h2 className="flex items-center gap-1.5 px-5 pb-2 text-[12px] font-semibold uppercase tracking-wide text-textMuted">
+                    <Users size={14} weight="fill" className="text-accent" aria-hidden />
+                    <span>Followed</span>
+                    <span className="tabular-nums">{rows.length}</span>
+                  </h2>
+                )}
+                <AdaptiveGrid variant={gridVariant} gap={gridGap} className="px-4">
+                  {rows.map((s, i) => card(s, favorites.length + i))}
+                </AdaptiveGrid>
+              </section>
             )}
           </div>
         )}
