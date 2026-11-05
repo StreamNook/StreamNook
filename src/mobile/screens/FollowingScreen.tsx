@@ -203,17 +203,17 @@ export const FollowingScreen: React.FC = () => {
         ) : (
           <div className="sn-tabbar-clearance">
             {favorites.length > 0 && (
-              // Desktop's favorites shelf: a faint wash of the heart's pink
-              // and a pink hairline, so the personal watchlist reads as its
-              // own block. The bordered shelf is the divider; nothing else
-              // separates it from the follows. Inset 8 px around the cards,
-              // with corners to match theirs.
+              // Desktop's favorites shelf: a faint wash and a hairline, in the
+              // theme's accent (the heart keeps its pink), so the personal
+              // watchlist reads as its own block. The bordered shelf is the
+              // divider; nothing else separates it from the follows. Inset
+              // 8 px around the cards, with corners to match theirs.
               <section
                 aria-label="Favorites"
                 className="mx-2 rounded-[26px] pt-3 pb-2"
                 style={{
-                  background: 'color-mix(in srgb, var(--color-highlight-pink) 2%, transparent)',
-                  border: '1px solid color-mix(in srgb, var(--color-highlight-pink) 8%, transparent)',
+                  background: 'color-mix(in srgb, var(--color-accent) 2%, transparent)',
+                  border: '1px solid color-mix(in srgb, var(--color-accent) 8%, transparent)',
                 }}
               >
                 {/* Insets are a pixel short of 12 and 8 to give back the
