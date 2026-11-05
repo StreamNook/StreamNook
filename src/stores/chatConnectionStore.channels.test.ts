@@ -292,6 +292,20 @@ describe('several Twitch chats joining at once', () => {
     expect(calls('join_chat_channel').map((c) => c[1])).toEqual([{ channel: 'b' }]);
   });
 
+  it('a rebuild that never answers stops holding joins once its wait has passed', async () => {
+    answers.chat_bridge_port = () => 4242;
+    answers.start_chat = () => 4242;
+    answers.join_chat_channel = () => undefined;
+    answers.rebuild_chat = () => new Promise<number | null>(() => {});
+    const { acquireChannel, rebuildTwitchChat } = await import('./chatConnectionStore');
+
+    await withClock(acquireChannel('a', '1', 'twitch'));
+    void rebuildTwitchChat('lost');
+    await vi.advanceTimersByTimeAsync(46_000);
+    await withClock(acquireChannel('b', '2', 'twitch'));
+    expect(calls('join_chat_channel').map((c) => c[1])).toEqual([{ channel: 'b' }]);
+  });
+
   it('a join waits out a first connect slower than one short round', async () => {
     let finishStart: (port: number) => void = () => {};
     answers.chat_bridge_port = () => 4242;

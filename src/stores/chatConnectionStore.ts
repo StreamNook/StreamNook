@@ -1846,9 +1846,14 @@ export async function reconnectAllChannels(): Promise<void> {
 export async function rebuildTwitchChat(reason: string, force = false): Promise<boolean> {
   const run = cycleTwitchChat(reason, force);
   rebuildsInFlight.add(run);
+  // `rebuild_chat` has no deadline of its own: a join stops waiting on one
+  // that has not answered by then (an answer lost across a freeze), so a hung
+  // rebuild never holds every later join. The rebuild itself runs on.
+  const forget = setTimeout(() => rebuildsInFlight.delete(run), BRIDGE_CONNECT_TIMEOUT_MS);
   try {
     return await run;
   } finally {
+    clearTimeout(forget);
     rebuildsInFlight.delete(run);
   }
 }
