@@ -1406,8 +1406,8 @@ pub enum MemberRead {
     /// Not a member: no member half, and nothing cached stands in for it.
     NotMember,
     /// Could not tell (the member list never loaded) or their preferences did
-    /// not answer: what they hide must never show, so the build takes the
-    /// cached sheet's member half, or none.
+    /// not answer: what they hide must never show, so the build has no member
+    /// half (a cached one was shaped by what they hid then).
     Unknown,
     Read(MemberFacts),
 }
