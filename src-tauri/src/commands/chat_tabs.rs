@@ -167,11 +167,13 @@ pub fn chat_tabs_set_active(app: AppHandle, channel: String) -> ChatTabsChange {
     change
 }
 
-/// Joins every chat not joined yet: the Chats screen's first look, or the
-/// return from a park.
+/// Joins every chat not joined yet: the Chats screen's first look. `resume` is
+/// the return from the background, which joins only a parked list (Rust's own
+/// state decides, never the page's copy of it).
 #[tauri::command]
-pub fn chat_tabs_connect(app: AppHandle) -> ChatTabsChange {
-    let (change, ()) = chat_tabs::apply_settled(|t| (t.connect(), ()));
+pub fn chat_tabs_connect(app: AppHandle, resume: Option<bool>) -> ChatTabsChange {
+    let resume = resume.unwrap_or(false);
+    let (change, ()) = chat_tabs::apply_settled(|t| (if resume { t.connect_parked() } else { t.connect() }, ()));
     settle(&app, &change);
     change
 }
