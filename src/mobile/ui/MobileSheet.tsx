@@ -30,6 +30,9 @@ export interface MobileSheetProps {
   /** The sheet's exit has played: a hand-off to another sheet starts here, so two never dim the
    *  screen at once. */
   onExited?: () => void;
+  /** Art behind the handle and the scrolling content, clipped to the sheet's top
+   *  corners and fixed while the content scrolls (a member's Atmosphere). */
+  backdrop?: React.ReactNode;
 }
 
 const DISMISS_DISTANCE = 96;
@@ -53,6 +56,7 @@ const SheetSurface: React.FC<Omit<MobileSheetProps, 'open'>> = ({
   maxHeightFraction = 0.72,
   fill = false,
   flush = false,
+  backdrop,
 }) => {
   const [dragY, setDragY] = useState(0);
   const cap = `min(calc(100dvh * ${maxHeightFraction}), calc(100dvh - var(--sn-kb, 0px) - ${SAFE_T} - 12px))`;
@@ -117,7 +121,7 @@ const SheetSurface: React.FC<Omit<MobileSheetProps, 'open'>> = ({
       <motion.div
         // Capped and centred rather than edge to edge: a sheet stretched across a
         // tablet or an unfolded Fold puts its controls a hand-span apart.
-        className="absolute inset-x-0 bottom-0 mx-auto w-full max-w-[640px] glass-modal rounded-b-none flex flex-col"
+        className="absolute inset-x-0 bottom-0 mx-auto w-full max-w-[640px] glass-modal rounded-b-none flex flex-col isolate"
         // Rides the soft keyboard. The app draws edge to edge, so the viewport
         // never shrinks for the IME; the native bridge reports its height as
         // --sn-kb instead (the keyboard MINUS the gesture bar, which the
@@ -138,6 +142,15 @@ const SheetSurface: React.FC<Omit<MobileSheetProps, 'open'>> = ({
         exit={{ y: '100%' }}
         transition={dragging ? { duration: 0 } : SETTLE}
       >
+        {backdrop && (
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 -z-10 overflow-hidden"
+            style={{ borderTopLeftRadius: 18, borderTopRightRadius: 18 }}
+          >
+            {backdrop}
+          </div>
+        )}
         <div
           className="flex flex-col items-center pt-2.5 pb-1 shrink-0 touch-none"
           onPointerDown={onPointerDown}

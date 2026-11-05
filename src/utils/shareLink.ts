@@ -18,8 +18,3 @@ export function shareLinkFor(
     streamId: stream.id || null,
   });
 }
-
-/** A StreamNook member's public profile page on the web. */
-export function buildProfileUrl(login: string): string {
-  return `https://streamnook.app/u/${encodeURIComponent((login ?? '').trim().toLowerCase())}`;
-}

@@ -1,10 +1,11 @@
 // Tap a name in chat, see who they are, in the same shape as your own card:
-// their Atmosphere glowing behind them, their picture with their StreamNook
-// badge on it as a medal (never on your own), their name in their paint, their
-// sub in this room, every badge they have under its platform's mark, and what
-// they said this session. Under their sub, the viewer's own note and name
-// color, and in a room the viewer moderates, Moderate and History
-// (ChatterTools).
+// their Atmosphere behind the whole sheet (their rank's aura when they wear
+// none), their picture with their StreamNook badge on it as a medal (never on
+// your own), their name in their paint, the badges they wear, their paint and
+// Atmosphere as chips, a plate linking to their StreamNook page, their sub in
+// this room, every badge they have under its platform's mark, and what they
+// said this session. Under their sub, the viewer's own note and name color, and
+// in a room the viewer moderates, Moderate and History (ChatterTools).
 //
 // Rust builds the sheet (`user_profile_sheet`, services/profile_view.rs): the
 // badge groups merged and deduped per provider, the worn paint, the Helix
@@ -24,20 +25,25 @@ import { Logger } from '../../utils/logger';
 import {
   getCosmeticsVersion,
   getStreamNookRegistryVersion,
+  getStreamNookUserNumber,
+  isStreamNookRegistryLoaded,
   subscribeCosmeticsVersion,
   subscribeStreamNookRegistryVersion,
 } from '../../services/supabaseService';
 import { SubStandingRow } from '../../components/profile/SubStandingRow';
 import { wornSubBadgeArt, type WornBadge } from '../../utils/wornSubBadge';
 import type { SubStanding } from '../../types';
-import { AtmosphereGlow, BrandMark, CutoutAvatar, MemberRankMark, PaintedName, SectionHeader } from './IdentityParts';
+import { BrandMark, CutoutAvatar, MemberRankMark, PaintedName, SectionHeader, TapPanelHost } from './IdentityParts';
 import { badgeArt, brandFor, glowAtmosphere, identityNameSize, medalUrl } from './identity';
 import { MemberSections } from './MemberSections';
 import { ChatterTools } from './ChatterTools';
+import { ProfileNameplate } from '../../components/profile/ProfileNameplate';
+import { ProfileHeroRows } from './ProfileHeroRows';
+import { RelicShowcase } from './RelicShowcase';
+import { FrameOverlay, PaintWash, SheetBackdrop } from './SheetBackdrop';
+import { accentBorder, auraFor, frameInsets, newOpenId, plateSlot, tzOffsetMin } from './profileSheetParts';
+import { useHoldStill } from './useHoldStill';
 
-/** How far down the sheet their Atmosphere's glow reaches: the picture and
- *  the name, fading out above what follows. */
-const GLOW = 200;
 const AVATAR = 76;
 
 export interface SheetUser {
@@ -125,8 +131,12 @@ const BadgeGrid: React.FC<{
   onToggle: () => void;
   onPick: (b: ProfileBadge) => void;
   onImageFailed: (b: ProfileBadge) => void;
+  /** A badge's panel is open under this group. */
+  panelOpen: boolean;
+  /** A tap outside the group puts the panel away. */
+  onPanelClose: () => void;
   children?: React.ReactNode;
-}> = ({ title, badges, open, onToggle, onPick, onImageFailed, children }) => {
+}> = ({ title, badges, open, onToggle, onPick, onImageFailed, panelOpen, onPanelClose, children }) => {
   if (!badges.length) return null;
   // A platform's group sits under its real mark; "Relics" and "Chat clients"
   // keep their words.
@@ -136,6 +146,7 @@ const BadgeGrid: React.FC<{
   return (
     <div className="mt-5">
       <SectionHeader title={brand ? 'Badges' : title} brand={brand} detail={String(badges.length)} className="mb-2" />
+      <TapPanelHost open={panelOpen} onClose={onPanelClose}>
       {/* Eight across on every phone, so two rows are always the first 16. */}
       <div className="grid grid-cols-8 gap-2 justify-items-start">
         {shown.map((b, i) => (
@@ -167,6 +178,7 @@ const BadgeGrid: React.FC<{
         </button>
       )}
       {children}
+      </TapPanelHost>
     </div>
   );
 };
@@ -238,12 +250,19 @@ const ProfileBody: React.FC<{
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
   // The body stays mounted through the slide-out, so a reopen of the same
   // person starts every group collapsed again here (adjust-state-in-render).
+  // One id per presentation of this sheet (Rust keeps a member's roast line
+  // steady for one id and rolls a new one for the next), and whether this
+  // presentation has had its fresh answer yet (the page plate's slot waits on it).
+  const [openId, setOpenId] = useState(newOpenId);
+  const [freshAnswered, setFreshAnswered] = useState(false);
   const [wasOpen, setWasOpen] = useState(open);
   if (open !== wasOpen) {
     setWasOpen(open);
     if (open) {
       setExpanded(new Set());
       setPicked(null);
+      setOpenId(newOpenId());
+      setFreshAnswered(false);
     }
   }
   // null until the store has answered, so "nothing yet" is never painted
@@ -335,12 +354,15 @@ const ProfileBody: React.FC<{
   const cosmeticsVersion = useSyncExternalStore(subscribeCosmeticsVersion, getCosmeticsVersion);
 
   useEffect(() => {
+    // The body outlives the sheet's slide out; nothing is read while it is closed.
+    if (!open) return;
     let cancelled = false;
     (async () => {
       try {
         const cached = await invoke<ProfileSheetView | null>('user_profile_sheet_cached', {
           userId,
           channelId: channelId ?? null,
+          openId,
         });
         if (!cancelled && cached) setSheet(cached);
         const fresh = await invoke<ProfileSheetView>('user_profile_sheet', {
@@ -350,16 +372,23 @@ const ProfileBody: React.FC<{
           color: user.color || null,
           channelId: channelId ?? null,
           channelLogin: channelName ?? null,
+          tzOffsetMin: tzOffsetMin(),
+          openId,
         });
-        if (!cancelled) setSheet(fresh);
+        if (!cancelled) {
+          setSheet(fresh);
+          setFreshAnswered(true);
+        }
       } catch (err) {
         Logger.debug('[UserProfile] profile unavailable:', err);
+        // Nothing more is coming for this presentation; a held plate slot lets go.
+        if (!cancelled) setFreshAnswered(true);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [userId, username, user.displayName, user.color, channelId, channelName, registryVersion, cosmeticsVersion]);
+  }, [open, openId, userId, username, user.displayName, user.color, channelId, channelName, registryVersion, cosmeticsVersion]);
 
   const paint = sheet?.paint_def ?? null;
   const adjustNameColor = useNameColorAdjust();
@@ -392,6 +421,8 @@ const ProfileBody: React.FC<{
       open={expanded.has(title)}
       onToggle={() => toggleGroup(title, badges)}
       onPick={(badge) => setPicked({ badge, group: title })}
+      panelOpen={picked?.group === title}
+      onPanelClose={() => setPicked(null)}
       onImageFailed={markImageFailed}
     >
       {picked?.group === title && <PickedPanel badge={picked.badge} />}
@@ -405,50 +436,78 @@ const ProfileBody: React.FC<{
   const login =
     sheet?.shown_login ??
     (!sheet && user.username.toLowerCase() !== user.displayName.toLowerCase() ? user.username : null);
-  // What they have on, in words: the Atmosphere, then the paint.
-  const wearing = [sheet?.atmosphere?.name, paint?.name ? `${paint.name} paint` : null].filter(Boolean).join(' · ');
+  // The badges they wear (bundled art drawn from the app, failed art dropped).
+  const worn = drawable(sheet?.worn ?? []);
+  // The look behind the whole sheet: their Atmosphere when the registry can
+  // resolve it, else their rank's aura. A Frame wraps the hero.
+  const atm = glowAtmosphere(sheet?.atmosphere?.id);
+  const aura = auraFor(sheet?.theme, atm ? (sheet?.atmosphere ?? null) : null, sheet?.accent, sheet?.member ?? null);
+  const holdStill = useHoldStill();
+  const insets = sheet?.frame ? frameInsets(sheet.frame, 1) : null;
+  const backdrop = aura.kind === 'none' ? undefined : <SheetBackdrop aura={aura} atm={atm} />;
+  // Their StreamNook page: shown when Rust named it, held while it is still
+  // coming for a member (or while the member list has not loaded).
+  const pageLink = sheet?.page_link ?? null;
+  const slot = plateSlot(isStreamNookRegistryLoaded(), getStreamNookUserNumber(userId) !== null, pageLink, freshAnswered);
 
   return (
-    <MobileSheet open={open} onClose={onClose} maxHeightFraction={0.8} fill>
+    <MobileSheet open={open} onClose={onClose} maxHeightFraction={0.8} fill backdrop={backdrop}>
       {/* No scroll anchoring: opening a badge group grows the sheet below the
           tap, and Chromium would otherwise pin something under it and slide
           everything above out of place. */}
       <div className="flex flex-col pb-2 [overflow-anchor:none]">
-        {/* Their Atmosphere glowing behind the picture and name across the
-            sheet's full width, else a faint glow of their name color. */}
-        <div className="relative -mx-4 px-4 pt-3">
-          <AtmosphereGlow atm={glowAtmosphere(sheet?.atmosphere?.id)} tint={shownColor} height={GLOW} />
-          <div className="relative flex items-start gap-3">
-            <CutoutAvatar
-              platformUrl={sheet?.avatar_url}
-              picture={sheet?.picture}
-              size={AVATAR}
-              medal={medal ? medalUrl(sheet?.streamnook) : null}
-              medalLabel={sheet?.streamnook?.label}
-            />
-            <div className="flex-1" />
-            {sheet?.member && (
-              <div className="pt-1.5">
-                <MemberRankMark rank={sheet.member} />
-              </div>
-            )}
+        {/* The hero: picture and rank, then the name, what they wear and the
+            plate to their StreamNook page. A Frame wraps it as a nine-slice
+            border (the padding keeps the content clear of it); a paint theme
+            washes it; an accent-tinted hairline closes it without a Frame. */}
+        <div
+          className={insets ? 'relative' : 'relative border-b border-borderSubtle pb-4 pt-3'}
+          style={
+            insets
+              ? { padding: `${insets.top + 12}px ${insets.right}px ${insets.bottom + 8}px ${insets.left}px` }
+              : accentBorder(sheet?.accent, 0.14)
+          }
+        >
+          {sheet?.theme === 'paint' && paint && <PaintWash paint={paint} holdStill={holdStill} />}
+          <div className="relative z-[2]">
+            <div className="flex items-start gap-3">
+              <CutoutAvatar
+                platformUrl={sheet?.avatar_url}
+                picture={sheet?.picture}
+                size={AVATAR}
+                medal={medal ? medalUrl(sheet?.streamnook) : null}
+                medalLabel={sheet?.streamnook?.label}
+              />
+              <div className="flex-1" />
+              {sheet?.member && (
+                <div className="pt-1.5">
+                  <MemberRankMark rank={sheet.member} caption={sheet.caption} />
+                </div>
+              )}
+            </div>
+            <div className="pt-3 min-w-0">
+              <PaintedName
+                text={name}
+                paint={paint}
+                color={shownColor}
+                className="block font-bold leading-tight break-words"
+                style={{ fontSize: identityNameSize(name) - 2 }}
+              />
+              <ProfileHeroRows
+                login={login}
+                worn={worn}
+                views={sheet?.member_profile?.views ?? null}
+                paint={paint}
+                paintColor={shownColor}
+                atmosphere={sheet?.atmosphere ?? null}
+                seventvUserId={sheet?.seventv_user_id ?? null}
+                holdStill={holdStill}
+                onBadgeImageFailed={markImageFailed}
+              />
+              <ProfileNameplate slot={slot} link={pageLink} size="phone" />
+            </div>
           </div>
-          <div className="relative pt-3 min-w-0">
-            <PaintedName
-              text={name}
-              paint={paint}
-              color={shownColor}
-              className="block font-bold leading-tight break-words"
-              style={{ fontSize: identityNameSize(name) - 2 }}
-            />
-            {(login || wearing) && (
-              <div className="mt-0.5 flex items-center gap-1.5 min-w-0">
-                {login && <span className="text-[13px] text-textMuted truncate shrink-0 max-w-[60%]">@{login}</span>}
-                {login && wearing && <span className="text-[13px] text-textMuted">·</span>}
-                {wearing && <span className="text-[12.5px] text-textSecondary truncate min-w-0">{wearing}</span>}
-              </div>
-            )}
-          </div>
+          {sheet?.frame && <FrameOverlay frame={sheet.frame} />}
         </div>
 
         {standing && (
@@ -470,11 +529,11 @@ const ProfileBody: React.FC<{
         )}
 
         {/* A member's StreamNook block comes first: their relics, then the
-            overview, top emotes and accolades. */}
+            hours, their Twitch and lifetime sections, top emotes and accolades. */}
         {sheet?.member_profile && (
           <>
-            {grid('Relics', relics)}
-            <MemberSections profile={sheet.member_profile} />
+            <RelicShowcase relics={relics} accent={sheet.accent} onImageFailed={markImageFailed} />
+            <MemberSections profile={sheet.member_profile} accent={sheet.accent} />
           </>
         )}
 

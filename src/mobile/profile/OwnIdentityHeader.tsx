@@ -14,12 +14,20 @@
 // and name color) come from the same two picker answers Edit profile edits,
 // held in one store so a change there shows here at once. The iPhone draws the
 // same card (You/OwnIdentityHeader.swift).
-import React from 'react';
+import React, { useSyncExternalStore } from 'react';
 import { ChevronRight, User } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
 import { usePicksStore, useOwnPicks } from './picksStore';
 import { AtmosphereGlow, CutoutAvatar, PaintedName, WornBadge } from './IdentityParts';
 import { badgeArt, glowAtmosphere, identityNameSize, nameColorOr } from './identity';
+import {
+  getStreamNookRegistryVersion,
+  getStreamNookUserNumber,
+  isStreamNookRegistryLoaded,
+  subscribeStreamNookRegistryVersion,
+} from '../../services/supabaseService';
+import { ProfileNameplate } from '../../components/profile/ProfileNameplate';
+import { plateSlot } from './profileSheetParts';
 
 const RADIUS = 22;
 /** How far down the card the Atmosphere's glow reaches: the picture, the name
@@ -56,6 +64,11 @@ export const OwnIdentityCard: React.FC<Props> = ({ userId, displayName, login, p
   const wearing = [atmosphereName, paint?.name ? `${paint.name} paint` : null].filter(Boolean).join(' · ');
   const badges = identity?.badges ?? [];
   const showLogin = !!login && login.toLowerCase() !== displayName.toLowerCase();
+  // Your StreamNook page: the saved or fresh identity carries it. Held while you
+  // are a member (or the member list has not loaded) and no identity has landed.
+  useSyncExternalStore(subscribeStreamNookRegistryVersion, getStreamNookRegistryVersion);
+  const pageLink = identity?.page_link ?? null;
+  const slot = plateSlot(isStreamNookRegistryLoaded(), getStreamNookUserNumber(userId) !== null, pageLink, identity !== null);
 
   return (
     // Raised over what follows, so the picture note a tap opens is never covered.
@@ -85,6 +98,7 @@ export const OwnIdentityCard: React.FC<Props> = ({ userId, displayName, login, p
             {wearing && <span className="text-[12.5px] text-textSecondary truncate min-w-0">{wearing}</span>}
           </div>
         )}
+        <ProfileNameplate slot={slot} link={pageLink} size="phone" />
       </div>
       <div className="relative mt-4 border-t border-borderSubtle" />
       <button

@@ -1380,6 +1380,11 @@ export const subscribeStreamNookRegistryVersion = (cb: () => void): (() => void)
 /** For React useSyncExternalStore: read the current version. */
 export const getStreamNookRegistryVersion = (): number => snRegistryVersion;
 
+/** Whether the member list has actually loaded. Before it has, "not a member"
+ *  means "not known yet", so a surface that waits on membership (the StreamNook
+ *  page plate's reserved slot) asks this. */
+export const isStreamNookRegistryLoaded = (): boolean => snRegistryLoaded;
+
 /**
  * Subscribe to the cosmetics registry. The first call reads Rust's copy;
  * subsequent calls just register the listener.

@@ -5,6 +5,7 @@
 // name beside or below it. The iPhone draws the same shape from
 // You/IdentityViews.swift.
 import React, { useRef, useState } from 'react';
+import { motion } from 'framer-motion';
 import { useOutsidePress } from '../../hooks/useOutsidePress';
 import { Check } from 'phosphor-react';
 import { ProviderMark } from '../../components/ProviderLogo';
@@ -15,11 +16,13 @@ import type { AtmosphereWashData } from '../../components/overlay/AtmosphereChat
 import { computePaintStyle } from '../../services/seventvService';
 import { getAtmosphere } from '../../services/atmospheres';
 import type { PaintV4 } from '../../services/paintStyle';
-import type { AvatarPick, MemberRank } from '../../types/profileView';
+import type { AtmosphereView, AvatarPick, MemberRank, ProfileBadge } from '../../types/profileView';
 // The rank number's display serif, the one the desktop card's tier mark uses.
 import '@fontsource-variable/fraunces/wght-italic.css';
 import streamnookMark from '../../assets/streamnook-logo-128.webp';
 import { SEVENTV_BLUE, nameColorOr, type Brand } from './identity';
+import { openExternal } from '../../utils/openExternal';
+import type { Panel } from './profileSheetParts';
 
 /**
  * A brand's real mark at `size` px. 7TV's wordmark is wider than tall, so
@@ -207,7 +210,7 @@ export const CutoutAvatar: React.FC<{
  * number; the rest keep the text color. The iPhone draws the same mark
  * (`MemberRankMark` in You/IdentityViews.swift).
  */
-export const MemberRankMark: React.FC<{ rank: MemberRank }> = ({ rank }) => {
+export const MemberRankMark: React.FC<{ rank: MemberRank; caption?: string | null }> = ({ rank, caption }) => {
   const lit = rank.tier === 'ethereal' || rank.tier === 'mythic' || rank.tier === 'ascendant';
   return (
     <div
@@ -234,6 +237,12 @@ export const MemberRankMark: React.FC<{ rank: MemberRank }> = ({ rank }) => {
       >
         {rank.label}
       </div>
+      {/* The worn StreamNook badge's caption, as the desktop hero prints it. */}
+      {caption && (
+        <div className="mt-2.5 max-w-[132px] break-words text-right text-[10px] font-light uppercase leading-snug tracking-[0.22em] text-textSecondary">
+          {caption}
+        </div>
+      )}
     </div>
   );
 };
@@ -302,6 +311,115 @@ export const SectionHeader: React.FC<{
     {trailing}
   </div>
 );
+
+/** The glass chip a paint, an Atmosphere or the 7TV link wears: the desktop
+ *  card's chip, sized for a thumb. */
+const CHIP =
+  'relative inline-flex shrink-0 items-center gap-1.5 overflow-hidden rounded-md border border-transparent px-2.5 py-1 text-[11px] font-bold leading-[1.35] shadow-[inset_1px_1px_0_0_rgba(255,255,255,0.10),inset_-1px_-1px_0_0_rgba(0,0,0,0.18)] transition-opacity active:opacity-70';
+
+/** Their worn 7TV paint as a chip filled with the paint, its name knocked out.
+ *  A tap says what it is. */
+export const PaintChip: React.FC<{ paint: PaintV4; color: string; still: boolean; onTap: () => void }> = ({
+  paint,
+  color,
+  still,
+  onTap,
+}) => {
+  const style = computePaintStyle(paint, color, 'all', still);
+  return (
+    <button
+      type="button"
+      onClick={onTap}
+      aria-label={`7TV paint: ${paint.name}`}
+      className={CHIP}
+      style={{ ...style, WebkitBackgroundClip: 'padding-box', backgroundClip: 'padding-box' }}
+    >
+      <span
+        style={{
+          ...style,
+          filter: 'invert(1) contrast(1.5)',
+          WebkitBackgroundClip: 'text',
+          backgroundClip: 'text',
+        }}
+      >
+        {paint.name}
+      </span>
+    </button>
+  );
+};
+
+/** Their Atmosphere as a chip filled with its own swatch, rimmed in its accent. */
+export const AtmosphereChip: React.FC<{ atmosphere: AtmosphereView; onTap: () => void }> = ({
+  atmosphere,
+  onTap,
+}) => (
+  <button
+    type="button"
+    onClick={onTap}
+    aria-label={`Atmosphere: ${atmosphere.name}`}
+    className={`${CHIP} text-white`}
+    style={{
+      background: atmosphere.swatch,
+      boxShadow: `inset 0 0 0 1px rgba(${atmosphere.accent}, 0.65), inset 0 1px 0 0 rgba(255, 255, 255, 0.18), 0 0 10px -3px rgba(${atmosphere.accent}, 0.7)`,
+    }}
+  >
+    <span
+      aria-hidden="true"
+      className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.14),transparent_70%)]"
+    />
+    <span className="relative [text-shadow:0_1px_2px_rgba(0,0,0,0.7)]">{atmosphere.name}</span>
+  </button>
+);
+
+/** Opens their 7TV profile, labeled with the 7TV logo. */
+export const SevenTvChip: React.FC<{ seventvUserId: string }> = ({ seventvUserId }) => (
+  <button
+    type="button"
+    onClick={() => void openExternal(`https://7tv.app/users/${seventvUserId}`)}
+    aria-label="Open 7TV profile"
+    className={`${CHIP} bg-white/5`}
+  >
+    <span className="inline-flex h-3" style={{ color: SEVENTV_BLUE }}>
+      <SevenTVLogo className="h-full w-auto" title="" />
+    </span>
+  </button>
+);
+
+/** What a tap on an accolade, an emote, a worn badge or a chip says, in place
+ *  (a tooltip does nothing under a thumb). It fades in; Interface > Motion's
+ *  Reduced and Off keep the fade only. */
+export const TapPanel: React.FC<{ panel: Panel; art?: ProfileBadge | null }> = ({ panel, art }) => (
+  <motion.div
+    role="note"
+    className="mt-3 glass-panel p-3 flex items-start gap-2.5"
+    initial={{ opacity: 0 }}
+    animate={{ opacity: 1 }}
+    transition={{ duration: 0.14, ease: 'easeOut' }}
+  >
+    {art && <FallbackImage src={art.url} fallbackUrls={art.fallbacks} alt="" className="w-7 h-7 object-contain shrink-0" />}
+    <div className="min-w-0 flex-1">
+      <div className="text-[14px] font-semibold text-textPrimary">{panel.title}</div>
+      {panel.detail && <div className="text-[12.5px] text-textSecondary mt-0.5">{panel.detail}</div>}
+    </div>
+  </motion.div>
+);
+
+/** Everything a tap panel belongs to: its items and the panel. A tap anywhere
+ *  outside it puts the panel away and presses nothing else (the house rule for
+ *  every pop-out); a tap on another item of the same group just switches it. */
+export const TapPanelHost: React.FC<{ open: boolean; onClose: () => void; children: React.ReactNode }> = ({
+  open,
+  onClose,
+  children,
+}) => {
+  const host = useRef<HTMLDivElement>(null);
+  const markInside = useOutsidePress(open, [host], onClose);
+  return (
+    <div ref={host} onPointerDownCapture={markInside}>
+      {children}
+    </div>
+  );
+};
 
 /** A worn badge at 18 px; one whose every URL fails takes itself out. */
 export const WornBadge: React.FC<{ url: string; fallbacks?: string[]; label?: string }> = ({

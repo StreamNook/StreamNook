@@ -14,6 +14,8 @@ import type { MemberProfileView } from './memberProfile';
 import { isStatHidden } from '../../services/profileVisibility';
 import { useAppStore } from '../../stores/AppStore';
 import { useLowPower } from '../../utils/lowPower';
+import { ProfileNameplate } from './ProfileNameplate';
+import { useProfileLink } from './useProfileLink';
 
 export function MemberProfileHero({
   userId,
@@ -45,7 +47,14 @@ export function MemberProfileHero({
     effectiveTheme,
     cosmeticName,
     headerBorder,
+    loading,
   } = view;
+  // The member's StreamNook page. The login asked about is the member's own
+  // Twitch login for this member id (`info`), never the login of the chat
+  // platform the card was opened from, so a claimed Kick account links to its
+  // own Twitch page. This hero only draws for members, so the slot is held
+  // until the answer lands.
+  const plate = useProfileLink({ memberId: userId, login: info?.login, loadFinished: !loading, expectMember: true });
   return (
     <>
     {/* Hero band — identity + rank over the atmosphere (most present here).
@@ -198,6 +207,10 @@ export function MemberProfileHero({
                   </span>
                 </Tooltip>
               )}
+            </div>
+            {/* The member's StreamNook page. Presses on it never start a drag. */}
+            <div onPointerDown={(e) => e.stopPropagation()}>
+              <ProfileNameplate slot={plate.slot} link={plate.link} size="desktop" />
             </div>
           </div>
         </div>

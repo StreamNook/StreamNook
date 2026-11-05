@@ -14,29 +14,85 @@ export interface ProfileBadge {
   provider?: string;
 }
 
+/** A member's StreamNook page as the plate draws it (Rust `member_link::page_link`).
+ *  `href` is what opening goes to, `url` is what the plate shows and copies. */
+export interface PageLink {
+  href: string;
+  url: string;
+  /** "streamnook.app/" or "streamnook.app/u/". */
+  prefix: string;
+  name: string;
+  /** The rank accent lifted to read on the plate's floor, `#rrggbb`. */
+  accent: string;
+}
+
+/** The desktop's answer to "may this member card show a plate". */
+export interface PageLinkAnswer {
+  state: 'member' | 'not_member' | 'not_ready';
+  link?: PageLink;
+}
+
+/** An equipped Frame: the art and the nine-slice numbers Rust serves
+ *  (top, right, bottom, left source slices; vertical and horizontal border). */
+export interface FrameView {
+  url: string;
+  slice: [number, number, number, number];
+  border: [number, number];
+}
+
 export interface ProfileBadgeGroup {
   /** "Twitch", "7TV", "Chat clients" or "StreamNook". */
   title: string;
   badges: ProfileBadge[];
 }
 
-/** One overview tile on a member's sheet. `key` is the stat's visibility key
- *  (`hours`, `messages`, `streams`, `favorite_channel`, `subs_gifted`,
- *  `twitch_age`, `followers`, `views`), which also picks its icon. */
+/** One tile of a member's "Twitch" or "Lifetime" section. `key` is the stat's
+ *  key in `utils/accolades.catalog.json`, which also picks its icon. `detail` is
+ *  set only on `twitch_age` ("Joined March 20, 2014") and shows in the tap
+ *  panel. A missing caption or detail is a missing key, never null. */
 export interface MemberStatView {
   key: string;
   label: string;
   value: string;
   caption?: string;
+  detail?: string;
 }
 
-/** One earned accolade: the desktop's lucide icon name and its two gradient
- *  stops (`#rrggbb`). */
+/** The hours hero: its heading, the number, its unit and a roast line when the
+ *  member keeps the roast visible. */
+export interface HoursHeroView {
+  /** "Hours watched". */
+  label: string;
+  value: string;
+  unit: string;
+  roast?: string;
+}
+
+/** "<Name>'s Twitch" or "Lifetime in StreamNook": a titled grid of tiles. */
+export interface StatSectionView {
+  /** `twitch` or `lifetime`. */
+  key: string;
+  title: string;
+  tiles: MemberStatView[];
+}
+
+/** One accolade on the wall: the desktop's lucide icon name, its two gradient
+ *  stops (`#rrggbb`), whether it is lit, and the hint a tap shows. */
 export interface AccoladeMedalView {
   id: string;
   label: string;
   icon: string;
-  colors: string[];
+  colors: [string, string];
+  earned: boolean;
+  secret: boolean;
+  hint: string;
+}
+
+/** The wall: earned ones first, then locked, as the desktop's wall orders them. */
+export interface AccoladeWallView {
+  earned: number;
+  total: number;
+  items: AccoladeMedalView[];
 }
 
 export interface TopEmoteView {
@@ -45,17 +101,24 @@ export interface TopEmoteView {
   provider: string;
   url: string;
   count: number;
+  /** The count as the tile prints it. */
+  count_text: string;
 }
 
-/** A member's relics, overview (ending on their profile views), earned
- *  accolades and top emotes, with what they hide already left out. */
+/** A member's StreamNook half, with what they hide already left out. */
 export interface MemberProfileView {
-  /** Their relics, the featured one first; the sheet's StreamNook block leads
-   *  with them. */
+  /** Their relics; the first one leads (the equipped one when there is one). */
   relics: ProfileBadge[];
-  stats: MemberStatView[];
-  accolades: AccoladeMedalView[];
+  hours?: HoursHeroView;
+  twitch?: StatSectionView;
+  lifetime?: StatSectionView;
+  /** Profile views as printed ("1,234"), when the member shows them. */
+  views?: string;
+  /** Up to 16 with art; the sheet draws the first 12 whose art loads. */
   top_emotes: TopEmoteView[];
+  /** "12 emotes · 345 used". */
+  emote_totals?: string;
+  accolades?: AccoladeWallView;
 }
 
 /** A member's StreamNook badge. `image_url` may be `streamnook-house:<slug>`,
@@ -93,6 +156,9 @@ export interface MemberRank {
   tier: string;
   /** The rank's name, or a famous number's own ("Nice" for 69). */
   label: string;
+  /** How strongly the rank's aura washes the top of the sheet when no
+   *  Atmosphere is worn, 0 to 1 (the desktop card's tier aura alpha). */
+  aura: number;
   /** The rank's color, `#rrggbb`. */
   accent: string;
 }
@@ -117,6 +183,20 @@ export interface ProfileSheetView {
   /** A member's relics, overview, accolades and top emotes; their StreamNook
    *  badges ride `groups`. */
   member_profile?: MemberProfileView;
+  /** A member's StreamNook page; absent for anyone who is not a member. */
+  page_link?: PageLink;
+  /** What they wear, Twitch first and StreamNook last, capped (members only). */
+  worn?: ProfileBadge[];
+  /** Their 7TV account, when they have one linked. */
+  seventv_user_id?: string;
+  /** Which look the sheet wears: the rank aura, a paint wash or an Atmosphere. */
+  theme?: 'tier' | 'paint' | 'atmosphere';
+  /** An equipped Frame, drawn around the hero. */
+  frame?: FrameView;
+  /** The profile accent as `#rrggbb`: section borders and the hero rim. */
+  accent?: string;
+  /** The worn StreamNook badge's caption under the rank. */
+  caption?: string;
 }
 
 export interface OwnIdentityView {
@@ -129,6 +209,8 @@ export interface OwnIdentityView {
   name_color?: string;
   /** Your 7TV picture, when you set one and you show 7TV pictures. */
   picture?: AvatarPick;
+  /** Your StreamNook page; absent when you are not a member. */
+  page_link?: PageLink;
   /** Your Twitch profile banner; absent when the account has none. */
   banner_url?: string;
   /** Worn, in surface order (your StreamNook badge last), images only, capped. */

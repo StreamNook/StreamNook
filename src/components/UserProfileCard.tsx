@@ -1,8 +1,8 @@
 import { useState, useEffect, useMemo, useRef, useCallback, useSyncExternalStore } from 'react';
 import { ExternalAnchor } from './ui/ExternalAnchor';
-import { MessageCircle, UserPlus, UserMinus, Loader2, ChevronLeft, ChevronUp, Pencil, X, Share2, Link2, Check, EyeOff, History } from 'lucide-react';
+import { MessageCircle, UserPlus, UserMinus, Loader2, ChevronLeft, ChevronUp, Pencil, X, Share2, Check, EyeOff, History } from 'lucide-react';
 import { filterChannelKey, isHiddenInScope } from '../utils/chatFilters';
-import { shareLinkFor, buildProfileUrl } from '../utils/shareLink';
+import { shareLinkFor } from '../utils/shareLink';
 import { providerLabel, type ProviderId } from '../types/providers';
 import { motion, AnimatePresence, useScroll, useTransform, useReducedMotion, useMotionValue, animate } from 'framer-motion';
 import { setUserNickname, setUserColor } from '../utils/userChatOverrides';
@@ -1004,8 +1004,6 @@ const UserProfileCard = ({
   const [followLoading, setFollowLoading] = useState(false);
   // Share confirmation (copies streamnook.app/w/<login>).
   const [shareCopied, setShareCopied] = useState(false);
-  // Profile-link confirmation (copies streamnook.app/u/<login>, members only).
-  const [profileLinkCopied, setProfileLinkCopied] = useState(false);
 
   // Get channel context
   const getChannelContext = useCallback(() => {
@@ -1737,22 +1735,6 @@ const UserProfileCard = ({
       >
         {shareCopied ? <Check size={14} className="text-success" /> : <Share2 size={14} className="text-accent" />}
         {shareCopied ? 'Copied' : 'Share'}
-      </button>
-      {/* The member's public profile page on the web. */}
-      <button
-        onClick={async () => {
-          try {
-            await navigator.clipboard.writeText(buildProfileUrl(login));
-            setProfileLinkCopied(true);
-            window.setTimeout(() => setProfileLinkCopied(false), 1400);
-          } catch (err) {
-            Logger.error('[UserProfileCard] Failed to copy profile link:', err);
-          }
-        }}
-        className={`${memberActionBtn} ${profileLinkCopied ? 'text-success' : ''}`}
-      >
-        {profileLinkCopied ? <Check size={14} className="text-success" /> : <Link2 size={14} className="text-accent" />}
-        {profileLinkCopied ? 'Copied' : 'Profile link'}
       </button>
     </div>
   );

@@ -55,6 +55,8 @@ import { listAtmospheres, getAtmosphere, getAtmosphereUnlock, type Atmosphere } 
 import { resolveEntitlement } from '../../services/cosmetics/ownership';
 import { MAJOR_COLOGNE_THEME_ID, MAJOR_COLOGNE_ACCOLADE_ID, parseCologneTheme, buildCologneTheme, isCologneTheme } from '../../services/cologneEvent';
 import { getTier, getTierAccent, StreamNookBadge } from '../StreamNookBadge';
+import { ProfileNameplate } from '../profile/ProfileNameplate';
+import { useProfileLink } from '../profile/useProfileLink';
 import { resolveCosmeticAsset } from '../cosmeticAssets';
 import { CosmeticArt } from '../CosmeticArt';
 import {
@@ -176,6 +178,14 @@ const ProfileSettings = () => {
 
   useSyncExternalStore(subscribeStreamNookRegistryVersion, getStreamNookRegistryVersion, getStreamNookRegistryVersion);
   const streamNookUserNumber = currentUser?.user_id ? getStreamNookUserNumber(currentUser.user_id) : null;
+  // Your StreamNook page, held in the header while you are known to be a member
+  // so the plate arriving moves nothing.
+  const profilePlate = useProfileLink({
+    memberId: currentUser?.user_id ?? null,
+    login: currentUser?.login ?? null,
+    loadFinished: true,
+    expectMember: streamNookUserNumber !== null,
+  });
 
   useSyncExternalStore(subscribeCosmeticsVersion, getCosmeticsVersion, getCosmeticsVersion);
   useSyncExternalStore(subscribeAtmospheresVersion, getAtmospheresVersion, getAtmospheresVersion);
@@ -1295,6 +1305,7 @@ const ProfileSettings = () => {
             )}
           </div>
           <p className="text-textSecondary text-base">@{currentUser.login}</p>
+          <ProfileNameplate slot={profilePlate.slot} link={profilePlate.link} size="desktop" />
         </div>
 
         {tier && streamNookUserNumber !== null && (

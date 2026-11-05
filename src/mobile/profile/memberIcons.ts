@@ -14,7 +14,10 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 
-/** Each overview tile's icon and the desktop card's color for it. */
+import { Award, Palette, Sparkles } from 'lucide-react';
+
+/** Each stat tile's icon and the desktop card's color for it; one entry for
+ *  every key in `utils/accolades.catalog.json` `stats` (memberIcons.test.ts). */
 export const STAT_ICONS: Record<string, { icon: LucideIcon; color: string }> = {
   hours: { icon: Clock, color: '#e6c178' },
   messages: { icon: MessageSquare, color: '#8fd4b4' },
@@ -24,6 +27,9 @@ export const STAT_ICONS: Record<string, { icon: LucideIcon; color: string }> = {
   twitch_age: { icon: Cake, color: '#e493a0' },
   followers: { icon: Users, color: '#8fc3e8' },
   views: { icon: Eye, color: '#aebfca' },
+  account_type: { icon: Award, color: '#b9a6ec' },
+  cosmetics: { icon: Palette, color: '#e493a0' },
+  member_rank: { icon: Sparkles, color: '#aebfca' },
 };
 
 /** The desktop medallions' lucide icons by name (src/components/profile/accoladeIcons.ts). */
