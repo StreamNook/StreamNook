@@ -1,36 +1,44 @@
-// Runs every case in utils/accolades.cases.json through the wall and compares
-// the whole output, item by item and key by key. The phones' Rust code and the
+// Runs every public case in utils/accolades.cases.json through the wall and
+// compares the whole output, item by item and key by key. Rust and the
 // streamnook.app member page run the same file, so a rule changed on one side
-// only fails here, there or on the site.
+// only fails here, there or on the site. The own cases in the file are Rust's:
+// your own wall is built there (own_accolades), not here.
 import { describe, expect, it } from 'vitest';
 import cases from '../../utils/accolades.cases.json';
-import { buildAccoladeWall, localDay, type AccoladeWall, type WallInput } from './accoladeWall';
+import { buildAccoladeWall, type AccoladeWall, type WallInput } from './accoladeWall';
 
 interface Case {
   name: string;
   own: boolean;
-  input: Omit<WallInput, 'own'>;
+  // The file's inputs also carry `today` and `created_at`, which only an own wall reads.
+  input: WallInput & { today?: string; created_at?: string | null };
   expect: AccoladeWall;
 }
 
 const file = cases as unknown as { v: number; cases: Case[] };
+const publicCases = file.cases.filter((c) => !c.own);
 
-describe('accolade wall cases', () => {
+describe('public accolade wall cases', () => {
   it('reads a plausible cases file', () => {
     expect(file.v).toBe(1);
     expect(file.cases.length).toBeGreaterThanOrEqual(16);
+    expect(publicCases.length).toBeGreaterThanOrEqual(10);
   });
 
-  for (const c of file.cases) {
+  it('leaves the own cases to Rust: they are in the file and never built here', () => {
+    expect(file.cases.some((c) => c.own)).toBe(true);
+    expect(publicCases.every((c) => !c.own)).toBe(true);
+  });
+
+  for (const c of publicCases) {
     it(c.name, () => {
-      expect(buildAccoladeWall({ ...c.input, own: c.own })).toStrictEqual(c.expect);
+      expect(buildAccoladeWall(c.input)).toStrictEqual(c.expect);
     });
   }
 });
 
 describe('the wall inputs', () => {
-  const quiet = {
-    own: true,
+  const quiet: WallInput = {
     messages: 0,
     hours: 0,
     streams: 0,
@@ -39,21 +47,22 @@ describe('the wall inputs', () => {
     cosmetics: 0,
     years: 0,
     member_number: 500,
-    saved: [] as string[],
-    hidden: [] as string[],
-    today: '',
-    created_at: null,
+    saved: [],
+    hidden: [],
   };
 
-  it('lights nothing from a day that is not a date', () => {
-    for (const today of ['', 'today', '2026-13-01', '2026-11-5']) {
-      const wall = buildAccoladeWall({ ...quiet, today });
-      expect(wall.items.filter((i) => i.earned)).toEqual([]);
-    }
+  it('lights nothing from the clock: only the stored set lights a season or Cake Day', () => {
+    expect(buildAccoladeWall(quiet).items.filter((i) => i.earned)).toEqual([]);
+    const saved = buildAccoladeWall({ ...quiet, saved: ['halloween', 'cake_day'] });
+    expect(saved.items.filter((i) => i.earned).map((i) => i.id)).toEqual(['halloween', 'cake_day']);
   });
 
-  it('writes a local date as year-month-day with two digits each', () => {
-    expect(localDay(new Date(2026, 0, 5))).toBe('2026-01-05');
-    expect(localDay(new Date(2026, 10, 25))).toBe('2026-11-25');
+  it('lists no secret that is not earned, and never prints its how-to', () => {
+    const wall = buildAccoladeWall(quiet);
+    expect(wall.items.some((i) => i.secret && !i.earned)).toBe(false);
+    const held = buildAccoladeWall({ ...quiet, saved: ['insomniac'] });
+    const item = held.items.find((i) => i.id === 'insomniac');
+    expect(item?.secret).toBe(true);
+    expect(item?.hint).toBe('A hidden accolade.');
   });
 });

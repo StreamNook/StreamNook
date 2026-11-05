@@ -153,6 +153,17 @@ export function statPanel(stat: Pick<MemberStatView, 'label' | 'detail'>): Panel
   return stat.detail ? { title: stat.label, detail: stat.detail } : null;
 }
 
+/** The words on an accolade's medallion: a locked secret reads "???" whatever its
+ *  label says. */
+export function accoladeLabel(item: Pick<AccoladeMedalView, 'label' | 'secret' | 'earned'>): string {
+  return item.secret && !item.earned ? '???' : item.label;
+}
+
+/** What a tap on an accolade says: the same label rule, and its hint. */
+export function accoladePanel(item: Pick<AccoladeMedalView, 'label' | 'hint' | 'secret' | 'earned'>): Panel {
+  return panelFor('accolade', { label: accoladeLabel(item), hint: item.hint });
+}
+
 /** Which mark the Account type tile draws, from its value. */
 export function accountGlyph(value: string): 'verified' | 'twitch' | 'award' {
   if (value === 'Partner' || value === 'Twitch Staff') return 'verified';
@@ -161,10 +172,8 @@ export function accountGlyph(value: string): 'verified' | 'twitch' | 'award' {
 }
 
 /** The device's offset from UTC in minutes, east positive (what Rust's
- *  `tz_offset_min` takes). `Date#getTimezoneOffset` is west positive. */
-export function tzOffsetMin(now: Pick<Date, 'getTimezoneOffset'> = new Date()): number {
-  return 0 - now.getTimezoneOffset();
-}
+ *  `tz_offset_min` takes): the one helper the desktop uses too. */
+export { ownTzOffsetMin as tzOffsetMin } from '../../hooks/useOwnAccolades';
 
 /** One id per presentation of a sheet: Rust keeps a member's roast line steady
  *  for one id and rolls a new one for the next. */

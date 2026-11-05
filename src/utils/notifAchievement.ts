@@ -2,7 +2,7 @@
 // "Test" button a stubborn number of times (some hands just can't leave a
 // button alone). The running count is kept LOCAL (per device) because progress
 // toward an easter egg does not need to follow the user around; only the EARNED
-// state is persisted (to user_accolades via grantAccolade, the same way
+// state is persisted (Rust saves it through grant_own_accolade, the same way
 // seasonal / cake-day accolades persist), so the medallion and the Midnight
 // Atmosphere it unlocks do follow the account.
 

@@ -7,12 +7,17 @@ import { Lock, Star } from 'lucide-react';
 import type { AccoladeWallView } from '../../types/profileView';
 import { SectionHeader, TapPanel, TapPanelHost } from './IdentityParts';
 import { ACCOLADE_ICONS } from './memberIcons';
-import { SECTION_TITLES, accentBorder, panelFor } from './profileSheetParts';
+import { SECTION_TITLES, accentBorder, accoladeLabel, accoladePanel } from './profileSheetParts';
+import { WALL } from './accoladeWallLayout';
 
 /** The desktop medallion's bevel: inset light and shade, no outer glow. */
 const MEDALLION_BEVEL = 'inset 1.5px 1.5px 1px rgba(255,255,255,0.35), inset -1.5px -1.5px 3px rgba(0,0,0,0.30)';
 
-export const AccoladeWall: React.FC<{ wall: AccoladeWallView; accent?: string }> = ({ wall, accent }) => {
+export const AccoladeWall: React.FC<{ wall: AccoladeWallView; accent?: string; className?: string }> = ({
+  wall,
+  accent,
+  className = 'mt-5',
+}) => {
   const [showAll, setShowAll] = useState(false);
   const [tapId, setTapId] = useState<string | null>(null);
   if (wall.items.length === 0) return null;
@@ -22,20 +27,24 @@ export const AccoladeWall: React.FC<{ wall: AccoladeWallView; accent?: string }>
   const percent = wall.total > 0 ? Math.round((wall.earned / wall.total) * 100) : 0;
   return (
     // No scroll anchoring: opening the locked ones grows the wall below the tap.
-    <div className="mt-5 glass-panel rounded-xl p-3.5 [overflow-anchor:none]" style={accentBorder(accent, 0.3)}>
-      <SectionHeader
-        title={SECTION_TITLES.accolades}
-        className="mb-2.5"
-        trailing={
-          <span className="text-[11px] tabular-nums text-textMuted">{`${wall.earned} / ${wall.total} unlocked`}</span>
-        }
-      />
+    <div
+      className={`${className} glass-panel rounded-xl [overflow-anchor:none]`}
+      style={{ ...accentBorder(accent, 0.3), padding: WALL.pad }}
+    >
+      <div style={{ height: WALL.header }}>
+        <SectionHeader
+          title={SECTION_TITLES.accolades}
+          trailing={
+            <span className="text-[11px] tabular-nums text-textMuted">{`${wall.earned} / ${wall.total} unlocked`}</span>
+          }
+        />
+      </div>
       <TapPanelHost open={tapped !== null} onClose={() => setTapId(null)}>
-        <div className="grid grid-cols-5 gap-x-2 gap-y-3">
+        <div className="grid grid-cols-5 gap-x-2" style={{ rowGap: WALL.rowGap }}>
           {items.map((a) => {
             const Icon = ACCOLADE_ICONS[a.icon] ?? Star;
             const mystery = a.secret && !a.earned;
-            const label = mystery ? '???' : a.label;
+            const label = accoladeLabel(a);
             const plain = label.replace(/\u00ad/g, '');
             return (
               <button
@@ -44,6 +53,7 @@ export const AccoladeWall: React.FC<{ wall: AccoladeWallView; accent?: string }>
                 onClick={() => setTapId((cur) => (cur === a.id ? null : a.id))}
                 aria-label={a.earned ? plain : `${plain}, locked`}
                 className="flex min-w-0 flex-col items-center gap-1 transition-opacity active:opacity-70"
+                style={{ height: WALL.cell }}
               >
                 <span
                   className={`flex h-11 w-11 items-center justify-center rounded-full ${
@@ -75,24 +85,24 @@ export const AccoladeWall: React.FC<{ wall: AccoladeWallView; accent?: string }>
           })}
         </div>
         {tapped && (
-          <TapPanel
-            panel={panelFor('accolade', {
-              label: tapped.secret && !tapped.earned ? '???' : tapped.label,
-              hint: tapped.hint,
-            })}
-          />
+          <TapPanel panel={accoladePanel(tapped)} />
         )}
       </TapPanelHost>
       {locked > 0 && (
         <button
           type="button"
           onClick={() => setShowAll((v) => !v)}
-          className="mt-3 min-h-[44px] w-full text-[12px] font-medium text-textMuted"
+          className="w-full text-[12px] font-medium text-textMuted"
+          style={{ marginTop: WALL.sectionGap, height: WALL.toggle }}
         >
           {showAll ? 'Show fewer' : `Show all ${wall.total} (${locked} locked)`}
         </button>
       )}
-      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/[0.06]" aria-hidden="true">
+      <div
+        className="overflow-hidden rounded-full bg-white/[0.06]"
+        style={{ marginTop: WALL.sectionGap, height: WALL.progress }}
+        aria-hidden="true"
+      >
         <div className="h-full rounded-full bg-accent/70" style={{ width: `${percent}%` }} />
       </div>
     </div>

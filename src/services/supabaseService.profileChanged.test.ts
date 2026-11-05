@@ -1,7 +1,8 @@
 // Rust caches the member sheet and rebuilds it when told a member's profile
-// changed. Two writes go straight from the webview to Supabase instead of through
-// Rust (a granted accolade, and the hidden-sections fallback when the site API is
-// unreachable), so each tells Rust once it has landed. A failed write tells nobody.
+// changed. One write still goes straight from the webview to Supabase instead of
+// through Rust: the hidden-sections fallback when the site API is unreachable. It
+// tells Rust once it has landed; a failed write tells nobody. (Accolades are no
+// longer written from here: Rust saves them and tells itself.)
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
@@ -42,17 +43,6 @@ describe('profile_changed after a direct write', () => {
     state.api = 'throw';
   });
 
-  it('is sent once for the member whose accolade was granted', async () => {
-    await (await load()).grantAccolade('42', 'chatterbox');
-    expect(told()).toEqual([['profile_changed', { userId: '42' }]]);
-  });
-
-  it('is not sent when the accolade write failed', async () => {
-    state.upsertError = { message: 'denied' };
-    await (await load()).grantAccolade('42', 'chatterbox');
-    expect(told()).toEqual([]);
-  });
-
   it('is sent once for the hidden-sections fallback write', async () => {
     await (await load()).setHiddenSections('42', ['messages']);
     expect(told()).toEqual([['profile_changed', { userId: '42' }]]);
@@ -68,5 +58,14 @@ describe('profile_changed after a direct write', () => {
     state.api = 'ok';
     await (await load()).setHiddenSections('42', ['messages']);
     expect(told()).toEqual([]);
+  });
+});
+
+describe('accolades are saved by Rust only', () => {
+  it('the webview has no direct accolade writer or day claim left', async () => {
+    const service = (await load()) as Record<string, unknown>;
+    expect(service.grantAccolade).toBeUndefined();
+    expect(service.claimLoginAccolades).toBeUndefined();
+    expect(typeof service.getAccolades).toBe('function');
   });
 });

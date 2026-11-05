@@ -2079,20 +2079,7 @@ mod tests {
         for case in &file.cases {
             let mode = if case.own { WallMode::Own } else { WallMode::Public };
             let wall = serde_json::to_value(accolade_wall(&case.input, mode)).unwrap();
-            let mut expect = case.expect.clone();
-            if case.own {
-                // TEMPORARY, removed by commit E: the file still keeps what the TypeScript builder
-                // drew, while Rust masks a locked secret as `???` with a lock (R5 G5), so the
-                // expectation is masked the same way. Commit E regenerates the own cases with
-                // "???" and "lock" and deletes this block.
-                if let Some(items) = expect.get_mut("items").and_then(Value::as_array_mut) {
-                    for item in items.iter_mut().filter(|i| i["earned"] == false && i["secret"] == true) {
-                        item["label"] = json!("???");
-                        item["icon"] = json!("lock");
-                    }
-                }
-            }
-            assert_eq!(wall, expect, "case: {}", case.name);
+            assert_eq!(wall, case.expect, "case: {}", case.name);
         }
     }
 

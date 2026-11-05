@@ -17,8 +17,18 @@ describe('ProfileOverview hands the wall what it needs', () => {
     expect(call?.[1]).toMatch(/\bhidden: hiddenSections\b/);
   });
 
-  it('says whose wall it is', () => {
-    expect(call?.[1]).toMatch(/\bown: isOwnProfile\b/);
+  it('builds only the public wall: no own flag, no clock, no creation date', () => {
+    expect(call?.[1]).not.toMatch(/\bown\b|\btoday\b|\bcreated_at\b/);
+  });
+
+  it('draws your own wall from Rust, and the signed-in wall is read only for your own profile', () => {
+    expect(source).toMatch(/useOwnAccolades\(isOwnProfile \? userId : null\)/);
+    expect(source).toMatch(/isOwnProfile\s*\?\s*ownWall\.wall/);
+  });
+
+  it('no longer saves accolades itself: Rust grants', () => {
+    expect(source).not.toMatch(/\bgrantAccolade\b/);
+    expect(source).not.toMatch(/\bGRANTABLE_IDS\b|\bgrantKey\b/);
   });
 
   it('keeps no accolade list of its own', () => {

@@ -683,51 +683,6 @@ export const getAccolades = async (userId: string): Promise<string[]> => {
 };
 
 /**
- * Grant an award badge to a user (idempotent). Insert-only; re-granting an
- * already-earned badge is a no-op via ON CONFLICT.
- */
-export const grantAccolade = async (userId: string, accoladeId: string): Promise<void> => {
-    if (!supabase || !userId || !accoladeId) return;
-    try {
-        const { error } = await supabase
-            .from('user_accolades')
-            .upsert(
-                { twitch_user_id: userId, accolade_id: accoladeId, earned_at: new Date().toISOString() },
-                { onConflict: 'twitch_user_id,accolade_id', ignoreDuplicates: true },
-            );
-        if (error) Logger.error('[Supabase] Failed to grant award badge:', error.message);
-        // Rust caches the member sheet; tell it this member's profile changed.
-        else void invoke('profile_changed', { userId }).catch(() => {});
-    } catch (error) {
-        Logger.error('[Supabase] Failed to grant award badge:', error);
-    }
-};
-
-/**
- * Claim today's login accolades (seasonal windows + cake day) server-side. The
- * claim_login_accolades RPC enforces the window against the server clock and
- * reads the verified Twitch creation date, then grants idempotently. Returns the
- * ids freshly granted. Fire-and-forget on login / own-profile open.
- */
-export const claimLoginAccolades = async (userId: string): Promise<string[]> => {
-    if (!supabase || !userId) return [];
-    try {
-        const { data, error } = await supabase.rpc('claim_login_accolades', {
-            p_twitch_user_id: userId,
-        });
-        if (error) {
-            Logger.warn('[Supabase] claim_login_accolades failed:', error.message);
-            return [];
-        }
-        const granted = (data as { granted?: string[] } | null)?.granted;
-        return Array.isArray(granted) ? granted : [];
-    } catch (error) {
-        Logger.warn('[Supabase] claim_login_accolades exception:', error);
-        return [];
-    }
-};
-
-/**
  * Read a member's active loadout (slot -> equipped cosmetic slug) from the new
  * user_cosmetic_equipment table. World-readable, so it resolves any member's
  * equipped slots for rendering. Returns {} until the Stage 3 migration is applied

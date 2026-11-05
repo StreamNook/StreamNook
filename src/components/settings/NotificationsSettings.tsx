@@ -21,12 +21,9 @@ import { useSettingReset } from './settingReset';
 import { InlineSlider, SubControl, SubControls } from '../plugins/settingsPageKit';
 import { useSoundOptions } from '../../hooks/useSoundOptions';
 import { playTestNotificationSound } from '../../utils/notificationSound';
-import { grantAccolade } from '../../services/supabaseService';
-import {
-  RESTLESS_ACCOLADE_ID,
-  NOTIF_CLICK_THRESHOLD,
-  bumpTestNotificationClicks,
-} from '../../utils/notifAchievement';
+import { RESTLESS_ACCOLADE_ID, bumpTestNotificationClicks } from '../../utils/notifAchievement';
+import { restlessReached } from '../../utils/clientAccolades';
+import { earnClientAccolade } from '../../utils/earnAccolade';
 import { alertKey, loadAlertTypes, useAlertTypes } from '../../mobile/alertTypes';
 import { openSystemNotifySettings, useSystemNotifyPermission } from '../../utils/systemNotifyPermission';
 
@@ -165,7 +162,7 @@ const TryButton = ({ onClick }: { onClick: () => void }) => (
 );
 
 const NotificationsSettings = () => {
-  const { settings, updateSettings, currentUser, addToast } = useAppStore();
+  const { settings, updateSettings, addToast } = useAppStore();
   const resetFor = useSettingReset();
   const alertTypes = useAlertTypes();
   // macOS asks before StreamNook's first system notification; elsewhere this
@@ -290,14 +287,12 @@ const NotificationsSettings = () => {
     try {
       await invoke('send_test_notification');
       // "Insomniac" easter egg: reward the stubborn Test-clicker. The running
-      // count is local; on the 50th click persist the accolade (which also
-      // unlocks the Midnight Atmosphere for any member, no sub required) and
-      // celebrate exactly once.
+      // count is local. From the 50th click on, Rust is asked to save the
+      // accolade (which also unlocks the Midnight Atmosphere for any member, no
+      // sub required); the toast comes once, after Rust says yes, and a refused
+      // save is asked again on the next click.
       const clicks = bumpTestNotificationClicks();
-      if (clicks === NOTIF_CLICK_THRESHOLD && currentUser?.user_id) {
-        void grantAccolade(currentUser.user_id, RESTLESS_ACCOLADE_ID);
-        addToast('Achievement unlocked: Restless. The Midnight Atmosphere is yours.', 'success', undefined, { alwaysShow: true });
-      }
+      if (restlessReached(clicks)) void earnClientAccolade(RESTLESS_ACCOLADE_ID);
     } catch (error) {
       Logger.error('Failed to send test notification:', error);
     }

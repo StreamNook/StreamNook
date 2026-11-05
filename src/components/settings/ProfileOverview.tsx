@@ -25,14 +25,12 @@ import { TwitchGlyph, TwitchVerifiedMark } from '../ui/TwitchGlyph';
 import { Logger } from '../../utils/logger';
 import { formatShortCount } from '../../utils/streamStats';
 import { fitHeaderDensity } from '../chat/fitHeaderDensity';
-import { CATALOG } from '../../utils/accoladeCatalogData';
 import { ACCOLADE_ICONS } from '../profile/accoladeIcons';
-import { buildAccoladeWall, localDay, type WallItem } from './accoladeWall';
+import { buildAccoladeWall, type AccoladeWall, type WallItem } from './accoladeWall';
+import { useOwnAccolades } from '../../hooks/useOwnAccolades';
 import {
   getUserStats,
   getAccolades,
-  grantAccolade,
-  claimLoginAccolades,
   getFavoriteChannel,
   type UserStats,
   type ChannelWatch,
@@ -56,8 +54,8 @@ interface ProfileOverviewProps {
   seventvBadgeCount: number;
   ownedCosmeticsCount: number;
   // When false, render another member's PUBLIC profile: skip the self-only
-  // live data (drops, channel-points balances, subscriptions) and never grant
-  // accolades. Defaults to true (the current settings usage).
+  // live data (drops, channel-points balances, subscriptions) and draw the
+  // public wall. Defaults to true (the current settings usage).
   isOwnProfile?: boolean;
   // Section keys the member hid from their public profile (honored only when
   // !isOwnProfile). Keys: roast, twitch, lifetime, emotes, accolades.
@@ -238,11 +236,6 @@ const AccoladeMedallion = ({ a }: { a: WallItem }) => {
   );
 };
 
-// The accolades a stat or the member number can light (not the seasons, Cake
-// Day or events, which the server grants): each is saved the first time it is
-// earned on your own profile.
-const GRANTABLE_IDS = new Set(CATALOG.accolades.filter((a) => a.kind === 'base' || a.kind === 'secret').map((a) => a.id));
-
 // "2 yrs, 4 mos" age, a numeric year count (for milestones), the exact join
 // date, and a days-until-next-cake-day caption.
 const describeAccountAge = (createdAt: string | null) => {
@@ -317,9 +310,6 @@ const ProfileOverview = ({
   const [favoriteChannel, setFavoriteChannel] = useState<ChannelWatch | null>(null);
   const [roast, setRoast] = useState<PickedRoast | null>(null);
   const [showAllAccolades, setShowAllAccolades] = useState(false);
-  // The viewer's local day, fixed while the profile is open: on your own wall it
-  // lights today's seasons and Cake Day at once.
-  const [today] = useState(() => localDay(new Date()));
 
   // Twitch Recap from before joining, as the server counted it, simply counts:
   // it rides along with the tracked stats everywhere they are used (accolades
@@ -359,14 +349,7 @@ const ProfileOverview = ({
     getAccolades(userId)
       .then((ids) => {
         if (!alive) return;
-        const set = new Set(ids);
-        // Own profile only: inside a season/holiday window (or on your cake
-        // day), collect it now (idempotent). claim_login_accolades (server
-        // clock) is the authority for the actual grant; the wall already shows
-        // the day's seasons and Cake Day on your own profile. Never grant on
-        // someone else's profile.
-        if (isOwnProfile) void claimLoginAccolades(userId);
-        setEarnedAccolades(set);
+        setEarnedAccolades(new Set(ids));
       })
       .catch(() => {});
 
@@ -444,56 +427,33 @@ const ProfileOverview = ({
   const recapPoints = Number(stats?.recap_points ?? 0);
   const streams = stats?.streams_watched ?? 0;
 
-  const pts = pointsHeld ?? 0;
-  const drops = dropsClaimed ?? 0;
   const years = age?.years ?? 0;
 
   // The wall: which accolades this member can still reach, which they hold, and
-  // the words each carries for the person looking. On YOUR profile everything
-  // is known and a secret shows its hint; on someone else's, a stat they hid (or
-  // one the public view never reads) never shows its number, and locked secrets
-  // stay off the wall.
-  const wall = buildAccoladeWall({
-    own: isOwnProfile,
-    messages,
-    hours,
-    streams,
-    drops,
-    points: pts,
-    cosmetics: cosmeticsTotal,
-    years,
-    member_number: streamNookUserNumber,
-    saved: [...earnedAccolades],
-    hidden: hiddenSections,
-    today,
-    created_at: createdAt,
-  });
-
-  // Base + secret accolades are achievements: once you cross the line they stay
-  // collected, even if the underlying number later dips or its live source is
-  // momentarily empty (channel-points balances, drops, and the like are only
-  // fetched on your OWN profile). Persist each the first time it's earned so it
-  // survives into the public/preview view (which never fetches that self-only
-  // data) and stays earned on reopen.
-  const grantKey = isOwnProfile
-    ? wall.items
-        .filter((a) => a.earned && GRANTABLE_IDS.has(a.id) && !earnedAccolades.has(a.id))
-        .map((a) => a.id)
-        .join(',')
-    : '';
-  useEffect(() => {
-    if (!grantKey || !userId) return;
-    const toGrant = grantKey.split(',');
-    setEarnedAccolades((prev) => {
-      const next = new Set(prev);
-      toGrant.forEach((id) => next.add(id));
-      return next;
-    });
-    toGrant.forEach((id) => grantAccolade(userId, id).catch(() => {}));
-  }, [grantKey, userId]);
-  const sortedAccolades = wall.items;
+  // the words each carries for the person looking. YOUR wall is Rust's answer:
+  // it counts what every platform counts, saves what you earn (nothing here
+  // saves an accolade), shows a locked secret as "???" with its hint, and prints
+  // your numbers in the hints. Someone else's is built here from what they show
+  // the public: a stat they hid (or one the public view never reads) never shows
+  // its number, and locked secrets stay off the wall.
+  const ownWall = useOwnAccolades(isOwnProfile ? userId : null);
+  const wall: AccoladeWall | null = isOwnProfile
+    ? ownWall.wall
+    : buildAccoladeWall({
+        messages,
+        hours,
+        streams,
+        drops: 0,
+        points: 0,
+        cosmetics: cosmeticsTotal,
+        years,
+        member_number: streamNookUserNumber,
+        saved: [...earnedAccolades],
+        hidden: hiddenSections,
+      });
+  const sortedAccolades = wall?.items ?? [];
   const earnedMedallions = sortedAccolades.filter((a) => a.earned);
-  const lockedCount = wall.total - wall.earned;
+  const lockedCount = wall ? wall.total - wall.earned : 0;
 
   const accentRgb = useContext(ProfileAccentContext);
   const compact = useContext(ProfileCompactContext);
@@ -703,7 +663,7 @@ const ProfileOverview = ({
   const emotesEl = statHidden('emotes') ? null : <TopEmotesSection userId={userId} />;
 
   // Accolades - collectible medallions. A big wall, so it anchors the bottom.
-  const accoladesEl = statHidden('accolades') ? null : (
+  const accoladesEl = statHidden('accolades') || !wall ? null : (
     <div className={`settings-card ${sectionPad}`} style={sectionStyle}>
       <div className={`flex items-center gap-1.5 ${compact ? 'mb-2.5' : 'mb-5'}`}>
         <Trophy size={14} className="text-textMuted" />
