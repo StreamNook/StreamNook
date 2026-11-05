@@ -203,15 +203,27 @@ export const FollowingScreen: React.FC = () => {
         ) : (
           <div className="sn-tabbar-clearance">
             {favorites.length > 0 && (
-              <section aria-label="Favorites">
-                {/* The shelf's mark is desktop's glass heart; the label keeps
-                    the phone's quiet group style and the count sits beside it. */}
-                <h2 className="flex items-center gap-1.5 px-5 pb-2 text-[12px] font-semibold uppercase tracking-wide text-textMuted">
+              // Desktop's favorites shelf: a faint wash of the heart's pink
+              // and a pink hairline, so the personal watchlist reads as its
+              // own block. The bordered shelf is the divider; nothing else
+              // separates it from the follows. Inset 8 px around the cards,
+              // with corners to match theirs.
+              <section
+                aria-label="Favorites"
+                className="mx-2 rounded-[26px] pt-3 pb-2"
+                style={{
+                  background: 'color-mix(in srgb, var(--color-highlight-pink) 2%, transparent)',
+                  border: '1px solid color-mix(in srgb, var(--color-highlight-pink) 8%, transparent)',
+                }}
+              >
+                {/* Insets are a pixel short of 12 and 8 to give back the
+                    border's pixel, so label and cards line up with Followed. */}
+                <h2 className="flex items-center gap-1.5 px-[11px] pb-2 text-[12px] font-semibold uppercase tracking-wide text-textMuted">
                   <GlassHeart />
                   <span>Favorites</span>
                   <span className="tabular-nums">{favorites.length}</span>
                 </h2>
-                <AdaptiveGrid variant={gridVariant} gap={gridGap} className="px-4">
+                <AdaptiveGrid variant={gridVariant} gap={gridGap} className="px-[7px]">
                   {favorites.map((s, i) => card(s, i))}
                 </AdaptiveGrid>
               </section>
@@ -220,29 +232,13 @@ export const FollowingScreen: React.FC = () => {
               <section aria-label="Followed">
                 {/* Labeled only under a Favorites shelf, so the two groups read
                     as a pair; alone, the list is plainly the follows. Its mark
-                    is desktop's Followed one, quieter than the heart. The seam
-                    is the heart's pink, as desktop's favorites shelf: a hairline
-                    feathered at both ends and a glow it casts down behind the
-                    label. */}
+                    is desktop's Followed one, quieter than the heart. */}
                 {favorites.length > 0 && (
-                  <div className="relative mt-5 px-4 pt-4 pb-2">
-                    <div
-                      aria-hidden
-                      className="pointer-events-none absolute inset-x-4 top-0 h-11"
-                      style={{
-                        background:
-                          'linear-gradient(color-mix(in srgb, var(--color-highlight-pink) 45%, transparent) 0 1px, color-mix(in srgb, var(--color-highlight-pink) 10%, transparent) 1px, transparent)',
-                        // Feathered only at the very ends, so the glow reaches the label.
-                        WebkitMaskImage: 'linear-gradient(to right, transparent, black 8%, black 92%, transparent)',
-                        maskImage: 'linear-gradient(to right, transparent, black 8%, black 92%, transparent)',
-                      }}
-                    />
-                    <h2 className="relative flex items-center gap-1.5 px-1 text-[12px] font-semibold uppercase tracking-wide text-textMuted">
-                      <Users size={15} strokeWidth={2} className="shrink-0 text-textSecondary" aria-hidden />
-                      <span>Followed</span>
-                      <span className="tabular-nums">{rows.length}</span>
-                    </h2>
-                  </div>
+                  <h2 className="mt-5 flex items-center gap-1.5 px-5 pb-2 text-[12px] font-semibold uppercase tracking-wide text-textMuted">
+                    <Users size={15} strokeWidth={2} className="shrink-0 text-textSecondary" aria-hidden />
+                    <span>Followed</span>
+                    <span className="tabular-nums">{rows.length}</span>
+                  </h2>
                 )}
                 <AdaptiveGrid variant={gridVariant} gap={gridGap} className="px-4">
                   {rows.map((s, i) => card(s, favorites.length + i))}
