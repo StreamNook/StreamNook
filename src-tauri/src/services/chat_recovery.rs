@@ -1,13 +1,10 @@
 //! Recovery for a Twitch chat connection that has died for good.
 //!
-//! The IRC task can end permanently while the local bridge stays up: a failed
-//! connect (a phone thawing before the network is back, a Wi-Fi to mobile
-//! handoff) ends it outright, and an expired token ends it too, because the
-//! token is read once when the task starts. Afterwards `start_chat` sees a
-//! handle that looks present and every soft reconnect reports success while
-//! nothing arrives; a PART and re-JOIN has no connection to ride. Only a stop
-//! clears that state, so a rebuild stops the Twitch side and brings it back
-//! with every room the window held, reading the token afresh.
+//! The IRC supervisor retries forever and reads the token on every attempt,
+//! but a socket that died while a phone slept sits there until the read
+//! deadline notices, and a PART and re-JOIN rides that dead socket. A rebuild
+//! stops the Twitch side and brings it back with every room the window held,
+//! now rather than after the deadline and the retry backoff.
 //!
 //! Automatic triggers overlap (resuming the app and the stale watchdog fire
 //! for the same dead connection, and every open room sees it), so one cycle
