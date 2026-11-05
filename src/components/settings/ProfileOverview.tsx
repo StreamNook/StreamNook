@@ -1,4 +1,4 @@
-import { useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { motion } from 'framer-motion';
 import {
@@ -16,42 +16,8 @@ import {
   Sparkles,
   Trophy,
   Lock,
-  MessageCircle,
-  Megaphone,
-  Mic,
-  Timer,
-  Moon,
-  Armchair,
-  Waves,
-  Ghost,
-  Package,
-  Flame,
-  PiggyBank,
-  Gem,
-  Shapes,
-  Droplets,
-  Medal,
-  Hourglass,
-  Crown,
   Heart,
-  PartyPopper,
-  Clover,
-  Sun,
-  Skull,
-  Snowflake,
   Star,
-  Layers,
-  Repeat,
-  BellRing,
-  Smile,
-  Flower2,
-  Leaf,
-  Laugh,
-  Sword,
-  Drumstick,
-  TreePine,
-  Flag,
-  Target,
   type LucideIcon,
 } from 'lucide-react';
 import { Tooltip } from '../ui/Tooltip';
@@ -59,8 +25,9 @@ import { TwitchGlyph, TwitchVerifiedMark } from '../ui/TwitchGlyph';
 import { Logger } from '../../utils/logger';
 import { formatShortCount } from '../../utils/streamStats';
 import { fitHeaderDensity } from '../chat/fitHeaderDensity';
-import { memberNumberName } from '../../utils/memberNumberNames';
-import { isPalindrome, outOfReachAccolades } from '../../utils/accoladeReach';
+import { CATALOG } from '../../utils/accoladeCatalogData';
+import { ACCOLADE_ICONS } from '../profile/accoladeIcons';
+import { buildAccoladeWall, localDay, type WallItem } from './accoladeWall';
 import {
   getUserStats,
   getAccolades,
@@ -73,11 +40,6 @@ import {
 import { getTier } from '../StreamNookBadge';
 import type { InventoryResponse, ChannelPointsBalance, IvrUserSummary } from '../../types';
 import { pickHoursRoast, type PickedRoast } from '../../utils/hoursWatchedRoasts';
-import { SEASONAL_ACCOLADES, getActiveSeasonalAccoladeIds, isCakeDay, CAKE_DAY_ID } from '../../utils/seasonalAccolades';
-import { RESTLESS_ACCOLADE_ID } from '../../utils/notifAchievement';
-import { PERFECT_CORNER_ACCOLADE_ID, SHINY_ACCOLADE_ID, WORTH_THE_WAIT_ACCOLADE_ID } from '../../utils/offlineAccoladeIds';
-import { MAJOR_COLOGNE_ACCOLADE_ID } from '../../services/cologneEvent';
-import { GRAND_FINALE_ACCOLADE_ID, SEMIQUINCENTENNIAL_ACCOLADE_ID } from '../../services/semiquincentennialEvent';
 import SubscriptionsSection from './SubscriptionsSection';
 import MembershipSection from './MembershipSection';
 import TopEmotesSection from './TopEmotesSection';
@@ -223,53 +185,25 @@ const StatTile = ({
   );
 };
 
-interface Accolade {
-  id: string;
-  label: string;
-  icon: LucideIcon;
-  // Vivid two-stop gradient fill for the earned medallion. Each accolade
-  // gets its own color so the wall reads as a varied collection.
-  grad: string;
-  earned: boolean;
-  hint: string;
-  // Secret accolades render as "???" until earned, then reveal.
-  secret?: boolean;
-}
-
 // Bevel comes from inset shadows only, no outer glow, per the house style.
 const MEDALLION_BEVEL =
   'inset 1.5px 1.5px 1px rgba(255,255,255,0.35), inset -1.5px -1.5px 3px rgba(0,0,0,0.30)';
 
-// Icon + color for each seasonal accolade (keyed by the ids in
-// seasonalAccolades.ts). Kept here so the util stays icon-free and testable.
-const SEASONAL_PRES: Record<string, { icon: LucideIcon; grad: string }> = {
-  new_year: { icon: PartyPopper, grad: 'linear-gradient(140deg, #fbbf24, #d97706)' },
-  valentines: { icon: Heart, grad: 'linear-gradient(140deg, #fb7185, #be123c)' },
-  st_patricks: { icon: Clover, grad: 'linear-gradient(140deg, #4ade80, #15803d)' },
-  april_fools: { icon: Laugh, grad: 'linear-gradient(140deg, #c084fc, #7c3aed)' },
-  may_fourth: { icon: Sword, grad: 'linear-gradient(140deg, #64748b, #1e293b)' },
-  halloween: { icon: Skull, grad: 'linear-gradient(140deg, #fb923c, #c2410c)' },
-  thanksgiving: { icon: Drumstick, grad: 'linear-gradient(140deg, #d8a657, #92400e)' },
-  winter_holiday: { icon: TreePine, grad: 'linear-gradient(140deg, #4ade80, #b91c1c)' },
-  spring: { icon: Flower2, grad: 'linear-gradient(140deg, #f9a8d4, #4ade80)' },
-  summer: { icon: Sun, grad: 'linear-gradient(140deg, #fcd34d, #f59e0b)' },
-  fall: { icon: Leaf, grad: 'linear-gradient(140deg, #fb923c, #b45309)' },
-  winter: { icon: Snowflake, grad: 'linear-gradient(140deg, #93c5fd, #2563eb)' },
-  [CAKE_DAY_ID]: { icon: Cake, grad: 'linear-gradient(140deg, #f9a8d4, #db2777)' },
-};
-
-const AccoladeMedallion = ({ a, isOwnProfile }: { a: Accolade; isOwnProfile: boolean }) => {
-  const Icon = a.icon;
+const AccoladeMedallion = ({ a }: { a: WallItem }) => {
+  const Icon = ACCOLADE_ICONS[a.icon] ?? Star;
+  // Vivid two-stop gradient fill for the earned medallion. Each accolade gets
+  // its own color so the wall reads as a varied collection.
+  const grad = `linear-gradient(140deg, ${a.colors[0]}, ${a.colors[1]})`;
   const compact = useContext(ProfileCompactContext);
-  const mystery = !!a.secret && !a.earned;
+  const mystery = a.secret && !a.earned;
   const label = mystery ? '???' : a.label;
-  // On YOUR OWN profile a secret accolade shows its cryptic, guiding hint so you
-  // can discover and chase it. On someone else's profile it never reveals the
-  // how-to (so it can't be cheated by reading it off their earned one) — just a
-  // neutral descriptor. Non-secret accolades show their hint either way.
-  const tip = a.secret && !isOwnProfile ? 'A hidden accolade.' : a.hint;
+  // The wall has already chosen the words for this viewer. On YOUR OWN profile
+  // a secret accolade shows its cryptic, guiding hint so you can discover and
+  // chase it. On someone else's it never reveals the how-to (so it can't be
+  // cheated by reading it off their earned one), and a stat they hid never
+  // shows its number.
   return (
-    <Tooltip content={tip} side="top">
+    <Tooltip content={a.hint} side="top">
       <motion.div
         variants={itemV}
         className={`flex flex-col items-center text-center ${compact ? 'gap-1.5' : 'gap-2'}`}
@@ -278,7 +212,7 @@ const AccoladeMedallion = ({ a, isOwnProfile }: { a: Accolade; isOwnProfile: boo
           className={`relative flex ${compact ? 'h-12 w-12' : 'h-16 w-16'} items-center justify-center rounded-full ${
             a.earned ? '' : 'border border-white/[0.06] bg-white/[0.03] opacity-55'
           }`}
-          style={a.earned ? { backgroundImage: a.grad, boxShadow: MEDALLION_BEVEL } : undefined}
+          style={a.earned ? { backgroundImage: grad, boxShadow: MEDALLION_BEVEL } : undefined}
         >
           {a.earned ? (
             <Icon
@@ -303,6 +237,11 @@ const AccoladeMedallion = ({ a, isOwnProfile }: { a: Accolade; isOwnProfile: boo
     </Tooltip>
   );
 };
+
+// The accolades a stat or the member number can light (not the seasons, Cake
+// Day or events, which the server grants): each is saved the first time it is
+// earned on your own profile.
+const GRANTABLE_IDS = new Set(CATALOG.accolades.filter((a) => a.kind === 'base' || a.kind === 'secret').map((a) => a.id));
 
 // "2 yrs, 4 mos" age, a numeric year count (for milestones), the exact join
 // date, and a days-until-next-cake-day caption.
@@ -378,6 +317,9 @@ const ProfileOverview = ({
   const [favoriteChannel, setFavoriteChannel] = useState<ChannelWatch | null>(null);
   const [roast, setRoast] = useState<PickedRoast | null>(null);
   const [showAllAccolades, setShowAllAccolades] = useState(false);
+  // The viewer's local day, fixed while the profile is open: on your own wall it
+  // lights today's seasons and Cake Day at once.
+  const [today] = useState(() => localDay(new Date()));
 
   // Twitch Recap from before joining, as the server counted it, simply counts:
   // it rides along with the tracked stats everywhere they are used (accolades
@@ -386,9 +328,19 @@ const ProfileOverview = ({
   const hours = (stats?.hours_watched ?? 0) + recapHours;
   const animatedHours = useCountUp(Math.round(hours));
 
-  const rerollRoast = () => setRoast(pickHoursRoast(hours));
+  // The line shown last, so a re-roll never repeats it. It lives as long as this
+  // profile is open; reopening starts fresh.
+  const lastRoast = useRef<string | null>(null);
+  const rerollRoast = () => {
+    const picked = pickHoursRoast(hours, Math.random, lastRoast.current);
+    lastRoast.current = picked.text;
+    setRoast(picked);
+  };
   useEffect(() => {
-    if (stats) setRoast(pickHoursRoast((stats.hours_watched ?? 0) + Number(stats.recap_hours ?? 0)));
+    if (!stats) return;
+    const picked = pickHoursRoast((stats.hours_watched ?? 0) + Number(stats.recap_hours ?? 0), Math.random, lastRoast.current);
+    lastRoast.current = picked.text;
+    setRoast(picked);
   }, [stats]);
 
   useEffect(() => {
@@ -408,15 +360,12 @@ const ProfileOverview = ({
       .then((ids) => {
         if (!alive) return;
         const set = new Set(ids);
-        // Own profile only: inside a season/holiday window, collect it now
-        // (idempotent) and reflect optimistically. Never grant on someone
-        // else's profile.
-        if (isOwnProfile) {
-          // Optimistic display; claim_login_accolades (server clock) is the
-          // authority for the actual grant.
-          getActiveSeasonalAccoladeIds(new Date()).forEach((id) => set.add(id));
-          void claimLoginAccolades(userId);
-        }
+        // Own profile only: inside a season/holiday window (or on your cake
+        // day), collect it now (idempotent). claim_login_accolades (server
+        // clock) is the authority for the actual grant; the wall already shows
+        // the day's seasons and Cake Day on your own profile. Never grant on
+        // someone else's profile.
+        if (isOwnProfile) void claimLoginAccolades(userId);
         setEarnedAccolades(set);
       })
       .catch(() => {});
@@ -476,17 +425,6 @@ const ProfileOverview = ({
     return () => { alive = false; };
   }, [userId, login]);
 
-  // Cake Day: once the creation date resolves, collect the accolade if today
-  // is the user's Twitch account anniversary.
-  useEffect(() => {
-    if (!isOwnProfile || !createdAt || !userId) return;
-    if (isCakeDay(createdAt, new Date())) {
-      // Server grants cake-day via claim_login_accolades (fired above); reflect
-      // optimistically here for immediate display.
-      setEarnedAccolades((prev) => new Set(prev).add(CAKE_DAY_ID));
-    }
-  }, [createdAt, userId, isOwnProfile]);
-
   const age = useMemo(() => describeAccountAge(createdAt), [createdAt]);
   const tier = streamNookUserNumber !== null ? getTier(streamNookUserNumber) : null;
 
@@ -509,53 +447,27 @@ const ProfileOverview = ({
   const pts = pointsHeld ?? 0;
   const drops = dropsClaimed ?? 0;
   const years = age?.years ?? 0;
-  const memberNo = streamNookUserNumber;
-  const memberName = memberNumberName(memberNo);
-  // Accolades this member can never earn now stay off the wall unless held.
-  const outOfReach = outOfReachAccolades(memberNo);
 
-  const baseAccolades: Accolade[] = [
-    { id: 'chatterbox', label: 'Chatterbox', icon: MessageCircle, grad: 'linear-gradient(140deg, #6aa9ff, #3b6fd4)', earned: messages >= 1000, hint: `Messages sent: ${messages.toLocaleString()} / 1,000` },
-    { id: 'motormouth', label: 'Motormouth', icon: Megaphone, grad: 'linear-gradient(140deg, #5b8def, #2f5fc0)', earned: messages >= 10000, hint: `Messages sent: ${messages.toLocaleString()} / 10,000` },
-    { id: 'yapper', label: 'Yapper Supreme', icon: Mic, grad: 'linear-gradient(140deg, #8b5cf6, #6d28d9)', earned: messages >= 50000, hint: `Messages sent: ${messages.toLocaleString()} / 50,000` },
-    { id: 'marathoner', label: 'Marathoner', icon: Timer, grad: 'linear-gradient(140deg, #f59e0b, #b45309)', earned: hours >= 100, hint: `Hours watched: ${Math.round(hours).toLocaleString()} / 100` },
-    { id: 'nosleep', label: 'No Sleep', icon: Moon, grad: 'linear-gradient(140deg, #6366f1, #4338ca)', earned: hours >= 1000, hint: `Hours watched: ${Math.round(hours).toLocaleString()} / 1,000` },
-    { id: 'grassless', label: 'Grassless', icon: Armchair, grad: 'linear-gradient(140deg, #84cc16, #4d7c0f)', earned: hours >= 5000, hint: `Hours watched: ${Math.round(hours).toLocaleString()} / 5,000` },
-    { id: 'surfer', label: 'Channel Surfer', icon: Waves, grad: 'linear-gradient(140deg, #06b6d4, #0e7490)', earned: streams >= 50, hint: `Streams watched: ${streams.toLocaleString()} / 50` },
-    { id: 'lurker', label: 'Certified Lurker', icon: Ghost, grad: 'linear-gradient(140deg, #94a3b8, #475569)', earned: streams >= 250, hint: `Streams watched: ${streams.toLocaleString()} / 250` },
-    { id: 'dropgoblin', label: 'Drop Goblin', icon: Package, grad: 'linear-gradient(140deg, #22c55e, #15803d)', earned: drops >= 25, hint: `Drops claimed: ${drops.toLocaleString()} / 25` },
-    { id: 'dropdragon', label: 'Drop Dragon', icon: Flame, grad: 'linear-gradient(140deg, #ef4444, #b91c1c)', earned: drops >= 100, hint: `Drops claimed: ${drops.toLocaleString()} / 100` },
-    { id: 'hoarder', label: 'Point Hoarder', icon: PiggyBank, grad: 'linear-gradient(140deg, #eab308, #a16207)', earned: pts >= 100000, hint: `Channel points held: ${pts.toLocaleString()} / 100,000` },
-    { id: 'tycoon', label: 'Point Tycoon', icon: Gem, grad: 'linear-gradient(140deg, #2dd4bf, #0f766e)', earned: pts >= 1000000, hint: `Channel points held: ${pts.toLocaleString()} / 1,000,000` },
-    { id: 'collector', label: 'Collector', icon: Shapes, grad: 'linear-gradient(140deg, #ec4899, #be185d)', earned: cosmeticsTotal >= 5, hint: `Cosmetics collected: ${cosmeticsTotal} / 5` },
-    { id: 'driplord', label: 'Drip Lord', icon: Droplets, grad: 'linear-gradient(140deg, #38bdf8, #0284c7)', earned: cosmeticsTotal >= 15, hint: `Cosmetics collected: ${cosmeticsTotal} / 15` },
-    { id: 'veteran', label: 'Veteran', icon: Medal, grad: 'linear-gradient(140deg, #fb923c, #c2410c)', earned: years >= 5, hint: `Years on Twitch: ${years} / 5` },
-    { id: 'ancient', label: 'Ancient One', icon: Hourglass, grad: 'linear-gradient(140deg, #a855f7, #7e22ce)', earned: years >= 10, hint: `Years on Twitch: ${years} / 10` },
-    { id: 'og', label: 'OG', icon: Crown, grad: 'linear-gradient(140deg, #fbbf24, #d97706)', earned: streamNookUserNumber !== null && streamNookUserNumber <= 100, hint: 'Be one of the first 100 StreamNook members' },
-  ].map((a) => ({ ...a, earned: a.earned || earnedAccolades.has(a.id) }));
-  // Counts only the base accolades this member can still earn, so OG's
-  // first-100 cut never puts Completionist out of reach.
-  const allBaseEarned = baseAccolades.every((a) => a.earned || outOfReach.has(a.id));
-
-  const secretAccolades: Accolade[] = [
-    { id: 'completionist', label: 'Completionist', icon: Star, grad: 'linear-gradient(140deg, #f472b6, #db2777)', secret: true, earned: allBaseEarned, hint: "When there's nothing else left to earn, this one shows up." },
-    { id: 'triple', label: 'Triple Threat', icon: Layers, grad: 'linear-gradient(140deg, #34d399, #0f766e)', secret: true, earned: messages >= 1000 && hours >= 100 && drops >= 25, hint: 'Talk, watch, and collect until all three run deep.' },
-    { id: 'palindrome', label: 'Palindrome', icon: Repeat, grad: 'linear-gradient(140deg, #c084fc, #7e22ce)', secret: true, earned: isPalindrome(memberNo), hint: 'A number that reads the same coming and going.' },
-    // One accolade for every meme number; the label is that number's own name.
-    { id: 'nice', label: memberName ?? 'Nice', icon: Smile, grad: 'linear-gradient(140deg, #facc15, #ca8a04)', secret: true, earned: memberName !== null, hint: 'Land on a number the internet never lets you forget.' },
-    { id: RESTLESS_ACCOLADE_ID, label: 'Restless', icon: BellRing, grad: 'linear-gradient(140deg, #818cf8, #4338ca)', secret: true, earned: earnedAccolades.has(RESTLESS_ACCOLADE_ID), hint: "The test notification really wishes you'd stop." },
-    { id: GRAND_FINALE_ACCOLADE_ID, label: 'Grand Finale', icon: Sparkles, grad: 'linear-gradient(140deg, #fcd34d, #dc3d55)', secret: true, earned: earnedAccolades.has(GRAND_FINALE_ACCOLADE_ID), hint: 'Stay a while under the anniversary sky.' },
-    // The offline room's moments (utils/offlineAccolades.ts grants them).
-    // Not secret: named from the start, their hints say plainly what to do.
-    // Listed here for the earned-state handling below, outside Completionist.
-    { id: PERFECT_CORNER_ACCOLADE_ID, label: 'Perfect Corner', icon: Target, grad: 'linear-gradient(140deg, #5eead4, #0f766e)', earned: earnedAccolades.has(PERFECT_CORNER_ACCOLADE_ID), hint: 'Wait in an offline chat long enough to see it land dead in the corner.' },
-    { id: SHINY_ACCOLADE_ID, label: 'Shiny', icon: Sparkles, grad: 'linear-gradient(140deg, #fde68a, #d97706)', earned: earnedAccolades.has(SHINY_ACCOLADE_ID), hint: 'Only a few of the sad frogs are golden.' },
-    { id: WORTH_THE_WAIT_ACCOLADE_ID, label: 'Worth the Wait', icon: Hourglass, grad: 'linear-gradient(140deg, #f9a8d4, #9333ea)', earned: earnedAccolades.has(WORTH_THE_WAIT_ACCOLADE_ID), hint: "Be waiting in a channel's offline chat when the stream finally starts." },
-    // Same persisted-set fallback as the base accolades: an earned secret stays
-    // lit even when its live source is absent — notably on the public/preview
-    // view, which never fetches your drops or channel points (so Triple Threat's
-    // drops read as 0 there). Without this, earned secrets vanish for viewers.
-  ].map((a) => ({ ...a, earned: a.earned || earnedAccolades.has(a.id) }));
+  // The wall: which accolades this member can still reach, which they hold, and
+  // the words each carries for the person looking. On YOUR profile everything
+  // is known and a secret shows its hint; on someone else's, a stat they hid (or
+  // one the public view never reads) never shows its number, and locked secrets
+  // stay off the wall.
+  const wall = buildAccoladeWall({
+    own: isOwnProfile,
+    messages,
+    hours,
+    streams,
+    drops,
+    points: pts,
+    cosmetics: cosmeticsTotal,
+    years,
+    member_number: streamNookUserNumber,
+    saved: [...earnedAccolades],
+    hidden: hiddenSections,
+    today,
+    created_at: createdAt,
+  });
 
   // Base + secret accolades are achievements: once you cross the line they stay
   // collected, even if the underlying number later dips or its live source is
@@ -563,78 +475,25 @@ const ProfileOverview = ({
   // fetched on your OWN profile). Persist each the first time it's earned so it
   // survives into the public/preview view (which never fetches that self-only
   // data) and stays earned on reopen.
+  const grantKey = isOwnProfile
+    ? wall.items
+        .filter((a) => a.earned && GRANTABLE_IDS.has(a.id) && !earnedAccolades.has(a.id))
+        .map((a) => a.id)
+        .join(',')
+    : '';
   useEffect(() => {
-    if (!isOwnProfile || !userId) return;
-    const toGrant = [...baseAccolades, ...secretAccolades]
-      .filter((a) => a.earned && !earnedAccolades.has(a.id))
-      .map((a) => a.id);
-    if (toGrant.length === 0) return;
+    if (!grantKey || !userId) return;
+    const toGrant = grantKey.split(',');
     setEarnedAccolades((prev) => {
       const next = new Set(prev);
       toGrant.forEach((id) => next.add(id));
       return next;
     });
     toGrant.forEach((id) => grantAccolade(userId, id).catch(() => {}));
-    // base/secret accolades are derived from these primitives + earnedAccolades.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOwnProfile, userId, earnedAccolades, messages, hours, streams, drops, pts, cosmeticsTotal, years, streamNookUserNumber]);
-  const seasonalAccolades: Accolade[] = [
-    ...SEASONAL_ACCOLADES.map((b): Accolade => ({
-      id: b.id,
-      label: b.label,
-      icon: SEASONAL_PRES[b.id].icon,
-      grad: SEASONAL_PRES[b.id].grad,
-      earned: earnedAccolades.has(b.id),
-      hint: earnedAccolades.has(b.id) ? 'Collected' : b.hint,
-    })),
-    {
-      id: CAKE_DAY_ID,
-      label: 'Cake Day',
-      icon: SEASONAL_PRES[CAKE_DAY_ID].icon,
-      grad: SEASONAL_PRES[CAKE_DAY_ID].grad,
-      earned: earnedAccolades.has(CAKE_DAY_ID),
-      hint: earnedAccolades.has(CAKE_DAY_ID) ? 'Collected' : 'Open StreamNook on your Twitch cake day',
-    },
-  ];
-  // Limited event accolades (earned via a special event, not a stat threshold).
-  const eventAccolades: Accolade[] = [
-    {
-      id: MAJOR_COLOGNE_ACCOLADE_ID,
-      label: 'CS2 Major Cologne 2026',
-      icon: Trophy,
-      grad: 'linear-gradient(140deg, #f6e3a0, #9c7528)',
-      earned: earnedAccolades.has(MAJOR_COLOGNE_ACCOLADE_ID),
-      hint: earnedAccolades.has(MAJOR_COLOGNE_ACCOLADE_ID)
-        ? 'Tuned in during the CS2 Major'
-        : 'Watch Counter-Strike in StreamNook during the CS2 Major',
-    },
-    {
-      id: SEMIQUINCENTENNIAL_ACCOLADE_ID,
-      label: 'Semiquincentennial',
-      icon: Flag,
-      grad: 'linear-gradient(140deg, #93b4ff, #dc3d55)',
-      earned: earnedAccolades.has(SEMIQUINCENTENNIAL_ACCOLADE_ID),
-      hint: earnedAccolades.has(SEMIQUINCENTENNIAL_ACCOLADE_ID)
-        ? 'Two hundred fifty years of the experiment, and you stood in the glow of the two hundred fiftieth.'
-        : 'Open StreamNook around the Fourth of July, 2026 (July 3 to 5)',
-    },
-  ];
-  // An accolade nobody can earn any more (a member number that does not
-  // qualify, an event that is over) is only listed for those who hold it.
-  const allAccolades: Accolade[] = [...baseAccolades, ...secretAccolades, ...seasonalAccolades, ...eventAccolades].filter(
-    (a) => a.earned || !outOfReach.has(a.id),
-  );
-  // On someone else's PUBLIC profile, hide locked SECRET accolades entirely: a
-  // viewer shouldn't see placeholders for hidden achievements the member hasn't
-  // earned, and must never be able to read a how-to off them. Your own profile
-  // shows all of them so you can chase them.
-  const accolades: Accolade[] = isOwnProfile
-    ? allAccolades
-    : allAccolades.filter((a) => !(a.secret && !a.earned));
-  const earnedCount = accolades.filter((a) => a.earned).length;
-  const sortedAccolades = [...accolades].sort((a, b) => Number(b.earned) - Number(a.earned));
+  }, [grantKey, userId]);
+  const sortedAccolades = wall.items;
   const earnedMedallions = sortedAccolades.filter((a) => a.earned);
-  const lockedCount = accolades.length - earnedCount;
+  const lockedCount = wall.total - wall.earned;
 
   const accentRgb = useContext(ProfileAccentContext);
   const compact = useContext(ProfileCompactContext);
@@ -852,7 +711,7 @@ const ProfileOverview = ({
           Accolades
         </h4>
         <span className="ml-auto text-[11px] tabular-nums text-textMuted">
-          {earnedCount} / {accolades.length} unlocked
+          {wall.earned} / {wall.total} unlocked
         </span>
       </div>
       <motion.div
@@ -862,7 +721,7 @@ const ProfileOverview = ({
         className={`grid ${compact ? 'grid-cols-6 gap-2.5 sm:grid-cols-8' : 'grid-cols-4 gap-4 sm:grid-cols-6'}`}
       >
         {accoladesShown.map((a) => (
-          <AccoladeMedallion key={a.id} a={a} isOwnProfile={isOwnProfile} />
+          <AccoladeMedallion key={a.id} a={a} />
         ))}
       </motion.div>
       {compact && lockedCount > 0 && (
@@ -871,13 +730,13 @@ const ProfileOverview = ({
           onClick={() => setShowAllAccolades((v) => !v)}
           className="mt-3 w-full text-[11px] font-medium text-textMuted transition-colors hover:text-textPrimary"
         >
-          {showAllAccolades ? 'Show fewer' : `Show all ${accolades.length} (${lockedCount} locked)`}
+          {showAllAccolades ? 'Show fewer' : `Show all ${wall.total} (${lockedCount} locked)`}
         </button>
       )}
       <div className={`${compact ? 'mt-3' : 'mt-5'} h-1.5 overflow-hidden rounded-full bg-white/[0.06]`}>
         <div
           className="h-full rounded-full bg-accent/70 transition-[width] duration-700 ease-out"
-          style={{ width: `${Math.round((earnedCount / accolades.length) * 100)}%` }}
+          style={{ width: `${Math.round((wall.earned / Math.max(1, wall.total)) * 100)}%` }}
         />
       </div>
     </div>

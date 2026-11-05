@@ -1162,15 +1162,18 @@ const UserProfileCard = ({
 
   // Resolve the BetterTTV Pro loyalty badge in parallel (non-blocking). Pops
   // into the BetterTTV badge group when/if it resolves; silent for non-Pro users.
+  // BetterTTV Pro belongs to a Twitch account, so the lookup uses the member's
+  // Twitch id (cardMemberId) and is skipped for a Kick or YouTube chatter nobody
+  // has claimed.
   useEffect(() => {
     let cancelled = false;
     setBttvProBadge(null);
-    if (!userId) return;
-    invoke<{ url: string; started_at: string | null; glow: boolean } | null>('get_bttv_pro_badge', { userId })
+    if (!cardMemberId) return;
+    invoke<{ url: string; started_at: string | null; glow: boolean } | null>('get_bttv_pro_badge', { userId: cardMemberId })
       .then((badge) => { if (!cancelled) setBttvProBadge(badge); })
       .catch((err) => Logger.debug('[UserProfileCard] BTTV Pro lookup failed:', err));
     return () => { cancelled = true; };
-  }, [userId]);
+  }, [cardMemberId]);
 
   // Lazily fetch the user's historical chat logs from Justlog the first time
   // the messages view is opened. We don't pre-fetch because most popup opens
@@ -1542,10 +1545,10 @@ const UserProfileCard = ({
   // default). Synchronous cache peek + version subscription so the card repaints
   // when the loadout lands or the member edits it; the effect kicks the fetch.
   useSyncExternalStore(subscribeIdentityVersion, getIdentityVersion, getIdentityVersion);
-  const identityLoadout = userId ? getIdentityFromMemoryCache(userId) : null;
+  const identityLoadout = cardMemberId ? getIdentityFromMemoryCache(cardMemberId) : null;
   useEffect(() => {
-    if (userId) void getIdentityWithCache(userId).catch(() => {});
-  }, [userId]);
+    if (cardMemberId) void getIdentityWithCache(cardMemberId).catch(() => {});
+  }, [cardMemberId]);
   const visibleThirdPartyBadges = useMemo(() => {
     if (!identityLoadout?.customized) return thirdPartyBadges;
     // A loadout picks WHICH badges show, never where they sit: the list keeps

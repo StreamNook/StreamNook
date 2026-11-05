@@ -1,16 +1,14 @@
 // Which accolades a member can never earn any more. The profile wall leaves
-// them off unless already earned, so nobody stares at a medallion they cannot
-// reach. Two kinds: the member-number accolades (a number never changes) and
-// events that are over.
+// them off unless already held, so nobody stares at a medallion they cannot
+// reach. Two kinds: the accolades decided by the member number (OG, Palindrome
+// and Nice; a number never changes) and the ones marked `ended` in
+// accolades.catalog.json (events that are over).
 //
-// TypeScript for the same reason as memberNumberNames.ts: the wall is built in
-// ProfileOverview and by the site's copy of this rule (`outOfReach` in
-// functions/utils/profile/accoladeCatalog.ts in streamnook.app, kept in step
-// by hand).
-
+// The streamnook.app member page keeps its own copy of this rule
+// (`outOfReach` in functions/utils/profile/accoladeCatalog.ts) and the shared
+// accolade cases check both.
+import { CATALOG } from './accoladeCatalogData';
 import { memberNumberName } from './memberNumberNames';
-import { MAJOR_COLOGNE_ACCOLADE_ID } from '../services/cologneEvent';
-import { GRAND_FINALE_ACCOLADE_ID, SEMIQUINCENTENNIAL_ACCOLADE_ID } from '../services/semiquincentennialEvent';
 
 /** A number of two or more digits that reads the same both ways. */
 export const isPalindrome = (n: number | null): boolean => {
@@ -19,14 +17,19 @@ export const isPalindrome = (n: number | null): boolean => {
   return s === s.split('').reverse().join('');
 };
 
-/** Events that are over: their accolades can be held, never earned. */
-const ENDED_EVENTS = [MAJOR_COLOGNE_ACCOLADE_ID, SEMIQUINCENTENNIAL_ACCOLADE_ID, GRAND_FINALE_ACCOLADE_ID];
-
 /** Accolade ids this member can never earn now. */
 export const outOfReachAccolades = (memberNumber: number | null): Set<string> => {
-  const out = new Set<string>(ENDED_EVENTS);
-  if (memberNumber === null || memberNumber > 100) out.add('og');
-  if (!isPalindrome(memberNumber)) out.add('palindrome');
-  if (memberNumberName(memberNumber) === null) out.add('nice');
+  const out = new Set<string>();
+  for (const a of CATALOG.accolades) {
+    if (a.ended) {
+      out.add(a.id);
+      continue;
+    }
+    if (!('special' in a.rule)) continue;
+    const special = a.rule.special;
+    if (special === 'first_hundred' && (memberNumber === null || memberNumber > 100)) out.add(a.id);
+    if (special === 'palindrome' && !isPalindrome(memberNumber)) out.add(a.id);
+    if (special === 'nice' && memberNumberName(memberNumber) === null) out.add(a.id);
+  }
   return out;
 };

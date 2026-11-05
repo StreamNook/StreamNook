@@ -13,3 +13,9 @@
 *.sh    text eol=lf
 *.yml   text eol=lf
 *.yaml  text eol=lf
+
+# Data files shared with the Rust side, the phones and the site are compared as
+# parsed values, but they are written LF so a CRLF checkout never shows them
+# modified.
+src/utils/*.json text eol=lf
+src/mobile/profile/fixtures/*.json text eol=lf

@@ -777,32 +777,58 @@ export interface EmoteUsageSummary {
 
 /**
  * Get a user's emote usage: the top emotes (highest count first), the count of
- * distinct emotes used, and total uses. Returns zeros when Supabase is
- * unconfigured or the table is missing.
+ * distinct emotes used, and total uses. The two totals are exact for any member:
+ * they come from the count column of every row, read a page at a time in a
+ * stable order (`emote_id` is unique per member). Returns zeros when Supabase is
+ * unconfigured, the table is missing or any page fails.
  */
+const EMOTE_PAGE = 1000;
+const EMOTE_MAX_PAGES = 100;
+
 export const getEmoteUsageSummary = async (
     userId: string,
     topLimit: number = 12,
 ): Promise<EmoteUsageSummary> => {
     const empty: EmoteUsageSummary = { top: [], uniqueCount: 0, totalCount: 0 };
     if (!supabase || !userId) return empty;
-    try {
-        const { data, error } = await supabase
+    const client = supabase;
+    const page = (n: number) =>
+        client
             .from('user_emote_usage')
-            .select('emote_id, emote_name, provider, image_url, count')
+            .select('count')
             .eq('twitch_user_id', userId)
-            .order('count', { ascending: false })
-            .limit(1000);
-        if (error) {
-            Logger.error('[Supabase] Failed to get emote usage:', error.message);
+            .order('emote_id', { ascending: true })
+            .range(n * EMOTE_PAGE, n * EMOTE_PAGE + EMOTE_PAGE - 1);
+    try {
+        const [topRes, firstPage] = await Promise.all([
+            client
+                .from('user_emote_usage')
+                .select('emote_id, emote_name, provider, image_url, count')
+                .eq('twitch_user_id', userId)
+                .order('count', { ascending: false })
+                .order('emote_id', { ascending: true })
+                .limit(topLimit),
+            page(0),
+        ]);
+        if (topRes.error || firstPage.error) {
+            Logger.error('[Supabase] Failed to get emote usage:', (topRes.error ?? firstPage.error)?.message);
             return empty;
         }
-        const rows = (data as EmoteUsage[]) || [];
-        return {
-            top: rows.slice(0, topLimit),
-            uniqueCount: rows.length,
-            totalCount: rows.reduce((s, e) => s + e.count, 0),
-        };
+        let rows = (firstPage.data as { count: number }[]) || [];
+        let uniqueCount = 0;
+        let totalCount = 0;
+        for (let n = 1; ; n++) {
+            uniqueCount += rows.length;
+            totalCount += rows.reduce((s, r) => s + r.count, 0);
+            if (rows.length < EMOTE_PAGE || n >= EMOTE_MAX_PAGES) break;
+            const next = await page(n);
+            if (next.error) {
+                Logger.error('[Supabase] Failed to get emote usage:', next.error.message);
+                return empty;
+            }
+            rows = (next.data as { count: number }[]) || [];
+        }
+        return { top: (topRes.data as EmoteUsage[]) || [], uniqueCount, totalCount };
     } catch (error) {
         Logger.error('[Supabase] Failed to get emote usage:', error);
         return empty;

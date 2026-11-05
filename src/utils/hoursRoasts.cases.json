@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "cases": [
+    { "name": "500 hours, r 0.0 and 0.0: the first roast line", "hours": 500, "rand": [0, 0], "last": null, "expect": { "text": "That's about 21 full days. Grass is still out there, by the way.", "tone": "roast" } },
+    { "name": "500 hours, r 0.5999: still roast, the last roast line", "hours": 500, "rand": [0.5999, 0.999], "last": null, "expect": { "text": "13 work weeks. You could have been employed. By yourself. Doing this.", "tone": "roast" } },
+    { "name": "500 hours, r 0.6: neutral begins", "hours": 500, "rand": [0.6, 0], "last": null, "expect": { "text": "That's 250 movies back-to-back, no bathroom breaks.", "tone": "neutral" } },
+    { "name": "500 hours, r 0.8999: neutral, the last neutral line", "hours": 500, "rand": [0.8999, 0.999], "last": null, "expect": { "text": "That is a genuinely unreasonable number of hours and we respect the commitment.", "tone": "neutral" } },
+    { "name": "500 hours, r 0.9: cute begins", "hours": 500, "rand": [0.9, 0], "last": null, "expect": { "text": "A cozy little 21-day pile of comfort streams. No notes.", "tone": "cute" } },
+    { "name": "500 hours, r 0.999: cute, the last cute line", "hours": 500, "rand": [0.999, 0.999], "last": null, "expect": { "text": "You found your people and you stuck around. Cute, actually.", "tone": "cute" } },
+    { "name": "500 hours, the line shown last is skipped", "hours": 500, "rand": [0, 0], "last": "That's about 21 full days. Grass is still out there, by the way.", "expect": { "text": "21 full days parked in that chair. Your spine is keeping receipts.", "tone": "roast" } },
+    { "name": "1.6 hours uses the low-hours set", "hours": 1.6, "rand": [0.5], "last": null, "expect": { "text": "Almost no watch time logged. Touching grass already? Show-off.", "tone": "roast" } },
+    { "name": "0 hours uses the low-hours set", "hours": 0, "rand": [0.99], "last": null, "expect": { "text": "Numbers too small to roast. Come back once you have made some questionable choices.", "tone": "roast" } },
+    { "name": "1.9 hours, the low-hours line shown last is skipped", "hours": 1.9, "rand": [0], "last": "Barely any hours on the board. New here, or just suspiciously well-adjusted?", "expect": { "text": "Almost no watch time logged. Touching grass already? Show-off.", "tone": "roast" } },
+    { "name": "2 hours is not low, but no unit reaches 2: flavor lines only", "hours": 2, "rand": [0.7, 0.5], "last": null, "expect": { "text": "That is a genuinely unreasonable number of hours and we respect the commitment.", "tone": "neutral" } },
+    { "name": "3 hours: a movie line appears once movies reach 2", "hours": 3, "rand": [0.6, 0], "last": null, "expect": { "text": "That's 2 movies back-to-back, no bathroom breaks.", "tone": "neutral" } },
+    { "name": "3 hours: no day, week, season or flight line", "hours": 3, "rand": [0, 0], "last": null, "expect": { "text": "Somewhere your vitamin D is filing a missing persons report.", "tone": "roast" } },
+    { "name": "11.9 hours: a day still rounds to zero, so no day line", "hours": 11.9, "rand": [0, 0], "last": null, "expect": { "text": "Somewhere your vitamin D is filing a missing persons report.", "tone": "roast" } },
+    { "name": "24 hours: one day is not enough for a day line", "hours": 24, "rand": [0, 0], "last": null, "expect": { "text": "Somewhere your vitamin D is filing a missing persons report.", "tone": "roast" } },
+    { "name": "36 hours: a day line appears at two days", "hours": 36, "rand": [0, 0], "last": null, "expect": { "text": "That's about 2 full days. Grass is still out there, by the way.", "tone": "roast" } },
+    { "name": "100000 hours: the unit is grouped", "hours": 100000, "rand": [0, 0], "last": null, "expect": { "text": "That's about 4,167 full days. Grass is still out there, by the way.", "tone": "roast" } }
+  ]
+}

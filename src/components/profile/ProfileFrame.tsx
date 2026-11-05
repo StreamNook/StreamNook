@@ -8,6 +8,12 @@ import { useEffect, useState } from 'react';
 import { getActiveEquipment, getCosmeticBySlug } from '../../services/supabaseService';
 import { resolveCosmeticAsset } from '../cosmeticAssets';
 import type { ActiveEquipment } from '../../services/cosmetics/types';
+import frame from '../../utils/profileFrame.json';
+
+// The frame art's slice insets and the border it is drawn at (profileFrame.json:
+// top, right, bottom, left, and vertical, horizontal).
+const BORDER = `${frame.border[0]}px ${frame.border[1]}px`;
+const SLICE = frame.slice.join(' ');
 
 /** The member's equipped frame art, or null when none is equipped. */
 export function useProfileFrameUrl(userId: string | null | undefined): string | null {
@@ -41,10 +47,10 @@ export function ProfileFrame({ url }: { url: string | null }) {
       className="pointer-events-none absolute inset-0 z-[30]"
       style={{
         borderStyle: 'solid',
-        borderWidth: '18px 14px',
+        borderWidth: BORDER,
         borderImageSource: `url(${url})`,
-        borderImageSlice: '199 159 199 159',
-        borderImageWidth: '18px 14px',
+        borderImageSlice: SLICE,
+        borderImageWidth: BORDER,
         borderImageRepeat: 'stretch',
       }}
     />
