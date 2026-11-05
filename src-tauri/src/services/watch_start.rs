@@ -48,6 +48,17 @@ fn current(ticket: u64) -> bool {
     TICKET.load(Ordering::Acquire) == ticket
 }
 
+/// `ticket` is still the latest, and from now on it is not, in one step. A
+/// start takes the watch session this way, so a newer start that took a ticket
+/// during its awaits is never superseded by an older one.
+pub(crate) fn claim(ticket: u64) -> bool {
+    claim_in(&TICKET, ticket)
+}
+
+fn claim_in(counter: &AtomicU64, ticket: u64) -> bool {
+    counter.compare_exchange(ticket, ticket + 1, Ordering::AcqRel, Ordering::Acquire).is_ok()
+}
+
 /// What the caller already knows of the stream: a list row, a raid's ids, a
 /// notification's login. Any field may be missing.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -341,7 +352,7 @@ async fn follow_provider(app: AppHandle, ticket: u64, row: ProviderStream) {
     if !current(ticket) {
         return;
     }
-    watch_session::start(
+    if !watch_session::start_current(
         app.clone(),
         WatchTarget {
             provider: row.provider.clone(),
@@ -358,8 +369,12 @@ async fn follow_provider(app: AppHandle, ticket: u64, row: ProviderStream) {
             avatar_url: row.profile_image_url.clone().unwrap_or_default(),
             category_art: row.category_thumbnail.clone().unwrap_or_default(),
         },
+        ticket,
     )
-    .await;
+    .await
+    {
+        return;
+    }
     log::info!("[WatchStart] {}: the watch session follows it", row.key);
 }
 
@@ -380,7 +395,7 @@ async fn follow(app: AppHandle, ticket: u64, login: String, row: TwitchStream) {
         return;
     }
     let authenticated = state.twitch_auth.get_token().await.is_ok();
-    watch_session::start(
+    if !watch_session::start_current(
         app.clone(),
         WatchTarget {
             provider: "twitch".to_string(),
@@ -396,8 +411,12 @@ async fn follow(app: AppHandle, ticket: u64, login: String, row: TwitchStream) {
             avatar_url: row.profile_image_url.clone().unwrap_or_default(),
             category_art: String::new(),
         },
+        ticket,
     )
-    .await;
+    .await
+    {
+        return;
+    }
     // Playback resolved, so the channel is live even where Helix does not list
     // it yet: the chat's live-only rewards follow at once.
     crate::services::channel_state::note_live(&row).await;
@@ -405,7 +424,9 @@ async fn follow(app: AppHandle, ticket: u64, login: String, row: TwitchStream) {
     // Can this broadcast be rewound, and where did the viewer leave its recording: the
     // cached lookup also files the archive for the live bookmark. Every app shares it here;
     // the desktop still reads the answer for its Rewind button (cached, so no second fetch).
-    if current(ticket) {
+    // The take above claimed `ticket`, which leaves the counter one past it
+    // while this start is still the latest.
+    if current(ticket + 1) {
         let _ = streaming::get_live_rewind_info(login.clone()).await;
     }
 }
@@ -509,7 +530,7 @@ pub async fn open_room(app: AppHandle, login: String, seed: Option<WatchSeed>, c
     }
     if !chat_only {
         let authenticated = app.state::<AppState>().twitch_auth.get_token().await.is_ok();
-        watch_session::start(
+        if !watch_session::start_current(
             app,
             WatchTarget {
                 provider: "twitch".to_string(),
@@ -525,8 +546,12 @@ pub async fn open_room(app: AppHandle, login: String, seed: Option<WatchSeed>, c
                 avatar_url: row.profile_image_url.clone().unwrap_or_default(),
                 category_art: String::new(),
             },
+            ticket,
         )
-        .await;
+        .await
+        {
+            return RoomOpen { superseded: true, room: None, live: None, row: None };
+        }
     } else {
         // Playback failed and only the chat opened: what the view watched
         // before is over, unless a start that took its ticket since owns it.
@@ -561,6 +586,15 @@ pub async fn stop(app: AppHandle, state: State<'_, AppState>, preserve_backend: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_claim_wins_once_and_only_for_the_latest_ticket() {
+        let counter = AtomicU64::new(5);
+        assert!(!claim_in(&counter, 4), "an older ticket");
+        assert!(claim_in(&counter, 5));
+        assert!(!claim_in(&counter, 5), "taken once");
+        assert_eq!(counter.load(Ordering::Acquire), 6);
+    }
 
     fn resolved() -> TwitchStream {
         TwitchStream {

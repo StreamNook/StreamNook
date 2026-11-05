@@ -236,15 +236,31 @@ pub async fn start(app: AppHandle, target: WatchTarget) {
     // Whatever opened this session (an offline room, a provider stream) wins
     // over a Twitch start still resolving.
     crate::services::watch_start::supersede();
+    begin(app, target, None).await;
+}
+
+/// `start` for the watch start holding `ticket`, only while it is still the
+/// latest. The ticket is claimed (checked and superseded in one step) under
+/// the session's own lock, so neither a newer start nor a stop that came
+/// during this start's awaits is ever overtaken by it. False, touching
+/// nothing, when it lost.
+pub async fn start_current(app: AppHandle, target: WatchTarget, ticket: u64) -> bool {
+    begin(app, target, Some(ticket)).await
+}
+
+async fn begin(app: AppHandle, target: WatchTarget, ticket: Option<u64>) -> bool {
     let seq = SEQ.fetch_add(1, Ordering::AcqRel) + 1;
-    let previous = with_session(|s| {
+    let taken = with_session(|s| {
+        if ticket.is_some_and(|t| !crate::services::watch_start::claim(t)) {
+            return None;
+        }
         // A raid's cooldown outlives the raided session: the channel just left
         // still reports offline, and that must not auto-switch away from the
         // raid target.
         let last_raid_ms = s.as_ref().map(|p| p.last_raid_ms).unwrap_or(0);
         let last_raid_to = s.as_ref().and_then(|p| p.last_raid_to.clone());
         presence(Some(&target));
-        s.replace(Session {
+        Some(s.replace(Session {
             seq,
             target: target.clone(),
             tasks: Vec::new(),
@@ -252,8 +268,9 @@ pub async fn start(app: AppHandle, target: WatchTarget) {
             last_raid_to,
             resolving: false,
             live_sent: false,
-        })
+        }))
     });
+    let Some(previous) = taken else { return false };
     if let Some(prev) = previous {
         release(prev);
     }
@@ -336,6 +353,7 @@ pub async fn start(app: AppHandle, target: WatchTarget) {
     for task in orphaned.into_iter().flatten() {
         task.abort();
     }
+    true
 }
 
 /// End the session. `preserve_backend` hands the channel to MultiNook: the
