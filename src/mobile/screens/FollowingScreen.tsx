@@ -1,7 +1,8 @@
 // Followed live channels: card feed or compact list, user's choice persisted.
 // Live favorites sit on their own shelf above the rest, as on desktop.
 import React, { useEffect, useMemo, useState } from 'react';
-import { Star, Users } from 'phosphor-react';
+import { Star } from 'phosphor-react';
+import { Heart } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { SettleIn, useSettleIn } from '../ui/SettleIn';
 import { useAppStore } from '../../stores/AppStore';
@@ -52,6 +53,35 @@ export function readStreamView(): StreamViewMode {
 export function writeStreamView(mode: StreamViewMode): void {
   localStorage.setItem(VIEW_KEY, mode);
 }
+
+/** The follows' mark: desktop's glass heart (pink glass, a white edge fading
+ *  down, a soft pink glow), with its gradients here since the phone shell
+ *  never mounts desktop's. */
+const GlassHeart: React.FC = () => (
+  <>
+    <svg width="0" height="0" className="absolute pointer-events-none" aria-hidden>
+      <defs>
+        <linearGradient id="sn-m-glass-heart-fill" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="rgba(255, 255, 255, 0.4)" />
+          <stop offset="30%" stopColor="rgba(236, 72, 153, 0.2)" />
+          <stop offset="100%" stopColor="rgba(236, 72, 153, 0.6)" />
+        </linearGradient>
+        <linearGradient id="sn-m-glass-heart-stroke" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="rgba(255, 255, 255, 0.8)" />
+          <stop offset="100%" stopColor="rgba(255, 255, 255, 0.1)" />
+        </linearGradient>
+      </defs>
+    </svg>
+    <Heart
+      size={15}
+      fill="url(#sn-m-glass-heart-fill)"
+      stroke="url(#sn-m-glass-heart-stroke)"
+      strokeWidth={1.5}
+      className="shrink-0 drop-shadow-[0_3px_6px_color-mix(in_srgb,var(--color-highlight-pink)_50%,transparent)]"
+      aria-hidden
+    />
+  </>
+);
 
 export const FollowingScreen: React.FC = () => {
   const followedStreams = useAppStore((s) => s.followedStreams);
@@ -185,29 +215,34 @@ export const FollowingScreen: React.FC = () => {
                 <AdaptiveGrid variant={gridVariant} gap={gridGap} className="px-4">
                   {favorites.map((s, i) => card(s, i))}
                 </AdaptiveGrid>
-                {/* Feathered at both ends, only when more rows follow. */}
-                {rows.length > 0 && (
-                  <div
-                    aria-hidden
-                    className="mx-4 my-5 h-px bg-borderSubtle/70"
-                    style={{
-                      WebkitMaskImage: 'linear-gradient(to right, transparent, black 26%, black 74%, transparent)',
-                      maskImage: 'linear-gradient(to right, transparent, black 26%, black 74%, transparent)',
-                    }}
-                  />
-                )}
               </section>
             )}
             {rows.length > 0 && (
               <section aria-label="Followed">
                 {/* Labeled only under a Favorites shelf, so the two groups read
-                    as a pair; alone, the list is plainly the follows. */}
+                    as a pair; alone, the list is plainly the follows. The
+                    seam is the heart's pink, as desktop's favorites shelf: a
+                    hairline feathered at both ends and a glow it casts down
+                    behind the label. */}
                 {favorites.length > 0 && (
-                  <h2 className="flex items-center gap-1.5 px-5 pb-2 text-[12px] font-semibold uppercase tracking-wide text-textMuted">
-                    <Users size={14} weight="fill" className="text-accent" aria-hidden />
-                    <span>Followed</span>
-                    <span className="tabular-nums">{rows.length}</span>
-                  </h2>
+                  <div className="relative mt-5 px-4 pt-4 pb-2">
+                    <div
+                      aria-hidden
+                      className="pointer-events-none absolute inset-x-4 top-0 h-11"
+                      style={{
+                        background:
+                          'linear-gradient(color-mix(in srgb, var(--color-highlight-pink) 45%, transparent) 0 1px, color-mix(in srgb, var(--color-highlight-pink) 10%, transparent) 1px, transparent)',
+                        // Feathered only at the very ends, so the glow reaches the label.
+                        WebkitMaskImage: 'linear-gradient(to right, transparent, black 8%, black 92%, transparent)',
+                        maskImage: 'linear-gradient(to right, transparent, black 8%, black 92%, transparent)',
+                      }}
+                    />
+                    <h2 className="relative flex items-center gap-1.5 px-1 text-[12px] font-semibold uppercase tracking-wide text-textMuted">
+                      <GlassHeart />
+                      <span>Followed</span>
+                      <span className="tabular-nums">{rows.length}</span>
+                    </h2>
+                  </div>
                 )}
                 <AdaptiveGrid variant={gridVariant} gap={gridGap} className="px-4">
                   {rows.map((s, i) => card(s, favorites.length + i))}
