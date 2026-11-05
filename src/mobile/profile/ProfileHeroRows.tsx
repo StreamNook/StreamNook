@@ -16,6 +16,12 @@ interface Tap {
   art: ProfileBadge | null;
 }
 
+/** A chip's height (its line, padding and edge), so a held chip row is exactly
+ *  as tall as a filled one. */
+const CHIP_ROW = 23;
+/** The gap above the chip row. */
+const CHIP_GAP = 8;
+
 export const ProfileHeroRows: React.FC<{
   login: string | null;
   /** Their worn badges, art already resolved and failed art already dropped. */
@@ -26,13 +32,16 @@ export const ProfileHeroRows: React.FC<{
   atmosphere: AtmosphereView | null;
   seventvUserId: string | null;
   holdStill: boolean;
+  /** No answer has landed yet: the chip row keeps its space, so chips arriving
+   *  push nothing below them down. Released, an unneeded row collapses upward. */
+  holdChips: boolean;
   onBadgeImageFailed: (badge: ProfileBadge) => void;
-}> = ({ login, worn, views, paint, paintColor, atmosphere, seventvUserId, holdStill, onBadgeImageFailed }) => {
+}> = ({ login, worn, views, paint, paintColor, atmosphere, seventvUserId, holdStill, holdChips, onBadgeImageFailed }) => {
   const [tap, setTap] = useState<Tap | null>(null);
   const toggle = (next: Tap) => setTap((cur) => (cur?.key === next.key ? null : next));
   const hasMeta = !!login || worn.length > 0 || !!views;
   const hasChips = !!paint || !!atmosphere || !!seventvUserId;
-  if (!hasMeta && !hasChips) return null;
+  const holding = holdChips && !hasChips;
   return (
     <TapPanelHost open={tap !== null} onClose={() => setTap(null)}>
       {hasMeta && (
@@ -68,25 +77,40 @@ export const ProfileHeroRows: React.FC<{
           )}
         </div>
       )}
-      {hasChips && (
-        <div className="mt-2 flex flex-wrap items-center gap-1.5">
-          {paint && (
-            <PaintChip
-              paint={paint}
-              color={paintColor}
-              still={holdStill}
-              onTap={() => toggle({ key: 'paint', panel: panelFor('paint', paint), art: null })}
-            />
-          )}
-          {atmosphere && (
-            <AtmosphereChip
-              atmosphere={atmosphere}
-              onTap={() => toggle({ key: 'atmosphere', panel: panelFor('atmosphere', atmosphere), art: null })}
-            />
-          )}
-          {seventvUserId && <SevenTvChip seventvUserId={seventvUserId} />}
-        </div>
-      )}
+      {/* Always drawn, so a held row that turns out unneeded can animate shut
+          (height only, which Interface > Motion collapses to instant). */}
+      <div
+        aria-hidden={hasChips ? undefined : true}
+        style={
+          hasChips
+            ? undefined
+            : {
+                height: holding ? CHIP_GAP + CHIP_ROW : 0,
+                overflow: 'hidden',
+                transition: 'height 180ms cubic-bezier(0.2, 0.8, 0.2, 1)',
+              }
+        }
+      >
+        {hasChips && (
+          <div className="flex flex-wrap items-center gap-1.5" style={{ marginTop: CHIP_GAP, minHeight: CHIP_ROW }}>
+            {paint && (
+              <PaintChip
+                paint={paint}
+                color={paintColor}
+                still={holdStill}
+                onTap={() => toggle({ key: 'paint', panel: panelFor('paint', paint), art: null })}
+              />
+            )}
+            {atmosphere && (
+              <AtmosphereChip
+                atmosphere={atmosphere}
+                onTap={() => toggle({ key: 'atmosphere', panel: panelFor('atmosphere', atmosphere), art: null })}
+              />
+            )}
+            {seventvUserId && <SevenTvChip seventvUserId={seventvUserId} />}
+          </div>
+        )}
+      </div>
       {tap && <TapPanel panel={tap.panel} art={tap.art} />}
     </TapPanelHost>
   );

@@ -51,7 +51,7 @@ const badge = shape(
   { id: str, url: str },
   { fallbacks: arrayOf(str), title: str, name: str, description: str, provider: str },
 );
-// Every optional field is a missing key, never null (planner X6): `str` and the
+// Every optional field is a missing key, never null (Rust skips None): `str` and the
 // shapes below reject null, so a null here fails.
 const stat = shape({ key: str, label: str, value: str }, { caption: str, detail: str });
 const section = shape({ key: str, title: str, tiles: arrayOf(stat) });

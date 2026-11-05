@@ -502,6 +502,7 @@ const ProfileBody: React.FC<{
                 atmosphere={sheet?.atmosphere ?? null}
                 seventvUserId={sheet?.seventv_user_id ?? null}
                 holdStill={holdStill}
+                holdChips={!freshAnswered && !sheet}
                 onBadgeImageFailed={markImageFailed}
               />
               <ProfileNameplate slot={slot} link={pageLink} size="phone" />

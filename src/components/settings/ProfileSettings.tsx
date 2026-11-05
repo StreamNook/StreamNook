@@ -46,6 +46,7 @@ import {
   setHiddenSections,
   setChatAtmosphere,
   getAccolades,
+  isStreamNookRegistryLoaded,
 } from '../../services/supabaseService';
 import type { CosmeticCatalogEntry } from '../../services/supabaseService';
 import { getIdentityWithCache, setIdentity } from '../../services/identityService';
@@ -178,13 +179,15 @@ const ProfileSettings = () => {
 
   useSyncExternalStore(subscribeStreamNookRegistryVersion, getStreamNookRegistryVersion, getStreamNookRegistryVersion);
   const streamNookUserNumber = currentUser?.user_id ? getStreamNookUserNumber(currentUser.user_id) : null;
-  // Your StreamNook page, held in the header while you are known to be a member
-  // so the plate arriving moves nothing.
+  // Your StreamNook page, held in the header while you are known to be a member,
+  // or may be one because the member list has not loaded yet, so the plate
+  // arriving moves nothing.
+  const registryLoaded = isStreamNookRegistryLoaded();
   const profilePlate = useProfileLink({
     memberId: currentUser?.user_id ?? null,
     login: currentUser?.login ?? null,
-    loadFinished: true,
-    expectMember: streamNookUserNumber !== null,
+    loadFinished: registryLoaded,
+    expectMember: !!currentUser?.user_id && (!registryLoaded || streamNookUserNumber !== null),
   });
 
   useSyncExternalStore(subscribeCosmeticsVersion, getCosmeticsVersion, getCosmeticsVersion);

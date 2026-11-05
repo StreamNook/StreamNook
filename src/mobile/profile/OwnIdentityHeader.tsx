@@ -65,10 +65,12 @@ export const OwnIdentityCard: React.FC<Props> = ({ userId, displayName, login, p
   const badges = identity?.badges ?? [];
   const showLogin = !!login && login.toLowerCase() !== displayName.toLowerCase();
   // Your StreamNook page: the saved or fresh identity carries it. Held while you
-  // are a member (or the member list has not loaded) and no identity has landed.
+  // are a member (or the member list has not loaded) until the fresh identity
+  // answers; a saved copy from before the link existed never collapses it.
   useSyncExternalStore(subscribeStreamNookRegistryVersion, getStreamNookRegistryVersion);
+  const identityFresh = usePicksStore((s) => s.userId === userId && s.identityFresh);
   const pageLink = identity?.page_link ?? null;
-  const slot = plateSlot(isStreamNookRegistryLoaded(), getStreamNookUserNumber(userId) !== null, pageLink, identity !== null);
+  const slot = plateSlot(isStreamNookRegistryLoaded(), getStreamNookUserNumber(userId) !== null, pageLink, identityFresh);
 
   return (
     // Raised over what follows, so the picture note a tap opens is never covered.

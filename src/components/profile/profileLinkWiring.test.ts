@@ -91,9 +91,10 @@ describe('the plate floor', () => {
     expect(plate).toContain('background: PLATE_FLOOR');
     expect(plate).not.toMatch(/var\(--color/);
     expect(plate).not.toMatch(/glass-(panel|modal|button)/);
+    expect(plate).not.toMatch(/bg-glass|backdrop-blur/);
   });
 
-  it('keeps the planner constants: reserved width 214, check color #4ade80', () => {
+  it('keeps the shared constants: reserved width 214, check color #4ade80', () => {
     expect(PLATE_RESERVED_WIDTH).toBe(214);
     expect(PLATE_CHECK).toBe('#4ade80');
   });

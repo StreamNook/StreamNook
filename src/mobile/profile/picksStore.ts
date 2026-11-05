@@ -32,6 +32,9 @@ interface PicksState {
   /** Whose answers these are; a sign-out or account switch drops them. */
   userId: string | null;
   identity: OwnIdentityView | null;
+  /** The fresh `own_identity_header` read has answered (or failed); a saved
+   *  copy painting first never sets it. */
+  identityFresh: boolean;
   sn: StreamNookPickerView | null;
   ext: ExternalPickerView | null;
   /** The account's Twitch bio; null until read. */
@@ -79,7 +82,7 @@ export const usePicksStore = create<PicksState>((set, get) => {
   /** Starts a fresh slate when the account changed. */
   const claim = (userId: string) => {
     if (get().userId === userId) return;
-    set({ userId, identity: null, sn: null, ext: null, bio: null, sevenTv: null, connecting: false });
+    set({ userId, identity: null, identityFresh: false, sn: null, ext: null, bio: null, sevenTv: null, connecting: false });
   };
 
   const setSevenTv = (signedIn: boolean, userId: string | null | undefined) =>
@@ -93,6 +96,7 @@ export const usePicksStore = create<PicksState>((set, get) => {
   return {
     userId: null,
     identity: null,
+    identityFresh: false,
     sn: null,
     ext: null,
     bio: null,
@@ -115,9 +119,10 @@ export const usePicksStore = create<PicksState>((set, get) => {
             login: login || displayName,
             displayName,
           });
-          if (forUser(get, userId)) set({ identity: fresh });
+          if (forUser(get, userId)) set({ identity: fresh, identityFresh: true });
         } catch (err) {
           Logger.debug('[Picks] own identity unavailable:', err);
+          if (forUser(get, userId)) set({ identityFresh: true });
         }
       });
     },
