@@ -1,8 +1,7 @@
 // Followed live channels: card feed or compact list, user's choice persisted.
 // Live favorites sit on their own shelf above the rest, as on desktop.
 import React, { useEffect, useMemo, useState } from 'react';
-import { Star } from 'phosphor-react';
-import { Heart } from 'lucide-react';
+import { Heart, Users } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { SettleIn, useSettleIn } from '../ui/SettleIn';
 import { useAppStore } from '../../stores/AppStore';
@@ -54,7 +53,7 @@ export function writeStreamView(mode: StreamViewMode): void {
   localStorage.setItem(VIEW_KEY, mode);
 }
 
-/** The follows' mark: desktop's glass heart (pink glass, a white edge fading
+/** The Favorites mark: desktop's glass heart (pink glass, a white edge fading
  *  down, a soft pink glow), with its gradients here since the phone shell
  *  never mounts desktop's. */
 const GlassHeart: React.FC = () => (
@@ -205,10 +204,10 @@ export const FollowingScreen: React.FC = () => {
           <div className="sn-tabbar-clearance">
             {favorites.length > 0 && (
               <section aria-label="Favorites">
-                {/* The shelf's mark is the gold star; the label keeps the
-                    phone's quiet group style and the count sits beside it. */}
+                {/* The shelf's mark is desktop's glass heart; the label keeps
+                    the phone's quiet group style and the count sits beside it. */}
                 <h2 className="flex items-center gap-1.5 px-5 pb-2 text-[12px] font-semibold uppercase tracking-wide text-textMuted">
-                  <Star size={14} weight="fill" className="text-yellow-400" aria-hidden />
+                  <GlassHeart />
                   <span>Favorites</span>
                   <span className="tabular-nums">{favorites.length}</span>
                 </h2>
@@ -220,10 +219,11 @@ export const FollowingScreen: React.FC = () => {
             {rows.length > 0 && (
               <section aria-label="Followed">
                 {/* Labeled only under a Favorites shelf, so the two groups read
-                    as a pair; alone, the list is plainly the follows. The
-                    seam is the heart's pink, as desktop's favorites shelf: a
-                    hairline feathered at both ends and a glow it casts down
-                    behind the label. */}
+                    as a pair; alone, the list is plainly the follows. Its mark
+                    is desktop's Followed one, quieter than the heart. The seam
+                    is the heart's pink, as desktop's favorites shelf: a hairline
+                    feathered at both ends and a glow it casts down behind the
+                    label. */}
                 {favorites.length > 0 && (
                   <div className="relative mt-5 px-4 pt-4 pb-2">
                     <div
@@ -238,7 +238,7 @@ export const FollowingScreen: React.FC = () => {
                       }}
                     />
                     <h2 className="relative flex items-center gap-1.5 px-1 text-[12px] font-semibold uppercase tracking-wide text-textMuted">
-                      <GlassHeart />
+                      <Users size={15} strokeWidth={2} className="shrink-0 text-textSecondary" aria-hidden />
                       <span>Followed</span>
                       <span className="tabular-nums">{rows.length}</span>
                     </h2>
