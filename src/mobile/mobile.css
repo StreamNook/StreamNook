@@ -590,3 +590,27 @@ body:has(.sn-mobile) .glass-input:focus {
 .sn-send-ink {
   color: oklch(from var(--color-accent) clamp(0, (0.66 - l) * 999, 1) 0 0);
 }
+/* A profile sheet under an Atmosphere sits on the desktop card's dark scrim on
+   every theme, so on a light theme its text, cards and lines take the default
+   dark theme's colors. */
+:root[data-theme-tone='light'] .sn-dark-ink {
+  --color-text-primary: #ebf0f2;
+  --color-text-secondary: #97b1b9;
+  --color-text-muted: rgba(151, 177, 185, 0.75);
+  --color-background-secondary: rgba(255, 255, 255, 0.03);
+  --color-background-tertiary: #1a1a1b;
+  --color-border: rgba(151, 177, 185, 0.3);
+  --color-border-subtle: rgba(151, 177, 185, 0.1);
+}
+/* A rank's own color on its number and name: bright on a dark sheet, deepened
+   on a light theme so gold and the pale ranks still read, bright again under an
+   Atmosphere's dark scrim. */
+.sn-rank-lit {
+  color: var(--rank-accent);
+}
+:root[data-theme-tone='light'] .sn-rank-lit {
+  color: color-mix(in srgb, var(--rank-accent) 42%, black);
+}
+:root[data-theme-tone='light'] .sn-dark-ink .sn-rank-lit {
+  color: var(--rank-accent);
+}

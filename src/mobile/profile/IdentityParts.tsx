@@ -221,8 +221,11 @@ export const MemberRankMark: React.FC<{ rank: MemberRank; caption?: string | nul
       <div className="flex items-baseline gap-1">
         <span className="text-[11px] font-light text-textMuted">Nº</span>
         <span
-          className="text-[34px] leading-none italic font-light tabular-nums"
-          style={{ fontFamily: "'Fraunces Variable', serif", color: lit ? rank.accent : 'var(--color-text-primary)' }}
+          className={`text-[34px] leading-none italic font-light tabular-nums${lit ? ' sn-rank-lit' : ''}`}
+          style={{
+            fontFamily: "'Fraunces Variable', serif",
+            ...(lit ? ({ '--rank-accent': rank.accent } as React.CSSProperties) : { color: 'var(--color-text-primary)' }),
+          }}
         >
           {rank.number.toLocaleString()}
         </span>
@@ -232,14 +235,14 @@ export const MemberRankMark: React.FC<{ rank: MemberRank; caption?: string | nul
         style={{ background: `linear-gradient(to right, transparent, color-mix(in srgb, ${rank.accent} 50%, transparent), transparent)` }}
       />
       <div
-        className="mt-2 text-[10px] font-semibold uppercase tracking-[0.22em] leading-none"
-        style={{ color: lit ? rank.accent : 'var(--color-text-secondary)' }}
+        className={`mt-2 text-[10px] font-semibold uppercase tracking-[0.22em] leading-none${lit ? ' sn-rank-lit' : ''}`}
+        style={lit ? ({ '--rank-accent': rank.accent } as React.CSSProperties) : { color: 'var(--color-text-secondary)' }}
       >
         {rank.label}
       </div>
       {/* The worn StreamNook badge's caption, as the desktop hero prints it. */}
       {caption && (
-        <div className="mt-2.5 max-w-[132px] break-words text-right text-[10px] font-light uppercase leading-snug tracking-[0.22em] text-textSecondary">
+        <div className="mt-2.5 max-w-[132px] break-words text-right text-[10px] font-light uppercase leading-snug tracking-[0.22em] text-textSecondary line-clamp-2">
           {caption}
         </div>
       )}

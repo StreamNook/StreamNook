@@ -91,8 +91,10 @@ export const OwnIdentityCard: React.FC<Props> = ({ userId, displayName, login, p
           style={{ fontSize: identityNameSize(displayName) }}
         />
         {showLogin && <div className="text-[13px] text-textMuted truncate mt-px">@{login}</div>}
-        {(badges.length > 0 || wearing) && (
-          <div className="mt-1.5 flex items-center gap-1.5 min-w-0">
+        {/* Held (empty) while your plate is still coming, so badges arriving
+            push the plate and Edit profile nothing down. */}
+        {(badges.length > 0 || wearing || slot === 'reserved') && (
+          <div className="mt-1.5 flex items-center gap-1.5 min-w-0 min-h-[18px]">
             {badges.map((b, i) => (
               <WornBadge key={`${b.id}-${i}`} url={badgeArt(b.url)} fallbacks={b.fallbacks} label={b.title || b.name} />
             ))}

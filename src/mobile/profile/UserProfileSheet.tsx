@@ -45,6 +45,9 @@ import { accentBorder, auraFor, frameInsets, newOpenId, plateSlot, tzOffsetMin }
 import { useHoldStill } from './useHoldStill';
 
 const AVATAR = 76;
+/** The rank column at its tallest (its top gap, number, hairline, name and a
+ *  two-line caption), held while a member's sheet has not answered. */
+const RANK_COLUMN = 105;
 
 export interface SheetUser {
   userId: string;
@@ -455,7 +458,7 @@ const ProfileBody: React.FC<{
       {/* No scroll anchoring: opening a badge group grows the sheet below the
           tap, and Chromium would otherwise pin something under it and slide
           everything above out of place. */}
-      <div className="flex flex-col pb-2 [overflow-anchor:none]">
+      <div className={`flex flex-col pb-2 [overflow-anchor:none]${aura.kind === 'atmosphere' ? ' sn-dark-ink' : ''}`}>
         {/* The hero: picture and rank, then the name, what they wear and the
             plate to their StreamNook page. A Frame wraps it as a nine-slice
             border (the padding keeps the content clear of it); a paint theme
@@ -470,7 +473,13 @@ const ProfileBody: React.FC<{
         >
           {sheet?.theme === 'paint' && paint && <PaintWash paint={paint} holdStill={holdStill} />}
           <div className="relative z-[2]">
-            <div className="flex items-start gap-3">
+            {/* A known member's rank column (number, name, a caption of up to two
+                lines) is held before the answer lands, so the name under it
+                never moves down; a shorter column then closes upward. */}
+            <div
+              className="flex items-start gap-3"
+              style={!sheet && getStreamNookUserNumber(userId) !== null ? { minHeight: RANK_COLUMN } : undefined}
+            >
               <CutoutAvatar
                 platformUrl={sheet?.avatar_url}
                 picture={sheet?.picture}

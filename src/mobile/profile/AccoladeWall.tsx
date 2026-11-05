@@ -40,7 +40,7 @@ export const AccoladeWall: React.FC<{ wall: AccoladeWallView; accent?: string; c
         />
       </div>
       <TapPanelHost open={tapped !== null} onClose={() => setTapId(null)}>
-        <div className="grid grid-cols-5 gap-x-2" style={{ rowGap: WALL.rowGap }}>
+        <div className="grid grid-cols-5 gap-x-1" style={{ rowGap: WALL.rowGap }}>
           {items.map((a) => {
             const Icon = ACCOLADE_ICONS[a.icon] ?? Star;
             const mystery = a.secret && !a.earned;
@@ -74,7 +74,7 @@ export const AccoladeWall: React.FC<{ wall: AccoladeWallView; accent?: string; c
                   )}
                 </span>
                 <span
-                  className={`w-full text-center text-[11px] font-medium leading-tight line-clamp-2 [hyphens:manual] ${
+                  className={`w-full text-center text-[10px] tracking-[-0.01em] font-medium leading-tight line-clamp-2 [hyphens:manual] ${
                     a.earned ? 'text-textSecondary' : 'text-textMuted'
                   }`}
                 >

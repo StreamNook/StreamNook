@@ -21,6 +21,9 @@ interface Tap {
 const CHIP_ROW = 23;
 /** The gap above the chip row. */
 const CHIP_GAP = 8;
+/** The meta line with worn badges in it: a 28 px badge target pulled in by 4
+ *  above and below. */
+const META_ROW = 20;
 
 export const ProfileHeroRows: React.FC<{
   login: string | null;
@@ -32,8 +35,9 @@ export const ProfileHeroRows: React.FC<{
   atmosphere: AtmosphereView | null;
   seventvUserId: string | null;
   holdStill: boolean;
-  /** No answer has landed yet: the chip row keeps its space, so chips arriving
-   *  push nothing below them down. Released, an unneeded row collapses upward. */
+  /** No answer has landed yet: the meta line and the chip row keep their space,
+   *  so badges and chips arriving push nothing below them down. Released, an
+   *  unneeded row collapses upward. */
   holdChips: boolean;
   onBadgeImageFailed: (badge: ProfileBadge) => void;
 }> = ({ login, worn, views, paint, paintColor, atmosphere, seventvUserId, holdStill, holdChips, onBadgeImageFailed }) => {
@@ -45,7 +49,12 @@ export const ProfileHeroRows: React.FC<{
   return (
     <TapPanelHost open={tap !== null} onClose={() => setTap(null)}>
       {hasMeta && (
-        <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1">
+        // Held at a badge row's height until the answer lands, so worn badges
+        // arriving under the handle push nothing down.
+        <div
+          className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1"
+          style={holdChips ? { minHeight: META_ROW } : undefined}
+        >
           {login && <span className="max-w-[60%] truncate text-[13px] leading-none text-textMuted">@{login}</span>}
           {worn.length > 0 && (
             <div className="flex items-center">
