@@ -136,6 +136,38 @@ pub async fn upsert(table: &str, on_conflict: &str, row: Value) -> Result<(), St
     Err(format!("{table}: {status} {}", body.chars().take(200).collect::<String>()))
 }
 
+/// Inserts one row and leaves an existing one alone (`on_conflict` names the
+/// unique columns). True when a row came back, which is only when this call
+/// created it; a duplicate answers an empty list and is false. One request per
+/// row, so a refused row never fails the others.
+pub async fn insert_ignore(table: &str, on_conflict: &str, row: Value) -> Result<bool, String> {
+    let (url, key) = creds().ok_or_else(|| "StreamNook backend not configured".to_string())?;
+    let res = crate::services::http::client()
+        .post(format!("{url}/rest/v1/{table}?on_conflict={on_conflict}"))
+        .header("apikey", key)
+        .header("Authorization", format!("Bearer {key}"))
+        .header("Prefer", "resolution=ignore-duplicates,return=representation")
+        .json(&row)
+        .send()
+        .await
+        .map_err(|e| format!("{table}: {e}"))?;
+    let status = res.status();
+    let body = res.text().await.map_err(|e| format!("{table}: {e}"))?;
+    if !status.is_success() {
+        return Err(format!("{table}: {status} {}", body.chars().take(200).collect::<String>()));
+    }
+    inserted_from(&body).map_err(|e| format!("{table}: {e}"))
+}
+
+/// Whether an insert's answer carries a row: `[]` (or nothing) means the row was
+/// already there.
+fn inserted_from(body: &str) -> Result<bool, serde_json::Error> {
+    if body.trim().is_empty() {
+        return Ok(false);
+    }
+    Ok(serde_json::from_str::<Vec<Value>>(body)?.first().is_some())
+}
+
 // ---- Realtime ------------------------------------------------------------------
 
 /// One change the realtime feed delivered, or the feed coming back after a gap.
@@ -361,6 +393,15 @@ mod tests {
         assert_eq!(rpc_body("  \n").unwrap(), Value::Null);
         assert_eq!(rpc_body("5").unwrap(), json!(5));
         assert!(rpc_body("{not json").is_err());
+    }
+
+    #[test]
+    fn an_insert_counts_only_when_a_row_came_back() {
+        assert!(inserted_from(r#"[{"twitch_user_id":"5","accolade_id":"og"}]"#).unwrap());
+        assert!(!inserted_from("[]").unwrap(), "a duplicate answers an empty list");
+        assert!(!inserted_from("").unwrap());
+        assert!(!inserted_from("  \n").unwrap());
+        assert!(inserted_from("{not json").is_err());
     }
 
     #[test]

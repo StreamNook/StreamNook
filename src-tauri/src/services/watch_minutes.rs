@@ -421,7 +421,9 @@ async fn flush() {
             return;
         };
         match send_batch(&member, items).await {
-            Sent::Done | Sent::NoToken => {}
+            // Hours watched moved on the server.
+            Sent::Done => crate::services::own_accolades::poke(crate::services::own_accolades::Poke::WatchMinutes),
+            Sent::NoToken => {}
             Sent::Deferred(unsent, why) => {
                 with_state(|s| put_back(&mut s.pending, unsent));
                 note_deferred(&why);

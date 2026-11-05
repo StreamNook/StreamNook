@@ -387,6 +387,8 @@ pub async fn claim_drop(
         .map_err(|e| e.to_string())?;
     // A claimed reward can be a badge; the missing-badges list should drop it now.
     crate::services::badge_standing::collection_may_have_changed(&app_handle);
+    // The claim went through, so the drops count the accolades read has moved.
+    crate::services::own_accolades::poke(crate::services::own_accolades::Poke::DropClaim);
     Ok(())
 }
 

@@ -2226,6 +2226,8 @@ impl DropsService {
                             // A claimed reward can be a badge; the
                             // missing-badges list should drop it now.
                             crate::services::badge_standing::collection_may_have_changed(&app_handle);
+                            // Twitch has granted it: the drops count the accolades read has moved.
+                            crate::services::own_accolades::poke(crate::services::own_accolades::Poke::DropClaim);
                             if current_settings.notify_on_drop_claimed {
                                 let _ = app_handle.emit("drop-claimed", &claimed);
                             }

@@ -5,6 +5,7 @@
 
 use crate::services::cosmetics_registry::{self as registry, Atmosphere, MemberIds, Snapshot};
 use crate::services::member_link::{self, PageLinkAnswer};
+use crate::services::member_profile::AccoladeWall;
 use crate::services::member_theme::{self as themes, MemberTheme, ProfilePrefs};
 use crate::services::profile_view::{self, ExternalPicker, OwnIdentity, ProfileSheet, StreamNookPicker};
 use tauri::command;
@@ -181,4 +182,33 @@ pub async fn profile_changed(user_id: String) {
 #[command]
 pub async fn sn_member_ids() -> MemberIds {
     registry::member_ids()
+}
+
+/// The signed-in member's own accolade wall: every accolade with their own
+/// numbers (drops and channel points included), locked secrets as `???`. Always
+/// the signed-in primary member, never an argument; None when signed out, not a
+/// member, or when their stats could not be read (the phones keep what they
+/// last drew). Reading it also saves any accolade their numbers have lit.
+/// `tz_offset_min` is minutes east of UTC, as for the sheet.
+#[command]
+pub async fn own_accolades(tz_offset_min: Option<i32>) -> Option<AccoladeWall> {
+    let member = crate::services::account_store::AccountStore::primary().map(|a| a.user_id).filter(|m| !m.is_empty())?;
+    crate::services::own_accolades::own_wall(&member, tz_offset_min).await
+}
+
+/// The last own wall Rust built for the signed-in primary member, from disk: no
+/// network, no writes, for a first frame that paints before `own_accolades` answers.
+/// None when signed out or nothing was built yet.
+#[command]
+pub async fn own_accolades_cached() -> Option<AccoladeWall> {
+    let member = crate::services::account_store::AccountStore::primary().map(|a| a.user_id).filter(|m| !m.is_empty())?;
+    crate::services::own_accolades::cached_own_wall(&member)
+}
+
+/// Saves one accolade only this app can attest, for the signed-in member:
+/// `insomniac`, `perfect_corner`, `shiny_peepo` or `worth_the_wait`; any other id
+/// is refused. True when it was new. The member is Rust's signed-in one.
+#[command]
+pub async fn grant_own_accolade(id: String) -> Result<bool, String> {
+    crate::services::own_accolades::grant_attested(&id).await
 }

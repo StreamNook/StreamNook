@@ -139,6 +139,7 @@ const PARALLEL: usize = 8;
 async fn send_pending() {
     let _sending = SENDING.lock().await;
     let (taken, taken_emotes) = pending(|p| (std::mem::take(&mut p.amounts), std::mem::take(&mut p.emotes)));
+    let sent_something = !taken.is_empty() || !taken_emotes.is_empty();
     let stat_results: Vec<_> = futures::stream::iter(taken)
         .map(|((member, stat), amount)| async move {
             let result = send_one(&member, stat, amount).await;
@@ -170,6 +171,10 @@ async fn send_pending() {
                 pending(|p| merge_emotes(&mut p.emotes, &member, vec![u]));
             }
         }
+    }
+    // The counts the accolades read have just moved on the server.
+    if sent_something {
+        crate::services::own_accolades::poke(crate::services::own_accolades::Poke::Stats);
     }
 }
 

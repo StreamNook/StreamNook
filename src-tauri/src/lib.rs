@@ -1575,6 +1575,9 @@ pub fn run() {
             // the page link has the live list (the committed one stands until it
             // answers). Nothing waits on it.
             services::client_config::warm();
+            // Your own accolades: a clock that notices a new local date (and claims the
+            // day's login accolades again) and pokes the grant every half hour.
+            services::own_accolades::start();
 
             // Twitch Recap hours for the signed-in member, published so the profile
             // can count the watching they did before joining. Daily, and a no-op
@@ -2585,6 +2588,9 @@ pub fn run() {
             streamnook_profile_link,
             profile_changed,
             sn_member_ids,
+            own_accolades,
+            own_accolades_cached,
+            grant_own_accolade,
             cosmetics_picker_state,
             external_cosmetics_state,
             // Server-controlled client switches

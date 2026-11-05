@@ -99,6 +99,8 @@ async fn run(user: UserInfo) {
         Ok(v) => debug!("[SignIn] accolades: {v}"),
         Err(e) => warn!("[SignIn] claim_login_accolades failed: {e}"),
     }
+    // The login claim may have saved a season; the numbers may have lit more.
+    crate::services::own_accolades::poke(crate::services::own_accolades::Poke::SignIn);
     // Server-gated on an active subscription; not deployed yet answers 404.
     if let Err(e) = backend::rpc("grant_atmosphere_ownership", json!({ "p_twitch_user_id": id })).await {
         if !e.contains("PGRST202") && !e.contains("42883") {

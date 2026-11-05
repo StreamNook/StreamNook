@@ -499,7 +499,8 @@ fn progress_text(def: &AccoladeDef, rule: &StatRule, input: &WallInput) -> Optio
         StatKind::Streams => grouped(input.streams),
         StatKind::Cosmetics => grouped(input.cosmetics),
         StatKind::Years => grouped(input.years.max(0) as u64),
-        StatKind::Drops | StatKind::Points => return None,
+        StatKind::Drops => grouped(input.drops),
+        StatKind::Points => grouped(input.points),
     };
     Some(format!("{label}: {value} / {}", grouped(rule.n)))
 }
@@ -538,9 +539,91 @@ fn public_hint(cat: &Catalog, def: &AccoladeDef, earned: bool, input: &WallInput
     }
 }
 
-/// The public accolade wall for a member, from the shipped catalog.
-pub fn accolade_wall(input: &WallInput) -> AccoladeWall {
-    wall_with(&CATALOG, input)
+/// Whose wall it is. A public wall is what anyone sees of a member: locked
+/// secrets and accolades whose input never answered are left off, and a hint
+/// never carries a hidden number or one the public view does not read. An own
+/// wall is the owner's: every locked accolade is listed (a locked secret as
+/// `???` with a lock and its cryptic hint), hints carry the owner's real numbers
+/// (drops and points too), hidden switches are ignored, and the seasons and the
+/// cake day light from today's date alone (the server grants them at sign-in).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum WallMode {
+    Public,
+    Own,
+}
+
+/// What an own wall shows in place of a locked secret's name and medal.
+const MYSTERY_LABEL: &str = "???";
+const MYSTERY_ICON: &str = "lock";
+
+/// Whether a month-and-day (`month * 100 + day`) falls in a seasonal window,
+/// which may wrap the new year.
+fn in_window(md: u32, w: &Window) -> bool {
+    let from = w.from_m * 100 + w.from_d;
+    let to = w.to_m * 100 + w.to_d;
+    if from <= to {
+        md >= from && md <= to
+    } else {
+        md >= from || md <= to
+    }
+}
+
+/// The accolades an own wall lights from `today` alone: every season whose window
+/// holds it, and Cake Day when the account's creation month and day (read in the
+/// zone `created_at` is written in) is today's.
+fn optimistic_ids(cat: &Catalog, input: &WallInput) -> Vec<String> {
+    let Ok(today) = NaiveDate::parse_from_str(&input.today, "%Y-%m-%d") else { return Vec::new() };
+    let md = today.month() * 100 + today.day();
+    let created_md = input
+        .created_at
+        .as_deref()
+        .and_then(|c| DateTime::parse_from_rfc3339(c).ok())
+        .map(|c| c.month() * 100 + c.day());
+    cat.accolades
+        .iter()
+        .filter(|d| match d.kind {
+            Kind::Seasonal => d.window.as_ref().is_some_and(|w| in_window(md, w)),
+            Kind::Cake => created_md == Some(md),
+            _ => false,
+        })
+        .map(|d| d.id.clone())
+        .collect()
+}
+
+/// What an own wall says under a medallion: the owner's real numbers for every
+/// stat they can read, the goal alone for one whose input never answered, and a
+/// secret's own cryptic hint.
+fn own_hint(cat: &Catalog, def: &AccoladeDef, earned: bool, input: &WallInput, unknown: &[StatKind]) -> String {
+    let hint = def.hint.clone().unwrap_or_default();
+    match def.kind {
+        Kind::Secret | Kind::Offline => hint,
+        Kind::Seasonal | Kind::Cake => {
+            if earned {
+                cat.titles.collected.clone()
+            } else {
+                hint
+            }
+        }
+        Kind::Event => {
+            if earned {
+                def.hint_earned.clone().unwrap_or(hint)
+            } else {
+                hint
+            }
+        }
+        Kind::Base => match &def.rule {
+            RuleDef::Stat(rule) if !unknown.contains(&rule.stat) => {
+                progress_text(def, rule, input).unwrap_or_else(|| def.goal.clone())
+            }
+            _ => def.goal.clone(),
+        },
+    }
+}
+
+/// The accolade wall for a member from the shipped catalog, public or the
+/// owner's own.
+pub fn accolade_wall(input: &WallInput, mode: WallMode) -> AccoladeWall {
+    wall_core(&CATALOG, input, &[], mode)
 }
 
 /// The public accolade wall against a given catalog. Locked secrets and
@@ -556,7 +639,18 @@ pub fn wall_with(cat: &Catalog, input: &WallInput) -> AccoladeWall {
 /// otherwise left off the wall, never shown locked at 0; a saved one says its
 /// goal, not a progress number. The counts follow the items.
 pub fn wall_with_unknowns(cat: &Catalog, input: &WallInput, unknown: &[StatKind]) -> AccoladeWall {
-    let saved: HashSet<&str> = input.saved.iter().map(String::as_str).collect();
+    wall_core(cat, input, unknown, WallMode::Public)
+}
+
+/// The wall in either mode. `unknown` lists the stats whose input never
+/// answered: public leaves their accolades off unless saved, own lists them
+/// locked with the goal text (lit if saved), and Triple Threat is never reached
+/// while Drops is unknown.
+pub fn wall_core(cat: &Catalog, input: &WallInput, unknown: &[StatKind], mode: WallMode) -> AccoladeWall {
+    let own = mode == WallMode::Own;
+    let optimistic: Vec<String> = if own { optimistic_ids(cat, input) } else { Vec::new() };
+    let mut saved: HashSet<&str> = input.saved.iter().map(String::as_str).collect();
+    saved.extend(optimistic.iter().map(String::as_str));
     let number = input.member_number;
     let name = number_name(cat, number);
     let unknown_input = |def: &AccoladeDef| matches!(&def.rule, RuleDef::Stat(rule) if unknown.contains(&rule.stat));
@@ -567,7 +661,12 @@ pub fn wall_with_unknowns(cat: &Catalog, input: &WallInput, unknown: &[StatKind]
                 Special::FirstHundred => number.is_some_and(|n| n <= 100),
                 Special::Completionist => all_base,
                 // The desktop's Triple Threat: messages, hours and drops all run deep.
-                Special::Triple => input.messages >= 1_000 && input.hours >= 100.0 && input.drops >= 25,
+                Special::Triple => {
+                    input.messages >= 1_000
+                        && input.hours >= 100.0
+                        && !unknown.contains(&StatKind::Drops)
+                        && input.drops >= 25
+                }
                 Special::Palindrome => is_palindrome(number),
                 Special::Nice => name.is_some(),
                 Special::Saved => false,
@@ -594,21 +693,27 @@ pub fn wall_with_unknowns(cat: &Catalog, input: &WallInput, unknown: &[StatKind]
     let mut items = Vec::new();
     for def in &cat.accolades {
         let earned = lit(def, all_base);
-        if (!earned && (out_of_reach(def) || unknown_input(def))) || (def.kind == Kind::Secret && !earned) {
+        if (!earned && out_of_reach(def)) || (!own && !earned && (unknown_input(def) || def.kind == Kind::Secret)) {
             continue;
         }
+        let mystery = own && def.kind == Kind::Secret && !earned;
         let label = match &def.rule {
+            _ if mystery => MYSTERY_LABEL.to_string(),
             RuleDef::Special(rule) if rule.special == Special::Nice => name.clone().unwrap_or_else(|| def.label.clone()),
             _ => def.label.clone(),
         };
         items.push(AccoladeMedal {
             id: def.id.clone(),
             label,
-            icon: def.icon.clone(),
+            icon: if mystery { MYSTERY_ICON.to_string() } else { def.icon.clone() },
             colors: def.colors.clone(),
             earned,
             secret: def.kind == Kind::Secret,
-            hint: public_hint(cat, def, earned, input, unknown),
+            hint: if own {
+                own_hint(cat, def, earned, input, unknown)
+            } else {
+                public_hint(cat, def, earned, input, unknown)
+            },
         });
     }
     items.sort_by_key(|m| !m.earned);
@@ -971,6 +1076,49 @@ pub fn totals_of(rows: &[Value]) -> (u64, u64) {
     (rows.len() as u64, rows.iter().map(|r| num(Some(r), "count").max(0.0) as u64).sum())
 }
 
+/// The wall's inputs from a member's facts, with the dates read in the clock's
+/// zone. `drops` and `points` are None when their read never answered. The second
+/// value lists the stats whose input never answered (years when IVR failed,
+/// cosmetics when the 7TV inventory did, and the two here), for `wall_core`. The
+/// public sheet passes `Some(0)` for both: it never reads them.
+pub fn wall_input(f: &MemberFacts, clock: &Clock, drops: Option<u64>, points: Option<u64>) -> (WallInput, Vec<StatKind>) {
+    let row: Option<&Value> = f.stats.as_answer().and_then(|r| r.as_ref());
+    let ivr: Option<&IvrUserSummary> = f.ivr.as_answer().and_then(|i| i.as_ref());
+    let today = clock.today();
+    let created: Option<NaiveDate> = ivr
+        .and_then(|i| i.created_at.as_deref())
+        .and_then(|c| DateTime::parse_from_rfc3339(c).ok())
+        .map(|c| clock.zone.date(c.with_timezone(&Utc)));
+    let input = WallInput {
+        messages: (num(row, "messages_sent") + num(row, "recap_messages")).max(0.0) as u64,
+        hours: (num(row, "hours_watched") + num(row, "recap_hours")).max(0.0),
+        streams: num(row, "streams_watched").max(0.0) as u64,
+        drops: drops.unwrap_or(0),
+        points: points.unwrap_or(0),
+        cosmetics: f.seventv.as_answer().map_or(0, |(p, b)| p + b) + registry::owned_slugs(&f.member_id).len() as u64,
+        years: created.map_or(0, |c| account_age(c, today).1),
+        member_number: f.number,
+        saved: f.saved.as_answer().map(|s| s.iter().cloned().collect()).unwrap_or_default(),
+        hidden: f.hidden.clone(),
+        today: today.to_string(),
+        created_at: created.map(|c| format!("{c}T00:00:00Z")),
+    };
+    let mut unknown = Vec::new();
+    if !f.ivr.is_answered() {
+        unknown.push(StatKind::Years);
+    }
+    if !f.seventv.is_answered() {
+        unknown.push(StatKind::Cosmetics);
+    }
+    if drops.is_none() {
+        unknown.push(StatKind::Drops);
+    }
+    if points.is_none() {
+        unknown.push(StatKind::Points);
+    }
+    (input, unknown)
+}
+
 /// Works a member's facts into what the sheet shows. A part that did not answer
 /// leaves its tiles out; nothing here turns a failed read into a zero.
 pub fn shape(f: &MemberFacts, ctx: &ShapeCtx) -> Shaped {
@@ -1102,28 +1250,8 @@ pub fn shape(f: &MemberFacts, ctx: &ShapeCtx) -> Shaped {
         .map(|(unique, used)| format!("{} emotes · {} used", grouped(unique), grouped(used)));
 
     let accolades = (!hidden("accolades") && stats_known && f.saved.is_answered()).then(|| {
-        let input = WallInput {
-            messages,
-            hours: hours_f,
-            streams,
-            drops: 0,
-            points: 0,
-            cosmetics: f.seventv.as_answer().map_or(0, |(p, b)| p + b) + owned.len() as u64,
-            years: age.as_ref().map_or(0, |a| a.1),
-            member_number: f.number,
-            saved: f.saved.as_answer().map(|s| s.iter().cloned().collect()).unwrap_or_default(),
-            hidden: f.hidden.clone(),
-            today: today.to_string(),
-            created_at: ivr.and_then(|i| i.created_at.clone()),
-        };
         // An input that never answered (and has no cached copy) is not read as 0.
-        let mut unknown = Vec::new();
-        if !f.ivr.is_answered() {
-            unknown.push(StatKind::Years);
-        }
-        if !f.seventv.is_answered() {
-            unknown.push(StatKind::Cosmetics);
-        }
+        let (input, unknown) = wall_input(f, ctx.clock, Some(0), Some(0));
         wall_with_unknowns(cat, &input, &unknown)
     });
 
@@ -1214,7 +1342,7 @@ fn digits(id: &str) -> String {
 
 /// The first row of a read: an error when the read failed, `Ok(None)` when it
 /// answered with no row (a member who has none yet).
-async fn first_row(table: &str, query: String) -> Result<Option<Value>, String> {
+pub(crate) async fn first_row(table: &str, query: String) -> Result<Option<Value>, String> {
     Ok(crate::services::streamnook_backend::select(table, &query).await?.into_iter().next())
 }
 
@@ -1380,6 +1508,8 @@ pub(crate) const TEST_CATALOG_JSON: &str = r##"{
       "rule": { "special": "first_hundred" }, "goal": "Be one of the first 100 StreamNook members" },
     { "id": "completionist", "label": "Completionist", "icon": "star", "colors": ["#f472b6", "#db2777"], "kind": "secret",
       "rule": { "special": "completionist" }, "hint": "When there's nothing else left to earn, this one shows up." },
+    { "id": "triple", "label": "Triple Threat", "icon": "layers", "colors": ["#34d399", "#0f766e"], "kind": "secret",
+      "rule": { "special": "triple" }, "hint": "Talk, watch, and collect until all three run deep." },
     { "id": "nice", "label": "Nice", "icon": "smile", "colors": ["#facc15", "#ca8a04"], "kind": "secret",
       "rule": { "special": "nice" }, "hint": "Land on a number the internet never lets you forget." },
     { "id": "halloween", "label": "Halloween", "icon": "skull", "colors": ["#fb923c", "#c2410c"], "kind": "seasonal",
@@ -1944,11 +2074,25 @@ mod tests {
         }
         let file: Cases = serde_json::from_str(include_str!("../../../src/utils/accolades.cases.json")).expect("accolades.cases.json");
         assert_eq!(file.v, 1);
-        let public: Vec<&Case> = file.cases.iter().filter(|c| !c.own).collect();
-        assert!(!public.is_empty(), "the cases file holds public cases");
-        for case in public {
-            let wall = serde_json::to_value(accolade_wall(&case.input)).unwrap();
-            assert_eq!(wall, case.expect, "case: {}", case.name);
+        assert!(file.cases.iter().any(|c| !c.own), "the cases file holds public cases");
+        assert!(file.cases.iter().any(|c| c.own), "the cases file holds own cases");
+        for case in &file.cases {
+            let mode = if case.own { WallMode::Own } else { WallMode::Public };
+            let wall = serde_json::to_value(accolade_wall(&case.input, mode)).unwrap();
+            let mut expect = case.expect.clone();
+            if case.own {
+                // TEMPORARY, removed by commit E: the file still keeps what the TypeScript builder
+                // drew, while Rust masks a locked secret as `???` with a lock (R5 G5), so the
+                // expectation is masked the same way. Commit E regenerates the own cases with
+                // "???" and "lock" and deletes this block.
+                if let Some(items) = expect.get_mut("items").and_then(Value::as_array_mut) {
+                    for item in items.iter_mut().filter(|i| i["earned"] == false && i["secret"] == true) {
+                        item["label"] = json!("???");
+                        item["icon"] = json!("lock");
+                    }
+                }
+            }
+            assert_eq!(wall, expect, "case: {}", case.name);
         }
     }
 
@@ -2137,5 +2281,125 @@ mod tests {
         assert!(p.top_emotes.iter().all(|e| !e.url.is_empty()));
         assert_eq!(p.top_emotes[0].id, "e0");
         assert!(p.top_emotes.iter().all(|e| e.id != "e4"), "the one without art is skipped");
+    }
+
+    fn own_input() -> WallInput {
+        WallInput {
+            member_number: Some(69),
+            messages: 500,
+            hours: 99.6,
+            drops: 12,
+            points: 7,
+            today: "2026-11-05".into(),
+            created_at: Some("2014-03-20T00:00:00Z".into()),
+            hidden: keys(&["messages", "roast"]),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn an_own_wall_lists_everything_with_the_owners_numbers_and_masks_locked_secrets() {
+        let cat = catalog();
+        let own = wall_core(&cat, &own_input(), &[], WallMode::Own);
+        let find = |id: &str| own.items.iter().find(|m| m.id == id).unwrap_or_else(|| panic!("{id} is on an own wall")).clone();
+        // Hidden switches are the public's business: the owner sees every number.
+        assert_eq!(find("chatterbox").hint, "Messages sent: 500 / 1,000");
+        assert_eq!(find("marathoner").hint, "Hours watched: 100 / 100");
+        assert_eq!(find("dropgoblin").hint, "Drops claimed: 12 / 25");
+        assert!(!find("dropgoblin").earned);
+        // A locked secret is a mystery with its cryptic hint; an earned one shows itself.
+        let triple = find("triple");
+        assert_eq!((triple.label.as_str(), triple.icon.as_str(), triple.secret, triple.earned), ("???", "lock", true, false));
+        assert_eq!(triple.hint, "Talk, watch, and collect until all three run deep.");
+        let nice = find("nice");
+        assert_eq!((nice.label.as_str(), nice.icon.as_str(), nice.earned), ("Nice", "smile", true));
+        assert_eq!(nice.hint, "Land on a number the internet never lets you forget.");
+        // The public wall of the same input has none of that.
+        let public = wall_core(&cat, &own_input(), &[], WallMode::Public);
+        assert!(public.items.iter().all(|m| m.id != "triple" && m.id != "completionist"));
+        assert_eq!(public.items.iter().find(|m| m.id == "nice").unwrap().hint, "A hidden accolade.");
+        assert!(public.items.iter().all(|m| m.label != "???"));
+        assert_eq!(public, wall_with(&cat, &own_input()), "the public entry points are unchanged");
+    }
+
+    #[test]
+    fn an_own_wall_lights_the_seasons_from_todays_date_and_a_public_one_never_does() {
+        let cat = catalog();
+        let on = |today: &str| WallInput { today: today.into(), member_number: Some(1000), ..Default::default() };
+        let halloween = |w: &AccoladeWall| w.items.iter().find(|m| m.id == "halloween").map(|m| (m.earned, m.hint.clone()));
+        assert_eq!(halloween(&wall_core(&cat, &on("2026-10-31"), &[], WallMode::Own)), Some((true, "Collected".to_string())));
+        assert_eq!(
+            halloween(&wall_core(&cat, &on("2026-11-05"), &[], WallMode::Own)),
+            Some((false, "Open StreamNook around Halloween (Oct 31)".to_string()))
+        );
+        assert_eq!(halloween(&wall_core(&cat, &on("2026-10-31"), &[], WallMode::Public)).map(|h| h.0), Some(false));
+        // The window wraps the new year, and an unreadable date lights nothing.
+        let wraps = Window { from_m: 12, from_d: 31, to_m: 1, to_d: 1 };
+        assert!(in_window(101, &wraps) && in_window(1231, &wraps) && !in_window(1230, &wraps) && !in_window(102, &wraps));
+        assert!(optimistic_ids(&cat, &on("not a date")).is_empty());
+    }
+
+    #[test]
+    fn an_own_wall_keeps_an_accolade_whose_input_never_answered_locked_with_its_goal_never_at_zero() {
+        let cat = catalog();
+        let base = WallInput {
+            member_number: Some(1000),
+            messages: 2000,
+            hours: 150.0,
+            today: "2026-11-05".into(),
+            ..Default::default()
+        };
+        let own = |input: &WallInput, unknown: &[StatKind]| wall_core(&cat, input, unknown, WallMode::Own);
+        let find = |w: &AccoladeWall, id: &str| w.items.iter().find(|m| m.id == id).cloned();
+        // Drops unknown (no drops token for this account): Drop Goblin is listed locked with its goal.
+        let w = own(&base, &[StatKind::Drops]);
+        let goblin = find(&w, "dropgoblin").expect("listed, not omitted");
+        assert_eq!((goblin.earned, goblin.hint.as_str()), (false, "Claim 25 drops"));
+        // Triple Threat reads Drops from that state: messages and hours are past their lines and it is
+        // still locked (a mystery with its cryptic hint) until the drops read answers.
+        let triple = find(&w, "triple").expect("a locked secret is listed on an own wall");
+        assert_eq!((triple.earned, triple.label.as_str(), triple.icon.as_str()), (false, "???", "lock"));
+        assert_eq!(triple.hint, "Talk, watch, and collect until all three run deep.");
+        // Saved: lit, and it says its goal rather than a number it cannot know.
+        let saved = WallInput { saved: vec!["dropgoblin".into(), "triple".into()], ..base.clone() };
+        let w = own(&saved, &[StatKind::Drops]);
+        assert_eq!(find(&w, "dropgoblin").map(|m| (m.earned, m.hint)), Some((true, "Claim 25 drops".to_string())));
+        assert_eq!(find(&w, "triple").map(|m| (m.earned, m.label)), Some((true, "Triple Threat".to_string())));
+        // The drops read answered with 30: Triple Threat is earned from the numbers alone.
+        let known = WallInput { drops: 30, ..base.clone() };
+        assert_eq!(find(&own(&known, &[]), "triple").map(|m| m.earned), Some(true));
+        assert_eq!(find(&own(&known, &[]), "dropgoblin").map(|m| m.hint), Some("Drops claimed: 30 / 25".to_string()));
+        // Years and cosmetics work the same way on an own wall: listed locked with the goal.
+        let w = own(&base, &[StatKind::Years, StatKind::Cosmetics]);
+        assert_eq!(find(&w, "veteran").map(|m| (m.earned, m.hint)), Some((false, "Reach 5 years on Twitch".to_string())));
+        assert_eq!(find(&w, "collector").map(|m| m.hint), Some("Collect 5 cosmetics".to_string()));
+        // Completionist cannot light while a base accolade's input is unknown.
+        let everything = WallInput { saved: vec!["dropgoblin".into()], ..base.clone() };
+        assert_eq!(find(&own(&everything, &[StatKind::Years]), "completionist").map(|m| m.earned), Some(false));
+    }
+
+    #[test]
+    fn the_wall_input_reads_the_same_numbers_the_sheet_does() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        registry_fixture();
+        let (input, unknown) = wall_input(&facts(), &clock(2026, 10, 17), Some(0), Some(0));
+        assert_eq!((input.messages, input.streams, input.cosmetics, input.years), (10_100, 300, 7, 12));
+        assert_eq!(input.hours, 1200.4 + 99.7);
+        assert_eq!((input.member_number, input.today.as_str()), (Some(7), "2026-10-17"));
+        assert_eq!(input.created_at.as_deref(), Some("2014-03-20T00:00:00Z"));
+        assert!(unknown.is_empty());
+        // None means the read never answered, and says so.
+        let (input, unknown) = wall_input(&facts(), &clock(2026, 10, 17), None, Some(5_000));
+        assert_eq!((input.drops, input.points), (0, 5_000));
+        assert_eq!(unknown, vec![StatKind::Drops]);
+        let mut down = facts();
+        down.ivr = Part::Failed;
+        down.seventv = Part::Failed;
+        assert_eq!(wall_input(&down, &clock(2026, 10, 17), Some(0), Some(0)).1, vec![StatKind::Years, StatKind::Cosmetics]);
+        // The creation date is read in the viewer's zone.
+        let mut late = facts();
+        late.ivr = Part::Answered(Some(ivr("2014-03-20T01:00:00Z")));
+        let west = Clock { now: Utc.with_ymd_and_hms(2026, 10, 17, 12, 0, 0).unwrap(), zone: Zone::Fixed(FixedOffset::east_opt(-8 * 3600).unwrap()) };
+        assert_eq!(wall_input(&late, &west, Some(0), Some(0)).0.created_at.as_deref(), Some("2014-03-19T00:00:00Z"));
     }
 }

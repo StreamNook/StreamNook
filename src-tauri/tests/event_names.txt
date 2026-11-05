@@ -79,6 +79,7 @@ multichat-popout-closed
 my-clips://changed
 new-favorite-drops
 notice-action-pending
+own-accolades-changed
 performance-state
 platform-account-changed
 platform-session-expired
