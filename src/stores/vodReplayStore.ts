@@ -86,6 +86,22 @@ let inFlight = false;
 // mounted (`registerReplayClock`); otherwise the desktop player's controls.
 let timeSource: (() => number | null) | null = null;
 let playerClock: (() => number | null) | null = null;
+// The VOD channel's badge set, indexed once per session before its first rows
+// show: replay never joins the room, which is what loads it for live chat, so
+// without it sub and bits badges draw Twitch's default art.
+let badgeRoom: string | null = null;
+let badgeReady: Promise<void> = Promise.resolve();
+
+function channelBadgesFor(rows: BackendChatMessage[]): Promise<void> {
+  const room = rows.find((r) => r.tags?.['room-id'])?.tags['room-id'];
+  if (room && room !== badgeRoom) {
+    badgeRoom = room;
+    badgeReady = import('../services/twitchBadges')
+      .then(({ initializeBadgeCache }) => initializeBadgeCache(room))
+      .catch((e) => Logger.warn('[VodReplay] channel badges did not load:', e));
+  }
+  return badgeReady;
+}
 
 /** Rust calls run one after another, so a stop can never land after the begin
  *  that followed it. */
@@ -138,7 +154,9 @@ function tick(): void {
   const mine = token;
   inFlight = true;
   call<ReplayStep>('vod_replay_tick', { videoId: session.id, position: t })
-    .then((step) => {
+    .then(async (step) => {
+      if (mine !== token) return;
+      await channelBadgesFor(step.rows);
       if (mine !== token) return;
       apply(step);
       // A seek outside what is fetched: report again shortly, which fetches
@@ -173,6 +191,8 @@ function resetLocal(): void {
   visible = [];
   inFlight = false;
   timeSource = null;
+  badgeRoom = null;
+  badgeReady = Promise.resolve();
 }
 
 /** The source-VOD window to replay for a clip. Both the main player and the clip modal

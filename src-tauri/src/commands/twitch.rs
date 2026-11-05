@@ -2370,7 +2370,13 @@ struct VcData {
 }
 #[derive(serde::Deserialize)]
 struct VcVideo {
+    /// The channel the VOD belongs to; its id is the replayed rows' room.
+    creator: Option<VcCreator>,
     comments: Option<VcComments>,
+}
+#[derive(serde::Deserialize)]
+struct VcCreator {
+    id: Option<String>,
 }
 #[derive(serde::Deserialize)]
 struct VcComments {
@@ -2439,8 +2445,10 @@ fn sanitize_tag_value(s: &str) -> String {
 /// the native `emotes` tag the live path consumes. The real playback offset
 /// rides along in a synthetic `vod-offset` tag so it travels *with* the message
 /// through the parser (parse_privmsg copies all tags), keeping offset↔message
-/// alignment bulletproof regardless of batch ordering.
-fn build_vod_comment_line(node: &VcNode, channel_lc: &str) -> String {
+/// alignment bulletproof regardless of batch ordering. `room_id` is the VOD
+/// channel's id: as on a live row, it picks the channel's own badge art
+/// (subscriber, bits) over Twitch's default set.
+fn build_vod_comment_line(node: &VcNode, channel_lc: &str, room_id: &str) -> String {
     let (login, display_name, user_id) = match &node.commenter {
         Some(c) => (
             c.login.clone().unwrap_or_else(|| "unknown".to_string()),
@@ -2510,6 +2518,9 @@ fn build_vod_comment_line(node: &VcNode, channel_lc: &str) -> String {
         sanitize_tag_value(&display_name),
         ts_ms
     );
+    if !room_id.is_empty() {
+        tags.push_str(&format!(";room-id={}", sanitize_tag_value(room_id)));
+    }
     if let Some(color) = &user_color {
         if !color.is_empty() {
             tags.push_str(&format!(";color={}", sanitize_tag_value(color)));
@@ -2568,12 +2579,13 @@ pub(crate) async fn vod_comments_at(
         return Err(format!("HTTP {}", status.as_u16()));
     }
     let parsed: VcResponse = resp.json().await.map_err(|_| "PARSE".to_string())?;
-    let edges = parsed
-        .data
-        .and_then(|d| d.video)
-        .and_then(|v| v.comments)
-        .map(|c| c.edges)
+    let video = parsed.data.and_then(|d| d.video);
+    let room_id = video
+        .as_ref()
+        .and_then(|v| v.creator.as_ref())
+        .and_then(|c| c.id.clone())
         .unwrap_or_default();
+    let edges = video.and_then(|v| v.comments).map(|c| c.edges).unwrap_or_default();
 
     let chan = channel_login.to_lowercase();
 
@@ -2585,10 +2597,18 @@ pub(crate) async fn vod_comments_at(
         crate::services::irc_service::IrcService::ensure_channel_emotes_for_parse(&chan, emote_service)
         .await;
     }
+    // The channel's own badge set, read once, before the rows are drawn: the
+    // phones' rows take their art from it, and without it a sub badge is
+    // Twitch's default one. Joining the room is what reads it for live chat.
+    if !room_id.is_empty() && !crate::services::chat_row_view::has_room_badges(&room_id) {
+        if let Err(e) = crate::commands::badges::fetch_channel_badges(room_id.clone()).await {
+            log::debug!("[VodReplay] channel badges for {room_id} unavailable: {e}");
+        }
+    }
 
     let raws: Vec<String> = edges
         .iter()
-        .map(|e| build_vod_comment_line(&e.node, &chan))
+        .map(|e| build_vod_comment_line(&e.node, &chan, &room_id))
         .collect();
 
     // Same parse path as IVR historical chat, so rendering is byte-identical.
@@ -2915,6 +2935,37 @@ fn add_broadcaster(chatters: &mut serde_json::Value, id: &str, login: &str, disp
         .sum();
     let total = obj.get("total").and_then(|t| t.as_u64()).unwrap_or(0) as usize;
     obj.insert("total".into(), serde_json::json!(total.max(listed)));
+}
+
+#[cfg(test)]
+mod vod_comment_tests {
+    use super::{build_vod_comment_line, VcResponse};
+
+    /// The shape Twitch answers `VideoCommentsByOffsetOrCursor` with (trimmed).
+    const PAGE: &str = r##"{"data":{"video":{"id":"2919544082",
+        "creator":{"id":"26490481","channel":{"id":"26490481"}},
+        "comments":{"edges":[{"node":{"id":"c1","contentOffsetSeconds":61,
+            "createdAt":"2026-11-04T20:00:00Z",
+            "commenter":{"id":"9","login":"viewer","displayName":"Viewer"},
+            "message":{"userColor":"#FF0000","userBadges":[{"setID":"subscriber","version":"12"}],
+                "fragments":[{"text":"hello","emote":null}]}}}]}}}}"##;
+
+    #[test]
+    fn a_replayed_row_carries_the_vod_channel_as_its_room() {
+        let video = serde_json::from_str::<VcResponse>(PAGE).unwrap().data.unwrap().video.unwrap();
+        let room = video.creator.unwrap().id.unwrap();
+        let node = &video.comments.unwrap().edges[0].node;
+        let line = build_vod_comment_line(node, "summit1g", &room);
+        assert!(line.contains(";room-id=26490481;"), "{line}");
+        assert!(line.contains("badges=subscriber/12"), "{line}");
+    }
+
+    #[test]
+    fn an_unknown_channel_adds_no_room() {
+        let video = serde_json::from_str::<VcResponse>(PAGE).unwrap().data.unwrap().video.unwrap();
+        let node = &video.comments.unwrap().edges[0].node;
+        assert!(!build_vod_comment_line(node, "summit1g", "").contains("room-id"));
+    }
 }
 
 #[cfg(test)]
