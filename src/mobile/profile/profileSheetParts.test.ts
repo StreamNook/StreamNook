@@ -81,7 +81,7 @@ describe('frameInsets', () => {
 
 describe('panelFor', () => {
   it('an accolade: the label without soft hyphens, and its hint', () => {
-    expect(panelFor('accolade', { label: 'Com­ple­tion­ist', hint: 'Earn every accolade' })).toEqual({
+    expect(panelFor('accolade', { label: 'Com\u00adple\u00adtion\u00adist', hint: 'Earn every accolade' })).toEqual({
       title: 'Completionist',
       detail: 'Earn every accolade',
     });

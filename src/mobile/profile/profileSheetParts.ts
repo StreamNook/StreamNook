@@ -72,7 +72,7 @@ export interface Panel {
   detail: string;
 }
 
-const SOFT_HYPHEN = /­/g;
+const SOFT_HYPHEN = /\u00ad/g;
 
 export function panelFor(kind: 'accolade', item: Pick<AccoladeMedalView, 'label' | 'hint'>): Panel;
 export function panelFor(kind: 'emote', item: Pick<TopEmoteView, 'name' | 'count_text' | 'provider'>): Panel;

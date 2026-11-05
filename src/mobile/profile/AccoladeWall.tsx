@@ -36,7 +36,7 @@ export const AccoladeWall: React.FC<{ wall: AccoladeWallView; accent?: string }>
             const Icon = ACCOLADE_ICONS[a.icon] ?? Star;
             const mystery = a.secret && !a.earned;
             const label = mystery ? '???' : a.label;
-            const plain = label.replace(/­/g, '');
+            const plain = label.replace(/\u00ad/g, '');
             return (
               <button
                 key={a.id}
