@@ -907,7 +907,9 @@ async fn fetch_and_build(req: SheetRequest, key: &str) -> Built {
             Some(facts)
         }
         MemberRead::NotMember => None,
-        MemberRead::Unknown => cached.as_ref().and_then(|c| c.member.clone()),
+        // Fails closed: a cached member half was shaped by what they hid then, so
+        // it never stands in when their preferences did not answer.
+        MemberRead::Unknown => None,
     };
     let soft = merge_soft(Soft { member, loadout, bttv }, cached.as_ref());
     let (paint_def, paint) = worn_paint(user_id, inventory.as_ref());
@@ -1334,6 +1336,10 @@ pub async fn own_identity(user_id: &str, login: &str, display_name: &str) -> Own
     if let Ok(mut last) = LAST_OWN.lock() {
         *last = Some((user_id.to_string(), login.to_string(), display_name.to_string()));
     }
+    // The stamp before any read starts, checked again before the file is written: a
+    // save that lands while this build runs moves it, so this build never writes
+    // over the header that save rebuilds.
+    let loadout_stamp = crate::commands::identity::loadout_stamp(user_id);
     let (badges, inventory, pictures, look, banner_url, colors, loadout, bttv) = tokio::join!(
         crate::commands::badge_service::get_user_badges_with_earned_unified(
             user_id.to_string(),
@@ -1349,8 +1355,6 @@ pub async fn own_identity(user_id: &str, login: &str, display_name: &str) -> Own
         loadout_part(user_id),
         bttv_part(user_id),
     );
-    // The stamp of the loadout this build read, checked again before the file is written.
-    let loadout_stamp = crate::commands::identity::loadout_stamp(user_id);
     let badges = badges.ok();
     // The card's name color before Edit profile has read it: what chat shows.
     let name_color = colors
