@@ -2018,6 +2018,7 @@ impl IrcService {
             consumers.clear();
             if claim {
                 consumers.insert(channel.to_lowercase(), HashSet::from([window.to_string()]));
+                crate::services::chat_recovery::note(channel, window, true);
             }
         }
 
@@ -3664,6 +3665,9 @@ impl IrcService {
         // which is what keeps claims from inflating: the set can never hold a
         // window twice, so releases always balance.
         let newly_claimed = claim_channel(&mut *get_channel_consumers().lock().await, &key, window);
+        // Kept even when the JOIN below fails: a rebuild in flight clears this
+        // claim with the dead connection and joins the room again from the note.
+        crate::services::chat_recovery::note(&key, window, true);
 
         if !newly_claimed {
             debug!(
@@ -3803,6 +3807,7 @@ impl IrcService {
         // subscribed to a channel nobody is JOINed to. Only the last
         // consumer's leave actually PARTs.
         let remaining = release_channel_claim(&mut *get_channel_consumers().lock().await, &key, window);
+        crate::services::chat_recovery::note(&key, window, false);
 
         if remaining > 0 {
             debug!(
