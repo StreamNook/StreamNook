@@ -266,4 +266,48 @@ describe('several Twitch chats joining at once', () => {
     await withClock(second);
     expect(calls('join_chat_channel').map((c) => c[1])).toEqual([{ channel: 'b' }]);
   });
+
+  it('a rebuild Rust declines at once never ends the wait for one still running', async () => {
+    let finishRebuild: (port: number | null) => void = () => {};
+    let asked = 0;
+    answers.chat_bridge_port = () => 4242;
+    answers.start_chat = () => 4242;
+    answers.join_chat_channel = () => undefined;
+    answers.rebuild_chat = () => {
+      asked += 1;
+      return asked === 1 ? new Promise<number | null>((r) => (finishRebuild = r)) : null;
+    };
+    const { acquireChannel, rebuildTwitchChat } = await import('./chatConnectionStore');
+
+    await withClock(acquireChannel('a', '1', 'twitch'));
+    const running = rebuildTwitchChat('watchdog');
+    expect(await withClock(rebuildTwitchChat('return'))).toBe(false);
+    const second = acquireChannel('b', '2', 'twitch');
+    await settle();
+    expect(calls('join_chat_channel')).toHaveLength(0);
+
+    finishRebuild(null);
+    await withClock(running);
+    await withClock(second);
+    expect(calls('join_chat_channel').map((c) => c[1])).toEqual([{ channel: 'b' }]);
+  });
+
+  it('a join waits out a first connect slower than one short round', async () => {
+    let finishStart: (port: number) => void = () => {};
+    answers.chat_bridge_port = () => 4242;
+    answers.start_chat = () => new Promise<number>((r) => (finishStart = r));
+    answers.join_chat_channel = () => undefined;
+    const { acquireChannel } = await import('./chatConnectionStore');
+
+    const first = acquireChannel('a', '1', 'twitch');
+    const second = acquireChannel('b', '2', 'twitch');
+    await settle();
+    await vi.advanceTimersByTimeAsync(40_000);
+    expect(calls('join_chat_channel')).toHaveLength(0);
+
+    finishStart(4242);
+    await withClock(first);
+    await withClock(second);
+    expect(calls('join_chat_channel').map((c) => c[1])).toEqual([{ channel: 'b' }]);
+  });
 });

@@ -199,7 +199,9 @@ describe('the return from the background', () => {
       invokeMock.mockResolvedValue({ tabs: [], active_channel: null, mixed_platforms: false, revision: 24, acquire: [tab('q', 'twitch', 'q', '6')], release: [] });
       await useChatTabsStore.getState().connect();
       finishA();
-      for (let i = 0; i < 5; i += 1) await Promise.resolve();
+      // A full task turn, not a counted few microtasks: a wait that does not
+      // loop would have settled by now.
+      await new Promise((r) => setTimeout(r, 0));
       expect(settled).toBe(false);
       finishB();
       await waiting;

@@ -1845,21 +1845,24 @@ export async function reconnectAllChannels(): Promise<void> {
  */
 export async function rebuildTwitchChat(reason: string, force = false): Promise<boolean> {
   const run = cycleTwitchChat(reason, force);
-  rebuildInFlight = run;
+  rebuildsInFlight.add(run);
   try {
     return await run;
   } finally {
-    if (rebuildInFlight === run) rebuildInFlight = null;
+    rebuildsInFlight.delete(run);
   }
 }
 
-/** A rebuild from `rebuild_chat` to its reconnect, while one runs: a Twitch
- *  join waits for it (see acquireChannel). */
-let rebuildInFlight: Promise<boolean> | null = null;
+/** Every rebuild from `rebuild_chat` to its reconnect, while it runs: a Twitch
+ *  join waits for them (see acquireChannel). Each is tracked on its own, so a
+ *  second ask that Rust declines at once (the stale watchdog and the return
+ *  both asking) never ends the wait for the one still running. */
+const rebuildsInFlight = new Set<Promise<boolean>>();
 
 /** The longest one round of that wait lasts, so a wedged connect or rebuild
- *  never holds a join for good. */
-const JOIN_WAIT_ROUND_MS = 10_000;
+ *  never holds a join for good. As long as the connect's own deadman, so the
+ *  wait never gives up on a connect that is slow but still going. */
+const JOIN_WAIT_ROUND_MS = BRIDGE_CONNECT_TIMEOUT_MS;
 
 async function cycleTwitchChat(reason: string, force: boolean): Promise<boolean> {
   const twitchSlices = () =>
@@ -3743,9 +3746,9 @@ export async function acquireChannel(
     // side fresh and sweep the window's claims, so a join that lands first is
     // swept with them. Join after them, whatever they did, unless this room
     // was let go meanwhile.
-    for (let waited = 0; (wsConnectPromise || rebuildInFlight) && waited < 3; waited += 1) {
+    for (let waited = 0; (wsConnectPromise || rebuildsInFlight.size > 0) && waited < 3; waited += 1) {
       await Promise.race([
-        Promise.allSettled([wsConnectPromise, rebuildInFlight]),
+        Promise.allSettled([wsConnectPromise, ...rebuildsInFlight]),
         new Promise<void>((done) => setTimeout(done, JOIN_WAIT_ROUND_MS)),
       ]);
     }

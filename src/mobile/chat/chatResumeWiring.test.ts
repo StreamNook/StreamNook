@@ -19,6 +19,9 @@ describe('chat return wiring', () => {
   });
 
   it('the Chats screen joins only while the page is seen', () => {
-    expect(read('../screens/ChatsScreen.tsx')).toContain("connection !== 'connected' && document.visibilityState === 'visible'");
+    const src = read('../screens/ChatsScreen.tsx');
+    expect(src).toContain("shown && pageVisible && connection !== 'connected'");
+    // Visibility is a dependency, so a page that opened hidden joins once seen.
+    expect(src).toContain('[shown, pageVisible, connection, connect]');
   });
 });

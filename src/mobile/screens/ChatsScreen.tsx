@@ -29,6 +29,7 @@ import { groupFor, isTogether } from '../../utils/sharedViewers';
 import { TogetherSheet } from '../player/TogetherSheet';
 import { formatViewerCount } from '../../utils/streamStats';
 import { tabIsStream } from '../watch/closeVideoRule';
+import { usePageState } from '../ui/usePageState';
 
 /** The Chats header's room strip: 40 px capsules with 7 px of air above and
  *  below, so they sit clear of the separator under them. */
@@ -105,10 +106,12 @@ export const ChatsScreen: React.FC<{ shown?: boolean; idle?: boolean }> = ({ sho
 
   // The first look joins the saved chats. Only while the page is seen: a set
   // parked in the background comes back with the return (lifecycle's
-  // chatResume), never here behind the viewer's back.
+  // chatResume), never here behind the viewer's back. A page that opened
+  // hidden on this tab joins the moment it is seen.
+  const pageVisible = usePageState().visible;
   useEffect(() => {
-    if (shown && connection !== 'connected' && document.visibilityState === 'visible') void connect();
-  }, [shown, connection, connect]);
+    if (shown && pageVisible && connection !== 'connected') void connect();
+  }, [shown, pageVisible, connection, connect]);
 
   useReadingAwake(shown && keepOn && tabs.length > 0, idleSecs);
 

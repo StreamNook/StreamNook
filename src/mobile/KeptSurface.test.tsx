@@ -74,10 +74,11 @@ function rooms(...channels: string[]) {
 /** The surface's own tag: its attributes and class tokens. */
 function surface(shown: boolean) {
   // Only while rendering: the sheets name the page body as their portal target
-  // (the portal itself renders nothing here, see above).
+  // (the portal itself renders nothing here, see above), and the screen reads
+  // whether the page is seen.
   const g = globalThis as Record<string, unknown>;
   const hadDocument = 'document' in g;
-  if (!hadDocument) g.document = { body: {} };
+  if (!hadDocument) g.document = { body: {}, documentElement: { dataset: {} }, visibilityState: 'visible' };
   let html: string;
   try {
     html = renderToStaticMarkup(
