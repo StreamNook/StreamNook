@@ -320,6 +320,10 @@ export interface AppState {
   offlineRoomLive: TwitchStream | null;
   /** The room is starting its now-live stream. */
   offlineRoomJoining: boolean;
+  /** Counts the viewer's opens (a stream, its offline room, a VOD or clip),
+   *  so the phone puts that chat in front even when the channel did not
+   *  change. A restart or a quality change is not an open. */
+  streamOpenSeq: number;
   /** Whether the current live broadcast can be rewound (the channel keeps
    *  VODs). null while unknown or not live; Rust answers once per live start
    *  from a cached lookup, so the player can say "VODs are off" up front. */
@@ -1229,7 +1233,7 @@ async function startProviderStream(
   const superseded = () => seq !== providerStartSeq;
   const loadTicket = ++startLoadSeq;
   showSwitchAtOnce(provider, channel, seed, set, get);
-  set({ isLoading: true });
+  set({ isLoading: true, streamOpenSeq: get().streamOpenSeq + 1 });
   trackActivity(`Started watching: ${key}`);
 
   // Tear down the previous provider stream's chat. Drops and channel points
@@ -1578,6 +1582,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   offlineRoom: null,
   offlineRoomLive: null,
   offlineRoomJoining: false,
+  streamOpenSeq: 0,
   liveRewindAvailable: null,
   liveRewindAnchor: null,
   liveLeftOffSecs: null,
@@ -2304,6 +2309,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         currentStream: parsedInfo,
         currentMediaType: type,
         originalMediaUrl: url,
+        streamOpenSeq: get().streamOpenSeq + 1,
         vodPlayback:
           type === 'video' && result.vod
             ? info.start_at != null
@@ -2994,6 +3000,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     // Phone: the new channel's header now, the old video gone now.
     const loadTicket = ++startLoadSeq;
     showSwitchAtOnce('twitch', channel, providedStreamInfo, set, get);
+    set({ streamOpenSeq: get().streamOpenSeq + 1 });
 
     // Leaving a provider stream for a Twitch one: drop its chat + offline poll
     // before the Twitch session sets up its own.
@@ -3172,6 +3179,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         // chatOnly: live, but playback failed. The room offers it again.
         offlineRoomLive: opts?.chatOnly ? (room?.live ?? null) : null,
         offlineRoomJoining: false,
+        streamOpenSeq: get().streamOpenSeq + 1,
       });
 
       // Warm up the chat bridge. claim:false for the same reason as the live
@@ -3219,6 +3227,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         // The overlay names what is playing; the login (and so the chat and the
         // go-live watch) stays the room's.
         currentStream: cs ? { ...cs, title: vod.title, game_name: vod.category || cs.game_name, started_at: vod.created_at } : cs,
+        streamOpenSeq: get().streamOpenSeq + 1,
       });
       // The VOD's own chat (synced replay) by default, with the toggle back to
       // the channel's live chat.

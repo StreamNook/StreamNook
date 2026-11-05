@@ -107,13 +107,16 @@ interface ChatTabsState {
   /** Bumped per channel to force a chat reload. */
   reloadNonce: Record<string, number>;
 
-  /** Point the stream-following tab at a new channel. */
+  /** Point the stream-following tab at a new channel. `focus`: the viewer
+   *  opened this stream, so its tab goes on screen even when it already
+   *  showed it (Rust `open_stream`). */
   syncStreamTab: (
     channel: string | null,
     channelId: string | null,
     label: string,
     avatar?: string | null,
     provider?: ProviderId,
+    focus?: boolean,
   ) => void;
   addTab: (
     channel: string,
@@ -283,9 +286,10 @@ export const useChatTabsStore = create<ChatTabsState>((set, get) => {
         });
     },
 
-    syncStreamTab: (channel, channelId, label, avatar, provider) =>
+    syncStreamTab: (channel, channelId, label, avatar, provider, focus) =>
       change('chat_tabs_sync_stream', {
         room: channel ? room(channel, channelId, label, avatar, provider) : null,
+        ...(focus && channel ? { focus: true } : {}),
       }),
 
     addTab: (channel, channelId, label, avatar, provider) =>

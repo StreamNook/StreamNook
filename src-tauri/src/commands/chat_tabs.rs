@@ -113,10 +113,19 @@ pub fn chat_tabs_get(app: AppHandle) -> ChatTabsChange {
 }
 
 /// Points the stream tab at the watched stream, or drops it with `None` when
-/// the player closed (a kept one stays as one of your chats).
+/// the player closed (a kept one stays as one of your chats). `focus`: the
+/// viewer opened this stream (`ChatTabs::open_stream`), so its tab goes on
+/// screen even when it already showed it.
 #[tauri::command]
-pub fn chat_tabs_sync_stream(app: AppHandle, room: Option<ChatRoomInput>) -> ChatTabsChange {
-    let (change, ()) = chat_tabs::apply_settled(|t| (t.sync_stream(room.as_ref()), ()));
+pub fn chat_tabs_sync_stream(app: AppHandle, room: Option<ChatRoomInput>, focus: Option<bool>) -> ChatTabsChange {
+    let focus = focus.unwrap_or(false);
+    let (change, ()) = chat_tabs::apply_settled(|t| {
+        let fx = match room.as_ref() {
+            Some(r) if focus => t.open_stream(r),
+            r => t.sync_stream(r),
+        };
+        (fx, ())
+    });
     settle(&app, &change);
     change
 }

@@ -7,7 +7,7 @@
 // chat pane, which only exists while a pane is on screen; with the Chats screen
 // there can be two panes or none, and the player closing must still retire the
 // stream tab (a kept one stays as one of your chats).
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../../stores/AppStore';
 import { useMobileNavStore } from '../navStore';
@@ -27,15 +27,22 @@ export function useChatsLifecycle(): void {
 
   // Keep the stream-following tab pointed at whatever is playing, on the
   // platform it plays on: a Kick stream's room is `kick:slug`, never a Twitch
-  // room that happens to share the name.
+  // room that happens to share the name. Each open (a tap, a VOD, the offline
+  // room, the same channel again) puts its chat in front; a name or picture
+  // arriving later only refreshes the tab.
   const streamProv = streamProvider(currentStream);
+  const openSeq = useAppStore((s) => s.streamOpenSeq);
+  const focusedSeq = useRef(openSeq);
   useEffect(() => {
+    const opened = openSeq !== focusedSeq.current;
+    focusedSeq.current = openSeq;
     syncStreamTab(
       currentStream?.user_login ?? null,
       currentStream?.user_id ?? null,
       currentStream?.user_name || currentStream?.user_login || '',
       currentStream?.profile_image_url ?? null,
       streamProv,
+      opened,
     );
     // userId: another account's chats replace the list (and its stream tab),
     // so the stream tab is pointed again after the load above.
@@ -47,6 +54,7 @@ export function useChatsLifecycle(): void {
     streamProv,
     syncStreamTab,
     userId,
+    openSeq,
   ]);
 
   // The room on screen, for the mentions hub: mentions there are read as they

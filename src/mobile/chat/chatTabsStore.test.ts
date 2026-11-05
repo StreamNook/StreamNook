@@ -69,6 +69,17 @@ describe('chat tabs mirror Rust', () => {
     expect(invokeMock).toHaveBeenCalledWith('chat_tabs_sync_stream', { room: null });
   });
 
+  it('asks Rust to put a stream the viewer opened in front, and only then', async () => {
+    useChatTabsStore.getState().syncStreamTab('xqc', '71092938', 'xQc', null, 'twitch', true);
+    await vi.waitFor(() => expect(invokeMock).toHaveBeenCalledTimes(1));
+    expect(invokeMock.mock.calls[0][1]).toMatchObject({ room: { channel: 'xqc' }, focus: true });
+    useChatTabsStore.getState().syncStreamTab('xqc', '71092938', 'xQc', 'face.png', 'twitch');
+    useChatTabsStore.getState().syncStreamTab(null, null, '', null, undefined, true);
+    await vi.waitFor(() => expect(invokeMock).toHaveBeenCalledTimes(3));
+    expect(invokeMock.mock.calls[1][1]).not.toHaveProperty('focus');
+    expect(invokeMock.mock.calls[2][1]).toEqual({ room: null });
+  });
+
   it('never paints an older answer over a newer one', async () => {
     const a = tab('a', 'twitch', 'a', '1');
     const b = tab('b', 'twitch', 'b', '2');

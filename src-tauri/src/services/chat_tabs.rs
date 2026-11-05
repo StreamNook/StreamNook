@@ -389,6 +389,19 @@ impl ChatTabs {
         fx
     }
 
+    /// A stream the viewer opened (a tap, a raid followed, a VOD or the offline
+    /// room of the channel already in the tab): `sync_stream`, and its tab goes
+    /// on screen even when the tab already showed that stream. A plain
+    /// `sync_stream` of the same stream (a name or picture arriving) leaves the
+    /// room on screen alone.
+    pub fn open_stream(&mut self, room: &ChatRoomInput) -> Effects {
+        let fx = self.sync_stream(Some(room));
+        if let Some(tab) = self.tabs.iter().find(|t| t.pinned_to_stream) {
+            self.active = Some(tab.channel.clone());
+        }
+        fx
+    }
+
     /// Opens a room as one of your chats and puts it on screen, joining your
     /// restored chats along with it. A room already open is only put on screen
     /// (and kept, when it is the stream's). Answers whether the tab knows only
@@ -728,6 +741,21 @@ mod tests {
         assert_eq!(names(&fx.release), ["twitch:s"]);
         assert_eq!(keys(&t), ["b"]);
         assert!(t.tabs[0].pinned_to_stream);
+    }
+
+    #[test]
+    fn opening_the_stream_already_in_the_tab_brings_it_to_the_front() {
+        let mut t = ChatTabs::default();
+        t.sync_stream(Some(&room("twitch", "s", Some("1"), "S")));
+        t.add(&room("twitch", "b", Some("2"), "B"));
+        assert_eq!(t.active.as_deref(), Some("b"));
+        let fx = t.open_stream(&room("twitch", "s", Some("1"), "S"));
+        assert!(fx.acquire.is_empty() && fx.release.is_empty(), "the same room stays joined");
+        assert_eq!(t.active.as_deref(), Some("s"));
+        assert!(t.tab("b").is_some(), "the room picked beside it stays open");
+        let fx = t.open_stream(&room("twitch", "n", Some("3"), "N"));
+        assert_eq!(names(&fx.acquire), ["twitch:n"]);
+        assert_eq!(t.active.as_deref(), Some("n"), "a new stream opened is in front too");
     }
 
     #[test]
