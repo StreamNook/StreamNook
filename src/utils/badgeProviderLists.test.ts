@@ -31,6 +31,7 @@ describe('badge provider lists', () => {
   it('reads the new providers from Rust', () => {
     expect(keys).toContain('limerino');
     expect(keys).toContain('jilchat');
+    expect(keys).toContain('bchat');
   });
 
   for (const file of LISTS) {

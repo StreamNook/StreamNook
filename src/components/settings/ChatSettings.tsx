@@ -59,6 +59,7 @@ import chattyLogo from '../../assets/chatty-logo.png';
 import dankchatLogo from '../../assets/dankchat-logo.png';
 import limerinoLogo from '../../assets/limerino-logo.png';
 import jilchatLogo from '../../assets/jilchat-logo.png';
+import bchatLogo from '../../assets/bchat-logo.png';
 import { badgeFoldLimit } from '../../utils/badgeFold';
 
 /** Platforms that can join a combined feed. Derived from the chat-capability
@@ -402,6 +403,7 @@ const BADGE_PROVIDERS: { id: string; label: string }[] = [
   { id: 'moltorino', label: 'Moltorino' },
   { id: 'limerino', label: 'Limerino' },
   { id: 'jilchat', label: 'JilChat' },
+  { id: 'bchat', label: 'bChat' },
   { id: 'chatsen', label: 'Chatsen' },
   { id: 'chatty', label: 'Chatty' },
   { id: 'dankchat', label: 'DankChat' },
@@ -416,6 +418,7 @@ const SERVICE_ICONS: Record<string, string> = {
   moltorino: moltorinoLogo,
   limerino: limerinoLogo,
   jilchat: jilchatLogo,
+  bchat: bchatLogo,
   chatsen: chatsenLogo,
   chatty: chattyLogo,
   dankchat: dankchatLogo,

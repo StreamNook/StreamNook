@@ -168,6 +168,7 @@ pub enum BadgeProvider {
     Moltorino,
     Limerino,
     JilChat,
+    BChat,
 }
 
 impl BadgeProvider {
@@ -198,6 +199,7 @@ impl BadgeProvider {
             BadgeProvider::Moltorino => "moltorino",
             BadgeProvider::Limerino => "limerino",
             BadgeProvider::JilChat => "jilchat",
+            BadgeProvider::BChat => "bchat",
         }
     }
 }
@@ -206,8 +208,8 @@ impl BadgeProvider {
 /// the order the chat index below walks its feeds in. A member's loadout
 /// chooses which badges show, never where they sit, so every chatter's badges
 /// line up alike. The site's `PROVIDER_ORDER` is the same list.
-pub const THIRD_PARTY_ORDER: [&str; 10] =
-    ["ffz", "bttv", "chatterino", "homies", "moltorino", "limerino", "jilchat", "chatsen", "chatty", "dankchat"];
+pub const THIRD_PARTY_ORDER: [&str; 11] =
+    ["ffz", "bttv", "chatterino", "homies", "moltorino", "limerino", "jilchat", "bchat", "chatsen", "chatty", "dankchat"];
 
 /// A provider key's place in `THIRD_PARTY_ORDER`; an unknown provider sorts
 /// last and is never dropped on that account.
@@ -255,14 +257,14 @@ fn ffz_wear_set(slot: Option<u32>) -> String {
 /// `HOMIES_CUSTOM_SET`). The chat index stores a provider's badges best-first,
 /// so the first of each category is the one the provider's own client draws.
 /// What a user owns is unchanged; this only limits what is drawn beside their
-/// name. A Limerino badge the user owns but did not pick (`LIMERINO_OWNED_SET`)
-/// is never worn.
+/// name. A Limerino or Moltorino badge the user owns but does not wear
+/// (`LIMERINO_OWNED_SET`, `MOLTORINO_OWNED_SET`) is never worn.
 pub fn worn_third_party(badges: &[Arc<UserBadge>]) -> Vec<UserBadge> {
     let mut seen: Vec<(&BadgeProvider, &str)> = Vec::new();
     badges
         .iter()
         .filter(|b| {
-            if b.badge_info.set_id == LIMERINO_OWNED_SET {
+            if b.badge_info.set_id == LIMERINO_OWNED_SET || b.badge_info.set_id == MOLTORINO_OWNED_SET {
                 return false;
             }
             let key = (&b.provider, b.badge_info.set_id.as_str());
@@ -791,31 +793,41 @@ struct DankChatBadge {
     users: Vec<String>,
 }
 
-// Moltorino (MoltoBenne's Chatterino7 fork): GET https://api.moltorino.com/badges.
-// One JSON snapshot of the whole supporter roster: `badges` is the tier list in
-// TIER ORDER (developer, top_donor, founder, supporter) and each tier carries its
-// holders. Moltorino's own client shows only the FIRST tier a user appears in,
-// so a user gets at most one badge here too. Feed facts, asset sizes and the
-// client rules are mirrored in the tier handling below.
+// Moltorino (MoltoBenne's Chatterino7 fork): GET https://api.moltorino.com/v2/badges.
+// One JSON snapshot of the whole supporter roster: `badges` is the tier list
+// (each with a `priority`, lower is better) and `users` maps a Twitch id to the
+// badges that holder owns, the one they picked to wear (`activeBadge`) and the
+// badge sources they hide. A holder wears their pick, or their best tier when
+// they made none, or nothing when they picked none or hide Moltorino (`m`).
+// The v1 `/badges` feed has no picks: it lists a holder under every tier they
+// own, `_alt` twins first, so it put the alt art on everyone.
 //
 // Every asset is an animated webp of 120-160 frames (1x 118 KB, 2x 353 KB,
 // 3x 962 KB), which is why the chat row renders third-party badges at 2x.
-const MOLTORINO_BADGES_URL: &str = "https://api.moltorino.com/badges";
-/// The roster changes a few times a week, not a few times an hour, and the
-/// feed is `no-store` with no ETag, so a refresh is always a full 20 KB read.
-/// Six hours is plenty for a badge nobody is waiting on.
-const MOLTORINO_REFRESH: Duration = Duration::from_secs(6 * 60 * 60);
+const MOLTORINO_BADGES_URL: &str = "https://api.moltorino.com/v2/badges";
+/// Picks change whenever a holder switches badge, and the feed carries an
+/// ETag (a 304 costs nothing) behind a 60-second CDN cache, so it rides the
+/// same 10-minute clock as Limerino.
+const MOLTORINO_REFRESH: Duration = Duration::from_secs(10 * 60);
 /// Bounds copied from Moltorino's own parser so a runaway feed cannot balloon
 /// the index: it caps at 64 tiers and 250,000 assignments.
 const MOLTORINO_MAX_TIERS: usize = 64;
 const MOLTORINO_MAX_ASSIGNMENTS: usize = 250_000;
+/// The wear category of the badge a Moltorino holder wears. Every other tier
+/// they own sits in `MOLTORINO_OWNED_SET`, which chat never wears.
+const MOLTORINO_SET: &str = "moltorino";
+const MOLTORINO_OWNED_SET: &str = "moltorino-owned";
+/// The code Moltorino's layout uses for its own badge in a holder's `hidden`.
+const MOLTORINO_LAYOUT_CODE: &str = "m";
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 struct MoltorinoBadgesResponse {
-    #[serde(default)]
-    version: Option<i64>,
+    #[serde(default, rename = "bundleVersion")]
+    bundle_version: Option<i64>,
     #[serde(default)]
     badges: Vec<MoltorinoBadge>,
+    #[serde(default)]
+    users: HashMap<String, MoltorinoHolder>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -825,10 +837,11 @@ struct MoltorinoBadge {
     tooltip: String,
     #[serde(default)]
     description: String,
+    /// Lower is better; a tier without one sorts after every ranked tier.
+    #[serde(default)]
+    priority: Option<i64>,
     #[serde(default)]
     images: MoltorinoImages,
-    #[serde(default)]
-    users: Vec<MoltorinoUser>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -841,9 +854,24 @@ struct MoltorinoImages {
     x3: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-struct MoltorinoUser {
-    id: String,
+#[derive(Debug, Clone, Default, Deserialize)]
+struct MoltorinoHolder {
+    /// Every tier they own.
+    #[serde(default)]
+    badges: Vec<String>,
+    /// `None`: no pick (wear the best tier). `Some(None)`: the feed's `null`,
+    /// wear none. `Some(Some(id))`: wear that tier.
+    #[serde(default, rename = "activeBadge", deserialize_with = "present_value")]
+    active_badge: Option<Option<String>>,
+    /// Moltorino layout codes of the badge sources they hide.
+    #[serde(default)]
+    hidden: Vec<String>,
+}
+
+/// Tells a present `null` (`Some(None)`) apart from an absent field (`None`,
+/// via `#[serde(default)]`).
+fn present_value<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Option<String>>, D::Error> {
+    Option::<String>::deserialize(d).map(Some)
 }
 
 impl MoltorinoBadge {
@@ -867,6 +895,21 @@ impl MoltorinoBadge {
         let x3 = if self.images.x3.trim().is_empty() { x2 } else { self.images.x3.trim() };
         Some((x1.to_string(), x2.to_string(), x3.to_string()))
     }
+
+    fn badge_info(&self, (x1, x2, x4): (String, String, String), set_id: &str) -> BadgeInfo {
+        BadgeInfo {
+            id: format!("moltorino-{}", self.id),
+            set_id: set_id.to_string(),
+            version: "1".to_string(),
+            title: self.title(),
+            description: self.description.clone(),
+            image_1x: x1,
+            image_2x: x2,
+            image_4x: x4,
+            click_action: None,
+            click_url: Some("https://moltorino.com/".to_string()),
+        }
+    }
 }
 
 /// Moltorino accepts only numeric Twitch ids of 1-32 digits; anything else in
@@ -876,31 +919,88 @@ fn is_valid_moltorino_user_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 32 && id.bytes().all(|b| b.is_ascii_digit())
 }
 
-/// One gallery tile per Moltorino tier, in tier order. Holder counts follow
-/// the same one-badge-per-user rule as the chat index, so a user listed under
-/// two tiers is counted (and flagged `owned`) only for the higher one.
+/// The tiers that can be drawn, best first (`priority`, feed order on ties),
+/// each with its (1x, 2x, 4x) art.
+fn moltorino_tiers(feed: &MoltorinoBadgesResponse) -> Vec<(&MoltorinoBadge, (String, String, String))> {
+    let mut tiers: Vec<_> = feed
+        .badges
+        .iter()
+        .take(MOLTORINO_MAX_TIERS)
+        .filter_map(|b| Some((b, b.image_urls()?)))
+        .collect();
+    tiers.sort_by_key(|(b, _)| b.priority.unwrap_or(i64::MAX));
+    tiers
+}
+
+/// One Moltorino holder: the positions in `tiers` of what they own (best
+/// first), and of the one they wear. They wear their pick when they own it,
+/// their best tier when they made no pick (or picked one they do not own),
+/// and nothing when they picked none or hide Moltorino's badge.
+struct MoltorinoHolding<'a> {
+    user_id: &'a str,
+    owned: Vec<usize>,
+    worn: Option<usize>,
+}
+
+fn moltorino_holdings<'a>(
+    feed: &'a MoltorinoBadgesResponse,
+    tiers: &[(&MoltorinoBadge, (String, String, String))],
+) -> Vec<MoltorinoHolding<'a>> {
+    let mut budget = MOLTORINO_MAX_ASSIGNMENTS;
+    let mut out = Vec::new();
+    for (uid, holder) in &feed.users {
+        let uid = uid.trim();
+        if budget == 0 {
+            break;
+        }
+        if !is_valid_moltorino_user_id(uid) {
+            continue;
+        }
+        let mut owned: Vec<usize> = holder
+            .badges
+            .iter()
+            .filter_map(|id| tiers.iter().position(|(t, _)| t.id == id.trim()))
+            .collect();
+        owned.sort_unstable();
+        owned.dedup();
+        owned.truncate(budget);
+        let Some(&best) = owned.first() else { continue };
+        budget -= owned.len();
+        let hides = holder.hidden.iter().any(|code| code.trim() == MOLTORINO_LAYOUT_CODE);
+        let worn = match &holder.active_badge {
+            _ if hides => None,
+            Some(None) => None,
+            Some(Some(pick)) => Some(owned.iter().copied().find(|&i| tiers[i].0.id == pick.trim()).unwrap_or(best)),
+            None => Some(best),
+        };
+        out.push(MoltorinoHolding { user_id: uid, owned, worn });
+    }
+    out
+}
+
+/// One gallery tile per Moltorino tier, best first. A tile counts the people
+/// WEARING it (one badge per holder, as in chat); `owned` is whether the
+/// viewer owns that tier at all.
 fn moltorino_gallery_tiles(
     feed: &MoltorinoBadgesResponse,
     viewer_user_id: Option<&str>,
 ) -> Vec<ThirdPartyGalleryBadge> {
-    let mut tiles = Vec::new();
-    let mut assigned: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    for badge in feed.badges.iter().take(MOLTORINO_MAX_TIERS) {
-        let Some((x1, x2, x4)) = badge.image_urls() else {
-            continue;
-        };
-        let mut user_count = 0usize;
-        let mut owned = false;
-        for user in &badge.users {
-            let uid = user.id.trim();
-            if !is_valid_moltorino_user_id(uid) || !assigned.insert(uid) {
-                continue;
-            }
-            user_count += 1;
-            if viewer_user_id == Some(uid) {
-                owned = true;
+    let tiers = moltorino_tiers(feed);
+    let mut wearers = vec![0usize; tiers.len()];
+    let mut viewer_owns = vec![false; tiers.len()];
+    for holding in moltorino_holdings(feed, &tiers) {
+        if let Some(i) = holding.worn {
+            wearers[i] += 1;
+        }
+        if viewer_user_id == Some(holding.user_id) {
+            for i in holding.owned {
+                viewer_owns[i] = true;
             }
         }
+    }
+    let mut tiles = Vec::new();
+    for (i, (badge, (x1, x2, x4))) in tiers.into_iter().enumerate() {
+        let (user_count, owned) = (wearers[i], viewer_owns[i]);
         tiles.push(ThirdPartyGalleryBadge {
             id: format!("moltorino-{}", badge.id),
             provider: BadgeProvider::Moltorino,
@@ -1163,6 +1263,144 @@ fn jilchat_gallery_tiles(feed: &[JilChatBadge], viewer_user_id: Option<&str>) ->
         .collect()
 }
 
+// bChat (ItsBr0dyy's chat overlay, a uChat fork): GET
+// https://itsbr0dyy.dev/api/badges ("Get bChat badges" in its API docs). An
+// object of badge groups keyed by id, IN FEED ORDER (admins first), each with
+// the Twitch ids wearing it, a title and 1x/2x/4x AVIF art. A holder listed in
+// two groups wears the first. No ETag or cache headers; the site asks callers
+// not to hammer it, so it rides the 10-minute own-clock gate.
+const BCHAT_BADGES_URL: &str = "https://itsbr0dyy.dev/api/badges";
+const BCHAT_REFRESH: Duration = Duration::from_secs(10 * 60);
+const BCHAT_CLICK_URL: &str = "https://bchat.itsbr0dyy.dev/";
+const BCHAT_MAX_BADGES: usize = 256;
+const BCHAT_MAX_ASSIGNMENTS: usize = 250_000;
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct BChatBadgesResponse {
+    #[serde(default)]
+    badges: BChatGroups,
+}
+
+/// The `badges` object as (id, group) pairs in feed order: serde_json is built
+/// without `preserve_order`, so a plain map would sort the ids.
+#[derive(Debug, Clone, Default)]
+struct BChatGroups(Vec<(String, BChatBadge)>);
+
+impl<'de> Deserialize<'de> for BChatGroups {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct Groups;
+        impl<'de> serde::de::Visitor<'de> for Groups {
+            type Value = BChatGroups;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("an object of bChat badge groups")
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<BChatGroups, A::Error> {
+                let mut out = Vec::new();
+                while let Some((id, badge)) = map.next_entry::<String, BChatBadge>()? {
+                    if out.len() < BCHAT_MAX_BADGES {
+                        out.push((id, badge));
+                    }
+                }
+                Ok(BChatGroups(out))
+            }
+        }
+        d.deserialize_map(Groups)
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct BChatBadge {
+    #[serde(default)]
+    users: Vec<String>,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    images: BChatImages,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct BChatImages {
+    #[serde(rename = "1x", default)]
+    x1: String,
+    #[serde(rename = "2x", default)]
+    x2: String,
+    #[serde(rename = "4x", default)]
+    x4: String,
+}
+
+impl BChatBadge {
+    /// The feed's titles are bare ("Admin", "Supporter"), so they read as
+    /// "bChat Admin" beside every other client's badges.
+    fn title(&self, id: &str) -> String {
+        let title = self.title.trim();
+        let title = if title.is_empty() { id.trim() } else { title };
+        if title.to_ascii_lowercase().contains("bchat") { title.to_string() } else { format!("bChat {title}") }
+    }
+
+    /// (1x, 2x, 4x), https only, each missing size falling back to the next
+    /// smaller one.
+    fn image_urls(&self) -> Option<(String, String, String)> {
+        let https = |s: &str| Some(s.trim()).filter(|s| s.starts_with("https://")).map(str::to_string);
+        let x1 = https(&self.images.x1)?;
+        let x2 = https(&self.images.x2).unwrap_or_else(|| x1.clone());
+        let x4 = https(&self.images.x4).unwrap_or_else(|| x2.clone());
+        Some((x1, x2, x4))
+    }
+
+    fn badge_info(&self, id: &str, (x1, x2, x4): (String, String, String)) -> BadgeInfo {
+        BadgeInfo {
+            id: format!("bchat-{}", id.trim()),
+            set_id: "bchat".to_string(),
+            version: "1".to_string(),
+            title: self.title(id),
+            description: String::new(),
+            image_1x: x1,
+            image_2x: x2,
+            image_4x: x4,
+            click_action: None,
+            click_url: Some(BCHAT_CLICK_URL.to_string()),
+        }
+    }
+}
+
+/// Each drawable group with the valid holders who WEAR it (their first group
+/// in feed order), within the assignment cap.
+fn bchat_wearers(feed: &BChatBadgesResponse) -> Vec<(&str, &BChatBadge, (String, String, String), Vec<&str>)> {
+    let mut assigned: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for (id, badge) in &feed.badges.0 {
+        let Some(urls) = badge.image_urls() else { continue };
+        let mut wearers = Vec::new();
+        for uid in badge.users.iter().map(|u| u.trim()) {
+            if assigned.len() >= BCHAT_MAX_ASSIGNMENTS {
+                break;
+            }
+            if is_valid_moltorino_user_id(uid) && assigned.insert(uid) {
+                wearers.push(uid);
+            }
+        }
+        out.push((id.as_str(), badge, urls, wearers));
+    }
+    out
+}
+
+fn bchat_gallery_tiles(feed: &BChatBadgesResponse, viewer_user_id: Option<&str>) -> Vec<ThirdPartyGalleryBadge> {
+    bchat_wearers(feed)
+        .into_iter()
+        .map(|(id, badge, (x1, x2, x4), wearers)| ThirdPartyGalleryBadge {
+            id: format!("bchat-{}", id.trim()),
+            provider: BadgeProvider::BChat,
+            title: badge.title(id),
+            image_1x: x1,
+            image_2x: x2,
+            image_4x: x4,
+            user_count: wearers.len(),
+            owned: viewer_user_id.is_some_and(|v| wearers.contains(&v)),
+            click_url: Some(BCHAT_CLICK_URL.to_string()),
+        })
+        .collect()
+}
+
 /// How one own-clock feed's refresh went.
 enum SmallFeedFetch<T> {
     Fresh(T, Option<String>),
@@ -1173,46 +1411,125 @@ enum SmallFeedFetch<T> {
     Skipped,
 }
 
+/// GETs an own-clock feed, revalidating with `etag` when one is held.
+async fn fetch_etag_feed<T: serde::de::DeserializeOwned>(
+    client: &reqwest::Client,
+    url: &str,
+    user_agent: &str,
+    etag: Option<&str>,
+) -> SmallFeedFetch<T> {
+    let mut req = client
+        .get(url)
+        .timeout(SMALL_FEED_TIMEOUT)
+        .header("User-Agent", user_agent)
+        .header("Accept", "application/json");
+    if let Some(tag) = etag {
+        req = req.header("If-None-Match", tag);
+    }
+    match req.send().await {
+        Ok(r) if r.status() == reqwest::StatusCode::NOT_MODIFIED => SmallFeedFetch::Unchanged,
+        Ok(r) if r.status().is_success() => {
+            let etag = r.headers().get(reqwest::header::ETAG).and_then(|v| v.to_str().ok()).map(str::to_string);
+            match r.json::<T>().await {
+                Ok(feed) => SmallFeedFetch::Fresh(feed, etag),
+                Err(_) => SmallFeedFetch::Failed,
+            }
+        }
+        _ => SmallFeedFetch::Failed,
+    }
+}
+
 /// The stamp that makes an own-clock feed due again at the next gate.
 fn retry_at_next_gate(now: SystemTime, refresh: Duration, gate: Duration) -> SystemTime {
     now.checked_sub(refresh.saturating_sub(gate)).unwrap_or(UNIX_EPOCH)
 }
 
-/// Applies a Limerino refresh. A 304 is success only while a feed is held; a
-/// failure keeps the last good feed and retries at the next gate without
-/// touching the shared stamp (Moltorino's rule).
-fn apply_limerino(tp: &mut ThirdPartyCache, fetch: SmallFeedFetch<LimerinoBadgesResponse>, now: SystemTime, gate: Duration) {
+/// One own-clock feed that revalidates with an ETag (Limerino, Moltorino):
+/// the feed, its ETag, its stamp and whether its failure was logged.
+struct EtagFeedSlot<'a, T> {
+    name: &'static str,
+    feed: &'a mut Option<T>,
+    etag: &'a mut Option<String>,
+    last_updated: &'a mut SystemTime,
+    warned: &'a mut bool,
+    refresh: Duration,
+}
+
+/// Applies an ETag feed's refresh. A 304 is success only while a feed is held;
+/// a failure keeps the last good feed and retries at the next gate without
+/// touching the shared stamp, so one hobby API being down never re-reads the
+/// other feeds every minute.
+fn apply_etag_feed<T>(slot: EtagFeedSlot<'_, T>, fetch: SmallFeedFetch<T>, now: SystemTime, gate: Duration, describe: impl Fn(&T) -> String) {
+    let name = slot.name;
     match fetch {
         SmallFeedFetch::Skipped => {}
         SmallFeedFetch::Fresh(feed, etag) => {
-            log::debug!("[BadgeService] Limerino roster: {} badges, {} users", feed.badges.len(), feed.users.len());
-            tp.limerino = Some(feed);
-            tp.limerino_etag = etag;
-            tp.limerino_last_updated = now;
-            tp.limerino_warned = false;
+            log::debug!("[BadgeService] {name} roster: {}", describe(&feed));
+            *slot.feed = Some(feed);
+            *slot.etag = etag;
+            *slot.last_updated = now;
+            *slot.warned = false;
         }
-        SmallFeedFetch::Unchanged if tp.limerino.is_some() => {
+        SmallFeedFetch::Unchanged if slot.feed.is_some() => {
             // Recovery after a failure is usually a 304 (the ETag survives),
             // so it ends the failure streak too.
-            tp.limerino_last_updated = now;
-            tp.limerino_warned = false;
+            *slot.last_updated = now;
+            *slot.warned = false;
         }
         SmallFeedFetch::Unchanged | SmallFeedFetch::Failed => {
-            if !tp.limerino_warned {
+            if !*slot.warned {
                 log::warn!(
-                    "[BadgeService] Limerino badge feed failed to refresh{}; retrying at the next gate",
-                    if tp.limerino.is_some() { " (kept previous)" } else { "" }
+                    "[BadgeService] {name} badge feed failed to refresh{}; retrying at the next gate",
+                    if slot.feed.is_some() { " (kept previous)" } else { "" }
                 );
-                tp.limerino_warned = true;
+                *slot.warned = true;
             } else {
-                log::debug!("[BadgeService] Limerino badge feed still failing");
+                log::debug!("[BadgeService] {name} badge feed still failing");
             }
-            if tp.limerino.is_none() {
-                tp.limerino_etag = None;
+            if slot.feed.is_none() {
+                *slot.etag = None;
             }
-            tp.limerino_last_updated = retry_at_next_gate(now, LIMERINO_REFRESH, gate);
+            *slot.last_updated = retry_at_next_gate(now, slot.refresh, gate);
         }
     }
+}
+
+fn apply_limerino(tp: &mut ThirdPartyCache, fetch: SmallFeedFetch<LimerinoBadgesResponse>, now: SystemTime, gate: Duration) {
+    let slot = EtagFeedSlot {
+        name: "Limerino",
+        feed: &mut tp.limerino,
+        etag: &mut tp.limerino_etag,
+        last_updated: &mut tp.limerino_last_updated,
+        warned: &mut tp.limerino_warned,
+        refresh: LIMERINO_REFRESH,
+    };
+    apply_etag_feed(slot, fetch, now, gate, |f| format!("{} badges, {} users", f.badges.len(), f.users.len()));
+}
+
+fn apply_bchat(tp: &mut ThirdPartyCache, fetch: SmallFeedFetch<BChatBadgesResponse>, now: SystemTime, gate: Duration) {
+    let slot = EtagFeedSlot {
+        name: "bChat",
+        feed: &mut tp.bchat,
+        etag: &mut tp.bchat_etag,
+        last_updated: &mut tp.bchat_last_updated,
+        warned: &mut tp.bchat_warned,
+        refresh: BCHAT_REFRESH,
+    };
+    apply_etag_feed(slot, fetch, now, gate, |f| format!("{} badges", f.badges.0.len()));
+}
+
+fn apply_moltorino(tp: &mut ThirdPartyCache, fetch: SmallFeedFetch<MoltorinoBadgesResponse>, now: SystemTime, gate: Duration) {
+    let slot = EtagFeedSlot {
+        name: "Moltorino",
+        feed: &mut tp.moltorino,
+        etag: &mut tp.moltorino_etag,
+        last_updated: &mut tp.moltorino_last_updated,
+        warned: &mut tp.moltorino_warned,
+        refresh: MOLTORINO_REFRESH,
+    };
+    apply_etag_feed(slot, fetch, now, gate, |f| {
+        format!("v{}, {} tiers, {} holders", f.bundle_version.unwrap_or(-1), f.badges.len(), f.users.len())
+    });
 }
 
 fn apply_jilchat(tp: &mut ThirdPartyCache, fetch: SmallFeedFetch<Vec<JilChatBadge>>, now: SystemTime, gate: Duration) {
@@ -1285,9 +1602,12 @@ struct ThirdPartyCache {
     chatty: Option<Vec<ChattyBadge>>,
     dankchat: Option<Vec<DankChatBadge>>,
     moltorino: Option<MoltorinoBadgesResponse>,
-    /// Moltorino refreshes on its own, slower clock (`MOLTORINO_REFRESH`);
-    /// the seven feeds above share `last_updated`.
+    /// Moltorino refreshes on its own clock (`MOLTORINO_REFRESH`; the seven
+    /// feeds above share `last_updated`), with the ETag to revalidate with and
+    /// whether its failure was already logged at warn.
     moltorino_last_updated: SystemTime,
+    moltorino_etag: Option<String>,
+    moltorino_warned: bool,
     limerino: Option<LimerinoBadgesResponse>,
     /// Own clock (`LIMERINO_REFRESH`), the ETag to revalidate with, and
     /// whether its failure was already logged at warn.
@@ -1298,6 +1618,12 @@ struct ThirdPartyCache {
     /// Own clock (`JILCHAT_REFRESH`).
     jilchat_last_updated: SystemTime,
     jilchat_warned: bool,
+    bchat: Option<BChatBadgesResponse>,
+    /// Own clock (`BCHAT_REFRESH`); the feed sends no ETag today, but one it
+    /// starts sending is used.
+    bchat_last_updated: SystemTime,
+    bchat_etag: Option<String>,
+    bchat_warned: bool,
     /// Inverted index over every provider feed: user_id -> the badges that
     /// user holds. Rebuilt once per feed refresh so per-chatter lookups are a
     /// single HashMap get instead of a scan over every holder list. One
@@ -1339,9 +1665,10 @@ impl ThirdPartyCache {
     /// - Homies: the custom badge, then the `/badges` role, then the
     ///   `/badges2` staff badge, each its own category; within one list the
     ///   last entry listing the user (Homies' client overwrites per list).
-    /// - Moltorino: the first tier in feed order (Moltorino's own rule).
+    /// - Moltorino: the tier the holder picked (`moltorino_holdings`); the rest they own sit in `MOLTORINO_OWNED_SET`.
     /// - Limerino: the user's own order; only the first (their pick) is worn, the rest sit in `LIMERINO_OWNED_SET`.
     /// - JilChat: the one badge the feed lists them under.
+    /// - bChat: the first group in feed order listing them.
     /// - Chatsen, Chatty: the first entry in feed order.
     /// - DankChat: the first entry listing the user, exactly as DankChat looks
     ///   one up.
@@ -1504,44 +1831,30 @@ impl ThirdPartyCache {
             }
         }
 
-        // Moltorino supporter badges. Tiers arrive in tier order and a user
-        // gets only the FIRST tier they appear in (Moltorino's own rule), so
-        // one badge per holder even when the feed lists them under several.
-        // Sits after Homies: both are Chatterino forks, and the title dedupe
-        // above cannot collide ("Moltorino ..." titles are unique to this feed).
+        // Moltorino supporter badges: the one each holder wears first (their
+        // pick, `MOLTORINO_SET`), then every other tier they own, best first
+        // (`MOLTORINO_OWNED_SET`, never worn). Sits after Homies: both are
+        // Chatterino forks, and the title dedupe above cannot collide
+        // ("Moltorino ..." titles are unique to this feed).
         if let Some(moltorino) = &self.moltorino {
-            let mut assigned: std::collections::HashSet<&str> = std::collections::HashSet::new();
-            let mut assignments = 0usize;
-            for (rank, badge) in moltorino.badges.iter().take(MOLTORINO_MAX_TIERS).enumerate() {
-                let Some((x1, x2, x4)) = badge.image_urls() else {
-                    continue;
-                };
-                let arc = Arc::new(UserBadge {
-                    badge_info: BadgeInfo {
-                        id: format!("moltorino-{}", badge.id),
-                        set_id: "moltorino".to_string(),
-                        version: "1".to_string(),
-                        title: badge.title(),
-                        description: badge.description.clone(),
-                        image_1x: x1,
-                        image_2x: x2,
-                        image_4x: x4,
-                        click_action: None,
-                        click_url: Some("https://moltorino.com/".to_string()),
-                    },
-                    provider: BadgeProvider::Moltorino,
-                });
-                let title_lower = arc.badge_info.title.to_lowercase();
-                for user in &badge.users {
-                    if assignments >= MOLTORINO_MAX_ASSIGNMENTS {
-                        break;
-                    }
-                    let uid = user.id.trim();
-                    if !is_valid_moltorino_user_id(uid) || !assigned.insert(uid) {
-                        continue;
-                    }
-                    assignments += 1;
-                    push(&mut by_user, uid.to_string(), &arc, &title_lower, rank);
+            let tiers = moltorino_tiers(moltorino);
+            let arcs = |set: &str| -> Vec<(Arc<UserBadge>, String)> {
+                tiers
+                    .iter()
+                    .map(|(badge, urls)| {
+                        let arc = Arc::new(UserBadge { badge_info: badge.badge_info(urls.clone(), set), provider: BadgeProvider::Moltorino });
+                        let title_lower = arc.badge_info.title.to_lowercase();
+                        (arc, title_lower)
+                    })
+                    .collect()
+            };
+            let (worn, owned) = (arcs(MOLTORINO_SET), arcs(MOLTORINO_OWNED_SET));
+            for holding in moltorino_holdings(moltorino, &tiers) {
+                if let Some(i) = holding.worn {
+                    push(&mut by_user, holding.user_id.to_string(), &worn[i].0, &worn[i].1, 0);
+                }
+                for i in holding.owned.into_iter().filter(|&i| Some(i) != holding.worn) {
+                    push(&mut by_user, holding.user_id.to_string(), &owned[i].0, &owned[i].1, i + 1);
                 }
             }
         }
@@ -1585,6 +1898,17 @@ impl ThirdPartyCache {
                     if !is_valid_moltorino_user_id(uid) || !assigned.insert(uid) {
                         continue;
                     }
+                    push(&mut by_user, uid.to_string(), &arc, &title_lower, rank);
+                }
+            }
+        }
+
+        // bChat: each holder wears the first group listing them.
+        if let Some(bchat) = &self.bchat {
+            for (rank, (id, badge, urls, wearers)) in bchat_wearers(bchat).into_iter().enumerate() {
+                let arc = Arc::new(UserBadge { badge_info: badge.badge_info(id, urls), provider: BadgeProvider::BChat });
+                let title_lower = arc.badge_info.title.to_lowercase();
+                for uid in wearers {
                     push(&mut by_user, uid.to_string(), &arc, &title_lower, rank);
                 }
             }
@@ -1878,6 +2202,9 @@ fn third_party_gallery_tiles(tp: &ThirdPartyCache, viewer_user_id: Option<&str>)
     if let Some(feed) = &tp.jilchat {
         out.extend(jilchat_gallery_tiles(feed, viewer_user_id));
     }
+    if let Some(feed) = &tp.bchat {
+        out.extend(bchat_gallery_tiles(feed, viewer_user_id));
+    }
 
     // Collapse entries that share a (provider, title) into one tile. Some feeds
     // (notably Chatty's FFZ re-host) emit one entry PER USER under the same title
@@ -1948,6 +2275,7 @@ impl BadgeProvider {
             "moltorino" => BadgeProvider::Moltorino,
             "limerino" => BadgeProvider::Limerino,
             "jilchat" => BadgeProvider::JilChat,
+            "bchat" => BadgeProvider::BChat,
             _ => return None,
         })
     }
@@ -1966,6 +2294,7 @@ impl BadgeProvider {
             BadgeProvider::Moltorino => "Moltorino",
             BadgeProvider::Limerino => "Limerino",
             BadgeProvider::JilChat => "JilChat",
+            BadgeProvider::BChat => "bChat",
         }
     }
 
@@ -1983,6 +2312,7 @@ impl BadgeProvider {
             BadgeProvider::Moltorino => "https://moltorino.com/",
             BadgeProvider::Limerino => "https://limerino.com/",
             BadgeProvider::JilChat => "https://jil.chat/",
+            BadgeProvider::BChat => BCHAT_CLICK_URL,
         }
     }
 }
@@ -2175,6 +2505,8 @@ impl BadgeCache {
                 dankchat: None,
                 moltorino: None,
                 moltorino_last_updated: UNIX_EPOCH,
+                moltorino_etag: None,
+                moltorino_warned: false,
                 limerino: None,
                 limerino_last_updated: UNIX_EPOCH,
                 limerino_etag: None,
@@ -2182,6 +2514,10 @@ impl BadgeCache {
                 jilchat: None,
                 jilchat_last_updated: UNIX_EPOCH,
                 jilchat_warned: false,
+                bchat: None,
+                bchat_last_updated: UNIX_EPOCH,
+                bchat_etag: None,
+                bchat_warned: false,
                 by_user: HashMap::new(),
                 backdrops: HashMap::new(),
                 painted: HashMap::new(),
@@ -2369,9 +2705,11 @@ impl BadgeService {
             }
         }
 
-        // Moltorino rides this gate but on its own, slower clock: it is only
-        // re-read once `MOLTORINO_REFRESH` has passed, at whichever 10-minute
-        // boundary comes next.
+        // Moltorino, Limerino, JilChat and bChat ride this gate on their own
+        // clocks: each is re-read once its refresh has passed, at whichever
+        // 10-minute boundary comes next.
+        let bchat_due = cache.third_party.bchat_last_updated.elapsed().map(|e| e >= BCHAT_REFRESH).unwrap_or(true);
+        let bchat_etag = if cache.third_party.bchat.is_some() { cache.third_party.bchat_etag.clone() } else { None };
         let moltorino_due = cache
             .third_party
             .moltorino_last_updated
@@ -2391,6 +2729,7 @@ impl BadgeService {
             .map(|e| e >= JILCHAT_REFRESH)
             .unwrap_or(true);
         let limerino_etag = if cache.third_party.limerino.is_some() { cache.third_party.limerino_etag.clone() } else { None };
+        let moltorino_etag = if cache.third_party.moltorino.is_some() { cache.third_party.moltorino_etag.clone() } else { None };
         let homies_custom_due = cache
             .third_party
             .homies_custom_last_updated
@@ -2537,51 +2876,21 @@ impl BadgeService {
             None
         };
 
-        // Fetch Moltorino supporter badges (single JSON snapshot, ~20 KB). A
-        // hobby API run by one person: identify ourselves honestly instead of
-        // the browser UA the client carries for Chatsen.
+        // Moltorino, Limerino, JilChat and bChat are hobby APIs run by one
+        // person each: identify ourselves honestly instead of the browser UA
+        // the client carries for Chatsen.
         let user_agent = format!("StreamNook/{} (+https://streamnook.app)", crate::services::client_identity::build_version());
         let moltorino_fut = async {
             if !moltorino_due {
-                return None;
+                return SmallFeedFetch::Skipped;
             }
-            match self
-                .http_client
-                .get(MOLTORINO_BADGES_URL)
-                .timeout(SMALL_FEED_TIMEOUT)
-                .header("User-Agent", user_agent.as_str())
-                .header("Accept", "application/json")
-                .send()
-                .await
-            {
-                Ok(response) if response.status().is_success() => response.json::<MoltorinoBadgesResponse>().await.ok(),
-                _ => None,
-            }
+            fetch_etag_feed(&self.http_client, MOLTORINO_BADGES_URL, &user_agent, moltorino_etag.as_deref()).await
         };
         let limerino_fut = async {
             if !limerino_due {
                 return SmallFeedFetch::Skipped;
             }
-            let mut req = self
-                .http_client
-                .get(LIMERINO_BADGES_URL)
-                .timeout(SMALL_FEED_TIMEOUT)
-                .header("User-Agent", user_agent.as_str())
-                .header("Accept", "application/json");
-            if let Some(tag) = limerino_etag.as_deref() {
-                req = req.header("If-None-Match", tag);
-            }
-            match req.send().await {
-                Ok(r) if r.status() == reqwest::StatusCode::NOT_MODIFIED => SmallFeedFetch::Unchanged,
-                Ok(r) if r.status().is_success() => {
-                    let etag = r.headers().get(reqwest::header::ETAG).and_then(|v| v.to_str().ok()).map(str::to_string);
-                    match r.json::<LimerinoBadgesResponse>().await {
-                        Ok(feed) => SmallFeedFetch::Fresh(feed, etag),
-                        Err(_) => SmallFeedFetch::Failed,
-                    }
-                }
-                _ => SmallFeedFetch::Failed,
-            }
+            fetch_etag_feed(&self.http_client, LIMERINO_BADGES_URL, &user_agent, limerino_etag.as_deref()).await
         };
         let jilchat_fut = async {
             if !jilchat_due {
@@ -2603,7 +2912,14 @@ impl BadgeService {
                 _ => SmallFeedFetch::Failed,
             }
         };
-        let (moltorino_badges, limerino_fetch, jilchat_fetch) = tokio::join!(moltorino_fut, limerino_fut, jilchat_fut);
+        let bchat_fut = async {
+            if !bchat_due {
+                return SmallFeedFetch::Skipped;
+            }
+            fetch_etag_feed(&self.http_client, BCHAT_BADGES_URL, &user_agent, bchat_etag.as_deref()).await
+        };
+        let (moltorino_fetch, limerino_fetch, jilchat_fetch, bchat_fetch) =
+            tokio::join!(moltorino_fut, limerino_fut, jilchat_fut, bchat_fut);
 
         // Update cache. A provider that failed this round (network, 5xx, a
         // body that no longer parses) keeps its LAST GOOD list instead of being
@@ -2635,35 +2951,12 @@ impl BadgeService {
         keep_last_good!(chatsen, chatsen_badges, "chatsen");
         keep_last_good!(chatty, chatty_badges, "chatty");
         keep_last_good!(dankchat, dankchat_badges, "dankchat");
-        // Moltorino keeps its last good roster too, but a failure must NOT
-        // back-date the shared stamp below: that would re-read all seven other
-        // feeds every minute for as long as one hobby API is down. Instead its
-        // own clock is set so the next attempt lands at the next 10-minute gate.
-        if moltorino_due {
-            match moltorino_badges {
-                Some(feed) => {
-                    log::debug!(
-                        "[BadgeService] Moltorino roster v{}: {} tiers, {} assignments",
-                        feed.version.unwrap_or(-1),
-                        feed.badges.len(),
-                        feed.badges.iter().map(|b| b.users.len()).sum::<usize>()
-                    );
-                    cache.third_party.moltorino = Some(feed);
-                    cache.third_party.moltorino_last_updated = SystemTime::now();
-                }
-                None => {
-                    log::warn!(
-                        "[BadgeService] Moltorino badge feed failed to refresh{}; retrying at the next gate",
-                        if cache.third_party.moltorino.is_some() { " (kept previous)" } else { "" }
-                    );
-                    cache.third_party.moltorino_last_updated = SystemTime::now()
-                        .checked_sub(MOLTORINO_REFRESH.saturating_sub(cache_duration))
-                        .unwrap_or(UNIX_EPOCH);
-                }
-            }
-        }
+        // The own-clock feeds keep their last good roster too, but a failure
+        // must NOT back-date the shared stamp below (see `apply_etag_feed`).
+        apply_moltorino(&mut cache.third_party, moltorino_fetch, SystemTime::now(), cache_duration);
         apply_limerino(&mut cache.third_party, limerino_fetch, SystemTime::now(), cache_duration);
         apply_jilchat(&mut cache.third_party, jilchat_fetch, SystemTime::now(), cache_duration);
+        apply_bchat(&mut cache.third_party, bchat_fetch, SystemTime::now(), cache_duration);
         // Homies custom badges follow the same rule: keep the last good list,
         // and a failure retries at the next 10-minute gate without back-dating
         // the shared stamp (the 4 MB list must never ride the 60-second retry).
@@ -3558,6 +3851,8 @@ impl BadgeService {
         cache.third_party.dankchat = None;
         cache.third_party.moltorino = None;
         cache.third_party.moltorino_last_updated = UNIX_EPOCH;
+        cache.third_party.moltorino_etag = None;
+        cache.third_party.moltorino_warned = false;
         cache.third_party.limerino = None;
         cache.third_party.limerino_last_updated = UNIX_EPOCH;
         cache.third_party.limerino_etag = None;
@@ -3565,6 +3860,10 @@ impl BadgeService {
         cache.third_party.jilchat = None;
         cache.third_party.jilchat_last_updated = UNIX_EPOCH;
         cache.third_party.jilchat_warned = false;
+        cache.third_party.bchat = None;
+        cache.third_party.bchat_last_updated = UNIX_EPOCH;
+        cache.third_party.bchat_etag = None;
+        cache.third_party.bchat_warned = false;
         cache.third_party.by_user.clear();
         cache.third_party.backdrops.clear();
         cache.third_party.painted.clear();
@@ -3653,6 +3952,8 @@ mod tests {
             dankchat: None,
             moltorino: None,
             moltorino_last_updated: UNIX_EPOCH,
+            moltorino_etag: None,
+            moltorino_warned: false,
             limerino: None,
             limerino_last_updated: UNIX_EPOCH,
             limerino_etag: None,
@@ -3660,6 +3961,10 @@ mod tests {
             jilchat: None,
             jilchat_last_updated: UNIX_EPOCH,
             jilchat_warned: false,
+            bchat: None,
+            bchat_last_updated: UNIX_EPOCH,
+            bchat_etag: None,
+            bchat_warned: false,
             by_user: HashMap::new(),
             backdrops: HashMap::new(),
             painted: HashMap::new(),
@@ -3799,6 +4104,8 @@ mod tests {
             dankchat: None,
             moltorino: None,
             moltorino_last_updated: UNIX_EPOCH,
+            moltorino_etag: None,
+            moltorino_warned: false,
             limerino: None,
             limerino_last_updated: UNIX_EPOCH,
             limerino_etag: None,
@@ -3806,6 +4113,10 @@ mod tests {
             jilchat: None,
             jilchat_last_updated: UNIX_EPOCH,
             jilchat_warned: false,
+            bchat: None,
+            bchat_last_updated: UNIX_EPOCH,
+            bchat_etag: None,
+            bchat_warned: false,
             by_user: HashMap::new(),
             backdrops: HashMap::new(),
             painted: HashMap::new(),
@@ -3845,47 +4156,64 @@ mod tests {
         assert_eq!(not_a_bot.len(), 1);
     }
 
-    /// A trimmed copy of the live feed (version 369, 2026-09-07) with the
-    /// shapes that matter: tier order, a holder listed under two tiers, a
-    /// non-numeric id, and a tier with no images.
+    /// A trimmed copy of the live v2 feed (bundleVersion 2204, 2026-11-06)
+    /// with the shapes that matter. Tiers are out of priority order on
+    /// purpose. Holders: no pick (best tier), a pick below their best, a
+    /// `null` pick (none), Moltorino hidden, a pick they do not own, layout
+    /// settings only, a tier with no art, and a non-numeric id.
     const MOLTORINO_FIXTURE: &str = r#"{
-      "version": 369,
-      "generatedAt": "2026-09-07T00:12:49.620Z",
+      "schemaVersion": 2,
+      "generation": "074cdd7e442fbda2",
+      "bundleVersion": 2204,
+      "generatedAt": "2026-11-06T14:58:44.551Z",
+      "layout": { "schemaVersion": 1, "defaultOrder": ["ta","ts","tv","tp","c","ff","fa","bt","bl","jc","bh","m","7","hc","hs"] },
       "badges": [
         {
-          "id": "developer",
-          "tooltip": "Moltorino Developer",
-          "description": "Given to people who help build and maintain Moltorino.",
+          "id": "supporter_plus_alt", "tooltip": "Moltorino Supporter+ Alt",
+          "description": "Given for supporting with $10 or more.", "listed": true, "priority": 80, "assetVersion": 5,
           "images": {
-            "1x": "https://api.moltorino.com/badges/assets/developer/1x.webp?v=369",
-            "2x": "https://api.moltorino.com/badges/assets/developer/2x.webp?v=369",
-            "3x": "https://api.moltorino.com/badges/assets/developer/3x.webp?v=369"
-          },
-          "users": [ { "id": "506954718", "username": "moltobenne_" } ]
+            "1x": "https://api.moltorino.com/badges/assets/supporter_plus_alt/1x.webp?asset=5",
+            "2x": "https://api.moltorino.com/badges/assets/supporter_plus_alt/2x.webp?asset=5",
+            "3x": "https://api.moltorino.com/badges/assets/supporter_plus_alt/3x.webp?asset=5",
+            "4x": "https://api.moltorino.com/badges/assets/supporter_plus_alt/4x.webp?asset=5"
+          }
         },
         {
-          "id": "broken",
-          "tooltip": "No Images",
-          "images": {},
-          "users": [ { "id": "777" } ]
+          "id": "developer", "tooltip": "Moltorino Developer",
+          "description": "Given to people who help build and maintain Moltorino.", "listed": false, "priority": 30, "assetVersion": 1,
+          "images": {
+            "1x": "https://api.moltorino.com/badges/assets/developer/1x.webp?asset=1",
+            "2x": "https://api.moltorino.com/badges/assets/developer/2x.webp?asset=1",
+            "3x": "https://api.moltorino.com/badges/assets/developer/3x.webp?asset=1",
+            "4x": ""
+          }
+        },
+        { "id": "broken", "tooltip": "No Images", "priority": 35, "images": {} },
+        {
+          "id": "supporter_plus", "tooltip": "Moltorino Supporter+", "priority": 90,
+          "images": { "1x": "https://api.moltorino.com/badges/assets/supporter_plus/1x.webp?asset=3" }
         },
         {
-          "id": "supporter",
-          "tooltip": "Moltorino Supporter",
-          "description": "Thanks for supporting Moltorino.",
+          "id": "supporter", "tooltip": "Moltorino Supporter",
+          "description": "Thanks for supporting Moltorino.", "listed": true, "priority": 100,
           "images": {
-            "1x": "https://api.moltorino.com/badges/assets/supporter/1x.webp?v=369",
-            "2x": "https://api.moltorino.com/badges/assets/supporter/2x.webp?v=369",
-            "3x": "https://api.moltorino.com/badges/assets/supporter/3x.webp?v=369"
-          },
-          "users": [
-            { "id": "506954718", "username": "moltobenne_" },
-            { "id": "249031143", "username": "br_winters" },
-            { "id": "not-a-number", "username": "typo" }
-          ]
+            "1x": "https://api.moltorino.com/badges/assets/supporter/1x.webp?asset=2",
+            "2x": "https://api.moltorino.com/badges/assets/supporter/2x.webp?asset=2",
+            "3x": "https://api.moltorino.com/badges/assets/supporter/3x.webp?asset=2"
+          }
         }
       ],
-      "users": [ { "id": "1051860673", "username": "omarbasilz", "decorations": false } ]
+      "users": {
+        "506954718": { "badges": ["developer", "supporter"] },
+        "249031143": { "badges": ["supporter_plus_alt", "supporter_plus", "supporter"], "activeBadge": "supporter_plus",
+                       "order": ["ta","hc","tv","tp","c","ff","fa","bt","bl","ts","jc","bh","7","m","hs"] },
+        "31117501": { "badges": ["supporter_plus_alt", "supporter_plus", "supporter"], "activeBadge": null },
+        "37907120": { "badges": ["supporter"], "hidden": ["ta", "m"] },
+        "888": { "badges": ["supporter"], "activeBadge": "developer" },
+        "12682083": { "hidden": ["ff"] },
+        "777": { "badges": ["broken"] },
+        "not-a-number": { "badges": ["supporter"] }
+      }
     }"#;
 
     fn moltorino_cache(feed: MoltorinoBadgesResponse) -> ThirdPartyCache {
@@ -3901,6 +4229,8 @@ mod tests {
             dankchat: None,
             moltorino: Some(feed),
             moltorino_last_updated: UNIX_EPOCH,
+            moltorino_etag: None,
+            moltorino_warned: false,
             limerino: None,
             limerino_last_updated: UNIX_EPOCH,
             limerino_etag: None,
@@ -3908,6 +4238,10 @@ mod tests {
             jilchat: None,
             jilchat_last_updated: UNIX_EPOCH,
             jilchat_warned: false,
+            bchat: None,
+            bchat_last_updated: UNIX_EPOCH,
+            bchat_etag: None,
+            bchat_warned: false,
             by_user: HashMap::new(),
             backdrops: HashMap::new(),
             painted: HashMap::new(),
@@ -3919,47 +4253,70 @@ mod tests {
     fn moltorino_feed_parses_with_unknown_fields() {
         let feed: MoltorinoBadgesResponse =
             serde_json::from_str(MOLTORINO_FIXTURE).expect("feed should parse");
-        assert_eq!(feed.version, Some(369));
-        assert_eq!(feed.badges.len(), 3);
-        assert_eq!(feed.badges[0].users[0].id, "506954718");
+        assert_eq!(feed.bundle_version, Some(2204));
+        assert_eq!(feed.badges.len(), 5);
+        // An absent pick, a `null` pick and a named pick stay three things.
+        assert_eq!(feed.users["506954718"].active_badge, None);
+        assert_eq!(feed.users["31117501"].active_badge, Some(None));
+        assert_eq!(feed.users["249031143"].active_badge, Some(Some("supporter_plus".to_string())));
+    }
+
+    fn worn_ids(index: &HashMap<String, Vec<Arc<UserBadge>>>, uid: &str) -> Vec<String> {
+        worn_third_party(&index[uid]).into_iter().map(|b| b.badge_info.id).collect()
     }
 
     #[test]
-    fn moltorino_holder_gets_one_badge_highest_tier_first() {
+    fn moltorino_holder_wears_their_pick() {
         let feed: MoltorinoBadgesResponse = serde_json::from_str(MOLTORINO_FIXTURE).unwrap();
         let index = moltorino_cache(feed).build_by_user_index();
 
-        // Listed under developer AND supporter: only the first tier sticks.
-        let dev = index.get("506954718").expect("developer should resolve");
-        assert_eq!(dev.len(), 1);
-        assert_eq!(dev[0].badge_info.id, "moltorino-developer");
+        // No pick: their best tier by priority, even though the feed lists
+        // another tier first. What else they own is held but never worn.
+        let dev = &index["506954718"];
+        assert_eq!(badge_ids(dev), ["moltorino-developer", "moltorino-supporter"]);
+        assert_eq!(dev[0].badge_info.set_id, "moltorino");
+        assert_eq!(dev[1].badge_info.set_id, "moltorino-owned");
         assert_eq!(dev[0].badge_info.title, "Moltorino Developer");
         assert_eq!(dev[0].provider, BadgeProvider::Moltorino);
-        assert_eq!(
-            dev[0].badge_info.image_4x,
-            "https://api.moltorino.com/badges/assets/developer/3x.webp?v=369"
-        );
+        assert_eq!(dev[0].badge_info.image_4x, "https://api.moltorino.com/badges/assets/developer/3x.webp?asset=1");
+        assert_eq!(worn_ids(&index, "506954718"), ["moltorino-developer"]);
 
-        let sup = index.get("249031143").expect("supporter should resolve");
-        assert_eq!(sup.len(), 1);
-        assert_eq!(sup[0].badge_info.id, "moltorino-supporter");
+        // Their pick wins over the alt art v1 put on everyone; a lone 1x
+        // stands in for the missing sizes.
+        assert_eq!(worn_ids(&index, "249031143"), ["moltorino-supporter_plus"]);
+        let plus = &index["249031143"][0];
+        assert_eq!(plus.badge_info.image_2x, plus.badge_info.image_1x);
+        assert_eq!(plus.badge_info.image_4x, plus.badge_info.image_1x);
+        assert_eq!(index["249031143"].len(), 3);
 
-        // A tier with no images never reaches the index; nor does a bad id.
+        // Picked none, or hides Moltorino: owns them, wears nothing.
+        assert!(worn_ids(&index, "31117501").is_empty());
+        assert_eq!(index["31117501"].len(), 3);
+        assert!(worn_ids(&index, "37907120").is_empty());
+        assert_eq!(badge_ids(&index["37907120"]), ["moltorino-supporter"]);
+
+        // A pick they do not own falls back to their best tier.
+        assert_eq!(worn_ids(&index, "888"), ["moltorino-supporter"]);
+
+        // Layout settings alone, a tier with no art and a bad id never index.
+        assert!(index.get("12682083").is_none());
         assert!(index.get("777").is_none());
         assert!(index.get("not-a-number").is_none());
     }
 
     #[test]
-    fn moltorino_gallery_counts_holders_and_ownership() {
+    fn moltorino_gallery_counts_wearers_and_ownership() {
         let feed: MoltorinoBadgesResponse = serde_json::from_str(MOLTORINO_FIXTURE).unwrap();
         let tiles = moltorino_gallery_tiles(&feed, Some("249031143"));
         let ids: Vec<&str> = tiles.iter().map(|t| t.id.as_str()).collect();
-        assert_eq!(ids, vec!["moltorino-developer", "moltorino-supporter"]);
-        assert_eq!(tiles[0].user_count, 1);
-        assert!(!tiles[0].owned);
-        // The duplicate holder and the bad id are not counted.
-        assert_eq!(tiles[1].user_count, 1);
-        assert!(tiles[1].owned);
+        assert_eq!(
+            ids,
+            ["moltorino-developer", "moltorino-supporter_plus_alt", "moltorino-supporter_plus", "moltorino-supporter"]
+        );
+        let counts: Vec<usize> = tiles.iter().map(|t| t.user_count).collect();
+        assert_eq!(counts, [1, 0, 1, 1]);
+        let owned: Vec<bool> = tiles.iter().map(|t| t.owned).collect();
+        assert_eq!(owned, [false, true, true, true]);
     }
 
     #[test]
@@ -3992,6 +4349,7 @@ mod tests {
             BadgeProvider::Moltorino,
             BadgeProvider::Limerino,
             BadgeProvider::JilChat,
+            BadgeProvider::BChat,
         ] {
             let wire = serde_json::to_string(&provider).unwrap();
             assert_eq!(
@@ -4048,6 +4406,8 @@ mod tests {
             dankchat: None,
             moltorino: None,
             moltorino_last_updated: UNIX_EPOCH,
+            moltorino_etag: None,
+            moltorino_warned: false,
             limerino: None,
             limerino_last_updated: UNIX_EPOCH,
             limerino_etag: None,
@@ -4055,6 +4415,10 @@ mod tests {
             jilchat: None,
             jilchat_last_updated: UNIX_EPOCH,
             jilchat_warned: false,
+            bchat: None,
+            bchat_last_updated: UNIX_EPOCH,
+            bchat_etag: None,
+            bchat_warned: false,
             by_user: HashMap::new(),
             backdrops: HashMap::new(),
             painted: HashMap::new(),
@@ -4141,6 +4505,8 @@ mod tests {
             dankchat: None,
             moltorino: None,
             moltorino_last_updated: UNIX_EPOCH,
+            moltorino_etag: None,
+            moltorino_warned: false,
             limerino: None,
             limerino_last_updated: UNIX_EPOCH,
             limerino_etag: None,
@@ -4148,6 +4514,10 @@ mod tests {
             jilchat: None,
             jilchat_last_updated: UNIX_EPOCH,
             jilchat_warned: false,
+            bchat: None,
+            bchat_last_updated: UNIX_EPOCH,
+            bchat_etag: None,
+            bchat_warned: false,
             by_user: HashMap::new(),
             backdrops: HashMap::new(),
             painted: HashMap::new(),
@@ -4485,9 +4855,10 @@ mod tests {
         let detail = badge_detail_from_cache(&tp, p, &id, None, Some("249031143"));
         assert_eq!(detail.title.as_deref(), Some("Moltorino Supporter"));
         assert_eq!(detail.description.as_deref(), Some("Thanks for supporting Moltorino."));
+        // One person wears it; the viewer owns it without wearing it.
         assert_eq!(detail.holder_count, Some(1));
         assert_eq!(detail.owned, Some(true));
-        assert!(detail.image_4x.as_deref().is_some_and(|u| u.ends_with("3x.webp?v=369")));
+        assert!(detail.image_4x.as_deref().is_some_and(|u| u.ends_with("3x.webp?asset=2")));
         // No viewer: ownership is unknown.
         let anon = badge_detail_from_cache(&tp, BadgeProvider::Moltorino, "moltorino-developer", None, None);
         assert_eq!(anon.owned, None);
@@ -4652,6 +5023,71 @@ mod tests {
     fn third_party_order_places_new_clients_after_moltorino() {
         assert_eq!(third_party_rank("limerino"), 5);
         assert_eq!(third_party_rank("jilchat"), 6);
+        assert_eq!(third_party_rank("bchat"), 7);
+    }
+
+    /// The live feed (2026-11-06) trimmed, groups in feed order, plus a holder
+    /// in two groups, a bad id, a group with no art and one with plain-http art.
+    const BCHAT_FIXTURE: &str = r#"{"badges":{
+      "admins":{"users":["1039455040","824594608","not-a-number"],"title":"Admin",
+        "images":{"1x":"https://itsbr0dyy.dev/badges/1x.avif","2x":"https://itsbr0dyy.dev/badges/2x.avif","4x":"https://itsbr0dyy.dev/badges/4x.avif"}},
+      "supporters":{"users":["204219574"," 824594608 "],"title":"Supporter",
+        "images":{"1x":"https://itsbr0dyy.dev/badges/supporter-1x.avif","2x":"https://itsbr0dyy.dev/badges/supporter-2x.avif","4x":"https://itsbr0dyy.dev/badges/supporter-4x.avif"}},
+      "liptongod":{"users":["61021189"],"title":"Supporter","images":{"1x":"https://itsbr0dyy.dev/badges/liptongod-4x.avif"}},
+      "empty":{"users":["1"],"title":"No art","images":{}},
+      "plain":{"users":["2"],"title":"Plain","images":{"1x":"http://itsbr0dyy.dev/badges/p.avif"}}
+    }}"#;
+
+    fn bchat_cache() -> ThirdPartyCache {
+        ThirdPartyCache { bchat: Some(serde_json::from_str(BCHAT_FIXTURE).unwrap()), ..empty_cache() }
+    }
+
+    #[test]
+    fn bchat_keeps_feed_order_and_wears_the_first_group() {
+        let feed: BChatBadgesResponse = serde_json::from_str(BCHAT_FIXTURE).unwrap();
+        let ids: Vec<&str> = feed.badges.0.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(ids, ["admins", "supporters", "liptongod", "empty", "plain"]);
+
+        let idx = bchat_cache().build_by_user_index();
+        let admin = &idx["1039455040"][0].badge_info;
+        assert_eq!((admin.id.as_str(), admin.title.as_str(), admin.set_id.as_str()), ("bchat-admins", "bChat Admin", "bchat"));
+        assert_eq!(admin.image_4x, "https://itsbr0dyy.dev/badges/4x.avif");
+        assert_eq!(idx["1039455040"][0].provider, BadgeProvider::BChat);
+        // Listed as an admin and (padded) as a supporter: wears the first.
+        assert_eq!(badge_ids(&idx["824594608"]), ["bchat-admins"]);
+        assert_eq!(badge_ids(&idx["204219574"]), ["bchat-supporters"]);
+        // A lone 1x stands in for every size.
+        let lipton = &idx["61021189"][0].badge_info;
+        assert_eq!((lipton.image_2x.as_str(), lipton.image_4x.as_str()), (lipton.image_1x.as_str(), lipton.image_1x.as_str()));
+        // No art, plain-http art and a bad id never index.
+        assert!(idx.get("1").is_none() && idx.get("2").is_none() && idx.get("not-a-number").is_none());
+    }
+
+    #[test]
+    fn bchat_gallery_counts_wearers() {
+        let tp = bchat_cache();
+        let tiles = bchat_gallery_tiles(tp.bchat.as_ref().unwrap(), Some("824594608"));
+        let rows: Vec<(&str, usize, bool)> = tiles.iter().map(|t| (t.id.as_str(), t.user_count, t.owned)).collect();
+        assert_eq!(rows, [("bchat-admins", 2, true), ("bchat-supporters", 1, false), ("bchat-liptongod", 1, false)]);
+        // The two "Supporter" groups share a title, so the gallery shows them as one tile.
+        let merged = third_party_gallery_tiles(&tp, None);
+        let bchat: Vec<(&str, usize)> =
+            merged.iter().filter(|t| t.provider == BadgeProvider::BChat).map(|t| (t.title.as_str(), t.user_count)).collect();
+        assert_eq!(bchat, [("bChat Admin", 2), ("bChat Supporter", 2)]);
+    }
+
+    #[test]
+    fn bchat_apply_outcomes() {
+        let now = UNIX_EPOCH + Duration::from_secs(1_000_000);
+        let gate = Duration::from_secs(600);
+        let mut tp = empty_cache();
+        apply_bchat(&mut tp, SmallFeedFetch::Fresh(serde_json::from_str(BCHAT_FIXTURE).unwrap(), None), now, gate);
+        assert_eq!(tp.bchat.as_ref().map(|f| f.badges.0.len()), Some(5));
+        assert_eq!(tp.bchat_last_updated, now);
+        apply_bchat(&mut tp, SmallFeedFetch::Failed, now, gate);
+        assert_eq!(tp.bchat.as_ref().map(|f| f.badges.0.len()), Some(5));
+        assert!(tp.bchat_warned);
+        assert_eq!(tp.bchat_last_updated, retry_at_next_gate(now, BCHAT_REFRESH, gate));
     }
 
     #[test]

@@ -15,7 +15,7 @@
 //                                       (broadcaster, mod, VIP), subscription,
 //                                       earned in the channel, then global.
 //   3. 7TV badge
-//   4. Third-party badges            - BTTV / FFZ / Chatterino / Homies / Moltorino / Limerino / JilChat / BTTV Pro
+//   4. Third-party badges            - BTTV / FFZ / Chatterino / Homies / Moltorino / Limerino / JilChat / bChat / BTTV Pro
 //                                       (any order among themselves)
 //   5. StreamNook member badge       - who you are on StreamNook. Rightmost, next
 //                                       to the name, where readers look first.

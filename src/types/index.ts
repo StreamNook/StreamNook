@@ -366,7 +366,7 @@ export interface ChatDesignSettings {
   show_third_party_badges?: boolean;
   // Add-on badge providers to leave out (lowercase ids: 'streamnook', '7tv',
   // 'ffz', 'bttv', 'chatterino', 'homies', 'moltorino', 'chatsen', 'chatty',
-  // 'dankchat', 'limerino', 'jilchat'). Default none.
+  // 'dankchat', 'limerino', 'jilchat', 'bchat'). Default none.
   hidden_badge_providers?: string[];
   // How many badges a chat row shows before folding the rest into a "+N"
   // chip that unfolds on hover (tap on phones). 0 shows all. Default 3.

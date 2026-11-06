@@ -154,6 +154,7 @@ export const BADGE_CACHE_HOSTS: ReadonlySet<string> = new Set([
   'api.moltorino.com',
   'api.limerino.com',
   'api.jil.chat',
+  'itsbr0dyy.dev',
 ]);
 
 const SEVENTV_BADGE = /^https:\/\/cdn\.7tv\.app\/badge\/([0-9A-Z]{26})\/([1-4]x\.(?:webp|avif))$/;

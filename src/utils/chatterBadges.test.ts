@@ -107,6 +107,12 @@ describe('onePerCategory', () => {
     const list = [b('limerino', 'limerino-halloween-2026', 'limerino'), b('limerino', 'limerino-founder', 'limerino-owned')];
     expect(onePerCategory(list).map((x) => x.id)).toEqual(['limerino-halloween-2026']);
   });
+
+  it("puts a Moltorino holder's owned tiers in their worn badge's one group", () => {
+    expect(wearCategory(b('moltorino', 'moltorino-supporter', 'moltorino-owned'))).toBe('moltorino:moltorino');
+    const list = [b('moltorino', 'moltorino-supporter_plus', 'moltorino'), b('moltorino', 'moltorino-supporter', 'moltorino-owned')];
+    expect(onePerCategory(list).map((x) => x.id)).toEqual(['moltorino-supporter_plus']);
+  });
 });
 
 describe('toggleLoadoutBadge', () => {

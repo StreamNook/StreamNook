@@ -24,6 +24,7 @@ import homiesLogo from '../assets/homies-logo.png';
 import moltorinoLogo from '../assets/moltorino-logo.svg';
 import limerinoLogo from '../assets/limerino-logo.png';
 import jilchatLogo from '../assets/jilchat-logo.png';
+import bchatLogo from '../assets/bchat-logo.png';
 import ffzLogo from '../assets/ffz-logo.png';
 import dankchatLogo from '../assets/dankchat-logo.png';
 import chatsenLogo from '../assets/chatsen-logo.png';
@@ -40,6 +41,7 @@ export type ChatClientProvider =
   | 'moltorino'
   | 'limerino'
   | 'jilchat'
+  | 'bchat'
   | 'chatsen'
   | 'chatty'
   | 'dankchat';
@@ -103,6 +105,13 @@ const PROVIDERS: ProviderMeta[] = [
     blurb: 'A Twitch chat app for iPhone, and a Chatterino fork.',
     homepage: 'https://jil.chat/',
     logo: jilchatLogo,
+  },
+  {
+    key: 'bchat',
+    label: 'bChat',
+    blurb: 'Admins and supporters of the bChat stream chat overlay.',
+    homepage: 'https://bchat.itsbr0dyy.dev/',
+    logo: bchatLogo,
   },
   {
     key: 'ffz',
