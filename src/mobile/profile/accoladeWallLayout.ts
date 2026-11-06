@@ -51,7 +51,12 @@ export function wallHeight(rows: number, hasToggle: boolean): number {
   );
 }
 
-/** The height of the invisible space a held slot keeps: a collapsed wall with two rows and "Show all". */
-export function collapsedWallHeight(): number {
-  return wallHeight(WALL.collapsedRows, true);
+/** The height of the invisible space a held slot keeps: a collapsed wall with
+ *  two rows (five across) and "Show all". */
+export function collapsedWallHeight(
+  columns: number = wallColumns(typeof window === 'undefined' ? 360 : window.innerWidth),
+): number {
+  // The same medallions two five-wide rows hold, in however many rows this
+  // screen's columns need, so a narrow phone's slot is not a row short.
+  return wallHeight(wallRows(WALL.collapsedRows * WALL.columns, columns), true);
 }

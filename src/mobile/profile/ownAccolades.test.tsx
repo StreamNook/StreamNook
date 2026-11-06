@@ -125,6 +125,8 @@ describe('the wall layout', () => {
   it('holds the slot at a collapsed wall of two rows with Show all', () => {
     expect(collapsedWallHeight()).toBe(wallHeight(2, true));
     expect(collapsedWallHeight()).toBe(296);
+    // Four across on a narrow phone holds the same ten medallions in three rows.
+    expect(collapsedWallHeight(4)).toBe(wallHeight(3, true));
     expect(wallHeight(3, true)).toBeGreaterThan(collapsedWallHeight());
   });
 });
