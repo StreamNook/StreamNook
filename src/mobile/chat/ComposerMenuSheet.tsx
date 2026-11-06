@@ -22,6 +22,7 @@ import { useAppStore } from '../../stores/AppStore';
 import { mutedIncludes, setLiveAlert } from '../notifyChannels';
 import { setFavoriteChannel, useIsFavorite, type FavoriteRef } from '../../utils/favoriteDoor';
 import { GlassHeart, SubscribeBadge, favoriteLabel } from '../ui/menuIcons';
+import { useUnbanRequests } from '../../components/chat/unbanRequests';
 
 // The same glyph per mode as the composer's room-mode icon, so the icon you
 // tapped is the one you find named here.
@@ -128,6 +129,13 @@ export const ComposerMenuSheet: React.FC<Props> = ({
     enabled: open && !!activeChannel,
   });
   const terms = platformTerms(provider);
+  // The Moderation row counts who is asking to be unbanned; the sheet it
+  // opens lists them. Read only while this menu is open.
+  const { rows: unbanRows } = useUnbanRequests(
+    channelId ?? '',
+    activeChannel ?? '',
+    open && !!onModeration && !!channelId && !!activeChannel,
+  );
   const canSubscribe = !!activeChannel && (provider === 'twitch' || provider === 'kick');
 
   // Favorite, for the room you are in: a Twitch room by its id when known (by
@@ -366,6 +374,7 @@ export const ComposerMenuSheet: React.FC<Props> = ({
               onModeration();
             }}
             icon={<ShieldCheck size={ICON} className="text-textSecondary" />}
+            value={unbanRows.length > 0 ? fitCount(unbanRows.length) : undefined}
             trailing={<CaretRight size={16} className="text-textMuted" />}
           >
             Moderation

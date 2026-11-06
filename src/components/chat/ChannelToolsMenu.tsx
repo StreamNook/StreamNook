@@ -6,12 +6,13 @@
 //   Your channel / Channel   the stream manager's rows (stream info, polls,
 //                            predictions, raid, ad break, rewards queue): the
 //                            ones Rust says your role here can use
-//   Chat modes, Moderation,  you moderate this Twitch channel
-//   Your settings
+//   Chat modes, Moderation,  you moderate this Twitch channel; Moderation
+//   Your settings            carries the unban requests waiting, if any
+//                            (the button's tooltip counts them)
 // ChatWidget decides which apply and renders the button only when at least
 // one does, so the row never carries a button that opens an empty menu.
 import React, { useState, useRef, useEffect } from 'react';
-import { Shield, ShieldAlert, Users, MessageSquare, Clock, Slash, Hash, Settings, ChevronLeft, ChevronRight, Zap, PinOff, Ban, BarChart3, Trophy, Pickaxe, Wrench, Pencil, Send, Tv, Megaphone } from 'lucide-react';
+import { Shield, ShieldAlert, Users, MessageSquare, Clock, Slash, Hash, Settings, ChevronLeft, ChevronRight, Zap, PinOff, Ban, BarChart3, Trophy, Pickaxe, Wrench, Pencil, Send, Tv, Megaphone, DoorOpen } from 'lucide-react';
 import { ChannelPointsIcon } from '../ChannelPointsIcon';
 import { SevenTVLogo } from '../emotesets/SevenTVLogo';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -26,6 +27,8 @@ import { useOutsidePress } from '../../hooks/useOutsidePress';
 import { managerAct, type ActOutcome, type ManagerAction, type SectionRow, type StreamManagerView } from '../../services/streamManager';
 import type { ManagerPanelKind } from './StreamManagerPanel';
 import BlockedTermsSheet from './BlockedTermsSheet';
+import UnbanRequestsPage from './UnbanRequestsPage';
+import { countLabel, useUnbanRequests } from './unbanRequests';
 import { ACCENT_BUTTON, DANGER_FILL, GLAZE_PILL } from '../ui/glazeButtons';
 
 export interface DropsTool {
@@ -102,8 +105,16 @@ const ChannelToolsMenu: React.FC<ChannelToolsMenuProps> = ({
   const menuRef = useRef<HTMLDivElement>(null);
   useFitAbove(menuRef, isOpen, 520);
   const [isPending, setIsPending] = useState(false);
-  // The Blocked terms page takes the menu's body in place of the sections.
-  const [page, setPage] = useState<'tools' | 'blocked'>('tools');
+  // The Blocked terms and Unban requests pages take the menu's body in place
+  // of the sections.
+  const [page, setPage] = useState<'tools' | 'blocked' | 'unban'>('tools');
+  // Live while the button shows, so the tooltip and the Moderation row can
+  // count them without the menu open. Rust backs off on a refused read.
+  const { rows: unbanRows, resolve: resolveUnban } = useUnbanRequests(
+    broadcasterId,
+    channelLogin,
+    canModerate && !!broadcasterId && !!channelLogin,
+  );
   // Read once per open rather than subscribed: the engine holds this in a plain
   // module Map with no store behind it, and the menu is short-lived anyway.
   const [activeNukeCount, setActiveNukeCount] = useState(0);
@@ -233,19 +244,24 @@ const ChannelToolsMenu: React.FC<ChannelToolsMenuProps> = ({
 
   const inUse = isOpen || pollBuilderOpen;
   const collecting = !!drops?.collecting;
+  // Quiet on purpose: the wrench looks the same, only its words count them.
+  const unbanWords = unbanRows.length > 0 ? countLabel(unbanRows.length) : null;
+  const tooltip = [collecting ? `Tools (collecting drops for ${drops?.gameName})` : 'Tools', unbanWords]
+    .filter(Boolean)
+    .join(' · ');
 
   return (
     // Not positioned on purpose: the menu anchors to the composer's own
     // `relative` block, so it spans the whole message box like the emote menu.
     <div className="static inline-flex flex-shrink-0 self-center" ref={containerRef} onPointerDownCapture={markInside}>
-      <Tooltip content={collecting ? `Tools (collecting drops for ${drops?.gameName})` : 'Tools'} side="top">
+      <Tooltip content={tooltip} side="top">
         <button
           onClick={() => {
             setIsOpen(!isOpen);
             setIsConfirmingClear(false);
             setPage('tools');
           }}
-          aria-label="Channel tools"
+          aria-label={unbanWords ? `Channel tools, ${unbanWords}` : 'Channel tools'}
           aria-expanded={isOpen}
           className={`sn-composer-tool relative flex items-center justify-center w-9 h-9 transition-colors duration-200 ${
             inUse ? 'text-accent-neon' : 'text-textSecondary hover:text-accent-neon'
@@ -273,14 +289,14 @@ const ChannelToolsMenu: React.FC<ChannelToolsMenuProps> = ({
           >
             {/* No frost of its own: the flyout is already the backdrop. */}
             <div className="px-4 py-3 border-b border-white/[0.06] flex items-center z-10 relative">
-              {page === 'blocked' ? (
+              {page !== 'tools' ? (
                 <button
                   onClick={() => setPage('tools')}
                   aria-label="Back to tools"
                   className="-ml-1 flex items-center gap-1 text-[11px] font-semibold text-white/50 tracking-wider uppercase hover:text-white/80 transition-colors"
                 >
                   <ChevronLeft size={13} strokeWidth={2.5} />
-                  Blocked terms
+                  {page === 'blocked' ? 'Blocked terms' : 'Unban requests'}
                 </button>
               ) : (
                 <span className="text-[11px] font-semibold text-white/50 tracking-wider uppercase">Tools</span>
@@ -289,6 +305,8 @@ const ChannelToolsMenu: React.FC<ChannelToolsMenuProps> = ({
 
             {page === 'blocked' && canModerate ? (
               <BlockedTermsSheet key={broadcasterId} broadcasterId={broadcasterId} />
+            ) : page === 'unban' && canModerate ? (
+              <UnbanRequestsPage key={broadcasterId} rows={unbanRows} resolve={resolveUnban} />
             ) : (
             <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-1">
               {drops && (
@@ -474,6 +492,17 @@ const ChannelToolsMenu: React.FC<ChannelToolsMenuProps> = ({
 
                     {canAnnounce && (
                       <MenuActionItem icon={<Megaphone size={14} />} label="Announce" onClick={() => openPanel('announce')} />
+                    )}
+
+                    {/* Only while someone is asking, like the nuke row below;
+                        an open page stays put after the last one is answered. */}
+                    {unbanRows.length > 0 && (
+                      <MenuActionItem
+                        icon={<DoorOpen size={14} />}
+                        label="Unban requests"
+                        badge={String(unbanRows.length)}
+                        onClick={() => setPage('unban')}
+                      />
                     )}
 
                     {/* Only rendered while a /nuke is still watching new messages, so

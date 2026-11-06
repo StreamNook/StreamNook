@@ -9,7 +9,6 @@ import { Zap, Filter } from 'lucide-react';
 import ChatSearchBar from './chat/ChatSearchBar';
 import { fitHeaderDensity } from './chat/fitHeaderDensity';
 import AutomodQueueStrip from './chat/AutomodQueueStrip';
-import UnbanRequestsStrip from './chat/UnbanRequestsStrip';
 import { useStreamerMode } from '../utils/streamerMode';
 import { firstDropOf, imagesTabOn, isDroppableImagePath, uploadIntoBox } from '../services/imageUploadService';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
@@ -5670,11 +5669,6 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
             queue; this strip mirrors it and sends Allow / Deny to Helix. */}
         {activeView === 'chat' && isModerator && isTwitch && panelChannelKey && (
           <AutomodQueueStrip channel={panelChannelKey} />
-        )}
-        {/* Unban requests waiting on the moderators. Rust keeps the list; this
-            strip mirrors it and sends Approve / Deny to Helix. */}
-        {activeView === 'chat' && isModerator && isTwitch && panelChannelKey && currentStream?.user_id && (
-          <UnbanRequestsStrip channel={panelChannelKey} channelId={currentStream.user_id} />
         )}
 
         {/* Input container - static flex item at bottom (hidden when About view active) */}

@@ -250,9 +250,8 @@ describe('every chat mounts it at the foot of its messages', () => {
     expect(widget.slice(panel, mount)).toContain('listeningPill={');
     expect(widget).toMatch(/\{listeningPill\}\s*\{pausedPill\}/);
     expect(widget).toContain('className="sn-chat-panel relative flex-1 overflow-hidden');
-    // ...so it sits above the AutoMod and unban strips, never over them.
+    // ...so it sits above the AutoMod strip, never over it.
     expect(widget.indexOf('<AutomodQueueStrip', mount)).toBeGreaterThan(mount);
-    expect(widget.indexOf('<UnbanRequestsStrip', mount)).toBeGreaterThan(mount);
     // Only once.
     expect(widget.indexOf('<ListeningStrip room=', mount + 1)).toBe(-1);
   });

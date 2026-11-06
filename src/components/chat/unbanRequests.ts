@@ -1,6 +1,6 @@
 // Unban requests a channel's moderators can answer, live from Rust
 // (`get_unban_requests`, pushed as `unban-requests`). Shared by the desktop
-// strip and the phones' Moderation sheet.
+// Tools menu's Unban requests page and the phones' Moderation sheet.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
@@ -39,12 +39,9 @@ export function rowsFor(rows: UnbanRequest[], channel: string): UnbanRequest[] {
   return rows.filter((r) => r.channel === key);
 }
 
-/** The collapsed line: "2 unban requests · Gus: I was joking". */
-export function summaryLine(rows: UnbanRequest[], open: boolean): string {
-  const noun = rows.length === 1 ? 'unban request' : 'unban requests';
-  const first = rows[0];
-  if (open || !first) return noun;
-  return `${noun} · ${first.user_name || first.user_login}: ${first.text}`;
+/** The Tools button's tooltip words: "1 unban request", "2 unban requests". */
+export function countLabel(count: number): string {
+  return `${count} ${count === 1 ? 'unban request' : 'unban requests'}`;
 }
 
 /** The channel's pending unban requests, live, and the way to answer one. */
