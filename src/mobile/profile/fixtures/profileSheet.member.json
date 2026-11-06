@@ -102,7 +102,7 @@
         { "key": "messages", "label": "Messages sent", "value": "10,100", "caption": "into the void" },
         { "key": "streams", "label": "Streams watched", "value": "300" },
         { "key": "subs_gifted", "label": "Subs gifted", "value": "5" },
-        { "key": "cosmetics", "label": "Cosmetics", "value": "7", "caption": "2 paints, 1 badges, 4 StreamNook" },
+        { "key": "cosmetics", "label": "Cosmetics", "value": "7", "caption": "2 paints, 1 badge, 4 StreamNook" },
         { "key": "favorite_channel", "label": "Favorite channel", "value": "xQc", "caption": "313h watched" },
         { "key": "member_rank", "label": "Member rank", "value": "#7", "caption": "Mythic" }
       ]

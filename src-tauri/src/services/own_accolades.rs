@@ -56,7 +56,7 @@ const WALK_RETRY: Duration = Duration::from_secs(10 * 60);
 /// The clock that looks for a new local date, and every Nth look pokes a run.
 const TICK: Duration = Duration::from_secs(5 * 60);
 const PERIODIC_EVERY: u32 = 6;
-/// The accolades only the client can attest (R5 E4): no rule lights them.
+/// The accolades only the client can attest: no rule lights them.
 const ATTESTED: [&str; 4] = [
     "insomniac",
     "perfect_corner",
@@ -302,45 +302,12 @@ async fn fetch_drops(token: &str) -> Part<u64> {
 
 // ---- Channel points held ---------------------------------------------------------------
 
-const WEB_CLIENT_ID: &str = env!("TWITCH_WEB_CLIENT_ID");
-
-const POINTS_QUERY: &str = r#"
-    query ChannelPointsContext($channelLogin: String!) {
-        user(login: $channelLogin) {
-            channel {
-                self {
-                    communityPoints {
-                        balance
-                    }
-                }
-            }
-        }
-    }
-    "#;
-
-/// The positive balances in one batch answer, summed. An answer is whole or it
-/// is an error: not an array, a length that does not match the batch, or any
-/// item that came back with `errors` makes the batch a failed one.
-fn sum_batch(parsed: &Value, expected: usize) -> Result<u64, String> {
-    let items = parsed.as_array().ok_or("the batch answer is not a list")?;
-    if items.len() != expected {
-        return Err(format!("the batch answered {} of {expected}", items.len()));
-    }
-    let mut total = 0u64;
-    for item in items {
-        if item.get("errors").is_some() {
-            return Err("a batch item came back with errors".to_string());
-        }
-        if let Some(balance) = item
-            .pointer("/data/user/channel/self/communityPoints/balance")
-            .and_then(Value::as_i64)
-        {
-            if balance > 0 {
-                total += balance as u64;
-            }
-        }
-    }
-    Ok(total)
+/// One batch's balances, summed. A batch is whole or it is a failed one: any
+/// operation that came back with `errors` fails it.
+fn sum_batch(balances: &[Option<u64>]) -> Result<u64, String> {
+    balances.iter().try_fold(0u64, |total, b| {
+        b.map(|n| total + n).ok_or_else(|| "a batch item came back with errors".to_string())
+    })
 }
 
 /// What a walk found.
@@ -369,37 +336,12 @@ async fn walk_points(token: &str) -> Result<WalkOutcome, String> {
             None => break,
         }
     }
-    let client = crate::services::http::client();
     let (mut total, mut failed_batches) = (0u64, 0usize);
     for chunk in channels.chunks(crate::services::twitch_limits::GQL_MAX_BATCHED_OPERATIONS) {
-        let body: Vec<Value> = chunk
-            .iter()
-            .map(|(login, _)| {
-                json!({
-                    "operationName": "ChannelPointsContext",
-                    "query": POINTS_QUERY,
-                    "variables": { "channelLogin": login.to_lowercase() }
-                })
-            })
-            .collect();
-        let sent = client
-            .post("https://gql.twitch.tv/gql")
-            .header("Client-Id", WEB_CLIENT_ID)
-            .header("Authorization", format!("OAuth {token}"))
-            .json(&body)
-            .send()
-            .await;
-        let batch = match sent {
-            Ok(res) => {
-                let ok = res.status().is_success();
-                match res.json::<Value>().await {
-                    Ok(parsed) if ok => sum_batch(&parsed, chunk.len()),
-                    Ok(_) => Err("the batch was refused".to_string()),
-                    Err(e) => Err(format!("the batch was unreadable: {e}")),
-                }
-            }
-            Err(e) => Err(format!("the batch failed: {e}")),
-        };
+        let logins: Vec<String> = chunk.iter().map(|(login, _)| login.clone()).collect();
+        let batch = crate::commands::drops::points_balances_batch(token, &logins)
+            .await
+            .and_then(|answered| sum_batch(&answered.into_iter().map(|(_, b)| b).collect::<Vec<_>>()));
         match batch {
             Ok(n) => total += n,
             Err(e) => {
@@ -453,14 +395,34 @@ fn walk_due(saved: Option<&Walked>, today: &str, retry_at: Option<Instant>, now:
     retry_at.is_none_or(|t| now >= t) && saved.is_none_or(|w| w.day != today)
 }
 
+/// Walks that did not complete, at most this many a day; then the next try waits
+/// for the next day, so a refused or broken walk never repeats all day.
+const WALK_TRIES_PER_DAY: u32 = 3;
+
 struct WalkState {
     running: bool,
     retry_at: Option<Instant>,
+    /// The day and how many walks failed on it.
+    failed: Option<(String, u32)>,
+}
+
+impl WalkState {
+    fn tries_left(&self, today: &str) -> bool {
+        self.failed.as_ref().is_none_or(|(day, n)| day != today || *n < WALK_TRIES_PER_DAY)
+    }
+
+    fn note_failure(&mut self, today: &str) {
+        self.failed = Some(match self.failed.take() {
+            Some((day, n)) if day == today => (day, n + 1),
+            _ => (today.to_string(), 1),
+        });
+    }
 }
 
 static WALK: Mutex<WalkState> = Mutex::new(WalkState {
     running: false,
     retry_at: None,
+    failed: None,
 });
 
 fn today_string() -> String {
@@ -531,6 +493,9 @@ fn start_walk(token: String, validated: String, start: WalkBind) {
             let mut state = WALK.lock().unwrap_or_else(|e| e.into_inner());
             state.running = false;
             state.retry_at = (!accepted).then(|| Instant::now() + WALK_RETRY);
+            if !accepted {
+                state.note_failure(&today_string());
+            }
         }
         if let Some(walked) = walk_to_save(
             accepted,
@@ -567,15 +532,12 @@ pub async fn own_drops_points(member_id: &str) -> DropsPoints {
         return DropsPoints::unknown();
     }
     let saved = saved_walk(&validated);
+    let today = today_string();
     let due = {
         let state = WALK.lock().unwrap_or_else(|e| e.into_inner());
         !state.running
-            && walk_due(
-                saved.as_ref(),
-                &today_string(),
-                state.retry_at,
-                Instant::now(),
-            )
+            && state.tries_left(&today)
+            && walk_due(saved.as_ref(), &today, state.retry_at, Instant::now())
     };
     if due {
         start_walk(token, validated, start);
@@ -651,10 +613,18 @@ fn primary_login() -> String {
 /// None unless `member_id` is the signed-in primary member.
 pub async fn own_wall(member_id: &str, tz_offset_min: Option<i32>) -> Option<AccoladeWall> {
     let bind = bind_now().filter(|b| b.member == member_id)?;
-    let (parts, wall) = build(&bind, &primary_login(), &Clock::system(tz_offset_min)).await?;
-    remember(&bind.member, &wall);
-    grant_from(&bind, &parts, &wall).await;
-    Some(wall)
+    match build(&bind, &primary_login(), &Clock::system(tz_offset_min)).await {
+        Some((parts, wall)) => {
+            remember(&bind.member, &wall);
+            grant_from(&bind, &parts, &wall).await;
+            Some(wall)
+        }
+        // The member list loaded and they are not on it: nothing to draw.
+        None if registry::members_loaded() && registry::member_number(&bind.member).is_none() => None,
+        // Could not read this time (list still loading, stats or saved set
+        // unread): the last wall built stays, so a slow start never wipes it.
+        None => cached_own_wall(&bind.member),
+    }
 }
 
 /// The last own wall Rust built for this member, from disk. No network.
@@ -1013,7 +983,7 @@ mod tests {
         *ORIGIN + Duration::from_secs(secs)
     }
 
-    // ---- The throttle (R5 F9) ----
+    // ---- The throttle ----
 
     #[test]
     fn the_first_trigger_runs_and_one_during_a_run_runs_it_once_more() {
@@ -1061,7 +1031,7 @@ mod tests {
         );
     }
 
-    // ---- The drops token (R5 H1) ----
+    // ---- The drops token ----
 
     #[test]
     fn a_token_swapped_between_two_reads_never_borrows_the_other_tokens_account() {
@@ -1120,7 +1090,7 @@ mod tests {
         );
     }
 
-    // ---- The walk (R5 G4, H2) ----
+    // ---- The walk ----
 
     fn bind5(member: &str, owner: &str, generation: u64) -> WalkBind {
         WalkBind {
@@ -1176,26 +1146,15 @@ mod tests {
 
     #[test]
     fn a_batch_with_an_item_that_came_back_with_errors_is_a_failed_batch() {
-        let item = |balance: i64| json!({ "data": { "user": { "channel": { "self": { "communityPoints": { "balance": balance } } } } } });
-        assert_eq!(
-            sum_batch(&json!([item(100), item(0), item(-5), item(250)]), 4),
-            Ok(350)
-        );
-        assert!(sum_batch(
-            &json!([item(100), { "errors": [{ "message": "service timeout" }] }]),
-            2
-        )
-        .is_err());
-        assert!(
-            sum_batch(&json!([item(100)]), 2).is_err(),
-            "a short answer is not mapped by position"
-        );
-        assert!(sum_batch(&json!({ "error": "Bad Request" }), 1).is_err());
+        use crate::commands::drops::points_batch_balances;
+        let item = |balance: i64| json!({ "data": { "community": { "channel": { "self": { "communityPoints": { "balance": balance } } } } } });
+        let sum = |answer: Value, n: usize| points_batch_balances(&answer, n).and_then(|b| sum_batch(&b));
+        assert_eq!(sum(json!([item(100), item(0), item(-5), item(250)]), 4), Ok(350));
+        assert!(sum(json!([item(100), { "errors": [{ "message": "service timeout" }] }]), 2).is_err());
+        assert!(sum(json!([item(100)]), 2).is_err(), "a short answer is not mapped by position");
+        assert!(sum(json!({ "error": "Bad Request" }), 1).is_err());
         // A channel that is gone answers no balance; that is not an error.
-        assert_eq!(
-            sum_batch(&json!([{ "data": { "user": null } }, item(7)]), 2),
-            Ok(7)
-        );
+        assert_eq!(sum(json!([{ "data": { "community": { "channel": null } } }, item(7)]), 2), Ok(7));
     }
 
     #[test]
@@ -1219,6 +1178,19 @@ mod tests {
             "an incomplete walk waits"
         );
         assert!(walk_due(None, "2026-11-05", Some(at(100)), at(100)));
+    }
+
+    #[test]
+    fn three_failed_walks_wait_for_the_next_day() {
+        let mut state = WalkState { running: false, retry_at: None, failed: None };
+        for _ in 0..WALK_TRIES_PER_DAY {
+            assert!(state.tries_left("2026-11-05"));
+            state.note_failure("2026-11-05");
+        }
+        assert!(!state.tries_left("2026-11-05"), "the day's tries are spent");
+        assert!(state.tries_left("2026-11-06"), "a new day starts over");
+        state.note_failure("2026-11-06");
+        assert_eq!(state.failed, Some(("2026-11-06".to_string(), 1)));
     }
 
     #[test]
@@ -1323,7 +1295,7 @@ mod tests {
         assert_eq!(drops_claimed(&json!({})), None);
     }
 
-    // ---- What is granted (R5 F9) ----
+    // ---- What is granted ----
 
     fn medal(id: &str, earned: bool) -> AccoladeMedal {
         AccoladeMedal {

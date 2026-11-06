@@ -487,7 +487,6 @@ pub async fn refresh_followed_channel_points(
     state: State<'_, AppState>,
 ) -> Result<Vec<ChannelPointsBalance>, String> {
     use crate::services::twitch_service::TwitchService;
-    use serde_json::json;
 
     const REFRESH_THROTTLE: std::time::Duration = std::time::Duration::from_secs(30);
     if !force.unwrap_or(false) {
@@ -503,11 +502,9 @@ pub async fn refresh_followed_channel_points(
         }
     }
 
-    const CLIENT_ID: &str = env!("TWITCH_WEB_CLIENT_ID");
     let token = DropsAuthService::get_token()
         .await
         .map_err(|e| format!("Failed to get token: {}", e))?;
-    let client = HTTP_CLIENT.clone();
 
     // Drain the full followed list (live or offline): (login, channel_id).
     let mut channels: Vec<(String, String)> = Vec::new();
@@ -529,106 +526,23 @@ pub async fn refresh_followed_channel_points(
         }
     }
 
-    // The same direct ChannelPointsContext query get_channel_points_for_channel
-    // uses (inline, not the stale persisted hash), batched 35 ops per request
-    // (Twitch GQL's per-batch ceiling).
-    const QUERY: &str = r#"
-    query ChannelPointsContext($channelLogin: String!) {
-        user(login: $channelLogin) {
-            channel {
-                self {
-                    communityPoints {
-                        balance
-                    }
-                }
-            }
-        }
-    }
-    "#;
-
+    // Batched 35 operations per request (Twitch GQL's per-batch ceiling), through
+    // the same persisted query and client the rewards menu reads balances with.
     // Collect off-lock so the network walk never stalls chat/automation, which also
     // hold the drops service mutex.
     let mut found: Vec<(String, String, i32)> = Vec::new(); // (channel_id, login, balance)
     for chunk in channels.chunks(crate::services::twitch_limits::GQL_MAX_BATCHED_OPERATIONS) {
-        let body: Vec<serde_json::Value> = chunk
-            .iter()
-            .map(|(login, _id)| {
-                json!({
-                    "operationName": "ChannelPointsContext",
-                    "query": QUERY,
-                    "variables": { "channelLogin": login.to_lowercase() }
-                })
-            })
-            .collect();
-
-        let resp = match client
-            .post("https://gql.twitch.tv/gql")
-            .header("Client-Id", CLIENT_ID)
-            .header("Authorization", format!("OAuth {}", token))
-            .json(&body)
-            .send()
-            .await
-        {
-            Ok(r) => r,
+        let logins: Vec<String> = chunk.iter().map(|(login, _)| login.clone()).collect();
+        let balances = match points_balances_batch(&token, &logins).await {
+            Ok(b) => b,
             Err(e) => {
-                error!("[ChannelPoints] balance batch failed: {}", e);
+                error!("[ChannelPoints] balance batch of {} channels: {}", chunk.len(), e);
                 continue;
             }
         };
-
-        // Status first: an over-cap batch returns 400 with valid JSON, so
-        // json() succeeds and the failure would pass unlogged.
-        let status = resp.status();
-        let parsed: serde_json::Value = match resp.json().await {
-            Ok(v) => v,
-            Err(e) => {
-                error!("[ChannelPoints] balance batch parse failed: {}", e);
-                continue;
-            }
-        };
-
-        if !status.is_success() {
-            error!(
-                "[ChannelPoints] balance batch HTTP {} for {} operations (cap is {}): {}",
-                status,
-                chunk.len(),
-                crate::services::twitch_limits::GQL_MAX_BATCHED_OPERATIONS,
-                parsed
-            );
-            continue;
-        }
-
-        // Results map to requests BY INDEX, sound only while lengths agree;
-        // a short array would misattribute balances.
-        let Some(arr) = parsed.as_array() else {
-            error!(
-                "[ChannelPoints] balance batch returned a non-array body, skipping {} channels: {}",
-                chunk.len(),
-                parsed
-            );
-            continue;
-        };
-        if arr.len() != chunk.len() {
-            error!(
-                "[ChannelPoints] balance batch length mismatch (sent {}, got {}); \
-                 refusing to map positionally",
-                chunk.len(),
-                arr.len()
-            );
-            continue;
-        }
-
-        for (idx, item) in arr.iter().enumerate() {
-            let Some((login, channel_id)) = chunk.get(idx) else {
-                continue;
-            };
-            if let Some(bal) = item
-                .pointer("/data/user/channel/self/communityPoints/balance")
-                .and_then(|v| v.as_i64())
-            {
-                if bal > 0 {
-                    found.push((channel_id.clone(), login.clone(), bal as i32));
-                }
+        for ((login, balance), (_, channel_id)) in balances.into_iter().zip(chunk) {
+            if let Some(bal) = balance.filter(|b| *b > 0) {
+                found.push((channel_id.clone(), login, bal.min(i32::MAX as u64) as i32));
             }
         }
     }
@@ -1390,6 +1304,74 @@ async fn points_gql(client_id: &str, token: &str, body: &serde_json::Value) -> O
         .iter()
         .any(|p| answer.pointer(p).is_some_and(|c| !c.is_null()));
     has_channel.then_some(answer)
+}
+
+/// One request's worth of `ChannelPointsContext` operations (the persisted query
+/// the rewards menu sends), one per login.
+pub(crate) fn points_batch_body(logins: &[String]) -> Vec<serde_json::Value> {
+    logins
+        .iter()
+        .map(|login| {
+            serde_json::json!({
+                "operationName": "ChannelPointsContext",
+                "variables": {
+                    "channelLogin": login.to_lowercase(),
+                    "includeGoalTypes": ["CREATOR", "BOOST"]
+                },
+                "extensions": {
+                    "persistedQuery": { "version": 1, "sha256Hash": CHANNEL_POINTS_CONTEXT_HASH }
+                }
+            })
+        })
+        .collect()
+}
+
+/// Each operation's balance in a batch answer, by index: `None` for one that came
+/// back with `errors`, 0 for a channel that is gone or where points are off for
+/// the viewer. An answer that is not a list, or whose length does not match the
+/// batch, is an error (results map to requests by position only).
+pub(crate) fn points_batch_balances(answer: &serde_json::Value, expected: usize) -> Result<Vec<Option<u64>>, String> {
+    let items = answer.as_array().ok_or("the batch answer is not a list")?;
+    if items.len() != expected {
+        return Err(format!("the batch answered {} of {expected}", items.len()));
+    }
+    Ok(items
+        .iter()
+        .map(|item| {
+            if item.get("errors").is_some() {
+                return None;
+            }
+            let balance = ["/data/community/channel", "/data/channel"]
+                .iter()
+                .find_map(|base| item.pointer(&format!("{base}/self/communityPoints/balance")))
+                .and_then(serde_json::Value::as_i64);
+            Some(balance.map_or(0, |b| b.max(0) as u64))
+        })
+        .collect())
+}
+
+/// The viewer's channel points in each of `logins` (one batch, at most
+/// `GQL_MAX_BATCHED_OPERATIONS`), read with the Drops token under the Android
+/// client it was issued to, as the rewards menu reads it. A refused or unreadable
+/// batch is an error; an operation that failed on its own is `None`.
+pub(crate) async fn points_balances_batch(token: &str, logins: &[String]) -> Result<Vec<(String, Option<u64>)>, String> {
+    let resp = HTTP_CLIENT
+        .post("https://gql.twitch.tv/gql")
+        .header("Client-Id", env!("TWITCH_ANDROID_CLIENT_ID"))
+        .header("Authorization", format!("OAuth {token}"))
+        .header("X-Device-Id", crate::services::twitch_service::gql_device_id())
+        .json(&points_batch_body(logins))
+        .send()
+        .await
+        .map_err(|e| format!("the batch failed: {e}"))?;
+    // Status first: an over-cap batch returns 400 with valid JSON.
+    let status = resp.status();
+    let answer: serde_json::Value = resp.json().await.map_err(|e| format!("the batch was unreadable: {e}"))?;
+    if !status.is_success() {
+        return Err(format!("the batch was refused: HTTP {status}: {answer}"));
+    }
+    let balances = points_batch_balances(&answer, logins.len())?;
+    Ok(logins.iter().cloned().zip(balances).collect())
 }
 
 /// The channel's `ChannelPointsContext`. The reward list is public, so it
@@ -2629,5 +2611,36 @@ mod tests {
         assert!(b.is_user_input_required);
         assert_eq!(b.prompt, None);
         assert_eq!(b.description, None, "the title says what it does");
+    }
+
+    #[test]
+    fn a_points_batch_asks_the_persisted_query_once_per_login() {
+        let body = points_batch_body(&["XQC".to_string(), "shroud".to_string()]);
+        assert_eq!(body.len(), 2);
+        assert_eq!(body[0]["operationName"], "ChannelPointsContext");
+        assert_eq!(body[0]["variables"]["channelLogin"], "xqc", "logins are sent lowercased");
+        assert_eq!(body[1]["variables"]["channelLogin"], "shroud");
+        assert_eq!(body[0]["extensions"]["persistedQuery"]["sha256Hash"], CHANNEL_POINTS_CONTEXT_HASH);
+        assert!(body[0].get("query").is_none(), "no inline document");
+    }
+
+    #[test]
+    fn a_points_batch_answer_maps_by_position_and_marks_failed_items() {
+        let item = |balance: serde_json::Value| {
+            serde_json::json!({ "data": { "community": { "channel": { "self": { "communityPoints": { "balance": balance } } } } } })
+        };
+        let answer = serde_json::json!([
+            item(serde_json::json!(1200)),
+            { "errors": [{ "message": "service timeout" }] },
+            { "data": { "community": { "channel": null } } },
+            { "data": { "community": { "channel": { "self": null } } } },
+            item(serde_json::json!(-3)),
+        ]);
+        assert_eq!(
+            points_batch_balances(&answer, 5),
+            Ok(vec![Some(1200), None, Some(0), Some(0), Some(0)])
+        );
+        assert!(points_batch_balances(&answer, 4).is_err(), "a length that does not match is not mapped");
+        assert!(points_batch_balances(&serde_json::json!({ "error": "Bad Request" }), 1).is_err());
     }
 }

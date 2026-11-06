@@ -985,6 +985,20 @@ pub fn grouped(n: u64) -> String {
     out
 }
 
+/// A stat tile's number: grouped up to 9,999,999, then three significant digits
+/// ("12.3M", "123M", "1.23B") so a tile never ends in an ellipsis. Truncated,
+/// never rounded up: 99,960,000 reads "99.9M", not "100.0M".
+pub fn tile_number(n: u64) -> String {
+    match n {
+        0..=9_999_999 => grouped(n),
+        10_000_000..=99_999_999 => format!("{}.{}M", n / 1_000_000, n / 100_000 % 10),
+        100_000_000..=999_999_999 => format!("{}M", n / 1_000_000),
+        1_000_000_000..=9_999_999_999 => format!("{}.{:02}B", n / 1_000_000_000, n / 10_000_000 % 100),
+        10_000_000_000..=99_999_999_999 => format!("{}.{}B", n / 1_000_000_000, n / 100_000_000 % 10),
+        _ => format!("{}B", n / 1_000_000_000),
+    }
+}
+
 fn num(row: Option<&Value>, key: &str) -> f64 {
     row.and_then(|r| r.get(key)).and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))).unwrap_or(0.0)
 }
@@ -1165,7 +1179,7 @@ pub fn shape(f: &MemberFacts, ctx: &ShapeCtx) -> Shaped {
     }
     if let Some(followers) = ivr.and_then(|i| i.followers) {
         if !hidden("followers") {
-            twitch_tiles.push(tile("followers", grouped(followers.max(0) as u64), None, None));
+            twitch_tiles.push(tile("followers", tile_number(followers.max(0) as u64), None, None));
         }
     }
     let bt = ctx.broadcaster_type;
@@ -1182,13 +1196,13 @@ pub fn shape(f: &MemberFacts, ctx: &ShapeCtx) -> Shaped {
     let mut lifetime_tiles = Vec::new();
     if stats_known {
         if !hidden("messages") {
-            lifetime_tiles.push(tile("messages", grouped(messages), None, None));
+            lifetime_tiles.push(tile("messages", tile_number(messages), None, None));
         }
         if !hidden("streams") {
-            lifetime_tiles.push(tile("streams", grouped(streams), None, None));
+            lifetime_tiles.push(tile("streams", tile_number(streams), None, None));
         }
         if subs_gifted > 0 && !hidden("subs_gifted") {
-            lifetime_tiles.push(tile("subs_gifted", grouped(subs_gifted), None, None));
+            lifetime_tiles.push(tile("subs_gifted", tile_number(subs_gifted), None, None));
         }
     }
     if let Some((paints, badges)) = f.seventv.as_answer() {
@@ -1196,8 +1210,8 @@ pub fn shape(f: &MemberFacts, ctx: &ShapeCtx) -> Shaped {
             let sn = owned.len() as u64;
             lifetime_tiles.push(tile(
                 "cosmetics",
-                grouped(paints + badges + sn),
-                Some(format!("{paints} paints, {badges} badges, {sn} StreamNook")),
+                tile_number(paints + badges + sn),
+                Some(format!("{}, {}, {sn} StreamNook", plural(*paints as i64, "paint"), plural(*badges as i64, "badge"))),
                 None,
             ));
         }
@@ -1931,6 +1945,15 @@ mod tests {
         assert_eq!(grouped(999), "999");
         assert_eq!(grouped(1000), "1,000");
         assert_eq!(grouped(1_234_567), "1,234,567");
+        // A tile keeps its number to four characters past 9,999,999.
+        assert_eq!(tile_number(9_999_999), "9,999,999");
+        assert_eq!(tile_number(12_345_678), "12.3M");
+        assert_eq!(tile_number(99_960_000), "99.9M");
+        assert_eq!(tile_number(123_456_789), "123M");
+        assert_eq!(tile_number(1_234_567_890), "1.23B");
+        assert_eq!(tile_number(12_345_678_901), "12.3B");
+        assert_eq!(tile_number(1_150_000_000), "1.15B");
+        assert_eq!(tile_number(10_000_000), "10.0M");
     }
 
     #[test]
