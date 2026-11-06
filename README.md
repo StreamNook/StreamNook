@@ -11,6 +11,7 @@ A native desktop client for Twitch, Kick, and YouTube.
   <a href="https://github.com/StreamNook/StreamNook/stargazers"><img src="https://img.shields.io/github/stars/StreamNook/StreamNook?color=00d9ff&style=for-the-badge&logo=star&logoColor=white&labelColor=1a1a2e" alt="Stars" /></a>
   <a href="https://github.com/StreamNook/StreamNook/issues"><img src="https://img.shields.io/badge/Issues-ff6b6b?style=for-the-badge&logo=github&logoColor=white&labelColor=1a1a2e" alt="Issues" /></a>
   <a href="https://github.com/StreamNook/StreamNook/discussions"><img src="https://img.shields.io/badge/Discussions-4ecdc4?style=for-the-badge&logo=github&logoColor=white&labelColor=1a1a2e" alt="Discussions" /></a>
+  <a href="https://discord.gg/2xvuF9TES7"><img src="https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white&labelColor=1a1a2e" alt="Join the StreamNook Discord" /></a>
 </p>
 
 <p>
