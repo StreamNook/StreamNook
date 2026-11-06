@@ -14,6 +14,8 @@ import ChatSettings from '../settings/ChatSettings';
 import ConnectionsSettings from './ConnectionsSettings';
 import MultiChatThemePicker from './MultiChatThemePicker';
 import SettingsSearchResults from '../settings/SettingsSearchResults';
+import { SettingsRow, SettingsSection } from '../settings/_primitives';
+import { Toggle } from '../ui/Toggle';
 import { findSettingTarget, flashSettingRow } from '../settings/settingsNavigation';
 import { searchSettings, type SettingsIndexEntry } from '../settings/searchIndex';
 
@@ -44,21 +46,23 @@ const TABS: TabMeta[] = [
     label: 'Theme',
     icon: Palette,
     tint: 'rgba(220, 145, 175, 0.20)',
-    description: 'Color theme for your chat windows',
+    // The picker applies the theme to the whole app, not only this window.
+    description: 'Colors for the whole app',
   },
   {
     id: 'connections',
     label: 'Connections',
     icon: Plug,
     tint: 'rgba(180, 150, 210, 0.22)',
-    description: 'Connected platform accounts',
+    description: 'Your platform accounts',
   },
   {
     id: 'panes',
-    label: 'Panes',
+    // "Panels", as the View menu names them: a "pane" in this window is a chat.
+    label: 'Panels',
     icon: Layout,
     tint: 'rgba(140, 195, 170, 0.22)',
-    description: 'Activity feed and moderator log behavior',
+    description: 'Mod logs and the activity feed',
   },
 ];
 
@@ -67,7 +71,7 @@ const RESULT_TAB: Record<string, SettingsTab> = {
   Chat: 'chat',
   Theme: 'theme',
   Connections: 'connections',
-  Panes: 'panes',
+  Panels: 'panes',
 };
 
 // Searchable stand-ins for the MultiChat-only tabs, so typing e.g. "log in" or
@@ -87,10 +91,10 @@ const MC_TAB_ENTRIES: SettingsIndexEntry[] = [
     description: 'connect link sign in log in twitch kick youtube account platform',
   },
   {
-    tab: 'Panes',
-    section: 'Behavior',
-    title: 'Activity & mod-log panes',
-    description: 'keep collecting while closed activity feed moderator log events',
+    tab: 'Panels',
+    section: 'Mod logs and activity',
+    title: 'Collect while hidden',
+    description: 'keep collecting while closed panes panels activity feed moderator mod log events memory',
   },
 ];
 
@@ -207,15 +211,27 @@ export default function ChatOnlySettingsModal({
             exit={{ opacity: 0, scale: 0.98, y: 8 }}
             transition={{ type: 'spring', stiffness: 420, damping: 32 }}
             onClick={(e) => e.stopPropagation()}
-            className="flex h-full w-full overflow-hidden bg-background"
+            // A MultiChat window opens 402 px wide, where a side rail would leave
+            // the settings a 190 px column. Under `sm` the rail becomes a header
+            // with the categories as a row of tabs, and the settings get the
+            // window's full width.
+            className="flex h-full w-full flex-col overflow-hidden bg-background sm:flex-row"
             role="dialog"
             aria-modal="true"
             aria-label="MultiChat Settings"
           >
             {/* Category rail */}
-            <aside className="flex w-[210px] flex-shrink-0 flex-col border-r border-white/[0.06] py-3">
-              <div className="px-4 pb-2">
+            <aside className="flex flex-shrink-0 flex-col border-b border-white/[0.06] pt-3 sm:w-[210px] sm:border-b-0 sm:border-r sm:py-3">
+              <div className="flex items-center justify-between gap-3 px-4 pb-2">
                 <h2 className="text-sm font-semibold text-textPrimary">MultiChat Settings</h2>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="-mr-1.5 rounded p-1.5 text-textMuted transition-colors hover:bg-white/[0.06] hover:text-textPrimary sm:hidden"
+                  aria-label="Close"
+                >
+                  <X size={16} />
+                </button>
               </div>
               <div className="px-3 pb-3">
                 <div className="relative">
@@ -246,7 +262,7 @@ export default function ChatOnlySettingsModal({
                   )}
                 </div>
               </div>
-              <nav className="scrollbar-thin flex-1 space-y-0.5 overflow-y-auto px-2">
+              <nav className="scrollbar-thin grid grid-cols-4 gap-1 px-2 pb-2 sm:block sm:flex-1 sm:space-y-0.5 sm:overflow-y-auto sm:pb-0">
                 {TABS.map((t) => {
                   const Icon = t.icon;
                   const isActive = t.id === tab && !searching;
@@ -255,7 +271,8 @@ export default function ChatOnlySettingsModal({
                       key={t.id}
                       type="button"
                       onClick={() => selectTab(t.id)}
-                      className={`flex w-full items-center gap-3 rounded-md px-2 py-1.5 text-left transition-colors ${
+                      aria-current={isActive ? 'page' : undefined}
+                      className={`flex w-full flex-col items-center gap-1.5 rounded-md px-1 py-2 transition-colors sm:flex-row sm:gap-3 sm:px-2 sm:py-1.5 sm:text-left ${
                         isActive
                           ? 'bg-white/[0.06] text-textPrimary'
                           : 'text-textSecondary hover:bg-white/[0.03] hover:text-textPrimary'
@@ -267,7 +284,7 @@ export default function ChatOnlySettingsModal({
                       >
                         <Icon size={14} strokeWidth={2.25} className="text-textPrimary" />
                       </span>
-                      <span className="text-[13px] font-medium">{t.label}</span>
+                      <span className="text-[12px] font-medium sm:text-[13px]">{t.label}</span>
                     </button>
                   );
                 })}
@@ -275,8 +292,8 @@ export default function ChatOnlySettingsModal({
             </aside>
 
             {/* Content */}
-            <section className="flex min-w-0 flex-1 flex-col">
-              <div className="flex items-center justify-end px-3 pt-3">
+            <section className="flex min-h-0 min-w-0 flex-1 flex-col">
+              <div className="hidden items-center justify-end px-3 pt-3 sm:flex">
                 <button
                   type="button"
                   onClick={onClose}
@@ -287,7 +304,7 @@ export default function ChatOnlySettingsModal({
                 </button>
               </div>
 
-              <div className="flex items-center gap-3 px-6 pb-3 pt-0">
+              <div className="flex items-center gap-3 px-4 pb-5 pt-4 sm:px-6 sm:pt-0">
                 <span
                   className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg"
                   style={{
@@ -306,13 +323,13 @@ export default function ChatOnlySettingsModal({
                   <h3 className="text-[15px] font-semibold leading-tight text-textPrimary">
                     {searching ? 'Search' : activeMeta.label}
                   </h3>
-                  <p className="mt-0.5 truncate text-[11px] text-textMuted">
+                  <p className="mt-0.5 text-[12px] leading-snug text-textMuted">
                     {searching ? `Results for "${query}"` : activeMeta.description}
                   </p>
                 </div>
               </div>
 
-              <div ref={contentRef} className="scrollbar-thin flex-1 overflow-y-auto px-6 pb-6">
+              <div ref={contentRef} className="scrollbar-thin flex-1 overflow-y-auto px-4 pb-6 sm:px-6">
                 {searching ? (
                   <SettingsSearchResults query={query} results={results} onSelect={handleResultSelect} />
                 ) : (
@@ -321,35 +338,20 @@ export default function ChatOnlySettingsModal({
                     {tab === 'theme' && <MultiChatThemePicker />}
                     {tab === 'connections' && <ConnectionsSettings />}
                     {tab === 'panes' && (
-                      <div className="flex items-start justify-between gap-4">
-                        <div className="min-w-0">
-                          <div className="text-sm font-medium text-textPrimary">
-                            Keep collecting while panes are closed
-                          </div>
-                          <div className="mt-1 text-xs leading-relaxed text-textSecondary">
-                            When on, the activity feed and moderator logs keep gathering events even
-                            while their panes are hidden, so reopening shows everything that happened
-                            in the meantime. When off, closing a pane stops its collector and frees
-                            its memory; it starts fresh on reopen, so events that occur while it's
-                            closed aren't captured.
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          role="switch"
-                          aria-checked={keepPanesCollecting}
-                          onClick={() => onKeepPanesCollectingChange(!keepPanesCollecting)}
-                          className={`relative mt-0.5 inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors ${
-                            keepPanesCollecting ? 'bg-accent' : 'bg-white/15'
-                          }`}
-                        >
-                          <span
-                            className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition-transform ${
-                              keepPanesCollecting ? 'translate-x-[18px]' : 'translate-x-0.5'
-                            }`}
-                          />
-                        </button>
-                      </div>
+                      <SettingsSection label="Mod logs and activity">
+                        <SettingsRow
+                          title="Collect while hidden"
+                          description="Both panels keep recording while they are closed, so opening one shows what you missed."
+                          help="Off frees the memory a closed panel uses. It starts empty the next time you open it, and nothing that happened while it was closed is shown."
+                          control={
+                            <Toggle
+                              enabled={keepPanesCollecting}
+                              onChange={() => onKeepPanesCollectingChange(!keepPanesCollecting)}
+                              ariaLabel="Collect while hidden"
+                            />
+                          }
+                        />
+                      </SettingsSection>
                     )}
                   </>
                 )}

@@ -14,7 +14,7 @@
 // re-launches. `channel`+`channelId` seed the window when first opened from a
 // "Pop out chat" action; once persisted state exists it takes precedence.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import { invoke } from '@tauri-apps/api/core';
@@ -65,8 +65,9 @@ import ErrorBoundary from '../ErrorBoundary';
 import ChatOnlySettingsModal from './ChatOnlySettingsModal';
 import MultiChatToasts from './MultiChatToasts';
 import ViewerCounter from './ViewerCounter';
+import MultiChatViewPicker, { type MultiChatView } from './MultiChatViewPicker';
 import { useTabLive } from '../../hooks/useTabLive';
-import { liveWord, type SourceLive } from '../../utils/tabLive';
+import { liveWord, totalViewers, type SourceLive } from '../../utils/tabLive';
 import { TabLiveLabel } from '../chat/TabLiveLabel';
 import { isImeComposing } from '../../utils/imeComposing';
 import { useOutsidePress } from '../../hooks/useOutsidePress';
@@ -1977,28 +1978,36 @@ export default function MultiChatWindow() {
           setIsBlendedMode(false);
           setIsMentionsMode(false);
         }}
-        isSplitMode={!!layoutTree && !isBlendedMode && !isMentionsMode}
-        onToggleSplits={() => {
+        view={
+          isMentionsMode
+            ? 'mentions'
+            : isBlendedMode
+              ? 'blend'
+              : layoutTree
+                ? 'splits'
+                : layoutMode === 1
+                  ? 'tabs'
+                  : 'columns'
+        }
+        chatCount={channels.length}
+        // Picking Custom splits shows the splits you already have (a feed on
+        // top of them only hid them), and seeds new ones from what is on screen
+        // otherwise: tabs mode becomes one pane that follows the active tab; a
+        // column preset becomes those columns.
+        onPickSplits={() => {
           setIsBlendedMode(false);
           setIsMentionsMode(false);
-          if (layoutTree) {
-            setLayoutTree(null);
-            return;
-          }
-          // Seed from what is on screen: tabs mode becomes one pane that
-          // follows the active tab; a column preset becomes those columns.
+          if (layoutTree) return;
           const seeded = layoutMode === 1 ? fromColumns([null]) : fromColumns(visibleChannels.map(entryKey));
           setLayoutTree(seeded);
           setFocusedLeafId(leaves(seeded)[0].id);
         }}
-        isBlendedMode={isBlendedMode}
-        onToggleBlended={() => {
-          setIsBlendedMode((v) => !v);
+        onPickBlended={() => {
+          setIsBlendedMode(true);
           setIsMentionsMode(false);
         }}
-        isMentionsMode={isMentionsMode}
-        onToggleMentions={() => {
-          setIsMentionsMode((v) => !v);
+        onPickMentions={() => {
+          setIsMentionsMode(true);
           setIsBlendedMode(false);
         }}
         canSplit={channels.length > 0}
@@ -2585,7 +2594,7 @@ function GoLiveControl({
           {live ? 'Live Chat' : 'Go Live'}
         </button>
       </Tooltip>
-      <Tooltip content="Go Live options">
+      <Tooltip content="Go Live options" disabled={open}>
         <button
           type="button"
           onClick={openMenu}
@@ -2661,7 +2670,7 @@ function GoLiveControl({
                     ))}
                   </>
                 ) : (
-                  <div className="px-2 py-1.5 text-[10px] leading-relaxed text-textMuted">
+                  <div className="px-2 py-1.5 text-[12px] leading-relaxed text-textMuted">
                     Open a channel with the + button to add it to your setup.
                   </div>
                 )}
@@ -2724,20 +2733,35 @@ function GoLiveControl({
 
 // ---------- TitleBar ---------------------------------------------------------
 
+// Below this width the full bar (heading, viewers, View, the five actions and
+// the window buttons, about 540 px with a live viewer count) does not fit, so
+// the panel switches and the viewer count move into the View menu.
+const COMPACT_TITLE_BAR_BELOW = 600;
+
+const subscribeResize = (onChange: () => void) => {
+  window.addEventListener('resize', onChange);
+  return () => window.removeEventListener('resize', onChange);
+};
+const readWindowWidth = () => window.innerWidth;
+
+function useWindowWidth(): number {
+  return useSyncExternalStore(subscribeResize, readWindowWidth);
+}
+
 interface TitleBarProps {
   heading: string;
   layoutMode: LayoutMode;
+  /** What the panes show, for the View menu. */
+  view: MultiChatView;
+  chatCount: number;
   canSplit: boolean;
   canRestore: boolean;
   showModLogs: boolean;
   showActivityFeed: boolean;
   onLayoutModeChange: (mode: LayoutMode) => void;
-  isBlendedMode: boolean;
-  onToggleBlended: () => void;
-  isMentionsMode: boolean;
-  onToggleMentions: () => void;
-  isSplitMode: boolean;
-  onToggleSplits: () => void;
+  onPickBlended: () => void;
+  onPickMentions: () => void;
+  onPickSplits: () => void;
   onRestore: () => void;
   onClose: () => void;
   onMinimize: () => void;
@@ -2752,12 +2776,11 @@ interface TitleBarProps {
 function TitleBar({
   heading,
   layoutMode,
-  isBlendedMode,
-  onToggleBlended,
-  isMentionsMode,
-  onToggleMentions,
-  isSplitMode,
-  onToggleSplits,
+  view,
+  chatCount,
+  onPickBlended,
+  onPickMentions,
+  onPickSplits,
   canSplit,
   canRestore,
   showModLogs,
@@ -2777,6 +2800,12 @@ function TitleBar({
   // CornersOut (maximize) and CornersIn (restore) — same behavior as
   // the main app's TitleBar.
   const [isMaximized, setIsMaximized] = useState(false);
+  const width = useWindowWidth();
+  const compact = width < COMPACT_TITLE_BAR_BELOW;
+  // Only while the View menu is there to carry it instead.
+  const viewersInMenu = compact && canSplit;
+  const watching = totalViewers(liveStats);
+  const anyLive = liveStats.some((s) => s.isLive);
   useEffect(() => {
     let unlistenResize: (() => void) | undefined;
     let cancelled = false;
@@ -2810,90 +2839,62 @@ function TitleBar({
       // "bleeding" onto the title bar). Solid bg-secondary, no compositing layer.
       className="relative z-50 flex h-[40px] select-none items-center justify-between border-b border-borderSubtle bg-secondary px-3"
     >
+      {/* The heading is the one part that gives way on a narrow window, so the
+          controls on the right always stay inside it. */}
       <div
         data-tauri-drag-region
-        className="pointer-events-none flex flex-shrink-0 items-center gap-2"
+        className="pointer-events-none flex min-w-0 items-center gap-2"
       >
         <img
           src={streamNookLogoUrl}
           alt="StreamNook"
-          className="h-4 w-4 object-contain"
+          className="h-4 w-4 flex-shrink-0 object-contain"
           draggable={false}
         />
-        <span className="truncate text-xs font-semibold tracking-wide text-textSecondary">
-          {heading}
-        </span>
+        {/* A narrow window has room for a letter or two of it, and the active
+            tab right below already names the chat. */}
+        {!(compact && canSplit) && (
+          <span className="truncate text-xs font-semibold tracking-wide text-textSecondary">
+            {heading}
+          </span>
+        )}
       </div>
 
-      <div data-tauri-drag-region className="flex flex-1 items-center justify-center">
-        <ViewerCounter stats={liveStats} />
+      {/* min-w-0: a viewer count wider than expected gives way here instead of
+          pushing the window's buttons out of the window. */}
+      <div data-tauri-drag-region className="flex min-w-0 flex-1 items-center justify-center overflow-hidden px-2">
+        {!viewersInMenu && <ViewerCounter stats={liveStats} />}
       </div>
 
+      {/* One View menu instead of a row of seven toggles: the row did not fit a
+          new window's 402 px and pushed the window's own buttons out of it. */}
       {canSplit && (
-        <div
-          className="chrome-glaze chrome-glaze--flat titlebar-icon-group mr-2"
-          data-tauri-drag-region="false"
-        >
-          <LayoutToggleButton
-            label="Mentions: every mention of you and reply to you, from every chat"
-            active={isMentionsMode}
-            onClick={onToggleMentions}
-          >
-            <span className="text-[15px] font-bold leading-none">@</span>
-          </LayoutToggleButton>
-          <LayoutToggleButton
-            label="Blend all sources into one feed"
-            active={isBlendedMode}
-            onClick={onToggleBlended}
-          >
-            <svg className="h-[17px] w-[17px]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <circle cx="9" cy="12" r="6" />
-              <circle cx="15" cy="12" r="6" />
-            </svg>
-          </LayoutToggleButton>
-          <span className="mx-0.5 h-4 w-px bg-borderSubtle" aria-hidden />
-          <LayoutToggleButton
-            label="Tabs"
-            active={layoutMode === 1 && !isBlendedMode && !isMentionsMode && !isSplitMode}
-            onClick={() => onLayoutModeChange(1)}
-          >
-            <LayoutIcon mode={1} />
-          </LayoutToggleButton>
-          <LayoutToggleButton
-            label="2 columns"
-            active={layoutMode === 2 && !isBlendedMode && !isSplitMode}
-            onClick={() => onLayoutModeChange(2)}
-          >
-            <LayoutIcon mode={2} />
-          </LayoutToggleButton>
-          <LayoutToggleButton
-            label="3 columns"
-            active={layoutMode === 3 && !isBlendedMode && !isSplitMode}
-            onClick={() => onLayoutModeChange(3)}
-          >
-            <LayoutIcon mode={3} />
-          </LayoutToggleButton>
-          <LayoutToggleButton
-            label="4 columns"
-            active={layoutMode === 4 && !isBlendedMode && !isSplitMode}
-            onClick={() => onLayoutModeChange(4)}
-          >
-            <LayoutIcon mode={4} />
-          </LayoutToggleButton>
-          <LayoutToggleButton
-            label="Custom splits: split any pane right or down, drag the dividers, show a channel twice"
-            active={isSplitMode}
-            onClick={onToggleSplits}
-          >
-            <svg className="h-[17px] w-[17px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round">
-              <rect x="3" y="3" width="18" height="18" rx="2" />
-              <path d="M11 3v18M11 13h10" />
-            </svg>
-          </LayoutToggleButton>
+        <div className="mr-2 flex-shrink-0">
+          <MultiChatViewPicker
+            view={view}
+            columns={layoutMode === 1 ? 2 : layoutMode}
+            chatCount={chatCount}
+            onTabs={() => onLayoutModeChange(1)}
+            onColumns={onLayoutModeChange}
+            onSplits={onPickSplits}
+            onBlend={onPickBlended}
+            onMentions={onPickMentions}
+            watching={viewersInMenu && anyLive ? watching : null}
+            panels={
+              compact
+                ? {
+                    modLogs: showModLogs,
+                    activity: showActivityFeed,
+                    onToggleModLogs,
+                    onToggleActivity: onToggleActivityFeed,
+                  }
+                : undefined
+            }
+          />
         </div>
       )}
 
-      <div className="flex items-center gap-2" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+      <div className="flex flex-shrink-0 items-center gap-2" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
         {/* Grouped action icons, wearing the same chrome glaze as the core app's
             title bar so the popout reads as first-class chrome rather than a
             looser one-off.
@@ -2932,28 +2933,34 @@ function TitleBar({
             </Tooltip>
           )}
           <span className="mx-0.5 h-4 w-px bg-borderSubtle" aria-hidden />
-          <Tooltip content={showModLogs ? 'Hide mod logs' : 'Show mod logs'} delay={200}>
-            <button
-              type="button"
-              onClick={onToggleModLogs}
-              data-tauri-drag-region="false"
-              aria-pressed={showModLogs}
-              className={`titlebar-icon-btn ${showModLogs ? 'is-active' : ''}`}
-            >
-              <ShieldCheck size={17} />
-            </button>
-          </Tooltip>
-          <Tooltip content={showActivityFeed ? 'Hide activity' : 'Show activity'} delay={200}>
-            <button
-              type="button"
-              onClick={onToggleActivityFeed}
-              data-tauri-drag-region="false"
-              aria-pressed={showActivityFeed}
-              className={`titlebar-icon-btn ${showActivityFeed ? 'is-active' : ''}`}
-            >
-              <Activity size={17} />
-            </button>
-          </Tooltip>
+          {/* On a narrow window these two live in the View menu instead. With
+              no chat open there is no View menu, and nothing for them to show. */}
+          {!(compact && canSplit) && (
+            <>
+              <Tooltip content={showModLogs ? 'Hide mod logs' : 'Show mod logs'} delay={200}>
+                <button
+                  type="button"
+                  onClick={onToggleModLogs}
+                  data-tauri-drag-region="false"
+                  aria-pressed={showModLogs}
+                  className={`titlebar-icon-btn ${showModLogs ? 'is-active' : ''}`}
+                >
+                  <ShieldCheck size={17} />
+                </button>
+              </Tooltip>
+              <Tooltip content={showActivityFeed ? 'Hide activity' : 'Show activity'} delay={200}>
+                <button
+                  type="button"
+                  onClick={onToggleActivityFeed}
+                  data-tauri-drag-region="false"
+                  aria-pressed={showActivityFeed}
+                  className={`titlebar-icon-btn ${showActivityFeed ? 'is-active' : ''}`}
+                >
+                  <Activity size={17} />
+                </button>
+              </Tooltip>
+            </>
+          )}
           <Tooltip content="Chat settings" delay={200}>
             <button
               type="button"
@@ -3004,67 +3011,6 @@ function TitleBar({
         </div>
       </div>
     </div>
-  );
-}
-
-// ---------- Layout toggle ---------------------------------------------------
-
-interface LayoutToggleButtonProps {
-  label: string;
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}
-
-function LayoutToggleButton({ label, active, onClick, children }: LayoutToggleButtonProps) {
-  return (
-    <Tooltip content={label}>
-    <button
-      type="button"
-      onClick={onClick}
-      aria-label={label}
-      aria-pressed={active}
-      data-tauri-drag-region="false"
-      // The same primitive the action cluster uses, rather than a hand-rolled
-      // box. These sat at 24px in a soft rectangle next to 30px capsules, which
-      // is why the two pills were visibly different heights.
-      //
-      // `is-active` also replaces an inline copy of that rule: the trench this
-      // used to spell out was character-for-character `.titlebar-icon-btn.is-active`.
-      className={`titlebar-icon-btn ${active ? 'is-active' : ''}`}
-    >
-      {children}
-    </button>
-    </Tooltip>
-  );
-}
-
-// Tiny icon glyph showing the column geometry for the toggle. Each variant is
-// a 12x10 rectangle subdivided into N equal columns.
-function LayoutIcon({ mode }: { mode: LayoutMode }) {
-  const cols = mode;
-  // Sized to sit beside 17px lucide glyphs. At 12x10 this read as a different,
-  // smaller family of icon. The stroke is a shade under lucide's effective
-  // 1.42px at this size, because a pure rectangle reads heavier than an
-  // open-path glyph at the same weight.
-  const width = 17;
-  const height = 13;
-  const colWidth = width / cols;
-  return (
-    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} fill="none">
-      <rect x="0.5" y="0.5" width={width - 1} height={height - 1} stroke="currentColor" strokeWidth="1.25" />
-      {Array.from({ length: cols - 1 }, (_, i) => (
-        <line
-          key={i}
-          x1={(i + 1) * colWidth}
-          y1="0.5"
-          x2={(i + 1) * colWidth}
-          y2={height - 0.5}
-          stroke="currentColor"
-          strokeWidth="1.25"
-        />
-      ))}
-    </svg>
   );
 }
 
@@ -3236,7 +3182,7 @@ function TabStrip({
         </div>
       </TabScroller>
       <div className="flex flex-shrink-0 items-center gap-1.5">
-        <Tooltip content="New MultiChat window. Each window is its own renderer, about 150 MB; splits inside one window are free." side="bottom">
+        <Tooltip content="New MultiChat window. Each window uses its own memory; splitting this one costs nothing extra." side="bottom">
           <button
             type="button"
             onClick={onNewWindow}
@@ -3461,7 +3407,8 @@ function TabContextMenu({
   // Clamp position to viewport so the menu never opens partially off-screen
   // (matches StreamContextMenu's collision-detection pattern).
   const MENU_WIDTH = 200;
-  const MENU_HEIGHT = 90;
+  // The name header and three rows measure about 160 px.
+  const MENU_HEIGHT = 160;
   let x = state.x;
   let y = state.y;
   if (x + MENU_WIDTH > window.innerWidth) x = window.innerWidth - MENU_WIDTH - 4;
@@ -3789,7 +3736,7 @@ function AddChannelPanel({
         )}
 
         {isTwitch && filtered.length > 0 && offline.length > 0 && (
-          <div className="px-3 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wider text-textMuted">Live</div>
+          <div className="px-3 pb-1 pt-1.5 text-[11px] font-semibold uppercase tracking-wider text-textMuted">Live</div>
         )}
 
         {!isTwitch && !showArbitraryAdd && (
@@ -3850,7 +3797,7 @@ function AddChannelPanel({
 
         {offline.length > 0 && (
           <>
-            <div className="px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-textMuted">Offline</div>
+            <div className="px-3 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wider text-textMuted">Offline</div>
             {offline.map((item) => (
               <button
                 key={`offline-${item.login}`}
