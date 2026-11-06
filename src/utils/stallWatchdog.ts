@@ -85,3 +85,129 @@ export function watchStalls(
     video.removeEventListener('seeking', reset);
   };
 }
+
+/** How long an element must sit wedged with a still playhead before a reload. */
+export const WEDGE_RELOAD_MS = 4000;
+
+/** What one watchdog tick learned about a wedge. */
+export interface WedgeTick {
+  /** The element is wedged now: the caller skips its other stall checks. */
+  wedged: boolean;
+  /** The wedge has lasted `WEDGE_RELOAD_MS`: reload the stream. */
+  reload: boolean;
+}
+
+type WedgeMedia = Pick<HTMLMediaElement, 'paused' | 'readyState' | 'currentTime' | 'buffered'>;
+
+/**
+ * Times a wedge (`wedgedOnBuffer`) across watchdog ticks by the clock, not by
+ * counting ticks, so it never reloads before `holdMs` however the ticks fall.
+ * The playhead must stay still too: an element still decoding (a covered
+ * window, for one) moves it and is timed afresh. After a reload the timing
+ * starts over.
+ */
+export function watchWedge(holdMs = WEDGE_RELOAD_MS): (video: WedgeMedia, now: number) => WedgeTick {
+  let since: number | null = null;
+  let sinceCt = 0;
+  return (video, now) => {
+    if (!wedgedOnBuffer(video)) {
+      since = null;
+      return { wedged: false, reload: false };
+    }
+    if (since === null || Math.abs(video.currentTime - sinceCt) > ADVANCE_SECS) {
+      since = now;
+      sinceCt = video.currentTime;
+      return { wedged: true, reload: false };
+    }
+    if (now - since < holdMs) return { wedged: true, reload: false };
+    since = null;
+    return { wedged: true, reload: true };
+  };
+}
+
+/** How often a start that has its level details checks for its first media. */
+export const FIRST_MEDIA_CHECK_MS = 1000;
+/** Nothing in flight and nothing loaded for this long: the start is broken. */
+export const FIRST_MEDIA_IDLE_MS = 5000;
+/** The longest a start waits for its first media: the fragment load's own timeout. */
+export const FIRST_MEDIA_CAP_MS = 20000;
+
+export interface FirstMediaDeps {
+  now: () => number;
+  /** Run `fn` after `ms`; the caller keeps the handle so its teardown can clear it. */
+  schedule: (fn: () => void, ms: number) => void;
+  /** This player is still the one playing. */
+  isCurrent: () => boolean;
+  /** Reload the stream; false when the reload was refused for now. */
+  reload: (why: string) => boolean;
+  /** Called once when the wait ends, however it ends. */
+  finished: () => void;
+}
+
+export interface FirstMediaWatch {
+  /** A fragment or part started downloading. */
+  loading: () => void;
+  /** A fragment or part finished downloading. */
+  loaded: () => void;
+  /** A fragment or part was parsed. */
+  progress: () => void;
+  /** The first media was buffered: true once, when the caller should start. */
+  media: () => boolean;
+}
+
+/**
+ * Waits for a start's first buffered media and reloads the stream when it
+ * never comes: after `FIRST_MEDIA_IDLE_MS` with nothing in flight and nothing
+ * loaded, or `FIRST_MEDIA_CAP_MS` at the latest, so a slow download still in
+ * flight is never thrown away. A refused reload (a restart or an auto-switch
+ * is running) is asked again on the next check.
+ */
+export function watchFirstMedia(deps: FirstMediaDeps): FirstMediaWatch {
+  const armedAt = deps.now();
+  let lastProgressAt = armedAt;
+  let inFlight = false;
+  let done = false;
+  const finish = () => {
+    if (done) return;
+    done = true;
+    deps.finished();
+  };
+  const check = () => {
+    if (done) return;
+    if (!deps.isCurrent()) {
+      finish();
+      return;
+    }
+    const now = deps.now();
+    const waited = now - armedAt;
+    const capped = waited >= FIRST_MEDIA_CAP_MS;
+    const idle = !inFlight && now - lastProgressAt >= FIRST_MEDIA_IDLE_MS;
+    if (capped || idle) {
+      const why = `[HLS] low-latency start: no media buffered after ${Math.round(waited / 1000)}s (${capped ? 'cap' : 'idle'}); reloading the stream`;
+      if (deps.reload(why)) {
+        finish();
+        return;
+      }
+    }
+    deps.schedule(check, FIRST_MEDIA_CHECK_MS);
+  };
+  deps.schedule(check, FIRST_MEDIA_CHECK_MS);
+  return {
+    loading: () => {
+      inFlight = true;
+      lastProgressAt = deps.now();
+    },
+    loaded: () => {
+      inFlight = false;
+      lastProgressAt = deps.now();
+    },
+    progress: () => {
+      lastProgressAt = deps.now();
+    },
+    media: () => {
+      if (done) return false;
+      finish();
+      return true;
+    },
+  };
+}

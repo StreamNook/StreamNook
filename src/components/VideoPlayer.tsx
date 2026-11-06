@@ -109,7 +109,7 @@ import {
 } from '../utils/pausePark';
 import { followLiveAfterResync } from '../utils/liveResync';
 import { HLS_START_CONFIG, resumeLoadAfterRecover, startLoadOnManifest } from '../utils/hlsStartLoad';
-import { watchStalls, wedgedOnBuffer } from '../utils/stallWatchdog';
+import { watchFirstMedia, watchStalls, watchWedge } from '../utils/stallWatchdog';
 import { createRecovery } from '../utils/recovery';
 import { IS_MAC } from '../utils/platform';
 import { attachPauseRoutes, releaseTypingFocus } from '../utils/pauseRoutes';
@@ -1536,27 +1536,27 @@ const VideoPlayer = () => {
         let frozen = 0;
         let lastCt = -1;
         let lastRecover = 0;
-        let wedged = 0;
+        const wedge = watchWedge();
         behindLiveWatchdogRef.current = setInterval(() => {
           const v = (hls.media as HTMLVideoElement | null) ?? video;
           // WebKit only, checked before the seeking skip below: a wedged
           // element's seeks never complete, so it would be skipped forever.
-          // Two ticks (~4s): an ordinary in-buffer seek, briefly at
-          // HAVE_METADATA, completes in well under a second. Reopening the
-          // stream is what gets it playing.
-          if (IS_MAC && v && wedgedOnBuffer(v)) {
-            wedged += 1;
-            if (wedged >= 2) {
-              wedged = 0;
-              recover(
-                `[HLS] behind-live watchdog: element stuck at readyState ${v.readyState} at ${v.currentTime.toFixed(1)} with media buffered ahead; reloading the stream`,
-                true,
-                'stall',
-              );
+          // Timed by the clock with a still playhead: an ordinary in-buffer
+          // seek, briefly at HAVE_METADATA, completes in well under a second.
+          // Reopening the stream is what gets it playing.
+          if (IS_MAC && v) {
+            const w = wedge(v, performance.now());
+            if (w.wedged) {
+              if (w.reload) {
+                recover(
+                  `[HLS] behind-live watchdog: element stuck at readyState ${v.readyState} at ${v.currentTime.toFixed(1)} with media buffered ahead; reloading the stream`,
+                  true,
+                  'wedge',
+                );
+              }
+              return;
             }
-            return;
           }
-          wedged = 0;
           if (!v || v.paused || v.seeking) {
             over = 0;
             frozen = 0;
@@ -1838,7 +1838,7 @@ const VideoPlayer = () => {
             const edge = data.details.edge;
             const loadedPos =
               hls.liveSyncPosition ?? (Number.isFinite(edge) ? Math.max(0, edge - cushion) : null);
-            const startLL = () => {
+            const placeLL = () => {
               if (hlsRef.current !== hls) return;
               const pos = hls.liveSyncPosition ?? loadedPos;
               if (pos != null && Number.isFinite(pos) && pos > 0) {
@@ -1847,6 +1847,9 @@ const VideoPlayer = () => {
               Logger.debug(
                 `[HLS] Level loaded (LL) — starting playback at ${video.currentTime.toFixed(2)}`,
               );
+            };
+            const playOrPark = () => {
+              if (hlsRef.current !== hls) return;
               if (holdHeldPause()) return;
               if (!currentSettings.autoplay) {
                 // Autoplay is off: nothing plays, and the wait arms the park so
@@ -1859,12 +1862,52 @@ const VideoPlayer = () => {
                 video.play().catch(() => Logger.debug('[HLS] LL muted autoplay also failed'));
               });
             };
+            if (!IS_MAC) {
+              placeLL();
+              playOrPark();
+              return;
+            }
             // On macOS, not before the first media lands: WebKit can wedge an
             // element whose playhead was set while nothing was appended, at
-            // HAVE_METADATA for good with every later seek left pending. The
-            // first buffered fragment or part comes a few hundred ms later.
-            if (IS_MAC) hls.once(Hls.Events.FRAG_BUFFERED, startLL);
-            else startLL();
+            // HAVE_METADATA for good with every later seek left pending.
+            const wantsPlay =
+              currentSettings.autoplay && !heldPause('main', liveKeyNow()) && !park?.loadStopped;
+            if (!wantsPlay) {
+              // Nothing plays yet: park or hold now, and place the playhead
+              // once media lands (after the viewer's play restarts the loads).
+              playOrPark();
+              hls.once(Hls.Events.FRAG_BUFFERED, placeLL);
+              return;
+            }
+            // A start that buffers nothing reloads instead of sitting black,
+            // and a slow first download still in flight is waited out.
+            const first = watchFirstMedia({
+              now: () => performance.now(),
+              schedule: (fn, ms) => {
+                bufferGateTimeoutRef.current = setTimeout(fn, ms);
+              },
+              isCurrent: () => hlsRef.current === hls,
+              reload: (why) => recover(why, true, 'no-buffer'),
+              finished: () => unhook(),
+            });
+            const onLoading = () => first.loading();
+            const onLoaded = () => first.loaded();
+            const onParsed = () => first.progress();
+            const onMedia = () => {
+              if (!first.media()) return;
+              placeLL();
+              playOrPark();
+            };
+            const unhook = () => {
+              hls.off(Hls.Events.FRAG_LOADING, onLoading);
+              hls.off(Hls.Events.FRAG_LOADED, onLoaded);
+              hls.off(Hls.Events.FRAG_PARSED, onParsed);
+              hls.off(Hls.Events.FRAG_BUFFERED, onMedia);
+            };
+            hls.on(Hls.Events.FRAG_LOADING, onLoading);
+            hls.on(Hls.Events.FRAG_LOADED, onLoaded);
+            hls.on(Hls.Events.FRAG_PARSED, onParsed);
+            hls.on(Hls.Events.FRAG_BUFFERED, onMedia);
           });
         } else {
           // Non-LL: don't play here. The FRAG_BUFFERED gate below calls play() once

@@ -102,4 +102,26 @@ describe('restartStream', () => {
     expect(starts).toBe(2);
     expect(useAppStore.getState().streamUrl).toBe('http://localhost/relay-2.m3u8');
   });
+
+  it('counts an automatic reload once, before the relay stops', async () => {
+    const first = useAppStore.getState().restartStream({ quiet: true, reason: 'stall' });
+    const second = useAppStore.getState().restartStream({ quiet: true, reason: 'stall' });
+    await vi.advanceTimersByTimeAsync(1000);
+    await Promise.all([first, second]);
+    expect(calls('note_playback_reload')).toHaveLength(1);
+    const order = invokeMock.mock.calls.map(([c]) => c);
+    expect(order.indexOf('note_playback_reload')).toBeLessThan(order.indexOf('stop_stream'));
+  });
+
+  it('never counts a reload whose stream was replaced', async () => {
+    const run = useAppStore.getState().restartStream({
+      quiet: true,
+      reason: 'stall',
+      ifUrl: 'http://localhost/elsewhere.m3u8',
+    });
+    await vi.advanceTimersByTimeAsync(1000);
+    await run;
+    expect(calls('note_playback_reload')).toHaveLength(0);
+    expect(calls('stop_stream')).toHaveLength(0);
+  });
 });

@@ -3,7 +3,7 @@ export type SwapVerdict = 'apply' | 'discard' | 'discard-and-stop';
 /**
  * What to do with an audio-only swap that has just resolved.
  *
- * `change_stream_quality` is `start_stream` underneath: by the time it
+ * The swap calls `start_stream`: by the time it
  * returns, the Rust relay is up for the channel the swap was issued for. Three
  * things can have happened in the meantime:
  *

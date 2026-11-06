@@ -805,7 +805,7 @@ function whenBootSettled(task: () => void): void {
 // the chat panes stay here.
 
 /** Why the player reloaded a live stream by itself (see `note_playback_reload`). */
-export type AutoReloadReason = 'stall' | 'no-buffer' | 'gave-up';
+export type AutoReloadReason = 'stall' | 'no-buffer' | 'gave-up' | 'wedge';
 
 type StoreSet = (partial: Partial<AppState>) => void;
 type StoreGet = () => AppState;
@@ -1082,6 +1082,16 @@ let transientSwapSeq = 0;
 // The restart that is running. A second restart asked for meanwhile is that
 // one, so two relay cycles never overlap.
 let restartInFlight: Promise<void> | null = null;
+/**
+ * Counts an automatic reload in Rust once its restart is the one running and
+ * still wanted, before its relay stops (Rust reads the channel the relay
+ * serves): repeated reloads hold low latency, and HEVC and AV1 on a Twitch
+ * channel, off for a while, which the start that follows then honors.
+ */
+async function countReload(login: string, reason: AutoReloadReason | undefined): Promise<void> {
+  if (!reason) return;
+  await invoke<boolean>('note_playback_reload', { login, reason }).catch(() => false);
+}
 async function settleTransientSwap(): Promise<void> {
   if (transientSwapInFlight) await transientSwapInFlight.catch(() => {});
 }
@@ -2588,14 +2598,6 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     Logger.info(`[Stream] Restarting stream for ${currentStream.user_login}...`);
     trackActivity('Restarted stream');
-    if (options?.reason) {
-      // Counted and logged in Rust; repeated reloads turn low latency off
-      // for a while, which the start below then honors.
-      await invoke<boolean>('note_playback_reload', {
-        login: currentStream.user_login,
-        reason: options.reason,
-      }).catch(() => false);
-    }
 
     // Save current stream info
     const channel = currentStream.user_login;
@@ -2621,6 +2623,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         release();
         return;
       }
+      await countReload(channel, options?.reason);
       try {
         set({ isRestartingStream: true });
         await invoke('stop_stream');
@@ -2683,6 +2686,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       release();
       return;
     }
+    await countReload(channel, options?.reason);
 
     try {
       // Freeze the running player's loader BEFORE the backend goes down: the relay
@@ -2875,12 +2879,13 @@ export const useAppStore = create<AppState>((set, get) => ({
             ? `https://twitch.tv/${currentStream.user_login}`
             : buildProviderUrl(provider, currentStream.user_login);
         const targetUrl = currentMediaType !== 'live' && originalMediaUrl ? originalMediaUrl : liveUrl;
-        const result = await invoke<StreamStartResult>('change_stream_quality', {
+        // `start_stream`, not `change_stream_quality`: this swap is not the
+        // viewer's pick, so a codec hold on the channel stays.
+        const result = await invoke<StreamStartResult>('start_stream', {
           url: targetUrl,
           quality,
         });
-        // change_stream_quality is start_stream underneath: it brought the relay
-        // up for `login`. Closing PiP with its X fires visibilitychange (this
+        // start_stream brought the relay up for `login`. Closing PiP with its X fires visibilitychange (this
         // downshift) and sn:pip-closed (exitStream) in the same instant, and the
         // late swap used to remount the player on an audio-only URL with
         // currentStream already null: audio, no overlay, no card, nothing on
