@@ -1023,6 +1023,17 @@ pub async fn promote_multi_nook_tile(
         debug!("[MultiNook] '{}' plays under the small-tile cap; promoting with a fresh resolve", stream_id);
         return Ok(None);
     }
+    // A Twitch tile serving HEVC or AV1 on a channel whose codecs are held
+    // (the main player kept reloading it) resolves afresh, in H.264.
+    if let Some(ref s) = promotion.status {
+        if tr::codec_held(&s.channel, promotion.codecs.as_deref()) {
+            debug!(
+                "[MultiNook] '{}' serves a codec held off {}; promoting with a fresh resolve",
+                stream_id, s.channel
+            );
+            return Ok(None);
+        }
+    }
 
     // The badge reads from here, exactly as the solo path sets it. A provider
     // tile carries no status and leaves whatever the last Twitch stream wrote,

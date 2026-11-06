@@ -49,7 +49,7 @@ fn codec_pref_reported() -> bool {
 }
 
 /// The codec families that failed to play on `channel` this session.
-fn failed_for(channel: &str) -> Vec<String> {
+fn failed_in_session(channel: &str) -> Vec<String> {
     FAILED_CODECS
         .lock()
         .unwrap()
@@ -57,6 +57,18 @@ fn failed_for(channel: &str) -> Vec<String> {
         .filter(|(c, _)| c.eq_ignore_ascii_case(channel))
         .map(|(_, f)| f.clone())
         .collect()
+}
+
+/// The codec families selection skips on `channel`: those that failed to
+/// play there this session, and those held off it now.
+fn failed_for(channel: &str) -> Vec<String> {
+    let mut failed = failed_in_session(channel);
+    for family in held_at(channel, Instant::now()) {
+        if !failed.contains(&family) {
+            failed.push(family);
+        }
+    }
+    failed
 }
 
 /// The selection preference on `channel`: what this machine decodes, less
@@ -116,6 +128,64 @@ pub fn avoid_codec_family(channel: &str, family: &str) {
         failed.push((channel.clone(), family.to_string()));
         log::warn!("[Resolver] {family} failed to play on {channel}; not selecting it there again this session");
     }
+}
+
+/// Codec families held off a channel until an instant, as (channel, family,
+/// until): a stream that keeps reloading there plays in H.264 for a while.
+/// HEVC and AV1 always take the low-latency origin, which has no stable
+/// whole-segment path for them, so only H.264 lets the reload hold-off reach
+/// them. Unlike `FAILED_CODECS` the families come back when the hold ends.
+static HELD_CODECS: Mutex<Vec<(String, String, Instant)>> = Mutex::new(Vec::new());
+
+/// The families a hold covers: every one selection can step away from.
+const HELD_FAMILIES: [&str; 2] = ["hevc", "av1"];
+
+/// Hold HEVC and AV1 off `channel` for `d` from now, replacing an earlier
+/// hold there.
+pub fn hold_codecs(channel: &str, d: Duration) {
+    let channel = channel.to_ascii_lowercase();
+    let now = Instant::now();
+    let mut held = HELD_CODECS.lock().unwrap_or_else(|e| e.into_inner());
+    held.retain(|(c, _, until)| *until > now && *c != channel);
+    for family in HELD_FAMILIES {
+        held.push((channel.clone(), family.to_string(), now + d));
+    }
+    log::warn!(
+        "[Resolver] HEVC and AV1 held off {channel} for {} min after repeated reloads",
+        d.as_secs() / 60
+    );
+}
+
+/// End `channel`'s codec hold: the viewer picked a quality there.
+pub fn release_codec_hold(channel: &str) {
+    let now = Instant::now();
+    let mut held = HELD_CODECS.lock().unwrap_or_else(|e| e.into_inner());
+    let releases = held
+        .iter()
+        .any(|(c, _, until)| *until > now && c.eq_ignore_ascii_case(channel));
+    held.retain(|(c, _, until)| *until > now && !c.eq_ignore_ascii_case(channel));
+    if releases {
+        debug!("[Resolver] {channel}'s codec hold ends: a quality was picked");
+    }
+}
+
+/// The families held off `channel` at `now`. Reads only, so a test may ask
+/// about a later instant without touching another test's holds.
+fn held_at(channel: &str, now: Instant) -> Vec<String> {
+    HELD_CODECS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .filter(|(c, _, until)| *until > now && c.eq_ignore_ascii_case(channel))
+        .map(|(_, f, _)| f.clone())
+        .collect()
+}
+
+/// Whether a rendition with these CODECS is held off `channel` now.
+pub fn codec_held(channel: &str, codecs: Option<&str>) -> bool {
+    codecs
+        .and_then(avoidable_codec_family)
+        .is_some_and(|family| held_at(channel, Instant::now()).iter().any(|f| f.as_str() == family))
 }
 
 /// A selection preference from the codecs a phone decodes in hardware, as its
@@ -179,6 +249,17 @@ pub fn playable_variants(master: &str, channel: &str) -> Vec<Variant> {
         return parse_master(master);
     }
     retain_playable(parse_master(master), &pref_for(channel))
+}
+
+/// The quality menu's tiers on `channel`: `playable_variants` without the
+/// codec holds, so a held tier stays listed for the viewer to pick (which
+/// ends the hold).
+fn menu_variants(master: &str, channel: &str) -> Vec<Variant> {
+    let failed = failed_in_session(channel);
+    if !codec_pref_reported() && failed.is_empty() {
+        return parse_master(master);
+    }
+    retain_playable(parse_master(master), &allowed_codecs(effective_codec_pref(), &failed))
 }
 
 /// `variants` without the video tiers `pref` rules out. A master with no
@@ -895,7 +976,7 @@ fn build(
     }
     let (idx, label) = select_variant_for(&variants, quality, &channel)
         .ok_or_else(|| anyhow!("{}: no variant matched '{}'", channel, quality))?;
-    let available = quality_names(&variants);
+    let available = quality_names(&menu_variants(&master, &channel));
     Ok(ResolvedLive {
         url: variants[idx].url.clone(),
         quality: label,
@@ -1710,6 +1791,43 @@ https://x/1440.m3u8\n";
         // Reported twice, kept once.
         fail_codec("test-banned-here", Some("video/mp4;codecs=hev1.1.6.L150.90"), None);
         assert_eq!(failed_for("test-banned-here").len(), 1);
+    }
+
+    #[test]
+    fn a_codec_hold_drops_hevc_and_av1_on_its_channel_until_it_ends() {
+        hold_codecs("Test-Hold-Here", Duration::from_secs(600));
+        let mut held = failed_for("test-hold-here");
+        held.sort();
+        assert_eq!(held, ["av1", "hevc"]);
+        assert!(failed_for("test-hold-elsewhere").is_empty());
+        let pref = allowed_codecs(s(&["av1", "hevc", "h264"]), &failed_for("test-hold-here"));
+        assert_eq!(pref, ["h264"], "H.264 stays the floor");
+        let later = Instant::now() + Duration::from_secs(601);
+        assert!(held_at("test-hold-here", later).is_empty(), "the hold ends");
+    }
+
+    #[test]
+    fn a_hold_stays_out_of_the_session_failures() {
+        hold_codecs("test-hold-menu", Duration::from_secs(600));
+        assert!(failed_in_session("test-hold-menu").is_empty(), "the quality menu keeps held tiers");
+    }
+
+    #[test]
+    fn releasing_a_hold_brings_the_codecs_back() {
+        hold_codecs("test-hold-release", Duration::from_secs(600));
+        assert_eq!(held_at("test-hold-release", Instant::now()).len(), 2);
+        release_codec_hold("Test-Hold-Release");
+        assert!(held_at("test-hold-release", Instant::now()).is_empty());
+    }
+
+    #[test]
+    fn a_held_codec_string_reads_as_held() {
+        hold_codecs("test-hold-tile", Duration::from_secs(600));
+        assert!(codec_held("test-hold-tile", Some("hev1.1.6.L150.90,mp4a.40.2")));
+        assert!(codec_held("test-hold-tile", Some("av01.0.08M.08,mp4a.40.2")));
+        assert!(!codec_held("test-hold-tile", Some("avc1.4D402A,mp4a.40.2")));
+        assert!(!codec_held("test-hold-tile", None));
+        assert!(!codec_held("test-hold-nowhere", Some("hev1.1.6.L150.90")));
     }
 
     #[test]

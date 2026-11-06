@@ -1439,6 +1439,12 @@ pub async fn change_stream_quality(
     quality: String,
     state: State<'_, AppState>,
 ) -> Result<StreamStartResult, String> {
+    // The viewer picked this quality, so it plays as picked: a codec hold on
+    // the channel (repeated automatic reloads) ends here. Automatic swaps
+    // call `start_stream` directly and never end it.
+    if let Some(channel) = channel_from_url(&url) {
+        tr::release_codec_hold(&channel);
+    }
     // Don't stop the server - just update the stream URL.
     // The server keeps running on the same port.
     start_stream(url, quality, state).await.map_err(|e| e.to_string())
