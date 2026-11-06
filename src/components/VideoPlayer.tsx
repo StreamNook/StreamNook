@@ -111,6 +111,7 @@ import { followLiveAfterResync } from '../utils/liveResync';
 import { HLS_START_CONFIG, resumeLoadAfterRecover, startLoadOnManifest } from '../utils/hlsStartLoad';
 import { watchStalls, wedgedOnBuffer } from '../utils/stallWatchdog';
 import { createRecovery } from '../utils/recovery';
+import { IS_MAC } from '../utils/platform';
 import { attachPauseRoutes, releaseTypingFocus } from '../utils/pauseRoutes';
 import { recognizeNowPlaying, announceSong, isQuietResult } from '../utils/songId';
 import { SongsSplitButton } from './songs/SongsFlyout';
@@ -1538,11 +1539,12 @@ const VideoPlayer = () => {
         let wedged = 0;
         behindLiveWatchdogRef.current = setInterval(() => {
           const v = (hls.media as HTMLVideoElement | null) ?? video;
-          // Checked before the seeking skip below: a wedged element's seeks
-          // never complete, so it would be skipped forever. Two ticks (~4s):
-          // an ordinary in-buffer seek, briefly at HAVE_METADATA, completes in
-          // well under a second. Reopening the stream is what gets it playing.
-          if (v && wedgedOnBuffer(v)) {
+          // WebKit only, checked before the seeking skip below: a wedged
+          // element's seeks never complete, so it would be skipped forever.
+          // Two ticks (~4s): an ordinary in-buffer seek, briefly at
+          // HAVE_METADATA, completes in well under a second. Reopening the
+          // stream is what gets it playing.
+          if (IS_MAC && v && wedgedOnBuffer(v)) {
             wedged += 1;
             if (wedged >= 2) {
               wedged = 0;
@@ -1836,11 +1838,7 @@ const VideoPlayer = () => {
             const edge = data.details.edge;
             const loadedPos =
               hls.liveSyncPosition ?? (Number.isFinite(edge) ? Math.max(0, edge - cushion) : null);
-            // Not before the first media lands: on WebKit, a playhead set while
-            // nothing is appended can wedge the element at HAVE_METADATA for
-            // good, with every later seek left pending. The first buffered
-            // fragment or part comes a few hundred ms later.
-            hls.once(Hls.Events.FRAG_BUFFERED, () => {
+            const startLL = () => {
               if (hlsRef.current !== hls) return;
               const pos = hls.liveSyncPosition ?? loadedPos;
               if (pos != null && Number.isFinite(pos) && pos > 0) {
@@ -1860,7 +1858,13 @@ const VideoPlayer = () => {
                 video.muted = true;
                 video.play().catch(() => Logger.debug('[HLS] LL muted autoplay also failed'));
               });
-            });
+            };
+            // On macOS, not before the first media lands: WebKit can wedge an
+            // element whose playhead was set while nothing was appended, at
+            // HAVE_METADATA for good with every later seek left pending. The
+            // first buffered fragment or part comes a few hundred ms later.
+            if (IS_MAC) hls.once(Hls.Events.FRAG_BUFFERED, startLL);
+            else startLL();
           });
         } else {
           // Non-LL: don't play here. The FRAG_BUFFERED gate below calls play() once
