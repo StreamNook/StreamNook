@@ -1007,7 +1007,7 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
 
             {/* Dock (minimize to the tray strip) — hidden while maximized */}
             {!isMaximized && !mini && (
-              <Tooltip content="Dock Stream" delay={200} side="top">
+              <Tooltip content="Dock: keeps playing in the toolbar" delay={200} side="top">
                 <button
                   onClick={() => dockSlot(id)}
                   className={glassButton}
@@ -1018,7 +1018,7 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
             )}
 
             {/* Close (remove from grid) */}
-            <Tooltip content="Close Stream" delay={200} side="top">
+            <Tooltip content="Close stream" delay={200} side="top">
               <button
                 onClick={() => removeSlot(id)}
                 className={glassButton}

@@ -50,7 +50,7 @@ function suggestNameFromSlots(): string {
       best = g;
     }
   }
-  return best || 'New Preset';
+  return best || 'New preset';
 }
 
 /** The thumbnail to show for a preset: its custom icon, else its first channel's
@@ -106,9 +106,21 @@ const MultiNookPresets: React.FC = () => {
         close();
       }
     }
+    // Esc steps back one level, like the other toolbar menus close on it: out
+    // of the editor to the list (so a half-made preset is not thrown away by
+    // one key), then out of the menu.
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== 'Escape') return;
+      if (view.mode === 'list') close();
+      else setView({ mode: 'list' });
+    }
     document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
-  }, [isOpen, close]);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [isOpen, close, view.mode]);
 
   const openNew = useCallback(() => {
     setView({ mode: 'editor', editingId: null, seed: [], seedName: '' });
@@ -147,10 +159,13 @@ const MultiNookPresets: React.FC = () => {
 
   return (
     <div ref={containerRef} className="relative">
-      <Tooltip content={activePreset ? `Preset: ${activePreset.name}` : 'Presets'} delay={200} side="bottom">
+      {/* Off while the menu is open: the tip would sit on the menu's header. */}
+      <Tooltip content={activePreset ? `Preset: ${activePreset.name}` : 'Presets'} delay={200} side="bottom" disabled={isOpen}>
         <button
           onClick={() => (isOpen ? close() : setIsOpen(true))}
           aria-pressed={isOpen}
+          // Its own name: the tooltip that would give it one is off while open.
+          aria-label={activePreset ? `Preset: ${activePreset.name}` : 'Presets'}
           // Wears the cluster's own button treatment rather than a glass
           // button of its own: this sits INSIDE the toolbar's glaze cluster,
           // and a glass button nested in a glass cluster is two materials
@@ -289,8 +304,8 @@ const PresetListView: React.FC<{
       <div className="max-h-72 overflow-y-auto custom-scrollbar px-1.5">
         {presets.length === 0 ? (
           <div className="px-3 py-6 text-center">
-            <p className="text-xs text-textSecondary font-medium">No presets yet</p>
-            <p className="text-[11px] text-textMuted mt-1 leading-snug">
+            <p className="text-[13px] text-textSecondary font-medium">No presets yet</p>
+            <p className="text-[12px] text-textMuted mt-1.5 leading-snug text-balance">
               Save a set of streamers and open them all with one click.
             </p>
           </div>
@@ -784,13 +799,13 @@ const PresetEditorView: React.FC<{
 
             {visibleItems.length === 0 && (
               <div className="px-4 py-3 text-center">
-                <span className="text-[11px] text-textMuted">
+                <span className="text-[12px] text-textMuted">
                   {query
                     ? isSearching
                       ? 'Searching Twitch...'
                       : `No channels found for "${searchInput}"`
                     : followedCount === 0
-                      ? 'No live follows. Type to search.'
+                      ? 'No followed channels are live. Type to search.'
                       : 'Start typing to search any channel'}
                 </span>
               </div>
@@ -802,7 +817,7 @@ const PresetEditorView: React.FC<{
           In this preset{channels.length > 0 ? ` · ${channels.length}` : ''}
         </div>
         {channels.length === 0 ? (
-          <div className="px-2 py-4 text-center text-[11px] text-textMuted">Search above to add streamers.</div>
+          <div className="px-2 py-4 text-center text-[12px] text-textMuted">Search above to add streamers.</div>
         ) : (
           <div className="space-y-0.5 pb-1">
             {channels.map((ch) => (
@@ -1023,7 +1038,7 @@ const PresetIconPicker: React.FC<{
                 })}
               </div>
             ) : (
-              <div className="px-4 py-6 text-center text-[11px] text-textMuted">
+              <div className="px-4 py-6 text-center text-[12px] text-textMuted">
                 {gameQuery.trim()
                   ? gameLoading
                     ? 'Searching...'
@@ -1071,7 +1086,7 @@ const PresetIconPicker: React.FC<{
               })}
             </div>
           ) : (
-            <div className="px-4 py-6 text-center text-[11px] text-textMuted">
+            <div className="px-4 py-6 text-center text-[12px] text-textMuted">
               Add channels to the preset first, then pick one as the icon.
             </div>
           )}

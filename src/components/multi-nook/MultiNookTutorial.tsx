@@ -7,7 +7,7 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useDndMonitor, DragOverlay, useDroppable } from '@dnd-kit/core';
-import { LayoutGrid, Plus, Volume2, Move, Minimize2, GripHorizontal, ArrowUpFromLine, MessageSquare, RefreshCcw } from 'lucide-react';
+import { LayoutGrid, Plus, Volume2, Move, Minimize2, Maximize2, Bookmark, GripHorizontal, ArrowUpFromLine, MessageSquare, RefreshCcw } from 'lucide-react';
 import { useTutorialStore } from '../../stores/tutorialStore';
 import { Tooltip } from '../ui/Tooltip';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -29,7 +29,7 @@ const TUTORIAL_DATA: Record<string, TutorialCardData> = {
     title: 'Add Streams',
     desc: (
       <span>
-        Use the <strong className="text-textPrimary">+</strong> button top-right, right-click any stream, or click the <strong className="text-textPrimary">top right arrow</strong> on any stream card to add it to your grid.
+        Use the <strong className="text-textPrimary">+</strong> button at the top right, right-click any stream, or click the <strong className="text-textPrimary">arrow</strong> at the top right of a stream card to add it to your grid.
       </span>
     ),
     colorClass: 'text-accent',
@@ -40,7 +40,7 @@ const TUTORIAL_DATA: Record<string, TutorialCardData> = {
     title: 'Smart Audio Focus',
     desc: (
       <span>
-        Click the body of any card to <strong>Focus</strong> its audio (indicated by a gentle glow). Click again to unfocus and instantly hear all streams simultaneously.
+        Click a stream to <strong>focus</strong> it: you hear only that one, and it gets a soft glow. Click it again to hear every stream at once.
       </span>
     ),
     colorClass: 'text-blue-400',
@@ -48,23 +48,44 @@ const TUTORIAL_DATA: Record<string, TutorialCardData> = {
   'tutorial::drag': {
     id: 'tutorial::drag',
     icon: <Move className="w-5 h-5 text-purple-400" />,
-    title: 'Drag & Drop Layout',
-    desc: 'Grab the top-center handle of any card and drag it around to instantly rearrange your entire grid layout.',
+    title: 'Drag to Rearrange',
+    desc: 'Grab the handle at the top of a stream and drag it to a new spot. The rest of the grid moves out of the way.',
     colorClass: 'text-purple-400',
   },
   'tutorial::dock': {
     id: 'tutorial::dock',
     icon: <Minimize2 className="w-5 h-5 text-emerald-400" />,
-    title: 'Docking & Background',
-    desc: 'For this tutorial, drag this specific card up to the top toolbar to dock it. (In real grids, any stream can be docked to hide it!)',
+    title: 'Docking',
+    desc: 'Try it here: drag this card up to the toolbar. A docked stream keeps playing out of the way until you drag it back onto the grid.',
     colorClass: 'text-emerald-400',
   },
   'tutorial::chat': {
     id: 'tutorial::chat',
     icon: <MessageSquare className="w-5 h-5 text-pink-400" />,
     title: 'Chat Control',
-    desc: 'The focused stream automatically commands the chat view, but you can switch it manually to any stream, or hide chat entirely for a cinematic layout.',
+    desc: 'Chat follows the stream you focus. Pick another stream above the chat, pin it to keep it there, or hide chat for a bigger grid.',
     colorClass: 'text-pink-400',
+  },
+  'tutorial::layout': {
+    id: 'tutorial::layout',
+    icon: <LayoutGrid className="w-5 h-5 text-sky-400" />,
+    title: 'Layouts',
+    desc: 'The layout button in the toolbar switches between an even grid and one main stream with the rest in a row or a column.',
+    colorClass: 'text-sky-400',
+  },
+  'tutorial::spotlight': {
+    id: 'tutorial::spotlight',
+    icon: <Maximize2 className="w-5 h-5 text-amber-400" />,
+    title: 'Spotlight',
+    desc: 'Double-click a stream to fill the whole grid with it. Double-click again, or press Esc, to bring the others back.',
+    colorClass: 'text-amber-400',
+  },
+  'tutorial::presets': {
+    id: 'tutorial::presets',
+    icon: <Bookmark className="w-5 h-5 text-teal-400" />,
+    title: 'Presets',
+    desc: 'Save the streams you watch together as a preset from the bookmark button, then open them all again with one click.',
+    colorClass: 'text-teal-400',
   },
   'tutorial::sync': {
     id: 'tutorial::sync',
@@ -265,8 +286,11 @@ export const MultiNookTutorial: React.FC = () => {
   const isUndocking = activeDragId === 'docked::tutorial::dock';
 
   return (
-    <div className="w-full h-full flex flex-col items-center justify-center text-textMuted border-2 border-dashed border-borderSubtle bg-glass/20 rounded-xl p-6 overflow-y-auto custom-scrollbar relative">
-      <div className={`flex flex-col items-center max-w-3xl w-full animate-in fade-in slide-in-from-bottom-4 duration-500 ${isUndocking ? 'opacity-0' : 'opacity-100'}`}>
+    // Centered with auto margins rather than justify-center: an open sandbox is
+    // taller than a short window, and justify-center pushed its top (the icon
+    // that closes it) out of the scroll area, where it could not be reached.
+    <div className="w-full h-full flex flex-col items-center text-textMuted border-2 border-dashed border-borderSubtle bg-glass/20 rounded-xl p-6 overflow-y-auto custom-scrollbar relative">
+      <div className={`my-auto flex flex-col items-center max-w-3xl w-full animate-in fade-in slide-in-from-bottom-4 duration-500 ${isUndocking ? 'opacity-0' : 'opacity-100'}`}>
         <button 
           onClick={() => setIsGridVisible(prev => !prev)}
           className={`
@@ -281,7 +305,7 @@ export const MultiNookTutorial: React.FC = () => {
         
         <h2 className="text-2xl font-bold text-textPrimary mb-2 tracking-tight">Welcome to MultiNook</h2>
         <p className="text-textMuted text-center max-w-md mb-8 transition-opacity duration-300 leading-relaxed">
-          Your ultimate interactive streaming canvas. Hit the + button top-right to start adding streams, or {
+          Watch several streams side by side. Hit the + button at the top right to add one, or {
             !isGridVisible 
               ? <span>click the <strong className="italic text-textPrimary">icon</strong> above to learn the ropes.</span> 
               : <span>click the active <strong className="italic text-textPrimary">icon</strong> to pack up the sandbox.</span>

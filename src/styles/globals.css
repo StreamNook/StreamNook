@@ -991,6 +991,14 @@ html[data-theme-tone="light"] .sn-notif-trigger .sn-notif-face > svg {
 .titlebar-icon-btn:active {
   background: rgba(255, 255, 255, 0.06);
 }
+/* No browser focus ring. Closing a toolbar menu with Esc leaves focus on its
+   button, and Chromium then drew its white outline around a button that was
+   no longer doing anything, which read as still selected. Keyboard focus shows
+   as the icon brightening instead, the quietest cue that is still visible. */
+.titlebar-icon-btn:focus-visible {
+  outline: none;
+  color: var(--color-text-primary);
+}
 .titlebar-icon-btn svg,
 .titlebar-icon-btn img {
   transition: transform 0.2s cubic-bezier(0.34, 1.4, 0.64, 1);

@@ -258,7 +258,7 @@ export const useMultiNookPlayer = ({
 
     const onNativeError = () => {
       if (!Hls.isSupported() && video?.error) {
-          setError('Failed to load video (Native)');
+          setError("Couldn't load this stream");
       }
     };
 
@@ -600,7 +600,8 @@ export const useMultiNookPlayer = ({
                 } else if (unsupported) {
                   setError(CODEC_UNPLAYABLE);
                 } else {
-                  setError('Media error');
+                  // Shown until the tile plays again (onPlaying clears it).
+                  setError('Video hiccup, recovering');
                   hls.recoverMediaError();
                   resumeLoadAfterRecover(hls, park);
                 }
@@ -609,17 +610,17 @@ export const useMultiNookPlayer = ({
           }
           switch (data.type) {
             case Hls.ErrorTypes.NETWORK_ERROR:
-              setError('Network error');
+              setError('Reconnecting...');
               // A parked tile stopped its downloads on purpose; its play restarts them.
               if (!park?.loadStopped) hls.startLoad();
               break;
             case Hls.ErrorTypes.MEDIA_ERROR:
-              setError('Media error');
+              setError('Video hiccup, recovering');
               hls.recoverMediaError();
               resumeLoadAfterRecover(hls, park);
               break;
             default:
-              setError('Playback error');
+              setError('This stream stopped playing');
               hls.destroy();
               break;
           }

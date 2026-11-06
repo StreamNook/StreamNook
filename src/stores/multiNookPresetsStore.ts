@@ -99,7 +99,7 @@ export const useMultiNookPresetsStore = create<MultiNookPresetsState>((set, get)
     const now = Date.now();
     const preset: MultiNookPreset = {
       id: newId(),
-      name: name.trim() || 'Untitled preset',
+      name: name.trim() || 'New preset',
       channels: dedupeChannels(channels),
       ...(icon ? { icon } : {}),
       ...(layout ? { layout } : {}),

@@ -109,7 +109,8 @@ export default function MultiNookLayoutPicker() {
 
   return (
     <div ref={containerRef} className="relative">
-      <Tooltip content="Layout" delay={200} side="bottom">
+      {/* Off while the menu is open: the tip would sit on the menu's header. */}
+      <Tooltip content="Layout" delay={200} side="bottom" disabled={isOpen}>
         <button
           onClick={() => setIsOpen((o) => !o)}
           aria-pressed={isOpen}
@@ -130,12 +131,12 @@ export default function MultiNookLayoutPicker() {
           ref={menuRef}
           role="dialog"
           aria-label="Layout"
-          className="glass-flyout w-[19rem] !p-3"
+          className="glass-flyout w-[22rem] !p-3"
           style={{ position: 'fixed', top: menuPos.top, right: menuPos.right, zIndex: 9999 }}
         >
           <div className="mb-2.5 flex items-baseline justify-between">
             <p className="text-[13px] font-semibold text-textPrimary">Layout</p>
-            <span className="text-[11px] text-textMuted">
+            <span className="text-[12px] text-textMuted">
               {visibleCount} {visibleCount === 1 ? 'stream' : 'streams'}
             </span>
           </div>
@@ -150,8 +151,8 @@ export default function MultiNookLayoutPicker() {
                     aria-checked={on}
                     aria-label={`${label}: ${detail}`}
                     onClick={() => void setLayout({ mode })}
-                    className={`flex flex-col items-center gap-2 !rounded-xl px-1.5 pb-2 pt-2.5 ${
-                      on ? `${ACCENT_BUTTON} !text-[11px]` : `${GLAZE_PILL} text-[11px]`
+                    className={`flex flex-col items-center gap-2 whitespace-nowrap !rounded-xl px-1.5 pb-2.5 pt-2.5 ${
+                      on ? `${ACCENT_BUTTON} !text-[12px]` : `${GLAZE_PILL} text-[12px]`
                     }`}
                     style={on ? ACCENT_FILL : undefined}
                   >
@@ -172,7 +173,7 @@ export default function MultiNookLayoutPicker() {
                   <label htmlFor="nook-strip-share" className="text-xs font-medium text-textPrimary">
                     Small streams
                   </label>
-                  <span className="text-[11px] tabular-nums text-textMuted">{Math.round(share * 100)}% of the space</span>
+                  <span className="text-[12px] tabular-nums text-textMuted">{Math.round(share * 100)}% of the space</span>
                 </div>
                 <input
                   id="nook-strip-share"
@@ -187,7 +188,7 @@ export default function MultiNookLayoutPicker() {
                   onBlur={commitShare}
                   className="mt-2 w-full cursor-pointer accent-accent"
                 />
-                <div className="mt-0.5 flex justify-between text-[10px] text-textMuted">
+                <div className="mt-0.5 flex justify-between text-[11px] text-textMuted">
                   <span>Smaller</span>
                   <span>Larger</span>
                 </div>
@@ -205,7 +206,7 @@ export default function MultiNookLayoutPicker() {
                         aria-checked={on}
                         onClick={() => void setLayout({ small_quality_cap: value })}
                         className={`py-1.5 ${
-                          on ? `${ACCENT_BUTTON} !text-[11px]` : `${GLAZE_PILL} text-[11px]`
+                          on ? `${ACCENT_BUTTON} !text-[12px]` : `${GLAZE_PILL} text-[12px]`
                         }`}
                         style={on ? ACCENT_FILL : undefined}
                       >
@@ -214,7 +215,7 @@ export default function MultiNookLayoutPicker() {
                     );
                   })}
                 </div>
-                <p className="mt-2 text-[11px] leading-4 text-textMuted">
+                <p className="mt-2 text-[12px] leading-[18px] text-textMuted">
                   {layout.small_quality_cap
                     ? 'Uses less bandwidth and CPU. A small stream made main switches back to its own quality.'
                     : 'Every stream keeps its own quality.'}

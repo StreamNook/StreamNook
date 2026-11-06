@@ -4,6 +4,7 @@ import { ProviderLogo } from '../ProviderLogo';
 import { makeKey } from '../../utils/providerKey';
 import { usemultiNookStore } from '../../stores/multiNookStore';
 import { Tooltip } from '../ui/Tooltip';
+import { TabScroller } from '../ui/TabScroller';
 import { ACCENT_BUTTON, ACCENT_FILL } from '../ui/glazeButtons';
 import { TabLiveLabel } from '../chat/TabLiveLabel';
 import { useTabLive } from '../../hooks/useTabLive';
@@ -35,9 +36,14 @@ const MultiNookChatSwitcher: React.FC = () => {
   // backdrop root, so theirs could only re-blur the strip, and a backdrop filter
   // nested in another one is what WebView2 paints stale. The chosen chip is the
   // filled accent capsule, like the MultiChat window's tab strip.
+  //
+  // Only the chips scroll (no bar, a fade on a hidden edge, the chosen chip
+  // kept in view), so the pin at the end never scrolls out of the strip.
+  const activeKey = activeChatChannelId;
   return (
-    <div className="flex-shrink-0 flex items-center gap-2 p-2 px-3 overflow-x-auto scrollbar-thin border-b border-borderSubtle bg-glass/30 backdrop-blur-sm shadow-sm" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
-      <div className="flex items-center gap-1.5 min-w-max">
+    <div className="flex-shrink-0 flex items-center gap-2 py-2 px-3 border-b border-borderSubtle bg-glass/30 backdrop-blur-sm shadow-sm" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+      <TabScroller activeKey={activeKey} count={slots.length}>
+        <div className="flex items-center gap-1.5 min-w-max">
         {slots.map((slot) => {
           // The composite slot key is the one identifier that is unambiguous
           // across platforms AND available immediately, so there is no longer an
@@ -54,18 +60,33 @@ const MultiNookChatSwitcher: React.FC = () => {
               side="bottom"
             >
               <button
+                data-tab-key={key}
                 onClick={() => setActiveChatChannelId(key)}
                 aria-label={state ? `${name}, ${state}` : name}
+                aria-pressed={isActive}
                 className={`
-                  px-3 py-1.5 text-xs font-bold tracking-wide flex items-center gap-1.5
+                  h-8 pl-1.5 pr-3.5 text-xs font-bold tracking-wide flex items-center gap-2
                   ${isActive
                     ? `${ACCENT_BUTTON} !text-xs font-extrabold`
                     : 'chrome-glaze chrome-glaze--flat chrome-glaze--control text-textSecondary hover:text-white'}
                 `}
                 style={isActive ? ACCENT_FILL : undefined}
               >
+                {/* The face finds a channel faster than its name in a row of them. */}
+                {slot.profileImageUrl ? (
+                  <img
+                    src={slot.profileImageUrl}
+                    alt=""
+                    draggable={false}
+                    className="h-5 w-5 shrink-0 rounded-full object-cover bg-black/20"
+                  />
+                ) : (
+                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-white/15 text-[10px] font-bold text-white" aria-hidden>
+                    {name.charAt(0).toUpperCase()}
+                  </span>
+                )}
                 {slot.provider && slot.provider !== 'twitch' && (
-                  <ProviderLogo provider={slot.provider} size={11} className="shrink-0" />
+                  <ProviderLogo provider={slot.provider} size={11} className="shrink-0 -ml-0.5" />
                 )}
                 {/* The dot hangs off the name's corner; the pin keeps clear of it. */}
                 <TabLiveLabel label={name} isLive={state === 'Live'} />
@@ -74,8 +95,9 @@ const MultiNookChatSwitcher: React.FC = () => {
             </Tooltip>
           );
         })}
-      </div>
-      <div className="flex-1" />
+        </div>
+      </TabScroller>
+      <div className="min-w-0 flex-1" />
       <Tooltip
         content={isChatPinned ? 'Unpin chat: follow the focused stream' : 'Pin chat: stay here when focus moves'}
         side="bottom"
@@ -84,7 +106,7 @@ const MultiNookChatSwitcher: React.FC = () => {
           onClick={toggleChatPinned}
           aria-pressed={isChatPinned}
           aria-label={isChatPinned ? 'Unpin chat' : 'Pin chat'}
-          className={`shrink-0 p-1.5 ${
+          className={`shrink-0 flex h-8 w-8 items-center justify-center ${
             isChatPinned ? ACCENT_BUTTON : 'chrome-glaze chrome-glaze--flat chrome-glaze--control text-textSecondary hover:text-white'
           }`}
           style={isChatPinned ? ACCENT_FILL : undefined}

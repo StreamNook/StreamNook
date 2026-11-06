@@ -14,8 +14,11 @@ const DEFAULT_ORDER = [
   'tutorial::add',
   'tutorial::focus',
   'tutorial::chat',
+  'tutorial::layout',
+  'tutorial::spotlight',
   'tutorial::drag',
   'tutorial::dock',
+  'tutorial::presets',
   'tutorial::sync',
 ];
 

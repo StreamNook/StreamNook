@@ -555,7 +555,7 @@ const DraggableDockPill: React.FC<{
     : undefined;
 
   return (
-    <Tooltip content="Drag to grid to restore · Click to swap" delay={500} side="bottom">
+    <Tooltip content="Click to swap with the focused stream · Drag onto the grid to restore" delay={500} side="bottom">
       <div
         ref={setNodeRef}
         style={style}
@@ -593,7 +593,7 @@ const DraggableDockPill: React.FC<{
           {slot.channelName || slot.channelLogin}
         </span>
       </div>
-      <Tooltip content="Restore to Grid" delay={200} side="bottom">
+      <Tooltip content="Restore to grid" delay={200} side="bottom">
         <button
           onClick={(e) => {
             e.stopPropagation();
@@ -658,7 +658,7 @@ const TutorialDockPill: React.FC<{
           Docking Tutorial
         </span>
       </div>
-      <Tooltip content="Restore to Grid" delay={200} side="bottom">
+      <Tooltip content="Restore to grid" delay={200} side="bottom">
         <button
           onClick={(e) => {
             e.stopPropagation();
