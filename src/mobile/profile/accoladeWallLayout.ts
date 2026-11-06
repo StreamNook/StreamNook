@@ -26,9 +26,15 @@ export const WALL = {
   collapsedRows: 2,
 } as const;
 
+/** Medallions across at a screen width: four below 340 css px, where five
+ *  columns leave a label too little room for its longest single word. */
+export function wallColumns(screenWidth: number): number {
+  return screenWidth < 340 ? 4 : WALL.columns;
+}
+
 /** How many rows a count of medallions takes. */
-export function wallRows(count: number): number {
-  return Math.ceil(Math.max(0, count) / WALL.columns);
+export function wallRows(count: number, columns: number = WALL.columns): number {
+  return Math.ceil(Math.max(0, count) / columns);
 }
 
 /** The whole panel's height for a number of medallion rows, with or without the "Show all" row. */

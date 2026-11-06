@@ -48,7 +48,7 @@ export const ProfileHeroRows: React.FC<{
   const holding = holdChips && !hasChips;
   return (
     <TapPanelHost open={tap !== null} onClose={() => setTap(null)}>
-      {hasMeta && (
+      {(hasMeta || holdChips) && (
         // Held at a badge row's height until the answer lands, so worn badges
         // arriving under the handle push nothing down.
         <div
