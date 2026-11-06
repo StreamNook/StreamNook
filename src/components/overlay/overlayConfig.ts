@@ -247,6 +247,9 @@ export interface OverlayStyle {
    *  '7tv'). Each provider toggles independently, on top of the global
    *  showThirdPartyBadges master. See THIRD_PARTY_BADGE_PROVIDERS. */
   hiddenBadgeProviders: string[];
+  /** Opt-in badge providers switched ON, by id (OPT_IN_BADGE_PROVIDERS). Those
+   *  start off, so an overlay saved before one existed never gains it. */
+  shownBadgeProviders: string[];
   /** Badges shown before the rest fold into a static "+N" (0 = all). The
    *  overlay's own choice, apart from chat's. Default 3. */
   badgeLimit: number;
@@ -630,6 +633,20 @@ export const THIRD_PARTY_BADGE_PROVIDERS: { id: string; label: string }[] = [
   { id: 'dankchat', label: 'DankChat' },
 ];
 
+// Badge providers added after overlays were in use start OFF: an overlay shows
+// one only once its streamer switches it on (shownBadgeProviders), so a saved
+// overlay never gains badges it was not built with. Every new provider goes
+// here; the older ones show unless hidden (hiddenBadgeProviders).
+export const OPT_IN_BADGE_PROVIDERS: ReadonlySet<string> = new Set(['limerino', 'jilchat', 'bchat']);
+
+/** Whether a badge provider (a badge's `source`) is switched off in this overlay. */
+export function badgeProviderHidden(style: Pick<OverlayStyle, 'hiddenBadgeProviders' | 'shownBadgeProviders'>, id: string): boolean {
+  const key = id.toLowerCase();
+  return OPT_IN_BADGE_PROVIDERS.has(key)
+    ? !(style.shownBadgeProviders ?? []).includes(key)
+    : (style.hiddenBadgeProviders ?? []).includes(key);
+}
+
 // Twitch badge categories a streamer can hide, each listing its Twitch badge SET
 // ids. The same table as TWITCH_BADGE_CATEGORY_SETS in the backend's
 // models/chat_layout.rs: the hosted overlay page has no backend, so the renderer
@@ -730,6 +747,7 @@ export const DEFAULT_OVERLAY_STYLE: OverlayStyle = {
   showThirdPartyBadges: true,
   showAtmospheres: true,
   hiddenBadgeProviders: [],
+  shownBadgeProviders: [],
   badgeLimit: 3,
   hiddenTwitchBadgeCategories: [],
   ffzCustomRoleBadges: false,
@@ -931,6 +949,11 @@ export const clampOverlayStyle = (s: OverlayStyle): OverlayStyle => {
     hiddenTwitchBadgeCategories: Array.from(new Set(
       (Array.isArray(s.hiddenTwitchBadgeCategories) ? s.hiddenTwitchBadgeCategories : [])
         .filter((id) => TWITCH_BADGE_CATEGORIES.some((c) => c.id === id)),
+    )),
+    // Absent on configs saved before opt-in providers existed → all of them off.
+    shownBadgeProviders: Array.from(new Set(
+      (Array.isArray(s.shownBadgeProviders) ? s.shownBadgeProviders : [])
+        .filter((id) => typeof id === 'string' && OPT_IN_BADGE_PROVIDERS.has(id)),
     )),
     bubbleOpacity: clamp(s.bubbleOpacity ?? 0.55, OVERLAY_LIMITS.bubbleOpacity.min, OVERLAY_LIMITS.bubbleOpacity.max),
     bubbleRadius: Math.round(clamp(s.bubbleRadius ?? 10, OVERLAY_LIMITS.bubbleRadius.min, OVERLAY_LIMITS.bubbleRadius.max)),

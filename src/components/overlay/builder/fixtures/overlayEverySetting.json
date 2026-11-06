@@ -77,6 +77,10 @@
       "homies-custom",
       "dankchat"
     ],
+    "shownBadgeProviders": [
+      "jilchat",
+      "bchat"
+    ],
     "badgeLimit": 0,
     "hiddenTwitchBadgeCategories": [
       "subscriber",
@@ -230,6 +234,7 @@
       "commandFilters": [],
       "hidePhrases": [],
       "hiddenBadgeProviders": [],
+      "shownBadgeProviders": [],
       "hiddenTwitchBadgeCategories": [],
       "eventTemplates": {}
     }

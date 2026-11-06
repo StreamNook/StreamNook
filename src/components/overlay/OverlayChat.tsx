@@ -14,6 +14,7 @@ import { computePaintStyle } from '../../services/paintStyle';
 import { PROVIDERS, type ProviderId } from '../../types/providers';
 import type { MessageSegment } from '../../services/twitchChat';
 import {
+  badgeProviderHidden,
   clampOverlayStyle,
   renderEventTemplate,
   DEFAULT_LINK_COLOR,
@@ -874,8 +875,8 @@ const OverlayRow = ({ message, style, expiring, enterDelay }: { message: Overlay
   // master AND a per-provider allowlist, each toggling independently by the
   // badge's `source` ('streamnook' for the member badge). A Homies custom badge
   // (category 'homies-custom') has its own entry, apart from the Homies roles.
-  const hiddenBadgeProviders = style.hiddenBadgeProviders ?? [];
-  const badgeSourceHidden = (src?: string) => hiddenBadgeProviders.includes((src || '').toLowerCase());
+  // The newer providers are opt-in: off until switched on (badgeProviderHidden).
+  const badgeSourceHidden = (src?: string) => badgeProviderHidden(style, src || '');
   const extraBadgeHidden = (b: { source?: string; category?: string }) =>
     badgeSourceHidden(b.category === 'homies-custom' ? 'homies-custom' : b.source);
   const nativeBadgesOn = style.showBadges;

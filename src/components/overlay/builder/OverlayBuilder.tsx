@@ -44,6 +44,8 @@ import {
   PROVIDER_CATEGORY_LABELS,
   PROVIDER_EVENT_CATEGORIES,
   THIRD_PARTY_BADGE_PROVIDERS,
+  OPT_IN_BADGE_PROVIDERS,
+  badgeProviderHidden,
   TWITCH_BADGE_CATEGORIES,
   clampOverlayStyle,
   decimalsOf,
@@ -959,10 +961,13 @@ const OverlayEditor = () => {
       return { ...s, hiddenProviderEvents: hidden.includes(key) ? hidden.filter((c) => c !== key) : [...hidden, key] };
     });
 
+  // An opt-in provider flips in the shown list (it starts off), the rest in the hidden list.
   const toggleBadgeProvider = (id: string) =>
     setStyle((s) => {
-      const hidden = s.hiddenBadgeProviders ?? [];
-      return { ...s, hiddenBadgeProviders: hidden.includes(id) ? hidden.filter((k) => k !== id) : [...hidden, id] };
+      const flip = (list: string[] = []) => (list.includes(id) ? list.filter((k) => k !== id) : [...list, id]);
+      return OPT_IN_BADGE_PROVIDERS.has(id)
+        ? { ...s, shownBadgeProviders: flip(s.shownBadgeProviders) }
+        : { ...s, hiddenBadgeProviders: flip(s.hiddenBadgeProviders) };
     });
 
   const toggleTwitchBadgeCategory = (id: string) =>
@@ -2157,10 +2162,10 @@ const OverlayEditor = () => {
           </SettingsRow>
           <SettingsRow onReset={resetFor('showThirdPartyBadges')} title="Add-on badges" description="Third-party badges: 7TV, FFZ, Chatterino, and more." help="Native platform badges follow the Badges toggle above." control={<Toggle enabled={style.showThirdPartyBadges} onChange={() => set('showThirdPartyBadges', !style.showThirdPartyBadges)} />} />
           <SettingsSubGroup>
-          <SettingsRow onReset={resetFor('hiddenBadgeProviders')} title="Services" description="Turn badge services off one by one." help="StreamNook is the member badge. The rest are third-party.">
+          <SettingsRow onReset={resetFor('hiddenBadgeProviders', 'shownBadgeProviders')} title="Services" description="Turn badge services on or off one by one." help="StreamNook is the member badge. The rest are third-party. Newly added services start off.">
             <SwitchList
               items={THIRD_PARTY_BADGE_PROVIDERS.map((p) => ({ id: p.id, label: p.label }))}
-              isOn={(id) => style.showThirdPartyBadges !== false && !(style.hiddenBadgeProviders ?? []).includes(id)}
+              isOn={(id) => style.showThirdPartyBadges !== false && !badgeProviderHidden(style, id)}
               onToggle={toggleBadgeProvider}
               disabled={style.showThirdPartyBadges === false}
             />
