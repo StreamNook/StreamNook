@@ -621,7 +621,7 @@ const ProfileOverview = ({
             icon={Palette}
             label="Cosmetics"
             count={cosmeticsTotal}
-            caption={`${seventvPaintCount} paints, ${seventvBadgeCount} badges, ${ownedCosmeticsCount} StreamNook`}
+            caption={`${seventvPaintCount} ${seventvPaintCount === 1 ? 'paint' : 'paints'}, ${seventvBadgeCount} ${seventvBadgeCount === 1 ? 'badge' : 'badges'}, ${ownedCosmeticsCount} StreamNook`}
             color={ICON_COLOR.rose}
           />
         )}

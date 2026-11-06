@@ -43,6 +43,17 @@ export function answerOnFailure(
   return { userId, wall: prev?.userId === userId ? prev.wall : null, fresh: true };
 }
 
+/** The last wall each account drew this session, so a You tab or Settings page
+ *  mounted again draws it on its first frame at its real size, instead of a
+ *  held slot that a bigger wall would then push past. */
+const lastWall = new Map<string, AccoladeWallView>();
+
+/** Remembers what an account's wall is now (nothing for "no wall"). */
+function remember(userId: string, wall: AccoladeWallView | null): void {
+  if (wall) lastWall.set(userId, wall);
+  else lastWall.delete(userId);
+}
+
 export function useOwnAccolades(userId: string | null | undefined): {
   wall: AccoladeWallView | null;
   answered: boolean;
@@ -58,7 +69,10 @@ export function useOwnAccolades(userId: string | null | undefined): {
     // The saved wall first: a local read, so the first frame has something to draw.
     invoke<AccoladeWallView | null>('own_accolades_cached')
       .then((saved) => {
-        if (!cancelled && mayPaintSaved(freshArrived, saved)) setState({ userId, wall: saved ?? null, fresh: false });
+        if (!cancelled && mayPaintSaved(freshArrived, saved)) {
+          remember(userId, saved ?? null);
+          setState({ userId, wall: saved ?? null, fresh: false });
+        }
       })
       .catch((err) => Logger.debug('[OwnAccolades] no saved wall:', err));
     const read = () => {
@@ -67,6 +81,7 @@ export function useOwnAccolades(userId: string | null | undefined): {
         .then((wall) => {
           if (cancelled || mine !== latest) return;
           freshArrived = true;
+          remember(userId, wall ?? null);
           setState({ userId, wall: wall ?? null, fresh: true });
         })
         .catch((err) => {
@@ -88,7 +103,9 @@ export function useOwnAccolades(userId: string | null | undefined): {
     };
   }, [userId]);
 
-  // An answer is only ever used for the account it was read for.
+  // An answer is only ever used for the account it was read for; before this
+  // mount's first answer, the account's last wall this session draws.
   const mine = userId && state?.userId === userId ? state : null;
-  return { wall: mine?.wall ?? null, answered: mine?.fresh === true };
+  const wall = mine ? mine.wall : userId ? (lastWall.get(userId) ?? null) : null;
+  return { wall, answered: mine?.fresh === true };
 }
