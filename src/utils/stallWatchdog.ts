@@ -134,6 +134,12 @@ export const FIRST_MEDIA_CAP_MS = 20000;
 
 export interface FirstMediaDeps {
   now: () => number;
+  /**
+   * A fragment or part is downloading now. Read from a tracker that was
+   * listening before the first load: hls.js starts that download inside its
+   * own LEVEL_LOADED handler, before a wait armed there could hear it.
+   */
+  inFlight: () => boolean;
   /** Run `fn` after `ms`; the caller keeps the handle so its teardown can clear it. */
   schedule: (fn: () => void, ms: number) => void;
   /** This player is still the one playing. */
@@ -145,11 +151,7 @@ export interface FirstMediaDeps {
 }
 
 export interface FirstMediaWatch {
-  /** A fragment or part started downloading. */
-  loading: () => void;
-  /** A fragment or part finished downloading. */
-  loaded: () => void;
-  /** A fragment or part was parsed. */
+  /** A fragment or part started, finished or parsed: the loader is moving. */
   progress: () => void;
   /** The first media was buffered: true once, when the caller should start. */
   media: () => boolean;
@@ -165,7 +167,6 @@ export interface FirstMediaWatch {
 export function watchFirstMedia(deps: FirstMediaDeps): FirstMediaWatch {
   const armedAt = deps.now();
   let lastProgressAt = armedAt;
-  let inFlight = false;
   let done = false;
   const finish = () => {
     if (done) return;
@@ -181,7 +182,7 @@ export function watchFirstMedia(deps: FirstMediaDeps): FirstMediaWatch {
     const now = deps.now();
     const waited = now - armedAt;
     const capped = waited >= FIRST_MEDIA_CAP_MS;
-    const idle = !inFlight && now - lastProgressAt >= FIRST_MEDIA_IDLE_MS;
+    const idle = !deps.inFlight() && now - lastProgressAt >= FIRST_MEDIA_IDLE_MS;
     if (capped || idle) {
       const why = `[HLS] low-latency start: no media buffered after ${Math.round(waited / 1000)}s (${capped ? 'cap' : 'idle'}); reloading the stream`;
       if (deps.reload(why)) {
@@ -193,14 +194,6 @@ export function watchFirstMedia(deps: FirstMediaDeps): FirstMediaWatch {
   };
   deps.schedule(check, FIRST_MEDIA_CHECK_MS);
   return {
-    loading: () => {
-      inFlight = true;
-      lastProgressAt = deps.now();
-    },
-    loaded: () => {
-      inFlight = false;
-      lastProgressAt = deps.now();
-    },
     progress: () => {
       lastProgressAt = deps.now();
     },

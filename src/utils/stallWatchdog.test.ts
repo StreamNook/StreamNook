@@ -191,16 +191,22 @@ describe('watchWedge', () => {
 });
 
 describe('watchFirstMedia', () => {
-  /** A hand-driven clock and scheduler, and a reload that answers from `answers`. */
-  function harness(answers: boolean[] = []) {
+  /**
+   * A hand-driven clock and scheduler, a loader whose in-flight state the test
+   * sets (already downloading when the watch arms, if `inFlightAtArm`), and a
+   * reload that answers from `answers`.
+   */
+  function harness(answers: boolean[] = [], inFlightAtArm = false) {
     let t = 0;
     let pending: (() => void) | null = null;
     let dueAt = 0;
     let current = true;
     let finished = 0;
+    let inFlight = inFlightAtArm;
     const reloads: string[] = [];
     const watch = watchFirstMedia({
       now: () => t,
+      inFlight: () => inFlight,
       schedule: (fn, ms) => {
         pending = fn;
         dueAt = t + ms;
@@ -233,6 +239,9 @@ describe('watchFirstMedia', () => {
       replace: () => {
         current = false;
       },
+      setInFlight: (v: boolean) => {
+        inFlight = v;
+      },
     };
   }
 
@@ -250,7 +259,7 @@ describe('watchFirstMedia', () => {
   it('waits for a download in flight until the 20s cap', () => {
     const h = harness();
     h.runTo(500);
-    h.watch.loading();
+    h.setInFlight(true);
     h.runTo(19000);
     expect(h.reloads).toHaveLength(0);
     h.runTo(20000);
@@ -258,10 +267,29 @@ describe('watchFirstMedia', () => {
     expect(h.reloads[0]).toContain('(cap)');
   });
 
+  it('a download already in flight when the wait arms is waited out to the cap', () => {
+    const h = harness([], true);
+    h.runTo(19000);
+    expect(h.reloads).toHaveLength(0);
+    h.runTo(20000);
+    expect(h.reloads).toHaveLength(1);
+    expect(h.reloads[0]).toContain('(cap)');
+  });
+
+  it('a download that ends starts the idle time from its progress', () => {
+    const h = harness([], true);
+    h.runTo(3000);
+    h.setInFlight(false);
+    h.watch.progress();
+    h.runTo(7000);
+    expect(h.reloads).toHaveLength(0);
+    h.runTo(8000);
+    expect(h.reloads).toHaveLength(1);
+    expect(h.reloads[0]).toContain('(idle)');
+  });
+
   it('asks again after a refused reload', () => {
-    const h = harness([false, true]);
-    h.runTo(500);
-    h.watch.loading();
+    const h = harness([false, true], true);
     h.runTo(20000);
     expect(h.reloads).toHaveLength(1);
     expect(h.finished()).toBe(0);
@@ -326,11 +354,47 @@ describe('the player and the store wire them', () => {
   });
 
   it('a macOS start that buffers nothing reloads through the recovery', () => {
-    const wait = slice(player, '// A start that buffers nothing reloads', 'hls.on(Hls.Events.FRAG_BUFFERED, onMedia);');
+    const wait = slice(player, '// A start that buffers nothing reloads', '\n          });\n');
     expect(wait).toContain('const first = watchFirstMedia({');
-    expect(wait).toContain("reload: (why) => recover(why, true, 'no-buffer'),");
+    expect(wait).toContain('inFlight: () => fragLoad.inFlight,');
+    expect(wait).toContain("return recover(why, true, 'no-buffer');");
     expect(wait).toContain('isCurrent: () => hlsRef.current === hls,');
     expect(wait).toContain('bufferGateTimeoutRef.current = setTimeout(fn, ms);');
+    expect(wait).toContain('finished: () => unhook(),');
+    for (const [event, handler] of [
+      ['FRAG_LOADING', 'onProgress'],
+      ['FRAG_LOADED', 'onProgress'],
+      ['FRAG_PARSED', 'onProgress'],
+      ['FRAG_BUFFERED', 'onMedia'],
+    ]) {
+      expect(wait).toContain(`hls.on(Hls.Events.${event}, ${handler});`);
+      expect(wait).toContain(`hls.off(Hls.Events.${event}, ${handler});`);
+    }
+    const media = slice(wait, 'const onMedia = () => {', '};');
+    const order = ['if (!first.media()) return;', 'placeLL();', 'playOrPark();'].map((s) => media.indexOf(s));
+    expect(order.every((i) => i > -1)).toBe(true);
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+  });
+
+  it('a viewer who paused while it waited is not reloaded', () => {
+    const reload = slice(player, 'reload: (why) => {', 'finished: () => unhook(),');
+    expect(reload.indexOf("if (heldPause('main', liveKeyNow())) {")).toBeGreaterThan(-1);
+    expect(reload.indexOf("if (heldPause('main', liveKeyNow())) {")).toBeLessThan(
+      reload.indexOf("return recover(why, true, 'no-buffer');"),
+    );
+  });
+
+  it('macOS starts only when nothing holds them, and tracks downloads before any load', () => {
+    expect(player).toContain(
+      "const wantsPlay =\n              currentSettings.autoplay && !heldPause('main', liveKeyNow()) && !park?.loadStopped;",
+    );
+    const tracker = player.indexOf('const fragLoad = { inFlight: false };');
+    expect(tracker).toBeGreaterThan(-1);
+    expect(tracker).toBeLessThan(player.indexOf('hls.on(Hls.Events.MANIFEST_PARSED'));
+    const hooks = slice(player, 'const fragLoad = { inFlight: false };', 'if (isLowLatencyChannel) {');
+    expect(hooks).toContain('if (IS_MAC && isLowLatencyChannel) {');
+    expect(hooks).toContain('fragLoad.inFlight = true;');
+    expect(hooks).toContain('if (!data.part) fragLoad.inFlight = false;');
   });
 
   it('counts a reload after the restart is claimed and still wanted', () => {

@@ -1531,6 +1531,19 @@ const VideoPlayer = () => {
           });
         },
       });
+      // Whether a fragment or part is downloading, for the macOS first-media
+      // wait at LEVEL_LOADED below. Tracked from here, ahead of every load:
+      // hls.js starts the first download inside its own LEVEL_LOADED handler,
+      // before that wait is armed. A part's FRAG_LOADED does not end its chain.
+      const fragLoad = { inFlight: false };
+      if (IS_MAC && isLowLatencyChannel) {
+        hls.on(Hls.Events.FRAG_LOADING, () => {
+          fragLoad.inFlight = true;
+        });
+        hls.on(Hls.Events.FRAG_LOADED, (_e, data) => {
+          if (!data.part) fragLoad.inFlight = false;
+        });
+      }
       if (isLowLatencyChannel) {
         let over = 0;
         let frozen = 0;
@@ -1883,30 +1896,37 @@ const VideoPlayer = () => {
             // and a slow first download still in flight is waited out.
             const first = watchFirstMedia({
               now: () => performance.now(),
+              inFlight: () => fragLoad.inFlight,
               schedule: (fn, ms) => {
                 bufferGateTimeoutRef.current = setTimeout(fn, ms);
               },
               isCurrent: () => hlsRef.current === hls,
-              reload: (why) => recover(why, true, 'no-buffer'),
+              reload: (why) => {
+                // The viewer paused while it waited: nothing to recover, and
+                // the playhead is placed when media lands.
+                if (heldPause('main', liveKeyNow())) {
+                  hls.once(Hls.Events.FRAG_BUFFERED, placeLL);
+                  return true;
+                }
+                return recover(why, true, 'no-buffer');
+              },
               finished: () => unhook(),
             });
-            const onLoading = () => first.loading();
-            const onLoaded = () => first.loaded();
-            const onParsed = () => first.progress();
+            const onProgress = () => first.progress();
             const onMedia = () => {
               if (!first.media()) return;
               placeLL();
               playOrPark();
             };
             const unhook = () => {
-              hls.off(Hls.Events.FRAG_LOADING, onLoading);
-              hls.off(Hls.Events.FRAG_LOADED, onLoaded);
-              hls.off(Hls.Events.FRAG_PARSED, onParsed);
+              hls.off(Hls.Events.FRAG_LOADING, onProgress);
+              hls.off(Hls.Events.FRAG_LOADED, onProgress);
+              hls.off(Hls.Events.FRAG_PARSED, onProgress);
               hls.off(Hls.Events.FRAG_BUFFERED, onMedia);
             };
-            hls.on(Hls.Events.FRAG_LOADING, onLoading);
-            hls.on(Hls.Events.FRAG_LOADED, onLoaded);
-            hls.on(Hls.Events.FRAG_PARSED, onParsed);
+            hls.on(Hls.Events.FRAG_LOADING, onProgress);
+            hls.on(Hls.Events.FRAG_LOADED, onProgress);
+            hls.on(Hls.Events.FRAG_PARSED, onProgress);
             hls.on(Hls.Events.FRAG_BUFFERED, onMedia);
           });
         } else {
