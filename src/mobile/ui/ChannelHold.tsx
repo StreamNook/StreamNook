@@ -13,7 +13,7 @@ import { streamProvider } from '../../utils/streamProvider';
 import { hapticCommit } from './haptics';
 import { createHoldFlag } from './holdFlag';
 import { useChannelHoldSheet } from './channelHoldStore';
-import { FavoriteStar, favoriteLabel } from './menuIcons';
+import { GlassHeart, favoriteLabel } from './menuIcons';
 import { favoriteRefOf, setFavoriteChannel, useIsFavorite } from '../../utils/favoriteDoor';
 import { useAppStore } from '../../stores/AppStore';
 
@@ -143,7 +143,7 @@ export const ChannelHoldSheet: React.FC = () => {
               }}
             >
               <span className="flex w-6 h-6 items-center justify-center">
-                <FavoriteStar on={isFavorite} size={22} />
+                <GlassHeart on={isFavorite} size={22} />
               </span>
               <span className="flex-1 text-left">{favoriteLabel(isFavorite)}</span>
             </button>

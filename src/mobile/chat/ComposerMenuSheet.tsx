@@ -21,7 +21,7 @@ import { useChatTabsStore } from './chatTabsStore';
 import { useAppStore } from '../../stores/AppStore';
 import { mutedIncludes, setLiveAlert } from '../notifyChannels';
 import { setFavoriteChannel, useIsFavorite, type FavoriteRef } from '../../utils/favoriteDoor';
-import { FavoriteStar, SubscribeBadge, favoriteLabel } from '../ui/menuIcons';
+import { GlassHeart, SubscribeBadge, favoriteLabel } from '../ui/menuIcons';
 
 // The same glyph per mode as the composer's room-mode icon, so the icon you
 // tapped is the one you find named here.
@@ -265,7 +265,7 @@ export const ComposerMenuSheet: React.FC<Props> = ({
         )}
 
         {/* Favorite, right before Add a chat: after Live alerts on Twitch,
-            after Subscribe on Kick. The sheet stays open; the star and the
+            after Subscribe on Kick. The sheet stays open; the heart and the
             words flipping are the confirmation. */}
         {favoriteRef && (
           <GroupRow
@@ -273,7 +273,7 @@ export const ComposerMenuSheet: React.FC<Props> = ({
               if (followingApplied) void setFavoriteChannel(favoriteRef, !isFavorite);
             }}
             aria-disabled={followingApplied ? undefined : true}
-            icon={<FavoriteStar on={isFavorite} size={ICON} />}
+            icon={<GlassHeart on={isFavorite} size={ICON} />}
           >
             {favoriteLabel(isFavorite)}
           </GroupRow>

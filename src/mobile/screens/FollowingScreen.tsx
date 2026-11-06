@@ -1,7 +1,7 @@
 // Followed live channels: card feed or compact list, user's choice persisted.
 // Live favorites sit on their own shelf above the rest, as on desktop.
 import React, { useEffect, useMemo, useState } from 'react';
-import { Heart, Users } from 'lucide-react';
+import { Users } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { SettleIn, useSettleIn } from '../ui/SettleIn';
 import { useAppStore } from '../../stores/AppStore';
@@ -18,6 +18,7 @@ import { ALL_PLATFORMS, KICK_PLATFORM, PlatformMenu, TWITCH_PLATFORM } from '../
 import { EmptyNote } from '../ui/EmptyNote';
 import { ScreenHeader } from '../ui/ScreenHeader';
 import { TitleCapsule, ViewToggle } from '../ui/TitleControls';
+import { GlassHeart } from '../ui/menuIcons';
 
 /** Which platform Following shows. null is everything. */
 type PlatformFilter = 'twitch' | 'kick' | null;
@@ -52,35 +53,6 @@ export function readStreamView(): StreamViewMode {
 export function writeStreamView(mode: StreamViewMode): void {
   localStorage.setItem(VIEW_KEY, mode);
 }
-
-/** The Favorites mark: desktop's glass heart (pink glass, a white edge fading
- *  down, a soft pink glow), with its gradients here since the phone shell
- *  never mounts desktop's. */
-const GlassHeart: React.FC = () => (
-  <>
-    <svg width="0" height="0" className="absolute pointer-events-none" aria-hidden>
-      <defs>
-        <linearGradient id="sn-m-glass-heart-fill" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="rgba(255, 255, 255, 0.4)" />
-          <stop offset="30%" stopColor="rgba(236, 72, 153, 0.2)" />
-          <stop offset="100%" stopColor="rgba(236, 72, 153, 0.6)" />
-        </linearGradient>
-        <linearGradient id="sn-m-glass-heart-stroke" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="rgba(255, 255, 255, 0.8)" />
-          <stop offset="100%" stopColor="rgba(255, 255, 255, 0.1)" />
-        </linearGradient>
-      </defs>
-    </svg>
-    <Heart
-      size={15}
-      fill="url(#sn-m-glass-heart-fill)"
-      stroke="url(#sn-m-glass-heart-stroke)"
-      strokeWidth={1.5}
-      className="shrink-0 drop-shadow-[0_3px_6px_color-mix(in_srgb,var(--color-highlight-pink)_50%,transparent)]"
-      aria-hidden
-    />
-  </>
-);
 
 export const FollowingScreen: React.FC = () => {
   const followedStreams = useAppStore((s) => s.followedStreams);
@@ -219,7 +191,7 @@ export const FollowingScreen: React.FC = () => {
                 {/* Insets are a pixel short of 12 and 8 to give back the
                     border's pixel, so label and cards line up with Followed. */}
                 <h2 className="flex items-center gap-1.5 px-[11px] pb-2 text-[12px] font-semibold uppercase tracking-wide text-textMuted">
-                  <GlassHeart />
+                  <GlassHeart on size={15} />
                   <span>Favorites</span>
                   <span className="tabular-nums">{favorites.length}</span>
                 </h2>
