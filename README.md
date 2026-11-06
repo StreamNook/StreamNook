@@ -24,6 +24,10 @@ A native desktop client for Twitch, YouTube, Kick, and TikTok.
 
 <sub>Windows. Extract and run, everything else is built in.</sub>
 
+<br />
+
+<a href="https://discord.gg/2xvuF9TES7"><img src="src-tauri/images/discord_invite.svg" alt="Join the StreamNook Discord server" width="440" /></a>
+
 </div>
 
 ---
