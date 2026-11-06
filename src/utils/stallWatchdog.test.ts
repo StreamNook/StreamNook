@@ -1,7 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { FIRST_MEDIA_CHECK_MS, watchFirstMedia, watchStalls, watchWedge, wedgedOnBuffer } from './stallWatchdog';
+import {
+  FIRST_MEDIA_CHECK_MS,
+  trackFragLoads,
+  watchFirstMedia,
+  watchStalls,
+  watchWedge,
+  wedgedOnBuffer,
+} from './stallWatchdog';
 
 /** A media element with settable playhead and state, and counted listeners. */
 function fakeVideo() {
@@ -190,6 +197,41 @@ describe('watchWedge', () => {
   });
 });
 
+describe('trackFragLoads', () => {
+  const main = { type: 'main' };
+  const audio = { type: 'audio' };
+
+  it('a part chain is in flight until each part lands, with no closing event', () => {
+    // hls.js: one FRAG_LOADING for the chain, one FRAG_LOADED per part.
+    const loads = trackFragLoads();
+    expect(loads.inFlight()).toBe(false);
+    loads.loading(main);
+    expect(loads.inFlight()).toBe(true);
+    loads.loaded(main);
+    expect(loads.inFlight()).toBe(false);
+    loads.loaded(main);
+    expect(loads.inFlight()).toBe(false);
+  });
+
+  it('a whole segment stays in flight until it lands', () => {
+    const loads = trackFragLoads();
+    loads.loading(main);
+    loads.loading(main);
+    expect(loads.inFlight()).toBe(true);
+    loads.loaded(main);
+    expect(loads.inFlight()).toBe(false);
+  });
+
+  it('ignores fragments that are not the picture', () => {
+    const loads = trackFragLoads();
+    loads.loading(audio);
+    expect(loads.inFlight()).toBe(false);
+    loads.loading(main);
+    loads.loaded(audio);
+    expect(loads.inFlight()).toBe(true);
+  });
+});
+
 describe('watchFirstMedia', () => {
   /**
    * A hand-driven clock and scheduler, a loader whose in-flight state the test
@@ -356,7 +398,7 @@ describe('the player and the store wire them', () => {
   it('a macOS start that buffers nothing reloads through the recovery', () => {
     const wait = slice(player, '// A start that buffers nothing reloads', '\n          });\n');
     expect(wait).toContain('const first = watchFirstMedia({');
-    expect(wait).toContain('inFlight: () => fragLoad.inFlight,');
+    expect(wait).toContain('inFlight: fragLoads.inFlight,');
     expect(wait).toContain("return recover(why, true, 'no-buffer');");
     expect(wait).toContain('isCurrent: () => hlsRef.current === hls,');
     expect(wait).toContain('bufferGateTimeoutRef.current = setTimeout(fn, ms);');
@@ -376,25 +418,30 @@ describe('the player and the store wire them', () => {
     expect(order).toEqual([...order].sort((a, b) => a - b));
   });
 
-  it('a viewer who paused while it waited is not reloaded', () => {
+  it('a viewer who paused while it waited is parked, not reloaded', () => {
     const reload = slice(player, 'reload: (why) => {', 'finished: () => unhook(),');
-    expect(reload.indexOf("if (heldPause('main', liveKeyNow())) {")).toBeGreaterThan(-1);
-    expect(reload.indexOf("if (heldPause('main', liveKeyNow())) {")).toBeLessThan(
-      reload.indexOf("return recover(why, true, 'no-buffer');"),
-    );
+    const steps = [
+      "if (heldPause('main', liveKeyNow())) {",
+      'playOrPark();',
+      'hls.once(Hls.Events.FRAG_BUFFERED, placeLL);',
+      'return true;',
+      "return recover(why, true, 'no-buffer');",
+    ].map((s) => reload.indexOf(s));
+    expect(steps.every((i) => i > -1)).toBe(true);
+    expect(steps).toEqual([...steps].sort((a, b) => a - b));
   });
 
   it('macOS starts only when nothing holds them, and tracks downloads before any load', () => {
     expect(player).toContain(
       "const wantsPlay =\n              currentSettings.autoplay && !heldPause('main', liveKeyNow()) && !park?.loadStopped;",
     );
-    const tracker = player.indexOf('const fragLoad = { inFlight: false };');
+    const tracker = player.indexOf('const fragLoads = trackFragLoads();');
     expect(tracker).toBeGreaterThan(-1);
     expect(tracker).toBeLessThan(player.indexOf('hls.on(Hls.Events.MANIFEST_PARSED'));
-    const hooks = slice(player, 'const fragLoad = { inFlight: false };', 'if (isLowLatencyChannel) {');
+    const hooks = slice(player, 'const fragLoads = trackFragLoads();', 'if (isLowLatencyChannel) {');
     expect(hooks).toContain('if (IS_MAC && isLowLatencyChannel) {');
-    expect(hooks).toContain('fragLoad.inFlight = true;');
-    expect(hooks).toContain('if (!data.part) fragLoad.inFlight = false;');
+    expect(hooks).toContain('hls.on(Hls.Events.FRAG_LOADING, (_e, data) => fragLoads.loading(data.frag));');
+    expect(hooks).toContain('hls.on(Hls.Events.FRAG_LOADED, (_e, data) => fragLoads.loaded(data.frag));');
   });
 
   it('counts a reload after the restart is claimed and still wanted', () => {

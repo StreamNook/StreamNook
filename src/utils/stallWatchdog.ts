@@ -125,6 +125,32 @@ export function watchWedge(holdMs = WEDGE_RELOAD_MS): (video: WedgeMedia, now: n
   };
 }
 
+/** What a fragment event says about its fragment. */
+interface FragEventFrag {
+  type: string;
+}
+
+/**
+ * Whether the main stream has a fragment or part downloading, from hls.js's
+ * FRAG_LOADING and FRAG_LOADED. A part chain sends one FRAG_LOADING and a
+ * FRAG_LOADED per part, never a closing part-less one, so every FRAG_LOADED
+ * ends the in-flight state: the next part then has the idle span to land,
+ * while a whole segment still downloading keeps it. Audio and subtitle
+ * fragments are not the picture's and are ignored.
+ */
+export function trackFragLoads() {
+  let inFlight = false;
+  return {
+    loading: (frag: FragEventFrag) => {
+      if (frag.type === 'main') inFlight = true;
+    },
+    loaded: (frag: FragEventFrag) => {
+      if (frag.type === 'main') inFlight = false;
+    },
+    inFlight: () => inFlight,
+  };
+}
+
 /** How often a start that has its level details checks for its first media. */
 export const FIRST_MEDIA_CHECK_MS = 1000;
 /** Nothing in flight and nothing loaded for this long: the start is broken. */

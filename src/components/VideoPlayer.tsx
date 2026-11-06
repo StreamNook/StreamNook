@@ -109,7 +109,7 @@ import {
 } from '../utils/pausePark';
 import { followLiveAfterResync } from '../utils/liveResync';
 import { HLS_START_CONFIG, resumeLoadAfterRecover, startLoadOnManifest } from '../utils/hlsStartLoad';
-import { watchFirstMedia, watchStalls, watchWedge } from '../utils/stallWatchdog';
+import { trackFragLoads, watchFirstMedia, watchStalls, watchWedge } from '../utils/stallWatchdog';
 import { createRecovery } from '../utils/recovery';
 import { IS_MAC } from '../utils/platform';
 import { attachPauseRoutes, releaseTypingFocus } from '../utils/pauseRoutes';
@@ -1531,18 +1531,14 @@ const VideoPlayer = () => {
           });
         },
       });
-      // Whether a fragment or part is downloading, for the macOS first-media
-      // wait at LEVEL_LOADED below. Tracked from here, ahead of every load:
-      // hls.js starts the first download inside its own LEVEL_LOADED handler,
-      // before that wait is armed. A part's FRAG_LOADED does not end its chain.
-      const fragLoad = { inFlight: false };
+      // Whether the main stream is downloading, for the macOS first-media wait
+      // at LEVEL_LOADED below. Tracked from here, ahead of every load: hls.js
+      // starts the first download inside its own LEVEL_LOADED handler, before
+      // that wait is armed.
+      const fragLoads = trackFragLoads();
       if (IS_MAC && isLowLatencyChannel) {
-        hls.on(Hls.Events.FRAG_LOADING, () => {
-          fragLoad.inFlight = true;
-        });
-        hls.on(Hls.Events.FRAG_LOADED, (_e, data) => {
-          if (!data.part) fragLoad.inFlight = false;
-        });
+        hls.on(Hls.Events.FRAG_LOADING, (_e, data) => fragLoads.loading(data.frag));
+        hls.on(Hls.Events.FRAG_LOADED, (_e, data) => fragLoads.loaded(data.frag));
       }
       if (isLowLatencyChannel) {
         let over = 0;
@@ -1896,15 +1892,17 @@ const VideoPlayer = () => {
             // and a slow first download still in flight is waited out.
             const first = watchFirstMedia({
               now: () => performance.now(),
-              inFlight: () => fragLoad.inFlight,
+              inFlight: fragLoads.inFlight,
               schedule: (fn, ms) => {
                 bufferGateTimeoutRef.current = setTimeout(fn, ms);
               },
               isCurrent: () => hlsRef.current === hls,
               reload: (why) => {
-                // The viewer paused while it waited: nothing to recover, and
+                // The viewer paused while it waited: nothing to recover. The
+                // held pause parks the downloads as on every other route, and
                 // the playhead is placed when media lands.
                 if (heldPause('main', liveKeyNow())) {
+                  playOrPark();
                   hls.once(Hls.Events.FRAG_BUFFERED, placeLL);
                   return true;
                 }
