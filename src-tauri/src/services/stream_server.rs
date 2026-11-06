@@ -180,6 +180,52 @@ fn map_upstream_url(manifest_url: &str, request_path: &str) -> String {
 /// takes the reuse path.
 static SOLO_START_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
+/// True while a start on the already-listening solo server brings the parts
+/// origin up for its new upstream. Until `ll_origin::start` resolves, a
+/// playlist request would fall through to the whole-segment path and get the
+/// `vseg/` playlist, and the next one the origin's `seg/`+`part/` playlist
+/// under the same URL. hls.js rejects that as a fatal "media sequence
+/// mismatch" (the same sequence number under a new URI), and the switch from
+/// TS to CMAF bytes mid-stream tears down its audio buffer. Playlist requests
+/// wait this out instead (`origin_start_settled`).
+static SOLO_ORIGIN_STARTING: Lazy<tokio::sync::watch::Sender<bool>> =
+    Lazy::new(|| tokio::sync::watch::Sender::new(false));
+
+/// How long a playlist request waits for an origin start before it is
+/// answered with a 503 the player retries. Starts take about half a second.
+const ORIGIN_START_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Marks an origin start for as long as it lives, so an error or a cancelled
+/// start can never leave playlist requests waiting.
+struct OriginStarting<'a>(&'a tokio::sync::watch::Sender<bool>);
+
+impl<'a> OriginStarting<'a> {
+    fn begin(flag: &'a tokio::sync::watch::Sender<bool>) -> Self {
+        flag.send_replace(true);
+        Self(flag)
+    }
+}
+
+impl Drop for OriginStarting<'_> {
+    fn drop(&mut self) {
+        self.0.send_replace(false);
+    }
+}
+
+/// Whether no origin start is in progress, waiting up to `limit` for one to
+/// finish. Answers at once when none is running.
+async fn origin_start_settled(
+    flag: &tokio::sync::watch::Sender<bool>,
+    limit: std::time::Duration,
+) -> bool {
+    let mut rx = flag.subscribe();
+    let settled = matches!(
+        tokio::time::timeout(limit, rx.wait_for(|starting| !*starting)).await,
+        Ok(Ok(_))
+    );
+    settled
+}
+
 /// Global HTTP client with optimized connection pooling
 static HTTP_CLIENT: Lazy<Client> = Lazy::new(|| {
     Client::builder()
@@ -969,6 +1015,14 @@ impl StreamServer {
                 as futures::future::BoxFuture<'static, Option<String>>
         })));
 
+        // A player can poll while the origin starts on either path: the reused
+        // listener is up, and after a stop the previous player's keep-alive
+        // connections outlive the aborted listener and read the same
+        // `PROXY_URL`. Held from before the url swap so no playlist of the new
+        // upstream is served until the origin has decided which kind it will be.
+        let _starting = (probe_ll && upstream_profile() == UpstreamProfile::Twitch)
+            .then(|| OriginStarting::begin(&SOLO_ORIGIN_STARTING));
+
         // Check if server is already running
         let server_exists = SERVER_HANDLE.lock().await.is_some();
 
@@ -1113,6 +1167,15 @@ impl StreamServer {
                 "\"ev\":\"o_req\",\"p\":{:?}",
                 path.as_str()
             ));
+        }
+        // A playlist asked for while the origin starts waits for its answer, so
+        // the player only ever sees the kind of playlist this stream keeps.
+        // Before the url is read, so a waited request is served from the new one.
+        if method == warp::http::Method::GET
+            && matches!(path.as_str().trim_start_matches('/'), "stream.m3u8" | "")
+            && !origin_start_settled(&SOLO_ORIGIN_STARTING, ORIGIN_START_WAIT).await
+        {
+            return Ok(empty_cors(503));
         }
         let Some(manifest_url) = proxy_url.lock().await.clone() else {
             return Ok(empty_cors(404));
@@ -1684,6 +1747,56 @@ mod relay_rewrite_tests {
 
     fn solo_state() -> std::sync::MutexGuard<'static, ()> {
         SOLO_GLOBALS_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    #[tokio::test]
+    async fn a_playlist_request_without_an_origin_start_is_served_at_once() {
+        let flag = tokio::sync::watch::Sender::new(false);
+        let settled = tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            origin_start_settled(&flag, ORIGIN_START_WAIT),
+        )
+        .await;
+        assert_eq!(settled, Ok(true));
+    }
+
+    #[tokio::test]
+    async fn a_playlist_request_during_an_origin_start_waits_for_it_to_finish() {
+        let flag = tokio::sync::watch::Sender::new(false);
+        let starting = OriginStarting::begin(&flag);
+        let waiter = origin_start_settled(&flag, ORIGIN_START_WAIT);
+        tokio::pin!(waiter);
+
+        // Still starting: the request must not fall through to the plain path.
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), waiter.as_mut())
+                .await
+                .is_err(),
+            "answered while the origin was still starting"
+        );
+
+        drop(starting);
+        assert!(waiter.await, "the finished start lets the request through");
+    }
+
+    #[tokio::test]
+    async fn a_playlist_request_gives_up_on_an_origin_start_that_overruns() {
+        let flag = tokio::sync::watch::Sender::new(false);
+        let _starting = OriginStarting::begin(&flag);
+        assert!(!origin_start_settled(&flag, std::time::Duration::from_millis(20)).await);
+    }
+
+    #[tokio::test]
+    async fn a_failed_origin_start_never_leaves_requests_waiting() {
+        let flag = tokio::sync::watch::Sender::new(false);
+        let start = async {
+            let _starting = OriginStarting::begin(&flag);
+            Err::<(), _>("upstream refused")?;
+            Ok::<(), &str>(())
+        };
+        assert!(start.await.is_err());
+        assert!(!*flag.borrow());
+        assert!(origin_start_settled(&flag, std::time::Duration::from_millis(20)).await);
     }
 
     #[test]
