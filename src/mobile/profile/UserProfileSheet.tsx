@@ -452,6 +452,19 @@ const ProfileBody: React.FC<{
   // coming for a member (or while the member list has not loaded).
   const pageLink = sheet?.page_link ?? null;
   const slot = plateSlot(isStreamNookRegistryLoaded(), getStreamNookUserNumber(userId) !== null, pageLink, freshAnswered);
+  const member = sheet?.member_profile ?? null;
+  // Every badge they have, by platform (StreamNook first), two rows each until
+  // opened. A member always has a StreamNook badge (it is the medal on their
+  // picture, and their StreamNook group), so the empty line is for others.
+  const badges = (
+    <>
+      {!sheet && <BadgeGridPlaceholder />}
+      {groups.map((group) => grid(group.title, group.badges))}
+      {sheet && groups.length === 0 && !sheet.streamnook && (
+        <div className="mt-4 text-[12.5px] text-textMuted">No badges to show for this user.</div>
+      )}
+    </>
+  );
 
   return (
     <MobileSheet open={open} onClose={onClose} maxHeightFraction={0.8} fill backdrop={backdrop}>
@@ -520,6 +533,18 @@ const ProfileBody: React.FC<{
           {sheet?.frame && <FrameOverlay frame={sheet.frame} />}
         </div>
 
+        {/* A member's sheet follows the desktop member card: their relics,
+            every badge they have (StreamNook first), then the hours, their
+            Twitch and lifetime sections, top emotes and accolades, and only
+            then this room. Anyone else's has this room first, then badges. */}
+        {member && (
+          <>
+            <RelicShowcase relics={relics} accent={sheet?.accent} onImageFailed={markImageFailed} />
+            {badges}
+            <MemberSections profile={member} accent={sheet?.accent} />
+          </>
+        )}
+
         {standing && (
           <div className="mt-4">
             <SubStandingRow standing={standing} badgeArt={wornSubBadgeArt(wornBadges)} size="sheet" />
@@ -538,24 +563,7 @@ const ProfileBody: React.FC<{
           />
         )}
 
-        {/* A member's StreamNook block comes first: their relics, then the
-            hours, their Twitch and lifetime sections, top emotes and accolades. */}
-        {sheet?.member_profile && (
-          <>
-            <RelicShowcase relics={relics} accent={sheet.accent} onImageFailed={markImageFailed} />
-            <MemberSections profile={sheet.member_profile} accent={sheet.accent} />
-          </>
-        )}
-
-        {/* Then every badge they have, by platform, two rows each until opened. */}
-        {!sheet && <BadgeGridPlaceholder />}
-        {groups.map((group) => grid(group.title, group.badges))}
-
-        {/* A member always has a StreamNook badge (it is the medal on their
-            picture, and their StreamNook group), so the line is for others. */}
-        {sheet && groups.length === 0 && !sheet.streamnook && (
-          <div className="mt-4 text-[12.5px] text-textMuted">No badges to show for this user.</div>
-        )}
+        {!member && badges}
 
         {/* Newest first: what they said last is what you opened the sheet
             for, so it sits at the top without scrolling. Plain text: the point

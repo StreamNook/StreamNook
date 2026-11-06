@@ -412,7 +412,7 @@ fn sheet_twitch_badges(resp: &UserBadgesResponse, in_room: bool) -> Vec<ProfileB
 /// the name each is shown under. A provider this list does not know falls into
 /// "Other", so a new Rust-side provider can never vanish. The desktop card's
 /// `THIRD_PARTY_PROVIDER_GROUPS` is pinned to this list by a test.
-pub const PROVIDER_GROUPS: [(&str, &str); 10] = [
+pub const PROVIDER_GROUPS: [(&str, &str); 11] = [
     ("ffz", "FrankerFaceZ"),
     ("bttv", "BetterTTV"),
     ("chatterino", "Chatterino"),
@@ -420,6 +420,7 @@ pub const PROVIDER_GROUPS: [(&str, &str); 10] = [
     ("moltorino", "Moltorino"),
     ("limerino", "Limerino"),
     ("jilchat", "JilChat"),
+    ("bchat", "bChat"),
     ("chatsen", "Chatsen"),
     ("chatty", "Chatty"),
     ("dankchat", "DankChat"),
@@ -498,8 +499,9 @@ fn pick_chat_clients(raw: Vec<ProfileBadge>, pro: Option<ProfileBadge>, filter: 
     list
 }
 
-/// Everyone's badge groups: Twitch, 7TV, one group per chat client in the chat's
-/// own order, "Other" for a provider this list does not know, then StreamNook.
+/// Everyone's badge groups: StreamNook first (on a profile it is what matters
+/// most), then Twitch, 7TV, one group per chat client in the chat's own order,
+/// and "Other" for a provider this list does not know.
 fn badge_groups(twitch: Vec<ProfileBadge>, seventv: Vec<ProfileBadge>, chat: Vec<ProfileBadge>, streamnook: Vec<ProfileBadge>) -> Vec<BadgeGroup> {
     let mut groups = Vec::new();
     let mut push = |title: &str, list: Vec<ProfileBadge>| {
@@ -507,13 +509,13 @@ fn badge_groups(twitch: Vec<ProfileBadge>, seventv: Vec<ProfileBadge>, chat: Vec
             groups.push(BadgeGroup { title: title.into(), badges: list });
         }
     };
+    push("StreamNook", streamnook);
     push("Twitch", twitch);
     push("7TV", seventv);
     for (key, title) in PROVIDER_GROUPS {
         push(title, chat.iter().filter(|b| provider_key(b) == key).cloned().collect());
     }
     push("Other", chat.iter().filter(|b| !PROVIDER_GROUPS.iter().any(|(key, _)| provider_key(b) == *key)).cloned().collect());
-    push("StreamNook", streamnook);
     groups
 }
 
@@ -1973,7 +1975,7 @@ mod tests {
         let keys: Vec<&str> = PROVIDER_GROUPS.iter().map(|(k, _)| *k).collect();
         assert_eq!(keys, crate::services::badge_service::THIRD_PARTY_ORDER.to_vec());
         assert_eq!(PROVIDER_GROUPS[0], ("ffz", "FrankerFaceZ"));
-        assert_eq!(PROVIDER_GROUPS[9], ("dankchat", "DankChat"));
+        assert_eq!(PROVIDER_GROUPS[10], ("dankchat", "DankChat"));
     }
 
     #[test]
@@ -1987,6 +1989,9 @@ mod tests {
         assert_eq!(ids(&bttv.badges), vec!["bttv-dev", "bttv-pro"], "Pro joins BetterTTV after its contributor badge");
         assert_eq!(ids(&groups.last().unwrap().badges), vec!["n-1"], "a provider the list does not know is Other");
         assert!(badge_groups(vec![], vec![], vec![], vec![]).is_empty());
+        let member = badge_groups(vec![cb("", "tw")], vec![], vec![], vec![cb("", "sn")]);
+        let titles: Vec<&str> = member.iter().map(|g| g.title.as_str()).collect();
+        assert_eq!(titles, vec!["StreamNook", "Twitch"], "a member's StreamNook badges lead the sheet");
     }
 
     #[test]

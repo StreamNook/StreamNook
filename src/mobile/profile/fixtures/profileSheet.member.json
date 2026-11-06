@@ -6,6 +6,23 @@
   "name_color": "#9147ff",
   "groups": [
     {
+      "title": "StreamNook",
+      "badges": [
+        {
+          "id": "streamnook-mobius",
+          "url": "https://cdn.streamnook.app/badges/mobius.webp",
+          "title": "streamnook mobius",
+          "provider": "streamnook"
+        },
+        {
+          "id": "streamnook-default",
+          "url": "streamnook-house:streamnook-default",
+          "title": "streamnook default",
+          "provider": "streamnook"
+        }
+      ]
+    },
+    {
       "title": "Twitch",
       "badges": [
         { "id": "prem", "url": "P4", "fallbacks": ["P4-2x", "P4-1x"], "title": "premium title" }
@@ -42,23 +59,6 @@
           "title": "BTTV Pro",
           "name": "BTTV Pro",
           "provider": "bttv"
-        }
-      ]
-    },
-    {
-      "title": "StreamNook",
-      "badges": [
-        {
-          "id": "streamnook-mobius",
-          "url": "https://cdn.streamnook.app/badges/mobius.webp",
-          "title": "streamnook mobius",
-          "provider": "streamnook"
-        },
-        {
-          "id": "streamnook-default",
-          "url": "streamnook-house:streamnook-default",
-          "title": "streamnook default",
-          "provider": "streamnook"
         }
       ]
     }
