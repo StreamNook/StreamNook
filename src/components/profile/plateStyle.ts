@@ -1,7 +1,8 @@
-// The StreamNook page plate's fixed look. Its floor, edge and muted text are
-// constants and never theme tokens, so Glassiness and a light theme cannot
-// change how it reads. Rust (`member_link::PLATE_FLOOR`) lifts the accent to
-// read on this same floor, and a test pins the two together.
+// The StreamNook page plate's fixed look on the desktop. Its floor, edge and
+// muted text are constants and never theme tokens, so Glassiness and a light
+// theme cannot change how it reads. Rust (`member_link::PLATE_FLOOR`) lifts the
+// accent to read on this same floor, and a test pins the two together. The
+// phones draw a glazed capsule instead and take only the sizes from here.
 
 /** The plate's own floor: near-black at 92%. */
 export const PLATE_FLOOR_RGB: readonly [number, number, number] = [14, 14, 18];

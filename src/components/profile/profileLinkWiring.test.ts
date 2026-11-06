@@ -6,11 +6,9 @@ import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   PLATE_CHECK,
-  PLATE_EDGE,
   PLATE_FLOOR,
   PLATE_FLOOR_ALPHA,
   PLATE_FLOOR_RGB,
-  PLATE_MUTED,
   PLATE_RESERVED_WIDTH,
 } from './plateStyle';
 import { profileLinkAsk } from './profileLink';
@@ -86,7 +84,7 @@ describe('the plate floor', () => {
     expect(Number((a / 255).toFixed(2))).toBe(PLATE_FLOOR_ALPHA);
   });
 
-  it('the plate draws that constant and no theme token', () => {
+  it('the desktop plate draws that constant and no theme token', () => {
     const plate = read('src/components/profile/ProfileNameplate.tsx');
     expect(plate).toContain('background: PLATE_FLOOR');
     expect(plate).not.toMatch(/var\(--color/);
@@ -101,13 +99,13 @@ describe('the plate floor', () => {
 });
 
 // The iPhone plate (ios/Sources/StreamNook/Design/ProfileNameplate.swift on the
-// iPhone car) keeps the same literals in its doc comments. There is no `ios/` on
-// `dev`, so this runs on the car and skips here.
-describe.skipIf(!existsSync(resolve(root, 'ios')))('the iPhone plate literals', () => {
-  it('names the floor, the edge and the muted color', () => {
+// phone round) is Liquid Glass with the link alone, like the Android capsule.
+// There is no `ios/` on `dev`, so this runs on the round and skips here.
+describe.skipIf(!existsSync(resolve(root, 'ios')))('the iPhone plate', () => {
+  it('is a Liquid Glass capsule with no copy button and no fixed floor', () => {
     const swift = read('ios/Sources/StreamNook/Design/ProfileNameplate.swift');
-    expect(swift).toContain(PLATE_FLOOR);
-    expect(swift).toContain(PLATE_EDGE);
-    expect(swift).toContain(PLATE_MUTED);
+    expect(swift).toContain('.snGlass(Capsule()');
+    expect(swift).not.toContain('UIPasteboard');
+    expect(swift).not.toContain(PLATE_FLOOR);
   });
 });

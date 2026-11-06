@@ -15,8 +15,8 @@ const link: PageLink = {
 const html = (el: React.ReactElement) => renderToStaticMarkup(el).replace(/&#x27;/g, "'");
 
 describe('ProfileNameplate', () => {
-  it('shows the prefix, the name in the accent, and both controls with their labels', () => {
-    const out = html(<ProfileNameplate slot="shown" link={link} size="phone" />);
+  it('shows the prefix, the name in the accent, and both controls with their labels on the desktop', () => {
+    const out = html(<ProfileNameplate slot="shown" link={link} size="desktop" />);
     expect(out).toContain('href="https://streamnook.app/u/tyler"');
     expect(out).toContain("aria-label=\"Open tyler's StreamNook page\"");
     expect(out).toContain('aria-label="Copy link"');
@@ -26,17 +26,31 @@ describe('ProfileNameplate', () => {
     expect(out).not.toContain('inert');
   });
 
-  it('is 34 high on the phone and 32 on the desktop, over the fixed floor', () => {
+  it('is a glazed capsule on the phone with the link alone: no copy button, no accent name', () => {
+    const out = html(<ProfileNameplate slot="shown" link={link} size="phone" />);
+    expect(out).toContain('href="https://streamnook.app/u/tyler"');
+    expect(out).toContain("aria-label=\"Open tyler's StreamNook page\"");
+    expect(out).toContain('chrome-glaze chrome-glaze--control chrome-glaze--frosted');
+    expect(out).toContain('>streamnook.app/<');
+    expect(out).toContain('>tyler<');
+    expect(out).toContain('text-textSecondary');
+    expect(out).not.toContain('Copy link');
+    expect(out).not.toContain('<button');
+    expect(out).not.toContain('#22D3EE');
+    expect(out).not.toContain('rgba(14,14,18,0.92)');
+  });
+
+  it('is 34 high on the phone and 32 on the desktop, the desktop over the fixed floor', () => {
     const phone = html(<ProfileNameplate slot="shown" link={link} size="phone" />);
     const desktop = html(<ProfileNameplate slot="shown" link={link} size="desktop" />);
     expect(phone).toContain('height:34px');
     expect(desktop).toContain('height:32px');
-    expect(phone).toContain('background:rgba(14,14,18,0.92)');
-    expect(phone).toContain('width:34px');
+    expect(desktop).toContain('background:rgba(14,14,18,0.92)');
+    expect(desktop).toContain('width:32px');
     expect(phone).not.toContain('width:214px');
   });
 
-  it('holds a visible, empty plate 214 wide and 34 high on the phone while reserved', () => {
+  it('holds a visible, empty capsule 214 wide and 34 high on the phone while reserved', () => {
     const out = html(<ProfileNameplate slot="reserved" link={null} size="phone" />);
     expect(out).not.toContain('streamnook.app');
     expect(out).not.toContain('<a ');
@@ -44,8 +58,7 @@ describe('ProfileNameplate', () => {
     expect(out).toContain('aria-hidden="true"');
     expect(out).toContain('inert=""');
     expect(out).toContain('height:34px;width:214px');
-    expect(out).toContain('background:rgba(14,14,18,0.92)');
-    expect(out).toContain('inset 0 0 0 1px rgba(255,255,255,0.10)');
+    expect(out).toContain('chrome-glaze');
     expect(out).toContain('height:42px');
     expect(out).toContain('opacity:1');
   });
