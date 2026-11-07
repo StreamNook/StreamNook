@@ -11,7 +11,8 @@ import { useWatchDrops, type WatchDrops } from '../../stores/watchDropsStore';
 import { useOutsidePress } from '../../hooks/useOutsidePress';
 import { usePerformanceQuiet } from '../../utils/lowPower';
 import { Logger } from '../../utils/logger';
-import { ACCENT_BUTTON, GLAZE_BANNER, SUCCESS_FILL } from '../ui/glazeButtons';
+import { ACCENT_BUTTON, GLAZE_BANNER, GLAZE_PILL, SUCCESS_FILL } from '../ui/glazeButtons';
+import { openExternal } from '../../utils/openExternal';
 import { DropArt } from './DropArt';
 import { splitStatus } from './dropsStatusText';
 
@@ -44,6 +45,9 @@ export interface BarLine {
   moreArt: string[];
   spoken: string;
   claimLabel: string;
+  /** Twitch would not grant it until the game account is linked: where to
+   *  link it, for the hover card's Connect. Null otherwise. */
+  connectUrl: string | null;
 }
 
 /** The lead reward; with none under way yet, the first reward a campaign here
@@ -51,7 +55,10 @@ export interface BarLine {
 export function barLine(view: WatchDrops): BarLine | null {
   const lead = view.lead;
   if (lead) {
+    const campaign = view.campaigns.find((c) => c.id === lead.campaign_id);
+    const row = campaign?.drops.find((d) => d.lead);
     return {
+      connectUrl: row?.connect && !row.claimed ? (campaign?.link_url ?? null) : null,
       name: lead.name,
       image: lead.image,
       status: lead.status,
@@ -75,6 +82,7 @@ export function barLine(view: WatchDrops): BarLine | null {
     ready: false,
     more: 0,
     moreArt: [],
+    connectUrl: null,
     spoken: rewards === 1 ? `${first.name}, ${first.status}` : `${rewards} rewards to earn on this channel`,
     claimLabel: '',
   };
@@ -89,6 +97,7 @@ export const PREVIEW_LINE: BarLine = {
   ready: false,
   more: 2,
   moreArt: [],
+  connectUrl: null,
   spoken: 'Rust hoodie, 12 minutes left',
   claimLabel: 'Claim',
 };
@@ -198,6 +207,23 @@ function ClaimButton({ line, claiming, onClaim }: { line: BarLine; claiming: boo
   );
 }
 
+/** Twitch would not grant the reward until the game account is linked: the
+ *  publisher's page to link it, in the browser. */
+function ConnectButton({ url }: { url: string }) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        void openExternal(url);
+      }}
+      className={`${GLAZE_PILL} min-w-[60px] shrink-0 px-3 text-center text-[11.5px] leading-[22px]`}
+    >
+      Connect
+    </button>
+  );
+}
+
 /** At rest: a slim glazed lip that rises out of the top of the message box,
  *  so nothing floats over chat. The picture, the name, a short track and the
  *  time; a reward ready to claim turns the glass green and says "Ready", and
@@ -260,7 +286,13 @@ export function DropsPeekView({ line, claiming, onToggle, onClaim }: Omit<DropsC
           <div className="truncate text-[12.5px] font-medium leading-4 text-textPrimary">{line.name}</div>
           <div className="mt-2 flex min-w-0 items-center gap-2.5 text-[11.5px] leading-4">
             <Track line={line} className="h-[3px] min-w-0 flex-1" />
-            {line.ready && onClaim ? <ClaimButton line={line} claiming={claiming} onClaim={onClaim} /> : <Status line={line} />}
+            {line.ready && onClaim ? (
+              <ClaimButton line={line} claiming={claiming} onClaim={onClaim} />
+            ) : line.connectUrl ? (
+              <ConnectButton url={line.connectUrl} />
+            ) : (
+              <Status line={line} />
+            )}
           </div>
         </div>
       </div>

@@ -86,7 +86,14 @@ describe('barLine', () => {
     link_url: null, cumulative_minutes: 0, drops: [tier],
   };
   it('says the lead', () => {
-    expect(barLine(view({ lead, more: 2 }))).toMatchObject({ name: 'Hoodie', status: '30m to watch', percent: 75, more: 2, ready: false });
+    expect(barLine(view({ lead, more: 2 }))).toMatchObject({ name: 'Hoodie', status: '30m to watch', percent: 75, more: 2, ready: false, connectUrl: null });
+  });
+  it("carries the campaign's link when the lead needs the game account linked", () => {
+    const row = { ...tier, id: 'b', lead: true, connect: true, status: 'Connect', bar: 100, current_minutes: 60 };
+    const campaign = { ...notStarted, id: 'c1', started: true, link_url: 'https://game.example/link', drops: [row] };
+    expect(barLine(view({ lead: { ...lead, status: 'Connect' }, campaigns: [campaign] }))?.connectUrl).toBe('https://game.example/link');
+    const claimed = { ...campaign, drops: [{ ...row, claimed: true }] };
+    expect(barLine(view({ lead, campaigns: [claimed] }))?.connectUrl).toBeNull();
   });
   it('says what a campaign here will start on', () => {
     expect(barLine(view({ campaigns: [notStarted] }))).toMatchObject({ name: 'Jacket', status: 'Starts when you watch', percent: 0 });
@@ -161,6 +168,12 @@ describe('DropsPeekView (the hover card)', () => {
   });
   it('offers Claim when the reward is ready', () => {
     expect(peek({ ready: true, percent: 100 }, () => {})).toContain('>Claim</button>');
+  });
+  it('offers Connect when Twitch would not grant the reward until the account is linked', () => {
+    const html = peek({ status: 'Connect', connectUrl: 'https://game.example/link' });
+    expect(html).toContain('>Connect</button>');
+    expect(html).not.toContain('>Claim</button>');
+    expect(peek({ status: 'Connect', connectUrl: null })).not.toContain('<button');
   });
   it('is square at the bottom like the lip it grows out of', () => {
     expect(peek()).toContain('border-radius:14px 14px 0 0');

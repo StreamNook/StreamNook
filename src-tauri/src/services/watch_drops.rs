@@ -723,7 +723,20 @@ pub fn build(i: &Inputs) -> WatchDrops {
             if rows.is_empty() {
                 return None;
             }
-            let link = c.account_link.clone().filter(|u| !u.is_empty());
+            // The Inventory's copy of a campaign carries no account link; the
+            // campaign list's copy does, so a tier Twitch would not grant
+            // still offers Connect with somewhere to go.
+            let link = c
+                .account_link
+                .clone()
+                .filter(|u| !u.is_empty())
+                .or_else(|| {
+                    i.list
+                        .iter()
+                        .find(|l| l.id == c.id)
+                        .and_then(|l| l.account_link.clone())
+                        .filter(|u| !u.is_empty())
+                });
             // A badge campaign also reports no linked account, but has no link to follow.
             let needs_link = !c.is_account_connected && link.is_some();
             Some(Built {
@@ -1880,6 +1893,36 @@ mod tests {
             stacked_any |= !view.more_art.is_empty();
         }
         assert!(stacked_any, "some golden case stacks art");
+    }
+
+    #[test]
+    fn the_inventory_copy_keeps_the_lists_account_link() {
+        // The Inventory never carries accountLinkURL; a tier Twitch would not
+        // grant must still offer Connect with the list's link.
+        let place = golden::place();
+        let case = golden::cases()
+            .into_iter()
+            .find(|c| {
+                let v = build(&Inputs::bare(&golden::place(), &c.list, Some(&c.inventory), now_ms()));
+                v.campaigns.len() == 1 && c.inventory.items.iter().any(|it| it.campaign.id == v.campaigns[0].id)
+            })
+            .expect("a case listing one campaign that is in the inventory");
+        let (mut list, mut inv) = (case.list.clone(), case.inventory.clone());
+        let id = inv.items[0].campaign.id.clone();
+        for c in list.iter_mut().filter(|c| c.id == id) {
+            c.account_link = Some("https://game.example/link".into());
+        }
+        for it in inv.items.iter_mut() {
+            it.campaign.account_link = None;
+        }
+        let view = build(&Inputs::bare(&place, &list, Some(&inv), now_ms()));
+        let c = view.campaigns.iter().find(|c| c.id == id).expect("the campaign");
+        assert_eq!(c.link_url.as_deref(), Some("https://game.example/link"));
+        // Without the list's copy there is still no link to invent.
+        let view = build(&Inputs::bare(&place, &[], Some(&inv), now_ms()));
+        if let Some(c) = view.campaigns.iter().find(|c| c.id == id) {
+            assert_eq!(c.link_url, None);
+        }
     }
 
     #[test]
