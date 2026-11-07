@@ -16,7 +16,7 @@ vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(async () => () => {}) })
 vi.mock('../../utils/openExternal', () => ({ openExternal: vi.fn() }));
 
 import DropsChatBar, { barLine, drawerAfter, DropsChatBarView, PREVIEW_LINE, showsHere } from './DropsChatBar';
-import DropsDrawer from './DropsDrawer';
+import DropsDrawer, { rewardRows } from './DropsDrawer';
 import { splitStatus } from './dropsStatusText';
 import type { HereDrop, WatchDrops } from '../../stores/watchDropsStore';
 
@@ -168,14 +168,36 @@ describe('DropsDrawer layouts', () => {
   const html = (campaigns: ReturnType<typeof campaign>[]) =>
     renderToStaticMarkup(<DropsDrawer view={view({ campaigns })} maxHeight={400} claimingId={null} onClaim={() => {}} />);
 
-  it('lays several rewards out as tiles in rows of three, the next one ringed', () => {
+  it('lays several rewards out as glazed tiles in rows of three, the next one ringed', () => {
     const out = html([campaign('a', [drop('1', { lead: true, status: '12m to watch', bar: 80 }), drop('2'), drop('3', { claimed: true })])]);
-    expect(out).toContain('grid grid-cols-3');
-    expect(out.match(/drops-tile /g)?.length).toBe(3);
-    expect(out).toContain('drops-tile flex min-w-0 flex-col gap-1.5 p-2 is-next');
+    expect(out).toContain('grid gap-2 grid-cols-3');
+    expect(out.match(/glaze-inset drops-tile /g)?.length).toBe(3);
+    expect(out).toContain('glaze-inset drops-tile flex min-w-0 flex-col gap-1.5 p-2 is-next');
     expect(out).toContain('is-claimed');
     expect(out).toContain('1 of 3');
     expect(out).toContain('src="box.jpg"');
+  });
+  it('keeps every row full: two wider tiles for two, a bar for one left over', () => {
+    const n = (count: number) => Array.from({ length: count }, (_, k) => drop(String(k + 1), { lead: k === 0 }));
+    const two = html([campaign('a', n(2))]);
+    expect(two).toContain('grid gap-2 grid-cols-2');
+    expect(two).not.toContain('grid-cols-3');
+    expect(two).toContain('aspect-ratio:16 / 10');
+    const four = html([campaign('a', n(4))]);
+    expect(four.match(/grid gap-2 grid-cols-3/g)?.length).toBe(1);
+    expect(four).not.toContain('grid-cols-2');
+    expect(four.match(/glaze-inset drops-tile flex items-center/g)?.length).toBe(1);
+    const five = html([campaign('a', n(5))]);
+    expect(five).toContain('grid gap-2 grid-cols-3');
+    expect(five).toContain('grid gap-2 grid-cols-2');
+    const seven = html([campaign('a', n(7))]);
+    expect(seven.match(/grid gap-2 grid-cols-3/g)?.length).toBe(2);
+    expect(seven.match(/glaze-inset drops-tile flex items-center/g)?.length).toBe(1);
+  });
+  it('splits rewards into rows of three with the rest last', () => {
+    expect(rewardRows([1, 2, 3, 4]).map((r) => r.length)).toEqual([3, 1]);
+    expect(rewardRows([1, 2, 3, 4, 5]).map((r) => r.length)).toEqual([3, 2]);
+    expect(rewardRows([1, 2]).map((r) => r.length)).toEqual([2]);
   });
   it('draws a lone reward as one wide tile with its minutes', () => {
     const out = html([campaign('a', [drop('1', { lead: true, status: '12m to watch', bar: 80, current_minutes: 48, required_minutes: 60 })])]);

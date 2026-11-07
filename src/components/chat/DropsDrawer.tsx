@@ -1,7 +1,8 @@
 // The drawer over chat: every campaign you can earn on this channel. Rewards
-// sit as tiles in rows of three, each with its own picture, bar and time; the
-// next reward is ringed, a ready one turns green with Claim. A campaign with
-// one reward draws it as a single wide tile instead of a lone tile in a row.
+// sit as glazed tiles in rows of three, each with its own picture, bar and
+// time; the next reward is ringed, a ready one turns green with Claim. Every
+// row is full: two left over become two wider tiles, one left over a
+// horizontal bar, and a campaign with one reward draws it as one wide tile.
 // A sibling of the bar (never inside its glass), so its own blur reads the
 // chat behind it.
 import { motion } from 'framer-motion';
@@ -142,12 +143,42 @@ function Rewards({
     );
   }
   return (
-    <div className="mt-3 grid grid-cols-3 gap-2">
-      {campaign.drops.map((drop) => (
-        <Tile key={drop.id} drop={drop} linkUrl={campaign.link_url} claiming={claimingId === drop.id} onClaim={onClaim} />
-      ))}
+    <div className="mt-3 flex flex-col gap-2">
+      {rewardRows(campaign.drops).map((row) =>
+        row.length === 1 ? (
+          <WideTile
+            key={row[0].id}
+            campaign={campaign}
+            drop={row[0]}
+            claiming={claimingId === row[0].id}
+            onClaim={onClaim}
+            bare
+          />
+        ) : (
+          <div key={row[0].id} className={`grid gap-2 ${row.length === 3 ? 'grid-cols-3' : 'grid-cols-2'}`}>
+            {row.map((drop) => (
+              <Tile
+                key={drop.id}
+                drop={drop}
+                linkUrl={campaign.link_url}
+                claiming={claimingId === drop.id}
+                onClaim={onClaim}
+                pair={row.length === 2}
+              />
+            ))}
+          </div>
+        ),
+      )}
     </div>
   );
+}
+
+/** Rows of three tiles; what is left over after them becomes a row of two
+ *  wider tiles, or one horizontal bar, so every row is full. */
+export function rewardRows<T>(drops: T[]): T[][] {
+  const rows: T[][] = [];
+  for (let i = 0; i < drops.length; i += 3) rows.push(drops.slice(i, i + 3));
+  return rows;
 }
 
 function tileState(drop: HereDrop): string {
@@ -157,23 +188,30 @@ function tileState(drop: HereDrop): string {
   return '';
 }
 
-/** One reward in a row of three: square art, two-line name, bar, then its
- *  time, or what it waits on. */
+/** One reward in a row of three (square art) or of two (wider art, the
+ *  picture fitted inside it): the name, bar, then its time, or what it waits
+ *  on. */
 function Tile({
   drop,
   linkUrl,
   claiming,
   onClaim,
+  pair,
 }: {
   drop: HereDrop;
   linkUrl: string | null;
   claiming: boolean;
   onClaim: OnClaim;
+  pair?: boolean;
 }) {
   return (
-    <div className={`drops-tile flex min-w-0 flex-col gap-1.5 p-2 ${tileState(drop)}`}>
-      <DropArt image={drop.image} size="fill" />
-      <div className="line-clamp-2 h-7 text-[11px] leading-[14px] text-textPrimary/90">
+    <div className={`glaze-inset drops-tile flex min-w-0 flex-col gap-1.5 p-2 ${tileState(drop)}`}>
+      <DropArt image={drop.image} size="fill" aspect={pair ? '16 / 10' : undefined} />
+      {/* Three across, a name gets two lines (the same two in every tile, so
+          the bars line up); two across there is room for it on one. */}
+      <div
+        className={`text-[11px] leading-[14px] text-textPrimary/90 ${pair ? 'truncate text-[11.5px]' : 'line-clamp-2 h-7'}`}
+      >
         {drop.name}
       </div>
       <Bar drop={drop} />
@@ -184,28 +222,33 @@ function Tile({
   );
 }
 
-/** A campaign's only reward as one wide tile: bigger art beside the name and
- *  time, a full-width bar, and under it the minutes or the claim. Between
- *  campaigns it carries its campaign's line instead of a header. */
+/** A reward as one horizontal tile: art beside the name and time, a
+ *  full-width bar. `big` is a campaign's only reward (bigger art, and the
+ *  minutes or the claim under the bar); between campaigns it carries its
+ *  campaign's line instead of a header; `bare` is the one left over under a
+ *  campaign's rows of tiles, whose header is already above it. */
 function WideTile({
   campaign,
   drop,
   claiming,
   onClaim,
   big,
+  bare,
 }: {
   campaign: HereCampaign;
   drop: HereDrop;
   claiming: boolean;
   onClaim: OnClaim;
   big?: boolean;
+  bare?: boolean;
 }) {
   const { time } = splitStatus(drop.status);
   const waiting = !drop.claimed && !drop.ready && !drop.pending && !drop.connect;
-  const campaignLine = [campaign.name, campaign.ends].filter(Boolean).join(' · ');
+  const campaignLine = bare ? '' : [campaign.name, campaign.ends].filter(Boolean).join(' · ');
+  const art = big ? 64 : bare ? 40 : 52;
   return (
-    <div className={`drops-tile flex items-center gap-[11px] p-2.5 ${tileState(drop)} ${big ? '' : 'mt-2.5'}`}>
-      <DropArt image={drop.image} size={big ? 64 : 52} radius={big ? 10 : 9} />
+    <div className={`glaze-inset drops-tile flex items-center gap-[11px] p-2.5 ${tileState(drop)} ${big || bare ? '' : 'mt-2.5'}`}>
+      <DropArt image={drop.image} size={art} radius={big ? 10 : 8} />
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-baseline justify-between gap-2">
           <span className={`min-w-0 truncate font-medium text-textPrimary ${big ? 'text-[13px]' : 'text-[12.5px]'}`}>

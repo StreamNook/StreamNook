@@ -2993,27 +2993,34 @@ body {
   background-color: color-mix(in srgb, var(--color-background-tertiary) 70%, black);
   box-shadow: 0 0 0 0.5px rgba(255, 255, 255, 0.14);
 }
-/* The drawer's reward tiles: a light film inside the glass, top-lit. The next
-   reward is ringed in the accent, green once it waits on a claim. */
+/* The drawer's reward tiles and bars wear the glaze inside the drawer's glass
+   (`glaze-inset` lights them: top edge, bounce, contact shadow, specular);
+   this sets only their shape and film. The next reward is ringed in the
+   accent, green once it waits on a claim, drawn on the glaze's free ::before
+   layer so the lighting on the element stays the same in every state. */
 .drops-tile {
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.035);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 0 0 0.5px rgba(255, 255, 255, 0.06);
-  transition: background-color 200ms ease, box-shadow 200ms ease;
+  background: rgba(255, 255, 255, 0.045);
+  transition: background-color 200ms ease;
+}
+.drops-tile::before {
+  transition: box-shadow 200ms ease;
 }
 .drops-tile.is-next {
-  background: color-mix(in srgb, var(--color-accent-on-surface) 8%, transparent);
+  background: color-mix(in srgb, var(--color-accent-on-surface) 9%, rgba(255, 255, 255, 0.03));
+}
+.drops-tile.is-next::before {
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.08),
-    0 0 0 1px color-mix(in srgb, var(--color-accent-on-surface) 45%, transparent),
-    0 0 18px -6px color-mix(in srgb, var(--color-accent-on-surface) 50%, transparent);
+    inset 0 0 0 1px color-mix(in srgb, var(--color-accent-on-surface) 45%, transparent),
+    0 0 18px -6px color-mix(in srgb, var(--color-accent-on-surface) 55%, transparent);
 }
 .drops-tile.is-ready {
-  background: color-mix(in srgb, var(--color-success) 8%, transparent);
+  background: color-mix(in srgb, var(--color-success) 9%, rgba(255, 255, 255, 0.03));
+}
+.drops-tile.is-ready::before {
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.08),
-    0 0 0 1px color-mix(in srgb, var(--color-success) 50%, transparent),
-    0 0 18px -6px color-mix(in srgb, var(--color-success) 50%, transparent);
+    inset 0 0 0 1px color-mix(in srgb, var(--color-success) 50%, transparent),
+    0 0 18px -6px color-mix(in srgb, var(--color-success) 55%, transparent);
 }
 .drops-tile.is-claimed .drops-art {
   opacity: 0.5;
