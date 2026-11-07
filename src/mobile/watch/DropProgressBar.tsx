@@ -8,7 +8,7 @@
 // `drop-progress` events belong to the desktop automation and are empty here.
 //
 // It is one card of the chat's top stack (components/chat/chatTopStack.ts): a
-// one-line strip (art, name, time left and a thin progress line) whose tap
+// one-line strip (art, name, time left and a thin inset progress track) whose tap
 // opens it, and an open form whose art and campaign line jump to Rewards.
 import React, { useCallback, useEffect, useState } from 'react';
 import { CaretRight, Gift } from 'phosphor-react';
@@ -186,9 +186,18 @@ export const DropCard: React.FC<{
       isExpanded={open}
       onToggleExpanded={onToggle}
       order={order}
+      // An inset rounded track under the name, inside the strip's padding, so
+      // the fill never runs into the card's rounded corners. 38px is the head's
+      // left padding, art and gap; 10px its right padding.
       stripLine={
-        <span aria-hidden className="absolute left-0 right-0 bottom-0 h-[2px] bg-textPrimary/[0.08]">
-          <span className={`block h-full ${fill} transition-[width] duration-700`} style={{ width: `${live.percent}%` }} />
+        <span
+          aria-hidden
+          className="pointer-events-none absolute left-[38px] right-2.5 bottom-[3px] h-[2px] overflow-hidden rounded-full bg-textPrimary/[0.10]"
+        >
+          <span
+            className={`block h-full rounded-full ${fill} transition-[width] duration-700`}
+            style={{ width: `${live.percent}%` }}
+          />
         </span>
       }
     >
