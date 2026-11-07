@@ -126,6 +126,7 @@ mod tests {
             [
                 "live",
                 "favorite_live",
+                "favorite_category",
                 "mentions",
                 "whispers",
                 "drops",
@@ -138,7 +139,7 @@ mod tests {
             ]
         );
         // Desktop-only types stay off both phones.
-        for id in ["gift_subs", "twitch_rewards", "channel_points", "predictions", "updates"] {
+        for id in ["favorite_category", "gift_subs", "twitch_rewards", "channel_points", "predictions", "updates"] {
             assert!(works_on(id, "desktop") && !works_on(id, "android") && !works_on(id, "ios"), "{id}");
         }
     }

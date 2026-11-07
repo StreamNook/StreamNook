@@ -157,6 +157,8 @@ struct SweepPlan {
     /// Whether a go-live edge should be announced. Read here with the rest of
     /// the settings so the sweep never has to reach for the lock again.
     notify: bool,
+    /// Whether a live favourite switching category should be announced.
+    notify_category: bool,
 }
 
 fn plan(state: &AppState) -> Option<SweepPlan> {
@@ -221,7 +223,31 @@ fn plan(state: &AppState) -> Option<SweepPlan> {
         // switch, and this watcher's own type toggle.
         notify: settings.live_notifications.enabled
             && settings.live_notifications.show_favorite_live_notifications,
+        notify_category: settings.live_notifications.enabled
+            && settings.live_notifications.show_favorite_category_notifications,
     })
+}
+
+/// The category a live favourite switched FROM, when `now` is the same
+/// broadcast as `before` in another category. Both must name a category: a
+/// sweep that briefly reads no category is not a change, and neither is a new
+/// broadcast (its go-live says what it is).
+fn switched_from(before: &ProviderStream, now: &ProviderStream) -> Option<String> {
+    let same_broadcast = if !before.id.is_empty() && !now.id.is_empty() {
+        before.id == now.id
+    } else {
+        !before.started_at.is_empty() && before.started_at == now.started_at
+    };
+    let (was, is) = (before.game_name.trim(), now.game_name.trim());
+    if !same_broadcast || was.is_empty() || is.is_empty() {
+        return None;
+    }
+    let moved = if !before.game_id.is_empty() && !now.game_id.is_empty() {
+        before.game_id != now.game_id
+    } else {
+        !was.eq_ignore_ascii_case(is)
+    };
+    moved.then(|| was.to_string())
 }
 
 /// A Twitch row in the one shape the event carries, so the frontend doesn't have
@@ -267,7 +293,7 @@ pub async fn refresh_favorites(app: AppHandle, state: AppState, key: Option<Stri
             // Nothing else on that platform was examined, so its other
             // favourites keep their rows.
             let none_examined = HashSet::new();
-            apply(&app, &parsed.provider, rows, false, &HashSet::new(), Some(&none_examined)).await;
+            apply(&app, &parsed.provider, rows, false, false, &HashSet::new(), Some(&none_examined)).await;
         }
         return;
     }
@@ -276,7 +302,7 @@ pub async fn refresh_favorites(app: AppHandle, state: AppState, key: Option<Stri
     let app = &app;
     futures::future::join_all(sources().await.into_iter().map(|source| async move {
         if let Some((rows, examined)) = check(plan, source).await {
-            apply(app, source, rows, false, &plan.also_followed, examined.as_ref()).await;
+            apply(app, source, rows, false, false, &plan.also_followed, examined.as_ref()).await;
         }
     }))
     .await;
@@ -429,6 +455,7 @@ async fn poll(app: AppHandle, state: AppState, source: &'static str) {
                     source,
                     rows,
                     primed && plan.notify,
+                    primed && plan.notify_category,
                     &plan.also_followed,
                     examined.as_ref(),
                 )
@@ -485,17 +512,22 @@ async fn prune_absent(app: &AppHandle, plan: &SweepPlan, source: &str) {
 }
 
 /// Fold one source's results into the shared state, emit the list update, and
-/// fire go-live notifications for favourites that just came online.
+/// fire go-live notifications for favourites that just came online, and
+/// category notifications for live favourites that switched category.
+#[allow(clippy::too_many_arguments)]
 async fn apply(
     app: &AppHandle,
     source: &str,
     rows: Vec<ProviderStream>,
     notify: bool,
+    notify_category: bool,
     suppress_notify: &HashSet<String>,
     examined: Option<&HashSet<String>>,
 ) {
     let live: Vec<ProviderStream> = rows.into_iter().filter(|r| r.is_live).collect();
     let mut fresh_live = Vec::new();
+    // (row, the category it switched from)
+    let mut switched: Vec<(ProviderStream, String)> = Vec::new();
     let rows_changed;
     let full: Vec<ProviderStream>;
 
@@ -536,8 +568,14 @@ async fn apply(
         });
         for row in &live {
             st.snapshot.insert(row.key.clone(), row.clone());
-            if !previously.contains_key(&row.key) {
-                fresh_live.push(row.clone());
+            match previously.get(&row.key) {
+                None => fresh_live.push(row.clone()),
+                Some(before) if notify_category => {
+                    if let Some(from) = switched_from(before, row) {
+                        switched.push((row.clone(), from));
+                    }
+                }
+                Some(_) => {}
             }
         }
 
@@ -556,6 +594,16 @@ async fn apply(
         crate::services::home_snapshot::note_discover_inputs_changed();
     }
 
+    // Every favourite, followed or not: the follow poller announces no
+    // category changes, so nothing doubles.
+    for (row, from) in switched {
+        crate::services::live_announce::announce_category(
+            app,
+            row_notification(&row, crate::services::live_announce::CATEGORY_SOURCE),
+            from,
+        );
+    }
+
     if !notify {
         return;
     }
@@ -565,26 +613,67 @@ async fn apply(
         if suppress_notify.contains(&row.key) {
             continue;
         }
-        let (channel, mute_keys) = crate::services::live_mute::row_alert(&row);
-        crate::services::live_announce::announce(
-            &app,
-            LiveNotification {
-                streamer_name: row.user_name.clone(),
-                // Twitch rows carry a bare login and provider rows the composite
-                // key, exactly as the two existing emitters do, so the click
-                // handler routes to the right platform.
-                streamer_login: row.key.clone(),
-                streamer_avatar: row.profile_image_url.clone(),
-                game_name: Some(row.game_name.clone()).filter(|g| !g.is_empty()),
-                game_image: None,
-                stream_title: Some(row.title.clone()).filter(|t| !t.is_empty()),
-                stream_url: row.watch_url.clone(),
-                is_test: false,
-                source: Some("favorite".to_string()),
-                seventv_id: crate::services::seventv_cosmetics_resolver::cosmetics_id(&row.provider, &row.user_id),
-                channel,
-                mute_keys,
-            },
-        );
+        crate::services::live_announce::announce(app, row_notification(&row, "favorite"));
+    }
+}
+
+/// A live favourite's row as a notification tagged `source`.
+fn row_notification(row: &ProviderStream, source: &str) -> LiveNotification {
+    let (channel, mute_keys) = crate::services::live_mute::row_alert(row);
+    LiveNotification {
+        streamer_name: row.user_name.clone(),
+        // Twitch rows carry a bare login and provider rows the composite
+        // key, exactly as the two existing emitters do, so the click
+        // handler routes to the right platform.
+        streamer_login: row.key.clone(),
+        streamer_avatar: row.profile_image_url.clone(),
+        game_name: Some(row.game_name.clone()).filter(|g| !g.is_empty()),
+        game_image: None,
+        stream_title: Some(row.title.clone()).filter(|t| !t.is_empty()),
+        stream_url: row.watch_url.clone(),
+        is_test: false,
+        source: Some(source.to_string()),
+        seventv_id: crate::services::seventv_cosmetics_resolver::cosmetics_id(&row.provider, &row.user_id),
+        channel,
+        mute_keys,
+    }
+}
+
+#[cfg(test)]
+mod category_change_tests {
+    use super::*;
+
+    fn row(id: &str, started: &str, game_id: &str, game: &str) -> ProviderStream {
+        serde_json::from_value(serde_json::json!({
+            "provider": "twitch", "key": "xqc", "id": id, "user_login": "xqc", "user_name": "xQc",
+            "game_id": game_id, "game_name": game, "started_at": started, "is_live": true, "watch_url": "",
+        }))
+        .expect("a row")
+    }
+
+    #[test]
+    fn a_new_category_on_the_same_broadcast_is_a_switch() {
+        let before = row("s1", "t0", "509658", "Just Chatting");
+        assert_eq!(switched_from(&before, &row("s1", "t0", "512953", "Elden Ring")), Some("Just Chatting".into()));
+        assert_eq!(switched_from(&before, &before.clone()), None, "same category");
+        // A renamed category with the same id is not a switch.
+        assert_eq!(switched_from(&before, &row("s1", "t0", "509658", "Just chatting!")), None);
+    }
+
+    #[test]
+    fn a_new_broadcast_or_a_missing_category_is_not() {
+        let before = row("s1", "t0", "509658", "Just Chatting");
+        assert_eq!(switched_from(&before, &row("s2", "t1", "512953", "Elden Ring")), None, "a restart");
+        assert_eq!(switched_from(&before, &row("s1", "t0", "", "")), None, "no category read");
+        assert_eq!(switched_from(&row("s1", "t0", "", ""), &row("s1", "t0", "512953", "Elden Ring")), None);
+    }
+
+    #[test]
+    fn platforms_without_ids_compare_start_time_and_name() {
+        let before = row("", "2026-11-07T15:00:00Z", "", "Gaming");
+        assert_eq!(switched_from(&before, &row("", "2026-11-07T15:00:00Z", "", "Music")), Some("Gaming".into()));
+        assert_eq!(switched_from(&before, &row("", "2026-11-07T15:00:00Z", "", "gaming")), None);
+        assert_eq!(switched_from(&before, &row("", "2026-11-07T18:00:00Z", "", "Music")), None, "a new broadcast");
+        assert_eq!(switched_from(&row("", "", "", "Gaming"), &row("", "", "", "Music")), None, "nothing ties them");
     }
 }

@@ -19,6 +19,15 @@
    "platforms": ["desktop"]
   },
   {
+   "id": "favorite_category",
+   "title": "Favorite category changes",
+   "detail": "When a live favorite switches to another category",
+   "setting": "live_notifications.show_favorite_category_notifications",
+   "channel": "live-channels",
+   "setup": false,
+   "platforms": ["desktop"]
+  },
+  {
    "id": "mentions",
    "title": "Mentions and replies",
    "detail": "When someone mentions or replies to you",

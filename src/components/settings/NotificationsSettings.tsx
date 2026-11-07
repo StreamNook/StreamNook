@@ -50,6 +50,7 @@ const IS_WINDOWS_DESKTOP = !IS_MAC && !IS_LINUX;
 const TYPE_HELP: Record<string, string> = {
   live: 'The moment it starts streaming. Clicking it opens the stream.',
   favorite_live: 'Even a favorite you do not follow on Twitch. Clicking it opens the stream.',
+  favorite_category: 'Says what it switched from and to, at most once every few minutes per channel. Clicking it opens the stream.',
   mentions: 'While that chat is not on screen. Clicking it opens the chat at that message.',
   whispers: 'Each new whisper. Clicking it opens the conversation.',
   drops: 'A notification confirms each drop StreamNook claims for you. New drops: at startup, StreamNook checks your favorite categories and tells you when they have new drops to earn.',
@@ -62,9 +63,9 @@ const TYPE_HELP: Record<string, string> = {
   updates: 'It opens the changelog to what is new. Turning this off leaves the update button in the title bar and Check for updates in the changelog.',
 };
 
-// Every type's switch starts on except predictions, as Rust's defaults have
-// them; read only when a saved copy lacks the key.
-const OFF_BY_DEFAULT = new Set(['predictions']);
+// Every type's switch starts on except predictions and favorite category
+// changes, as Rust's defaults have them; read only when a saved copy lacks the key.
+const OFF_BY_DEFAULT = new Set(['predictions', 'favorite_category']);
 
 // The six supported toast anchors, placed on a 3x3 grid that stands in for the
 // screen. The middle row's sides are intentionally inert (vertically-centered

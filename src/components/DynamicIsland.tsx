@@ -194,6 +194,12 @@ interface LiveNotificationFromBackend {
     channels?: AlertChannel[];
 }
 
+/** A live favorite switched category (live_announce.rs `CategoryAnnouncement`):
+ *  `game_name` is the new category, `previous_game_name` the one before. */
+interface CategoryChangeFromBackend extends Omit<LiveNotificationFromBackend, 'merge_into'> {
+    previous_game_name: string;
+}
+
 interface DropClaimedEvent {
     drop_name: string;
     game_name: string;
@@ -268,6 +274,7 @@ const getPreviewText = (n: IslandItem): string => {
         }
         case 'live': {
             const d = n.data as LiveNotificationData;
+            if (d.previous_game_name) return `${d.streamer_name} switched to ${d.game_name}`;
             return d.game_name ? `${d.streamer_name} is live • ${d.game_name}` : `${d.streamer_name} is live`;
         }
         case 'whisper':
@@ -1112,6 +1119,58 @@ const DynamicIsland = () => {
     // Listen for whisper notifications
     useEffect(() => {
         // Rust records each incoming whisper, then decides whether it is worth
+    // A live favorite switched category. Rust (live_announce.rs) already
+    // dropped it when its switch is off, the channel is muted or hidden, or it
+    // repeats one from the last few minutes; it reaches the same three places
+    // a go-live does, worded as a switch.
+    useEffect(() => {
+        const unlisten = listen<CategoryChangeFromBackend>('favorite-category-changed', (event) => {
+            const data = event.payload;
+            if (!notificationsEnabled) return;
+
+            if (useDynamicIsland) {
+                addNotification({
+                    id: data.notification_id,
+                    type: 'live',
+                    timestamp: Date.now(),
+                    read: false,
+                    data: {
+                        streamer_name: data.streamer_name,
+                        streamer_login: data.streamer_login,
+                        streamer_avatar: data.streamer_avatar,
+                        game_name: data.game_name,
+                        stream_title: data.stream_title,
+                        is_live: true,
+                        providers: data.providers,
+                        seventv_id: data.seventv_id ?? undefined,
+                        channels: data.channels,
+                        previous_game_name: data.previous_game_name,
+                    } as LiveNotificationData,
+                });
+            }
+            if (useToast) {
+                emit('show-live-toast', data);
+            }
+            // Once per event: the toast plays it when one is shown.
+            if (soundEnabled && useDynamicIsland && !useToast) {
+                playNotificationSound();
+            }
+            mirrorNotification({
+                kind: 'live',
+                title: `${data.streamer_name} switched to ${data.game_name}`,
+                body: `Was ${data.previous_game_name}`,
+                imageUrl: data.streamer_avatar,
+                roundImage: true,
+                action: { label: 'Watch', run: () => { void startStream(data.streamer_login); } },
+                target: { type: 'watch', channel: data.streamer_login },
+            });
+        });
+
+        return () => {
+            unlisten.then((fn) => fn());
+        };
+    }, [addNotification, notificationsEnabled, useDynamicIsland, useToast, startStream, soundEnabled, playNotificationSound, mirrorNotification]);
+
         // a notification (services/whisper_inbox.rs: the master switch and the
         // Whispers type, streamer mode, and not the conversation on screen),
         // the same decision the phones post from. The announcement already
@@ -2474,7 +2533,12 @@ const DynamicIsland = () => {
                                                                     )}
                                                                 </div>
                                                                 <p className="text-white/50 text-sm truncate mt-0.5">
-                                                                    {(notification.data as LiveNotificationData).is_live
+                                                                    {/* A switch says only where it went: the row is
+                                                                        narrow, and "from ..." would be cut mid-phrase.
+                                                                        The toast and system notification name both. */}
+                                                                    {(notification.data as LiveNotificationData).previous_game_name
+                                                                        ? `Switched to ${(notification.data as LiveNotificationData).game_name}`
+                                                                        : (notification.data as LiveNotificationData).is_live
                                                                         ? (notification.data as LiveNotificationData).game_name || 'Streaming'
                                                                         : 'Offline'
                                                                     }

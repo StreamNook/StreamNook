@@ -2710,6 +2710,12 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     description: 'At startup, StreamNook checks your favorite categories and tells you when they have new drops to earn. Previously "New drops in favorite categories".'
   },
   {
+  {
+    tab: 'Notifications',
+    section: 'Notify me about',
+    title: 'Favorite category changes',
+    description: 'When a live favorite switches to another category, saying what it switched from and to. Game change, category switch, stream changed game. Off until turned on.'
+  },
     tab: 'Notifications',
     section: 'Notify me about',
     title: 'New badges',

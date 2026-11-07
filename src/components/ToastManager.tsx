@@ -22,6 +22,9 @@ interface LiveNotification {
   is_test?: boolean;
   /** The streamer's cosmetics id, for their 7TV picture. */
   seventv_id?: string | null;
+  /** Set when a live favorite switched category: the one it switched from.
+   *  `game_name` is then the one it switched to. */
+  previous_game_name?: string;
 }
 
 // Component to render stream title with Apple-style emojis (inline)
@@ -236,8 +239,19 @@ const ToastManager = () => {
 
             {/* Text Content */}
             <div className="flex-1 min-w-0 overflow-hidden max-w-full space-y-1">
-              <div className="text-base font-semibold truncate max-w-full text-textPrimary">{notification.streamer_name} is now live!</div>
-              {liveActivityText(notification.game_name) && (
+              {notification.previous_game_name ? (
+                <>
+                  <div className="text-base font-semibold truncate max-w-full text-textPrimary">
+                    {notification.streamer_name} switched to {notification.game_name}
+                  </div>
+                  <div className="text-xs font-normal text-textSecondary truncate max-w-full">
+                    Was {notification.previous_game_name}
+                  </div>
+                </>
+              ) : (
+                <div className="text-base font-semibold truncate max-w-full text-textPrimary">{notification.streamer_name} is now live!</div>
+              )}
+              {!notification.previous_game_name && liveActivityText(notification.game_name) && (
                 <div className="text-xs font-normal text-textSecondary truncate max-w-full">{liveActivityText(notification.game_name)}</div>
               )}
               {notification.stream_title && (

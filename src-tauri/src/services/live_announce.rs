@@ -140,10 +140,10 @@ pub fn drop_reason(
         return None;
     }
     let type_on = ln.enabled
-        && if n.source.as_deref() == Some("favorite") {
-            ln.show_favorite_live_notifications
-        } else {
-            ln.show_live_notifications
+        && match n.source.as_deref() {
+            Some("favorite") => ln.show_favorite_live_notifications,
+            Some(CATEGORY_SOURCE) => ln.show_favorite_category_notifications,
+            _ => ln.show_live_notifications,
         };
     if !type_on {
         return Some(DropReason::TypeOff);
@@ -196,6 +196,83 @@ pub fn announce(app: &AppHandle, notification: LiveNotification) {
     };
     let Some((notification_id, providers, channels, merge_into)) = decided else { return };
     let _ = app.emit(EVENT, LiveAnnouncement { notification, notification_id, providers, channels, merge_into });
+}
+
+// ---- A live favourite switched category ----------------------------------
+
+/// A live favourite moved to another category. Its own event, so it never
+/// takes the go-live dedupe slot or merges into a go-live entry.
+pub const CATEGORY_EVENT: &str = "favorite-category-changed";
+
+/// The `source` a category change carries, which `drop_reason` gates on its
+/// own switch.
+pub const CATEGORY_SOURCE: &str = "favorite_category";
+
+/// One alert per channel within this window: a streamer trying categories
+/// back and forth is one piece of news, not five.
+const CATEGORY_DEDUPE_MS: i64 = 3 * 60_000;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CategoryAnnouncement {
+    /// `game_name` is the category it switched TO.
+    #[serde(flatten)]
+    pub notification: LiveNotification,
+    pub notification_id: String,
+    /// The category it switched from.
+    pub previous_game_name: String,
+    /// Its platform, as a go-live's `providers`, for the row's mark.
+    pub providers: Vec<String>,
+    /// Its channel, for "Turn off alerts" on the row.
+    pub channels: Vec<AlertChannel>,
+}
+
+/// streamer_login (lowercase) -> last category alert at.
+static CATEGORY_GATE: Mutex<Option<HashMap<String, i64>>> = Mutex::new(None);
+
+/// Whether a category alert for `login` is news at `now`, recording it when it
+/// is. Sweeps the map, so it never grows for the life of the session.
+fn admit_category(recent: &mut HashMap<String, i64>, login: &str, now: i64) -> bool {
+    recent.retain(|_, at| now - *at < CATEGORY_DEDUPE_MS);
+    let login = login.to_lowercase();
+    if recent.contains_key(&login) {
+        return false;
+    }
+    recent.insert(login, now);
+    true
+}
+
+/// Announce that a live favourite switched from `previous_game_name` to
+/// `notification.game_name`, unless `drop_reason` drops it or it repeats one
+/// made within the window. `notification.source` must be `CATEGORY_SOURCE`.
+pub fn announce_category(app: &AppHandle, notification: LiveNotification, previous_game_name: String) {
+    let now = chrono::Utc::now().timestamp_millis();
+    let room = crate::services::watch_session::offline_room_login();
+    let reason = {
+        let state = app.state::<AppState>();
+        let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
+        drop_reason(
+            &settings.live_notifications,
+            &crate::services::hidden_channels::hides_notification_keys,
+            room.as_deref(),
+            &notification,
+        )
+    };
+    if reason.is_some() {
+        return;
+    }
+    {
+        let mut guard = CATEGORY_GATE.lock().unwrap_or_else(|e| e.into_inner());
+        if !admit_category(guard.get_or_insert_with(HashMap::new), &notification.streamer_login, now) {
+            return;
+        }
+    }
+    let notification_id = format!("category-{now}-{}", notification.streamer_login);
+    let providers = vec![crate::services::providers::key::parse_key(&notification.streamer_login).provider];
+    let channels: Vec<AlertChannel> = notification.channel.clone().into_iter().collect();
+    let _ = app.emit(
+        CATEGORY_EVENT,
+        CategoryAnnouncement { notification, notification_id, previous_game_name, providers, channels },
+    );
 }
 
 #[cfg(test)]
@@ -396,5 +473,40 @@ mod tests {
         let is_hidden = |keys: &[String]| crate::services::hidden_channels::hides(&hidden, keys);
         let yt_handle = from_row(&prow("youtube", "youtube:@Handle", UC, "@Handle"), None);
         assert_eq!(drop_reason(&alerting(), &is_hidden, None, &yt_handle), Some(DropReason::Hidden));
+    }
+
+    #[test]
+    fn category_changes_answer_to_their_own_switch() {
+        let mut change = live("xqc");
+        change.source = Some(CATEGORY_SOURCE.into());
+        // Off by default, so an update never starts these on its own.
+        assert!(!LiveNotificationSettings::default().show_favorite_category_notifications);
+        assert_eq!(drop_reason(&alerting(), &never_hidden, None, &change), Some(DropReason::TypeOff));
+
+        let mut on = alerting();
+        on.show_favorite_category_notifications = true;
+        assert_eq!(drop_reason(&on, &never_hidden, None, &change), None);
+        // The go-live switches do not decide it.
+        on.show_favorite_live_notifications = false;
+        on.show_live_notifications = false;
+        assert_eq!(drop_reason(&on, &never_hidden, None, &change), None);
+        // The master switch and mutes still do.
+        on.muted_live_channels = vec!["xqc".into()];
+        assert_eq!(drop_reason(&on, &never_hidden, None, &change), Some(DropReason::Muted));
+        on.muted_live_channels.clear();
+        on.enabled = false;
+        assert_eq!(drop_reason(&on, &never_hidden, None, &change), Some(DropReason::TypeOff));
+    }
+
+    #[test]
+    fn one_category_alert_per_channel_per_window() {
+        let mut recent = HashMap::new();
+        assert!(admit_category(&mut recent, "xqc", 0));
+        assert!(!admit_category(&mut recent, "XQC", CATEGORY_DEDUPE_MS - 1));
+        assert!(admit_category(&mut recent, "shroud", 1), "another channel is its own news");
+        assert!(admit_category(&mut recent, "xqc", CATEGORY_DEDUPE_MS));
+        // A category alert never holds the go-live slot.
+        let mut g = Gate::default();
+        assert!(admit(&mut g, &live("xqc"), CATEGORY_DEDUPE_MS).is_some());
     }
 }
