@@ -32,7 +32,7 @@ import { useBlendedChatSource } from '../hooks/useBlendedChatSource';
 import { useBlendCompanions, type BlendCompanion } from '../hooks/useBlendCompanions';
 import { sendToSource } from '../utils/sendToSource';
 import { varyRepeat } from '../utils/sentContent';
-import { ProviderMark } from './ProviderLogo';
+import { ReplyContextCard } from './chat/ReplyContextCard';
 import BlendBar, { type BlendView } from './chat/BlendBar';
 import { BlendSourcesButton } from './chat/BlendSourcesButton';
 import { historyKey as chatterHistoryKey } from '../utils/chatterIdentity';
@@ -1519,8 +1519,10 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   // `source` is set only when replying to a row from ANOTHER platform in a
   // merged feed. Absent means the channel being watched, which is every reply
   // outside combined chat.
+  // `row` is the message being answered, so the card over the composer can draw
+  // its author's cosmetics and quote it.
   const [replyingTo, setReplyingTo] = useState<
-    { messageId: string; username: string; source?: BlendCompanion } | null
+    { messageId: string; username: string; source?: BlendCompanion; row: BackendChatMessage | null } | null
   >(null);
 
   // @ mention autocomplete state
@@ -4519,10 +4521,12 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     // is read through a ref so this callback keeps a fixed identity (an unstable
     // one here re-renders every visible message on every keystroke).
     const from = blendSourceRef.current.get(messageId);
+    const row = messagesRef.current.find((m) => typeof m !== 'string' && m.id === messageId);
     setReplyingTo({
       messageId,
       username,
       source: from && from.provider !== provider ? from : undefined,
+      row: row && typeof row !== 'string' ? row : null,
     });
     inputRef.current?.focus({ preventScroll: true });
     // `provider` changes only when the channel does, which already re-renders the
@@ -5885,27 +5889,12 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                 </div>
               )}
               {replyingTo && !isResubMode && !isWatchStreakMode && (
-                <div className="mb-2 flex items-center gap-2 px-3 py-2 bg-glass rounded-lg border border-borderSubtle">
-                  <svg className="w-4 h-4 text-accent flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg>
-                  <span className="text-xs text-textSecondary flex-1 inline-flex items-center gap-1">
-                    Replying to <span className="text-accent font-semibold">{replyingTo.username}</span>
-                    {/* Say where it is going the moment the reply is aimed
-                        somewhere other than the channel on screen, rather than
-                        letting it be a surprise after sending. */}
-                    {replyingTo.source && (
-                      <span className="inline-flex items-center gap-1">
-                        on
-                        <ProviderMark provider={replyingTo.source.provider} size={12} />
-                        <span className="text-textPrimary">{replyingTo.source.channelName}</span>
-                      </span>
-                    )}
-                  </span>
-                  <Tooltip content="Cancel reply" side="top">
-                  <button onClick={() => setReplyingTo(null)} className="text-textSecondary hover:text-textPrimary transition-colors">
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-                  </button>
-                  </Tooltip>
-                </div>
+                <ReplyContextCard
+                  username={replyingTo.username}
+                  row={replyingTo.row}
+                  source={replyingTo.source}
+                  onCancel={() => setReplyingTo(null)}
+                />
               )}
 
               {/* VOD chat source toggle. Uses the app's standard segmented control
