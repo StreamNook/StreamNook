@@ -2687,6 +2687,12 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   {
     tab: 'Notifications',
     section: 'Notify me about',
+    title: 'Favorite category changes',
+    description: 'When a live favorite switches to another category, saying what it switched from and to. Game change, category switch, stream changed game. Off until turned on.'
+  },
+  {
+    tab: 'Notifications',
+    section: 'Notify me about',
     title: 'Mentions and replies',
     description: 'When someone mentions or replies to you while that chat is not on screen, and clicking it opens the chat at that message. @ mentions, pings. Previously "Notify me" under Mentions and replies.'
   },
@@ -2710,12 +2716,6 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     description: 'At startup, StreamNook checks your favorite categories and tells you when they have new drops to earn. Previously "New drops in favorite categories".'
   },
   {
-  {
-    tab: 'Notifications',
-    section: 'Notify me about',
-    title: 'Favorite category changes',
-    description: 'When a live favorite switches to another category, saying what it switched from and to. Game change, category switch, stream changed game. Off until turned on.'
-  },
     tab: 'Notifications',
     section: 'Notify me about',
     title: 'New badges',

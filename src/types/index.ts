@@ -966,6 +966,8 @@ export interface LiveNotificationSettings {
   // Separate from show_live_notifications so a long favorites list can be
   // silenced without losing notifications for the channels you follow.
   show_favorite_live_notifications?: boolean;
+  // A live FAVORITED channel switches category. Off until turned on.
+  show_favorite_category_notifications?: boolean;
   show_whisper_notifications?: boolean;
   show_update_notifications?: boolean;
   show_drops_notifications?: boolean;
@@ -984,8 +986,6 @@ export interface LiveNotificationSettings {
   show_mention_notifications?: boolean;
   // Extras on the Windows channel points notification (Rust
   // services/points_notify.rs), off by default: a Rewards button with a
-  // A live FAVORITED channel switches category. Off until turned on.
-  show_favorite_category_notifications?: boolean;
   // right-click way to these settings, and a bar toward the next reward.
   points_rewards_button?: boolean;
   points_next_reward?: boolean;
@@ -2796,6 +2796,9 @@ export interface LiveNotificationData {
   /** Each platform's channel this entry stands for, as Rust names it, so the
    *  row's "Turn off alerts" mutes every one. Absent on older entries. */
   channels?: AlertChannel[];
+  /** Set on a category change of a live favorite: the category it switched
+   *  from (`game_name` is the one it switched to). */
+  previous_game_name?: string;
 }
 
 /** One platform's channel in a go-live, as Rust's `AlertChannel`. */
@@ -2814,9 +2817,6 @@ export interface WhisperNotificationData {
   profile_image_url?: string;
 }
 
-  /** Set on a category change of a live favorite: the category it switched
-   *  from (`game_name` is the one it switched to). */
-  previous_game_name?: string;
 export interface SystemNotificationData {
   /** Where the entry came from, when that is more useful than its level.
    *  A plugin saying "farming is now active" is a plugin talking, and the

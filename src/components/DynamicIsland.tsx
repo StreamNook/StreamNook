@@ -1116,9 +1116,6 @@ const DynamicIsland = () => {
         };
     }, [addNotification, notificationsEnabled, useDynamicIsland, useToast, addToast, startStream, soundEnabled, playNotificationSound, mirrorNotification]);
 
-    // Listen for whisper notifications
-    useEffect(() => {
-        // Rust records each incoming whisper, then decides whether it is worth
     // A live favorite switched category. Rust (live_announce.rs) already
     // dropped it when its switch is off, the channel is muted or hidden, or it
     // repeats one from the last few minutes; it reaches the same three places
@@ -1171,6 +1168,9 @@ const DynamicIsland = () => {
         };
     }, [addNotification, notificationsEnabled, useDynamicIsland, useToast, startStream, soundEnabled, playNotificationSound, mirrorNotification]);
 
+    // Listen for whisper notifications
+    useEffect(() => {
+        // Rust records each incoming whisper, then decides whether it is worth
         // a notification (services/whisper_inbox.rs: the master switch and the
         // Whispers type, streamer mode, and not the conversation on screen),
         // the same decision the phones post from. The announcement already

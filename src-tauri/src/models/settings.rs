@@ -810,6 +810,11 @@ pub struct LiveNotificationSettings {
     /// silenced without losing notifications for the channels you follow.
     #[serde(default = "default_true")]
     pub show_favorite_live_notifications: bool,
+    /// A live FAVOURITED channel switches category (favorite_live_service).
+    /// Off until turned on, so a long favourites list does not start alerting
+    /// the moment this arrives in an update.
+    #[serde(default)]
+    pub show_favorite_category_notifications: bool,
     #[serde(default = "default_true")]
     pub show_whisper_notifications: bool,
     #[serde(default = "default_true")]
@@ -864,11 +869,6 @@ pub struct LiveNotificationSettings {
     pub native_only_when_unfocused: bool,
     // Quick update: clicking update toast immediately starts update
     #[serde(default)]
-    /// A live FAVOURITED channel switches category (favorite_live_service).
-    /// Off until turned on, so a long favourites list does not start alerting
-    /// the moment this arrives in an update.
-    #[serde(default)]
-    pub show_favorite_category_notifications: bool,
     pub quick_update_on_toast: bool,
     // Toast placement: which screen anchor toasts appear at, and how far they
     // sit from the anchored top/bottom edge (raise the offset to lift toasts off
@@ -920,6 +920,7 @@ impl Default for LiveNotificationSettings {
             sound_volume: None,
             show_live_notifications: true,
             show_favorite_live_notifications: true,
+            show_favorite_category_notifications: false,
             show_whisper_notifications: true,
             show_update_notifications: true,
             show_drops_notifications: true,
@@ -974,7 +975,6 @@ pub struct AutoSwitchSettings {
     pub stay_in_offline_chat: bool,
 }
 
-            show_favorite_category_notifications: false,
 impl Default for AutoSwitchSettings {
     fn default() -> Self {
         Self {
