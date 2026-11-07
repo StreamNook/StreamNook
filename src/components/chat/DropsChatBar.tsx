@@ -180,7 +180,7 @@ function Status({ line, short }: { line: BarLine; short?: boolean }) {
   );
 }
 
-function ClaimButton({ line, claiming, onClaim, small }: { line: BarLine; claiming: boolean; onClaim: () => void; small?: boolean }) {
+function ClaimButton({ line, claiming, onClaim }: { line: BarLine; claiming: boolean; onClaim: () => void }) {
   return (
     <button
       type="button"
@@ -190,7 +190,7 @@ function ClaimButton({ line, claiming, onClaim, small }: { line: BarLine; claimi
       }}
       disabled={claiming}
       style={SUCCESS_FILL}
-      className={`${ACCENT_BUTTON} shrink-0 text-center ${small ? 'min-w-[46px] px-2 !text-[10.5px] leading-[16px]' : 'min-w-[60px] px-3 !text-[11.5px] leading-[22px]'}`}
+      className={`${ACCENT_BUTTON} min-w-[60px] shrink-0 px-3 text-center !text-[11.5px] leading-[22px]`}
     >
       {claiming ? 'Claiming' : line.claimLabel}
     </button>
@@ -199,8 +199,16 @@ function ClaimButton({ line, claiming, onClaim, small }: { line: BarLine; claimi
 
 /** At rest: a slim glazed lip that rises out of the top of the message box,
  *  so nothing floats over chat. The picture, the name, a short track and the
- *  time (or Claim). From props alone, so the settings preview draws it too. */
-export function DropsChatBarView({ line, open, claiming, onToggle, onClaim, onPreload }: DropsChatBarViewProps) {
+ *  time; a reward ready to claim turns the glass green and says "Ready", and
+ *  the Claim itself waits in the hover card and the drawer, so a stray click
+ *  on the lip never claims. From props alone, so the settings preview draws
+ *  it too. */
+export function DropsChatBarView({
+  line,
+  open,
+  onToggle,
+  onPreload,
+}: Pick<DropsChatBarViewProps, 'line' | 'open' | 'onToggle' | 'onPreload'>) {
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.target !== e.currentTarget) return;
     if (e.key === 'Enter' || e.key === ' ') {
@@ -223,8 +231,8 @@ export function DropsChatBarView({ line, open, claiming, onToggle, onClaim, onPr
       <DropArt image={line.image} size={14} radius={4} />
       <span className="min-w-0 flex-1 truncate font-medium text-textPrimary/90">{line.name}</span>
       <Track line={line} className="h-[3px] w-12 shrink-0" />
-      {line.ready && onClaim ? (
-        <ClaimButton line={line} claiming={claiming} onClaim={onClaim} small />
+      {line.ready ? (
+        <span className="shrink-0 whitespace-nowrap font-semibold text-success">Ready</span>
       ) : (
         <Status line={line} short />
       )}
@@ -232,14 +240,15 @@ export function DropsChatBarView({ line, open, claiming, onToggle, onClaim, onPr
   );
 }
 
-/** On hover: the lip pops out into a card over the bottom of chat, with the
- *  reward, its track and time, and the other rewards here. A click on it
- *  opens the drawer. */
+/** On hover: the lip grows into a card over the bottom of chat, with the
+ *  reward, its track and time (or Claim), and the other rewards here. Square
+ *  at the bottom like the lip, since it rises out of the same edge of the
+ *  message box. A click on it opens the drawer. */
 export function DropsPeekView({ line, claiming, onToggle, onClaim }: Omit<DropsChatBarViewProps, 'open' | 'onPreload'>) {
   return (
     <div
       onClick={onToggle}
-      style={heat(line, 14)}
+      style={heat(line, '14px 14px 0 0')}
       className={`${GLAZE_BANNER} drops-bar drops-peek w-full cursor-pointer select-none px-3 pb-2.5 pt-3 ${line.ready ? 'is-ready' : ''}`}
     >
       <div className="flex min-w-0 items-center gap-2.5">
@@ -391,14 +400,7 @@ function DropsChatBarInner({ channelId, login, headerInset, emotePickerOpen, onD
           </motion.div>
         )}
       </AnimatePresence>
-      <DropsChatBarView
-        line={line}
-        open={open}
-        claiming={!!lead && claiming === lead.drop_id}
-        onToggle={() => send('toggle')}
-        onClaim={lead ? () => void claim(lead.drop_id, lead.instance_id) : undefined}
-        onPreload={() => void loadDrawer()}
-      />
+      <DropsChatBarView line={line} open={open} onToggle={() => send('toggle')} onPreload={() => void loadDrawer()} />
     </div>
   );
 }

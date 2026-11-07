@@ -109,8 +109,8 @@ describe('drawerAfter', () => {
 });
 
 describe('DropsChatBarView (the lip)', () => {
-  const lip = (over: Partial<typeof PREVIEW_LINE> = {}, onClaim?: () => void) =>
-    renderToStaticMarkup(<DropsChatBarView line={{ ...PREVIEW_LINE, ...over }} open={false} claiming={false} onClaim={onClaim} />);
+  const lip = (over: Partial<typeof PREVIEW_LINE> = {}) =>
+    renderToStaticMarkup(<DropsChatBarView line={{ ...PREVIEW_LINE, ...over }} open={false} />);
   it('is a slim glazed lip with an inset track, never an edge strip', () => {
     const html = lip();
     expect(html).toContain('chrome-glaze drops-bar drops-lip');
@@ -129,9 +129,11 @@ describe('DropsChatBarView (the lip)', () => {
     expect(html).not.toContain('to watch');
     expect(html).not.toContain('drops-stack');
   });
-  it('offers a small Claim and turns the glass green when the reward is ready', () => {
-    const html = lip({ ready: true, percent: 100 }, () => {});
-    expect(html).toContain('>Claim</button>');
+  it('turns green and says Ready when the reward is ready, with Claim left to the card and drawer', () => {
+    const html = lip({ ready: true, percent: 100 });
+    expect(html).not.toContain('<button');
+    expect(html).not.toContain('Claim');
+    expect(html).toContain('text-success">Ready</span>');
     expect(html).toMatch(/drops-lip[^"]*is-ready/);
     expect(html).toContain('drops-bar-fill block h-full rounded-full is-ready');
   });
@@ -159,6 +161,9 @@ describe('DropsPeekView (the hover card)', () => {
   });
   it('offers Claim when the reward is ready', () => {
     expect(peek({ ready: true, percent: 100 }, () => {})).toContain('>Claim</button>');
+  });
+  it('is square at the bottom like the lip it grows out of', () => {
+    expect(peek()).toContain('border-radius:14px 14px 0 0');
   });
 });
 

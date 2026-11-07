@@ -2986,7 +2986,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
             {/* The lip rises out of the message box, so the preview draws one under it. */}
             <div className="max-w-[340px]">
               <div className="px-2">
-                <DropsChatBarView line={DROPS_PREVIEW_LINE} open={false} claiming={false} />
+                <DropsChatBarView line={DROPS_PREVIEW_LINE} open={false} />
               </div>
               <div className="flex h-[34px] items-center rounded-[10px] border border-borderSubtle bg-background px-3 text-[12px] text-textMuted">
                 Send a message
