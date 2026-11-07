@@ -2983,8 +2983,14 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         {/* The phones draw their own card, so the bar's preview is desktop only. */}
         {!IS_MOBILE && (
           <SettingPreview caption="above the message box">
+            {/* The lip rises out of the message box, so the preview draws one under it. */}
             <div className="max-w-[340px]">
-              <DropsChatBarView line={DROPS_PREVIEW_LINE} open={false} claiming={false} />
+              <div className="px-2">
+                <DropsChatBarView line={DROPS_PREVIEW_LINE} open={false} claiming={false} />
+              </div>
+              <div className="flex h-[34px] items-center rounded-[10px] border border-borderSubtle bg-background px-3 text-[12px] text-textMuted">
+                Send a message
+              </div>
             </div>
           </SettingPreview>
         )}

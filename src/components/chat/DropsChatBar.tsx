@@ -3,9 +3,8 @@
 // from Rust (services/watch_drops.rs, through stores/watchDropsStore); this
 // draws the one-line bar and, on a click, the drawer listing every reward you
 // can earn here. The drawer floats over chat, so nothing in the column moves.
-import { lazy, memo, Suspense, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
-import { AnimatePresence } from 'framer-motion';
-import { CaretUp } from 'phosphor-react';
+import { lazy, memo, Suspense, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
 import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../../stores/AppStore';
 import { useWatchDrops, type WatchDrops } from '../../stores/watchDropsStore';
@@ -149,17 +148,59 @@ function MoreStack({ more, art }: { more: number; art: string[] }) {
   );
 }
 
-/** The glaze rounds to a pill and outranks the rounded utilities, so the
- *  bar's corner is set inline, with the reward's progress as `--drops-heat`,
- *  which warms the glass (its frost lives in the stylesheet, where the
- *  full-screen column can raise it). */
-const BAR_RADIUS = 13;
+/** The reward's progress as `--drops-heat` (0 to 1), which warms the glass.
+ *  The glaze rounds to a pill and outranks the rounded utilities, so each
+ *  surface's corner is set inline too; the frost lives in the stylesheet,
+ *  where the full-screen column can raise it. */
+const heat = (line: BarLine, radius: string | number): CSSProperties =>
+  ({ borderRadius: radius, '--drops-heat': (clamp(line.percent) / 100).toFixed(2) }) as CSSProperties;
 
-/** The bar itself, from props alone (the settings preview draws it too). The
- *  fill is an inset track under the name, clear of the bar's rounded corners. */
-export function DropsChatBarView({ line, open, claiming, onToggle, onClaim, onPreload }: DropsChatBarViewProps) {
-  const percent = Math.max(0, Math.min(100, line.percent));
+const clamp = (n: number) => Math.max(0, Math.min(100, n));
+
+/** A drops track: an inset rounded fill, never an edge strip. */
+function Track({ line, className }: { line: BarLine; className: string }) {
+  return (
+    <span aria-hidden className={`block overflow-hidden rounded-full bg-textPrimary/[0.10] ${className}`}>
+      <span
+        className={`drops-bar-fill block h-full rounded-full ${line.ready ? 'is-ready' : ''}`}
+        style={{ width: `${clamp(line.percent)}%` }}
+      />
+    </span>
+  );
+}
+
+/** The time strong and the rest quiet ("12m to watch"); `short` keeps only the time. */
+function Status({ line, short }: { line: BarLine; short?: boolean }) {
   const { time, rest } = splitStatus(line.status);
+  return (
+    <span className="shrink-0 whitespace-nowrap tabular-nums text-textSecondary">
+      {time && <span className="font-semibold text-textPrimary">{time}</span>}
+      {short && time ? '' : rest}
+    </span>
+  );
+}
+
+function ClaimButton({ line, claiming, onClaim, small }: { line: BarLine; claiming: boolean; onClaim: () => void; small?: boolean }) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        onClaim();
+      }}
+      disabled={claiming}
+      style={SUCCESS_FILL}
+      className={`${ACCENT_BUTTON} shrink-0 text-center ${small ? 'min-w-[46px] px-2 !text-[10.5px] leading-[16px]' : 'min-w-[60px] px-3 !text-[11.5px] leading-[22px]'}`}
+    >
+      {claiming ? 'Claiming' : line.claimLabel}
+    </button>
+  );
+}
+
+/** At rest: a slim glazed lip that rises out of the top of the message box,
+ *  so nothing floats over chat. The picture, the name, a short track and the
+ *  time (or Claim). From props alone, so the settings preview draws it too. */
+export function DropsChatBarView({ line, open, claiming, onToggle, onClaim, onPreload }: DropsChatBarViewProps) {
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.target !== e.currentTarget) return;
     if (e.key === 'Enter' || e.key === ' ') {
@@ -176,42 +217,50 @@ export function DropsChatBarView({ line, open, claiming, onToggle, onClaim, onPr
       onClick={onToggle}
       onKeyDown={onKeyDown}
       onPointerEnter={onPreload}
-      style={{ borderRadius: BAR_RADIUS, '--drops-heat': (percent / 100).toFixed(2) } as CSSProperties}
-      className={`${GLAZE_BANNER} drops-bar flex h-[52px] w-full cursor-pointer select-none flex-col justify-center gap-2 px-3 outline-none focus-visible:ring-1 focus-visible:ring-accent/60 ${line.ready ? 'is-ready' : ''}`}
+      style={heat(line, '10px 10px 0 0')}
+      className={`${GLAZE_BANNER} drops-bar drops-lip flex h-6 w-full cursor-pointer select-none items-center gap-2 px-2.5 text-[11px] leading-4 outline-none focus-visible:ring-1 focus-visible:ring-accent/60 ${line.ready ? 'is-ready' : ''}`}
     >
-      <span className="flex min-w-0 items-center gap-2.5">
-        <DropArt image={line.image} size={28} radius={8} />
-        <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium leading-4 text-textPrimary">{line.name}</span>
-        {line.ready && onClaim ? (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onClaim();
-            }}
-            disabled={claiming}
-            style={SUCCESS_FILL}
-            className={`${ACCENT_BUTTON} min-w-[60px] shrink-0 px-3 text-center !text-[11.5px] leading-[22px]`}
-          >
-            {claiming ? 'Claiming' : line.claimLabel}
-          </button>
-        ) : (
-          <span className="shrink-0 whitespace-nowrap text-[12px] leading-4 tabular-nums text-textSecondary">
-            {time && <span className="font-semibold text-textPrimary">{time}</span>}
-            {rest}
+      <DropArt image={line.image} size={14} radius={4} />
+      <span className="min-w-0 flex-1 truncate font-medium text-textPrimary/90">{line.name}</span>
+      <Track line={line} className="h-[3px] w-12 shrink-0" />
+      {line.ready && onClaim ? (
+        <ClaimButton line={line} claiming={claiming} onClaim={onClaim} small />
+      ) : (
+        <Status line={line} short />
+      )}
+    </div>
+  );
+}
+
+/** On hover: the lip pops out into a card over the bottom of chat, with the
+ *  reward, its track and time, and the other rewards here. A click on it
+ *  opens the drawer. */
+export function DropsPeekView({ line, claiming, onToggle, onClaim }: Omit<DropsChatBarViewProps, 'open' | 'onPreload'>) {
+  return (
+    <div
+      onClick={onToggle}
+      style={heat(line, 14)}
+      className={`${GLAZE_BANNER} drops-bar drops-peek w-full cursor-pointer select-none px-3 pb-2.5 pt-3 ${line.ready ? 'is-ready' : ''}`}
+    >
+      <div className="flex min-w-0 items-center gap-2.5">
+        <DropArt image={line.image} size={32} radius={8} />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[12.5px] font-medium leading-4 text-textPrimary">{line.name}</div>
+          <div className="mt-2 flex min-w-0 items-center gap-2.5 text-[11.5px] leading-4">
+            <Track line={line} className="h-[3px] min-w-0 flex-1" />
+            {line.ready && onClaim ? <ClaimButton line={line} claiming={claiming} onClaim={onClaim} /> : <Status line={line} />}
+          </div>
+        </div>
+      </div>
+      {line.more > 0 && (
+        <div className="mt-2.5 flex min-w-0 items-center gap-2 border-t border-white/[0.07] pt-2 text-[11px] leading-4">
+          <MoreStack more={line.more} art={line.moreArt} />
+          <span className="min-w-0 flex-1 truncate text-textSecondary">
+            {line.more === 1 ? '1 more on this channel' : `${line.more} more on this channel`}
           </span>
-        )}
-        <MoreStack more={line.more} art={line.moreArt} />
-        <CaretUp
-          size={12}
-          weight="bold"
-          aria-hidden
-          className={`shrink-0 text-textMuted transition-transform duration-200 ease-[cubic-bezier(0.2,0.8,0.2,1)] ${open ? 'rotate-180' : ''}`}
-        />
-      </span>
-      <span aria-hidden className="ml-[38px] block h-[3px] overflow-hidden rounded-full bg-textPrimary/[0.09]">
-        <span className={`drops-bar-fill block h-full rounded-full ${line.ready ? 'is-ready' : ''}`} style={{ width: `${percent}%` }} />
-      </span>
+          <span className="shrink-0 text-textPrimary/80">Click for all</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -237,10 +286,24 @@ function DropsChatBarInner({ channelId, login, headerInset, emotePickerOpen, onD
   const [maxHeight, setMaxHeight] = useState(320);
   const { claiming, claim } = useDropClaim();
   const hostRef = useRef<HTMLDivElement>(null);
+  // The hover card: a mouse resting on the lip (or the card itself) shows it
+  // after a beat, so a pointer crossing on its way to the message box does
+  // not flash it; leaving gives a short grace to reach the card.
+  const [peek, setPeek] = useState(false);
+  const peekTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hover = (on: boolean) => (e: PointerEvent<HTMLDivElement>) => {
+    if (e.pointerType !== 'mouse') return;
+    if (peekTimer.current) clearTimeout(peekTimer.current);
+    peekTimer.current = setTimeout(() => setPeek(on), on ? PEEK_SHOW_MS : PEEK_HIDE_MS);
+  };
+  useEffect(() => () => {
+    if (peekTimer.current) clearTimeout(peekTimer.current);
+  }, []);
 
   const send = (event: DrawerEvent) => {
     const next = drawerAfter(open, event);
     if (next && !open) onDrawerOpen();
+    if (next) setPeek(false);
     setOpen(next);
   };
 
@@ -255,6 +318,20 @@ function DropsChatBarInner({ channelId, login, headerInset, emotePickerOpen, onD
   if (!line && open) setOpen(drawerAfter(open, 'gone'));
 
   const onPress = useOutsidePress(open, [hostRef], () => send('outside'));
+
+  // Escape closes the open drawer wherever focus is: opened from the hover
+  // card, which goes away as the drawer comes up, focus is left on the page,
+  // not in here. Caught first and stopped, so it closes only the drawer.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      setOpen(drawerAfter(true, 'escape'));
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [open]);
 
   // The drawer may rise as far as the header's lower edge. ResizeObserver
   // reports once on observe, so the cap is set as the drawer opens, and again
@@ -277,13 +354,11 @@ function DropsChatBarInner({ channelId, login, headerInset, emotePickerOpen, onD
     <div
       ref={hostRef}
       onPointerDownCapture={onPress}
-      onKeyDown={(e) => {
-        if (e.key === 'Escape' && open) {
-          e.stopPropagation();
-          send('escape');
-        }
-      }}
-      className="relative z-[55] flex-shrink-0 px-2 pb-1 pt-1.5"
+      onPointerEnter={hover(true)}
+      onPointerLeave={hover(false)}
+      // The lip sits flush on the message box's top edge (over its border), so
+      // at rest it takes only its own height from the column.
+      className="relative z-[55] -mb-px flex-shrink-0 px-2 pt-1.5"
     >
       <AnimatePresence>
         {open && (
@@ -295,6 +370,25 @@ function DropsChatBarInner({ channelId, login, headerInset, emotePickerOpen, onD
               onClaim={(dropId, instanceId) => void claim(dropId, instanceId)}
             />
           </Suspense>
+        )}
+        {peek && !open && (
+          <motion.div
+            key="peek"
+            initial={{ opacity: 0, y: 6, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 4, scale: 0.985 }}
+            transition={{ duration: 0.16, ease: [0.2, 0.8, 0.2, 1] }}
+            // Above the lip (which comes later and positions itself), so the
+            // card covers it whole and grows out of the same place.
+            className="absolute bottom-0 left-2 right-2 z-10 origin-bottom"
+          >
+            <DropsPeekView
+              line={line}
+              claiming={!!lead && claiming === lead.drop_id}
+              onToggle={() => send('toggle')}
+              onClaim={lead ? () => void claim(lead.drop_id, lead.instance_id) : undefined}
+            />
+          </motion.div>
         )}
       </AnimatePresence>
       <DropsChatBarView
@@ -308,6 +402,9 @@ function DropsChatBarInner({ channelId, login, headerInset, emotePickerOpen, onD
     </div>
   );
 }
+
+const PEEK_SHOW_MS = 120;
+const PEEK_HIDE_MS = 160;
 
 /** Memoized: ChatWidget re-renders on every chat flush and is not compiled,
  *  and this takes only primitives plus one stable callback. */

@@ -15,7 +15,7 @@ vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(async () => () => {}) })
 
 vi.mock('../../utils/openExternal', () => ({ openExternal: vi.fn() }));
 
-import DropsChatBar, { barLine, drawerAfter, DropsChatBarView, PREVIEW_LINE, showsHere } from './DropsChatBar';
+import DropsChatBar, { barLine, drawerAfter, DropsChatBarView, DropsPeekView, PREVIEW_LINE, showsHere } from './DropsChatBar';
 import DropsDrawer, { rewardRows } from './DropsDrawer';
 import { splitStatus } from './dropsStatusText';
 import type { HereDrop, WatchDrops } from '../../stores/watchDropsStore';
@@ -108,43 +108,75 @@ describe('drawerAfter', () => {
   });
 });
 
-describe('DropsChatBarView', () => {
-  it('draws an inset track and the extra count, never an edge strip', () => {
-    const html = renderToStaticMarkup(<DropsChatBarView line={PREVIEW_LINE} open={false} claiming={false} />);
-    expect(html).toContain('ml-[38px]');
+describe('DropsChatBarView (the lip)', () => {
+  const lip = (over: Partial<typeof PREVIEW_LINE> = {}, onClaim?: () => void) =>
+    renderToStaticMarkup(<DropsChatBarView line={{ ...PREVIEW_LINE, ...over }} open={false} claiming={false} onClaim={onClaim} />);
+  it('is a slim glazed lip with an inset track, never an edge strip', () => {
+    const html = lip();
+    expect(html).toContain('chrome-glaze drops-bar drops-lip');
+    expect(html).toContain('h-6');
+    // Square at the bottom, where it meets the message box.
+    expect(html).toContain('border-radius:10px 10px 0 0');
     // The glass warms with the reward's progress.
     expect(html).toContain('--drops-heat:0.72');
     expect(html).toContain('width:72%');
-    expect(html).toContain('+2');
-    expect(html).toContain('chrome-glaze drops-bar');
     expect(html).not.toContain('liquid-glass-panel drops-bar');
     expect(html).not.toMatch(/absolute left-0 right-0 bottom-0/);
   });
-  it('draws the time strong and the rest quiet', () => {
-    const html = renderToStaticMarkup(<DropsChatBarView line={PREVIEW_LINE} open={false} claiming={false} />);
+  it('keeps only the time at rest and nothing about the other rewards', () => {
+    const html = lip({ more: 2, moreArt: ['a.png', 'b.png'] });
+    expect(html).toContain('<span class="font-semibold text-textPrimary">12m</span></span>');
+    expect(html).not.toContain('to watch');
+    expect(html).not.toContain('drops-stack');
+  });
+  it('offers a small Claim and turns the glass green when the reward is ready', () => {
+    const html = lip({ ready: true, percent: 100 }, () => {});
+    expect(html).toContain('>Claim</button>');
+    expect(html).toMatch(/drops-lip[^"]*is-ready/);
+    expect(html).toContain('drops-bar-fill block h-full rounded-full is-ready');
+  });
+});
+
+describe('DropsPeekView (the hover card)', () => {
+  const peek = (over: Partial<typeof PREVIEW_LINE> = {}, onClaim?: () => void) =>
+    renderToStaticMarkup(<DropsPeekView line={{ ...PREVIEW_LINE, ...over }} claiming={false} onClaim={onClaim} />);
+  it('says the reward in full with its time', () => {
+    const html = peek();
+    expect(html).toContain('chrome-glaze drops-bar drops-peek');
     expect(html).toContain('<span class="font-semibold text-textPrimary">12m</span> to watch');
+    expect(html).toContain('2 more on this channel');
+    expect(html).toContain('Click for all');
   });
   it('stacks the other rewards and counts only the ones beyond the pictures', () => {
-    const two = renderToStaticMarkup(
-      <DropsChatBarView line={{ ...PREVIEW_LINE, more: 2, moreArt: ['a.png', 'b.png'] }} open={false} claiming={false} />,
-    );
+    const two = peek({ more: 2, moreArt: ['a.png', 'b.png'] });
     expect(two.match(/<img/g)?.length).toBe(2);
-    expect(two).not.toContain('+');
-    const five = renderToStaticMarkup(
-      <DropsChatBarView line={{ ...PREVIEW_LINE, more: 5, moreArt: ['a.png', 'b.png'] }} open={false} claiming={false} />,
-    );
-    expect(five).toContain('+3');
-    const none = renderToStaticMarkup(<DropsChatBarView line={{ ...PREVIEW_LINE, more: 0 }} open={false} claiming={false} />);
+    expect(two).not.toMatch(/>\+\d/);
+    expect(peek({ more: 5, moreArt: ['a.png', 'b.png'] })).toContain('+3');
+    expect(peek({ more: 1, moreArt: ['a.png'] })).toContain('1 more on this channel');
+    const none = peek({ more: 0 });
     expect(none).not.toContain('drops-stack');
+    expect(none).not.toContain('more on this channel');
   });
-  it('offers a filled Claim and lights the rim when the reward is ready', () => {
-    const html = renderToStaticMarkup(
-      <DropsChatBarView line={{ ...PREVIEW_LINE, ready: true }} open={false} claiming={false} onClaim={() => {}} />,
-    );
-    expect(html).toContain('>Claim</button>');
-    expect(html).toContain('drops-bar flex');
-    expect(html).toMatch(/drops-bar[^"]*is-ready/);
-    expect(html).toContain('drops-bar-fill block h-full rounded-full is-ready');
+  it('offers Claim when the reward is ready', () => {
+    expect(peek({ ready: true, percent: 100 }, () => {})).toContain('>Claim</button>');
+  });
+});
+
+describe('the hover card wiring', () => {
+  it('shows only for a mouse, after a beat, and never over the open drawer', () => {
+    const src = readFileSync(resolve(__dirname, 'DropsChatBar.tsx'), 'utf8').replace(/\r\n/g, '\n');
+    expect(src).toContain("if (e.pointerType !== 'mouse') return;");
+    expect(src).toContain('{peek && !open && (');
+    expect(src).toContain('if (next) setPeek(false);');
+  });
+  it('closes the drawer on Escape wherever focus is, since the card it opened from goes away', () => {
+    const src = readFileSync(resolve(__dirname, 'DropsChatBar.tsx'), 'utf8').replace(/\r\n/g, '\n');
+    expect(src).toContain("window.addEventListener('keydown', onKey, true);");
+    expect(src).toContain("window.removeEventListener('keydown', onKey, true);");
+  });
+  it('sits in the column above the message box, never over the message list', () => {
+    const src = readFileSync(resolve(__dirname, 'DropsChatBar.tsx'), 'utf8').replace(/\r\n/g, '\n');
+    expect(src).toContain('className="relative z-[55] -mb-px flex-shrink-0 px-2 pt-1.5"');
   });
 });
 
