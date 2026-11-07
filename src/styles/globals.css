@@ -3051,6 +3051,13 @@ body {
 .chat-fullscreen-overlay .chrome-glaze.drops-bar {
   --glaze-frost: 85%;
 }
+/* Performance mode leaves transitions alone app-wide, but the drops fills,
+   glow and tile states step straight to their new look there, like the card
+   and drawer (Motion Off already collapses them with everything else). */
+html[data-sn-perf] :is(.drops-bar-fill, .drops-tile, .chrome-glaze.drops-bar),
+html[data-sn-perf] .drops-tile::before {
+  transition: none !important;
+}
 
 /* Small floating flyout (the title bar's platform switcher menu). A popover
    this small hangs over live video, where .glass-panel does not work: its blur

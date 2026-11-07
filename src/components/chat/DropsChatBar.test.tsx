@@ -174,6 +174,23 @@ describe('the hover card wiring', () => {
     expect(src).toContain('{peek && !open && (');
     expect(src).toContain('if (next) setPeek(false);');
   });
+  it('shows an arrow on the lip and a hand only on the card that takes the click', () => {
+    const lip = renderToStaticMarkup(<DropsChatBarView line={PREVIEW_LINE} open={false} />);
+    expect(lip).toContain('cursor-default');
+    expect(lip).not.toContain('cursor-pointer');
+    expect(renderToStaticMarkup(<DropsPeekView line={PREVIEW_LINE} claiming={false} />)).toContain('cursor-pointer');
+  });
+  it('appears at once under Motion Off and Performance mode', () => {
+    const src = readFileSync(resolve(__dirname, 'DropsChatBar.tsx'), 'utf8').replace(/\r\n/g, '\n');
+    expect(src).toContain("const motionOff = useAppStore((s) => s.settings.motion_mode) === 'off';");
+    expect(src).toContain('const instant = motionOff || performanceQuiet;');
+    expect(src).toContain('transition: instant ? INSTANT : PEEK_IN');
+    expect(src).toContain('instant={instant}');
+    const drawer = readFileSync(resolve(__dirname, 'DropsDrawer.tsx'), 'utf8');
+    expect(drawer).toContain('transition: instant ? { duration: 0 }');
+    const css = readFileSync(resolve(__dirname, '../../styles/globals.css'), 'utf8');
+    expect(css).toContain('html[data-sn-perf] :is(.drops-bar-fill, .drops-tile, .chrome-glaze.drops-bar)');
+  });
   it('closes the drawer on Escape wherever focus is, since the card it opened from goes away', () => {
     const src = readFileSync(resolve(__dirname, 'DropsChatBar.tsx'), 'utf8').replace(/\r\n/g, '\n');
     expect(src).toContain("window.addEventListener('keydown', onKey, true);");

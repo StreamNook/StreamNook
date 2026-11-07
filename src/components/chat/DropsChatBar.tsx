@@ -9,6 +9,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../../stores/AppStore';
 import { useWatchDrops, type WatchDrops } from '../../stores/watchDropsStore';
 import { useOutsidePress } from '../../hooks/useOutsidePress';
+import { usePerformanceQuiet } from '../../utils/lowPower';
 import { Logger } from '../../utils/logger';
 import { ACCENT_BUTTON, GLAZE_BANNER, SUCCESS_FILL } from '../ui/glazeButtons';
 import { DropArt } from './DropArt';
@@ -226,7 +227,9 @@ export function DropsChatBarView({
       onKeyDown={onKeyDown}
       onPointerEnter={onPreload}
       style={heat(line, '10px 10px 0 0')}
-      className={`${GLAZE_BANNER} drops-bar drops-lip flex h-6 w-full cursor-pointer select-none items-center gap-2 px-2.5 text-[11px] leading-4 outline-none focus-visible:ring-1 focus-visible:ring-accent/60 ${line.ready ? 'is-ready' : ''}`}
+      // An arrow, not a hand: a mouse resting here grows the card, which is
+      // what takes the click (a tap opens the drawer straight away).
+      className={`${GLAZE_BANNER} drops-bar drops-lip flex h-6 w-full cursor-default select-none items-center gap-2 px-2.5 text-[11px] leading-4 outline-none focus-visible:ring-1 focus-visible:ring-accent/60 ${line.ready ? 'is-ready' : ''}`}
     >
       <DropArt image={line.image} size={14} radius={4} />
       <span className="min-w-0 flex-1 truncate font-medium text-textPrimary/90">{line.name}</span>
@@ -295,6 +298,12 @@ function DropsChatBarInner({ channelId, login, headerInset, emotePickerOpen, onD
   const [maxHeight, setMaxHeight] = useState(320);
   const { claiming, claim } = useDropClaim();
   const hostRef = useRef<HTMLDivElement>(null);
+  // Motion Off and Performance mode show the card and the drawer at once.
+  // Reduced keeps their fades and drops the slide (MotionScope's
+  // reducedMotion); the CSS side is already gated on html[data-motion].
+  const motionOff = useAppStore((s) => s.settings.motion_mode) === 'off';
+  const performanceQuiet = usePerformanceQuiet();
+  const instant = motionOff || performanceQuiet;
   // The hover card: a mouse resting on the lip (or the card itself) shows it
   // after a beat, so a pointer crossing on its way to the message box does
   // not flash it; leaving gives a short grace to reach the card.
@@ -374,6 +383,7 @@ function DropsChatBarInner({ channelId, login, headerInset, emotePickerOpen, onD
           <Suspense key="drawer" fallback={null}>
             <DropsDrawer
               view={view}
+              instant={instant}
               maxHeight={maxHeight}
               claimingId={claiming}
               onClaim={(dropId, instanceId) => void claim(dropId, instanceId)}
@@ -383,10 +393,12 @@ function DropsChatBarInner({ channelId, login, headerInset, emotePickerOpen, onD
         {peek && !open && (
           <motion.div
             key="peek"
-            initial={{ opacity: 0, y: 6, scale: 0.98 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 4, scale: 0.985 }}
-            transition={{ duration: 0.16, ease: [0.2, 0.8, 0.2, 1] }}
+            // Grows up out of the lip: a short rise and a hair of scale from
+            // its bottom edge, quick in and quicker out, transform and opacity
+            // only.
+            initial={{ opacity: 0, y: 4, scale: 0.985 }}
+            animate={{ opacity: 1, y: 0, scale: 1, transition: instant ? INSTANT : PEEK_IN }}
+            exit={{ opacity: 0, y: 3, scale: 0.99, transition: instant ? INSTANT : PEEK_OUT }}
             // Above the lip (which comes later and positions itself), so the
             // card covers it whole and grows out of the same place.
             className="absolute bottom-0 left-2 right-2 z-10 origin-bottom"
@@ -405,8 +417,12 @@ function DropsChatBarInner({ channelId, login, headerInset, emotePickerOpen, onD
   );
 }
 
-const PEEK_SHOW_MS = 120;
-const PEEK_HIDE_MS = 160;
+const PEEK_SHOW_MS = 90;
+const PEEK_HIDE_MS = 140;
+const EASE_OUT = [0.2, 0.8, 0.2, 1] as const;
+const PEEK_IN = { duration: 0.14, ease: EASE_OUT };
+const PEEK_OUT = { duration: 0.1, ease: EASE_OUT };
+const INSTANT = { duration: 0 };
 
 /** Memoized: ChatWidget re-renders on every chat flush and is not compiled,
  *  and this takes only primitives plus one stable callback. */

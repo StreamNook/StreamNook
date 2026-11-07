@@ -17,6 +17,8 @@ const EASE = [0.2, 0.8, 0.2, 1] as const;
 
 interface Props {
   view: WatchDrops;
+  /** Motion Off or Performance mode: appear and go at once. */
+  instant?: boolean;
   maxHeight: number;
   claimingId: string | null;
   onClaim: (dropId: string, instanceId: string | null) => void;
@@ -24,7 +26,7 @@ interface Props {
 
 type OnClaim = Props['onClaim'];
 
-export default function DropsDrawer({ view, maxHeight, claimingId, onClaim }: Props) {
+export default function DropsDrawer({ view, instant, maxHeight, claimingId, onClaim }: Props) {
   const left = view.campaigns.reduce((n, c) => n + c.drops.filter((d) => !d.claimed).length, 0);
   const one = view.campaigns.length === 1 ? view.campaigns[0] : null;
   return (
@@ -32,9 +34,8 @@ export default function DropsDrawer({ view, maxHeight, claimingId, onClaim }: Pr
       role="dialog"
       aria-label="Drops on this channel"
       initial={{ opacity: 0, y: 8, scale: 0.98 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      exit={{ opacity: 0, y: 6, scale: 0.985 }}
-      transition={{ duration: 0.18, ease: EASE }}
+      animate={{ opacity: 1, y: 0, scale: 1, transition: instant ? { duration: 0 } : { duration: 0.17, ease: EASE } }}
+      exit={{ opacity: 0, y: 6, scale: 0.985, transition: instant ? { duration: 0 } : { duration: 0.11, ease: EASE } }}
       style={{ maxHeight }}
       className="liquid-glass-panel drops-drawer absolute bottom-full left-2 right-2 flex origin-bottom flex-col overflow-hidden"
     >

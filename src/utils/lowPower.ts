@@ -109,6 +109,11 @@ export function useLowPower(): boolean {
 export function useBatteryLowPower(): boolean {
   return useSyncExternalStore(subscribeLowPower, isBatteryLowPower, isBatteryLowPower);
 }
+/** Desktop Performance mode is quieting the window: the JS-driven entrances
+ *  that `html[data-sn-perf]` cannot reach appear at once too. */
+export function usePerformanceQuiet(): boolean {
+  return useSyncExternalStore(subscribeLowPower, isPerformanceQuiet, isPerformanceQuiet);
+}
 export function useStillChat(): boolean {
   return useSyncExternalStore(subscribeLowPower, isStillChat, isStillChat);
 }
