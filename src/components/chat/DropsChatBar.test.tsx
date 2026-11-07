@@ -17,10 +17,11 @@ vi.mock('../../utils/openExternal', () => ({ openExternal: vi.fn() }));
 
 import DropsChatBar, { barLine, drawerAfter, DropsChatBarView, PREVIEW_LINE, showsHere } from './DropsChatBar';
 import DropsDrawer from './DropsDrawer';
+import { splitStatus } from './dropsStatusText';
 import type { HereDrop, WatchDrops } from '../../stores/watchDropsStore';
 
 const view = (over: Partial<WatchDrops> = {}): WatchDrops => ({
-  channel_id: '111', login: 'Shroud', game_id: 'g1', game_name: 'Rust', lead: null, more: 0, campaigns: [],
+  channel_id: '111', login: 'Shroud', game_id: 'g1', game_name: 'Rust', lead: null, more: 0, more_art: [], campaigns: [],
   complete: false, stalled: false, stall_episode: 0, ...over,
 });
 
@@ -34,7 +35,7 @@ describe('DropsDrawer', () => {
       <DropsDrawer
         view={view({
           campaigns: [{
-            id: 'c', name: 'Rust Drops', game_name: 'Rust', art: '', ends: '', claimed_label: '0 of 1 claimed', started: true,
+            id: 'c', name: 'Rust Drops', game_name: 'Rust', art: '', box_art: '', ends: '', claimed_label: '0 of 1 claimed', started: true,
             needs_link: drop.connect, link_url: drop.connect ? 'https://example.com/link' : null, cumulative_minutes: 60, drops: [drop],
           }],
         })}
@@ -81,7 +82,7 @@ describe('barLine', () => {
     lead: false, status: 'Starts when you watch', detail: null, bar: 0, current_minutes: 0, required_minutes: 60, claim_label: 'Claim',
   };
   const notStarted = {
-    id: 'c2', name: 'Later', game_name: 'Rust', art: 'art', ends: '', claimed_label: '', started: false, needs_link: false,
+    id: 'c2', name: 'Later', game_name: 'Rust', art: 'art', box_art: '', ends: '', claimed_label: '', started: false, needs_link: false,
     link_url: null, cumulative_minutes: 0, drops: [tier],
   };
   it('says the lead', () => {
@@ -110,17 +111,85 @@ describe('drawerAfter', () => {
 describe('DropsChatBarView', () => {
   it('draws an inset track and the extra count, never an edge strip', () => {
     const html = renderToStaticMarkup(<DropsChatBarView line={PREVIEW_LINE} open={false} claiming={false} />);
-    expect(html).toContain('ml-[26px]');
+    expect(html).toContain('ml-[34px]');
     expect(html).toContain('width:72%');
     expect(html).toContain('+2');
     expect(html).toContain('liquid-glass-panel drops-bar');
     expect(html).not.toMatch(/absolute left-0 right-0 bottom-0/);
   });
-  it('offers Claim when the reward is ready', () => {
+  it('draws the time strong and the rest quiet', () => {
+    const html = renderToStaticMarkup(<DropsChatBarView line={PREVIEW_LINE} open={false} claiming={false} />);
+    expect(html).toContain('<span class="font-semibold text-textPrimary">12m</span> to watch');
+  });
+  it('stacks the other rewards and counts only the ones beyond the pictures', () => {
+    const two = renderToStaticMarkup(
+      <DropsChatBarView line={{ ...PREVIEW_LINE, more: 2, moreArt: ['a.png', 'b.png'] }} open={false} claiming={false} />,
+    );
+    expect(two.match(/<img/g)?.length).toBe(2);
+    expect(two).not.toContain('+');
+    const five = renderToStaticMarkup(
+      <DropsChatBarView line={{ ...PREVIEW_LINE, more: 5, moreArt: ['a.png', 'b.png'] }} open={false} claiming={false} />,
+    );
+    expect(five).toContain('+3');
+    const none = renderToStaticMarkup(<DropsChatBarView line={{ ...PREVIEW_LINE, more: 0 }} open={false} claiming={false} />);
+    expect(none).not.toContain('drops-stack');
+  });
+  it('offers a filled Claim and lights the rim when the reward is ready', () => {
     const html = renderToStaticMarkup(
       <DropsChatBarView line={{ ...PREVIEW_LINE, ready: true }} open={false} claiming={false} onClaim={() => {}} />,
     );
     expect(html).toContain('>Claim</button>');
+    expect(html).toContain('drops-bar flex');
+    expect(html).toMatch(/drops-bar[^"]*is-ready/);
+    expect(html).toContain('drops-bar-fill block h-full rounded-full is-ready');
+  });
+});
+
+describe('splitStatus', () => {
+  it('takes a leading time and leaves words alone', () => {
+    expect(splitStatus('12m to watch')).toEqual({ time: '12m', rest: ' to watch' });
+    expect(splitStatus('2h 12m to watch')).toEqual({ time: '2h 12m', rest: ' to watch' });
+    expect(splitStatus('1d 3h to watch')).toEqual({ time: '1d 3h', rest: ' to watch' });
+    expect(splitStatus('5h')).toEqual({ time: '5h', rest: '' });
+    expect(splitStatus('Ready')).toEqual({ time: '', rest: 'Ready' });
+    expect(splitStatus('Starts when you watch')).toEqual({ time: '', rest: 'Starts when you watch' });
+  });
+});
+
+describe('DropsDrawer layouts', () => {
+  const drop = (id: string, over: Partial<HereDrop> = {}): HereDrop => ({
+    id, instance_id: null, name: `Reward ${id}`, image: `${id}.png`, claimed: false, ready: false, pending: false, connect: false,
+    lead: false, status: '2h 12m to watch', detail: null, bar: 27, current_minutes: 48, required_minutes: 180, claim_label: 'Claim', ...over,
+  });
+  const campaign = (id: string, drops: HereDrop[]) => ({
+    id, name: `Campaign ${id}`, game_name: 'Once Human', art: 'art.png', box_art: 'box.jpg', ends: '8d left',
+    claimed_label: '', started: true, needs_link: false, link_url: null, cumulative_minutes: 48, drops,
+  });
+  const html = (campaigns: ReturnType<typeof campaign>[]) =>
+    renderToStaticMarkup(<DropsDrawer view={view({ campaigns })} maxHeight={400} claimingId={null} onClaim={() => {}} />);
+
+  it('lays several rewards out as tiles in rows of three, the next one ringed', () => {
+    const out = html([campaign('a', [drop('1', { lead: true, status: '12m to watch', bar: 80 }), drop('2'), drop('3', { claimed: true })])]);
+    expect(out).toContain('grid grid-cols-3');
+    expect(out.match(/drops-tile /g)?.length).toBe(3);
+    expect(out).toContain('drops-tile flex min-w-0 flex-col gap-1.5 p-2 is-next');
+    expect(out).toContain('is-claimed');
+    expect(out).toContain('1 of 3');
+    expect(out).toContain('src="box.jpg"');
+  });
+  it('draws a lone reward as one wide tile with its minutes', () => {
+    const out = html([campaign('a', [drop('1', { lead: true, status: '12m to watch', bar: 80, current_minutes: 48, required_minutes: 60 })])]);
+    expect(out).not.toContain('grid-cols-3');
+    expect(out).toContain('48 of 60 min watched');
+    expect(out).not.toContain('1 of 1');
+  });
+  it('gives each one-reward campaign its own wide tile with its campaign line', () => {
+    const out = html([campaign('a', [drop('1', { lead: true })]), campaign('b', [drop('2')])]);
+    expect(out).toContain('Drops on this channel');
+    expect(out).toContain('2 left');
+    expect(out).toContain('Campaign a · 8d left');
+    expect(out).toContain('Campaign b · 8d left');
+    expect(out).not.toContain('grid-cols-3');
   });
 });
 

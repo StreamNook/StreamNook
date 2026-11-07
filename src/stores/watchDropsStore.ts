@@ -53,6 +53,8 @@ export interface HereCampaign {
   name: string;
   game_name: string;
   art: string;
+  /** The game's box art, sized; '' for a campaign with no category. */
+  box_art: string;
   ends: string;
   claimed_label: string;
   started: boolean;
@@ -70,6 +72,8 @@ export interface WatchDrops {
   game_name: string;
   lead: WatchDropLead | null;
   more: number;
+  /** Pictures of the first two of those others, stacked on the bar. */
+  more_art: string[];
   campaigns: HereCampaign[];
   complete: boolean;
   stalled: boolean;

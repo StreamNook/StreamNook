@@ -11,7 +11,9 @@ import { useAppStore } from '../../stores/AppStore';
 import { useWatchDrops, type WatchDrops } from '../../stores/watchDropsStore';
 import { useOutsidePress } from '../../hooks/useOutsidePress';
 import { Logger } from '../../utils/logger';
+import { ACCENT_BUTTON, SUCCESS_FILL } from '../ui/glazeButtons';
 import { DropArt } from './DropArt';
+import { splitStatus } from './dropsStatusText';
 
 // The drawer's code loads on first open (or first hover of the bar), so a chat
 // that never opens it pays nothing for it.
@@ -36,8 +38,10 @@ export interface BarLine {
   percent: number;
   /** Waits on a claim: the status becomes the Claim button. */
   ready: boolean;
-  /** Other rewards under way here ("+N"). */
+  /** Other rewards under way here. */
   more: number;
+  /** Pictures of the first two of them, stacked; any beyond read "+N". */
+  moreArt: string[];
   spoken: string;
   claimLabel: string;
 }
@@ -54,6 +58,7 @@ export function barLine(view: WatchDrops): BarLine | null {
       percent: lead.percent,
       ready: lead.complete,
       more: view.more,
+      moreArt: view.more_art ?? [],
       spoken: lead.spoken,
       claimLabel: lead.claim_label,
     };
@@ -69,6 +74,7 @@ export function barLine(view: WatchDrops): BarLine | null {
     percent: 0,
     ready: false,
     more: 0,
+    moreArt: [],
     spoken: rewards === 1 ? `${first.name}, ${first.status}` : `${rewards} rewards to earn on this channel`,
     claimLabel: '',
   };
@@ -82,6 +88,7 @@ export const PREVIEW_LINE: BarLine = {
   percent: 72,
   ready: false,
   more: 2,
+  moreArt: [],
   spoken: 'Rust hoodie, 12 minutes left',
   claimLabel: 'Claim',
 };
@@ -122,11 +129,31 @@ export interface DropsChatBarViewProps {
   onPreload?: () => void;
 }
 
+/** The other rewards on the bar: up to two pictures, then "+N" for the rest;
+ *  with no pictures at all, "+N" alone. */
+function MoreStack({ more, art }: { more: number; art: string[] }) {
+  if (more <= 0) return null;
+  const shown = art.slice(0, Math.min(2, more));
+  const rest = more - shown.length;
+  return (
+    <span className="drops-stack flex shrink-0 items-center pl-1">
+      {shown.map((src) => (
+        <DropArt key={src} image={src} size={18} radius={5} />
+      ))}
+      {rest > 0 && (
+        <span className="rounded-full bg-textPrimary/[0.10] px-1.5 text-[10.5px] font-medium leading-[18px] tabular-nums text-textSecondary">
+          +{rest}
+        </span>
+      )}
+    </span>
+  );
+}
+
 /** The bar itself, from props alone (the settings preview draws it too). The
  *  fill is an inset track under the name, clear of the bar's rounded corners. */
 export function DropsChatBarView({ line, open, claiming, onToggle, onClaim, onPreload }: DropsChatBarViewProps) {
-  const fill = line.ready ? 'bg-success' : 'bg-accent-on-surface';
   const percent = Math.max(0, Math.min(100, line.percent));
+  const { time, rest } = splitStatus(line.status);
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.target !== e.currentTarget) return;
     if (e.key === 'Enter' || e.key === ' ') {
@@ -143,11 +170,11 @@ export function DropsChatBarView({ line, open, claiming, onToggle, onClaim, onPr
       onClick={onToggle}
       onKeyDown={onKeyDown}
       onPointerEnter={onPreload}
-      className="liquid-glass-panel drops-bar flex h-[34px] w-full cursor-pointer select-none flex-col justify-center gap-[5px] px-2.5 outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
+      className={`liquid-glass-panel drops-bar flex h-[42px] w-full cursor-pointer select-none flex-col justify-center gap-[5px] px-2.5 outline-none focus-visible:ring-1 focus-visible:ring-accent/60 ${line.ready ? 'is-ready' : ''}`}
     >
       <span className="flex min-w-0 items-center gap-2">
-        <DropArt image={line.image} size={18} />
-        <span className="min-w-0 flex-1 truncate text-[12px] font-medium leading-4 text-textPrimary">{line.name}</span>
+        <DropArt image={line.image} size={26} radius={7} />
+        <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium leading-4 text-textPrimary">{line.name}</span>
         {line.ready && onClaim ? (
           <button
             type="button"
@@ -156,18 +183,18 @@ export function DropsChatBarView({ line, open, claiming, onToggle, onClaim, onPr
               onClaim();
             }}
             disabled={claiming}
-            className="min-w-[56px] shrink-0 rounded-full border border-success/60 px-2 text-center text-[11px] font-semibold leading-[18px] text-success transition-opacity duration-150 disabled:opacity-60"
+            style={SUCCESS_FILL}
+            className={`${ACCENT_BUTTON} min-w-[60px] shrink-0 px-3 text-center !text-[11.5px] leading-[22px]`}
           >
             {claiming ? 'Claiming' : line.claimLabel}
           </button>
         ) : (
-          <span className="shrink-0 text-[11.5px] leading-4 tabular-nums text-textSecondary">{line.status}</span>
-        )}
-        {line.more > 0 && (
-          <span className="shrink-0 rounded-full bg-textPrimary/[0.08] px-1.5 text-[10.5px] leading-4 tabular-nums text-textSecondary">
-            +{line.more}
+          <span className="shrink-0 whitespace-nowrap text-[12px] leading-4 tabular-nums text-textSecondary">
+            {time && <span className="font-semibold text-textPrimary">{time}</span>}
+            {rest}
           </span>
         )}
+        <MoreStack more={line.more} art={line.moreArt} />
         <CaretUp
           size={12}
           weight="bold"
@@ -175,8 +202,8 @@ export function DropsChatBarView({ line, open, claiming, onToggle, onClaim, onPr
           className={`shrink-0 text-textMuted transition-transform duration-200 ease-[cubic-bezier(0.2,0.8,0.2,1)] ${open ? 'rotate-180' : ''}`}
         />
       </span>
-      <span aria-hidden className="ml-[26px] block h-[2px] overflow-hidden rounded-full bg-textPrimary/[0.10]">
-        <span className={`drops-bar-fill block h-full rounded-full ${fill}`} style={{ width: `${percent}%` }} />
+      <span aria-hidden className="ml-[34px] block h-[3px] overflow-hidden rounded-full bg-textPrimary/[0.09]">
+        <span className={`drops-bar-fill block h-full rounded-full ${line.ready ? 'is-ready' : ''}`} style={{ width: `${percent}%` }} />
       </span>
     </div>
   );

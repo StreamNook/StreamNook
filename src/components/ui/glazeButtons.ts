@@ -16,6 +16,10 @@ export const ACCENT_FILL: CSSProperties = { background: 'color-mix(in srgb, var(
  *  the theme's red mixed into black, kept dark enough for white text. */
 export const DANGER_FILL: CSSProperties = { background: 'color-mix(in srgb, var(--color-error) 62%, black)' };
 
+/** The filled button for taking something earned (Claim on a drop): the
+ *  theme's green mixed into black, kept dark enough for white text. */
+export const SUCCESS_FILL: CSSProperties = { background: 'color-mix(in srgb, var(--color-success) 62%, black)' };
+
 /** Every other button beside it (Deny, Cancel, a timeout length, a saved
  *  reason): the same capsule and `glaze-inset` lighting on a light film, a
  *  step quieter than the filled one. Callers set height, padding and size. */

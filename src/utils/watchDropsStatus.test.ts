@@ -9,7 +9,7 @@ import type { WatchDrops } from '../stores/watchDropsStore';
 
 const NOW = '2026-11-06T12:00:00.000Z';
 const base: WatchDrops = {
-  channel_id: '111', login: 'shroud', game_id: 'g1', game_name: 'Rust', lead: null, more: 0,
+  channel_id: '111', login: 'shroud', game_id: 'g1', game_name: 'Rust', lead: null, more: 0, more_art: [],
   campaigns: [], complete: false, stalled: false, stall_episode: 0,
 };
 const hoodie = {
@@ -27,13 +27,13 @@ const withLead: WatchDrops = {
   },
   campaigns: [
     {
-      id: 'c1', name: 'Rust Drops', game_name: 'Rust', art: '', ends: '3d left', claimed_label: '1 of 3 claimed',
+      id: 'c1', name: 'Rust Drops', game_name: 'Rust', art: '', box_art: '', ends: '3d left', claimed_label: '1 of 3 claimed',
       started: true, needs_link: false, link_url: null, cumulative_minutes: 90,
       drops: [{ ...hoodie, id: 'a', lead: false, claimed: true, current_minutes: 60, required_minutes: 60 }, hoodie,
         { ...hoodie, id: 'zero', lead: false, required_minutes: 0, current_minutes: 0 }],
     },
     {
-      id: 'c2', name: 'Later', game_name: 'Rust', art: '', ends: '', claimed_label: '', started: false, needs_link: false,
+      id: 'c2', name: 'Later', game_name: 'Rust', art: '', box_art: '', ends: '', claimed_label: '', started: false, needs_link: false,
       link_url: null, cumulative_minutes: 0, drops: [{ ...hoodie, id: 'n', lead: false, current_minutes: 0 }],
     },
   ],

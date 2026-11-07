@@ -2964,11 +2964,67 @@ body {
     var(--hairline-contour),
     0 2px 8px -2px rgba(0, 0, 0, 0.45);
 }
+/* A reward waiting on a claim lights the bar's rim green. Box shadows only
+   change when the state does, never per frame. */
+.liquid-glass-panel.drops-bar.is-ready {
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.10),
+    inset 0 -0.5px 0 0 rgba(255, 255, 255, 0.06),
+    0 0 0 1px color-mix(in srgb, var(--color-success) 38%, transparent),
+    0 4px 18px -4px color-mix(in srgb, var(--color-success) 28%, transparent),
+    0 2px 8px -2px rgba(0, 0, 0, 0.45);
+}
 /* A drops fill moves about once a minute. A width transition inside a fixed
    track is the one layout animation the chat column allows; Motion Off
-   collapses it with every other transition. */
+   collapses it with every other transition. The fill runs from a deeper tone
+   of the accent to the accent itself, with a soft glow of its own color. */
 .drops-bar-fill {
-  transition: width 700ms cubic-bezier(0.2, 0.8, 0.2, 1), background-color 200ms ease;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--color-accent-on-surface) 62%, black), var(--color-accent-on-surface));
+  box-shadow: 0 0 8px color-mix(in srgb, var(--color-accent-on-surface) 45%, transparent);
+  transition: width 700ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.drops-bar-fill.is-ready {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--color-success) 70%, black), color-mix(in srgb, var(--color-success) 80%, white));
+  box-shadow: 0 0 8px color-mix(in srgb, var(--color-success) 50%, transparent);
+}
+/* A reward's picture: a dark ground for transparent art and a hairline, so
+   art drawn on black or on white both read as a tile. */
+.drops-art {
+  background-color: color-mix(in srgb, var(--color-background-tertiary) 70%, black);
+  box-shadow: 0 0 0 0.5px rgba(255, 255, 255, 0.14);
+}
+/* The drawer's reward tiles: a light film inside the glass, top-lit. The next
+   reward is ringed in the accent, green once it waits on a claim. */
+.drops-tile {
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.035);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 0 0 0.5px rgba(255, 255, 255, 0.06);
+  transition: background-color 200ms ease, box-shadow 200ms ease;
+}
+.drops-tile.is-next {
+  background: color-mix(in srgb, var(--color-accent-on-surface) 8%, transparent);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 0 0 1px color-mix(in srgb, var(--color-accent-on-surface) 45%, transparent),
+    0 0 18px -6px color-mix(in srgb, var(--color-accent-on-surface) 50%, transparent);
+}
+.drops-tile.is-ready {
+  background: color-mix(in srgb, var(--color-success) 8%, transparent);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 0 0 1px color-mix(in srgb, var(--color-success) 50%, transparent),
+    0 0 18px -6px color-mix(in srgb, var(--color-success) 50%, transparent);
+}
+.drops-tile.is-claimed .drops-art {
+  opacity: 0.5;
+}
+/* The bar's stacked pictures of the other rewards: each overlaps the last and
+   is cut out of the bar by a ring of the glass's own tone. */
+.drops-stack > * + * {
+  margin-left: -6px;
+}
+.drops-stack > * {
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--color-background-tertiary) 80%, black);
 }
 /* Over video in the full-screen chat column, the bar and the drawer keep the
    flyout's near-opaque base under the liquid tint, so a bright stream never

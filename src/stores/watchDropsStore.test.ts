@@ -46,6 +46,7 @@ const view = (over: Partial<WatchDrops> = {}): WatchDrops => ({
   game_name: 'Rust',
   lead: null,
   more: 0,
+  more_art: [],
   campaigns: [],
   complete: false,
   stalled: false,
@@ -113,7 +114,7 @@ describe('watch drops store', () => {
     const v = view({
       campaigns: [
         {
-          id: 'c1', name: 'Rust Drops', game_name: 'Rust', art: '', ends: '3d left', claimed_label: '1 of 3 claimed',
+          id: 'c1', name: 'Rust Drops', game_name: 'Rust', art: '', box_art: '', ends: '3d left', claimed_label: '1 of 3 claimed',
           started: true, needs_link: false, link_url: null, cumulative_minutes: 90,
           drops: [
             { id: 'a', instance_id: null, name: 'Cap', image: '', claimed: true, ready: false, pending: false, connect: false, lead: false, status: 'Claimed', detail: null, bar: 100, current_minutes: 60, required_minutes: 60, claim_label: 'Claim' },
@@ -121,7 +122,7 @@ describe('watch drops store', () => {
           ],
         },
         {
-          id: 'c2', name: 'Not started', game_name: 'Rust', art: '', ends: '', claimed_label: '', started: false, needs_link: false, link_url: null, cumulative_minutes: 0,
+          id: 'c2', name: 'Not started', game_name: 'Rust', art: '', box_art: '', ends: '', claimed_label: '', started: false, needs_link: false, link_url: null, cumulative_minutes: 0,
           drops: [{ id: 'z', instance_id: null, name: 'Jacket', image: '', claimed: false, ready: false, pending: false, connect: false, lead: false, status: 'Starts when you watch', detail: null, bar: 0, current_minutes: 0, required_minutes: 60, claim_label: 'Claim' }],
         },
       ],

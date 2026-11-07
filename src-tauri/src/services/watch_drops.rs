@@ -78,6 +78,9 @@ pub struct WatchDrops {
     pub lead: Option<WatchDrop>,
     /// Other rewards not yet claimed here besides the lead ("+N").
     pub more: u32,
+    /// Pictures of the first of those others (at most two, campaign order),
+    /// stacked on the bar in place of a bare "+N".
+    pub more_art: Vec<String>,
     /// Started first (fewest minutes left), then not started, by name.
     pub campaigns: Vec<HereCampaign>,
     /// A campaign counts here and every watch-time reward here is earned.
@@ -92,6 +95,8 @@ pub struct HereCampaign {
     pub name: String,
     pub game_name: String,
     pub art: String,
+    /// The game's box art, sized; empty for a campaign with no category.
+    pub box_art: String,
     /// "3d left"; empty when unknown.
     pub ends: String,
     /// "2 of 4 claimed"; empty when not started.
@@ -782,6 +787,11 @@ pub fn build(i: &Inputs) -> WatchDrops {
                     .map(|x| x.image_url.clone())
                     .filter(|u| !u.is_empty())
                     .unwrap_or_else(|| b.c.image_url.clone()),
+                box_art: if b.c.has_category {
+                    sized_box_art(&b.c.image_url)
+                } else {
+                    String::new()
+                },
                 ends: crate::services::rewards_drops::ends_in(
                     b.c.end_at.timestamp_millis(),
                     i.now_ms,
@@ -805,7 +815,26 @@ pub fn build(i: &Inputs) -> WatchDrops {
             }
         })
         .collect();
+    view.more_art = more_art(&view.campaigns);
     view
+}
+
+/// The bar's stacked pictures: the first two rewards still to earn here
+/// besides the lead, each with the picture its own drawer row shows.
+fn more_art(campaigns: &[HereCampaign]) -> Vec<String> {
+    campaigns
+        .iter()
+        .flat_map(|c| &c.drops)
+        .filter(|d| !d.claimed && !d.lead && !d.image.is_empty())
+        .map(|d| d.image.clone())
+        .take(2)
+        .collect()
+}
+
+/// Box art at the drawer's size: Twitch sends some URLs with `{width}x{height}`
+/// left for the caller (the Inventory's own 144x192, already cached).
+fn sized_box_art(url: &str) -> String {
+    url.replace("{width}", "144").replace("{height}", "192")
 }
 
 /// The phones' lead: never a campaign not started.
@@ -1821,6 +1850,78 @@ mod tests {
     }
 
     #[test]
+    fn the_bars_stacked_art_is_the_next_rewards_never_the_lead_or_a_claimed_one() {
+        let place = golden::place();
+        let mut stacked_any = false;
+        for case in golden::cases() {
+            let view = build(&Inputs::bare(
+                &place,
+                &case.list,
+                Some(&case.inventory),
+                now_ms(),
+            ));
+            assert!(view.more_art.len() <= 2, "{}", case.name);
+            assert!(view.more_art.len() as u32 <= view.more, "{}", case.name);
+            let rows: Vec<&HereDrop> = view.campaigns.iter().flat_map(|c| &c.drops).collect();
+            if let Some(lead) = rows.iter().find(|d| d.lead) {
+                assert!(!view.more_art.contains(&lead.image), "{}: lead stacked", case.name);
+            }
+            for art in &view.more_art {
+                let row = rows.iter().find(|d| &d.image == art).expect("a row's picture");
+                assert!(!row.claimed, "{}: claimed stacked", case.name);
+            }
+            let first: Vec<String> = rows
+                .iter()
+                .filter(|d| !d.claimed && !d.lead)
+                .map(|d| d.image.clone())
+                .take(2)
+                .collect();
+            assert_eq!(view.more_art, first, "{}: campaign order", case.name);
+            stacked_any |= !view.more_art.is_empty();
+        }
+        assert!(stacked_any, "some golden case stacks art");
+    }
+
+    #[test]
+    fn box_art_is_sized_and_only_for_a_campaign_with_a_category() {
+        assert_eq!(
+            sized_box_art("https://static-cdn.jtvnw.net/ttv-boxart/1_IGDB-{width}x{height}.jpg"),
+            "https://static-cdn.jtvnw.net/ttv-boxart/1_IGDB-144x192.jpg"
+        );
+        assert_eq!(sized_box_art("https://x/a-285x380.jpg"), "https://x/a-285x380.jpg");
+        let place = golden::place();
+        let case = golden::cases()
+            .into_iter()
+            .find(|c| {
+                let v = build(&Inputs::bare(&golden::place(), &c.list, Some(&c.inventory), now_ms()));
+                v.campaigns.len() == 1
+            })
+            .expect("a case listing one campaign");
+        let art = |list: &mut Vec<DropCampaign>, inv: &mut crate::models::drops::InventoryResponse, url: &str| {
+            for c in list.iter_mut() {
+                c.image_url = url.into();
+            }
+            for it in inv.items.iter_mut() {
+                it.campaign.image_url = url.into();
+            }
+        };
+        let (mut list, mut inv) = (case.list.clone(), case.inventory.clone());
+        art(&mut list, &mut inv, "https://box/{width}x{height}.jpg");
+        let view = build(&Inputs::bare(&place, &list, Some(&inv), now_ms()));
+        assert_eq!(view.campaigns[0].box_art, "https://box/144x192.jpg");
+        for c in list.iter_mut() {
+            c.has_category = false;
+        }
+        for it in inv.items.iter_mut() {
+            it.campaign.has_category = false;
+        }
+        let view = build(&Inputs::bare(&place, &list, Some(&inv), now_ms()));
+        if let Some(c) = view.campaigns.first() {
+            assert_eq!(c.box_art, "", "no category, no box art");
+        }
+    }
+
+    #[test]
     fn not_started_and_unlinked_rows_say_so() {
         let place = golden::place();
         let cases = golden::cases();
@@ -2438,6 +2539,7 @@ mod tests {
                 "lead",
                 "login",
                 "more",
+                "more_art",
                 "stall_episode",
                 "stalled"
             ]
@@ -2458,6 +2560,7 @@ mod tests {
             keys(view["campaigns"][0].clone()),
             vec![
                 "art",
+                "box_art",
                 "claimed_label",
                 "cumulative_minutes",
                 "drops",
