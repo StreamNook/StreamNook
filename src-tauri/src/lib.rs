@@ -1531,6 +1531,10 @@ pub fn run() {
             // Manage AppState directly, not wrapped in Arc
             app.manage(app_state);
 
+            // Drops progress for the channel being earned on: one model for
+            // every surface, and the app's one inventory reader.
+            services::watch_drops::start(app_handle.clone());
+
             // Discord Rich Presence reads the switch and the style from AppState.
             #[cfg(desktop)]
             services::discord_presence::init(&app_handle);
@@ -2601,6 +2605,9 @@ pub fn run() {
             get_rewards_drops,
             // The phones' in-player drop bar
             get_watch_drop,
+            // Drops progress in chat: the shared model and its stall episode
+            get_watch_drops,
+            ack_drop_stall,
             // 7TV cosmetics, resolved once for every window
             seventv_user_cosmetics,
             seventv_user_inventory,

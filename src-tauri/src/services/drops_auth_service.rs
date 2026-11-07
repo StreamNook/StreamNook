@@ -88,6 +88,7 @@ impl DropsAuthService {
         TOKEN_EPOCH.fetch_add(1, Ordering::SeqCst);
         debug!("[DROPS_AUTH] Token sealed to {:?}", path);
         crate::services::account_roster::notify();
+        crate::services::watch_drops::drops_auth_changed();
         Ok(())
     }
 
@@ -95,6 +96,7 @@ impl DropsAuthService {
         let result = token_vault::remove(&Self::get_token_file_path()?);
         TOKEN_EPOCH.fetch_add(1, Ordering::SeqCst);
         crate::services::account_roster::notify();
+        crate::services::watch_drops::drops_auth_changed();
         result
     }
 

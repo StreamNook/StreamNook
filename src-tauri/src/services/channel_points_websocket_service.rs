@@ -327,6 +327,10 @@ impl ChannelPointsWebSocketService {
         // A moderator's warning to the viewer, and its acknowledgement.
         topics.push(format!("chatrooms-user-v1.{}", user_id));
 
+        // Drop minutes as Twitch credits them, and finished drops with their
+        // claim ids (services::watch_drops). 4 per channel + 4 global = 44 of 50.
+        topics.push(format!("user-drop-events.{}", user_id));
+
         // Note: Removed raid topics to reduce count per channel
         // This allows 24 channels per connection: 24*2 + 2 global = 50 topics exactly
 
@@ -362,8 +366,22 @@ impl ChannelPointsWebSocketService {
         }
 
         // Batch: an oversized LISTEN frame is dropped silently, subscribing
-        // to nothing. See twitch_limits.
-        for (batch_index, batch) in topics.chunks(PUBSUB_LISTEN_TOPICS_PER_FRAME).enumerate() {
+        // to nothing. See twitch_limits. `user-drop-events` goes in a frame of
+        // its own: a topic Twitch refuses fails its whole frame, and the points,
+        // prediction and warning topics must not go down with it (drops then
+        // fall back to the inventory read alone).
+        let (drop_topics, rest): (Vec<String>, Vec<String>) = topics
+            .iter()
+            .cloned()
+            .partition(|t| t.starts_with("user-drop-events."));
+        let mut frames: Vec<Vec<String>> = rest
+            .chunks(PUBSUB_LISTEN_TOPICS_PER_FRAME)
+            .map(|c| c.to_vec())
+            .collect();
+        if !drop_topics.is_empty() {
+            frames.push(drop_topics);
+        }
+        for (batch_index, batch) in frames.iter().enumerate() {
             let listen_message = json!({
                 "type": "LISTEN",
                 "nonce": Uuid::new_v4().to_string(),
@@ -390,12 +408,12 @@ impl ChannelPointsWebSocketService {
             "WebSocket #{} sent LISTEN for {} topics in {} batch(es)",
             index,
             topics.len(),
-            topics.len().div_ceil(PUBSUB_LISTEN_TOPICS_PER_FRAME)
+            frames.len()
         );
 
         // Twitch answers every good LISTEN; a missing ack is the only signal
         // a frame was dropped, so count them and shout rather than fail quiet.
-        let expected_acks = topics.len().div_ceil(PUBSUB_LISTEN_TOPICS_PER_FRAME);
+        let expected_acks = frames.len();
         let listen_acks = Arc::new(AtomicUsize::new(0));
         let acks_probe = listen_acks.clone();
         let subscribe_watchdog = tokio::spawn(async move {
@@ -590,6 +608,14 @@ impl ChannelPointsWebSocketService {
                                     active_viewing_channels,
                                 )
                                 .await;
+                            }
+                            "user-drop-events" => {
+                                // Every connection carries the user topics;
+                                // a second copy sets the same minutes again.
+                                crate::services::watch_drops::on_push(
+                                    channel_id.as_deref().unwrap_or_default(),
+                                    &message_data,
+                                );
                             }
                             _ => {}
                         }

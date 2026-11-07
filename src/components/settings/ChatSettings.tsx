@@ -91,6 +91,7 @@ import { getUserCosmetics, computePaintStyle } from '../../services/seventvServi
 import { StyledChatName, type NameSeparator, type NameStyle } from '../chat/StyledChatName';
 import type { DeletedMessageStyle } from '../chat/deletedMessage';
 import { BadgeFoldPreview, DeletedMessagePreview, EventRowPreview, InboxButtonPreview, MentionPreview, MentionRowPreview, MessageLayoutPreview, RoomModesPreview, SettingPreview } from './ChatPreview';
+import { DropsChatBarView, PREVIEW_LINE as DROPS_PREVIEW_LINE } from '../chat/DropsChatBar';
 import { ProfilePicturePreview } from './ProfilePicturePreview';
 import {
   DEFAULT_PROFILE_PICTURE_ANIMATION,
@@ -558,6 +559,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
     emote_scale: stored?.emote_scale ?? 1,
     animate_emotes: stored?.animate_emotes ?? 'always',
     show_chat_gifs: stored?.show_chat_gifs ?? true,
+    show_drops_in_chat: stored?.show_drops_in_chat ?? true,
     gif_scale: stored?.gif_scale ?? 1,
     backfill_opacity: stored?.backfill_opacity ?? 100,
     emote_margin: stored?.emote_margin ?? 0.125,
@@ -2969,6 +2971,37 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
                   auto_claim_points_watching: !(settings.auto_claim_points_watching ?? true),
                 })
               }
+            />
+          }
+        />
+      </SettingsSection>
+
+      <SettingsSection
+        label="Drops"
+        description="Your progress toward drops on the channel you are watching."
+      >
+        {/* The phones draw their own card, so the bar's preview is desktop only. */}
+        {!IS_MOBILE && (
+          <SettingPreview caption="above the message box">
+            <div className="max-w-[340px]">
+              <DropsChatBarView line={DROPS_PREVIEW_LINE} open={false} claiming={false} />
+            </div>
+          </SettingPreview>
+        )}
+
+        <SettingsRow
+          title="Drops progress"
+          onReset={resetFor(['chat_design.show_drops_in_chat', true])}
+          description={
+            IS_MOBILE
+              ? 'A card at the top of chat shows the next drop you are earning on this channel and how far along it is.'
+              : 'A slim bar above the message box shows the next drop you are earning on this channel. Click it to see every reward you can earn here and claim the ones that are ready.'
+          }
+          help="It only shows while the channel you are watching can earn you a drop. The title bar badge and the Drops page keep working when this is off."
+          control={
+            <Toggle
+              enabled={cd.show_drops_in_chat ?? true}
+              onChange={() => setDesign({ show_drops_in_chat: !(cd.show_drops_in_chat ?? true) })}
             />
           }
         />

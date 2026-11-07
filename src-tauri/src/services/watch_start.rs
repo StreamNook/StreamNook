@@ -33,6 +33,34 @@ static TICKET: AtomicU64 = AtomicU64::new(0);
 /// The latest ticket belongs to a stop, so a relay a superseded start brought
 /// up is nobody's and goes down.
 static STOPPED: AtomicBool = AtomicBool::new(true);
+/// The ticket of the start still resolving, or 0: closing MultiNook leaves
+/// earning to it.
+static IN_FLIGHT: AtomicU64 = AtomicU64::new(0);
+/// Every move of earning (drops and points) by a start or by closing the grid
+/// runs under this, so neither replaces the other's halfway.
+static EARNING_AIM: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Closing the grid found a start in flight and left earning to it. If that
+/// start then fails or is superseded it never aims earning, so once it ends,
+/// however it ends, the grid's exit is decided again.
+static GRID_EXIT_DEFERRED: AtomicBool = AtomicBool::new(false);
+
+/// Held by a start until it finishes, however it finishes.
+struct PendingStart(u64);
+
+impl Drop for PendingStart {
+    fn drop(&mut self) {
+        let mine = IN_FLIGHT
+            .compare_exchange(self.0, 0, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok();
+        // A newer start still in flight inherits the deferred exit instead.
+        if mine && GRID_EXIT_DEFERRED.swap(false, Ordering::AcqRel) {
+            if let Some(app) = crate::services::watch_drops::app() {
+                tauri::async_runtime::spawn(async move { earning_after_grid(&app).await });
+            }
+        }
+    }
+}
 
 /// Something newer than any start in flight began.
 pub fn supersede() {
@@ -41,7 +69,9 @@ pub fn supersede() {
 
 fn take_ticket() -> u64 {
     STOPPED.store(false, Ordering::Release);
-    TICKET.fetch_add(1, Ordering::AcqRel) + 1
+    let ticket = TICKET.fetch_add(1, Ordering::AcqRel) + 1;
+    IN_FLIGHT.store(ticket, Ordering::Release);
+    ticket
 }
 
 fn current(ticket: u64) -> bool {
@@ -195,6 +225,7 @@ pub async fn start(
         return Err(StartError::Message("No channel to watch".to_string()));
     }
     let ticket = take_ticket();
+    let pending = PendingStart(ticket);
     let seed = seed.unwrap_or_default();
     let quality = quality
         .filter(|q| !q.trim().is_empty())
@@ -230,7 +261,10 @@ pub async fn start(
     // Earning and the watch session follow the answer, so the first frame
     // never waits on them.
     let (app_bg, row_bg, login_bg) = (app.clone(), row.clone(), login.clone());
-    tauri::async_runtime::spawn(async move { follow(app_bg, ticket, login_bg, row_bg).await });
+    tauri::async_runtime::spawn(async move {
+        follow(app_bg, ticket, login_bg, row_bg).await;
+        drop(pending);
+    });
     log::info!("[WatchStart] {login}: watching");
     Ok(WatchStart { superseded: false, row: Some(DiscoverRow::Twitch(row)), stream })
 }
@@ -293,6 +327,7 @@ async fn start_provider(
         return Err(StartError::Message("No channel to watch".to_string()));
     }
     let ticket = take_ticket();
+    let pending = PendingStart(ticket);
     let seed = seed.unwrap_or_default();
     let quality = quality
         .filter(|q| !q.trim().is_empty())
@@ -334,7 +369,10 @@ async fn start_provider(
     }
     let row = provider_row(&provider, &channel, &seed, meta.as_ref());
     let (app_bg, row_bg) = (app.clone(), row.clone());
-    tauri::async_runtime::spawn(async move { follow_provider(app_bg, ticket, row_bg).await });
+    tauri::async_runtime::spawn(async move {
+        follow_provider(app_bg, ticket, row_bg).await;
+        drop(pending);
+    });
     log::info!("[WatchStart] {provider}:{channel}: watching");
     Ok(WatchStart { superseded: false, row: Some(DiscoverRow::Provider(row)), stream })
 }
@@ -344,10 +382,16 @@ async fn start_provider(
 /// a stop came meanwhile.
 async fn follow_provider(app: AppHandle, ticket: u64, row: ProviderStream) {
     let state = app.state::<AppState>();
-    let previous = watch_session::twitch_channel_id();
-    let _ = crate::commands::drops::stop_drops_monitoring(state.clone()).await;
-    if let Some(id) = previous {
-        let _ = streaming::unregister_active_channel(id, state.clone()).await;
+    {
+        let _aim = EARNING_AIM.lock().await;
+        if !current(ticket) {
+            return;
+        }
+        let previous = watch_session::twitch_channel_id();
+        let _ = crate::commands::drops::stop_drops_monitoring(state.clone()).await;
+        if let Some(id) = previous {
+            let _ = streaming::unregister_active_channel(id, state.clone()).await;
+        }
     }
     if !current(ticket) {
         return;
@@ -384,12 +428,20 @@ async fn follow_provider(app: AppHandle, ticket: u64, row: ProviderStream) {
 /// crediting the channel before.
 async fn follow(app: AppHandle, ticket: u64, login: String, row: TwitchStream) {
     let state = app.state::<AppState>();
-    if row.user_id.is_empty() {
-        log::warn!("[WatchStart] no broadcaster id for {login}; drops and points monitoring off for this session");
-        let _ = crate::commands::drops::stop_drops_monitoring(state.clone()).await;
-    } else {
-        crate::commands::drops::monitor_watched_channel(&app, row.user_id.clone(), login.clone()).await;
-        let _ = streaming::register_active_channel(row.user_id.clone(), state.clone()).await;
+    {
+        // Under the lock closing MultiNook re-aims under, so a grid closing
+        // while this start resolves never clears what it set.
+        let _aim = EARNING_AIM.lock().await;
+        if !current(ticket) {
+            return;
+        }
+        if row.user_id.is_empty() {
+            log::warn!("[WatchStart] no broadcaster id for {login}; drops and points monitoring off for this session");
+            let _ = crate::commands::drops::stop_drops_monitoring(state.clone()).await;
+        } else {
+            crate::commands::drops::monitor_watched_channel(&app, row.user_id.clone(), login.clone()).await;
+            let _ = streaming::register_active_channel(row.user_id.clone(), state.clone()).await;
+        }
     }
     if !current(ticket) {
         return;
@@ -482,6 +534,7 @@ pub fn room_row(login: &str, room: Option<&OfflineRoom>, seed: &WatchSeed) -> Tw
 pub async fn open_room(app: AppHandle, login: String, seed: Option<WatchSeed>, chat_only: bool) -> RoomOpen {
     let login = login.trim().trim_start_matches('#').to_lowercase();
     let ticket = take_ticket();
+    let _pending = PendingStart(ticket);
     let seed = seed.unwrap_or_default();
     let mut room = match crate::services::offline_room::open(&login).await {
         Ok(room) => Some(room),
@@ -580,6 +633,58 @@ pub async fn stop(app: AppHandle, state: State<'_, AppState>, preserve_backend: 
     let _ = crate::commands::drops::stop_drops_monitoring(state.clone()).await;
     if let Some(id) = channel_id {
         let _ = streaming::unregister_active_channel(id, state.clone()).await;
+    }
+}
+
+/// Where earning goes once MultiNook's grid has closed or emptied.
+#[derive(Debug, PartialEq)]
+enum AfterGrid {
+    /// A start in flight (or a grid open again) decides it.
+    Skip,
+    /// Back to the solo Twitch stream behind the grid: (id, login).
+    Follow(String, String),
+    /// Nothing behind it earns: drops, points and the socket stop.
+    Stop,
+}
+
+fn after_grid(start_in_flight: bool, grid_open: bool, session: Option<&WatchTarget>) -> AfterGrid {
+    if start_in_flight || grid_open {
+        return AfterGrid::Skip;
+    }
+    match session {
+        Some(t) if t.provider == "twitch" && !t.offline && !t.user_id.is_empty() => {
+            AfterGrid::Follow(t.user_id.clone(), t.login.clone())
+        }
+        _ => AfterGrid::Stop,
+    }
+}
+
+/// MultiNook closed or emptied: earning leaves the tile it last focused, for
+/// the solo stream behind the grid, or stops with nothing behind it. A start
+/// in flight aims earning itself, so this leaves it alone.
+pub async fn earning_after_grid(app: &AppHandle) {
+    let _aim = EARNING_AIM.lock().await;
+    let state = app.state::<AppState>();
+    loop {
+        let in_flight = IN_FLIGHT.load(Ordering::Acquire) != 0;
+        let grid_open = watch_session::grid_open();
+        match after_grid(in_flight, grid_open, watch_session::current_target().as_ref()) {
+            AfterGrid::Skip => {
+                if in_flight && !grid_open {
+                    // The start that ends next decides this exit again.
+                    GRID_EXIT_DEFERRED.store(true, Ordering::Release);
+                    // It may have ended between the check and the mark: decide now.
+                    if IN_FLIGHT.load(Ordering::Acquire) == 0 && GRID_EXIT_DEFERRED.swap(false, Ordering::AcqRel) {
+                        continue;
+                    }
+                }
+            }
+            AfterGrid::Follow(id, login) => crate::commands::drops::monitor_watched_channel(app, id, login).await,
+            AfterGrid::Stop => {
+                let _ = crate::commands::drops::stop_drops_monitoring(state.clone()).await;
+            }
+        }
+        return;
     }
 }
 
@@ -725,5 +830,56 @@ mod tests {
         assert!(current(ticket));
         supersede();
         assert!(!current(ticket));
+    }
+
+    fn session(provider: &str, user_id: &str, offline: bool) -> WatchTarget {
+        serde_json::from_value(serde_json::json!({
+            "provider": provider, "login": "caster", "user_id": user_id, "offline": offline,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn closing_the_grid_goes_back_to_the_solo_stream_or_stops() {
+        let solo = session("twitch", "42", false);
+        assert_eq!(after_grid(false, false, Some(&solo)), AfterGrid::Follow("42".into(), "caster".into()));
+        assert_eq!(after_grid(false, false, None), AfterGrid::Stop);
+        assert_eq!(after_grid(false, false, Some(&session("kick", "42", false))), AfterGrid::Stop);
+        assert_eq!(after_grid(false, false, Some(&session("twitch", "42", true))), AfterGrid::Stop, "an offline room earns nothing");
+        assert_eq!(after_grid(false, false, Some(&session("twitch", "", false))), AfterGrid::Stop);
+    }
+
+    #[test]
+    fn a_start_in_flight_or_an_open_grid_decides_instead() {
+        let solo = session("twitch", "42", false);
+        assert_eq!(after_grid(true, false, Some(&solo)), AfterGrid::Skip);
+        assert_eq!(after_grid(false, true, None), AfterGrid::Skip);
+    }
+
+    /// The tests below share the start marks with each other.
+    static MARKS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn a_finished_start_clears_only_its_own_mark() {
+        let _marks = MARKS.lock().unwrap_or_else(|e| e.into_inner());
+        IN_FLIGHT.store(7, Ordering::Release);
+        drop(PendingStart(6));
+        assert_eq!(IN_FLIGHT.load(Ordering::Acquire), 7, "an older start leaves a newer one's mark");
+        drop(PendingStart(7));
+        assert_eq!(IN_FLIGHT.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn a_grid_exit_left_to_a_start_is_decided_again_when_that_start_ends() {
+        let _marks = MARKS.lock().unwrap_or_else(|e| e.into_inner());
+        IN_FLIGHT.store(9, Ordering::Release);
+        GRID_EXIT_DEFERRED.store(true, Ordering::Release);
+        // An older start ending is not the one the exit waited on.
+        drop(PendingStart(8));
+        assert!(GRID_EXIT_DEFERRED.load(Ordering::Acquire), "kept for the start still in flight");
+        // The start it waited on ends (aimed, failed or superseded): the exit is taken up again.
+        drop(PendingStart(9));
+        assert!(!GRID_EXIT_DEFERRED.load(Ordering::Acquire));
+        assert_eq!(IN_FLIGHT.load(Ordering::Acquire), 0);
     }
 }

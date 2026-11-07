@@ -104,6 +104,21 @@ pub async fn get_watch_drop(
     .await)
 }
 
+/// What the account can earn on the channel it is earning on, for chat's
+/// drops bar and drawer and the title-bar badge (services/watch_drops.rs). A
+/// pure read: `watch-drops://changed` carries every later change.
+#[tauri::command]
+pub fn get_watch_drops() -> crate::services::watch_drops::WatchDropsSnapshot {
+    crate::services::watch_drops::current()
+}
+
+/// The farmed stream stalled: true for exactly one caller per episode, so a
+/// popout or a reloaded window never acts on it twice.
+#[tauri::command]
+pub fn ack_drop_stall(episode: u64) -> bool {
+    crate::services::watch_drops::ack_stall(episode)
+}
+
 #[tauri::command]
 pub async fn get_drops_settings(state: State<'_, AppState>) -> Result<DropsSettings, String> {
     let drops_service = state.drops_service.lock().await;
@@ -379,17 +394,29 @@ pub async fn claim_drop(
     drop_id: String,
     drop_instance_id: Option<String>,
     state: State<'_, AppState>,
-) -> Result<(), String> {
-    let drops_service = state.drops_service.lock().await;
-    drops_service
-        .claim_drop(&drop_id, drop_instance_id.as_deref())
-        .await
-        .map_err(|e| e.to_string())?;
+) -> Result<String, String> {
+    let outcome = {
+        let drops_service = state.drops_service.lock().await;
+        drops_service
+            .claim_drop(&drop_id, drop_instance_id.as_deref())
+            .await
+            .map_err(|e| e.to_string())?
+    };
+    crate::services::watch_drops::claimed(
+        &drop_id,
+        crate::services::drops_service::on_claim_outcome(outcome),
+        chrono::Utc::now(),
+        false,
+    );
     // A claimed reward can be a badge; the missing-badges list should drop it now.
     crate::services::badge_standing::collection_may_have_changed(&app_handle);
     // The claim went through, so the drops count the accolades read has moved.
     crate::services::own_accolades::poke(crate::services::own_accolades::Poke::DropClaim);
-    Ok(())
+    Ok(match outcome {
+        crate::services::drops_service::ClaimOutcome::Claimed => "claimed",
+        crate::services::drops_service::ClaimOutcome::AlreadyClaimed => "already_claimed",
+    }
+    .to_string())
 }
 
 #[tauri::command]

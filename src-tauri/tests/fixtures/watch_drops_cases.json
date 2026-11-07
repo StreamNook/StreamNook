@@ -1,0 +1,124 @@
+[
+  {
+    "name": "shuffled_order_and_a_zeroed_claimed_tier",
+    "campaigns": [ { "id": "c1", "game": "Rust", "tiers": [
+      { "id": "t2", "need": 120, "have": 90 }, { "id": "t1", "need": 60, "have": 0, "claimed": true }, { "id": "t3", "need": 180, "have": 90 } ] } ],
+    "rust": { "lead": "t2", "lead_shown": 90, "lead_ready": false, "complete": false, "listed": ["c1"], "more": 1 },
+    "differs": null, "via_pick": true,
+    "ts": { "drop_id": "t2", "campaign_id": "c1", "current_minutes": 90, "required_minutes": 120, "cumulative": 90 }
+  },
+  {
+    "name": "owned_reissue_by_completed_benefit_name_raises_the_clock",
+    "campaigns": [ { "id": "c1", "game": "Rust", "tiers": [
+      { "id": "t1", "need": 60, "have": 0, "benefit": "new-b1", "bname": "Cap" }, { "id": "t2", "need": 120, "have": 0, "bname": "Hoodie" } ] } ],
+    "completed": [ { "id": "old-b1", "name": "  cap " } ],
+    "rust": { "lead": "t2", "lead_shown": 60, "lead_ready": false, "complete": false, "listed": ["c1"], "more": 0 },
+    "differs": null, "via_pick": false,
+    "ts": { "drop_id": "t2", "campaign_id": "c1", "current_minutes": 60, "required_minutes": 120, "cumulative": 60 }
+  },
+  {
+    "name": "owned_by_benefit_id_under_another_name",
+    "campaigns": [ { "id": "c1", "game": "Rust", "tiers": [
+      { "id": "t1", "need": 60, "have": 0, "benefit": "b1", "bname": "Cap" }, { "id": "t2", "need": 120, "have": 0 } ] } ],
+    "completed": [ { "id": "b1", "name": "Renamed cap" } ],
+    "rust": { "lead": "t2", "lead_shown": 60, "lead_ready": false, "complete": false, "listed": ["c1"], "more": 0 },
+    "differs": null, "via_pick": false,
+    "ts": { "drop_id": "t2", "campaign_id": "c1", "current_minutes": 60, "required_minutes": 120, "cumulative": 60 }
+  },
+  {
+    "name": "owned_through_a_claimed_inventory_benefit",
+    "campaigns": [
+      { "id": "c0", "game": "Other", "in_list": false, "tiers": [ { "id": "d0", "need": 30, "have": 0, "claimed": true, "benefit": "b1", "bname": "Cap two" } ] },
+      { "id": "c1", "game": "Rust", "tiers": [ { "id": "t1", "need": 60, "have": 0, "benefit": "b1", "bname": "Cap" }, { "id": "t2", "need": 120, "have": 0 } ] } ],
+    "rust": { "lead": "t2", "lead_shown": 60, "lead_ready": false, "complete": false, "listed": ["c1"], "more": 0 },
+    "differs": null, "via_pick": true,
+    "ts": { "drop_id": "t2", "campaign_id": "c1", "current_minutes": 60, "required_minutes": 120, "cumulative": 60 }
+  },
+  {
+    "name": "live_minutes_are_never_owned",
+    "campaigns": [ { "id": "c1", "game": "Rust", "tiers": [ { "id": "t1", "need": 60, "have": 30, "bname": "Cap" } ] } ],
+    "completed": [ { "id": "old", "name": "Cap" } ],
+    "rust": { "lead": "t1", "lead_shown": 30, "lead_ready": false, "complete": false, "listed": ["c1"], "more": 0 },
+    "differs": null, "via_pick": false,
+    "ts": { "drop_id": "t1", "campaign_id": "c1", "current_minutes": 30, "required_minutes": 60, "cumulative": 30 }
+  },
+  {
+    "name": "a_ready_unclaimed_tier_leads_with_claim",
+    "campaigns": [ { "id": "c1", "game": "Rust", "tiers": [ { "id": "t1", "need": 60, "have": 60 }, { "id": "t2", "need": 120, "have": 60 } ] } ],
+    "rust": { "lead": "t1", "lead_shown": 60, "lead_ready": true, "complete": false, "listed": ["c1"], "more": 1 },
+    "differs": "TS skips a ready unclaimed tier (keeps tiers above the clock only) and shows t2 at 60 of 120; Rust shows t1 ready with Claim", "via_pick": true,
+    "ts": { "drop_id": "t2", "campaign_id": "c1", "current_minutes": 60, "required_minutes": 120, "cumulative": 60 }
+  },
+  {
+    "name": "a_ready_last_tier_is_not_complete",
+    "campaigns": [ { "id": "c1", "game": "Rust", "tiers": [ { "id": "t1", "need": 60, "have": 60 } ] } ],
+    "rust": { "lead": "t1", "lead_shown": 60, "lead_ready": true, "complete": false, "listed": ["c1"], "more": 0 },
+    "differs": "TS answers null (the badge then reads complete); Rust leads with the ready tier, not complete", "via_pick": true,
+    "ts": null
+  },
+  {
+    "name": "every_tier_owned_is_complete",
+    "campaigns": [ { "id": "c1", "game": "Rust", "tiers": [ { "id": "t1", "need": 60, "have": 0, "claimed": true }, { "id": "t2", "need": 120, "have": 0, "claimed": true } ] } ],
+    "rust": { "lead": null, "lead_shown": 0, "lead_ready": false, "complete": true, "listed": ["c1"], "more": 0 },
+    "differs": null, "via_pick": true,
+    "ts": null
+  },
+  {
+    "name": "no_watch_time_tiers_clear",
+    "campaigns": [ { "id": "c1", "game": "Rust", "tiers": [ { "id": "t1", "need": 0, "have": 0 } ] } ],
+    "rust": { "lead": null, "lead_shown": 0, "lead_ready": false, "complete": false, "listed": [], "more": 0 },
+    "differs": null, "via_pick": true,
+    "ts": null
+  },
+  {
+    "name": "separate_progress_reads_each_reward_on_its_own",
+    "campaigns": [ { "id": "c1", "game": "Rust", "separate": true, "tiers": [ { "id": "t1", "need": 60, "have": 10 }, { "id": "t2", "need": 30, "have": 25 } ] } ],
+    "rust": { "lead": "t2", "lead_shown": 25, "lead_ready": false, "complete": false, "listed": ["c1"], "more": 1 },
+    "differs": "TS runs one clock (max 25) over every tier, so t1 would read 25 of 60; Rust reads t1 at its own 10", "via_pick": true,
+    "ts": { "drop_id": "t2", "campaign_id": "c1", "current_minutes": 25, "required_minutes": 30, "cumulative": 25 }
+  },
+  {
+    "name": "two_campaigns_in_one_game_stay_apart",
+    "campaigns": [
+      { "id": "cA", "game": "Rust", "in_inventory": false, "tiers": [ { "id": "tA", "need": 60, "have": 0 } ] },
+      { "id": "cB", "game": "Rust", "in_list": false, "tiers": [ { "id": "tB", "need": 60, "have": 50 } ] } ],
+    "rust": { "lead": "tB", "lead_shown": 50, "lead_ready": false, "complete": false, "listed": ["cB", "cA"], "more": 1 },
+    "differs": "TS joins the list campaign to the inventory by name or game and borrows cB's minutes under cA's id; Rust joins by campaign id only", "via_pick": false,
+    "ts": { "drop_id": "tB", "campaign_id": "cA", "current_minutes": 50, "required_minutes": 60, "cumulative": 50 }
+  },
+  {
+    "name": "a_campaign_in_list_and_inventory_is_listed_once",
+    "campaigns": [ { "id": "c1", "game": "Rust", "tiers": [ { "id": "t1", "need": 60, "have": 20 } ] } ],
+    "rust": { "lead": "t1", "lead_shown": 20, "lead_ready": false, "complete": false, "listed": ["c1"], "more": 0 },
+    "differs": null, "via_pick": true,
+    "ts": { "drop_id": "t1", "campaign_id": "c1", "current_minutes": 20, "required_minutes": 60, "cumulative": 20 }
+  },
+  {
+    "name": "a_not_started_campaign_is_listed_but_never_leads",
+    "campaigns": [ { "id": "cN", "game": "Rust", "in_inventory": false, "tiers": [ { "id": "tN", "need": 60, "have": 0 } ] } ],
+    "rust": { "lead": null, "lead_shown": 0, "lead_ready": false, "complete": false, "listed": ["cN"], "more": 1 },
+    "differs": "TS shows the not-started tier at 0 of 60 as current; Rust lists it as not started and leads with nothing", "via_pick": false,
+    "ts": { "drop_id": "tN", "campaign_id": "cN", "current_minutes": 0, "required_minutes": 60, "cumulative": 0 }
+  },
+  {
+    "name": "an_unlinked_campaign_never_leads",
+    "campaigns": [ { "id": "cU", "game": "Rust", "linked": false, "link": "https://example.test/link", "tiers": [ { "id": "tU", "need": 60, "have": 20 } ] } ],
+    "rust": { "lead": null, "lead_shown": 0, "lead_ready": false, "complete": false, "listed": ["cU"], "more": 1 },
+    "differs": "TS leads with an unlinked campaign; Rust lists it with Connect and leads with nothing", "via_pick": true,
+    "ts": { "drop_id": "tU", "campaign_id": "cU", "current_minutes": 20, "required_minutes": 60, "cumulative": 20 }
+  },
+  {
+    "name": "a_cross_category_drop_accruing_here_is_listed_and_leads",
+    "campaigns": [ { "id": "cX", "game": "Pokemon", "has_category": false, "in_list": false, "accruing": true, "tiers": [ { "id": "tx", "need": 60, "have": 20 } ] } ],
+    "rust": { "lead": "tx", "lead_shown": 20, "lead_ready": false, "complete": false, "listed": ["cX"], "more": 0 },
+    "differs": "not pickCurrentDrop's case: TS shows it from a separate branch over get_drop_progress", "via_pick": true,
+    "ts": { "note": "no list campaign in the game: TS takes its cross-category branch, not pickCurrentDrop" }
+  },
+  {
+    "name": "a_restricted_campaign_on_another_channel_is_left_out",
+    "campaigns": [ { "id": "cR", "game": "Rust", "allowed": ["hjune"], "tiers": [ { "id": "tR", "need": 60, "have": 30 } ] } ],
+    "rust": { "lead": null, "lead_shown": 0, "lead_ready": false, "complete": false, "listed": [], "more": 0 },
+    "differs": "TS matches by game only and shows it", "via_pick": true,
+    "ts": { "drop_id": "tR", "campaign_id": "cR", "current_minutes": 30, "required_minutes": 60, "cumulative": 30 }
+  }
+]

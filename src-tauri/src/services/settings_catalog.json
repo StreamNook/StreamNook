@@ -1680,6 +1680,23 @@
   },
   {
    "page": "chat",
+   "section": "Drops",
+   "title": "Drops progress",
+   "paths": [
+    "chat_design.show_drops_in_chat"
+   ],
+   "nested": false,
+   "logo": null,
+   "detail": "A card at the top of chat shows the next drop you are earning on this channel and how far along it is.",
+   "aliases": [
+    "drops",
+    "drop progress",
+    "rewards"
+   ],
+   "hidden_on_ios": true
+  },
+  {
+   "page": "chat",
    "section": "Chat Behavior",
    "title": "Deleted messages",
    "paths": [

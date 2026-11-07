@@ -160,6 +160,28 @@ pub fn current_target() -> Option<WatchTarget> {
     with_session(|s| s.as_ref().filter(|s| !s.target.offline).map(|s| s.target.clone()))
 }
 
+/// The earning channel is the solo stream on screen with no MultiNook grid
+/// over it: the only case the drops stall auto-switch acts on (it switches
+/// the solo stream).
+pub fn solo_earning(channel_id: &str) -> bool {
+    if with_grid(|g| g.is_some()) {
+        return false;
+    }
+    with_session(|s| {
+        s.as_ref().is_some_and(|s| {
+            s.target.provider == "twitch"
+                && !s.target.offline
+                && !s.target.user_id.is_empty()
+                && s.target.user_id == channel_id
+        })
+    })
+}
+
+/// MultiNook's grid is open.
+pub fn grid_open() -> bool {
+    with_grid(|g| g.is_some())
+}
+
 /// The Twitch broadcaster id of the session (live or an offline room), if any.
 pub fn twitch_channel_id() -> Option<String> {
     with_session(|s| {
@@ -274,6 +296,17 @@ async fn begin(app: AppHandle, target: WatchTarget, ticket: Option<u64>) -> bool
     if let Some(prev) = previous {
         release(prev);
     }
+    // Drops progress follows the channel being earned on, in its game.
+    if target.provider == "twitch" && !target.offline && !target.user_id.is_empty() {
+        // The row may be minutes old: it seeds the game only while nothing
+        // fresher is known, never beating stream info already asked for.
+        crate::services::watch_drops::seed_game(
+            &target.user_id,
+            target.game_id.as_deref().unwrap_or(""),
+            &target.game_name,
+        );
+    }
+    crate::services::watch_drops::poke();
     // StreamNook watch time counts a live channel on screen; an offline room
     // shows chat only, so it clears the main source instead.
     crate::services::watch_minutes::set_source(
@@ -366,6 +399,7 @@ pub async fn stop(app: AppHandle, preserve_backend: bool) {
         s.take()
     });
     crate::services::watch_minutes::set_source(crate::services::watch_minutes::MAIN, None);
+    crate::services::watch_drops::poke();
     let Some(prev) = previous else { return };
     release(prev);
     if preserve_backend {
@@ -390,13 +424,17 @@ pub async fn end_session(app: AppHandle, still_current: impl Fn() -> bool) {
 
 /// The session, taken only while `still_current` holds, read inside the lock.
 fn take_if(still_current: impl Fn() -> bool) -> Option<Session> {
-    with_session(|s| {
+    let taken = with_session(|s| {
         if !still_current() {
             return None;
         }
         presence(None);
         s.take()
-    })
+    });
+    if taken.is_some() {
+        crate::services::watch_drops::poke();
+    }
+    taken
 }
 
 /// Stop what a finished session was running.
@@ -538,6 +576,7 @@ pub fn set_grid_focus(app: AppHandle, focus: Option<GridFocus>) {
     let Some(focus) = focus else {
         let seq = GRID_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
         with_grid(|g| *g = None);
+        crate::services::watch_drops::poke();
         // Settles too: a grid that remounts declares its tile again at once,
         // and the socket should not drop and come back for it.
         tauri::async_runtime::spawn(async move {
@@ -545,6 +584,8 @@ pub fn set_grid_focus(app: AppHandle, focus: Option<GridFocus>) {
             if GRID_SEQ.load(Ordering::Acquire) == seq {
                 aim_watch_socket(&app).await;
                 refresh_raid_fallback(&app);
+                // Drops and points leave the tile the grid last focused.
+                crate::services::watch_start::earning_after_grid(&app).await;
             }
         });
         return;
@@ -581,6 +622,7 @@ pub fn set_grid_focus(app: AppHandle, focus: Option<GridFocus>) {
             settle_focus(g, channel.clone())
         });
         let Some(moved) = moved else { return };
+        crate::services::watch_drops::poke();
         aim_watch_socket(&app).await;
         refresh_raid_fallback(&app);
         if moved {
@@ -806,6 +848,12 @@ fn announce_live(app: &AppHandle, seq: u64, row: TwitchStream) {
 }
 
 pub fn on_channel_update(app: &AppHandle, update: &ChannelUpdateEvent) {
+    crate::services::watch_drops::saw_game(
+        &update.broadcaster_user_id,
+        &update.category_id,
+        &update.category_name,
+        std::time::Instant::now(),
+    );
     let Some(seq) = is_current_broadcaster(&update.broadcaster_user_id, &update.broadcaster_user_login)
     else {
         return;

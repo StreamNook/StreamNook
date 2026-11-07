@@ -62,7 +62,7 @@ struct GraphQLError {
 /// same finished drop and announced it. Only `ELIGIBLE_FOR_ALL` means the
 /// reward was granted by THIS call.
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum ClaimOutcome {
+pub(crate) enum ClaimOutcome {
     /// Granted just now. The only outcome worth notifying about.
     Claimed,
     /// Twitch had already granted it. Resolved, but not news.
@@ -111,6 +111,90 @@ fn claim_confirmed(after: Option<&DropProgress>) -> bool {
         Some(p) => p.is_claimed || p.drop_instance_id.is_none() || !drop_earned(p),
         None => true,
     }
+}
+
+/// How a claim's answer stands in the shared model: a fresh grant waits for
+/// the inventory to confirm it; an old one is settled.
+pub(crate) fn on_claim_outcome(outcome: ClaimOutcome) -> crate::services::watch_drops::ClaimState {
+    match outcome {
+        ClaimOutcome::Claimed => crate::services::watch_drops::ClaimState::Pending,
+        ClaimOutcome::AlreadyClaimed => crate::services::watch_drops::ClaimState::Claimed,
+    }
+}
+
+/// The verdict for each claim an inventory read can judge: one that started at
+/// least 30 s after the claim (the inventory lags a claim by that much).
+fn settle_unconfirmed(
+    unconfirmed: &HashMap<String, (DateTime<Utc>, ClaimedDrop)>,
+    read_started_at: DateTime<Utc>,
+    progress_map: &HashMap<String, DropProgress>,
+) -> Vec<(String, bool)> {
+    let settle = chrono::Duration::seconds(crate::services::watch_drops::CLAIM_SETTLE_SECS);
+    unconfirmed
+        .iter()
+        .filter(|(_, (claimed_at, _))| read_started_at >= *claimed_at + settle)
+        .map(|(id, _)| (id.clone(), claim_confirmed(progress_map.get(id))))
+        .collect()
+}
+
+/// The oldest inventory read the loop's refresh may reuse: newer than its last
+/// refresh and than one check interval ago, and late enough to judge the
+/// oldest claim waiting on confirmation once that is possible.
+fn refresh_since(
+    last_refresh: Option<DateTime<Utc>>,
+    now: DateTime<Utc>,
+    check_interval_secs: u64,
+    oldest_unconfirmed: Option<DateTime<Utc>>,
+) -> DateTime<Utc> {
+    let mut since = now - chrono::Duration::seconds(check_interval_secs as i64);
+    if let Some(last) = last_refresh {
+        since = since.max(last);
+    }
+    if let Some(claimed_at) = oldest_unconfirmed {
+        let judge = claimed_at + chrono::Duration::seconds(crate::services::watch_drops::CLAIM_SETTLE_SECS);
+        if judge <= now {
+            since = since.max(judge);
+        }
+    }
+    since
+}
+
+/// Per-drop progress from an Inventory answer, keyed by drop id: the live
+/// minutes, claim state and dropInstanceIDs the campaign list lags on. Only
+/// drops Twitch gave a `self` for. The monitoring loop overlays this on its
+/// campaign snapshot so its auto-claim check can see a drop reach 100%.
+pub(crate) fn inventory_progress_from_json(body: &serde_json::Value) -> HashMap<String, DropProgress> {
+    let mut map = HashMap::new();
+    let Some(campaigns) = body["data"]["currentUser"]["inventory"]["dropCampaignsInProgress"].as_array() else {
+        return map;
+    };
+    for campaign in campaigns {
+        let campaign_id = campaign["id"].as_str().unwrap_or("").to_string();
+        let Some(drops) = campaign["timeBasedDrops"].as_array() else {
+            continue;
+        };
+        for drop in drops {
+            let Some(drop_id) = drop["id"].as_str() else { continue };
+            let self_data = &drop["self"];
+            if self_data.is_null() {
+                continue;
+            }
+            map.insert(
+                drop_id.to_string(),
+                DropProgress {
+                    campaign_id: campaign_id.clone(),
+                    drop_id: drop_id.to_string(),
+                    current_minutes_watched: self_data["currentMinutesWatched"].as_i64().unwrap_or(0) as i32,
+                    required_minutes_watched: drop["requiredMinutesWatched"].as_i64().unwrap_or(0) as i32,
+                    is_claimed: self_data["isClaimed"].as_bool().unwrap_or(false),
+                    last_updated: Utc::now(),
+                    drop_instance_id: self_data["dropInstanceID"].as_str().map(String::from),
+                    twitch_progress: None,
+                },
+            );
+        }
+    }
+    map
 }
 
 
@@ -342,9 +426,23 @@ async fn announce_once(notices: &RwLock<DropNotices>, drop_id: &str) -> bool {
 }
 
 async fn mark_ungranted(notices: &RwLock<DropNotices>, drop_id: String, at: DateTime<Utc>) {
-    let mut notices = notices.write().await;
-    notices.ungranted.insert(drop_id, at);
-    save_drop_notices(&notices);
+    {
+        let mut notices = notices.write().await;
+        notices.ungranted.insert(drop_id, at);
+        save_drop_notices(&notices);
+    }
+    // The drawer shows Connect for it from now on.
+    crate::services::watch_drops::poke();
+}
+
+/// The drops Twitch accepted a claim for but has not granted (a game account
+/// not linked), for the shared model's Connect.
+pub(crate) struct UngrantedHandle(Arc<RwLock<DropNotices>>);
+
+impl UngrantedHandle {
+    pub(crate) async fn ids(&self) -> std::collections::HashSet<String> {
+        self.0.read().await.ungranted.keys().cloned().collect()
+    }
 }
 
 async fn forget_ungranted(notices: &RwLock<DropNotices>, drop_id: &str) {
@@ -511,6 +609,25 @@ impl DropsService {
     /// Fetch inventory (in-progress campaigns) using the Inventory GQL operation
     /// This matches the Twitch web client's fetch_inventory() function
     pub async fn fetch_inventory(&self) -> Result<InventoryResponse> {
+        Ok(Self::fetch_inventory_with(
+            &self.client,
+            &self.device_id,
+            &self.session_id,
+            crate::services::reward_drops::REUSE_FOR_INVENTORY_SECS,
+        )
+        .await?
+        .0)
+    }
+
+    /// `fetch_inventory` from owned values, for `services::watch_drops` (the
+    /// app's one inventory reader), with the per-drop progress overlay the
+    /// monitoring loop's auto-claim reads, parsed from the same answer.
+    pub(crate) async fn fetch_inventory_with(
+        client: &Client,
+        device_id: &str,
+        session_id: &str,
+        second_list_max_age_secs: u64,
+    ) -> Result<(InventoryResponse, HashMap<String, DropProgress>)> {
         debug!("[fetch_inventory] Fetching inventory (in-progress campaigns)...");
 
         let token = match DropsAuthService::get_token().await {
@@ -525,9 +642,9 @@ impl DropsService {
         };
 
         // Use the exact same GQL operation as the Twitch web client
-        let response = self.client
+        let response = client
             .post("https://gql.twitch.tv/gql")
-            .headers(self.create_gql_headers(&token))
+            .headers(Self::gql_headers(&token, device_id, session_id))
             .json(&serde_json::json!({
                 "operationName": "Inventory",
                 "variables": {
@@ -563,6 +680,7 @@ impl DropsService {
         if response_json["data"].is_null() || response_json["data"]["currentUser"].is_null() {
             return Err(anyhow::anyhow!("Unable to fetch inventory data"));
         }
+        let progress_overlay = inventory_progress_from_json(&response_json);
 
         // Parse in-progress campaigns
         let inventory = &response_json["data"]["currentUser"]["inventory"];
@@ -848,15 +966,13 @@ impl DropsService {
         // The viewer's started drops from Twitch's second list, like the rest.
         // The campaign load just fetched it (and the watch loop keeps it fresh),
         // so reuse that rather than asking Twitch again.
-        let second_list = match crate::services::reward_drops::cached_within(
-            crate::services::reward_drops::REUSE_FOR_INVENTORY_SECS,
-        ) {
+        let second_list = match crate::services::reward_drops::cached_within(second_list_max_age_secs) {
             Some(c) => c,
             None => match crate::services::reward_drops::fetch(
-                &self.client,
+                client,
                 &token,
-                &self.device_id,
-                &self.session_id,
+                device_id,
+                session_id,
             )
             .await
             {
@@ -917,14 +1033,17 @@ impl DropsService {
             completed_drops.len()
         );
 
-        Ok(InventoryResponse {
-            items,
-            total_campaigns,
-            active_campaigns: active_count,
-            upcoming_campaigns: upcoming_count,
-            expired_campaigns: expired_count,
-            completed_drops,
-        })
+        Ok((
+            InventoryResponse {
+                items,
+                total_campaigns,
+                active_campaigns: active_count,
+                upcoming_campaigns: upcoming_count,
+                expired_campaigns: expired_count,
+                completed_drops,
+            },
+            progress_overlay,
+        ))
     }
 
     /// Get all active campaigns with smart caching (for UI display)
@@ -1011,6 +1130,19 @@ impl DropsService {
     pub async fn prime_campaign_cache(&self, campaigns: &[DropCampaign]) {
         let mut cache = self.cached_campaigns.write().await;
         *cache = Some((campaigns.to_vec(), Utc::now()));
+    }
+
+    /// What `services::watch_drops` reads with, captured once: the shared
+    /// client and GQL ids, the campaign cache and the ungranted marks. It never
+    /// locks this service, so a claim never waits behind its read.
+    pub(crate) fn read_handles(&self) -> crate::services::watch_drops::Handles {
+        crate::services::watch_drops::Handles {
+            client: self.client.clone(),
+            device_id: self.device_id.clone(),
+            session_id: self.session_id.clone(),
+            cached_campaigns: self.cached_campaigns.clone(),
+            ungranted: UngrantedHandle(self.drop_notices.clone()),
+        }
     }
 
     /// Fetches all active drop campaigns with per-account progress (each drop's
@@ -1517,74 +1649,6 @@ impl DropsService {
         map
     }
 
-    /// Per-drop progress from the Inventory query, keyed by drop id. The
-    /// campaign list's `self` progress lags while minutes are being earned;
-    /// the inventory is where live minutes, claim state, and the
-    /// dropInstanceIDs needed for claiming actually appear. The watched-channel
-    /// monitor overlays this on top of the campaign snapshot so its auto-claim
-    /// check can ever see a drop reach 100%.
-    async fn fetch_inventory_progress(
-        client: &Client,
-        device_id: &str,
-        session_id: &str,
-    ) -> Result<HashMap<String, DropProgress>> {
-        let token = DropsAuthService::get_token().await?;
-
-        let response = client
-            .post("https://gql.twitch.tv/gql")
-            .headers(Self::gql_headers(&token, device_id, session_id))
-            .json(&serde_json::json!({
-                "operationName": "Inventory",
-                "variables": { "fetchRewardCampaigns": false },
-                "extensions": {
-                    "persistedQuery": { "version": 1, "sha256Hash": INVENTORY_QUERY_HASH }
-                }
-            }))
-            .send()
-            .await?;
-
-        let body: serde_json::Value = response.json().await?;
-        let mut map = HashMap::new();
-        let Some(campaigns) =
-            body["data"]["currentUser"]["inventory"]["dropCampaignsInProgress"].as_array()
-        else {
-            return Ok(map);
-        };
-        for campaign in campaigns {
-            let campaign_id = campaign["id"].as_str().unwrap_or("").to_string();
-            let Some(drops) = campaign["timeBasedDrops"].as_array() else {
-                continue;
-            };
-            for drop in drops {
-                let Some(drop_id) = drop["id"].as_str() else { continue };
-                let self_data = &drop["self"];
-                if self_data.is_null() {
-                    continue;
-                }
-                map.insert(
-                    drop_id.to_string(),
-                    DropProgress {
-                        campaign_id: campaign_id.clone(),
-                        drop_id: drop_id.to_string(),
-                        current_minutes_watched: self_data["currentMinutesWatched"]
-                            .as_i64()
-                            .unwrap_or(0) as i32,
-                        required_minutes_watched: drop["requiredMinutesWatched"]
-                            .as_i64()
-                            .unwrap_or(0) as i32,
-                        is_claimed: self_data["isClaimed"].as_bool().unwrap_or(false),
-                        last_updated: Utc::now(),
-                        drop_instance_id: self_data["dropInstanceID"]
-                            .as_str()
-                            .map(String::from),
-                        twitch_progress: None,
-                    },
-                );
-            }
-        }
-        Ok(map)
-    }
-
     /// Updates the service's internal state with fresh campaign data and calculates progress.
     pub async fn update_campaigns_and_progress(&self, campaigns: &[DropCampaign]) {
         {
@@ -1646,7 +1710,7 @@ impl DropsService {
         &self,
         drop_id: &str,
         provided_drop_instance_id: Option<&str>,
-    ) -> Result<()> {
+    ) -> Result<ClaimOutcome> {
         let token = DropsAuthService::get_token().await?;
 
         // First check if a drop_instance_id was provided directly from the frontend
@@ -1745,12 +1809,12 @@ impl DropsService {
             .pointer("/data/claimDropRewards/status")
             .and_then(|s| s.as_str());
         debug!("Claim result status: {:?}", result_status);
-        if claim_outcome_from_status(result_status).is_none() {
+        let Some(outcome) = claim_outcome_from_status(result_status) else {
             return Err(anyhow::anyhow!(
                 "Twitch did not claim this drop ({})",
                 result_status.unwrap_or("no result")
             ));
-        }
+        };
 
         // Update progress to mark as claimed
         let mut progress_map = self.drop_progress.write().await;
@@ -1759,7 +1823,7 @@ impl DropsService {
             progress.last_updated = Utc::now();
         }
 
-        Ok(())
+        Ok(outcome)
     }
 
     /// Get user ID from token by validating it with Twitch
@@ -2113,6 +2177,9 @@ impl DropsService {
             // refreshed inventory to show whether the drop was really granted
             // before anything is announced or settled (see `claim_confirmed`).
             let mut unconfirmed: HashMap<String, (DateTime<Utc>, ClaimedDrop)> = HashMap::new();
+            // A drop here turned ready: the next refresh reads anew instead of
+            // reusing a read from before it (services::watch_drops).
+            let mut want_fresh = false;
             // Drops Twitch called eligible but did not grant (a game account
             // not linked) are retried hourly, so linking the account later lets
             // the next try through. The spacing and the once-only "ready"
@@ -2124,6 +2191,8 @@ impl DropsService {
                 let should_continue = *monitoring_active.read().await;
                 if !should_continue {
                     debug!("Stopping drops monitoring");
+                    // Its unconfirmed claims go with it; the model settles them itself.
+                    crate::services::watch_drops::loop_stopped();
                     break;
                 }
 
@@ -2154,7 +2223,7 @@ impl DropsService {
                                 >= PROGRESS_REFRESH_SECS
                         })
                         .unwrap_or(true);
-                    let mut inventory_fresh = false;
+                    let mut inventory_read_at: Option<DateTime<Utc>> = None;
                     if refresh_due {
                         let campaign_snapshot =
                             match Self::fetch_active_campaigns(&client, &device_id, &session_id)
@@ -2169,53 +2238,71 @@ impl DropsService {
                         // The campaign list lags earned minutes and never carries
                         // dropInstanceIDs; the inventory is the live source. Overlay
                         // it so the auto-claim check below actually sees completion.
-                        let inventory_overlay =
-                            match Self::fetch_inventory_progress(&client, &device_id, &session_id)
-                                .await
-                            {
-                                Ok(map) => Some(map),
-                                Err(e) => {
-                                    debug!("Inventory progress refresh failed: {}", e);
-                                    None
-                                }
-                            };
-                        inventory_fresh = inventory_overlay.is_some();
+                        // The app reads the inventory in one place
+                        // (services::watch_drops): a read recent enough is reused.
+                        let since = if want_fresh {
+                            Utc::now()
+                        } else {
+                            refresh_since(
+                                last_progress_refresh,
+                                Utc::now(),
+                                current_settings.check_interval_seconds,
+                                unconfirmed.values().map(|(at, _)| *at).min(),
+                            )
+                        };
+                        want_fresh = false;
+                        let inventory_overlay = match crate::services::watch_drops::inventory_newer_than(
+                            since,
+                            &client,
+                            &device_id,
+                            &session_id,
+                        )
+                        .await
+                        {
+                            Ok(snapshot) => Some((snapshot.read_started_at, snapshot.progress_overlay.clone())),
+                            Err(e) => {
+                                debug!("Inventory progress refresh failed: {}", e);
+                                None
+                            }
+                        };
+                        inventory_read_at = inventory_overlay.as_ref().map(|(at, _)| *at);
                         if campaign_snapshot.is_some() || inventory_overlay.is_some() {
                             let mut progress_map = drop_progress.write().await;
                             if let Some(snapshot) = campaign_snapshot {
                                 *progress_map = snapshot;
                             }
-                            if let Some(overlay) = inventory_overlay {
+                            if let Some((_, overlay)) = inventory_overlay {
                                 progress_map.extend(overlay);
                             }
                             last_progress_refresh = Some(Utc::now());
                         }
                     }
 
-                    // Settle claims awaiting confirmation, once an inventory read
-                    // taken after the claim says whether Twitch granted them.
-                    if inventory_fresh && !unconfirmed.is_empty() {
+                    // Settle claims awaiting confirmation, from an inventory read
+                    // that started at least 30 s after each claim.
+                    if let Some(read_at) = inventory_read_at.filter(|_| !unconfirmed.is_empty()) {
                         let now = Utc::now();
                         let verdicts: Vec<(String, bool)> = {
                             let progress_map = drop_progress.read().await;
-                            unconfirmed
-                                .iter()
-                                .filter(|(_, (claimed_at, _))| {
-                                    now.signed_duration_since(*claimed_at).num_seconds() >= 30
-                                })
-                                .map(|(id, _)| (id.clone(), claim_confirmed(progress_map.get(id))))
-                                .collect()
+                            settle_unconfirmed(&unconfirmed, read_at, &progress_map)
                         };
                         for (drop_id, granted) in verdicts {
-                            let Some((_, claimed)) = unconfirmed.remove(&drop_id) else { continue };
+                            let Some((claimed_at, claimed)) = unconfirmed.remove(&drop_id) else { continue };
                             if !granted {
                                 info!(
                                     "[Auto] Twitch accepted the claim for {} ({}) but has not granted it; the game account is probably not linked. Retrying hourly.",
                                     claimed.drop_name, drop_id
                                 );
+                                crate::services::watch_drops::forget_claim(&drop_id);
                                 mark_ungranted(&drop_notices, drop_id, now).await;
                                 continue;
                             }
+                            crate::services::watch_drops::claimed(
+                                &drop_id,
+                                crate::services::watch_drops::ClaimState::Claimed,
+                                claimed_at,
+                                true,
+                            );
                             forget_ungranted(&drop_notices, &drop_id).await;
                             {
                                 let mut settled = attempted_claims.write().await;
@@ -2292,6 +2379,13 @@ impl DropsService {
                                         progress.drop_id, outcome
                                     );
                                     failed_claims.remove(&progress.drop_id);
+                                    let claimed_at = Utc::now();
+                                    crate::services::watch_drops::claimed(
+                                        &progress.drop_id,
+                                        on_claim_outcome(outcome),
+                                        claimed_at,
+                                        true,
+                                    );
 
                                     // Already granted: settled, and not news. It
                                     // still reaches here whenever the settled set
@@ -2338,10 +2432,10 @@ impl DropsService {
                                             game_name,
                                             benefit_name,
                                             benefit_image_url,
-                                            claimed_at: Utc::now(),
+                                            claimed_at,
                                         };
 
-                                        unconfirmed.insert(progress.drop_id.clone(), (Utc::now(), claimed));
+                                        unconfirmed.insert(progress.drop_id.clone(), (claimed_at, claimed));
                                         // Read the inventory again on the next
                                         // pass rather than a full refresh later.
                                         last_progress_refresh = None;
@@ -2363,8 +2457,16 @@ impl DropsService {
                     }
                 }
 
-                // Wait for next check interval
-                tokio::time::sleep(check_interval).await;
+                // Wait for the next check, or less when a drop on the watched
+                // channel turns ready (services::watch_drops), so a finished
+                // drop is claimed no later than before.
+                tokio::select! {
+                    _ = tokio::time::sleep(check_interval) => {}
+                    _ = crate::services::watch_drops::ready_changed() => {
+                        last_progress_refresh = None;
+                        want_fresh = true;
+                    }
+                }
             }
         });
     }
@@ -2930,5 +3032,112 @@ mod drop_notices_tests {
         let kept = notices.pruned(now);
         assert!(!kept.announced.contains_key("old"));
         assert!(kept.announced.contains_key("recent"));
+    }
+}
+
+#[cfg(test)]
+mod shared_inventory_tests {
+    use super::*;
+
+    fn claimed_drop(id: &str, at: DateTime<Utc>) -> ClaimedDrop {
+        ClaimedDrop {
+            id: format!("c-{id}"),
+            campaign_id: "camp".into(),
+            drop_id: id.into(),
+            drop_name: id.into(),
+            game_name: String::new(),
+            benefit_name: String::new(),
+            benefit_image_url: String::new(),
+            claimed_at: at,
+        }
+    }
+
+    #[test]
+    fn a_read_from_before_the_settle_window_judges_nothing() {
+        let t = Utc::now();
+        let mut unconfirmed = HashMap::new();
+        unconfirmed.insert("d1".to_string(), (t, claimed_drop("d1", t)));
+        let progress = HashMap::new();
+        assert!(settle_unconfirmed(&unconfirmed, t + chrono::Duration::seconds(29), &progress).is_empty());
+        assert!(settle_unconfirmed(&unconfirmed, t - chrono::Duration::seconds(50), &progress).is_empty());
+        assert_eq!(
+            settle_unconfirmed(&unconfirmed, t + chrono::Duration::seconds(30), &progress),
+            vec![("d1".to_string(), true)],
+            "gone from the inventory counts as granted"
+        );
+    }
+
+    #[test]
+    fn an_earned_drop_still_holding_its_instance_is_not_granted() {
+        let t = Utc::now();
+        let mut unconfirmed = HashMap::new();
+        unconfirmed.insert("d1".to_string(), (t, claimed_drop("d1", t)));
+        let mut progress = HashMap::new();
+        progress.insert(
+            "d1".to_string(),
+            DropProgress {
+                campaign_id: "camp".into(),
+                drop_id: "d1".into(),
+                current_minutes_watched: 60,
+                required_minutes_watched: 60,
+                is_claimed: false,
+                last_updated: t,
+                drop_instance_id: Some("i".into()),
+                twitch_progress: None,
+            },
+        );
+        assert_eq!(
+            settle_unconfirmed(&unconfirmed, t + chrono::Duration::seconds(40), &progress),
+            vec![("d1".to_string(), false)]
+        );
+    }
+
+    #[test]
+    fn the_refresh_reuses_only_a_late_enough_read() {
+        let now = Utc::now();
+        assert_eq!(refresh_since(None, now, 60, None), now - chrono::Duration::seconds(60));
+        let last = now - chrono::Duration::seconds(10);
+        assert_eq!(refresh_since(Some(last), now, 60, None), last);
+        let claim = now - chrono::Duration::seconds(40);
+        assert_eq!(refresh_since(Some(last), now, 60, Some(claim)), last, "the claim's window is behind the last refresh");
+        let fresh_claim = now - chrono::Duration::seconds(31);
+        assert_eq!(refresh_since(None, now, 60, Some(fresh_claim)), fresh_claim + chrono::Duration::seconds(30));
+        let too_new = now - chrono::Duration::seconds(5);
+        assert_eq!(refresh_since(None, now, 60, Some(too_new)), now - chrono::Duration::seconds(60), "never a time not reached yet");
+    }
+
+    #[test]
+    fn claim_outcomes_map_onto_the_shared_model() {
+        assert_eq!(on_claim_outcome(ClaimOutcome::Claimed), crate::services::watch_drops::ClaimState::Pending);
+        assert_eq!(on_claim_outcome(ClaimOutcome::AlreadyClaimed), crate::services::watch_drops::ClaimState::Claimed);
+    }
+
+    #[test]
+    fn the_inventory_overlay_parses_as_the_loop_always_did() {
+        let body = serde_json::json!({ "data": { "currentUser": { "inventory": { "dropCampaignsInProgress": [
+            { "id": "camp", "timeBasedDrops": [
+                { "id": "d1", "requiredMinutesWatched": 60,
+                  "self": { "currentMinutesWatched": 42, "isClaimed": false, "dropInstanceID": "inst-1" } },
+                { "id": "d2", "requiredMinutesWatched": 120, "self": null }
+            ] }
+        ] } } } });
+        let map = inventory_progress_from_json(&body);
+        assert_eq!(map.len(), 1, "a drop without self is left out");
+        let p = &map["d1"];
+        assert_eq!((p.campaign_id.as_str(), p.current_minutes_watched, p.required_minutes_watched), ("camp", 42, 60));
+        assert_eq!(p.drop_instance_id.as_deref(), Some("inst-1"));
+        assert!(!p.is_claimed && p.twitch_progress.is_none());
+        assert!(inventory_progress_from_json(&serde_json::json!({ "data": null })).is_empty());
+    }
+
+    #[test]
+    fn the_loop_reads_the_inventory_only_through_the_shared_reader() {
+        let source = include_str!("drops_service.rs");
+        let start = source.find("pub async fn start_monitoring(").unwrap();
+        let end = source[start..].find("pub async fn stop_monitoring(").unwrap();
+        let body = &source[start..start + end];
+        assert!(body.contains("watch_drops::inventory_newer_than("));
+        assert!(!body.contains("\"operationName\": \"Inventory\""));
+        assert!(body.contains("settle_unconfirmed("));
     }
 }

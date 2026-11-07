@@ -55,6 +55,7 @@ export const DropProgressBar: React.FC<Props> = ({ stack, visible = true }) => {
   const currentStream = useAppStore((s) => s.currentStream);
   const originCategory = useAppStore((s) => s.streamOriginCategory);
   const addToast = useAppStore((s) => s.addToast);
+  const showInChat = useAppStore((s) => s.settings.chat_design?.show_drops_in_chat ?? true);
   const openDropCampaign = useMobileNavStore((s) => s.openDropCampaign);
   const [shown, setShown] = useState<{ login: string; drop: WatchDrop } | null>(null);
   const [claiming, setClaiming] = useState(false);
@@ -65,8 +66,9 @@ export const DropProgressBar: React.FC<Props> = ({ stack, visible = true }) => {
   const gameId = currentStream?.game_id || '';
   const channelLogin = currentStream?.user_login ?? '';
   const channelId = currentStream?.user_id ?? '';
-  // Drops are Twitch's; a Kick stream in a drops category earns nothing.
-  const twitch = isTwitchStream(currentStream) && !!channelLogin;
+  // Drops are Twitch's; a Kick stream in a drops category earns nothing. With
+  // Drops progress off the card is gone and its poll never starts.
+  const twitch = showInChat && isTwitchStream(currentStream) && !!channelLogin;
 
   const refresh = useCallback(async () => {
     try {

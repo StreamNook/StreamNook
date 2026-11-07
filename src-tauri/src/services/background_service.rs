@@ -169,11 +169,14 @@ impl BackgroundService {
             // the watch earns nothing either (the heartbeat needs it too).
             Err(_) => {
                 info!("[Points] socket not started for {login}: no drops sign-in");
+                // A socket left from the account before must not keep its topics.
+                self.websocket_service.lock().await.disconnect_all().await;
                 return;
             }
         };
         let Some(user_id) = Self::fetch_user_id(&token).await else {
             info!("[Points] socket not started for {login}: the drops account's user id did not resolve");
+            self.websocket_service.lock().await.disconnect_all().await;
             return;
         };
 
@@ -193,6 +196,16 @@ impl BackgroundService {
             info!("[Points] socket follows {login}");
         }
         ws.register_active_channel(&channel_id).await;
+    }
+
+    /// The drops account changed (sign-in, sign-out, another account): the
+    /// socket follows the watched channel again under the new credential, or
+    /// comes down without one. With no watched channel it is left alone.
+    pub async fn reaim_for_account(&self) {
+        let watched = self.watched.read().await.clone();
+        if let Some((channel_id, login)) = watched {
+            self.set_watched_channel(channel_id, login).await;
+        }
     }
 
     /// Tear the realtime socket down when no channel is being watched.
@@ -495,7 +508,7 @@ impl BackgroundService {
 
     /// Resolve the authenticated user's id from the drops token (needed for the
     /// user-scoped PubSub topics).
-    async fn fetch_user_id(token: &str) -> Option<String> {
+    pub(crate) async fn fetch_user_id(token: &str) -> Option<String> {
         let resp = crate::services::http::client()
             .get("https://id.twitch.tv/oauth2/validate")
             .header("Authorization", format!("OAuth {}", token))

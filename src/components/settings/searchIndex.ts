@@ -462,6 +462,18 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   },
   {
     tab: 'Chat',
+    section: 'Drops',
+    title: 'Drops',
+    description: 'Your progress toward drops on the channel you are watching, in chat. Drops bar, drop progress, rewards, claim.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Drops',
+    title: 'Drops progress',
+    description: 'A slim bar above the message box shows the next drop you are earning on this channel. Click it to see every reward you can earn here and claim the ones that are ready.'
+  },
+  {
+    tab: 'Chat',
     section: 'YouTube Chat',
     sectionId: 'settings-section-youtube-chat',
     title: 'Feed',

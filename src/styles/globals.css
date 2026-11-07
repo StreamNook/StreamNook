@@ -2953,6 +2953,31 @@ body {
     opacity 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
+/* The chat drops bar and its drawer wear the command palette's glass at chat
+   scale. The bar sits in the column right above the message box, so it gets a
+   short contact shadow: the palette's deep drop would spill onto the composer. */
+.liquid-glass-panel.drops-bar {
+  border-radius: 10px;
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.10),
+    inset 0 -0.5px 0 0 rgba(255, 255, 255, 0.06),
+    var(--hairline-contour),
+    0 2px 8px -2px rgba(0, 0, 0, 0.45);
+}
+/* A drops fill moves about once a minute. A width transition inside a fixed
+   track is the one layout animation the chat column allows; Motion Off
+   collapses it with every other transition. */
+.drops-bar-fill {
+  transition: width 700ms cubic-bezier(0.2, 0.8, 0.2, 1), background-color 200ms ease;
+}
+/* Over video in the full-screen chat column, the bar and the drawer keep the
+   flyout's near-opaque base under the liquid tint, so a bright stream never
+   reads through their text. */
+.chat-fullscreen-overlay .liquid-glass-panel.drops-bar,
+.chat-fullscreen-overlay .liquid-glass-panel.drops-drawer {
+  background-color: color-mix(in srgb, var(--color-background-tertiary) calc(92% + (1 - var(--glass-strength, 1)) * 8%), transparent);
+}
+
 /* Small floating flyout (the title bar's platform switcher menu). A popover
    this small hangs over live video, where .glass-panel does not work: its blur
    AND its base both ride the Glassiness slider, so at low settings it stops

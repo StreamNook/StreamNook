@@ -366,6 +366,11 @@ pub struct ChatDesignSettings {
     /// that reveals it on click. Default true.
     #[serde(default = "default_true")]
     pub show_chat_gifs: bool,
+    /// Drops progress in chat for the channel this account is earning on: the
+    /// bar above the message box on desktop, the drop card on Android.
+    /// Default true, also for a settings file saved before it existed.
+    #[serde(default = "default_true")]
+    pub show_drops_in_chat: bool,
     /// Twitch chat GIF size multiplier on the 80px base height, held to
     /// `GIF_SCALE_MIN..=GIF_SCALE_MAX` on every load and save. Default 1.
     #[serde(default = "default_gif_scale", deserialize_with = "deserialize_gif_scale")]
@@ -697,6 +702,7 @@ impl Default for ChatDesignSettings {
             emote_scale: 1.0,
             animate_emotes: default_animate_emotes(),
             show_chat_gifs: true,
+            show_drops_in_chat: true,
             gif_scale: default_gif_scale(),
             backfill_opacity: default_backfill_opacity(),
             emote_margin: 0.125,
@@ -2988,6 +2994,25 @@ mod backup_persistence_tests {
             again["chat_design"]["scrollbar_mark_kinds"],
             serde_json::json!(["mention", "first_time"])
         );
+    }
+
+    #[test]
+    fn drops_in_chat_setting_persists_and_defaults_on() {
+        let mut value = serde_json::to_value(Settings::default()).expect("serialize defaults");
+        let design = value["chat_design"].as_object_mut().expect("chat_design object");
+        assert_eq!(design.get("show_drops_in_chat"), Some(&serde_json::json!(true)));
+        design.remove("show_drops_in_chat");
+        let old: Settings = serde_json::from_value(value.clone()).expect("deserialize old file");
+        assert!(old.chat_design.show_drops_in_chat, "a file saved before the setting existed reads on");
+
+        value["chat_design"]
+            .as_object_mut()
+            .unwrap()
+            .insert("show_drops_in_chat".into(), serde_json::json!(false));
+        let parsed: Settings = serde_json::from_value(value).expect("deserialize");
+        assert!(!parsed.chat_design.show_drops_in_chat);
+        let again = serde_json::to_value(&parsed).expect("re-serialize");
+        assert_eq!(again["chat_design"]["show_drops_in_chat"], serde_json::json!(false));
     }
 
     #[test]

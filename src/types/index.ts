@@ -246,6 +246,10 @@ export interface ChatDesignSettings {
   // Twitch chat GIFs (Tier 2/3 subscribers). Off swaps each for a chip that
   // reveals on click. Typed in Rust too (ChatDesignSettings). Default true.
   show_chat_gifs?: boolean;
+  // Drops progress in chat for the channel this account is earning on: the
+  // bar above the message box on desktop, the drop card on Android. Typed in
+  // Rust too (ChatDesignSettings). Default true.
+  show_drops_in_chat?: boolean;
   // Chat GIF size multiplier on the 80px default, 0.5 to 2. Typed and clamped
   // in Rust (ChatDesignSettings.gif_scale). Default 1.
   gif_scale?: number;

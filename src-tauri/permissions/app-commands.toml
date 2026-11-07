@@ -627,6 +627,8 @@ allow = [
   "get_drops_overview",
   "get_rewards_drops",
   "get_watch_drop",
+  "get_watch_drops",
+  "ack_drop_stall",
   "seventv_user_cosmetics",
   "seventv_user_inventory",
   "seventv_profile_pictures",

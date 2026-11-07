@@ -68,6 +68,19 @@ pub struct WatchHeartbeatService {
     /// Woken whenever what the segment traffic follows may have changed
     /// (target or playing), so drop_playback waits instead of polling.
     follow_changed: tokio::sync::Notify,
+    /// One stream-info read at a time: the minute tick and `resolve_now`
+    /// share it, and the second adopts the first's answer.
+    resolve_lock: tokio::sync::Mutex<()>,
+}
+
+/// The channel the heartbeat follows and the game its stream info named, as
+/// `services::watch_drops` reads it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Earning {
+    pub channel_id: String,
+    pub login: String,
+    pub game_id: String,
+    pub game_name: String,
 }
 
 /// A report's outcome, for the once-per-change log.
@@ -95,12 +108,43 @@ impl WatchHeartbeatService {
             drops_outcome: AtomicU8::new(OUTCOME_UNKNOWN),
             points_outcome: AtomicU8::new(OUTCOME_UNKNOWN),
             follow_changed: tokio::sync::Notify::new(),
+            resolve_lock: tokio::sync::Mutex::new(()),
         }
     }
 
     /// The main player is playing (earning), as the earning gate last said.
     pub fn is_playing(&self) -> bool {
         self.playing.load(Ordering::SeqCst)
+    }
+
+    /// The channel followed now, with the game its stream info last named.
+    pub async fn earning(&self) -> Option<Earning> {
+        self.target.read().await.as_ref().map(|t| Earning {
+            channel_id: t.channel_id.clone(),
+            login: t.login.clone(),
+            game_id: t.game_id.clone(),
+            game_name: t.game_name.clone(),
+        })
+    }
+
+    /// Resolve the target's stream info now, unless it is fresh; a read in
+    /// flight is waited for and its answer kept (no second request).
+    pub async fn resolve_now(&self) {
+        let Ok(token) = DropsAuthService::get_token().await else { return };
+        let Some(mut target) = self.target.read().await.clone() else { return };
+        let stale = target.broadcast_checked_at.map(|at| at.elapsed() > BROADCAST_REFRESH).unwrap_or(true);
+        if stale {
+            let _ = self.refresh_stream_info(&mut target, &token).await;
+        }
+    }
+
+    /// A newer game for the followed channel (a `channel.update`): the minute
+    /// payload names it from now on.
+    pub async fn set_game(&self, channel_id: &str, game_id: String, game_name: String) {
+        if let Some(t) = self.target.write().await.as_mut().filter(|t| t.channel_id == channel_id) {
+            t.game_id = game_id;
+            t.game_name = game_name;
+        }
     }
 
     /// Spawns the 60-second tick loop (idempotent). Ticks no-op while there
@@ -148,6 +192,7 @@ impl WatchHeartbeatService {
         }
         self.playing.store(true, Ordering::SeqCst);
         self.follow_changed.notify_one();
+        crate::services::watch_drops::poke();
         previous
     }
 
@@ -157,6 +202,7 @@ impl WatchHeartbeatService {
         self.playing.store(false, Ordering::SeqCst);
         let previous = self.target.write().await.take().map(|t| t.channel_id);
         self.follow_changed.notify_one();
+        crate::services::watch_drops::poke();
         previous
     }
 
@@ -167,6 +213,7 @@ impl WatchHeartbeatService {
         if self.playing.swap(playing, Ordering::SeqCst) != playing {
             info!("[Heartbeat] main player playing={playing}");
             self.follow_changed.notify_one();
+            crate::services::watch_drops::poke();
         }
     }
 
@@ -200,44 +247,8 @@ impl WatchHeartbeatService {
             .broadcast_checked_at
             .map(|at| at.elapsed() > BROADCAST_REFRESH)
             .unwrap_or(true);
-        if stale {
-            match self.fetch_stream_info(&target.channel_id, &token).await {
-                Ok(Some((broadcast_id, game_id, game_name))) => {
-                    target.broadcast_id = Some(broadcast_id);
-                    target.game_id = game_id;
-                    target.game_name = game_name;
-                    target.broadcast_checked_at = Some(Instant::now());
-                }
-                Ok(None) => {
-                    // Channel is not live (offline, VOD, or ended). Nothing
-                    // to report; re-check on the next stale window.
-                    if changed(&self.drops_outcome, OUTCOME_NOT_LIVE) {
-                        info!("[Heartbeat] {} not live per GetStreamInfo; nothing to report", target.login);
-                    }
-                    target.broadcast_id = None;
-                    target.broadcast_checked_at = Some(Instant::now());
-                }
-                Err(e) => {
-                    // Deliberately does NOT stamp broadcast_checked_at. Doing
-                    // so treats "could not ask" as "asked, and the answer is
-                    // still good", which pins a stale broadcast id for another
-                    // full refresh window and lets a repeatedly-failing lookup
-                    // extend that window indefinitely. On a phone connection
-                    // this is a likely branch, not an exotic one. Leaving the
-                    // mark alone retries on the next tick instead.
-                    if changed(&self.drops_outcome, OUTCOME_NO_LOOKUP) {
-                        warn!("[Heartbeat] stream info for {} failed, retrying each tick: {e}", target.login);
-                    } else {
-                        debug!("[Heartbeat] stream info fetch failed, retrying next tick: {e}");
-                    }
-                }
-            }
-            // Write back the refreshed snapshot unless the target moved on.
-            let mut current = self.target.write().await;
-            match current.as_mut() {
-                Some(t) if t.channel_id == target.channel_id => *t = target.clone(),
-                _ => return,
-            }
+        if stale && !self.refresh_stream_info(&mut target, &token).await {
+            return;
         }
         let Some(broadcast_id) = target.broadcast_id.clone() else {
             return;
@@ -285,6 +296,75 @@ impl WatchHeartbeatService {
                     warn!("[Heartbeat] points send failed for {}: {e}", target.login);
                 }
             }
+        }
+    }
+
+    /// Resolve the broadcast id and game, and write them back unless the
+    /// target moved on (false then). One at a time: a resolve that finished
+    /// while this one waited is adopted. The game is the newest seen for the
+    /// channel, judged from when this read was asked for.
+    async fn refresh_stream_info(&self, target: &mut WatchTarget, token: &str) -> bool {
+        let _one = self.resolve_lock.lock().await;
+        match self.target.read().await.as_ref().filter(|t| t.channel_id == target.channel_id) {
+            Some(current) if current.broadcast_checked_at.is_some_and(|at| at.elapsed() <= BROADCAST_REFRESH) => {
+                *target = current.clone();
+                return true;
+            }
+            Some(_) => {}
+            None => return false,
+        }
+        let asked_at = Instant::now();
+        match self.fetch_stream_info(&target.channel_id, token).await {
+            Ok(Some((broadcast_id, game_id, game_name))) => {
+                crate::services::watch_drops::saw_game(&target.channel_id, &game_id, &game_name, asked_at);
+                let (game_id, game_name) =
+                    crate::services::watch_drops::newest_game(&target.channel_id, asked_at, game_id, game_name);
+                target.broadcast_id = Some(broadcast_id);
+                target.game_id = game_id;
+                target.game_name = game_name;
+                target.broadcast_checked_at = Some(Instant::now());
+            }
+            Ok(None) => {
+                // Channel is not live (offline, VOD, or ended). Nothing
+                // to report; re-check on the next stale window.
+                if changed(&self.drops_outcome, OUTCOME_NOT_LIVE) {
+                    info!("[Heartbeat] {} not live per GetStreamInfo; nothing to report", target.login);
+                }
+                target.broadcast_id = None;
+                target.broadcast_checked_at = Some(Instant::now());
+            }
+            Err(e) => {
+                // Deliberately does NOT stamp broadcast_checked_at. Doing
+                // so treats "could not ask" as "asked, and the answer is
+                // still good", which pins a stale broadcast id for another
+                // full refresh window and lets a repeatedly-failing lookup
+                // extend that window indefinitely. On a phone connection
+                // this is a likely branch, not an exotic one. Leaving the
+                // mark alone retries on the next tick instead.
+                if changed(&self.drops_outcome, OUTCOME_NO_LOOKUP) {
+                    warn!("[Heartbeat] stream info for {} failed, retrying each tick: {e}", target.login);
+                } else {
+                    debug!("[Heartbeat] stream info fetch failed, retrying next tick: {e}");
+                }
+            }
+        }
+        // Write back the refreshed snapshot unless the target moved on, with
+        // any game seen since this read was asked for.
+        let mut current = self.target.write().await;
+        match current.as_mut() {
+            Some(t) if t.channel_id == target.channel_id => {
+                let (game_id, game_name) = crate::services::watch_drops::newest_game(
+                    &target.channel_id,
+                    asked_at,
+                    target.game_id.clone(),
+                    target.game_name.clone(),
+                );
+                target.game_id = game_id;
+                target.game_name = game_name;
+                *t = target.clone();
+                true
+            }
+            _ => false,
         }
     }
 

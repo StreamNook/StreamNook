@@ -9,6 +9,7 @@ import { Zap, Filter } from 'lucide-react';
 import ChatSearchBar from './chat/ChatSearchBar';
 import { fitHeaderDensity } from './chat/fitHeaderDensity';
 import AutomodQueueStrip from './chat/AutomodQueueStrip';
+import DropsChatBar from './chat/DropsChatBar';
 import { useStreamerMode } from '../utils/streamerMode';
 import { firstDropOf, imagesTabOn, isDroppableImagePath, uploadIntoBox } from '../services/imageUploadService';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
@@ -1151,6 +1152,10 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     if (activeView === 'modroom' && !modRoomEligible) setActiveView('chat');
   }, [activeView, modRoomEligible, isTwitch]);
   const [showEmotePicker, setShowEmotePicker] = useState(false);
+  // The drops drawer and the emote picker share the space above the message
+  // box: opening the drawer closes the picker, and the bar closes its drawer
+  // when the picker opens.
+  const closeEmotePicker = useCallback(() => setShowEmotePicker(false), []);
   const emoteButtonRef = useRef<HTMLButtonElement>(null);
   // While the picker is open, fill the emote disk cache aggressively (the user is
   // actively waiting on these); the matching cleanup drops back to the polite
@@ -5669,6 +5674,19 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
             queue; this strip mirrors it and sends Allow / Deny to Helix. */}
         {activeView === 'chat' && isModerator && isTwitch && panelChannelKey && (
           <AutomodQueueStrip channel={panelChannelKey} />
+        )}
+
+        {/* Drops progress for the channel this account is earning on. Rust
+            decides which reward and how far along; the bar only draws it, and
+            its drawer floats over chat. */}
+        {activeView === 'chat' && isTwitch && (
+          <DropsChatBar
+            channelId={(channelOverride ? channelOverride.user_id : currentStream?.user_id) ?? ''}
+            login={(channelOverride ? channelOverride.user_login : currentStream?.user_login) ?? ''}
+            headerInset={chromeHeight}
+            emotePickerOpen={showEmotePicker}
+            onDrawerOpen={closeEmotePicker}
+          />
         )}
 
         {/* Input container - static flex item at bottom (hidden when About view active) */}

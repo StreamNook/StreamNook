@@ -275,6 +275,7 @@ const BY_TITLE: Record<string, LucideIcon> = {
   'Colon list': List,
   'Chatter names': Users,
   'Bonus chests': PackageOpen,
+  'Drops progress': Gift,
   'Deleted messages': Trash2,
   'Hide shared chat': Share2,
   'Smooth resume': FastForward,

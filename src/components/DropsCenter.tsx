@@ -21,6 +21,7 @@ import DropsInventoryTab from './drops/DropsInventoryTab';
 import { Tooltip } from './ui/Tooltip';
 
 import { Logger } from '../utils/logger';
+import { getWatchDrops, overlayWatchTiers } from '../stores/watchDropsStore';
 // Twitch SVG Icon Component
 const TwitchIcon = ({ size = 20 }: { size?: number }) => (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
@@ -208,7 +209,9 @@ export default function DropsCenter() {
     // Take the Drops model Rust built (services/drops_overview.rs). The open
     // detail panel holds a snapshot of one game, so it is re-picked by id.
     const applyOverview = (overview: DropsOverview) => {
-        setProgress(overview.progress);
+        // The overview's per-drop counters zero a claimed tier; the campaign
+        // earning here takes the model's clock, the numbers the badge shows.
+        setProgress(overlayWatchTiers(overview.progress, getWatchDrops()?.view));
         if (overview.statistics) setStatistics(overview.statistics);
         setInventoryItems(overview.inventory_items);
         setCompletedDrops(overview.completed_drops);

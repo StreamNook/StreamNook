@@ -132,6 +132,7 @@ twitch-reward-received
 unban-requests
 update://status
 user-history-message
+watch-drops://changed
 watch-session://offline
 watch-session://reconnecting
 watch-session://redirect

@@ -8,8 +8,7 @@
 //! and the `drop-progress` events belong to the desktop automation and are
 //! empty on a phone.
 
-use crate::models::drops::{earnable_here, InventoryItem, TimeBasedDrop};
-use crate::services::drop_words;
+use crate::models::drops::{earnable_here, InventoryItem};
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -39,11 +38,13 @@ pub struct WatchDrop {
     pub spoken: String,
 }
 
-/// What the watched channel is earning, from the inventory: the unclaimed
-/// drop whose minutes are all in comes first (it waits on a claim), then the
-/// one with the fewest minutes left. Campaigns count only when earnable on
-/// this channel AND in the game it is streaming; with the game not known yet
-/// there is nothing to show.
+/// What the watched channel is earning, from the inventory, by the shared
+/// picker (services/watch_drops.rs): a finished drop waiting on a claim first,
+/// then the one with the fewest minutes left, on the campaign's own clock
+/// (Twitch zeroes a claimed reward's counter) and skipping rewards already
+/// owned. Campaigns count only when earnable on this channel AND in the game
+/// it is streaming, or earning right now across categories; with the game not
+/// known yet there is nothing to show.
 pub fn pick(items: &[InventoryItem], channel_id: &str, login: &str, game_id: &str, game_name: &str) -> Option<WatchDrop> {
     // Twitch credits a campaign only in its own category, so with the game not
     // known yet nothing can honestly show. (Counting a campaign that names this
@@ -52,71 +53,34 @@ pub fn pick(items: &[InventoryItem], channel_id: &str, login: &str, game_id: &st
     if game_id.is_empty() && game_name.is_empty() {
         return None;
     }
-    let relevant: Vec<&InventoryItem> = items
-        .iter()
-        .filter(|it| it.campaign.earnable_on(channel_id, login) && it.campaign.counts_in(game_id, game_name))
-        .collect();
-    let candidates: Vec<(&InventoryItem, &TimeBasedDrop, i32, i32)> = relevant
-        .iter()
-        .flat_map(|it| it.campaign.time_based_drops.iter().map(move |d| (*it, d)))
-        .filter(|(_, d)| d.required_minutes_watched > 0 && !d.progress.as_ref().is_some_and(|p| p.is_claimed))
-        .map(|(it, d)| {
-            let need = d.required_minutes_watched;
-            let have = d.progress.as_ref().map(|p| p.current_minutes_watched).unwrap_or(0).clamp(0, need);
-            (it, d, have, need)
-        })
-        .collect();
-    if candidates.is_empty() {
-        let drops: usize = relevant.iter().map(|it| it.campaign.time_based_drops.len()).sum();
+    let inventory = crate::models::drops::InventoryResponse {
+        items: items.to_vec(),
+        total_campaigns: 0,
+        active_campaigns: 0,
+        upcoming_campaigns: 0,
+        expired_campaigns: 0,
+        completed_drops: Vec::new(),
+    };
+    let place = crate::services::watch_drops::Place {
+        channel_id: channel_id.to_string(),
+        login: login.to_string(),
+        game_id: game_id.to_string(),
+        game_name: game_name.to_string(),
+    };
+    let view = crate::services::watch_drops::build(&crate::services::watch_drops::Inputs::bare(
+        &place,
+        &[],
+        Some(&inventory),
+        chrono::Utc::now().timestamp_millis(),
+    ));
+    if view.lead.is_none() {
         log::warn!(
-            "[DropProgress] no match: game=\"{game_name}\" channel=\"{login}\" campaigns={} relevant={} drops={drops}",
+            "[DropProgress] no match: game=\"{game_name}\" channel=\"{login}\" campaigns={} listed={}",
             items.len(),
-            relevant.len()
+            view.campaigns.len()
         );
-        return None;
     }
-    let ready = |have: i32, need: i32, d: &TimeBasedDrop| {
-        have >= need || d.progress.as_ref().and_then(|p| p.twitch_progress.as_ref()).is_some_and(|t| t.ready_to_claim)
-    };
-    let (item, drop, have, need) = candidates
-        .iter()
-        .min_by_key(|(_, d, have, need)| (!ready(*have, *need, d), need - have))
-        .copied()?;
-    let complete = ready(have, need, drop);
-    let mut tiers: Vec<&TimeBasedDrop> =
-        item.campaign.time_based_drops.iter().filter(|d| d.required_minutes_watched > 0).collect();
-    tiers.sort_by_key(|d| d.required_minutes_watched);
-    let tier = tiers.iter().position(|d| d.id == drop.id);
-    let line = match tier {
-        Some(i) if tiers.len() > 1 => format!("{} · {} of {}", item.campaign.name, i + 1, tiers.len()),
-        _ => item.campaign.name.clone(),
-    };
-    let benefit = drop.benefit_edges.first();
-    let name = benefit
-        .map(|b| b.name.clone())
-        .filter(|n| !n.is_empty())
-        .or_else(|| Some(drop.name.clone()).filter(|n| !n.is_empty()))
-        .unwrap_or_else(|| "Drop".to_string());
-    let left = need - have;
-    Some(WatchDrop {
-        campaign_id: item.campaign.id.clone(),
-        drop_id: drop.id.clone(),
-        instance_id: drop.progress.as_ref().and_then(|p| p.drop_instance_id.clone()),
-        // A finished drop is said once, by its Claim button.
-        trailing: if complete { String::new() } else { drop_words::to_watch(left) },
-        status: if complete { "Ready".to_string() } else { drop_words::to_watch(left) },
-        spoken: if complete {
-            format!("{name}, ready to claim")
-        } else {
-            format!("{name}, {left} minute{} left", if left == 1 { "" } else { "s" })
-        },
-        name,
-        image: benefit.map(|b| b.image_url.clone()).unwrap_or_default(),
-        line,
-        percent: if complete { 100.0 } else { have as f32 / need as f32 * 100.0 },
-        complete,
-        claim_label: drop_words::claim_label(drop).into(),
-    })
+    crate::services::watch_drops::lead_for(&view)
 }
 
 /// The bar for the watched channel, or None: not connected, nothing earnable
@@ -128,6 +92,12 @@ pub async fn get(
     game_id: &str,
     game_name: &str,
 ) -> Option<WatchDrop> {
+    // The shared model answers when it follows this very place: fresher (it
+    // hears Twitch's pushes) and no read of its own. Elsewhere this reads for
+    // itself as before.
+    if let Some(answer) = crate::services::watch_drops::answer_for(channel_id, login, game_id, game_name).await {
+        return answer;
+    }
     let place = format!("{login} in \"{game_name}\" ({game_id})");
     if !crate::services::drops_auth_service::DropsAuthService::is_authenticated().await {
         decided(&place, "drops not connected");
@@ -179,6 +149,7 @@ fn decided(place: &str, outcome: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::drops::TimeBasedDrop;
     use crate::models::drops::{AllowedChannel, CampaignStatus, DropBenefit, DropCampaign, DropProgress};
     use chrono::Utc;
 
@@ -221,7 +192,8 @@ mod tests {
                 description: String::new(),
                 image_url: String::new(),
                 start_at: Utc::now(),
-                end_at: Utc::now(),
+                // Still running: an ended campaign earns nothing and is not shown.
+                end_at: Utc::now() + chrono::Duration::days(1),
                 time_based_drops: drops,
                 is_account_connected: true,
                 allowed_channels: channels.iter().map(|c| AllowedChannel { id: format!("id-{c}"), name: c.to_string() }).collect(),
@@ -278,5 +250,37 @@ mod tests {
     fn nothing_left_shows_nothing() {
         let items = vec![item("1", "Rust", &[], vec![drop("a", 60, 60, true), drop("e", 0, 0, false)])];
         assert!(pick(&items, "", "x", "", "Rust").is_none());
+    }
+
+    #[test]
+    fn the_golden_cases_hold_through_pick() {
+        for case in crate::services::watch_drops::golden::cases().into_iter().filter(|c| c.via_pick) {
+            let lead = pick(&case.inventory.items, "id-shroud", "shroud", "", "Rust");
+            assert_eq!(lead.as_ref().map(|l| l.drop_id.as_str()), case.rust["lead"].as_str(), "{}", case.name);
+        }
+    }
+
+    #[test]
+    fn the_phones_json_keeps_its_keys() {
+        let drop = WatchDrop {
+            campaign_id: String::new(),
+            drop_id: String::new(),
+            instance_id: None,
+            name: String::new(),
+            image: String::new(),
+            trailing: String::new(),
+            status: String::new(),
+            line: String::new(),
+            percent: 0.0,
+            complete: false,
+            claim_label: String::new(),
+            spoken: String::new(),
+        };
+        let mut keys: Vec<String> = serde_json::to_value(drop).unwrap().as_object().unwrap().keys().cloned().collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["campaign_id", "claim_label", "complete", "drop_id", "image", "instance_id", "line", "name", "percent", "spoken", "status", "trailing"]
+        );
     }
 }
