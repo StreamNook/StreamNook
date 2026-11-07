@@ -5,6 +5,7 @@
 // can earn here. The drawer floats over chat, so nothing in the column moves.
 import { lazy, memo, Suspense, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
+import { ArrowSquareOut } from 'phosphor-react';
 import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../../stores/AppStore';
 import { useWatchDrops, type WatchDrops } from '../../stores/watchDropsStore';
@@ -217,9 +218,10 @@ function ConnectButton({ url }: { url: string }) {
         e.stopPropagation();
         void openExternal(url);
       }}
-      className={`${GLAZE_PILL} min-w-[60px] shrink-0 px-3 text-center text-[11.5px] leading-[22px]`}
+      className={`${GLAZE_PILL} inline-flex min-w-[60px] shrink-0 items-center justify-center gap-1 px-3 text-[11.5px] leading-[22px]`}
     >
       Connect
+      <ArrowSquareOut size={11} weight="bold" aria-hidden className="opacity-70" />
     </button>
   );
 }

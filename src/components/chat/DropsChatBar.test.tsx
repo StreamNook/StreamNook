@@ -54,7 +54,8 @@ describe('DropsDrawer', () => {
     // Twitch would not grant it until the game account is linked.
     const connect = drawer(tier({ connect: true, status: 'Connect' }));
     expect(connect).not.toContain('>Claim<');
-    expect(connect).toContain('>Connect<');
+    // A link out to the game's page, said with the open-a-page arrow.
+    expect(connect).toMatch(/>Connect<svg/);
   });
 });
 
@@ -171,7 +172,7 @@ describe('DropsPeekView (the hover card)', () => {
   });
   it('offers Connect when Twitch would not grant the reward until the account is linked', () => {
     const html = peek({ status: 'Connect', connectUrl: 'https://game.example/link' });
-    expect(html).toContain('>Connect</button>');
+    expect(html).toMatch(/>Connect<svg[^]*?<\/svg><\/button>/);
     expect(html).not.toContain('>Claim</button>');
     expect(peek({ status: 'Connect', connectUrl: null })).not.toContain('<button');
   });

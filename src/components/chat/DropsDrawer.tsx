@@ -6,7 +6,7 @@
 // A sibling of the bar (never inside its glass), so its own blur reads the
 // chat behind it.
 import { motion } from 'framer-motion';
-import { Check } from 'phosphor-react';
+import { ArrowSquareOut, Check } from 'phosphor-react';
 import type { HereCampaign, HereDrop, WatchDrops } from '../../stores/watchDropsStore';
 import { openExternal } from '../../utils/openExternal';
 import { ACCENT_BUTTON, GLAZE_PILL, SUCCESS_FILL } from '../ui/glazeButtons';
@@ -341,8 +341,14 @@ function Trailing({
   }
   if (drop.connect) {
     return linkUrl ? (
-      <button type="button" onClick={() => void openExternal(linkUrl)} className={`${GLAZE_PILL} text-[11.5px] px-3 leading-[22px] ${span}`}>
+      // Opens the game's page to link the account, in the browser.
+      <button
+        type="button"
+        onClick={() => void openExternal(linkUrl)}
+        className={`${GLAZE_PILL} inline-flex items-center justify-center gap-1 px-3 text-[11.5px] leading-[22px] ${span}`}
+      >
         Connect
+        <ArrowSquareOut size={11} weight="bold" aria-hidden className="opacity-70" />
       </button>
     ) : (
       <span className="truncate text-[11px] leading-4 text-textSecondary">{drop.status}</span>
