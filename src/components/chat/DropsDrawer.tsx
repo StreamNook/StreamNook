@@ -100,13 +100,20 @@ function DropRow({
     <div className="flex min-h-[40px] items-center gap-2.5 rounded-lg px-1.5 py-1.5 transition-colors duration-150 hover:bg-white/[0.04]">
       <DropArt image={drop.image} size={26} />
       <div className="min-w-0 flex-1">
-        <div className="flex items-baseline gap-2">
-          <span className={`min-w-0 truncate text-[12.5px] leading-4 ${drop.claimed ? 'text-textSecondary' : 'text-textPrimary'}`}>
-            {drop.name}
+        {/* The status sits on the name's line, so every bar below runs the
+            row's full width and the bars of a campaign end together. */}
+        <div className="flex min-h-[20px] items-center gap-2">
+          <span className="flex min-w-0 flex-1 items-baseline gap-2">
+            <span className={`min-w-0 truncate text-[12.5px] leading-4 ${drop.claimed ? 'text-textSecondary' : 'text-textPrimary'}`}>
+              {drop.name}
+            </span>
+            {drop.lead && (
+              <span className="shrink-0 text-[10px] font-medium uppercase tracking-wider text-accent-on-surface">Next</span>
+            )}
           </span>
-          {drop.lead && (
-            <span className="shrink-0 text-[10px] font-medium uppercase tracking-wider text-accent-on-surface">Next</span>
-          )}
+          <span className="flex shrink-0 justify-end">
+            <Trailing drop={drop} linkUrl={linkUrl} claiming={claiming} onClaim={onClaim} />
+          </span>
         </div>
         {drop.bar !== null && !drop.claimed && (
           <div className="mt-1.5 h-[3px] overflow-hidden rounded-full bg-textPrimary/[0.10]">
@@ -116,9 +123,6 @@ function DropRow({
         {drop.detail && !drop.claimed && (
           <div className="mt-1 truncate text-[11px] leading-[14px] text-textSecondary">{drop.detail}</div>
         )}
-      </div>
-      <div className="flex min-w-[64px] shrink-0 justify-end">
-        <Trailing drop={drop} linkUrl={linkUrl} claiming={claiming} onClaim={onClaim} />
       </div>
     </div>
   );

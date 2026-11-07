@@ -8,8 +8,10 @@
 //! focused Twitch tile) in the newest game seen for that channel. The
 //! inventory is read here and nowhere else: the drops monitoring loop asks
 //! `inventory_newer_than` for its auto-claim instead of reading it itself.
-//! Twitch's `user-drop-events` pushes move minutes between reads, and the next
-//! read reconciles them.
+//! It reads once a minute while drops are being earned. `user-drop-events`
+//! pushes, when the points socket subscribes to them, move minutes between
+//! reads, and the next read reconciles them; the socket does not subscribe
+//! today (Twitch sent none there), so the reads alone keep the bar moving.
 //!
 //! `watch-drops://changed` carries the whole model whenever it changes;
 //! `get_watch_drops` answers the current one. Every value carries `rev`, so a
@@ -1387,9 +1389,10 @@ pub fn on_push(topic_user: &str, msg: &serde_json::Value) {
         (if changed { rebuild(s) } else { None }, wake, known)
     });
     // Build step 0 reads these lines: the first of each kind, and whether its
-    // drop id is one the inventory knows.
+    // drop id is one the inventory knows. Logged as a warning because release
+    // logs keep only warnings, and this is the one proof the pushes arrive.
     if first {
-        log::info!("[DropEvents] first {kind}: known={known} message={msg}");
+        log::warn!("[DropEvents] first {kind}: known={known} message={msg}");
     }
     send(out);
     if wake {

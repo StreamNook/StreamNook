@@ -327,9 +327,11 @@ impl ChannelPointsWebSocketService {
         // A moderator's warning to the viewer, and its acknowledgement.
         topics.push(format!("chatrooms-user-v1.{}", user_id));
 
-        // Drop minutes as Twitch credits them, and finished drops with their
-        // claim ids (services::watch_drops). 4 per channel + 4 global = 44 of 50.
-        topics.push(format!("user-drop-events.{}", user_id));
+        // `user-drop-events.<user>` is not subscribed: on this socket Twitch
+        // accepts the LISTEN but sent no drop-progress while drops were being
+        // earned, so services::watch_drops reads the inventory each
+        // minute instead. Its handler below and its own LISTEN frame stay, so
+        // turning it back on is this one push.
 
         // Note: Removed raid topics to reduce count per channel
         // This allows 24 channels per connection: 24*2 + 2 global = 50 topics exactly
