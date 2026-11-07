@@ -7,7 +7,8 @@
 import React, { useState } from 'react';
 import { useAppStore } from '../../stores/AppStore';
 import { useWatchDrops } from '../../stores/watchDropsStore';
-import { barLine, DropsChatBarView, showsHere, useDropClaim } from '../../components/chat/DropsChatBar';
+import { barLine, DropsChatBarView, showsHere } from '../../components/chat/DropsChatBar';
+import { useDropClaim } from '../../components/chat/useDropClaim';
 import { DrawerBody } from '../../components/chat/DropsDrawer';
 import { MobileSheet } from '../ui/MobileSheet';
 

@@ -9,6 +9,7 @@ import { motion } from 'framer-motion';
 import { Check } from 'phosphor-react';
 import type { HereCampaign, HereDrop, WatchDrops } from '../../stores/watchDropsStore';
 import { ACCENT_BUTTON, SUCCESS_FILL } from '../ui/glazeButtons';
+import { ConnectButton } from './DropsConnectButton';
 import { DropArt } from './DropArt';
 import { splitStatus } from './dropsStatusText';
 
@@ -170,6 +171,7 @@ function Rewards({
               <Tile
                 key={drop.id}
                 drop={drop}
+                linkUrl={campaign.link_url}
                 claiming={claimingId === drop.id}
                 onClaim={onClaim}
                 pair={row.length === 2}
@@ -202,11 +204,13 @@ function tileState(drop: HereDrop): string {
  *  on. */
 function Tile({
   drop,
+  linkUrl,
   claiming,
   onClaim,
   pair,
 }: {
   drop: HereDrop;
+  linkUrl: string | null;
   claiming: boolean;
   onClaim: OnClaim;
   pair?: boolean;
@@ -223,7 +227,7 @@ function Tile({
       </div>
       <Bar drop={drop} />
       <div className="flex min-h-[22px] items-center">
-        <Trailing drop={drop} claiming={claiming} onClaim={onClaim} wide />
+        <Trailing drop={drop} linkUrl={linkUrl} claiming={claiming} onClaim={onClaim} wide />
       </div>
     </div>
   );
@@ -250,7 +254,7 @@ function WideTile({
   bare?: boolean;
 }) {
   const { time } = splitStatus(drop.status);
-  const waiting = !drop.claimed && !drop.ready && !drop.pending && !drop.watched;
+  const waiting = !drop.claimed && !drop.ready && !drop.pending && !drop.connect && !drop.watched;
   const campaignLine = bare ? '' : [campaign.name, campaign.ends].filter(Boolean).join(' · ');
   const art = big ? 64 : bare ? 40 : 52;
   return (
@@ -266,7 +270,7 @@ function WideTile({
               <span className={`font-semibold text-textPrimary ${big ? 'text-[15px]' : 'text-[13.5px]'}`}>{time}</span> left
             </span>
           )}
-          {!big && !waiting && <Trailing drop={drop} claiming={claiming} onClaim={onClaim} />}
+          {!big && !waiting && <Trailing drop={drop} linkUrl={campaign.link_url} claiming={claiming} onClaim={onClaim} />}
         </div>
         {!big && campaignLine && (
           <div className="mt-0.5 flex min-w-0 items-center gap-[5px]">
@@ -284,13 +288,17 @@ function WideTile({
                 ? 'Claimed'
                 : drop.ready && !drop.pending
                   ? 'Ready to claim'
-                  : drop.watched
-                    ? 'Watched, waiting on Twitch'
-                    : drop.bar !== null
-                      ? `${drop.current_minutes} of ${drop.required_minutes} min watched`
-                      : drop.status}
+                  : drop.connect
+                    ? 'Link your game account to claim'
+                    : drop.watched
+                      ? 'Watched, waiting on Twitch'
+                      : drop.bar !== null
+                        ? `${drop.current_minutes} of ${drop.required_minutes} min watched`
+                        : drop.status}
             </span>
-            {!waiting && !drop.watched && <Trailing drop={drop} claiming={claiming} onClaim={onClaim} />}
+            {!waiting && !drop.watched && (
+              <Trailing drop={drop} linkUrl={campaign.link_url} claiming={claiming} onClaim={onClaim} />
+            )}
           </div>
         )}
         {drop.detail && !drop.claimed && (
@@ -314,22 +322,25 @@ function Bar({ drop, thick }: { drop: HereDrop; thick?: boolean }) {
 
 const CAPSULE = '!text-[11.5px] px-3 leading-[22px] text-center';
 
-/** What a reward offers or waits on: Claim, Claiming, Watched, Claimed, or
- *  its time left. `wide` stretches a button across its tile. */
+/** What a reward offers or waits on: Claim, Claiming, Connect, Watched,
+ *  Claimed, or its time left. `wide` stretches a button across its tile. */
 function Trailing({
   drop,
+  linkUrl,
   claiming,
   onClaim,
   wide,
 }: {
   drop: HereDrop;
+  linkUrl: string | null;
   claiming: boolean;
   onClaim: OnClaim;
   wide?: boolean;
 }) {
   const span = wide ? 'w-full' : 'min-w-[64px] shrink-0';
-  // A claim already sent waits for Twitch, and one Twitch took but has not
-  // granted is retried by the auto-claim: neither offers Claim again.
+  // A claim already sent waits for Twitch, one Twitch would not grant needs
+  // the game account linked, and one not granted is retried by the
+  // auto-claim: none offers Claim again.
   if (drop.claimed) {
     return (
       <span className="flex items-center gap-1 text-[11px] leading-4 text-success">
@@ -345,7 +356,11 @@ function Trailing({
       </button>
     );
   }
-  if (drop.watched) {
+  if (drop.connect && linkUrl) {
+    // Opens the game's page to link the account, in the browser.
+    return <ConnectButton url={linkUrl} className={span} />;
+  }
+  if (drop.connect || drop.watched) {
     return <span className="truncate text-[11px] leading-4 text-textSecondary">{drop.status}</span>;
   }
   if (drop.ready) {

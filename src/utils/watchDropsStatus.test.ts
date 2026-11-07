@@ -14,7 +14,7 @@ const base: WatchDrops = {
 };
 const hoodie = {
   id: 'b', instance_id: 'i-b', name: 'Hoodie', image: 'img-b', claimed: false, ready: false, pending: false,
-  watched: false, lead: true, status: '30m to watch', detail: 'Day 1 of 2', bar: 75, current_minutes: 90,
+  connect: false, watched: false, lead: true, status: '30m to watch', detail: 'Day 1 of 2', bar: 75, current_minutes: 90,
   required_minutes: 120, claim_label: 'Claim',
 };
 const withLead: WatchDrops = {
@@ -28,13 +28,13 @@ const withLead: WatchDrops = {
   campaigns: [
     {
       id: 'c1', name: 'Rust Drops', game_name: 'Rust', art: '', box_art: '', ends: '3d left', claimed_label: '1 of 3 claimed',
-      started: true, cumulative_minutes: 90,
+      started: true, link_url: null, cumulative_minutes: 90,
       drops: [{ ...hoodie, id: 'a', lead: false, claimed: true, current_minutes: 60, required_minutes: 60 }, hoodie,
         { ...hoodie, id: 'zero', lead: false, required_minutes: 0, current_minutes: 0 }],
     },
     {
       id: 'c2', name: 'Later', game_name: 'Rust', art: '', box_art: '', ends: '', claimed_label: '', started: false,
-      cumulative_minutes: 0, drops: [{ ...hoodie, id: 'n', lead: false, current_minutes: 0 }],
+      link_url: null, cumulative_minutes: 0, drops: [{ ...hoodie, id: 'n', lead: false, current_minutes: 0 }],
     },
   ],
 };

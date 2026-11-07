@@ -5,14 +5,14 @@
 // can earn here. The drawer floats over chat, so nothing in the column moves.
 import { lazy, memo, Suspense, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../../stores/AppStore';
 import { useWatchDrops, type WatchDrops } from '../../stores/watchDropsStore';
 import { useOutsidePress } from '../../hooks/useOutsidePress';
 import { usePerformanceQuiet } from '../../utils/lowPower';
-import { Logger } from '../../utils/logger';
 import { ACCENT_BUTTON, GLAZE_BANNER, SUCCESS_FILL } from '../ui/glazeButtons';
 import { DropArt } from './DropArt';
+import { ConnectButton } from './DropsConnectButton';
+import { useDropClaim } from './useDropClaim';
 import { splitStatus } from './dropsStatusText';
 
 // The drawer's code loads on first open (or first hover of the bar), so a chat
@@ -44,6 +44,9 @@ export interface BarLine {
   moreArt: string[];
   spoken: string;
   claimLabel: string;
+  /** The lead waits on a game account link: where to link it, for the hover
+   *  card's Connect. Null otherwise. */
+  connectUrl: string | null;
 }
 
 /** The lead reward; with none under way yet, the first reward a campaign here
@@ -51,7 +54,10 @@ export interface BarLine {
 export function barLine(view: WatchDrops): BarLine | null {
   const lead = view.lead;
   if (lead) {
+    const campaign = view.campaigns.find((c) => c.id === lead.campaign_id);
+    const row = campaign?.drops.find((d) => d.lead);
     return {
+      connectUrl: row?.connect && !row.claimed ? (campaign?.link_url ?? null) : null,
       name: lead.name,
       image: lead.image,
       status: lead.status,
@@ -75,6 +81,7 @@ export function barLine(view: WatchDrops): BarLine | null {
     ready: false,
     more: 0,
     moreArt: [],
+    connectUrl: null,
     spoken: rewards === 1 ? `${first.name}, ${first.status}` : `${rewards} rewards to earn on this channel`,
     claimLabel: '',
   };
@@ -89,6 +96,7 @@ export const PREVIEW_LINE: BarLine = {
   ready: false,
   more: 2,
   moreArt: [],
+  connectUrl: null,
   spoken: 'Rust hoodie, 12 minutes left',
   claimLabel: 'Claim',
 };
@@ -100,25 +108,6 @@ export type DrawerEvent = 'toggle' | 'outside' | 'escape' | 'picker' | 'gone';
  *  going away) closes it. */
 export const drawerAfter = (open: boolean, event: DrawerEvent): boolean => (event === 'toggle' ? !open : false);
 
-/** Claims one drop. "claimed" and "already_claimed" both mean it is yours, so
- *  both say so; the toast comes only from this click. */
-export function useDropClaim() {
-  const [claiming, setClaiming] = useState<string | null>(null);
-  const claim = async (dropId: string, instanceId: string | null) => {
-    if (claiming) return;
-    setClaiming(dropId);
-    try {
-      await invoke<string>('claim_drop', { dropId, dropInstanceId: instanceId });
-      useAppStore.getState().addToast('Drop claimed', 'success');
-    } catch (err) {
-      Logger.error('[DropsChatBar] claim failed:', err);
-      useAppStore.getState().addToast('Could not claim that drop.', 'error');
-    } finally {
-      setClaiming(null);
-    }
-  };
-  return { claiming, claim };
-}
 
 export interface DropsChatBarViewProps {
   line: BarLine;
@@ -268,6 +257,8 @@ export function DropsPeekView({ line, claiming, onToggle, onClaim }: Omit<DropsC
             <Track line={line} className="h-[3px] min-w-0 flex-1" />
             {line.ready && onClaim ? (
               <ClaimButton line={line} claiming={claiming} onClaim={onClaim} />
+            ) : line.connectUrl ? (
+              <ConnectButton url={line.connectUrl} className="min-w-[60px] shrink-0" />
             ) : (
               <Status line={line} />
             )}

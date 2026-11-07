@@ -37,7 +37,9 @@ export interface HereDrop {
   claimed: boolean;
   ready: boolean;
   pending: boolean;
-  /** Minutes in, but Twitch has not granted the claim; the auto-claim tries again later. */
+  /** Minutes in, but the game account is not linked: Connect opens the campaign's `link_url`. */
+  connect: boolean;
+  /** Minutes in, but Twitch has not granted the claim and there is no page to link; the auto-claim tries again later. */
   watched: boolean;
   lead: boolean;
   status: string;
@@ -59,6 +61,8 @@ export interface HereCampaign {
   ends: string;
   claimed_label: string;
   started: boolean;
+  /** The game's page to link the account, for Connect. */
+  link_url: string | null;
   cumulative_minutes: number;
   drops: HereDrop[];
 }

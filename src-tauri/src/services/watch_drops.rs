@@ -102,6 +102,8 @@ pub struct HereCampaign {
     /// "2 of 4 claimed"; empty when not started.
     pub claimed_label: String,
     pub started: bool,
+    /// The game's page to link the account, for a tier's Connect.
+    pub link_url: Option<String>,
     /// The campaign clock (a per-reward campaign: its furthest reward).
     pub cumulative_minutes: i32,
     /// Watch-time rewards, fewest required minutes first.
@@ -117,12 +119,16 @@ pub struct HereDrop {
     pub claimed: bool,
     pub ready: bool,
     pub pending: bool,
-    /// Its minutes are in but Twitch has not granted the claim (the
-    /// auto-claim tries again later); no Claim, and it never holds the lip.
+    /// Its minutes are in but the game account is not linked (Twitch's own
+    /// Inventory offers Connect here too): Connect opens the campaign's
+    /// `link_url` in place of a Claim Twitch would not grant.
+    pub connect: bool,
+    /// Its minutes are in but Twitch has not granted the claim and there is
+    /// no page to link an account (the auto-claim tries again later).
     pub watched: bool,
     pub lead: bool,
-    /// "Claimed", "Ready", "Claiming", "Watched", "12m to watch" or
-    /// "Starts when you watch".
+    /// "Claimed", "Ready", "Claiming", "Connect", "Watched", "12m to watch"
+    /// or "Starts when you watch".
     pub status: String,
     pub detail: Option<String>,
     pub bar: Option<f32>,
@@ -464,11 +470,21 @@ struct Row<'a> {
     owned: bool,
     ready: bool,
     pending: bool,
+    connect: bool,
     watched: bool,
 }
 
 /// A campaign's watch-time rewards, fewest minutes first, and its clock.
-fn rows<'a>(c: &'a DropCampaign, started: bool, i: &Inputs, owned: &Owned) -> (Vec<Row<'a>>, i32) {
+/// `link`: whether the campaign has a page to link the game account;
+/// `needs_link`: Twitch says the account is not linked (and there is a page).
+fn rows<'a>(
+    c: &'a DropCampaign,
+    started: bool,
+    link: bool,
+    needs_link: bool,
+    i: &Inputs,
+    owned: &Owned,
+) -> (Vec<Row<'a>>, i32) {
     let mut tiers: Vec<&TimeBasedDrop> = c
         .time_based_drops
         .iter()
@@ -539,11 +555,17 @@ fn rows<'a>(c: &'a DropCampaign, started: bool, i: &Inputs, owned: &Owned) -> (V
                 .is_some_and(|t| t.ready_to_claim);
             let pending = !own && i.claims.get(&d.id) == Some(&ClaimState::Pending);
             let earned = started && (shown >= need || twitch_ready);
-            // A claim Twitch took but has not granted; the auto-claim tries
-            // it again later.
-            let watched = !own && !pending && i.ungranted.contains(&d.id);
-            // A claim already sent, or one not granted, never offers Claim.
-            let ready = !own && !pending && !watched && earned;
+            let ungranted = i.ungranted.contains(&d.id);
+            // Twitch will not grant it until the game account is linked: one
+            // whose minutes are in while Twitch says the account is not
+            // linked, or one it already took but did not grant.
+            let connect = !own && !pending && link && (ungranted || (needs_link && earned));
+            // Not granted, with no page to link anything; the auto-claim
+            // tries it again later.
+            let watched = !own && !pending && !connect && ungranted;
+            // A claim already sent, or one Twitch will not grant, never
+            // offers Claim.
+            let ready = !own && !pending && !connect && !watched && earned;
             Row {
                 d,
                 need,
@@ -551,6 +573,7 @@ fn rows<'a>(c: &'a DropCampaign, started: bool, i: &Inputs, owned: &Owned) -> (V
                 owned: own,
                 ready,
                 pending,
+                connect,
                 watched,
             }
         })
@@ -559,19 +582,20 @@ fn rows<'a>(c: &'a DropCampaign, started: bool, i: &Inputs, owned: &Owned) -> (V
 }
 
 impl Row<'_> {
-    /// Its minutes are in: ready to claim, being claimed, or not granted.
+    /// Its minutes are in: ready to claim, being claimed, waiting on a link,
+    /// or not granted.
     fn waits(&self) -> bool {
-        self.ready || self.pending || self.watched
+        self.ready || self.pending || self.connect || self.watched
     }
 
     /// The lip's order, then minutes left: one to claim, then one still
     /// earning, then one the lip only shows when nothing else is left (a
-    /// claim in flight or not granted), so a finished reward never parks the
-    /// lip while another is making progress.
+    /// claim in flight, one waiting on a link, or not granted), so a finished
+    /// reward never parks the lip while another is making progress.
     fn rank(&self) -> (u8, i32) {
         let kind = if self.ready {
             0
-        } else if self.pending || self.watched {
+        } else if self.pending || self.connect || self.watched {
             2
         } else {
             1
@@ -599,6 +623,8 @@ fn here_drop(r: &Row, i: &Inputs, started: bool, lead: bool) -> HereDrop {
         "Claimed".to_string()
     } else if r.pending {
         "Claiming".to_string()
+    } else if r.connect {
+        "Connect".to_string()
     } else if r.watched {
         "Watched".to_string()
     } else if r.ready {
@@ -625,6 +651,7 @@ fn here_drop(r: &Row, i: &Inputs, started: bool, lead: bool) -> HereDrop {
         claimed: r.owned,
         ready: r.ready,
         pending: r.pending,
+        connect: r.connect,
         watched: r.watched,
         lead,
         status,
@@ -662,6 +689,8 @@ fn lead_drop(c: &DropCampaign, rows: &[Row], at: usize, i: &Inputs) -> WatchDrop
     let left = r.need - r.shown;
     let status = if r.pending {
         "Claiming".to_string()
+    } else if r.connect {
+        "Connect".to_string()
     } else if r.watched {
         "Watched".to_string()
     } else if r.ready {
@@ -677,6 +706,8 @@ fn lead_drop(c: &DropCampaign, rows: &[Row], at: usize, i: &Inputs) -> WatchDrop
         trailing: if r.ready { String::new() } else { status.clone() },
         spoken: if r.pending {
             format!("{name}, claiming")
+        } else if r.connect {
+            format!("{name}, link your game account to claim")
         } else if r.watched {
             format!("{name}, watched, not granted yet")
         } else if r.ready {
@@ -737,11 +768,29 @@ pub fn build(i: &Inputs) -> WatchDrops {
         started: bool,
         rows: Vec<Row<'a>>,
         clock: i32,
+        link: Option<String>,
     }
     let mut built: Vec<Built> = found
         .into_iter()
         .filter_map(|(c, started)| {
-            let (rows, clock) = rows(c, started, i, &owned);
+            // The Inventory's copy of a campaign carries no account link; the
+            // campaign list's copy does, so Connect still has somewhere to go.
+            let link = c
+                .account_link
+                .clone()
+                .filter(|u| !u.is_empty())
+                .or_else(|| {
+                    i.list
+                        .iter()
+                        .find(|l| l.id == c.id)
+                        .and_then(|l| l.account_link.clone())
+                        .filter(|u| !u.is_empty())
+                });
+            // Twitch's own flag, the one its Inventory draws Connect from. A
+            // badge campaign also reports no linked account, but has no link
+            // to follow, so it never asks for one.
+            let needs_link = !c.is_account_connected && link.is_some();
+            let (rows, clock) = rows(c, started, link.is_some(), needs_link, i, &owned);
             if rows.is_empty() {
                 return None;
             }
@@ -750,6 +799,7 @@ pub fn build(i: &Inputs) -> WatchDrops {
                 started,
                 rows,
                 clock,
+                link,
             })
         })
         .collect();
@@ -836,6 +886,7 @@ pub fn build(i: &Inputs) -> WatchDrops {
                     String::new()
                 },
                 started: b.started,
+                link_url: b.link.clone(),
                 cumulative_minutes: b.clock,
                 drops: b
                     .rows
@@ -1365,8 +1416,8 @@ pub fn claimed(drop_id: &str, state: ClaimState, at: DateTime<Utc>, by_loop: boo
     poke();
 }
 
-/// The loop found a claim not granted: the tier shows Watched at once, so it
-/// never flashes back to Ready while the next inventory read is due.
+/// The loop found a claim not granted: the tier shows Connect (or Watched)
+/// at once, so it never flashes back to Ready while the next read is due.
 pub fn forget_claim(drop_id: &str) {
     let out = with_state(|s| {
         s.claims.remove(drop_id);
@@ -1917,9 +1968,9 @@ mod tests {
     }
 
     #[test]
-    fn a_finished_tier_offers_claim_whatever_the_account_link_says() {
-        // Twitch's linked flag is not trusted: an earned tier is Ready, never
-        // a Connect that would sit there.
+    fn an_earned_tier_offers_connect_not_claim_while_twitch_says_the_account_is_not_linked() {
+        // Twitch's own Inventory shows Connect in place of Claim for exactly
+        // this: the minutes are in and the game account is not linked.
         let place = golden::place();
         let case = golden::cases()
             .into_iter()
@@ -1935,9 +1986,55 @@ mod tests {
         }
         let view = build(&Inputs::bare(&place, &case.list, Some(&inv), now_ms()));
         let tier = &view.campaigns[0].drops[0];
-        assert!(tier.ready && !tier.watched);
+        assert!(tier.connect && !tier.ready && !tier.watched, "Connect in place of Claim");
+        assert_eq!(tier.status, "Connect");
+        assert_eq!(view.campaigns[0].link_url.as_deref(), Some("https://example.test/link"));
+        // Still earning: no Connect yet, just its time.
+        let view = build(&Inputs::bare(&place, &case.list, Some(&case.inventory), now_ms()));
+        let tier = &view.campaigns[0].drops[0];
+        assert!(!tier.connect && !tier.ready);
+        // Linked: the same earned tier offers Claim.
+        let mut list = case.list.clone();
+        for c in list.iter_mut() {
+            c.is_account_connected = true;
+        }
+        for it in inv.items.iter_mut() {
+            it.campaign.is_account_connected = true;
+        }
+        let view = build(&Inputs::bare(&place, &list, Some(&inv), now_ms()));
+        let tier = &view.campaigns[0].drops[0];
+        assert!(tier.ready && !tier.connect);
         assert_eq!(tier.status, "Ready");
-        assert!(view.lead.as_ref().is_some_and(|l| l.complete));
+    }
+
+    #[test]
+    fn the_inventory_copy_keeps_the_lists_account_link() {
+        // The Inventory never carries accountLinkURL; Connect still needs the
+        // list's link.
+        let place = golden::place();
+        let case = golden::cases()
+            .into_iter()
+            .find(|c| {
+                let v = build(&Inputs::bare(&golden::place(), &c.list, Some(&c.inventory), now_ms()));
+                v.campaigns.len() == 1 && c.inventory.items.iter().any(|it| it.campaign.id == v.campaigns[0].id)
+            })
+            .expect("a case listing one campaign that is in the inventory");
+        let (mut list, mut inv) = (case.list.clone(), case.inventory.clone());
+        let id = inv.items[0].campaign.id.clone();
+        for c in list.iter_mut().filter(|c| c.id == id) {
+            c.account_link = Some("https://game.example/link".into());
+        }
+        for it in inv.items.iter_mut() {
+            it.campaign.account_link = None;
+        }
+        let view = build(&Inputs::bare(&place, &list, Some(&inv), now_ms()));
+        let c = view.campaigns.iter().find(|c| c.id == id).expect("the campaign");
+        assert_eq!(c.link_url.as_deref(), Some("https://game.example/link"));
+        // Without the list's copy there is still no link to invent.
+        let view = build(&Inputs::bare(&place, &[], Some(&inv), now_ms()));
+        if let Some(c) = view.campaigns.iter().find(|c| c.id == id) {
+            assert_eq!(c.link_url, None);
+        }
     }
 
     #[test]
@@ -2520,6 +2617,20 @@ mod tests {
         let view = build(&j);
         assert_eq!(view.lead.as_ref().unwrap().drop_id, "b", "one not granted hands it on too");
         assert_eq!(view.campaigns[0].drops[0].status, "Watched");
+        // The game account not linked: the finished one offers Connect in the
+        // drawer while the lip follows the one still earning.
+        let (mut list, mut inv) = (list.clone(), inv.clone());
+        for c in list.iter_mut() {
+            c.account_link = Some("https://game.example/link".into());
+            c.is_account_connected = false;
+        }
+        inv.items[0].campaign.is_account_connected = false;
+        let mut k = Inputs::bare(&place, &list, Some(&inv), now_ms());
+        k.held_lead = Some("a");
+        let view = build(&k);
+        assert_eq!(view.campaigns[0].drops[0].status, "Connect");
+        assert!(view.campaigns[0].drops[0].connect);
+        assert_eq!(view.lead.as_ref().unwrap().drop_id, "b", "Connect never parks the lip");
     }
 
     /// One started campaign with a tier per (id, minutes needed, minutes in).
@@ -2708,6 +2819,7 @@ mod tests {
                 "ends",
                 "game_name",
                 "id",
+                "link_url",
                 "name",
                 "started"
             ]
@@ -2718,6 +2830,7 @@ mod tests {
                 "bar",
                 "claim_label",
                 "claimed",
+                "connect",
                 "current_minutes",
                 "detail",
                 "id",
