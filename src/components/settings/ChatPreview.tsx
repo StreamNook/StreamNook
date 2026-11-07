@@ -30,7 +30,7 @@ import type { ChatDesignSettings } from '../../types';
 import { ModSlider } from '../chat/ModSlider';
 import { ModLineButtons } from '../chat/ModLineButtons';
 import { HoverModButtons } from '../chat/HoverModButtons';
-import { Copy, PushPin } from 'phosphor-react';
+import { ArrowBendUpLeft, Copy, PushPin } from 'phosphor-react';
 import { formatDuration } from '../../utils/timeoutRamp';
 import { lineButtons, type LineButton } from '../chat/modLine';
 import { bindLineStrips, bindLineWheel, useLineArt, useLineButtons, type LineArt } from '../chat/lineArt';
@@ -421,7 +421,8 @@ export const ModLinePreview = ({ stored }: { stored: ChatDesignSettings | undefi
 
 /** Sample chat whose middle line shows the hover buttons as chat draws them
  *  under the pointer (here at rest, so they can be seen): the real Ban, Delete
- *  and quick timeout, the other lengths one click away, then Pin and Copy. A
+ *  and quick timeout, the other lengths one click away, then Pin, Copy and
+ *  Reply. A
  *  click only names the action; nothing is sent from a preview. */
 export const ModHoverPreview = ({ stored }: { stored: ChatDesignSettings | undefined }) => {
   const design = previewDesignOf(stored);
@@ -467,6 +468,9 @@ export const ModHoverPreview = ({ stored }: { stored: ChatDesignSettings | undef
               </button>
               <button type="button" aria-label="Copy message" onClick={() => setClicked('copy the message')} className={dockButton}>
                 <Copy size={14} weight="bold" />
+              </button>
+              <button type="button" aria-label="Reply" onClick={() => setClicked(`reply to ${target}`)} className={dockButton}>
+                <ArrowBendUpLeft size={14} weight="bold" />
               </button>
             </div>
           </div>

@@ -82,6 +82,19 @@ describe('mod buttons act only on still rows', () => {
     const row = read('components/ChatMessage.tsx');
     expect(row).toContain("'Pin message'} side=\"top\" requirePointerMove>");
     expect(row).toContain('<Tooltip content="Copy message" side="top" requirePointerMove>');
+    expect(row).toContain('<Tooltip content="Reply" side="top" requirePointerMove>');
+  });
+
+  it("the dock's Reply sits right of Copy and starts the same reply a right click does", () => {
+    const row = read('components/ChatMessage.tsx');
+    const copy = row.indexOf('aria-label="Copy message"');
+    const reply = row.indexOf('aria-label="Reply"');
+    expect(copy).toBeGreaterThan(0);
+    expect(reply).toBeGreaterThan(copy);
+    expect(row.slice(reply, reply + 400)).toContain('onUsernameRightClick?.(messageId, parsed.username)');
+    expect(row).toContain("const canReply = !!onUsernameRightClick && !!parsed.tags.get('id');");
+    const preview = read('components/settings/ChatPreview.tsx');
+    expect(preview.indexOf('aria-label="Reply"')).toBeGreaterThan(preview.indexOf('aria-label="Copy message"'));
   });
 
   it('the dock stays opaque: its buttons dim, and its box shows at once on a moving row', () => {

@@ -539,7 +539,7 @@ import { isThemeDark } from '../themes';
 
 import { Logger } from '../utils/logger';
 import { moderateWithToast, type ModRequest } from '../services/moderation';
-import { Copy, PushPin, PushPinSlash } from 'phosphor-react';
+import { ArrowBendUpLeft, Copy, PushPin, PushPinSlash } from 'phosphor-react';
 import { ModSlider } from './chat/ModSlider';
 import { HoverModButtons } from './chat/HoverModButtons';
 import { ModLineButtons } from './chat/ModLineButtons';
@@ -3472,6 +3472,8 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   // that handled the click itself keeps it (the name; an emote, which goes
   // into the composer), links and buttons keep the plain no-menu default, and
   // a text selection touching this row falls through to the Copy menu.
+  // The hover dock's Reply starts the same reply a right click does.
+  const canReply = !!onUsernameRightClick && !!parsed.tags.get('id');
   const handleRowContextMenu = (e: React.MouseEvent<HTMLDivElement>) => {
     if (e.defaultPrevented || !onUsernameRightClick) return;
     const messageId = parsed.tags.get('id');
@@ -3938,7 +3940,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
           lengths open on a click, in place, and their close button lands on
           the chevron's own spot, so a double click only toggles. data-no-drag
           so nothing here starts a mod drag. */}
-      {hoverArmed && (onMessageCopy || (showInlinePin && !!broadcasterId) || dockOffered) && (
+      {hoverArmed && (onMessageCopy || canReply || (showInlinePin && !!broadcasterId) || dockOffered) && (
         <div
           data-no-drag="true"
           data-row-dock="true"
@@ -3968,7 +3970,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
               }}
             />
           )}
-          {dockOffered && (onMessageCopy || showInlinePin) && <div className="mx-0.5 h-4 w-px bg-white/10" />}
+          {dockOffered && (onMessageCopy || canReply || showInlinePin) && <div className="mx-0.5 h-4 w-px bg-white/10" />}
           {showInlinePin && broadcasterId && thisMessageId && parsed.provider === 'twitch' && (
             <Tooltip content={isThisPinned ? 'Unpin message' : 'Pin message'} side="top" requirePointerMove>
               <button
@@ -4004,6 +4006,23 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
                 className="p-1 rounded-md text-white/50 hover:text-white hover:bg-surface-hover transition-colors"
               >
                 <Copy size={14} weight="bold" />
+              </button>
+            </Tooltip>
+          )}
+          {/* The same reply a right click on the name starts, for those who
+              would rather click. */}
+          {canReply && (
+            <Tooltip content="Reply" side="top" requirePointerMove>
+              <button
+                aria-label="Reply"
+                onClick={(e) => {
+                  e.preventDefault();
+                  const messageId = parsed.tags.get('id');
+                  if (messageId) onUsernameRightClick?.(messageId, parsed.username);
+                }}
+                className="p-1 rounded-md text-white/50 hover:text-white hover:bg-surface-hover transition-colors"
+              >
+                <ArrowBendUpLeft size={14} weight="bold" />
               </button>
             </Tooltip>
           )}
