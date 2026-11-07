@@ -3,7 +3,7 @@
 // from Rust (services/watch_drops.rs, through stores/watchDropsStore); this
 // draws the one-line bar and, on a click, the drawer listing every reward you
 // can earn here. The drawer floats over chat, so nothing in the column moves.
-import { lazy, memo, Suspense, useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { lazy, memo, Suspense, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
 import { AnimatePresence } from 'framer-motion';
 import { CaretUp } from 'phosphor-react';
 import { invoke } from '@tauri-apps/api/core';
@@ -11,7 +11,7 @@ import { useAppStore } from '../../stores/AppStore';
 import { useWatchDrops, type WatchDrops } from '../../stores/watchDropsStore';
 import { useOutsidePress } from '../../hooks/useOutsidePress';
 import { Logger } from '../../utils/logger';
-import { ACCENT_BUTTON, SUCCESS_FILL } from '../ui/glazeButtons';
+import { ACCENT_BUTTON, GLAZE_BANNER, SUCCESS_FILL } from '../ui/glazeButtons';
 import { DropArt } from './DropArt';
 import { splitStatus } from './dropsStatusText';
 
@@ -136,7 +136,7 @@ function MoreStack({ more, art }: { more: number; art: string[] }) {
   const shown = art.slice(0, Math.min(2, more));
   const rest = more - shown.length;
   return (
-    <span className="drops-stack flex shrink-0 items-center pl-1">
+    <span className="drops-stack flex shrink-0 items-center pl-1.5">
       {shown.map((src) => (
         <DropArt key={src} image={src} size={18} radius={5} />
       ))}
@@ -148,6 +148,12 @@ function MoreStack({ more, art }: { more: number; art: string[] }) {
     </span>
   );
 }
+
+/** The glaze rounds to a pill and outranks the rounded utilities, so the
+ *  bar's corner is set inline, with the reward's progress as `--drops-heat`,
+ *  which warms the glass (its frost lives in the stylesheet, where the
+ *  full-screen column can raise it). */
+const BAR_RADIUS = 13;
 
 /** The bar itself, from props alone (the settings preview draws it too). The
  *  fill is an inset track under the name, clear of the bar's rounded corners. */
@@ -170,10 +176,11 @@ export function DropsChatBarView({ line, open, claiming, onToggle, onClaim, onPr
       onClick={onToggle}
       onKeyDown={onKeyDown}
       onPointerEnter={onPreload}
-      className={`liquid-glass-panel drops-bar flex h-[42px] w-full cursor-pointer select-none flex-col justify-center gap-[5px] px-2.5 outline-none focus-visible:ring-1 focus-visible:ring-accent/60 ${line.ready ? 'is-ready' : ''}`}
+      style={{ borderRadius: BAR_RADIUS, '--drops-heat': (percent / 100).toFixed(2) } as CSSProperties}
+      className={`${GLAZE_BANNER} drops-bar flex h-[52px] w-full cursor-pointer select-none flex-col justify-center gap-2 px-3 outline-none focus-visible:ring-1 focus-visible:ring-accent/60 ${line.ready ? 'is-ready' : ''}`}
     >
-      <span className="flex min-w-0 items-center gap-2">
-        <DropArt image={line.image} size={26} radius={7} />
+      <span className="flex min-w-0 items-center gap-2.5">
+        <DropArt image={line.image} size={28} radius={8} />
         <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium leading-4 text-textPrimary">{line.name}</span>
         {line.ready && onClaim ? (
           <button
@@ -202,7 +209,7 @@ export function DropsChatBarView({ line, open, claiming, onToggle, onClaim, onPr
           className={`shrink-0 text-textMuted transition-transform duration-200 ease-[cubic-bezier(0.2,0.8,0.2,1)] ${open ? 'rotate-180' : ''}`}
         />
       </span>
-      <span aria-hidden className="ml-[34px] block h-[3px] overflow-hidden rounded-full bg-textPrimary/[0.09]">
+      <span aria-hidden className="ml-[38px] block h-[3px] overflow-hidden rounded-full bg-textPrimary/[0.09]">
         <span className={`drops-bar-fill block h-full rounded-full ${line.ready ? 'is-ready' : ''}`} style={{ width: `${percent}%` }} />
       </span>
     </div>

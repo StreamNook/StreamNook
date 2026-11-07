@@ -111,10 +111,13 @@ describe('drawerAfter', () => {
 describe('DropsChatBarView', () => {
   it('draws an inset track and the extra count, never an edge strip', () => {
     const html = renderToStaticMarkup(<DropsChatBarView line={PREVIEW_LINE} open={false} claiming={false} />);
-    expect(html).toContain('ml-[34px]');
+    expect(html).toContain('ml-[38px]');
+    // The glass warms with the reward's progress.
+    expect(html).toContain('--drops-heat:0.72');
     expect(html).toContain('width:72%');
     expect(html).toContain('+2');
-    expect(html).toContain('liquid-glass-panel drops-bar');
+    expect(html).toContain('chrome-glaze drops-bar');
+    expect(html).not.toContain('liquid-glass-panel drops-bar');
     expect(html).not.toMatch(/absolute left-0 right-0 bottom-0/);
   });
   it('draws the time strong and the rest quiet', () => {

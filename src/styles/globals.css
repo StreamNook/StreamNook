@@ -2953,26 +2953,35 @@ body {
     opacity 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
-/* The chat drops bar and its drawer wear the command palette's glass at chat
-   scale. The bar sits in the column right above the message box, so it gets a
-   short contact shadow: the palette's deep drop would spill onto the composer. */
-.liquid-glass-panel.drops-bar {
-  border-radius: 10px;
-  box-shadow:
-    inset 0 1px 0 0 rgba(255, 255, 255, 0.10),
-    inset 0 -0.5px 0 0 rgba(255, 255, 255, 0.06),
-    var(--hairline-contour),
-    0 2px 8px -2px rgba(0, 0, 0, 0.45);
+/* The chat drops bar wears the chat column's glaze (the streak and resub
+   banners' material: accent-lit rim, specular, contact shadow), with a little
+   frost so its quieter lines hold over a theme's art. Its corner is set inline,
+   because the glaze rounds to a pill. The drawer above it keeps the command
+   palette's glass. */
+/* The glass itself is colored, and it warms as the reward gets closer:
+   `--drops-heat` (0 to 1, the reward's progress, set inline) pushes more of
+   the accent into the glaze's tint, its rim and its inner glow, and lifts a
+   soft glow of the same color under it. It only changes when the minutes do,
+   about once a minute, in steps too small to see (the glow under it eases);
+   nothing here animates per frame. */
+.chrome-glaze.drops-bar {
+  --drops-heat: 0;
+  --glaze-frost: 24%;
+  --glaze-ring: calc(12% + var(--drops-heat) * 36%);
+  --glaze-inner: calc(6% + var(--drops-heat) * 24%);
+  --glaze-spec: calc(30% + var(--drops-heat) * 30%);
+  background-image: linear-gradient(
+    color-mix(in srgb, color-mix(in srgb, var(--color-accent) calc(8% + var(--drops-heat) * 44%), var(--color-background-tertiary)) calc(36% + var(--drops-heat) * 20%), transparent),
+    color-mix(in srgb, color-mix(in srgb, var(--color-accent) calc(8% + var(--drops-heat) * 44%), var(--color-background-tertiary)) calc(36% + var(--drops-heat) * 20%), transparent)
+  );
+  box-shadow: 0 4px 20px -6px color-mix(in srgb, var(--color-accent) calc(var(--drops-heat) * 45%), transparent);
+  transition: box-shadow 700ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
-/* A reward waiting on a claim lights the bar's rim green. Box shadows only
-   change when the state does, never per frame. */
-.liquid-glass-panel.drops-bar.is-ready {
-  box-shadow:
-    inset 0 1px 0 0 rgba(255, 255, 255, 0.10),
-    inset 0 -0.5px 0 0 rgba(255, 255, 255, 0.06),
-    0 0 0 1px color-mix(in srgb, var(--color-success) 38%, transparent),
-    0 4px 18px -4px color-mix(in srgb, var(--color-success) 28%, transparent),
-    0 2px 8px -2px rgba(0, 0, 0, 0.45);
+/* A reward waiting on a claim turns the glass green: a local accent retints
+   the whole glaze, as the title bar's update pill does, at full heat. */
+.chrome-glaze.drops-bar.is-ready {
+  --color-accent: var(--color-success);
+  --drops-heat: 1;
 }
 /* A drops fill moves about once a minute. A width transition inside a fixed
    track is the one layout animation the chat column allows; Motion Off
@@ -2995,32 +3004,32 @@ body {
 }
 /* The drawer's reward tiles and bars wear the glaze inside the drawer's glass
    (`glaze-inset` lights them: top edge, bounce, contact shadow, specular);
-   this sets only their shape and film. The next reward is ringed in the
-   accent, green once it waits on a claim, drawn on the glaze's free ::before
-   layer so the lighting on the element stays the same in every state. */
+   this sets only their shape and film. The next reward is colored glass
+   rather than an outline: the accent tints the film, lights the top edge and
+   glows softly from inside, on the glaze's free ::before layer so the
+   lighting on the element is the same in every state. Green once it waits
+   on a claim. */
 .drops-tile {
+  --tile-tint: transparent;
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.045);
+  background: color-mix(in srgb, var(--tile-tint) 16%, rgba(255, 255, 255, 0.045));
   transition: background-color 200ms ease;
 }
 .drops-tile::before {
   transition: box-shadow 200ms ease;
 }
 .drops-tile.is-next {
-  background: color-mix(in srgb, var(--color-accent-on-surface) 9%, rgba(255, 255, 255, 0.03));
-}
-.drops-tile.is-next::before {
-  box-shadow:
-    inset 0 0 0 1px color-mix(in srgb, var(--color-accent-on-surface) 45%, transparent),
-    0 0 18px -6px color-mix(in srgb, var(--color-accent-on-surface) 55%, transparent);
+  --tile-tint: var(--color-accent-on-surface);
 }
 .drops-tile.is-ready {
-  background: color-mix(in srgb, var(--color-success) 9%, rgba(255, 255, 255, 0.03));
+  --tile-tint: var(--color-success);
+  background: color-mix(in srgb, var(--tile-tint) 20%, rgba(255, 255, 255, 0.04));
 }
-.drops-tile.is-ready::before {
+.drops-tile:is(.is-next, .is-ready)::before {
   box-shadow:
-    inset 0 0 0 1px color-mix(in srgb, var(--color-success) 50%, transparent),
-    0 0 18px -6px color-mix(in srgb, var(--color-success) 55%, transparent);
+    inset 0 1px 0 0 color-mix(in srgb, var(--tile-tint) 55%, transparent),
+    inset 0 0 16px 0 color-mix(in srgb, var(--tile-tint) 22%, transparent),
+    0 0 18px -6px color-mix(in srgb, var(--tile-tint) 45%, transparent);
 }
 .drops-tile.is-claimed .drops-art {
   opacity: 0.5;
@@ -3033,12 +3042,14 @@ body {
 .drops-stack > * {
   box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--color-background-tertiary) 80%, black);
 }
-/* Over video in the full-screen chat column, the bar and the drawer keep the
-   flyout's near-opaque base under the liquid tint, so a bright stream never
-   reads through their text. */
-.chat-fullscreen-overlay .liquid-glass-panel.drops-bar,
+/* Over video in the full-screen chat column, the drawer keeps the flyout's
+   near-opaque base under the liquid tint and the bar's glaze takes a heavy
+   frost, so a bright stream never reads through their text. */
 .chat-fullscreen-overlay .liquid-glass-panel.drops-drawer {
   background-color: color-mix(in srgb, var(--color-background-tertiary) calc(92% + (1 - var(--glass-strength, 1)) * 8%), transparent);
+}
+.chat-fullscreen-overlay .chrome-glaze.drops-bar {
+  --glaze-frost: 85%;
 }
 
 /* Small floating flyout (the title bar's platform switcher menu). A popover
