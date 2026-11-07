@@ -404,6 +404,11 @@ export function SwipeModerator({
         list.setAttribute('data-row-swipe', '');
         // A slide back still running on this row would make it lag the finger.
         clearTransition(press.row);
+        // The newest rows' entrance (Slide or Rise) holds `transform: none` by its fill, and an
+        // animation outranks this inline transform: the row would not move under the finger,
+        // then jump once a new message pushed it out of the newest three. Its entrance is over
+        // (or ends now), so it stays off for good: cleared, it would play again.
+        press.row.style.animation = 'none';
         rowRect = press.row.getBoundingClientRect();
         listRect = list.getBoundingClientRect();
         if (kind === 'mod') {
