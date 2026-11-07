@@ -6,10 +6,9 @@
 // A sibling of the bar (never inside its glass), so its own blur reads the
 // chat behind it.
 import { motion } from 'framer-motion';
-import { ArrowSquareOut, Check } from 'phosphor-react';
+import { Check } from 'phosphor-react';
 import type { HereCampaign, HereDrop, WatchDrops } from '../../stores/watchDropsStore';
-import { openExternal } from '../../utils/openExternal';
-import { ACCENT_BUTTON, GLAZE_PILL, SUCCESS_FILL } from '../ui/glazeButtons';
+import { ACCENT_BUTTON, SUCCESS_FILL } from '../ui/glazeButtons';
 import { DropArt } from './DropArt';
 import { splitStatus } from './dropsStatusText';
 
@@ -27,8 +26,6 @@ interface Props {
 type OnClaim = Props['onClaim'];
 
 export default function DropsDrawer({ view, instant, maxHeight, claimingId, onClaim }: Props) {
-  const left = view.campaigns.reduce((n, c) => n + c.drops.filter((d) => !d.claimed).length, 0);
-  const one = view.campaigns.length === 1 ? view.campaigns[0] : null;
   return (
     <motion.div
       role="dialog"
@@ -40,6 +37,19 @@ export default function DropsDrawer({ view, instant, maxHeight, claimingId, onCl
       className="liquid-glass-panel drops-drawer absolute bottom-full left-2 right-2 flex origin-bottom flex-col overflow-hidden"
     >
       <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto p-3">
+        <DrawerBody view={view} claimingId={claimingId} onClaim={onClaim} />
+      </div>
+    </motion.div>
+  );
+}
+
+/** What the drawer lists, without its own glass or scroll: desktop's drawer
+ *  wraps it in a panel over chat, the phones' lip in a bottom sheet. */
+export function DrawerBody({ view, claimingId, onClaim }: Pick<Props, 'view' | 'claimingId' | 'onClaim'>) {
+  const left = view.campaigns.reduce((n, c) => n + c.drops.filter((d) => !d.claimed).length, 0);
+  const one = view.campaigns.length === 1 ? view.campaigns[0] : null;
+  return (
+    <>
         {one ? (
           <>
             <CampaignHeader campaign={one} />
@@ -78,8 +88,7 @@ export default function DropsDrawer({ view, instant, maxHeight, claimingId, onCl
             )}
           </>
         )}
-      </div>
-    </motion.div>
+    </>
   );
 }
 
@@ -161,7 +170,6 @@ function Rewards({
               <Tile
                 key={drop.id}
                 drop={drop}
-                linkUrl={campaign.link_url}
                 claiming={claimingId === drop.id}
                 onClaim={onClaim}
                 pair={row.length === 2}
@@ -184,7 +192,7 @@ export function rewardRows<T>(drops: T[]): T[][] {
 
 function tileState(drop: HereDrop): string {
   if (drop.claimed) return 'is-claimed';
-  if (drop.ready && !drop.pending && !drop.connect) return 'is-ready';
+  if (drop.ready && !drop.pending) return 'is-ready';
   if (drop.lead) return 'is-next';
   return '';
 }
@@ -194,13 +202,11 @@ function tileState(drop: HereDrop): string {
  *  on. */
 function Tile({
   drop,
-  linkUrl,
   claiming,
   onClaim,
   pair,
 }: {
   drop: HereDrop;
-  linkUrl: string | null;
   claiming: boolean;
   onClaim: OnClaim;
   pair?: boolean;
@@ -217,7 +223,7 @@ function Tile({
       </div>
       <Bar drop={drop} />
       <div className="flex min-h-[22px] items-center">
-        <Trailing drop={drop} linkUrl={linkUrl} claiming={claiming} onClaim={onClaim} wide />
+        <Trailing drop={drop} claiming={claiming} onClaim={onClaim} wide />
       </div>
     </div>
   );
@@ -244,7 +250,7 @@ function WideTile({
   bare?: boolean;
 }) {
   const { time } = splitStatus(drop.status);
-  const waiting = !drop.claimed && !drop.ready && !drop.pending && !drop.connect;
+  const waiting = !drop.claimed && !drop.ready && !drop.pending && !drop.watched;
   const campaignLine = bare ? '' : [campaign.name, campaign.ends].filter(Boolean).join(' · ');
   const art = big ? 64 : bare ? 40 : 52;
   return (
@@ -260,7 +266,7 @@ function WideTile({
               <span className={`font-semibold text-textPrimary ${big ? 'text-[15px]' : 'text-[13.5px]'}`}>{time}</span> left
             </span>
           )}
-          {!big && !waiting && <Trailing drop={drop} linkUrl={campaign.link_url} claiming={claiming} onClaim={onClaim} />}
+          {!big && !waiting && <Trailing drop={drop} claiming={claiming} onClaim={onClaim} />}
         </div>
         {!big && campaignLine && (
           <div className="mt-0.5 flex min-w-0 items-center gap-[5px]">
@@ -276,13 +282,15 @@ function WideTile({
             <span className={`truncate text-[11px] tabular-nums ${drop.ready && !drop.claimed ? 'text-success' : 'text-textSecondary'}`}>
               {drop.claimed
                 ? 'Claimed'
-                : drop.ready && !drop.pending && !drop.connect
+                : drop.ready && !drop.pending
                   ? 'Ready to claim'
-                  : drop.bar !== null
-                    ? `${drop.current_minutes} of ${drop.required_minutes} min watched`
-                    : drop.status}
+                  : drop.watched
+                    ? 'Watched, waiting on Twitch'
+                    : drop.bar !== null
+                      ? `${drop.current_minutes} of ${drop.required_minutes} min watched`
+                      : drop.status}
             </span>
-            {!waiting && <Trailing drop={drop} linkUrl={campaign.link_url} claiming={claiming} onClaim={onClaim} />}
+            {!waiting && !drop.watched && <Trailing drop={drop} claiming={claiming} onClaim={onClaim} />}
           </div>
         )}
         {drop.detail && !drop.claimed && (
@@ -296,7 +304,7 @@ function WideTile({
 function Bar({ drop, thick }: { drop: HereDrop; thick?: boolean }) {
   if (drop.bar === null || drop.claimed) return <div className={thick ? 'h-1' : 'h-[3px]'} />;
   const percent = Math.max(0, Math.min(100, drop.bar));
-  const ready = drop.ready && !drop.pending && !drop.connect;
+  const ready = drop.ready && !drop.pending;
   return (
     <div className={`${thick ? 'h-1' : 'h-[3px]'} overflow-hidden rounded-full bg-textPrimary/[0.09]`}>
       <div className={`drops-bar-fill h-full rounded-full ${ready ? 'is-ready' : ''}`} style={{ width: `${percent}%` }} />
@@ -306,24 +314,22 @@ function Bar({ drop, thick }: { drop: HereDrop; thick?: boolean }) {
 
 const CAPSULE = '!text-[11.5px] px-3 leading-[22px] text-center';
 
-/** What a reward offers or waits on: Claim, Claiming, Connect, Claimed, or
+/** What a reward offers or waits on: Claim, Claiming, Watched, Claimed, or
  *  its time left. `wide` stretches a button across its tile. */
 function Trailing({
   drop,
-  linkUrl,
   claiming,
   onClaim,
   wide,
 }: {
   drop: HereDrop;
-  linkUrl: string | null;
   claiming: boolean;
   onClaim: OnClaim;
   wide?: boolean;
 }) {
   const span = wide ? 'w-full' : 'min-w-[64px] shrink-0';
-  // A claim already sent waits for Twitch, and a drop Twitch would not grant
-  // needs the game account linked: neither offers Claim again.
+  // A claim already sent waits for Twitch, and one Twitch took but has not
+  // granted is retried by the auto-claim: neither offers Claim again.
   if (drop.claimed) {
     return (
       <span className="flex items-center gap-1 text-[11px] leading-4 text-success">
@@ -339,20 +345,8 @@ function Trailing({
       </button>
     );
   }
-  if (drop.connect) {
-    return linkUrl ? (
-      // Opens the game's page to link the account, in the browser.
-      <button
-        type="button"
-        onClick={() => void openExternal(linkUrl)}
-        className={`${GLAZE_PILL} inline-flex items-center justify-center gap-1 px-3 text-[11.5px] leading-[22px] ${span}`}
-      >
-        Connect
-        <ArrowSquareOut size={11} weight="bold" aria-hidden className="opacity-70" />
-      </button>
-    ) : (
-      <span className="truncate text-[11px] leading-4 text-textSecondary">{drop.status}</span>
-    );
+  if (drop.watched) {
+    return <span className="truncate text-[11px] leading-4 text-textSecondary">{drop.status}</span>;
   }
   if (drop.ready) {
     return (

@@ -2293,8 +2293,8 @@ impl DropsService {
                                     "[Auto] Twitch accepted the claim for {} ({}) but has not granted it; the game account is probably not linked. Retrying hourly.",
                                     claimed.drop_name, drop_id
                                 );
+                                mark_ungranted(&drop_notices, drop_id.clone(), now).await;
                                 crate::services::watch_drops::forget_claim(&drop_id);
-                                mark_ungranted(&drop_notices, drop_id, now).await;
                                 continue;
                             }
                             crate::services::watch_drops::claimed(

@@ -37,7 +37,8 @@ export interface HereDrop {
   claimed: boolean;
   ready: boolean;
   pending: boolean;
-  connect: boolean;
+  /** Minutes in, but Twitch has not granted the claim; the auto-claim tries again later. */
+  watched: boolean;
   lead: boolean;
   status: string;
   detail: string | null;
@@ -58,8 +59,6 @@ export interface HereCampaign {
   ends: string;
   claimed_label: string;
   started: boolean;
-  needs_link: boolean;
-  link_url: string | null;
   cumulative_minutes: number;
   drops: HereDrop[];
 }

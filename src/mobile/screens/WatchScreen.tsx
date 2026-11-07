@@ -56,7 +56,6 @@ import {
 } from '../chat/ChatTabStrip';
 import { useMentionsStore } from '../mentions/mentionInbox';
 import { MentionContextCard } from '../mentions/MentionContextCard';
-import { DropProgressBar } from '../watch/DropProgressBar';
 import { PinnedBanner } from '../watch/PinnedBanner';
 import { usePinsOpen } from '../watch/pinsOpen';
 import HypeTrainBanner from '../../components/HypeTrainBanner';
@@ -1963,10 +1962,9 @@ export const WatchScreen: React.FC = () => {
             top={
               // Poll + prediction cards are exactly the desktop components:
               // they self-fetch off the channel. Either can be turned off.
-              // Rust orders the stack (the user's order, votes before the
-              // drop), keeps one card open and caps its height. Stream scoped,
-              // like the hype train; the drop card stays mounted on another tab
-              // so its poll keeps running, it just draws nothing there.
+              // Rust orders the stack, keeps one card open and caps its
+              // height. Stream scoped, like the hype train. Drops progress is
+              // not a card here: it is the lip on the composer (MobileDropsLip).
               <ChatOverlayStack
                 maxHeight={topStack.maxHeight}
                 stackRef={setTopStackEl}
@@ -1986,7 +1984,6 @@ export const WatchScreen: React.FC = () => {
                     stack={topStack.control.poll}
                   />
                 )}
-                <DropProgressBar stack={topStack.control.drop} visible={streamScoped && !chatOverlay} />
               </ChatOverlayStack>
             }
           />

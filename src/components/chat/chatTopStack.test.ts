@@ -44,7 +44,6 @@ describe('chat top stack: the TS shapes match Rust', () => {
     for (const file of [
       'src/components/PollOverlay.tsx',
       'src/components/PredictionOverlay.tsx',
-      'src/mobile/watch/DropProgressBar.tsx',
     ]) {
       const src = read(file);
       expect(src, file).toContain('useStackPresence(stack,');
@@ -58,10 +57,9 @@ describe('chat top stack: the TS shapes match Rust', () => {
     expect(desktop).toContain('maxHeight={topStack.maxHeight}');
     const phone = read('src/mobile/screens/WatchScreen.tsx');
     expect(phone).toContain('useChatTopStack(chatColumnEl)');
-    expect(phone).toContain('stack={topStack.control.drop}');
-    // The drop card left the floating header, which used to paint over the poll.
-    const header = phone.slice(phone.indexOf('<PinnedBanner') - 400, phone.indexOf('<PinnedBanner'));
-    expect(header).not.toContain('DropProgressBar');
+    // Drops progress is the lip on the composer now, never a card up here.
+    expect(phone).not.toContain('topStack.control.drop');
+    expect(phone).not.toContain('DropProgressBar');
   });
 });
 

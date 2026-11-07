@@ -23,6 +23,7 @@ import type { BackendChatMessage } from '../../services/twitchChat';
 import { Logger } from '../../utils/logger';
 import { moderateWithToast } from '../../services/moderation';
 import { MobileChatInput, type ChatGating } from './MobileChatInput';
+import { MobileDropsLip } from './MobileDropsLip';
 import { UserProfileSheet, type SheetUser } from '../profile/UserProfileSheet';
 import { EmoteSheet } from './EmoteSheet';
 import type { EmoteCardTarget } from '../../stores/emoteCardStore';
@@ -1134,6 +1135,11 @@ export const MobileChatPane: React.FC<{
             fill
           />
         </div>
+      )}
+      {/* Drops progress rises out of the composer's top edge, for the room the
+          account is earning in. */}
+      {!noSend && !vodHere && isTwitchRoom && activeTab && (
+        <MobileDropsLip channelId={broadcasterId ?? ''} login={activeTab.login} />
       )}
       {!noSend && (
         <MobileChatInput

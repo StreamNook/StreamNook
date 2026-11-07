@@ -102,8 +102,6 @@ pub struct HereCampaign {
     /// "2 of 4 claimed"; empty when not started.
     pub claimed_label: String,
     pub started: bool,
-    pub needs_link: bool,
-    pub link_url: Option<String>,
     /// The campaign clock (a per-reward campaign: its furthest reward).
     pub cumulative_minutes: i32,
     /// Watch-time rewards, fewest required minutes first.
@@ -119,9 +117,11 @@ pub struct HereDrop {
     pub claimed: bool,
     pub ready: bool,
     pub pending: bool,
-    pub connect: bool,
+    /// Its minutes are in but Twitch has not granted the claim (the
+    /// auto-claim tries again later); no Claim, and it never holds the lip.
+    pub watched: bool,
     pub lead: bool,
-    /// "Claimed", "Ready", "Claiming", "Connect", "12m to watch" or
+    /// "Claimed", "Ready", "Claiming", "Watched", "12m to watch" or
     /// "Starts when you watch".
     pub status: String,
     pub detail: Option<String>,
@@ -336,8 +336,15 @@ pub struct Inputs<'a> {
     pub instances: &'a HashMap<String, String>,
     pub claims: &'a HashMap<String, ClaimState>,
     pub ungranted: &'a HashSet<String>,
+    /// The reward the lip showed last, so a tie never trades it away.
+    pub held_lead: Option<&'a str>,
     pub now_ms: i64,
 }
+
+/// Minutes a reward on the lip may trail the closest one and still keep it:
+/// rewards finishing together have counters that reach the app a moment
+/// apart, and the lip must not trade places each time one lands.
+const LEAD_SLACK_MINUTES: i32 = 1;
 
 static NO_OVERLAY: Lazy<HashMap<String, (i32, DateTime<Utc>)>> = Lazy::new(HashMap::new);
 static NO_INSTANCES: Lazy<HashMap<String, String>> = Lazy::new(HashMap::new);
@@ -361,6 +368,7 @@ impl<'a> Inputs<'a> {
             instances: &NO_INSTANCES,
             claims: &NO_CLAIMS,
             ungranted: &NO_UNGRANTED,
+            held_lead: None,
             now_ms,
         }
     }
@@ -456,14 +464,11 @@ struct Row<'a> {
     owned: bool,
     ready: bool,
     pending: bool,
-    connect: bool,
+    watched: bool,
 }
 
 /// A campaign's watch-time rewards, fewest minutes first, and its clock.
-/// `needs_link`: the game account is not linked and there is a page to link
-/// it, so a tier whose minutes are in offers Connect rather than a Claim
-/// Twitch would not grant.
-fn rows<'a>(c: &'a DropCampaign, started: bool, needs_link: bool, i: &Inputs, owned: &Owned) -> (Vec<Row<'a>>, i32) {
+fn rows<'a>(c: &'a DropCampaign, started: bool, i: &Inputs, owned: &Owned) -> (Vec<Row<'a>>, i32) {
     let mut tiers: Vec<&TimeBasedDrop> = c
         .time_based_drops
         .iter()
@@ -534,13 +539,11 @@ fn rows<'a>(c: &'a DropCampaign, started: bool, needs_link: bool, i: &Inputs, ow
                 .is_some_and(|t| t.ready_to_claim);
             let pending = !own && i.claims.get(&d.id) == Some(&ClaimState::Pending);
             let earned = started && (shown >= need || twitch_ready);
-            // Twitch will not grant it until the game account is linked: one it
-            // already turned down, or one whose minutes are in while the
-            // campaign says the account is not linked yet.
-            let connect = !own && !pending && (i.ungranted.contains(&d.id) || (needs_link && earned));
-            // A claim already sent, or one waiting on that link, never offers
-            // Claim.
-            let ready = !own && !pending && !connect && earned;
+            // A claim Twitch took but has not granted; the auto-claim tries
+            // it again later.
+            let watched = !own && !pending && i.ungranted.contains(&d.id);
+            // A claim already sent, or one not granted, never offers Claim.
+            let ready = !own && !pending && !watched && earned;
             Row {
                 d,
                 need,
@@ -548,7 +551,7 @@ fn rows<'a>(c: &'a DropCampaign, started: bool, needs_link: bool, i: &Inputs, ow
                 owned: own,
                 ready,
                 pending,
-                connect,
+                watched,
             }
         })
         .collect();
@@ -556,10 +559,24 @@ fn rows<'a>(c: &'a DropCampaign, started: bool, needs_link: bool, i: &Inputs, ow
 }
 
 impl Row<'_> {
-    /// Its minutes are in: ready to claim, being claimed, or waiting on a link.
-    /// These come first, before any tier still earning.
+    /// Its minutes are in: ready to claim, being claimed, or not granted.
     fn waits(&self) -> bool {
-        self.ready || self.pending || self.connect
+        self.ready || self.pending || self.watched
+    }
+
+    /// The lip's order, then minutes left: one to claim, then one still
+    /// earning, then one the lip only shows when nothing else is left (a
+    /// claim in flight or not granted), so a finished reward never parks the
+    /// lip while another is making progress.
+    fn rank(&self) -> (u8, i32) {
+        let kind = if self.ready {
+            0
+        } else if self.pending || self.watched {
+            2
+        } else {
+            1
+        };
+        (kind, self.need - self.shown)
     }
 }
 
@@ -582,8 +599,8 @@ fn here_drop(r: &Row, i: &Inputs, started: bool, lead: bool) -> HereDrop {
         "Claimed".to_string()
     } else if r.pending {
         "Claiming".to_string()
-    } else if r.connect {
-        "Connect".to_string()
+    } else if r.watched {
+        "Watched".to_string()
     } else if r.ready {
         "Ready".to_string()
     } else if !started {
@@ -608,7 +625,7 @@ fn here_drop(r: &Row, i: &Inputs, started: bool, lead: bool) -> HereDrop {
         claimed: r.owned,
         ready: r.ready,
         pending: r.pending,
-        connect: r.connect,
+        watched: r.watched,
         lead,
         status,
         detail: if r.owned {
@@ -645,8 +662,8 @@ fn lead_drop(c: &DropCampaign, rows: &[Row], at: usize, i: &Inputs) -> WatchDrop
     let left = r.need - r.shown;
     let status = if r.pending {
         "Claiming".to_string()
-    } else if r.connect {
-        "Connect".to_string()
+    } else if r.watched {
+        "Watched".to_string()
     } else if r.ready {
         "Ready".to_string()
     } else {
@@ -660,8 +677,8 @@ fn lead_drop(c: &DropCampaign, rows: &[Row], at: usize, i: &Inputs) -> WatchDrop
         trailing: if r.ready { String::new() } else { status.clone() },
         spoken: if r.pending {
             format!("{name}, claiming")
-        } else if r.connect {
-            format!("{name}, link your game account to claim")
+        } else if r.watched {
+            format!("{name}, watched, not granted yet")
         } else if r.ready {
             format!("{name}, ready to claim")
         } else {
@@ -720,29 +737,11 @@ pub fn build(i: &Inputs) -> WatchDrops {
         started: bool,
         rows: Vec<Row<'a>>,
         clock: i32,
-        link: Option<String>,
-        needs_link: bool,
     }
     let mut built: Vec<Built> = found
         .into_iter()
         .filter_map(|(c, started)| {
-            // The Inventory's copy of a campaign carries no account link; the
-            // campaign list's copy does, so a tier Twitch would not grant
-            // still offers Connect with somewhere to go.
-            let link = c
-                .account_link
-                .clone()
-                .filter(|u| !u.is_empty())
-                .or_else(|| {
-                    i.list
-                        .iter()
-                        .find(|l| l.id == c.id)
-                        .and_then(|l| l.account_link.clone())
-                        .filter(|u| !u.is_empty())
-                });
-            // A badge campaign also reports no linked account, but has no link to follow.
-            let needs_link = !c.is_account_connected && link.is_some();
-            let (rows, clock) = rows(c, started, needs_link, i, &owned);
+            let (rows, clock) = rows(c, started, i, &owned);
             if rows.is_empty() {
                 return None;
             }
@@ -751,18 +750,16 @@ pub fn build(i: &Inputs) -> WatchDrops {
                 started,
                 rows,
                 clock,
-                link,
-                needs_link,
             })
         })
         .collect();
-    let work = |b: &Built| -> (bool, i32) {
+    let work = |b: &Built| -> (u8, i32) {
         b.rows
             .iter()
             .filter(|r| !r.owned)
-            .map(|r| (!r.waits(), r.need - r.shown))
+            .map(Row::rank)
             .min()
-            .unwrap_or((true, i32::MAX))
+            .unwrap_or((u8::MAX, i32::MAX))
     };
     built.sort_by(|a, b| {
         (!a.started, work(a), a.c.name.to_lowercase()).cmp(&(
@@ -771,19 +768,35 @@ pub fn build(i: &Inputs) -> WatchDrops {
             b.c.name.to_lowercase(),
         ))
     });
-    let lead_at: Option<(usize, usize)> = built
+    // The lip's reward, by `Row::rank`: one to claim, else the one still
+    // earning closest to done, ties to the first in drawer order. The reward
+    // already on the lip keeps it while it is the same kind and within the
+    // slack of the closest, so rewards finishing together never trade places.
+    let candidates: Vec<((usize, usize), (u8, i32))> = built
         .iter()
         .enumerate()
-        .filter(|(_, b)| b.started && !b.needs_link)
+        .filter(|(_, b)| b.started)
         .flat_map(|(bi, b)| {
             b.rows
                 .iter()
                 .enumerate()
                 .filter(|(_, r)| !r.owned)
-                .map(move |(ri, r)| ((bi, ri), (!r.waits(), r.need - r.shown)))
+                .map(move |(ri, r)| ((bi, ri), r.rank()))
         })
-        .min_by_key(|(_, key)| *key)
-        .map(|(at, _)| at);
+        .collect();
+    let lead_at: Option<(usize, usize)> = candidates
+        .iter()
+        .map(|(_, key)| *key)
+        .min()
+        .and_then(|(kind, left)| {
+            let held = i.held_lead.and_then(|id| {
+                candidates.iter().find(|((bi, ri), (k, l))| {
+                    built[*bi].rows[*ri].d.id == id && *k == kind && *l <= left + LEAD_SLACK_MINUTES
+                })
+            });
+            held.or_else(|| candidates.iter().find(|(_, key)| *key == (kind, left)))
+                .map(|(at, _)| *at)
+        });
     view.lead = lead_at.map(|(bi, ri)| lead_drop(built[bi].c, &built[bi].rows, ri, i));
     let unowned: u32 = built
         .iter()
@@ -823,8 +836,6 @@ pub fn build(i: &Inputs) -> WatchDrops {
                     String::new()
                 },
                 started: b.started,
-                needs_link: b.needs_link,
-                link_url: b.link.clone(),
                 cumulative_minutes: b.clock,
                 drops: b
                     .rows
@@ -1120,6 +1131,7 @@ fn rebuild(s: &mut State) -> Option<WatchDropsSnapshot> {
                 instances: &s.instances,
                 claims: &claims,
                 ungranted: &s.ungranted,
+                held_lead: s.view.lead.as_ref().map(|l| l.drop_id.as_str()),
                 now_ms,
             })
         }
@@ -1353,10 +1365,12 @@ pub fn claimed(drop_id: &str, state: ClaimState, at: DateTime<Utc>, by_loop: boo
     poke();
 }
 
-/// The loop found a claim not granted: the ungranted mark (Connect) takes over.
+/// The loop found a claim not granted: the tier shows Watched at once, so it
+/// never flashes back to Ready while the next inventory read is due.
 pub fn forget_claim(drop_id: &str) {
     let out = with_state(|s| {
         s.claims.remove(drop_id);
+        s.ungranted.insert(drop_id.to_string());
         rebuild(s)
     });
     send(out);
@@ -1903,75 +1917,27 @@ mod tests {
     }
 
     #[test]
-    fn an_earned_tier_offers_connect_not_claim_while_the_account_is_not_linked() {
+    fn a_finished_tier_offers_claim_whatever_the_account_link_says() {
+        // Twitch's linked flag is not trusted: an earned tier is Ready, never
+        // a Connect that would sit there.
         let place = golden::place();
         let case = golden::cases()
             .into_iter()
-            .find(|c| c.name == "an_unlinked_campaign_never_leads")
+            .find(|c| c.name == "a_campaign_reported_unlinked_still_leads")
             .unwrap();
-        let earn = |inv: &mut crate::models::drops::InventoryResponse| {
-            for it in inv.items.iter_mut() {
-                for d in it.campaign.time_based_drops.iter_mut() {
-                    if let Some(p) = d.progress.as_mut() {
-                        p.current_minutes_watched = d.required_minutes_watched;
-                    }
+        let mut inv = case.inventory.clone();
+        for it in inv.items.iter_mut() {
+            for d in it.campaign.time_based_drops.iter_mut() {
+                if let Some(p) = d.progress.as_mut() {
+                    p.current_minutes_watched = d.required_minutes_watched;
                 }
             }
-        };
-        let mut inv = case.inventory.clone();
-        earn(&mut inv);
+        }
         let view = build(&Inputs::bare(&place, &case.list, Some(&inv), now_ms()));
         let tier = &view.campaigns[0].drops[0];
-        assert!(view.campaigns[0].needs_link);
-        assert!(tier.connect && !tier.ready, "Connect in place of Claim");
-        assert_eq!(tier.status, "Connect");
-        assert_eq!(view.campaigns[0].link_url.as_deref(), Some("https://example.test/link"));
-        // Still earning: no Connect yet, just its time.
-        let view = build(&Inputs::bare(&place, &case.list, Some(&case.inventory), now_ms()));
-        let tier = &view.campaigns[0].drops[0];
-        assert!(!tier.connect && !tier.ready);
-        // Linked: the same earned tier offers Claim.
-        let mut list = case.list.clone();
-        for c in list.iter_mut() {
-            c.is_account_connected = true;
-        }
-        for it in inv.items.iter_mut() {
-            it.campaign.is_account_connected = true;
-        }
-        let view = build(&Inputs::bare(&place, &list, Some(&inv), now_ms()));
-        let tier = &view.campaigns[0].drops[0];
-        assert!(tier.ready && !tier.connect);
+        assert!(tier.ready && !tier.watched);
         assert_eq!(tier.status, "Ready");
-    }
-
-    #[test]
-    fn the_inventory_copy_keeps_the_lists_account_link() {
-        // The Inventory never carries accountLinkURL; a tier Twitch would not
-        // grant must still offer Connect with the list's link.
-        let place = golden::place();
-        let case = golden::cases()
-            .into_iter()
-            .find(|c| {
-                let v = build(&Inputs::bare(&golden::place(), &c.list, Some(&c.inventory), now_ms()));
-                v.campaigns.len() == 1 && c.inventory.items.iter().any(|it| it.campaign.id == v.campaigns[0].id)
-            })
-            .expect("a case listing one campaign that is in the inventory");
-        let (mut list, mut inv) = (case.list.clone(), case.inventory.clone());
-        let id = inv.items[0].campaign.id.clone();
-        for c in list.iter_mut().filter(|c| c.id == id) {
-            c.account_link = Some("https://game.example/link".into());
-        }
-        for it in inv.items.iter_mut() {
-            it.campaign.account_link = None;
-        }
-        let view = build(&Inputs::bare(&place, &list, Some(&inv), now_ms()));
-        let c = view.campaigns.iter().find(|c| c.id == id).expect("the campaign");
-        assert_eq!(c.link_url.as_deref(), Some("https://game.example/link"));
-        // Without the list's copy there is still no link to invent.
-        let view = build(&Inputs::bare(&place, &[], Some(&inv), now_ms()));
-        if let Some(c) = view.campaigns.iter().find(|c| c.id == id) {
-            assert_eq!(c.link_url, None);
-        }
+        assert!(view.lead.as_ref().is_some_and(|l| l.complete));
     }
 
     #[test]
@@ -2014,7 +1980,7 @@ mod tests {
     }
 
     #[test]
-    fn not_started_and_unlinked_rows_say_so() {
+    fn not_started_rows_say_so() {
         let place = golden::place();
         let cases = golden::cases();
         let not_started = cases
@@ -2030,21 +1996,6 @@ mod tests {
         assert!(!view.campaigns[0].started);
         assert_eq!(view.campaigns[0].drops[0].status, "Starts when you watch");
         assert_eq!(view.campaigns[0].claimed_label, "");
-        let unlinked = cases
-            .iter()
-            .find(|c| c.name == "an_unlinked_campaign_never_leads")
-            .unwrap();
-        let view = build(&Inputs::bare(
-            &place,
-            &unlinked.list,
-            Some(&unlinked.inventory),
-            now_ms(),
-        ));
-        assert!(view.campaigns[0].needs_link);
-        assert_eq!(
-            view.campaigns[0].link_url.as_deref(),
-            Some("https://example.test/link")
-        );
     }
 
     fn reward_list() -> Vec<serde_json::Value> {
@@ -2541,10 +2492,108 @@ mod tests {
         ungranted.insert("t1".to_string());
         let mut j = Inputs::bare(&place, &list, Some(&inv), now_ms());
         j.ungranted = &ungranted;
-        let connect = build(&j);
-        assert_eq!(connect.campaigns[0].drops[0].status, "Connect");
-        assert!(!connect.campaigns[0].drops[0].ready && connect.campaigns[0].drops[0].connect);
-        assert!(connect.lead.as_ref().is_some_and(|l| !l.complete && l.status == "Connect"));
+        let watched = build(&j);
+        assert_eq!(watched.campaigns[0].drops[0].status, "Watched");
+        assert!(!watched.campaigns[0].drops[0].ready && watched.campaigns[0].drops[0].watched);
+        // Nothing else is left, so the lip still shows it rather than vanish.
+        assert!(watched.lead.as_ref().is_some_and(|l| !l.complete && l.status == "Watched"));
+    }
+
+    #[test]
+    fn a_stuck_reward_never_parks_the_lip_while_another_is_earning() {
+        let place = golden::place();
+        let (list, inv) = tiers(true, &[("a", 60, 60), ("b", 120, 70), ("c", 240, 70)]);
+        assert_eq!(lead_of(&list, &inv, None), "a", "Ready leads");
+        let mut claims = HashMap::new();
+        claims.insert("a".to_string(), ClaimState::Pending);
+        let mut i = Inputs::bare(&place, &list, Some(&inv), now_ms());
+        i.claims = &claims;
+        i.held_lead = Some("a");
+        let view = build(&i);
+        assert_eq!(view.lead.as_ref().unwrap().drop_id, "b", "a claim in flight hands the lip on");
+        assert_eq!(view.campaigns[0].drops[0].status, "Claiming", "the drawer still says so");
+        let mut ungranted = HashSet::new();
+        ungranted.insert("a".to_string());
+        let mut j = Inputs::bare(&place, &list, Some(&inv), now_ms());
+        j.ungranted = &ungranted;
+        j.held_lead = Some("a");
+        let view = build(&j);
+        assert_eq!(view.lead.as_ref().unwrap().drop_id, "b", "one not granted hands it on too");
+        assert_eq!(view.campaigns[0].drops[0].status, "Watched");
+    }
+
+    /// One started campaign with a tier per (id, minutes needed, minutes in).
+    fn tiers(separate: bool, spec: &[(&str, i32, i32)]) -> (Vec<DropCampaign>, InventoryResponse) {
+        let (list, mut inv) = one_tier(0);
+        let c = &mut inv.items[0].campaign;
+        c.separate_progress = separate;
+        let base = c.time_based_drops[0].clone();
+        c.time_based_drops = spec
+            .iter()
+            .map(|(id, need, have)| {
+                let mut d = base.clone();
+                d.id = id.to_string();
+                d.required_minutes_watched = *need;
+                for b in &mut d.benefit_edges {
+                    b.id = format!("benefit-{id}");
+                    b.name = format!("Reward {id}");
+                }
+                let p = d.progress.as_mut().expect("a started tier");
+                p.current_minutes_watched = *have;
+                p.is_claimed = false;
+                p.twitch_progress = None;
+                d
+            })
+            .collect();
+        (list, inv)
+    }
+
+    fn lead_of(list: &[DropCampaign], inv: &InventoryResponse, held: Option<&str>) -> String {
+        let place = golden::place();
+        let mut i = Inputs::bare(&place, list, Some(inv), now_ms());
+        i.held_lead = held;
+        build(&i).lead.expect("a lead").drop_id
+    }
+
+    #[test]
+    fn the_lip_moves_to_the_next_reward_once_the_closest_is_claimed() {
+        let place = golden::place();
+        let (list, inv) = tiers(false, &[("t1", 30, 40), ("t2", 60, 40), ("t3", 90, 40)]);
+        assert_eq!(lead_of(&list, &inv, None), "t1", "the finished tier leads");
+        let mut claims = HashMap::new();
+        claims.insert("t1".to_string(), ClaimState::Claimed);
+        let mut i = Inputs::bare(&place, &list, Some(&inv), now_ms());
+        i.claims = &claims;
+        i.held_lead = Some("t1");
+        let view = build(&i);
+        let lead = view.lead.expect("the next tier leads");
+        assert_eq!(lead.drop_id, "t2", "the closest one still to earn");
+        assert!(lead.line.ends_with("2 of 3"), "{}", lead.line);
+    }
+
+    #[test]
+    fn rewards_finishing_together_keep_the_first_on_the_lip() {
+        let (list, inv) = tiers(true, &[("a", 60, 50), ("b", 60, 50)]);
+        assert_eq!(lead_of(&list, &inv, None), "a", "a tie goes to the first");
+        assert_eq!(lead_of(&list, &inv, Some("b")), "b", "a tie keeps the one shown");
+        // The second one's minute lands a moment before the first's.
+        let (list, inv) = tiers(true, &[("a", 60, 50), ("b", 60, 51)]);
+        assert_eq!(lead_of(&list, &inv, Some("a")), "a", "a minute apart never trades places");
+        assert_eq!(lead_of(&list, &inv, None), "b", "with nothing shown, the closest leads");
+        // Truly further along: the lip follows it.
+        let (list, inv) = tiers(true, &[("a", 60, 50), ("b", 60, 52)]);
+        assert_eq!(lead_of(&list, &inv, Some("a")), "b");
+        // Both finish together: the first, or the one already shown.
+        let (list, inv) = tiers(true, &[("a", 60, 60), ("b", 60, 60)]);
+        assert_eq!(lead_of(&list, &inv, None), "a");
+        assert_eq!(lead_of(&list, &inv, Some("b")), "b");
+        // A finished one always takes the lip from one still earning.
+        let (list, inv) = tiers(true, &[("a", 60, 59), ("b", 60, 60)]);
+        assert_eq!(lead_of(&list, &inv, Some("a")), "b");
+        // One running count: equal tiers finish together, the first leads.
+        let (list, inv) = tiers(false, &[("a", 60, 45), ("b", 60, 45), ("c", 120, 45)]);
+        assert_eq!(lead_of(&list, &inv, None), "a");
+        assert_eq!(lead_of(&list, &inv, Some("c")), "a", "a held tier far behind lets go");
     }
 
     fn body_of<'a>(source: &'a str, signature: &str) -> &'a str {
@@ -2659,9 +2708,7 @@ mod tests {
                 "ends",
                 "game_name",
                 "id",
-                "link_url",
                 "name",
-                "needs_link",
                 "started"
             ]
         );
@@ -2671,7 +2718,6 @@ mod tests {
                 "bar",
                 "claim_label",
                 "claimed",
-                "connect",
                 "current_minutes",
                 "detail",
                 "id",
@@ -2682,7 +2728,8 @@ mod tests {
                 "pending",
                 "ready",
                 "required_minutes",
-                "status"
+                "status",
+                "watched"
             ]
         );
     }

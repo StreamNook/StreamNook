@@ -27,7 +27,7 @@ const view = (over: Partial<WatchDrops> = {}): WatchDrops => ({
 
 describe('DropsDrawer', () => {
   const tier = (over: Partial<HereDrop>): HereDrop => ({
-    id: 't', instance_id: 'i', name: 'Hoodie', image: '', claimed: false, ready: true, pending: false, connect: false,
+    id: 't', instance_id: 'i', name: 'Hoodie', image: '', claimed: false, ready: true, pending: false, watched: false,
     lead: false, status: 'Ready', detail: null, bar: 100, current_minutes: 60, required_minutes: 60, claim_label: 'Claim', ...over,
   });
   const drawer = (drop: HereDrop) =>
@@ -36,7 +36,7 @@ describe('DropsDrawer', () => {
         view={view({
           campaigns: [{
             id: 'c', name: 'Rust Drops', game_name: 'Rust', art: '', box_art: '', ends: '', claimed_label: '0 of 1 claimed', started: true,
-            needs_link: drop.connect, link_url: drop.connect ? 'https://example.com/link' : null, cumulative_minutes: 60, drops: [drop],
+            cumulative_minutes: 60, drops: [drop],
           }],
         })}
         maxHeight={300}
@@ -51,11 +51,12 @@ describe('DropsDrawer', () => {
     const pending = drawer(tier({ pending: true, status: 'Claiming' }));
     expect(pending).not.toContain('>Claim<');
     expect(pending).toMatch(/disabled=""[^>]*>Claiming</);
-    // Twitch would not grant it until the game account is linked.
-    const connect = drawer(tier({ connect: true, status: 'Connect' }));
-    expect(connect).not.toContain('>Claim<');
-    // A link out to the game's page, said with the open-a-page arrow.
-    expect(connect).toMatch(/>Connect<svg/);
+    // Twitch took the claim but has not granted it: no button at all, and
+    // never a Connect.
+    const watched = drawer(tier({ ready: false, watched: true, status: 'Watched' }));
+    expect(watched).not.toContain('<button');
+    expect(watched).not.toContain('Connect');
+    expect(watched).toContain('Watched, waiting on Twitch');
   });
 });
 
@@ -79,22 +80,15 @@ describe('barLine', () => {
     status: '30m to watch', line: '', percent: 75, complete: false, claim_label: 'Claim', spoken: 'Hoodie, 30 minutes left',
   };
   const tier = {
-    id: 'n', instance_id: null, name: 'Jacket', image: '', claimed: false, ready: false, pending: false, connect: false,
+    id: 'n', instance_id: null, name: 'Jacket', image: '', claimed: false, ready: false, pending: false, watched: false,
     lead: false, status: 'Starts when you watch', detail: null, bar: 0, current_minutes: 0, required_minutes: 60, claim_label: 'Claim',
   };
   const notStarted = {
-    id: 'c2', name: 'Later', game_name: 'Rust', art: 'art', box_art: '', ends: '', claimed_label: '', started: false, needs_link: false,
-    link_url: null, cumulative_minutes: 0, drops: [tier],
+    id: 'c2', name: 'Later', game_name: 'Rust', art: 'art', box_art: '', ends: '', claimed_label: '', started: false,
+    cumulative_minutes: 0, drops: [tier],
   };
   it('says the lead', () => {
-    expect(barLine(view({ lead, more: 2 }))).toMatchObject({ name: 'Hoodie', status: '30m to watch', percent: 75, more: 2, ready: false, connectUrl: null });
-  });
-  it("carries the campaign's link when the lead needs the game account linked", () => {
-    const row = { ...tier, id: 'b', lead: true, connect: true, status: 'Connect', bar: 100, current_minutes: 60 };
-    const campaign = { ...notStarted, id: 'c1', started: true, link_url: 'https://game.example/link', drops: [row] };
-    expect(barLine(view({ lead: { ...lead, status: 'Connect' }, campaigns: [campaign] }))?.connectUrl).toBe('https://game.example/link');
-    const claimed = { ...campaign, drops: [{ ...row, claimed: true }] };
-    expect(barLine(view({ lead, campaigns: [claimed] }))?.connectUrl).toBeNull();
+    expect(barLine(view({ lead, more: 2 }))).toMatchObject({ name: 'Hoodie', status: '30m to watch', percent: 75, more: 2, ready: false });
   });
   it('says what a campaign here will start on', () => {
     expect(barLine(view({ campaigns: [notStarted] }))).toMatchObject({ name: 'Jacket', status: 'Starts when you watch', percent: 0 });
@@ -170,11 +164,10 @@ describe('DropsPeekView (the hover card)', () => {
   it('offers Claim when the reward is ready', () => {
     expect(peek({ ready: true, percent: 100 }, () => {})).toContain('>Claim</button>');
   });
-  it('offers Connect when Twitch would not grant the reward until the account is linked', () => {
-    const html = peek({ status: 'Connect', connectUrl: 'https://game.example/link' });
-    expect(html).toMatch(/>Connect<svg[^]*?<\/svg><\/button>/);
-    expect(html).not.toContain('>Claim</button>');
-    expect(peek({ status: 'Connect', connectUrl: null })).not.toContain('<button');
+  it('never offers Connect', () => {
+    const src = readFileSync(resolve(__dirname, 'DropsChatBar.tsx'), 'utf8');
+    expect(src).not.toContain('Connect');
+    expect(readFileSync(resolve(__dirname, 'DropsDrawer.tsx'), 'utf8')).not.toContain('Connect');
   });
   it('is square at the bottom like the lip it grows out of', () => {
     expect(peek()).toContain('border-radius:14px 14px 0 0');
@@ -229,12 +222,12 @@ describe('splitStatus', () => {
 
 describe('DropsDrawer layouts', () => {
   const drop = (id: string, over: Partial<HereDrop> = {}): HereDrop => ({
-    id, instance_id: null, name: `Reward ${id}`, image: `${id}.png`, claimed: false, ready: false, pending: false, connect: false,
+    id, instance_id: null, name: `Reward ${id}`, image: `${id}.png`, claimed: false, ready: false, pending: false, watched: false,
     lead: false, status: '2h 12m to watch', detail: null, bar: 27, current_minutes: 48, required_minutes: 180, claim_label: 'Claim', ...over,
   });
   const campaign = (id: string, drops: HereDrop[]) => ({
     id, name: `Campaign ${id}`, game_name: 'Once Human', art: 'art.png', box_art: 'box.jpg', ends: '8d left',
-    claimed_label: '', started: true, needs_link: false, link_url: null, cumulative_minutes: 48, drops,
+    claimed_label: '', started: true, cumulative_minutes: 48, drops,
   });
   const html = (campaigns: ReturnType<typeof campaign>[]) =>
     renderToStaticMarkup(<DropsDrawer view={view({ campaigns })} maxHeight={400} claimingId={null} onClaim={() => {}} />);
@@ -307,10 +300,29 @@ describe('mounting', () => {
   });
 });
 
-describe('the Android card', () => {
-  it('follows Drops progress, and polls nothing while it is off', () => {
-    const src = readFileSync(resolve(__dirname, '../../mobile/watch/DropProgressBar.tsx'), 'utf8');
-    expect(src).toContain("s.settings.chat_design?.show_drops_in_chat ?? true");
-    expect(src).toContain('const twitch = showInChat && isTwitchStream(currentStream) && !!channelLogin;');
+describe('the phone lip', () => {
+  const lipSrc = () => readFileSync(resolve(__dirname, '../../mobile/chat/MobileDropsLip.tsx'), 'utf8');
+  it('follows Drops progress and the same Rust model as desktop', () => {
+    const src = lipSrc();
+    expect(src).toContain('s.settings.chat_design?.show_drops_in_chat ?? true');
+    expect(src).toContain('useWatchDrops(enabled)');
+    expect(src).toContain('showsHere(view, channelId, login) ? barLine(view) : null');
+  });
+  it('is the touch lip, and a tap opens the list in a bottom sheet', () => {
+    const src = lipSrc();
+    expect(src).toContain('onToggle={() => setOpen(true)} touch');
+    const sheet = src.indexOf('<MobileSheet open={open}');
+    expect(sheet).toBeGreaterThan(0);
+    expect(src.indexOf('<DrawerBody', sheet)).toBeGreaterThan(sheet);
+    const html = renderToStaticMarkup(<DropsChatBarView line={PREVIEW_LINE} open={false} touch />);
+    expect(html).toContain('h-9');
+    expect(html).toContain('border-radius:12px 12px 0 0');
+  });
+  it('rises out of the composer for a live Twitch room only', () => {
+    const pane = readFileSync(resolve(__dirname, '../../mobile/chat/MobileChatPane.tsx'), 'utf8');
+    const lip = pane.indexOf('<MobileDropsLip');
+    expect(lip).toBeGreaterThan(0);
+    expect(pane.indexOf('<MobileChatInput')).toBeGreaterThan(lip);
+    expect(pane.slice(lip - 120, lip)).toContain('!noSend && !vodHere && isTwitchRoom && activeTab');
   });
 });

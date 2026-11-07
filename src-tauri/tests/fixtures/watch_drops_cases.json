@@ -101,10 +101,10 @@
     "ts": { "drop_id": "tN", "campaign_id": "cN", "current_minutes": 0, "required_minutes": 60, "cumulative": 0 }
   },
   {
-    "name": "an_unlinked_campaign_never_leads",
+    "name": "a_campaign_reported_unlinked_still_leads",
     "campaigns": [ { "id": "cU", "game": "Rust", "linked": false, "link": "https://example.test/link", "tiers": [ { "id": "tU", "need": 60, "have": 20 } ] } ],
-    "rust": { "lead": null, "lead_shown": 0, "lead_ready": false, "complete": false, "listed": ["cU"], "more": 1 },
-    "differs": "TS leads with an unlinked campaign; Rust lists it with Connect and leads with nothing", "via_pick": true,
+    "rust": { "lead": "tU", "lead_shown": 20, "lead_ready": false, "complete": false, "listed": ["cU"], "more": 0 },
+    "differs": "", "via_pick": true,
     "ts": { "drop_id": "tU", "campaign_id": "cU", "current_minutes": 20, "required_minutes": 60, "cumulative": 20 }
   },
   {

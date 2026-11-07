@@ -5,15 +5,13 @@
 // can earn here. The drawer floats over chat, so nothing in the column moves.
 import { lazy, memo, Suspense, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { ArrowSquareOut } from 'phosphor-react';
 import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../../stores/AppStore';
 import { useWatchDrops, type WatchDrops } from '../../stores/watchDropsStore';
 import { useOutsidePress } from '../../hooks/useOutsidePress';
 import { usePerformanceQuiet } from '../../utils/lowPower';
 import { Logger } from '../../utils/logger';
-import { ACCENT_BUTTON, GLAZE_BANNER, GLAZE_PILL, SUCCESS_FILL } from '../ui/glazeButtons';
-import { openExternal } from '../../utils/openExternal';
+import { ACCENT_BUTTON, GLAZE_BANNER, SUCCESS_FILL } from '../ui/glazeButtons';
 import { DropArt } from './DropArt';
 import { splitStatus } from './dropsStatusText';
 
@@ -46,9 +44,6 @@ export interface BarLine {
   moreArt: string[];
   spoken: string;
   claimLabel: string;
-  /** Twitch would not grant it until the game account is linked: where to
-   *  link it, for the hover card's Connect. Null otherwise. */
-  connectUrl: string | null;
 }
 
 /** The lead reward; with none under way yet, the first reward a campaign here
@@ -56,10 +51,7 @@ export interface BarLine {
 export function barLine(view: WatchDrops): BarLine | null {
   const lead = view.lead;
   if (lead) {
-    const campaign = view.campaigns.find((c) => c.id === lead.campaign_id);
-    const row = campaign?.drops.find((d) => d.lead);
     return {
-      connectUrl: row?.connect && !row.claimed ? (campaign?.link_url ?? null) : null,
       name: lead.name,
       image: lead.image,
       status: lead.status,
@@ -83,7 +75,6 @@ export function barLine(view: WatchDrops): BarLine | null {
     ready: false,
     more: 0,
     moreArt: [],
-    connectUrl: null,
     spoken: rewards === 1 ? `${first.name}, ${first.status}` : `${rewards} rewards to earn on this channel`,
     claimLabel: '',
   };
@@ -98,7 +89,6 @@ export const PREVIEW_LINE: BarLine = {
   ready: false,
   more: 2,
   moreArt: [],
-  connectUrl: null,
   spoken: 'Rust hoodie, 12 minutes left',
   claimLabel: 'Claim',
 };
@@ -112,7 +102,7 @@ export const drawerAfter = (open: boolean, event: DrawerEvent): boolean => (even
 
 /** Claims one drop. "claimed" and "already_claimed" both mean it is yours, so
  *  both say so; the toast comes only from this click. */
-function useDropClaim() {
+export function useDropClaim() {
   const [claiming, setClaiming] = useState<string | null>(null);
   const claim = async (dropId: string, instanceId: string | null) => {
     if (claiming) return;
@@ -208,24 +198,6 @@ function ClaimButton({ line, claiming, onClaim }: { line: BarLine; claiming: boo
   );
 }
 
-/** Twitch would not grant the reward until the game account is linked: the
- *  publisher's page to link it, in the browser. */
-function ConnectButton({ url }: { url: string }) {
-  return (
-    <button
-      type="button"
-      onClick={(e) => {
-        e.stopPropagation();
-        void openExternal(url);
-      }}
-      className={`${GLAZE_PILL} inline-flex min-w-[60px] shrink-0 items-center justify-center gap-1 px-3 text-[11.5px] leading-[22px]`}
-    >
-      Connect
-      <ArrowSquareOut size={11} weight="bold" aria-hidden className="opacity-70" />
-    </button>
-  );
-}
-
 /** At rest: a slim glazed lip that rises out of the top of the message box,
  *  so nothing floats over chat. The picture, the name, a short track and the
  *  time; a reward ready to claim turns the glass green and says "Ready", and
@@ -237,7 +209,11 @@ export function DropsChatBarView({
   open,
   onToggle,
   onPreload,
-}: Pick<DropsChatBarViewProps, 'line' | 'open' | 'onToggle' | 'onPreload'>) {
+  touch,
+}: Pick<DropsChatBarViewProps, 'line' | 'open' | 'onToggle' | 'onPreload'> & {
+  /** The phones': tall enough for a thumb, and a tap opens the sheet. */
+  touch?: boolean;
+}) {
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.target !== e.currentTarget) return;
     if (e.key === 'Enter' || e.key === ' ') {
@@ -254,14 +230,16 @@ export function DropsChatBarView({
       onClick={onToggle}
       onKeyDown={onKeyDown}
       onPointerEnter={onPreload}
-      style={heat(line, '10px 10px 0 0')}
+      style={heat(line, touch ? '12px 12px 0 0' : '10px 10px 0 0')}
       // An arrow, not a hand: a mouse resting here grows the card, which is
       // what takes the click (a tap opens the drawer straight away).
-      className={`${GLAZE_BANNER} drops-bar drops-lip flex h-6 w-full cursor-default select-none items-center gap-2 px-2.5 text-[11px] leading-4 outline-none focus-visible:ring-1 focus-visible:ring-accent/60 ${line.ready ? 'is-ready' : ''}`}
+      className={`${GLAZE_BANNER} drops-bar drops-lip flex w-full cursor-default select-none items-center outline-none focus-visible:ring-1 focus-visible:ring-accent/60 ${
+        touch ? 'h-9 gap-2.5 px-3 text-[12.5px] leading-4 active:opacity-80' : 'h-6 gap-2 px-2.5 text-[11px] leading-4'
+      } ${line.ready ? 'is-ready' : ''}`}
     >
-      <DropArt image={line.image} size={14} radius={4} />
+      <DropArt image={line.image} size={touch ? 20 : 14} radius={touch ? 5 : 4} />
       <span className="min-w-0 flex-1 truncate font-medium text-textPrimary/90">{line.name}</span>
-      <Track line={line} className="h-[3px] w-12 shrink-0" />
+      <Track line={line} className={`h-[3px] shrink-0 ${touch ? 'w-16' : 'w-12'}`} />
       {line.ready ? (
         <span className="shrink-0 whitespace-nowrap font-semibold text-success">Ready</span>
       ) : (
@@ -290,8 +268,6 @@ export function DropsPeekView({ line, claiming, onToggle, onClaim }: Omit<DropsC
             <Track line={line} className="h-[3px] min-w-0 flex-1" />
             {line.ready && onClaim ? (
               <ClaimButton line={line} claiming={claiming} onClaim={onClaim} />
-            ) : line.connectUrl ? (
-              <ConnectButton url={line.connectUrl} />
             ) : (
               <Status line={line} />
             )}
