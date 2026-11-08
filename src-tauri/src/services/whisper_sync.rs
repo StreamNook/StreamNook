@@ -32,7 +32,7 @@ use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -116,6 +116,10 @@ pub trait Events: Send + Sync {
     fn archive_changed(&self, owner: &str, syncing: bool);
     fn conversation(&self, scope: &Scope, key: &str);
     fn counts(&self);
+    /// A new account generation: only claims made under it still count.
+    fn claims_scope(&self, generation: u64);
+    /// Look again for sends still waiting on Twitch's copy.
+    fn recheck_sends(&self);
 }
 
 pub struct SystemClock;
@@ -180,6 +184,20 @@ impl Events for AppEvents {
     fn counts(&self) {
         crate::services::inbox_counts::wake();
     }
+    fn claims_scope(&self, generation: u64) {
+        crate::services::whisper_claims::clear_scope(generation);
+    }
+    fn recheck_sends(&self) {
+        crate::services::whisper_send::recheck_pending();
+    }
+}
+
+/// One conversation's refresh: whether a read is running, and the newest read
+/// that succeeded (by the order reads started in).
+struct RefreshSlot {
+    running: bool,
+    last_ok: u64,
+    ended: tokio::sync::watch::Sender<u64>,
 }
 
 pub struct Env {
@@ -264,12 +282,16 @@ pub struct Engine {
     gate: Mutex<MintGate>,
     who: Mutex<HashMap<String, String>>,
     loading: Mutex<HashSet<String>>,
-    refreshing: Mutex<HashSet<String>>,
+    refreshing: Mutex<HashMap<String, RefreshSlot>>,
+    /// Orders refresh calls and reads: a call counts only a read started after it.
+    refresh_order: AtomicU64,
     debounced: Mutex<HashSet<String>>,
     owed: Mutex<HashMap<String, bool>>,
     restarted: Mutex<HashSet<String>>,
     problem: Mutex<Option<String>>,
     offset_ms: AtomicI64,
+    /// Accounts whose sends left Sending by an earlier run were settled.
+    settled: Mutex<HashSet<String>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -285,6 +307,23 @@ struct Merged {
     has_next: bool,
     next_cursor: Option<String>,
     owe: bool,
+    /// A gap page reached the gap's floor (or the end of history).
+    gap_closed: bool,
+}
+
+/// The newest Twitch message held, by (time, id): where a gap opened now ends.
+fn newest_twitch(messages: &[StoredWhisper]) -> Option<Marker> {
+    messages
+        .iter()
+        .filter(|m| m.origin == Origin::Twitch)
+        .max_by(|a, b| (a.timestamp, &a.id).cmp(&(b.timestamp, &b.id)))
+        .map(|m| Marker { id: m.id.clone(), at_ms: m.timestamp })
+}
+
+/// A gap page reaches the floor when it holds the floor message or anything
+/// older, by (time, id).
+fn reaches_floor(page: &[GqlMessage], floor: &Marker) -> bool {
+    page.iter().any(|gm| (gm.sent_at_ms, gm.id.as_str()) <= (floor.at_ms, floor.id.as_str()))
 }
 
 /// How a page of messages is being read.
@@ -471,12 +510,26 @@ impl Engine {
             gate: Mutex::new(MintGate::default()),
             who: Mutex::new(HashMap::new()),
             loading: Mutex::new(HashSet::new()),
-            refreshing: Mutex::new(HashSet::new()),
+            refreshing: Mutex::new(HashMap::new()),
+            refresh_order: AtomicU64::new(0),
             debounced: Mutex::new(HashSet::new()),
             owed: Mutex::new(HashMap::new()),
             restarted: Mutex::new(HashSet::new()),
             problem: Mutex::new(None),
             offset_ms: AtomicI64::new(0),
+            settled: Mutex::new(HashSet::new()),
+        }
+    }
+
+    /// Once per account per process, before anything merges Twitch's copies:
+    /// sends an earlier run of the app left Sending become Unknown, so the
+    /// first read of their thread adopts them instead of adding a duplicate.
+    fn settle_once(&self, scope: &Scope) {
+        if lock(&self.settled).insert(scope.owner.clone()) {
+            let n = crate::services::whisper_send::settle_stale_sends(scope);
+            if n > 0 {
+                log::info!("[WhisperSync] {n} whispers left Sending by the last run wait on Twitch's thread");
+            }
         }
     }
 
@@ -491,7 +544,7 @@ impl Engine {
     /// scope is closed at once, before anything is spawned; its teardown is
     /// returned for the caller to run.
     fn follow(self: &Arc<Self>, user_id: Option<String>) -> Option<Closing> {
-        let (old, start) = {
+        let (old, start, generation) = {
             let mut c = lock(&self.ctrl);
             if c.followed == user_id {
                 return None;
@@ -506,22 +559,23 @@ impl Engine {
             if let Some(id) = &user_id {
                 c.scope = Some(whisper_store::open(id, c.generation));
             }
-            (old, user_id.is_some())
+            (old, user_id.is_some(), c.generation)
         };
         lock(&self.who).clear();
         lock(&self.gate).succeeded();
         lock(&self.restarted).clear();
         lock(&self.debounced).clear();
         *lock(&self.problem) = None;
-        let closing = old.map(|s| {
-            crate::services::whisper_claims::clear_scope(s.generation);
-            whisper_store::close(&s)
-        });
+        // Claims made under any earlier generation stop counting, on a switch
+        // and on sign-out alike; a window shows its conversation again by
+        // claiming it under the new one.
+        self.env.events.claims_scope(generation);
+        let closing = old.map(|s| whisper_store::close(&s));
         if start {
             self.trigger(Reason::Follow);
-            // A send left waiting by an earlier run of the app (now
-            // Unknown) gets its real check against Twitch.
-            crate::services::whisper_send::recheck_pending();
+            // A send left waiting by an earlier run of the app gets its real
+            // check against Twitch (each read settles stale sends first).
+            self.env.events.recheck_sends();
         }
         closing
     }
@@ -638,6 +692,9 @@ impl Engine {
             let long = c.away_since.take().is_some_and(|t| now - t >= AWAY_FOR_SYNC_MS);
             (long, c.socket_down_since.is_some())
         };
+        // Back on screen: sends still waiting get their real check now, since
+        // a phone's timers stop in the background.
+        self.env.events.recheck_sends();
         if long_away {
             self.trigger(Reason::Resume);
         } else if gap {
@@ -810,6 +867,8 @@ impl Engine {
         let create = fresh_meta(&key, thread);
         let out = whisper_store::update(scope, &key, Some(create), |conv| {
             let mut m = Merged { has_next: thread.messages.has_next, next_cursor: thread.messages.next_cursor.clone(), ..Merged::default() };
+            // Where a gap this page opens will end: what was held before it.
+            let floor_before = newest_twitch(&conv.messages);
             m.changed |= merge_twitch_meta(&mut conv.meta, thread, page_seq);
             let me_p = thread.me.as_ref();
             let me = Who {
@@ -847,41 +906,56 @@ impl Engine {
             let cursor = |c: &Option<String>| c.clone().map(|cursor| Cursor { cursor, device_id: device.map(str::to_string) });
             let deep_before = conv.meta.deep.clone();
             let gap_before = conv.meta.gap.clone();
+            let floor_held = conv.meta.gap_floor.clone();
+            // A gap keeps the floor of the first sync that left it open, so paging
+            // from the newest page reaches everything both missed.
+            let open_gap = |meta: &mut ConversationMeta, at: Option<Cursor>| {
+                meta.gap = at.or(Some(Cursor { cursor: String::new(), device_id: None }));
+                if meta.gap_floor.is_none() {
+                    meta.gap_floor = floor_before.clone();
+                }
+            };
             match mode {
                 Mode::Nested { first_import } => {
                     if !more {
                         conv.meta.deep = Deep::Complete;
                         conv.meta.gap = None;
+                        conv.meta.gap_floor = None;
                     } else if first_import || conv.meta.deep == Deep::Unknown {
                         if conv.meta.deep != Deep::Complete {
                             conv.meta.deep = Deep::Partial { cursor: cursor(&m.next_cursor) };
                         }
                     } else if !m.hit_known {
-                        conv.meta.gap = cursor(&m.next_cursor).or(Some(Cursor { cursor: String::new(), device_id: None }));
+                        open_gap(&mut conv.meta, cursor(&m.next_cursor));
                     }
                 }
                 Mode::Refresh => {
                     if !more && conv.meta.deep == Deep::Unknown {
                         conv.meta.deep = Deep::Complete;
                     } else if more && !m.hit_known {
-                        conv.meta.gap = cursor(&m.next_cursor).or(Some(Cursor { cursor: String::new(), device_id: None }));
+                        open_gap(&mut conv.meta, cursor(&m.next_cursor));
                     }
                 }
                 Mode::Deep => {
                     conv.meta.deep = if more { Deep::Partial { cursor: cursor(&m.next_cursor) } } else { Deep::Complete };
                 }
                 Mode::Gap => {
-                    if m.hit_known {
+                    // Meeting what the last sync just merged proves nothing: only
+                    // reaching the floor (or the end of history) closes the gap.
+                    let reached = floor_held.as_ref().is_some_and(|f| reaches_floor(&thread.messages.messages, f));
+                    if reached || !more {
+                        if !more {
+                            conv.meta.deep = Deep::Complete;
+                        }
                         conv.meta.gap = None;
-                    } else if !more {
-                        conv.meta.gap = None;
-                        conv.meta.deep = Deep::Complete;
+                        conv.meta.gap_floor = None;
+                        m.gap_closed = true;
                     } else {
                         conv.meta.gap = cursor(&m.next_cursor);
                     }
                 }
             }
-            m.changed |= conv.meta.deep != deep_before || conv.meta.gap != gap_before;
+            m.changed |= conv.meta.deep != deep_before || conv.meta.gap != gap_before || conv.meta.gap_floor != floor_held;
             if conv.meta.deep == Deep::Complete {
                 m.changed |= drop_scraped(&mut conv.meta, &mut conv.messages);
             }
@@ -1064,6 +1138,7 @@ impl Engine {
     }
 
     async fn run_inner(&self, scope: &Scope, reason: &Reason) -> SyncOutcome {
+        self.settle_once(scope);
         let gql = match self.session(scope).await {
             Ok(g) => g,
             Err(outcome) => return outcome,
@@ -1338,6 +1413,7 @@ impl Engine {
                     whisper_store::update(scope, key, None, |conv| {
                         conv.meta.deep = Deep::Complete;
                         conv.meta.gap = None;
+                        conv.meta.gap_floor = None;
                         ((), true)
                     })
                     .map_err(|e| HistoryEnd::Stop(Self::fail(e)))?;
@@ -1376,7 +1452,7 @@ impl Engine {
                 self.send_owed_now(scope, key, gql, run).await;
             }
             let done = match mode {
-                Mode::Gap => m.hit_known || !m.has_next,
+                Mode::Gap => m.gap_closed || !m.has_next,
                 _ => !m.has_next,
             };
             if done || (until_new && m.added > 0) {
@@ -1424,17 +1500,51 @@ impl Engine {
     /// another device, Twitch's emote parts for live whispers, and the real
     /// id of a whisper we sent. Never mints; a gap it finds is left for the
     /// next sync (and a partial-only one is asked for).
+    ///
+    /// Returns only after a read that started after this call: a caller that
+    /// finds a read already running waits for it, then reads again unless
+    /// another caller's newer read already succeeded. A delivery check or a
+    /// Retry that gets Ok has seen Twitch's thread as it was when it asked.
     async fn refresh_thread(self: &Arc<Self>, key: String) -> Result<(), String> {
         let Some(scope) = self.scope() else { return Ok(()) };
-        if !lock(&self.refreshing).insert(key.clone()) {
-            return Ok(());
+        let asked = self.refresh_order.fetch_add(1, Ordering::SeqCst) + 1;
+        loop {
+            let wait = {
+                let mut map = lock(&self.refreshing);
+                let slot = map
+                    .entry(key.clone())
+                    .or_insert_with(|| RefreshSlot { running: false, last_ok: 0, ended: tokio::sync::watch::channel(0).0 });
+                if slot.last_ok >= asked {
+                    return Ok(());
+                }
+                if slot.running {
+                    Some(slot.ended.subscribe())
+                } else {
+                    slot.running = true;
+                    None
+                }
+            };
+            let Some(mut ended) = wait else {
+                let started = self.refresh_order.fetch_add(1, Ordering::SeqCst) + 1;
+                let result = self.refresh_inner(&scope, &key).await;
+                let mut map = lock(&self.refreshing);
+                if let Some(slot) = map.get_mut(&key) {
+                    slot.running = false;
+                    if result.is_ok() {
+                        slot.last_ok = slot.last_ok.max(started);
+                    }
+                    slot.ended.send_replace(slot.last_ok);
+                }
+                return result;
+            };
+            if ended.changed().await.is_err() {
+                return Err("the conversation refresh stopped".into());
+            }
         }
-        let result = self.refresh_inner(&scope, &key).await;
-        lock(&self.refreshing).remove(&key);
-        result
     }
 
     async fn refresh_inner(self: &Arc<Self>, scope: &Scope, key: &str) -> Result<(), String> {
+        self.settle_once(scope);
         let Some(meta) = whisper_store::read_index(scope, |idx| idx.conversations.iter().find(|m| m.key == key).cloned())? else {
             return Ok(());
         };
@@ -1698,13 +1808,11 @@ pub fn note_socket_down() {
     engine().note_socket_down();
 }
 
+/// The UI left the screen (`true`: every window minimized or in the tray, the
+/// phone app in the background) or came back. Coming back after ten minutes
+/// syncs, and sends still waiting are checked again.
 pub fn note_away(away: bool) {
     engine().note_away(away);
-    if !away {
-        // Back on screen: sends still waiting get their real
-        // check now, since a phone's timers stop in the background.
-        crate::services::whisper_send::recheck_pending();
-    }
 }
 
 pub fn note_resumed() {
@@ -1819,6 +1927,10 @@ mod tests {
         calls: Mutex<Vec<(String, Option<String>, bool)>>,
         inject: Mutex<Vec<(String, GqlError)>>,
         refuse_cursor: Mutex<Option<String>>,
+        /// While set, a history read takes its answer, then waits here before
+        /// handing it back (an answer already on its way, Twitch moving on).
+        hold: Mutex<Option<Arc<tokio::sync::Notify>>>,
+        held: AtomicU32,
     }
     fn iso(ms: i64) -> String {
         use chrono::TimeZone;
@@ -1832,6 +1944,8 @@ mod tests {
                 calls: Mutex::new(Vec::new()),
                 inject: Mutex::new(Vec::new()),
                 refuse_cursor: Mutex::new(None),
+                hold: Mutex::new(None),
+                held: AtomicU32::new(0),
             })
         }
         fn add_thread(&self, other: &str, n: usize, start_ms: i64) {
@@ -1954,7 +2068,13 @@ mod tests {
     #[async_trait::async_trait]
     impl Gql for FakeGqlOf {
         async fn post(&self, body: Value, integrity: Option<&Integrity>) -> Result<Value, GqlError> {
-            self.0.answer(&body, integrity)
+            let answer = self.0.answer(&body, integrity);
+            let gate = if body["operationName"] == "SnWhisperMessages" { lock(&self.0.hold).clone() } else { None };
+            if let Some(gate) = gate {
+                self.0.held.fetch_add(1, Ordering::SeqCst);
+                gate.notified().await;
+            }
+            answer
         }
     }
     struct FakeSession {
@@ -1988,6 +2108,12 @@ mod tests {
         }
         fn counts(&self) {
             lock(&self.log).push("counts".into());
+        }
+        fn claims_scope(&self, generation: u64) {
+            lock(&self.log).push(format!("claims {generation}"));
+        }
+        fn recheck_sends(&self) {
+            lock(&self.log).push("recheck".into());
         }
     }
 
@@ -2672,5 +2798,156 @@ mod tests {
         let added = r.engine.load_older("1000000000".into()).await.unwrap();
         assert!(added > 0);
         assert!(matches!(r.meta(&scope, "1000000000").deep, Deep::Partial { .. }), "one tap does not read the whole history");
+    }
+
+    // ---- Settling, gaps, joined refreshes, claims, resume ---------------------------------
+
+    /// A send the last run of the app left Sending is settled before the first
+    /// merge, so Twitch's copy of it is adopted, not added beside it.
+    #[tokio::test]
+    async fn stale_sending_is_settled_then_adopted() {
+        let r = rig("99999943");
+        r.twitch.add_thread("1000000000", 2, T0); // m1 is ours: "words 1" at T0 + 60 s
+        let scope = r.follow("99999943");
+        let mut ours = local("sent-left", "1000000000", "99999943", T0 + 60_000 - 400, Origin::LocalSent, true);
+        ours.message = "words 1".into();
+        ours.delivery = Some(whisper_store::Delivery::Sending);
+        ours.sent_local_ms = Some(T0 + 60_000 - 400);
+        seed(&scope, "1000000000", vec![ours], |_| {});
+        r.run(&scope, Reason::Manual).await;
+        let msgs = r.messages(&scope, "1000000000");
+        assert_eq!(msgs.len(), 2, "{:?}", msgs.iter().map(|m| m.id.clone()).collect::<Vec<_>>());
+        let adopted = msgs.iter().find(|m| m.id == "1000000000-m1").unwrap();
+        assert_eq!(adopted.delivery, Some(whisper_store::Delivery::Delivered));
+        assert!(msgs.iter().all(|m| m.id != "sent-left"));
+    }
+
+    /// 150 whispers arrived while the app was closed: the incremental page
+    /// holds 20, the gap pages from the newest down to what was held before,
+    /// and none is lost or doubled.
+    #[tokio::test]
+    async fn a_gap_of_150_is_fetched_whole() {
+        let r = rig("99999944");
+        r.twitch.add_thread("1000000000", 5, T0);
+        let scope = r.follow("99999944");
+        r.run(&scope, Reason::Manual).await;
+        assert_eq!(r.meta(&scope, "1000000000").deep, Deep::Complete);
+        {
+            let mut threads = lock(&r.twitch.threads);
+            let t = &mut threads[0];
+            let newer: Vec<FMsg> = (0..150)
+                .rev()
+                .map(|i| FMsg { id: format!("late{i}"), from: "1000000000".into(), text: format!("late {i}"), at: T0 + 86_400_000 + i * 1000 })
+                .collect();
+            let mut all = newer;
+            all.extend(t.msgs.clone());
+            t.msgs = all;
+        }
+        r.run(&scope, Reason::Manual).await;
+        let msgs = r.messages(&scope, "1000000000");
+        let ids: HashSet<String> = msgs.iter().map(|m| m.id.clone()).collect();
+        assert_eq!(msgs.len(), 155, "every late whisper is stored");
+        assert_eq!(ids.len(), 155, "none twice");
+        let meta = r.meta(&scope, "1000000000");
+        assert!(meta.gap.is_none() && meta.gap_floor.is_none(), "the gap closed at the floor");
+    }
+
+    /// A refresh asked for while another is reading waits for it, then reads
+    /// again: the answer it gets is never one that left before it asked.
+    #[tokio::test]
+    async fn retry_during_refresh_reads_twitch_again() {
+        let r = rig("99999945");
+        r.twitch.add_thread("1000000000", 2, T0);
+        let scope = r.follow("99999945");
+        r.run(&scope, Reason::Manual).await;
+        let before = r.twitch.count("SnWhisperMessages");
+        let gate = Arc::new(tokio::sync::Notify::new());
+        *lock(&r.twitch.hold) = Some(Arc::clone(&gate));
+        let e1 = Arc::clone(&r.engine);
+        let first = tokio::spawn(async move { e1.refresh_thread("1000000000".into()).await });
+        while r.twitch.held.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+        // Twitch moves on after the first answer left.
+        lock(&r.twitch.threads)[0].msgs.insert(0, FMsg { id: "late".into(), from: "99999945".into(), text: "late".into(), at: T0 + 86_400_000 });
+        *lock(&r.twitch.hold) = None;
+        let e2 = Arc::clone(&r.engine);
+        let second = tokio::spawn(async move { e2.refresh_thread("1000000000".into()).await });
+        for _ in 0..50 {
+            tokio::task::yield_now().await;
+        }
+        assert!(!second.is_finished(), "the second caller waits for a read of its own");
+        gate.notify_one();
+        first.await.unwrap().unwrap();
+        second.await.unwrap().unwrap();
+        assert!(r.messages(&scope, "1000000000").iter().any(|m| m.id == "late"), "the second read saw Twitch as it was when asked");
+        assert_eq!(r.twitch.count("SnWhisperMessages") - before, 2);
+    }
+
+    /// Several callers waiting on one read share the one fresh read after it.
+    #[tokio::test]
+    async fn waiters_share_one_fresh_read() {
+        let r = rig("99999946");
+        r.twitch.add_thread("1000000000", 2, T0);
+        let scope = r.follow("99999946");
+        r.run(&scope, Reason::Manual).await;
+        let before = r.twitch.count("SnWhisperMessages");
+        let gate = Arc::new(tokio::sync::Notify::new());
+        *lock(&r.twitch.hold) = Some(Arc::clone(&gate));
+        let e1 = Arc::clone(&r.engine);
+        let first = tokio::spawn(async move { e1.refresh_thread("1000000000".into()).await });
+        while r.twitch.held.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+        *lock(&r.twitch.hold) = None;
+        let waiters: Vec<_> = (0..3)
+            .map(|_| {
+                let e = Arc::clone(&r.engine);
+                tokio::spawn(async move { e.refresh_thread("1000000000".into()).await })
+            })
+            .collect();
+        for _ in 0..50 {
+            tokio::task::yield_now().await;
+        }
+        gate.notify_one();
+        first.await.unwrap().unwrap();
+        for w in waiters {
+            w.await.unwrap().unwrap();
+        }
+        assert_eq!(r.twitch.count("SnWhisperMessages") - before, 2, "one read in flight, one fresh read for every waiter");
+        drop(scope);
+    }
+
+    /// Following another account (or none) leaves only claims made under the
+    /// new generation counting.
+    #[tokio::test]
+    async fn a_new_account_keeps_only_its_own_claims() {
+        let r = rig("99999947");
+        let a = r.follow("99999947");
+        let b = r.follow("99999948");
+        assert!(b.generation > a.generation);
+        let _ = r.engine.follow(None);
+        let log = lock(&r.events.log).clone();
+        let seen: Vec<String> = log.iter().filter(|l| l.starts_with("claims")).cloned().collect();
+        // Each follow keeps the generation it moves to, sign-out included.
+        let want = vec![
+            format!("claims {}", a.generation),
+            format!("claims {}", b.generation),
+            format!("claims {}", b.generation + 1),
+        ];
+        assert_eq!(seen, want);
+    }
+
+    /// Coming back on screen checks the sends still waiting on Twitch's copy.
+    #[tokio::test]
+    async fn delivery_rechecks_on_resume() {
+        let r = rig("99999949");
+        let _ = r.follow("99999949");
+        lock(&r.events.log).clear();
+        r.engine.note_away(true);
+        assert!(!lock(&r.events.log).contains(&"recheck".to_string()));
+        r.clock.0.fetch_add(60_000, Ordering::SeqCst);
+        r.engine.note_away(false);
+        assert!(lock(&r.events.log).contains(&"recheck".to_string()));
     }
 }

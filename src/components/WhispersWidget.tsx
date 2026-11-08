@@ -29,6 +29,7 @@ import {
     mergeDraft,
     mergeMessages,
     messageTime,
+    ownerChanged,
     sortRows,
     syncLine,
     syncStatusWords,
@@ -250,8 +251,12 @@ const WhispersWidget = ({ isOpen, onClose }: WhispersWidgetProps) => {
         const offUpdated = listen<WhisperUpdatePayload>(WHISPER_UPDATED_EVENT, (event) => {
             if (!alive) return;
             const update = event.payload;
-            const owner = listRef.current?.owner_id;
-            if (owner && update.owner_id !== owner) return;
+            // Another account's change: the account switched under the window,
+            // so the list is read again (and the old one's conversation closes).
+            if (ownerChanged(listRef.current?.owner_id, update.owner_id)) {
+                void reloadList();
+                return;
+            }
             setList((prev) => applyRowUpdate(prev, update));
             setDraft((d) => (d && (d.key === update.key || d.user_id === update.meta.user_id) ? null : d));
             setActiveKey((a) => (a !== null && a === update.replaced_key ? update.key : a));
@@ -263,9 +268,10 @@ const WhispersWidget = ({ isOpen, onClose }: WhispersWidgetProps) => {
         });
         const offArchive = listen<unknown>(WHISPER_ARCHIVE_CHANGED_EVENT, (event) => {
             if (!alive) return;
-            const owner = archiveOwnerOf(event.payload);
-            const mine = listRef.current?.owner_id;
-            if (mine && owner && owner !== mine) return;
+            if (ownerChanged(listRef.current?.owner_id, archiveOwnerOf(event.payload))) {
+                void reloadList();
+                return;
+            }
             const syncing = archiveSyncing(event.payload);
             setList((prev) => (prev ? { ...prev, syncing } : prev));
             if (!syncing) setSyncedAt(Date.now());
@@ -279,6 +285,14 @@ const WhispersWidget = ({ isOpen, onClose }: WhispersWidgetProps) => {
             void offArchive.then((fn) => fn());
         };
     }, [isOpen, reloadList, loadLatest]);
+
+    // The app's Twitch account changed while the window is open: read the list
+    // for the account now signed in.
+    const currentUserId = useAppStore((s) => s.currentUser?.user_id ?? null);
+    useEffect(() => {
+        if (!isOpen) return;
+        if (ownerChanged(listRef.current?.owner_id, currentUserId)) void reloadList();
+    }, [isOpen, currentUserId, reloadList]);
 
     // A different account (or signing out) drops what the old one had open.
     useEffect(() => {
@@ -489,7 +503,10 @@ const WhispersWidget = ({ isOpen, onClose }: WhispersWidgetProps) => {
         };
         stickToBottom.current = true;
         try {
-            const update = await invoke<WhisperUpdatePayload>('whisper_send', { target, text });
+            // Bound to the account whose list is on screen: Rust refuses the send
+            // if the signed-in account is another one by now.
+            const expectOwner = listRef.current?.owner_id || null;
+            const update = await invoke<WhisperUpdatePayload>('whisper_send', { target, text, expectOwner, expectOwnerName: null });
             setList((prev) => applyRowUpdate(prev, update));
             setPage((prev) =>
                 prev && (prev.key === update.key || prev.key === target.key)

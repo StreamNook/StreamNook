@@ -114,6 +114,12 @@ fn keep_for(expiration_ms: i64, now_ms: i64) -> Duration {
 /// A token for the signed-in twitch.tv session: the cached one, or a fresh
 /// mint (one at a time; callers waiting share it).
 pub async fn get() -> Result<Integrity, String> {
+    get_with(mint()).await
+}
+
+/// `get` with the mint passed in. `MINTING` is held only while `mint` runs,
+/// so a mint that gives up (every phone arm stops at its ceiling) frees it.
+async fn get_with<F: std::future::Future<Output = Result<Minted, String>>>(mint: F) -> Result<Integrity, String> {
     if let Some(t) = cached() {
         return Ok(t);
     }
@@ -121,7 +127,7 @@ pub async fn get() -> Result<Integrity, String> {
     if let Some(t) = cached() {
         return Ok(t);
     }
-    let minted = match mint().await {
+    let minted = match mint.await {
         Ok(m) => m,
         Err(e) => {
             *LAST_FAILURE.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
@@ -440,15 +446,13 @@ mod tests {
 
     #[tokio::test]
     async fn native_never_answers_releases_minting() {
-        // The wait ends by itself, so a mint that holds MINTING returns and
-        // releases it even when the phone side never answers.
-        let lock = tokio::sync::Mutex::new(());
-        {
-            let _held = lock.lock().await;
-            let (id, rx) = matcher::begin(30);
-            assert!(matcher::wait(&id, rx, 30).await.is_err());
-        }
-        assert!(lock.try_lock().is_ok());
+        // A phone mint whose shell never answers: `get` holds MINTING while it
+        // waits, the wait ends at its ceiling, and MINTING is free again.
+        let (id, rx) = matcher::begin(30);
+        let never = async move { matcher::wait(&id, rx, 30).await.and_then(|url| minted_from_url(&url)) };
+        let r = tokio::time::timeout(Duration::from_secs(5), get_with(never)).await;
+        assert!(matches!(r, Ok(Err(_))), "the mint gave up by itself");
+        assert!(MINTING.try_lock().is_ok(), "MINTING is released");
     }
 
     #[test]

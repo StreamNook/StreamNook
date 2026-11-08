@@ -199,14 +199,18 @@ pub fn forget_window(label: &str) {
     let _ = s.newly_counting();
 }
 
-/// `WindowEvent::Focused` for a desktop window.
+/// `WindowEvent::Focused` for a desktop window. It arrives on the main thread:
+/// the claim map changes here, the store work of a read-through goes to a
+/// blocking task so a focus change never waits on disk.
 pub fn note_focus(label: &str, focused: bool) {
     let new = {
         let mut s = state();
         s.note_focus(label, focused);
         s.newly_counting()
     };
-    after_change(new);
+    if !new.is_empty() {
+        tauri::async_runtime::spawn_blocking(move || after_change(new));
+    }
 }
 
 /// The visibility poll's verdict for a window (minimized or hidden).

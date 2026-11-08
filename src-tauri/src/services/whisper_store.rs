@@ -175,6 +175,10 @@ pub struct ConversationMeta {
     pub deep: Deep,
     #[serde(default)]
     pub gap: Option<Cursor>,
+    /// The newest Twitch message held when the gap opened: paging closes the
+    /// gap only once it reaches this message or an older one.
+    #[serde(default)]
+    pub gap_floor: Option<Marker>,
     #[serde(default)]
     pub file_stamp: Option<FileStamp>,
     /// Some message is one of our sends still waiting on Twitch (Sending,
@@ -214,6 +218,7 @@ impl ConversationMeta {
             muted: false,
             deep: Deep::Unknown,
             gap: None,
+            gap_floor: None,
             file_stamp: None,
             delivery_pending: false,
             archived_seq: 0,
@@ -1195,14 +1200,24 @@ fn mark_dirty() {
     ensure_flush_task();
 }
 
+/// The flush loop lives as long as its runtime: only the app's multi-thread
+/// runtime keeps it; a current-thread runtime (a one-off `block_on`) would end
+/// it and leave it marked as started.
+fn lasting_runtime(flavor: Option<tokio::runtime::RuntimeFlavor>) -> bool {
+    matches!(flavor, Some(tokio::runtime::RuntimeFlavor::MultiThread))
+}
+
 fn ensure_flush_task() {
     if FLUSH_TASK_STARTED
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
         .is_ok()
     {
-        // No runtime yet: let a later write start the task. ANY_DIRTY stays
-        // set, so nothing is lost (the exit flush is the last net).
-        if tokio::runtime::Handle::try_current().is_err() {
+        // No runtime yet, or one that ends soon (the throwaway runtime of an
+        // Android notification reply): let a later write start the task on the
+        // app's own runtime. ANY_DIRTY stays set, so nothing is lost (the exit
+        // flush is the last net).
+        let flavor = tokio::runtime::Handle::try_current().ok().map(|h| h.runtime_flavor());
+        if !lasting_runtime(flavor) {
             FLUSH_TASK_STARTED.store(false, Ordering::SeqCst);
             return;
         }
@@ -1848,5 +1863,13 @@ mod tests {
         let a = next_seq();
         let b = next_seq();
         assert!(b > a);
+    }
+
+    #[test]
+    fn the_flush_loop_starts_only_on_a_lasting_runtime() {
+        use tokio::runtime::RuntimeFlavor;
+        assert!(lasting_runtime(Some(RuntimeFlavor::MultiThread)));
+        assert!(!lasting_runtime(Some(RuntimeFlavor::CurrentThread)), "a one-off block_on ends and takes the loop with it");
+        assert!(!lasting_runtime(None));
     }
 }

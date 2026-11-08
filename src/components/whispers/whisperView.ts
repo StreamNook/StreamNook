@@ -143,6 +143,12 @@ export function archiveOwnerOf(payload: unknown): string | null {
   return null;
 }
 
+/** An event for another account than the list on screen: the account changed,
+ *  so the list is read again (which drops the old account's open conversation). */
+export function ownerChanged(listOwner: string | null | undefined, eventOwner: string | null | undefined): boolean {
+  return !!listOwner && !!eventOwner && listOwner !== eventOwner;
+}
+
 /** Whether a sync is running, from the archive event. */
 export const archiveSyncing = (payload: unknown): boolean =>
   !!payload && typeof payload === 'object' && (payload as { syncing?: unknown }).syncing === true;

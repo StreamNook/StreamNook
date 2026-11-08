@@ -343,6 +343,51 @@ fn clear_stage(id: &str) {
     PENDING.lock().unwrap_or_else(|e| e.into_inner()).remove(id);
 }
 
+/// Whether any send of this conversation is still queued or on the wire.
+fn conversation_sending(pending: &HashMap<String, Pending>, owner: &str, key: &str) -> bool {
+    pending.values().any(|p| p.owner == owner && p.key == key && matches!(p.stage, Stage::Queued | Stage::InFlight))
+}
+
+/// A conversation with a send queued or in flight stays in memory; it may
+/// leave once its last send has ended.
+fn unpin_if_idle(scope: &Scope, key: &str) {
+    let busy = conversation_sending(&PENDING.lock().unwrap_or_else(|e| e.into_inner()), &scope.owner, key);
+    if !busy {
+        let _ = whisper_store::pin(scope, key, false);
+    }
+}
+
+/// Sends that were Sending when the app last stopped: no process is sending
+/// them any more, and only Twitch's thread can say whether they went out. Each
+/// becomes Unknown, which the next read of the thread adopts or checks; none is
+/// ever sent again. A send this process still has queued or on the wire is
+/// left alone. Returns how many changed.
+pub fn settle_stale_sends(scope: &Scope) -> usize {
+    let keys: Vec<String> = whisper_store::read_index(scope, |idx| {
+        idx.conversations.iter().filter(|c| c.delivery_pending).map(|c| c.key.clone()).collect()
+    })
+    .unwrap_or_default();
+    let live: std::collections::HashSet<String> = PENDING.lock().unwrap_or_else(|e| e.into_inner()).keys().cloned().collect();
+    let mut settled = 0;
+    for key in keys {
+        let changed = whisper_store::update(scope, &key, None, |c| {
+            let mut n = 0usize;
+            for m in c.messages.iter_mut() {
+                if m.origin == Origin::LocalSent && m.delivery == Some(Delivery::Sending) && !live.contains(&m.id) {
+                    m.delivery = Some(Delivery::Unknown);
+                    m.got_204 = false;
+                    n += 1;
+                }
+            }
+            (n, n > 0)
+        });
+        if let Ok(Some(n)) = changed {
+            settled += n;
+        }
+    }
+    settled
+}
+
 fn scope_current(scope: &Scope) -> bool {
     whisper_sync::current_scope().as_ref() == Some(scope)
 }
@@ -395,10 +440,12 @@ fn finish(scope: &Scope, key: &str, id: &str, outcome: &Outcome) -> Option<Whisp
     match applied {
         Ok(Some(Some(m))) => {
             clear_stage(id);
+            unpin_if_idle(scope, key);
             whisper_inbox::emit_update(scope, key, Some(m), None)
         }
         Ok(_) => {
             clear_stage(id);
+            unpin_if_idle(scope, key);
             None
         }
         Err(_) => {
@@ -408,6 +455,9 @@ fn finish(scope: &Scope, key: &str, id: &str, outcome: &Outcome) -> Option<Whisp
     }
 }
 
+/// Whether `scope` is still the followed account, asked when a send's turn comes.
+type IsCurrent = dyn Fn(&Scope) -> bool + Send + Sync;
+
 /// Send a message already filed as Sending, in its turn.
 #[allow(clippy::too_many_arguments)]
 async fn run_queued(
@@ -415,6 +465,7 @@ async fn run_queued(
     helix: &dyn Helix,
     clock: &dyn Clock,
     sleeper: &dyn Sleeper,
+    current: &IsCurrent,
     key: &str,
     id: &str,
     expect_owner: Option<&str>,
@@ -422,13 +473,15 @@ async fn run_queued(
     schedule: bool,
 ) -> Result<WhisperUpdate, String> {
     set_stage(id, &scope.owner, key, Stage::Queued);
+    let _ = whisper_store::pin(scope, key, true);
     let _turn = SEND_LOCK.lock().await;
-    if !scope_current(scope) {
+    if !current(scope) {
         // Teardown files the words for it.
         return Err(SIGNED_OUT_BEFORE.into());
     }
     let Some(message) = find_message(scope, key, id) else {
         clear_stage(id);
+        unpin_if_idle(scope, key);
         return Err("This whisper was discarded.".into());
     };
     set_stage(id, &scope.owner, key, Stage::InFlight);
@@ -552,7 +605,9 @@ pub(crate) async fn send_in(
         migrated: false,
     };
     let key = file_send(scope, &target, message.clone())?;
-    // On disk before Twitch hears of it, so a crash leaves it to be checked.
+    // In memory until the send ends, and on disk before Twitch hears of it, so
+    // a crash leaves it to be checked.
+    let _ = whisper_store::pin(scope, &key, true);
     whisper_store::write_now(scope, &key)?;
     whisper_inbox::emit_update(scope, &key, Some(message.clone()), None);
     run_queued(
@@ -560,6 +615,7 @@ pub(crate) async fn send_in(
         helix,
         clock,
         sleeper,
+        &scope_current,
         &key,
         &message.id,
         expect_owner.as_deref(),
@@ -658,9 +714,10 @@ pub async fn retry(key: String, message_id: String) -> Result<WhisperUpdate, Str
         (Some(m), true)
     })?;
     let Some(Some(m)) = reset else { return Err(ONLY_NOT_DELIVERED.into()) };
+    let _ = whisper_store::pin(&scope, &key, true);
     whisper_store::write_now(&scope, &key)?;
     whisper_inbox::emit_update(&scope, &key, Some(m), None);
-    run_queued(&scope, &HelixWhispers, &SystemClock, &TokioSleeper, &key, &message_id, None, None, true).await
+    run_queued(&scope, &HelixWhispers, &SystemClock, &TokioSleeper, &scope_current, &key, &message_id, None, None, true).await
 }
 
 /// Drop a Not delivered whisper.
@@ -1126,8 +1183,7 @@ mod tests {
     }
 
     #[test]
-    fn delivery_rechecks_on_resume() {
-        // A resume runs the checks the suspended app never ran.
+    fn an_unknown_send_needs_two_checks() {
         let mut messages = vec![local("a", "hi", 0, Some(Delivery::Unknown))];
         apply_check(&mut messages, 600_000);
         apply_check(&mut messages, 600_100);
@@ -1143,13 +1199,196 @@ mod tests {
         assert_eq!(messages[0].delivery, None);
     }
 
+    // ---- The queue and the restart ---------------------------------------------------
+
+    /// Helix as a script: each send takes the next answer (Ok when the script
+    /// is empty); a refused token is renewed as "token-b", whose owner is
+    /// `renewed_id`.
+    struct ScriptHelix {
+        id: String,
+        renewed_id: String,
+        sends: AtomicU32,
+        rejects: AtomicU32,
+        script: Mutex<std::collections::VecDeque<Result<(), SendFail>>>,
+        on_send: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
+    }
+
+    impl ScriptHelix {
+        fn new(id: &str, script: Vec<Result<(), SendFail>>) -> Self {
+            ScriptHelix {
+                id: id.into(),
+                renewed_id: id.into(),
+                sends: AtomicU32::new(0),
+                rejects: AtomicU32::new(0),
+                script: Mutex::new(script.into()),
+                on_send: Mutex::new(None),
+            }
+        }
+    }
+
+    impl Helix for ScriptHelix {
+        fn token(&self) -> Fut<'_, Result<String, SendFail>> {
+            Box::pin(async { Ok("token-a".to_string()) })
+        }
+        fn identity(&self, token: &str) -> Fut<'_, Result<String, SendFail>> {
+            let id = if token == "token-b" { self.renewed_id.clone() } else { self.id.clone() };
+            Box::pin(async move { Ok(id) })
+        }
+        fn send(&self, _t: &str, _f: &str, _to: &str, _x: &str) -> Fut<'_, Result<(), SendFail>> {
+            self.sends.fetch_add(1, Ordering::SeqCst);
+            if let Some(hook) = self.on_send.lock().unwrap().as_ref() {
+                hook();
+            }
+            let answer = self.script.lock().unwrap().pop_front().unwrap_or(Ok(()));
+            Box::pin(async move { answer })
+        }
+        fn reject(&self, _t: &str) -> Fut<'_, Result<String, SendFail>> {
+            self.rejects.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Ok("token-b".to_string()) })
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingSleeper(Mutex<Vec<u64>>);
+    impl Sleeper for RecordingSleeper {
+        fn sleep(&self, ms: u64) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+            self.0.lock().unwrap().push(ms);
+            Box::pin(async {})
+        }
+    }
+
+    /// Every queue test reads the same clock, so the shared spacing state
+    /// never sees two clocks.
+    const QUEUE_NOW: i64 = 1_000_000;
+
+    fn always(_: &Scope) -> bool {
+        true
+    }
+
+    fn file(scope: &Scope, key: &str, messages: Vec<StoredWhisper>) {
+        whisper_store::update(scope, key, Some(whisper_store::ConversationMeta::new(key)), |c| {
+            c.messages.extend(messages);
+            ((), true)
+        })
+        .unwrap();
+    }
+
+    fn stored(scope: &Scope, key: &str, id: &str) -> Option<StoredWhisper> {
+        whisper_store::read(scope, key, |c| c.messages.iter().find(|m| m.id == id).cloned()).unwrap().flatten()
+    }
+
+    #[tokio::test]
+    async fn queued_sends_are_spaced() {
+        let scope = whisper_store::open("99999951", 1);
+        file(&scope, THEM, vec![local("q1", "one", QUEUE_NOW, Some(Delivery::Sending)), local("q2", "two", QUEUE_NOW, Some(Delivery::Sending))]);
+        let helix = ScriptHelix::new("99999951", Vec::new());
+        let clock = FixedClock(QUEUE_NOW);
+        run_queued(&scope, &helix, &clock, &NoSleep, &always, THEM, "q1", None, None, false).await.unwrap();
+        let second = RecordingSleeper::default();
+        run_queued(&scope, &helix, &clock, &second, &always, THEM, "q2", None, None, false).await.unwrap();
+        assert_eq!(second.0.lock().unwrap().first().copied(), Some(SPACING_MS as u64), "the next send waits out the gap");
+        assert_eq!(stored(&scope, THEM, "q2").unwrap().delivery, Some(Delivery::Sent));
+    }
+
+    #[tokio::test]
+    async fn too_many_sends_back_off_then_not_delivered() {
+        let scope = whisper_store::open("99999952", 1);
+        file(&scope, THEM, vec![local("r1", "busy", QUEUE_NOW, Some(Delivery::Sending))]);
+        let refusals = (0..4).map(|_| Err(SendFail::Status(429, String::new()))).collect();
+        let helix = ScriptHelix::new("99999952", refusals);
+        let sleeper = RecordingSleeper::default();
+        let err = run_queued(&scope, &helix, &FixedClock(QUEUE_NOW), &sleeper, &always, THEM, "r1", None, None, false).await.unwrap_err();
+        assert!(err.starts_with("Sending too fast"), "{err}");
+        assert_eq!(helix.sends.load(Ordering::SeqCst), 4, "three retries after the first refusal");
+        let waits = sleeper.0.lock().unwrap().clone();
+        assert!(RATE_RETRIES_MS.iter().all(|w| waits.contains(w)), "{waits:?}");
+        let m = stored(&scope, THEM, "r1").unwrap();
+        assert_eq!(m.delivery, Some(Delivery::NotDelivered));
+        assert!(m.failure.unwrap().starts_with("Sending too fast"));
+    }
+
+    #[tokio::test]
+    async fn a_refused_token_is_renewed_once_and_checked_again() {
+        let scope = whisper_store::open("99999953", 1);
+        file(&scope, THEM, vec![local("t1", "hi", QUEUE_NOW, Some(Delivery::Sending)), local("t2", "hi again", QUEUE_NOW, Some(Delivery::Sending))]);
+        let helix = ScriptHelix::new("99999953", vec![Err(SendFail::Status(401, String::new()))]);
+        run_queued(&scope, &helix, &FixedClock(QUEUE_NOW), &NoSleep, &always, THEM, "t1", None, None, false).await.unwrap();
+        assert_eq!((helix.sends.load(Ordering::SeqCst), helix.rejects.load(Ordering::SeqCst)), (2, 1));
+        assert_eq!(stored(&scope, THEM, "t1").unwrap().delivery, Some(Delivery::Sent));
+
+        // A renewed token that belongs to someone else sends nothing more.
+        let mut other = ScriptHelix::new("99999953", vec![Err(SendFail::Status(401, String::new()))]);
+        other.renewed_id = "1234567".into();
+        let err = run_queued(&scope, &other, &FixedClock(QUEUE_NOW), &NoSleep, &always, THEM, "t2", None, None, false).await.unwrap_err();
+        assert_eq!(err, SWITCHED);
+        assert_eq!(other.sends.load(Ordering::SeqCst), 1);
+        assert_eq!(stored(&scope, THEM, "t2").unwrap().failure.as_deref(), Some(SWITCHED));
+    }
+
+    #[tokio::test]
+    async fn an_answer_after_the_account_closed_waits_for_teardown() {
+        let scope = whisper_store::open("99999954", 1);
+        file(&scope, THEM, vec![local("c1", "bye", QUEUE_NOW, Some(Delivery::Sending))]);
+        let helix = ScriptHelix::new("99999954", Vec::new());
+        let closed: std::sync::Arc<Mutex<Option<Closing>>> = std::sync::Arc::new(Mutex::new(None));
+        let (keep, sc) = (std::sync::Arc::clone(&closed), scope.clone());
+        *helix.on_send.lock().unwrap() = Some(Box::new(move || {
+            *keep.lock().unwrap() = Some(whisper_store::close(&sc));
+        }));
+        let err = run_queued(&scope, &helix, &FixedClock(QUEUE_NOW), &NoSleep, &always, THEM, "c1", None, None, false).await.unwrap_err();
+        assert_eq!(err, SIGNED_OUT_BEFORE);
+        let stage = PENDING.lock().unwrap().get("c1").map(|p| p.stage.clone());
+        assert_eq!(stage, Some(Stage::Answered(Outcome::Sent)), "nothing is written under the closed account");
+        let closing = closed.lock().unwrap().take().unwrap();
+        teardown(&closing).await;
+        let after = whisper_store::update_closing(&closing, THEM, |c| (c.messages.iter().find(|m| m.id == "c1").map(|m| (m.delivery, m.got_204)), false))
+            .unwrap()
+            .unwrap();
+        assert_eq!(after, Some((Some(Delivery::Unknown), true)), "teardown files it as Unknown, 204 kept for adoption");
+    }
+
+    #[test]
+    fn a_conversation_stays_pinned_while_one_of_its_sends_is_live() {
+        let mut p = HashMap::new();
+        p.insert("a".to_string(), Pending { owner: ME.into(), key: THEM.into(), stage: Stage::Queued });
+        assert!(conversation_sending(&p, ME, THEM));
+        p.insert("a".to_string(), Pending { owner: ME.into(), key: THEM.into(), stage: Stage::Answered(Outcome::Sent) });
+        assert!(!conversation_sending(&p, ME, THEM), "an answered send no longer holds it");
+        p.insert("b".to_string(), Pending { owner: ME.into(), key: "other".into(), stage: Stage::InFlight });
+        assert!(!conversation_sending(&p, ME, THEM));
+        assert!(conversation_sending(&p, ME, "other"));
+    }
+
+    #[test]
+    fn stale_sending_turns_unknown_and_live_sends_stay() {
+        let scope = whisper_store::open("99999955", 1);
+        let mut old = local("old", "from last time", 5_000, Some(Delivery::Sending));
+        old.got_204 = true;
+        file(&scope, THEM, vec![old, local("live", "going now", 6_000, Some(Delivery::Sending))]);
+        set_stage("live", "99999955", THEM, Stage::InFlight);
+        assert_eq!(settle_stale_sends(&scope), 1);
+        let old = stored(&scope, THEM, "old").unwrap();
+        assert_eq!((old.delivery, old.got_204), (Some(Delivery::Unknown), false));
+        assert!(adoptable(&old), "Unknown is adopted by Twitch's copy");
+        assert_eq!(stored(&scope, THEM, "live").unwrap().delivery, Some(Delivery::Sending));
+        clear_stage("live");
+    }
+
     #[test]
     fn restart_never_resends() {
-        // Nothing but reset_for_retry (a Retry tap) ever makes a message Sending.
-        let mut messages = vec![local("a", "hi", 0, Some(Delivery::Unknown)), local("b", "yo", 0, Some(Delivery::NotDelivered))];
-        apply_check(&mut messages, 50_000);
-        apply_check(&mut messages, 60_000);
-        assert!(messages.iter().all(|m| m.delivery != Some(Delivery::Sending)));
+        // What a crash left Sending is settled, never sent: no Helix call can
+        // come from it, and nothing stays Sending.
+        let scope = whisper_store::open("99999956", 1);
+        file(&scope, THEM, vec![local("a", "hi", 1_000, Some(Delivery::Sending)), local("b", "yo", 2_000, Some(Delivery::NotDelivered))]);
+        let helix = ScriptHelix::new("99999956", Vec::new());
+        settle_stale_sends(&scope);
+        let all = whisper_store::read(&scope, THEM, |c| c.messages.clone()).unwrap().unwrap();
+        assert!(all.iter().all(|m| m.delivery != Some(Delivery::Sending)), "{:?}", all.iter().map(|m| m.delivery).collect::<Vec<_>>());
+        assert_eq!(helix.sends.load(Ordering::SeqCst), 0);
+        let mut checked = all.clone();
+        apply_check(&mut checked, 50_000);
+        apply_check(&mut checked, 60_000);
+        assert!(checked.iter().all(|m| m.delivery != Some(Delivery::Sending)));
     }
 
     #[test]

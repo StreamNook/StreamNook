@@ -47,11 +47,22 @@ pub fn all_hidden() -> bool {
 /// minute away.
 fn set_on_screen(on_screen: bool) {
     let was = ANY_ON_SCREEN.swap(on_screen, Ordering::Relaxed);
+    // Whispers sync after a long time away and recheck waiting sends on return.
+    if let Some(away) = away_change(was, on_screen) {
+        crate::services::whisper_sync::note_away(away);
+    }
     if on_screen && !was {
         debug!("[WindowVisibility] back on screen");
         crate::services::home_snapshot::note_ui_on_screen();
         crate::services::channel_state::note_ui_on_screen();
     }
+}
+
+/// What a change of "anything on screen" tells the whisper sync: `Some(true)`
+/// when the UI just left the screen, `Some(false)` when it came back, nothing
+/// when it did not change (the poll asks every second).
+fn away_change(was: bool, on_screen: bool) -> Option<bool> {
+    (was != on_screen).then_some(!on_screen)
 }
 
 /// Some surface is on screen that can show what the UI pollers fetch: a
@@ -176,6 +187,14 @@ pub fn start(app: AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn leaving_and_returning_reach_the_whisper_sync_once_each() {
+        assert_eq!(away_change(true, false), Some(true), "everything minimized or in the tray");
+        assert_eq!(away_change(false, true), Some(false), "back on screen");
+        assert_eq!(away_change(true, true), None, "the poll repeating itself says nothing");
+        assert_eq!(away_change(false, false), None);
+    }
 
     #[test]
     fn only_a_phone_in_the_background_is_idle() {

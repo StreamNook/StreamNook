@@ -15,6 +15,7 @@ import {
   liveLine,
   mergeDraft,
   mergeMessages,
+  ownerChanged,
   sortRows,
   syncLine,
   syncStatusWords,
@@ -182,6 +183,14 @@ describe('what the archive event and the refresh answer say', () => {
     expect(archiveOwnerOf(null)).toBeNull();
     expect(archiveSyncing({ owner_id: 'x', syncing: true })).toBe(true);
     expect(archiveSyncing('x')).toBe(false);
+  });
+
+  it('reads the list again when an event belongs to another account', () => {
+    expect(ownerChanged('99999999', '1000000000')).toBe(true);
+    expect(ownerChanged('99999999', '99999999')).toBe(false);
+    // Nothing loaded yet, or an event that names nobody: nothing to compare.
+    expect(ownerChanged(null, '1000000000')).toBe(false);
+    expect(ownerChanged('99999999', null)).toBe(false);
   });
 
   it('words each refresh outcome', () => {
