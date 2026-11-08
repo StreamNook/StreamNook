@@ -27,7 +27,8 @@
 //
 // Rust learns the same thing (set_app_foreground; PiP counts as seen), so its
 // pollers rest while the app is away. Going to the background also flushes
-// every debounced store there.
+// every debounced store there. It also learns whether the app can be read
+// (set_app_interactive; PiP does not count), for whisper conversations.
 import { invoke } from '@tauri-apps/api/core';
 import { refreshEntitlementRegistries, resumePresence, suspendPresence } from '../services/supabaseService';
 import { refreshFollowingIfStale } from './followRefresh';
@@ -76,7 +77,23 @@ function reportForeground(foreground: boolean): void {
   });
 }
 
+// Whether the app can be read right now: on screen with the screen on, and not
+// shrunk into the system PiP window. Rust counts an open whisper conversation
+// as being read only then, so a whisper landing while the stream plays in PiP
+// or the phone is locked still notifies and stays unread. Unlike
+// set_app_foreground, PiP does not count.
+let lastInteractive: boolean | null = null;
+function reportInteractive(override?: boolean): void {
+  const interactive = override ?? (document.visibilityState === 'visible' && !inPictureInPicture());
+  if (interactive === lastInteractive) return;
+  lastInteractive = interactive;
+  void invoke('set_app_interactive', { interactive }).catch((err) => {
+    Logger.debug('[Lifecycle] set_app_interactive failed:', err);
+  });
+}
+
 async function onHidden(): Promise<void> {
+  reportInteractive(false);
   if (inPictureInPicture()) {
     pipAway = true;
     return;
@@ -95,6 +112,7 @@ async function onHidden(): Promise<void> {
 }
 
 async function onVisible(): Promise<void> {
+  reportInteractive();
   if (!hiddenNow && !pipAway) return;
   hiddenNow = false;
   pipAway = false;
@@ -153,22 +171,29 @@ export function installLifecycle(): () => void {
   // and locked with audio is the main background case, so the screen itself
   // counts. PiP with the screen off is still PiP.
   const onScreenOff = () => {
+    reportInteractive(false);
     if (isInPip() !== true) void onHidden();
   };
   const onScreenOn = () => {
     if (document.visibilityState === 'visible') void onVisible();
+    else reportInteractive();
   };
+  // Entering or leaving PiP can happen while the page stays visible.
+  const onPip = () => reportInteractive();
   hiddenNow = document.visibilityState === 'hidden';
   document.addEventListener('visibilitychange', handler);
   window.addEventListener('sn:pip-closed', onPipClosed);
   window.addEventListener('sn:screen-off', onScreenOff);
   window.addEventListener('sn:screen-on', onScreenOn);
+  window.addEventListener('sn:pip', onPip);
   reportForeground(document.visibilityState === 'visible');
+  reportInteractive();
   return () => {
     document.removeEventListener('visibilitychange', handler);
     window.removeEventListener('sn:pip-closed', onPipClosed);
     window.removeEventListener('sn:screen-off', onScreenOff);
     window.removeEventListener('sn:screen-on', onScreenOn);
+    window.removeEventListener('sn:pip', onPip);
     installed = false;
   };
 }

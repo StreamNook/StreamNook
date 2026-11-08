@@ -21,7 +21,7 @@ use serde::Serialize;
 use tauri::{Emitter, Manager};
 
 use crate::rt::AppHandle;
-use crate::services::inbox_counts::Surface; // (reconciled: Surface lives in inbox_counts)
+use crate::services::inbox_counts::Surface;
 use crate::services::mention_inbox::MentionPart;
 use crate::services::twitch_service::TwitchService;
 use crate::services::whisper_service::WhisperEvent;
@@ -104,7 +104,7 @@ pub struct RowMeta {
     pub unread_count: i32,
     pub archived: bool,
     pub muted: bool,
-    /// (reconciled, CA-13.1) The sender as the iPhone's pinned-sender look draws
+    /// The sender as the iPhone's pinned-sender look draws
     /// them (`{name_color, badges, role_badge, paint}`, the shape
     /// `chat_row_view::stamp_pins` writes). Built at read time from cosmetics
     /// already known; desktop and Android draw names through `useChatterLook`
@@ -162,7 +162,7 @@ fn now_twitch_ms() -> i64 {
 
 /// A fresh index entry for a conversation that does not exist yet.
 pub fn new_meta(key: &str, user_id: &str, login: &str, name: &str, avatar: Option<String>) -> ConversationMeta {
-    // (reconciled) built on the store's own empty meta, so no field is missed.
+    // Built on the store's own empty meta, so no field is missed.
     ConversationMeta {
         user_id: user_id.to_string(),
         user_login: login.to_string(),
@@ -260,7 +260,6 @@ pub fn emit_update(
 
 /// Tell windows a conversation changed with no single new message (a sync
 /// merge, a read marker, a load of older history), so an open one re-reads.
-/// (reconciled: the name whisper_sync calls.)
 pub fn emit_conversation(scope: &Scope, key: &str) {
     let _ = emit_update(scope, key, None, None);
 }
@@ -326,7 +325,7 @@ pub async fn record_incoming(app: AppHandle, owner_id: String, ev: WhisperEvent,
         log::debug!("[WhisperInbox] whisper for an account no longer followed; not filed");
         return;
     }
-    whisper_sync::note_twitch_time(twitch_ms); // (reconciled: one argument, 7.4's form)
+    whisper_sync::note_twitch_time(twitch_ms);
 
     // An old login-keyed conversation moves under the id now that it is known.
     let found = key_for(&scope, &ev.from_user_id, &ev.from_user_login);
@@ -445,7 +444,7 @@ pub fn mark_read(key: &str) -> Result<(), String> {
 
 /// The conversations Mark all read reads: every one with something unread,
 /// muted and archived ones included (reading them changes no badge and keeps
-/// Twitch in step). (reconciled: factored out so it is tested)
+/// Twitch in step).
 fn unread_keys(idx: &AccountIndex) -> Vec<String> {
     idx.conversations.iter().filter(|c| c.unread_count > 0).map(|c| c.key.clone()).collect()
 }
@@ -507,7 +506,7 @@ pub fn row_meta(meta: &ConversationMeta) -> RowMeta {
         unread_count: meta.unread_count,
         archived: meta.archived,
         muted: meta.muted,
-        // (reconciled, CA-13.1) Known cosmetics only: a list never starts lookups.
+        // Known cosmetics only: a list never starts lookups.
         sender_view: Some(crate::services::chat_row_view::whisper_sender_view(
             &meta.user_id,
             meta.color.as_deref(),
@@ -656,7 +655,7 @@ pub fn page(key: &str, cursor: Option<String>, limit: usize) -> Result<WhisperPa
     let Some(scope) = current() else { return Ok(empty_page()) };
     refresh_globals_soon();
     let out = whisper_store::read(&scope, key, |c| page_of(c, cursor.as_deref(), limit.clamp(1, 200)))?;
-    // (reconciled, CA-13.1) An open conversation looks its sender's 7TV
+    // An open conversation looks its sender's 7TV
     // cosmetics up once, so the next read draws their paint and badge.
     if let Some(user_id) = out.as_ref().and_then(|p| p.meta.as_ref()).map(|m| m.user_id.clone()) {
         crate::services::chat_row_view::warm_whisper_sender(&user_id);
@@ -809,67 +808,6 @@ fn with_globals_msg(mut m: StoredWhisper) -> StoredWhisper {
     m
 }
 
-// ---- The old commands, until each one's last caller is gone ---------------
-
-/// What the not-yet-retired commands answer, in their old shapes, so the old
-/// store can go first. Each one leaves with its command.
-pub mod legacy {
-    use super::*;
-
-    fn conversation_json(c: &Conversation) -> serde_json::Value {
-        serde_json::json!({
-            "user_id": c.meta.user_id,
-            "user_login": c.meta.user_login,
-            "user_name": c.meta.user_name,
-            "profile_image_url": c.meta.profile_image_url,
-            "messages": c.messages,
-            "last_message_timestamp": c.meta.last_message_timestamp,
-            "unread_count": c.meta.unread_count,
-        })
-    }
-
-    /// `load_whisper_storage`: every conversation with its messages.
-    pub fn load_storage() -> Result<serde_json::Value, String> {
-        let Some(scope) = current() else {
-            return Ok(serde_json::json!({ "conversations": {}, "version": 1 }));
-        };
-        let keys: Vec<String> =
-            whisper_store::read_index(&scope, |idx| idx.conversations.iter().map(|c| c.key.clone()).collect())?;
-        let mut out = serde_json::Map::new();
-        for key in keys {
-            if let Some(v) = whisper_store::read(&scope, &key, conversation_json)? {
-                out.insert(key, v);
-            }
-        }
-        Ok(serde_json::json!({ "conversations": out, "version": 1 }))
-    }
-
-    /// `whisper_thread`: one conversation, oldest first.
-    pub fn thread(key: &str) -> Result<Option<serde_json::Value>, String> {
-        let Some(scope) = current() else { return Ok(None) };
-        whisper_store::read(&scope, key, conversation_json)
-    }
-
-    /// `whisper_refresh`: a sync, answering how many messages it added.
-    pub async fn refresh() -> Result<usize, String> {
-        Ok(match whisper_sync::sync_now().await {
-            whisper_sync::SyncOutcome::Done { added } | whisper_sync::SyncOutcome::Partial { added } => added as usize,
-            whisper_sync::SyncOutcome::Failed { reason } => return Err(reason),
-            _ => 0,
-        })
-    }
-
-    /// `whisper_import`: files are not imported any more.
-    pub fn import() -> Result<serde_json::Value, String> {
-        Err("Whispers now load from Twitch on their own.".into())
-    }
-
-    /// `get_whisper_storage_path`.
-    pub fn storage_path() -> Result<String, String> {
-        whisper_store::root_dir().map(|p| p.to_string_lossy().into_owned())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -960,7 +898,7 @@ mod tests {
         assert_eq!(ids, ["a", "b", "c"]);
     }
 
-    /// (reconciled, A34 "mark all read") Mark all read reads every conversation
+    /// Mark all read reads every conversation
     /// with something unread, muted and archived ones too, and skips read ones.
     #[test]
     fn mark_all_read_picks_every_unread_conversation() {

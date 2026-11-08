@@ -1,225 +1,150 @@
-// The phone's view of the whisper inbox. Rust owns the conversations
-// (services/whisper_inbox.rs, the same store desktop's Whispers panel uses):
-// the socket files every incoming whisper there, Rust marks them read, sends
-// replies, and decides which whisper is worth a notification (posted from
-// Rust itself, android_notify.rs, because wry pauses the page off screen).
-// This module asks for the list and a thread, relays the screen's actions,
-// and holds the one piece of page state Rust has no business with: what was
-// typed here and is still on its way, or was refused.
+// The phone's link to the whisper store. Rust owns the conversations
+// (services/whisper_inbox.rs, whisper_send.rs, whisper_sync.rs): it imports the
+// history from Twitch, files every incoming whisper, marks conversations read
+// here and on Twitch, sends, tracks where each send stands, and decides which
+// whisper is worth a notification (posted from Rust itself, android_notify.rs,
+// because wry pauses the page off screen). This module relays the conversation
+// sheet's actions and hands Rust's changes to whatever is on screen. It holds
+// no messages.
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useAppStore } from '../../stores/AppStore';
 import { useMobileNavStore } from '../navStore';
-import { closeInboxSheet } from '../mentions/mentionInbox';
+import { bumpInbox, closeInboxSheet, inboxHooks } from '../mentions/mentionInbox';
 import { Logger } from '../../utils/logger';
 import { claimWhisper } from '../../utils/whisperClaim';
-import type { WhisperConversation, WhisperList, WhisperListRow, WhisperUpdate } from '../../types';
-import { failureReason, type PendingWhisper } from './whisperModel';
+import type {
+  WhisperArchiveChangedPayload,
+  WhisperPagePayload,
+  WhisperRowMeta,
+  WhisperStatusPayload,
+  WhisperUpdatePayload,
+} from '../../types';
+import { PAGE, failureReason } from './whisperModel';
 
-export type { WhisperListRow };
+export type WhisperStatus = WhisperStatusPayload;
 
 interface WhispersState {
-  /** The account the list belongs to ('' signed out); the writes take it. */
-  ownerId: string;
-  rows: WhisperListRow[];
-  unreadTotal: number;
-  /** A list answer arrived at least once. */
-  loaded: boolean;
-  /** The last list read failed and there is nothing to show. */
-  failed: boolean;
-  /** Bumped on every change Rust reports, so an open thread re-reads. */
+  /** What the inbox says about whispers beyond its rows. */
+  status: WhisperStatus | null;
+  /** Bumped when many conversations changed at once (a sync), so an open
+   *  conversation reads its newest page again. */
   revision: number;
-  /** The newest change Rust reported, for the open thread to apply at once. */
-  lastUpdate: WhisperUpdate | null;
-  /** Typed here, not yet confirmed (or refused) by Twitch, per conversation. */
-  pending: PendingWhisper[];
+  /** The newest single change Rust reported, for the open conversation. */
+  lastUpdate: WhisperUpdatePayload | null;
 }
 
 export const useWhispersStore = create<WhispersState>(() => ({
-  ownerId: '',
-  rows: [],
-  unreadTotal: 0,
-  loaded: false,
-  failed: false,
+  status: null,
   revision: 0,
   lastUpdate: null,
-  pending: [],
 }));
 
-/** Re-read the list from Rust. */
-export async function refreshWhisperList(): Promise<void> {
+export async function refreshWhisperStatus(): Promise<void> {
   try {
-    const list = await invoke<WhisperList>('whisper_list');
-    useWhispersStore.setState({
-      ownerId: list.owner_id,
-      rows: list.conversations,
-      unreadTotal: list.unread_total,
-      loaded: true,
-      failed: false,
-    });
+    const status = await invoke<WhisperStatus>('whisper_status');
+    useWhispersStore.setState({ status });
   } catch (err) {
-    Logger.warn('[Whispers] list failed:', err);
-    useWhispersStore.setState((s) => ({ failed: !s.loaded }));
+    Logger.debug('[Whispers] status failed:', err);
   }
 }
 
-/** One conversation with all its messages, or null when it is gone. */
-export async function loadWhisperThread(key: string): Promise<WhisperConversation | null> {
-  const ownerId = useWhispersStore.getState().ownerId;
-  if (!ownerId) return null;
-  return invoke<WhisperConversation | null>('whisper_thread', { ownerId, key });
+/** A page of one conversation, oldest first, before `cursor` when given. */
+export function loadWhisperPage(key: string, cursor: string | null = null, limit = PAGE): Promise<WhisperPagePayload> {
+  return invoke<WhisperPagePayload>('whisper_page', { key, cursor: cursor ?? undefined, limit });
 }
 
-/** The conversation is on screen and read: Rust zeroes its unread count. */
-export async function markWhisperRead(key: string): Promise<void> {
-  const { ownerId, rows } = useWhispersStore.getState();
-  if (!ownerId) return;
-  const row = rows.find((r) => r.key === key);
-  if (row && row.unread_count > 0) {
-    useWhispersStore.setState((s) => ({
-      rows: s.rows.map((r) => (r.key === key ? { ...r, unread_count: 0 } : r)),
-      unreadTotal: Math.max(0, s.unreadTotal - row.unread_count),
-    }));
-  }
-  try {
-    await invoke('whisper_mark_read', { ownerId, key });
-  } catch (err) {
-    Logger.warn('[Whispers] mark read failed:', err);
-  }
+/** Ask Rust for one more page of the conversation's history from Twitch;
+ *  answers how many messages it added. */
+export function loadOlderFromTwitch(key: string): Promise<number> {
+  return invoke<number>('whisper_load_older', { key });
 }
 
-// ---------------------------------------------------------------------------
-// The conversation on screen
-// ---------------------------------------------------------------------------
-//
-// Rust reads a whisper landing in the open conversation as read and does not
-// notify for it. It only counts as open while the app is on screen: the page
-// reports none the moment it is hidden, and the open one again when it comes
-// back (marking it read, since whatever arrived meanwhile has now been seen).
-
-let openKey: string | null = null;
-let visibilityHooked = false;
-
-function reportOpen(): void {
-  const key = document.visibilityState === 'visible' ? openKey : null;
-  claimWhisper(key);
-  if (key) void markWhisperRead(key);
-}
-
-/** The conversation view came up (a key) or went away (null). */
+/** The conversation view came up (a key) or went away (null). Rust counts it
+ *  as being read only while the app is in front and not in PiP (lifecycle.ts
+ *  reports that), and reads it through as the claim starts counting. */
 export function setOpenWhisper(key: string | null): void {
-  openKey = key;
-  if (!visibilityHooked) {
-    visibilityHooked = true;
-    document.addEventListener('visibilitychange', reportOpen);
-  }
-  reportOpen();
+  claimWhisper(key);
 }
 
-// ---------------------------------------------------------------------------
-// Sending
-// ---------------------------------------------------------------------------
-
-let localSeq = 0;
-
-function setPending(localId: string, change: Partial<PendingWhisper> | null): void {
-  useWhispersStore.setState((s) => ({
-    pending: change
-      ? s.pending.map((p) => (p.localId === localId ? { ...p, ...change } : p))
-      : s.pending.filter((p) => p.localId !== localId),
-  }));
-}
-
-async function deliver(localId: string, row: WhisperListRow, text: string): Promise<WhisperUpdate | null> {
-  const ownerId = useWhispersStore.getState().ownerId;
-  if (!ownerId) {
-    setPending(localId, { status: 'failed', reason: 'You are not signed in to Twitch.' });
-    return null;
-  }
+/** Send `text`. Rust files it as Sending at once (the thread shows it from the
+ *  update) and answers once Twitch has; a refusal before anything was filed
+ *  comes back as its reason. */
+export async function sendWhisper(meta: WhisperRowMeta, text: string): Promise<string | null> {
   try {
-    const update = await invoke<WhisperUpdate>('whisper_send', {
-      ownerId,
+    await invoke('whisper_send', {
       target: {
-        key: row.key,
-        user_id: row.user_id,
-        user_login: row.user_login,
-        user_name: row.user_name,
-        profile_image_url: row.profile_image_url,
+        key: meta.key,
+        user_id: meta.user_id,
+        user_login: meta.user_login,
+        user_name: meta.user_name,
+        profile_image_url: meta.profile_image_url,
       },
       text,
     });
-    // Sent: the message now lives in Rust's conversation, so the pending copy
-    // goes, and the list and the open thread take the update.
-    setPending(localId, null);
-    takeUpdate(update);
-    return update;
+    return null;
   } catch (err) {
     Logger.warn('[Whispers] send failed:', err);
-    setPending(localId, { status: 'failed', reason: failureReason(err) });
-    return null;
+    return failureReason(err);
   }
 }
 
-/** Send `text` to the conversation. Shown at once as sending; Twitch's answer
- *  turns it into the sent message or a failure with its reason. */
-export function sendWhisper(row: WhisperListRow, text: string): void {
-  const clean = text.trim();
-  if (!clean) return;
-  localSeq += 1;
-  const pending: PendingWhisper = {
-    localId: `local-${Date.now()}-${localSeq}`,
-    key: row.key,
-    text: clean,
-    status: 'sending',
-    atMs: Date.now(),
-  };
-  useWhispersStore.setState((s) => ({ pending: [...s.pending, pending] }));
-  void deliver(pending.localId, row, clean);
+export function retryWhisper(key: string, messageId: string): void {
+  void invoke('whisper_retry', { key, messageId }).catch((err) => Logger.warn('[Whispers] retry failed:', err));
 }
 
-export function retryWhisper(localId: string, row: WhisperListRow): void {
-  const p = useWhispersStore.getState().pending.find((x) => x.localId === localId);
-  if (!p || p.status !== 'failed') return;
-  setPending(localId, { status: 'sending', reason: undefined, atMs: Date.now() });
-  void deliver(localId, row, p.text);
+export function discardWhisper(key: string, messageId: string): void {
+  void invoke('whisper_discard', { key, messageId }).catch((err) => Logger.warn('[Whispers] discard failed:', err));
 }
 
-export function discardWhisper(localId: string): void {
-  setPending(localId, null);
+export function markWhisperRead(key: string): void {
+  void invoke('whisper_mark_read', { key }).catch((err) => Logger.warn('[Whispers] mark read failed:', err));
 }
 
-// ---------------------------------------------------------------------------
-// Rust's changes
-// ---------------------------------------------------------------------------
-
-function takeUpdate(update: WhisperUpdate): void {
-  const s = useWhispersStore.getState();
-  if (s.ownerId && update.owner_id !== s.ownerId) return;
-  useWhispersStore.setState((st) => ({ revision: st.revision + 1, lastUpdate: update }));
-  // The list is small and Rust sorts it; a re-read keeps one source of truth.
-  void refreshWhisperList();
+/** Archive the conversation, here and on Twitch. */
+export async function archiveWhisper(key: string): Promise<void> {
+  try {
+    await invoke('whisper_archive', { key });
+  } catch (err) {
+    Logger.warn('[Whispers] archive failed:', err);
+    useAppStore.getState().addToast('Could not archive that conversation.', 'error');
+  }
 }
 
-/** Open a conversation from a notification tap. Right after a cold start the
- *  account may not be known yet, so the list is read first. */
+/** Sync with Twitch now (the inbox screen's pull). */
+export async function syncWhispersNow(): Promise<void> {
+  try {
+    await invoke('whisper_sync_now');
+  } catch (err) {
+    Logger.warn('[Whispers] sync failed:', err);
+  }
+  await refreshWhisperStatus();
+}
+
+/** Open a conversation in its sheet: from an inbox row, a notification tap or
+ *  the arrival card. Two sheets never stack: an open inbox gives way to it. */
 export async function openWhisperByKey(key: string): Promise<void> {
   if (!key) return;
-  if (!useWhispersStore.getState().loaded) await refreshWhisperList();
-  // Two sheets never stack: an open inbox gives way to the conversation.
   closeInboxSheet();
   useMobileNavStore.getState().openWhisper(key);
 }
 
+function ownerMatches(ownerId: string | undefined): boolean {
+  const mine = useAppStore.getState().currentUser?.user_id;
+  return !mine || !ownerId || ownerId === mine;
+}
+
 let installed = false;
 
-/** Mounted once by the shell: the list and unread count, seeded now and kept
- *  current by Rust's events. Re-seeded on sign-in, since the inbox is per
- *  account. */
+/** Mounted once by the shell: the status, and Rust's changes handed to the
+ *  inbox and the open conversation. Reset on an account change, since
+ *  whispers are per account. */
 export function installWhisperInbox(): () => void {
   if (installed) return () => {};
   installed = true;
-  void refreshWhisperList();
+  inboxHooks.openWhisper = (key) => void openWhisperByKey(key);
+  void refreshWhisperStatus();
   const unlisteners: (() => void)[] = [];
   let dead = false;
   const hold = (p: Promise<() => void>) =>
@@ -227,20 +152,38 @@ export function installWhisperInbox(): () => void {
       if (dead) u();
       else unlisteners.push(u);
     });
-  hold(listen<WhisperUpdate>('whisper-conversation-updated', (e) => takeUpdate(e.payload)));
-  hold(listen<string>('whisper-archive-changed', () => {
-    useWhispersStore.setState((s) => ({ revision: s.revision + 1, lastUpdate: null }));
-    void refreshWhisperList();
-  }));
+  hold(
+    listen<WhisperUpdatePayload>('whisper-conversation-updated', (e) => {
+      if (!e.payload || !ownerMatches(e.payload.owner_id)) return;
+      useWhispersStore.setState({ lastUpdate: e.payload });
+      bumpInbox();
+    }),
+  );
+  hold(
+    listen<WhisperArchiveChangedPayload | string>('whisper-archive-changed', (e) => {
+      const p = e.payload;
+      const owner = typeof p === 'string' ? p : p?.owner_id;
+      if (!ownerMatches(owner)) return;
+      const syncing = typeof p === 'string' ? undefined : p?.syncing;
+      useWhispersStore.setState((s) => ({
+        revision: s.revision + 1,
+        lastUpdate: null,
+        status: s.status && syncing !== undefined ? { ...s.status, syncing } : s.status,
+      }));
+      bumpInbox();
+      void refreshWhisperStatus();
+    }),
+  );
   const unsubUser = useAppStore.subscribe((s, prev) => {
     if (s.currentUser?.user_id !== prev.currentUser?.user_id) {
-      useWhispersStore.setState({ rows: [], unreadTotal: 0, loaded: false, pending: [], lastUpdate: null });
-      void refreshWhisperList();
+      useWhispersStore.setState((st) => ({ status: null, lastUpdate: null, revision: st.revision + 1 }));
+      void refreshWhisperStatus();
     }
   });
   return () => {
     dead = true;
     installed = false;
+    inboxHooks.openWhisper = null;
     unlisteners.forEach((u) => u());
     unsubUser();
   };

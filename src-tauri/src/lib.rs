@@ -57,7 +57,7 @@ use commands::{
     seventv_cosmetics_fetch::*, sn_cosmetics::*, song_id::*, spellcheck::*, streamnook_api::*, streaming::*, subscriptions::*,
     text_segments::*, twitch::*,
     universal_cache::*,
-    user_profile::*, vod_progress::*, watch_session::*, watch_streak::*, whisper_storage::*, whispers::*, mention_inbox::*, window_state::*,
+    user_profile::*, vod_progress::*, watch_session::*, watch_streak::*, whispers::*, mention_inbox::*, window_state::*,
 };
 // Desktop-only feature modules, excluded from the phone app (watch/earn/chat
 // only): MultiNook tiling, Discord RPC, and profile-card screen capture.
@@ -2556,7 +2556,6 @@ pub fn run() {
             whisper_mark_read,
             whisper_send,
             whisper_list,
-            whisper_thread,
             whisper_page,
             whisper_mark_all_read,
             whisper_retry,
@@ -2566,6 +2565,7 @@ pub fn run() {
             whisper_sync_now,
             whisper_island_clear,
             inbox_opened,
+            whisper_status,
             // Mentions inbox
             get_mention_inbox,
             get_inbox_view,

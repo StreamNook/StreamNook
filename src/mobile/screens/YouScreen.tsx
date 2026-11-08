@@ -3,10 +3,8 @@
 // every picture, name and cosmetic), the accounts you are signed in with (each
 // with its own sign in / sign out), then settings sections inline.
 import React, { useEffect, useState } from 'react';
-import { ArrowCircleDown, At, ChatCircle, MusicNotes } from 'phosphor-react';
+import { ArrowCircleDown, MusicNotes, Tray } from 'phosphor-react';
 import { useMentionsStore } from '../mentions/mentionInbox';
-import { useWhispersStore } from '../whispers/whisperInbox';
-import { WHISPER_WORDS } from '../whispers/whisperModel';
 import { ChevronRight } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
 import { useMobileNavStore, type MobileTab } from '../navStore';
@@ -31,9 +29,7 @@ export const YouScreen: React.FC = () => {
   const isAuthenticated = useAppStore((s) => s.isAuthenticated);
   const setCosmeticsOpen = useMobileNavStore((s) => s.setCosmeticsOpen);
   const setMentionsOpen = useMobileNavStore((s) => s.setMentionsOpen);
-  const mentionsUnread = useMentionsStore((s) => s.unreadTotal);
-  const openWhispers = useMobileNavStore((s) => s.openWhispers);
-  const whispersUnread = useWhispersStore((s) => s.unreadTotal);
+  const inboxUnread = useMentionsStore((s) => s.unreadTotal);
   const openSongs = useMobileNavStore((s) => s.openSongs);
   const startTab = usePhonePrefs((s) => s.startTab);
   const setStartTab = usePhonePrefs((s) => s.setStartTab);
@@ -102,47 +98,28 @@ export const YouScreen: React.FC = () => {
         </div>
       )}
 
-      {/* Your mentions, first among the things that are about you, then your
-          whispers (Twitch's, so only with a Twitch sign-in; here until the chat
-          inbox opens them), then the songs you identified. The dot is the only
-          mark unread gets here. */}
+      {/* Your inbox (mentions, replies, highlights, and your Twitch whispers
+          when Twitch is signed in), first among the things that are about you,
+          then the songs you identified. The dot is the only mark unread gets
+          here. */}
       <div className="px-4 mb-4">
         <div className="glass-panel w-full overflow-hidden">
           <button
             onClick={() => setMentionsOpen(true)}
             className="w-full flex items-center gap-3 px-3.5 py-3 text-left active:bg-surface-active"
           >
-            <At size={20} className="text-textSecondary shrink-0" />
+            <Tray size={20} className="text-textSecondary shrink-0" />
             <span className="flex-1 min-w-0">
-              <span className="block text-[15px] font-medium text-textPrimary">Mentions</span>
+              <span className="block text-[15px] font-medium text-textPrimary">Inbox</span>
               <span className="block text-[12.5px] text-textMuted truncate">
-                Who mentioned or replied to you in chat
+                {currentUser?.user_id ? 'Mentions, replies and whispers' : 'Mentions and replies'}
               </span>
             </span>
-            {mentionsUnread > 0 && (
-              <span className="w-2 h-2 rounded-full bg-accent shrink-0" aria-label="Unread mentions" />
+            {inboxUnread > 0 && (
+              <span className="w-2 h-2 rounded-full bg-accent shrink-0" aria-label="Unread in your inbox" />
             )}
             <ChevronRight size={16} className="text-textMuted shrink-0" />
           </button>
-          {currentUser?.user_id && (
-            <>
-              <div className="ml-[46px] border-t border-borderSubtle" />
-              <button
-                onClick={openWhispers}
-                className="w-full flex items-center gap-3 px-3.5 py-3 text-left active:bg-surface-active"
-              >
-                <ChatCircle size={20} className="text-textSecondary shrink-0" />
-                <span className="flex-1 min-w-0">
-                  <span className="block text-[15px] font-medium text-textPrimary">{WHISPER_WORDS.title}</span>
-                  <span className="block text-[12.5px] text-textMuted truncate">{WHISPER_WORDS.entryDetail}</span>
-                </span>
-                {whispersUnread > 0 && (
-                  <span className="w-2 h-2 rounded-full bg-accent shrink-0" aria-label="Unread whispers" />
-                )}
-                <ChevronRight size={16} className="text-textMuted shrink-0" />
-              </button>
-            </>
-          )}
           <div className="ml-[46px] border-t border-borderSubtle" />
           <button
             onClick={() => openSongs()}

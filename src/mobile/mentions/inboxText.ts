@@ -32,17 +32,20 @@ export const CHIP_LABEL: Record<InboxFilterId, string> = {
   whispers: 'Whispers',
 };
 
-/** The empty list's words for a chip. */
-export function emptyWords(filter: InboxFilterId): { text: string; hint: string } {
+/** The empty list's words for a chip. `syncing`: Rust is still bringing the
+ *  whisper history in from Twitch. */
+export function emptyWords(filter: InboxFilterId, syncing = false): { text: string; hint: string } {
   switch (filter) {
     case 'highlights':
       return { text: 'No highlights yet.', hint: 'Messages with one of your highlight phrases show up here.' };
     case 'whispers':
-      return { text: 'No whispers yet.', hint: 'Whispers sent to you show up here.' };
+      return syncing
+        ? { text: 'Loading your whispers from Twitch.', hint: 'Your conversations show up here as they arrive.' }
+        : { text: 'No whispers yet.', hint: 'Your Twitch whisper conversations show up here.' };
     case 'mentions':
       return { text: 'No mentions yet.', hint: 'When someone mentions or replies to you in a chat, it shows up here.' };
     default:
-      return { text: 'Nothing here yet.', hint: 'Mentions, replies and your highlight phrases show up here.' };
+      return { text: 'Nothing here yet.', hint: 'Mentions, replies, highlights and whispers show up here.' };
   }
 }
 

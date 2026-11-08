@@ -23,7 +23,6 @@ const base = {
   sheetStack: [] as string[],
   songsOpen: false,
   songsFocus: null,
-  whispersOpen: false,
   mentionsOpen: false,
   settingsView: null as string | null,
   cosmeticsOpen: false,
@@ -35,7 +34,6 @@ describe('Back before the player', () => {
   it.each([
     { sheetStack: ['quality'] },
     { songsOpen: true },
-    { whispersOpen: true },
     { mentionsOpen: true },
     { settingsView: 'player' },
     { cosmeticsOpen: true },

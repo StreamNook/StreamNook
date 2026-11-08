@@ -1,24 +1,24 @@
 // The pieces an inbox row and the arrival card share: the sender's face with
-// the kind's mark on it, and the message with its emotes.
+// the kind's mark on it, and a message with its emotes.
 import React, { useState } from 'react';
 import { AtSign, Highlighter, MessageCircle, Reply } from 'lucide-react';
-import type { MentionEntry } from '../../types';
+import type { MentionEntry, MentionPart } from '../../types';
+import type { FaceInfo } from './inboxModel';
 
 const KIND_ICON = { mention: AtSign, reply: Reply, word: Highlighter, whisper: MessageCircle } as const;
 
 /** The sender's picture (Rust's cached lookup), or their initial on their own
  *  color while it loads or when there is none, with the kind's mark on its
  *  corner. */
-export const InboxFace: React.FC<{ entry: MentionEntry; avatar: string | null; size: number; dim?: boolean }> = ({
-  entry,
+export const InboxFace: React.FC<{ face: FaceInfo; avatar: string | null; size: number; dim?: boolean }> = ({
+  face,
   avatar,
   size,
   dim = false,
 }) => {
   const [broken, setBroken] = useState<string | null>(null);
-  const Icon = KIND_ICON[(entry.kind as keyof typeof KIND_ICON) ?? 'mention'] ?? AtSign;
-  const color = entry.sender_color || 'var(--color-accent)';
-  const name = entry.sender_name || entry.sender_login || '?';
+  const Icon = KIND_ICON[face.kind] ?? AtSign;
+  const color = face.color || 'var(--color-accent)';
   const chip = Math.round(size * 0.5);
   const showPicture = !!avatar && broken !== avatar;
   return (
@@ -40,7 +40,7 @@ export const InboxFace: React.FC<{ entry: MentionEntry; avatar: string | null; s
               background: `linear-gradient(135deg, ${color}, color-mix(in srgb, ${color} 55%, #000))`,
             }}
           >
-            {name.charAt(0).toUpperCase()}
+            {(face.name || '?').charAt(0).toUpperCase()}
           </span>
         )}
       </span>
@@ -55,14 +55,13 @@ export const InboxFace: React.FC<{ entry: MentionEntry; avatar: string | null; s
   );
 };
 
-/** The message as the chat drew it: emotes inline at the text's height, or
- *  the plain text for an entry filed before Rust kept its parts. */
-export const InboxMessage: React.FC<{ entry: MentionEntry; emote: number }> = ({ entry, emote }) => {
-  if (entry.removed) return <span className="italic text-textMuted">Message deleted by a moderator</span>;
-  if (!entry.parts?.length) return <>{entry.text}</>;
+/** Words and emotes in order, emotes at the text's height; the plain text when
+ *  there are no parts. */
+export const InboxParts: React.FC<{ parts: MentionPart[]; text: string; emote: number }> = ({ parts, text, emote }) => {
+  if (!parts.length) return <>{text}</>;
   return (
     <>
-      {entry.parts.map((p, i) =>
+      {parts.map((p, i) =>
         p.type === 'emote' ? (
           <img
             key={i}
@@ -79,4 +78,10 @@ export const InboxMessage: React.FC<{ entry: MentionEntry; emote: number }> = ({
       )}
     </>
   );
+};
+
+/** A mention as the chat drew it, or the line for one a moderator deleted. */
+export const InboxMessage: React.FC<{ entry: MentionEntry; emote: number }> = ({ entry, emote }) => {
+  if (entry.removed) return <span className="italic text-textMuted">Message deleted by a moderator</span>;
+  return <InboxParts parts={entry.parts ?? []} text={entry.text} emote={emote} />;
 };

@@ -35,10 +35,7 @@ interface MobileNavState {
   cosmeticsOpen: boolean;
   /** The mentions inbox, over everything else (it opens from the chat too). */
   mentionsOpen: boolean;
-  /** The whispers list, over everything else like Mentions (a notification
-   *  tap and the chat inbox open it from anywhere). */
-  whispersOpen: boolean;
-  /** The conversation open in its bottom sheet, by its inbox key. */
+  /** The whisper conversation open in its bottom sheet, by its key. */
   whisperKey: string | null;
   /** Your songs, over everything else like Mentions (a song card in any chat
    *  opens it too). */
@@ -77,39 +74,34 @@ interface MobileNavState {
   openBrowseCategory: (category: TwitchCategory | null) => void;
   setCosmeticsOpen: (open: boolean) => void;
   setMentionsOpen: (open: boolean) => void;
-  /** The whispers list (the entry the inbox and the You tab use). */
-  openWhispers: () => void;
   /** One conversation, in the bottom sheet the chat menu uses, over whatever
-   *  is on screen (an open inbox goes first). */
+   *  is on screen (an open inbox sheet goes first; You > Inbox stays under it). */
   openWhisper: (key: string) => void;
   /** Close the conversation's sheet. */
   closeWhisper: () => void;
-  /** Close the whispers layer entirely. */
-  closeWhispers: () => void;
   /** Your songs, on one song's detail when `focus` is given. */
   openSongs: (focus?: string | null) => void;
   closeSongs: () => void;
   setSongsFocus: (key: string | null) => void;
   setPlayerMode: (mode: 'full' | 'mini') => void;
-  /** Back chain: top sheet (a whisper conversation is one) -> a song's detail -> songs -> whispers -> mentions -> settings -> cosmetics -> minimize the watch layer
+  /** Back chain: top sheet (a whisper conversation is one) -> a song's detail -> songs -> inbox -> settings -> cosmetics -> minimize the watch layer
    *  -> category drill -> a tab other than the start tab -> not consumed
    *  (native backgrounds the task). */
   handleBack: () => boolean;
 }
 
 /** What takes Back before the full player shrinks, in handleBack's order: an
- *  open sheet, Songs, Whispers, Mentions, Settings, Cosmetics. The watch
+ *  open sheet, Songs, the inbox, Settings, Cosmetics. The watch
  *  layer's claim on chat's screen edge reads it too (SN-30), so a new Back
  *  consumer ahead of the player belongs here as well as in handleBack. */
 export function backTakenBeforePlayer(s: {
   sheetStack: string[];
   songsOpen: boolean;
-  whispersOpen: boolean;
   mentionsOpen: boolean;
   settingsView: string | null;
   cosmeticsOpen: boolean;
 }): boolean {
-  return s.sheetStack.length > 0 || s.songsOpen || s.whispersOpen || s.mentionsOpen || !!s.settingsView || s.cosmeticsOpen;
+  return s.sheetStack.length > 0 || s.songsOpen || s.mentionsOpen || !!s.settingsView || s.cosmeticsOpen;
 }
 
 export const useMobileNavStore = create<MobileNavState>((set, get) => ({
@@ -123,7 +115,6 @@ export const useMobileNavStore = create<MobileNavState>((set, get) => ({
   browseCategory: null,
   cosmeticsOpen: false,
   mentionsOpen: false,
-  whispersOpen: false,
   whisperKey: null,
   songsOpen: false,
   songsFocus: null,
@@ -173,10 +164,8 @@ export const useMobileNavStore = create<MobileNavState>((set, get) => ({
   openBrowseCategory: (category) => set({ browseCategory: category }),
   setCosmeticsOpen: (open) => set({ cosmeticsOpen: open }),
   setMentionsOpen: (open) => set({ mentionsOpen: open }),
-  openWhispers: () => set({ whispersOpen: true, whisperKey: null }),
-  openWhisper: (key) => set({ whisperKey: key, mentionsOpen: false }),
+  openWhisper: (key) => set({ whisperKey: key }),
   closeWhisper: () => set({ whisperKey: null }),
-  closeWhispers: () => set({ whispersOpen: false, whisperKey: null }),
   openSongs: (focus = null) => set({ songsOpen: true, songsFocus: focus }),
   closeSongs: () => set({ songsOpen: false, songsFocus: null }),
   setSongsFocus: (key) => set({ songsFocus: key }),
@@ -197,10 +186,6 @@ export const useMobileNavStore = create<MobileNavState>((set, get) => ({
       if (get().songsOpen) {
         if (get().songsFocus) set({ songsFocus: null });
         else get().closeSongs();
-        return true;
-      }
-      if (get().whispersOpen) {
-        set({ whispersOpen: false });
         return true;
       }
       if (mentionsOpen) {

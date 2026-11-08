@@ -1,8 +1,9 @@
-// The phone's view of the mentions inbox. Rust owns the inbox (who mentioned
-// you, which are read, what a moderator removed) and the rules that file into
-// it; this module only asks for pages, relays the row actions, and holds the
-// two pieces of page state a jump needs: the entry being looked for in a chat,
-// and the "Older than chat history" card when it could not be found.
+// The phone's view of the inbox. Rust owns it: the mentions (who mentioned you,
+// which are read, what a moderator removed) and the whisper conversations, and
+// the rules that file into both. This module asks for pages, relays the row
+// actions, keeps the unread count the tray shows, and holds the two pieces of
+// page state a jump needs: the entry being looked for in a chat, and the
+// "Older than chat history" card when it could not be found.
 //
 // Notifications are not here: Rust posts them itself (android_notify.rs),
 // because wry pauses the WebView whenever the app leaves the screen.
@@ -14,10 +15,21 @@ import { useChatTabsStore } from '../chat/chatTabsStore';
 import { useMobileNavStore } from '../navStore';
 import { Logger } from '../../utils/logger';
 import type { ProviderId } from '../../types/providers';
-import type { InboxFilterId, InboxRowView, InboxView, MentionArrival, MentionEntry, MentionPage } from '../../types';
+import type {
+  InboxCounts,
+  InboxFilterId,
+  InboxItem,
+  InboxViewPayload,
+  MentionArrival,
+  MentionEntry,
+  MentionPage,
+  WhisperArrivedPayload,
+  WhisperUpdatePayload,
+} from '../../types';
 import { NO_COMPOSER_BUSY, withComposerBusy, type ComposerBusy } from './composerBusy';
+import { nextCounts } from './inboxModel';
 
-export type { InboxFilterId, InboxRowView, InboxView, MentionArrival, MentionEntry, MentionPage };
+export type { InboxFilterId, InboxItem, InboxViewPayload, MentionArrival, MentionEntry, MentionPage };
 
 /** Where an inbox sheet opens: the chat under the player, or the Chats tab. */
 export type InboxSurface = 'watch' | 'chats';
@@ -43,9 +55,17 @@ export function roomName(room: string): string {
   return i > 0 ? room.slice(i + 1) : room;
 }
 
+/** What the card over the message bar shows: a mention, or a whisper. */
+export type InboxArrivalItem =
+  | { kind: 'mention'; entry: MentionEntry; avatar: string | null }
+  | { kind: 'whisper'; update: WhisperUpdatePayload };
+
 interface MentionsState {
+  /** Mentions and whispers unread, as Rust last published it. */
   unreadTotal: number;
-  /** Bumped on every `mention-inbox-changed`, so an open list re-reads. */
+  /** The revision of `unreadTotal` (Rust's `counts_rev`). */
+  countsRev: number;
+  /** Bumped whenever Rust says the inbox changed, so an open list re-reads. */
   revision: number;
   /** The entry an opened chat is looking for, until it is found or given up. */
   pendingJump: MentionEntry | null;
@@ -54,7 +74,7 @@ interface MentionsState {
   /** The chat whose inbox sheet is open, if any. */
   sheetIn: InboxSurface | null;
   /** The latest arrival waiting for, or showing as, the card over the bar. */
-  arrival: (MentionArrival & { seq: number }) | null;
+  arrival: (InboxArrivalItem & { seq: number }) | null;
   /** Which chat's composer holds a riser (the suggestions strip, the emote or
    *  wallet panel): an arrival in that chat waits rather than sit over it. */
   composerBusy: ComposerBusy;
@@ -62,6 +82,7 @@ interface MentionsState {
 
 export const useMentionsStore = create<MentionsState>(() => ({
   unreadTotal: 0,
+  countsRev: 0,
   revision: 0,
   pendingJump: null,
   contextCard: null,
@@ -89,30 +110,46 @@ export function setComposerBusy(surface: InboxSurface, busy: boolean): void {
   if (next) useMentionsStore.setState({ composerBusy: next });
 }
 
-/** One page of the timeline for a chip: Rust filters, folds identical
- *  messages and attaches the senders' pictures it has. */
-export function getInboxView(filter: InboxFilterId, beforeMs?: number | null, limit = PAGE_SIZE): Promise<InboxView> {
-  return invoke<InboxView>('get_inbox_view', { filter, beforeMs: beforeMs ?? undefined, limit });
+/** Take an unread total Rust published with revision `rev`, unless what is
+ *  shown is newer. */
+export function takeCounts(total: number, rev: number): void {
+  const s = useMentionsStore.getState();
+  const next = nextCounts({ unreadTotal: s.unreadTotal, countsRev: s.countsRev }, total, rev);
+  if (next) useMentionsStore.setState(next);
 }
 
-/** Rows the sheet showed while it was open, marked read as it closes. */
+/** Bump the revision, so an open inbox reads its rows again. */
+export function bumpInbox(): void {
+  useMentionsStore.setState((s) => ({ revision: s.revision + 1 }));
+}
+
+/** One page of the timeline for a chip: Rust filters, folds identical
+ *  messages, merges the whisper conversations in, and attaches the senders'
+ *  pictures it has. */
+export function getInboxView(filter: InboxFilterId, cursor?: string | null, limit = PAGE_SIZE): Promise<InboxViewPayload> {
+  return invoke<InboxViewPayload>('get_inbox_view', { filter, cursor: cursor ?? undefined, limit, surface: 'phone' });
+}
+
+/** Mention rows the sheet showed while it was open, marked read as it closes. */
 export function markInboxSeen(ids: string[]): void {
   if (ids.length === 0) return;
   void invoke('mark_mentions_read', { ids }).catch((err) => Logger.warn('[Inbox] mark seen failed:', err));
 }
 
-/**
- * Hooks the whisper inbox fills in when it joins the timeline (Rust adds the
- * `whispers` chip and `whisper` rows to `get_inbox_view`): what a whisper row
- * opens. Until then no whisper row exists, so nothing calls it.
- */
-export const inboxHooks: { openWhisper: ((row: InboxRowView) => void) | null } = { openWhisper: null };
+/** The inbox came on screen: Rust syncs whispers with Twitch at most once a
+ *  minute, so something read or answered on another device shows here. */
+export function noteInboxOpened(): void {
+  void invoke('inbox_opened').catch((err) => Logger.debug('[Inbox] inbox_opened failed:', err));
+}
+
+/** Set by the whisper inbox when it installs: what a whisper row opens. */
+export const inboxHooks: { openWhisper: ((key: string) => void) | null } = { openWhisper: null };
 
 /** A row tap: jump to the message (its whole fold reads as read), or open the
  *  whisper conversation. */
-export function openInboxRow(row: InboxRowView): void {
-  if ((row.entry.kind as string) === 'whisper') {
-    inboxHooks.openWhisper?.(row);
+export function openInboxRow(row: InboxItem): void {
+  if (row.kind === 'whisper') {
+    inboxHooks.openWhisper?.(row.whisper.key);
     return;
   }
   closeInboxSheet();
@@ -133,8 +170,8 @@ function quietly(command: string, args?: Record<string, unknown>): Promise<void>
   return invoke(command, args).then(
     () => undefined,
     (err) => {
-      Logger.warn(`[Mentions] ${command} failed:`, err);
-      useAppStore.getState().addToast('Could not update your mentions.', 'error');
+      Logger.warn(`[Inbox] ${command} failed:`, err);
+      useAppStore.getState().addToast('Could not update your inbox.', 'error');
     },
   );
 }
@@ -142,6 +179,12 @@ function quietly(command: string, args?: Record<string, unknown>): Promise<void>
 export const markAllMentionsRead = () => quietly('mark_mentions_read', {});
 export const removeMention = (id: string) => quietly('remove_mention', { id });
 export const clearMentionInbox = () => quietly('clear_mention_inbox');
+
+/** Mark all read: every mention and every whisper conversation, here and on
+ *  Twitch. */
+export async function markAllInboxRead(): Promise<void> {
+  await Promise.all([quietly('mark_mentions_read', {}), quietly('whisper_mark_all_read')]);
+}
 
 function mutedRooms(): string[] {
   return useAppStore.getState().settings.mentions?.muted_channels ?? [];
@@ -240,13 +283,13 @@ function arrivalAvatarKey(e: MentionEntry): string | null {
 let installed = false;
 
 /** Mounted once by the shell: the unread count, seeded now and kept current by
- *  Rust's change event. Re-seeded on sign-in, since the inbox is per account. */
+ *  Rust's count event. Re-seeded on sign-in, since the inbox is per account. */
 export function installMentionInbox(): () => void {
   if (installed) return () => {};
   installed = true;
   const seed = () => {
-    void getMentionPage(undefined, 1)
-      .then((p) => useMentionsStore.setState({ unreadTotal: p.unread_total }))
+    void getInboxView('all', null, 1)
+      .then((v) => takeCounts(v.unread_total, v.counts_rev))
       .catch(() => {});
   };
   seed();
@@ -257,14 +300,16 @@ export function installMentionInbox(): () => void {
       if (dead) u();
       else unlistens.push(u);
     });
+  // The one source of the tray's count: mentions and whispers together, with
+  // the revision that keeps a late read from lowering it.
   keep(
-    listen<{ unread_total: number }>('mention-inbox-changed', (e) => {
-      useMentionsStore.setState((s) => ({
-        unreadTotal: e.payload?.unread_total ?? s.unreadTotal,
-        revision: s.revision + 1,
-      }));
+    listen<InboxCounts>('inbox-changed', (e) => {
+      if (e.payload) takeCounts(e.payload.unread_total, e.payload.rev);
     }),
   );
+  // Mentions changed: an open list reads again. The count comes from
+  // `inbox-changed`, never from here.
+  keep(listen('mention-inbox-changed', () => bumpInbox()));
   // A new entry for the card over the bar. Rust already left out replay, a
   // chat on screen and streamer mode. With the sheet open the sheet shows it.
   let seq = 0;
@@ -273,7 +318,19 @@ export function installMentionInbox(): () => void {
       if (!e.payload?.entry) return;
       Logger.debug('[Inbox] arrival', e.payload.entry.id);
       if (useMentionsStore.getState().sheetIn) return;
-      useMentionsStore.setState({ arrival: { ...e.payload, seq: ++seq } });
+      useMentionsStore.setState({
+        arrival: { kind: 'mention', entry: e.payload.entry, avatar: e.payload.avatar ?? null, seq: ++seq },
+      });
+    }),
+  );
+  // A new whisper for the same card, under the same rules (Rust left out a
+  // conversation on screen, a muted one and streamer mode).
+  keep(
+    listen<WhisperArrivedPayload>('whisper-arrived', (e) => {
+      const update = e.payload?.update;
+      if (!update?.message) return;
+      if (useMentionsStore.getState().sheetIn) return;
+      useMentionsStore.setState({ arrival: { kind: 'whisper', update, seq: ++seq } });
     }),
   );
   // Senders' pictures landing: an open inbox reads again to show them, and a
@@ -282,14 +339,12 @@ export function installMentionInbox(): () => void {
     listen<Record<string, string>>('channel-avatars', (e) => {
       const s = useMentionsStore.getState();
       const a = s.arrival;
-      if (a && !a.avatar) {
+      if (a && a.kind === 'mention' && !a.avatar) {
         const key = arrivalAvatarKey(a.entry);
         const url = key ? e.payload?.[key] : undefined;
         if (url) useMentionsStore.setState({ arrival: { ...a, avatar: url } });
       }
-      if (s.sheetIn || useMobileNavStore.getState().mentionsOpen) {
-        useMentionsStore.setState((st) => ({ revision: st.revision + 1 }));
-      }
+      if (s.sheetIn || useMobileNavStore.getState().mentionsOpen) bumpInbox();
     }),
   );
   const unsubUser = useAppStore.subscribe((s, prev) => {

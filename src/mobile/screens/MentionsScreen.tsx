@@ -1,6 +1,7 @@
-// You > Mentions: the inbox, the same panel the message bar's tray opens, here
-// as a screen of its own. It sits over the watch layer, so opening a row
-// reaches its chat without closing the stream.
+// You > Inbox: the inbox (mentions, replies, highlights and whispers), the
+// same panel the message bar's tray opens, here as a screen of its own. It
+// sits over the watch layer, so opening a row reaches its chat without closing
+// the stream, and a whisper row opens its conversation sheet over it.
 import React from 'react';
 import { useMobileNavStore } from '../navStore';
 import { DrillInScreen } from '../ui/DrillInScreen';

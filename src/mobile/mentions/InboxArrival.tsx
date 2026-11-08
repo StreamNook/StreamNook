@@ -1,17 +1,62 @@
-// A new mention, reply or highlight, as a compact card risen out of the tray
-// just above the message bar: who, where, and a line of what they said. It
-// stays a few seconds and folds back into the tray's count. A tap jumps to the
-// message (the keyboard and the draft stay as they were); a slide down puts it
-// away early. While the composer holds a long draft or its suggestions, the
-// card waits for it, so it never sits over what is being written.
+// A new mention, reply, highlight or whisper, as a compact card risen out of
+// the tray just above the message bar: who, where, and a line of what they
+// said. It stays a few seconds and folds back into the tray's count. A tap
+// opens it (the chat at the message, or the whisper conversation; the keyboard
+// and the draft stay as they were); a slide down puts it away early. While the
+// composer holds a long draft or its suggestions, the card waits for it, so it
+// never sits over what is being written.
 import React, { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { dismissArrival, openMention, useMentionsStore, type InboxSurface } from './mentionInbox';
-import { InboxFace, InboxMessage } from './InboxParts';
+import { dismissArrival, inboxHooks, openMention, useMentionsStore, type InboxArrivalItem, type InboxSurface } from './mentionInbox';
+import { InboxFace, InboxMessage, InboxParts } from './InboxParts';
 import { INBOX_SPRING, whereWords } from './inboxText';
+import { faceOfEntry, faceOfWhisper, whisperName, type FaceInfo } from './inboxModel';
 
 /** How long a card stays up before it folds into the count. */
 export const ARRIVAL_MS = 4000;
+
+interface ArrivalView {
+  face: FaceInfo;
+  avatar: string | null;
+  name: string;
+  color: string | null;
+  lead: string;
+  place: string | null;
+  text: string;
+  body: React.ReactNode;
+  open: () => void;
+}
+
+function arrivalView(a: InboxArrivalItem): ArrivalView {
+  if (a.kind === 'mention') {
+    const where = whereWords(a.entry);
+    return {
+      face: faceOfEntry(a.entry),
+      avatar: a.avatar,
+      name: a.entry.sender_name || a.entry.sender_login,
+      color: a.entry.sender_color ?? null,
+      lead: where.lead,
+      place: where.place,
+      text: a.entry.text,
+      body: <InboxMessage entry={a.entry} emote={19} />,
+      open: () => void openMention(a.entry),
+    };
+  }
+  const m = a.update.meta;
+  const msg = a.update.message;
+  const text = msg?.message ?? m.last_text;
+  return {
+    face: faceOfWhisper(m),
+    avatar: m.profile_image_url,
+    name: whisperName(m),
+    color: m.color,
+    lead: 'whispered',
+    place: null,
+    text,
+    body: <InboxParts parts={msg?.parts ?? []} text={text} emote={19} />,
+    open: () => inboxHooks.openWhisper?.(a.update.key),
+  };
+}
 
 export const InboxArrival: React.FC<{ side: 'left' | 'right'; surface: InboxSurface }> = ({ side, surface }) => {
   const arrival = useMentionsStore((s) => s.arrival);
@@ -30,11 +75,10 @@ export const InboxArrival: React.FC<{ side: 'left' | 'right'; surface: InboxSurf
     return () => window.clearTimeout(t);
   }, [shown, seq]);
 
-  const entry = arrival?.entry;
-  const where = entry ? whereWords(entry) : null;
+  const v = arrival ? arrivalView(arrival) : null;
   return (
     <AnimatePresence>
-      {shown && entry && where && (
+      {shown && v && (
         <motion.button
           key={seq}
           type="button"
@@ -69,29 +113,26 @@ export const InboxArrival: React.FC<{ side: 'left' | 'right'; surface: InboxSurf
           onClick={() => {
             if (moved.current) return;
             dismissArrival(seq);
-            void openMention(entry);
+            v.open();
           }}
-          aria-label={`${entry.sender_name || entry.sender_login} ${where.lead} ${where.place ?? ''}: ${entry.text}. Open`}
+          aria-label={`${v.name} ${v.lead} ${v.place ?? ''}: ${v.text}. Open`}
         >
           <span className="chrome-glaze chrome-glaze--frosted sn-inbox-arrival flex items-center gap-2.5 pl-2 pr-3 h-[54px] rounded-[18px]">
-            <InboxFace entry={entry} avatar={arrival?.avatar ?? null} size={36} />
+            <InboxFace face={v.face} avatar={v.avatar} size={36} />
             <span className="flex-1 min-w-0 flex flex-col">
               <span className="flex items-baseline gap-1.5 min-w-0 leading-[18px]">
-                <span
-                  className="text-[14px] font-bold truncate text-textPrimary"
-                  style={entry.sender_color ? { color: entry.sender_color } : undefined}
-                >
-                  {entry.sender_name || entry.sender_login}
+                <span className="text-[14px] font-bold truncate text-textPrimary" style={v.color ? { color: v.color } : undefined}>
+                  {v.name}
                 </span>
                 <span className="shrink-0 text-[12.5px] text-textMuted">
-                  {where.lead}
-                  {where.place ? ` ${where.place}` : ''}
+                  {v.lead}
+                  {v.place ? ` ${v.place}` : ''}
                 </span>
                 <span className="flex-1" />
                 <span className="shrink-0 text-[11.5px] text-textMuted tabular-nums">now</span>
               </span>
               <span className="sn-inbox-fade-end text-[13.5px] leading-[20px] text-textSecondary overflow-hidden whitespace-nowrap">
-                <InboxMessage entry={entry} emote={19} />
+                {v.body}
               </span>
             </span>
           </span>

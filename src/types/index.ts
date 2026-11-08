@@ -731,27 +731,6 @@ export type MentionPart = { type: 'text'; text: string } | { type: 'emote'; name
  *  the whisper store joins the view). */
 export type InboxFilterId = 'all' | 'mentions' | 'highlights' | 'whispers';
 
-/** One row of `get_inbox_view`: the newest of a run of identical messages. */
-export interface InboxRowView {
-  entry: MentionEntry;
-  /** The older identical messages, newest first. */
-  folded: { id: string; at_ms: number; read: boolean }[];
-  /** Any message in the row is unread. */
-  unread: boolean;
-  /** The sender's picture, once Rust has it. */
-  avatar: string | null;
-}
-
-/** `get_inbox_view` (commands/mention_inbox.rs `InboxView`). */
-export interface InboxView {
-  rows: InboxRowView[];
-  has_more: boolean;
-  /** The `beforeMs` that asks for the next page. */
-  before_ms: number | null;
-  unread_total: number;
-  chips: { id: InboxFilterId; unread: number }[];
-}
-
 /** `mention-arrived`: a live entry just filed unread, for the card over the
  *  message bar. */
 export interface MentionArrival {
@@ -3026,7 +3005,7 @@ export interface WhisperRowMeta {
   unread_count: number;
   archived: boolean;
   muted: boolean;
-  /** (reconciled, CA-13.1) The iPhone's pinned-sender view; desktop and Android use `useChatterLook`. */
+  /** The iPhone's pinned-sender view; desktop and Android use `useChatterLook`. */
   sender_view?: unknown | null;
   /** Live right now, as far as StreamNook knows; absent or null while offline. */
   live?: WhisperLiveNow | null;
@@ -3077,10 +3056,8 @@ export interface InboxCounts {
 /** Which surface asks for the inbox view (mention_inbox.rs `Surface`). */
 export type InboxSurface = 'phone' | 'island' | 'multichat';
 
-// (reconciled) The inbox view's new shape, the archive event, the arrival and
-// the sync answer: one place for the desktop (7.9, 7.10) and Android (7.11).
-// The old `InboxRowView` and `InboxView` above stay for the Android inbox until
-// 7.11 removes them.
+// The inbox view, the archive event, the arrival and the sync answer: one
+// place for the desktop and Android.
 
 /** A mention row of `get_inbox_view` (mention_inbox.rs `InboxItem::Mention`):
  *  the newest of a run of identical messages. */

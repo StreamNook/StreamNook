@@ -1,124 +1,189 @@
 import { describe, expect, it } from 'vitest';
-import type { Whisper, WhisperListRow, WhisperUpdate } from '../../types';
+import type { StoredWhisperMessage, WhisperPagePayload, WhisperRowMeta, WhisperUpdatePayload } from '../../types';
 import {
-  applyToThread,
+  MAX_WHISPER,
+  canSend,
+  clockTime,
   composerPlaceholder,
+  counterText,
   dayLabel,
   failureReason,
-  previewLine,
-  rowTime,
+  fromPage,
+  scalarLength,
   shownName,
   threadItems,
-  type PendingWhisper,
+  updateNeedsReread,
+  withOlder,
+  withRefresh,
+  withUpdate,
 } from './whisperModel';
 
 const NOW = new Date(2026, 9, 19, 15, 0, 0).getTime();
 const MIN = 60_000;
+const ME = '99999999';
+const THEM = '1000000000';
 
-function row(over: Partial<WhisperListRow> = {}): WhisperListRow {
+function msg(id: string, at: number, mine: boolean, over: Partial<StoredWhisperMessage> = {}): StoredWhisperMessage {
   return {
-    key: '42',
-    user_id: '42',
-    user_login: 'bob',
-    user_name: 'Bob',
-    profile_image_url: null,
-    last_message_timestamp: NOW - 5 * MIN,
-    unread_count: 0,
-    last_text: 'see you there',
-    last_is_sent: false,
+    id,
+    from_user_id: mine ? ME : THEM,
+    from_user_login: mine ? 'someme' : 'somefriend',
+    from_user_name: mine ? 'SomeMe' : 'SomeFriend',
+    to_user_id: mine ? THEM : ME,
+    to_user_login: mine ? 'somefriend' : 'someme',
+    to_user_name: mine ? 'SomeFriend' : 'SomeMe',
+    message: `text ${id}`,
+    timestamp: at,
+    is_sent: mine,
+    parts: [],
+    deleted: false,
+    edited_ms: null,
+    origin: 'twitch',
+    delivery: null,
+    failure: null,
+    cut_to: null,
     ...over,
   };
 }
 
-function msg(id: string, at: number, mine: boolean, text = 'hi'): Whisper {
+function meta(over: Partial<WhisperRowMeta> = {}): WhisperRowMeta {
   return {
-    id,
-    from_user_id: mine ? '1' : '42',
-    from_user_login: mine ? 'me' : 'bob',
-    from_user_name: mine ? 'Me' : 'Bob',
-    to_user_id: mine ? '42' : '1',
-    to_user_login: mine ? 'bob' : 'me',
-    to_user_name: mine ? 'Bob' : 'Me',
-    message: text,
-    timestamp: at,
-    is_sent: mine,
+    key: THEM,
+    user_id: THEM,
+    user_login: 'somefriend',
+    user_name: 'SomeFriend',
+    profile_image_url: null,
+    color: null,
+    badges: [],
+    last_message_timestamp: NOW,
+    last_text: '',
+    last_parts: [],
+    last_is_sent: false,
+    unread_count: 0,
+    archived: false,
+    muted: false,
+    ...over,
   };
 }
 
+function page(messages: StoredWhisperMessage[], over: Partial<WhisperPagePayload> = {}): WhisperPagePayload {
+  return { meta: meta(), messages, cursor: messages[0] ? `c-${messages[0].id}` : null, has_more_local: false, older_on_twitch: false, ...over };
+}
+
+function update(message: StoredWhisperMessage | null, over: Partial<WhisperUpdatePayload> = {}): WhisperUpdatePayload {
+  return { owner_id: ME, key: THEM, replaced_key: null, meta: meta(), message, removed_message_id: null, loading: null, error: null, ...over };
+}
+
 describe('whisper words', () => {
-  it('names the person and marks your own last line', () => {
-    expect(shownName(row())).toBe('Bob');
-    expect(shownName(row({ user_name: '' }))).toBe('bob');
-    expect(shownName(row({ user_name: '', user_login: '' }))).toBe('Someone');
-    expect(previewLine(row())).toBe('see you there');
-    expect(previewLine(row({ last_is_sent: true }))).toBe('You: see you there');
-    expect(previewLine(row({ last_text: '' }))).toBe('');
-    expect(composerPlaceholder(row())).toBe('Whisper Bob');
+  it('names the person and the composer', () => {
+    expect(shownName(meta())).toBe('SomeFriend');
+    expect(shownName(meta({ user_name: '' }))).toBe('somefriend');
+    expect(shownName(meta({ user_name: '', user_login: '' }))).toBe('Someone');
+    expect(composerPlaceholder(meta())).toBe('Whisper SomeFriend');
   });
 
-  it('dates rows and days the way Mentions does', () => {
-    expect(rowTime(NOW - 10_000, NOW)).toBe('now');
-    expect(rowTime(NOW - 5 * MIN, NOW)).toBe('5m');
-    expect(rowTime(NOW - 3 * 60 * MIN, NOW)).toBe('3h');
-    expect(rowTime(NOW - 2 * 24 * 60 * MIN, NOW)).toBe('2d');
+  it('counts characters as Rust does and stops at the limit', () => {
+    expect(scalarLength('a😀b')).toBe(3);
+    expect(counterText(449)).toBeNull();
+    expect(counterText(450)).toBe('450/500');
+    expect(canSend('   ')).toBe(false);
+    expect(canSend('😀'.repeat(MAX_WHISPER))).toBe(true);
+    expect(canSend('a'.repeat(MAX_WHISPER + 1))).toBe(false);
+  });
+
+  it('heads days and gives the reason Rust gave', () => {
     expect(dayLabel(NOW - 60 * MIN, NOW)).toBe('Today');
     expect(dayLabel(NOW - 24 * 60 * MIN, NOW)).toBe('Yesterday');
-  });
-
-  it('shows the reason Rust gave, else the plain fallback', () => {
     expect(failureReason('Cannot send: User not found.')).toBe('Cannot send: User not found.');
     expect(failureReason(new Error('boom'))).toBe('boom');
     expect(failureReason(undefined)).toBe('Failed to send message. Please try again.');
   });
 });
 
-describe('the conversation view', () => {
+describe('the conversation layout', () => {
   it('heads each day and times the end of each run', () => {
-    const messages = [
-      msg('a', NOW - 26 * 60 * MIN, false),
-      msg('b', NOW - 30 * MIN, false),
-      msg('c', NOW - 29 * MIN, false),
-      msg('d', NOW - 28 * MIN, true),
-      msg('e', NOW - 2 * MIN, true),
-    ];
-    const items = threadItems(messages, [], NOW);
-    expect(items.map((i) => (i.kind === 'day' ? i.label : i.id))).toEqual(['Yesterday', 'a', 'Today', 'b', 'c', 'd', 'e']);
-    const last = (id: string) => items.find((i) => i.id === id && i.kind === 'message');
-    // b and c are one run; d starts yours; e is more than five minutes later.
-    expect(last('b')).toMatchObject({ last: false, time: null });
-    expect(last('c')).toMatchObject({ last: true, mine: false });
-    expect(last('d')).toMatchObject({ last: true, mine: true });
-    expect(last('e')).toMatchObject({ last: true });
+    const items = threadItems(
+      [msg('a', NOW - 26 * 60 * MIN, false), msg('b', NOW - 30 * MIN, false), msg('c', NOW - 29 * MIN, false), msg('d', NOW - 28 * MIN, true), msg('e', NOW - 2 * MIN, true)],
+      NOW,
+    );
+    expect(items.map((i) => (i.kind === 'day' ? i.label.split(' · ')[0] : i.id))).toEqual(['Yesterday', 'a', 'Today', 'b', 'c', 'd', 'e']);
+    const todayHead = items.find((i) => i.kind === 'day' && i.label.startsWith('Today'));
+    expect(todayHead && 'label' in todayHead ? todayHead.label : null).toBe(`Today · ${clockTime(NOW - 30 * MIN)}`);
+    const item = (id: string) => items.find((i) => i.id === id && i.kind === 'message');
+    expect(item('b')).toMatchObject({ last: false, time: null });
+    expect(item('c')).toMatchObject({ last: true, mine: false });
+    expect(item('d')).toMatchObject({ last: true, mine: true });
   });
 
-  it('puts what is still on its way after the thread, under today', () => {
-    const pending: PendingWhisper = { localId: 'l1', key: '42', text: 'yo', status: 'sending', atMs: NOW };
-    const items = threadItems([msg('a', NOW - 26 * 60 * MIN, false)], [pending], NOW);
-    expect(items.map((i) => i.kind)).toEqual(['day', 'message', 'day', 'pending']);
-    expect(threadItems([], [pending], NOW).map((i) => i.kind)).toEqual(['pending']);
-  });
-
-  it('takes an update for its conversation once', () => {
-    const update: WhisperUpdate = {
-      owner_id: '1',
-      key: '42',
-      replaced_key: null,
-      meta: {
-        user_id: '42',
-        user_login: 'bob',
-        user_name: 'Bob',
-        profile_image_url: 'pic',
-        last_message_timestamp: NOW,
-        unread_count: 0,
-      },
-      message: msg('z', NOW, false),
+  it('says where each send stands, and Sent or Delivered only on the newest', () => {
+    const items = threadItems(
+      [
+        msg('old', NOW - 10 * MIN, true, { delivery: 'delivered' }),
+        msg('going', NOW - 9 * MIN, true, { delivery: 'sending' }),
+        msg('check', NOW - 8 * MIN, true, { delivery: 'unknown' }),
+        msg('bad', NOW - 7 * MIN, true, { delivery: 'not_delivered', failure: 'Cannot send: User not found.' }),
+        msg('new', NOW - 6 * MIN, true, { delivery: 'delivered' }),
+      ],
+      NOW,
+    );
+    const status = (id: string) => {
+      const it = items.find((i) => i.id === id);
+      return it && it.kind === 'message' ? it.status : undefined;
     };
-    const once = applyToThread(null, '42', update);
-    expect(once?.messages.map((m) => m.id)).toEqual(['z']);
-    expect(applyToThread(once, '42', update)?.messages).toHaveLength(1);
-    // Another conversation's update changes nothing here.
-    expect(applyToThread(once, '7', update)).toBe(once);
-    // A conversation moved from its login to its id still takes it.
-    expect(applyToThread(null, 'bob', { ...update, replaced_key: 'bob' })?.profile_image_url).toBe('pic');
+    expect(status('old')).toBeNull();
+    expect(status('going')?.label).toBe('Sending...');
+    expect(status('check')?.label).toBe('Checking...');
+    expect(status('bad')).toMatchObject({ label: 'Not delivered', failure: 'Cannot send: User not found.', actions: true });
+    expect(status('new')).toMatchObject({ label: 'Delivered', actions: false });
+  });
+
+  it('reads a state this build does not know as Sent, and leaves old sends unmarked', () => {
+    const items = threadItems(
+      [msg('migrated', NOW - 9 * MIN, true), msg('future', NOW - 8 * MIN, true, { delivery: 'queued_elsewhere' as never })],
+      NOW,
+    );
+    const at = (id: string) => items.find((i) => i.id === id);
+    expect(at('migrated')).toMatchObject({ status: null });
+    expect(at('future')).toMatchObject({ status: { label: 'Sent' } });
+  });
+
+  it('says when Twitch cut a whisper', () => {
+    const items = threadItems([msg('cut', NOW - MIN, true, { delivery: 'delivered', cut_to: 500 })], NOW);
+    expect(items.find((i) => i.id === 'cut')).toMatchObject({ cut: 'Twitch cut this whisper to 500 characters.' });
+  });
+});
+
+describe('the thread state', () => {
+  it('takes an update for its conversation once, and replaces a message by id', () => {
+    const start = fromPage(page([msg('a', NOW - 5 * MIN, false)]));
+    const sending = msg('l1', NOW - MIN, true, { origin: 'local_sent', delivery: 'sending' });
+    const once = withUpdate(start, THEM, update(sending));
+    expect(once?.messages.map((m) => m.id)).toEqual(['a', 'l1']);
+    expect(withUpdate(once, THEM, update(sending))?.messages).toHaveLength(2);
+    const sent = withUpdate(once, THEM, update({ ...sending, delivery: 'sent' }));
+    expect(sent?.messages.find((m) => m.id === 'l1')?.delivery).toBe('sent');
+    expect(withUpdate(once, '7', update(sending))).toBe(once);
+    expect(withUpdate(once, THEM, update(null, { removed_message_id: 'l1' }))?.messages.map((m) => m.id)).toEqual(['a']);
+  });
+
+  it('reads again when Twitch\'s copy of a send arrives under a new id', () => {
+    const local = msg('l1', NOW - MIN, true, { origin: 'local_sent', delivery: 'sent' });
+    const s = fromPage(page([local]));
+    const twitchCopy = msg('t1', NOW - MIN, true, { delivery: 'delivered' });
+    expect(updateNeedsReread(s, THEM, update(twitchCopy))).toBe(true);
+    expect(updateNeedsReread(s, THEM, update(local))).toBe(false);
+    expect(updateNeedsReread(fromPage(page([msg('x', NOW, true, { delivery: 'delivered' })])), THEM, update(twitchCopy))).toBe(false);
+  });
+
+  it('adds older pages above and keeps them when the newest page is read again', () => {
+    const newest = page([msg('c', NOW - 3 * MIN, false), msg('d', NOW - 2 * MIN, false)], { has_more_local: true });
+    const s = fromPage(newest);
+    const older = withOlder(s, page([msg('a', NOW - 9 * MIN, false), msg('b', NOW - 8 * MIN, false)], { cursor: 'c-a' }));
+    expect(older.messages.map((m) => m.id)).toEqual(['a', 'b', 'c', 'd']);
+    expect(older.cursor).toBe('c-a');
+    expect(older.hasMoreLocal).toBe(false);
+    const again = withRefresh(older, page([msg('c', NOW - 3 * MIN, false), msg('d', NOW - 2 * MIN, false), msg('e', NOW - MIN, false)]));
+    expect(again.messages.map((m) => m.id)).toEqual(['a', 'b', 'c', 'd', 'e']);
+    expect(again.cursor).toBe('c-a');
   });
 });

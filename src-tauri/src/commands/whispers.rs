@@ -122,6 +122,28 @@ pub async fn whisper_island_clear() -> Result<(), String> {
     whisper_inbox::island_clear()
 }
 
+/// What the inbox says about whispers beyond its rows.
+#[derive(serde::Serialize)]
+pub struct WhisperStatus {
+    pub signed_in: bool,
+    pub syncing: bool,
+    /// Why whispers cannot load (the twitch.tv session belongs to someone
+    /// else), in the words the inbox shows; None when they can.
+    pub session_problem: Option<String>,
+    pub unread_total: u32,
+}
+
+/// The followed account's whisper state, without its conversations.
+#[tauri::command]
+pub async fn whisper_status() -> Result<WhisperStatus, String> {
+    Ok(WhisperStatus {
+        signed_in: whisper_sync::current_scope().is_some(),
+        syncing: whisper_sync::syncing(),
+        session_problem: whisper_sync::session_problem(),
+        unread_total: crate::services::inbox_counts::snapshot().whispers,
+    })
+}
+
 /// The phone app can be read now: in front and not in picture-in-picture.
 /// Allowed only by mobile-commands.toml.
 #[cfg(mobile)]
