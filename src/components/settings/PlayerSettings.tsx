@@ -1,4 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { settingsOnceLoaded } from '../../utils/settingsOnceLoaded';
+import { restartApp } from '../../utils/restartApp';
 import { Dropdown } from '../ui/Dropdown';
 import { useAppStore } from '../../stores/AppStore';
 // Shared panel: both shells render it, so a platform branch here is legitimate.
@@ -139,6 +141,20 @@ const PlayerSettings = () => {
   const middleClickMute = videoPlayer?.middle_click_mute ?? true;
   const middleClickMultiNook = videoPlayer?.middle_click_multinook ?? true;
   const mediaKeys = videoPlayer?.media_keys ?? true;
+  // Media keys is a browser switch Rust applies at launch, from the same file
+  // this run first loaded: a value that differs from that one waits for a restart.
+  const [launchedMediaKeys, setLaunchedMediaKeys] = useState<boolean | null>(null);
+  const [restarting, setRestarting] = useState(false);
+  useEffect(() => {
+    let live = true;
+    void settingsOnceLoaded().then((first) => {
+      if (live && first) setLaunchedMediaKeys(first.video_player?.media_keys ?? true);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+  const mediaKeysWaitForRestart = launchedMediaKeys !== null && launchedMediaKeys !== mediaKeys;
   const resumeVodPlayback = videoPlayer?.resume_vod_playback ?? true;
   const syncVodProgress = videoPlayer?.sync_vod_progress ?? true;
   const continueWatchingLive = videoPlayer?.continue_watching_live ?? false;
@@ -516,15 +532,32 @@ const PlayerSettings = () => {
           <SettingsRow
             title="Media keys"
             onReset={resetFor(['video_player.media_keys', true])}
-            description="Your keyboard's play/pause key pauses and plays the stream. Turn it off to keep the media keys for your music player."
-            help="Off, StreamNook also leaves the Windows media panel. The change applies the next time StreamNook starts."
+            description="Your keyboard's play/pause key pauses and plays the stream. Turn it off to keep the media keys for your music player. A change applies after StreamNook restarts."
+            help="Off, StreamNook also leaves the Windows media panel. Windows reads this when StreamNook starts, so closing to the tray does not apply it: restart from here, or quit from the tray and open StreamNook again."
             control={
               <Toggle
                 enabled={mediaKeys}
                 onChange={() => setVideoPlayer({ media_keys: !mediaKeys })}
               />
             }
-          />
+          >
+            {mediaKeysWaitForRestart && (
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-[12.5px] text-textSecondary">Not applied yet. Restarting reopens the stream you are on.</span>
+                <button
+                  type="button"
+                  disabled={restarting}
+                  onClick={() => {
+                    setRestarting(true);
+                    void restartApp('Media keys changed').catch(() => setRestarting(false));
+                  }}
+                  className={`${GLAZE_PILL} h-8 px-3.5 text-[12.5px] flex-shrink-0 disabled:opacity-60`}
+                >
+                  {restarting ? 'Restarting…' : 'Restart now'}
+                </button>
+              </div>
+            )}
+          </SettingsRow>
         )}
 
         {/* Phone-only: a desktop has nothing to leave the app INTO, and no

@@ -1,8 +1,7 @@
-import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useAppStore } from '../stores/AppStore';
-import { captureResumeSnapshot } from '../services/sessionResume';
 import { Logger } from './logger';
+import { restartApp } from './restartApp';
 
 export type DrawingMode = 'hardware' | 'software' | 'unknown';
 
@@ -46,12 +45,7 @@ const RECHECK_MS = [3000, 10_000];
 export const GPU_RESTART_TOAST_ID = -1;
 
 async function restartForDrawing(): Promise<void> {
-  await captureResumeSnapshot();
-  if (import.meta.env.DEV) {
-    window.location.reload();
-    return;
-  }
-  await invoke('restart_app', { reason: 'drawing fell back to software' });
+  await restartApp('drawing fell back to software');
 }
 
 /** Log the drawing mode now, and after every GPU process failure; offer the
