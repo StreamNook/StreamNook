@@ -10,7 +10,8 @@
 // cheer picker), with the switcher at the bottom when the channel has both.
 // `WalletSheet` is the same two tabs inside the phone's bottom sheet, its
 // switcher on top.
-import { useEffect, useRef, useState, type RefObject } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type RefObject } from 'react';
+import { usePerformanceQuiet } from '../../utils/lowPower';
 import { AnimatePresence, motion } from 'framer-motion';
 import ChannelPointsMenu from '../ChannelPointsMenu';
 import { ChannelPointsIcon } from '../ChannelPointsIcon';
@@ -59,6 +60,8 @@ interface Pop {
   key: string;
   amount: number;
   kind: 'points' | 'bits';
+  /** A bonus chest: the pill says so. */
+  chest: boolean;
 }
 
 /** The seq last seen for one currency: null until its first answer arrived.
@@ -85,11 +88,12 @@ function useGainPops(
     setSeen(next);
     const fresh: Pop[] = [];
     if (pointsGain && seen.points !== null && next.points !== null && next.points > seen.points) {
-      if (gains === 'all' || pointsGain.chest) fresh.push({ key: `p${next.points}`, amount: pointsGain.amount, kind: 'points' });
+      if (gains === 'all' || pointsGain.chest)
+        fresh.push({ key: `p${next.points}`, amount: pointsGain.amount, kind: 'points', chest: pointsGain.chest });
       if (pointsGain.reason) setRecent(pointsGain);
     }
     if (bitsGain && gains === 'all' && seen.bits !== null && next.bits !== null && next.bits > seen.bits) {
-      fresh.push({ key: `b${next.bits}`, amount: bitsGain.amount, kind: 'bits' });
+      fresh.push({ key: `b${next.bits}`, amount: bitsGain.amount, kind: 'bits', chest: false });
     }
     if (fresh.length) setQueue((q) => [...q, ...fresh]);
   }
@@ -97,7 +101,8 @@ function useGainPops(
   const headKey = head?.key;
   useEffect(() => {
     if (!headKey) return;
-    const t = window.setTimeout(() => setQueue((q) => q.slice(1)), 1800);
+    // Long enough to read without hunting for it.
+    const t = window.setTimeout(() => setQueue((q) => q.slice(1)), 2800);
     return () => window.clearTimeout(t);
   }, [headKey]);
   // The reason stays on the hover card for five minutes after the gain.
@@ -143,6 +148,81 @@ function HoverCard({ points, bits, recent }: { points: WalletPoints | null; bits
         </div>
       )}
     </div>
+  );
+}
+
+// A bouncy rise: it overshoots a touch, so it reads as a reward landing.
+const POP_IN = { type: 'spring', stiffness: 420, damping: 15, mass: 0.8 } as const;
+// A contour in the theme's own ground so it reads over any chat or art on
+// dark and light themes alike, and a glow of its own color so it catches the
+// eye.
+const GAIN_TEXT: CSSProperties = {
+  textShadow:
+    '0 1px 2px color-mix(in srgb, var(--color-background) 90%, transparent), 0 0 1px var(--color-background), 0 0 10px color-mix(in srgb, currentColor 45%, transparent), 0 0 22px color-mix(in srgb, currentColor 25%, transparent)',
+};
+const POP_OUT = { duration: 0.22, ease: [0.4, 0, 1, 1] } as const;
+const RING = { duration: 0.6, ease: [0.2, 0.8, 0.2, 1] } as const;
+const NOW = { duration: 0 } as const;
+
+/** A gain springs up out of the wallet button, big and bright: the channel's
+ *  own points icon (or the bits gem), "+N" in bold with a glow of its color,
+ *  and "BONUS" for a chest, while a soft ring goes out around the button. Over
+ *  everything at the message box's edge, the drops lip included. Motion Off
+ *  and Performance mode show and hide it in place. */
+function GainPop({ pop, points, gemUrl }: { pop: Pop | null; points: WalletPoints | null; gemUrl: string | null }) {
+  const motionOff = useAppStore((s) => s.settings.motion_mode) === 'off';
+  const performanceQuiet = usePerformanceQuiet();
+  const instant = motionOff || performanceQuiet;
+  const isPoints = pop?.kind === 'points';
+  return (
+    <>
+      <AnimatePresence>
+        {pop && !instant && (
+          <motion.span
+            key={`${pop.key}-ring`}
+            aria-hidden
+            initial={{ opacity: 0.75, scale: 0.85 }}
+            animate={{ opacity: 0, scale: 1.55, transition: RING }}
+            exit={{ opacity: 0, transition: NOW }}
+            className={`pointer-events-none absolute inset-0 rounded-full border-2 ${isPoints ? 'border-accent-neon/70' : 'border-textPrimary/50'}`}
+          />
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {pop && (
+          <motion.span
+            key={pop.key}
+            // It rises clear of the drops lip on the message box's edge, and
+            // grows rightward from the button, which sits at the column's
+            // left edge, so nothing is cut off.
+            initial={{ opacity: 0, y: 18, scale: 0.5 }}
+            animate={{ opacity: 1, y: -30, scale: 1, transition: instant ? NOW : POP_IN }}
+            exit={{ opacity: 0, y: -44, scale: 0.96, transition: instant ? NOW : POP_OUT }}
+            aria-live="polite"
+            className="pointer-events-none absolute bottom-full left-0 z-[60] mb-1 origin-bottom-left select-none"
+          >
+            <span className="flex items-center gap-1.5 whitespace-nowrap leading-none">
+              {isPoints ? (
+                <PointsGlyph iconUrl={points?.iconUrl ?? null} name={points?.name ?? null} size={20} className={points?.iconUrl ? '' : 'text-accent-neon'} />
+              ) : (
+                <Gem url={gemUrl} size={18} />
+              )}
+              <span
+                className={`text-[19px] font-extrabold tabular-nums tracking-tight ${isPoints ? 'text-accent-neon' : 'text-textPrimary'}`}
+                style={GAIN_TEXT}
+              >
+                +{pop.amount.toLocaleString()}
+              </span>
+              {pop.chest && (
+                <span className="text-[12px] font-bold uppercase tracking-[0.08em] text-textPrimary" style={GAIN_TEXT}>
+                  Bonus
+                </span>
+              )}
+            </span>
+          </motion.span>
+        )}
+      </AnimatePresence>
+    </>
   );
 }
 
@@ -235,25 +315,7 @@ export function WalletFace({ points, bits: bitsFace, mode, gains, open, onToggle
           </button>
         </Tooltip>
       )}
-      {/* "+N" for every gain Rust reports, one after another */}
-      <AnimatePresence>
-        {pop && (
-          <motion.span
-            key={pop.key}
-            initial={{ opacity: 0, x: '-50%', y: 4, scale: 0.85 }}
-            animate={{ opacity: 1, x: '-50%', y: -16, scale: 1 }}
-            exit={{ opacity: 0, x: '-50%', y: -24 }}
-            transition={{ duration: 0.8, ease: 'easeOut' }}
-            className={`absolute left-1/2 top-0 flex items-center gap-0.5 text-[11px] font-semibold pointer-events-none whitespace-nowrap select-none ${
-              pop.kind === 'points' ? 'text-accent-neon' : 'text-textPrimary'
-            }`}
-            aria-live="polite"
-          >
-            +{pop.amount.toLocaleString()}
-            {pop.kind === 'bits' && <Gem url={bits?.gem_url ?? null} size={10} />}
-          </motion.span>
-        )}
-      </AnimatePresence>
+      <GainPop pop={pop} points={points} gemUrl={bits?.gem_url ?? null} />
     </div>
   );
 }
