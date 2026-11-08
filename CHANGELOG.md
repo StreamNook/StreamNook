@@ -1,3 +1,75 @@
+## [8.9.0] - 2026-11-08
+
+## 🎉 New: Whispers, everywhere
+> Your Twitch whispers now live in StreamNook. Every conversation syncs from Twitch and opens in a rebuilt Whispers window, in the Dynamic Island, in MultiChat and in the inbox, with one unread count across all of them. The phones get them in their inbox too.
+
+---
+
+### 🖥️ Windows and macOS
+
+#### ✨ Features
+- Drops progress lives on the message box: a slim line shows the reward you're earning and how far along it is, opens a drawer of rewards with their real art, and tucks into a thin line until something changes. A finished reward whose game account isn't linked offers Connect.
+- Settings > Chat and Settings > Moderation show a real chat beside the settings that follows the section you're reading and changes the moment you change something.
+- Changing where notifications show sends a sample to the island and as a toast, right where you put them.
+- Profile > Customize puts StreamNook badges first, grows wider, shows your real profile card beside the pickers, searches badges and paints, and keeps your own cosmetics on disk so they load straight away.
+- A "Your chat" shortcut on your profile opens your own channel's chat.
+- Alerts when a live favorite switches category. Requested by Arout (SN-260).
+- Keep chat in Compact View, fitted inside the preset's window. Requested by haku (SN-241).
+- A Reply button beside Copy in a message's hover buttons, and the reply card over the message box shows who you're replying to.
+- The overlay can hide messages that are only a link, and wide windows show its settings one section at a time.
+- Go-live notifications lead with the stream title. Requested by zoox (SN-257).
+
+#### 🐛 Bug Fixes
+- 7TV stays signed in: the session refreshes before its 30 days run out, and a passing hiccup no longer signs you out.
+- Mentions and replies from the chat you're looking at stay out of the island. Requested by PieterVMB (SN-259).
+- Unban requests moved from above the message box into Tools > Moderation. Reported by zoox (SN-244).
+- The Badges before +N preview shows the FFZ Supporter badge in its color. Reported by zoox (SN-251).
+- Media keys says a change applies after a restart and offers Restart now. Requested by haku (SN-237).
+- A member's number stays on one line while it reveals, and member #1's number keeps its glow with animations off.
+- Identifying a song no longer shows a second toast.
+- MultiChat keeps its own buttons inside a narrow window, and the MultiNook chat switcher keeps its pin in view.
+
+#### ⚡ Performance
+- Profile > Customize scrolls smoothly, even with hundreds of badges and paints.
+
+### 🍎 macOS
+- Streams on low-latency channels no longer stall or lose audio when they start. Contributed by mortan.
+
+### 📱 Mobile
+
+#### ✨ Features
+- Whispers in the inbox, each conversation in its own view.
+- The drops lip rises out of the message box, reading percent then time (86% · 25m). Tap it for the reward sheet, or tuck it into a thin progress line along the message box's edge.
+- Badge and reward sheets show where to earn as tappable cards: the category opens Browse and each channel starts its stream.
+- Your accolade wall on the You tab, and secret accolades show a question mark until earned.
+- Member profiles follow the desktop member card, StreamNook badges first, with the StreamNook page link as a glass capsule.
+- Left-handed swipes: swipe left to moderate a message and right to reply (Android).
+- Tap a badge in chat to open its card (Android).
+- The badge fold arrives on iPhone: the peek pill with its rarity foil, Badges before +N with a preview, Limerino and JilChat badges, and the Redemption color setting.
+
+#### 🐛 Bug Fixes
+- Favorites and Followed are kept apart, Favorites on its own pink shelf with desktop's glass heart. Reported by zoox (SN-249).
+- Opening a stream puts its chat in front, even when the Chats page had another one open. Reported by zoox (SN-255).
+- Backing out of a settings search no longer brings the keyboard back. Reported by zoox (SN-256).
+- A swiped message follows your finger instead of stuttering, and swipe to reply slides home before the keyboard opens.
+- Profile sheets hold still while they load and stay readable on every theme.
+- A mention from someone with a profile picture still says where they replied to you (iPhone).
+- A channel points redemption reads "<name> redeemed <reward> <cost>", as on desktop (iPhone).
+- A picture's link no longer goes into the message box twice (Android).
+- Settings > Notifications explains what the iPhone's own settings do to Lock Screen alerts, and go-live alerts are marked time sensitive (iPhone).
+- Automatic stream reloads respect the same reload holds as desktop (iPhone).
+
+### 🌐 Everywhere
+- Accolades are earned the same way on every platform. Requested by zoox (SN-253).
+- Emote words show the word typed with each emote, under it, after it or in a chip.
+- bChat badges join the chat clients, and Moltorino supporters wear the badge they picked. Requested by ItsBr0dyy (SN-245).
+- Badges before +N shows every badge by default; installs still on the old limit of 3 move to Show all. Requested by zoox (SN-258).
+- Moderators can add `--channel` to /ban, /timeout, /unban and /untimeout to act in up to ten chats they moderate.
+- The Missing list no longer shows a retired 2016 badge beside the current one. Reported by zoox (SN-246).
+- Replayed VOD chat wears the channel's own sub and bits badges. Reported by zoox (SN-250).
+- 7TV updates keep arriving after a reconnect.
+- Chat rejoins its rooms reliably after a reconnect, and a Twitch sign-in renewal always saves.
+
 ## [8.8.21] - 2026-11-03
 
 ## 🎉 New: Badges fold into a +N pill
