@@ -1312,6 +1312,13 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   },
   {
     tab: 'Chat',
+    section: 'Polls & Predictions',
+    title: 'Collapsed',
+    parent: 'Predictions',
+    description: 'Opens live predictions as their header bar instead of expanded. A prediction already closed and waiting for the result opens collapsed either way. Predictions start collapsed, minimize prediction.'
+  },
+  {
+    tab: 'Chat',
     section: 'Chat Events',
     sectionId: 'settings-section-chat-events',
     title: 'Style',

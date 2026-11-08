@@ -32,6 +32,8 @@ export interface StackRequest {
   cards: StackKind[];
   order: 'prediction-first' | 'poll-first';
   polls_start_collapsed: boolean;
+  predictions_start_collapsed: boolean;
+  prediction_waiting: boolean;
   opened: StackKind | null;
   folded: StackKind[];
   chat_height: number;
@@ -50,6 +52,9 @@ export interface StackCardControl {
   /** The card's identity while it has something to show (the poll id, the
    *  drop's campaign), null while it has nothing. Stable for the card's life. */
   onPresence: (id: string | null) => void;
+  /** The prediction says whether it is closed and waiting for its result,
+   *  which keeps it from opening by itself. The other cards never call it. */
+  onWaiting: (waiting: boolean) => void;
 }
 
 const KINDS: StackKind[] = ['prediction', 'poll', 'drop'];
@@ -93,6 +98,10 @@ export function useChatTopStack(column: HTMLElement | null): {
 } {
   const order = useAppStore((s) => s.settings.chat_overlay_order) ?? 'prediction-first';
   const pollsStartCollapsed = useAppStore((s) => s.settings.chat_design?.polls_start_collapsed ?? false);
+  const predictionsStartCollapsed = useAppStore(
+    (s) => s.settings.chat_design?.predictions_start_collapsed ?? false,
+  );
+  const [predictionWaiting, setPredictionWaiting] = useState(false);
 
   const [ids, setIds] = useState<Partial<Record<StackKind, string>>>({});
   const idsRef = useRef(ids);
@@ -135,6 +144,8 @@ export function useChatTopStack(column: HTMLElement | null): {
       cards,
       order,
       polls_start_collapsed: pollsStartCollapsed,
+      predictions_start_collapsed: predictionsStartCollapsed,
+      prediction_waiting: predictionWaiting,
       opened,
       folded,
       chat_height: height,
@@ -152,7 +163,7 @@ export function useChatTopStack(column: HTMLElement | null): {
     return () => {
       live = false;
     };
-  }, [cards, order, pollsStartCollapsed, opened, folded, height]);
+  }, [cards, order, pollsStartCollapsed, predictionsStartCollapsed, predictionWaiting, opened, folded, height]);
 
   const report = useCallback((kind: StackKind, id: string | null) => {
     const prev = idsRef.current[kind] ?? null;
@@ -188,8 +199,17 @@ export function useChatTopStack(column: HTMLElement | null): {
   const handlers = useMemo(
     () =>
       Object.fromEntries(
-        KINDS.map((k) => [k, { onToggle: () => toggle(k), onPresence: (id: string | null) => report(k, id) }]),
-      ) as Record<StackKind, Pick<StackCardControl, 'onToggle' | 'onPresence'>>,
+        KINDS.map((k) => [
+          k,
+          {
+            onToggle: () => toggle(k),
+            onPresence: (id: string | null) => report(k, id),
+            onWaiting: (waiting: boolean) => {
+              if (k === 'prediction') setPredictionWaiting(waiting);
+            },
+          },
+        ]),
+      ) as Record<StackKind, Pick<StackCardControl, 'onToggle' | 'onPresence' | 'onWaiting'>>,
     [toggle, report],
   );
 

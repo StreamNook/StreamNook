@@ -160,6 +160,14 @@ const PredictionOverlay = ({ channelId, channelLogin, stack, previewView, previe
   // In a stack Rust decides which card is open, and this one reports itself so
   // it gets a slot; on its own it keeps its own fold.
   const released = useStackPresence(stack, predictionId);
+  // Closed to bets and waiting for the result: nothing in the card can be
+  // acted on, so Rust leaves it folded unless the viewer opens it (SN-264).
+  const waiting = view?.phase === 'locked' || view?.phase === 'resolving';
+  const onWaiting = stack?.onWaiting;
+  useEffect(() => {
+    onWaiting?.(waiting);
+  }, [onWaiting, waiting]);
+  useEffect(() => () => onWaiting?.(false), [onWaiting]);
   const isExpanded = stack ? stack.open : expandedHere;
   const toggle = stack ? stack.onToggle : () => setExpandedHere(!expandedHere);
 

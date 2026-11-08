@@ -327,6 +327,9 @@ export interface ChatDesignSettings {
   // Live polls open collapsed to their header instead of expanded. Independent
   // of `show_polls`, which hides the card entirely. Default false (polls open).
   polls_start_collapsed?: boolean;
+  // Live predictions open collapsed to their strip. A prediction already closed
+  // and waiting for its result starts collapsed either way. Default false.
+  predictions_start_collapsed?: boolean;
   /** Sound when a live message mentions you: a built-in tone id or `file:<id>`. Absent or empty: no sound. */
   mention_sound?: string;
   /** Mention sound volume, percent of the sound's own level (0-200, default 100). */

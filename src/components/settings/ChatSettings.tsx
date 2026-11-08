@@ -596,6 +596,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
     pinned_collapsed_style: stored?.pinned_collapsed_style ?? 'bar',
     pinned_start_collapsed: stored?.pinned_start_collapsed ?? true,
     polls_start_collapsed: stored?.polls_start_collapsed ?? false,
+    predictions_start_collapsed: stored?.predictions_start_collapsed ?? false,
     name_color_adjustment: (stored?.name_color_adjustment ?? 'hsl_loop') as 'off' | 'hsl_loop',
     show_badges: stored?.show_badges ?? true,
     badge_scale: stored?.badge_scale ?? 1,
@@ -1149,7 +1150,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           title="Predictions"
           onReset={resetFor(['show_predictions', true])}
           description="A live prediction card with the outcomes and how points are stacking up."
-          help="Top card picks which one sits on top when a poll and a prediction run at the same time. Both cards show either way, stacked."
+          help="Collapsed opens a prediction as its header bar; tap the header to expand it. A prediction that is already closed and waiting for the result opens collapsed either way. Top card picks which one sits on top when a poll and a prediction run at the same time. Both cards show either way, stacked."
           control={
             <Toggle
               enabled={settings.show_predictions ?? true}
@@ -1159,8 +1160,21 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
             />
           }
         >
-          {(settings.show_polls ?? true) && (settings.show_predictions ?? true) && (
+          {(settings.show_predictions ?? true) && (
             <SubControls>
+              <SubControl
+                title="Collapsed"
+                onReset={resetFor(['chat_design.predictions_start_collapsed', false])}
+                control={
+                  <Toggle
+                    enabled={cd.predictions_start_collapsed ?? false}
+                    onChange={() =>
+                      setDesign({ predictions_start_collapsed: !(cd.predictions_start_collapsed ?? false) })
+                    }
+                  />
+                }
+              />
+              {(settings.show_polls ?? true) && (
               <SubControl
                 title="Top card"
                 onReset={resetFor(['chat_overlay_order', 'prediction-first'])}
@@ -1175,6 +1189,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
                   />
                 }
               />
+              )}
             </SubControls>
           )}
         </SettingsRow>

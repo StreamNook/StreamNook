@@ -27,6 +27,11 @@ pub struct StackRequest {
     pub order: Option<String>,
     /// `chat_design.polls_start_collapsed`.
     pub polls_start_collapsed: bool,
+    /// `chat_design.predictions_start_collapsed`.
+    pub predictions_start_collapsed: bool,
+    /// The prediction is closed to bets and waiting for its result (`locked` or
+    /// `resolving`). Nothing in it can be acted on, so it never opens by itself.
+    pub prediction_waiting: bool,
     /// The card the viewer last opened, which stays the open one while it is there.
     pub opened: Option<String>,
     /// Cards the viewer folded, which never open by themselves again.
@@ -53,7 +58,8 @@ pub struct StackLayout {
 /// The layout for `req`. The votes come first in the viewer's order, the drop after them (it is
 /// news, they ask for something). At most one card is open: the one the viewer opened, else,
 /// on a column tall enough, the first vote they have not folded (a poll only when polls do not
-/// start collapsed), else the drop when it is alone.
+/// start collapsed; a prediction only when predictions do not, and never one waiting for its
+/// result), else the drop when it is alone.
 pub fn layout(req: &StackRequest) -> StackLayout {
     let has = |kind: &str| req.cards.iter().any(|c| c == kind);
     let votes: [&str; 2] = if req.order.as_deref() == Some("poll-first") { ["poll", "prediction"] } else { ["prediction", "poll"] };
@@ -70,7 +76,7 @@ pub fn layout(req: &StackRequest) -> StackLayout {
             }
             order.iter().copied().find(|k| match *k {
                 "poll" => !req.polls_start_collapsed && !folded(k),
-                "prediction" => !folded(k),
+                "prediction" => !req.predictions_start_collapsed && !req.prediction_waiting && !folded(k),
                 // The drop opens only with no vote card beside it.
                 _ => !folded(k) && order.iter().all(|o| *o == "drop"),
             })
@@ -146,6 +152,22 @@ mod tests {
         both.order = Some("poll-first".into());
         both.polls_start_collapsed = true;
         assert_eq!(open_of(&layout(&both)), vec!["prediction"]);
+    }
+
+    /// SN-264: a prediction already closed and waiting for its result starts as a strip, and
+    /// predictions can start collapsed like polls. A tap still opens either.
+    #[test]
+    fn predictions_can_start_collapsed_and_a_waiting_one_never_opens_itself() {
+        let mut waiting = req(&["prediction", "poll"], 700.0);
+        waiting.prediction_waiting = true;
+        assert_eq!(open_of(&layout(&waiting)), vec!["poll"], "the poll beside it opens instead");
+        waiting.opened = Some("prediction".into());
+        assert_eq!(open_of(&layout(&waiting)), vec!["prediction"], "a tap opens it");
+
+        let mut collapsed = req(&["prediction"], 700.0);
+        collapsed.predictions_start_collapsed = true;
+        assert!(open_of(&layout(&collapsed)).is_empty());
+        assert_eq!(open_of(&layout(&req(&["prediction"], 700.0))), vec!["prediction"], "the default is unchanged");
     }
 
     #[test]

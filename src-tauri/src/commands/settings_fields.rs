@@ -100,6 +100,7 @@ pub fn frontend_owned_defaults() -> Value {
         // Typed groups whose optional fields stay absent until chosen.
         "chat_design": {
             "polls_start_collapsed": false,
+            "predictions_start_collapsed": false,
             "pinned_start_collapsed": true,
             "mention_sound": "",
             "mention_sound_volume": 100,

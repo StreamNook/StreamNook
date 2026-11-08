@@ -555,6 +555,9 @@ pub struct ChatDesignSettings {
     pub pinned_start_collapsed: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub polls_start_collapsed: Option<bool>,
+    /// Live predictions open collapsed to their strip (default false).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub predictions_start_collapsed: Option<bool>,
     /// Sound played when a live message mentions you: a built-in tone id or
     /// `file:<id>` from the custom sounds. Absent or empty means no sound.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -801,6 +804,7 @@ impl Default for ChatDesignSettings {
             username_colon: None,
             pinned_start_collapsed: None,
             polls_start_collapsed: None,
+            predictions_start_collapsed: None,
             mention_sound: None,
             mention_sound_volume: None,
             mention_sound_replies: None,
@@ -3068,6 +3072,7 @@ mod backup_persistence_tests {
         design.insert("username_colon".into(), serde_json::json!(true));
         design.insert("pinned_start_collapsed".into(), serde_json::json!(true));
         design.insert("polls_start_collapsed".into(), serde_json::json!(false));
+        design.insert("predictions_start_collapsed".into(), serde_json::json!(true));
 
         let parsed: Settings = serde_json::from_value(value).expect("deserialize");
         assert_eq!(parsed.chat_design.name_color_adjustment, "off");
@@ -3075,6 +3080,7 @@ mod backup_persistence_tests {
         assert_eq!(parsed.chat_design.username_colon, Some(true));
         assert_eq!(parsed.chat_design.pinned_start_collapsed, Some(true));
         assert_eq!(parsed.chat_design.polls_start_collapsed, Some(false));
+        assert_eq!(parsed.chat_design.predictions_start_collapsed, Some(true));
 
         let again = serde_json::to_value(&parsed).expect("re-serialize");
         assert_eq!(again["chat_design"]["activity_font_size"], serde_json::json!(16));
