@@ -818,6 +818,58 @@ pub async fn refresh(app: &AppHandle, owner_id: &str, token: &str) -> Result<usi
     Ok(added)
 }
 
+// ---- Operations the new whisper commands call -------------------------------
+// Card 7.5 replaces this block with the real operations.
+
+/// What every surface draws for a conversation (list row, inbox row,
+/// notification).
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct RowMeta {
+    pub key: String,
+    pub user_id: String,
+    pub user_login: String,
+    pub user_name: String,
+    pub profile_image_url: Option<String>,
+    pub color: Option<String>,
+    pub badges: Vec<crate::services::whisper_store::TwitchBadge>,
+    pub last_message_timestamp: i64,
+    pub last_text: String,
+    pub last_parts: Vec<crate::services::mention_inbox::MentionPart>,
+    pub last_is_sent: bool,
+    pub unread_count: i32,
+    pub archived: bool,
+    pub muted: bool,
+}
+
+/// One page of a conversation: its row, and messages oldest first.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct WhisperPage {
+    pub meta: Option<RowMeta>,
+    pub messages: Vec<crate::services::whisper_store::StoredWhisper>,
+    pub cursor: Option<String>,
+    pub has_more_local: bool,
+    pub older_on_twitch: bool,
+}
+
+pub fn page(_key: &str, _cursor: Option<String>, _limit: usize) -> Result<WhisperPage, String> {
+    Err("not ready".into())
+}
+
+pub fn mark_all_read() -> Result<(), String> {
+    Err("not ready".into())
+}
+
+pub async fn archive(_key: &str) -> Result<(), String> {
+    Err("not ready".into())
+}
+
+pub fn island_clear() -> Result<(), String> {
+    Err("not ready".into())
+}
+
+/// Tell an open conversation to read itself again. Card 7.5 writes it.
+pub fn emit_conversation(_scope: &crate::services::whisper_store::Scope, _key: &str) {}
+
 // ---- Dates ----------------------------------------------------------------
 
 static US_LOCALE_DATE: Lazy<Regex> = Lazy::new(|| {

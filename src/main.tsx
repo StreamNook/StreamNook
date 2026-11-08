@@ -93,6 +93,10 @@ localStorage.removeItem('plyr');
 // is read by nothing.
 localStorage.removeItem('streamnook_whatsnew_cache_v2');
 
+// A page that just loaded shows no whisper conversation yet, whatever window
+// it renders; a reloaded page must not keep the old page's claim.
+void import('./utils/whisperClaim').then((m) => m.clearWhisperClaim());
+
 // Route based on URL hash. Profile-card windows, the StreamNook MultiChat
 // popout, and ui-plugin popout windows share the same bundle as the main App;
 // main.tsx picks the root component to render.

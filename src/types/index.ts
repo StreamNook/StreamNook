@@ -2968,6 +2968,193 @@ export interface WhisperList {
   unread_total: number;
 }
 
+/** Where one of our own sends stands (services/whisper_store.rs `Delivery`). */
+export type WhisperDelivery = 'sending' | 'sent' | 'unknown' | 'delivered' | 'not_delivered';
+
+/** Where a stored whisper came from (services/whisper_store.rs `Origin`). */
+export type WhisperOrigin = 'twitch' | 'local_sent' | 'scraped';
+
+/** A Twitch badge shown beside a whisper partner's name. */
+export interface TwitchWhisperBadge {
+  set_id: string;
+  version: string;
+  title: string;
+  image_url: string;
+}
+
+/** One stored whisper (services/whisper_store.rs `StoredWhisper`). */
+export interface StoredWhisperMessage {
+  id: string;
+  from_user_id: string;
+  from_user_login: string;
+  from_user_name: string;
+  to_user_id: string;
+  to_user_login: string;
+  to_user_name: string;
+  message: string;
+  timestamp: number;
+  is_sent: boolean;
+  parts: MentionPart[];
+  deleted: boolean;
+  edited_ms: number | null;
+  origin: WhisperOrigin;
+  delivery: WhisperDelivery | null;
+  failure: string | null;
+  cut_to: number | null;
+}
+
+/** A whisper partner's live broadcast (whisper_live.rs `LiveNow`). */
+export interface WhisperLiveNow {
+  title: string;
+  category: string;
+  viewers: number;
+}
+
+/** What every surface draws for a conversation (whisper_inbox.rs `RowMeta`). */
+export interface WhisperRowMeta {
+  key: string;
+  user_id: string;
+  user_login: string;
+  user_name: string;
+  profile_image_url: string | null;
+  color: string | null;
+  badges: TwitchWhisperBadge[];
+  last_message_timestamp: number;
+  last_text: string;
+  last_parts: MentionPart[];
+  last_is_sent: boolean;
+  unread_count: number;
+  archived: boolean;
+  muted: boolean;
+  /** (reconciled, CA-13.1) The iPhone's pinned-sender view; desktop and Android use `useChatterLook`. */
+  sender_view?: unknown | null;
+  /** Live right now, as far as StreamNook knows; absent or null while offline. */
+  live?: WhisperLiveNow | null;
+}
+
+/** One conversation's change (`whisper-conversation-updated`). */
+export interface WhisperUpdatePayload {
+  owner_id: string;
+  key: string;
+  replaced_key: string | null;
+  meta: WhisperRowMeta;
+  message: StoredWhisperMessage | null;
+  removed_message_id: string | null;
+  loading: boolean | null;
+  error: string | null;
+}
+
+/** Rust's `whisper_list` once the new store lands. */
+export interface WhisperListPayload {
+  owner_id: string;
+  conversations: WhisperRowMeta[];
+  unread_total: number;
+  syncing: boolean;
+  signed_in: boolean;
+  session_problem: string | null;
+}
+
+/** Rust's `whisper_page`: one conversation's row and a page of its messages, oldest first. */
+export interface WhisperPagePayload {
+  meta: WhisperRowMeta | null;
+  messages: StoredWhisperMessage[];
+  cursor: string | null;
+  has_more_local: boolean;
+  older_on_twitch: boolean;
+}
+
+/** The inbox counts every badge reads (`inbox-changed`, services/inbox_counts.rs). */
+export interface InboxCounts {
+  unread_total: number;
+  mentions: number;
+  whispers: number;
+  island: number;
+  /** MultiChat's Mentions badge: every unread mention and the whispers after its Clear. */
+  multichat?: number;
+  rev: number;
+}
+
+/** Which surface asks for the inbox view (mention_inbox.rs `Surface`). */
+export type InboxSurface = 'phone' | 'island' | 'multichat';
+
+// (reconciled) The inbox view's new shape, the archive event, the arrival and
+// the sync answer: one place for the desktop (7.9, 7.10) and Android (7.11).
+// The old `InboxRowView` and `InboxView` above stay for the Android inbox until
+// 7.11 removes them.
+
+/** A mention row of `get_inbox_view` (mention_inbox.rs `InboxItem::Mention`):
+ *  the newest of a run of identical messages. */
+export interface InboxMentionItem {
+  kind: 'mention';
+  /** Unique within a view: the entry's id. */
+  row_id: string;
+  entry: MentionEntry;
+  /** The older identical messages, newest first. */
+  folded: { id: string; at_ms: number; read: boolean }[];
+  /** Any message in the row is unread. */
+  unread: boolean;
+  /** The sender's picture, once Rust has it. */
+  avatar: string | null;
+}
+
+/** A whisper conversation row of `get_inbox_view` (`InboxItem::Whisper`), at
+ *  its newest message. `row_id` is `w:<key>`. */
+export interface InboxWhisperItem {
+  kind: 'whisper';
+  row_id: string;
+  whisper: WhisperRowMeta;
+}
+
+/** One row of `get_inbox_view`, tagged by `kind`. */
+export type InboxItem = InboxMentionItem | InboxWhisperItem;
+
+/** `get_inbox_view` (commands/mention_inbox.rs `InboxView`). */
+export interface InboxViewPayload {
+  rows: InboxItem[];
+  has_more: boolean;
+  /** Opaque: what asks for the next page. */
+  cursor: string | null;
+  unread_total: number;
+  chips: { id: InboxFilterId; unread: number }[];
+  /** The revision of the counts; a shell keeps the highest it has seen. */
+  counts_rev: number;
+  /** The island's count from the same snapshot. */
+  island_unread: number;
+  /** The whole snapshot those counts come from (seeds every badge at mount). */
+  counts: InboxCounts;
+}
+
+/** `whisper-archive-changed`: many conversations changed, or a sync started or ended. */
+export interface WhisperArchiveChangedPayload {
+  owner_id: string;
+  /** A sync is running. */
+  syncing: boolean;
+}
+
+/** `whisper-arrived`: a live whisper filed unread, for the card over the message bar. */
+export interface WhisperArrivedPayload {
+  update: WhisperUpdatePayload;
+}
+
+/** `whisper_status`: what the inbox says about whispers beyond its rows. */
+export interface WhisperStatusPayload {
+  signed_in: boolean;
+  syncing: boolean;
+  /** Why whispers cannot load (the twitch.tv session is someone else's), or null. */
+  session_problem: string | null;
+  unread_total: number;
+}
+
+/** `whisper_sync_now` (whisper_sync.rs `SyncOutcome`, tagged by `outcome`). */
+export type WhisperSyncOutcome =
+  | { outcome: 'done'; added: number }
+  | { outcome: 'partial'; added: number }
+  | { outcome: 'superseded' }
+  | { outcome: 'no_session' }
+  | { outcome: 'wrong_session' }
+  | { outcome: 'still_running' }
+  | { outcome: 'failed'; reason: string };
+
 // Hype Train Types
 export interface HypeTrainContributor {
   user_id: string;

@@ -322,6 +322,11 @@ pub mod earning_gate;
 pub mod whisper_inbox;
 pub mod whisper_service;
 pub mod whisper_storage_service;
+pub mod whisper_store;
+pub mod whisper_sync;
+pub mod whisper_send;
+pub mod whisper_claims;
+pub mod inbox_counts;
 pub mod window_visibility;
 // Desktop-only: Performance mode, the cheap look while StreamNook is in the
 // background (or always).

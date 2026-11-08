@@ -24,6 +24,8 @@ allow = [
   "update_chat_identity_gql",
   "flush_persistent_stores",
   "set_app_foreground",
+  "set_app_interactive",
+  "twitch_integrity_minted",
   "set_low_power",
   "get_app_presence",
   "export_logs",

@@ -18,6 +18,7 @@ import { SevenTvAvatar } from './SevenTvAvatar';
 import { playNotificationSound as playGatedNotificationSound } from '../utils/notificationSound';
 import { isImeComposing } from '../utils/imeComposing';
 import { useOutsidePress } from '../hooks/useOutsidePress';
+import { claimWhisper } from '../utils/whisperClaim';
 interface WhispersWidgetProps {
     isOpen: boolean;
     onClose: () => void;
@@ -347,9 +348,9 @@ const WhispersWidget = ({ isOpen, onClose }: WhispersWidgetProps) => {
     // Tell Rust which conversation is open, so a whisper arriving in it is not
     // counted as unread.
     useEffect(() => {
-        void invoke('whisper_set_active', { key: activeConversation });
+        claimWhisper(activeConversation);
     }, [activeConversation]);
-    useEffect(() => () => void invoke('whisper_set_active', { key: null }), []);
+    useEffect(() => () => claimWhisper(null), []);
 
     // Scroll to bottom when new messages arrive
     useEffect(() => {

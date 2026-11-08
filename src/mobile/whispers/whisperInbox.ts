@@ -13,6 +13,7 @@ import { useAppStore } from '../../stores/AppStore';
 import { useMobileNavStore } from '../navStore';
 import { closeInboxSheet } from '../mentions/mentionInbox';
 import { Logger } from '../../utils/logger';
+import { claimWhisper } from '../../utils/whisperClaim';
 import type { WhisperConversation, WhisperList, WhisperListRow, WhisperUpdate } from '../../types';
 import { failureReason, type PendingWhisper } from './whisperModel';
 
@@ -102,7 +103,7 @@ let visibilityHooked = false;
 
 function reportOpen(): void {
   const key = document.visibilityState === 'visible' ? openKey : null;
-  invoke('whisper_set_active', { key }).catch((err) => Logger.debug('[Whispers] set active failed:', err));
+  claimWhisper(key);
   if (key) void markWhisperRead(key);
 }
 

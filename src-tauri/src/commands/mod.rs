@@ -96,5 +96,6 @@ pub mod user_profile;
 pub mod vod_progress;
 pub mod watch_streak;
 pub mod whisper_storage;
+pub mod whispers;
 pub mod mention_inbox;
 pub mod window_state;

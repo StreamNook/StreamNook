@@ -57,7 +57,7 @@ use commands::{
     seventv_cosmetics_fetch::*, sn_cosmetics::*, song_id::*, spellcheck::*, streamnook_api::*, streaming::*, subscriptions::*,
     text_segments::*, twitch::*,
     universal_cache::*,
-    user_profile::*, vod_progress::*, watch_session::*, watch_streak::*, whisper_storage::*, mention_inbox::*, window_state::*,
+    user_profile::*, vod_progress::*, watch_session::*, watch_streak::*, whisper_storage::*, whispers::*, mention_inbox::*, window_state::*,
 };
 // Desktop-only feature modules, excluded from the phone app (watch/earn/chat
 // only): MultiNook tiling, Discord RPC, and profile-card screen capture.
@@ -685,6 +685,7 @@ pub(crate) fn flush_debounced_stores() {
     let _ = services::universal_cache_service::flush_manifest_now();
     let _ = services::mod_log_storage_service::ModLogStorageService::flush_now();
     let _ = services::whisper_storage_service::WhisperStorageService::flush_now();
+    let _ = services::whisper_store::flush_now();
     let _ = services::mention_inbox::flush_now();
     let _ = services::vod_progress_service::flush_now();
     #[cfg(desktop)]
@@ -1043,6 +1044,8 @@ pub fn run() {
             #[cfg(desktop)]
             if payload.event() == tauri::webview::PageLoadEvent::Started {
                 services::performance_mode::note_window_destroyed(webview.label());
+                // A new page shows no whisper conversation until it says so.
+                services::whisper_claims::clear_label(webview.label());
             }
             if webview.label() == "main" && payload.event() == tauri::webview::PageLoadEvent::Started {
                 // What the old page declared to Discord presence goes with it.
@@ -1894,6 +1897,10 @@ pub fn run() {
             #[cfg(mobile)]
             set_app_foreground,
             #[cfg(mobile)]
+            set_app_interactive,
+            #[cfg(mobile)]
+            twitch_integrity_minted,
+            #[cfg(mobile)]
             set_low_power,
             #[cfg(mobile)]
             get_app_presence,
@@ -2558,6 +2565,15 @@ pub fn run() {
             whisper_refresh,
             whisper_list,
             whisper_thread,
+            whisper_page,
+            whisper_mark_all_read,
+            whisper_retry,
+            whisper_discard,
+            whisper_archive,
+            whisper_load_older,
+            whisper_sync_now,
+            whisper_island_clear,
+            inbox_opened,
             // Mentions inbox
             get_mention_inbox,
             get_inbox_view,
@@ -2925,9 +2941,16 @@ pub fn run() {
                 services::performance_mode::note_focus(*focused);
             }
 
+            // A whisper conversation counts as read only while its own window
+            // has focus, on every desktop OS.
+            if let WindowEvent::Focused(focused) = event {
+                services::whisper_claims::note_focus(&label, *focused);
+            }
+
             if let WindowEvent::Destroyed = event {
                 services::app_exit::note_window_destroyed(&label);
                 services::performance_mode::note_window_destroyed(&label);
+                services::whisper_claims::forget_window(&label);
                 // A destroyed webview never runs its React cleanup, so any
                 // chat consumer claims it still holds would pin those channels
                 // JOINed (and their IRC traffic flowing) forever. Sweep them;
