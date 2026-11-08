@@ -1,4 +1,6 @@
 import { useState, useEffect } from 'react';
+import { LiveChatPreview } from './LiveChatPreview';
+import { useRequestSettingsWide } from './settingsWide';
 import { invoke } from '@tauri-apps/api/core';
 import { X } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
@@ -90,7 +92,8 @@ import { useChatUserStore } from '../../stores/chatUserStore';
 import { getUserCosmetics, computePaintStyle } from '../../services/seventvService';
 import { StyledChatName, type NameSeparator, type NameStyle } from '../chat/StyledChatName';
 import type { DeletedMessageStyle } from '../chat/deletedMessage';
-import { BadgeFoldPreview, DeletedMessagePreview, EventRowPreview, InboxButtonPreview, MentionPreview, MentionRowPreview, MessageLayoutPreview, RoomModesPreview, SettingPreview } from './ChatPreview';
+import type { EmoteWordsLook } from '../chat/emoteWords';
+import { BadgeFoldPreview, DeletedMessagePreview, EmoteWordsPreview, EventRowPreview, InboxButtonPreview, MentionPreview, MentionRowPreview, MessageLayoutPreview, RoomModesPreview, SettingPreview } from './ChatPreview';
 import { DropsChatBarView, PREVIEW_LINE as DROPS_PREVIEW_LINE } from '../chat/DropsChatBar';
 import { ProfilePicturePreview } from './ProfilePicturePreview';
 import {
@@ -204,6 +207,13 @@ type HoverSizeKey = (typeof HOVER_SIZE_OPTIONS)[number]['value'];
 // phone reads the value Rust gave it and draws no reset arrow.
 const ENTRANCE_FALLBACK = IS_MOBILE ? 'slide' : 'none';
 const DELETED_FALLBACK = IS_MOBILE ? 'italic' : 'strikethrough';
+
+const EMOTE_WORDS_OPTIONS: { value: EmoteWordsLook; label: string }[] = [
+  { value: 'off', label: 'Off' },
+  { value: 'under', label: 'Under' },
+  { value: 'after', label: 'After' },
+  { value: 'chips', label: 'Chips' },
+];
 
 const DELETED_STYLE_OPTIONS: { value: DeletedMessageStyle; label: string }[] = [
   { value: 'strikethrough', label: 'Strikethrough' },
@@ -457,6 +467,8 @@ function replySoundChoice(cd: { reply_sound?: string; mention_sound_replies?: bo
 }
 
 const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {}) => {
+  const livePreview = !IS_MOBILE && !hidePlacement;
+  useRequestSettingsWide(livePreview);
   const { settings, updateSettings } = useAppStore();
   const resetFor = useSettingReset();
   // Phone-shell preferences (see mobile/phonePrefs.ts); only read on the phone.
@@ -498,6 +510,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
   // The option under the pointer in a visual setting, shown in its preview
   // before it is picked; null falls back to the saved value.
   const [deletedHover, setDeletedHover] = useState<DeletedMessageStyle | null>(null);
+  const [emoteWordsHover, setEmoteWordsHover] = useState<EmoteWordsLook | null>(null);
   const [entranceHover, setEntranceHover] = useState<'none' | 'fade' | 'slide' | 'rise' | null>(null);
   // Hovering a mention-style option previews it before it is chosen.
   const [mentionHover, setMentionHover] = useState<Partial<MentionLook>>({});
@@ -568,6 +581,9 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
     hide_shared_chat: stored?.hide_shared_chat ?? false,
     paint_mentions_in_body: stored?.paint_mentions_in_body ?? true,
     compact_emote_tooltips: stored?.compact_emote_tooltips ?? false,
+    emote_words: stored?.emote_words ?? 'off',
+    emote_words_sentences_only: stored?.emote_words_sentences_only ?? true,
+    emote_words_scale: stored?.emote_words_scale ?? 1,
     ffz_emote_effects: stored?.ffz_emote_effects ?? true,
     bttv_emote_modifiers: stored?.bttv_emote_modifiers ?? true,
     giant_emotes: stored?.giant_emotes ?? true,
@@ -583,7 +599,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
     name_color_adjustment: (stored?.name_color_adjustment ?? 'hsl_loop') as 'off' | 'hsl_loop',
     show_badges: stored?.show_badges ?? true,
     badge_scale: stored?.badge_scale ?? 1,
-    badge_fold_limit: stored?.badge_fold_limit ?? 3,
+    badge_fold_limit: stored?.badge_fold_limit ?? 0,
     ffz_custom_role_badges: stored?.ffz_custom_role_badges ?? true,
     show_third_party_badges: stored?.show_third_party_badges ?? true,
     hidden_badge_providers: stored?.hidden_badge_providers ?? [],
@@ -750,7 +766,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
     }
   };
 
-  return (
+  const page = (
     // The phones share one section gap; the desktop keeps its wider one.
     <div className={IS_MOBILE ? 'space-y-6' : 'space-y-8'}>
       {/* Desktop only. This positions the MAIN app's chat panel (left / right /
@@ -1272,14 +1288,16 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
                 { value: 'plain', label: 'Plain' },
               ]}
             />
-            <EventRowPreview
-              design={cd}
-              events={{
-                ...chatEvents,
-                event_style: eventStyleHover ?? chatEvents.event_style,
-                event_animation: glintHover ?? chatEvents.event_animation,
-              }}
-            />
+            {!livePreview && (
+              <EventRowPreview
+                design={cd}
+                events={{
+                  ...chatEvents,
+                  event_style: eventStyleHover ?? chatEvents.event_style,
+                  event_animation: glintHover ?? chatEvents.event_animation,
+                }}
+              />
+            )}
           </div>
           {(chatEvents.event_style ?? 'cards') === 'outline' && (
             <SubControls>
@@ -1442,9 +1460,13 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         label="Message Layout"
         description="Spacing, text size, animation and timestamps."
       >
-        <div className="pt-3">
-          <MessageLayoutPreview design={cd} entrance={entranceHover ?? cd.message_entrance} />
-        </div>
+        {/* Where the pinned chat preview is beside the page, it shows all of
+            this; the drawn samples stay for the phone and the chat-only window. */}
+        {!livePreview && (
+          <div className="pt-3">
+            <MessageLayoutPreview design={cd} entrance={entranceHover ?? cd.message_entrance} />
+          </div>
+        )}
 
         <SettingsRow
           title="Dividers"
@@ -1644,13 +1666,15 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         label="Names & Badges"
         description="How chatter names, badges, 7TV paints and atmospheres look."
       >
-        <SettingPreview caption="how your name looks in chat">
-          <NamePrefixPreview
-            separator={cd.username_separator ?? 'none'}
-            nameStyle={cd.username_style ?? 'plain'}
-            accentSource={cd.username_accent_source ?? 'user'}
-          />
-        </SettingPreview>
+        {!livePreview && (
+          <SettingPreview caption="how your name looks in chat">
+            <NamePrefixPreview
+              separator={cd.username_separator ?? 'none'}
+              nameStyle={cd.username_style ?? 'plain'}
+              accentSource={cd.username_accent_source ?? 'user'}
+            />
+          </SettingPreview>
+        )}
 
         <SettingsRow
           title="Name style"
@@ -1806,7 +1830,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
 
         <SettingsRow
           title="Badges before +N"
-          onReset={resetFor(['chat_design.badge_fold_limit', 3])}
+          onReset={resetFor(['chat_design.badge_fold_limit', 0])}
           description="Add-on badges past this many fold into a +N you can hover (tap on phones) to see. Twitch's own badges always show."
           help="The +N wears a foil by how many add-on badges someone has in all, whatever this is set to: silver from 2, gold from 3, cosmos from 5, and rainbow from 8."
         >
@@ -1824,7 +1848,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
                 { value: '5', label: '5' },
               ]}
             />
-            <BadgeFoldPreview limit={foldPreview ?? badgeFoldLimit(cd.badge_fold_limit)} />
+            {!livePreview && <BadgeFoldPreview limit={foldPreview ?? badgeFoldLimit(cd.badge_fold_limit)} />}
           </div>
         </SettingsRow>
 
@@ -1961,9 +1985,11 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         label="Mentions & Replies"
         description="How a message that mentions you, and a reply, stand out, and how an @name reads in chat."
       >
-        <div className="pt-3">
-          <MentionPreview design={cd} look={{ ...mentionLook(cd), ...mentionHover }} />
-        </div>
+        {!livePreview && (
+          <div className="pt-3">
+            <MentionPreview design={cd} look={{ ...mentionLook(cd), ...mentionHover }} />
+          </div>
+        )}
 
         <SettingsRow
           title="Mention sound"
@@ -2155,15 +2181,17 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
               }
             />
           </SubControls>
-          <div className="pt-3">
-            <MentionRowPreview
-              design={cd}
-              hold={cd.mention_hold ?? false}
-              opacity={settings.chat_highlights?.appearance?.opacity ?? 20}
-              mentionColor={cd.mention_color ?? '#ff4444'}
-              replyColor={cd.reply_color ?? '#ff6b6b'}
-            />
-          </div>
+          {!livePreview && (
+            <div className="pt-3">
+              <MentionRowPreview
+                design={cd}
+                hold={cd.mention_hold ?? false}
+                opacity={settings.chat_highlights?.appearance?.opacity ?? 20}
+                mentionColor={cd.mention_color ?? '#ff4444'}
+                replyColor={cd.reply_color ?? '#ff6b6b'}
+              />
+            </div>
+          )}
         </SettingsRow>
 
         {IS_MOBILE && (
@@ -2342,6 +2370,64 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
             />
           }
         />
+
+        <SettingsRow
+          title="Emote words"
+          onReset={resetFor(
+            ['chat_design.emote_words', 'off'],
+            ['chat_design.emote_words_sentences_only', true],
+            ['chat_design.emote_words_scale', 1],
+          )}
+          description="Shows the word that was typed with each emote, so a message made mostly of emotes still reads as a sentence."
+          help="Under puts the word in small print beneath the emote, After follows the emote with it, and Chips pairs a small emote with the word in a pill. Word size makes the word smaller or larger than its look's own size; the preview shows it as you drag. Sentences only leaves messages that are nothing but emotes as they are."
+        >
+          <div className="space-y-3">
+            <SegmentedSelect<EmoteWordsLook>
+              fullWidth={IS_MOBILE}
+              value={cd.emote_words}
+              onChange={(emote_words) => setDesign({ emote_words })}
+              onPreview={setEmoteWordsHover}
+              options={EMOTE_WORDS_OPTIONS}
+            />
+            {!livePreview && (
+              <EmoteWordsPreview
+                design={cd}
+                look={emoteWordsHover ?? cd.emote_words}
+                sentencesOnly={cd.emote_words_sentences_only}
+                wordScale={cd.emote_words_scale}
+              />
+            )}
+          </div>
+          {cd.emote_words !== 'off' && (
+            <SubControls>
+              <SubControl
+                title="Word size"
+                onReset={resetFor(['chat_design.emote_words_scale', 1])}
+                control={
+                  <InlineSlider
+                    value={cd.emote_words_scale}
+                    min={0.6}
+                    max={1.4}
+                    step={0.05}
+                    label="Emote word size"
+                    format={(v) => `${v.toFixed(2)}x`}
+                    onChange={(emote_words_scale) => setDesign({ emote_words_scale })}
+                  />
+                }
+              />
+              <SubControl
+                title="Sentences only"
+                onReset={resetFor(['chat_design.emote_words_sentences_only', true])}
+                control={
+                  <Toggle
+                    enabled={cd.emote_words_sentences_only}
+                    onChange={() => setDesign({ emote_words_sentences_only: !cd.emote_words_sentences_only })}
+                  />
+                }
+              />
+            </SubControls>
+          )}
+        </SettingsRow>
 
         <SettingsRow
           title="Animation"
@@ -2669,7 +2755,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
               />
             </SubControls>
           )}
-          {(settings.chat_input?.show_room_modes ?? true) && (
+          {!livePreview && (settings.chat_input?.show_room_modes ?? true) && (
             <div className="pt-3">
               <RoomModesPreview style={IS_MOBILE ? 'prompt' : (roomModesStyleHover ?? settings.chat_input?.room_modes_style ?? 'prompt')} />
             </div>
@@ -2980,8 +3066,9 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         label="Drops"
         description="Your progress toward drops on the channel you are watching."
       >
-        {/* The phones draw their own card, so the bar's preview is desktop only. */}
-        {!IS_MOBILE && (
+        {/* The phones draw their own card, so the bar's preview is desktop only,
+            and only where the pinned chat preview is not beside the page. */}
+        {!IS_MOBILE && !livePreview && (
           <SettingPreview caption="above the message box">
             {/* The lip rises out of the message box, so the preview draws one under it. */}
             <div className="max-w-[340px]">
@@ -3041,10 +3128,12 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
                 options={DELETED_STYLE_OPTIONS}
               />
             )}
-            <DeletedMessagePreview
-              design={cd}
-              style={deletedHover ?? (cd.deleted_message_style as DeletedMessageStyle)}
-            />
+            {!livePreview && (
+              <DeletedMessagePreview
+                design={cd}
+                style={deletedHover ?? (cd.deleted_message_style as DeletedMessageStyle)}
+              />
+            )}
           </div>
         </SettingsRow>
 
@@ -3528,7 +3617,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
       </SettingsSection>
       )}
 
-      <HighlightAppearanceSettings />
+      <HighlightAppearanceSettings livePreview={livePreview} />
       <CustomSoundsSettings />
 
       <HighlightPhrasesSettings />
@@ -3547,6 +3636,19 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
 
 
       <UserOverridesSettings />
+    </div>
+  );
+
+  // Settings' Chat tab on desktop: the page grows like the overlay studio and a
+  // real chat column stays pinned beside the settings, so every look change
+  // shows as chat draws it. The chat-only window and the phone keep one column.
+  if (!livePreview) return page;
+  return (
+    <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(320px,402px)]">
+      <aside className="xl:sticky xl:top-2 xl:order-2">
+        <LiveChatPreview />
+      </aside>
+      <div className="min-w-0 xl:order-1">{page}</div>
     </div>
   );
 };

@@ -208,6 +208,29 @@ fn percents(outcomes: &[Outcome]) -> Vec<i64> {
     outcomes.iter().map(|o| ((o.points as f64 / pool as f64) * 100.0).round() as i64).collect()
 }
 
+/// Settings' chat preview: an open prediction's card and the answer for a 10
+/// point bet on its first side, built the way live ones are (made-up title,
+/// sides, pool and balance; nothing is placed).
+pub(crate) fn sample_view(channel_id: &str, now_ms: i64) -> (PredictionView, BetView) {
+    let p = Prediction {
+        channel_id: channel_id.to_string(),
+        id: "preview-prediction".into(),
+        title: "Does he beat it first try?".into(),
+        status: "ACTIVE".into(),
+        outcomes: vec![
+            Outcome { id: "yes".into(), title: "Yes".into(), color: "BLUE".into(), points: 182_400, users: 312 },
+            Outcome { id: "no".into(), title: "No way".into(), color: "PINK".into(), points: 96_150, users: 141 },
+        ],
+        window_seconds: 120,
+        created_at_ms: Some(now_ms - 34_000),
+        winning_outcome_id: None,
+        stake: None,
+        result: None,
+    };
+    let points = ChannelPoints { enabled: true, balance: Some(128_450), ..Default::default() };
+    (view_of(&p, Some(&points), now_ms), bet_of(&p, "yes", Some("10"), Some(&points), now_ms))
+}
+
 fn view_of(p: &Prediction, points: Option<&ChannelPoints>, now_ms: i64) -> PredictionView {
     let word = points_word(points);
     let open = p.open_at(now_ms);

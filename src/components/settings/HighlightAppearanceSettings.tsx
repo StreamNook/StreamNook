@@ -39,7 +39,9 @@ const Toggle = ({ enabled, onChange }: { enabled: boolean; onChange: () => void 
   </button>
 );
 
-const HighlightAppearanceSettings = () => {
+/** `livePreview`: Settings > Chat's pinned chat preview is beside the page and
+ *  draws the scrollbar marks, so the drawn sample is left out. */
+const HighlightAppearanceSettings = ({ livePreview = false }: { livePreview?: boolean } = {}) => {
   const { settings, updateSettings } = useAppStore();
   // Only a build that draws a chat scrollbar has marks to set (Rust client capabilities).
   const caps = useClientCapabilities();
@@ -178,7 +180,7 @@ const HighlightAppearanceSettings = () => {
                   }
                 />
               </SubControls>
-              <ScrollbarMarksPreview design={previewDesign} kinds={markKinds} mentionColor={design?.mention_color} />
+              {!livePreview && <ScrollbarMarksPreview design={previewDesign} kinds={markKinds} mentionColor={design?.mention_color} />}
             </div>
           )}
         </SettingsRow>

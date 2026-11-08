@@ -5,6 +5,7 @@
 //! line in permissions/app-commands.toml (acl_parity test enforces it).
 
 use crate::services::chat_history::{ChatHistory, HistoryStats, SearchHit};
+use crate::services::chat_preview::{PreviewAsk, PreviewChat};
 use crate::services::chat_rules::{ChatRules, RuleError};
 use serde::Serialize;
 
@@ -78,4 +79,12 @@ pub async fn get_chat_rule_errors() -> Result<Vec<RuleError>, String> {
 #[tauri::command]
 pub async fn get_chat_history_stats() -> Result<HistoryStats, String> {
     Ok(ChatHistory::stats())
+}
+
+/// Settings > Chat's chat preview: one scene's sample chat, real Twitch lines
+/// parsed, stamped with your rules and given their row view exactly as live
+/// lines are (services/chat_preview), recording nothing.
+#[tauri::command]
+pub async fn preview_chat_rows(ask: PreviewAsk) -> Result<PreviewChat, String> {
+    Ok(crate::services::chat_preview::preview(&ask))
 }

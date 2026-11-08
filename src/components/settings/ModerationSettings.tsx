@@ -11,6 +11,9 @@ import { useSettingDefault, useSettingReset } from './settingReset';
 import { ModHoverPreview, ModLinePreview, ModSliderPreview } from './ChatPreview';
 import { HoverTimeoutsEditor, ModSliderStepsEditor } from './ModSliderSteps';
 import { UserCardSettings } from './ModerationCardSettings';
+import { LiveChatPreview } from './LiveChatPreview';
+import { useRequestSettingsWide } from './settingsWide';
+import { IS_MOBILE } from '../../utils/platform';
 
 const Toggle = ({ enabled, onChange }: { enabled: boolean; onChange: () => void }) => (
   <button
@@ -47,6 +50,8 @@ const EDGE_DESCRIPTION: Record<ModEdge, string> = {
 };
 
 const ModerationSettings = () => {
+  // The page grows like Chat's to make room for the pinned preview.
+  useRequestSettingsWide(!IS_MOBILE);
   const { settings, updateSettings } = useAppStore();
   const mod = settings.moderation ?? {};
   const confirmBans = mod.confirm_bans ?? false;
@@ -116,7 +121,7 @@ const ModerationSettings = () => {
   const defaultHover = hoverOf(defaultStyle);
   const defaultsLoaded = defaultStyle !== undefined;
 
-  return (
+  const page = (
     <div className="space-y-8">
       <SettingsSection
         id="settings-section-streamer-mode"
@@ -212,7 +217,7 @@ const ModerationSettings = () => {
           )}
           {modEdge === 'buttons' && (
             <>
-              <ModLinePreview stored={cd} />
+              {IS_MOBILE && <ModLinePreview stored={cd} />}
               <SubControls>
                 <SubControl
                   title="Show"
@@ -250,7 +255,8 @@ const ModerationSettings = () => {
         >
           {hoverButtons && (
             <>
-              <ModHoverPreview stored={cd} />
+              {/* The pinned preview beside the page shows these on desktop. */}
+              {IS_MOBILE && <ModHoverPreview stored={cd} />}
               <SubControls>
                 <SubControl
                   title="Timeout lengths"
@@ -519,6 +525,18 @@ const ModerationSettings = () => {
           description="Reverses the most recent /nuke in this channel. Bans and timeouts are lifted; deleted messages stay gone because Twitch cannot restore them."
         />
       </SettingsSection>
+    </div>
+  );
+
+  // Desktop: your chat as a moderator sees it, pinned beside the settings, so
+  // the swipe edge, line buttons and hover buttons show as you change them.
+  if (IS_MOBILE) return page;
+  return (
+    <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(320px,402px)]">
+      <aside className="xl:sticky xl:top-2 xl:order-2">
+        <LiveChatPreview moderation />
+      </aside>
+      <div className="min-w-0 xl:order-1">{page}</div>
     </div>
   );
 };

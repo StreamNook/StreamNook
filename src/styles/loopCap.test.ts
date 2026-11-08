@@ -186,6 +186,13 @@ const CSS_ROWS: Record<string, Row> = {
   'styles/globals.css|.animate-panel-slide-down': { d: 'instant-ok' },
   'styles/globals.css|.animate-panel-slide-up': { d: 'instant-ok' },
   'styles/globals.css|.sn-ethereal-text': { d: 'rests-ok' },
+  // The cosmetic you just picked growing into the profile preview; at once it
+  // is simply the new cosmetic in place.
+  'styles/globals.css|.sn-cosmetic-swap': { d: 'instant-ok' },
+  'styles/globals.css|.sn-cosmetic-swap--name': { d: 'instant-ok' },
+  // A preview's rim lighting up after a change; at once it is simply no rim.
+  'styles/globals.css|.sn-preview-changed': { d: 'instant-ok' },
+  'styles/globals.css|.sn-preview-scene': { d: 'instant-ok' },
   'styles/globals.css|.chest-attention': { d: 'rests-ok' },
   'styles/globals.css|.sn-ffz-anim-rainbow': { d: 'content', cover: FFZ },
   'styles/globals.css|.sn-ffz-anim-shake': { d: 'content', cover: FFZ },

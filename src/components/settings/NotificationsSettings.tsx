@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useFreshIds } from '../../hooks/useFreshIds';
 import { Dropdown } from '../ui/Dropdown';
 import { Tooltip } from '../ui/Tooltip';
 import { Toggle } from '../ui/Toggle';
@@ -195,6 +196,26 @@ const NotificationsSettings = () => {
     toast_edge_offset: DEFAULT_TOAST_EDGE_OFFSET,
   };
   const systemOn = liveNotifications.use_native_notifications ?? false;
+
+  // Where notifications show, previewed for real: a change to the island,
+  // toasts, toast position or edge distance sends one silent sample through
+  // the Test path (Rust's go-live mock, `is_test`), so it lands in the island
+  // and as a toast exactly where your settings put them. Half a second after
+  // the last change, so dragging the edge distance sends one, not dozens.
+  const displaySig = [
+    liveNotifications.use_dynamic_island ?? true,
+    liveNotifications.use_toast ?? true,
+    liveNotifications.toast_position ?? DEFAULT_TOAST_POSITION,
+    liveNotifications.toast_edge_offset ?? DEFAULT_TOAST_EDGE_OFFSET,
+  ].join('|');
+  const displayChanged = useFreshIds([displaySig]).has(displaySig);
+  useEffect(() => {
+    if (!displayChanged) return;
+    const timer = setTimeout(() => {
+      invoke('send_test_notification').catch((error) => Logger.error('Failed to send the display preview:', error));
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [displaySig, displayChanged]);
 
   const soundOptions = useSoundOptions({ defaultId: 'boop' });
 

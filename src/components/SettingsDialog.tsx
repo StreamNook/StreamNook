@@ -46,7 +46,8 @@ const BackupSettings = lazy(() => import('./settings/BackupSettings'));
 const ProfileSettings = lazy(() => import('./settings/ProfileSettings'));
 const SettingsSearchResults = lazy(() => import('./settings/SettingsSearchResults'));
 import type { SettingsIndexEntry } from './settings/searchIndex';
-import { findSettingTarget, flashSettingRow } from './settings/settingsNavigation';
+import { findSettingTarget, flashSettingRow, revealHiddenTarget } from './settings/settingsNavigation';
+import { useSettingsWide } from './settings/settingsWide';
 import { DISCORD_EDITOR_SECTION, requestDiscordEditor } from './settings/discord/discordEditorRequest';
 import { features } from '../features';
 import { Tooltip } from './ui/Tooltip';
@@ -134,6 +135,11 @@ const SettingsDialog = () => {
   // layout that fills the entire app via Interface › Settings Window, giving
   // long tabs more room and less scrolling.
   const compactWindow = settings.compact_settings_window !== false;
+  // Profile > Customize grows like the Overlay studio, so a wall of cosmetics
+  // gets room.
+  // The open tab asked for room (Profile > Customize, Chat with its live
+  // preview column); it then draws its own section rail beside the preview.
+  const tabWide = useSettingsWide();
 
   useEffect(() => {
     if (settingsInitialTab) {
@@ -154,6 +160,12 @@ const SettingsDialog = () => {
       // A search hit names a row: land on the row itself and flash it, since a
       // section can run to dozens of rows. A plain deep link names a section.
       const el = entry ? findSettingTarget(contentRef.current, entry) : document.getElementById(sectionId);
+      // In a section the overlay builder's tabs keep closed: open it, measure
+      // on the next frame.
+      if (el && revealHiddenTarget(el)) {
+        if (performance.now() - start < 2000) requestAnimationFrame(attempt);
+        return;
+      }
       if (el && contentRef.current) {
         if (entry) flashSettingRow(el);
         const containerTop = contentRef.current.getBoundingClientRect().top;
@@ -237,7 +249,7 @@ const SettingsDialog = () => {
                 // Opt-in full-page (Interface › Settings Window) fills the window
                 // edge to edge for every tab.
                 ? 'w-full h-full'
-                : activeTab === 'Overlay'
+                : activeTab === 'Overlay' || tabWide
                   // The Overlay builder is a design studio: fill nearly the whole
                   // window (so the live preview + all controls fit at once, no
                   // scrolling) with only a thin uniform margin. NO max cap — it
@@ -590,7 +602,9 @@ const SettingsDialog = () => {
                 {/* Section rail: sticky beside the panel, spring indicator
                     follows the section being read (settings/SectionNav). */}
                 {/* The overlay builder draws its own rail beside its controls. */}
-                <SectionNav containerRef={contentRef} tabKey={activeTab} hidden={searching || activeTab === 'Overlay'} />
+                {/* Profile > Customize draws its own beside its chat preview. Chat
+                    keeps this one: its sections run longer than the column has room. */}
+                <SectionNav containerRef={contentRef} tabKey={activeTab} hidden={searching || activeTab === 'Overlay' || (activeTab === 'Profile' && tabWide)} />
                </div>
               </div>
             </section>

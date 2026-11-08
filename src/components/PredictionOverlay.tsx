@@ -27,6 +27,11 @@ interface PredictionOverlayProps {
   channelLogin?: string;
   /** Its slot in the top-of-chat stack, when it sits in one. */
   stack?: StackCardControl;
+  /** Settings' chat preview: draw this card (Rust's sample) and follow no
+   *  channel, ask nothing and place nothing. */
+  previewView?: PredictionView;
+  /** Rust's answer for the preview's bet, in place of asking about a channel. */
+  previewBet?: BetView;
 }
 
 /** How long to wait after the last side or amount change before asking Rust. */
@@ -47,15 +52,16 @@ const RESULT_STYLES: Record<ResultView['tone'], string> = {
   ended: 'bg-transparent border-accent-on-surface/60 text-accent-on-surface',
 };
 
-const PredictionOverlay = ({ channelId, channelLogin, stack }: PredictionOverlayProps) => {
+const PredictionOverlay = ({ channelId, channelLogin, stack, previewView, previewBet }: PredictionOverlayProps) => {
   const { addToast, currentStream } = useAppStore();
-  const currentChannelId = channelId || currentStream?.user_id;
-  const currentChannelLogin = channelLogin || currentStream?.user_login;
+  // A preview follows no channel, so nothing below reaches Twitch.
+  const currentChannelId = previewView ? undefined : channelId || currentStream?.user_id;
+  const currentChannelLogin = previewView ? undefined : channelLogin || currentStream?.user_login;
 
   // Rust's card, tagged with the channel it belongs to so a channel switch
   // shows nothing until the new channel's card arrives.
   const [card, setCard] = useState<{ channelId: string; view: PredictionView | null } | null>(null);
-  const view = card && card.channelId === currentChannelId ? card.view : null;
+  const view = previewView ?? (card && card.channelId === currentChannelId ? card.view : null);
   const [expandedHere, setExpandedHere] = useState(true);
   const [selected, setSelected] = useState<string | null>(null);
   const [amountInput, setAmountInput] = useState('10');
@@ -121,7 +127,7 @@ const PredictionOverlay = ({ channelId, channelLogin, stack }: PredictionOverlay
   const side = view?.picked ?? selected;
   const canPredict = view?.can_predict ?? false;
   const betKey = predictionId && side ? `${predictionId}:${side}` : null;
-  const bet = canPredict && betAnswer && betAnswer.key === betKey ? betAnswer.bet : null;
+  const bet = previewBet ?? (canPredict && betAnswer && betAnswer.key === betKey ? betAnswer.bet : null);
   // The confirm only makes sense while predicting is still offered.
   const showConfirm = confirming && canPredict && bet !== null;
   const failureKey = `${betKey ?? ''}|${amountInput}`;

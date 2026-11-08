@@ -37,7 +37,7 @@ import { BlendSourcesButton } from './chat/BlendSourcesButton';
 import { historyKey as chatterHistoryKey } from '../utils/chatterIdentity';
 import { streamProvider } from '../utils/streamProvider';
 import type { ProviderId } from '../types/providers';
-import { CaretDown, ChatCircle, Chats, Funnel, Lightning, PaperPlaneTilt, PushPin, ShieldCheck, Timer, UsersThree, X } from 'phosphor-react';
+import { CaretDown, ChatCircle, Chats, Funnel, Lightning, PaperPlaneTilt, PushPin, ShieldCheck, Timer, UsersThree } from 'phosphor-react';
 import { COMPOSER_STRIP, COMPOSER_STRIP_STYLE } from './ui/glazeButtons';
 import { ChatDockPanel, ChatDockSwitcher, ChatDockTabs } from './chat/ChatDock';
 import { useDockSwitcherFloor } from '../hooks/useChatDock';
@@ -57,11 +57,8 @@ import { usePlatformAccountStore } from '../stores/platformAccountStore';
 import { EmoteText, useTextEmotes } from '../utils/emoteText';
 import { isImeComposing } from '../utils/imeComposing';
 import { syncComposerPlaceholder, trackComposerWidth } from '../utils/composerNarrow';
-import { LinkPreviewCard } from './chat/LinkPreviewCard';
 import { usePausedNewCount } from '../hooks/usePausedNewCount';
-import { PinnedChatter } from './chat/PinnedChatter';
-import { SevenTvAvatar } from './SevenTvAvatar';
-import { previewUrlsFromLinks, type RowLink } from '../services/linkPreviewService';
+import { PinnedBar, type PinnedMessage } from './chat/PinnedBar';
 import UserProfileCard from './UserProfileCard';
 import ErrorBoundary from './ErrorBoundary';
 import PredictionOverlay from './PredictionOverlay';
@@ -93,7 +90,6 @@ import { prefetchChannelBadges } from '../services/badgeService';
 import { initializeBadgeImageCache } from '../services/badgeImageCacheService';
 import { parseMessage } from '../services/twitchChat';
 import { loadFavoriteEmotes } from '../services/favoriteEmoteService';
-import { getAppleEmojiUrl } from '../services/emojiService';
 import { useChatUserStore, type ChatUser } from '../stores/chatUserStore';
 import { forceRefreshCosmetics } from '../services/cosmeticsCache';
 import MentionAutocomplete from './MentionAutocomplete';
@@ -130,10 +126,17 @@ import { applySlashOutcome, handleSlashCommand, runSlashCommand } from '../utils
 import ChatBurstStatus from './chat/ChatBurstStatus';
 import { getRemindFlowSuggestions, tokenizeRemindOverlay } from '../utils/reminderEngine';
 
-import { BackendChatMessage, type MessageSegment } from '../services/twitchChat';
+import { BackendChatMessage } from '../services/twitchChat';
 import { registerChatModController, getChatModController, type ChatModController } from '../keybindings';
 import { Tooltip } from './ui/Tooltip';
 import { RoomModeIndicator } from './chat/RoomModeIndicator';
+import {
+  composerInputLook,
+  composerLook,
+  composerPaddingLeft as composerPaddingLeftFor,
+  sendButtonClass,
+} from './chat/composerParts';
+import { EmoteSmileyButton } from './chat/EmoteSmileyButton';
 
 interface ParsedMessage {
   username: string;
@@ -251,8 +254,6 @@ const USER_HISTORY_MAX_USERS = 300;
  *  every render of the widget. */
 const NO_BLEND_SOURCES: BlendCompanion[] = [];
 
-// Lifts an unpainted pinned name off the glass; a 7TV paint brings its own shadow.
-const PIN_NAME_SHADOW = { textShadow: '0 1px 2px rgba(0,0,0,0.8)' } as const;
 
 interface ChatMessagesPanelProps {
   /** Live slice key (bare Twitch login / composite provider key); ignored when
@@ -1772,26 +1773,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   const [customPointsName, setCustomPointsName] = useState<string | null>(null);
   const [customPointsIconUrl, setCustomPointsIconUrl] = useState<string | null>(null);
 
-  // Pinned chat state
-  interface PinnedMessage {
-    id: string;
-    message_id: string;
-    type: string;
-    message_text: string;
-    sender_id: string;
-    sender_name: string;
-    sender_login?: string;
-    sender_shown_name?: string;
-    sender_color: string;
-    sender_avatar: string;
-    sender_badges: Array<{ set_id: string; version: string }>;
-    pinned_by: string;
-    pinned_by_id: string;
-    pinned_by_avatar: string;
-    started_at: string;
-    /** The text as text and link segments, split in Rust (`text_spans::pin_segments`). */
-    segments?: MessageSegment[];
-  }
+  // Pinned chat state (the pin shape lives with chat/PinnedBar).
   const [pinnedMessages, setPinnedMessages] = useState<PinnedMessage[]>([]);
   // The scrollbar's pinned marks find their rows by these ids.
   const pinnedIds = useMemo(
@@ -1873,53 +1855,24 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   // on the ROOMSTATE frame, for every platform that reports them. One place
   // shows them, the viewer's pick: a chip at the field's end that stays while
   // you type (the default), or the prompt in place of "Send a message".
-  const roomModes =
-    (settings.chat_input?.show_room_modes ?? true) && roomState?.modes && roomState.modes.modes.length > 0
-      ? roomState.modes
-      : null;
-  const roomModesAsPrompt = settings.chat_input?.room_modes_style !== 'chip';
-  const roomModePrompt = roomModesAsPrompt ? (roomModes?.prompt ?? null) : null;
-  const roomModePromptShort = roomModesAsPrompt ? (roomModes?.prompt_short ?? null) : null;
-  const chatPlaceholder = !canSendHere
-    ? provider === 'kick'
-      ? 'Connect your Kick account to send'
-      : provider === 'youtube'
-      ? 'Connect your YouTube account to send'
-      : 'Connect your TikTok account to send'
-    : twitchSignInOwed
-    ? 'Sign in again to chat'
-    : isWatchStreakMode
-    ? 'Add a message to your watch streak'
-    : isResubMode
-    ? 'Add a message to your resub'
-    : roomModePrompt ?? (isSubOnly && !canBypassSubOnly ? "Subscriber-Only Mode" : "Send a message");
-  // The same prompt in a word or two for a narrow composer row, where the
-  // full one is cut mid-word: Chromium draws no ellipsis on a textarea
-  // placeholder. utils/composerNarrow.ts swaps between the two.
-  const chatPlaceholderNarrow = !canSendHere
-    ? 'Sign in'
-    : twitchSignInOwed
-    ? 'Sign in'
-    : isWatchStreakMode || isResubMode
-    ? 'Message'
-    : roomModePromptShort ?? (isSubOnly && !canBypassSubOnly ? 'Sub-only' : 'Message');
-
-  // Optional composer chrome. The placeholder keeps its text whenever it is
-  // saying something the user can act on (connect your account,
-  // sub-only, a room mode), so hiding it only ever drops the idle "Send a
-  // message" prompt.
-  const chatInputPrefs = settings.chat_input;
-  const showEmoteButton = !chatInputPrefs?.hide_emote_button;
-  const showPointsBalance = !chatInputPrefs?.hide_points_balance;
-  const pointsBalanceInline = !!chatInputPrefs?.show_points_balance_inline;
-  const walletGains = chatInputPrefs?.wallet_gains === 'chest' ? 'chest' : 'all';
+  // Your Chat Input settings applied to this composer (chat/composerParts,
+  // shared with Settings > Chat's preview): the prompt, the room modes as a
+  // chip or the prompt, the emote button and the wallet's balance modes.
+  const look = composerLook(settings.chat_input, {
+    canSend: canSendHere,
+    provider,
+    signInOwed: twitchSignInOwed,
+    watchStreak: isWatchStreakMode,
+    resub: isResubMode,
+    subOnlyBlocked: isSubOnly && !canBypassSubOnly,
+    inputDisabled: isInputDisabled,
+    roomModes: roomState?.modes ?? null,
+  });
+  const { showEmoteButton, showPointsBalance, pointsBalanceInline, walletGains } = look;
   // The box's text cheers (Rust's live check): Send becomes the cheer.
   const composerCheer = useCheerDraft(isTwitch ? (channelOverride?.user_login ?? currentStream?.user_login) : null, messageInput);
-  const visiblePlaceholder =
-    chatInputPrefs?.hide_placeholder && !isInputDisabled && !isWatchStreakMode && !roomModePrompt
-      ? ''
-      : chatPlaceholder;
-  const visiblePlaceholderNarrow = visiblePlaceholder ? chatPlaceholderNarrow : '';
+  const visiblePlaceholder = look.placeholder;
+  const visiblePlaceholderNarrow = look.placeholderNarrow;
   // A render that changes the prompt writes the full one onto the field; put
   // the short one back while the row is narrow (the row's width observer
   // covers resizes).
@@ -1930,7 +1883,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   // 36px clears the inset emote button; 12px is the plain input inset once it's
   // hidden. The /remind highlight backdrop reuses this so its text stays
   // pixel-aligned with the real textarea underneath it.
-  const composerPaddingLeft = `${showSendAsPicker ? 74 : showEmoteButton ? 36 : 12}px`;
+  const composerPaddingLeft = composerPaddingLeftFor(showSendAsPicker, showEmoteButton);
 
   // Dry run of the /nuke being typed, so you see the blast radius before you
   // commit to it. Deliberately a count in ChatWidget's own state rendered above
@@ -5262,270 +5215,35 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
           </div>
         )}
 
-        {/* Free Floating Pinned Message Modal */}
-        {pinnedMessages.length > 0 && (
-          <div className={`absolute left-3 right-3 z-[15] pointer-events-none flex flex-col items-center ${activeView !== 'chat' ? 'hidden' : ''}`}
-            style={{
-              top: pinnedTop,
-            }}>
-            <AnimatePresence>
-              {isPinnedExpanded && (
-                <motion.div
-                  initial={{ opacity: 0, y: -10, scale: 0.96, height: 0 }}
-                  animate={{ opacity: 1, y: 0, scale: 1, height: 'auto' }}
-                  exit={{ opacity: 0, y: -10, scale: 0.96, height: 0 }}
-                  transition={{ duration: 0.3, ease: [0.175, 0.885, 0.32, 1.2] }}
-                  // The emote, bits and mod menus' glass, blur and corners.
-                  className="glass-flyout rounded-xl !p-0 w-full max-w-sm mt-2 pointer-events-auto overflow-hidden origin-top cursor-pointer"
-                  // Clicking the open pin folds it back to the bar, the same
-                  // gesture that opened it. Interactive children (unpin, links,
-                  // preview cards) keep their own click, and a drag that selected
-                  // text is a copy, not a collapse.
-                  role="button"
-                  tabIndex={0}
-                  aria-expanded={true}
-                  aria-label="Collapse pinned message"
-                  onClick={(e) => {
-                    const target = e.target as HTMLElement;
-                    if (target.closest('button, a, input, textarea, select, video, [role="button"]:not([data-pin-card]), [data-no-pin-toggle]')) return;
-                    if ((window.getSelection()?.toString() ?? '').length > 0) return;
-                    setIsPinnedExpanded(false);
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.target !== e.currentTarget) return;
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      setIsPinnedExpanded(false);
-                    }
-                  }}
-                  data-pin-card=""
-                >
-                {pinnedMessages.map((pin, i) => {
-                  // Same link-preview pipeline the main chat uses, applied to the
-                  // pinned message.
-                  const previewsOn = settings.chat_design?.link_previews ?? true;
-                  const keepLink = settings.chat_design?.link_preview_keep_link ?? false;
-                  const shortenLinks = settings.chat_design?.shorten_links ?? true;
-                  // Rust split the text into text and links, as it does a chat row.
-                  const pinParts: MessageSegment[] = pin.segments ?? [{ type: 'text', content: pin.message_text }];
-                  const pinLinks: RowLink[] = [];
-                  for (const seg of pinParts) if (seg.type === 'link') pinLinks.push(seg);
-                  const previewItems = previewsOn
-                    ? previewUrlsFromLinks(pinLinks, 2, settings.chat_design?.link_preview_trusted_domains)
-                    : [];
-                  // In "clean" mode the inline link is suppressed for any trusted
-                  // (auto-carded) URL so the card is the sole representation,
-                  // matching chat. Untrusted links keep their inline link.
-                  const suppressed = !keepLink
-                    ? new Set(previewItems.filter((it) => it.trusted).map((it) => it.url))
-                    : null;
-                  const hasVisibleBody = pinParts.some((seg) =>
-                    seg.type === 'link' ? !suppressed?.has(seg.url) : seg.content.trim().length > 0,
-                  );
-                  return (
-                  <div
-                    key={pin.id}
-                    className={`relative p-3.5 ${i > 0 ? 'border-t border-white/[0.05]' : ''}`}
-                  >
-                    {/* Unpin (mod-only): clears the current mod pin from the
-                        pinned message itself. */}
-                    {isModerator && currentStream?.user_id && (
-                      <Tooltip content="Unpin message" side="left">
-                        <button
-                          type="button"
-                          onClick={async () => {
-                            try {
-                              await invoke('unpin_chat_message', { broadcasterId: currentStream.user_id, messageId: pin.message_id });
-                              usePinStore.getState().requestRefresh();
-                            } catch (err) {
-                              Logger.error('[ChatWidget] Failed to unpin message:', err);
-                            }
-                          }}
-                          className="absolute top-2 right-2 z-10 p-1.5 rounded-lg text-textSecondary/70 hover:text-red-400 hover:bg-red-500/15 transition-colors pointer-events-auto"
-                          aria-label="Unpin message"
-                        >
-                          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="2" x2="22" y1="2" y2="22"/><line x1="12" x2="12" y1="17" y2="22"/><path d="M9 9v1.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17h12"/><path d="M15 9.34V6h1a2 2 0 0 0 0-4H7.89"/></svg>
-                        </button>
-                      </Tooltip>
-                    )}
-                    {/* Sender row: avatar + badges + name + message */}
-                    <div className="flex items-start gap-3">
-                      {/* Sender avatar */}
-                      {pin.sender_avatar ? (
-                        <SevenTvAvatar
-                          cosmeticsId={provider === 'twitch' ? pin.sender_id : `${provider}:${pin.sender_id}`}
-                          src={pin.sender_avatar}
-                          px={36}
-                          motion="animate"
-                          alt={pin.sender_name}
-                          className="w-9 h-9 rounded-full flex-shrink-0 object-cover border border-white/5"
-                        />
-                      ) : (
-                        <div
-                          className="w-9 h-9 rounded-full flex-shrink-0 flex items-center justify-center text-[13px] font-bold text-white shadow-inner"
-                          style={{ backgroundColor: pin.sender_color }}
-                        >
-                          {pin.sender_name.charAt(0).toUpperCase()}
-                        </div>
-                      )}
-                      <div className="flex-1 min-w-0 pt-0.5">
-                        {/* Name + badges row */}
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          {/* Badges and name exactly as a chat row draws them:
-                              chat-order badges, 7TV, third-party, StreamNook,
-                              then the name in its paint. */}
-                          <PinnedChatter
-                            variant="card"
-                            provider={provider}
-                            userId={pin.sender_id}
-                            name={pin.sender_name}
-                            login={pin.sender_login}
-                            shownName={pin.sender_shown_name}
-                            color={pin.sender_color}
-                            badges={pin.sender_badges}
-                            channelId={currentStream?.user_id}
-                            onBadgeClick={handleBadgeClick}
-                            nameClassName="text-sm font-bold tracking-tight"
-                            plainNameStyle={PIN_NAME_SHADOW}
-                          />
-                        </div>
-                        {/* Message text with clickable links. Trusted carded
-                            links are suppressed in clean mode (the card is the
-                            link); the whole paragraph is skipped if nothing
-                            visible remains (e.g. a pin that's only a link). */}
-                        {hasVisibleBody && (
-                          <p className="text-[13.5px] text-textPrimary/95 mt-1.5 break-words font-medium" style={{ lineHeight: '1.5' }}>
-                            {pinParts.map((seg, index) =>
-                              seg.type === 'link' ? (
-                                suppressed?.has(seg.url) ? null : (
-                                  <a
-                                    key={index}
-                                    className="text-accent/90 hover:text-accent hover:underline pointer-events-auto cursor-pointer transition-colors"
-                                    onClick={() => {
-                                      import('@tauri-apps/plugin-shell').then(({ open }) => open(seg.url));
-                                    }}
-                                  >
-                                    {shortenLinks && seg.label ? seg.label : seg.content}
-                                  </a>
-                                )
-                              ) : (
-                                <span key={index}>
-                                  {renderPinTextWithEmotes(seg.content, `pin-${pin.id}-${index}`, 'h-6 max-w-[112px] -my-1')}
-                                </span>
-                              )
-                            )}
-                          </p>
-                        )}
-                        {/* Inline link preview cards. In clean mode the inline
-                            link above is suppressed and showChip lets a failed
-                            trusted preview fall back to a link chip so the link is
-                            never lost. Untrusted links render a click-to-load
-                            chip (with the always-trust shield). */}
-                        {previewItems.length > 0 && (
-                          <div className="mt-2 flex flex-col items-start gap-1">
-                            {previewItems.map((it) => (
-                              <LinkPreviewCard
-                                key={it.url}
-                                url={it.url}
-                                trusted={it.trusted}
-                                showChip={it.trusted && !keepLink}
-                              />
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                    {/* Pinned by footer — visually separated */}
-                    {pin.pinned_by && (
-                      <div className="flex items-center gap-2 mt-3 pt-2.5 border-t border-white/[0.04] ml-[48px]">
-                        <svg className="w-3 h-3 text-accent" fill="currentColor" viewBox="0 0 16 16">
-                          <path d="M4.146.146A.5.5 0 0 1 4.5 0h7a.5.5 0 0 1 .5.5c0 .68-.342 1.174-.646 1.479-.126.125-.25.224-.354.298v4.431l.078.048c.203.127.476.314.751.555C12.36 7.775 13 8.527 13 9.5a.5.5 0 0 1-.5.5h-4v4.5a.5.5 0 0 1-1 0V10h-4A.5.5 0 0 1 3 9.5c0-.973.64-1.725 1.17-2.189A5.921 5.921 0 0 1 5 6.708V2.277a2.77 2.77 0 0 1-.354-.298C4.342 1.674 4 1.179 4 .5a.5.5 0 0 1 .146-.354z"/>
-                        </svg>
-                        {pin.pinned_by_avatar && (
-                          <SevenTvAvatar
-                            cosmeticsId={provider === 'twitch' ? pin.pinned_by_id : `${provider}:${pin.pinned_by_id}`}
-                            src={pin.pinned_by_avatar}
-                            px={16}
-                            alt={pin.pinned_by}
-                            className="w-4 h-4 rounded-full object-cover border border-white/10"
-                          />
-                        )}
-                        <span className="text-[11px] text-textSecondary uppercase tracking-wide font-medium">
-                          Pinned by{' '}
-                          <span className="inline-flex items-center gap-1 align-middle ml-0.5">
-                            <PinnedChatter
-                              variant="line"
-                              provider={provider}
-                              userId={pin.pinned_by_id}
-                              name={pin.pinned_by}
-                              nameClassName="font-bold text-textPrimary/80"
-                            />
-                          </span>
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                  );
-                })}
-                </motion.div>
-              )}
-            </AnimatePresence>
-            {/* Collapsed state: a thin one-line bar (pin + sender + truncated
-                text) instead of hiding the pin entirely. Click to expand.
-                Opt-out via chat_design.pinned_collapsed_style === 'hidden'. */}
-            <AnimatePresence>
-              {!isPinnedExpanded && (settings.chat_design?.pinned_collapsed_style ?? 'bar') !== 'hidden' && (() => {
-                const pin = pinnedMessages[0];
-                return (
-                  <motion.button
-                    type="button"
-                    initial={{ opacity: 0, y: -8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -8 }}
-                    transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-                    onClick={() => {
-                      setIsPinnedExpanded(true);
-                      seenPinIdRef.current = pin.id;
-                    }}
-                    className="glass-flyout rounded-xl group w-full max-w-sm mt-2 pointer-events-auto overflow-hidden flex items-center gap-2.5 !px-3.5 !py-2.5 text-left transition-colors"
-                  >
-                    <svg className="w-3.5 h-3.5 text-accent flex-shrink-0" fill="currentColor" viewBox="0 0 16 16">
-                      <path d="M4.146.146A.5.5 0 0 1 4.5 0h7a.5.5 0 0 1 .5.5c0 .68-.342 1.174-.646 1.479-.126.125-.25.224-.354.298v4.431l.078.048c.203.127.476.314.751.555C12.36 7.775 13 8.527 13 9.5a.5.5 0 0 1-.5.5h-4v4.5a.5.5 0 0 1-1 0V10h-4A.5.5 0 0 1 3 9.5c0-.973.64-1.725 1.17-2.189A5.921 5.921 0 0 1 5 6.708V2.277a2.77 2.77 0 0 1-.354-.298C4.342 1.674 4 1.179 4 .5a.5.5 0 0 1 .146-.354z"/>
-                    </svg>
-                    {/* Sender: the name in its paint and at most the role
-                        badge, so the name and preview keep the line. The cap
-                        only stops a very long name from eating the preview. */}
-                    <span className="text-[13px] flex items-center gap-1.5 min-w-0 max-w-[50%] shrink">
-                      <PinnedChatter
-                        variant="bar"
-                        provider={provider}
-                        userId={pin.sender_id}
-                        name={pin.sender_name}
-                        login={pin.sender_login}
-                        shownName={pin.sender_shown_name}
-                        color={pin.sender_color}
-                        badges={pin.sender_badges}
-                        channelId={currentStream?.user_id}
-                        nameClassName="font-bold min-w-0 truncate"
-                        plainNameStyle={PIN_NAME_SHADOW}
-                      />
-                    </span>
-                    <span className="text-[13px] text-textPrimary/85 truncate min-w-0 flex-1">
-                      {renderPinTextWithEmotes(pin.message_text, `pinbar-${pin.id}`, 'h-5 max-w-[80px] -my-0.5')}
-                    </span>
-                    {pinnedMessages.length > 1 && (
-                      <span className="text-[11px] font-semibold text-textSecondary flex-shrink-0 tabular-nums">
-                        +{pinnedMessages.length - 1}
-                      </span>
-                    )}
-                    {/* Expand chevron */}
-                    <CaretDown size={12} weight="bold" aria-hidden className="text-textSecondary/60 group-hover:text-textSecondary flex-shrink-0 transition-colors" />
-                  </motion.button>
-                );
-              })()}
-            </AnimatePresence>
-          </div>
-        )}
+        {/* Free Floating Pinned Message Modal (chat/PinnedBar, which Settings >
+            Chat's preview draws too). */}
+        <PinnedBar
+          pins={pinnedMessages}
+          expanded={isPinnedExpanded}
+          onExpand={(pinId) => {
+            setIsPinnedExpanded(true);
+            seenPinIdRef.current = pinId;
+          }}
+          onCollapse={() => setIsPinnedExpanded(false)}
+          provider={provider}
+          channelId={currentStream?.user_id}
+          top={pinnedTop}
+          hidden={activeView !== 'chat'}
+          onUnpin={
+            isModerator && currentStream?.user_id
+              ? async (messageId) => {
+                  try {
+                    await invoke('unpin_chat_message', { broadcasterId: currentStream.user_id, messageId });
+                    usePinStore.getState().requestRefresh();
+                  } catch (err) {
+                    Logger.error('[ChatWidget] Failed to unpin message:', err);
+                  }
+                }
+              : undefined
+          }
+          onBadgeClick={handleBadgeClick}
+          renderText={renderPinTextWithEmotes}
+        />
 
         {/* Staging area removed - using direct rendering with ResizeObserver */}
 
@@ -5969,9 +5687,12 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                 <div className="sn-composer-field relative flex-1 min-w-0 flex items-center">
                   {/* Emoji button — inset left inside the input */}
                   {showEmoteButton && (
-                  <Tooltip content={showEmotePicker ? 'Close' : isTwitch ? 'Emotes, GIFs and commands' : 'Emotes and commands'} side="top">
-                  <button
-                    ref={emoteButtonRef}
+                  <EmoteSmileyButton
+                    open={showEmotePicker}
+                    smiley={smiley.currentSmiley}
+                    transitioning={smiley.isSmileyTransitioning}
+                    label={isTwitch ? 'Emotes, GIFs and commands' : 'Emotes and commands'}
+                    buttonRef={emoteButtonRef}
                     onClick={() => {
                       // Twitch only. A non-Twitch pane legitimately has an empty
                       // `twitch` slot, so without this gate every picker open on
@@ -5987,24 +5708,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                       setShowEmotePicker(!showEmotePicker);
                     }}
                     onMouseLeave={smiley.cycleEmoteSmiley}
-                    className={`group absolute left-1 top-1/2 -translate-y-1/2 z-10 flex items-center justify-center w-7 h-7 text-textSecondary hover:text-textPrimary transition-colors duration-200`}
-                  >
-                    {showEmotePicker ? (
-                      <X size={16} weight="bold" aria-hidden className="transition-all duration-200 text-accent group-hover:drop-shadow-[0_0_5px_color-mix(in_srgb,var(--color-accent-neon)_80%,transparent)]" />
-                    ) : (
-                      <img
-                        src={getAppleEmojiUrl(smiley.currentSmiley)}
-                        alt={smiley.currentSmiley}
-                        draggable={false}
-                        className={`w-4 h-4 object-contain transition-all ease-in-out group-hover:drop-shadow-[0_0_5px_color-mix(in_srgb,var(--color-accent-neon)_80%,transparent)] ${
-                          smiley.isSmileyTransitioning
-                            ? 'opacity-0 scale-50 duration-100'
-                            : 'opacity-100 scale-100 duration-150'
-                        }`}
-                      />
-                    )}
-                  </button>
-                  </Tooltip>
+                  />
                   )}
                   {/* Send-as account picker, just right of the emote button */}
                   {showSendAsPicker && (
@@ -6117,51 +5821,13 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                     data-placeholder-wide={visiblePlaceholder}
                     data-placeholder-narrow={visiblePlaceholderNarrow}
                     // glass-exempt: the input is clear on purpose; the highlight layer under it carries the surface.
-                    className={`sn-composer-input relative w-full text-sm placeholder-textSecondary resize-none overflow-hidden scrollbar-thin leading-[1.4] self-center transition-all duration-300 ${remindOverlayActive ? '' : 'glass-input'} ${
-                      isWatchStreakMode 
-                        ? 'ring-2 ring-amber-500/50 bg-amber-500/5 shadow-[0_0_15px_color-mix(in_srgb,var(--color-warning)_15%,transparent)] placeholder-amber-500/60 text-textPrimary'
-                        : (commandState.isValid && !remindOverlayActive)
-                        ? 'font-bold tracking-wide'
-                        : ''
-                    }`}
-                    style={{ 
-                      minHeight: '36px',
-                      maxHeight: '120px',
-                      paddingTop: '8px',
-                      paddingBottom: '8px',
+                    {...composerInputLook({
+                      remindOverlay: remindOverlayActive,
+                      watchStreak: isWatchStreakMode,
+                      commandValid: commandState.isValid,
+                      isCommand: commandState.isCommand,
                       paddingLeft: composerPaddingLeft,
-                      paddingRight: 'var(--sn-room-pad, 12px)',
-                      ...(remindOverlayActive ? {
-                        // The backdrop above renders the surface + chipped text;
-                        // the textarea goes transparent and only carries the caret
-                        // + editing. Keep a 1px transparent border so its box model
-                        // matches the backdrop's bordered box and the text aligns.
-                        color: 'transparent',
-                        caretColor: 'var(--color-text-primary)',
-                        background: 'transparent',
-                        border: '1px solid transparent',
-                        boxShadow: 'none',
-                        backdropFilter: 'none',
-                        WebkitBackdropFilter: 'none',
-                        // Match the backdrop's gap so the caret stays aligned with
-                        // the boxed text above it.
-                        wordSpacing: '0.4em',
-                        // No fade: go transparent instantly so the text doesn't
-                        // ghost over the chip backdrop during the transition.
-                        transition: 'none',
-                      } : commandState.isValid && !isWatchStreakMode ? {
-                        backgroundColor: 'rgba(200, 224, 232, 0.1)',
-                        borderColor: 'var(--color-accent)',
-                        boxShadow: '0 0 16px color-mix(in srgb, var(--color-accent-neon) 25%, transparent), inset 4px 4px 10px -3px rgba(0, 0, 0, 0.6)',
-                        color: 'var(--color-accent)'
-                      } : commandState.isCommand && !isWatchStreakMode ? {
-                        backgroundColor: 'rgba(255, 255, 255, 0.04)',
-                        borderColor: 'rgba(255, 255, 255, 0.2)',
-                        color: 'var(--color-text-primary)'
-                      } : {
-                        color: 'var(--color-text-primary)'
-                      })
-                    }}
+                    })}
                     rows={1}
                     disabled={isInputDisabled}
                     onBlur={() => {
@@ -6175,7 +5841,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                     }}
                   />
                   {/* The room's chat modes as one chip at the field's right edge. */}
-                  {roomModes && !roomModesAsPrompt && <RoomModeIndicator view={roomModes} />}
+                  {look.roomModesChip && <RoomModeIndicator view={look.roomModesChip} />}
                   {/* Length label, bottom-right of the field, clear of the chip. */}
                   {messageInput.length > 0 && (
                     <span
@@ -6219,11 +5885,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                   onClick={() => handleSendMessage()}
                   aria-label={composerCheer ? `Cheer ${composerCheer.total.toLocaleString()} bits` : undefined}
                   disabled={(!messageInput.trim() && !isWatchStreakMode && !isResubMode) || isInputDisabled || (!!composerCheer && composerCheer.problems.length > 0)} 
-                  className={`sn-composer-tool flex-shrink-0 flex items-center justify-center self-center w-9 h-9 text-white rounded transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed ${
-                    isWatchStreakMode 
-                      ? 'bg-amber-500 hover:bg-amber-400 shadow-[0_0_12px_color-mix(in_srgb,var(--color-warning)_30%,transparent)]'
-                      : 'glass-button'
-                  }`}
+                  className={sendButtonClass(isWatchStreakMode)}
                 >
                   {/* While a slow-mode wait runs, the seconds left stand in for
                       the arrow, in the same 36px button. fitSeconds keeps it to

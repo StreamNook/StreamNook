@@ -21,11 +21,15 @@ interface PollOverlayProps {
   channelLogin?: string;
   /** Its slot in the top-of-chat stack, when it sits in one. */
   stack?: StackCardControl;
+  /** Settings' chat preview: draw this card (Rust's sample) and follow no
+   *  channel and vote nowhere. */
+  previewView?: PollView;
 }
 
-const PollOverlay = ({ channelId, stack }: PollOverlayProps) => {
+const PollOverlay = ({ channelId, stack, previewView }: PollOverlayProps) => {
   const { addToast, currentStream } = useAppStore();
-  const currentChannelId = channelId || currentStream?.user_id;
+  // A preview follows no channel, so nothing below reaches Twitch.
+  const currentChannelId = previewView ? undefined : channelId || currentStream?.user_id;
 
   // Mirrors the pinned banner's `pinned_start_collapsed`: some people want polls
   // out of the way by default rather than eating the top of chat.
@@ -36,7 +40,7 @@ const PollOverlay = ({ channelId, stack }: PollOverlayProps) => {
   // Rust's card, tagged with the channel it belongs to so a channel switch
   // shows nothing until the new channel's card arrives.
   const [card, setCard] = useState<{ channelId: string; view: PollView | null } | null>(null);
-  const view = card && card.channelId === currentChannelId ? card.view : null;
+  const view = previewView ?? (card && card.channelId === currentChannelId ? card.view : null);
   const [expandedHere, setExpandedHere] = useState(!pollsStartCollapsed);
   // A tap marks its choice at once; Rust's next push confirms it, and a
   // refusal takes the mark back.

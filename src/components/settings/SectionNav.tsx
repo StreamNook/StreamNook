@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import { motion } from 'framer-motion';
 import { Tooltip } from '../ui/Tooltip';
+import { setSectionInView } from './sectionInView';
 
 interface SectionNavProps {
   containerRef: RefObject<HTMLDivElement | null>;
@@ -27,6 +28,11 @@ interface SectionNavProps {
   minSections?: number;
   /** Where the rail sticks, as a CSS length. Defaults to the pane's top inset. */
   stickyTop?: string;
+  /** Tabs instead of a jump list: the host shows only the section picked here
+   *  (streamnook.app's overlay page), so a click switches and nothing spies on
+   *  the scroll. */
+  selectedId?: string;
+  onSelect?: (id: string) => void;
 }
 
 interface Entry {
@@ -45,9 +51,17 @@ function scrollerOf(el: HTMLElement): HTMLElement | null {
   return null;
 }
 
-export default function SectionNav({ containerRef, tabKey, hidden = false, minSections = 4, stickyTop }: SectionNavProps) {
+export default function SectionNav({ containerRef, tabKey, hidden = false, minSections = 4, stickyTop, selectedId, onSelect }: SectionNavProps) {
   const [entries, setEntries] = useState<Entry[]>([]);
-  const [activeId, setActiveId] = useState<string | null>(null);
+  const [spiedId, setActiveId] = useState<string | null>(null);
+  const tabs = onSelect != null;
+  const activeId = tabs ? (selectedId ?? entries[0]?.id ?? null) : spiedId;
+  // Tell a preview beside the settings which section is being read.
+  const activeLabel = entries.find((e) => e.id === activeId)?.label ?? null;
+  useEffect(() => {
+    if (hidden) return;
+    setSectionInView(activeLabel);
+  }, [activeLabel, hidden]);
   const rafRef = useRef<number | null>(null);
   // While a click-driven scroll is in flight the spy would flicker through
   // every section on the way; pin the target until the scroll settles.
@@ -93,7 +107,7 @@ export default function SectionNav({ containerRef, tabKey, hidden = false, minSe
 
   useEffect(() => {
     const root = containerRef.current;
-    if (!root || entries.length === 0) return;
+    if (!root || entries.length === 0 || tabs) return;
     const scroller = scrollerOf(root);
     const target: HTMLElement | Window = scroller ?? window;
     const measure = () => {
@@ -128,13 +142,26 @@ export default function SectionNav({ containerRef, tabKey, hidden = false, minSe
       target.removeEventListener('scroll', onScroll);
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
     };
-  }, [containerRef, entries, tabKey, readingLine]);
+  }, [containerRef, entries, tabKey, readingLine, tabs]);
 
   const jump = useCallback((id: string) => {
     const root = containerRef.current;
-    const el = document.getElementById(id);
-    if (!root || !el) return;
+    if (!root) return;
     const scroller = scrollerOf(root);
+    if (onSelect) {
+      onSelect(id);
+      // Scrolled down a long section, the next one would open somewhere above
+      // the window: bring its top back under the pinned header, at once, since
+      // the content was swapped rather than travelled through.
+      requestAnimationFrame(() => {
+        const top = document.getElementById(id)?.getBoundingClientRect().top;
+        const line = readingLine(scroller) + 12;
+        if (top != null && top < line) (scroller ?? window).scrollBy({ top: top - line });
+      });
+      return;
+    }
+    const el = document.getElementById(id);
+    if (!el) return;
     // Pin for the length of the smooth scroll so the spy does not walk
     // through every section on the way.
     const now = performance.now();
@@ -144,14 +171,16 @@ export default function SectionNav({ containerRef, tabKey, hidden = false, minSe
       top: el.getBoundingClientRect().top - readingLine(scroller) - 12,
       behavior: 'smooth',
     });
-  }, [containerRef, readingLine]);
+  }, [containerRef, readingLine, onSelect]);
 
   if (hidden || entries.length < minSections) return null;
 
   return (
     <nav
-      aria-label="Sections on this page"
-      className="sn-section-rail sticky top-6 hidden w-[168px] flex-shrink-0 self-start min-[1120px]:block"
+      aria-label={tabs ? 'Settings sections' : 'Sections on this page'}
+      // As tabs the host decides when the rail fits; as a jump list it shows
+      // from 1120 px.
+      className={`sn-section-rail sticky top-6 w-[168px] flex-shrink-0 self-start ${tabs ? 'block' : 'hidden min-[1120px]:block'}`}
       style={stickyTop ? { top: stickyTop } : undefined}
     >
       <div className="relative pl-4">
@@ -171,12 +200,17 @@ export default function SectionNav({ containerRef, tabKey, hidden = false, minSe
                     transition={{ type: 'spring', stiffness: 460, damping: 36, mass: 0.6 }}
                   />
                 )}
-                <Tooltip content={e.label}>
+                {/* Tabs have room for the whole name, so it never needs repeating. */}
+                <Tooltip content={e.label} disabled={tabs}>
                   <button
                     type="button"
                     onClick={() => jump(e.id)}
-                    aria-current={active ? 'location' : undefined}
-                    className={`block w-full truncate py-[5px] text-left text-[11.5px] leading-snug transition-[color,transform] duration-200 ${
+                    aria-current={active ? (tabs ? 'page' : 'location') : undefined}
+                    // As tabs it is the page's main navigation, so a step
+                    // larger than the margin notes of a jump list.
+                    className={`block w-full truncate text-left leading-snug transition-[color,transform] duration-200 ${
+                      tabs ? 'py-[7px] text-[13px]' : 'py-[5px] text-[11.5px]'
+                    } ${
                       active ? 'translate-x-0.5 font-medium text-textPrimary' : 'text-textMuted hover:text-textSecondary'
                     }`}
                   >

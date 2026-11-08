@@ -31,7 +31,7 @@ extern crate sn_tauri_headless as tauri;
 uniffi::setup_scaffolding!();
 
 use commands::chat_query::{
-    get_chat_history_stats, get_chat_rule_errors, search_chat, validate_chat_filter,
+    get_chat_history_stats, get_chat_rule_errors, search_chat, preview_chat_rows, validate_chat_filter,
     validate_chat_phrase,
 };
 use commands::moderation_tools::{
@@ -423,6 +423,7 @@ fn load_settings_from_file() -> Result<Settings, Box<dyn std::error::Error>> {
     settings.enable_low_latency_engine_once();
     settings.scope_blend_header_marks_once();
     settings.move_room_modes_to_prompt_once();
+    settings.move_badge_fold_to_show_all_once();
     settings.adopt_first_run_look_once();
     settings.retire_mod_tiles();
     settings.lift_custom_theme_muted();
@@ -1073,6 +1074,10 @@ pub fn run() {
             // below, once its data folder is known.
             #[cfg(desktop)]
             services::asset_scope::allow_app_assets(app.handle());
+            // Every connected 7TV session re-minted before its 30 days run out,
+            // at launch and every few hours while the app stays open.
+            #[cfg(desktop)]
+            commands::seventv_cosmetics::spawn_seventv_keepalive(app.handle().clone());
             // Linux builds the main window here instead of from the config
             // (tauri.linux.conf.json sets `create: false`), after every plugin
             // has registered its init script, and always opaque: the CEF
@@ -2175,6 +2180,7 @@ pub fn run() {
             validate_chat_phrase,
             get_chat_rule_errors,
             get_chat_history_stats,
+            preview_chat_rows,
             get_automod_queue,
             resolve_automod_message,
             moderate_chatter,
@@ -2406,6 +2412,7 @@ pub fn run() {
             equip_evolution_lane,
             get_badge_drop_campaign,
             get_badge_earn_guide,
+            resolve_watch_places,
             // Badge Metadata commands
             fetch_badge_metadata,
             // Link preview commands
