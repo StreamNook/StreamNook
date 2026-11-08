@@ -660,7 +660,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
             ? 'relative flex min-h-0 flex-1 flex-col'
           // glass-flyout: this can open over live video, and its base stays
           // readable at every Glassiness.
-          : 'glass-flyout absolute bottom-full left-0 right-0 mb-2 flex flex-col max-h-[400px] overflow-hidden z-50 origin-bottom-left !p-0'
+          : 'glass-flyout absolute bottom-full left-0 right-0 mb-2 flex flex-col max-h-[400px] overflow-hidden z-[60] origin-bottom-left !p-0'
       }
       style={{ minHeight: overlayOpen ? OVERLAY_MIN_HEIGHT : undefined }}
     >

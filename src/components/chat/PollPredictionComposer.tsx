@@ -188,7 +188,7 @@ export function PollPredictionComposer({
       className={
         inline
           ? 'flex flex-col'
-          : 'glass-flyout rounded-xl !p-0 absolute bottom-full left-0 right-0 mb-2 z-50 flex flex-col max-h-[70vh] overflow-hidden'
+          : 'glass-flyout rounded-xl !p-0 absolute bottom-full left-0 right-0 mb-2 z-[60] flex flex-col max-h-[70vh] overflow-hidden'
       }
     >
       {/* Kind switch */}

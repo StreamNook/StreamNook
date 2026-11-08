@@ -354,7 +354,7 @@ export function WalletMenu({ channelLogin, channelId, points, bits: bitsFace, on
       transition={motionOff ? { duration: 0 } : { duration: 0.16, ease: 'easeOut' }}
       // glass-flyout: this can open over live video, and its base stays
       // readable at every Glassiness.
-      className="glass-flyout absolute bottom-full left-0 right-0 mb-2 flex flex-col overflow-hidden z-50 origin-bottom-left !p-0"
+      className="glass-flyout absolute bottom-full left-0 right-0 mb-2 flex flex-col overflow-hidden z-[60] origin-bottom-left !p-0"
       style={{ maxHeight: MENU_MAX_PX }}
     >
       <div className="relative flex min-h-0 flex-1 flex-col">

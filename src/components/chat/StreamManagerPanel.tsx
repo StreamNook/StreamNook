@@ -130,7 +130,7 @@ export function StreamManagerPanel({ kind, view, queue, onQueue, onOutcome, onCl
     <div
       ref={rootRef}
       onPointerDownCapture={markInside}
-      className="glass-flyout rounded-xl !p-0 absolute bottom-full left-0 right-0 mb-2 z-50 flex flex-col max-h-[70vh] overflow-hidden"
+      className="glass-flyout rounded-xl !p-0 absolute bottom-full left-0 right-0 mb-2 z-[60] flex flex-col max-h-[70vh] overflow-hidden"
     >
       <div className="flex items-center gap-2 px-3 py-2.5">
         <span className="flex items-center justify-center text-textSecondary">{head.icon}</span>

@@ -66,7 +66,7 @@ export default function SendAsPicker() {
       </Tooltip>
 
       {open && (
-        <div className="glass-flyout rounded-xl absolute bottom-full left-0 mb-2 w-56 max-h-72 overflow-y-auto scrollbar-thin z-50">
+        <div className="glass-flyout rounded-xl absolute bottom-full left-0 mb-2 w-56 max-h-72 overflow-y-auto scrollbar-thin z-[60]">
           <div className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-white/50">
             Send messages as
           </div>

@@ -557,10 +557,11 @@ const PANEL_MAX_PX = 520;
 // The same frosted surface as the Tools menu and the command list's dialog
 // (`.glass-flyout`, solid at Glassiness 0%), so every menu over the message box
 // reads as one family. `!p-0`: the header and grid run edge to edge.
-// z-50: above a pinned prediction or poll (z-40), which otherwise covered the
-// top of the open menu, where search results land.
+// z-[60], with every menu over the message box: above a pinned prediction or
+// poll (z-40), which otherwise covered the top of the open menu where search
+// results land, and above the drops lip (z-[55]) on the message box's edge.
 const DEFAULT_PANEL_CLASS =
-  'glass-flyout rounded-xl !p-0 absolute bottom-full left-0 right-0 mb-2 h-[520px] flex flex-col overflow-hidden origin-bottom z-50';
+  'glass-flyout rounded-xl !p-0 absolute bottom-full left-0 right-0 mb-2 h-[520px] flex flex-col overflow-hidden origin-bottom z-[60]';
 /** A host that places the menu itself (the phone) keeps the plain fill. */
 const HOST_PANEL_FILL =
   'color-mix(in srgb, var(--color-background) calc(95% + (1 - var(--glass-strength, 1)) * 5%), transparent)';
