@@ -314,6 +314,7 @@ pub mod vod_replay;
 pub mod vod_sync;
 pub mod vod_storyboard;
 pub mod watch_heartbeat_service;
+pub mod whisper_gql;
 pub mod whisper_history_service;
 pub mod watch_session;
 pub mod watch_start;

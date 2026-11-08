@@ -53,6 +53,18 @@ pub async fn post_with(
     tag: &str,
     integrity: Option<&crate::services::twitch_integrity::Integrity>,
 ) -> Result<serde_json::Value, String> {
+    post_status(token, body, tag, integrity).await.map_err(|(_, e)| e)
+}
+
+/// `post_with`, keeping the HTTP status of a refused request (None when no
+/// answer came), so a caller can tell a rate limit or a refused session from a
+/// network failure without reading the words.
+pub async fn post_status(
+    token: Option<&str>,
+    body: serde_json::Value,
+    tag: &str,
+    integrity: Option<&crate::services::twitch_integrity::Integrity>,
+) -> Result<serde_json::Value, (Option<u16>, String)> {
     let mut req = crate::services::http::client().post(GQL_URL).header("Client-ID", TWITCH_WEB_CLIENT_ID);
     req = match integrity {
         Some(i) => req
@@ -64,11 +76,18 @@ pub async fn post_with(
     if let Some(token) = token {
         req = req.header("Authorization", format!("OAuth {}", token));
     }
-    let resp = req.json(&body).send().await.map_err(|e| format!("GQL request failed: {e}"))?;
+    let resp = req
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| (None, format!("GQL request failed: {e}")))?;
     if !resp.status().is_success() {
-        return Err(format!("GQL answered {}", resp.status()));
+        return Err((Some(resp.status().as_u16()), format!("GQL answered {}", resp.status())));
     }
-    let json: serde_json::Value = resp.json().await.map_err(|e| format!("GQL response was not JSON: {e}"))?;
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| (None, format!("GQL response was not JSON: {e}")))?;
     if let Some(errors) = json.get("errors") {
         log::warn!("[{tag}] GQL errors: {errors}");
     }
