@@ -454,6 +454,24 @@ pub async fn get_badge_drop_campaign(
     Ok(live_badge_campaign(&state, &set_id, &version).await.map(|(c, _)| c))
 }
 
+/// The categories and channels a badge or a Drops campaign names, ready to
+/// draw as tappable cards: each category as Twitch knows it, each channel
+/// with its face and live state (see `services::watch_places`). `limit` caps
+/// the channels (16 by default, at most 100).
+#[tauri::command]
+pub async fn resolve_watch_places(
+    categories: Option<Vec<String>>,
+    channels: Option<Vec<String>>,
+    limit: Option<u32>,
+) -> crate::services::watch_places::WatchPlaces {
+    crate::services::watch_places::resolve(
+        categories.unwrap_or_default(),
+        channels.unwrap_or_default(),
+        limit.map(|l| l as usize),
+    )
+    .await
+}
+
 /// How one badge is earned and where: what to do, for how long, on which
 /// channels and in which category, plus a sentence saying all of it. The
 /// viewer's live Drops list answers first; the relay's campaign requirement

@@ -11,7 +11,7 @@
 // grant on the drops client.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { ArrowSquareOut, Broadcast, CalendarBlank, CaretRight, CheckCircle, Gift, Warning } from 'phosphor-react';
+import { ArrowSquareOut, CalendarBlank, CaretRight, CheckCircle, Gift, Warning } from 'phosphor-react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useAppStore } from '../../stores/AppStore';
@@ -38,7 +38,9 @@ import {
 import { getBadgeEarnGuide, type EarnGuide } from '../../services/badgeStanding';
 import { openExternal } from '../../utils/openExternal';
 import { Logger } from '../../utils/logger';
-import type { TwitchStream } from '../../types';
+import type { TwitchCategory } from '../../types';
+import { resolveWatchPlaces, type PlaceChannel, type WatchPlaces } from '../../services/watchPlaces';
+import { PlaceCategoryCard, PlaceChannelCard } from '../rewards/WatchPlaceCards';
 
 type RewardsTab = 'drops' | 'badges';
 const REWARDS_TABS: { value: RewardsTab; label: string }[] = [
@@ -178,15 +180,50 @@ export const RewardsScreen: React.FC = () => {
   }, [badgeDetail]);
   const openGuide = badgeDetail && badgeGuide?.key === badgeDetail.key ? badgeGuide.guide : null;
 
-  // A badge's channel, opened the way the desktop badge page opens it: with the
-  // live stream when there is one, so the player starts with its metadata.
-  const watchBadgeChannel = async (login: string) => {
-    const live = await invoke<TwitchStream | null>('check_stream_online', { userLogin: login }).catch(
-      () => null,
-    );
+  // The guide's category and channels as cards, resolved by Rust: what
+  // desktop's badge page shows.
+  const [badgePlaces, setBadgePlaces] = useState<{ key: string; places: WatchPlaces } | null>(null);
+  useEffect(() => {
+    if (!badgeDetail || !openGuide) return;
+    let live = true;
+    const key = badgeDetail.key;
+    resolveWatchPlaces(openGuide.category ? [openGuide.category] : [], openGuide.earn.channels ?? [], 10)
+      .then((places) => { if (live) setBadgePlaces({ key, places }); })
+      .catch((e) => Logger.debug('[Rewards] badge places failed:', e));
+    return () => { live = false; };
+  }, [badgeDetail, openGuide]);
+  const openPlaces = badgeDetail && badgePlaces?.key === badgeDetail.key ? badgePlaces.places : null;
+
+  // A channel, opened the way the desktop badge page opens it: with the live
+  // stream when there is one, so the player starts with its metadata.
+  const watchPlace = (place: PlaceChannel) => {
     setBadgeDetail(null);
-    void startStream(login, live ?? undefined);
+    setCampaignDetail(null);
+    setChannelsOpenFor(null);
+    void startStream(place.login, place.live ?? undefined);
   };
+  const browsePlace = (category: TwitchCategory) => {
+    setBadgeDetail(null);
+    setCampaignDetail(null);
+    openBrowseCategory(category);
+    setNavTab('browse');
+  };
+
+  // A campaign's live channels as stream cards above its full list, the way
+  // desktop's channel picker shows who is live (Rust's first 100).
+  const [campaignLive, setCampaignLive] = useState<{ id: string; channels: PlaceChannel[] } | null>(null);
+  useEffect(() => {
+    if (!campaignDetail || campaignDetail.channels.length === 0) return;
+    let live = true;
+    const id = campaignDetail.id;
+    resolveWatchPlaces([], campaignDetail.channels.map((c) => c.name), 100)
+      .then((places) => {
+        if (live) setCampaignLive({ id, channels: places.channels.filter((c) => c.live) });
+      })
+      .catch((e) => Logger.debug('[Rewards] campaign channels failed:', e));
+    return () => { live = false; };
+  }, [campaignDetail]);
+  const liveInCampaign = campaignDetail && campaignLive?.id === campaignDetail.id ? campaignLive.channels : [];
 
   // A read on mount and on pull-to-refresh asks Twitch again; a new search
   // re-filters Rust's last read.
@@ -614,7 +651,8 @@ export const RewardsScreen: React.FC = () => {
               const prose = blurbText(badgeDetail.prose);
               const window = blurbText(badgeDetail.window);
               const summary = openGuide?.summary ?? null;
-              const channels = (openGuide?.earn.channels ?? []).slice(0, 10);
+              const categories = (openPlaces?.categories ?? []).filter((c) => c.id);
+              const channels = openPlaces?.channels ?? [];
               return (
                 <>
                   {/* The campaign's own numbers in one sentence: what, how
@@ -631,22 +669,19 @@ export const RewardsScreen: React.FC = () => {
                       {prose}
                     </p>
                   )}
-                  {/* The only channels it counts on, each a tap away. */}
-                  {channels.length > 0 && (
+                  {/* Where it counts, each a tap away: its category, then the
+                      only channels it counts on, live ones first. */}
+                  {(categories.length > 0 || channels.length > 0) && (
                     <div className="mt-3 w-full flex flex-col gap-1.5">
-                      {channels.map((login) => (
-                        <button
-                          key={login}
-                          onClick={() => void watchBadgeChannel(login)}
-                          className="glass-panel sn-touch px-3 py-2.5 flex items-center gap-2.5 text-left active:opacity-80"
-                        >
-                          <Broadcast size={16} className="text-accent shrink-0" />
-                          <span className="flex-1 min-w-0 truncate text-[13.5px] font-medium text-textPrimary">
-                            {login}
-                          </span>
-                          <span className="text-[12px] text-textMuted shrink-0">Watch</span>
-                          <CaretRight size={13} weight="bold" className="text-textMuted shrink-0" />
-                        </button>
+                      {categories.map((c) => (
+                        <PlaceCategoryCard
+                          key={c.id}
+                          place={c}
+                          onOpen={() => browsePlace({ id: c.id!, name: c.name, box_art_url: c.box_art_url ?? '' })}
+                        />
+                      ))}
+                      {channels.map((c) => (
+                        <PlaceChannelCard key={c.login} place={c} onWatch={() => watchPlace(c)} />
                       ))}
                     </div>
                   )}
@@ -698,7 +733,19 @@ export const RewardsScreen: React.FC = () => {
             <div className="flex flex-col items-center gap-1 text-center pt-2 pb-2">
               <h2 className="text-[16px] font-semibold text-textPrimary leading-snug">{campaignDetail.name}</h2>
               <div className="text-[12.5px] text-textMuted tabular-nums">
-                {[campaignDetail.game_name, campaignDetail.meta_label].filter(Boolean).join(' · ')}
+                {/* The game opens its category when the campaign counts in one. */}
+                {campaignDetail.find_stream && campaignDetail.game_name ? (
+                  <button
+                    onClick={() => browsePlace(campaignDetail.find_stream!)}
+                    className="text-accent font-medium active:opacity-70"
+                  >
+                    {campaignDetail.game_name}
+                  </button>
+                ) : (
+                  campaignDetail.game_name
+                )}
+                {campaignDetail.game_name && campaignDetail.meta_label ? ' · ' : ''}
+                {campaignDetail.meta_label}
               </div>
             </div>
 
@@ -723,6 +770,17 @@ export const RewardsScreen: React.FC = () => {
                 </span>
                 {campaignDetail.link_url && <ArrowSquareOut size={14} className="text-textMuted shrink-0" />}
               </button>
+            )}
+
+            {/* Who is live on it now, a stream card each. */}
+            {liveInCampaign.length > 0 && (
+              <div className="flex flex-col gap-1.5 my-1.5">
+                {/* On the cards' content edge (their px-3). */}
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-textMuted px-3">Live now</div>
+                {liveInCampaign.slice(0, 5).map((c) => (
+                  <PlaceChannelCard key={c.login} place={c} onWatch={() => watchPlace(c)} />
+                ))}
+              </div>
             )}
 
             {/* Where it can be earned: collapsed, each name a row to tap and watch. */}

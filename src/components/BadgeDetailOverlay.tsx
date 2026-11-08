@@ -26,6 +26,7 @@ import {
 } from '../services/badgeStanding';
 import { extractChannelLogins, splitChannelMentions } from '../utils/badgeChannels';
 import { dedupeResolvedLinks } from '../utils/badgeLinks';
+import { resolveWatchPlaces, type PlaceCategory, type PlaceChannel } from '../services/watchPlaces';
 
 // The sibling-list heading, from our enrichment or from badgebase. Everything
 // after it (up to the next blank line) is the list of related event badges.
@@ -79,11 +80,6 @@ function localizeUtcInText(text: string): string {
       minute: '2-digit',
     });
   });
-}
-interface TwitchCategory {
-  id: string;
-  name: string;
-  box_art_url?: string;
 }
 
 interface DropCampaign {
@@ -143,32 +139,9 @@ interface BadgeMetadata {
 // is searched first and ahead of any name guessed out of the copy.
 type LinkCandidate = ParsedBadgeLink & { authoritative?: boolean };
 
-/**
- * Recover a real category from an over-specific name by dropping trailing words
- * ("La Velada del Año VI" -> "La Velada"). Only accepts a result the original
- * name starts with, so it narrows to a genuine parent rather than drifting to
- * an unrelated category.
- */
-async function recoverCategoryByPrefix(name: string): Promise<TwitchCategory | null> {
-  const words = name.trim().split(/\s+/);
-  for (let len = words.length - 1; len >= 2; len--) {
-    const query = words.slice(0, len).join(' ');
-    try {
-      const results = await invoke<TwitchCategory[]>('search_categories', { query, limit: 5 });
-      const hit = (results ?? []).find(
-        (r) => name.toLowerCase().startsWith(r.name.toLowerCase()) && r.name.length >= 4
-      );
-      if (hit) return hit;
-    } catch {
-      return null;
-    }
-  }
-  return null;
-}
-
-// A refined badge link that also carries the category's box art for a cover chip
-// and the id Twitch resolved it to, which is what identity is judged on.
-type DisplayLink = ParsedBadgeLink & { boxArtUrl?: string; categoryId?: string };
+// A refined badge link that also carries the category's box art and viewers for
+// its card and the id Twitch resolved it to, which is what identity is judged on.
+type DisplayLink = ParsedBadgeLink & { boxArtUrl?: string; categoryId?: string; viewersLine?: string };
 
 interface BadgeDetailOverlayProps {
   badge: BadgeVersion;
@@ -224,73 +197,34 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
     setLoadingCategories(true);
     const validLinks: DisplayLink[] = [];
 
+    // Rust resolves every category name at once (services/watch_places.rs):
+    // Twitch's spelling, box art and viewers, or no card for a name Twitch
+    // cannot place. A failed call keeps the names as parsed.
+    const categoryNames = links.filter((l) => l.type === 'category').map((l) => l.name.trim());
+    let places: PlaceCategory[] | null = null;
+    if (categoryNames.length > 0) {
+      try {
+        places = (await resolveWatchPlaces(categoryNames, [])).categories;
+      } catch (error) {
+        Logger.warn('[BadgeDetail] Failed to resolve categories:', error);
+      }
+    }
+
     for (const link of links) {
       if (link.type === 'category') {
-        // Validate and refine category names using Twitch search API
-        try {
-          const results = await invoke<TwitchCategory[]>('search_categories', {
-            query: link.name,
-            limit: 5
-          });
-
-          if (results && results.length > 0) {
-            // Find the best match - prefer exact match, then longest name that contains our search term
-            const searchLower = link.name.toLowerCase();
-
-            let bestMatch = results[0];
-
-            // First, check for exact match (case-insensitive)
-            const exactMatch = results.find(r => r.name.toLowerCase() === searchLower);
-            if (exactMatch) {
-              bestMatch = exactMatch;
-            } else {
-              // Otherwise, find the best fuzzy match
-              // Prioritize results where our search term is contained in the result name
-              const containingMatches = results.filter(r =>
-                r.name.toLowerCase().includes(searchLower) ||
-                searchLower.includes(r.name.toLowerCase())
-              );
-
-              if (containingMatches.length > 0) {
-                // Prefer longer names as they're more specific (e.g., "Tom Clancy's Rainbow Six Siege X")
-                bestMatch = containingMatches.reduce((best, curr) =>
-                  curr.name.length > best.name.length ? curr : best
-                );
-              }
-            }
-
-            Logger.debug(`[BadgeDetail] Refined category: "${link.name}" → "${bestMatch.name}"`);
-
-            // Add the validated link with refined name + box art for the chip.
-            validLinks.push({
-              ...link,
-              name: bestMatch.name,
-              boxArtUrl: bestMatch.box_art_url,
-              categoryId: bestMatch.id,
-            });
-          } else {
-            // Event names get mistaken for categories ("La Velada del Año VI"
-            // when the category is "La Velada"), so retry on progressively
-            // shorter prefixes and accept only a result the full name starts
-            // with. A name Twitch cannot resolve is dropped rather than
-            // rendered as a card that leads nowhere.
-            const recovered = await recoverCategoryByPrefix(link.name);
-            if (recovered) {
-              Logger.debug(`[BadgeDetail] Recovered category "${link.name}" -> "${recovered.name}"`);
-              validLinks.push({
-                ...link,
-                name: recovered.name,
-                boxArtUrl: recovered.box_art_url,
-                categoryId: recovered.id,
-              });
-            } else {
-              Logger.debug(`[BadgeDetail] No matching category found for "${link.name}", skipping`);
-            }
-          }
-        } catch (error) {
-          Logger.warn(`[BadgeDetail] Failed to search categories for "${link.name}":`, error);
-          // Keep original link on error
+        if (!places) {
           validLinks.push(link);
+          continue;
+        }
+        const place = places.find((p) => p.query === link.name.trim());
+        if (place) {
+          validLinks.push({
+            ...link,
+            name: place.name,
+            boxArtUrl: place.box_art_url ?? undefined,
+            categoryId: place.id ?? undefined,
+            viewersLine: place.viewers_line ?? undefined,
+          });
         }
       } else if (link.type === 'drops') {
         // Validate drops event names using active drops campaigns
@@ -490,12 +424,34 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
   const proseText = (parsedBadge?.earnProse || badge.description || '').trim();
   const aboutText = proseText && proseText !== earnSummary ? proseText : '';
 
+  // Every channel the page draws (its cards and the chips in its copy), in one
+  // Rust read: face, name and live state (services/watch_places.rs).
+  const chipLogins = splitChannelMentions(aboutText).flatMap((p) => (p.login ? [p.login] : []));
+  const placeLogins = [...new Set([...channelLogins, ...chipLogins].map((l) => l.toLowerCase()))].join('|');
+  const [channelPlaces, setChannelPlaces] = useState<{ key: string; byLogin: Map<string, PlaceChannel> } | null>(
+    null,
+  );
+  useEffect(() => {
+    if (!placeLogins) return;
+    let alive = true;
+    resolveWatchPlaces([], placeLogins.split('|'))
+      .then((p) => {
+        if (alive) setChannelPlaces({ key: placeLogins, byLogin: new Map(p.channels.map((c) => [c.login, c])) });
+      })
+      .catch((e) => Logger.warn('[BadgeDetail] Failed to resolve channels:', e));
+    return () => {
+      alive = false;
+    };
+  }, [placeLogins]);
+  const placeFor = (login: string) =>
+    channelPlaces?.key === placeLogins ? channelPlaces.byLogin.get(login.toLowerCase()) : undefined;
+
   // Render More Info with channel mentions ("/studbudz") turned into clickable
   // avatar chips, keeping the date-highlighting on the surrounding text.
   const renderMoreInfo = (text: string) => {
     return splitChannelMentions(localizeUtcInText(text)).map((part, i) =>
       part.login ? (
-        <BadgeChannelChip key={i} login={part.login} onWatch={handleWatchChannel} />
+        <BadgeChannelChip key={i} login={part.login} place={placeFor(part.login)} onWatch={handleWatchChannel} />
       ) : (
         <span key={i}>{convertTimestampsToLocalJSX(part.text)}</span>
       ),
@@ -1044,6 +1000,7 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
                         key={`link-${index}`}
                         name={link.name}
                         boxArtUrl={link.boxArtUrl}
+                        viewersLine={link.viewersLine}
                         onClick={() => handleLinkClick(link)}
                       />
                     ) : (
@@ -1071,9 +1028,12 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
                       </button>
                     ),
                   )}
-                  {channelLogins.map((login) => (
-                    <BadgeChannelCard key={`chan-${login}`} login={login} onWatch={handleWatchChannel} />
-                  ))}
+                  {channelLogins.map((login) => {
+                    const place = placeFor(login);
+                    return place ? (
+                      <BadgeChannelCard key={`chan-${login}`} place={place} onWatch={handleWatchChannel} />
+                    ) : null;
+                  })}
                   {loadingCategories && (
                     <div className="text-xs text-textMuted px-1">Finding category…</div>
                   )}

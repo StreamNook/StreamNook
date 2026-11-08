@@ -17,6 +17,8 @@ pub mod bttv_pro_service;
 pub mod shared_lookup;
 pub mod member_link;
 pub mod own_accolades;
+pub mod watch_places;
+pub mod chat_preview;
 
 pub mod account_store;
 pub mod activity_history_service;

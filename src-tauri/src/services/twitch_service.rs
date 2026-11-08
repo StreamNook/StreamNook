@@ -5721,18 +5721,43 @@ impl TwitchService {
     pub async fn users_by_ids(
         ids: &[String],
     ) -> Result<std::collections::HashMap<String, (String, String, Option<String>)>, String> {
-        let mut out = std::collections::HashMap::new();
-        if ids.is_empty() {
+        let users = Self::helix_users("id", ids).await?;
+        Ok(users
+            .into_iter()
+            .map(|(id, login, display, avatar)| (id, (login, display, avatar)))
+            .collect())
+    }
+
+    /// `login -> (user id, display name, avatar)` for a batch of Twitch
+    /// logins (lowercase keys). Errors like `users_by_ids`.
+    pub async fn users_by_logins(
+        logins: &[String],
+    ) -> Result<std::collections::HashMap<String, (String, String, Option<String>)>, String> {
+        let users = Self::helix_users("login", logins).await?;
+        Ok(users
+            .into_iter()
+            .map(|(id, login, display, avatar)| (login.to_lowercase(), (id, display, avatar)))
+            .collect())
+    }
+
+    /// Helix `users` by `field` (`id` or `login`), 100 a call:
+    /// `(id, login, display name, avatar)` per user found.
+    async fn helix_users(
+        field: &str,
+        values: &[String],
+    ) -> Result<Vec<(String, String, String, Option<String>)>, String> {
+        let mut out = Vec::new();
+        if values.is_empty() {
             return Ok(out);
         }
 
         let token = Self::get_token().await.map_err(|e| e.to_string())?;
         let client = crate::services::http::client().clone();
 
-        for chunk in ids.chunks(100) {
+        for chunk in values.chunks(100) {
             let query = chunk
                 .iter()
-                .map(|id| format!("id={}", id))
+                .map(|v| format!("{field}={}", urlencoding::encode(v)))
                 .collect::<Vec<_>>()
                 .join("&");
             let url = format!("https://api.twitch.tv/helix/users?{}", query);
@@ -5772,7 +5797,7 @@ impl TwitchService {
                     .and_then(|v| v.as_str())
                     .filter(|s| !s.is_empty())
                     .map(|s| s.to_string());
-                out.insert(id.to_string(), (login, display, avatar));
+                out.push((id.to_string(), login, display, avatar));
             }
         }
 

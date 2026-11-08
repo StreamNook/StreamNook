@@ -1,50 +1,20 @@
-import { useEffect, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { ArrowUpRight, Gamepad2 } from 'lucide-react';
 
-interface StreamLite {
-  viewer_count?: number;
-}
-
 /** A themed card for the Twitch category a badge is tied to: the game's box art
- *  bleeding to the card edge, the name, and a live "watching" count. The whole
- *  card opens the category. */
+ *  bleeding to the card edge, the name, and its live viewers as Rust worded
+ *  them (services/watch_places.rs). The whole card opens the category. */
 export const BadgeCategoryCard = ({
   name,
   boxArtUrl,
+  viewersLine,
   onClick,
 }: {
   name: string;
   boxArtUrl?: string;
+  viewersLine?: string;
   onClick: () => void;
 }) => {
-  const [live, setLive] = useState<{ viewers: number; more: boolean } | null>(null);
-
-  useEffect(() => {
-    let alive = true;
-    invoke('get_streams_by_game_name', {
-      gameName: name,
-      excludeUserLogin: null,
-      cursor: null,
-      limit: 100,
-    })
-      .then((res) => {
-        if (!alive) return;
-        const [streams, cursor] = res as [StreamLite[], string | null];
-        const viewers = streams.reduce((sum, s) => sum + (s.viewer_count || 0), 0);
-        setLive({ viewers, more: !!cursor });
-      })
-      .catch(() => {});
-    return () => {
-      alive = false;
-    };
-  }, [name]);
-
   const art = boxArtUrl ? boxArtUrl.replace('{width}', '216').replace('{height}', '288') : null;
-  const subtitle =
-    live && live.viewers > 0
-      ? `${live.viewers.toLocaleString()}${live.more ? '+' : ''} watching now`
-      : 'Browse this category';
 
   return (
     <button
@@ -63,7 +33,7 @@ export const BadgeCategoryCard = ({
         <div className="text-[15px] font-medium text-textPrimary truncate group-hover:text-accent transition-colors">
           {name}
         </div>
-        <div className="text-[12px] text-textSecondary">{subtitle}</div>
+        <div className="text-[12px] text-textSecondary">{viewersLine ?? 'Browse this category'}</div>
       </div>
       <ArrowUpRight
         size={18}
