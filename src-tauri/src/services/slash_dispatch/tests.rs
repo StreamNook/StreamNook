@@ -308,6 +308,109 @@ async fn ban_toasts_the_typed_name_and_an_unknown_user() {
     assert_eq!(toast(&o, ToastKind::Error), vec!["User ghost not found"]);
 }
 
+/// Accounts by login for the `--channel` cases: two chats, the target, and a
+/// chat where Twitch refuses because you are not a moderator there.
+fn rooms_answer(cmd: &str, a: &Value) -> Result<Value, String> {
+    match (cmd, a["login"].as_str(), a["broadcasterId"].as_str()) {
+        ("get_user_by_login", Some("bob"), _) => Ok(json!({ "id": "7", "login": "bob" })),
+        ("get_user_by_login", Some("alpha"), _) => Ok(json!({ "id": "100", "login": "alpha" })),
+        ("get_user_by_login", Some("beta"), _) => Ok(json!({ "id": "200", "login": "beta" })),
+        ("get_user_by_login", Some("notmod"), _) => Ok(json!({ "id": "300", "login": "notmod" })),
+        ("get_user_by_login", _, _) => Err("not found".into()),
+        (_, _, Some("300")) => Err("You are not a moderator there".into()),
+        _ => default_answer(cmd, a),
+    }
+}
+
+#[tokio::test]
+async fn channel_flag_bans_in_each_named_chat_instead_of_this_one() {
+    let fake = Fake::new();
+    fake.answer(rooms_answer);
+    let o = run(&fake, "/ban --channel alpha,#Beta bob spamming links").await;
+    let bans = fake.calls("ban_user");
+    assert_eq!(
+        bans,
+        vec![
+            json!({ "broadcasterId": "100", "targetUserId": "7", "duration": null, "reason": "spamming links" }),
+            json!({ "broadcasterId": "200", "targetUserId": "7", "duration": null, "reason": "spamming links" }),
+        ]
+    );
+    assert_eq!(
+        toast(&o, ToastKind::Success),
+        vec!["Banned bob in #alpha, #beta"]
+    );
+}
+
+#[tokio::test]
+async fn channel_flag_takes_repeats_equals_ids_and_any_position() {
+    let fake = Fake::new();
+    fake.answer(rooms_answer);
+    run(
+        &fake,
+        "/timeout bob --channel alpha 600 --channel=alpha calm down --channel id:555",
+    )
+    .await;
+    let rooms: Vec<Value> = fake
+        .calls("ban_user")
+        .iter()
+        .map(|b| b["broadcasterId"].clone())
+        .collect();
+    assert_eq!(rooms, vec![json!("100"), json!("555")]);
+    assert_eq!(fake.calls("ban_user")[0]["duration"], json!(600));
+    assert_eq!(fake.calls("ban_user")[0]["reason"], json!("calm down"));
+    run(&fake, "/untimeout --channel beta bob").await;
+    assert_eq!(
+        fake.calls("unban_user"),
+        vec![json!({ "broadcasterId": "200", "targetUserId": "7" })]
+    );
+}
+
+#[tokio::test]
+async fn channel_flag_reports_each_chat_it_missed() {
+    let fake = Fake::new();
+    fake.answer(rooms_answer);
+    let o = run(&fake, "/unban --channel alpha,notmod,ghost bob").await;
+    assert_eq!(
+        toast(&o, ToastKind::Success),
+        vec!["Unbanned bob in #alpha"]
+    );
+    assert_eq!(
+        toast(&o, ToastKind::Error),
+        vec![
+            "#notmod: You are not a moderator there",
+            "Channel ghost not found"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn channel_flag_without_a_chat_or_user_shows_usage_and_calls_nothing() {
+    let fake = Fake::new();
+    fake.answer(rooms_answer);
+    for line in [
+        "/ban bob --channel",
+        "/ban --channel , bob",
+        "/ban --channel alpha",
+    ] {
+        let o = run(&fake, line).await;
+        assert_eq!(
+            toast(&o, ToastKind::Info),
+            vec!["Usage: /ban <username> [reason]"],
+            "{line}"
+        );
+    }
+    let many = (0..11)
+        .map(|i| format!("c{i}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let o = run(&fake, &format!("/ban --channel {many} bob")).await;
+    assert_eq!(
+        toast(&o, ToastKind::Error),
+        vec!["--channel takes at most 10 chats at once"]
+    );
+    assert!(fake.calls("ban_user").is_empty());
+}
+
 #[tokio::test]
 async fn purge_times_out_for_one_second() {
     let fake = Fake::new();

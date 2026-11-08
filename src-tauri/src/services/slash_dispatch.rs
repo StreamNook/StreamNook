@@ -1216,6 +1216,91 @@ async fn on_user(
     Ok(())
 }
 
+/// The most chats one `--channel` moderation line acts in.
+const MAX_MOD_ROOMS: usize = 10;
+
+/// Pull `--channel <chat>` (repeatable, `a,b` lists, `--channel=a`) out of a
+/// moderation line, the form moderators already type in other clients. Gives
+/// the chats named, deduped, and the words left over; `None` when a
+/// `--channel` has no chat after it. A chat is a login, or `id:<user id>`.
+fn take_channels<'a>(args: &[&'a str]) -> Option<(Vec<String>, Vec<&'a str>)> {
+    let mut rooms: Vec<String> = Vec::new();
+    let mut words = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i];
+        let value = if let Some(v) = a.strip_prefix("--channel=") {
+            v
+        } else if a.eq_ignore_ascii_case("--channel") {
+            i += 1;
+            *args.get(i)?
+        } else {
+            words.push(a);
+            i += 1;
+            continue;
+        };
+        if value.split(',').all(|name| clean_login(name).is_empty()) {
+            return None;
+        }
+        for name in value.split(',') {
+            let room = clean_login(name);
+            if !room.is_empty() && !rooms.contains(&room) {
+                rooms.push(room);
+            }
+        }
+        i += 1;
+    }
+    Some((rooms, words))
+}
+
+/// Run one moderation call on `username` in each of `rooms`, instead of the
+/// chat it was typed in. One toast names every chat it worked in and each chat
+/// it failed in gets its own, so a ban that missed somewhere is never hidden.
+async fn mod_in_rooms(
+    c: &Call<'_>,
+    o: &mut Outcome,
+    rooms: &[String],
+    username: &str,
+    cmd: &str,
+    args: impl Fn(&str, &User) -> Value,
+    done: String,
+) -> Result<(), String> {
+    if rooms.len() > MAX_MOD_ROOMS {
+        o.err(format!(
+            "--channel takes at most {MAX_MOD_ROOMS} chats at once"
+        ));
+        return Ok(());
+    }
+    let target = match user_or_why(c.b(), username, format!("User {username} not found")).await {
+        Ok(user) => user,
+        Err(why) => {
+            o.err(why);
+            return Ok(());
+        }
+    };
+    let mut worked = Vec::new();
+    for room in rooms {
+        let (label, room_id) = match room.strip_prefix("id:") {
+            Some(room_id) => (room.clone(), room_id.to_string()),
+            None => match user_or_why(c.b(), room, format!("Channel {room} not found")).await {
+                Ok(owner) => (owner.login, owner.id),
+                Err(why) => {
+                    o.err(why);
+                    continue;
+                }
+            },
+        };
+        match c.b().invoke(cmd, args(&room_id, &target)).await {
+            Ok(_) => worked.push(format!("#{label}")),
+            Err(e) => o.err(format!("#{label}: {e}")),
+        }
+    }
+    if !worked.is_empty() {
+        o.ok(format!("{done} in {}", worked.join(", ")));
+    }
+    Ok(())
+}
+
 /// A Twitch moderation action's toast, in the words `services::moderation`
 /// gives every surface.
 fn mod_words(action: &ModAction, name: &str) -> String {
@@ -1254,40 +1339,72 @@ async fn core(c: &Call<'_>, o: &mut Outcome) -> Result<Flow, String> {
             o.ui = Some(Ui::OpenSongs);
         }
         "ban" => {
-            if c.args.is_empty() {
+            let Some((rooms, words)) = take_channels(c.args) else {
+                return Ok(Flow::Usage);
+            };
+            if words.is_empty() {
                 return Ok(Flow::Usage);
             }
-            let username = clean_login(c.arg(0));
-            let reason = c.from(1);
+            let username = clean_login(words[0]);
+            let reason = words[1..].join(" ");
             let done = mod_words(&ModAction::Ban, &username);
-            on_user(c, o, &username, "ban_user", |u| {
-                json!({ "broadcasterId": id, "targetUserId": u.id, "duration": null, "reason": opt(&reason) })
-            }, done)
-            .await?;
+            let body = |room: &str, u: &User| json!({ "broadcasterId": room, "targetUserId": u.id, "duration": null, "reason": opt(&reason) });
+            if rooms.is_empty() {
+                on_user(c, o, &username, "ban_user", |u| body(id.as_str(), u), done).await?;
+            } else {
+                mod_in_rooms(c, o, &rooms, &username, "ban_user", body, done).await?;
+            }
         }
         "timeout" => {
-            if c.args.is_empty() {
+            let Some((rooms, words)) = take_channels(c.args) else {
+                return Ok(Flow::Usage);
+            };
+            if words.is_empty() {
                 return Ok(Flow::Usage);
             }
-            let username = clean_login(c.arg(0));
-            let (secs, reason) = moderation::typed_timeout(&c.from(1));
+            let username = clean_login(words[0]);
+            let (secs, reason) = moderation::typed_timeout(&words[1..].join(" "));
             let reason = reason.unwrap_or_default();
             // What Twitch will really apply (it stops at 14 days), said the way
             // every other moderation surface says it ("Timed out bob for 10m").
             let secs = moderation::applied_timeout(moderation::Platform::Twitch, secs);
             let done = mod_words(&ModAction::Timeout { seconds: secs }, &username);
-            on_user(c, o, &username, "ban_user", |u| {
-                json!({ "broadcasterId": id, "targetUserId": u.id, "duration": secs, "reason": opt(&reason) })
-            }, done)
-            .await?;
+            let body = |room: &str, u: &User| json!({ "broadcasterId": room, "targetUserId": u.id, "duration": secs, "reason": opt(&reason) });
+            if rooms.is_empty() {
+                on_user(c, o, &username, "ban_user", |u| body(id.as_str(), u), done).await?;
+            } else {
+                mod_in_rooms(c, o, &rooms, &username, "ban_user", body, done).await?;
+            }
         }
         "unban" | "untimeout" => {
-            if c.args.is_empty() {
+            let Some((rooms, words)) = take_channels(c.args) else {
+                return Ok(Flow::Usage);
+            };
+            if words.is_empty() {
                 return Ok(Flow::Usage);
             }
-            let username = clean_login(c.arg(0));
-            let done = mod_words(&ModAction::Unban { timeout: c.command == "untimeout" }, &username);
-            on_user(c, o, &username, "unban_user", |u| json!({ "broadcasterId": id, "targetUserId": u.id }), done).await?;
+            let username = clean_login(words[0]);
+            let done = mod_words(
+                &ModAction::Unban {
+                    timeout: c.command == "untimeout",
+                },
+                &username,
+            );
+            let body =
+                |room: &str, u: &User| json!({ "broadcasterId": room, "targetUserId": u.id });
+            if rooms.is_empty() {
+                on_user(
+                    c,
+                    o,
+                    &username,
+                    "unban_user",
+                    |u| body(id.as_str(), u),
+                    done,
+                )
+                .await?;
+            } else {
+                mod_in_rooms(c, o, &rooms, &username, "unban_user", body, done).await?;
+            }
         }
         "clear" => {
             b.invoke("clear_chat", json!({ "broadcasterId": id })).await?;
