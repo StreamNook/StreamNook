@@ -968,6 +968,9 @@ export interface LiveNotificationSettings {
   show_favorite_live_notifications?: boolean;
   // A live FAVORITED channel switches category. Off until turned on.
   show_favorite_category_notifications?: boolean;
+  // A Twitch go-live shows the streamer's own go-live message instead of the
+  // stream title, when they set one. Off by default.
+  streamer_go_live_text?: boolean;
   show_whisper_notifications?: boolean;
   show_update_notifications?: boolean;
   show_drops_notifications?: boolean;

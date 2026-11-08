@@ -195,7 +195,60 @@ pub fn announce(app: &AppHandle, notification: LiveNotification) {
         admit(guard.get_or_insert_with(Gate::default), &notification, now)
     };
     let Some((notification_id, providers, channels, merge_into)) = decided else { return };
-    let _ = app.emit(EVENT, LiveAnnouncement { notification, notification_id, providers, channels, merge_into });
+    let key = crate::services::providers::key::parse_key(&notification.streamer_login);
+    let wants_text = !notification.is_test
+        && key.provider == "twitch"
+        && app.state::<AppState>().settings.lock().unwrap_or_else(|e| e.into_inner()).live_notifications.streamer_go_live_text;
+    if !wants_text {
+        let _ = app.emit(EVENT, LiveAnnouncement { notification, notification_id, providers, channels, merge_into });
+        return;
+    }
+    // The streamer's own go-live message replaces the title, when they set one. One
+    // public read after the gate admitted it, so a repeat never costs a request; a
+    // slow or failed read keeps the title rather than holding the alert back.
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let mut notification = notification;
+        let read = tokio::time::timeout(GO_LIVE_TEXT_WAIT, streamer_go_live_text(&key.channel)).await;
+        if let Ok(Some(text)) = read {
+            notification.stream_title = Some(text);
+        }
+        let _ = app.emit(EVENT, LiveAnnouncement { notification, notification_id, providers, channels, merge_into });
+    });
+}
+
+/// How long a go-live waits for the streamer's message before going out with the title.
+const GO_LIVE_TEXT_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// The Twitch streamer's own go-live message: the text they set in their dashboard for
+/// their followers' notifications. Public, so asked anonymously.
+async fn streamer_go_live_text(login: &str) -> Option<String> {
+    let body = serde_json::json!({
+        "query": "query GoLiveText($login: String!) { user(login: $login) { broadcastSettings { liveUpNotificationInfo { liveUpNotification isDefault } } } }",
+        "variables": { "login": login },
+    });
+    let resp: serde_json::Value = crate::services::auth_proxy::web_client()
+        .post("https://gql.twitch.tv/gql")
+        .header("Client-ID", crate::services::auth_proxy::TWITCH_WEB_CLIENT_ID)
+        .json(&body)
+        .send()
+        .await
+        .ok()?
+        .json()
+        .await
+        .ok()?;
+    go_live_text_of(&resp)
+}
+
+/// The message in a `GoLiveText` answer: none when the streamer never set one
+/// (Twitch then reports its own default, which says less than the title) or it is blank.
+fn go_live_text_of(resp: &serde_json::Value) -> Option<String> {
+    let info = resp.pointer("/data/user/broadcastSettings/liveUpNotificationInfo")?;
+    if info.get("isDefault").and_then(|v| v.as_bool()).unwrap_or(true) {
+        return None;
+    }
+    let text = info.get("liveUpNotification")?.as_str()?.trim();
+    (!text.is_empty()).then(|| text.to_string())
 }
 
 // ---- A live favourite switched category ----------------------------------
@@ -278,6 +331,18 @@ pub fn announce_category(app: &AppHandle, notification: LiveNotification, previo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_go_live_message_counts_only_when_the_streamer_set_one() {
+        let answer = |text: &str, is_default: bool| {
+            serde_json::json!({ "data": { "user": { "broadcastSettings": { "liveUpNotificationInfo": {
+                "liveUpNotification": text, "isDefault": is_default } } } } })
+        };
+        assert_eq!(go_live_text_of(&answer(" hello! Tim is live :) ", false)).as_deref(), Some("hello! Tim is live :)"));
+        assert_eq!(go_live_text_of(&answer("tim went live!", true)), None, "Twitch's default says less than the title");
+        assert_eq!(go_live_text_of(&answer("   ", false)), None);
+        assert_eq!(go_live_text_of(&serde_json::json!({ "data": { "user": null } })), None, "an unknown login");
+    }
     use crate::models::provider_stream::ProviderStream;
     use serde_json::json;
     use std::collections::HashSet;

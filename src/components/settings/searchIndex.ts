@@ -2721,6 +2721,13 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   {
     tab: 'Notifications',
     section: 'Notify me about',
+    title: "Streamer's message",
+    parent: 'Live channels',
+    description: "A Twitch go-live alert shows the message the streamer wrote for their followers' notifications instead of the stream title, when they wrote one. Go live notification text, custom go-live message."
+  },
+  {
+    tab: 'Notifications',
+    section: 'Notify me about',
     title: 'Favorite channels live',
     description: 'When a channel you favorited goes live, even one you do not follow on Twitch. Favorites. Previously "Favorite channels".'
   },

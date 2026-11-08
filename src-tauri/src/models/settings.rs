@@ -878,6 +878,11 @@ pub struct LiveNotificationSettings {
     /// the moment this arrives in an update.
     #[serde(default)]
     pub show_favorite_category_notifications: bool,
+    /// A Twitch go-live shows the streamer's own go-live message (the text they
+    /// set for their followers' notifications) instead of the stream title,
+    /// when they set one. Off by default.
+    #[serde(default)]
+    pub streamer_go_live_text: bool,
     #[serde(default = "default_true")]
     pub show_whisper_notifications: bool,
     #[serde(default = "default_true")]
@@ -984,6 +989,7 @@ impl Default for LiveNotificationSettings {
             show_live_notifications: true,
             show_favorite_live_notifications: true,
             show_favorite_category_notifications: false,
+            streamer_go_live_text: false,
             show_whisper_notifications: true,
             show_update_notifications: true,
             show_drops_notifications: true,

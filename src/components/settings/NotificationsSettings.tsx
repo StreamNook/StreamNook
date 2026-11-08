@@ -27,6 +27,7 @@ import { restlessReached } from '../../utils/clientAccolades';
 import { earnClientAccolade } from '../../utils/earnAccolade';
 import { alertKey, loadAlertTypes, useAlertTypes } from '../../mobile/alertTypes';
 import { openSystemNotifySettings, useSystemNotifyPermission } from '../../utils/systemNotifyPermission';
+import { IS_MOBILE } from '../../utils/platform';
 
 import { Logger } from '../../utils/logger';
 import { IS_LINUX, IS_MAC } from '../../utils/platform';
@@ -507,6 +508,23 @@ const NotificationsSettings = () => {
                           </div>
                         }
                       />
+                      {/* Desktop's alerts only for now: the phones' pushes are
+                          written by the push server, which does not read it yet. */}
+                      {!IS_MOBILE && (
+                        <SubControl
+                          title="Streamer's message"
+                          control={
+                            <Toggle
+                              enabled={liveNotifications.streamer_go_live_text ?? false}
+                              onChange={() =>
+                                updateLiveNotifications({
+                                  streamer_go_live_text: !(liveNotifications.streamer_go_live_text ?? false),
+                                })
+                              }
+                            />
+                          }
+                        />
+                      )}
                     </SubControls>
                   ) : type.id === 'drops' && on ? (
                     <SubControls>
