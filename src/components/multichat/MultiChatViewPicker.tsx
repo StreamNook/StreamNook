@@ -86,7 +86,7 @@ const VIEW_NAME: Record<MultiChatView, string> = {
   columns: 'Columns',
   splits: 'Custom splits',
   blend: 'Blended',
-  mentions: 'Mentions',
+  mentions: 'Inbox',
 };
 
 interface ViewRowProps {
@@ -328,8 +328,8 @@ export default function MultiChatViewPicker({
             />
             <ViewRow
               icon={<MentionsIcon />}
-              label="Mentions"
-              detail="Every mention of you and reply to you"
+              label="Inbox"
+              detail="Mentions, replies and whispers"
               on={view === 'mentions'}
               onPick={pick(onMentions)}
             />
