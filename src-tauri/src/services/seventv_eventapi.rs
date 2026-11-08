@@ -554,6 +554,16 @@ fn op_of(v: &Value) -> u64 {
     v.get("op").and_then(|o| o.as_u64()).unwrap_or(u64::MAX)
 }
 
+/// Whether a RESUME ACK really brought the old session back. 7TV ACKs a
+/// RESUME it could not honor too, with `success: false` and
+/// `subscriptions_restored: 0` in `d.data`, and the new session then carries no
+/// subscription at all: taking every ACK as a resume left the socket open but
+/// deaf to emote edits, set switches and cosmetics until the channel was
+/// rejoined, and the next unsubscribe for it ended the stream (4010).
+fn resume_restored(ack: &Value) -> bool {
+    ack.pointer("/d/data/success").and_then(Value::as_bool) == Some(true)
+}
+
 /// The documented per-close-code delay, if the code carries one.
 fn close_delay_floor(code: u16) -> Option<Duration> {
     match code {
@@ -724,7 +734,8 @@ async fn connect_and_run(
 
     // RESUME the previous session when we have one: the server restores its
     // subscriptions and replays every dispatch we missed, in order. Anything
-    // other than an ACK for it within the window means a fresh start.
+    // other than an ACK saying it succeeded, within the window, means a fresh
+    // start: subscribe everything again and resync every channel's set.
     let mut resumed = false;
     if let Some(prev) = resume_session.as_deref() {
         write
@@ -745,8 +756,19 @@ async fn connect_and_run(
                         continue;
                     };
                     match op_of(&v) {
-                        OP_ACK if v.pointer("/d/command").and_then(|c| c.as_str()) == Some("RESUME") => {
-                            resumed = true;
+                        OP_ACK
+                            if v.pointer("/d/command").and_then(|c| c.as_str())
+                                == Some("RESUME") =>
+                        {
+                            resumed = resume_restored(&v);
+                            if !resumed {
+                                warn!(
+                                    "[7TV EventAPI] RESUME acknowledged but not restored: {}",
+                                    v.pointer("/d/data")
+                                        .map(|d| d.to_string())
+                                        .unwrap_or_default()
+                                );
+                            }
                             break;
                         }
                         OP_ERROR => {
@@ -1618,5 +1640,19 @@ mod tests {
         let frames = subscribe_frames(&sub);
         assert!(frames.iter().any(|f| f.contains("\"user.update\"") && f.contains("\"owner\"")));
         assert!(frames.iter().any(|f| f.contains("\"emote_set.update\"") && f.contains("\"set\"")));
+    }
+
+    #[test]
+    fn a_resume_counts_only_when_the_ack_says_it_succeeded() {
+        let refused = json!({ "op": 5, "d": { "command": "RESUME", "data": {
+            "success": false, "dispatches_replayed": 0, "subscriptions_restored": 0
+        } } });
+        assert!(!resume_restored(&refused));
+        let bare = json!({ "op": 5, "d": { "command": "RESUME" } });
+        assert!(!resume_restored(&bare));
+        let restored = json!({ "op": 5, "d": { "command": "RESUME", "data": {
+            "success": true, "dispatches_replayed": 2, "subscriptions_restored": 5
+        } } });
+        assert!(resume_restored(&restored));
     }
 }
