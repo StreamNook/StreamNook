@@ -555,7 +555,13 @@ fn campaign_fills(
     if campaigns.is_empty() {
         return fills;
     }
-    use crate::services::drops_overview::{badge_tier_for, campaign_for_badge, untyped_reward_for};
+    use crate::services::drops_overview::{
+        badge_key, badge_tier_for, campaign_for_badge, untyped_reward_for,
+    };
+    // A reward is matched by title, and the catalogue keeps retired sets under
+    // the titles of new ones (2016's warcraft/alliance beside alliance/1). Each
+    // reward's badges by title, with whether the badge's set id names it.
+    let mut claims: HashMap<(String, String, String), Vec<(String, bool)>> = HashMap::new();
     for badge in catalogue {
         // A typed badge reward first, then the reward-campaign list, whose
         // rewards carry no type.
@@ -580,8 +586,24 @@ fn campaign_fills(
                 });
             }
         }
-        let channels = (campaign.is_acl_based && !campaign.allowed_channels.is_empty())
-            .then(|| campaign.allowed_channels.iter().map(|c| c.name.to_lowercase()).collect());
+        let title = badge_key(&badge.title);
+        let named = !title.is_empty() && badge_key(&badge.set_id).contains(&title);
+        claims
+            .entry((
+                campaign.id.clone(),
+                tier.map(|d| d.id.clone()).unwrap_or_default(),
+                title,
+            ))
+            .or_default()
+            .push((badge.key(), named));
+        let channels =
+            (campaign.is_acl_based && !campaign.allowed_channels.is_empty()).then(|| {
+                campaign
+                    .allowed_channels
+                    .iter()
+                    .map(|c| c.name.to_lowercase())
+                    .collect()
+            });
         fills.insert(
             badge.key(),
             CampaignFill {
@@ -599,6 +621,15 @@ fn campaign_fills(
                 category: campaign.has_category.then(|| campaign.game_name.clone()),
             },
         );
+    }
+    // One reward is one badge: where several share it, those whose set id
+    // names the title keep it. With none named, all keep it, as before.
+    for claimants in claims.values() {
+        if claimants.len() > 1 && claimants.iter().any(|(_, named)| *named) {
+            for (key, _) in claimants.iter().filter(|(_, named)| !named) {
+                fills.remove(key);
+            }
+        }
     }
     fills
 }
@@ -974,12 +1005,20 @@ pub async fn window_for(
     if own.is_some() {
         return own;
     }
-    let badge = load_catalogue()
-        .await
-        .into_iter()
+    let catalogue = load_catalogue().await;
+    let badge = catalogue
+        .iter()
         .find(|b| b.set_id == set_id && b.version == version)?;
     let key = badge.key();
-    campaign_fills(&[badge], &active_campaigns(app).await)
+    // With its same-titled siblings, so a reward fills the same one badge here
+    // as in the standing.
+    let title = crate::services::drops_overview::badge_key(&badge.title);
+    let siblings: Vec<CatalogueBadge> = catalogue
+        .iter()
+        .filter(|b| crate::services::drops_overview::badge_key(&b.title) == title)
+        .cloned()
+        .collect();
+    campaign_fills(&siblings, &active_campaigns(app).await)
         .remove(&key)
         .map(|f| f.runs)
 }
@@ -1092,6 +1131,36 @@ mod tests {
         assert_eq!(pushless.earn.steps, vec![EarnStep::Subscribe { count: None }]);
         assert_eq!(pushless.category.as_deref(), Some("Space Marine 2"));
         assert_eq!(pushless.ends_ms, Some(NOW + 11 * 24 * HOUR));
+    }
+
+    #[test]
+    fn a_reward_fills_one_badge_not_a_retired_set_of_the_same_title() {
+        let campaign: crate::models::drops::DropCampaign = serde_json::from_value(json!({
+            "id": "wow", "name": "Horde and Alliance Badges", "game_id": "18122",
+            "game_name": "World of Warcraft", "description": "", "image_url": "",
+            "start_at": "2026-11-04T16:00:00Z", "end_at": "2026-12-01T07:58:59Z",
+            "time_based_drops": [
+                { "id": "d-alliance", "name": "Alliance", "required_subs": 1,
+                  "benefit_edges": [{ "id": "b1", "name": "Alliance", "distribution_type": "BADGE" }] },
+                { "id": "d-horde", "name": "Horde", "required_subs": 1,
+                  "benefit_edges": [{ "id": "b2", "name": "Horde", "distribution_type": "BADGE" }] }
+            ]
+        }))
+        .unwrap();
+        let catalogue = vec![
+            badge("alliance", "1", "Alliance"),
+            badge("horde", "1", "Horde"),
+            badge("warcraft", "alliance", "Alliance"),
+            badge("warcraft", "horde", "Horde"),
+        ];
+        let mut keys: Vec<String> = campaign_fills(&catalogue, &[campaign.clone()])
+            .into_keys()
+            .collect();
+        keys.sort();
+        assert_eq!(keys, vec!["alliance/1", "horde/1"]);
+        // Alone, a retired set still takes a reward named for it.
+        let alone = campaign_fills(&catalogue[2..], &[campaign]);
+        assert!(alone.contains_key("warcraft/alliance"));
     }
 
     #[test]
