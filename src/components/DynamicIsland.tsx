@@ -1133,7 +1133,8 @@ const DynamicIsland = () => {
                 mirrorNotification({
                     kind: 'live',
                     title: `${data.streamer_name} is live`,
-                    body: liveActivityText(data.game_name) || data.stream_title || '',
+                    // The streamer's title first, as the phones' pushes word it.
+                    body: data.stream_title || liveActivityText(data.game_name) || '',
                     imageUrl: data.streamer_avatar,
                     roundImage: true,
                     action: { label: 'Watch', run: () => { void startStream(data.streamer_login); } },
