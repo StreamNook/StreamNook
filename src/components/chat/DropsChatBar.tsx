@@ -248,6 +248,14 @@ export function DropsChatBarView({
   );
 }
 
+// The tip: a bright point of the fill's own color with a soft halo, quiet
+// enough that it never pulls the eye off chat.
+const HAIRLINE_TIP: CSSProperties = {
+  background: 'color-mix(in srgb, var(--color-accent-on-surface) 70%, white)',
+  boxShadow:
+    '0 0 4px 1px color-mix(in srgb, var(--color-accent-on-surface) 70%, transparent), 0 0 10px 2px color-mix(in srgb, var(--color-accent-on-surface) 30%, transparent)',
+};
+
 /** The lip tucked away: the message box's own top border fills with the
  *  reward's progress, edge to edge, so nothing floats over chat. A strip just
  *  above the border takes the pointer: hovering it shows the card (desktop),
@@ -274,8 +282,13 @@ export function DropsHairline({
       {/* Over the message box's top border (the host overlaps it by a
           pixel): the fill runs from the left edge and thickens a touch under
           the pointer. */}
-      <span aria-hidden className="absolute inset-x-0 bottom-0 h-[2px] overflow-hidden transition-[height] duration-150 group-hover:h-[3px]">
-        <span className="drops-bar-fill block h-full rounded-r-full" style={{ width: `${clamp(line.percent)}%` }} />
+      <span aria-hidden className="absolute inset-x-0 bottom-0 h-[2px] transition-[height] duration-150 group-hover:h-[3px]">
+        <span className="drops-bar-fill block h-full rounded-full" style={{ width: `${clamp(line.percent)}%` }} />
+        {/* A soft glow on the leading tip, where the progress is now. */}
+        <span
+          className="drops-hairline-tip absolute top-1/2 h-1.5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full"
+          style={{ left: `${clamp(line.percent)}%`, ...HAIRLINE_TIP }}
+        />
       </span>
     </button>
   );
