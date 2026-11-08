@@ -431,6 +431,11 @@ fn merge_twitch_meta(meta: &mut ConversationMeta, thread: &GqlThread, page_seq: 
     meta.muted = thread.muted;
     if meta.read_seq <= page_seq {
         meta.twitch_read = thread.twitch_read.clone();
+        // A read state carried over from the old archive gives way to Twitch's.
+        if meta.migrated_read && meta.twitch_read.is_some() {
+            meta.read_through = None;
+            meta.migrated_read = false;
+        }
     }
     if !meta.archive_pending && meta.archived_seq <= page_seq {
         meta.archived = thread.archived;
@@ -2554,6 +2559,39 @@ mod tests {
         assert_eq!(t[0].read.as_ref().unwrap().0, "1000000000-m0");
         drop(t);
         assert!(r.meta(&scope, "1000000000").twitch_read_owed.is_none());
+    }
+
+    /// The old archive could not tell a conversation read here from one its
+    /// importer filed as read, so a migrated read state gives way to Twitch's
+    /// marker the first time Twitch sends one.
+    #[tokio::test]
+    async fn a_migrated_read_state_gives_way_to_twitch() {
+        let r = rig("99999942");
+        r.twitch.add_thread("1000000000", 5, T0); // theirs: m0, m2, m4 (newest)
+        let scope = r.follow("99999942");
+        r.run(&scope, Reason::Manual).await;
+        // Twitch has read only up to m0; the migration guessed everything read.
+        lock(&r.twitch.threads)[0].read = Some(("1000000000-m0".into(), T0));
+        whisper_store::update(&scope, "1000000000", None, |conv| {
+            conv.meta.read_through = Some(Marker { id: "1000000000-m4".into(), at_ms: T0 + 240_000 });
+            conv.meta.migrated_read = true;
+            ((), true)
+        })
+        .unwrap();
+        assert_eq!(r.meta(&scope, "1000000000").unread_count, 0);
+        r.run(&scope, Reason::Manual).await;
+        let meta = r.meta(&scope, "1000000000");
+        assert_eq!(meta.unread_count, 2, "m2 and m4 are unread on Twitch");
+        assert!(!meta.migrated_read);
+        assert!(meta.read_through.is_none());
+        // A read made here afterwards still wins over an older Twitch marker.
+        whisper_store::update(&scope, "1000000000", None, |conv| {
+            conv.meta.read_through = Some(Marker { id: "1000000000-m4".into(), at_ms: T0 + 240_000 });
+            ((), true)
+        })
+        .unwrap();
+        r.run(&scope, Reason::Manual).await;
+        assert_eq!(r.meta(&scope, "1000000000").unread_count, 0);
     }
 
     #[tokio::test]

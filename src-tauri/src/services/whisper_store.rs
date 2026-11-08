@@ -159,6 +159,11 @@ pub struct ConversationMeta {
     pub unread_count: i32,
     #[serde(default)]
     pub read_through: Option<Marker>,
+    /// `read_through` came from the old archive's unread count, which cannot
+    /// tell a conversation read here from one its importer filed as read. It
+    /// stands in until Twitch's own read marker arrives, then gives way to it.
+    #[serde(default)]
+    pub migrated_read: bool,
     #[serde(default)]
     pub twitch_read: Option<Marker>,
     #[serde(default)]
@@ -210,6 +215,7 @@ impl ConversationMeta {
             last_is_sent: false,
             unread_count: 0,
             read_through: None,
+            migrated_read: false,
             twitch_read: None,
             twitch_read_owed: None,
             archived: false,
@@ -612,6 +618,7 @@ fn migrate(entry: &mut OwnerEntry, storage: V1Storage) -> Result<(), String> {
         meta.profile_image_url = conv.profile_image_url;
         meta.last_message_timestamp = conv.last_message_timestamp;
         meta.read_through = migrated_marker(&messages, conv.unread_count);
+        meta.migrated_read = true;
         recount(&mut meta, &messages);
         let path = conv_path(&entry.dir, &key);
         write_atomic(&path, &write_conv_body(Some(&meta), &key, &messages)?)?;

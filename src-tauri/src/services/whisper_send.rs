@@ -1147,18 +1147,19 @@ mod tests {
         let key = THEM;
         let scope = whisper_store::open(owner, 1);
         whisper_store::update(&scope, key, Some(whisper_store::ConversationMeta::new(key)), |c| {
-            c.messages.push(local("q1", "first", 1, Some(Delivery::Sending)));
-            c.messages.push(local("w1", "second", 2, Some(Delivery::Sending)));
+            // Ids of its own: the pending map is shared by every test.
+            c.messages.push(local("drain-q1", "first", 1, Some(Delivery::Sending)));
+            c.messages.push(local("drain-w1", "second", 2, Some(Delivery::Sending)));
             ((), true)
         })
         .unwrap();
-        set_stage("q1", owner, key, Stage::Queued);
-        set_stage("w1", owner, key, Stage::InFlight);
+        set_stage("drain-q1", owner, key, Stage::Queued);
+        set_stage("drain-w1", owner, key, Stage::InFlight);
         let closing = whisper_store::close(&scope);
         teardown(&closing).await;
         let states = whisper_store::update_closing(&closing, key, |c| {
             let of = |id: &str| c.messages.iter().find(|m| m.id == id).map(|m| (m.delivery, m.failure.clone()));
-            ((of("q1"), of("w1")), false)
+            ((of("drain-q1"), of("drain-w1")), false)
         })
         .unwrap()
         .unwrap();
