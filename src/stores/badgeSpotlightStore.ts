@@ -7,6 +7,7 @@
 import { create } from 'zustand';
 import { useTooltipStore } from './TooltipStore';
 import { directBadgeRoute, openBadgeDetailsRoute, type BadgeRef } from '../utils/badgeSpotlight';
+import { IS_MOBILE } from '../utils/platform';
 
 interface BadgeSpotlightState {
   badge: BadgeRef | null;
@@ -33,8 +34,13 @@ export function openBadgeSpotlight(badge: BadgeRef, opts?: { fromBadges?: boolea
 }
 
 /** What a badge click does: its page in the Badges overlay where it has one
- *  (Twitch, 7TV, StreamNook), else the spotlight card in this window. */
+ *  (Twitch, 7TV, StreamNook), else the spotlight card in this window. The
+ *  phone has no Badges overlay: every badge opens its sheet (mobile/chat/BadgeSheet). */
 export function openBadgeInfo(badge: BadgeRef): void {
+  if (IS_MOBILE) {
+    openBadgeSpotlight(badge);
+    return;
+  }
   const route = directBadgeRoute(badge);
   if (!route) {
     openBadgeSpotlight(badge);

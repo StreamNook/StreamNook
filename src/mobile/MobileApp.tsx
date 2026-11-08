@@ -47,6 +47,7 @@ import { installWhisperInbox } from './whispers/whisperInbox';
 import { MobileClipSheet } from './watch/MobileClipSheet';
 import { MobileChannelSheet } from './watch/MobileChannelSheet';
 import { ChannelHoldSheet } from './ui/ChannelHold';
+import { BadgeSheet } from './chat/BadgeSheet';
 import LoadingWidget from '../components/LoadingWidget';
 import DeviceLoginOverlay from '../components/DeviceLoginOverlay';
 import ToastManager from '../components/ToastManager';
@@ -271,6 +272,8 @@ const MobileApp: React.FC = () => {
           {/* A held card's sheet: one for every card, so a card that moves or
               goes away after a press never takes the sheet with it. */}
           <ChannelHoldSheet />
+          {/* A badge tapped anywhere: rows, the +N fold, profiles. */}
+          <BadgeSheet />
         </>
       )}
 

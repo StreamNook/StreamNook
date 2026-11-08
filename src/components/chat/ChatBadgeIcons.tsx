@@ -102,6 +102,10 @@ interface ChatBadgeIconsProps {
    *  `badgeFoldLimit`. 0 (the default) folds nothing. */
   foldLimit?: number;
   keyPrefix?: string;
+  /** Wraps each badge, given an id naming the cosmetic it draws (`tw-<set>/<v>`,
+   *  `7tv-<id>`, `tp-<provider>-<id>`, `sn`). Live previews use it to play a
+   *  swap on the badge that just changed; chat rows leave it out. */
+  wrapSlot?: (id: string, node: ReactNode) => ReactNode;
 }
 
 // A flex box around a block image: an inline-block button put the image on its
@@ -115,6 +119,8 @@ const BADGE_BUTTON_CLASS =
  *  Twitch's own copy of that art when one exists, and its finished element. */
 interface BadgeSlot {
   key: string;
+  /** The cosmetic it draws, for `wrapSlot`. */
+  id: string;
   kind: FoldKind;
   url: string;
   remote?: string;
@@ -143,11 +149,14 @@ export function ChatBadgeIcons({
   interactive = true,
   foldLimit = 0,
   keyPrefix = 'badge',
+  wrapSlot,
 }: ChatBadgeIconsProps) {
   // Battery Saver or Freeze emotes: the 7TV badge's published still (utils/lowPower).
   const stillBadges = useStillChat();
-  // Touch has no hover and no spotlight host on the phone shell.
-  const clickable = interactive && !IS_MOBILE;
+  // A tap on the phone opens the badge sheet (openBadgeInfo); touch has no
+  // hover, so the hover card never offers a click there.
+  const clickable = interactive;
+  const hoverClickable = interactive && !IS_MOBILE;
   const slots: BadgeSlot[] = [];
 
   twitchBadges.forEach((badge, idx) => {
@@ -183,11 +192,12 @@ export function ChatBadgeIcons({
     );
     slots.push({
       key: `${keyPrefix}-${badge.key}-${idx}`,
+      id: `tw-${badge.key}`,
       kind: foldKind(info.provider ?? 'twitch', badge.key.split('/')[0]),
       url: src,
       remote: info.image_url_4x || info.image_url_1x,
       node: (
-        <Tooltip content={<BadgeHoverCard badge={ref} clickable={clickable} />} side="top" requirePointerMove>
+        <Tooltip content={<BadgeHoverCard badge={ref} clickable={hoverClickable} />} side="top" requirePointerMove>
           {clickable ? (
             <button
               type="button"
@@ -219,10 +229,11 @@ export function ChatBadgeIcons({
     );
     slots.push({
       key: `${keyPrefix}-7tv`,
+      id: `7tv-${seventvBadge.id}`,
       kind: 'seventv',
       url,
       node: (
-        <Tooltip content={<BadgeHoverCard badge={ref} clickable={clickable} />} side="top" requirePointerMove>
+        <Tooltip content={<BadgeHoverCard badge={ref} clickable={hoverClickable} />} side="top" requirePointerMove>
           {clickable ? (
             <button type="button" aria-label={ref.title} className={BADGE_BUTTON_CLASS} onClick={() => openBadgeInfo(ref)}>
               {img}
@@ -260,10 +271,11 @@ export function ChatBadgeIcons({
       );
       slots.push({
         key: `${keyPrefix}-tp-${badge.id}-${idx}`,
+        id: `tp-${badge.provider}-${badge.id}`,
         kind: 'addon',
         url,
         node: (
-          <Tooltip content={<BadgeHoverCard badge={ref} clickable={clickable} />} side="top" requirePointerMove>
+          <Tooltip content={<BadgeHoverCard badge={ref} clickable={hoverClickable} />} side="top" requirePointerMove>
             {clickable ? (
               <button type="button" aria-label={ref.title} className={BADGE_BUTTON_CLASS} onClick={() => openBadgeInfo(ref)}>
                 {img}
@@ -279,6 +291,7 @@ export function ChatBadgeIcons({
   if (streamNookMemberId) {
     slots.push({
       key: `${keyPrefix}-sn`,
+      id: 'sn',
       kind: 'streamnook',
       url: '',
       node: (
@@ -304,7 +317,9 @@ export function ChatBadgeIcons({
   return (
     <>
       {fold.shown.map((i) => (
-        <Fragment key={drawable[i].key}>{drawable[i].node}</Fragment>
+        <Fragment key={drawable[i].key}>
+          {wrapSlot ? wrapSlot(drawable[i].id, drawable[i].node) : drawable[i].node}
+        </Fragment>
       ))}
       {fold.hidden.length > 0 && (
         <BadgeFoldChip
