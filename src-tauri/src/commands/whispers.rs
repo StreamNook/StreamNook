@@ -138,6 +138,9 @@ pub async fn set_app_interactive(interactive: bool) -> Result<(), String> {
 #[cfg(mobile)]
 #[tauri::command]
 pub async fn twitch_integrity_minted(request_id: String, url: Option<String>, error: Option<String>) -> Result<bool, String> {
-    let _ = (request_id, url, error);
-    Ok(false)
+    let outcome = match url {
+        Some(u) => Ok(u),
+        None => Err(error.unwrap_or_else(|| "no answer".into())),
+    };
+    Ok(crate::services::twitch_integrity::matcher::answer(&request_id, outcome))
 }

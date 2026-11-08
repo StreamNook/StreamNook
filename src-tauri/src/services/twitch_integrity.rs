@@ -66,11 +66,35 @@ static CACHE: Mutex<Option<(Integrity, Instant)>> = Mutex::new(None);
 static LAST_FAILURE: Mutex<Option<Instant>> = Mutex::new(None);
 const WARM_BACKOFF: Duration = Duration::from_secs(120);
 static MINTING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+/// When a mint last succeeded (ms since the epoch), for callers that back off.
+static LAST_SUCCESS: Mutex<Option<i64>> = Mutex::new(None);
+/// The phone side's own deadline: it always answers by then and removes its view.
+/// Used by the phone arms only.
+#[allow(dead_code)]
+const NATIVE_DEADLINE_MS: u64 = 28_000;
+/// The longest a phone mint can hold `MINTING`, whatever the phone side does.
+#[allow(dead_code)]
+const NATIVE_CEILING_MS: u64 = 35_000;
 
 fn cached() -> Option<Integrity> {
     let guard = CACHE.lock().unwrap_or_else(|e| e.into_inner());
     let (token, until) = guard.as_ref()?;
     (Instant::now() < *until).then(|| token.clone())
+}
+
+/// A token is cached and fresh, so a call needs no mint.
+pub fn has_cached() -> bool {
+    cached().is_some()
+}
+
+/// When a mint last succeeded, if ever this run.
+pub fn last_success_ms() -> Option<i64> {
+    *LAST_SUCCESS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// The cached token, without minting (reconciled: whisper_sync's minter reads it).
+pub fn cached_token() -> Option<Integrity> {
+    cached()
 }
 
 /// Forget the token: Twitch refused it, or the account changed.
@@ -104,6 +128,7 @@ pub async fn get() -> Result<Integrity, String> {
             return Err(e);
         }
     };
+    *LAST_SUCCESS.lock().unwrap_or_else(|e| e.into_inner()) = Some(chrono::Utc::now().timestamp_millis());
     let integrity = Integrity { token: minted.token, device_id: minted.device_id, user_agent: minted.user_agent };
     let keep = keep_for(minted.expiration, chrono::Utc::now().timestamp_millis());
     if !keep.is_zero() {
@@ -116,6 +141,10 @@ pub async fn get() -> Result<Integrity, String> {
 /// not wait on the page.
 pub fn warm() {
     if cached().is_some() {
+        return;
+    }
+    // A phone in the background never opens a page to mint.
+    if crate::services::window_visibility::phone_idle() {
         return;
     }
     let failed_recently = LAST_FAILURE
@@ -233,10 +262,98 @@ async fn mint() -> Result<Minted, String> {
     }
 }
 
-/// The phone has no second window to borrow; cheers there go without a token.
-#[cfg(not(desktop))]
+/// The phone answers the minted page's final address (its fragment carries the
+/// answer), read the same way the desktop window's is.
+#[allow(dead_code)]
+fn minted_from_url(url: &str) -> Result<Minted, String> {
+    match read_fragment(url) {
+        Some(Ok(m)) => Ok(m),
+        Some(Err(e)) => Err(format!("Twitch's security check failed: {e}")),
+        None => Err("Twitch's security check gave no answer".into()),
+    }
+}
+
+/// On iPhone the shell runs the page in a 1 pt WKWebView on the sign-in's
+/// store (`host_request` kind `mint_twitch_integrity`) and answers through
+/// `twitch_integrity_minted`. `MINTING` is held at most `NATIVE_CEILING_MS`.
+#[cfg(target_os = "ios")]
+async fn mint() -> Result<Minted, String> {
+    if crate::services::window_visibility::phone_idle() {
+        return Err("Twitch's security check waits for the app to be open".into());
+    }
+    let (id, rx) = matcher::begin(NATIVE_CEILING_MS);
+    sn_tauri_headless::host_request(
+        "mint_twitch_integrity",
+        &serde_json::json!({
+            "request_id": id,
+            "url": MINT_PAGE,
+            "script": script(),
+            "deadline_ms": NATIVE_DEADLINE_MS,
+        }),
+    );
+    let url = matcher::wait(&id, rx, NATIVE_CEILING_MS).await?;
+    minted_from_url(&url)
+}
+
+/// Android: filled by its own card (the login plugin's web view).
+#[cfg(target_os = "android")]
 async fn mint() -> Result<Minted, String> {
     Err("Twitch's security check needs the desktop app".into())
+}
+
+/// Requests a phone shell answers later, matched by id. Plain Rust with no
+/// platform gate, so its rules are tested on desktop.
+pub mod matcher {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+
+    use once_cell::sync::Lazy;
+    use tokio::sync::oneshot;
+
+    type Answer = Result<String, String>;
+
+    static PENDING: Lazy<Mutex<HashMap<String, (oneshot::Sender<Answer>, Instant)>>> =
+        Lazy::new(|| Mutex::new(HashMap::new()));
+
+    /// Open a request that may be answered within `ceiling_ms`.
+    pub fn begin(ceiling_ms: u64) -> (String, oneshot::Receiver<Answer>) {
+        let id = format!("mint-{}-{:08x}", chrono::Utc::now().timestamp_millis(), rand::random::<u32>());
+        let (tx, rx) = oneshot::channel();
+        let deadline = Instant::now() + Duration::from_millis(ceiling_ms);
+        PENDING.lock().unwrap_or_else(|e| e.into_inner()).insert(id.clone(), (tx, deadline));
+        (id, rx)
+    }
+
+    /// The shell's answer. False when the request is unknown, already
+    /// answered, past its ceiling, or its waiter is gone.
+    pub fn answer(request_id: &str, outcome: Answer) -> bool {
+        let entry = PENDING.lock().unwrap_or_else(|e| e.into_inner()).remove(request_id);
+        match entry {
+            Some((tx, deadline)) if Instant::now() <= deadline => tx.send(outcome).is_ok(),
+            _ => false,
+        }
+    }
+
+    /// Drop a request nobody waits for any more; a late answer is then refused.
+    pub fn forget(request_id: &str) {
+        PENDING.lock().unwrap_or_else(|e| e.into_inner()).remove(request_id);
+    }
+
+    /// Wait for the answer at most `ceiling_ms`.
+    pub async fn wait(request_id: &str, rx: oneshot::Receiver<Answer>, ceiling_ms: u64) -> Answer {
+        match tokio::time::timeout(Duration::from_millis(ceiling_ms), rx).await {
+            Ok(Ok(answer)) => answer,
+            Ok(Err(_)) => {
+                forget(request_id);
+                Err("Twitch's security check was cancelled".into())
+            }
+            Err(_) => {
+                forget(request_id);
+                Err(format!("Twitch's security check did not answer within {}s", ceiling_ms / 1000))
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -276,5 +393,46 @@ mod tests {
         assert!(s.contains("location.hash !== '#SN_MINT'"));
         assert!(s.contains(TWITCH_WEB_CLIENT_ID));
         assert!(s.contains(BOT_CHECK_SCRIPT));
+    }
+
+    #[tokio::test]
+    async fn mint_matcher_resolves_and_times_out() {
+        let (id, rx) = matcher::begin(5_000);
+        assert!(matcher::answer(&id, Ok("https://www.twitch.tv/robots.txt#x".into())));
+        assert_eq!(matcher::wait(&id, rx, 5_000).await.unwrap(), "https://www.twitch.tv/robots.txt#x");
+        // Answered once: a second answer is refused.
+        assert!(!matcher::answer(&id, Ok("again".into())));
+        assert!(!matcher::answer("mint-unknown", Ok("x".into())));
+    }
+
+    #[tokio::test]
+    async fn late_native_answer_after_timeout_is_dropped() {
+        let (id, rx) = matcher::begin(5_000);
+        let r = matcher::wait(&id, rx, 20).await;
+        assert!(r.unwrap_err().contains("did not answer"));
+        assert!(!matcher::answer(&id, Ok("late".into())));
+    }
+
+    #[tokio::test]
+    async fn native_never_answers_releases_minting() {
+        // The wait ends by itself, so a mint that holds MINTING returns and
+        // releases it even when the phone side never answers.
+        let lock = tokio::sync::Mutex::new(());
+        {
+            let _held = lock.lock().await;
+            let (id, rx) = matcher::begin(30);
+            assert!(matcher::wait(&id, rx, 30).await.is_err());
+        }
+        assert!(lock.try_lock().is_ok());
+    }
+
+    #[test]
+    fn a_minted_page_address_reads_like_the_desktop_one() {
+        let url = format!(
+            "https://www.twitch.tv/robots.txt#SN_INTEGRITY={}",
+            urlencoding::encode(r#"{"token":"t","expiration":0,"device_id":"d","user_agent":"u"}"#)
+        );
+        assert_eq!(minted_from_url(&url).unwrap().token, "t");
+        assert!(minted_from_url("https://www.twitch.tv/robots.txt").is_err());
     }
 }
