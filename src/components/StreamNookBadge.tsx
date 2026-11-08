@@ -197,10 +197,12 @@ const getTierBase = (n: number): TierInfo => {
 };
 
 // Mixed pool: digits (the target glyphs), half-width katakana for the matrix flavor,
-// plus a few punctuation marks for visual variety while scrambling.
+// plus a few punctuation marks for visual variety while scrambling. Half-width
+// (U+FF66 to U+FF9D), so every glyph is a digit's width: full-width katakana
+// are twice as wide and wrapped a long number's cypher onto two lines.
 const SCRAMBLE_POOL =
   '0123456789' +
-  'アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン' +
+  'ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜｦﾝ' +
   '!#$%&*+';
 
 const pickRandomGlyph = () =>
@@ -314,12 +316,12 @@ const MatrixDecode = ({ numberText, tier, skipCypher = false, cosmeticName = nul
             ⇒ identical widths ⇒ the scramble / resolved number always sits at
             the geometric center of the row, regardless of whether the leading
             Nº is at opacity-0 (cypher) or opacity-1 (reveal). */}
-        <div className="flex items-baseline justify-center gap-2">
+        <div className="flex items-baseline justify-center gap-2 whitespace-nowrap">
           <span className={`text-[11px] text-white/30 font-light leading-none ${chromeOpacity}`}>
             Nº
           </span>
           {!revealed ? (
-            <span className="font-mono text-[52px] font-extralight text-textPrimary tabular-nums leading-none tracking-tight">
+            <span className="font-mono text-[52px] font-extralight text-textPrimary tabular-nums leading-none tracking-tight whitespace-nowrap">
               {scramble}
             </span>
           ) : (

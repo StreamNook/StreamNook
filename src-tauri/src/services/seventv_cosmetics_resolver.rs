@@ -1359,6 +1359,64 @@ pub async fn inventory(id: &str) -> Option<UserCosmetics> {
     owned(id).await.map(|i| with_pick(id, i.cosmetics, true))
 }
 
+/// Disk-cache requests for every piece of art in an inventory: each badge's
+/// 4x image and each image paint layer's file, picked and keyed as the page
+/// keys them (badge id, layer id; `pickPaintLayerImage`), so Customize and chat
+/// read the same copies. Gradient paints have nothing to fetch.
+pub fn art_requests(c: &UserCosmetics) -> Vec<crate::services::asset_cache_queue::AssetRequest> {
+    use crate::services::asset_cache_queue::AssetRequest;
+    let mut out = Vec::new();
+    for badge in &c.badges {
+        if let Some(id) = badge
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+        {
+            out.push(AssetRequest {
+                id: id.to_string(),
+                url: format!("https://cdn.7tv.app/badge/{id}/4x.webp"),
+            });
+        }
+    }
+    for paint in &c.paints {
+        let layers = paint.pointer("/data/layers").and_then(Value::as_array);
+        for layer in layers.into_iter().flatten() {
+            let Some(ty) = layer.get("ty") else { continue };
+            if ty.get("__typename").and_then(Value::as_str) != Some("PaintLayerTypeImage") {
+                continue;
+            }
+            let Some(layer_id) = layer
+                .get("id")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+            else {
+                continue;
+            };
+            let images = ty
+                .get("images")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let frames = |i: &Value| i.get("frameCount").and_then(Value::as_u64).unwrap_or(1);
+            let animated = images.iter().any(|i| frames(i) > 1);
+            let pick = images.iter().find(|i| {
+                i.get("scale").and_then(Value::as_u64) == Some(1) && (!animated || frames(i) > 1)
+            });
+            if let Some(url) = pick
+                .and_then(|i| i.get("url"))
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+            {
+                out.push(AssetRequest {
+                    id: layer_id.to_string(),
+                    url: url.to_string(),
+                });
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1759,5 +1817,43 @@ mod tests {
         assert_eq!(owned.paints[1]["selected"], true);
         assert_eq!(owned.badges.len(), 1);
         assert!(owned.badges[0].get("selected").is_none());
+    }
+
+    #[test]
+    fn an_inventory_caches_every_badge_and_image_paint_layer_as_the_page_picks() {
+        let image = |url: &str, scale: u64, frames: u64| json!({ "url": url, "scale": scale, "frameCount": frames });
+        let c = UserCosmetics {
+            badges: vec![json!({ "id": "b1" }), json!({ "id": "" }), json!({})],
+            paints: vec![
+                // A gradient paint: nothing to fetch.
+                json!({ "id": "p0", "data": { "layers": [{ "id": "g", "ty": { "__typename": "PaintLayerTypeLinearGradient" } }] } }),
+                // Animated: the scale-1 animated file, not the still.
+                json!({ "id": "p1", "data": { "layers": [{ "id": "L1", "ty": {
+                    "__typename": "PaintLayerTypeImage",
+                    "images": [image("still-1x", 1, 1), image("anim-2x", 2, 30), image("anim-1x", 1, 30)],
+                } }] } }),
+                // Still: the scale-1 file.
+                json!({ "id": "p2", "data": { "layers": [{ "id": "L2", "ty": {
+                    "__typename": "PaintLayerTypeImage",
+                    "images": [image("still-2x", 2, 1), image("still-1x", 1, 1)],
+                } }] } }),
+            ],
+            ..Default::default()
+        };
+        let got: Vec<(String, String)> = art_requests(&c)
+            .into_iter()
+            .map(|r| (r.id, r.url))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (
+                    "b1".to_string(),
+                    "https://cdn.7tv.app/badge/b1/4x.webp".to_string()
+                ),
+                ("L1".to_string(), "anim-1x".to_string()),
+                ("L2".to_string(), "still-1x".to_string()),
+            ]
+        );
     }
 }

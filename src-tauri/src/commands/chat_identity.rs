@@ -367,6 +367,32 @@ pub struct ChatIdentityBadge {
     pub is_selected: bool,
 }
 
+/// Disk-cache requests for your own Twitch badges, under the id chat rows use
+/// for the same art (`twitch-<set>/<version>`), so Customize's wall and chat
+/// share one copy and open from disk.
+pub fn identity_badge_requests(
+    badges: &[ChatIdentityBadge],
+) -> Vec<crate::services::asset_cache_queue::AssetRequest> {
+    badges
+        .iter()
+        .filter(|b| !b.id.is_empty() && !b.image_url.is_empty())
+        .map(|b| crate::services::asset_cache_queue::AssetRequest {
+            id: format!("twitch-{}/{}", b.id, b.version),
+            url: b.image_url.clone(),
+        })
+        .collect()
+}
+
+#[cfg(desktop)]
+fn queue_identity_badge_art(app: &AppHandle, badges: &[ChatIdentityBadge]) {
+    crate::services::asset_cache_queue::enqueue(
+        app,
+        crate::services::asset_cache_queue::AssetKind::Badge,
+        identity_badge_requests(badges),
+        false,
+    );
+}
+
 // ── Android: the GQL path only ───────────────────────────────────────────────
 //
 // The desktop commands are `#[cfg(desktop)]` because of what they fall back TO,
@@ -770,6 +796,7 @@ pub async fn fetch_chat_identity_badges(
                 "[ChatIdentity] Fast GQL path succeeded with {} badges!",
                 badges.len()
             );
+            queue_identity_badge_art(&app, &badges);
             let result = BadgeScrapeResult {
                 success: true,
                 message: format!("Found {} badges via GQL", badges.len()),
@@ -847,6 +874,7 @@ pub async fn receive_badge_data(app: AppHandle, result: BadgeScrapeResult) -> Re
         result.success,
         result.message
     );
+    queue_identity_badge_art(&app, &result.badges);
 
     // Emit to frontend
     let _ = app.emit("chat-identity-badges-found", &result);
@@ -972,4 +1000,39 @@ pub async fn receive_update_result(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn your_twitch_badges_cache_under_the_id_chat_rows_use() {
+        let badge = |id: &str, version: &str, url: &str| ChatIdentityBadge {
+            id: id.into(),
+            version: version.into(),
+            title: String::new(),
+            image_url: url.into(),
+            is_selected: false,
+        };
+        let got: Vec<(String, String)> = identity_badge_requests(&[
+            badge(
+                "glhf-pledge",
+                "1",
+                "https://static-cdn.jtvnw.net/badges/v1/a/3",
+            ),
+            badge("", "1", "https://x"),
+            badge("partner", "1", ""),
+        ])
+        .into_iter()
+        .map(|r| (r.id, r.url))
+        .collect();
+        assert_eq!(
+            got,
+            [(
+                "twitch-glhf-pledge/1".to_string(),
+                "https://static-cdn.jtvnw.net/badges/v1/a/3".to_string()
+            )]
+        );
+    }
 }

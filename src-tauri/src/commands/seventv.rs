@@ -89,9 +89,24 @@ pub async fn seventv_user_cosmetics(
 /// Everything one account owns on 7TV (the cosmetics picker, attainables).
 #[command]
 pub async fn seventv_user_inventory(
+    app: crate::rt::AppHandle,
     id: String,
 ) -> Option<crate::services::seventv_cosmetics_resolver::UserCosmetics> {
-    crate::services::seventv_cosmetics_resolver::inventory(&id).await
+    use crate::services::{asset_cache_queue, seventv_cosmetics_resolver as resolver};
+    let owned = resolver::inventory(&id).await;
+    // Your own collection goes to disk whole, not only what has been drawn
+    // somewhere, so Customize opens a wall of paints and badges from disk.
+    let own =
+        crate::services::account_store::AccountStore::primary().is_some_and(|a| a.user_id == id);
+    if let (true, Some(c)) = (own, owned.as_ref()) {
+        asset_cache_queue::enqueue(
+            &app,
+            asset_cache_queue::AssetKind::Cosmetic,
+            resolver::art_requests(c),
+            false,
+        );
+    }
+    owned
 }
 
 /// The 7TV profile picture of each cosmetics id (bare Twitch id, `kick:<id>`,

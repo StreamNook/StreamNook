@@ -1,15 +1,15 @@
-import { useState, useEffect, useRef, useSyncExternalStore, useMemo, type CSSProperties } from 'react';
+import { useState, useEffect, useRef, useSyncExternalStore, useDeferredValue, type CSSProperties } from 'react';
+import { useFreshIds } from '../../hooks/useFreshIds';
 import { createPortal } from 'react-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useAppStore } from '../../stores/AppStore';
 import { refreshAtmosphere, setOwnThemeHiddenInChat } from '../../stores/chatUserStore';
-import { AtmosphereBackground } from '../AtmosphereBackground';
 import { isDevAtmosphere } from '../../services/devAtmospheres';
 import { MajorCologneChrome } from '../MajorCologneChrome';
-import { getPreviewEmotes, previewEmoteUrl, rollPreviewChat, type PreviewEmote } from '../../utils/previewChat';
+import { getPreviewEmotes, type PreviewEmote } from '../../utils/previewChat';
 import { openBadgesWithPaintInMain, openBadgesOnStreamNookInMain } from '../../utils/openBadgesInMain';
 import streamNookLogo from '../../assets/streamnook-logo-128.webp';
-import { User, Link, Unlink, Image as ImageIcon, Film, Heart, Check, ExternalLink, Lock, MessageSquare } from 'lucide-react';
+import { User, Link, Unlink, Image as ImageIcon, Film, Heart, Check, ExternalLink, Lock, ArrowUpRight } from 'lucide-react';
 import {
   computePaintStyle,
   getBadgeImageUrls,
@@ -19,6 +19,7 @@ import {
   clearUserCache as clear7TVCache,
 } from '../../services/seventvService';
 import { FallbackImage } from '../FallbackImage';
+import { getCachedBadgeUrl } from '../../services/badgeImageCacheService';
 import { Tooltip } from '../ui/Tooltip';
 import { TwitchBadge } from '../../services/badgeService';
 import type { ThirdPartyBadge } from '../../services/badgeService';
@@ -76,7 +77,12 @@ import { invoke } from '@tauri-apps/api/core';
 import { Logger } from '../../utils/logger';
 import LinkedAccountsSection from './LinkedAccountsSection';
 import ProfileOverview from './ProfileOverview';
-import { features } from '../../features';
+import { ProfileChatPreview } from './profile/ProfileChatPreview';
+import { BADGE_GRID, CardTitle, CosmeticSearch, CustomizeGroup, PAINT_GRID, SubTitle } from './profile/CustomizeParts';
+import { matchesCosmetic } from './profile/cosmeticSearch';
+import { setHoveredTheme } from './profile/profilePreview';
+import { useRequestSettingsWide } from './settingsWide';
+import SectionNav from './SectionNav';
 import {
   isStatHidden,
   PROFILE_VISIBILITY_GROUPS,
@@ -229,8 +235,23 @@ const ProfileSettings = () => {
     () => (seededProfile?.seventvPaint as SevenTVPaint | null | undefined) ?? null,
   );
   const [profileTheme, setProfileThemeState] = useState(() => seededProfile?.profileTheme ?? 'tier');
-  // The cosmetic currently hovered in the picker, for the live preview card.
-  const [previewThemeId, setPreviewThemeId] = useState<string | null>(null);
+  // The look hovered in the picker lives in its own store (profilePreview),
+  // read only by the chat preview: hovering never re-renders this page.
+  useEffect(() => () => setHoveredTheme(null), []);
+  // Customize gets the wide window, like the Overlay studio, and draws its own
+  // section rail beside the chat preview.
+  useRequestSettingsWide(profileTab === 'customize');
+  const customizeRef = useRef<HTMLDivElement>(null);
+  // Where the profile card draws: in place on Overview, in Customize's held
+  // column otherwise (a portal, so it stays one element with one ref).
+  const cardInColumn = profileTab === 'customize';
+  // The search over every badge and paint wall. The walls filter on the
+  // deferred copy, so typing stays instant with hundreds of cosmetics.
+  const [cosmeticQuery, setCosmeticQuery] = useState('');
+  const cosmeticFilter = useDeferredValue(cosmeticQuery.trim());
+  const [cardSlot, setCardSlot] = useState<HTMLDivElement | null>(null);
+  const placeCard = (card: React.ReactElement) =>
+    cardInColumn ? (cardSlot ? createPortal(card, cardSlot) : null) : card;
   // Live 7TV global emotes for the mock chat message (fetched once, cached).
   const [previewEmotes, setPreviewEmotes] = useState<PreviewEmote[]>([]);
   useEffect(() => { getPreviewEmotes().then(setPreviewEmotes).catch(() => {}); }, []);
@@ -965,6 +986,32 @@ const ProfileSettings = () => {
     ? withBttvPro(thirdPartyBadges as any[], selfBttvProBadge)
     : thirdPartyBadges;
   const shownThirdParty = allThirdParty.filter((b) => isThirdPartyShown(b));
+  // The card's cosmetic you just picked plays its swap (same ids as the chat
+  // line in ProfileChatPreview); the rest hold still.
+  const freshOnCard = useFreshIds(
+    [
+      selectedGlobalBadge ? `tw-${selectedGlobalBadge.id}/${selectedGlobalBadge.version}` : '',
+      selected7TVBadge ? `7tv-${selected7TVBadge.id}` : '',
+      ...shownThirdParty.map((b) => `tp-${b.provider}-${b.id}`),
+      `sn-${activeCosmeticSlug ?? ''}`,
+      `paint-${seventvPaint?.id ?? 'none'}`,
+    ].filter(Boolean),
+  );
+  const swapOnCard = (id: string) => (freshOnCard.has(id) ? 'sn-cosmetic-swap' : 'inline-flex');
+
+  // Each wall narrowed by the search (all of it while the search is empty).
+  const searchingCosmetics = cosmeticFilter.length > 0;
+  const snOwnedHits = ownedBadges.filter((c) => matchesCosmetic(c.name, cosmeticFilter));
+  const snLockedHits = lockedBadges.filter((c) => matchesCosmetic(c.name, cosmeticFilter));
+  const thirdPartyHits = allThirdParty.filter(
+    (b) => matchesCosmetic(b.title, cosmeticFilter) || matchesCosmetic(b.provider, cosmeticFilter),
+  );
+  const twitchHits = chatIdentityBadges.filter((b) => matchesCosmetic(b.title, cosmeticFilter));
+  const paintHits = allSeventvPaints.filter((p) => matchesCosmetic(p.name, cosmeticFilter));
+  const seventvBadgeHits = seventvBadges.filter((b) => matchesCosmetic(b.tooltip || b.name, cosmeticFilter));
+  const noCosmeticHits =
+    searchingCosmetics &&
+    snOwnedHits.length + snLockedHits.length + thirdPartyHits.length + twitchHits.length + paintHits.length + seventvBadgeHits.length === 0;
   const toggleThirdParty = (b: { provider: string; id: string }) => {
     if (!currentUser?.user_id) return;
     // Chat shows one badge per category (Homies has three: custom, role,
@@ -1067,25 +1114,6 @@ const ProfileSettings = () => {
     if (a.unlock?.kind === 'subscriber') return 'Subscriber atmosphere';
     return null;
   };
-
-  // Live preview: the hovered cosmetic (or the active one when nothing hovered).
-  const activePreviewId = previewThemeId ?? profileTheme;
-  const previewAtm = getAtmosphere(activePreviewId);
-  // Frosted readability block behind the text for busy washes (e.g. Midnight),
-  // mirroring ChatMessage so the text stays legible over the image in the preview.
-  // The chat preview shows what chat will show, so it drops the wash when the
-  // member keeps their atmosphere out of chat.
-  const chatPreviewAtm = chatAtmosphere ? previewAtm : null;
-  const previewFrost = !!chatPreviewAtm?.chatFrost;
-  const previewLocked = previewAtm ? !atmUnlocked(previewAtm) : activePreviewId === 'paint' ? !canPaint : false;
-  // Name the RIGHT tier on the lock pill: an Atmosphere needs Subscriber, but a
-  // 7TV paint only needs Supporter. Telling a paint previewer to "subscribe"
-  // overcharges them (Supporter is the cheaper one-time tier that unlocks it).
-  const previewLockTier: 'supporter' | 'subscriber' = previewAtm ? 'subscriber' : 'supporter';
-  // A fresh random sample line (+ maybe a 7TV emote) each time the previewed
-  // cosmetic changes, so the mock chat reads like real, varied chat.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const previewChat = useMemo(() => rollPreviewChat(previewEmotes), [activePreviewId, previewEmotes]);
 
   // Signed in, with the profile still on its way (a session kept through a
   // network failure): say so rather than offer a sign-in.
@@ -1203,25 +1231,57 @@ const ProfileSettings = () => {
           </button>
         ))}
       </div>
-        <button
-          type="button"
-          onClick={() => {
-            const store = useAppStore.getState();
-            store.closeSettings();
-            void store.openOwnChannel();
-          }}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-white/[0.06] bg-white/[0.03] px-3 py-[10px] text-[13px] font-medium text-textSecondary transition-colors hover:text-textPrimary"
-        >
-          <MessageSquare size={14} />
-          My channel
-        </button>
+        {/* A shortcut, so it reads as one: your own face says whose chat,
+            the words say where, and the arrow says it takes you there. */}
+        <Tooltip content="Go to your channel" side="left">
+          <button
+            type="button"
+            onClick={() => {
+              const store = useAppStore.getState();
+              store.closeSettings();
+              void store.openOwnChannel();
+            }}
+            className="group ml-auto inline-flex items-center gap-2 self-stretch rounded-lg border border-white/[0.06] bg-white/[0.03] pl-[7px] pr-3 text-[13px] font-medium text-textSecondary transition-colors hover:bg-white/[0.06] hover:text-textPrimary"
+          >
+            {currentUser?.profile_image_url ? (
+              <span className="h-6 w-6 overflow-hidden rounded-full ring-1 ring-white/10">
+                <SevenTvAvatar
+                  cosmeticsId={currentUser.user_id}
+                  px={48}
+                  src={currentUser.profile_image_url}
+                  alt=""
+                  className="h-full w-full object-cover"
+                />
+              </span>
+            ) : (
+              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-white/[0.06]">
+                <User size={13} />
+              </span>
+            )}
+            Your chat
+            <ArrowUpRight
+              size={14}
+              className="text-textMuted transition-transform duration-200 group-hover:-translate-y-px group-hover:translate-x-px group-hover:text-textPrimary"
+            />
+          </button>
+        </Tooltip>
       </div>
 
-      <div ref={profileCardRef} className="relative overflow-hidden flex items-center gap-8 p-6 glass-panel glaze-inset rounded-xl">
+      {/* The card is the honest preview: your number, every badge you wear and
+          your paint, updated as you pick. On Customize it moves into the column
+          held beside the pickers (stacked to fit); the same element, so Share
+          captures it there too. */}
+      {placeCard(
+      <div
+        ref={profileCardRef}
+        className={`relative overflow-hidden glass-panel glaze-inset rounded-xl ${
+          cardInColumn ? 'grid grid-cols-[auto_1fr] items-center gap-x-4 gap-y-4 p-5' : 'flex items-center gap-8 p-6'
+        }`}
+      >
         {/* Tier aura backdrop — Ethereal gets violet, Mythic gets amber.
             Other tiers don't define one; the card stays neutral glass. */}
         {tier?.auraClassName && <div className={tier.auraClassName} />}
-        <div className="relative w-32 h-32 rounded-full bg-white/[0.04] flex-shrink-0 flex items-center justify-center overflow-hidden ring-1 ring-inset ring-white/10 shadow-[0_6px_20px_rgba(0,0,0,0.45)]">
+        <div className={`relative ${cardInColumn ? 'w-20 h-20' : 'w-32 h-32'} rounded-full bg-white/[0.04] flex-shrink-0 flex items-center justify-center overflow-hidden ring-1 ring-inset ring-white/10 shadow-[0_6px_20px_rgba(0,0,0,0.45)]`}>
           {currentUser.profile_image_url ? (
             <SevenTvAvatar
               cosmeticsId={currentUser.user_id}
@@ -1236,42 +1296,61 @@ const ProfileSettings = () => {
           )}
         </div>
 
-        <div className="relative flex-1 min-w-0">
+        <div className={`relative min-w-0 ${cardInColumn ? 'col-span-2 row-start-2' : 'flex-1'}`}>
           <div className="flex items-center gap-2 mb-2 flex-wrap">
             {/* Canonical badge order (see utils/badgeOrder): Twitch global, then
                 7TV, then third-party, then StreamNook last, next to the name. The
                 card has no channel context, so the channel-contextual tier
                 (sub/poll) never shows here. */}
-            {selectedGlobalBadge && (
-              <Tooltip content={`Twitch: ${selectedGlobalBadge.title}`} side="top">
-                <img src={selectedGlobalBadge.image_url} alt={selectedGlobalBadge.title} className="w-6 h-6" />
-              </Tooltip>
-            )}
+            {selectedGlobalBadge && (() => {
+              const id = `tw-${selectedGlobalBadge.id}/${selectedGlobalBadge.version}`;
+              return (
+                <span key={id} className={swapOnCard(id)}>
+                  <Tooltip content={`Twitch: ${selectedGlobalBadge.title}`} side="top">
+                    <img
+                      src={getCachedBadgeUrl(`twitch-${selectedGlobalBadge.id}/${selectedGlobalBadge.version}`) ?? selectedGlobalBadge.image_url}
+                      alt={selectedGlobalBadge.title}
+                      className="w-6 h-6"
+                    />
+                  </Tooltip>
+                </span>
+              );
+            })()}
             {selected7TVBadge && (() => {
               const urls = getBadgeImageUrls(selected7TVBadge as any);
+              const id = `7tv-${selected7TVBadge.id}`;
               return urls.url4x ? (
-                <Tooltip content={`7TV: ${selected7TVBadge.tooltip || selected7TVBadge.name}`} side="top">
-                  <FallbackImage
-                    src={urls.url4x}
-                    fallbackUrls={getBadgeFallbackUrls(selected7TVBadge.id).slice(1)}
-                    alt={selected7TVBadge.tooltip || selected7TVBadge.name}
-                    className="w-6 h-6"
-                  />
-                </Tooltip>
+                <span key={id} className={swapOnCard(id)}>
+                  <Tooltip content={`7TV: ${selected7TVBadge.tooltip || selected7TVBadge.name}`} side="top">
+                    <FallbackImage
+                      src={urls.url4x}
+                      fallbackUrls={getBadgeFallbackUrls(selected7TVBadge.id).slice(1)}
+                      alt={selected7TVBadge.tooltip || selected7TVBadge.name}
+                      className="w-6 h-6"
+                    />
+                  </Tooltip>
+                </span>
               ) : null;
             })()}
             {/* Selected third-party badges — the card is the screenshot preview,
                 so it shows exactly the loadout other StreamNook users will see. */}
             {shownThirdParty.map((badge: any) => (
-              <Tooltip key={`card-tp-${badge.provider}-${badge.id}`} content={`${badge.title} (${badge.provider.toUpperCase()})`} side="top">
-                <img src={badge.image4x || badge.imageUrl} alt={badge.title} className="w-6 h-6" />
-              </Tooltip>
+              <span key={`card-tp-${badge.provider}-${badge.id}`} className={swapOnCard(`tp-${badge.provider}-${badge.id}`)}>
+                <Tooltip content={`${badge.title} (${badge.provider.toUpperCase()})`} side="top">
+                  <img src={badge.image4x || badge.imageUrl} alt={badge.title} className="w-6 h-6" />
+                </Tooltip>
+              </span>
             ))}
             {streamNookUserNumber !== null && currentUser?.user_id && (
-              <StreamNookBadge userId={currentUser.user_id} side="bottom" />
+              <span key={`sn-${activeCosmeticSlug ?? ''}`} className={swapOnCard(`sn-${activeCosmeticSlug ?? ''}`)}>
+                <StreamNookBadge userId={currentUser.user_id} side="bottom" />
+              </span>
             )}
             <h3
-              className="text-3xl font-bold"
+              key={`paint-${seventvPaint?.id ?? 'none'}`}
+              className={`${cardInColumn ? 'text-2xl' : 'text-3xl'} font-bold ${
+                freshOnCard.has(`paint-${seventvPaint?.id ?? 'none'}`) ? 'sn-cosmetic-swap sn-cosmetic-swap--name' : ''
+              }`}
               style={seventvPaint ? computePaintStyle(seventvPaint as any, '#9146FF') : { color: 'var(--text-primary)' }}
             >
               {currentUser.display_name || currentUser.login}
@@ -1312,7 +1391,11 @@ const ProfileSettings = () => {
         </div>
 
         {tier && streamNookUserNumber !== null && (
-          <div className="relative flex-shrink-0 flex flex-col items-center pt-1 pb-2 min-w-[120px]">
+          <div
+            className={`relative flex-shrink-0 flex flex-col items-center pt-1 pb-2 ${
+              cardInColumn ? 'col-start-2 row-start-1 justify-self-end min-w-[96px]' : 'min-w-[120px]'
+            }`}
+          >
             <div className="text-[9px] uppercase tracking-[0.36em] font-medium text-white/35 mb-3">
               StreamNook
             </div>
@@ -1327,7 +1410,8 @@ const ProfileSettings = () => {
             {tier.label && <div className={tier.labelClassName}>{tier.label}</div>}
           </div>
         )}
-        </div>
+        </div>,
+      )}
 
       {/* Intro for the identity editor. Shown only on the Customize sub-tab;
           the Overview sub-tab renders its own stats view instead. */}
@@ -1444,36 +1528,71 @@ const ProfileSettings = () => {
       )}
 
       {profileTab === 'customize' && (
-        <>
-      <div className="px-1 pt-0.5">
-        <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-textMuted">Cosmetics</h3>
-        <p className="mt-0.5 text-[11px] leading-relaxed text-textSecondary">
-          Your StreamNook identity: badges, your profile background, and animated Atmospheres.
+        // Wide window: the cosmetics on the left, the chat preview held in
+        // view on the right while you browse. Narrower: the preview leads.
+        <div ref={customizeRef} className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(320px,402px)]">
+          <aside className="xl:sticky xl:top-2 xl:order-2">
+            <div ref={setCardSlot} className="mb-5" />
+            <ProfileChatPreview
+              profileTheme={profileTheme}
+              chatAtmosphere={chatAtmosphere}
+              canPaint={canPaint}
+              atmUnlocked={atmUnlocked}
+              onGetSupport={openSupportFor}
+              memberId={streamNookUserNumber !== null ? currentUser?.user_id ?? null : null}
+              memberBadge={activeCosmeticSlug}
+              twitchBadge={selectedGlobalBadge}
+              seventvBadge={selected7TVBadge as never}
+              thirdParty={shownThirdParty}
+              displayName={currentUser.display_name || currentUser.login || ''}
+              paint={seventvPaint}
+              emotes={previewEmotes}
+            />
+            {/* The sections, a jump away, with the one in view lit: a big
+                collection makes this a long page. */}
+            <div className="mt-6 hidden pl-1 xl:block">
+              <SectionNav containerRef={customizeRef} tabKey="customize" minSections={3} />
+            </div>
+          </aside>
+          <div className="min-w-0 space-y-4 xl:order-1">
+      <CustomizeGroup
+        title="Badges and paints"
+        note="Pick what shows beside your name in chat."
+        action={<CosmeticSearch value={cosmeticQuery} onChange={setCosmeticQuery} />}
+      />
+      {noCosmeticHits && (
+        <p className="px-1 py-6 text-center text-[13px] text-textSecondary">
+          Nothing matches “{cosmeticFilter}”.
         </p>
-      </div>
-      {streamNookUserNumber !== null && currentUser?.user_id && (ownedBadges.length > 0 || lockedBadges.length > 0) && (
-        <div className="settings-card p-4">
-          <div className="flex items-center gap-1.5 mb-4">
-            <Tooltip content="Open StreamNook badges" side="top">
-              <button
-                onClick={() => openBadgesOnStreamNookInMain()}
-                className="cursor-pointer hover:scale-110 transition-transform"
-                aria-label="Open StreamNook badges"
-              >
-                <img
-                  src={streamNookLogo}
-                  alt=""
-                  className="w-4 h-4 object-contain"
-                  draggable={false}
-                />
-              </button>
-            </Tooltip>
-            <h4 className="text-sm font-semibold text-textPrimary uppercase tracking-wide">
-              Badges
-            </h4>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {ownedBadges.map((cosmetic) => {
+      )}
+      {streamNookUserNumber !== null && currentUser?.user_id && snOwnedHits.length + snLockedHits.length > 0 && (
+        <section id="customize-streamnook" data-settings-section="StreamNook" className="settings-card scroll-mt-4 p-4">
+          <CardTitle
+            title="StreamNook"
+            icon={
+              <Tooltip content="Open StreamNook badges" side="top">
+                <button
+                  onClick={() => openBadgesOnStreamNookInMain()}
+                  className="cursor-pointer hover:scale-110 transition-transform"
+                  aria-label="Open StreamNook badges"
+                >
+                  <img
+                    src={streamNookLogo}
+                    alt=""
+                    className="w-4 h-4 object-contain"
+                    draggable={false}
+                  />
+                </button>
+              </Tooltip>
+            }
+          />
+          <SubTitle
+            title="Badges"
+            count={snOwnedHits.length}
+            wearing={ownedBadges.find((c) => c.slug === activeCosmeticSlug)?.name}
+          />
+          <div className={BADGE_GRID}>
+            {snOwnedHits.map((cosmetic) => {
               const asset = resolveCosmeticAsset(cosmetic, { chatSize: true });
               if (!asset) return null;
               const isActive = activeCosmeticSlug === cosmetic.slug;
@@ -1510,7 +1629,7 @@ const ProfileSettings = () => {
                 </Tooltip>
               );
             })}
-            {lockedBadges.map((cosmetic) => {
+            {snLockedHits.map((cosmetic) => {
               const asset = resolveCosmeticAsset(cosmetic, { chatSize: true });
               if (!asset) return null;
               const how = cosmetic.payment_type === 'Subscription'
@@ -1561,84 +1680,255 @@ const ProfileSettings = () => {
               </button>
             </div>
           )}
-        </div>
+        </section>
       )}
 
-      {/* Chat preview: how your name + badges read in a chat line for the hovered
-          (or active) cosmetic. An Atmosphere themes the chat backdrop; a 7TV paint
-          only the name. The full profile is now shown 1:1 by the live preview
-          (the "Show live preview" button above), so it's no longer mocked here. */}
-      <div className="space-y-2">
-        <div className="flex items-center gap-2 px-1">
-          <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-textMuted">Chat preview</span>
-          {previewLocked && (
-            <button
-              type="button"
-              onClick={() => openSupportFor(previewLockTier)}
-              className="inline-flex items-center gap-1 rounded-full border border-amber-400/30 bg-amber-400/15 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-200/90 transition-colors hover:bg-amber-400/25"
-            >
-              Get {previewLockTier === 'supporter' ? 'Supporter' : 'Subscriber'}
-              <ExternalLink size={9} className="opacity-70" />
-            </button>
-          )}
-        </div>
-
-        {/* Mock chat message at real chat sizes (text-sm, 20px badges), capped at a
-            real chat column width (~402px). Inline flow (below) wraps a long
-            message to the left edge like real chat, and the min height keeps it at
-            least two lines tall so the atmosphere reads with real vertical presence
-            instead of a thin single line. */}
-        <div
-          className="relative isolate w-full max-w-[402px] overflow-hidden rounded-lg border border-white/[0.06]"
-          style={{ paddingLeft: 18, paddingRight: 18, paddingTop: 7, paddingBottom: 7, minHeight: 60 }}
-        >
-          {chatPreviewAtm && <AtmosphereBackground atm={chatPreviewAtm} variant="chat" />}
-          {/* Inline flow (not flex) so a long message wraps to the LEFT edge on the
-              next line like a real chat row, instead of indenting under the name or
-              stretching into one super-wide line. Busy washes (chatFrost, e.g.
-              Midnight) get the same frosted readability block real chat uses. */}
-          <div
-            className={`relative text-sm leading-relaxed ${
-              previewFrost
-                ? `inline-block max-w-[calc(100%+0.75rem)] rounded-md px-1.5 -mx-1.5 py-0.5 ${features.richAtmospheres ? 'atm-frost' : 'atm-frost atm-frost--flat'}`
-                : ''
-            }`}
-          >
-            <span className="mr-1.5 align-middle text-[11px] text-textMuted">3:45</span>
-            {streamNookUserNumber !== null && currentUser?.user_id && (
-              <span className="mr-1 inline-flex align-middle">
-                <StreamNookBadge userId={currentUser.user_id} side="top" />
-              </span>
-            )}
-            <span
-              className="align-middle font-semibold"
-              style={seventvPaint ? computePaintStyle(seventvPaint as any, '#9146FF') : undefined}
-            >
-              {currentUser.display_name || currentUser.login}
-            </span>
-            <span className="align-middle text-textSecondary">
-              {' '}
-              {previewChat.text}
-              {previewChat.emotes.map((e, i) => (
-                <Tooltip key={`${e.id}-${i}`} content={e.name}>
-                  <img
-                    src={previewEmoteUrl(e.id)}
-                    alt={e.name}
-                    className="mx-0.5 inline-block h-6 w-auto align-middle object-contain"
-                    onError={(ev) => {
-                      (ev.currentTarget as HTMLImageElement).style.display = 'none';
-                    }}
-                  />
+      {/* Badges from other chat clients (FFZ, BTTV, Chatterino, ...): any number
+          can show at once, so each tile is a toggle. */}
+      {thirdPartyHits.length > 0 && (
+        <section id="customize-chat-clients" data-settings-section="Chat clients" className="settings-card scroll-mt-4 p-4">
+          <CardTitle title="Chat clients" />
+          <SubTitle title="Badges" count={thirdPartyHits.length} />
+          <div className={BADGE_GRID}>
+            {thirdPartyHits.map((badge: any, idx) => {
+              const shown = isThirdPartyShown(badge);
+              return (
+                <Tooltip key={`${badge.provider}-${badge.id}-${idx}`} content={`${badge.title} (${badge.provider.toUpperCase()})`} side="top">
+                  <div
+                    onClick={() => toggleThirdParty(badge)}
+                    className={`
+                      relative p-2 rounded-lg cursor-pointer transition-all
+                      ${shown
+                        ? 'glass-input border-accent/50 ring-1 ring-accent/30'
+                        : 'border border-transparent opacity-50 hover:opacity-80 hover:bg-glass hover:border-borderLight'}
+                    `}
+                  >
+                    <img src={badge.image4x || badge.imageUrl} alt={badge.title} className="w-8 h-8" />
+                    {shown && <CheckChip tone="accent" />}
+                  </div>
                 </Tooltip>
-              ))}
-            </span>
+              );
+            })}
           </div>
-        </div>
-      </div>
+        </section>
+      )}
+
+      {/* Your Twitch global badge (one at a time, set on Twitch itself). */}
+      {(!searchingCosmetics || twitchHits.length > 0) && (
+      <section id="customize-twitch" data-settings-section="Twitch" className="settings-card scroll-mt-4 p-4">
+        <CardTitle
+          title="Twitch"
+          icon={
+            <Tooltip content="Open your Twitch profile" side="top">
+              <button
+                onClick={handleOpenTwitchProfile}
+                className="cursor-pointer hover:scale-110 transition-transform"
+                aria-label="Open your Twitch profile"
+              >
+                <svg fill="currentColor" viewBox="0 0 512 512" className="w-4 h-4 text-[#9146FF]">
+                  <path d="M80,32,48,112V416h96v64h64l64-64h80L464,304V32ZM416,288l-64,64H256l-64,64V352H112V80H416Z" />
+                  <rect x="320" y="143" width="48" height="129" />
+                  <rect x="208" y="143" width="48" height="129" />
+                </svg>
+              </button>
+            </Tooltip>
+          }
+          action={
+            <Tooltip content="Refresh your Twitch badges" side="top">
+              <button
+                onClick={() => fetchChatIdentity(true)}
+                disabled={isFetchingIdentity}
+                aria-label="Refresh your Twitch badges"
+                className="p-1.5 text-textSecondary hover:text-accent hover:bg-glass rounded transition-all"
+              >
+                <svg
+                  width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                  strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                  className={isFetchingIdentity ? 'animate-spin' : ''}
+                >
+                  <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                  <path d="M3 3v5h5" />
+                  <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+                  <path d="M16 21h5v-5" />
+                </svg>
+              </button>
+            </Tooltip>
+          }
+        />
+        {chatIdentityBadges.length > 0 && (
+          <SubTitle
+            title="Global badges"
+            count={twitchHits.length}
+            wearing={chatIdentityBadges.find((b) => b.is_selected)?.title}
+          />
+        )}
+        {chatIdentityBadges.length > 0 ? (
+          <div className={BADGE_GRID}>
+            {twitchHits.map((badge) => (
+              <Tooltip key={`${badge.id}-${badge.version}`} content={badge.title} side="top">
+                <div
+                  className={`
+                    relative p-2 rounded-lg cursor-pointer transition-all flex items-center justify-center
+                    ${badge.is_selected ? 'glass-input border-accent/50 ring-1 ring-accent/30' : 'border border-transparent hover:bg-glass hover:border-borderLight'}
+                    ${updatingBadgeId === badge.id ? 'opacity-50 cursor-wait' : ''}
+                  `}
+                  onClick={() => !updatingBadgeId && updateChatIdentity(badge)}
+                >
+                  {/* The disk copy Rust keeps of your own badges (shared with chat). */}
+                  <img
+                    src={getCachedBadgeUrl(`twitch-${badge.id}/${badge.version}`) ?? badge.image_url}
+                    alt={badge.title}
+                    loading="lazy"
+                    decoding="async"
+                    className="w-8 h-8"
+                  />
+                  {badge.is_selected && <CheckChip tone="accent" />}
+                </div>
+              </Tooltip>
+            ))}
+          </div>
+        ) : (
+          <p className="text-textSecondary text-sm italic">
+            {isFetchingIdentity ? 'Loading badges...' : 'No badges available'}
+          </p>
+        )}
+      </section>
+      )}
+
+      {/* 7TV: your paint first (it colors your name), then your 7TV badge.
+          Changing either needs the 7TV connection. */}
+      {(paintHits.length > 0 || seventvBadgeHits.length > 0) && (
+        <section id="customize-7tv" data-settings-section="7TV" className="settings-card scroll-mt-4 p-4">
+          <CardTitle
+            title="7TV"
+            icon={
+              <Tooltip content="Edit your 7TV cosmetics" side="top">
+                <button
+                  onClick={handleOpen7TVCosmetics}
+                  className="cursor-pointer hover:scale-110 transition-transform"
+                  aria-label="Edit your 7TV cosmetics"
+                >
+                  <svg className="w-4 h-4 text-[#29b6f6]" viewBox="0 0 28 21" fill="currentColor">
+                    <path d="M20.7465 5.48825L21.9799 3.33745L22.646 2.20024L21.4125 0.0494437V0H14.8259L17.2928 4.3016L17.9836 5.48825H20.7465Z" />
+                    <path d="M7.15395 19.9258L14.5546 7.02104L15.4673 5.43884L13.0004 1.13724L12.3097 0.0247596H1.8995L0.666057 2.17556L0 3.31276L1.23344 5.46356V5.51301H9.12745L2.96025 16.267L2.09685 17.7998L3.33029 19.9506V20H7.15395" />
+                    <path d="M17.4655 19.9257H21.2398L26.1736 11.3225L27.037 9.83924L25.8036 7.68844V7.63899H22.0046L19.5377 11.9406L19.365 12.262L16.8981 7.96038L16.7255 7.63899L14.2586 11.9406L13.5679 13.1272L17.2682 19.5796L17.4655 19.9257Z" />
+                  </svg>
+                </button>
+              </Tooltip>
+            }
+            badge={
+              seventvAuthConnected ? (
+                <span className="px-2 py-0.5 text-[10px] font-medium bg-green-500/20 text-green-400 rounded-full">
+                  Connected
+                </span>
+              ) : undefined
+            }
+            action={
+              seventvUserId ? (
+                seventvAuthConnected ? (
+                  <button
+                    onClick={async () => {
+                      await invoke('logout_seventv');
+                      if (mountedRef.current) setSeventvAuthConnected(false);
+                    }}
+                    className="px-3 py-1.5 text-xs font-medium text-red-400 hover:bg-red-500/10 rounded-lg transition-all flex items-center gap-1.5"
+                  >
+                    <Unlink size={14} />
+                    Disconnect
+                  </button>
+                ) : (
+                  <button
+                    onClick={async () => {
+                      setIsConnecting7TV(true);
+                      await invoke('open_seventv_login_window');
+                    }}
+                    disabled={isConnecting7TV}
+                    className="px-3 py-1.5 text-xs font-medium text-[#29b6f6] hover:bg-[#29b6f6]/10 rounded-lg transition-all flex items-center gap-1.5"
+                  >
+                    <Link size={14} />
+                    {isConnecting7TV ? 'Connecting...' : 'Connect to Edit'}
+                  </button>
+                )
+              ) : undefined
+            }
+          />
+
+          {paintHits.length > 0 && (
+            <div className="mb-4">
+              <SubTitle title="Paints" count={paintHits.length} wearing={seventvPaint?.name} />
+              <div className={PAINT_GRID}>
+                {paintHits.map((paint) => {
+                  const isSelected = seventvPaint?.id === paint.id;
+                  const isUpdating = updatingSeventvPaintId === paint.id;
+                  return (
+                    <Tooltip key={paint.id} content={seventvAuthConnected ? paint.name : `${paint.name} - Connect to edit`} side="top">
+                      <div
+                        className={`
+                          relative min-w-0 px-3 py-1.5 rounded-lg cursor-pointer transition-all text-sm font-bold
+                          ${isSelected ? 'glass-input border-[#29b6f6]/50 ring-1 ring-[#29b6f6]/30' : 'border border-transparent hover:bg-glass hover:border-borderLight'}
+                          ${isUpdating ? 'opacity-50' : ''}
+                          ${!seventvAuthConnected ? 'cursor-default' : ''}
+                        `}
+                        onClick={() => seventvAuthConnected && !isUpdating && handleSelectSeventvPaint(isSelected ? null : paint)}
+                      >
+                        <span className="block truncate" style={computePaintStyle(paint as any, '#29b6f6')}>{paint.name}</span>
+                        {isSelected && <CheckChip tone="seventv" />}
+                      </div>
+                    </Tooltip>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {seventvBadgeHits.length > 0 && (
+            <div>
+              <SubTitle
+                title="Badges"
+                count={seventvBadgeHits.length}
+                wearing={(() => {
+                  const worn = seventvBadges.find((b) => (b as any).selected);
+                  return worn ? worn.tooltip || worn.name : null;
+                })()}
+              />
+              <div className={BADGE_GRID}>
+                {seventvBadgeHits.map((badge, idx) => {
+                  const urls = getBadgeImageUrls(badge as any);
+                  const isSelected = (badge as any).selected;
+                  const isUpdating = updatingSeventvBadgeId === badge.id;
+                  return urls.url4x ? (
+                    <Tooltip key={`${badge.id}-${idx}`} content={badge.tooltip || badge.name} side="top">
+                      <div
+                        className={`
+                          relative p-2 rounded-lg cursor-pointer transition-all
+                          ${isSelected ? 'glass-input border-[#29b6f6]/50 ring-1 ring-[#29b6f6]/30' : 'border border-transparent hover:bg-glass hover:border-borderLight'}
+                          ${isUpdating ? 'opacity-50' : ''}
+                          ${!seventvAuthConnected ? 'cursor-default' : ''}
+                        `}
+                        onClick={() => seventvAuthConnected && !isUpdating && handleSelectSeventvBadge(isSelected ? null : badge)}
+                      >
+                        <FallbackImage
+                          src={urls.url4x}
+                          fallbackUrls={getBadgeFallbackUrls(badge.id).slice(1)}
+                          alt={badge.tooltip || badge.name}
+                          className="w-8 h-8"
+                        />
+                        {isSelected && <CheckChip tone="seventv" />}
+                      </div>
+                    </Tooltip>
+                  ) : null;
+                })}
+              </div>
+            </div>
+          )}
+        </section>
+      )}
+
+      <CustomizeGroup title="Your look" note="The background behind your profile, and an Atmosphere that themes your profile and chat." />
 
       {/* Profile background: the basic backdrop source (tier or your 7TV paint).
           A paint only changes the BACKGROUND, not chat. */}
-      <div className="settings-card p-4">
+      <section id="customize-background" data-settings-section="Profile background" className="settings-card scroll-mt-4 p-4">
         <h4 className="text-sm font-semibold text-textPrimary">Profile background</h4>
         <p className="mt-0.5 text-[12px] leading-relaxed text-textSecondary">
           Just your profile background. The tier aura is free; using your equipped 7TV paint is a
@@ -1653,8 +1943,8 @@ const ProfileSettings = () => {
                 key={opt.id}
                 type="button"
                 onClick={() => (locked ? openSupportFor(opt.tier === 'subscriber' ? 'subscriber' : 'supporter') : selectProfileTheme(opt.id, opt.tier))}
-                onMouseEnter={() => setPreviewThemeId(opt.id)}
-                onMouseLeave={() => setPreviewThemeId(null)}
+                onMouseEnter={() => setHoveredTheme(opt.id)}
+                onMouseLeave={() => setHoveredTheme(null)}
                 className={`flex w-full items-center gap-3 rounded-lg border p-2.5 text-left transition-colors ${
                   selected
                     ? 'border-accent/50 bg-accent/[0.06]'
@@ -1677,13 +1967,13 @@ const ProfileSettings = () => {
             );
           })}
         </div>
-      </div>
+      </section>
 
       {/* StreamNook Atmospheres: our own profile cosmetic that decorates BOTH the
           profile background AND chat messages (the whole package, unlike a paint
           which is only a background). A subscriber perk. Click the active one to
           remove it (back to the tier aura). */}
-      <div className="settings-card p-4">
+      <section id="customize-atmospheres" data-settings-section="Atmospheres" className="settings-card scroll-mt-4 p-4">
         <div className="mb-1.5 flex items-center gap-1.5">
           <img src={streamNookLogo} alt="" className="h-4 w-4 object-contain" draggable={false} />
           <h4 className="text-sm font-semibold uppercase tracking-wide text-textPrimary">Atmospheres</h4>
@@ -1731,8 +2021,8 @@ const ProfileSettings = () => {
                         ? selectProfileTheme('tier', 'free')
                         : selectProfileTheme(a.id, 'subscriber', a.unlock?.kind === 'accolade')
                 }
-                onMouseEnter={() => setPreviewThemeId(a.id)}
-                onMouseLeave={() => setPreviewThemeId(null)}
+                onMouseEnter={() => setHoveredTheme(a.id)}
+                onMouseLeave={() => setHoveredTheme(null)}
                 className={`flex w-full items-center gap-3 rounded-lg border p-2.5 text-left transition-colors ${
                   selected
                     ? 'border-accent/50 bg-accent/[0.06]'
@@ -1773,8 +2063,8 @@ const ProfileSettings = () => {
                 <button
                   type="button"
                   onClick={() => (active ? selectProfileTheme('tier', 'free') : selectProfileTheme(MAJOR_COLOGNE_THEME_ID, 'free', true))}
-                  onMouseEnter={() => setPreviewThemeId(active ? profileTheme : MAJOR_COLOGNE_THEME_ID)}
-                  onMouseLeave={() => setPreviewThemeId(null)}
+                  onMouseEnter={() => setHoveredTheme(active ? profileTheme : MAJOR_COLOGNE_THEME_ID)}
+                  onMouseLeave={() => setHoveredTheme(null)}
                   className={`flex w-full items-center gap-3 p-2.5 text-left transition-colors ${
                     active ? 'bg-accent/[0.06]' : 'hover:bg-white/[0.03]'
                   }`}
@@ -1863,12 +2153,14 @@ const ProfileSettings = () => {
             </button>
           </div>
         )}
-      </div>
+      </section>
+
+      <CustomizeGroup title="Privacy" />
 
       {/* Profile visibility: one switch per stat for the PUBLIC profile (what
           other StreamNook users see, in the app and on streamnook.app). Self
           view always shows all. */}
-      <div className="settings-card p-4">
+      <section id="customize-visibility" data-settings-section="Profile visibility" className="settings-card scroll-mt-4 p-4">
         <h4 className="text-sm font-semibold text-textPrimary">Profile visibility</h4>
         <p className="mt-0.5 text-[12px] leading-relaxed text-textSecondary">
           Choose what shows on your public profile, here and on streamnook.app. Your channel points,
@@ -1912,222 +2204,10 @@ const ProfileSettings = () => {
             }),
           ])}
         </div>
-      </div>
+      </section>
 
-      <div className="settings-card p-4">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-1.5">
-            <Tooltip content="Open your Twitch profile" side="top">
-              <button
-                onClick={handleOpenTwitchProfile}
-                className="cursor-pointer hover:scale-110 transition-transform"
-                aria-label="Open your Twitch profile"
-              >
-                <svg fill="currentColor" viewBox="0 0 512 512" className="w-4 h-4 text-[#9146FF]">
-                  <path d="M80,32,48,112V416h96v64h64l64-64h80L464,304V32ZM416,288l-64,64H256l-64,64V352H112V80H416Z" />
-                  <rect x="320" y="143" width="48" height="129" />
-                  <rect x="208" y="143" width="48" height="129" />
-                </svg>
-              </button>
-            </Tooltip>
-            <h4 className="text-sm font-semibold text-textPrimary uppercase tracking-wide">
-              Global Cosmetics
-            </h4>
-          </div>
-          <button
-            onClick={() => fetchChatIdentity(true)}
-            disabled={isFetchingIdentity}
-            className="p-1.5 text-textSecondary hover:text-accent hover:bg-glass rounded transition-all"
-          >
-            <svg
-              width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-              strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-              className={isFetchingIdentity ? 'animate-spin' : ''}
-            >
-              <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
-              <path d="M3 3v5h5" />
-              <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
-              <path d="M16 21h5v-5" />
-            </svg>
-          </button>
-        </div>
-
-        {chatIdentityBadges.length > 0 ? (
-          <div className="grid grid-cols-8 gap-2">
-            {chatIdentityBadges.map((badge) => (
-              <Tooltip key={`${badge.id}-${badge.version}`} content={badge.title} side="top">
-                <div
-                  className={`
-                    relative p-2 rounded-lg cursor-pointer transition-all flex items-center justify-center
-                    ${badge.is_selected ? 'glass-input border-accent/50 ring-1 ring-accent/30' : 'border border-transparent hover:bg-glass hover:border-borderLight'}
-                    ${updatingBadgeId === badge.id ? 'opacity-50 cursor-wait' : ''}
-                  `}
-                  onClick={() => !updatingBadgeId && updateChatIdentity(badge)}
-                >
-                  <img src={badge.image_url} alt={badge.title} className="w-8 h-8" />
-                  {badge.is_selected && <CheckChip tone="accent" />}
-                </div>
-              </Tooltip>
-            ))}
-          </div>
-        ) : (
-          <p className="text-textSecondary text-sm italic">
-            {isFetchingIdentity ? 'Loading badges...' : 'No badges available'}
-          </p>
-        )}
-      </div>
-
-      {(allSeventvPaints.length > 0 || seventvBadges.length > 0) && (
-        <div className="settings-card p-4">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-1.5">
-                <Tooltip content="Edit your 7TV cosmetics" side="top">
-                  <button
-                    onClick={handleOpen7TVCosmetics}
-                    className="cursor-pointer hover:scale-110 transition-transform"
-                    aria-label="Edit your 7TV cosmetics"
-                  >
-                    <svg className="w-4 h-4 text-[#29b6f6]" viewBox="0 0 28 21" fill="currentColor">
-                      <path d="M20.7465 5.48825L21.9799 3.33745L22.646 2.20024L21.4125 0.0494437V0H14.8259L17.2928 4.3016L17.9836 5.48825H20.7465Z" />
-                      <path d="M7.15395 19.9258L14.5546 7.02104L15.4673 5.43884L13.0004 1.13724L12.3097 0.0247596H1.8995L0.666057 2.17556L0 3.31276L1.23344 5.46356V5.51301H9.12745L2.96025 16.267L2.09685 17.7998L3.33029 19.9506V20H7.15395" />
-                      <path d="M17.4655 19.9257H21.2398L26.1736 11.3225L27.037 9.83924L25.8036 7.68844V7.63899H22.0046L19.5377 11.9406L19.365 12.262L16.8981 7.96038L16.7255 7.63899L14.2586 11.9406L13.5679 13.1272L17.2682 19.5796L17.4655 19.9257Z" />
-                    </svg>
-                  </button>
-                </Tooltip>
-                <h4 className="text-sm font-semibold text-textPrimary uppercase tracking-wide">
-                  Cosmetics
-                </h4>
-              </div>
-              {seventvAuthConnected && (
-                <span className="px-2 py-0.5 text-[10px] font-medium bg-green-500/20 text-green-400 rounded-full">
-                  Connected
-                </span>
-              )}
-            </div>
-
-            {seventvUserId && (
-              seventvAuthConnected ? (
-                <button
-                  onClick={async () => {
-                    await invoke('logout_seventv');
-                    if (mountedRef.current) setSeventvAuthConnected(false);
-                  }}
-                  className="px-3 py-1.5 text-xs font-medium text-red-400 hover:bg-red-500/10 rounded-lg transition-all flex items-center gap-1.5"
-                >
-                  <Unlink size={14} />
-                  Disconnect
-                </button>
-              ) : (
-                <button
-                  onClick={async () => {
-                    setIsConnecting7TV(true);
-                    await invoke('open_seventv_login_window');
-                  }}
-                  disabled={isConnecting7TV}
-                  className="px-3 py-1.5 text-xs font-medium text-[#29b6f6] hover:bg-[#29b6f6]/10 rounded-lg transition-all flex items-center gap-1.5"
-                >
-                  <Link size={14} />
-                  {isConnecting7TV ? 'Connecting...' : 'Connect to Edit'}
-                </button>
-              )
-            )}
-          </div>
-
-          {allSeventvPaints.length > 0 && (
-            <div className="mb-4">
-              <p className="text-xs text-textSecondary mb-2 font-medium">Paints</p>
-              <div className="flex flex-wrap gap-2">
-                {allSeventvPaints.map((paint) => {
-                  const isSelected = seventvPaint?.id === paint.id;
-                  const isUpdating = updatingSeventvPaintId === paint.id;
-                  return (
-                    <Tooltip key={paint.id} content={seventvAuthConnected ? paint.name : `${paint.name} - Connect to edit`} side="top">
-                      <div
-                        className={`
-                          relative px-3 py-1.5 rounded-lg cursor-pointer transition-all text-sm font-bold
-                          ${isSelected ? 'glass-input border-[#29b6f6]/50 ring-1 ring-[#29b6f6]/30' : 'border border-transparent hover:bg-glass hover:border-borderLight'}
-                          ${isUpdating ? 'opacity-50' : ''}
-                          ${!seventvAuthConnected ? 'cursor-default' : ''}
-                        `}
-                        onClick={() => seventvAuthConnected && !isUpdating && handleSelectSeventvPaint(isSelected ? null : paint)}
-                      >
-                        <span style={computePaintStyle(paint as any, '#29b6f6')}>{paint.name}</span>
-                        {isSelected && <CheckChip tone="seventv" />}
-                      </div>
-                    </Tooltip>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {seventvBadges.length > 0 && (
-            <div>
-              <p className="text-xs text-textSecondary mb-2 font-medium">Badges</p>
-              <div className="flex flex-wrap gap-2">
-                {seventvBadges.map((badge, idx) => {
-                  const urls = getBadgeImageUrls(badge as any);
-                  const isSelected = (badge as any).selected;
-                  const isUpdating = updatingSeventvBadgeId === badge.id;
-                  return urls.url4x ? (
-                    <Tooltip key={`${badge.id}-${idx}`} content={badge.tooltip || badge.name} side="top">
-                      <div
-                        className={`
-                          relative p-2 rounded-lg cursor-pointer transition-all
-                          ${isSelected ? 'glass-input border-[#29b6f6]/50 ring-1 ring-[#29b6f6]/30' : 'border border-transparent hover:bg-glass hover:border-borderLight'}
-                          ${isUpdating ? 'opacity-50' : ''}
-                          ${!seventvAuthConnected ? 'cursor-default' : ''}
-                        `}
-                        onClick={() => seventvAuthConnected && !isUpdating && handleSelectSeventvBadge(isSelected ? null : badge)}
-                      >
-                        <FallbackImage
-                          src={urls.url4x}
-                          fallbackUrls={getBadgeFallbackUrls(badge.id).slice(1)}
-                          alt={badge.tooltip || badge.name}
-                          className="w-8 h-8"
-                        />
-                        {isSelected && <CheckChip tone="seventv" />}
-                      </div>
-                    </Tooltip>
-                  ) : null;
-                })}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {allThirdParty.length > 0 && (
-        <div className="settings-card p-4">
-          <h4 className="text-sm font-semibold text-textPrimary uppercase tracking-wide mb-4">
-            Other Badges
-          </h4>
-          <div className="flex flex-wrap gap-2">
-            {allThirdParty.map((badge: any, idx) => {
-              const shown = isThirdPartyShown(badge);
-              return (
-                <Tooltip key={`${badge.provider}-${badge.id}-${idx}`} content={`${badge.title} (${badge.provider.toUpperCase()})`} side="top">
-                  <div
-                    onClick={() => toggleThirdParty(badge)}
-                    className={`
-                      relative p-2 rounded-lg cursor-pointer transition-all
-                      ${shown
-                        ? 'glass-input border-accent/50 ring-1 ring-accent/30'
-                        : 'border border-transparent opacity-50 hover:opacity-80 hover:bg-glass hover:border-borderLight'}
-                    `}
-                  >
-                    <img src={badge.image4x || badge.imageUrl} alt={badge.title} className="w-8 h-8" />
-                    {shown && <CheckChip tone="accent" />}
-                  </div>
-                </Tooltip>
-              );
-            })}
           </div>
         </div>
-      )}
-
-        </>
       )}
     </div>
   );
