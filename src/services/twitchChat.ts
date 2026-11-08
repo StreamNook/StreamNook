@@ -236,9 +236,10 @@ const parseMessageUncached = (raw: string | BackendChatMessage, channelId?: stri
       // Non-Twitch providers carry their own already-resolved badge images
       // (Kick: baked badges_v2 art + custom/default subscriber art; YouTube:
       // real per-tier member badge art), so build badgeData directly instead of
-      // going through the Twitch badge cache. Only Kick has bundled fallback art
-      // for its icon-only role badges; YouTube role-badge art is a later pass, so
-      // YouTube only renders badges that ship a real image_url (member tiers).
+      // going through the Twitch badge cache. Kick's icon-only role badges get
+      // bundled art here; YouTube's moderator and verified art rides the badge's
+      // image_url from Rust (youtube.rs parse_badges), and its owner has no badge
+      // (the name wears a gold pill instead).
       badgeData = [];
       for (const b of raw.badges) {
         const url = b.image_url_1x || (raw.provider === 'kick' ? kickBadgeImage(b.name) : undefined);

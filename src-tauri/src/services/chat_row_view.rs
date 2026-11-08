@@ -1179,6 +1179,29 @@ pub(crate) fn kick_badge_art(name: &str) -> Option<String> {
     art.get(name).cloned()
 }
 
+/// YouTube's own art for its role badges, which its chat API sends as an icon
+/// type with no image. The moderator shield and the verified check are the
+/// glyphs and colors the stream overlay draws (`OverlayChat.tsx`
+/// `YT_ROLE_BADGES`), rasterized to PNG for the native shells. The owner has no
+/// badge on YouTube (the name sits in a gold pill instead, `owner_name`), and a
+/// member's badge carries its own tier art in the row.
+pub(crate) fn youtube_badge_art(name: &str) -> Option<String> {
+    use base64::Engine;
+    static ART: std::sync::OnceLock<std::collections::HashMap<&'static str, String>> = std::sync::OnceLock::new();
+    let art = ART.get_or_init(|| {
+        let png: [(&str, &[u8]); 2] = [
+            ("moderator", include_bytes!("../../assets/youtube-badges/moderator.png")),
+            ("verified", include_bytes!("../../assets/youtube-badges/verified.png")),
+        ];
+        png.into_iter()
+            .map(|(name, bytes)| {
+                (name, format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
+            })
+            .collect()
+    });
+    art.get(name).cloned()
+}
+
 /// A Kick role badge's name in words, when the row carries no title.
 fn kick_badge_title(name: &str) -> String {
     match name {
@@ -1231,6 +1254,16 @@ fn badges(msg: &ChatMessage, prefs: &Prefs, worn: Option<&WornView>) -> Vec<View
                         role: crate::services::badge_fold::fold_kind("kick", &badge.name)
                             == crate::services::badge_fold::FoldKind::Role,
                         provider: "kick".to_string(),
+                    });
+                }
+            } else if msg.provider == "youtube" {
+                if let Some(url) = youtube_badge_art(&badge.name) {
+                    out.push(ViewBadge {
+                        url,
+                        title: badge.title.clone().unwrap_or_else(|| kick_badge_title(&badge.name)),
+                        role: crate::services::badge_fold::fold_kind("youtube", &badge.name)
+                            == crate::services::badge_fold::FoldKind::Role,
+                        provider: "youtube".to_string(),
                     });
                 }
             }

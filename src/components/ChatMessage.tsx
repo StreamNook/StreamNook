@@ -208,6 +208,16 @@ const SubGiftIcon = () => {
   );
 };
 
+/** A YouTube channel owner's name: dark text in YouTube's gold pill (the values
+ *  the overlay reads off YouTube's own chat, `OverlayChat.tsx`). */
+const YOUTUBE_OWNER_PILL: React.CSSProperties = {
+  color: '#111111',
+  backgroundColor: '#ffd600',
+  padding: '0.13em 0.27em',
+  borderRadius: '0.13em',
+  textShadow: 'none',
+};
+
 const GIANT_EMOTE_HEIGHT = 'calc(8em * var(--sn-emote-scale, 1))';
 const GIANT_EMOTE_MAX_WIDTH = 'calc(24em * var(--sn-emote-scale, 1))';
 // Inline emote sizing, shared by a lone emote and a stacked group (zero-width
@@ -1477,14 +1487,20 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   // base color; the 7TV paint (if present) renders on top of it.
   const paintShadowMode = useAppStore((s) => s.settings.cosmetics?.paint_shadows) ?? 'all';
 
+  // YouTube's channel owner has no badge: the name sits in a gold pill, as on
+  // YouTube and in the overlay. Rust tags the row (`youtube-owner`). The pill is
+  // the owner's role mark, so it follows Show badges.
+  const youtubeOwnerPill =
+    parsed.provider === 'youtube' && parsed.tags.get('youtube-owner') === '1' && chatDesign?.show_badges !== false;
   const usernameStyle = useMemo(() => {
+    if (youtubeOwnerPill) return YOUTUBE_OWNER_PILL;
     if (!seventvPaint) {
       return { color: effectiveColor };
     }
 
     // Use the new computePaintStyle function
     return computePaintStyle(seventvPaint, effectiveColor, paintShadowMode, stillEmotes);
-  }, [seventvPaint, effectiveColor, paintShadowMode, stillEmotes]);
+  }, [youtubeOwnerPill, seventvPaint, effectiveColor, paintShadowMode, stillEmotes]);
 
   // Username prefix styling (normal messages only; action/"/me" stay plain).
   // The separator glyph sits between the name and the message; the name style

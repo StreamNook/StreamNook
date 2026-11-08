@@ -2541,6 +2541,11 @@ fn base_message(
     let mut tags = HashMap::new();
     tags.insert("display-name".to_string(), display_name.clone());
     tags.insert("id".to_string(), id.clone());
+    // The channel owner has no badge on YouTube: their name sits in a gold pill.
+    // The owner badge has no art, so the shells never see it; this tag tells them.
+    if badges.iter().any(|b| b.name == "broadcaster") {
+        tags.insert("youtube-owner".to_string(), "1".to_string());
+    }
     // The chatter's profile picture rides every message; stamp it so the frontend
     // can render YouTube's native inline avatar (largest thumbnail).
     if let Some(url) = r
@@ -2767,7 +2772,10 @@ fn parse_badges(author_badges: Option<&Value>) -> Vec<Badge> {
             out.push(Badge {
                 name: name.to_string(),
                 version: "1".to_string(),
-                image_url_1x: None,
+                // YouTube sends an icon type, never an image: the moderator and
+                // verified art rides the badge from here, so every shell draws it.
+                // The owner has none (YouTube puts their name in a gold pill).
+                image_url_1x: crate::services::chat_row_view::youtube_badge_art(name),
                 image_url_2x: None,
                 image_url_4x: None,
                 title: Some(if tooltip.is_empty() {
@@ -2958,6 +2966,22 @@ fn color_for(channel_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Lemithehater: YouTube's roles never showed in app chat, because the API sends an
+    /// icon type with no image. Moderator and verified now carry the overlay's art; the
+    /// owner keeps no badge (YouTube shows a gold name pill instead).
+    #[test]
+    fn youtube_role_badges_carry_their_own_art() {
+        let role = |icon: &str| {
+            serde_json::json!({ "liveChatAuthorBadgeRenderer": { "icon": { "iconType": icon }, "tooltip": "" } })
+        };
+        let badges = parse_badges(Some(&serde_json::json!([role("MODERATOR"), role("VERIFIED"), role("OWNER")])));
+        let art = |name: &str| badges.iter().find(|b| b.name == name).and_then(|b| b.image_url_1x.clone());
+        assert!(art("moderator").is_some_and(|u| u.starts_with("data:image/png;base64,iVBOR")));
+        assert!(art("verified").is_some_and(|u| u.starts_with("data:image/png;base64,iVBOR")));
+        assert!(badges.iter().any(|b| b.name == "broadcaster"), "the owner is still known");
+        assert_eq!(art("broadcaster"), None, "the owner has no badge art on YouTube");
+    }
+
     #[test]
     fn whitespace_runs_keep_every_kind_of_space() {
         let runs = whitespace_runs("KEKW\nok\u{a0}\u{a0}LUL ");
