@@ -47,7 +47,7 @@ use commands::stream_manager::{
     check_stream_info, get_reward_queue, get_stream_manager, search_raid_targets, stream_manager_act,
 };
 use commands::{
-    accounts::*, activity_history::*, announcements::*, app::*, automation::*, badge_metadata::*, badge_service::*,
+    accounts::*, activity_history::*, announcements::*, app::*, badge_metadata::*, badge_service::*,
     badges::*, bits::*, cache::*, channel_links::*, channel_panels::*, channel_state::*, chat::*, chat_identity::*, components::*,
     cosmetics_cache::*, diagnostic_logging::*, drops::*, emoji::*, emote_prefetch::*,
     emotes::*, eventsub::*, ffz::*, gifs::*, helix::*, home_snapshot::*, shared_chat::*, fonts::*, hype_train::*, identity::*, justlog::*, layout::*,
@@ -2080,10 +2080,7 @@ pub fn run() {
             get_user_videos,
             send_whisper,
             start_whisper_listener,
-            get_whisper_history,
             search_whisper_user,
-            import_all_whisper_history,
-            refresh_whisper_history,
             // Streaming commands
             start_stream,
             resolve_clip_media,
@@ -2697,12 +2694,6 @@ pub fn run() {
             get_all_seventv_badges,
             get_all_seventv_paints,
             get_seventv_paint_usage,
-            // Automation commands (whisper scraper only — desktop-only webview scrape)
-            #[cfg(desktop)]
-            scrape_whispers,
-            #[cfg(desktop)]
-            receive_whisper_export,
-            emit_whisper_progress,
             // Whisper Storage commands
             load_whisper_storage,
             delete_whisper_conversation,

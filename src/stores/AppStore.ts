@@ -207,25 +207,6 @@ interface DropsCache {
 // Cache duration: 15 minutes in milliseconds (backend uses 5 min, we use 15 for frontend)
 const DROPS_CACHE_DURATION = 15 * 60 * 1000;
 
-// Whisper import progress tracking
-export interface WhisperImportProgress {
-  step: number;
-  status: 'pending' | 'running' | 'complete' | 'error';
-  detail: string;
-  current: number;
-  total: number;
-}
-
-export interface WhisperImportState {
-  isImporting: boolean;
-  progress: WhisperImportProgress;
-  estimatedEndTime: number | null; // Unix timestamp when import should finish
-  totalConversations: number;
-  exportProgress: { current: number; total: number; username: string };
-  result: { conversations: number; messages: number } | null;
-  error: string | null;
-}
-
 export interface AppState {
   settings: Settings;
   followedStreams: TwitchStream[];
@@ -446,8 +427,6 @@ export interface AppState {
   songsPanel: { focus: string | null } | null;
   showDashboardOverlay: boolean;
   whisperTargetUser: { id: string; login: string; display_name: string; profile_image_url?: string } | null;
-  // Whisper import state (persistent across wizard open/close)
-  whisperImportState: WhisperImportState;
   isHomeActive: boolean;
   isAuthenticated: boolean;
   // True from launch until the initial credential check resolves. The boot
@@ -724,9 +703,6 @@ export interface AppState {
   loadActiveDropsCache: (forceRefresh?: boolean) => Promise<void>;
   getDropsCampaignByGameId: (gameId: string) => DropCampaign | undefined;
   getDropsCampaignByGameName: (gameName: string) => DropCampaign | undefined;
-  // Whisper import actions
-  setWhisperImportState: (state: Partial<WhisperImportState>) => void;
-  resetWhisperImportState: () => void;
   // Mod Logs State
   modLogs: ModLogEvent[];
   /** Channels whose persisted history has already been merged in this session (avoids re-loading). */
@@ -1908,17 +1884,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       void invoke('refresh_home_section', { section: 'continue_watching' }).catch(() => {});
     }
   },
-  // Whisper import state
-  whisperImportState: {
-    isImporting: false,
-    progress: { step: 0, status: 'pending', detail: '', current: 0, total: 4 },
-    estimatedEndTime: null,
-    totalConversations: 0,
-    exportProgress: { current: 0, total: 0, username: '' },
-    result: null,
-    error: null,
-  },
-
   patchCurrentStream: (partial) => {
     const current = get().currentStream;
     if (!current) return;
@@ -4153,27 +4118,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   getDropsCampaignByGameName: (gameName: string) => {
     const campaigns = get().dropsCache?.byGameName.get(gameName.toLowerCase());
     return campaigns?.[0];
-  },
-
-  // Whisper import state management
-  setWhisperImportState: (state: Partial<WhisperImportState>) => {
-    set((prev) => ({
-      whisperImportState: { ...prev.whisperImportState, ...state },
-    }));
-  },
-
-  resetWhisperImportState: () => {
-    set({
-      whisperImportState: {
-        isImporting: false,
-        progress: { step: 0, status: 'pending', detail: '', current: 0, total: 4 },
-        estimatedEndTime: null,
-        totalConversations: 0,
-        exportProgress: { current: 0, total: 0, username: '' },
-        result: null,
-        error: null,
-      },
-    });
   },
 }));
 

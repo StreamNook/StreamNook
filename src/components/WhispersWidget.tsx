@@ -1,11 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion } from 'framer-motion';
-import { X, MessageCircle, Send, Search, Plus, ArrowLeft, Loader2, Users, ChevronDown, Smile, SortAsc, User, Trash2, Clock, Download, RefreshCw } from 'lucide-react';
+import { X, MessageCircle, Send, Search, Plus, ArrowLeft, Loader2, Users, ChevronDown, Smile, SortAsc, User, Trash2, Clock, RefreshCw } from 'lucide-react';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../stores/AppStore';
 import { getAppleEmojiUrl } from '../services/emojiService';
-import WhisperImportWizard from './WhisperImportWizard';
 import { Tooltip } from './ui/Tooltip';
 import { ACCENT_BUTTON, ACCENT_FILL, GLAZE_PILL } from './ui/glazeButtons';
 import SpellcheckUnderlay from './chat/SpellcheckUnderlay';
@@ -162,7 +161,7 @@ const applyWhisperUpdate = (
 const WhispersWidget = ({ isOpen, onClose }: WhispersWidgetProps) => {
     const [conversations, setConversations] = useState<Map<string, WhisperConversation>>(new Map());
     const [activeConversation, setActiveConversation] = useState<string | null>(null);
-    const { whisperTargetUser, clearWhisperTargetUser, whisperImportState } = useAppStore();
+    const { whisperTargetUser, clearWhisperTargetUser } = useAppStore();
     const previousActiveConversationRef = useRef<string | null>(null);
     const [message, setMessage] = useState('');
     const [isSending, setIsSending] = useState(false);
@@ -179,7 +178,6 @@ const WhispersWidget = ({ isOpen, onClose }: WhispersWidgetProps) => {
     const [showEmojiPicker, setShowEmojiPicker] = useState(false);
     const [emojiSearchQuery, setEmojiSearchQuery] = useState('');
     const [selectedEmojiCategory, setSelectedEmojiCategory] = useState<string>('Smileys');
-    const [showImportWizard, setShowImportWizard] = useState(false);
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -659,46 +657,16 @@ const WhispersWidget = ({ isOpen, onClose }: WhispersWidgetProps) => {
                         </div>
                         <div className="flex items-center gap-1 shrink-0">
                             <input type="file" ref={fileInputRef} onChange={handleFileImport} accept=".json" className="hidden" />
-                            {/* Background Import Indicator */}
-                            {whisperImportState.isImporting && (
-                                <Tooltip content="Click to view import progress" side="bottom">
-                                <button
-                                    onClick={() => setShowImportWizard(true)}
-                                    className="flex items-center gap-2 px-2 py-1.5 glass-button hover:text-accent transition-colors animate-pulse"
-                                >
-                                    <Loader2 size={14} className="text-accent animate-spin" />
-                                    <span className="text-accent text-xs font-medium">
-                                        {whisperImportState.exportProgress.total > 0
-                                            ? `${whisperImportState.exportProgress.current + 1}/${whisperImportState.exportProgress.total}`
-                                            : 'Importing...'}
-                                    </span>
-                                </button>
-                                </Tooltip>
-                            )}
                             {/* Refresh: pull the latest messages from Twitch and merge them in */}
-                            {!whisperImportState.isImporting && (
-                                <Tooltip content="Refresh messages from Twitch" side="bottom">
-                                <button
-                                    onClick={handleRefresh}
-                                    disabled={isRefreshing || isImportingAll}
-                                    className="p-2 text-textSecondary hover:text-accent hover:bg-surface-hover rounded-lg transition-colors disabled:opacity-50"
-                                >
-                                    <RefreshCw size={18} className={isRefreshing ? 'animate-spin' : ''} />
-                                </button>
-                                </Tooltip>
-                            )}
-                            {/* Import Button (only show when not importing) */}
-                            {!whisperImportState.isImporting && (
-                                <Tooltip content="Import whisper history" side="bottom">
-                                <button
-                                    onClick={() => setShowImportWizard(true)}
-                                    disabled={isImportingAll}
-                                    className="p-2 text-textSecondary hover:text-accent hover:bg-surface-hover rounded-lg transition-colors disabled:opacity-50"
-                                >
-                                    {isImportingAll ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />}
-                                </button>
-                                </Tooltip>
-                            )}
+                            <Tooltip content="Refresh messages from Twitch" side="bottom">
+                            <button
+                                onClick={handleRefresh}
+                                disabled={isRefreshing || isImportingAll}
+                                className="p-2 text-textSecondary hover:text-accent hover:bg-surface-hover rounded-lg transition-colors disabled:opacity-50"
+                            >
+                                <RefreshCw size={18} className={isRefreshing ? 'animate-spin' : ''} />
+                            </button>
+                            </Tooltip>
                             <Tooltip content="New conversation" side="bottom">
                             <button
                                 onClick={() => setShowNewConversation(true)}
@@ -1039,12 +1007,6 @@ const WhispersWidget = ({ isOpen, onClose }: WhispersWidgetProps) => {
                     )}
                 </div>
             </motion.div>
-
-            {/* Import Wizard */}
-            <WhisperImportWizard
-                isOpen={showImportWizard}
-                onClose={() => setShowImportWizard(false)}
-            />
         </motion.div>
     );
 };

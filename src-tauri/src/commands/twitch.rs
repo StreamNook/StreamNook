@@ -3,9 +3,6 @@ use crate::models::stream::{TwitchClip, TwitchStream, TwitchVideo};
 use crate::models::user::{ChannelInfo, UserInfo};
 use crate::services::drops_auth_service::DropsAuthService;
 use crate::services::twitch_service::{DeviceCodeInfo, TokenHealthStatus, TwitchService};
-use crate::services::whisper_history_service::{
-    WhisperHistoryService, WhisperMessage,
-};
 use crate::services::whisper_service::WhisperService;
 use anyhow::Result;
 use log::{debug, error, warn};
@@ -2068,30 +2065,6 @@ pub async fn start_whisper_listener(
     Ok(())
 }
 
-/// Get whisper message history for a specific user
-/// Uses undocumented Twitch GraphQL API
-#[tauri::command]
-pub async fn get_whisper_history(
-    other_user_id: String,
-    cursor: Option<String>,
-) -> Result<(Vec<WhisperMessage>, Option<String>), String> {
-    let token = TwitchService::get_token()
-        .await
-        .map_err(|e| format!("Failed to get token: {}", e))?;
-
-    let user_info = TwitchService::get_user_info()
-        .await
-        .map_err(|e| format!("Failed to get user info: {}", e))?;
-
-    WhisperHistoryService::get_whisper_messages(
-        &token,
-        &user_info.id,
-        &other_user_id,
-        cursor.as_deref(),
-    )
-    .await
-}
-
 /// Search for a user to whisper using official Helix API
 #[tauri::command]
 pub async fn search_whisper_user(
@@ -2110,63 +2083,6 @@ pub async fn search_whisper_user(
             Ok(None)
         }
     }
-}
-
-/// Import all whisper history for a list of known user IDs
-/// Used to fetch all messages from existing conversations
-#[tauri::command]
-pub async fn import_all_whisper_history(
-    user_ids: Vec<String>,
-) -> Result<std::collections::HashMap<String, Vec<WhisperMessage>>, String> {
-    let token = TwitchService::get_token()
-        .await
-        .map_err(|e| format!("Failed to get token: {}", e))?;
-
-    let user_info = TwitchService::get_user_info()
-        .await
-        .map_err(|e| format!("Failed to get user info: {}", e))?;
-
-    let result =
-        WhisperHistoryService::import_full_history(&token, &user_info.id, user_ids).await?;
-
-    Ok(result.messages_by_user)
-}
-
-/// Refresh recent whispers for the given conversations. Fetches only the most
-/// recent page per conversation (cheap), so messages sent from other clients
-/// since the last sync show up; the frontend merges them into history by
-/// timestamp. Authenticates with the active account's harvested web session
-/// token, which matches the web Client-Id the whisper GQL requires (the main
-/// app token does not, which is why the old GQL path failed). It's a read, so
-/// no integrity token is needed.
-#[tauri::command]
-pub async fn refresh_whisper_history(
-    state: State<'_, AppState>,
-    user_ids: Vec<String>,
-) -> Result<std::collections::HashMap<String, Vec<WhisperMessage>>, String> {
-    let token = state
-        .twitch_auth
-        .get_token()
-        .await
-        .map_err(|_| "You must be logged in to Twitch to refresh whispers.".to_string())?;
-
-    let user_info = TwitchService::get_user_info()
-        .await
-        .map_err(|e| format!("Failed to get user info: {}", e))?;
-
-    let mut out: std::collections::HashMap<String, Vec<WhisperMessage>> =
-        std::collections::HashMap::new();
-    for uid in user_ids {
-        match WhisperHistoryService::get_whisper_messages(&token, &user_info.id, &uid, None).await {
-            Ok((messages, _cursor)) => {
-                if !messages.is_empty() {
-                    out.insert(uid, messages);
-                }
-            }
-            Err(e) => log::debug!("[WhisperRefresh] thread {} failed: {}", uid, e),
-        }
-    }
-    Ok(out)
 }
 
 /// Categories matching `query`: the exact name first, then names starting with

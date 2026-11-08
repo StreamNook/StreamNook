@@ -231,10 +231,7 @@ const PULSE_LOADER_FILES = new Set([
   'components/modroom/ModRoomPane.tsx',
   'components/SocialLinks.tsx',
   'components/StreamerAboutPanel.tsx',
-  // The whispers button's dot, shown only while an import runs.
-  'components/TitleBar.tsx',
   'components/UserProfileCard.tsx',
-  'components/WhispersWidget.tsx',
   'mobile/rewards/MobileEvolution.tsx',
   'mobile/rewards/MobileMissingNow.tsx',
   'mobile/screens/MobileWhatsNew.tsx',

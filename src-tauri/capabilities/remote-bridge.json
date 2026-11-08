@@ -3,7 +3,6 @@
   "identifier": "remote-bridge-capability",
   "description": "The only native surface reachable from the remote twitch.tv, kick.com, youtube.com and tiktok.com pages StreamNook loads in its hidden and overlay webviews. Everything else is denied to those origins.",
   "windows": [
-    "whisper-scraper",
     "identity-fetch-*",
     "identity-update-*",
     "twitch-login",

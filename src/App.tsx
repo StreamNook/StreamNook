@@ -4,7 +4,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { useShallow } from 'zustand/react/shallow';
 import { IS_MOBILE, isPortrait, onOrientationChange } from './utils/platform';
 import MobileNav from './components/mobile/MobileNav';
-import { useAppStore, type WhisperImportProgress, type SettingsTab } from './stores/AppStore';
+import { useAppStore, type SettingsTab } from './stores/AppStore';
 import { listenForSettingsUpdates } from './utils/settingsBroadcast';
 import { trackPresence, isSupabaseConfigured, incrementStat, subscribeToStreamNookRegistry, subscribeToCosmeticsRegistry, subscribeToAtmospheresRegistry, refreshEntitlementRegistries } from './services/supabaseService';
 import { primeClientConfig } from './services/clientConfig';
@@ -1193,65 +1193,6 @@ function App() {
         Logger.debug('[App] Automation status update:', event.payload.active);
         useAppStore.getState().setDropProgressActive(event.payload.active);
       });
-
-      // Listen for whisper import events (global listener so import works from any UI)
-      await addListener<{ step: number; status: string; detail: string; current: number; total: number }>(
-        'whisper-import-progress',
-        (event) => {
-          const { step, status, detail, current, total } = event.payload;
-          const { setWhisperImportState } = useAppStore.getState();
-          setWhisperImportState({
-            progress: { step, status: status as WhisperImportProgress['status'], detail, current, total }
-          });
-
-          // Track export progress for step 3
-          if (step === 3 && status === 'running') {
-            const match = detail.match(/Exporting: (.+)/);
-            setWhisperImportState({
-              exportProgress: { current, total, username: match ? match[1] : '' }
-            });
-          }
-
-          // When step 2 completes, set the estimated end time
-          if (step === 2 && status === 'complete') {
-            const countMatch = detail.match(/Found (\d+) conversations/);
-            if (countMatch) {
-              const count = parseInt(countMatch[1], 10);
-              const SECONDS_PER_CONVERSATION = 3;
-              const estimatedSeconds = count * SECONDS_PER_CONVERSATION;
-              const endTime = Date.now() + (estimatedSeconds * 1000);
-              setWhisperImportState({
-                totalConversations: count,
-                estimatedEndTime: endTime
-              });
-            }
-          }
-        }
-      );
-
-      await addListener<{ success: boolean; message: string; conversations: number; messages: number }>(
-        'whisper-import-complete',
-        (event) => {
-          const { success, message, conversations, messages } = event.payload;
-          const { setWhisperImportState, addToast } = useAppStore.getState();
-          if (success) {
-            Logger.debug('[App] Whisper import completed:', conversations, 'conversations,', messages, 'messages');
-            setWhisperImportState({
-              isImporting: false,
-              result: { conversations, messages },
-              error: null
-            });
-            addToast(`Imported ${messages.toLocaleString()} whisper messages from ${conversations} conversations`, 'success');
-          } else {
-            Logger.error('[App] Whisper import failed:', message);
-            setWhisperImportState({
-              isImporting: false,
-              error: message
-            });
-            addToast(`Whisper import failed: ${message}`, 'error');
-          }
-        }
-      );
 
       // Listen for reserved stream going offline (watch token allocation feature)
       await addListener('reserved-stream-offline', () => {

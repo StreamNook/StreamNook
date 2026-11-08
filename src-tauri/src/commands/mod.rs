@@ -2,7 +2,6 @@ pub mod accounts;
 pub mod activity_history;
 pub mod announcements;
 pub mod app;
-pub mod automation;
 pub mod badge_metadata;
 pub mod badge_service;
 pub mod badges;

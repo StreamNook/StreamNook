@@ -7,8 +7,6 @@ import {
     User,
     Package,
     AlertCircle,
-    MessageCircle,
-    Wand2,
     CheckCircle2,
     Palette,
     Bell,
@@ -49,18 +47,18 @@ import SetupNotificationsStep from './SetupNotificationsStep';
 
 const STEP_EASE: [number, number, number, number] = [0.16, 1, 0.3, 1];
 const STEP_DURATION = 0.4;
-const STEP_COUNT = 9;
+const STEP_COUNT = 8;
 
 // Steps that configure or use something a phone does not have.
 //
-//  4 - whisper history import. It runs the whisper SCRAPER, and
-//      scrape_whispers / receive_whisper_export are #[cfg(desktop)] (they drive
-//      a hidden webview), so on Android the step could only ever fail.
-//  6 - sidebar mode. The Sidebar is gated off mobile entirely, so the step asks
+//  5 - sidebar mode. The Sidebar is gated off mobile entirely, so the step asks
 //      about a surface that never renders.
 //
+// Whisper history needs no step: it imports itself from Twitch after sign-in,
+// on every platform.
+//
 // NOT skipped: step 1 (components) is a no-op on both platforms now that the
-// client is self-contained and auto-advances. Step 7 (notifications) asks, on
+// client is self-contained and auto-advances. Step 6 (notifications) asks, on
 // every platform, which alert types to turn on, from the list Rust keeps
 // (`get_alert_types`, the ones marked for setup); a phone skips it only when
 // Rust offers none, and desktop also asks there where they show (Dynamic
@@ -69,10 +67,10 @@ const STEP_COUNT = 9;
 // MODULE SCOPE ON PURPOSE. These were declared inside the component, below
 // handleDropsLogin, which meant a caller earlier in the body could not use them
 // without relying on closure timing - and the one place that needed it hardcoded
-// `setCurrentStep(4)` instead, routing around the skip entirely and landing
-// Android on the whisper step. Any new step transition must go through these.
-const MOBILE_SKIPPED_STEPS = new Set([4, 6]);
-const NOTIFICATION_STEP = 7;
+// a literal step number instead, routing around the skip entirely and landing
+// Android on a skipped step. Any new step transition must go through these.
+const MOBILE_SKIPPED_STEPS = new Set([5]);
+const NOTIFICATION_STEP = 6;
 const stepAfter = (s: number, skipped: Set<number> = MOBILE_SKIPPED_STEPS): number => {
     let n = s + 1;
     if (IS_MOBILE) while (skipped.has(n)) n += 1;
@@ -223,7 +221,7 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
     const youtubeOffered = usePlatformAccountStore((s) => s.youtube.canSignIn);
     const tiktokOffered = usePlatformAccountStore((s) => s.tiktok.canSignIn);
 
-    const { addToast, settings, updateSettings, isAuthenticated, checkAuthStatus, loginToTwitch, whisperImportState, setWhisperImportState } = useAppStore();
+    const { addToast, settings, updateSettings, isAuthenticated, checkAuthStatus, loginToTwitch } = useAppStore();
     const unlistenRefs = useRef<Array<() => void>>([]);
     // Mobile only: drives the one-time "these pages swipe" hint, which retires
     // itself the moment it has been proven unnecessary.
@@ -328,10 +326,8 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
             setStatus(prev => ({ ...prev, dropsAuthenticated: true }));
             addToast('Drops login successful!', 'success');
             // stepAfter, NOT a literal 4. Drops is step 3, and hardcoding
-            // its successor routes around MOBILE_SKIPPED_STEPS entirely -
-            // which landed Android straight on the whisper-import step even
-            // though it is skipped, because the skip only ever applied to
-            // normal navigation.
+            // its successor routes around MOBILE_SKIPPED_STEPS entirely,
+            // because the skip only ever applies to normal navigation.
             setTimeout(() => setCurrentStep(stepAfter(3)), 500);
         } catch (e) {
             Logger.error('Failed to complete drops login:', e);
@@ -551,15 +547,14 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
             case 3:
             case 4:
             case 5:
-            case 6:
                 return { label: 'Continue', onClick: () => setCurrentStep(nextStep(currentStep)) };
-            case 7:
+            case 6:
                 // The step is a choice: nothing chosen reads as Skip.
                 return {
                     label: setupAlerts?.length && !anyAlertChosen ? 'Skip' : 'Continue',
                     onClick: () => setCurrentStep(nextStep(currentStep)),
                 };
-            case 8:
+            case 7:
                 return { label: 'Start watching', onClick: handleCompleteSetup };
             default:
                 return null;
@@ -568,16 +563,12 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
 
     // Steps that configure or use something a phone does not have.
     //
-    //  4 - whisper history import. It runs the whisper SCRAPER, and
-    //      `scrape_whispers` / `receive_whisper_export` are `#[cfg(desktop)]`
-    //      (they drive a hidden webview). The step therefore could not do
-    //      anything on Android except fail, which is exactly what it did.
-    //  6 - sidebar mode (expanded/compact/hidden/off). The Sidebar is gated off
+    //  5 - sidebar mode (expanded/compact/hidden/off). The Sidebar is gated off
     //      entirely on mobile, so this asks about a surface that never renders.
     //
     // Deliberately NOT skipped: step 1 (components) is a no-op on both platforms
     // now that the client is self-contained - `check_components_installed`
-    // always returns true and the step auto-advances. Step 7 (notifications)
+    // always returns true and the step auto-advances. Step 6 (notifications)
     // shows on a phone whenever Rust offers an alert type in setup, and always
     // on desktop, which also picks where alerts show there.
     // Dots must reflect the steps this platform actually shows, otherwise mobile
@@ -586,21 +577,21 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
         (i) => !(IS_MOBILE && skippedSteps.has(i)),
     );
 
-    const canGoBack = currentStep > 1 && currentStep < 8;
+    const canGoBack = currentStep > 1 && currentStep < 7;
 
     // Swipe navigation (mobile). The step dots already imply a swipeable carousel,
     // so a Continue button on every step was both redundant and un-native.
     //
     // Forward swipe is allowed only where advancing is pure navigation. Step 1 runs
     // the component extraction and advances itself when that finishes, so swiping
-    // past it would skip a required step; step 8 commits setup, which should stay a
+    // past it would skip a required step; step 7 commits setup, which should stay a
     // deliberate tap rather than something you can trigger with a stray flick.
     // Sign-in is the one step you cannot swipe past. See the primary action for
     // step 2 for why. Mobile-only: `canSwipeForward` is read solely by the drag
     // handler, which desktop never runs.
     const signInRequired = IS_MOBILE && currentStep === 2 && !status.mainAuthenticated;
     const canSwipeForward =
-        !signInRequired && (currentStep === 0 || (currentStep >= 2 && currentStep <= 7));
+        !signInRequired && (currentStep === 0 || (currentStep >= 2 && currentStep <= 6));
     // Timestamp of the last swipe-driven step change, used to swallow swipes that
     // arrive while the exit animation is still running.
     const lastStepChangeRef = useRef(0);
@@ -804,92 +795,6 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
             case 4:
                 return (
                     <>
-                        {whisperImportState.result ? (
-                            <CheckCircle2 size={64} strokeWidth={1.4} className="text-success mb-10" />
-                        ) : whisperImportState.isImporting ? (
-                            <Loader2 size={56} strokeWidth={1.4} className="text-accent animate-spin mb-10" />
-                        ) : (
-                            <MessageCircle size={56} strokeWidth={1.4} className="text-accent mb-10" />
-                        )}
-                        <h1 className="text-4xl font-medium text-textPrimary tracking-tight mb-4">
-                            {whisperImportState.result
-                                ? 'Whispers imported'
-                                : whisperImportState.isImporting
-                                    ? 'Importing whispers'
-                                    : 'Import your whispers'}
-                        </h1>
-                        <p className="text-textSecondary text-base max-w-md mb-8">
-                            {whisperImportState.result
-                                ? `${whisperImportState.result.conversations.toLocaleString()} conversations, ${whisperImportState.result.messages.toLocaleString()} messages.`
-                                : whisperImportState.isImporting
-                                    ? 'Running in the background. You can keep going.'
-                                    : 'Pull in your private message history so it lives inside the app.'}
-                        </p>
-
-                        {whisperImportState.isImporting && whisperImportState.progress && (
-                            <div className="glass-panel rounded-xl p-4 mb-6 w-full max-w-sm">
-                                <div className="flex items-center gap-3 mb-2">
-                                    <Loader2 size={14} className="text-accent animate-spin flex-shrink-0" />
-                                    <span className="text-sm text-textPrimary">{whisperImportState.progress.detail}</span>
-                                </div>
-                                {whisperImportState.exportProgress && whisperImportState.exportProgress.total > 0 && (
-                                    <div className="mt-2">
-                                        <div className="flex justify-between text-xs text-textMuted mb-1 tabular-nums">
-                                            <span>Progress</span>
-                                            <span>{whisperImportState.exportProgress.current + 1}/{whisperImportState.exportProgress.total}</span>
-                                        </div>
-                                        <div className="h-1 bg-borderSubtle rounded-full overflow-hidden">
-                                            <div
-                                                className="h-full bg-accent rounded-full transition-all duration-300"
-                                                style={{ width: `${((whisperImportState.exportProgress.current + 1) / whisperImportState.exportProgress.total) * 100}%` }}
-                                            />
-                                        </div>
-                                    </div>
-                                )}
-                            </div>
-                        )}
-
-                        {whisperImportState.error && (
-                            <div className="flex items-center gap-2 text-error text-sm mb-5 px-3 py-2 rounded-lg bg-error/10">
-                                <AlertCircle size={15} />
-                                <span>{whisperImportState.error}</span>
-                            </div>
-                        )}
-
-                        {!whisperImportState.isImporting && !whisperImportState.result && (
-                            <button
-                                onClick={async () => {
-                                    setWhisperImportState({
-                                        isImporting: true,
-                                        error: null,
-                                        result: null,
-                                        progress: { step: 0, status: 'running', detail: 'Starting...', current: 0, total: 4 },
-                                        estimatedEndTime: null,
-                                        totalConversations: 0,
-                                        exportProgress: { current: 0, total: 0, username: '' }
-                                    });
-                                    try {
-                                        await invoke('scrape_whispers');
-                                    } catch (err) {
-                                        Logger.error('[SetupWizard] Whisper import failed:', err);
-                                        setWhisperImportState({
-                                            isImporting: false,
-                                            error: err instanceof Error ? err.message : String(err)
-                                        });
-                                    }
-                                }}
-                                className="glass-button flex items-center justify-center gap-2 px-6 py-3 text-textPrimary rounded-xl font-medium"
-                            >
-                                <Wand2 size={17} />
-                                Start import
-                            </button>
-                        )}
-                    </>
-                );
-
-            case 5:
-                return (
-                    <>
                         <Palette size={56} strokeWidth={1.4} className="text-accent mb-8" />
                         <h1 className="text-4xl font-medium text-textPrimary tracking-tight mb-4">
                             Pick your look
@@ -936,7 +841,7 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
                     </>
                 );
 
-            case 6:
+            case 5:
                 return (
                     <>
                         <PanelTop size={56} strokeWidth={1.4} className="text-accent mb-8" />
@@ -969,7 +874,7 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
                     </>
                 );
 
-            case 7:
+            case 6:
                 // The same step on every platform: a switch per alert type Rust
                 // offers in setup, all off. The phone's own component asks
                 // Android or iOS; desktop's adds where alerts show (Dynamic
@@ -1004,7 +909,7 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
                     </>
                 );
 
-            case 8: {
+            case 7: {
                 // Every sign-in the wizard offered, by name and logo: the accounts
                 // step offers, beside Twitch, the platforms this build can sign in to.
                 const platformRow = (provider: ProviderId, ok: boolean) =>
@@ -1015,17 +920,6 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
                     ...(kickOffered || kickConnected ? [platformRow('kick', kickConnected)] : []),
                     ...(youtubeOffered || youtubeConnected ? [platformRow('youtube', youtubeConnected)] : []),
                     ...(tiktokOffered || tiktokConnected ? [platformRow('tiktok', tiktokConnected)] : []),
-                    // Whisper import is a step mobile never shows, so reporting
-                    // it as "skipped" on the summary named something the phone
-                    // had not offered to do in the first place, which reads as a
-                    // missing feature rather than a skipped one.
-                    ...(IS_MOBILE
-                        ? []
-                        : [{
-                            ok: !!whisperImportState.result,
-                            pending: whisperImportState.isImporting,
-                            label: 'Whisper history',
-                        }]),
                 ];
 
                 return (

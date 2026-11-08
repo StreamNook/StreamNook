@@ -145,8 +145,6 @@ watched-chest-claimed
 webview-gpu-failed
 whisper-archive-changed
 whisper-conversation-updated
-whisper-import-complete
-whisper-import-progress
 whisper-notify
 whisper-received
 window-visibility

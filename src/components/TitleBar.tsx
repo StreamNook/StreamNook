@@ -59,7 +59,7 @@ const TitleBar = () => {
   // whole-store subscription, so the title bar re-rendered on every unrelated
   // store tick.
   const { openSettings, setShowDropsOverlay, setShowMarketplaceOverlay, setShowBadgesOverlay, setShowWhispersOverlay, toggleTheaterMode, toggleWindowFullscreen, toggleKeepOnTop } = useAppStore.getState();
-  const { dropProgressActive, dropProgressComplete, isTheaterMode, streamUrl, currentMediaType, settings, whisperImportState, updateInfo } = useAppStore(
+  const { dropProgressActive, dropProgressComplete, isTheaterMode, streamUrl, currentMediaType, settings, updateInfo } = useAppStore(
     useShallow((s) => ({
       dropProgressActive: s.dropProgressActive,
       dropProgressComplete: s.dropProgressComplete,
@@ -67,7 +67,6 @@ const TitleBar = () => {
       streamUrl: s.streamUrl,
       currentMediaType: s.currentMediaType,
       settings: s.settings,
-      whisperImportState: s.whisperImportState,
       updateInfo: s.updateInfo,
     })),
   );
@@ -1060,10 +1059,6 @@ const TitleBar = () => {
               className="titlebar-icon-btn relative"
             >
               <MessageCircle size={17} />
-              {/* Import indicator */}
-              {whisperImportState.isImporting && (
-                <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-purple-500 rounded-full animate-pulse" />
-              )}
             </button>
           </Tooltip>
 

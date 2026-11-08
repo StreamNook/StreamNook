@@ -28,8 +28,6 @@ description = "Narrow reporting callbacks used by injected scripts on twitch.tv 
 
 [permission.commands]
 allow = [
-  "emit_whisper_progress",
-  "receive_whisper_export",
   "receive_badge_data",
   "receive_update_result",
   "close_login_overlay",
