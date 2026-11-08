@@ -248,10 +248,10 @@ export function DropsChatBarView({
   );
 }
 
-/** The lip tucked away: a thin progress line along the message box's top
- *  edge, still filling as minutes come in. A taller invisible strip around it
- *  takes the pointer: hovering it shows the card (desktop), clicking or
- *  tapping it brings the lip back. */
+/** The lip tucked away: the message box's own top border fills with the
+ *  reward's progress, edge to edge, so nothing floats over chat. A strip just
+ *  above the border takes the pointer: hovering it shows the card (desktop),
+ *  clicking or tapping it brings the lip back. */
 export function DropsHairline({
   line,
   onShow,
@@ -269,10 +269,13 @@ export function DropsHairline({
       onClick={onShow}
       onPointerEnter={onPreload}
       aria-label={`${line.spoken}. Show the drops bar`}
-      className={`drops-hairline group block w-full cursor-pointer outline-none focus-visible:ring-1 focus-visible:ring-accent/60 ${touch ? 'px-4 py-2' : 'px-3 py-[5px]'}`}
+      className={`drops-hairline group relative block w-full cursor-pointer outline-none focus-visible:ring-1 focus-visible:ring-accent/60 ${touch ? 'h-4' : 'h-2'}`}
     >
-      <span aria-hidden className="block h-[2px] overflow-hidden rounded-full bg-textPrimary/[0.08] transition-[height] duration-150 group-hover:h-[3px]">
-        <span className="drops-bar-fill block h-full rounded-full" style={{ width: `${clamp(line.percent)}%` }} />
+      {/* Over the message box's top border (the host overlaps it by a
+          pixel): the fill runs from the left edge and thickens a touch under
+          the pointer. */}
+      <span aria-hidden className="absolute inset-x-0 bottom-0 h-[2px] overflow-hidden transition-[height] duration-150 group-hover:h-[3px]">
+        <span className="drops-bar-fill block h-full rounded-r-full" style={{ width: `${clamp(line.percent)}%` }} />
       </span>
     </button>
   );
@@ -451,7 +454,7 @@ function DropsChatBarInner({ channelId, login, headerInset, emotePickerOpen, onD
       // at rest it takes only its own height from the column. The emote
       // picker opens over this spot: the lip steps out of sight under it but
       // keeps its height, so chat never shifts.
-      className={`relative z-[55] -mb-px flex-shrink-0 px-2 ${tucked ? '' : 'pt-1.5'} ${emotePickerOpen ? 'invisible pointer-events-none' : ''}`}
+      className={`relative z-[55] -mb-px flex-shrink-0 ${tucked ? '' : 'px-2 pt-1.5'} ${emotePickerOpen ? 'invisible pointer-events-none' : ''}`}
     >
       <AnimatePresence>
         {open && (

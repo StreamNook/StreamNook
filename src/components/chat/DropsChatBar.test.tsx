@@ -221,7 +221,7 @@ describe('the hover card wiring', () => {
   });
   it('sits in the column above the message box, never over the message list', () => {
     const src = readFileSync(resolve(__dirname, 'DropsChatBar.tsx'), 'utf8').replace(/\r\n/g, '\n');
-    expect(src).toContain("className={`relative z-[55] -mb-px flex-shrink-0 px-2 ${tucked ? '' : 'pt-1.5'} ${emotePickerOpen ? 'invisible pointer-events-none' : ''}`}");
+    expect(src).toContain("className={`relative z-[55] -mb-px flex-shrink-0 ${tucked ? '' : 'px-2 pt-1.5'} ${emotePickerOpen ? 'invisible pointer-events-none' : ''}`}");
   });
 });
 
@@ -317,10 +317,10 @@ describe('mounting', () => {
 });
 
 describe('tucking the lip away', () => {
-  it('the tucked lip is a thin line that still fills, and a click brings the lip back', () => {
+  it('the tucked lip fills the message box border itself, and a click brings the lip back', () => {
     const html = renderToStaticMarkup(<DropsHairline line={PREVIEW_LINE} onShow={() => {}} />);
     expect(html).toContain('drops-hairline');
-    expect(html).toContain('h-[2px]');
+    expect(html).toContain('absolute inset-x-0 bottom-0 h-[2px]');
     expect(html).toContain('width:72%');
     expect(html).toContain('Show the drops bar');
   });
