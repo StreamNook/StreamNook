@@ -747,6 +747,85 @@ pub fn stamp_pins(pins: &mut [Value], channel_id: &str) {
     }
 }
 
+/// A whisper sender as the pinned-sender look draws them (the iPhone's
+/// `PinnedSender`): the readable name color, Twitch's display badges as the
+/// whisper thread lists them (resolved art, no channel), then their worn 7TV
+/// badge, their chat clients' badges and their StreamNook badge in the one
+/// surface order, the one role badge, and their 7TV paint. Reads only what is
+/// already known; `warm_whisper_sender` starts the lookup.
+pub fn whisper_sender_view(
+    user_id: &str,
+    color: Option<&str>,
+    twitch: &[crate::services::whisper_store::TwitchBadge],
+) -> Value {
+    let prefs = prefs();
+    let name_color = shown_color(color, &prefs);
+    let mut badges = Vec::new();
+    let mut role: Option<(u8, ViewBadge)> = None;
+    if prefs.show_badges {
+        for b in twitch {
+            if b.image_url.is_empty() {
+                continue;
+            }
+            let rank = role_rank(&b.set_id);
+            let badge = ViewBadge {
+                url: b.image_url.clone(),
+                title: b.title.clone(),
+                provider: "twitch".to_string(),
+                role: rank.is_some(),
+            };
+            if let Some(rank) = rank {
+                if role.as_ref().is_none_or(|(best, _)| rank < *best) {
+                    role = Some((rank, badge.clone()));
+                }
+            }
+            badges.push(badge);
+        }
+    }
+    let worn = crate::services::seventv_cosmetics_resolver::cosmetics_id("twitch", user_id)
+        .and_then(|id| crate::services::seventv_cosmetics_resolver::peek(&id))
+        .map(|user| worn_view(&user.paints, &user.badges));
+    let shown = |provider: &str| {
+        prefs.show_third_party_badges && !prefs.hidden_badge_providers.iter().any(|p| p == provider)
+    };
+    if shown("7tv") {
+        if let Some(badge) = worn.as_ref().and_then(|w| w.badge.clone()) {
+            badges.push(badge);
+        }
+    }
+    badges.extend(third_party_badges(user_id, &prefs));
+    if shown("streamnook") && !user_id.is_empty() && crate::services::cosmetics_registry::is_member(user_id) {
+        if let Some(badge) = member_badge(user_id) {
+            badges.push(badge);
+        }
+    }
+    badges.sort_by_key(|b| crate::services::badge_service::surface_rank(&b.provider));
+    serde_json::json!({
+        "name_color": name_color,
+        "badges": badges,
+        "role_badge": role.map(|(_, b)| b),
+        "paint": worn.and_then(|w| w.paint),
+    })
+}
+
+/// An open whisper conversation's sender: look their 7TV cosmetics up once
+/// (one lookup in flight per sender), so the next read of the conversation or
+/// the inbox draws their paint and badge.
+pub fn warm_whisper_sender(user_id: &str) {
+    let Some(id) = crate::services::seventv_cosmetics_resolver::cosmetics_id("twitch", user_id) else {
+        return;
+    };
+    if crate::services::seventv_cosmetics_resolver::peek(&id).is_some() {
+        return;
+    }
+    if tokio::runtime::Handle::try_current().is_ok() && begin_lookup(&id) {
+        tokio::spawn(async move {
+            let _ = crate::services::seventv_cosmetics_resolver::resolve(id.clone()).await;
+            end_lookup(&id);
+        });
+    }
+}
+
 // ---- The body ----------------------------------------------------------------
 
 const MOD_HIDDEN: u32 = 1;
@@ -1830,5 +1909,25 @@ mod tests {
         assert_eq!(providers, ["twitch", "ffz", "streamnook"]);
         assert_eq!(badges[1]["url"], "https://ffz/2");
         assert_eq!(pins[0]["sender_view"]["role_badge"]["url"], "https://g/mod/2");
+    }
+
+    #[test]
+    fn a_whisper_sender_wears_twitchs_display_badges_and_one_role_badge() {
+        let badge = |set: &str, url: &str| crate::services::whisper_store::TwitchBadge {
+            set_id: set.into(),
+            version: "1".into(),
+            title: set.into(),
+            image_url: url.into(),
+        };
+        let view = whisper_sender_view(
+            "",
+            Some("#000080"),
+            &[badge("moderator", "https://w/mod"), badge("subscriber", "https://w/sub"), badge("noart", "")],
+        );
+        let urls: Vec<&str> = view["badges"].as_array().unwrap().iter().map(|b| b["url"].as_str().unwrap()).collect();
+        assert_eq!(urls, ["https://w/mod", "https://w/sub"], "a badge with no art is left out");
+        assert_eq!(view["role_badge"]["url"], "https://w/mod");
+        assert_ne!(view["name_color"], "#000080", "navy is lifted to read on a dark theme");
+        assert!(view["paint"].is_null(), "no paint is known for an empty id");
     }
 }

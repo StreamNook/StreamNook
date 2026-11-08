@@ -940,7 +940,10 @@ async fn r_replies_to_the_last_whisper() {
     let o = run(&fake, "/r").await;
     assert_eq!(toast(&o, ToastKind::Info), vec!["Usage: /r <message>  (replies to Bob)"]);
     let o = run(&fake, "/r see you").await;
-    assert_eq!(fake.calls("send_whisper"), vec![json!({ "toUserId": "7", "message": "see you" })]);
+    assert_eq!(
+        fake.calls("send_whisper"),
+        vec![json!({ "toUserId": "7", "toLogin": "bob", "toName": "Bob", "message": "see you" })]
+    );
     assert_eq!(toast(&o, ToastKind::Success), vec!["Whisper sent to Bob"]);
 }
 

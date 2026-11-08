@@ -320,6 +320,7 @@ pub mod watch_start;
 pub mod app_presence;
 pub mod earning_gate;
 pub mod whisper_inbox;
+pub mod whisper_live;
 pub mod whisper_service;
 pub mod whisper_storage_service;
 pub mod whisper_store;

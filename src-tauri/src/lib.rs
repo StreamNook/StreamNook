@@ -2078,7 +2078,6 @@ pub fn run() {
             get_games_by_ids,
             get_videos_by_game,
             get_user_videos,
-            send_whisper,
             start_whisper_listener,
             search_whisper_user,
             // Streaming commands

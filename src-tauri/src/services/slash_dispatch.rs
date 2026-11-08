@@ -1396,7 +1396,15 @@ async fn core(c: &Call<'_>, o: &mut Outcome) -> Result<Flow, String> {
                 let username = strip_first_at(c.arg(0));
                 let message = c.from(1);
                 let done = format!("Whisper sent to {username}");
-                on_user(c, o, &username, "send_whisper", |u| json!({ "toUserId": u.id, "message": message }), done).await?;
+                on_user(
+                    c,
+                    o,
+                    &username,
+                    "send_whisper",
+                    |u| json!({ "toUserId": u.id, "toLogin": u.login, "toName": u.display_name, "message": message }),
+                    done,
+                )
+                .await?;
             } else if c.args.len() == 1 {
                 o.info("Usage: /w <username> <message>");
             } else {
@@ -1508,7 +1516,7 @@ async fn core(c: &Call<'_>, o: &mut Outcome) -> Result<Flow, String> {
                 o.err(format!("Could not find {last_name}"));
                 return Ok(Flow::Done);
             };
-            b.invoke("send_whisper", json!({ "toUserId": to, "message": text })).await?;
+            b.invoke("send_whisper", json!({ "toUserId": to, "toLogin": last_login, "toName": last_name, "message": text })).await?;
             o.ok(format!("Whisper sent to {last_name}"));
         }
         "clip" => {

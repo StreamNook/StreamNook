@@ -152,7 +152,9 @@ pub fn start(app: AppHandle) {
                 let hidden = window.is_minimized().unwrap_or(false);
                 // The emote menu only serves a chat window; on its own it is
                 // nobody watching anything, so it never keeps the UI pollers up.
-                on_screen |= !hidden && !serves_another_window(&label) && window.is_visible().unwrap_or(true);
+                let visible = window.is_visible().unwrap_or(true);
+                on_screen |= !hidden && !serves_another_window(&label) && visible;
+                crate::services::whisper_claims::note_minimized(&label, hidden || !visible);
                 let changed = last.get(&label) != Some(&hidden);
                 if changed {
                     last.insert(label.clone(), hidden);

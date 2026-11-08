@@ -98,8 +98,18 @@ pub enum NoticeAction {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum NoticeReply {
-    /// A whisper back to this person.
-    Whisper { user_id: String, login: String, name: String, avatar: Option<String> },
+    /// A whisper back to this person, from the account it came to (`owner_id`;
+    /// a reply after switching accounts is refused).
+    Whisper {
+        user_id: String,
+        login: String,
+        name: String,
+        avatar: Option<String>,
+        #[serde(default)]
+        owner_id: Option<String>,
+        #[serde(default)]
+        owner_name: Option<String>,
+    },
     /// A Twitch chat reply, threaded under message `parent_id` in `channel`.
     Chat { channel: String, broadcaster_id: Option<String>, parent_id: String, to_name: String },
 }
@@ -419,6 +429,9 @@ fn interpret(args: &str, text: Option<String>, page_knows: impl Fn(&str) -> bool
     if args.send {
         let text = text.map(|t| t.trim().to_string()).unwrap_or_default();
         return match args.reply {
+            // A whisper goes as typed: the send refuses an over-long one and
+            // the failure notice says why. A chat reply keeps chat's cut.
+            Some(target @ NoticeReply::Whisper { .. }) if !text.is_empty() => Use::Reply(target, text),
             Some(target) if !text.is_empty() => Use::Reply(target, text.chars().take(MAX_REPLY).collect()),
             _ => Use::Ignore,
         };
@@ -479,9 +492,17 @@ async fn send_reply(app: AppHandle, target: NoticeReply, text: String) {
         Ok(())
     } else {
         match &target {
-            NoticeReply::Whisper { user_id, login, name, avatar } => {
-                crate::services::whisper_inbox::reply_from_notification(&app, user_id, login, name, avatar.clone(), text)
-                    .await
+            NoticeReply::Whisper { user_id, login, name, avatar, owner_id, owner_name } => {
+                crate::services::whisper_send::reply_from_notification(
+                    owner_id.clone(),
+                    owner_name.clone(),
+                    user_id,
+                    login,
+                    name,
+                    avatar.clone(),
+                    text,
+                )
+                .await
             }
             NoticeReply::Chat { channel, broadcaster_id, parent_id, .. } => {
                 send_chat_reply(&app, channel, broadcaster_id.as_deref(), parent_id, &text).await
@@ -653,6 +674,28 @@ mod tests {
         assert_eq!(interpret(&no_target, Some("hi".into()), |_| false), Use::Ignore);
         let long = "x".repeat(MAX_REPLY + 50);
         assert!(matches!(interpret(&send, Some(long), |_| false), Use::Reply(_, t) if t.chars().count() == MAX_REPLY));
+    }
+
+    #[test]
+    fn a_whisper_reply_is_never_cut() {
+        let whisper = NoticeReply::Whisper {
+            user_id: "1000000000".into(),
+            login: "pebble".into(),
+            name: "Pebble".into(),
+            avatar: None,
+            owner_id: Some("99999999".into()),
+            owner_name: Some("Otter".into()),
+        };
+        let send = ToastArgs { id: "w".into(), action: None, reply: Some(whisper), send: true }.encode();
+        let long = "x".repeat(MAX_REPLY + 50);
+        assert!(matches!(interpret(&send, Some(long), |_| false), Use::Reply(_, t) if t.chars().count() == MAX_REPLY + 50));
+    }
+
+    #[test]
+    fn an_old_whisper_reply_without_an_owner_still_reads() {
+        let old: NoticeReply =
+            serde_json::from_str(r#"{"type":"whisper","userId":"9","login":"a","name":"A","avatar":null}"#).unwrap();
+        assert!(matches!(old, NoticeReply::Whisper { owner_id: None, .. }));
     }
 
     #[test]

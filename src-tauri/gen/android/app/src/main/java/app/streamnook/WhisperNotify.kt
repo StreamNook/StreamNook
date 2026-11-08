@@ -34,6 +34,9 @@ object WhisperNotifier {
   data class Item(
     /** The conversation's key in the core's inbox (the sender's Twitch id). */
     val key: String,
+    /** The account the whisper came to, and its name, for the reply's check. */
+    val ownerId: String = "",
+    val ownerName: String = "",
     val id: String,
     val userId: String,
     val login: String,
@@ -159,6 +162,8 @@ object WhisperNotifier {
   ): android.app.Notification {
     val reply = Intent(context, WhisperReplyReceiver::class.java).apply {
       putExtra("key", item.key)
+      putExtra("owner_id", item.ownerId)
+      putExtra("owner_name", item.ownerName)
       putExtra("id", item.id)
       putExtra("user_id", item.userId)
       putExtra("login", item.login)
@@ -215,6 +220,8 @@ class WhisperReplyReceiver : BroadcastReceiver() {
       ?.toString()?.trim().orEmpty()
     val item = WhisperNotifier.Item(
       key = intent.getStringExtra("key").orEmpty(),
+      ownerId = intent.getStringExtra("owner_id").orEmpty(),
+      ownerName = intent.getStringExtra("owner_name").orEmpty(),
       id = intent.getStringExtra("id").orEmpty(),
       userId = intent.getStringExtra("user_id").orEmpty(),
       login = intent.getStringExtra("login").orEmpty(),
@@ -234,6 +241,8 @@ class WhisperReplyReceiver : BroadcastReceiver() {
         val reason = try {
           NotifyBridge.replyWhisper(
             app.dataDir.absolutePath,
+            item.ownerId,
+            item.ownerName,
             item.userId,
             item.login,
             item.name,

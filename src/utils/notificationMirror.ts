@@ -43,7 +43,16 @@ export type NoticeAction =
 
 /** Where a reply typed into a Windows notification goes (`NoticeReply`). */
 export type NoticeReply =
-  | { type: 'whisper'; userId: string; login: string; name: string; avatar: string | null }
+  | {
+      type: 'whisper';
+      userId: string;
+      login: string;
+      name: string;
+      avatar: string | null;
+      /** The account the whisper came to; a reply from another account is refused. */
+      ownerId?: string | null;
+      ownerName?: string | null;
+    }
   | { type: 'chat'; channel: string; broadcasterId: string | null; parentId: string; toName: string };
 
 export interface MirroredNotice {

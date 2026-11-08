@@ -144,8 +144,8 @@ watch-session://went-live
 watched-chest-claimed
 webview-gpu-failed
 whisper-archive-changed
+whisper-arrived
 whisper-conversation-updated
 whisper-notify
-whisper-received
 window-visibility
 youtube-identity-changed

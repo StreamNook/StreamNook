@@ -1,73 +1,65 @@
 //! Whisper conversations as a domain: what happens when a whisper arrives, is
-//! sent, read, imported or refreshed. Persistence is whisper_storage_service;
-//! this module decides what to write.
+//! read, archived, listed or paged. Storage is `whisper_store`; Twitch reads
+//! and the sync are `whisper_sync`; sending is `whisper_send`; who is looking
+//! at which conversation is `whisper_claims`.
 //!
-//! Receiving is owned here, not by a window: the whisper socket records every
-//! incoming whisper itself, so history keeps accruing while the main window is
+//! Receiving is owned here, not by a window: the whisper socket files every
+//! incoming whisper itself, so history keeps growing while the main window is
 //! closed to the tray, and a window only ever gets the one conversation that
-//! changed (`whisper-conversation-updated`) instead of shipping the whole
-//! archive back to disk on every change.
+//! changed (`whisper-conversation-updated`).
 //!
-//! Conversations are keyed by the other user's numeric Twitch id. Imports can
-//! only name a login, so a conversation may sit under its login until the id is
-//! known; any later sighting of the id moves it (re-keying).
+//! Conversations are keyed by the other person's numeric Twitch id. An old
+//! import could only name a login, so a conversation may sit under its login
+//! until the id is seen; the first sighting moves it.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, Instant};
+
+use chrono::TimeZone;
+use serde::Serialize;
+use tauri::{Emitter, Manager};
+
+use crate::rt::AppHandle;
+use crate::services::inbox_counts::Surface; // (reconciled: Surface lives in inbox_counts)
+use crate::services::mention_inbox::MentionPart;
 use crate::services::twitch_service::TwitchService;
 use crate::services::whisper_service::WhisperEvent;
-use crate::services::whisper_storage_service::{
-    StoredConversation, StoredWhisper, WhisperStorageService,
+use crate::services::whisper_store::{
+    self, AccountIndex, Conversation, ConversationMeta, Deep, Marker, Origin, Scope, StoredWhisper, TwitchBadge,
 };
-use chrono::TimeZone;
-use futures::stream::{self, StreamExt};
-use once_cell::sync::Lazy;
-use regex::Regex;
-use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
-use crate::rt::AppHandle;
-use tauri::Emitter;
+use crate::services::whisper_sync::{self, Reason};
 
 pub const UPDATED_EVENT: &str = "whisper-conversation-updated";
-/// Many conversations changed at once (an import); reload the archive.
+/// Many conversations changed at once (a sync), or a sync started or ended.
 pub const ARCHIVE_CHANGED_EVENT: &str = "whisper-archive-changed";
 /// An incoming whisper worth a notification now (the payload is its
-/// `WhisperUpdate`). Decided here for every platform: the setting, streamer
-/// mode, and the conversation not being the one open on screen. The desktop's
-/// island and toasts, the Android shade (android_notify.rs) and the iPhone's
-/// local notification all post from it.
+/// `WhisperUpdate`). Decided here for every platform.
 pub const NOTIFY_EVENT: &str = "whisper-notify";
-
-/// Parallel Helix lookups while resolving an import's logins to ids.
-const RESOLVE_CONCURRENCY: usize = 4;
-
-/// The conversation open in the Whispers panel, if any. A whisper landing in
-/// it is read as it arrives, so it never counts as unread.
-static ACTIVE: Mutex<Option<String>> = Mutex::new(None);
+/// An incoming whisper for the phones' arrival card. Independent of the
+/// notification setting, like `mention-arrived`.
+pub const ARRIVED_EVENT: &str = "whisper-arrived";
 
 /// Notifications on, and the Whispers alert type on.
-static NOTIFY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static NOTIFY: AtomicBool = AtomicBool::new(false);
 
 /// Settings changed: whether an incoming whisper may notify.
 pub fn refresh_settings(settings: &crate::models::settings::Settings) {
     let n = &settings.live_notifications;
-    NOTIFY.store(n.enabled && n.show_whisper_notifications, std::sync::atomic::Ordering::Relaxed);
+    NOTIFY.store(n.enabled && n.show_whisper_notifications, Ordering::Relaxed);
 }
 
-/// The open conversation, while a window or the phone app is on screen. With
-/// everything minimized, in the tray or the phone app in the background, no
-/// conversation is being read, so a whisper there counts as unread and notifies.
-fn open_conversation() -> Option<String> {
-    if crate::services::window_visibility::all_hidden() {
-        return None;
-    }
-    ACTIVE.lock().ok().and_then(|a| a.clone())
+/// Whether a whisper just filed is announced: notifications and the Whispers
+/// type on, streamer mode off, Twitch has not muted the conversation, and it
+/// did not land in a conversation someone is reading.
+fn announces(notify: bool, streamer_mode: bool, muted: bool, reading: bool, incoming: bool) -> bool {
+    notify && !streamer_mode && !muted && !reading && incoming
 }
 
-/// Whether a whisper just recorded is announced: notifications and the
-/// Whispers type on, streamer mode off, someone else's whisper, and not one
-/// that landed in the conversation on screen (that one is already read).
-fn announces(notify: bool, streamer_mode: bool, update: &WhisperUpdate, landed_in_open: bool) -> bool {
-    notify && !streamer_mode && !landed_in_open && update.message.as_ref().is_some_and(|m| !m.is_sent)
+/// Whether a whisper just filed shows the phones' arrival card: the same as a
+/// mention's card, so the notification setting does not decide it.
+fn arrives(streamer_mode: bool, muted: bool, reading: bool, incoming: bool) -> bool {
+    !streamer_mode && !muted && !reading && incoming
 }
 
 /// Who whispered last since the app started, for `/r`: (login, display
@@ -79,155 +71,284 @@ pub fn last_from() -> Option<(String, String, String)> {
     LAST_FROM.lock().ok().and_then(|l| l.clone())
 }
 
-type Conversations = HashMap<String, StoredConversation>;
-
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub struct ConversationMeta {
-    pub user_id: String,
-    pub user_login: String,
-    pub user_name: String,
-    pub profile_image_url: Option<String>,
-    pub last_message_timestamp: i64,
-    pub unread_count: i32,
-}
-
 /// One conversation's change, as a window applies it: move `replaced_key` to
-/// `key` if set, take `meta`, and append `message` unless it is already there.
-#[derive(Debug, Clone, Serialize)]
+/// `key` if set, take `meta`, add or replace `message` by id, and drop
+/// `removed_message_id`.
+#[derive(Serialize, Clone, Debug)]
 pub struct WhisperUpdate {
     pub owner_id: String,
     pub key: String,
     pub replaced_key: Option<String>,
-    pub meta: ConversationMeta,
+    pub meta: RowMeta,
     pub message: Option<StoredWhisper>,
+    pub removed_message_id: Option<String>,
+    pub loading: Option<bool>,
+    pub error: Option<String>,
 }
 
-/// `whisper-archive-changed`: many conversations may have changed (a sync or
-/// an import); `syncing` says whether a sync is still running.
-#[derive(Debug, Clone, Serialize)]
+/// What every surface draws for a conversation (list row, inbox row,
+/// notification).
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct RowMeta {
+    pub key: String,
+    pub user_id: String,
+    pub user_login: String,
+    pub user_name: String,
+    pub profile_image_url: Option<String>,
+    pub color: Option<String>,
+    pub badges: Vec<TwitchBadge>,
+    pub last_message_timestamp: i64,
+    pub last_text: String,
+    pub last_parts: Vec<MentionPart>,
+    pub last_is_sent: bool,
+    pub unread_count: i32,
+    pub archived: bool,
+    pub muted: bool,
+    /// (reconciled, CA-13.1) The sender as the iPhone's pinned-sender look draws
+    /// them (`{name_color, badges, role_badge, paint}`, the shape
+    /// `chat_row_view::stamp_pins` writes). Built at read time from cosmetics
+    /// already known; desktop and Android draw names through `useChatterLook`
+    /// and ignore it.
+    pub sender_view: Option<serde_json::Value>,
+    /// Whether they are live right now, from what StreamNook already knows
+    /// (`whisper_live`). None while offline or not known.
+    pub live: Option<crate::services::whisper_live::LiveNow>,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct WhisperList {
+    pub owner_id: String,
+    pub conversations: Vec<RowMeta>,
+    pub unread_total: i64,
+    pub syncing: bool,
+    pub signed_in: bool,
+    pub session_problem: Option<String>,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct WhisperPage {
+    pub meta: Option<RowMeta>,
+    /// Oldest first.
+    pub messages: Vec<StoredWhisper>,
+    /// What to pass back for the page before this one; None at the start.
+    pub cursor: Option<String>,
+    pub has_more_local: bool,
+    pub older_on_twitch: bool,
+}
+
+#[derive(Serialize, Clone, Debug)]
 pub struct ArchiveChanged {
     pub owner_id: String,
     pub syncing: bool,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub struct ImportSummary {
-    pub conversations: usize,
-    pub messages: usize,
+#[derive(Serialize, Clone, Debug)]
+pub struct WhisperArrived {
+    pub update: WhisperUpdate,
 }
 
-/// Who "me" is when an import has to fill in the sender of a message.
-#[derive(Debug, Clone, Default)]
-pub struct Me {
-    pub id: String,
-    pub login: String,
-    pub display_name: String,
+fn app() -> Option<AppHandle> {
+    crate::services::providers::app_handle()
 }
 
-fn meta_of(c: &StoredConversation) -> ConversationMeta {
+fn current() -> Option<Scope> {
+    whisper_sync::current_scope()
+}
+
+/// Now on Twitch's clock, as well as it is known.
+fn now_twitch_ms() -> i64 {
+    chrono::Utc::now().timestamp_millis() + whisper_sync::twitch_offset_ms()
+}
+
+/// A fresh index entry for a conversation that does not exist yet.
+pub fn new_meta(key: &str, user_id: &str, login: &str, name: &str, avatar: Option<String>) -> ConversationMeta {
+    // (reconciled) built on the store's own empty meta, so no field is missed.
     ConversationMeta {
-        user_id: c.user_id.clone(),
-        user_login: c.user_login.clone(),
-        user_name: c.user_name.clone(),
-        profile_image_url: c.profile_image_url.clone(),
-        last_message_timestamp: c.last_message_timestamp,
-        unread_count: c.unread_count,
+        user_id: user_id.to_string(),
+        user_login: login.to_string(),
+        user_name: if name.is_empty() { login.to_string() } else { name.to_string() },
+        profile_image_url: avatar,
+        ..ConversationMeta::new(key)
     }
 }
 
-fn is_numeric_id(s: &str) -> bool {
-    !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())
-}
-
-fn now_ms() -> i64 {
-    chrono::Utc::now().timestamp_millis()
-}
-
-/// Treat an empty string like a missing value, as the exporter's `a || b` did.
-fn or_else(value: Option<&str>, fallback: &str) -> String {
-    match value {
-        Some(v) if !v.is_empty() => v.to_string(),
-        _ => fallback.to_string(),
+/// Add `m` in (timestamp, id) order. False when a message with its id is
+/// already there.
+pub(crate) fn insert_sorted(messages: &mut Vec<StoredWhisper>, m: StoredWhisper) -> bool {
+    if messages.iter().any(|x| x.id == m.id) {
+        return false;
     }
+    let pos = messages.partition_point(|x| (x.timestamp, x.id.as_str()) <= (m.timestamp, m.id.as_str()));
+    messages.insert(pos, m);
+    true
 }
 
-/// Where a conversation with this user lives: under their id, or, for one
-/// imported before the id was known, under their login.
-fn find_key(convs: &Conversations, user_id: &str, login: &str) -> Option<String> {
-    if convs.contains_key(user_id) {
-        return Some(user_id.to_string());
+/// The newest message from the other person that still shows.
+fn newest_incoming(messages: &[StoredWhisper]) -> Option<&StoredWhisper> {
+    messages.iter().rev().find(|m| !m.is_sent && !m.deleted)
+}
+
+/// Read the conversation through its newest incoming message. Owes Twitch
+/// that id when it is Twitch's own. Returns whether anything changed.
+fn read_through_now(c: &mut Conversation) -> bool {
+    let Some(newest) = newest_incoming(&c.messages).cloned() else {
+        return false;
+    };
+    if c.meta.read_through.as_ref().is_some_and(|r| r.id == newest.id) {
+        return false;
+    }
+    c.meta.read_through = Some(Marker { id: newest.id.clone(), at_ms: newest.timestamp });
+    c.meta.read_seq = whisper_store::next_seq();
+    if newest.origin == Origin::Twitch {
+        c.meta.twitch_read_owed = Some(newest.id);
+    }
+    true
+}
+
+/// The conversation with this person, under their id or, for an old import,
+/// their login.
+pub fn key_for(scope: &Scope, user_id: &str, login: &str) -> Option<String> {
+    whisper_store::read_index(scope, |idx| key_in(idx, user_id, login)).ok().flatten()
+}
+
+fn key_in(idx: &AccountIndex, user_id: &str, login: &str) -> Option<String> {
+    if !user_id.is_empty() {
+        if let Some(c) = idx.conversations.iter().find(|c| c.key == user_id) {
+            return Some(c.key.clone());
+        }
     }
     let login = login.to_lowercase();
-    if convs.contains_key(&login) {
-        return Some(login);
+    if login.is_empty() {
+        return None;
     }
-    convs
+    idx.conversations
         .iter()
-        .find(|(_, c)| c.user_login.to_lowercase() == login)
-        .map(|(k, _)| k.clone())
+        .find(|c| c.key == login || c.user_login.to_lowercase() == login)
+        .map(|c| c.key.clone())
 }
 
-/// Move the conversation at `from` to `to`, merging into one already there.
-fn rekey(convs: &mut Conversations, from: &str, to: &str) {
-    if from == to {
+fn meta_of(scope: &Scope, key: &str) -> Option<ConversationMeta> {
+    whisper_store::read_index(scope, |idx| idx.conversations.iter().find(|c| c.key == key).cloned())
+        .ok()
+        .flatten()
+}
+
+/// Send one conversation's change to every window, and wake the counts.
+pub fn emit_update(
+    scope: &Scope,
+    key: &str,
+    message: Option<StoredWhisper>,
+    replaced_key: Option<String>,
+) -> Option<WhisperUpdate> {
+    let meta = meta_of(scope, key)?;
+    let update = WhisperUpdate {
+        owner_id: scope.owner.clone(),
+        key: key.to_string(),
+        replaced_key,
+        meta: row_meta(&meta),
+        message: message.map(with_globals_msg),
+        removed_message_id: None,
+        loading: None,
+        error: None,
+    };
+    if let Some(app) = app() {
+        let _ = app.emit(UPDATED_EVENT, &update);
+    }
+    crate::services::inbox_counts::wake();
+    Some(update)
+}
+
+/// Tell windows a conversation changed with no single new message (a sync
+/// merge, a read marker, a load of older history), so an open one re-reads.
+/// (reconciled: the name whisper_sync calls.)
+pub fn emit_conversation(scope: &Scope, key: &str) {
+    let _ = emit_update(scope, key, None, None);
+}
+
+/// A message left a conversation (a discarded send).
+pub fn emit_removed(scope: &Scope, key: &str, message_id: &str) {
+    let Some(meta) = meta_of(scope, key) else { return };
+    let update = WhisperUpdate {
+        owner_id: scope.owner.clone(),
+        key: key.to_string(),
+        replaced_key: None,
+        meta: row_meta(&meta),
+        message: None,
+        removed_message_id: Some(message_id.to_string()),
+        loading: None,
+        error: None,
+    };
+    if let Some(app) = app() {
+        let _ = app.emit(UPDATED_EVENT, &update);
+    }
+    crate::services::inbox_counts::wake();
+}
+
+/// Many conversations may have changed, or a sync started or ended.
+pub fn emit_archive_changed(owner: &str, syncing: bool) {
+    if let Some(app) = app() {
+        let _ = app.emit(ARCHIVE_CHANGED_EVENT, &ArchiveChanged { owner_id: owner.to_string(), syncing });
+    }
+    crate::services::inbox_counts::wake();
+}
+
+/// The conversation someone is reading: read it through what just merged in.
+pub fn read_through_if_reading(scope: &Scope, key: &str) {
+    if crate::services::whisper_claims::reading(&scope.owner, key) {
+        let _ = mark_read_in(scope, key);
+    }
+}
+
+/// A claim on this conversation started counting (focus came back, the sheet
+/// opened, the app came back): what is on screen is read.
+pub fn on_claim_counting(owner: &str, key: &str) {
+    let Some(scope) = current() else { return };
+    if scope.owner == owner {
+        let _ = mark_read_in(&scope, key);
+    }
+}
+
+/// File a whisper the socket just received and tell the windows. `twitch_ms`
+/// is EventSub's own timestamp, so every time in a conversation is Twitch's.
+pub async fn record_incoming(app: AppHandle, owner_id: String, ev: WhisperEvent, twitch_ms: i64) {
+    let _ = app;
+    if !ev.from_user_login.is_empty() {
+        if let Ok(mut last) = LAST_FROM.lock() {
+            let name = if ev.from_user_name.is_empty() { ev.from_user_login.clone() } else { ev.from_user_name.clone() };
+            *last = Some((ev.from_user_login.clone(), name, ev.from_user_id.clone()));
+        }
+    }
+    let Some(scope) = current() else {
+        log::debug!("[WhisperInbox] whisper arrived with no account followed; not filed");
+        return;
+    };
+    if scope.owner != owner_id {
+        log::debug!("[WhisperInbox] whisper for an account no longer followed; not filed");
         return;
     }
-    let Some(mut moving) = convs.remove(from) else { return };
-    moving.user_id = to.to_string();
-    match convs.get_mut(to) {
-        Some(existing) => {
-            if existing.profile_image_url.is_none() {
-                existing.profile_image_url = moving.profile_image_url.take();
+    whisper_sync::note_twitch_time(twitch_ms); // (reconciled: one argument, 7.4's form)
+
+    // An old login-keyed conversation moves under the id now that it is known.
+    let found = key_for(&scope, &ev.from_user_id, &ev.from_user_login);
+    let mut replaced = None;
+    if let Some(k) = found.as_deref() {
+        if k != ev.from_user_id && !ev.from_user_id.is_empty() {
+            if whisper_store::rekey(&scope, k, &ev.from_user_id).is_ok() {
+                replaced = Some(k.to_string());
             }
-            existing.unread_count += moving.unread_count;
-            merge_messages(existing, moving.messages);
-        }
-        None => {
-            convs.insert(to.to_string(), moving);
         }
     }
-}
+    let key = if ev.from_user_id.is_empty() { found.clone().unwrap_or_default() } else { ev.from_user_id.clone() };
+    if key.is_empty() {
+        return;
+    }
+    let needs_avatar = meta_of(&scope, &key).map(|m| m.profile_image_url.is_none()).unwrap_or(true);
+    let avatar = if needs_avatar && !ev.from_user_id.is_empty() {
+        TwitchService::get_user_by_id(&ev.from_user_id).await.ok().and_then(|u| u.profile_image_url)
+    } else {
+        None
+    };
 
-/// Add messages not already present (by id), keep time order, and move the
-/// conversation's last-message time to its newest message. Returns how many
-/// were added.
-fn merge_messages(conv: &mut StoredConversation, incoming: Vec<StoredWhisper>) -> usize {
-    let mut known: HashSet<String> = conv.messages.iter().map(|m| m.id.clone()).collect();
-    let before = conv.messages.len();
-    for m in incoming {
-        if known.insert(m.id.clone()) {
-            conv.messages.push(m);
-        }
-    }
-    let added = conv.messages.len() - before;
-    if added > 0 {
-        conv.messages.sort_by_key(|m| m.timestamp);
-        if let Some(last) = conv.messages.last() {
-            conv.last_message_timestamp = last.timestamp;
-        }
-    }
-    added
-}
-
-/// Whether recording a whisper from this user needs their avatar looked up:
-/// only for a conversation that does not exist yet, or one found under a login
-/// that has no picture. Everything else already has what it needs.
-fn needs_avatar(convs: &Conversations, ev: &WhisperEvent) -> bool {
-    match find_key(convs, &ev.from_user_id, &ev.from_user_login) {
-        None => true,
-        Some(key) => key != ev.from_user_id && convs[&key].profile_image_url.is_none(),
-    }
-}
-
-/// Record one incoming whisper. Returns the change, or None when that whisper
-/// was already stored.
-fn apply_incoming(
-    convs: &mut Conversations,
-    ev: &WhisperEvent,
-    received_ms: i64,
-    avatar: Option<String>,
-    active: Option<&str>,
-) -> Option<(String, Option<String>, StoredWhisper)> {
     let message = StoredWhisper {
         id: ev.whisper_id.clone(),
         from_user_id: ev.from_user_id.clone(),
@@ -237,233 +358,316 @@ fn apply_incoming(
         to_user_login: ev.to_user_login.clone(),
         to_user_name: ev.to_user_name.clone(),
         message: ev.text.clone(),
-        timestamp: received_ms,
+        timestamp: twitch_ms,
         is_sent: false,
+        parts: Vec::new(),
+        deleted: false,
+        edited_ms: None,
+        origin: Origin::Twitch,
+        delivery: None,
+        sent_local_ms: None,
+        got_204: false,
+        checks: 0,
+        failure: None,
+        cut_to: None,
+        migrated: false,
     };
-    let from_id = ev.from_user_id.as_str();
-
-    let Some(found) = find_key(convs, from_id, &ev.from_user_login) else {
-        convs.insert(
-            from_id.to_string(),
-            StoredConversation {
-                user_id: from_id.to_string(),
-                user_login: ev.from_user_login.clone(),
-                user_name: ev.from_user_name.clone(),
-                profile_image_url: avatar,
-                messages: vec![message.clone()],
-                last_message_timestamp: received_ms,
-                unread_count: if active == Some(from_id) { 0 } else { 1 },
-            },
-        );
-        return Some((from_id.to_string(), None, message));
-    };
-
-    let conv = convs.get_mut(&found).expect("found above");
-    if conv.messages.iter().any(|m| m.id == message.id) {
-        return None;
-    }
-    let is_open = active == Some(found.as_str()) || active == Some(from_id);
-    if !is_open {
-        conv.unread_count += 1;
-    }
-    merge_messages(conv, vec![message.clone()]);
-
-    let replaced = if found != from_id {
-        if conv.profile_image_url.is_none() {
-            conv.profile_image_url = avatar;
+    let reading = crate::services::whisper_claims::reading(&scope.owner, &key);
+    let create = new_meta(&key, &ev.from_user_id, &ev.from_user_login, &ev.from_user_name, avatar.clone());
+    let filed = whisper_store::update(&scope, &key, Some(create), |c| {
+        if !insert_sorted(&mut c.messages, message.clone()) {
+            return (None, false);
         }
-        rekey(convs, &found, from_id);
-        Some(found)
-    } else {
-        None
-    };
-    Some((from_id.to_string(), replaced, message))
-}
-
-fn update_for(
-    convs: &Conversations,
-    owner_id: &str,
-    key: String,
-    replaced_key: Option<String>,
-    message: Option<StoredWhisper>,
-) -> Option<WhisperUpdate> {
-    let meta = meta_of(convs.get(&key)?);
-    Some(WhisperUpdate { owner_id: owner_id.to_string(), key, replaced_key, meta, message })
-}
-
-/// Persist a whisper the socket just received and tell the windows. Runs off
-/// the socket's read loop, so a slow avatar lookup never delays keepalives.
-pub async fn record_incoming(app: AppHandle, owner_id: String, ev: WhisperEvent, received_ms: i64) {
-    if !ev.from_user_login.is_empty() {
-        if let Ok(mut last) = LAST_FROM.lock() {
-            let name = if ev.from_user_name.is_empty() { ev.from_user_login.clone() } else { ev.from_user_name.clone() };
-            *last = Some((ev.from_user_login.clone(), name, ev.from_user_id.clone()));
+        if c.meta.profile_image_url.is_none() {
+            c.meta.profile_image_url = avatar.clone();
         }
-    }
-    let lookup = WhisperStorageService::update_conversations(&app, &owner_id, |convs| {
-        (needs_avatar(convs, &ev), false)
+        if c.meta.archived {
+            // Twitch brings an archived conversation back on a new message;
+            // so does StreamNook, and an archive still owed is dropped.
+            c.meta.archived = false;
+            c.meta.archive_pending = false;
+            c.meta.archive_requested_ms = None;
+            c.meta.archived_seq = whisper_store::next_seq();
+        }
+        if reading {
+            read_through_now(c);
+        }
+        (Some(c.meta.muted), true)
     });
-    let avatar = match lookup {
-        Ok(true) => TwitchService::get_user_by_id(&ev.from_user_id)
-            .await
-            .ok()
-            .and_then(|u| u.profile_image_url),
-        Ok(false) => None,
+    let muted = match filed {
+        Ok(Some(Some(muted))) => muted,
+        Ok(_) => return,
         Err(e) => {
-            log::warn!("[WhisperInbox] could not open whisper storage: {e}");
+            log::warn!("[WhisperInbox] could not file a whisper: {e}");
             return;
         }
     };
-    let active = open_conversation();
-    let result = WhisperStorageService::update_conversations(&app, &owner_id, |convs| {
-        match apply_incoming(convs, &ev, received_ms, avatar, active.as_deref()) {
-            Some((key, replaced, message)) => {
-                let open = active.as_deref().is_some_and(|a| a == key || replaced.as_deref() == Some(a));
-                (update_for(convs, &owner_id, key, replaced, Some(message)).map(|u| (u, open)), true)
-            }
-            None => (None, false),
+    if reading {
+        whisper_sync::send_owed(key.clone());
+    }
+    let Some(update) = emit_update(&scope, &key, Some(message), replaced) else { return };
+    let notify = NOTIFY.load(Ordering::Relaxed);
+    let streamer = crate::services::streamer_mode::StreamerMode::is_active();
+    if let Some(app) = crate::services::providers::app_handle() {
+        if announces(notify, streamer, muted, reading, true) {
+            log::info!("[WhisperInbox] announcing an incoming whisper");
+            let _ = app.emit(NOTIFY_EVENT, &update);
+        } else {
+            log::debug!(
+                "[WhisperInbox] whisper filed without a notification (notify {notify}, streamer mode {streamer}, muted {muted}, reading {reading})"
+            );
         }
-    });
-    match result {
-        Ok(Some((update, open))) => {
-            let _ = app.emit(UPDATED_EVENT, &update);
-            let notify = NOTIFY.load(std::sync::atomic::Ordering::Relaxed);
-            let streamer = crate::services::streamer_mode::StreamerMode::is_active();
-            if announces(notify, streamer, &update, open) {
-                log::info!("[WhisperInbox] announcing an incoming whisper");
-                let _ = app.emit(NOTIFY_EVENT, &update);
-            } else {
-                log::debug!(
-                    "[WhisperInbox] whisper filed without a notification (notify {notify}, streamer mode {streamer}, open {open})"
-                );
-            }
+        if arrives(streamer, muted, reading, true) {
+            let _ = app.emit(ARRIVED_EVENT, &WhisperArrived { update: update.clone() });
         }
-        Ok(None) => {}
-        Err(e) => log::warn!("[WhisperInbox] failed to record whisper: {e}"),
+    }
+    // Twitch's copy carries the emote ranges EventSub leaves out.
+    whisper_sync::trigger(Reason::AfterTraffic(key));
+}
+
+fn mark_read_in(scope: &Scope, key: &str) -> Result<(), String> {
+    let changed = whisper_store::update(scope, key, None, |c| {
+        let changed = read_through_now(c);
+        (changed, changed)
+    })?;
+    if changed == Some(true) {
+        whisper_sync::send_owed(key.to_string());
+        emit_update(scope, key, None, None);
+    }
+    Ok(())
+}
+
+/// Read a conversation through its newest message, here and on Twitch.
+pub fn mark_read(key: &str) -> Result<(), String> {
+    let Some(scope) = current() else { return Ok(()) };
+    mark_read_in(&scope, key)
+}
+
+/// The conversations Mark all read reads: every one with something unread,
+/// muted and archived ones included (reading them changes no badge and keeps
+/// Twitch in step). (reconciled: factored out so it is tested)
+fn unread_keys(idx: &AccountIndex) -> Vec<String> {
+    idx.conversations.iter().filter(|c| c.unread_count > 0).map(|c| c.key.clone()).collect()
+}
+
+/// Read every conversation with something unread.
+pub fn mark_all_read() -> Result<(), String> {
+    let Some(scope) = current() else { return Ok(()) };
+    let keys: Vec<String> = whisper_store::read_index(&scope, unread_keys)?;
+    for key in keys {
+        mark_read_in(&scope, &key)?;
+    }
+    Ok(())
+}
+
+/// Archive a conversation here at once and on Twitch as soon as it can.
+pub async fn archive(key: &str) -> Result<(), String> {
+    let Some(scope) = current() else { return Ok(()) };
+    let changed = whisper_store::update(&scope, key, None, |c| {
+        if c.meta.archived && !c.meta.archive_pending {
+            return ((), false);
+        }
+        c.meta.archived = true;
+        c.meta.archive_pending = true;
+        c.meta.archive_requested_ms = Some(now_twitch_ms());
+        c.meta.archived_seq = whisper_store::next_seq();
+        ((), true)
+    })?;
+    if changed.is_some() {
+        whisper_sync::send_owed(key.to_string());
+        emit_update(&scope, key, None, None);
+    }
+    Ok(())
+}
+
+/// Leave every whisper row up to now out of the island and MultiChat.
+pub fn island_clear() -> Result<(), String> {
+    let Some(scope) = current() else { return Ok(()) };
+    whisper_store::update_index(&scope, |idx| {
+        idx.island_cleared_through = Some(now_twitch_ms());
+        ((), true)
+    })?;
+    emit_archive_changed(&scope.owner, whisper_sync::syncing());
+    Ok(())
+}
+
+pub fn row_meta(meta: &ConversationMeta) -> RowMeta {
+    RowMeta {
+        key: meta.key.clone(),
+        user_id: meta.user_id.clone(),
+        user_login: meta.user_login.clone(),
+        user_name: meta.user_name.clone(),
+        profile_image_url: meta.profile_image_url.clone(),
+        color: meta.color.clone(),
+        badges: meta.badges.clone(),
+        last_message_timestamp: meta.last_message_timestamp,
+        last_text: meta.last_text.clone(),
+        last_parts: with_globals(&meta.last_parts, &meta.last_text),
+        last_is_sent: meta.last_is_sent,
+        unread_count: meta.unread_count,
+        archived: meta.archived,
+        muted: meta.muted,
+        // (reconciled, CA-13.1) Known cosmetics only: a list never starts lookups.
+        sender_view: Some(crate::services::chat_row_view::whisper_sender_view(
+            &meta.user_id,
+            meta.color.as_deref(),
+            &meta.badges,
+        )),
+        // What is already known; a read never asks Twitch.
+        live: crate::services::whisper_live::cached(&meta.user_login),
     }
 }
 
-/// Which conversation the Whispers panel has open (None when closed).
-pub fn set_active(key: Option<String>) {
-    if let Ok(mut active) = ACTIVE.lock() {
-        *active = key;
-    }
+/// Rows a surface shows, newest first (ties by key), after `after` when given.
+/// Archived conversations are left out; the island and MultiChat also leave
+/// out rows at or before their Clear.
+fn rows_of(idx: &AccountIndex, surface: Surface, after: Option<(i64, String)>, limit: usize) -> Vec<ConversationMeta> {
+    let cleared = match surface {
+        Surface::Island | Surface::Multichat => idx.island_cleared_through,
+        Surface::Phone => None,
+    };
+    let mut rows: Vec<&ConversationMeta> = idx
+        .conversations
+        .iter()
+        .filter(|c| !c.archived)
+        .filter(|c| c.last_message_timestamp > 0)
+        .filter(|c| cleared.is_none_or(|t| c.last_message_timestamp > t))
+        .collect();
+    rows.sort_by(|a, b| b.last_message_timestamp.cmp(&a.last_message_timestamp).then_with(|| a.key.cmp(&b.key)));
+    rows.into_iter()
+        .filter(|c| match &after {
+            Some((ts, key)) => c.last_message_timestamp < *ts || (c.last_message_timestamp == *ts && c.key > *key),
+            None => true,
+        })
+        .take(limit)
+        .cloned()
+        .collect()
 }
 
-pub fn mark_read(app: &AppHandle, owner_id: &str, key: &str) -> Result<(), String> {
-    WhisperStorageService::update_conversations(app, owner_id, |convs| match convs.get_mut(key) {
-        Some(c) if c.unread_count > 0 => {
-            c.unread_count = 0;
-            ((), true)
+/// (every unread, unread the island shows): archived and Twitch-muted
+/// conversations count toward neither.
+fn unread_of(idx: &AccountIndex) -> (u32, u32) {
+    let mut all = 0u32;
+    let mut island = 0u32;
+    for c in idx.conversations.iter().filter(|c| !c.archived && !c.muted) {
+        let n = c.unread_count.max(0) as u32;
+        all += n;
+        if idx.island_cleared_through.is_none_or(|t| c.last_message_timestamp > t) {
+            island += n;
         }
-        _ => ((), false),
+    }
+    (all, island)
+}
+
+/// The inbox view's whisper rows (see `rows_of`).
+pub fn rows_for_view(surface: Surface, after: Option<(i64, String)>, limit: usize) -> Vec<RowMeta> {
+    let Some(scope) = current() else { return Vec::new() };
+    refresh_globals_soon();
+    whisper_store::read_index(&scope, |idx| rows_of(idx, surface, after, limit))
+        .map(|rows| rows.iter().map(row_meta).collect())
+        .unwrap_or_default()
+}
+
+/// (all, island) unread for the counts emitter.
+pub fn unread_counts() -> (u32, u32) {
+    let Some(scope) = current() else { return (0, 0) };
+    whisper_store::read_index(&scope, unread_of).unwrap_or((0, 0))
+}
+
+/// The signed-in account's conversations, newest first.
+pub fn list() -> Result<WhisperList, String> {
+    let Some(scope) = current() else {
+        return Ok(WhisperList {
+            owner_id: String::new(),
+            conversations: Vec::new(),
+            unread_total: 0,
+            syncing: false,
+            signed_in: false,
+            session_problem: None,
+        });
+    };
+    refresh_globals_soon();
+    let (rows, (unread, _)) =
+        whisper_store::read_index(&scope, |idx| (rows_of(idx, Surface::Phone, None, usize::MAX), unread_of(idx)))?;
+    Ok(WhisperList {
+        owner_id: scope.owner.clone(),
+        conversations: rows.iter().map(row_meta).collect(),
+        unread_total: i64::from(unread),
+        syncing: whisper_sync::syncing(),
+        signed_in: true,
+        session_problem: whisper_sync::session_problem(),
     })
 }
 
-/// The panel's view of the conversation being written to. A brand-new one
-/// exists only in the panel until its first message is sent.
-#[derive(Debug, Clone, Deserialize)]
-pub struct SendTarget {
-    pub key: String,
-    pub user_id: String,
-    pub user_login: String,
-    pub user_name: String,
-    pub profile_image_url: Option<String>,
+fn encode_cursor(ts: i64, id: &str) -> String {
+    format!("{ts}:{id}")
 }
 
-/// Send a whisper and record it. The recipient's id is looked up by login when
-/// the conversation only knows their login (an import that never resolved).
-pub async fn send(
-    app: &AppHandle,
-    owner_id: &str,
-    target: SendTarget,
-    text: String,
-) -> Result<WhisperUpdate, String> {
-    let stored = WhisperStorageService::update_conversations(app, owner_id, |convs| {
-        (convs.get(&target.key).map(|c| c.user_id.clone()), false)
-    })?;
-    let mut recipient = stored.unwrap_or_else(|| target.user_id.clone());
-    let mut resolved_avatar = None;
-    if !is_numeric_id(&recipient) {
-        let user = TwitchService::get_user_by_login(&target.user_login)
-            .await
-            .map_err(|_| "Cannot send: User not found on Twitch.".to_string())?;
-        recipient = user.id;
-        resolved_avatar = user.profile_image_url;
-    }
-
-    TwitchService::send_whisper(&recipient, &text)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    let me = TwitchService::get_user_info().await.ok();
-    let sent_ms = now_ms();
-    let message = StoredWhisper {
-        id: format!("sent-{}-{:08x}", sent_ms, rand::random::<u32>()),
-        from_user_id: owner_id.to_string(),
-        from_user_login: me.as_ref().map(|u| u.login.clone()).unwrap_or_default(),
-        from_user_name: me.as_ref().map(|u| u.display_name.clone()).unwrap_or_default(),
-        to_user_id: recipient.clone(),
-        to_user_login: target.user_login.clone(),
-        to_user_name: target.user_name.clone(),
-        message: text,
-        timestamp: sent_ms,
-        is_sent: true,
-    };
-
-    let owner = owner_id.to_string();
-    WhisperStorageService::update_conversations(app, owner_id, move |convs| {
-        let conv = convs.entry(target.key.clone()).or_insert_with(|| StoredConversation {
-            user_id: recipient.clone(),
-            user_login: target.user_login.clone(),
-            user_name: target.user_name.clone(),
-            profile_image_url: target.profile_image_url.clone(),
-            messages: Vec::new(),
-            last_message_timestamp: sent_ms,
-            unread_count: 0,
-        });
-        conv.user_id = recipient;
-        if resolved_avatar.is_some() {
-            conv.profile_image_url = resolved_avatar;
-        }
-        merge_messages(conv, vec![message.clone()]);
-        (update_for(convs, &owner, target.key, None, Some(message)), true)
-    })?
-    .ok_or_else(|| "Conversation vanished while sending".to_string())
+fn decode_cursor(raw: &str) -> Option<(i64, String)> {
+    let (ts, id) = raw.split_once(':')?;
+    Some((ts.parse().ok()?, id.to_string()))
 }
 
-/// Send a whisper typed into a Windows notification and tell every window, as
-/// the Whispers panel's own send would. A notification can start the app, so
-/// this waits a little for the Twitch sign-in to load.
-pub async fn reply_from_notification(
-    app: &AppHandle,
-    user_id: &str,
-    login: &str,
-    name: &str,
-    avatar: Option<String>,
-    text: String,
-) -> Result<(), String> {
-    let mut me = None;
-    for _ in 0..20 {
-        if let Ok(user) = TwitchService::get_user_info().await {
-            me = Some(user);
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    }
-    let me = me.ok_or_else(|| "You are not signed in to Twitch.".to_string())?;
-    let key = WhisperStorageService::update_conversations(app, &me.id, |convs| (find_key(convs, user_id, login), false))?
-        .unwrap_or_else(|| user_id.to_string());
-    let target = SendTarget {
-        key,
-        user_id: user_id.to_string(),
-        user_login: login.to_string(),
-        user_name: name.to_string(),
-        profile_image_url: avatar,
+fn local_day(ms: i64) -> Option<chrono::NaiveDate> {
+    chrono::Local.timestamp_millis_opt(ms).single().map(|d| d.date_naive())
+}
+
+/// The messages a conversation shows. While older history is still on
+/// Twitch, old scraped copies dated on or after the oldest Twitch message's
+/// day are hidden (they stay on disk until the history is complete).
+fn visible_messages(c: &Conversation) -> Vec<&StoredWhisper> {
+    let hide_from = if matches!(c.meta.deep, Deep::Partial { .. }) {
+        c.messages.iter().filter(|m| m.origin == Origin::Twitch).filter_map(|m| local_day(m.timestamp)).min()
+    } else {
+        None
     };
-    let update = send(app, &me.id, target, text).await?;
-    let _ = app.emit(UPDATED_EVENT, &update);
-    Ok(())
+    c.messages
+        .iter()
+        .filter(|m| match (hide_from, m.origin) {
+            (Some(day), Origin::Scraped) => local_day(m.timestamp).is_none_or(|d| d < day),
+            _ => true,
+        })
+        .collect()
+}
+
+fn page_of(c: &Conversation, cursor: Option<&str>, limit: usize) -> WhisperPage {
+    let visible = visible_messages(c);
+    let end = match cursor.and_then(decode_cursor) {
+        Some((ts, id)) => visible.partition_point(|m| (m.timestamp, m.id.as_str()) < (ts, id.as_str())),
+        None => visible.len(),
+    };
+    let start = end.saturating_sub(limit);
+    let slice = &visible[start..end];
+    WhisperPage {
+        meta: Some(row_meta(&c.meta)),
+        messages: slice.iter().map(|m| with_globals_msg((*m).clone())).collect(),
+        cursor: slice.first().map(|m| encode_cursor(m.timestamp, &m.id)),
+        has_more_local: start > 0,
+        older_on_twitch: matches!(c.meta.deep, Deep::Partial { .. }),
+    }
+}
+
+fn empty_page() -> WhisperPage {
+    WhisperPage { meta: None, messages: Vec::new(), cursor: None, has_more_local: false, older_on_twitch: false }
+}
+
+/// One page of a conversation, oldest first, before `cursor` when given.
+pub fn page(key: &str, cursor: Option<String>, limit: usize) -> Result<WhisperPage, String> {
+    let Some(scope) = current() else { return Ok(empty_page()) };
+    refresh_globals_soon();
+    let out = whisper_store::read(&scope, key, |c| page_of(c, cursor.as_deref(), limit.clamp(1, 200)))?;
+    // (reconciled, CA-13.1) An open conversation looks its sender's 7TV
+    // cosmetics up once, so the next read draws their paint and badge.
+    if let Some(user_id) = out.as_ref().and_then(|p| p.meta.as_ref()).map(|m| m.user_id.clone()) {
+        crate::services::chat_row_view::warm_whisper_sender(&user_id);
+    }
+    // An open conversation asks whether its person is live, at most
+    // once every two minutes; a changed answer lands as an update.
+    #[cfg(not(test))]
+    if let Some(m) = out.as_ref().and_then(|p| p.meta.as_ref()) {
+        crate::services::whisper_live::refresh_soon(scope.clone(), key.to_string(), m.user_login.clone(), m.user_id.clone());
+    }
+    Ok(out.unwrap_or_else(empty_page))
 }
 
 /// Why Twitch did not deliver a whisper, in the words every platform shows
@@ -488,6 +692,9 @@ pub fn send_failure_reason(status: Option<u16>, body: &str) -> String {
     if lower.contains("settings prevent") {
         return "Cannot send: This user's privacy settings prevent them from receiving whispers from you.".into();
     }
+    if lower.contains("verified phone") {
+        return "Cannot send: Twitch needs a verified phone number on your account to send whispers.".into();
+    }
     match status {
         None => "Could not reach Twitch. Check your connection and try again.".into(),
         Some(401) => "Cannot send: Your session has expired. Please sign in again.".into(),
@@ -500,511 +707,366 @@ pub fn send_failure_reason(status: Option<u16>, body: &str) -> String {
     }
 }
 
-/// One conversation as the phones' list draws it: who, the newest message,
-/// and its unread count.
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub struct ConversationRow {
-    pub key: String,
-    #[serde(flatten)]
-    pub meta: ConversationMeta,
-    pub last_text: String,
-    pub last_is_sent: bool,
-}
+// ---- Third-party global emotes, added when a message is read ---------------
 
-/// The signed-in account's conversations, newest first. `owner_id` is empty
-/// when nobody is signed in (then there are no rows), and is what the writes
-/// (`whisper_send`, `whisper_mark_read`) take back.
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub struct WhisperList {
-    pub owner_id: String,
-    pub conversations: Vec<ConversationRow>,
-    pub unread_total: i64,
-}
+static GLOBALS: RwLock<Option<Arc<crate::services::irc_service::EmoteLookup>>> = RwLock::new(None);
+static GLOBALS_ASKED: Mutex<Option<Instant>> = Mutex::new(None);
+const GLOBALS_RETRY: Duration = Duration::from_secs(60);
 
-fn list_of(owner_id: &str, convs: &Conversations) -> WhisperList {
-    let mut rows: Vec<ConversationRow> = convs
-        .iter()
-        .map(|(key, c)| {
-            let last = c.messages.last();
-            ConversationRow {
-                key: key.clone(),
-                meta: meta_of(c),
-                last_text: last.map(|m| m.message.clone()).unwrap_or_default(),
-                last_is_sent: last.is_some_and(|m| m.is_sent),
+/// Load the 7TV, BTTV and FFZ global emotes once they are cached (at most
+/// once a minute). The first table that lands asks the views to read again.
+fn refresh_globals_soon() {
+    {
+        let mut asked = GLOBALS_ASKED.lock().unwrap_or_else(|e| e.into_inner());
+        if asked.is_some_and(|t| t.elapsed() < GLOBALS_RETRY) {
+            return;
+        }
+        *asked = Some(Instant::now());
+    }
+    tauri::async_runtime::spawn(async {
+        let Some(app) = app() else { return };
+        let Some(state) = app.try_state::<crate::models::settings::AppState>() else { return };
+        let service = state.emote_service.clone();
+        let lookup = {
+            let svc = service.read().await;
+            svc.with_cached_set("global", |set| crate::services::irc_service::EmoteLookup::build(set)).await
+        };
+        let Some(lookup) = lookup else { return };
+        if lookup.len() == 0 {
+            return;
+        }
+        let first = {
+            let mut g = GLOBALS.write().unwrap_or_else(|e| e.into_inner());
+            let first = g.is_none();
+            *g = Some(lookup);
+            first
+        };
+        if first {
+            if let Some(scope) = current() {
+                emit_archive_changed(&scope.owner, whisper_sync::syncing());
             }
-        })
-        .collect();
-    // Newest first; a tie (two imports with the same time) keeps a fixed order.
-    rows.sort_by(|a, b| {
-        b.meta
-            .last_message_timestamp
-            .cmp(&a.meta.last_message_timestamp)
-            .then_with(|| a.key.cmp(&b.key))
+        }
     });
-    let unread_total = rows.iter().map(|r| i64::from(r.meta.unread_count.max(0))).sum();
-    WhisperList { owner_id: owner_id.to_string(), conversations: rows, unread_total }
 }
 
-/// The list for `owner_id` (empty owner: nobody signed in, no rows).
-pub fn list(app: &AppHandle, owner_id: &str) -> Result<WhisperList, String> {
-    if owner_id.trim().is_empty() {
-        return Ok(WhisperList { owner_id: String::new(), conversations: Vec::new(), unread_total: 0 });
-    }
-    WhisperStorageService::update_conversations(app, owner_id, |convs| (list_of(owner_id, convs), false))
-}
-
-/// One conversation with every message, oldest first; None when it is gone.
-pub fn thread(app: &AppHandle, owner_id: &str, key: &str) -> Result<Option<StoredConversation>, String> {
-    if owner_id.trim().is_empty() {
-        return Ok(None);
-    }
-    WhisperStorageService::update_conversations(app, owner_id, |convs| (convs.get(key).cloned(), false))
-}
-
-// ---- Imports --------------------------------------------------------------
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ExportedUser {
-    id: Option<String>,
-    login: String,
-    #[serde(default)]
-    display_name: String,
-    #[serde(rename = "profileImageURL")]
-    profile_image_url: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ExportedMessage {
-    id: String,
-    from_user_id: Option<String>,
-    from_user_login: Option<String>,
-    from_user_name: Option<String>,
-    #[serde(default)]
-    content: String,
-    #[serde(default)]
-    sent_at: String,
-    is_sent: Option<bool>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ExportedConversation {
-    user: ExportedUser,
-    #[serde(default)]
-    messages: Vec<ExportedMessage>,
-    last_message_at: Option<String>,
-}
-
-/// A whisper export (the scraper's output, or a file saved from it).
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WhisperExport {
-    pub version: Option<i64>,
-    pub my_user_id: Option<String>,
-    pub my_username: Option<String>,
-    pub conversations: Vec<serde_json::Value>,
-}
-
-/// Merge an export into the archive. Returns the keys it touched and a summary.
-fn merge_export(
-    convs: &mut Conversations,
-    export: &WhisperExport,
-    me: &Me,
-    now: i64,
-) -> (Vec<String>, ImportSummary) {
-    let mut touched = Vec::new();
-    let mut summary = ImportSummary { conversations: 0, messages: 0 };
-    for raw in &export.conversations {
-        let Ok(conv) = serde_json::from_value::<ExportedConversation>(raw.clone()) else {
-            continue;
-        };
-        let other = &conv.user;
-        let key = or_else(other.id.as_deref(), &other.login.to_lowercase());
-        let display = if other.display_name.is_empty() { &other.login } else { &other.display_name };
-        let messages: Vec<StoredWhisper> = conv
-            .messages
-            .iter()
-            .map(|m| {
-                let named_me = m
-                    .from_user_name
-                    .as_deref()
-                    .is_some_and(|n| !me.login.is_empty() && n.eq_ignore_ascii_case(&me.login));
-                let is_sent = m.is_sent == Some(true) || named_me;
-                let (me_or_them_id, me_or_them_login, me_or_them_name) = if is_sent {
-                    (me.id.as_str(), me.login.as_str(), me.display_name.as_str())
-                } else {
-                    (key.as_str(), other.login.as_str(), display.as_str())
-                };
-                StoredWhisper {
-                    id: m.id.clone(),
-                    from_user_id: or_else(m.from_user_id.as_deref(), me_or_them_id),
-                    from_user_login: or_else(m.from_user_login.as_deref(), me_or_them_login),
-                    from_user_name: or_else(m.from_user_name.as_deref(), me_or_them_name),
-                    to_user_id: if is_sent { key.clone() } else { me.id.clone() },
-                    to_user_login: if is_sent { other.login.clone() } else { me.login.clone() },
-                    to_user_name: if is_sent { display.to_string() } else { me.display_name.clone() },
-                    message: m.content.clone(),
-                    timestamp: parse_whisper_date(&m.sent_at, now),
-                    is_sent,
+/// `parts` (or `text` when there are none) with words naming a global emote
+/// turned into emotes. Empty when nothing became an emote and there were no
+/// parts, so a shell keeps drawing plain `text`.
+fn split_globals(parts: &[MentionPart], text: &str, get: impl Fn(&str) -> Option<String>) -> Vec<MentionPart> {
+    let source: Vec<MentionPart> =
+        if parts.is_empty() { vec![MentionPart::Text { text: text.to_string() }] } else { parts.to_vec() };
+    let mut out: Vec<MentionPart> = Vec::new();
+    let mut any = false;
+    let mut buffer = String::new();
+    for part in source {
+        match part {
+            MentionPart::Text { text } => {
+                for (i, word) in text.split(' ').enumerate() {
+                    if i > 0 {
+                        buffer.push(' ');
+                    }
+                    match (!word.is_empty()).then(|| get(word)).flatten() {
+                        Some(url) => {
+                            if !buffer.is_empty() {
+                                out.push(MentionPart::Text { text: std::mem::take(&mut buffer) });
+                            }
+                            out.push(MentionPart::Emote { name: word.to_string(), url });
+                            any = true;
+                        }
+                        None => buffer.push_str(word),
+                    }
                 }
-            })
-            .collect();
-        summary.conversations += 1;
-        summary.messages += messages.len();
-
-        match convs.get_mut(&key) {
-            Some(existing) => {
-                if existing.profile_image_url.is_none() {
-                    existing.profile_image_url = other.profile_image_url.clone().filter(|u| !u.is_empty());
-                }
-                merge_messages(existing, messages);
             }
-            None => {
-                let mut fresh = StoredConversation {
-                    user_id: key.clone(),
-                    user_login: other.login.clone(),
-                    user_name: display.to_string(),
-                    profile_image_url: other.profile_image_url.clone().filter(|u| !u.is_empty()),
-                    messages: Vec::new(),
-                    last_message_timestamp: conv
-                        .last_message_at
-                        .as_deref()
-                        .map(|s| parse_whisper_date(s, now))
-                        .unwrap_or(now),
-                    unread_count: 0,
-                };
-                let last = fresh.last_message_timestamp;
-                merge_messages(&mut fresh, messages);
-                // An export's own "last message" time wins over the newest parsed
-                // message, as before; parsing a scraped date is best effort.
-                if conv.last_message_at.is_some() {
-                    fresh.last_message_timestamp = last;
+            emote => {
+                if !buffer.is_empty() {
+                    out.push(MentionPart::Text { text: std::mem::take(&mut buffer) });
                 }
-                convs.insert(key.clone(), fresh);
+                out.push(emote);
             }
         }
-        touched.push(key);
     }
-    (touched, summary)
+    if !buffer.is_empty() {
+        out.push(MentionPart::Text { text: buffer });
+    }
+    if !any && parts.is_empty() {
+        return Vec::new();
+    }
+    out
 }
 
-/// Import an export, then resolve the logins it could only name into ids (and
-/// fetch missing pictures), so every imported conversation can be written to.
-pub async fn import_export(
-    app: &AppHandle,
-    owner_id: &str,
-    export: WhisperExport,
-) -> Result<ImportSummary, String> {
-    let signed_in = TwitchService::get_user_info().await.ok();
-    let me = Me {
-        id: signed_in.as_ref().map(|u| u.id.clone()).or(export.my_user_id.clone()).unwrap_or_default(),
-        login: signed_in
-            .as_ref()
-            .map(|u| u.login.clone())
-            .or(export.my_username.clone())
-            .unwrap_or_default(),
-        display_name: signed_in
-            .as_ref()
-            .map(|u| u.display_name.clone())
-            .or(export.my_username.clone())
-            .unwrap_or_default(),
-    };
-    let now = now_ms();
-    let (to_resolve, summary) = WhisperStorageService::update_conversations(app, owner_id, |convs| {
-        let (touched, summary) = merge_export(convs, &export, &me, now);
-        let to_resolve: Vec<(String, String)> = touched
-            .into_iter()
-            .filter_map(|key| {
-                let c = convs.get(&key)?;
-                (!is_numeric_id(&key) || c.profile_image_url.is_none())
-                    .then(|| (key, c.user_login.clone()))
-            })
-            .collect();
-        ((to_resolve, summary), true)
-    })?;
+fn with_globals(parts: &[MentionPart], text: &str) -> Vec<MentionPart> {
+    let lookup = GLOBALS.read().unwrap_or_else(|e| e.into_inner()).clone();
+    match lookup {
+        Some(l) => split_globals(parts, text, |w| l.get(w).map(|e| e.url.clone())),
+        None => parts.to_vec(),
+    }
+}
 
-    let resolved: Vec<(String, Option<(String, Option<String>)>)> = stream::iter(to_resolve)
-        .map(|(key, login)| async move {
-            let user = TwitchService::get_user_by_login(&login).await.ok();
-            (key, user.map(|u| (u.id, u.profile_image_url)))
+fn with_globals_msg(mut m: StoredWhisper) -> StoredWhisper {
+    if !m.deleted {
+        m.parts = with_globals(&m.parts, &m.message);
+    }
+    m
+}
+
+// ---- The old commands, until each one's last caller is gone ---------------
+
+/// What the not-yet-retired commands answer, in their old shapes, so the old
+/// store can go first. Each one leaves with its command.
+pub mod legacy {
+    use super::*;
+
+    fn conversation_json(c: &Conversation) -> serde_json::Value {
+        serde_json::json!({
+            "user_id": c.meta.user_id,
+            "user_login": c.meta.user_login,
+            "user_name": c.meta.user_name,
+            "profile_image_url": c.meta.profile_image_url,
+            "messages": c.messages,
+            "last_message_timestamp": c.meta.last_message_timestamp,
+            "unread_count": c.meta.unread_count,
         })
-        .buffer_unordered(RESOLVE_CONCURRENCY)
-        .collect()
-        .await;
-
-    WhisperStorageService::update_conversations(app, owner_id, |convs| {
-        for (key, found) in resolved {
-            let Some((id, avatar)) = found else { continue };
-            if let Some(c) = convs.get_mut(&key) {
-                if avatar.is_some() {
-                    c.profile_image_url = avatar;
-                }
-                c.user_id = id.clone();
-            }
-            if !is_numeric_id(&key) {
-                rekey(convs, &key, &id);
-            }
-        }
-        ((), true)
-    })?;
-    let _ = app.emit(ARCHIVE_CHANGED_EVENT, ArchiveChanged { owner_id: owner_id.to_string(), syncing: false });
-    Ok(summary)
-}
-
-// ---- Operations the new whisper commands call -------------------------------
-// Card 7.5 replaces this block with the real operations.
-
-/// What every surface draws for a conversation (list row, inbox row,
-/// notification).
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub struct RowMeta {
-    pub key: String,
-    pub user_id: String,
-    pub user_login: String,
-    pub user_name: String,
-    pub profile_image_url: Option<String>,
-    pub color: Option<String>,
-    pub badges: Vec<crate::services::whisper_store::TwitchBadge>,
-    pub last_message_timestamp: i64,
-    pub last_text: String,
-    pub last_parts: Vec<crate::services::mention_inbox::MentionPart>,
-    pub last_is_sent: bool,
-    pub unread_count: i32,
-    pub archived: bool,
-    pub muted: bool,
-}
-
-/// One page of a conversation: its row, and messages oldest first.
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub struct WhisperPage {
-    pub meta: Option<RowMeta>,
-    pub messages: Vec<crate::services::whisper_store::StoredWhisper>,
-    pub cursor: Option<String>,
-    pub has_more_local: bool,
-    pub older_on_twitch: bool,
-}
-
-pub fn page(_key: &str, _cursor: Option<String>, _limit: usize) -> Result<WhisperPage, String> {
-    Err("not ready".into())
-}
-
-pub fn mark_all_read() -> Result<(), String> {
-    Err("not ready".into())
-}
-
-pub async fn archive(_key: &str) -> Result<(), String> {
-    Err("not ready".into())
-}
-
-pub fn island_clear() -> Result<(), String> {
-    Err("not ready".into())
-}
-
-/// Tell an open conversation to read itself again. Card 7.5 writes it.
-pub fn emit_conversation(_scope: &crate::services::whisper_store::Scope, _key: &str) {}
-
-// ---- Dates ----------------------------------------------------------------
-
-static US_LOCALE_DATE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)^(\d{1,2})/(\d{1,2})/(\d{4})(?:,?\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?)?")
-        .expect("valid regex")
-});
-
-/// A whisper timestamp as epoch milliseconds. Twitch's API sends RFC 3339; the
-/// web scraper reads the page's tooltip, a US-locale string such as
-/// "5/31/2021, 8:30:39 PM PDT" (or just "5/31/2021"), read as local time with
-/// the zone abbreviation dropped. Anything unreadable becomes `now`.
-pub fn parse_whisper_date(raw: &str, now: i64) -> i64 {
-    let s = raw.trim();
-    if s.is_empty() {
-        return now;
     }
-    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
-        return dt.timestamp_millis();
-    }
-    if let Ok(dt) = chrono::DateTime::parse_from_rfc2822(s) {
-        return dt.timestamp_millis();
-    }
-    if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.f") {
-        if let Some(dt) = chrono::Local.from_local_datetime(&naive).earliest() {
-            return dt.timestamp_millis();
-        }
-    }
-    if let Some(c) = US_LOCALE_DATE.captures(s) {
-        let num = |i: usize| c.get(i).and_then(|m| m.as_str().parse::<u32>().ok());
-        let (Some(month), Some(day), Some(year)) = (num(1), num(2), num(3)) else {
-            return now;
+
+    /// `load_whisper_storage`: every conversation with its messages.
+    pub fn load_storage() -> Result<serde_json::Value, String> {
+        let Some(scope) = current() else {
+            return Ok(serde_json::json!({ "conversations": {}, "version": 1 }));
         };
-        let mut hour = num(4).unwrap_or(0);
-        match c.get(7).map(|m| m.as_str().to_ascii_uppercase()) {
-            Some(ref ap) if ap == "PM" && hour < 12 => hour += 12,
-            Some(ref ap) if ap == "AM" && hour == 12 => hour = 0,
-            _ => {}
+        let keys: Vec<String> =
+            whisper_store::read_index(&scope, |idx| idx.conversations.iter().map(|c| c.key.clone()).collect())?;
+        let mut out = serde_json::Map::new();
+        for key in keys {
+            if let Some(v) = whisper_store::read(&scope, &key, conversation_json)? {
+                out.insert(key, v);
+            }
         }
-        if let Some(dt) = chrono::Local
-            .with_ymd_and_hms(year as i32, month, day, hour, num(5).unwrap_or(0), num(6).unwrap_or(0))
-            .earliest()
-        {
-            return dt.timestamp_millis();
-        }
+        Ok(serde_json::json!({ "conversations": out, "version": 1 }))
     }
-    now
+
+    /// `whisper_thread`: one conversation, oldest first.
+    pub fn thread(key: &str) -> Result<Option<serde_json::Value>, String> {
+        let Some(scope) = current() else { return Ok(None) };
+        whisper_store::read(&scope, key, conversation_json)
+    }
+
+    /// `whisper_refresh`: a sync, answering how many messages it added.
+    pub async fn refresh() -> Result<usize, String> {
+        Ok(match whisper_sync::sync_now().await {
+            whisper_sync::SyncOutcome::Done { added } | whisper_sync::SyncOutcome::Partial { added } => added as usize,
+            whisper_sync::SyncOutcome::Failed { reason } => return Err(reason),
+            _ => 0,
+        })
+    }
+
+    /// `whisper_import`: files are not imported any more.
+    pub fn import() -> Result<serde_json::Value, String> {
+        Err("Whispers now load from Twitch on their own.".into())
+    }
+
+    /// `get_whisper_storage_path`.
+    pub fn storage_path() -> Result<String, String> {
+        whisper_store::root_dir().map(|p| p.to_string_lossy().into_owned())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
-    fn event(from_id: &str, login: &str, id: &str) -> WhisperEvent {
-        WhisperEvent {
-            from_user_id: from_id.into(),
-            from_user_login: login.into(),
-            from_user_name: login.to_uppercase(),
-            to_user_id: "1".into(),
-            to_user_login: "me".into(),
-            to_user_name: "Me".into(),
-            whisper_id: id.into(),
-            text: "hi".into(),
+    fn msg(id: &str, ts: i64, is_sent: bool, origin: Origin) -> StoredWhisper {
+        StoredWhisper {
+            id: id.into(),
+            from_user_id: if is_sent { "99999999".into() } else { "1000000000".into() },
+            from_user_login: String::new(),
+            from_user_name: String::new(),
+            to_user_id: String::new(),
+            to_user_login: String::new(),
+            to_user_name: String::new(),
+            message: format!("text {id}"),
+            timestamp: ts,
+            is_sent,
+            parts: Vec::new(),
+            deleted: false,
+            edited_ms: None,
+            origin,
+            delivery: None,
+            sent_local_ms: None,
+            got_204: false,
+            checks: 0,
+            failure: None,
+            cut_to: None,
+            migrated: false,
         }
     }
 
-    fn conv(user_id: &str, login: &str) -> StoredConversation {
-        StoredConversation {
-            user_id: user_id.into(),
-            user_login: login.into(),
-            user_name: login.into(),
-            profile_image_url: None,
-            messages: Vec::new(),
-            last_message_timestamp: 0,
-            unread_count: 0,
-        }
+    fn conv(messages: Vec<StoredWhisper>) -> Conversation {
+        Conversation { meta: new_meta("1000000000", "1000000000", "pebble", "Pebble", None), messages }
     }
 
-    fn me() -> Me {
-        Me { id: "1".into(), login: "me".into(), display_name: "Me".into() }
-    }
-
-    #[test]
-    fn a_first_whisper_opens_an_unread_conversation() {
-        let mut convs = Conversations::new();
-        let (key, replaced, _) =
-            apply_incoming(&mut convs, &event("42", "bob", "w1"), 100, Some("pic".into()), None).unwrap();
-        assert_eq!((key.as_str(), replaced), ("42", None));
-        let c = &convs["42"];
-        assert_eq!((c.unread_count, c.last_message_timestamp), (1, 100));
-        assert_eq!(c.profile_image_url.as_deref(), Some("pic"));
-    }
-
-    #[test]
-    fn a_whisper_into_the_open_conversation_is_already_read() {
-        let mut convs = Conversations::new();
-        apply_incoming(&mut convs, &event("42", "bob", "w1"), 100, None, Some("42"));
-        apply_incoming(&mut convs, &event("42", "bob", "w2"), 200, None, Some("42"));
-        assert_eq!(convs["42"].unread_count, 0);
-        assert_eq!(convs["42"].messages.len(), 2);
-    }
-
-    #[test]
-    fn a_repeated_whisper_changes_nothing() {
-        let mut convs = Conversations::new();
-        apply_incoming(&mut convs, &event("42", "bob", "w1"), 100, None, None);
-        assert!(apply_incoming(&mut convs, &event("42", "bob", "w1"), 200, None, None).is_none());
-        assert_eq!(convs["42"].unread_count, 1);
-    }
-
-    #[test]
-    fn a_login_keyed_import_moves_to_the_id_on_first_whisper() {
-        let mut convs = Conversations::new();
-        convs.insert("bob".into(), conv("bob", "Bob"));
-        assert!(needs_avatar(&convs, &event("42", "bob", "w1")));
-        let (key, replaced, _) =
-            apply_incoming(&mut convs, &event("42", "bob", "w1"), 100, Some("pic".into()), None).unwrap();
-        assert_eq!((key.as_str(), replaced.as_deref()), ("42", Some("bob")));
-        assert!(!convs.contains_key("bob"));
-        assert_eq!(convs["42"].user_id, "42");
-        assert_eq!(convs["42"].profile_image_url.as_deref(), Some("pic"));
-    }
-
-    #[test]
-    fn a_known_conversation_needs_no_avatar_lookup() {
-        let mut convs = Conversations::new();
-        convs.insert("42".into(), conv("42", "bob"));
-        assert!(!needs_avatar(&convs, &event("42", "bob", "w1")));
-    }
-
-    #[test]
-    fn rekeying_onto_an_existing_conversation_merges_instead_of_overwriting() {
-        let mut convs = Conversations::new();
-        let mut by_id = conv("42", "bob");
-        by_id.messages.push(StoredWhisper {
-            id: "a".into(), from_user_id: "42".into(), from_user_login: "bob".into(),
-            from_user_name: "Bob".into(), to_user_id: "1".into(), to_user_login: "me".into(),
-            to_user_name: "Me".into(), message: "x".into(), timestamp: 10, is_sent: false,
-        });
-        let mut by_login = by_id.clone();
-        by_login.messages[0].id = "b".into();
-        by_login.messages[0].timestamp = 5;
-        convs.insert("42".into(), by_id);
-        convs.insert("bob".into(), by_login);
-        rekey(&mut convs, "bob", "42");
-        let ids: Vec<_> = convs["42"].messages.iter().map(|m| m.id.as_str()).collect();
-        assert_eq!(ids, vec!["b", "a"]);
-        assert_eq!(convs.len(), 1);
-    }
-
-    #[test]
-    fn an_export_merges_in_time_order_and_fills_the_sender() {
-        let mut convs = Conversations::new();
-        let export = WhisperExport {
-            version: Some(1),
-            my_user_id: None,
-            my_username: None,
-            conversations: vec![json!({
-                "user": { "login": "Bob", "displayName": "Bob" },
-                "messages": [
-                    { "id": "m2", "fromUserName": "me", "content": "yo", "sentAt": "2021-05-31T20:31:00Z" },
-                    { "id": "m1", "fromUserName": "Bob", "content": "hey", "sentAt": "2021-05-31T20:30:00Z" }
-                ]
-            })],
-        };
-        let (touched, summary) = merge_export(&mut convs, &export, &me(), 0);
-        assert_eq!(touched, vec!["bob"]);
-        assert_eq!(summary, ImportSummary { conversations: 1, messages: 2 });
-        let c = &convs["bob"];
-        assert_eq!(c.messages[0].id, "m1");
-        assert!(!c.messages[0].is_sent);
-        assert!(c.messages[1].is_sent);
-        assert_eq!(c.messages[1].from_user_id, "1");
-        assert_eq!(c.messages[1].to_user_id, "bob");
-        // Re-importing the same file adds nothing.
-        let (_, again) = merge_export(&mut convs, &export, &me(), 0);
-        assert_eq!(again.messages, 2);
-        assert_eq!(convs["bob"].messages.len(), 2);
-    }
-
-    fn update(is_sent: bool) -> WhisperUpdate {
-        let mut convs = Conversations::new();
-        apply_incoming(&mut convs, &event("42", "bob", "w1"), 100, None, None);
-        let mut u = update_for(&convs, "1", "42".into(), None, convs["42"].messages.last().cloned()).unwrap();
-        if let Some(m) = u.message.as_mut() {
-            m.is_sent = is_sent;
-        }
-        u
+    fn meta(key: &str, ts: i64, unread: i32) -> ConversationMeta {
+        let mut m = new_meta(key, key, "someone", "Someone", None);
+        m.last_message_timestamp = ts;
+        m.unread_count = unread;
+        m
     }
 
     #[test]
     fn a_whisper_notifies_only_when_nothing_keeps_it_quiet() {
-        assert!(announces(true, false, &update(false), false));
-        // The setting (or the master switch) off, streamer mode on, or the
-        // conversation on screen: filed, not announced.
-        assert!(!announces(false, false, &update(false), false));
-        assert!(!announces(true, true, &update(false), false));
-        assert!(!announces(true, false, &update(false), true));
-        // Your own message never notifies you.
-        assert!(!announces(true, false, &update(true), false));
+        assert!(announces(true, false, false, false, true));
+        assert!(!announces(false, false, false, false, true));
+        assert!(!announces(true, true, false, false, true));
+        assert!(!announces(true, false, false, true, true));
+        assert!(!announces(true, false, false, false, false));
+    }
+
+    #[test]
+    fn muted_never_announces() {
+        assert!(!announces(true, false, true, false, true));
+        assert!(!arrives(false, true, false, true));
+    }
+
+    #[test]
+    fn whisper_arrival_ignores_notify_setting() {
+        // The notification switch is not an input to the arrival card at all.
+        assert!(arrives(false, false, false, true));
+        assert!(!arrives(true, false, false, true));
+        assert!(!arrives(false, false, true, true));
+    }
+
+    #[test]
+    fn open_conversation_reads_through_on_merge() {
+        let mut c = conv(vec![msg("a", 10, false, Origin::Twitch), msg("b", 20, true, Origin::LocalSent), msg("c", 30, false, Origin::Twitch)]);
+        assert!(read_through_now(&mut c));
+        assert_eq!(c.meta.read_through, Some(Marker { id: "c".into(), at_ms: 30 }));
+        assert_eq!(c.meta.twitch_read_owed.as_deref(), Some("c"));
+        // Reading again changes nothing.
+        assert!(!read_through_now(&mut c));
+    }
+
+    #[test]
+    fn a_scraped_newest_message_is_read_but_never_owed_to_twitch() {
+        let mut c = conv(vec![msg("s", 10, false, Origin::Scraped)]);
+        assert!(read_through_now(&mut c));
+        assert_eq!(c.meta.twitch_read_owed, None);
+    }
+
+    #[test]
+    fn insert_keeps_order_and_ignores_a_known_id() {
+        let mut v = vec![msg("a", 10, false, Origin::Twitch), msg("c", 30, false, Origin::Twitch)];
+        assert!(insert_sorted(&mut v, msg("b", 20, false, Origin::Twitch)));
+        assert!(!insert_sorted(&mut v, msg("b", 25, false, Origin::Twitch)));
+        let ids: Vec<_> = v.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["a", "b", "c"]);
+    }
+
+    /// (reconciled, A34 "mark all read") Mark all read reads every conversation
+    /// with something unread, muted and archived ones too, and skips read ones.
+    #[test]
+    fn mark_all_read_picks_every_unread_conversation() {
+        let mut muted = meta("1000000002", 20, 1);
+        muted.muted = true;
+        let mut archived = meta("1000000003", 30, 4);
+        archived.archived = true;
+        let idx = AccountIndex {
+            conversations: vec![meta("1000000001", 10, 2), muted, archived, meta("1000000004", 40, 0)],
+            ..Default::default()
+        };
+        assert_eq!(unread_keys(&idx), ["1000000001", "1000000002", "1000000003"]);
+    }
+
+    #[test]
+    fn page_keeps_same_ms_messages() {
+        let c = conv((0..5).map(|i| msg(&format!("m{i}"), 100, false, Origin::Twitch)).collect());
+        let mut seen = Vec::new();
+        let mut cursor: Option<String> = None;
+        loop {
+            let p = page_of(&c, cursor.as_deref(), 2);
+            for m in p.messages.iter().rev() {
+                seen.push(m.id.clone());
+            }
+            if !p.has_more_local {
+                break;
+            }
+            cursor = p.cursor;
+        }
+        seen.reverse();
+        assert_eq!(seen, ["m0", "m1", "m2", "m3", "m4"]);
+    }
+
+    #[test]
+    fn partial_hides_scraped_from_oldest_twitch_day() {
+        let day = |d: u32, h: u32| chrono::Local.with_ymd_and_hms(2025, 3, d, h, 0, 0).earliest().unwrap().timestamp_millis();
+        let mut c = conv(vec![
+            msg("old", day(1, 0), false, Origin::Scraped),
+            msg("same", day(5, 0), false, Origin::Scraped),
+            msg("tw", day(5, 15), false, Origin::Twitch),
+        ]);
+        c.meta.deep = Deep::Partial { cursor: None };
+        let ids: Vec<_> = page_of(&c, None, 50).messages.into_iter().map(|m| m.id).collect();
+        assert_eq!(ids, ["old", "tw"]);
+        c.meta.deep = Deep::Complete;
+        assert_eq!(page_of(&c, None, 50).messages.len(), 3);
+    }
+
+    #[test]
+    fn rows_leave_out_archived_and_cleared() {
+        let mut idx = AccountIndex::default();
+        idx.conversations = vec![meta("1000000001", 300, 1), meta("1000000002", 200, 0), meta("1000000003", 100, 2)];
+        idx.conversations[1].archived = true;
+        let keys = |rows: Vec<ConversationMeta>| rows.into_iter().map(|r| r.key).collect::<Vec<_>>();
+        assert_eq!(keys(rows_of(&idx, Surface::Phone, None, 10)), ["1000000001", "1000000003"]);
+        idx.island_cleared_through = Some(150);
+        assert_eq!(keys(rows_of(&idx, Surface::Island, None, 10)), ["1000000001"]);
+        assert_eq!(keys(rows_of(&idx, Surface::Multichat, None, 10)), ["1000000001"]);
+        assert_eq!(keys(rows_of(&idx, Surface::Phone, None, 10)), ["1000000001", "1000000003"]);
+        assert_eq!(keys(rows_of(&idx, Surface::Phone, Some((300, "1000000001".into())), 10)), ["1000000003"]);
+    }
+
+    #[test]
+    fn rows_with_one_time_page_by_key() {
+        let mut idx = AccountIndex::default();
+        idx.conversations = vec![meta("1000000002", 100, 0), meta("1000000001", 100, 0), meta("1000000003", 100, 0)];
+        let first = rows_of(&idx, Surface::Phone, None, 2);
+        assert_eq!(first.iter().map(|r| r.key.as_str()).collect::<Vec<_>>(), ["1000000001", "1000000002"]);
+        let last = first.last().unwrap();
+        let rest = rows_of(&idx, Surface::Phone, Some((last.last_message_timestamp, last.key.clone())), 2);
+        assert_eq!(rest.iter().map(|r| r.key.as_str()).collect::<Vec<_>>(), ["1000000003"]);
+    }
+
+    #[test]
+    fn muted_and_archived_count_nowhere() {
+        let mut idx = AccountIndex::default();
+        idx.conversations = vec![meta("1000000001", 300, 2), meta("1000000002", 200, 3), meta("1000000003", 100, 4)];
+        idx.conversations[1].muted = true;
+        idx.conversations[2].archived = true;
+        assert_eq!(unread_of(&idx), (2, 2));
+        idx.island_cleared_through = Some(400);
+        assert_eq!(unread_of(&idx), (2, 0));
+    }
+
+    #[test]
+    fn globals_turn_known_words_into_emotes() {
+        let get = |w: &str| (w == "EZ").then(|| "u".to_string());
+        let parts = split_globals(&[], "that was EZ ok", get);
+        assert_eq!(
+            parts,
+            vec![
+                MentionPart::Text { text: "that was ".into() },
+                MentionPart::Emote { name: "EZ".into(), url: "u".into() },
+                MentionPart::Text { text: " ok".into() },
+            ]
+        );
+        // Twitch emote parts stay where they are; only text words change.
+        let twitch = vec![MentionPart::Emote { name: "Kappa".into(), url: "k".into() }, MentionPart::Text { text: " EZ".into() }];
+        let parts = split_globals(&twitch, "Kappa EZ", get);
+        assert_eq!(parts[0], MentionPart::Emote { name: "Kappa".into(), url: "k".into() });
+        assert_eq!(parts[2], MentionPart::Emote { name: "EZ".into(), url: "u".into() });
+    }
+
+    #[test]
+    fn plain_text_without_globals_stays_plain() {
+        assert!(split_globals(&[], "nothing here", |_| None).is_empty());
     }
 
     #[test]
@@ -1012,7 +1074,7 @@ mod tests {
         let body = |m: &str| format!(r#"{{"error":"Bad Request","status":400,"message":"{m}"}}"#);
         assert_eq!(
             send_failure_reason(Some(403), &body("the sender does not have a verified phone number")),
-            "Cannot send: The sender does not have a verified phone number."
+            "Cannot send: Twitch needs a verified phone number on your account to send whispers."
         );
         assert_eq!(
             send_failure_reason(Some(400), &body("The recipient's settings prevent this sender from whispering them")),
@@ -1026,36 +1088,8 @@ mod tests {
     }
 
     #[test]
-    fn the_list_is_newest_first_with_the_last_message_and_the_unread_total() {
-        let mut convs = Conversations::new();
-        apply_incoming(&mut convs, &event("42", "bob", "w1"), 100, None, None);
-        apply_incoming(&mut convs, &event("43", "amy", "w2"), 300, None, None);
-        apply_incoming(&mut convs, &event("42", "bob", "w3"), 200, None, None);
-        convs.insert("44".into(), conv("44", "cat"));
-        let list = list_of("1", &convs);
-        let keys: Vec<_> = list.conversations.iter().map(|r| r.key.as_str()).collect();
-        assert_eq!(keys, ["43", "42", "44"]);
-        assert_eq!(list.unread_total, 3);
-        assert_eq!(list.conversations[1].meta.unread_count, 2);
-        assert_eq!((list.conversations[1].last_text.as_str(), list.conversations[1].last_is_sent), ("hi", false));
-        // An empty conversation (a new one, nothing sent yet) has no last line.
-        assert_eq!(list.conversations[2].last_text, "");
-        // The row flattens the meta, as the phones read it.
-        let row = serde_json::to_value(&list.conversations[0]).unwrap();
-        assert_eq!(row["user_login"], "amy");
-        assert_eq!(row["key"], "43");
-    }
-
-    #[test]
-    fn parses_every_date_shape_whispers_arrive_in() {
-        assert_eq!(parse_whisper_date("2021-05-31T20:30:39Z", 7), 1622493039000);
-        assert_eq!(parse_whisper_date("", 7), 7);
-        assert_eq!(parse_whisper_date("garbage", 7), 7);
-        let local = |y, mo, d, h, mi, s| {
-            chrono::Local.with_ymd_and_hms(y, mo, d, h, mi, s).earliest().unwrap().timestamp_millis()
-        };
-        assert_eq!(parse_whisper_date("5/31/2021, 8:30:39 PM PDT", 7), local(2021, 5, 31, 20, 30, 39));
-        assert_eq!(parse_whisper_date("5/31/2021, 12:05 AM", 7), local(2021, 5, 31, 0, 5, 0));
-        assert_eq!(parse_whisper_date("9/24/2026", 7), local(2026, 9, 24, 0, 0, 0));
+    fn cursors_round_trip_ids_with_colons() {
+        assert_eq!(decode_cursor(&encode_cursor(42, "a:b")), Some((42, "a:b".to_string())));
+        assert_eq!(decode_cursor("x"), None);
     }
 }

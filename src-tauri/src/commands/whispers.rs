@@ -3,7 +3,7 @@
 //! hand it to the page or the shell. The account is Rust's own followed
 //! Twitch account, never one the page passes.
 
-use crate::rt::{AppHandle, Window};
+use crate::rt::Window;
 use crate::services::whisper_inbox::{self, WhisperList, WhisperPage, WhisperUpdate};
 use crate::services::whisper_send::{self, SendTarget};
 use crate::services::whisper_sync::{self, SyncOutcome};
@@ -28,9 +28,11 @@ async fn owner() -> String {
 
 /// The signed-in account's conversations, newest first, with the unread total.
 #[tauri::command]
-pub async fn whisper_list(app_handle: AppHandle) -> Result<WhisperList, String> {
-    let owner = owner().await;
-    whisper_inbox::list(&app_handle, &owner)
+pub async fn whisper_list() -> Result<WhisperList, String> {
+    let mut list = whisper_inbox::list()?;
+    // The Following list's live answer for these people, no network.
+    crate::services::whisper_live::fill(&mut list.conversations).await;
+    Ok(list)
 }
 
 /// One page of a conversation's messages, oldest first, older than `cursor`.
@@ -51,9 +53,8 @@ pub async fn whisper_set_active(window: Window, key: Option<String>, page_load: 
 
 /// Mark one conversation read, here and on Twitch.
 #[tauri::command]
-pub async fn whisper_mark_read(app_handle: AppHandle, key: String) -> Result<(), String> {
-    let owner = owner().await;
-    whisper_inbox::mark_read(&app_handle, &owner, &key)
+pub async fn whisper_mark_read(key: String) -> Result<(), String> {
+    whisper_inbox::mark_read(&key)
 }
 
 /// Mark every conversation read, here and on Twitch.
@@ -65,18 +66,15 @@ pub async fn whisper_mark_all_read() -> Result<(), String> {
 /// Send a whisper. The message is filed as Sending at once; this returns once
 /// Twitch has answered (Sent, or the reason it refused). A notification reply
 /// passes the account the whisper came to, so a reply after an account switch
-/// is refused (7.5 wires these two through; until then they are unused).
+/// is refused.
 #[tauri::command]
 pub async fn whisper_send(
-    app_handle: AppHandle,
     target: SendTarget,
     text: String,
     expect_owner: Option<String>,
     expect_owner_name: Option<String>,
 ) -> Result<WhisperUpdate, String> {
-    let _ = (&expect_owner, &expect_owner_name);
-    let owner = owner().await;
-    whisper_inbox::send(&app_handle, &owner, target, text).await
+    whisper_send::send(target, text, expect_owner, expect_owner_name).await
 }
 
 /// An inbox is on screen (the island's history, MultiChat's Mentions mode,

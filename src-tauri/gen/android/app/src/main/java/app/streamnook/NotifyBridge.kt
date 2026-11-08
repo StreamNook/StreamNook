@@ -78,6 +78,8 @@ object NotifyBridge {
    */
   external fun replyWhisper(
     baseDir: String,
+    ownerId: String,
+    ownerName: String,
     userId: String,
     login: String,
     name: String,

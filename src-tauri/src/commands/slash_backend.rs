@@ -164,7 +164,16 @@ impl TauriBackend {
             "update_user_chat_color" => unit(tw::update_user_chat_color(s(&a, "targetUserId"), s(&a, "color")).await),
             "block_user" => unit(tw::block_user(s(&a, "targetUserId")).await),
             "unblock_user" => unit(tw::unblock_user(s(&a, "targetUserId")).await),
-            "send_whisper" => unit(tw::send_whisper(s(&a, "toUserId"), s(&a, "message")).await),
+            "send_whisper" => {
+                let target = crate::services::whisper_send::SendTarget {
+                    key: s(&a, "toUserId"),
+                    user_id: s(&a, "toUserId"),
+                    user_login: s(&a, "toLogin"),
+                    user_name: s(&a, "toName"),
+                    profile_image_url: None,
+                };
+                unit(crate::services::whisper_send::send(target, s(&a, "message"), None, None).await.map(|_| ()))
+            }
             "stop_chat" => to(crate::services::chat_service::ChatService::stop(&self.window).await.map_err(|e| e.to_string())),
             "get_chatters_by_role" => tw::get_chatters_by_role(self.state(), s(&a, "channelLogin")).await,
             "slash_role_list" => to(sl::slash_role_list(self.state(), s(&a, "channel"), s(&a, "role")).await),

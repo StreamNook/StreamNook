@@ -517,16 +517,18 @@ pub fn mention_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
 /// words every platform shows.
 ///
 /// With the app running this is exactly the desktop's notification reply:
-/// `whisper_inbox::reply_from_notification`, which sends through the same
+/// `whisper_send::reply_from_notification`, which sends through the same
 /// `send` as `whisper_send`, files the reply in the conversation and tells the
 /// page. Android may have ended the process since the notification was posted;
-/// a cold process has no app to file into, so it only sends (the reply is on
-/// Twitch, and the conversation shows it once the thread is pulled again).
+/// a cold process has no app running, so `whisper_send::cold_reply` files the
+/// reply on disk before sending it, and the next sync adopts or checks it.
 #[no_mangle]
 pub extern "system" fn Java_app_streamnook_NotifyBridge_replyWhisper<'local>(
     mut env: JNIEnv<'local>,
     _this: JObject<'local>,
     base_dir: JString<'local>,
+    owner_id: JString<'local>,
+    owner_name: JString<'local>,
     user_id: JString<'local>,
     login: JString<'local>,
     name: JString<'local>,
@@ -536,35 +538,49 @@ pub extern "system" fn Java_app_streamnook_NotifyBridge_replyWhisper<'local>(
     let get = |env: &mut JNIEnv<'local>, s: &JString<'local>| -> String {
         env.get_string(s).map(|v| v.into()).unwrap_or_default()
     };
-    let (candidate, user_id, login, name, avatar, text) = (
+    let (candidate, owner_id, owner_name, user_id, login, name, avatar, text) = (
         get(&mut env, &base_dir),
+        get(&mut env, &owner_id),
+        get(&mut env, &owner_name),
         get(&mut env, &user_id),
         get(&mut env, &login),
         get(&mut env, &name),
         get(&mut env, &avatar),
         get(&mut env, &text),
     );
-    let answer = reply_whisper(&candidate, &user_id, &login, &name, avatar, text);
+    let owner = (!owner_id.is_empty()).then_some(owner_id);
+    let owner_name = (!owner_name.is_empty()).then_some(owner_name);
+    let answer = reply_whisper(&candidate, owner, owner_name, &user_id, &login, &name, avatar, text);
     match env.new_string(answer) {
         Ok(s) => s.into_raw(),
         Err(_) => std::ptr::null_mut(),
     }
 }
 
-fn reply_whisper(candidate: &str, user_id: &str, login: &str, name: &str, avatar: String, text: String) -> String {
+#[allow(clippy::too_many_arguments)]
+fn reply_whisper(
+    candidate: &str,
+    owner_id: Option<String>,
+    owner_name: Option<String>,
+    user_id: &str,
+    login: &str,
+    name: &str,
+    avatar: String,
+    text: String,
+) -> String {
     let text = text.trim().to_string();
     if text.is_empty() || user_id.is_empty() {
         return String::new();
     }
     let avatar = (!avatar.is_empty()).then_some(avatar);
-    if let Some(app) = crate::services::providers::app_handle() {
+    if crate::services::providers::app_handle().is_some() {
         log::info!("[WhisperNotify] notification reply, sending through the inbox");
-        let result = tauri::async_runtime::block_on(crate::services::whisper_inbox::reply_from_notification(
-            &app, user_id, login, name, avatar, text,
+        let result = tauri::async_runtime::block_on(crate::services::whisper_send::reply_from_notification(
+            owner_id, owner_name, user_id, login, name, avatar, text,
         ));
         return result.err().unwrap_or_default();
     }
-    log::info!("[WhisperNotify] notification reply in a cold process, sending only");
+    log::info!("[WhisperNotify] notification reply in a cold process, filing then sending");
     if let Some(base) = resolve_base(candidate) {
         app_paths::set_base(base);
     }
@@ -572,8 +588,7 @@ fn reply_whisper(candidate: &str, user_id: &str, login: &str, name: &str, avatar
         return "Failed to send message. Please try again.".into();
     };
     runtime
-        .block_on(TwitchService::send_whisper(user_id, &text))
+        .block_on(crate::services::whisper_send::cold_reply(owner_id, owner_name, user_id, login, name, text))
         .err()
-        .map(|e| e.to_string())
         .unwrap_or_default()
 }

@@ -2034,15 +2034,6 @@ pub async fn get_streams_by_game_id(
     Ok((streams, next))
 }
 
-/// Send a whisper message to another user
-/// Requires user:manage:whispers scope
-#[tauri::command]
-pub async fn send_whisper(to_user_id: String, message: String) -> Result<(), String> {
-    TwitchService::send_whisper(&to_user_id, &message)
-        .await
-        .map_err(|e| e.to_string())
-}
-
 /// Start listening for whisper messages via EventSub WebSocket
 /// This should be called after the user is authenticated
 #[tauri::command]

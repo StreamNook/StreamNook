@@ -80,6 +80,8 @@ class MentionNotifyPlugin(private val activity: Activity) : Plugin(activity) {
     if (meta == null || message == null || message.optBoolean("is_sent", false)) return
     val item = WhisperNotifier.Item(
       key = a.optString("key", ""),
+      ownerId = a.optString("owner_id", ""),
+      ownerName = message.optString("to_user_name", ""),
       id = message.optString("id", ""),
       userId = meta.optString("user_id", ""),
       login = meta.optString("user_login", message.optString("from_user_login", "")),

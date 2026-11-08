@@ -3747,46 +3747,46 @@ impl TwitchService {
         Ok(found)
     }
 
-    /// Send a whisper message to another user
-    /// Requires user:manage:whispers scope
-    pub async fn send_whisper(to_user_id: &str, message: &str) -> Result<()> {
-        let token = Self::get_token().await?;
+    /// Send a whisper from `from` with exactly this token (Helix, scope
+    /// `user:manage:whispers`). The caller has checked the token belongs to
+    /// `from`. A failure says whether anything may have reached Twitch: a
+    /// connect or name-lookup failure means nothing left; any other failure
+    /// without a status means it may have.
+    pub async fn send_whisper_with_token(
+        token: &str,
+        from: &str,
+        to: &str,
+        message: &str,
+    ) -> std::result::Result<(), crate::services::whisper_send::SendFail> {
+        use crate::services::whisper_send::SendFail;
         let client = crate::services::http::client().clone();
-
-        // Get the current user's ID
-        let user_info = Self::get_user_info().await?;
-
-        let response = client
-            .post(format!(
-                "https://api.twitch.tv/helix/whispers?from_user_id={}&to_user_id={}",
-                user_info.id, to_user_id
-            ))
-            .header(AUTHORIZATION, format!("Bearer {}", token))
+        let response = match client
+            .post(format!("https://api.twitch.tv/helix/whispers?from_user_id={from}&to_user_id={to}"))
+            .header(AUTHORIZATION, format!("Bearer {token}"))
             .header("Client-Id", CLIENT_ID)
             .header("Content-Type", "application/json")
-            .json(&serde_json::json!({
-                "message": message
-            }))
+            .json(&serde_json::json!({ "message": message }))
             .send()
             .await
-            .map_err(|e| {
+        {
+            Ok(r) => r,
+            Err(e) => {
                 log::warn!("[Whisper] send request failed: {e}");
-                anyhow::anyhow!(crate::services::whisper_inbox::send_failure_reason(None, ""))
-            })?;
-
+                return Err(if e.is_connect() || e.is_builder() {
+                    SendFail::BeforeConnect(e.to_string())
+                } else {
+                    SendFail::NoAnswer(e.to_string())
+                });
+            }
+        };
         let status = response.status();
         if status.is_success() {
-            Ok(())
-        } else {
-            // Twitch's reason, in the words every platform shows (the raw body
-            // stays in the log).
-            let error_text = response.text().await.unwrap_or_default();
-            log::warn!("[Whisper] Twitch refused a whisper ({status}): {error_text}");
-            Err(anyhow::anyhow!(crate::services::whisper_inbox::send_failure_reason(
-                Some(status.as_u16()),
-                &error_text
-            )))
+            return Ok(());
         }
+        // The raw body stays in the log; the shells show send_failure_reason's words.
+        let body = response.text().await.unwrap_or_default();
+        log::warn!("[Whisper] Twitch refused a whisper ({status}): {body}");
+        Err(SendFail::Status(status.as_u16(), body))
     }
 
     /// Get streams by game name (convenience method that resolves game name to ID)
