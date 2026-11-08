@@ -14,7 +14,7 @@ export interface BadgeFold {
   tier: number;
 }
 
-export const DEFAULT_BADGE_FOLD_LIMIT = 3;
+export const DEFAULT_BADGE_FOLD_LIMIT = 0;
 
 const ROLE_SETS = new Set(rules.role_sets);
 const PLATFORM_PROVIDERS = new Set(rules.platform_providers);
@@ -28,7 +28,7 @@ export function foldKind(provider: string, setName: string): FoldKind {
   return 'addon';
 }
 
-/** The setting as a usable limit of add-on badges: 0 = show all, else 2 to 5; missing = 3. */
+/** The setting as a usable limit of add-on badges: 0 = show all, else 2 to 5; missing = show all. */
 export function badgeFoldLimit(setting: number | undefined): number {
   if (setting === undefined || !Number.isFinite(setting)) return DEFAULT_BADGE_FOLD_LIMIT;
   const n = Math.floor(setting);

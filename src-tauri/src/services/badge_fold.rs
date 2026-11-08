@@ -67,7 +67,7 @@ pub fn rarity_tier(addons: usize) -> u8 {
 }
 
 /// The "Badges before +N" setting as a limit: 0 shows all, else 2 to 5 (what
-/// Settings offers); a missing or unreadable value is the default, 3.
+/// Settings offers); a missing or unreadable value is the default, show all.
 pub fn fold_limit(raw: Option<f64>) -> usize {
     match raw {
         Some(n) if n.is_finite() => {
@@ -78,7 +78,7 @@ pub fn fold_limit(raw: Option<f64>) -> usize {
                 n.clamp(2.0, 5.0) as usize
             }
         }
-        _ => 3,
+        _ => 0,
     }
 }
 
@@ -223,8 +223,8 @@ mod tests {
         assert_eq!(plan.shown, vec![0, 1, 2, 5]);
         assert_eq!(plan.hidden, vec![3, 4]);
         assert_eq!(plan.tier, 2);
-        // Missing reads as 3; zero shows all.
-        assert_eq!(fold_plan(&badges, None).hidden, vec![4]);
+        // Missing reads as show all, as zero does.
+        assert!(fold_plan(&badges, None).hidden.is_empty());
         assert!(fold_plan(&badges, Some(0.0)).hidden.is_empty());
         // A role flag on an add-on changes nothing: only platform badges have roles.
         assert_eq!(fold_plan(&[("ffz", true), ("bttv", false), ("7tv", false)], Some(2.0)).hidden, vec![2]);

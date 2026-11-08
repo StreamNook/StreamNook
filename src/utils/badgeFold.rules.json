@@ -3,7 +3,7 @@
   "platform_providers": ["", "twitch", "kick", "youtube", "tiktok"],
   "tiers": [2, 3, 5, 8],
   "limit_cases": [
-    { "raw": null, "limit": 3 },
+    { "raw": null, "limit": 0 },
     { "raw": 0, "limit": 0 },
     { "raw": -1, "limit": 0 },
     { "raw": 1, "limit": 2 },
