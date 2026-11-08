@@ -108,4 +108,9 @@ describe('the paused hint fits its column', () => {
     expect(replyHintWords(REPLY_HINT.length * 6 - 1, measure)).toBe(REPLY_HINT_SHORT);
     expect(replyHintWords(0, measure)).toBe(REPLY_HINT);
   });
+
+  it('says right with Left-handed swipes, from the shared table', () => {
+    expect(replyHintWords(999, measure, true)).toBe(cases.words.hintFlipped);
+    expect(replyHintWords(cases.words.hintFlipped.length * 6 - 1, measure, true)).toBe(cases.words.hintShortFlipped);
+  });
 });

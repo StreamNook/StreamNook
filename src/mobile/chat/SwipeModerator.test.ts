@@ -26,6 +26,7 @@ const slider: TouchSlider = {
   hold_ban_words: 'Hold for Ban, let go to cancel',
   nudge_words: 'Swipe right on a message to moderate it',
   start: 0,
+  flipped: false,
   quick_seconds: 60,
 };
 
@@ -106,13 +107,13 @@ describe('where a slide can start', () => {
 describe('where a reply can start (swipe left)', () => {
   it('follows the shared table', () => {
     for (const c of cases.start) {
-      const got = slideStart(c.dx, c.dy, cases.numbers.engage, c.grab, { mod: c.mod, reply: c.reply, rightGrab: c.rightGrab });
+      const got = slideStart(c.dx, c.dy, cases.numbers.engage, c.grab, { mod: c.mod, reply: c.reply, replyGrab: c.rightGrab });
       expect(got, `${c.dx},${c.dy} grab ${c.grab} right ${c.rightGrab} mod ${c.mod} reply ${c.reply}`).toBe(c.want);
     }
   });
 
   it('starts a reply on a leftward move, where it once waited', () => {
-    expect(slideStart(-12, 3, 10, false, { mod: false, reply: true, rightGrab: false })).toBe('reply');
+    expect(slideStart(-12, 3, 10, false, { mod: false, reply: true, replyGrab: false })).toBe('reply');
     expect(slideStart(-12, 3, 10, false)).toBe('wait');
   });
 

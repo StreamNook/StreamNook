@@ -25,6 +25,15 @@ describe('the row swipe owner', () => {
     expect(swipe).toContain('live.current.cancelHold();');
   });
 
+  it('reads every move toward the mod side, so Left-handed swipes mirror one set of rules', () => {
+    expect(swipe).toContain('const dx = (e.clientX - press.x) * press.dir;');
+    expect(swipe).toContain('grab: !!target && (l.flipped ? inRight : inLeft),');
+    expect(swipe).toContain('replyGrab: !!reply && (l.flipped ? inLeft : inRight),');
+    // A slider Rust laid out the other way round never draws.
+    expect(swipe).toContain('current.slider = s && s.flipped === (current.dir < 0) ? s : null;');
+    expect(pane).toContain('flipped={swipeFlipped}');
+  });
+
   it('never lets a swipe pause chat', () => {
     expect(swipe).toMatch(/const onTouchMove = \(e: TouchEvent\) => \{\s*if \(!kind\) return;\s*e\.preventDefault\(\);[^}]*e\.stopPropagation\(\);/);
     expect(swipe).toContain('pauseRatioRef.current = () => {');

@@ -144,6 +144,7 @@ function SwipeModerateSettings() {
   const resetFor = useSettingReset();
   const on = design?.mod_slider ?? true;
   const hold = design?.mod_hold_buttons ?? true;
+  const flipped = design?.mod_slider_flipped ?? false;
   const timeouts = design?.mod_slider_timeouts ?? [60, 300, 600, 1800, 3600, 86400, 604800];
   const withDelete = design?.mod_slider_delete ?? true;
   const withBan = design?.mod_slider_ban ?? true;
@@ -166,7 +167,7 @@ function SwipeModerateSettings() {
     >
       <SettingsRow
         title="Swipe to moderate"
-        description="Swipe right on a message; pull further for a longer timeout. Ban needs a short hold."
+        description={`Swipe ${flipped ? 'left' : 'right'} on a message; pull further for a longer timeout. Ban needs a short hold.`}
         control={<Toggle enabled={on} onChange={() => void setFields({ 'chat_design.mod_slider': !on })} />}
         onReset={resetFor(['chat_design.mod_slider', true])}
       />
@@ -263,6 +264,13 @@ function SwipeModerateSettings() {
           </SettingsRow>
         </SettingsSubGroup>
       )}
+      {/* Its own row, not under the swipe: swipe to reply turns round with it for everyone. */}
+      <SettingsRow
+        title="Left-handed swipes"
+        description="Swipe left on a message to moderate it and right to reply, the other way round from the usual."
+        control={<Toggle enabled={flipped} onChange={() => void setFields({ 'chat_design.mod_slider_flipped': !flipped })} />}
+        onReset={resetFor(['chat_design.mod_slider_flipped', false])}
+      />
       <SettingsRow
         title="Hold menu buttons"
         description="Delete, Timeout and Ban in the press-and-hold menu."

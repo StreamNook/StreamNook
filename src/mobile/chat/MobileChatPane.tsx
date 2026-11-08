@@ -60,6 +60,13 @@ import { SegmentedControl, type Segment } from '../ui/SegmentedControl';
 import { HoldWhile } from '../ui/HoldWhile';
 import { PausedOverlay } from './ResumeLiveButton';
 import { useComposerRiserLift } from './pausedOverlay';
+import { openBadgeInfo } from '../../stores/badgeSpotlightStore';
+import { twitchRowBadgeRef, type TwitchRowBadgeInfo } from '../../utils/badgeSpotlight';
+
+/** A tapped badge in a row opens the phone's badge sheet (BadgeSheet, mounted in MobileApp).
+ *  Module scope, so the rows' memo never sees a new callback. */
+const openRowBadge = (badgeKey: string, badgeInfo: Record<string, unknown>) =>
+  openBadgeInfo(twitchRowBadgeRef(badgeKey, badgeInfo as TwitchRowBadgeInfo));
 import { inboxPaneOnScreen, watchLayerUp } from '../ui/coveredSurface';
 
 // How long a pause/resume transition is protected from being reversed. Matches
@@ -683,6 +690,8 @@ export const MobileChatPane: React.FC<{
   // Swiping a row to moderate it is on where moderator tools are, never in
   // the read-only overlay.
   const swipeSetting = useAppStore((s) => s.settings.chat_design?.mod_slider ?? true);
+  // Left-handed swipes: left moderates, right replies.
+  const swipeFlipped = useAppStore((s) => s.settings.chat_design?.mod_slider_flipped ?? false);
   const holdModButtons = useAppStore((s) => s.settings.chat_design?.mod_hold_buttons ?? true);
   const swipeOn = swipeSetting && modToolsArmed && !!broadcasterId && !noSend;
   // Rows take sideways swipes: right for a moderator's slider, left for a reply.
@@ -700,7 +709,7 @@ export const MobileChatPane: React.FC<{
     press.release();
   }, [press]);
 
-  // Swipe right on a message to moderate it. Rust lays the slider out for each
+  // Swipe right (left, flipped) on a message to moderate it. Rust lays the slider out for each
   // press, from where the thumb landed and with the chatter's name in its
   // words; the saved steps, Length and Style are read there.
   const sliderFor = useCallback(
@@ -1022,7 +1031,10 @@ export const MobileChatPane: React.FC<{
     return () => ro.disconnect();
   }, []);
   // Measured once per size change, not on every chat flush.
-  const hintWords = useMemo(() => replyHintWords(hintBox.width, (t) => measureText(t, hintBox.font)), [hintBox]);
+  const hintWords = useMemo(
+    () => replyHintWords(hintBox.width, (t) => measureText(t, hintBox.font), swipeFlipped),
+    [hintBox, swipeFlipped],
+  );
 
 
   // The inbox over this chat: its bottom sheet, or a new mention's card, only
@@ -1084,7 +1096,7 @@ export const MobileChatPane: React.FC<{
             onEmoteRightClick={() => {}}
             onEmoteOpen={onEmoteOpen}
             onUsernameRightClick={() => {}}
-            onBadgeClick={() => {}}
+            onBadgeClick={openRowBadge}
             highlightedMessageId={null}
             deletedMessageIds={deletedMessageIds}
             clearedUserContexts={clearedUserContexts}
@@ -1100,7 +1112,7 @@ export const MobileChatPane: React.FC<{
             {/* Only the X takes a touch: a swipe on the row under the pill still starts. */}
             <div className="glass-badge flex items-center gap-1.5 rounded-full py-1 pl-3 pr-1.5 text-[12px] text-textPrimary">
               <HandPointing size={14} weight="bold" className="text-accent" />
-              Swipe right on a message to moderate it
+              {swipeFlipped ? 'Swipe left on a message to moderate it' : 'Swipe right on a message to moderate it'}
               <button type="button" onClick={learnSwipe} aria-label="Dismiss the swipe hint" className="pointer-events-auto p-1 text-textMuted">
                 <X size={11} weight="bold" />
               </button>
@@ -1187,6 +1199,7 @@ export const MobileChatPane: React.FC<{
         listRef={listRef}
         modEnabled={swipeOn}
         replyEnabled={replyEnabled}
+        flipped={swipeFlipped}
         broadcasterId={broadcasterId}
         targetFor={swipeTargetFor}
         replyFor={replyFor}

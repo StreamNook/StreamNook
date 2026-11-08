@@ -1,4 +1,5 @@
-// Swipe left on a message to reply: the rules both phones follow, run on every finger move (so
+// Swipe left on a message to reply (right with Left-handed swipes, the same rules read the other
+// way round): the rules both phones follow, run on every finger move (so
 // they stay out of Rust, as the mod slider's per-move lookups do). The iPhone's twin is SNKit
 // ReplySwipe; both are tested against replySwipeCases.json.
 import { pickFittingText } from './placeholderFit';
@@ -21,6 +22,9 @@ export const SNAP_BACK_MS = 220;
 export const REPLY_HINT_SHOWS = 5;
 export const REPLY_HINT = 'Swipe left on a message to reply';
 export const REPLY_HINT_SHORT = 'Swipe left to reply';
+/** The same with Left-handed swipes, where right replies. */
+export const REPLY_HINT_FLIPPED = 'Swipe right on a message to reply';
+export const REPLY_HINT_SHORT_FLIPPED = 'Swipe right to reply';
 /** The platforms whose sends thread a reply (YouTube and TikTok send it as a plain line). */
 export const REPLY_PROVIDERS: readonly string[] = ['twitch', 'kick'];
 /** Ids of your own rows the platform has not answered yet: nothing can reply to them. */
@@ -133,7 +137,8 @@ export function replyAfterSend(draftId: string | null, sentWith: string | null):
   return sentWith != null && draftId === sentWith;
 }
 
-/** The paused hint's words for a column `width` px wide (`measure` gives a text's width). */
-export function replyHintWords(width: number, measure: (text: string) => number | null): string {
-  return pickFittingText([REPLY_HINT, REPLY_HINT_SHORT], width, measure);
+/** The paused hint's words for a column `width` px wide (`measure` gives a text's width); `flipped`
+ *  is Left-handed swipes. */
+export function replyHintWords(width: number, measure: (text: string) => number | null, flipped = false): string {
+  return pickFittingText(flipped ? [REPLY_HINT_FLIPPED, REPLY_HINT_SHORT_FLIPPED] : [REPLY_HINT, REPLY_HINT_SHORT], width, measure);
 }

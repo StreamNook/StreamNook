@@ -1,5 +1,8 @@
 //! The mod slider on a phone: swipe right on a message to pick Delete, a
-//! timeout or Ban, and let go to apply it through `moderate_chatter`.
+//! timeout or Ban, and let go to apply it through `moderate_chatter`. With
+//! `chat_design.mod_slider_flipped` the swipe runs left instead: every pull
+//! below is measured leftward from the thumb, and the room is what lies left
+//! of it, so the phones draw the same ruler mirrored.
 //!
 //! It is the desktop slider's gesture with a finger's sizes. Rust lays out
 //! the ruler once per press, for the room right of where the thumb landed
@@ -101,6 +104,9 @@ pub struct TouchSlider {
     pub nudge_words: String,
     /// Where the thumb landed, from the row's left edge: the ruler starts here.
     pub start: f32,
+    /// The pull runs left (`chat_design.mod_slider_flipped`): a pull of `p`
+    /// sits at `start - p` on the row, not `start + p`.
+    pub flipped: bool,
     /// The long-press fan's one-tap timeout: the first timeout step.
     pub quick_seconds: u32,
 }
@@ -225,16 +231,45 @@ fn touch_steps(steps: &[ModStep], name: &str) -> Vec<TouchStep> {
 }
 
 /// The slider for a press `start` points from the left of a row `row_width`
-/// points wide, on `name`'s message. Pure, for tests.
-pub fn build(steps: &[ModStep], row_width: f32, start: f32, name: &str, length: &str, style: &str, enabled: bool) -> TouchSlider {
+/// points wide, on `name`'s message; `flipped` pulls leftward. Pure, for tests.
+#[allow(clippy::too_many_arguments)]
+pub fn build(
+    steps: &[ModStep],
+    row_width: f32,
+    start: f32,
+    name: &str,
+    length: &str,
+    style: &str,
+    enabled: bool,
+    flipped: bool,
+) -> TouchSlider {
     let start = start.clamp(0.0, (row_width - 1.0).max(0.0));
-    let room = row_width - start;
-    let quick_seconds = steps.iter().find_map(|s| (s.action == StepAction::Timeout).then_some(s.seconds).flatten()).unwrap_or(600);
+    // A flipped press at `start` is an unflipped one at `row_width - start`.
+    let room = if flipped { start } else { row_width - start };
+    let quick_seconds = steps
+        .iter()
+        .find_map(|s| {
+            (s.action == StepAction::Timeout)
+                .then_some(s.seconds)
+                .flatten()
+        })
+        .unwrap_or(600);
     // Too near the right edge for any step: the pull runs with no steps and
     // says where to start instead, so a release there does nothing.
     let (kept, dead, spacing, cancel_words) = match fit(steps, room, length) {
         Some((kept, dead, spacing)) => (kept, dead, spacing, "Let go to cancel"),
-        None => (Vec::new(), DEAD_FLOOR_PT, STEP_FLOOR_PT, "Start further left to moderate"),
+        None if flipped => (
+            Vec::new(),
+            DEAD_FLOOR_PT,
+            STEP_FLOOR_PT,
+            "Start further right to moderate",
+        ),
+        None => (
+            Vec::new(),
+            DEAD_FLOOR_PT,
+            STEP_FLOOR_PT,
+            "Start further left to moderate",
+        ),
     };
     let (starts, end) = if kept.is_empty() {
         (Vec::new(), (room - RIGHT_MARGIN_PT).max(1.0))
@@ -259,8 +294,14 @@ pub fn build(steps: &[ModStep], row_width: f32, start: f32, name: &str, length: 
         engage: ENGAGE_PT,
         cancel_words: cancel_words.into(),
         hold_ban_words: "Hold for Ban, let go to cancel".into(),
-        nudge_words: "Swipe right on a message to moderate it".into(),
+        nudge_words: if flipped {
+            "Swipe left on a message to moderate it"
+        } else {
+            "Swipe right on a message to moderate it"
+        }
+        .into(),
         start,
+        flipped,
         quick_seconds,
     }
 }
@@ -291,10 +332,15 @@ pub async fn get_touch_mod_slider(
         steps = steps_within(steps, reach);
         reachable = reach != MessageReach::Nothing;
     }
-    let (length, style, enabled) = crate::services::providers::setting(|s| {
-        (s.chat_design.mod_slider_length.clone(), s.chat_design.mod_slider_style.clone(), s.chat_design.mod_slider)
+    let (length, style, enabled, flipped) = crate::services::providers::setting(|s| {
+        (
+            s.chat_design.mod_slider_length.clone(),
+            s.chat_design.mod_slider_style.clone(),
+            s.chat_design.mod_slider,
+            s.chat_design.mod_slider_flipped,
+        )
     })
-    .unwrap_or_else(|| ("medium".into(), "preview".into(), true));
+    .unwrap_or_else(|| ("medium".into(), "preview".into(), true, false));
     build(
         &steps,
         row_width as f32,
@@ -303,6 +349,7 @@ pub async fn get_touch_mod_slider(
         &length,
         &style,
         enabled && reachable,
+        flipped,
     )
 }
 
@@ -382,7 +429,7 @@ mod tests {
 
     #[test]
     fn the_ruler_ends_in_bans_zone_one_step_past_the_last_timeout() {
-        let s = build(&steps(), 406.0, 16.0, "", "medium", "preview", true);
+        let s = build(&steps(), 406.0, 16.0, "", "medium", "preview", true, false);
         // The room right of the thumb is 390.
         assert_eq!(s.start, 16.0);
         assert_eq!(s.dead, 72.0);
@@ -400,7 +447,16 @@ mod tests {
 
     #[test]
     fn the_chip_names_the_chatter() {
-        let s = build(&steps(), 390.0, 20.0, " Gus ", "medium", "preview", true);
+        let s = build(
+            &steps(),
+            390.0,
+            20.0,
+            " Gus ",
+            "medium",
+            "preview",
+            true,
+            false,
+        );
         assert_eq!(s.steps[0].chip, "Delete Gus\u{2019}s message");
         assert_eq!(s.steps[2].chip, "Time out Gus 10m");
         assert_eq!(s.steps[4].chip, "Ban Gus");
@@ -414,7 +470,16 @@ mod tests {
     fn wherever_the_thumb_lands_ban_stays_reachable_and_the_ruler_keeps_its_sizes() {
         for width in [393.0, 402.0] {
             for start in [16.0, 120.0, 200.0] {
-                let s = build(&default_steps(), width, start, "", "medium", "preview", true);
+                let s = build(
+                    &default_steps(),
+                    width,
+                    start,
+                    "",
+                    "medium",
+                    "preview",
+                    true,
+                    false,
+                );
                 let room = width - start;
                 let ban = s.steps.len() - 1;
                 assert_eq!(s.steps[ban].label, "Ban", "Ban stays last ({width}, {start})");
@@ -426,8 +491,26 @@ mod tests {
             }
         }
         // Landing near the left, the step size is the Length setting's, every time.
-        let a = build(&default_steps(), 393.0, 16.0, "", "medium", "preview", true);
-        let b = build(&default_steps(), 393.0, 60.0, "", "medium", "preview", true);
+        let a = build(
+            &default_steps(),
+            393.0,
+            16.0,
+            "",
+            "medium",
+            "preview",
+            true,
+            false,
+        );
+        let b = build(
+            &default_steps(),
+            393.0,
+            60.0,
+            "",
+            "medium",
+            "preview",
+            true,
+            false,
+        );
         assert_eq!((a.spacing, b.spacing), (34.0, 34.0));
         // The longest timeouts give way first.
         let labels: Vec<&str> = a.steps.iter().map(|s| s.label.as_str()).collect();
@@ -437,7 +520,16 @@ mod tests {
 
     #[test]
     fn too_near_the_right_edge_the_pull_has_no_steps_and_says_where_to_start() {
-        let s = build(&default_steps(), 393.0, 300.0, "", "medium", "preview", true);
+        let s = build(
+            &default_steps(),
+            393.0,
+            300.0,
+            "",
+            "medium",
+            "preview",
+            true,
+            false,
+        );
         assert!(s.steps.is_empty());
         assert!(s.enabled, "the pull still shows its chip");
         assert_eq!(s.cancel_words, "Start further left to moderate");
@@ -447,13 +539,13 @@ mod tests {
 
     #[test]
     fn a_narrow_row_squeezes_the_steps_but_never_below_the_floor() {
-        let s = build(&steps(), 200.0, 0.0, "", "long", "rail", true);
+        let s = build(&steps(), 200.0, 0.0, "", "long", "rail", true, false);
         assert_eq!(s.dead, 72.0);
         assert_eq!(s.steps.len(), 3, "Delete, 1m and Ban");
         assert!(s.spacing >= STEP_FLOOR_PT && s.spacing < STEP_PT_LONG);
         assert!(s.end + RIGHT_MARGIN_PT <= 200.0);
         assert_eq!(s.style, "rail");
-        let odd = build(&steps(), 390.0, 0.0, "", "medium", "sideways", true);
+        let odd = build(&steps(), 390.0, 0.0, "", "medium", "sideways", true, false);
         assert_eq!(odd.style, "preview");
     }
 
@@ -483,7 +575,37 @@ mod tests {
 
     #[test]
     fn no_steps_means_no_slider() {
-        assert!(!build(&[], 390.0, 0.0, "", "medium", "preview", true).enabled);
-        assert!(!build(&steps(), 390.0, 0.0, "", "medium", "preview", false).enabled);
+        assert!(!build(&[], 390.0, 0.0, "", "medium", "preview", true, false).enabled);
+        assert!(!build(&steps(), 390.0, 0.0, "", "medium", "preview", false, false).enabled);
+    }
+
+    #[test]
+    fn a_flipped_slider_is_the_same_ruler_measured_leftward() {
+        // A flipped press 16 from the right edge is an unflipped one 16 from the left.
+        let plain = build(&steps(), 406.0, 16.0, "", "medium", "preview", true, false);
+        let flipped = build(&steps(), 406.0, 390.0, "", "medium", "preview", true, true);
+        assert!(flipped.flipped && !plain.flipped);
+        assert_eq!(flipped.start, 390.0);
+        assert_eq!((flipped.dead, flipped.spacing), (plain.dead, plain.spacing));
+        assert_eq!(flipped.starts, plain.starts);
+        assert_eq!(flipped.end, plain.end);
+        assert_eq!(
+            flipped.nudge_words,
+            "Swipe left on a message to moderate it"
+        );
+        // Too near the LEFT edge it says to start further right.
+        let edge = build(
+            &default_steps(),
+            393.0,
+            60.0,
+            "",
+            "medium",
+            "preview",
+            true,
+            true,
+        );
+        assert!(edge.steps.is_empty());
+        assert_eq!(edge.cancel_words, "Start further right to moderate");
+        assert!(edge.end <= 60.0);
     }
 }

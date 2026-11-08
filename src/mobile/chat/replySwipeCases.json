@@ -12,7 +12,12 @@
     "snapBackMs": 220,
     "hintShows": 5
   },
-  "words": { "hint": "Swipe left on a message to reply", "hintShort": "Swipe left to reply" },
+  "words": {
+    "hint": "Swipe left on a message to reply",
+    "hintShort": "Swipe left to reply",
+    "hintFlipped": "Swipe right on a message to reply",
+    "hintShortFlipped": "Swipe right to reply"
+  },
   "shown": [
     { "pull": -5, "shown": 0 },
     { "pull": 0, "shown": 0 },

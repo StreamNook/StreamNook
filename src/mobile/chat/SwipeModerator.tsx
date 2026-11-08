@@ -14,6 +14,10 @@
 //   an arrow comes in at its right and, past the arm point, an accent disc fills
 //   behind it with one light tick; letting go there starts the reply
 //   (replySwipe.ts holds the numbers, shared with the iPhone).
+// - Left-handed swipes (`flipped`) swap the two: left moderates, with the
+//   slider mirrored (Delete nearest the right edge, where the thumb starts),
+//   and right replies. Every move is read toward the mod side (`dir`), so the
+//   rules are one set; only the drawing turns round.
 //
 // One move, one direction: the press is decided once, at the slop. Every press
 // on a row holds the list at once (`holdChatRow`), so in a fast chat the row
@@ -74,6 +78,8 @@ interface Props {
   modEnabled: boolean;
   /** Swiping left to reply is on here (the room can take a reply). */
   replyEnabled: boolean;
+  /** Left-handed swipes: left moderates, right replies (`chat_design.mod_slider_flipped`). */
+  flipped: boolean;
   broadcasterId: string | null;
   /** The chatter behind a row the viewer may swipe, or null. */
   targetFor: (messageId: string) => SwipeTarget | null;
@@ -97,6 +103,7 @@ export function SwipeModerator({
   listRef,
   modEnabled,
   replyEnabled,
+  flipped,
   broadcasterId,
   targetFor,
   replyFor,
@@ -114,8 +121,8 @@ export function SwipeModerator({
   const [host, setHost] = useState<HTMLElement | null>(null);
   const replyIcon = useRef<HTMLSpanElement | null>(null);
   // Everything the native listeners read, kept current without re-binding them.
-  const live = useRef({ modEnabled, replyEnabled, broadcasterId, targetFor, replyFor, sliderFor, fanArmed, cancelHold, onDone, onReply });
-  live.current = { modEnabled, replyEnabled, broadcasterId, targetFor, replyFor, sliderFor, fanArmed, cancelHold, onDone, onReply };
+  const live = useRef({ modEnabled, replyEnabled, flipped, broadcasterId, targetFor, replyFor, sliderFor, fanArmed, cancelHold, onDone, onReply });
+  live.current = { modEnabled, replyEnabled, flipped, broadcasterId, targetFor, replyFor, sliderFor, fanArmed, cancelHold, onDone, onReply };
 
   useEffect(() => {
     const list = listRef.current;
@@ -134,10 +141,12 @@ export function SwipeModerator({
       slider: TouchSlider | null;
       /** The core answered for the slider (or no slider was asked for). */
       sliderSettled: boolean;
-      /** The press landed in the left grab zone (mod). */
+      /** The press landed in the mod's grab zone (the left edge's; the right's flipped). */
       grab: boolean;
-      /** The press landed in the right grab zone (reply). */
-      rightGrab: boolean;
+      /** The press landed in the reply's grab zone (the right edge's; the left's flipped). */
+      replyGrab: boolean;
+      /** The mod side: 1 right, -1 left (Left-handed swipes), fixed for the press. */
+      dir: 1 | -1;
     } | null = null;
     /** What the press became at the slop; null while undecided. */
     let kind: 'mod' | 'reply' | null = null;
@@ -266,9 +275,9 @@ export function SwipeModerator({
       const b = body(press.row);
       const lit = step != null && !offRow && !resting();
       if (s.style === 'capsule') {
-        press.row.style.transform = `translateX(${slide}px)`;
+        press.row.style.transform = `translateX(${press.dir * slide}px)`;
         // The part slid past the list's edge fades out rather than being cut mid-word.
-        press.row.style.maskImage = `linear-gradient(to left, transparent ${slide}px, #000 ${slide + 24}px)`;
+        press.row.style.maskImage = `linear-gradient(${press.dir > 0 ? 'to left' : 'to right'}, transparent ${slide}px, #000 ${slide + 24}px)`;
       }
       if (s.style === 'preview' && b) {
         b.style.opacity = lit ? '0.45' : '';
@@ -293,9 +302,10 @@ export function SwipeModerator({
       if (!p) return;
       const r = replyStep(drag, Math.max(0, -dx));
       drag = r.drag;
-      p.row.style.transform = `translateX(${-r.shown}px)`;
-      // The part slid past the list's left edge fades out rather than being cut mid-word.
-      p.row.style.maskImage = `linear-gradient(to right, transparent ${r.shown}px, #000 ${r.shown + 24}px)`;
+      // Away from the mod side: left, or right with Left-handed swipes.
+      p.row.style.transform = `translateX(${-p.dir * r.shown}px)`;
+      // The part slid past the list's edge fades out rather than being cut mid-word.
+      p.row.style.maskImage = `linear-gradient(${p.dir > 0 ? 'to right' : 'to left'}, transparent ${r.shown}px, #000 ${r.shown + 24}px)`;
       const icon = replyIcon.current;
       if (icon) {
         icon.style.opacity = String(r.progress);
@@ -336,6 +346,8 @@ export function SwipeModerator({
       const insets = readInsets();
       const leftEdge = Math.max(insets.gestureLeft, insets.left, lr.left);
       const rightEdge = Math.min(lr.right, window.innerWidth - Math.max(insets.gestureRight, insets.right));
+      const inLeft = inGrabZone(e.clientX, leftEdge);
+      const inRight = inRightGrabZone(e.clientX, rightEdge);
       const current = {
         id: e.pointerId,
         x: e.clientX,
@@ -346,8 +358,9 @@ export function SwipeModerator({
         reply,
         slider: null as TouchSlider | null,
         sliderSettled: !target,
-        grab: !!target && inGrabZone(e.clientX, leftEdge),
-        rightGrab: !!reply && inRightGrabZone(e.clientX, rightEdge),
+        grab: !!target && (l.flipped ? inRight : inLeft),
+        replyGrab: !!reply && (l.flipped ? inLeft : inRight),
+        dir: (l.flipped ? -1 : 1) as 1 | -1,
       };
       press = current;
       if (!target) return;
@@ -355,7 +368,8 @@ export function SwipeModerator({
       void l.sliderFor(r.width, e.clientX - r.left, target).then((s) => {
         trace(s ? `slider ready: enabled ${s.enabled} steps ${s.steps.length} start ${Math.round(s.start)}` : 'slider missing');
         if (press !== current) return;
-        current.slider = s;
+        // A slider laid out the other way round (the setting flipped mid-press) never draws.
+        current.slider = s && s.flipped === (current.dir < 0) ? s : null;
         current.sliderSettled = true;
         if (kind !== 'mod') return;
         // A slide that latched before the slider came: the core says no and the press ends, or
@@ -367,7 +381,8 @@ export function SwipeModerator({
 
     const onMove = (e: PointerEvent) => {
       if (!press || e.pointerId !== press.id) return;
-      const dx = e.clientX - press.x;
+      // Toward the mod side, so every rule below reads one way round.
+      const dx = (e.clientX - press.x) * press.dir;
       const dy = e.clientY - press.y;
       if (!kind) {
         // The fan owns a hold that armed.
@@ -379,7 +394,7 @@ export function SwipeModerator({
         const move = slideStart(dx, dy, press.slider?.engage ?? REPLY_ENGAGE, press.grab, {
           mod: !!press.target,
           reply: !!press.reply,
-          rightGrab: press.rightGrab,
+          replyGrab: press.replyGrab,
         });
         // A vertical move is the list's scroll; a sideways one nothing here takes lets the row go.
         if (move === 'scroll' || move === 'none') {
@@ -527,7 +542,7 @@ export function SwipeModerator({
   return (
     <>
       {view && shown && createPortal(<SwipeOverlay view={view} slider={shown} />, host)}
-      {createPortal(<ReplyArrow view={replyView} iconRef={replyIcon} />, host)}
+      {createPortal(<ReplyArrow view={replyView} iconRef={replyIcon} flipped={flipped} />, host)}
     </>
   );
 }
@@ -537,9 +552,18 @@ function trace(line: string): void {
   Logger.warn('[Swipe]', line);
 }
 
-/** The arrow a reply swipe pulls in at the row's right. Always mounted, so a swipe's first move
- *  already has it to write to; the swipe sets its opacity, scale and armed look directly. */
-function ReplyArrow({ view, iconRef }: { view: ReplyView | null; iconRef: React.RefObject<HTMLSpanElement | null> }) {
+/** The arrow a reply swipe pulls in at the row's right (its left with Left-handed swipes). Always
+ *  mounted, so a swipe's first move already has it to write to; the swipe sets its opacity, scale
+ *  and armed look directly. */
+function ReplyArrow({
+  view,
+  iconRef,
+  flipped,
+}: {
+  view: ReplyView | null;
+  iconRef: React.RefObject<HTMLSpanElement | null>;
+  flipped: boolean;
+}) {
   return (
     <div
       className="pointer-events-none absolute z-30"
@@ -548,7 +572,7 @@ function ReplyArrow({ view, iconRef }: { view: ReplyView | null; iconRef: React.
     >
       <span
         ref={iconRef}
-        className="absolute right-3 flex h-8 w-8 items-center justify-center rounded-full text-textSecondary"
+        className={`absolute ${flipped ? 'left-3' : 'right-3'} flex h-8 w-8 items-center justify-center rounded-full text-textSecondary`}
         style={{ top: 'calc(50% - 16px)', opacity: 0, transform: 'scale(0.6)' }}
       >
         <Reply size={16} strokeWidth={2.25} />
@@ -594,8 +618,9 @@ function SwipeOverlay({ view, slider }: { view: View; slider: TouchSlider }) {
   useEffect(() => {
     if (chipRef.current) setChipWidth(chipRef.current.offsetWidth);
   }, [words]);
-  // The ruler starts where the thumb landed.
-  const at = (x: number) => slider.start + x;
+  // The ruler starts where the thumb landed, and runs left when flipped.
+  const sign = slider.flipped ? -1 : 1;
+  const at = (x: number) => slider.start + sign * x;
   const finger = at(view.slide);
   const chipX = Math.min(Math.max(CHIP_INSET, finger - chipWidth / 2), view.width - chipWidth - CHIP_INSET);
   // Above the row, kept clear of the list's faded top: near the top it comes
@@ -614,8 +639,9 @@ function SwipeOverlay({ view, slider }: { view: View; slider: TouchSlider }) {
         // The legend: each name in its own box, the first and last the same distance from their
         // ends and equal gaps between, so "Delete" and "Ban" sit evenly; the lit pill marks the
         // step under the finger.
+        // Flipped, Delete sits at the right end, where the thumb starts.
         <div
-          className="absolute inset-x-1 inset-y-1 flex items-center justify-between rounded-[10px] border border-borderSubtle px-1"
+          className={`absolute inset-x-1 inset-y-1 flex items-center justify-between rounded-[10px] border border-borderSubtle px-1 ${slider.flipped ? 'flex-row-reverse' : ''}`}
           style={SOLID_RAISED}
         >
           {slider.steps.map((s, i) => {
@@ -636,13 +662,15 @@ function SwipeOverlay({ view, slider }: { view: View; slider: TouchSlider }) {
       ) : (
         // glass-exempt: the pull's wash over the message, which must keep the message readable through it.
         // None while a release would cancel (a gray box said nothing); soft at both ends.
+        // From the row's edge on the side the swipe starts to the finger.
         <div
-          className="absolute inset-y-0 left-0"
+          className="absolute inset-y-0"
           style={{
-            width: finger,
+            left: slider.flipped ? finger : 0,
+            width: slider.flipped ? view.width - finger : finger,
             opacity: step == null ? 0 : 1,
             transition: 'opacity 120ms ease-out',
-            background: `linear-gradient(to right, transparent, color-mix(in srgb, ${tint} 18%, transparent) 16px, color-mix(in srgb, ${tint} 18%, transparent) calc(100% - 10px), transparent)`,
+            background: `linear-gradient(${slider.flipped ? 'to left' : 'to right'}, transparent, color-mix(in srgb, ${tint} 18%, transparent) 16px, color-mix(in srgb, ${tint} 18%, transparent) calc(100% - 10px), transparent)`,
           }}
         />
       )}
@@ -655,7 +683,12 @@ function SwipeOverlay({ view, slider }: { view: View; slider: TouchSlider }) {
               <span
                 key={`t-${i}`}
                 className="absolute top-0 h-[3px] rounded-full"
-                style={{ left: at(start) + 1, width: Math.max(2, zoneEnd - start - 2), background: stepTint(s), opacity: start <= view.slide ? 1 : 0.32 }}
+                style={{
+                  left: Math.min(at(start), at(zoneEnd)) + 1,
+                  width: Math.max(2, zoneEnd - start - 2),
+                  background: stepTint(s),
+                  opacity: start <= view.slide ? 1 : 0.32,
+                }}
               />
             );
           })}
@@ -681,7 +714,7 @@ function SwipeOverlay({ view, slider }: { view: View; slider: TouchSlider }) {
           // glass-exempt: Ban's rest filling the chip behind its words, which must stay readable through it.
           <span
             className="absolute inset-0 bg-error/20"
-            style={{ transformOrigin: 'left', animation: `sn-swipe-dwell ${slider.ban_dwell_ms}ms linear forwards` }}
+            style={{ transformOrigin: slider.flipped ? 'right' : 'left', animation: `sn-swipe-dwell ${slider.ban_dwell_ms}ms linear forwards` }}
           />
         )}
         <span className="relative truncate">{words}</span>

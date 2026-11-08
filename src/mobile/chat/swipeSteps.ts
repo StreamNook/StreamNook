@@ -2,7 +2,8 @@
 // tests. Rust lays the slider out (services/touch_mod_slider.rs); these are
 // the per-move lookups that must not cross into Rust on every finger move,
 // written to match Rust's `step_at` and `with_hysteresis` and tested on the
-// same pulls. `slideStart` also decides the reply swipe's start (swipe left).
+// same pulls. `slideStart` also decides the reply swipe's start (swipe left, or
+// right with Left-handed swipes).
 import type { ModAction } from '../../services/moderation';
 import { REPLY_ENGAGE } from './replySwipe';
 
@@ -32,6 +33,8 @@ export interface TouchSlider {
   nudge_words: string;
   /** Where the thumb landed, from the row's left edge: the ruler starts here. */
   start: number;
+  /** The pull runs left (Left-handed swipes): a pull of `p` sits at `start - p` on the row. */
+  flipped: boolean;
   quick_seconds: number;
 }
 
@@ -125,19 +128,20 @@ export function inRightGrabZone(clientX: number, rightEdge: number): boolean {
 }
 
 /** What the press can start, for `slideStart`: a mod target, a reply, and whether it landed in the
- *  right edge's grab zone. */
+ *  reply's grab zone (the right edge's; the left edge's with Left-handed swipes). */
 export interface SlideOptions {
   mod: boolean;
   reply: boolean;
-  rightGrab: boolean;
+  replyGrab: boolean;
 }
 
 /** What a finger `dx`, `dy` from its press does before a slide has started: starts the mod slide,
  *  starts a reply (leftward), is the list's scroll, is a sideways move nothing here can take, or is
- *  not decided yet. `engage` is the core's distance (10 by default); a press in the left grab zone
- *  starts a mod slide sooner and on a steeper angle. Without `options` it is the mod slide's rule
- *  alone (leftward waits). The reply mirrors the mod rule; in the right grab zone it starts sooner
- *  but never on a steeper angle, so a right thumb's read-back scroll is never a reply. */
+ *  not decided yet. `dx` is measured toward the mod side, so Left-handed swipes pass it negated
+ *  and every rule mirrors. `engage` is the core's distance (10 by default); a press in the mod's
+ *  grab zone starts a mod slide sooner and on a steeper angle. Without `options` it is the mod
+ *  slide's rule alone (leftward waits). The reply mirrors the mod rule; in its grab zone it starts
+ *  sooner but never on a steeper angle, so a thumb's read-back scroll is never a reply. */
 export function slideStart(
   dx: number,
   dy: number,
@@ -146,7 +150,7 @@ export function slideStart(
   options?: SlideOptions,
 ): 'slide' | 'reply' | 'scroll' | 'none' | 'wait' {
   if (options && dx < 0) {
-    const reach = options.rightGrab ? Math.min(GRAB_ENGAGE, REPLY_ENGAGE) : REPLY_ENGAGE;
+    const reach = options.replyGrab ? Math.min(GRAB_ENGAGE, REPLY_ENGAGE) : REPLY_ENGAGE;
     if (Math.abs(dy) > reach && -dx <= Math.abs(dy)) return 'scroll';
     if (-dx >= reach && -dx >= Math.abs(dy)) return options.reply ? 'reply' : 'none';
     return 'wait';
