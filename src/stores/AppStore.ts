@@ -8,6 +8,7 @@ import { getAppVersion } from '../utils/appVersion';
 // Direct import (not via the keybindings index) to avoid a storecommands cycle.
 import { getPlayerControls } from '../keybindings/playerControls';
 import { qualitiesEquivalent } from '../utils/quality';
+import { compactChatPlacement } from '../utils/compactView';
 import { reportCodecPreference } from '../utils/codecPreference';
 import { setInlineEmoteScale } from '../services/emoteService';
 import { updatePresence } from '../services/supabaseService';
@@ -2068,7 +2069,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     // (Settings::retire_oled_v2), so every shell gets it.
     const state = get();
     if (state.isTheaterMode) {
-      set({ settings, originalChatPlacement: settings.chat_placement });
+      // Compact View hides chat unless the viewer keeps it there.
+      set({
+        settings,
+        originalChatPlacement: settings.chat_placement,
+        chatPlacement: compactChatPlacement(settings.chat_placement, settings.keep_chat_in_compact === true),
+      });
     } else {
       set({ settings, chatPlacement: settings.chat_placement });
     }
@@ -2112,8 +2118,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     for (const key of RUST_ONLY_KEYS) kept[key] = (state.settings as unknown as Record<string, unknown>)[key];
     const next = { ...newSettings, ...kept } as Settings;
     if (state.isTheaterMode) {
-      // Don't un-hide the chat if we're in compact/theater mode, just quietly update the original placement
-      set({ settings: next, originalChatPlacement: next.chat_placement });
+      // Compact View keeps chat hidden unless the viewer keeps it there; either
+      // way the placement to come back to follows the change.
+      set({
+        settings: next,
+        originalChatPlacement: next.chat_placement,
+        chatPlacement: compactChatPlacement(next.chat_placement, next.keep_chat_in_compact === true),
+      });
     } else {
       set({ settings: next, chatPlacement: next.chat_placement });
     }
@@ -3418,11 +3429,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     trackActivity(newTheaterMode ? 'Enabled Theater Mode' : 'Disabled Theater Mode');
 
     if (newTheaterMode) {
-      // Entering theater mode - save current chat placement and hide chat
+      // Entering Compact View - save the chat placement and hide chat, unless
+      // the viewer keeps chat in Compact View.
       set({
         isTheaterMode: true,
         originalChatPlacement: state.chatPlacement,
-        chatPlacement: 'hidden'
+        chatPlacement: compactChatPlacement(state.chatPlacement, state.settings.keep_chat_in_compact === true),
       });
     } else {
       // Exiting theater mode - restore original chat placement

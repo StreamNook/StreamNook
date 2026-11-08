@@ -1554,6 +1554,11 @@ export interface Settings {
   // purpose: a full-size window glued in front of everything is overbearing.
   // Only the frontend reads it, so it rides Rust's `extra` catch-all.
   keep_on_top_in_compact?: boolean;
+  // Compact View keeps chat where it is docked instead of hiding it; the
+  // preset's window makes room for it (utils/compactView.ts). Off by default.
+  // Only the frontend reads it, so it rides Rust's `extra` catch-all like
+  // keep_on_top_in_compact above.
+  keep_chat_in_compact?: boolean;
   // Full screen (F11) while watching tucks the title bar and sidebar away so
   // only the stream and chat show; each comes back when the cursor reaches its
   // edge. Frontend-only, so it rides Rust's `extra` catch-all. Default ON,

@@ -65,6 +65,7 @@ import { useThemeBoot } from './boot/useThemeBoot';
 import { getLogicalInnerSize, clampToWorkArea } from './utils/windowSizing';
 import { isTitlebarDragActive } from './utils/titleBarDrag';
 import { getSelectedCompactViewPreset } from './constants/compactViewPresets';
+import { compactChatSlot } from './utils/compactView';
 import { afterBoot, type BootTier } from './utils/startupScheduler';
 import { getAppVersion, primeClientIdentity } from './utils/appVersion';
 import { OPEN_CHANGELOG_EVENT, requestChangelog, type OpenChangelogDetail } from './utils/changelogEvents';
@@ -1559,11 +1560,39 @@ function App() {
           const targetWidth = preset.width - windowBorderWidth;
           // Recalculate height to maintain 16:9 aspect ratio based on adjusted width
           const videoHeight = Math.round(targetWidth / 16 * 9);
-          const targetHeight = videoHeight + titleBarHeight;
+          let targetHeight = videoHeight + titleBarHeight;
+          let windowWidth = targetWidth;
 
-          Logger.debug(`Entering compact view - resizing to: ${targetWidth}x${targetHeight} (${preset.name}, video: ${targetWidth}x${videoHeight})`);
+          // "Keep chat": the preset is still the whole window, and docked chat
+          // fits inside it by the aspect lock's own rule (Rust): side chat keeps
+          // the width and the window gets shorter, bottom chat keeps the height
+          // and it gets narrower, so the picture stays 16:9 with no bars.
+          // chatSizeRef, not chatSize: a placement change resets the size in the
+          // placement effect, which runs before this one in the same commit.
+          const slot = compactChatSlot({
+            placement: chatPlacement,
+            chatSize: chatSizeRef.current,
+            revealOnHover: autoHideActive,
+            chatInPopout: activeChatChannelInPopoutRef.current,
+          });
+          if (slot) {
+            const [fitWidth, fitHeight] = await invoke<[number, number]>('calculate_aspect_ratio_size', {
+              currentWidth: targetWidth,
+              currentHeight: targetHeight,
+              chatSize: slot.chatSize,
+              chatPlacement: slot.placement,
+              titleBarHeight: titleBarHeight,
+              targetAspectRatio: 16.0 / 9.0,
+              uiWidthOffset: slot.uiWidthOffset,
+              uiHeightOffset: slot.uiHeightOffset,
+            });
+            windowWidth = fitWidth;
+            targetHeight = fitHeight;
+          }
+
+          Logger.debug(`Entering compact view - resizing to: ${windowWidth}x${targetHeight} (${preset.name}, chat: ${slot ? `${slot.placement} ${slot.chatSize}` : 'hidden'})`);
           selfResizeUntilRef.current = Date.now() + 300;
-          await window.setSize(new LogicalSize(targetWidth, targetHeight));
+          await window.setSize(new LogicalSize(windowWidth, targetHeight));
         } else if (savedWindowSize) {
           // Exiting theater mode - restore previous size
           Logger.debug('Exiting compact view - restoring to:', savedWindowSize.maximized ? 'maximized' : `${savedWindowSize.width}x${savedWindowSize.height}`);
@@ -1580,7 +1609,7 @@ function App() {
 
     handleTheaterMode();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isTheaterMode, streamUrl, settings.compact_view?.selectedPresetId, aspectBarReserve]); // Re-run if the preset or the title bar's row changes while in compact view
+  }, [isTheaterMode, streamUrl, settings.compact_view?.selectedPresetId, aspectBarReserve, chatPlacement, autoHideActive]); // Re-run if the preset, the title bar's row, or where chat sits changes while in compact view (Keep chat moves chatPlacement)
 
   // Keep-on-top, scoped to Compact View. The only place that calls
   // setAlwaysOnTop for the main window: the store action just writes the

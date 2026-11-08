@@ -2548,6 +2548,13 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   },
   {
     tab: 'Interface',
+    section: 'Compact View',
+    sectionId: 'settings-section-compact',
+    title: 'Keep chat',
+    description: 'Compact View keeps chat where you dock it instead of hiding it; the window stays the size you picked and the picture makes room. Chat in Compact View, compact mode with chat.'
+  },
+  {
+    tab: 'Interface',
     section: 'Window',
     sectionId: 'settings-section-window',
     title: 'Centered settings',

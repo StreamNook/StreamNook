@@ -111,6 +111,7 @@ const InterfaceSettings = () => {
     })();
 
     const keepOnTopInCompact = settings.keep_on_top_in_compact === true;
+    const keepChatInCompact = settings.keep_chat_in_compact === true;
     const fullscreenStreamOnly = settings.fullscreen_stream_only !== false;
 
     const motionMode: MotionMode = settings.motion_mode ?? 'full';
@@ -547,6 +548,18 @@ const InterfaceSettings = () => {
                             <Toggle
                                 enabled={keepOnTopInCompact}
                                 onChange={() => void updateSettings({ ...settings, keep_on_top_in_compact: !keepOnTopInCompact })}
+                            />
+                        }
+                    />
+                    <SettingsRow
+                        title="Keep chat"
+                        onReset={resetFor(['keep_chat_in_compact', false])}
+                        description="Compact View keeps chat where you dock it instead of hiding it. The window stays the size you picked, and the picture makes room for chat."
+                        help="Chat beside the picture keeps the window's width and makes it shorter; chat below keeps its height and makes it narrower, so the video never gets black bars. Chat that slides out on hover takes no room. Off, Compact View shows the picture alone."
+                        control={
+                            <Toggle
+                                enabled={keepChatInCompact}
+                                onChange={() => void updateSettings({ ...settings, keep_chat_in_compact: !keepChatInCompact })}
                             />
                         }
                     />
