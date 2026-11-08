@@ -63,9 +63,14 @@ impl PushDevice {
     /// The `/register` body. An FCM device also carries the original
     /// `fcm_token` key, so the body reads the same to a server that predates
     /// `kind` and to one that knows it.
-    pub fn register_body(&self, follows: &[String]) -> Value {
+    pub fn register_body(&self, follows: &[String], live_text: bool) -> Value {
         let mut body = self.identity();
         body["follows"] = json!(follows);
+        // Go-live pushes carry the streamer's own message instead of the title.
+        // Sent only when on, so the body stays what an older server expects.
+        if live_text {
+            body["live_text"] = json!(true);
+        }
         body
     }
 
@@ -93,6 +98,9 @@ pub struct AlertInputs {
     /// Android's Instant alerts switch.
     pub push: bool,
     pub muted: Vec<String>,
+    /// Notify me about > Live channels > Streamer's message: the push server
+    /// writes this phone's go-live alerts with the streamer's own message.
+    pub live_text: bool,
 }
 
 impl AlertInputs {
@@ -107,7 +115,15 @@ impl AlertInputs {
             .unwrap_or_default();
         muted.sort();
         muted.dedup();
-        Self { enabled: flag("enabled"), live: flag("show_live_notifications"), push: flag("push_notifications"), muted }
+        // Off unless saved on, matching its serde default.
+        let live_text = notif.and_then(|n| n.get("streamer_go_live_text")).and_then(Value::as_bool).unwrap_or(false);
+        Self {
+            enabled: flag("enabled"),
+            live: flag("show_live_notifications"),
+            push: flag("push_notifications"),
+            muted,
+            live_text,
+        }
     }
 
     pub fn from_settings(settings: &crate::models::settings::Settings) -> Self {
@@ -122,7 +138,12 @@ pub fn note_change(cell: &mut Option<AlertInputs>, next: AlertInputs) -> Option<
     use crate::services::push_plan::Kind;
     let kind = match cell.as_ref() {
         Some(prev) if *prev == next => None,
-        Some(prev) if prev.enabled == next.enabled && prev.live == next.live && prev.push == next.push => {
+        Some(prev)
+            if prev.enabled == next.enabled
+                && prev.live == next.live
+                && prev.push == next.push
+                && prev.live_text == next.live_text =>
+        {
             Some(Kind::MuteOnly)
         }
         _ => Some(Kind::Switch),
@@ -608,7 +629,7 @@ pub mod server {
         if !may {
             return failed(snap, Outcome::Waiting, now, Some(&device));
         }
-        let body = device.register_body(&ids);
+        let body = device.register_body(&ids, inputs.live_text);
         let mut used = token;
         let mut answer = post("/register", &body, Some(&used)).await;
         if matches!(answer, Ok((401, _))) {
@@ -1002,7 +1023,7 @@ mod tests {
     #[test]
     fn unsaved_switches_read_as_on() {
         let fresh = AlertInputs::from_json(None);
-        assert_eq!(fresh, AlertInputs { enabled: true, live: true, push: true, muted: vec![] });
+        assert_eq!(fresh, AlertInputs { enabled: true, live: true, push: true, muted: vec![], live_text: false });
         let defaults = AlertInputs::from_settings(&crate::models::settings::Settings::default());
         assert_eq!(defaults, fresh);
     }
@@ -1017,7 +1038,7 @@ mod tests {
     fn apns_body_is_the_contract() {
         let device = PushDevice::apns("ABCDEF0123", "sandbox", "XTL-C84UQRPAQ2.app.streamnook").unwrap();
         assert_eq!(
-            device.register_body(&["123".into(), "456".into()]),
+            device.register_body(&["123".into(), "456".into()], false),
             json!({
                 "kind": "apns",
                 "token": "abcdef0123",
@@ -1027,13 +1048,30 @@ mod tests {
             })
         );
         assert_eq!(device.unregister_body(), json!({ "kind": "apns", "token": "abcdef0123", "env": "sandbox", "topic": "XTL-C84UQRPAQ2.app.streamnook" }));
-        assert_eq!(device.register_body(&[])["follows"], json!([]));
+        assert_eq!(device.register_body(&[], false)["follows"], json!([]));
+    }
+
+    /// The go-live text choice reaches the server only when on, and flipping it
+    /// alone is a change the server is owed, settled like a switch.
+    #[test]
+    fn the_go_live_text_choice_rides_the_registration() {
+        let device = PushDevice::Fcm { token: "fcm-abc".into() };
+        assert_eq!(device.register_body(&["9".into()], true)["live_text"], json!(true));
+        assert!(device.register_body(&["9".into()], false).get("live_text").is_none());
+
+        let mut notif = json!({ "streamer_go_live_text": true });
+        assert!(AlertInputs::from_json(Some(&notif)).live_text);
+        notif["streamer_go_live_text"] = json!(false);
+        let off = AlertInputs::from_json(Some(&notif));
+        let mut cell = Some(off.clone());
+        let on = AlertInputs { live_text: true, ..off };
+        assert_eq!(note_change(&mut cell, on), Some(crate::services::push_plan::Kind::Switch));
     }
 
     #[test]
     fn fcm_body_still_reads_as_the_old_android_body() {
         let device = PushDevice::Fcm { token: "fcm-abc".into() };
-        let body = device.register_body(&["9".into()]);
+        let body = device.register_body(&["9".into()], false);
         assert_eq!(body["kind"], "fcm");
         assert_eq!(body["token"], "fcm-abc");
         // What the server before `kind` reads: {fcm_token, follows}.
