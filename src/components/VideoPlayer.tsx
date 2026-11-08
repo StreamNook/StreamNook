@@ -586,10 +586,10 @@ const VideoPlayer = () => {
   const [isRestarting, setIsRestarting] = useState(false);
 
   // Song identification: capture a few seconds of player audio and name the
-  // track. The note surfaces the result as a toast; the card also lands in
-  // the playing stream's chat, whose composer shows the listening strip
-  // meanwhile. The note's bars and its "Stop listening" come from the
-  // window's one listening state (SongsSplitButton reads it).
+  // track. The card lands in the playing stream's chat, whose composer shows
+  // the listening strip meanwhile and then the result. The note's bars and
+  // its "Stop listening" come from the window's one listening state
+  // (SongsSplitButton reads it).
   const handleIdentifySong = useCallback(async () => {
     const addToast = useAppStore.getState().addToast;
     // The room the answer goes to, as the listening starts: a viewer who
@@ -598,9 +598,11 @@ const VideoPlayer = () => {
     const result = await recognizeNowPlaying(videoRef.current, { room });
     // A canceled listening, or one asked for while one runs, says nothing.
     if (isQuietResult(result)) return;
-    // Also drop the clickable card into the playing stream's chat (where the
-    // links live); the toast below is just the quick on-player confirmation.
-    announceSong(result, room);
+    // The clickable card goes into the playing stream's chat (where the links
+    // live). Once it is there a toast would only repeat it: the answer just
+    // joins the island's history. With no chat to post in, the toast is the
+    // answer.
+    const islandOnly = announceSong(result, room);
     if (result.status === 'match') {
       const s = result.song;
       // The track's own link first; a search page says it is one.
@@ -617,12 +619,12 @@ const VideoPlayer = () => {
             }
           : undefined,
         // The island row shows the cover and opens the song in Your songs.
-        { avatarUrl: s.album_art ?? undefined, songKey: s.key ?? undefined },
+        { avatarUrl: s.album_art ?? undefined, songKey: s.key ?? undefined, islandOnly },
       );
     } else if (result.status === 'no-match') {
-      addToast("Couldn't identify the song. Try again when the music is clearer.", 'info');
+      addToast("Couldn't identify the song. Try again when the music is clearer.", 'info', undefined, { islandOnly });
     } else {
-      addToast(result.message, 'error');
+      addToast(result.message, 'error', undefined, { islandOnly });
     }
   }, []);
 

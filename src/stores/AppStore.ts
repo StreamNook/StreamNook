@@ -551,7 +551,9 @@ export interface AppState {
   patchCurrentStream: (partial: Partial<TwitchStream>) => void;
   /** `sticky` keeps the toast on screen until it is dismissed or removed by
    *  id; pass `id` to be able to remove it. */
-  addToast: (message: string | React.ReactNode, type: 'info' | 'success' | 'warning' | 'error' | 'live' | 'channel_points', action?: { label: string; onClick: () => void }, options?: { skipIsland?: boolean; alwaysShow?: boolean; avatarUrl?: string; avatarSevenTvId?: string; source?: 'plugin'; sticky?: boolean; id?: number; title?: string; songKey?: string }) => void;
+  /** `islandOnly` records it in the Dynamic Island's history without the
+   *  toast, for an answer already shown elsewhere. */
+  addToast: (message: string | React.ReactNode, type: 'info' | 'success' | 'warning' | 'error' | 'live' | 'channel_points', action?: { label: string; onClick: () => void }, options?: { skipIsland?: boolean; islandOnly?: boolean; alwaysShow?: boolean; avatarUrl?: string; avatarSevenTvId?: string; source?: 'plugin'; sticky?: boolean; id?: number; title?: string; songKey?: string }) => void;
   removeToast: (id: number) => void;
   loadSettings: () => Promise<void>;
   updateSettings: (newSettings: Settings) => Promise<void>;
@@ -1950,6 +1952,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         }).catch(() => {});
       }
     }
+    if (options?.islandOnly) return;
 
     // Gate the minor "action feedback" toasts (copy, follow, mod result,
     // quality change, login, etc.) behind the user's notification settings.

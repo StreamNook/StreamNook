@@ -229,8 +229,9 @@ function emitSongMessage(room: string | null, text: string, songCard?: SongMatch
   return true;
 }
 
-export function announceSong(result: RecognizeResult, room: string | null = null): void {
-  if (isQuietResult(result)) return;
+/** Post the answer in its chat. True when it was posted there. */
+export function announceSong(result: RecognizeResult, room: string | null = null): boolean {
+  if (isQuietResult(result)) return false;
   const posted =
     result.status === 'match'
       ? emitSongMessage(room, `♪ ${result.song.title} by ${result.song.artist}`, result.song)
@@ -241,4 +242,5 @@ export function announceSong(result: RecognizeResult, room: string | null = null
   // listening strip was: only where it was posted, never over a chat that is
   // gone.
   if (posted) publishSongResult(result, room);
+  return posted;
 }
