@@ -388,15 +388,21 @@ function DropsChatBarInner({ channelId, login, headerInset, emotePickerOpen, onD
   const motionOff = useAppStore((s) => s.settings.motion_mode) === 'off';
   const performanceQuiet = usePerformanceQuiet();
   const instant = motionOff || performanceQuiet;
-  // The hover card: a mouse resting on the lip (or the card itself) shows it
-  // after a beat, so a pointer crossing on its way to the message box does
-  // not flash it; leaving gives a short grace to reach the card.
+  // The hover card: a mouse that comes to rest on the lip shows it. Every move
+  // restarts the wait, so a pointer crossing the lip on its way to the message
+  // box never grows the card (SN-264: it did after 90 ms of passing through).
+  // Leaving gives a short grace to reach the card.
   const [peek, setPeek] = useState(false);
   const peekTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hover = (on: boolean) => (e: PointerEvent<HTMLDivElement>) => {
     if (e.pointerType !== 'mouse') return;
     if (peekTimer.current) clearTimeout(peekTimer.current);
-    peekTimer.current = setTimeout(() => setPeek(on), on ? PEEK_SHOW_MS : PEEK_HIDE_MS);
+    peekTimer.current = setTimeout(() => setPeek(on), on ? PEEK_REST_MS : PEEK_HIDE_MS);
+  };
+  const rest = (e: PointerEvent<HTMLDivElement>) => {
+    if (e.pointerType !== 'mouse' || peek) return;
+    if (peekTimer.current) clearTimeout(peekTimer.current);
+    peekTimer.current = setTimeout(() => setPeek(true), PEEK_REST_MS);
   };
   useEffect(() => () => {
     if (peekTimer.current) clearTimeout(peekTimer.current);
@@ -462,6 +468,7 @@ function DropsChatBarInner({ channelId, login, headerInset, emotePickerOpen, onD
       ref={hostRef}
       onPointerDownCapture={onPress}
       onPointerEnter={hover(true)}
+      onPointerMove={rest}
       onPointerLeave={hover(false)}
       // The lip sits flush on the message box's top edge (over its border), so
       // at rest it takes only its own height from the column. The emote
@@ -521,7 +528,8 @@ export function tuckDropsLip(hidden: boolean) {
   void invoke('set_drops_lip_hidden', { hidden }).catch((err) => Logger.warn('[DropsChatBar] tuck failed:', err));
 }
 
-const PEEK_SHOW_MS = 90;
+/** How long the mouse must stay still on the lip before the card grows. */
+const PEEK_REST_MS = 260;
 const PEEK_HIDE_MS = 140;
 const EASE_OUT = [0.2, 0.8, 0.2, 1] as const;
 const PEEK_IN = { duration: 0.14, ease: EASE_OUT };

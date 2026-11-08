@@ -223,6 +223,15 @@ describe('the hover card wiring', () => {
     const src = readFileSync(resolve(__dirname, 'DropsChatBar.tsx'), 'utf8').replace(/\r\n/g, '\n');
     expect(src).toContain("className={`relative z-[55] -mb-px flex-shrink-0 ${tucked ? '' : 'px-2 pt-1.5'} ${emotePickerOpen ? 'invisible pointer-events-none' : ''}`}");
   });
+  it('ranks only inside chat, so it never draws over Settings or other dialogs (SN-264)', () => {
+    const chat = readFileSync(resolve(__dirname, '../ChatWidget.tsx'), 'utf8');
+    expect(chat).toContain('className="isolate h-full bg-secondary overflow-hidden flex flex-col relative"');
+  });
+  it('grows the hover card only once the mouse rests, not as it passes on to the message box (SN-264)', () => {
+    const src = readFileSync(resolve(__dirname, 'DropsChatBar.tsx'), 'utf8').replace(/\r\n/g, '\n');
+    expect(src).toContain('onPointerMove={rest}');
+    expect(src).toContain("if (e.pointerType !== 'mouse' || peek) return;");
+  });
 });
 
 describe('splitStatus', () => {

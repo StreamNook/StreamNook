@@ -4756,7 +4756,12 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
       <div
         ref={setChatContainerEl}
         data-chat-surface=""
-        className="h-full bg-secondary overflow-hidden flex flex-col relative"
+        // `isolate`: chat's own layers (the drops lip at z-[55], menus at
+        // z-[60]) rank against each other only. Without it they competed with
+        // the app's dialogs, and the drops lip drew over Settings and stayed
+        // clickable there (SN-264). Nothing here draws past the column anyway
+        // (overflow-hidden).
+        className="isolate h-full bg-secondary overflow-hidden flex flex-col relative"
         onDragOver={onImageDragOver}
         onDragLeave={onImageDragLeave}
         onDrop={onImageDrop}
