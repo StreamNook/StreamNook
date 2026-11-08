@@ -5,7 +5,8 @@
 
 use crate::rt::Window;
 use crate::services::whisper_inbox::{self, WhisperList, WhisperPage, WhisperUpdate};
-use crate::services::whisper_send::{self, SendTarget};
+// Named `sender` here: the module and the `whisper_send` command share a name.
+use crate::services::whisper_send::{self as sender, SendTarget};
 use crate::services::whisper_sync::{self, SyncOutcome};
 
 /// Default and largest page of messages one `whisper_page` call returns.
@@ -74,7 +75,7 @@ pub async fn whisper_send(
     expect_owner: Option<String>,
     expect_owner_name: Option<String>,
 ) -> Result<WhisperUpdate, String> {
-    whisper_send::send(target, text, expect_owner, expect_owner_name).await
+    sender::send(target, text, expect_owner, expect_owner_name).await
 }
 
 /// An inbox is on screen (the island's history, MultiChat's Mentions mode,
@@ -88,13 +89,13 @@ pub async fn inbox_opened() -> Result<(), String> {
 /// Send a Not delivered whisper again (after checking Twitch does not have it).
 #[tauri::command]
 pub async fn whisper_retry(key: String, message_id: String) -> Result<WhisperUpdate, String> {
-    whisper_send::retry(key, message_id).await
+    sender::retry(key, message_id).await
 }
 
 /// Drop a Not delivered whisper.
 #[tauri::command]
 pub async fn whisper_discard(key: String, message_id: String) -> Result<(), String> {
-    whisper_send::discard(&key, &message_id)
+    sender::discard(&key, &message_id)
 }
 
 /// Archive a conversation on Twitch and here.
