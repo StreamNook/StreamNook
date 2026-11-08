@@ -3,7 +3,7 @@ import { CircleHelp, RotateCcw, type LucideIcon } from 'lucide-react';
 import { Tooltip } from '../ui/Tooltip';
 import { Toggle } from '../ui/Toggle';
 import { IS_MOBILE } from '../../utils/platform';
-import { sectionIdFromLabel } from './sectionId';
+import { sectionIdFromLabel, SETTINGS_REVEAL_EVENT } from './sectionId';
 import {
   GROUP_ICON,
   GROUP_ICON_STROKE,
@@ -33,9 +33,11 @@ interface SettingsSectionProps {
   /** The phone's small action on the heading's line (Custom Commands' Show
    *  reference), as the iPhone places it. The desktop does not draw it. */
   accessory?: ReactNode;
+  /** On the section element, for a host that shows one section at a time. */
+  className?: string;
 }
 
-export { sectionIdFromLabel };
+export { sectionIdFromLabel, SETTINGS_REVEAL_EVENT };
 
 /** The phone's section, in the chat menu's grouped style: the name as a quiet
  *  label over the icon column, the rows on a solid card, and the one-line
@@ -49,8 +51,9 @@ const PhoneSettingsSection = ({
   logo,
   shownLabel,
   accessory,
+  className,
 }: SettingsSectionProps) => (
-  <section id={id ?? sectionIdFromLabel(label)} data-settings-section={label}>
+  <section id={id ?? sectionIdFromLabel(label)} data-settings-section={label} className={className}>
     {/* An accessory sits on the heading's line, centered on it. */}
     <div className={accessory ? 'flex items-center justify-between gap-3 pr-2' : undefined}>
       <GroupLabel
@@ -82,8 +85,9 @@ const DesktopSettingsSection = ({
   bare = false,
   logo,
   shownLabel,
+  className,
 }: SettingsSectionProps) => (
-  <section id={id ?? sectionIdFromLabel(label)} data-settings-section={label}>
+  <section id={id ?? sectionIdFromLabel(label)} data-settings-section={label} className={className}>
     <div className="px-1 pb-2.5">
       <h3
         className={`text-[12px] font-semibold uppercase tracking-[0.14em] text-textPrimary ${logo ? 'flex items-center gap-1.5' : ''}`}
@@ -469,7 +473,8 @@ export function SwitchList({
   disabled?: boolean;
 }) {
   return (
-    <div className={`flex w-full flex-col ${disabled ? 'pointer-events-none opacity-50' : ''}`}>
+    // data-switch-list lets a host lay a long list across columns line by line.
+    <div data-switch-list="" className={`flex w-full flex-col ${disabled ? 'pointer-events-none opacity-50' : ''}`}>
       {items.map((item) => (
         <div
           key={item.id}

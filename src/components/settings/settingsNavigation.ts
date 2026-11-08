@@ -2,8 +2,17 @@
 // Settings dialog and the MultiChat chat-settings modal, which render the same
 // rows and search the same index.
 
-import { sectionIdFromLabel } from './sectionId';
+import { sectionIdFromLabel, SETTINGS_REVEAL_EVENT } from './sectionId';
 import type { SettingsIndexEntry } from './searchIndex';
+
+/** A target inside a section that is not shown (another of the overlay
+ *  builder's tabs) has no position to scroll to. Asks its pane to open it and
+ *  says so; the caller measures again on the next frame. */
+export function revealHiddenTarget(el: HTMLElement): boolean {
+  if (el.getClientRects().length > 0) return false;
+  el.dispatchEvent(new CustomEvent(SETTINGS_REVEAL_EVENT, { bubbles: true }));
+  return true;
+}
 
 const rowsIn = (root: ParentNode): HTMLElement[] =>
   Array.from(root.querySelectorAll<HTMLElement>('[data-setting-row]'));

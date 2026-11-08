@@ -70,7 +70,9 @@ const OverlaySettings = () => {
   );
   return (
     <OverlayHostProvider value={host}>
-      <OverlayBuilder />
+      {/* The Stream Overlay tab fills nearly the window, so it has room to
+          show one section at a time beside the preview. */}
+      <OverlayBuilder sectionTabs />
     </OverlayHostProvider>
   );
 };

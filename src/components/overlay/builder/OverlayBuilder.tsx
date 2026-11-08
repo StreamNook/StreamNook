@@ -12,7 +12,7 @@ import type { CSSProperties } from 'react';
 import { RotateCcw, RefreshCw, Link2, Plus, X, AlertTriangle, Play, Pause, Copy, Trash2, Pencil, Check, ChevronRight, LogIn, Download, Upload, Undo2, Redo2 } from 'lucide-react';
 import { Tooltip } from '../../ui/Tooltip';
 import { Dropdown } from '../../ui/Dropdown';
-import { SettingsSection, SettingsRow, SettingsSubGroup, SegmentedSelect, SwitchList } from '../../settings/_primitives';
+import { SettingsSection, SettingsRow, SettingsSubGroup, SegmentedSelect, SwitchList, sectionIdFromLabel, SETTINGS_REVEAL_EVENT } from '../../settings/_primitives';
 import SectionNav from '../../settings/SectionNav';
 import { SevenTVLogo } from '../../emotesets/SevenTVLogo';
 import streamNookLogo from '../../../assets/streamnook-logo.png';
@@ -780,9 +780,67 @@ const isTextEntry = (target: EventTarget | null): boolean => {
   return target instanceof HTMLInputElement && TEXT_INPUT_TYPES.has(target.type);
 };
 
-const OverlayEditor = () => {
+// The section the tabbed builder last showed, so a return visit opens there.
+const SECTION_TAB_KEY = 'sn_overlay_builder_section';
+// The narrowest builder that tabs: the rail and 520 px of settings (712 px,
+// the grid's floor for that column), a 24 px gap and the 340 px preview.
+const TABS_MIN_W = 712 + 24 + 340;
+
+const OverlayEditor = ({ sectionTabs }: { sectionTabs: boolean }) => {
   const host = useOverlayHost();
   const apiRequest = host.request;
+  // Tabbed (sectionTabs, once the builder itself is TABS_MIN_W wide): the rail
+  // picks the one section shown, so the pane is as long as that section instead
+  // of all ten. Narrower, every section shows and the rail jumps between them.
+  // Measured on the builder, not the window: in the app it sits beside the
+  // Settings menu, on the site it has the page.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [rootW, setRootW] = useState(0);
+  useLayoutEffect(() => {
+    const el = rootRef.current;
+    if (!el || !sectionTabs) return;
+    setRootW(el.clientWidth);
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver((entries) => setRootW(entries[entries.length - 1].contentRect.width));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [sectionTabs]);
+  const tabbed = sectionTabs && rootW >= TABS_MIN_W;
+  const [sectionTab, setSectionTab] = useState<string>(() => {
+    try {
+      return localStorage.getItem(SECTION_TAB_KEY) ?? sectionIdFromLabel('Sources');
+    } catch {
+      return sectionIdFromLabel('Sources');
+    }
+  });
+  const pickSectionTab = (id: string) => {
+    setSectionTab(id);
+    try {
+      localStorage.setItem(SECTION_TAB_KEY, id);
+    } catch {
+      // Private windows refuse storage; the pick still holds for this visit.
+    }
+  };
+  const tabPane = (label: string) =>
+    tabbed && sectionIdFromLabel(label) !== sectionTab ? 'hidden' : undefined;
+  // A remembered section that no longer exists would leave the tab empty.
+  useEffect(() => {
+    if (sectionTabs && !controlsRef.current?.querySelector(`#${CSS.escape(sectionTab)}`)) {
+      setSectionTab(sectionIdFromLabel('Sources'));
+    }
+  }, [sectionTabs, sectionTab]);
+  // A settings search or deep link landing in a closed tab opens it; the jump
+  // measures again on the next frame.
+  useEffect(() => {
+    const el = controlsRef.current;
+    if (!el || !sectionTabs) return;
+    const onReveal = (e: Event) => {
+      const section = (e.target as HTMLElement).closest<HTMLElement>('section[data-settings-section]');
+      if (section?.id) pickSectionTab(section.id);
+    };
+    el.addEventListener(SETTINGS_REVEAL_EVENT, onReveal);
+    return () => el.removeEventListener(SETTINGS_REVEAL_EVENT, onReveal);
+  });
   // One load, shared by every initializer below (useState initials only read on
   // the first render, so the snapshot never goes stale).
   const initial = useMemo(loadProfiles, []);
@@ -891,6 +949,29 @@ const OverlayEditor = () => {
   // Leave an inset around the canvas so it sits framed inside the scene, not edge to edge.
   const STAGE_PAD = 44;
   const scale = Math.min(1, (stageW - STAGE_PAD) / style.width, (maxStageH - STAGE_PAD) / style.height);
+  // Tabbed, the stage is the canvas plus its frame rather than a fixed 620 px
+  // pane around it, so a 400 px wide overlay no longer sits in 220 px of empty
+  // scene and the settings get that width back. The grid reads the width; it
+  // holds while a pointer is down, since a Width drag would otherwise resize
+  // the settings column, and the slider being dragged with it. Never under
+  // the 552 px the preview toolbar needs to stay on one line.
+  const previewFitW = Math.max(552, Math.round(style.width * Math.min(1, (maxStageH - STAGE_PAD) / style.height)) + STAGE_PAD);
+  const stageH = tabbed ? Math.min(maxStageH, Math.round(style.height * scale) + STAGE_PAD) : maxStageH;
+  const [heldFitW, setHeldFitW] = useState(previewFitW);
+  const previewFitRef = useRef(previewFitW);
+  useEffect(() => {
+    previewFitRef.current = previewFitW;
+    if (!pointerHeldRef.current) setHeldFitW(previewFitW);
+  }, [previewFitW]);
+  useEffect(() => {
+    const release = () => setHeldFitW(previewFitRef.current);
+    window.addEventListener('pointerup', release);
+    window.addEventListener('pointercancel', release);
+    return () => {
+      window.removeEventListener('pointerup', release);
+      window.removeEventListener('pointercancel', release);
+    };
+  }, []);
 
   // The name of the overlay being edited. It rides in the published style, so
   // a rename is an edit like any other: an undo step and a save.
@@ -1678,21 +1759,39 @@ const OverlayEditor = () => {
     // column, never as a grid column of its own: two breakpoint templates on
     // one grid resolve in stylesheet order, and the losing order put the
     // controls in the preview's column and pushed the preview off the page.
-    <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(340px,var(--overlay-builder-preview-max,430px))]">
+    //
+    // Tabbed, the controls column keeps at least 712 px (the rail and a
+    // comfortable 520 px of settings) and the preview gives way to it, sized to
+    // the canvas. Set inline from the measured width, so no breakpoint class
+    // competes with it.
+    <div
+      ref={rootRef}
+      className={`grid gap-6 ${tabbed ? '' : 'lg:grid-cols-[minmax(0,1fr)_minmax(340px,var(--overlay-builder-preview-max,430px))]'}`}
+      style={tabbed ? {
+        gridTemplateColumns: `minmax(712px,1fr) minmax(340px,min(var(--overlay-builder-preview-max,430px),${heldFitW}px))`,
+      } : undefined}
+    >
       <div className="flex min-w-0 gap-6">
       {/* ── Section rail ─────────────────────────────────────────── */}
       {/* From 1440 px only: below that the preview column leaves the controls
-          too little room to give 168 px to the rail. */}
-      <div className="hidden w-[168px] flex-shrink-0 min-[1440px]:block">
+          too little room to give 168 px to the rail. Tabbed, always: the grid
+          above holds that room for it. */}
+      <div className={`w-[168px] flex-shrink-0 ${tabbed ? '' : 'hidden min-[1440px]:block'}`}>
         <SectionNav
           containerRef={controlsRef}
           tabKey="overlay-builder"
-          stickyTop="calc(var(--overlay-builder-sticky-top, 0.25rem) + 0.5rem)"
+          // Tabs pin level with the overlay bar, so the columns share one top
+          // edge while scrolled.
+          stickyTop={tabbed ? 'var(--overlay-builder-sticky-top, 0.25rem)' : 'calc(var(--overlay-builder-sticky-top, 0.25rem) + 0.5rem)'}
+          selectedId={tabbed ? sectionTab : undefined}
+          onSelect={tabbed ? pickSectionTab : undefined}
         />
       </div>
 
       {/* ── Controls ─────────────────────────────────────────────── */}
-      <div ref={controlsRef} className="space-y-5 min-w-0 flex-1">
+      {/* data-section-tabs lets the host's stylesheet lay a wide section's
+          rows out in columns. */}
+      <div ref={controlsRef} data-section-tabs={tabbed || undefined} className="space-y-5 min-w-0 flex-1">
         {/* Which overlay you are editing, and the two things you do to it.
             Sticks against the settings dialog's scroll port so switching
             overlays never means scrolling back to the top; data-settings-sticky
@@ -1910,7 +2009,7 @@ const OverlayEditor = () => {
           </div>
         </div>
 
-        <SettingsSection label="Sources" description="The channels this overlay reads chat from, on any mix of platforms.">
+        <SettingsSection className={tabPane('Sources')} label="Sources" description="The channels this overlay reads chat from, on any mix of platforms.">
           <div className="settings-row -mx-4 px-4 py-3 space-y-2.5">
             <label className="block text-[11px] text-textSecondary">Add a channel</label>
             <div className="flex items-center gap-2">
@@ -1975,7 +2074,7 @@ const OverlayEditor = () => {
           </SettingsRow>
         </SettingsSection>
 
-        <SettingsSection label="Layout" description="The overlay's size and background; set your OBS Browser Source to the same width and height.">
+        <SettingsSection className={tabPane('Layout')} label="Layout" description="The overlay's size and background; set your OBS Browser Source to the same width and height.">
           <SettingsRow title="Presets" description="Common sizes to start from, then fine-tune below.">
             <div className="flex flex-wrap gap-2">
               {SIZE_PRESETS.map((p) => {
@@ -2018,7 +2117,7 @@ const OverlayEditor = () => {
           )}
         </SettingsSection>
 
-        <SettingsSection label="Text" description="Font, sizing, and legibility of the message text.">
+        <SettingsSection className={tabPane('Text')} label="Text" description="Font, sizing, and legibility of the message text.">
           <SettingsRow onReset={resetFor('fontFamily')} title="Font" control={
             <Dropdown
               value={isCustomFont ? CUSTOM_FONT : style.fontFamily}
@@ -2100,7 +2199,7 @@ const OverlayEditor = () => {
           <SettingsRow onReset={resetFor('emojiStyle')} title="Emoji style" description="One consistent emoji set across every platform." help="System uses your machine's own emoji font instead." control={<Dropdown value={style.emojiStyle} options={emojiStyleOptions} onChange={(v) => set('emojiStyle', v)} align="right" />} />
         </SettingsSection>
 
-        <SettingsSection label="Emotes & Badges" description="Emote sizing and every badge type.">
+        <SettingsSection className={tabPane('Emotes & Badges')} label="Emotes & Badges" description="Emote sizing and every badge type.">
           <SettingsRow onReset={resetFor('emoteScale')} title="Emote size">
             <Slider value={style.emoteScale} min={OVERLAY_LIMITS.emoteScale.min} max={OVERLAY_LIMITS.emoteScale.max} step={0.05} onChange={(v) => set('emoteScale', v)} format={(v) => `${v.toFixed(2)}x`} />
           </SettingsRow>
@@ -2173,7 +2272,7 @@ const OverlayEditor = () => {
           </SettingsSubGroup>
         </SettingsSection>
 
-        <SettingsSection label="Chatters" description="Picture, name, and cosmetics of the person behind each message.">
+        <SettingsSection className={tabPane('Chatters')} label="Chatters" description="Picture, name, and cosmetics of the person behind each message.">
           <SettingsRow onReset={resetFor('showAvatars')} title="Profile pictures" titleBadge={<SourceScope sources={['youtube', 'tiktok']} />} description="Avatars beside names." help="YouTube and TikTok send avatars. Twitch and Kick don't have them, so nothing changes there." control={<Toggle enabled={style.showAvatars} onChange={() => set('showAvatars', !style.showAvatars)} />} />
           <SettingsRow onReset={resetFor('showAtSign')} title="@ prefix" titleBadge={<SourceScope sources={['youtube']} />} description="Keep the @ before YouTube usernames." help="YouTube names arrive as @handles. Off drops the leading @ from every name." control={<Toggle enabled={style.showAtSign} onChange={() => set('showAtSign', !style.showAtSign)} />} />
           <SettingsRow onReset={resetFor('readableNameColors')} title="Readable colors" description="Brighten name colors too dark to read." help="Walks a chatter's own color lighter until it stands out against your bubbles, your background, or the stream. The hue stays the same, and 7TV paints are never changed." control={<Toggle enabled={style.readableNameColors} onChange={() => set('readableNameColors', !style.readableNameColors)} />} />
@@ -2228,7 +2327,7 @@ const OverlayEditor = () => {
           </SettingsSubGroup>
         </SettingsSection>
 
-        <SettingsSection label="Messages" description="How each message looks.">
+        <SettingsSection className={tabPane('Messages')} label="Messages" description="How each message looks.">
           <SettingsRow onReset={resetFor('replyStyle')} title="Replies" description="How a reply shows the message it answers." help={'Context line shows "Replying to @name: their message" above it. @username puts just the name in front of the message, the way Twitch chat did before threading. Off shows the message on its own.'}>
             <SegmentedSelect value={style.replyStyle} options={REPLY_STYLES} onChange={(v) => set('replyStyle', v)} />
           </SettingsRow>
@@ -2268,7 +2367,7 @@ const OverlayEditor = () => {
           </SettingsRow>
         </SettingsSection>
 
-        <SettingsSection label="Behavior" description="How chat flows: where new messages land, how long they stay, and what happens on reload.">
+        <SettingsSection className={tabPane('Behavior')} label="Behavior" description="How chat flows: where new messages land, how long they stay, and what happens on reload.">
           <SettingsRow onReset={resetFor('maxMessageAgeSec')} title="Lifetime" description="Removes a message from the overlay once it has been up this long, so a quiet stream never shows stale chat.">
             <Slider value={style.maxMessageAgeSec} min={OVERLAY_LIMITS.maxMessageAgeSec.min} max={OVERLAY_LIMITS.maxMessageAgeSec.max} step={5} onChange={(v) => set('maxMessageAgeSec', Math.round(v))} format={(v) => (v === 0 ? 'Never' : `${v}s`)} />
           </SettingsRow>
@@ -2292,7 +2391,7 @@ const OverlayEditor = () => {
         </SettingsSection>
 
         <>
-        <SettingsSection label="Filters" description="Keep bots and command spam out of the overlay.">
+        <SettingsSection className={tabPane('Filters')} label="Filters" description="Keep bots, commands and bare links out of the overlay.">
           <SettingsRow onReset={resetFor('hideBots')} title="Hide bots" description="Nightbot, StreamElements, other known bots, and anyone with a bot badge." help="Channel bots vary and some slip through. Hide any it misses by name under Hidden Accounts." control={<Toggle enabled={style.hideBots} onChange={() => set('hideBots', !style.hideBots)} />} />
           <SettingsRow onReset={resetFor('hideCommands')} title="Hide commands" description="Keeps chat commands like !title off the overlay; choose which ones below." control={<Toggle enabled={style.hideCommands} onChange={() => set('hideCommands', !style.hideCommands)} />} />
           {style.hideCommands && (
@@ -2305,8 +2404,9 @@ const OverlayEditor = () => {
           <SettingsRow onReset={resetFor('hidePhrases')} title="Phrases" description="Hide messages containing these words or phrases." help="Matched anywhere in the message, in any case, whatever channel moderation does. Events are unaffected.">
             <PhraseEditor phrases={style.hidePhrases ?? []} onAdd={addPhrase} onRemove={removePhrase} />
           </SettingsRow>
+          <SettingsRow onReset={resetFor('hideLinkOnly')} title="Hide link-only messages" description="Hides a message that is just a link. A link sent with other words still shows." help="A picture the overlay draws under Uploaded images is not a bare link, so it still shows. Events are unaffected." control={<Toggle enabled={style.hideLinkOnly === true} onChange={() => set('hideLinkOnly', !style.hideLinkOnly)} />} />
         </SettingsSection>
-        <SettingsSection label="Hidden Accounts" description="Hide specific people on each source, by username or display name.">
+        <SettingsSection className={tabPane('Hidden Accounts')} label="Hidden Accounts" description="Hide specific people on each source, by username or display name.">
           {sources.length === 0 ? (
             <p className="py-3 text-[13px] text-textMuted">Add a source first, then hide accounts on it.</p>
           ) : (
@@ -2323,7 +2423,7 @@ const OverlayEditor = () => {
         </SettingsSection>
         </>
 
-        <SettingsSection label="Events" description="Subs, gifts, raids, and more. How they look, and which ones each source shows.">
+        <SettingsSection className={tabPane('Events')} label="Events" description="Subs, gifts, raids, and more. How they look, and which ones each source shows.">
           <SettingsRow onReset={resetFor('cheerDisplay')} title="Cheers" titleBadge={<SourceScope sources={['twitch']} />} description="Show a bits cheer inline like a normal message, or as an event card like subs and raids.">
             <SegmentedSelect value={style.cheerDisplay ?? 'message'} onChange={(v) => set('cheerDisplay', v)} options={CHEER_DISPLAYS} />
           </SettingsRow>
@@ -2468,7 +2568,7 @@ const OverlayEditor = () => {
         <div
           ref={stageWrapRef}
           className="relative w-full flex items-center justify-center rounded-2xl overflow-hidden"
-          style={{ height: maxStageH, ...SCENE_STYLES[sceneBg], boxShadow: 'inset 0 0 0 1px rgba(151,177,185,0.16), 0 24px 60px -30px rgba(0,0,0,0.75)' }}
+          style={{ height: stageH, ...SCENE_STYLES[sceneBg], boxShadow: 'inset 0 0 0 1px rgba(151,177,185,0.16), 0 24px 60px -30px rgba(0,0,0,0.75)' }}
         >
           {sceneBg === 'scene' && (
             <div
@@ -2545,9 +2645,13 @@ const OverlayEditor = () => {
 // made signed out lives on this device and is still there after signing in.
 // Keyed by account: signing in as someone else starts a fresh editor that loads
 // that account's overlays.
-export const OverlayBuilder = () => {
+//
+// `sectionTabs` shows one settings section at a time whenever the builder is
+// wide enough for the tab rail beside its settings and preview; narrower, it
+// lists every section. Both hosts turn it on.
+export const OverlayBuilder = ({ sectionTabs = false }: { sectionTabs?: boolean }) => {
   const host = useOverlayHost();
-  return <OverlayEditor key={host.accountId ?? 'signed-out'} />;
+  return <OverlayEditor key={host.accountId ?? 'signed-out'} sectionTabs={sectionTabs} />;
 };
 
 export default OverlayBuilder;
