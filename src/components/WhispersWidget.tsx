@@ -213,8 +213,9 @@ const WhispersWidget = ({ isOpen, onClose }: WhispersWidgetProps) => {
     useEffect(() => {
         let unlisten: (() => void) | undefined;
         let isMounted = true;
-        void listen<string>('whisper-archive-changed', (event) => {
-            if (event.payload === currentUser?.user_id) void reloadConversations();
+        void listen<string | { owner_id: string; syncing: boolean }>('whisper-archive-changed', (event) => {
+            const owner = typeof event.payload === 'string' ? event.payload : event.payload.owner_id;
+            if (owner === currentUser?.user_id) void reloadConversations();
         }).then((fn) => {
             if (isMounted) unlisten = fn;
             else fn();

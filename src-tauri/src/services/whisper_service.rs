@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Mutex;
 use crate::rt::AppHandle;
-use tauri::Emitter;
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, timeout, Duration, Instant};
 use tokio_tungstenite::tungstenite::Message;
@@ -29,6 +28,9 @@ const OVER_BUDGET_SECS: u64 = 60;
 /// Wakes a listener waiting out its backoff, when the app comes back to the
 /// front (the phones say so through `note_app_resumed`).
 static WAKE: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+/// Set by the process's first successful subscribe.
+static SUBSCRIBED_ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 #[derive(Debug, Deserialize)]
 struct WebSocketMessage {
@@ -110,6 +112,7 @@ fn next_wait(retry: u64, ended: &Ended) -> (u64, u64) {
 /// A live session is left alone (it keeps its subscription and its slot).
 pub fn resume() {
     WAKE.notify_waiters();
+    crate::services::whisper_sync::note_resumed();
 }
 
 /// Follow the signed-in Twitch account: listen for its whispers, or stop when
@@ -121,6 +124,9 @@ pub fn follow_account(app: &AppHandle, user_id: Option<String>) {
     use std::sync::Arc;
     use tauri::Manager;
     use tokio::sync::Mutex as TokioMutex;
+    // Synchronously first: the account's history and its generation follow
+    // the same call, before anything below is spawned.
+    crate::services::whisper_sync::follow_account(user_id.clone());
     let Some(service) = app.try_state::<Arc<TokioMutex<WhisperService>>>() else { return };
     let service = service.inner().clone();
     let app = app.clone();
@@ -192,6 +198,7 @@ async fn listen(user_id: String, app_handle: AppHandle) {
             return;
         };
         let ended = run_session(&user_id, &token, &app_handle).await;
+        crate::services::whisper_sync::note_socket_down();
         if matches!(ended, Ended::Refused) {
             warn!("[WhisperService] Twitch refused the whisper subscription, listener stopped");
             return;
@@ -241,6 +248,10 @@ async fn run_session(user_id: &str, token: &str, app_handle: &AppHandle) -> Ende
         Ok(()) => {
             debug!("[WhisperService] Successfully subscribed to whisper events");
             live.mark_subscribed();
+            // A resubscribe after the socket was down means whispers may have
+            // been missed: the sync reads them back. The process's first
+            // subscribe is not a gap.
+            crate::services::whisper_sync::note_socket_up(!SUBSCRIBED_ONCE.swap(true, std::sync::atomic::Ordering::SeqCst));
             if crate::services::eventsub_budget::note_room(SocketOwner::Whispers) {
                 crate::services::eventsub_budget::log_room("whispers");
             }
@@ -332,6 +343,14 @@ fn handle_text(text: &str, user_id: &str, app_handle: &AppHandle, seen: &mut See
     let Ok(ws_msg) = serde_json::from_str::<WebSocketMessage>(text) else {
         return None;
     };
+    // Twitch's own clock, on every frame (keepalives too): whispers are
+    // stamped with it, and our sends are stamped against it.
+    let twitch_ms = chrono::DateTime::parse_from_rfc3339(&ws_msg.metadata.message_timestamp)
+        .map(|d| d.timestamp_millis())
+        .ok();
+    if let Some(t) = twitch_ms {
+        crate::services::whisper_sync::note_twitch_time(t);
+    }
     match ws_msg.metadata.message_type.as_str() {
         "notification" => {
             // A redelivered whisper would be filed in the inbox twice.
@@ -358,16 +377,12 @@ fn handle_text(text: &str, user_id: &str, app_handle: &AppHandle, seen: &mut See
                 whisper_event.from_user_name, whisper_event.text
             );
 
-            // Emit to frontend
-            if let Err(e) = app_handle.emit("whisper-received", &whisper_event) {
-                error!("[WhisperService] Failed to emit whisper event: {}", e);
-            }
             // Persist it here, whether or not a window is open to see it.
             tauri::async_runtime::spawn(crate::services::whisper_inbox::record_incoming(
                 app_handle.clone(),
                 user_id.to_string(),
                 whisper_event,
-                chrono::Utc::now().timestamp_millis(),
+                twitch_ms.unwrap_or_else(|| crate::services::whisper_sync::twitch_now(chrono::Utc::now().timestamp_millis())),
             ));
             None
         }

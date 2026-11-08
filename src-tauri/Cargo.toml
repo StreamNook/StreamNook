@@ -391,6 +391,8 @@ objc2-web-kit = { version = "0.3", default-features = false, features = [
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol", "sn-tauri-headless/custom-protocol"]
+# A read-only depth proof for whispers (logs counts at warn); never in a release build.
+whisper-probe = []
 
 # Remote WebView inspection in a RELEASE build. Deliberately NOT in `default`.
 #

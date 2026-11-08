@@ -13,7 +13,6 @@
 //! known; any later sighting of the id moves it (re-keying).
 
 use crate::services::twitch_service::TwitchService;
-use crate::services::whisper_history_service::{WhisperHistoryService, WhisperMessage};
 use crate::services::whisper_service::WhisperEvent;
 use crate::services::whisper_storage_service::{
     StoredConversation, StoredWhisper, WhisperStorageService,
@@ -101,6 +100,14 @@ pub struct WhisperUpdate {
     pub replaced_key: Option<String>,
     pub meta: ConversationMeta,
     pub message: Option<StoredWhisper>,
+}
+
+/// `whisper-archive-changed`: many conversations may have changed (a sync or
+/// an import); `syncing` says whether a sync is still running.
+#[derive(Debug, Clone, Serialize)]
+pub struct ArchiveChanged {
+    pub owner_id: String,
+    pub syncing: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -742,80 +749,8 @@ pub async fn import_export(
         }
         ((), true)
     })?;
-    let _ = app.emit(ARCHIVE_CHANGED_EVENT, owner_id);
+    let _ = app.emit(ARCHIVE_CHANGED_EVENT, ArchiveChanged { owner_id: owner_id.to_string(), syncing: false });
     Ok(summary)
-}
-
-/// Merge one thread's recent page into its conversation. Returns how many
-/// messages were new.
-fn merge_refresh(conv: &mut StoredConversation, me: &Me, page: Vec<WhisperMessage>, now: i64) -> usize {
-    let other_id = conv.user_id.clone();
-    let fresh = page
-        .into_iter()
-        .map(|m| {
-            let is_sent = m.from_user_id == me.id;
-            StoredWhisper {
-                id: m.id,
-                from_user_login: if is_sent { me.login.clone() } else { conv.user_login.clone() },
-                from_user_name: or_else(
-                    Some(m.from_user_name.as_str()),
-                    if is_sent { &me.display_name } else { &conv.user_name },
-                ),
-                from_user_id: m.from_user_id,
-                to_user_id: if is_sent { other_id.clone() } else { me.id.clone() },
-                to_user_login: if is_sent { conv.user_login.clone() } else { me.login.clone() },
-                to_user_name: if is_sent { conv.user_name.clone() } else { me.display_name.clone() },
-                message: m.content,
-                timestamp: parse_whisper_date(&m.sent_at, now),
-                is_sent,
-            }
-        })
-        .collect();
-    merge_messages(conv, fresh)
-}
-
-/// Pull each conversation's most recent page from Twitch and merge in anything
-/// StreamNook never saw (replies sent from the site or the phone).
-pub async fn refresh(app: &AppHandle, owner_id: &str, token: &str) -> Result<usize, String> {
-    let user = TwitchService::get_user_info()
-        .await
-        .map_err(|e| format!("Failed to get user info: {e}"))?;
-    let me = Me { id: user.id, login: user.login, display_name: user.display_name };
-    let ids = WhisperStorageService::update_conversations(app, owner_id, |convs| {
-        (convs.keys().filter(|k| is_numeric_id(k)).cloned().collect::<Vec<_>>(), false)
-    })?;
-
-    let pages: Vec<(String, Vec<WhisperMessage>)> = stream::iter(ids)
-        .map(|id| {
-            let me_id = me.id.clone();
-            async move {
-                match WhisperHistoryService::get_whisper_messages(token, &me_id, &id, None).await {
-                    Ok((messages, _cursor)) => (id, messages),
-                    Err(e) => {
-                        log::debug!("[WhisperInbox] refresh of thread {id} failed: {e}");
-                        (id, Vec::new())
-                    }
-                }
-            }
-        })
-        .buffer_unordered(RESOLVE_CONCURRENCY)
-        .collect()
-        .await;
-
-    let now = now_ms();
-    let added = WhisperStorageService::update_conversations(app, owner_id, |convs| {
-        let mut added = 0;
-        for (id, page) in pages {
-            if let Some(conv) = convs.get_mut(&id) {
-                added += merge_refresh(conv, &me, page, now);
-            }
-        }
-        (added, added > 0)
-    })?;
-    if added > 0 {
-        let _ = app.emit(ARCHIVE_CHANGED_EVENT, owner_id);
-    }
-    Ok(added)
 }
 
 // ---- Operations the new whisper commands call -------------------------------
@@ -1048,20 +983,6 @@ mod tests {
         let (_, again) = merge_export(&mut convs, &export, &me(), 0);
         assert_eq!(again.messages, 2);
         assert_eq!(convs["bob"].messages.len(), 2);
-    }
-
-    #[test]
-    fn refresh_adds_only_unseen_messages() {
-        let mut c = conv("42", "bob");
-        let page = vec![
-            WhisperMessage { id: "r1".into(), from_user_id: "1".into(), from_user_name: String::new(), content: "a".into(), sent_at: "2021-01-01T00:00:00Z".into(), cursor: None },
-            WhisperMessage { id: "r2".into(), from_user_id: "42".into(), from_user_name: "Bob".into(), content: "b".into(), sent_at: "2021-01-01T00:01:00Z".into(), cursor: None },
-        ];
-        assert_eq!(merge_refresh(&mut c, &me(), page.clone(), 0), 2);
-        assert_eq!(merge_refresh(&mut c, &me(), page, 0), 0);
-        assert!(c.messages[0].is_sent);
-        assert_eq!(c.messages[0].from_user_name, "Me");
-        assert_eq!(c.messages[1].to_user_id, "1");
     }
 
     fn update(is_sent: bool) -> WhisperUpdate {

@@ -131,10 +131,13 @@ pub async fn whisper_refresh(
     state: State<'_, AppState>,
     owner_id: String,
 ) -> Result<usize, String> {
-    let token = state
-        .twitch_auth
-        .get_token()
-        .await
-        .map_err(|_| "You must be logged in to Twitch to refresh whispers.".to_string())?;
-    whisper_inbox::refresh(&app_handle, &owner_id, &token).await
+    let _ = (&app_handle, &state, &owner_id);
+    use crate::services::whisper_sync::{sync_now, SyncOutcome};
+    match sync_now().await {
+        SyncOutcome::Done { added } | SyncOutcome::Partial { added } => Ok(added as usize),
+        SyncOutcome::NoSession => Err("You must be logged in to Twitch to refresh whispers.".to_string()),
+        SyncOutcome::WrongSession => Err(crate::services::whisper_sync::SESSION_PROBLEM.to_string()),
+        SyncOutcome::Failed { reason } => Err(reason),
+        SyncOutcome::Superseded | SyncOutcome::StillRunning => Ok(0),
+    }
 }
