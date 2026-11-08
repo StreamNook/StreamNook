@@ -722,6 +722,9 @@ export interface MentionEntry {
   /** The message as the chat drew it, words and emotes in order. Absent on
    *  older entries and on a message with no emote: show `text`. */
   parts?: MentionPart[];
+  /** It arrived while its chat was on screen; the desktop island leaves it
+   *  out (`get_mention_inbox` with `unseenOnly`). */
+  seen_live?: boolean;
 }
 
 /** One piece of a filed message (mention_inbox.rs `MentionPart`). */

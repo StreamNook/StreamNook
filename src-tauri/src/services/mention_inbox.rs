@@ -163,6 +163,10 @@ pub struct MentionEntry {
     /// for a message with none): show `text`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub parts: Vec<MentionPart>,
+    /// It arrived while its chat was on screen: the viewer saw it happen, so
+    /// the desktop island leaves it out. The inboxes still list it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub seen_live: bool,
 }
 
 /// One piece of a filed message.
@@ -298,6 +302,7 @@ impl Inbox {
         }
         if self.visible.contains(&entry.room) {
             entry.read = true;
+            entry.seen_live = true;
         }
         let at = entry.at_ms;
         let pos = self.entries.partition_point(|e| e.at_ms <= at);
@@ -326,13 +331,14 @@ impl Inbox {
         self.entries.iter().filter(|e| !e.read && !e.removed).count() as u32
     }
 
-    /// Newest first, older than `before_ms` when given.
-    pub fn page(&self, before_ms: Option<i64>, limit: usize) -> (Vec<MentionEntry>, bool) {
+    /// Newest first, older than `before_ms` when given. `unseen_only` leaves
+    /// out what arrived in a chat on screen (the desktop island).
+    pub fn page(&self, before_ms: Option<i64>, limit: usize, unseen_only: bool) -> (Vec<MentionEntry>, bool) {
         let mut out: Vec<MentionEntry> = self
             .entries
             .iter()
             .rev()
-            .filter(|e| before_ms.is_none_or(|b| e.at_ms < b))
+            .filter(|e| before_ms.is_none_or(|b| e.at_ms < b) && !(unseen_only && e.seen_live))
             .take(limit + 1)
             .cloned()
             .collect();
@@ -659,6 +665,7 @@ pub fn entry_for(msg: &ChatMessage, kind: MentionKind, now_ms: i64) -> MentionEn
         at_ms: sent_at_ms(msg).unwrap_or(now_ms),
         read: false,
         removed: false,
+        seen_live: false,
     }
 }
 
@@ -1156,9 +1163,9 @@ pub fn mark_room_read(room: &str) {
     let _ = with_inbox(|inbox| ((), inbox.mark_room_read(&room)));
 }
 
-pub fn page(before_ms: Option<i64>, limit: usize) -> Option<(Vec<MentionEntry>, bool, u32)> {
+pub fn page(before_ms: Option<i64>, limit: usize, unseen_only: bool) -> Option<(Vec<MentionEntry>, bool, u32)> {
     with_inbox(|inbox| {
-        let (entries, more) = inbox.page(before_ms, limit);
+        let (entries, more) = inbox.page(before_ms, limit, unseen_only);
         ((entries, more, inbox.unread_total()), false)
     })
 }
@@ -1258,6 +1265,7 @@ mod tests {
             read: false,
             removed: false,
             parts: Vec::new(),
+            seen_live: false,
         }
     }
 
@@ -1472,12 +1480,26 @@ mod tests {
         for i in 0..5 {
             inbox.file(entry(&format!("m{i}"), "xqc", NOW + i), NOW);
         }
-        let (first, more) = inbox.page(None, 2);
+        let (first, more) = inbox.page(None, 2, false);
         assert_eq!(first.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), ["m4", "m3"]);
         assert!(more);
-        let (rest, more) = inbox.page(Some(first[1].at_ms), 10);
+        let (rest, more) = inbox.page(Some(first[1].at_ms), 10, false);
         assert_eq!(rest.len(), 3);
         assert!(!more);
+    }
+
+    #[test]
+    fn the_island_page_leaves_out_mentions_seen_as_they_happened() {
+        let mut inbox = Inbox::default();
+        inbox.file(entry("away", "xqc", NOW), NOW);
+        inbox.set_visible(vec!["xqc".into()]);
+        inbox.file(entry("watching", "xqc", NOW + 1), NOW);
+        inbox.file(entry("docked", "kick:xqc", NOW + 2), NOW);
+        // Opening the chat reads the one that came in while away; it stays.
+        assert!(inbox.get("away").is_some_and(|e| e.read && !e.seen_live));
+        let ids = |v: Vec<MentionEntry>| v.into_iter().map(|e| e.id).collect::<Vec<_>>();
+        assert_eq!(ids(inbox.page(None, 10, true).0), ["docked", "away"]);
+        assert_eq!(ids(inbox.page(None, 10, false).0), ["docked", "watching", "away"]);
     }
 
     #[test]

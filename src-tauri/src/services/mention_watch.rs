@@ -198,6 +198,7 @@ impl RemoteMention {
             at_ms: self.at_ms,
             read: false,
             removed: false,
+            seen_live: false,
         })
     }
 }

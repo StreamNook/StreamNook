@@ -17,11 +17,13 @@ pub struct MentionPage {
 }
 
 /// One page of the signed-in account's mentions, newest first, older than
-/// `before_ms` when given. Empty when nobody is signed in to Twitch.
+/// `before_ms` when given. `unseen_only` (the desktop island) leaves out the
+/// ones that arrived in a chat on screen. Empty when nobody is signed in to
+/// Twitch.
 #[tauri::command]
-pub async fn get_mention_inbox(before_ms: Option<i64>, limit: Option<u32>) -> MentionPage {
+pub async fn get_mention_inbox(before_ms: Option<i64>, limit: Option<u32>, unseen_only: Option<bool>) -> MentionPage {
     let limit = limit.map(|l| l as usize).unwrap_or(PAGE_DEFAULT).clamp(1, PAGE_MAX);
-    match mention_inbox::page(before_ms, limit) {
+    match mention_inbox::page(before_ms, limit, unseen_only.unwrap_or(false)) {
         Some((entries, has_more, unread_total)) => MentionPage { entries, has_more, unread_total },
         None => MentionPage { entries: Vec::new(), has_more: false, unread_total: 0 },
     }

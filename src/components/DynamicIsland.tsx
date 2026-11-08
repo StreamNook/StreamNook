@@ -597,13 +597,15 @@ const DynamicIsland = () => {
 
     // The first pages again, as many as are loaded, after every change Rust
     // reports (a new mention, a read, a removal, an account switch). Changes
-    // come in bursts in a busy chat, so they are gathered for a moment.
+    // come in bursts in a busy chat, so they are gathered for a moment. Only
+    // mentions from chats that were not on screen: one in the chat you were
+    // reading is not news (MultiChat's Mentions list still keeps it).
     useEffect(() => {
         if (IS_MOBILE) return;
         let alive = true;
         let timer: ReturnType<typeof setTimeout> | null = null;
         const reload = () => {
-            invoke<MentionPage>('get_mention_inbox', { limit: Math.min(mentionsLoaded.current, MENTION_PAGE_MAX) })
+            invoke<MentionPage>('get_mention_inbox', { limit: Math.min(mentionsLoaded.current, MENTION_PAGE_MAX), unseenOnly: true })
                 .then((page) => {
                     if (!alive) return;
                     setMentions(page.entries);
@@ -628,7 +630,7 @@ const DynamicIsland = () => {
         const last = mentions[mentions.length - 1];
         if (!mentionsHaveMore || !last || mentionsLoadingOlder.current) return;
         mentionsLoadingOlder.current = true;
-        invoke<MentionPage>('get_mention_inbox', { beforeMs: last.at_ms, limit: MENTION_PAGE })
+        invoke<MentionPage>('get_mention_inbox', { beforeMs: last.at_ms, limit: MENTION_PAGE, unseenOnly: true })
             .then((page) => {
                 setMentions((prev) => {
                     const seen = new Set(prev.map((m) => m.id));
