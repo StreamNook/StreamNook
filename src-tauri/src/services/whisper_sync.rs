@@ -1988,7 +1988,13 @@ mod tests {
         }
         fn node(&self, t: &FThread, messages: Value) -> Value {
             let me = lock(&self.viewer).clone();
-            json!({ "id": self.tid(&t.other), "unreadMessagesCount": 0, "isArchived": t.archived, "isMuted": false,
+            // As Twitch counts: messages newer than the read one (all of them
+            // when nothing was read).
+            let unread = match &t.read {
+                Some((id, _)) => t.msgs.iter().position(|m| &m.id == id).unwrap_or(t.msgs.len()),
+                None => t.msgs.len(),
+            };
+            json!({ "id": self.tid(&t.other), "unreadMessagesCount": unread, "isArchived": t.archived, "isMuted": false,
                 "userLastMessageRead": t.read.as_ref().map(|(id, at)| json!({ "id": id, "sentAt": iso(*at) })),
                 "participants": [ { "id": me, "login": "me_login", "displayName": "Me", "chatColor": null, "profileImageURL": null, "displayBadges": [] },
                                   { "id": t.other, "login": t.login, "displayName": t.login, "chatColor": "#00FF00", "profileImageURL": null, "displayBadges": [] } ],

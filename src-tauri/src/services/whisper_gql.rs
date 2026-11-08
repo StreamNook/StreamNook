@@ -411,6 +411,21 @@ fn parse_messages(conn: &Value, viewer_id: &str) -> Result<MessagesPage, GqlErro
     })
 }
 
+/// Where Twitch has read a thread up to, from its own unread count. Twitch's
+/// `userLastMessageRead` can name the newest message while
+/// `unreadMessagesCount` still says some are unread (its web client counts
+/// from message sequence numbers), so the count decides: the last read message
+/// is the one just past the newest `unread` messages. When those reach past
+/// this page, the point sits just before the oldest message fetched. None
+/// when the page has no messages.
+fn read_point(newest_first: &[GqlMessage], unread: i32) -> Option<Marker> {
+    let n = unread.max(0) as usize;
+    match newest_first.get(n) {
+        Some(m) => Some(Marker { id: m.id.clone(), at_ms: m.sent_at_ms }),
+        None => newest_first.last().map(|m| Marker { id: String::new(), at_ms: m.sent_at_ms - 1 }),
+    }
+}
+
 fn parse_thread(node: &Value, viewer_id: &str) -> Result<GqlThread, GqlError> {
     let thread_id = s(node, "id").ok_or_else(|| GqlError::Shape("thread without id".into()))?;
     let people: Vec<GqlParticipant> = node
@@ -420,7 +435,7 @@ fn parse_thread(node: &Value, viewer_id: &str) -> Result<GqlThread, GqlError> {
         .unwrap_or_default();
     let me = people.iter().find(|p| p.id == viewer_id).cloned();
     let other = people.into_iter().find(|p| p.id != viewer_id);
-    let twitch_read = node.get("userLastMessageRead").and_then(|r| {
+    let last_read = node.get("userLastMessageRead").and_then(|r| {
         let id = s(r, "id")?;
         let at_ms = s(r, "sentAt").as_deref().and_then(ms)?;
         Some(Marker { id, at_ms })
@@ -429,11 +444,13 @@ fn parse_thread(node: &Value, viewer_id: &str) -> Result<GqlThread, GqlError> {
         Some(conn) if !conn.is_null() => parse_messages(conn, viewer_id)?,
         _ => return Err(GqlError::Shape("thread without messages".into())),
     };
+    let unread = node.get("unreadMessagesCount").and_then(Value::as_i64).unwrap_or(0) as i32;
+    let twitch_read = read_point(&messages.messages, unread).or(last_read);
     Ok(GqlThread {
         thread_id,
         other,
         me,
-        unread: node.get("unreadMessagesCount").and_then(Value::as_i64).unwrap_or(0) as i32,
+        unread,
         twitch_read,
         archived: node.get("isArchived").and_then(Value::as_bool).unwrap_or(false),
         muted: node.get("isMuted").and_then(Value::as_bool).unwrap_or(false),
@@ -630,6 +647,33 @@ mod tests {
         assert!(emote_parts("Kappa Pog", &[("25".into(), 0, 4), ("25".into(), 6, 8)]).is_empty());
     }
 
+    /// Seen live: Twitch said one unread while `userLastMessageRead` named the
+    /// newest message. The count wins.
+    #[test]
+    fn the_unread_count_decides_the_read_point() {
+        let mut node = thread_node(
+            "99999999_1000000000",
+            "1000000000",
+            vec![
+                message("m3", "1000000000", "new", "2030-01-01T00:02:00Z"),
+                message("m2", "99999999", "mine", "2030-01-01T00:01:00Z"),
+                message("m1", "1000000000", "old", "2030-01-01T00:00:00Z"),
+            ],
+            false,
+        );
+        node["unreadMessagesCount"] = json!(1);
+        node["userLastMessageRead"] = json!({ "id": "m3", "sentAt": "2030-01-01T00:02:00Z" });
+        let t = parse_thread(&node, "99999999").unwrap();
+        assert_eq!(t.twitch_read.as_ref().unwrap().id, "m2");
+        node["unreadMessagesCount"] = json!(0);
+        let t = parse_thread(&node, "99999999").unwrap();
+        assert_eq!(t.twitch_read.as_ref().unwrap().id, "m3");
+        // No messages on the page: Twitch's own field is all there is.
+        let mut empty = thread_node("99999999_1000000001", "1000000001", vec![], false);
+        empty["userLastMessageRead"] = json!({ "id": "m9", "sentAt": "2030-01-01T00:00:00Z" });
+        assert_eq!(parse_thread(&empty, "99999999").unwrap().twitch_read.unwrap().id, "m9");
+    }
+
     #[tokio::test]
     async fn parses_a_threads_page() {
         let answer = json!({ "data": { "currentUser": { "id": "99999999", "whisperThreads": {
@@ -647,7 +691,10 @@ mod tests {
         assert_eq!(t.other.as_ref().unwrap().badges[0].set_id, "turbo");
         assert_eq!(t.me.as_ref().unwrap().login, "me_login");
         assert!(t.muted);
-        assert_eq!(t.twitch_read.as_ref().unwrap().id, "m1");
+        // Two unread with two messages on the page: read up to just before m1.
+        let read = t.twitch_read.as_ref().unwrap();
+        assert_eq!(read.id, "");
+        assert_eq!(read.at_ms, t.messages.messages[1].sent_at_ms - 1);
         assert_eq!(t.messages.messages[0].id, "m2");
         let (body, integ) = gql.bodies.lock().unwrap()[0].clone();
         assert_eq!(body["operationName"], "SnWhisperThreads");
