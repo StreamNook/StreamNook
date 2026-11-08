@@ -23,7 +23,7 @@ const FLYOUTS = [
 
 describe('menus over the message box', () => {
   it('the lip sits at z-[55]', () => {
-    expect(read('chat/DropsChatBar.tsx')).toContain('relative z-[55] -mb-px');
+    expect(read('chat/DropsChatBar.tsx')).toContain('`relative z-[55] -mb-px');
   });
   for (const file of FLYOUTS) {
     it(`${file} opens above the lip`, () => {

@@ -81,6 +81,8 @@ export interface WatchDrops {
   complete: boolean;
   stalled: boolean;
   stall_episode: number;
+  /** The viewer tucked the lip away; Rust clears it when something is worth showing. */
+  lip_hidden: boolean;
 }
 
 export interface WatchDropsSnapshot {

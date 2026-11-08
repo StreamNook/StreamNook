@@ -40,6 +40,7 @@ import {
 } from './watchDropsStore';
 
 const view = (over: Partial<WatchDrops> = {}): WatchDrops => ({
+  lip_hidden: false,
   channel_id: '111',
   login: 'shroud',
   game_id: 'g1',

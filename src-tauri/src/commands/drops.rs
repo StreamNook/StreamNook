@@ -112,6 +112,13 @@ pub fn get_watch_drops() -> crate::services::watch_drops::WatchDropsSnapshot {
     crate::services::watch_drops::current()
 }
 
+/// Tuck chat's drops lip away into a thin line, or bring it back. Rust brings
+/// it back on its own when something is worth showing.
+#[tauri::command]
+pub fn set_drops_lip_hidden(hidden: bool) {
+    crate::services::watch_drops::set_lip_hidden(hidden);
+}
+
 /// The farmed stream stalled: true for exactly one caller per episode, so a
 /// popout or a reloaded window never acts on it twice.
 #[tauri::command]

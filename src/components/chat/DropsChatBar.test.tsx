@@ -15,14 +15,14 @@ vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(async () => () => {}) })
 
 vi.mock('../../utils/openExternal', () => ({ openExternal: vi.fn() }));
 
-import DropsChatBar, { barLine, drawerAfter, DropsChatBarView, DropsPeekView, PREVIEW_LINE, showsHere } from './DropsChatBar';
+import DropsChatBar, { barLine, drawerAfter, DropsChatBarView, DropsHairline, DropsPeekView, PREVIEW_LINE, showsHere } from './DropsChatBar';
 import DropsDrawer, { rewardRows } from './DropsDrawer';
 import { splitStatus } from './dropsStatusText';
 import type { HereDrop, WatchDrops } from '../../stores/watchDropsStore';
 
 const view = (over: Partial<WatchDrops> = {}): WatchDrops => ({
   channel_id: '111', login: 'Shroud', game_id: 'g1', game_name: 'Rust', lead: null, more: 0, more_art: [], campaigns: [],
-  complete: false, stalled: false, stall_episode: 0, ...over,
+  complete: false, stalled: false, stall_episode: 0, lip_hidden: false, ...over,
 });
 
 describe('DropsDrawer', () => {
@@ -221,7 +221,7 @@ describe('the hover card wiring', () => {
   });
   it('sits in the column above the message box, never over the message list', () => {
     const src = readFileSync(resolve(__dirname, 'DropsChatBar.tsx'), 'utf8').replace(/\r\n/g, '\n');
-    expect(src).toContain("className={`relative z-[55] -mb-px flex-shrink-0 px-2 pt-1.5 ${emotePickerOpen ? 'invisible pointer-events-none' : ''}`}");
+    expect(src).toContain("className={`relative z-[55] -mb-px flex-shrink-0 px-2 ${tucked ? '' : 'pt-1.5'} ${emotePickerOpen ? 'invisible pointer-events-none' : ''}`}");
   });
 });
 
@@ -313,6 +313,31 @@ describe('mounting', () => {
     expect(src.slice(bar, input)).toContain('channelId={(channelOverride ? channelOverride.user_id : currentStream?.user_id) ??');
     expect(src.slice(bar, input)).toContain('login={(channelOverride ? channelOverride.user_login : currentStream?.user_login) ??');
     expect(src).toContain('const closeEmotePicker = useCallback(() => setShowEmotePicker(false), []);');
+  });
+});
+
+describe('tucking the lip away', () => {
+  it('the tucked lip is a thin line that still fills, and a click brings the lip back', () => {
+    const html = renderToStaticMarkup(<DropsHairline line={PREVIEW_LINE} onShow={() => {}} />);
+    expect(html).toContain('drops-hairline');
+    expect(html).toContain('h-[2px]');
+    expect(html).toContain('width:72%');
+    expect(html).toContain('Show the drops bar');
+  });
+  it('the hover card offers to tuck it, or to bring it back once tucked', () => {
+    const open = renderToStaticMarkup(<DropsPeekView line={PREVIEW_LINE} claiming={false} onTuck={() => {}} />);
+    expect(open).toContain('aria-label="Tuck the drops bar away"');
+    const tucked = renderToStaticMarkup(<DropsPeekView line={PREVIEW_LINE} claiming={false} tucked onTuck={() => {}} />);
+    expect(tucked).toContain('aria-label="Show the drops bar"');
+    expect(renderToStaticMarkup(<DropsPeekView line={PREVIEW_LINE} claiming={false} />)).not.toContain('Tuck');
+  });
+  it('Rust holds the choice; the phone pulls the lip down to tuck it', () => {
+    const src = readFileSync(resolve(__dirname, 'DropsChatBar.tsx'), 'utf8');
+    expect(src).toContain("invoke('set_drops_lip_hidden', { hidden })");
+    expect(src).toContain('const tucked = !!view.lip_hidden && !!lead;');
+    const phone = readFileSync(resolve(__dirname, '../../mobile/chat/MobileDropsLip.tsx'), 'utf8');
+    expect(phone).toContain('if (d?.swiped && pull >= TUCK_PX) tuckDropsLip(true);');
+    expect(phone).toContain('onShow={() => tuckDropsLip(false)}');
   });
 });
 

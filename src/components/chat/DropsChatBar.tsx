@@ -5,7 +5,11 @@
 // can earn here. The drawer floats over chat, so nothing in the column moves.
 import { lazy, memo, Suspense, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
+import { invoke } from '@tauri-apps/api/core';
+import { CaretDown, CaretUp } from 'phosphor-react';
 import { useAppStore } from '../../stores/AppStore';
+import { Logger } from '../../utils/logger';
+import { Tooltip } from '../ui/Tooltip';
 import { useWatchDrops, type WatchDrops } from '../../stores/watchDropsStore';
 import { useOutsidePress } from '../../hooks/useOutsidePress';
 import { usePerformanceQuiet } from '../../utils/lowPower';
@@ -244,18 +248,75 @@ export function DropsChatBarView({
   );
 }
 
+/** The lip tucked away: a thin progress line along the message box's top
+ *  edge, still filling as minutes come in. A taller invisible strip around it
+ *  takes the pointer: hovering it shows the card (desktop), clicking or
+ *  tapping it brings the lip back. */
+export function DropsHairline({
+  line,
+  onShow,
+  onPreload,
+  touch,
+}: {
+  line: BarLine;
+  onShow: () => void;
+  onPreload?: () => void;
+  touch?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onShow}
+      onPointerEnter={onPreload}
+      aria-label={`${line.spoken}. Show the drops bar`}
+      className={`drops-hairline group block w-full cursor-pointer outline-none focus-visible:ring-1 focus-visible:ring-accent/60 ${touch ? 'px-4 py-2' : 'px-3 py-[5px]'}`}
+    >
+      <span aria-hidden className="block h-[2px] overflow-hidden rounded-full bg-textPrimary/[0.08] transition-[height] duration-150 group-hover:h-[3px]">
+        <span className="drops-bar-fill block h-full rounded-full" style={{ width: `${clamp(line.percent)}%` }} />
+      </span>
+    </button>
+  );
+}
+
 /** On hover: the lip grows into a card over the bottom of chat, with the
  *  reward, its track and time (or Claim), and the other rewards here. Square
  *  at the bottom like the lip, since it rises out of the same edge of the
  *  message box. A click on it opens the drawer. */
-export function DropsPeekView({ line, claiming, onToggle, onClaim }: Omit<DropsChatBarViewProps, 'open' | 'onPreload'>) {
+export function DropsPeekView({
+  line,
+  claiming,
+  onToggle,
+  onClaim,
+  tucked,
+  onTuck,
+}: Omit<DropsChatBarViewProps, 'open' | 'onPreload'> & {
+  /** The lip is tucked away into the thin line. */
+  tucked?: boolean;
+  /** Tuck the lip away, or bring it back when it is tucked. */
+  onTuck?: () => void;
+}) {
   return (
     <div
       onClick={onToggle}
       style={heat(line, '14px 14px 0 0')}
-      className={`${GLAZE_BANNER} drops-bar drops-peek w-full cursor-pointer select-none px-3 pb-2.5 pt-3 ${line.ready ? 'is-ready' : ''}`}
+      className={`${GLAZE_BANNER} drops-bar drops-peek relative w-full cursor-pointer select-none px-3 pb-2.5 pt-3 ${line.ready ? 'is-ready' : ''}`}
     >
-      <div className="flex min-w-0 items-center gap-2.5">
+      {onTuck && (
+        <Tooltip content={tucked ? 'Show the drops bar' : 'Tuck away until something new'} side="top">
+          <button
+            type="button"
+            aria-label={tucked ? 'Show the drops bar' : 'Tuck the drops bar away'}
+            onClick={(e) => {
+              e.stopPropagation();
+              onTuck();
+            }}
+            className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full text-textSecondary transition-colors hover:bg-white/[0.08] hover:text-textPrimary"
+          >
+            {tucked ? <CaretUp size={12} weight="bold" /> : <CaretDown size={12} weight="bold" />}
+          </button>
+        </Tooltip>
+      )}
+      <div className={`flex min-w-0 items-center gap-2.5 ${onTuck ? 'pr-6' : ''}`}>
         <DropArt image={line.image} size={32} radius={8} />
         <div className="min-w-0 flex-1">
           <div className="truncate text-[12.5px] font-medium leading-4 text-textPrimary">{line.name}</div>
@@ -375,6 +436,11 @@ function DropsChatBarInner({ channelId, login, headerInset, emotePickerOpen, onD
 
   if (!line || !view) return null;
   const lead = view.lead;
+  const tucked = !!view.lip_hidden && !!lead;
+  const tuck = (hidden: boolean) => {
+    setPeek(false);
+    tuckDropsLip(hidden);
+  };
   return (
     <div
       ref={hostRef}
@@ -385,7 +451,7 @@ function DropsChatBarInner({ channelId, login, headerInset, emotePickerOpen, onD
       // at rest it takes only its own height from the column. The emote
       // picker opens over this spot: the lip steps out of sight under it but
       // keeps its height, so chat never shifts.
-      className={`relative z-[55] -mb-px flex-shrink-0 px-2 pt-1.5 ${emotePickerOpen ? 'invisible pointer-events-none' : ''}`}
+      className={`relative z-[55] -mb-px flex-shrink-0 px-2 ${tucked ? '' : 'pt-1.5'} ${emotePickerOpen ? 'invisible pointer-events-none' : ''}`}
     >
       <AnimatePresence>
         {open && (
@@ -417,13 +483,26 @@ function DropsChatBarInner({ channelId, login, headerInset, emotePickerOpen, onD
               claiming={!!lead && claiming === lead.drop_id}
               onToggle={() => send('toggle')}
               onClaim={lead ? () => void claim(lead.drop_id, lead.instance_id) : undefined}
+              tucked={tucked}
+              onTuck={lead ? () => tuck(!tucked) : undefined}
             />
           </motion.div>
         )}
       </AnimatePresence>
-      <DropsChatBarView line={line} open={open} onToggle={() => send('toggle')} onPreload={() => void loadDrawer()} />
+      {tucked ? (
+        <DropsHairline line={line} onShow={() => tuck(false)} onPreload={() => void loadDrawer()} />
+      ) : (
+        <DropsChatBarView line={line} open={open} onToggle={() => send('toggle')} onPreload={() => void loadDrawer()} />
+      )}
     </div>
   );
+}
+
+/** Tuck chat's drops lip away into the thin line, or bring it back. Rust
+ *  holds the choice and brings the lip back itself when something is worth
+ *  showing. */
+export function tuckDropsLip(hidden: boolean) {
+  void invoke('set_drops_lip_hidden', { hidden }).catch((err) => Logger.warn('[DropsChatBar] tuck failed:', err));
 }
 
 const PEEK_SHOW_MS = 90;

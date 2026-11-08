@@ -87,6 +87,48 @@ pub struct WatchDrops {
     pub complete: bool,
     pub stalled: bool,
     pub stall_episode: u64,
+    /// The viewer tucked the lip away: chat draws a thin progress line on the
+    /// message box instead. Cleared on its own by anything worth showing (see
+    /// `tuck_holds`).
+    pub lip_hidden: bool,
+}
+
+/// The lip tucked away, and what it was showing then.
+#[derive(Debug, Clone, PartialEq)]
+struct Tucked {
+    campaign_id: String,
+    drop_id: String,
+    /// The channel's id, else its login (lowercase).
+    channel: String,
+}
+
+fn channel_key(view: &WatchDrops) -> String {
+    if view.channel_id.is_empty() {
+        view.login.to_lowercase()
+    } else {
+        view.channel_id.clone()
+    }
+}
+
+/// The lip stays tucked only while nothing new is worth showing: the same
+/// reward on the same channel, still just earning. A reward ready to claim,
+/// one waiting on a game account link, the next reward starting, or another
+/// channel's drops all bring it back; minutes ticking up never do.
+fn tuck_holds(t: &Tucked, view: &WatchDrops) -> bool {
+    let Some(lead) = &view.lead else {
+        return false;
+    };
+    let waits_on_link = view
+        .campaigns
+        .iter()
+        .find(|c| c.id == lead.campaign_id)
+        .and_then(|c| c.drops.iter().find(|d| d.id == lead.drop_id))
+        .is_some_and(|d| d.connect);
+    lead.campaign_id == t.campaign_id
+        && lead.drop_id == t.drop_id
+        && channel_key(view) == t.channel
+        && !lead.complete
+        && !waits_on_link
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -1115,6 +1157,8 @@ struct State {
     stall: StallClock,
     acked: u64,
     ready_ids: HashSet<String>,
+    /// The lip tucked away by the viewer, until `tuck_holds` lets go.
+    tucked: Option<Tucked>,
 }
 
 static STATE: Lazy<Mutex<State>> = Lazy::new(|| Mutex::new(State::default()));
@@ -1156,6 +1200,24 @@ pub fn drops_auth_changed() {
 /// Resolves when a reward here turns ready to claim, for the monitoring loop.
 pub async fn ready_changed() {
     READY.notified().await
+}
+
+/// Tuck the lip away (`true`) or bring it back (`false`). Tucking holds the
+/// reward on screen now, and lets go on its own when that is no longer true.
+pub fn set_lip_hidden(hidden: bool) {
+    let out = with_state(|s| {
+        s.tucked = if hidden {
+            s.view.lead.as_ref().map(|l| Tucked {
+                campaign_id: l.campaign_id.clone(),
+                drop_id: l.drop_id.clone(),
+                channel: channel_key(&s.view),
+            })
+        } else {
+            None
+        };
+        rebuild(s)
+    });
+    send(out);
 }
 
 /// The model now.
@@ -1221,6 +1283,13 @@ fn rebuild(s: &mut State) -> Option<WatchDropsSnapshot> {
         READY.notify_one();
     }
     s.ready_ids = ready;
+    if let Some(t) = &s.tucked {
+        if tuck_holds(t, &view) {
+            view.lip_hidden = true;
+        } else {
+            s.tucked = None;
+        }
+    }
     if view == s.view {
         return None;
     }
@@ -2683,6 +2752,44 @@ mod tests {
     }
 
     #[test]
+    fn a_tucked_lip_comes_back_only_for_something_worth_showing() {
+        let place = golden::place();
+        let view_of = |spec: &[(&str, i32, i32)], held: Option<&str>| {
+            let (list, inv) = tiers(true, spec);
+            let mut i = Inputs::bare(&place, &list, Some(&inv), now_ms());
+            i.held_lead = held;
+            build(&i)
+        };
+        let earning = view_of(&[("a", 60, 30), ("b", 120, 30)], None);
+        let lead = earning.lead.as_ref().unwrap();
+        let t = Tucked {
+            campaign_id: lead.campaign_id.clone(),
+            drop_id: lead.drop_id.clone(),
+            channel: channel_key(&earning),
+        };
+        assert!(tuck_holds(&t, &earning));
+        // Minutes ticking up keep it tucked.
+        assert!(tuck_holds(&t, &view_of(&[("a", 60, 45), ("b", 120, 45)], Some("a"))));
+        // Ready to claim brings it back.
+        assert!(!tuck_holds(&t, &view_of(&[("a", 60, 60), ("b", 120, 60)], Some("a"))));
+        // The next reward starting brings it back.
+        let mut claims = HashMap::new();
+        claims.insert("a".to_string(), ClaimState::Claimed);
+        let (list, inv) = tiers(true, &[("a", 60, 60), ("b", 120, 60)]);
+        let mut i = Inputs::bare(&place, &list, Some(&inv), now_ms());
+        i.claims = &claims;
+        assert!(!tuck_holds(&t, &build(&i)));
+        // Another channel's drops bring it back.
+        let mut elsewhere = earning.clone();
+        elsewhere.channel_id = "someone-else".into();
+        assert!(!tuck_holds(&t, &elsewhere));
+        // Nothing left to show lets go too.
+        let mut empty = earning.clone();
+        empty.lead = None;
+        assert!(!tuck_holds(&t, &empty));
+    }
+
+    #[test]
     fn rewards_finishing_together_keep_the_first_on_the_lip() {
         let (list, inv) = tiers(true, &[("a", 60, 50), ("b", 60, 50)]);
         assert_eq!(lead_of(&list, &inv, None), "a", "a tie goes to the first");
@@ -2789,6 +2896,7 @@ mod tests {
                 "game_id",
                 "game_name",
                 "lead",
+                "lip_hidden",
                 "login",
                 "more",
                 "more_art",

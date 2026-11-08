@@ -10,7 +10,7 @@ import type { WatchDrops } from '../stores/watchDropsStore';
 const NOW = '2026-11-06T12:00:00.000Z';
 const base: WatchDrops = {
   channel_id: '111', login: 'shroud', game_id: 'g1', game_name: 'Rust', lead: null, more: 0, more_art: [],
-  campaigns: [], complete: false, stalled: false, stall_episode: 0,
+  campaigns: [], complete: false, stalled: false, stall_episode: 0, lip_hidden: false,
 };
 const hoodie = {
   id: 'b', instance_id: 'i-b', name: 'Hoodie', image: 'img-b', claimed: false, ready: false, pending: false,
