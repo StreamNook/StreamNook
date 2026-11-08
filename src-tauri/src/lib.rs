@@ -684,7 +684,6 @@ pub(crate) fn flush_debounced_stores() {
     let _ = commands::settings::flush_settings_now();
     let _ = services::universal_cache_service::flush_manifest_now();
     let _ = services::mod_log_storage_service::ModLogStorageService::flush_now();
-    let _ = services::whisper_storage_service::WhisperStorageService::flush_now();
     let _ = services::whisper_store::flush_now();
     let _ = services::mention_inbox::flush_now();
     let _ = services::vod_progress_service::flush_now();
@@ -2078,7 +2077,6 @@ pub fn run() {
             get_games_by_ids,
             get_videos_by_game,
             get_user_videos,
-            start_whisper_listener,
             search_whisper_user,
             // Streaming commands
             start_stream,
@@ -2557,8 +2555,6 @@ pub fn run() {
             whisper_set_active,
             whisper_mark_read,
             whisper_send,
-            whisper_import,
-            whisper_refresh,
             whisper_list,
             whisper_thread,
             whisper_page,
@@ -2694,11 +2690,6 @@ pub fn run() {
             get_all_seventv_badges,
             get_all_seventv_paints,
             get_seventv_paint_usage,
-            // Whisper Storage commands
-            load_whisper_storage,
-            delete_whisper_conversation,
-            get_whisper_storage_path,
-            migrate_whispers_from_localstorage,
             // Log commands
             log_message,
             log_messages_batch,

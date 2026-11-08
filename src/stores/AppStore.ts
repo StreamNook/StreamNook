@@ -3753,14 +3753,6 @@ export const useAppStore = create<AppState>((set, get) => ({
           }),
         );
       }
-
-      // Start whisper listener after successful authentication
-      try {
-        await invoke('start_whisper_listener');
-        Logger.debug('[Auth] Whisper listener started');
-      } catch (whisperError) {
-        Logger.warn('[Auth] Could not start whisper listener:', whisperError);
-      }
     } catch (e) {
       // Check if user was previously authenticated (session expired)
       const wasAuthenticated = get().isAuthenticated;

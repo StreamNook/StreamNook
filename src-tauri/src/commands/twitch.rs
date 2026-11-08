@@ -3,14 +3,12 @@ use crate::models::stream::{TwitchClip, TwitchStream, TwitchVideo};
 use crate::models::user::{ChannelInfo, UserInfo};
 use crate::services::drops_auth_service::DropsAuthService;
 use crate::services::twitch_service::{DeviceCodeInfo, TokenHealthStatus, TwitchService};
-use crate::services::whisper_service::WhisperService;
 use anyhow::Result;
 use log::{debug, error, warn};
 use std::path::PathBuf;
 use std::sync::Arc;
 use crate::rt::AppHandle;
 use tauri::{Manager, State, WebviewUrl};
-use tokio::sync::Mutex as TokioMutex;
 
 // Device Code Flow - the main login command
 #[tauri::command]
@@ -2032,28 +2030,6 @@ pub async fn get_streams_by_game_id(
     crate::services::hidden_channels::retain_twitch(&mut streams, crate::services::hidden_channels::Realm::Browse);
     crate::services::category_tags::record_streams(&streams);
     Ok((streams, next))
-}
-
-/// Start listening for whisper messages via EventSub WebSocket
-/// This should be called after the user is authenticated
-#[tauri::command]
-pub async fn start_whisper_listener(
-    app: AppHandle,
-    whisper_service: State<'_, Arc<TokioMutex<WhisperService>>>,
-) -> Result<(), String> {
-    // Get the current user's ID; the listener fetches a fresh token per connect.
-    let user_info = TwitchService::get_user_info()
-        .await
-        .map_err(|e| format!("Failed to get user info: {}", e))?;
-
-    // Start the whisper listener
-    let service = whisper_service.lock().await;
-    service
-        .start_listening(user_info.id, app)
-        .await
-        .map_err(|e| format!("Failed to start whisper listener: {}", e))?;
-
-    Ok(())
 }
 
 /// Search for a user to whisper using official Helix API

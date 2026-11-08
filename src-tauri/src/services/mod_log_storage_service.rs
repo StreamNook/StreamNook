@@ -1,6 +1,6 @@
 // Per-channel moderation-log persistence.
 //
-// Mirrors whisper_storage_service: a single JSON file in the app data dir, keyed
+// A single JSON file in the app data dir, keyed
 // by lowercase channel login -> a capped list of mod-log entries. Entries are
 // stored as opaque JSON values so this layer never has to track the frontend's
 // ModLogEvent shape. The point is durability + bounded RAM: the live UI keeps

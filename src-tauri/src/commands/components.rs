@@ -1629,7 +1629,6 @@ pub(crate) fn flush_stores_before_hard_exit(app_handle: &crate::rt::AppHandle) {
     let _ = crate::commands::settings::flush_settings_now();
     let _ = crate::services::universal_cache_service::flush_manifest_now();
     let _ = crate::services::mod_log_storage_service::ModLogStorageService::flush_now();
-    let _ = crate::services::whisper_storage_service::WhisperStorageService::flush_now();
     let _ = crate::services::whisper_store::flush_now();
     let _ = crate::services::vod_progress_service::flush_now();
     let _ = crate::services::song_id::history::flush_now();
