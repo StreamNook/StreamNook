@@ -34,7 +34,7 @@ import { SplitWalletGlyph, WalletChestGlyph } from '../../components/chat/SplitW
 import { ChannelPointsIcon } from '../../components/ChannelPointsIcon';
 import { useChannelPoints } from './useChannelPoints';
 import { MobileEmoteCarousel } from './MobileEmoteCarousel';
-import { getWordRange, type EmoteTabCandidate } from '../../utils/chatInputWord';
+import { getWordRange, insertAtCaret, type EmoteTabCandidate } from '../../utils/chatInputWord';
 import { matchEmoteFill, rowsToTabCandidates, createRequestSeq } from '../../services/emoteMatch';
 import { ComposerMenuSheet } from './ComposerMenuSheet';
 import { closeInboxSheet, setComposerBusy, toggleInboxSheet, useMentionsStore, type InboxSurface } from '../mentions/mentionInbox';
@@ -528,7 +528,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
   // The shared picker hands back the literal token to insert, which is an emote
   // name for emotes and the character itself for emoji.
   const insertEmote = (token: string) => {
-    setText((t) => (t.length === 0 || t.endsWith(' ') ? `${t}${token} ` : `${t} ${token} `));
+    setText((t) => insertAtCaret(t, t.length, t.length, token).text);
     if (!emotesOpen) inputRef.current?.focus();
   };
 

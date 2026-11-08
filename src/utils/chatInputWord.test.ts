@@ -133,3 +133,15 @@ test('insertAtCaret replaces a selection and clamps stale positions', () => {
   // Emoji are inserted whole.
   assert.deepEqual(insertAtCaret('gg', 2, 2, '\u{1F525}'), { text: 'gg \u{1F525} ', caret: 6 });
 });
+
+test('insertAtCaret adds a link already in the box only once', () => {
+  // The upload put its link in the box; a tap on the thumbnail changes nothing.
+  const link = 'https://i.nuuls.com/OnLxW.png';
+  assert.deepEqual(insertAtCaret(`${link} `, 30, 30, link), { text: `${link} `, caret: 30 });
+  assert.deepEqual(insertAtCaret(`look ${link} lol`, 0, 0, link), { text: `look ${link} lol`, caret: 0 });
+  // A different link, or the link inside a longer word, still goes in.
+  assert.deepEqual(insertAtCaret(`${link} `, 30, 30, 'https://i.nuuls.com/b.png').text, `${link} https://i.nuuls.com/b.png `);
+  assert.deepEqual(insertAtCaret(`${link}x`, 31, 31, link).text, `${link}x ${link} `);
+  // Emotes still repeat.
+  assert.deepEqual(insertAtCaret('Kappa ', 6, 6, 'Kappa').text, 'Kappa Kappa ');
+});

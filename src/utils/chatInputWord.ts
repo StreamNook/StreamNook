@@ -16,6 +16,10 @@
  * just past the inserted word and its trailing space. Out-of-range positions
  * are clamped, so a stale selection can never cut the text.
  *
+ * A web link already in the text as its own word is not added again: an
+ * uploaded image's link goes in the box when the upload finishes, so a tap on
+ * its thumbnail after that would post the link twice. Emotes still repeat.
+ *
  *   ("hi|", "Kappa")         -> "hi Kappa |"
  *   ("|there", "Kappa")      -> "Kappa |there"
  *   ("a | b", "Kappa")       -> "a Kappa | b"
@@ -28,6 +32,7 @@ export function insertAtCaret(
 ): { text: string; caret: number } {
   const at = Math.max(0, Math.min(start, value.length));
   const to = Math.max(at, Math.min(end, value.length));
+  if (/^https?:\/\/\S+$/i.test(insert) && value.split(/\s+/).includes(insert)) return { text: value, caret: to };
   const before = value.slice(0, at);
   const after = value.slice(to);
   const lead = before && !/\s$/.test(before) ? ' ' : '';
