@@ -96,6 +96,22 @@ class FileHandoffArgs {
     lateinit var mime: String
 }
 
+/**
+ * Twitch's security check, run for Rust. Rust hands over the page and the
+ * script that asks the check for a token; this only runs them and hands back
+ * the page's final address, whose fragment carries the answer.
+ */
+@InvokeArg
+class MintArgs {
+    lateinit var url: String
+    lateinit var script: String
+    /** Always answered by then, with an error if the page said nothing. */
+    var deadlineMs: Long = 28_000L
+}
+
+/** How often the security check's page is asked for its address. */
+private const val MINT_POLL_MS = 250L
+
 /** A hidden re-mint either completes on its own quickly or it will not at all. */
 private const val HIDDEN_WATCH_TIMEOUT_MS = 30 * 1000L
 
@@ -167,6 +183,8 @@ class TwitchLoginPlugin(private val activity: Activity) : Plugin(activity) {
     fun openLogin(invoke: Invoke) {
         val args = invoke.parseArgs(OpenLoginArgs::class.java)
         activity.runOnUiThread {
+            // A sign-in the person can see wins over a security check in progress.
+            if (!args.hidden) endMint(null, "a sign-in took over")
             // A silent re-mint never takes over a sign-in the person can see,
             // and a visible sign-in always wins over a re-mint in progress.
             if (overlay != null && args.hidden) {
@@ -435,6 +453,7 @@ class TwitchLoginPlugin(private val activity: Activity) : Plugin(activity) {
     @Command
     fun clearCookies(invoke: Invoke) {
         activity.runOnUiThread {
+            endMint(null, "signed out")
             val cm = CookieManager.getInstance()
             cm.removeAllCookies {
                 cm.flush()
@@ -546,6 +565,122 @@ class TwitchLoginPlugin(private val activity: Activity) : Plugin(activity) {
         } catch (e: Exception) {
             invoke.reject(e.message ?: "could not share the file")
         }
+    }
+
+    // ── Twitch's security check (an integrity token) ────────────────────────
+    // Twitch answers some private calls only with a token its in-page bot check
+    // mints, and the check has to run in a browser on a twitch.tv page. Here that
+    // browser is a 1 px WebView on the app's cookie jar (the signed-in twitch.tv
+    // session), in the login overlay's own browser identity. One check at a time;
+    // a visible sign-in always wins; every outcome removes the view and answers.
+
+    private var mintView: WebView? = null
+    private var mintInvoke: Invoke? = null
+    private var mintTick: Runnable? = null
+    private var mintDeadline: Runnable? = null
+
+    @SuppressLint("SetJavaScriptEnabled")
+    @Command
+    fun mintIntegrity(invoke: Invoke) {
+        val args = invoke.parseArgs(MintArgs::class.java)
+        activity.runOnUiThread {
+            if (activity.isFinishing || activity.isDestroyed) {
+                answerMint(invoke, null, "the app is closing")
+                return@runOnUiThread
+            }
+            if (overlay != null && !hiddenMode) {
+                answerMint(invoke, null, "a sign-in is on screen")
+                return@runOnUiThread
+            }
+            // One slot: a newer check replaces an older one, which answers now.
+            endMint(null, "a newer security check started")
+            val decor = activity.window?.decorView as? ViewGroup
+            if (decor == null) {
+                answerMint(invoke, null, "no window to run the check in")
+                return@runOnUiThread
+            }
+            val wv = WebView(activity).apply {
+                // Drawn (a page that is never drawn may not run its timers), but
+                // one pixel, nearly transparent, never focused or touched.
+                layoutParams = FrameLayout.LayoutParams(1, 1).apply { gravity = Gravity.TOP or Gravity.START }
+                alpha = 0.01f
+                isFocusable = false
+                isClickable = false
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+                settings.javaScriptEnabled = true
+                settings.domStorageEnabled = true
+                settings.userAgentString = chromeUa
+            }
+            CookieManager.getInstance().setAcceptCookie(true)
+            CookieManager.getInstance().setAcceptThirdPartyCookies(wv, true)
+            val origins = setOf("https://twitch.tv", "https://*.twitch.tv")
+            val documentStart = WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)
+            if (documentStart) {
+                WebViewCompat.addDocumentStartJavaScript(wv, UA_CLIENT_HINTS_SPOOF, origins)
+                WebViewCompat.addDocumentStartJavaScript(wv, args.script, origins)
+            }
+            wv.webViewClient = object : WebViewClient() {
+                override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                    // The check stays on its page; any other scheme has nothing to load here.
+                    return !request.url.toString().startsWith("https://")
+                }
+
+                override fun onPageFinished(view: WebView, url: String?) {
+                    super.onPageFinished(view, url)
+                    // Without start-of-page scripts the check starts once the page is
+                    // in; the script itself acts only on the check's page, once.
+                    if (!documentStart && view === mintView) view.evaluateJavascript(args.script, null)
+                }
+            }
+            decor.addView(wv)
+            mintView = wv
+            mintInvoke = invoke
+            lateinit var tick: Runnable
+            tick = Runnable {
+                val view = mintView ?: return@Runnable
+                view.evaluateJavascript("location.href") { raw ->
+                    val href = decodeJsString(raw)
+                    if (href != null && href.contains("#SN_INTEGRITY")) {
+                        // Posted, not run inline: this is the WebView's own callback,
+                        // and ending the check destroys that WebView.
+                        storageWatchHandler.post { if (mintView === view) endMint(href, null) }
+                    } else if (mintView === view) {
+                        storageWatchHandler.postDelayed(tick, MINT_POLL_MS)
+                    }
+                }
+            }
+            val deadline = Runnable {
+                endMint(null, "Twitch's security check did not answer within ${args.deadlineMs / 1000}s")
+            }
+            mintTick = tick
+            mintDeadline = deadline
+            storageWatchHandler.postDelayed(tick, MINT_POLL_MS)
+            storageWatchHandler.postDelayed(deadline, args.deadlineMs)
+            wv.loadUrl(args.url)
+        }
+    }
+
+    /** End the running check, if any: remove its view and answer its caller. */
+    private fun endMint(url: String?, error: String?) {
+        mintTick?.let { storageWatchHandler.removeCallbacks(it) }
+        mintDeadline?.let { storageWatchHandler.removeCallbacks(it) }
+        mintTick = null
+        mintDeadline = null
+        mintView?.let { v ->
+            (v.parent as? ViewGroup)?.removeView(v)
+            v.destroy()
+        }
+        mintView = null
+        val pending = mintInvoke
+        mintInvoke = null
+        if (pending != null) answerMint(pending, url, error)
+    }
+
+    private fun answerMint(invoke: Invoke, url: String?, error: String?) {
+        val ret = JSObject()
+        if (url != null) ret.put("url", url)
+        if (error != null) ret.put("error", error)
+        invoke.resolve(ret)
     }
 
     /** Whether the overlay is on screen. Rust polls it to notice a close.

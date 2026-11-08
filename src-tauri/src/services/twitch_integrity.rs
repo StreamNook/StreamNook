@@ -92,7 +92,7 @@ pub fn last_success_ms() -> Option<i64> {
     *LAST_SUCCESS.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// The cached token, without minting (reconciled: whisper_sync's minter reads it).
+/// The cached token, without minting (whisper_sync's minter reads it).
 pub fn cached_token() -> Option<Integrity> {
     cached()
 }
@@ -295,10 +295,35 @@ async fn mint() -> Result<Minted, String> {
     minted_from_url(&url)
 }
 
-/// Android: filled by its own card (the login plugin's web view).
+/// On Android the login plugin runs the page in a 1 px WebView on the app's
+/// cookie jar (`mintIntegrity`), the browser the twitch.tv session was signed in
+/// with, and answers with the page's final address. The Kotlin side always
+/// answers by `NATIVE_DEADLINE_MS` and removes its view; the wait here is capped
+/// at `NATIVE_CEILING_MS` whatever happens, so `MINTING` is never held longer.
 #[cfg(target_os = "android")]
 async fn mint() -> Result<Minted, String> {
-    Err("Twitch's security check needs the desktop app".into())
+    if crate::services::window_visibility::phone_idle() {
+        return Err("Twitch's security check waits for the app to be open".into());
+    }
+    let app = crate::services::providers::app_handle().ok_or("no app handle; cannot open the twitch.tv page")?;
+    let script = script();
+    let job = tauri::async_runtime::spawn_blocking(move || {
+        crate::twitch_login_plugin::mint_integrity(&app, MINT_PAGE, &script, NATIVE_DEADLINE_MS)
+    });
+    let url = match tokio::time::timeout(Duration::from_millis(NATIVE_CEILING_MS), job).await {
+        Ok(Ok(answer)) => answer?,
+        Ok(Err(e)) => return Err(format!("Twitch's security check could not run: {e}")),
+        Err(_) => {
+            return Err(format!(
+                "Twitch's security check did not answer within {}s",
+                NATIVE_CEILING_MS / 1000
+            ))
+        }
+    };
+    let minted = minted_from_url(&url)?;
+    // The proof line S1 reads back: kept at a level release logs keep.
+    log::warn!("[Integrity] minted on the phone");
+    Ok(minted)
 }
 
 /// Requests a phone shell answers later, matched by id. Plain Rust with no

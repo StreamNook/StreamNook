@@ -61,6 +61,22 @@ struct KickRedirectResp {
     url: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MintArgs<'a> {
+    url: &'a str,
+    script: &'a str,
+    deadline_ms: u64,
+}
+
+#[derive(Deserialize)]
+struct MintResp {
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    error: Option<String>,
+}
+
 pub fn init<R: Runtime>() -> TauriPlugin<R> {
     tauri::plugin::Builder::new("twitch-login")
         .setup(|app, api| {
@@ -194,6 +210,23 @@ pub fn take_drops_token(app: &AppHandle<Rt>) -> String {
         .run_mobile_plugin::<DropsTokenResp>("takeDropsToken", ())
         .map(|r| r.token)
         .unwrap_or_default()
+}
+
+/// Run Twitch's security check in a 1 px WebView on the app's cookie jar (the
+/// signed-in twitch.tv session) and hand back the page's final address, whose
+/// fragment carries the answer (`twitch_integrity::read_fragment`). Blocks the
+/// calling thread until the Kotlin side answers, which it always does by
+/// `deadline_ms`: call it from a blocking task.
+pub fn mint_integrity(app: &AppHandle<Rt>, url: &str, script: &str, deadline_ms: u64) -> Result<String, String> {
+    let resp = handle(app)
+        .0
+        .run_mobile_plugin::<MintResp>("mintIntegrity", MintArgs { url, script, deadline_ms })
+        .map_err(|e| e.to_string())?;
+    match (resp.url, resp.error) {
+        (Some(u), _) if !u.is_empty() => Ok(u),
+        (_, Some(e)) if !e.is_empty() => Err(e),
+        _ => Err("Twitch's security check gave no answer".into()),
+    }
 }
 
 /// Expire every cookie on these origins, leaving other sites signed in.
