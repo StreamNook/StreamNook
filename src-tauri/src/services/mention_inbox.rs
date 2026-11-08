@@ -331,6 +331,12 @@ impl Inbox {
         self.entries.iter().filter(|e| !e.read && !e.removed).count() as u32
     }
 
+    /// Unread entries the desktop island lists (it leaves out what arrived
+    /// in a chat on screen).
+    pub fn unread_unseen(&self) -> u32 {
+        self.entries.iter().filter(|e| !e.read && !e.removed && !e.seen_live).count() as u32
+    }
+
     /// Newest first, older than `before_ms` when given. `unseen_only` leaves
     /// out what arrived in a chat on screen (the desktop island).
     pub fn page(&self, before_ms: Option<i64>, limit: usize, unseen_only: bool) -> (Vec<MentionEntry>, bool) {
@@ -430,13 +436,29 @@ impl Inbox {
     /// is more, and the cursor for the next page (the oldest entry consumed,
     /// so a fold never splits across pages).
     pub fn view(&self, filter: InboxFilter, before_ms: Option<i64>, limit: usize) -> (Vec<InboxRow>, bool, Option<i64>) {
+        self.view_on(filter, before_ms, limit, false)
+    }
+
+    /// `view`, leaving out what arrived in a chat on screen when
+    /// `skip_seen_live` (the desktop island).
+    pub fn view_on(
+        &self,
+        filter: InboxFilter,
+        before_ms: Option<i64>,
+        limit: usize,
+        skip_seen_live: bool,
+    ) -> (Vec<InboxRow>, bool, Option<i64>) {
         let mut rows: Vec<InboxRow> = Vec::new();
         let mut cursor = None;
         let mut iter = self
             .entries
             .iter()
             .rev()
-            .filter(|e| filter.admits(e.kind) && before_ms.is_none_or(|b| e.at_ms < b))
+            .filter(|e| {
+                filter.admits(e.kind)
+                    && before_ms.is_none_or(|b| e.at_ms < b)
+                    && !(skip_seen_live && e.seen_live)
+            })
             .peekable();
         while let Some(head) = iter.next() {
             let mut row = InboxRow {
@@ -468,8 +490,8 @@ impl Inbox {
     }
 }
 
-/// The phones' inbox chips: which entries a view shows. The whispers car adds
-/// its own chip and rows to the view (the command's `chips` lists what exists).
+/// The inbox chips: which rows a view shows. `All` is every mention row and
+/// every whisper conversation, merged newest first.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum InboxFilter {
@@ -479,16 +501,22 @@ pub enum InboxFilter {
     Mentions,
     /// Highlight phrases.
     Highlights,
+    /// Whisper conversations only.
+    Whispers,
 }
 
 impl InboxFilter {
-    pub const CHIPS: [InboxFilter; 3] = [InboxFilter::All, InboxFilter::Mentions, InboxFilter::Highlights];
+    pub const CHIPS: [InboxFilter; 4] =
+        [InboxFilter::All, InboxFilter::Mentions, InboxFilter::Highlights, InboxFilter::Whispers];
 
+    /// Whether a mention entry of this kind shows under this chip. Whispers
+    /// are not mention entries, so the Whispers chip admits none.
     pub fn admits(self, kind: MentionKind) -> bool {
         match self {
             InboxFilter::All => true,
             InboxFilter::Mentions => matches!(kind, MentionKind::Mention | MentionKind::Reply),
             InboxFilter::Highlights => kind == MentionKind::Word,
+            InboxFilter::Whispers => false,
         }
     }
 
@@ -497,8 +525,157 @@ impl InboxFilter {
             InboxFilter::All => "all",
             InboxFilter::Mentions => "mentions",
             InboxFilter::Highlights => "highlights",
+            InboxFilter::Whispers => "whispers",
         }
     }
+
+    /// Whether this chip shows mention rows at all.
+    fn shows_mentions(self) -> bool {
+        self != InboxFilter::Whispers
+    }
+
+    /// Whether this chip shows whisper conversations.
+    fn shows_whispers(self) -> bool {
+        matches!(self, InboxFilter::All | InboxFilter::Whispers)
+    }
+}
+
+/// Which app asks for the view. Defined in `inbox_counts`, so `whisper_inbox`
+/// can name it too; re-exported here so `mention_inbox::Surface` keeps working.
+pub use crate::services::inbox_counts::Surface;
+
+/// One row of any inbox view: a mention row (with the identical messages
+/// folded under it), or one whisper conversation at its newest message.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum InboxItem {
+    Mention {
+        row_id: String,
+        entry: MentionEntry,
+        folded: Vec<FoldedEntry>,
+        unread: bool,
+        avatar: Option<String>,
+    },
+    Whisper {
+        row_id: String,
+        whisper: crate::services::whisper_inbox::RowMeta,
+    },
+}
+
+impl InboxItem {
+    /// The time the row sorts by: a mention row's newest entry, a
+    /// conversation's newest message.
+    fn at_ms(&self) -> i64 {
+        match self {
+            InboxItem::Mention { entry, .. } => entry.at_ms,
+            InboxItem::Whisper { whisper, .. } => whisper.last_message_timestamp,
+        }
+    }
+}
+
+/// Where the next page of a merged view starts, on each side. Travels to
+/// the shells as an opaque JSON string.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+struct ViewCursor {
+    /// Mention side: read entries strictly older than this.
+    #[serde(default)]
+    m: Option<i64>,
+    #[serde(default)]
+    m_done: bool,
+    /// Whisper side: start strictly after this (time, key) position.
+    #[serde(default)]
+    w: Option<(i64, String)>,
+    #[serde(default)]
+    w_done: bool,
+}
+
+/// One page of a merged view, as the command returns it.
+pub struct ViewPage {
+    pub rows: Vec<InboxItem>,
+    pub has_more: bool,
+    pub cursor: Option<String>,
+    pub chips: Vec<(InboxFilter, u32)>,
+}
+
+/// The oldest entry a mention row consumed: its last folded entry, else
+/// its own. The next mention page reads strictly older than this, so a
+/// fold is never split across pages.
+fn row_floor(row: &InboxRow) -> i64 {
+    row.folded.last().map(|f| f.at_ms).unwrap_or(row.entry.at_ms)
+}
+
+/// Merge one page from the two sides, newest first.
+///
+/// `mentions` holds up to `limit` rows read from the mention side's cursor,
+/// plus whether that side has more. `whispers` holds up to `limit + 1`
+/// conversations read from the whisper side's cursor. A side that the chip
+/// does not show, or that is already done, comes in as `None`. Ties go to
+/// the mention row. Each side's cursor moves past the last row of that side
+/// taken, so no row is skipped and none shows twice.
+fn merge_view(
+    mentions: Option<(Vec<InboxRow>, bool)>,
+    whispers: Option<Vec<crate::services::whisper_inbox::RowMeta>>,
+    cursor: &ViewCursor,
+    limit: usize,
+) -> (Vec<InboxItem>, bool, Option<ViewCursor>) {
+    let (m_rows, m_more) = mentions.unwrap_or((Vec::new(), false));
+    let mut w_rows = whispers.unwrap_or_default();
+    let w_more = w_rows.len() > limit;
+    w_rows.truncate(limit);
+
+    let mut out: Vec<InboxItem> = Vec::new();
+    let (mut mi, mut wi) = (0usize, 0usize);
+    let mut last_floor: Option<i64> = None;
+    let mut last_w: Option<(i64, String)> = None;
+    while out.len() < limit && (mi < m_rows.len() || wi < w_rows.len()) {
+        let take_mention = match (m_rows.get(mi), w_rows.get(wi)) {
+            (Some(m), Some(w)) => m.entry.at_ms >= w.last_message_timestamp,
+            (Some(_), None) => true,
+            _ => false,
+        };
+        if take_mention {
+            let row = m_rows[mi].clone();
+            mi += 1;
+            last_floor = Some(row_floor(&row));
+            out.push(InboxItem::Mention {
+                row_id: row.entry.id.clone(),
+                entry: row.entry,
+                folded: row.folded,
+                unread: row.unread,
+                avatar: row.avatar,
+            });
+        } else {
+            let w = w_rows[wi].clone();
+            wi += 1;
+            last_w = Some((w.last_message_timestamp, w.key.clone()));
+            out.push(InboxItem::Whisper { row_id: format!("w:{}", w.key), whisper: w });
+        }
+    }
+
+    let next = ViewCursor {
+        m: last_floor.or(cursor.m),
+        m_done: cursor.m_done || (mi == m_rows.len() && !m_more),
+        w: last_w.or_else(|| cursor.w.clone()),
+        w_done: cursor.w_done || (wi == w_rows.len() && !w_more),
+    };
+    let has_more = !(next.m_done && next.w_done);
+    (out, has_more, has_more.then_some(next))
+}
+
+/// The chips the inbox shows, with their unread counts. The Whispers chip
+/// exists only while a Twitch account is followed (whispers are Twitch's);
+/// All counts both sides.
+fn chips_for(twitch: bool, mention_unread: [u32; 3], whisper_unread: u32) -> Vec<(InboxFilter, u32)> {
+    let [all, mentions, highlights] = mention_unread;
+    let mut chips = vec![
+        (InboxFilter::All, all + if twitch { whisper_unread } else { 0 }),
+        (InboxFilter::Mentions, mentions),
+        (InboxFilter::Highlights, highlights),
+    ];
+    if twitch {
+        chips.push((InboxFilter::Whispers, whisper_unread));
+    }
+    chips
 }
 
 /// One row of the phones' inbox: the newest entry of a run of identical
@@ -1000,6 +1177,7 @@ fn with_inbox_of<R>(owner: String, sources: Vec<String>, f: impl FnOnce(&mut Inb
         if let Some(app) = crate::services::providers::app_handle() {
             let _ = app.emit(CHANGED_EVENT, serde_json::json!({ "unread_total": total }));
         }
+        crate::services::inbox_counts::wake();
     }
     Some(out)
 }
@@ -1170,18 +1348,63 @@ pub fn page(before_ms: Option<i64>, limit: usize, unseen_only: bool) -> Option<(
     })
 }
 
-/// One page of the phones' inbox timeline (see `Inbox::view`), with the
-/// unread total and each chip's unread count. None when nobody is signed in.
-pub fn view(
-    filter: InboxFilter,
-    before_ms: Option<i64>,
-    limit: usize,
-) -> Option<(Vec<InboxRow>, bool, Option<i64>, u32, Vec<(InboxFilter, u32)>)> {
-    with_inbox(|inbox| {
-        let (rows, more, cursor) = inbox.view(filter, before_ms, limit);
-        let chips = InboxFilter::CHIPS.iter().map(|f| (*f, inbox.unread_for(*f))).collect();
-        ((rows, more, cursor, inbox.unread_total(), chips), false)
-    })
+/// One page of an inbox view: mention rows and whisper conversations merged
+/// newest first (see `merge_view`), with each chip's unread count. The mention
+/// side is read under the mention inbox's lock and the whisper side under the
+/// whisper store's own, never both at once. A cursor that does not parse
+/// answers an empty last page rather than page 1 again.
+pub fn view_page(filter: InboxFilter, surface: Surface, cursor: Option<&str>, limit: usize) -> ViewPage {
+    let cursor: ViewCursor = match cursor {
+        None => ViewCursor::default(),
+        Some(raw) => match serde_json::from_str(raw) {
+            Ok(c) => c,
+            Err(e) => {
+                log::warn!("[MentionInbox] inbox view cursor did not parse: {e}");
+                return ViewPage { rows: Vec::new(), has_more: false, cursor: None, chips: Vec::new() };
+            }
+        },
+    };
+    let twitch = crate::services::whisper_sync::current_scope().is_some();
+    let read_mentions = filter.shows_mentions() && !cursor.m_done;
+    let read_whispers = twitch && filter.shows_whispers() && !cursor.w_done;
+
+    let mention_side = with_inbox(|inbox| {
+        let rows = read_mentions.then(|| {
+            let (rows, more, _) = inbox.view_on(filter, cursor.m, limit, surface.skips_seen_live());
+            (rows, more)
+        });
+        let counts = [
+            inbox.unread_for(InboxFilter::All),
+            inbox.unread_for(InboxFilter::Mentions),
+            inbox.unread_for(InboxFilter::Highlights),
+        ];
+        ((rows, counts), false)
+    });
+    let (mention_rows, mention_counts) = mention_side.unwrap_or((None, [0, 0, 0]));
+
+    let whisper_rows = read_whispers
+        .then(|| crate::services::whisper_inbox::rows_for_view(surface, cursor.w.clone(), limit + 1));
+    let whisper_unread = if twitch { crate::services::whisper_inbox::unread_counts().0 } else { 0 };
+
+    // A side the chip does not show is done from the start.
+    let cursor = ViewCursor {
+        m_done: cursor.m_done || !filter.shows_mentions(),
+        w_done: cursor.w_done || !(twitch && filter.shows_whispers()),
+        ..cursor
+    };
+    let (rows, has_more, next) = merge_view(mention_rows, whisper_rows, &cursor, limit);
+    ViewPage {
+        rows,
+        has_more,
+        cursor: next.and_then(|c| serde_json::to_string(&c).ok()),
+        chips: chips_for(twitch, mention_counts, whisper_unread),
+    }
+}
+
+/// The mention side of the inbox counts: every unread entry, and the ones
+/// the desktop island lists. (0, 0) when no account is known.
+pub fn badge_counts() -> (u32, u32) {
+    with_inbox(|inbox| ((inbox.unread_total(), inbox.unread_unseen()), false)).unwrap_or((0, 0))
 }
 
 pub fn mark_read(ids: Option<Vec<String>>) {
@@ -1500,6 +1723,170 @@ mod tests {
         let ids = |v: Vec<MentionEntry>| v.into_iter().map(|e| e.id).collect::<Vec<_>>();
         assert_eq!(ids(inbox.page(None, 10, true).0), ["docked", "away"]);
         assert_eq!(ids(inbox.page(None, 10, false).0), ["docked", "watching", "away"]);
+    }
+
+    #[test]
+    fn the_island_view_leaves_out_mentions_seen_as_they_happened() {
+        let mut inbox = Inbox::default();
+        inbox.file(entry("away", "xqc", NOW), NOW);
+        inbox.set_visible(vec!["xqc".into()]);
+        // A different message, so the phones' view does not fold it into "away".
+        let mut watching = entry("watching", "xqc", NOW + 1);
+        watching.text = "back again @brandon".into();
+        inbox.file(watching, NOW);
+        inbox.file(entry("docked", "kick:xqc", NOW + 2), NOW);
+        let ids = |rows: Vec<InboxRow>| rows.into_iter().map(|r| r.entry.id).collect::<Vec<_>>();
+        let island = inbox.view_on(InboxFilter::All, None, 10, Surface::Island.skips_seen_live()).0;
+        assert_eq!(ids(island), ["docked", "away"]);
+        for surface in [Surface::Phone, Surface::Multichat] {
+            let rows = inbox.view_on(InboxFilter::All, None, 10, surface.skips_seen_live()).0;
+            assert_eq!(ids(rows), ["docked", "watching", "away"], "{surface:?}");
+        }
+        assert_eq!(inbox.unread_unseen(), 1);
+    }
+
+    fn wrow(key: &str, at_ms: i64) -> crate::services::whisper_inbox::RowMeta {
+        crate::services::whisper_inbox::RowMeta {
+            key: key.into(),
+            user_id: key.into(),
+            user_login: format!("user{key}"),
+            user_name: format!("User{key}"),
+            profile_image_url: None,
+            color: None,
+            badges: Vec::new(),
+            last_message_timestamp: at_ms,
+            last_text: "hello".into(),
+            last_parts: Vec::new(),
+            last_is_sent: false,
+            unread_count: 0,
+            archived: false,
+            muted: false,
+            sender_view: None,
+            live: None,
+        }
+    }
+
+    /// The whisper side as `rows_for_view` serves it: newest first by
+    /// (time desc, key asc), strictly after `after`, at most `n`.
+    fn whisper_side(
+        all: &[crate::services::whisper_inbox::RowMeta],
+        after: Option<(i64, String)>,
+        n: usize,
+    ) -> Vec<crate::services::whisper_inbox::RowMeta> {
+        let mut rows = all.to_vec();
+        rows.sort_by(|a, b| b.last_message_timestamp.cmp(&a.last_message_timestamp).then_with(|| a.key.cmp(&b.key)));
+        rows.into_iter()
+            .filter(|r| {
+                after.as_ref().is_none_or(|(ts, key)| {
+                    r.last_message_timestamp < *ts || (r.last_message_timestamp == *ts && r.key > *key)
+                })
+            })
+            .take(n)
+            .collect()
+    }
+
+    /// Page an All view to the end, the way `view_page` does, and answer the
+    /// row ids in order.
+    fn page_all(inbox: &Inbox, whispers: &[crate::services::whisper_inbox::RowMeta], limit: usize) -> Vec<String> {
+        let mut cursor = ViewCursor::default();
+        let mut seen = Vec::new();
+        for _ in 0..50 {
+            let m = (!cursor.m_done).then(|| {
+                let (rows, more, _) = inbox.view_on(InboxFilter::All, cursor.m, limit, false);
+                (rows, more)
+            });
+            let w = (!cursor.w_done).then(|| whisper_side(whispers, cursor.w.clone(), limit + 1));
+            let (rows, more, next) = merge_view(m, w, &cursor, limit);
+            seen.extend(rows.iter().map(|r| match r {
+                InboxItem::Mention { row_id, .. } | InboxItem::Whisper { row_id, .. } => row_id.clone(),
+            }));
+            match (more, next) {
+                (true, Some(n)) => cursor = n,
+                _ => return seen,
+            }
+        }
+        panic!("paging never ended");
+    }
+
+    #[test]
+    fn view_all_never_splits_a_fold_or_skips_a_whisper() {
+        // A mention row at 100 folding entries at 90 and 80, and a whisper
+        // conversation at 85 that sorts between the fold's head and its tail.
+        let mut inbox = Inbox::default();
+        inbox.file(said("m80", "1", "spam", NOW + 80), NOW);
+        inbox.file(said("m90", "1", "spam", NOW + 90), NOW);
+        inbox.file(said("m100", "1", "spam", NOW + 100), NOW);
+        inbox.file(said("old", "2", "older", NOW + 10), NOW);
+        let whispers = vec![wrow("85", NOW + 85), wrow("50", NOW + 50), wrow("5", NOW + 5)];
+        for limit in 1..=4 {
+            assert_eq!(
+                page_all(&inbox, &whispers, limit),
+                ["m100", "w:85", "w:50", "old", "w:5"],
+                "limit {limit}"
+            );
+        }
+    }
+
+    #[test]
+    fn view_ties_keep_every_row_once() {
+        let mut inbox = Inbox::default();
+        inbox.file(said("m", "1", "same time", NOW + 50), NOW);
+        let whispers = vec![wrow("b", NOW + 50), wrow("a", NOW + 50), wrow("c", NOW + 40)];
+        for limit in 1..=3 {
+            assert_eq!(page_all(&inbox, &whispers, limit), ["m", "w:a", "w:b", "w:c"], "limit {limit}");
+        }
+    }
+
+    #[test]
+    fn a_chip_that_shows_one_side_never_reads_the_other() {
+        let mut inbox = Inbox::default();
+        inbox.file(said("m", "1", "hi", NOW + 9), NOW);
+        let cursor = ViewCursor { w_done: true, ..ViewCursor::default() };
+        let (rows, more, _) = merge_view(Some((inbox.view(InboxFilter::Mentions, None, 5).0, false)), None, &cursor, 5);
+        assert_eq!(rows.len(), 1);
+        assert!(!more);
+        let cursor = ViewCursor { m_done: true, ..ViewCursor::default() };
+        let (rows, more, _) = merge_view(None, Some(vec![wrow("1", NOW)]), &cursor, 5);
+        assert!(matches!(&rows[..], [InboxItem::Whisper { row_id, .. }] if row_id == "w:1"));
+        assert!(!more);
+    }
+
+    #[test]
+    fn a_cursor_survives_the_round_trip_as_a_string() {
+        let c = ViewCursor { m: Some(NOW), m_done: false, w: Some((NOW - 1, "42".into())), w_done: true };
+        let raw = serde_json::to_string(&c).unwrap();
+        assert_eq!(serde_json::from_str::<ViewCursor>(&raw).unwrap(), c);
+        assert!(serde_json::from_str::<ViewCursor>("not json").is_err());
+    }
+
+    #[test]
+    fn chips_omit_whispers_without_twitch() {
+        assert_eq!(
+            chips_for(false, [3, 2, 1], 7),
+            vec![(InboxFilter::All, 3), (InboxFilter::Mentions, 2), (InboxFilter::Highlights, 1)]
+        );
+        assert_eq!(
+            chips_for(true, [3, 2, 1], 7),
+            vec![
+                (InboxFilter::All, 10),
+                (InboxFilter::Mentions, 2),
+                (InboxFilter::Highlights, 1),
+                (InboxFilter::Whispers, 7)
+            ]
+        );
+    }
+
+    #[test]
+    fn surfaces_and_filters_serialize_as_the_shells_send_them() {
+        assert_eq!(serde_json::to_string(&Surface::Island).unwrap(), "\"island\"");
+        assert_eq!(serde_json::from_str::<Surface>("\"multichat\"").unwrap(), Surface::Multichat);
+        assert_eq!(serde_json::from_str::<InboxFilter>("\"whispers\"").unwrap(), InboxFilter::Whispers);
+        assert_eq!(InboxFilter::Whispers.id(), "whispers");
+        assert!(!InboxFilter::Whispers.admits(MentionKind::Mention));
+        let item = InboxItem::Whisper { row_id: "w:9".into(), whisper: wrow("9", NOW) };
+        let json = serde_json::to_value(&item).unwrap();
+        assert_eq!(json["kind"], "whisper");
+        assert_eq!(json["whisper"]["key"], "9");
     }
 
     #[test]

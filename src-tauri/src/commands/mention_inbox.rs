@@ -3,7 +3,7 @@
 
 use serde::Serialize;
 
-use crate::services::mention_inbox::{self, InboxFilter, InboxRow, MentionEntry};
+use crate::services::mention_inbox::{self, InboxFilter, InboxItem, MentionEntry, Surface};
 
 const PAGE_DEFAULT: usize = 50;
 const PAGE_MAX: usize = 200;
@@ -37,43 +37,79 @@ pub struct InboxChip {
 
 #[derive(Serialize)]
 pub struct InboxView {
-    /// Newest first; identical messages in a row folded into one.
-    pub rows: Vec<InboxRow>,
+    /// Newest first: mention rows (identical messages in a row folded into
+    /// one) and whisper conversations, as the chip asks.
+    pub rows: Vec<InboxItem>,
     pub has_more: bool,
-    /// What `before_ms` asks for to get the next page.
-    pub before_ms: Option<i64>,
+    /// What `cursor` asks for to get the next page; opaque to the shells.
+    pub cursor: Option<String>,
+    /// The inbox counts' last published total (see `inbox_counts`).
     pub unread_total: u32,
-    /// The chips the phones show, in order, with their unread counts.
+    /// The chips to show, in order, with their unread counts.
     pub chips: Vec<InboxChip>,
+    /// The revision of `unread_total`; a shell keeps the highest it has seen.
+    pub counts_rev: u64,
+    /// The island's count from the same snapshot (`Counts::island`), so the
+    /// island has its count at mount before any `inbox-changed` arrives.
+    pub island_unread: u32,
+    /// The whole snapshot the fields above come from, so a shell can seed every
+    /// count it shows (the Whispers window reads `whispers`) from one answer.
+    pub counts: crate::services::inbox_counts::Counts,
 }
 
-/// The phones' inbox: one page of the timeline for a chip (`all`,
-/// `mentions`, `highlights`), with the senders' pictures that are cached.
-/// The rest are looked up and land as `channel-avatars`; read again then.
+/// One page of an inbox for a chip (`all`, `mentions`, `highlights`,
+/// `whispers`) on a surface (`phone`, `island`, `multichat`), with the
+/// senders' pictures that are cached. The rest are looked up and land as
+/// `channel-avatars`; read again then.
 #[tauri::command]
-pub async fn get_inbox_view(filter: Option<InboxFilter>, before_ms: Option<i64>, limit: Option<u32>) -> InboxView {
+pub async fn get_inbox_view(
+    filter: Option<InboxFilter>,
+    cursor: Option<String>,
+    limit: Option<u32>,
+    surface: Option<Surface>,
+) -> InboxView {
     let limit = limit.map(|l| l as usize).unwrap_or(PAGE_DEFAULT).clamp(1, PAGE_MAX);
-    let Some((mut rows, has_more, cursor, unread_total, chips)) =
-        mention_inbox::view(filter.unwrap_or_default(), before_ms, limit)
-    else {
-        return InboxView {
-            rows: Vec::new(),
-            has_more: false,
-            before_ms: None,
-            unread_total: 0,
-            chips: InboxFilter::CHIPS.iter().map(|f| InboxChip { id: f.id(), unread: 0 }).collect(),
-        };
-    };
-    let pictures = mention_inbox::avatars_for(rows.iter().map(|r| &r.entry));
-    for row in &mut rows {
-        row.avatar = mention_inbox::avatar_of(&row.entry, &pictures);
+    let page = mention_inbox::view_page(filter.unwrap_or_default(), surface.unwrap_or_default(), cursor.as_deref(), limit);
+    let mut rows = page.rows;
+    // Whisper rows carry whether their person is live, from the Following
+    // list (no network).
+    let mut whispers: Vec<crate::services::whisper_inbox::RowMeta> = rows
+        .iter()
+        .filter_map(|r| match r {
+            InboxItem::Whisper { whisper, .. } => Some(whisper.clone()),
+            InboxItem::Mention { .. } => None,
+        })
+        .collect();
+    if !whispers.is_empty() {
+        crate::services::whisper_live::fill(&mut whispers).await;
+        let mut filled = whispers.into_iter();
+        for row in &mut rows {
+            if let InboxItem::Whisper { whisper, .. } = row {
+                if let Some(f) = filled.next() {
+                    whisper.live = f.live;
+                }
+            }
+        }
     }
+    let pictures = mention_inbox::avatars_for(rows.iter().filter_map(|r| match r {
+        InboxItem::Mention { entry, .. } => Some(entry),
+        InboxItem::Whisper { .. } => None,
+    }));
+    for row in &mut rows {
+        if let InboxItem::Mention { entry, avatar, .. } = row {
+            *avatar = mention_inbox::avatar_of(entry, &pictures);
+        }
+    }
+    let counts = crate::services::inbox_counts::snapshot();
     InboxView {
         rows,
-        has_more,
-        before_ms: cursor,
-        unread_total,
-        chips: chips.into_iter().map(|(f, unread)| InboxChip { id: f.id(), unread }).collect(),
+        has_more: page.has_more,
+        cursor: page.cursor,
+        unread_total: counts.unread_total,
+        chips: page.chips.into_iter().map(|(f, unread)| InboxChip { id: f.id(), unread }).collect(),
+        counts_rev: counts.rev,
+        island_unread: counts.island,
+        counts: counts.clone(),
     }
 }
 
