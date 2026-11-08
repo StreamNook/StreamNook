@@ -231,6 +231,12 @@ export function DropsChatBarView({
       <Track line={line} className={`h-[3px] shrink-0 ${touch ? 'w-16' : 'w-12'}`} />
       {line.ready ? (
         <span className="shrink-0 whitespace-nowrap font-semibold text-success">Ready</span>
+      ) : splitStatus(line.status).time ? (
+        // Still earning: how far along, then the time left, quieter.
+        <span className="shrink-0 whitespace-nowrap tabular-nums">
+          <span className="font-semibold text-textPrimary">{Math.round(clamp(line.percent))}%</span>
+          <span className="text-textSecondary"> · {splitStatus(line.status).time}</span>
+        </span>
       ) : (
         <Status line={line} short />
       )}

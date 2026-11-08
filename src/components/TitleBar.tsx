@@ -1,5 +1,6 @@
 import { Window } from '@tauri-apps/api/window';
-import { Settings, Proportions, MessageCircle, Pickaxe, Clock, Tv, Download, Check, Pin, PinOff, Lightbulb } from 'lucide-react';
+import { Settings, Proportions, MessageCircle, Download, Check, Pin, PinOff, Lightbulb } from 'lucide-react';
+import { DropsPreviewCard } from './titlebar/DropsPreviewCard';
 import { Minus, X, CornersOut, CornersIn, ArrowsOut, ArrowsIn, Medal, Package, PuzzlePiece } from 'phosphor-react';
 import { IS_MAC, MAC_TRAFFIC_LIGHT_INSET_PX } from '../utils/platform';
 import { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
@@ -858,9 +859,12 @@ const TitleBar = () => {
               }
 
               const isAnyAutomationActive = dropProgressActive || channelPointsActive;
+              // The progress card says it all; the tooltip on top of it only
+              // covered the card's first line.
+              const previewShown = showDropsPreview && dropProgressActive && !!dropProgress?.current_drop;
 
               return (
-                <Tooltip content={title} delay={200}>
+                <Tooltip content={title} delay={200} disabled={previewShown}>
                   <button
                     onClick={() => setShowDropsOverlay(true)}
                     className={`titlebar-icon-btn ${showProgressBadge ? 'gap-1' : ''}`}
@@ -903,68 +907,11 @@ const TitleBar = () => {
                 }}
                 onMouseLeave={handleDropsMouseLeave}
               >
-                {/* Header */}
-                <div className="flex items-center gap-2 mb-2">
-                  <div className="p-1.5 rounded-md bg-accent/20">
-                    <Pickaxe size={14} className="text-accent" />
-                  </div>
-                  <span className="text-xs font-semibold text-textPrimary">Drop progress</span>
-                </div>
-
-                {/* Game & Drop Info */}
-                <div className="space-y-1.5">
-                  <div className="flex items-center gap-2 text-xs">
-                    <span className="text-textMuted">Game:</span>
-                    <span className="text-textPrimary font-medium truncate max-w-[140px]">
-                      {dropProgress.current_drop.game_name}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2 text-xs">
-                    <span className="text-textMuted">Drop:</span>
-                    <span className="text-textPrimary font-medium truncate max-w-[140px]">
-                      {dropProgress.current_drop.drop_name || '…'}
-                    </span>
-                  </div>
-                  {dropProgress.current_channel && (
-                    <div className="flex items-center gap-2 text-xs">
-                      <Tv size={10} className="text-textMuted" />
-                      <span className="text-textSecondary truncate max-w-[160px]">
-                        {dropProgress.current_channel.display_name}
-                      </span>
-                    </div>
-                  )}
-                </div>
-
-                {/* Progress Bar */}
-                <div className="mt-3">
-                  <div className="flex items-center justify-between text-xs mb-1">
-                    <span className="text-textMuted flex items-center gap-1">
-                      <Clock size={10} />
-                      Progress
-                    </span>
-                    <span className="text-accent font-semibold">{progressPercent}%</span>
-                  </div>
-                  <div className="h-1.5 bg-surface rounded-full overflow-hidden">
-                    <div 
-                      className="h-full rounded-full automation-progress-bar transition-all duration-500"
-                      style={{ width: `${progressPercent}%` }}
-                    />
-                  </div>
-                  <div className="flex items-center justify-between text-[10px] text-textMuted mt-1">
-                    <span>{dropProgress.current_drop.current_minutes} min</span>
-                    <span>{dropProgress.current_drop.required_minutes} min</span>
-                  </div>
-                  {dropProgress.current_drop.detail && (
-                    <div className="text-[10px] text-textSecondary mt-1 truncate">
-                      {dropProgress.current_drop.detail}
-                    </div>
-                  )}
-                </div>
-
-                {/* Click hint */}
-                <div className="mt-2 pt-2 border-t border-borderSubtle">
-                  <span className="text-[10px] text-textMuted">Click to view all drops</span>
-                </div>
+                <DropsPreviewCard
+                  drop={dropProgress.current_drop}
+                  channelName={dropProgress.current_channel?.display_name}
+                  percent={progressPercent}
+                />
               </div>,
               document.body
             )}

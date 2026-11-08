@@ -2983,6 +2983,14 @@ body {
   --color-accent: var(--color-success);
   --drops-heat: 1;
 }
+/* The lip on the message box stays quiet: its glass still takes the tint,
+   but no glow spreads around it and its rim only brightens a little, so it
+   never pulls the eye off chat. */
+.chrome-glaze.drops-bar.drops-lip {
+  --glaze-ring: calc(12% + var(--drops-heat) * 10%);
+  --glaze-inner: calc(6% + var(--drops-heat) * 6%);
+  box-shadow: none;
+}
 /* A drops fill moves about once a minute. A width transition inside a fixed
    track is the one layout animation the chat column allows; Motion Off
    collapses it with every other transition. The fill runs from a deeper tone

@@ -137,9 +137,9 @@ describe('DropsChatBarView (the lip)', () => {
     expect(html).not.toContain('liquid-glass-panel drops-bar');
     expect(html).not.toMatch(/absolute left-0 right-0 bottom-0/);
   });
-  it('keeps only the time at rest and nothing about the other rewards', () => {
+  it('says how far along and the time left at rest, and nothing about the other rewards', () => {
     const html = lip({ more: 2, moreArt: ['a.png', 'b.png'] });
-    expect(html).toContain('<span class="font-semibold text-textPrimary">12m</span></span>');
+    expect(html).toContain('<span class="font-semibold text-textPrimary">72%</span><span class="text-textSecondary"> · 12m</span>');
     expect(html).not.toContain('to watch');
     expect(html).not.toContain('drops-stack');
   });
