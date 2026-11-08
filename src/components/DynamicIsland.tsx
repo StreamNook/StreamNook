@@ -1,7 +1,7 @@
 import { Fragment, useState, useEffect, useEffectEvent, useLayoutEffect, useRef, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Bell, BellOff, Radio, MessageCircle, User, Download, Award, Check, CheckCheck, Info, CheckCircle2, AlertTriangle, XCircle, AtSign, Reply, Highlighter } from 'lucide-react';
+import { Archive, Bell, BellOff, Radio, MessageCircle, User, Download, Award, Check, CheckCheck, Info, CheckCircle2, AlertTriangle, XCircle, AtSign, Reply, Highlighter } from 'lucide-react';
 import { X, SpeakerSlash, Trash, PuzzlePiece, Package, Gift, Sparkle } from 'phosphor-react';
 import { listen, emit } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
@@ -11,7 +11,24 @@ import { exitPlayerFullscreenForBarAction } from '../utils/windowFullscreen';
 import { requestChangelog } from '../utils/changelogEvents';
 import { requestWallet } from '../utils/walletRequest';
 import { openMentionInMain } from '../stores/mentionJumpStore';
-import { MENTION_INBOX_CHANGED_EVENT, MENTION_NOTIFY_EVENT, toggleMentionChatMuted } from '../stores/mentionInboxStore';
+import { MENTION_NOTIFY_EVENT, toggleMentionChatMuted, useInboxCounts } from '../stores/mentionInboxStore';
+import { useInboxView } from './inbox/useInboxView';
+import {
+    dropRows,
+    foldedLine,
+    keepCachedNotification,
+    mentionRowIds,
+    mergeIslandHistory,
+    readRows,
+    rowUnread,
+    toMentionItem,
+    toWhisperItem,
+    type IslandItem,
+    type MentionItem,
+    type WhisperRowItem,
+} from './inbox/islandHistory';
+import { PinnedChatter } from './chat/PinnedChatter';
+import { WhisperParts } from './whispers/WhisperParts';
 import { isProviderId } from '../types/providers';
 import { Logger } from '../utils/logger';
 import { LiveAlertIslandAction } from './LiveAlertIslandAction';
@@ -51,8 +68,8 @@ import type {
     MembershipGiftNotificationData,
     MentionEntry,
     MentionKind,
-    MentionPage,
-    WhisperUpdate,
+    WhisperRowMeta,
+    WhisperUpdatePayload,
 } from '../types';
 
 const MAX_NOTIFICATIONS = 20;
@@ -64,34 +81,9 @@ const CACHE_EXPIRY_DAYS = 7;
 const TEST_NOTIFICATION_TTL_MS = 8000;
 // Click actions kept for notifications shown in a MultiChat window.
 const MAX_MIRRORED_ACTIONS = 12;
-// Mentions come from Rust's inbox a page at a time; scrolling to the end of
-// the history asks for the next older page.
-const MENTION_PAGE = 20;
-/** `get_mention_inbox` caps a page here. */
-const MENTION_PAGE_MAX = 200;
 // The open panel with nothing in it: the header (42) and the empty state
 // (its ring, line and padding).
 const EMPTY_PANEL_HEIGHT = 42 + 190;
-
-/** A mention or reply from Rust's inbox, drawn in the history beside the
- *  island's own notifications. Never cached here: Rust owns the entry and its
- *  read state, so these are re-read from it, not saved with the rest. */
-interface MentionItem {
-    id: string;
-    type: 'mention';
-    timestamp: number;
-    read: boolean;
-    data: MentionEntry;
-}
-type IslandItem = DynamicIslandNotification | MentionItem;
-
-const toMentionItem = (entry: MentionEntry): MentionItem => ({
-    id: `mention:${entry.id}`,
-    type: 'mention',
-    timestamp: entry.at_ms,
-    read: entry.read,
-    data: entry,
-});
 
 const MENTION_KIND_WORDS: Record<MentionKind, string> = {
     mention: 'mentioned you',
@@ -109,7 +101,7 @@ const MentionGlyph = ({ kind, size }: { kind: MentionKind; size: number }) => {
 
 // A mention's row in the history: who, in which chat, and what they said.
 // The row around it (hover, read dimming, time and actions) is the island's.
-const MentionRowBody = ({ entry, showPlatform }: { entry: MentionEntry; showPlatform: boolean }) => {
+const MentionRowBody = ({ entry, foldedCount, showPlatform }: { entry: MentionEntry; foldedCount: number; showPlatform: boolean }) => {
     const platform = showPlatform && isProviderId(entry.platform) ? entry.platform : null;
     return (
         <>
@@ -143,10 +135,68 @@ const MentionRowBody = ({ entry, showPlatform }: { entry: MentionEntry; showPlat
                 ) : (
                     <p className="text-white/50 text-sm line-clamp-2 break-words mt-0.5">{entry.text}</p>
                 )}
+                {foldedCount > 0 && (
+                    <p className="text-white/35 text-[12px] mt-0.5">{foldedLine(entry.kind, foldedCount + 1)}</p>
+                )}
             </div>
         </>
     );
 };
+
+// A whisper conversation's row in the history, in the Whispers window's row
+// look at the island's own avatar size (34 px, so it lines up with every
+// other row here): the picture with a live ring while they stream, their
+// badges and painted name, the unread count as an accent capsule at the end
+// of the name line, and the newest message under it. The name's color is
+// lifted to read on the always-dark panel, like a mention's.
+const WhisperRowBody = ({ whisper }: { whisper: WhisperRowMeta }) => (
+    <>
+        <div className="relative flex-shrink-0">
+            {whisper.profile_image_url ? (
+                <SevenTvAvatar
+                    cosmeticsId={whisper.user_id}
+                    px={34}
+                    motion="hover"
+                    src={whisper.profile_image_url}
+                    alt=""
+                    className={`w-[34px] h-[34px] rounded-full object-cover ${whisper.live ? 'ring-2 ring-live/80' : ''}`}
+                />
+            ) : (
+                <div className="sn-notif-glyph">
+                    <MessageCircle size={21} className="text-purple-400" />
+                </div>
+            )}
+        </div>
+        <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-1.5 min-w-0 text-sm">
+                <PinnedChatter
+                    provider="twitch"
+                    userId={whisper.user_id}
+                    name={whisper.user_name}
+                    login={whisper.user_login}
+                    color={whisper.color ?? undefined}
+                    badges={whisper.badges}
+                    variant="line"
+                    nameClassName="min-w-0 truncate font-semibold"
+                    plainNameStyle={{ color: whisper.color ? `oklch(from ${whisper.color} max(l, 0.75) c h)` : '#ffffff' }}
+                />
+                <span className="flex-1" />
+                {whisper.unread_count > 0 && (
+                    <span
+                        className="flex-shrink-0 min-w-[18px] h-[18px] px-1.5 rounded-full text-[11px] font-bold leading-[18px] text-center tabular-nums"
+                        style={{ background: 'var(--color-accent)', color: 'color-mix(in srgb, var(--color-accent) 14%, black)' }}
+                    >
+                        {whisper.unread_count > 99 ? '99+' : whisper.unread_count}
+                    </span>
+                )}
+            </div>
+            <p className="text-white/50 text-sm line-clamp-2 break-words mt-0.5">
+                {whisper.last_is_sent && <span className="text-white/35">You: </span>}
+                <WhisperParts parts={whisper.last_parts} text={whisper.last_text} />
+            </p>
+        </div>
+    </>
+);
 
 
 interface TwitchRewardFromBackend {
@@ -239,9 +289,12 @@ const loadCachedNotifications = (): DynamicIslandNotification[] => {
         const { notifications } = JSON.parse(cached);
         const expiryTime = CACHE_EXPIRY_DAYS * 24 * 60 * 60 * 1000;
 
-        // Filter out notifications older than expiry time
+        // Filter out notifications older than expiry time, and the old whisper
+        // entries: a whisper conversation is an inbox row now. The save effect
+        // writes the filtered list back on the first render.
+        const now = Date.now();
         const validNotifications = notifications.filter(
-            (n: DynamicIslandNotification) => Date.now() - n.timestamp < expiryTime
+            (n: DynamicIslandNotification) => keepCachedNotification(n, now, expiryTime)
         );
 
         return validNotifications.slice(0, MAX_NOTIFICATIONS);
@@ -277,6 +330,8 @@ const getPreviewText = (n: IslandItem): string => {
             if (d.previous_game_name) return `${d.streamer_name} switched to ${d.game_name}`;
             return d.game_name ? `${d.streamer_name} is live • ${d.game_name}` : `${d.streamer_name} is live`;
         }
+        case 'whisper_row':
+            return `Whisper from ${n.data.user_name}`;
         case 'whisper':
             return `Whisper from ${(n.data as WhisperNotificationData).from_user_name}`;
         case 'update':
@@ -338,6 +393,11 @@ const renderPreviewIcon = (n: IslandItem): React.ReactNode => {
         case 'mention':
             // Rust keeps no picture of the sender, so the kind's mark.
             return <MentionGlyph kind={n.data.kind} size={11} />;
+        case 'whisper_row':
+            // Whispers are Twitch's, so the sender id is a bare Twitch id.
+            return n.data.profile_image_url
+                ? <SevenTvAvatar cosmeticsId={n.data.user_id} px={16} src={n.data.profile_image_url} alt="" className="w-4 h-4 rounded-full object-cover flex-shrink-0" />
+                : <MessageCircle size={11} className="text-purple-400 flex-shrink-0" />;
         case 'live': {
             const d = n.data as LiveNotificationData;
             return d.streamer_avatar
@@ -581,101 +641,78 @@ const DynamicIsland = () => {
         saveCachedNotifications(notifications);
     }, [notifications]);
 
-    // Mentions and replies: Rust's inbox for the signed-in account, newest
-    // first. Rust owns the entries, their read state and the unread total; the
+    // The inbox in the island: Rust's view for this surface, newest first, a
+    // page at a time. Mentions and replies from chats that were not on screen
+    // (one in the chat you were reading is not news; MultiChat's list still
+    // keeps it), folded like the phones', and whisper conversations at their
+    // newest message. Rust owns the rows, their read state and the counts; the
     // history draws the loaded pages and sends what the viewer does.
-    const [mentions, setMentions] = useState<MentionEntry[]>([]);
-    const [mentionsHaveMore, setMentionsHaveMore] = useState(false);
-    const [mentionUnread, setMentionUnread] = useState(0);
-    const mentionsLoaded = useRef(MENTION_PAGE);
-    const mentionsLoadingOlder = useRef(false);
-    useEffect(() => {
-        mentionsLoaded.current = Math.max(MENTION_PAGE, mentions.length);
-    }, [mentions.length]);
+    const inbox = useInboxView('island', !IS_MOBILE);
+    const inboxCounts = useInboxCounts();
+    const islandUnread = inboxCounts?.island ?? 0;
     const mutedRooms = settings.mentions?.muted_channels;
     const mutedRoomSet = useMemo(() => new Set((mutedRooms ?? []).map((r) => r.toLowerCase())), [mutedRooms]);
 
-    // The first pages again, as many as are loaded, after every change Rust
-    // reports (a new mention, a read, a removal, an account switch). Changes
-    // come in bursts in a busy chat, so they are gathered for a moment. Only
-    // mentions from chats that were not on screen: one in the chat you were
-    // reading is not news (MultiChat's Mentions list still keeps it).
+    // The history coming on screen is an inbox opening: Rust syncs
+    // whispers with Twitch if a minute has passed since the last time.
     useEffect(() => {
-        if (IS_MOBILE) return;
-        let alive = true;
-        let timer: ReturnType<typeof setTimeout> | null = null;
-        const reload = () => {
-            invoke<MentionPage>('get_mention_inbox', { limit: Math.min(mentionsLoaded.current, MENTION_PAGE_MAX), unseenOnly: true })
-                .then((page) => {
-                    if (!alive) return;
-                    setMentions(page.entries);
-                    setMentionsHaveMore(page.has_more);
-                    setMentionUnread(page.unread_total);
-                })
-                .catch((e) => Logger.debug('[DynamicIsland] get_mention_inbox failed:', e));
-        };
-        reload();
-        const unlisten = listen(MENTION_INBOX_CHANGED_EVENT, () => {
-            if (timer) clearTimeout(timer);
-            timer = setTimeout(reload, 120);
-        });
-        return () => {
-            alive = false;
-            if (timer) clearTimeout(timer);
-            unlisten.then((fn) => fn());
-        };
-    }, []);
+        if (!isExpanded) return;
+        invoke('inbox_opened').catch((e) => Logger.debug('[DynamicIsland] inbox_opened failed:', e));
+    }, [isExpanded]);
 
-    const loadOlderMentions = useCallback(() => {
-        const last = mentions[mentions.length - 1];
-        if (!mentionsHaveMore || !last || mentionsLoadingOlder.current) return;
-        mentionsLoadingOlder.current = true;
-        invoke<MentionPage>('get_mention_inbox', { beforeMs: last.at_ms, limit: MENTION_PAGE, unseenOnly: true })
-            .then((page) => {
-                setMentions((prev) => {
-                    const seen = new Set(prev.map((m) => m.id));
-                    return [...prev, ...page.entries.filter((m) => !seen.has(m.id))];
-                });
-                setMentionsHaveMore(page.has_more);
-            })
-            .catch((e) => Logger.debug('[DynamicIsland] older mentions failed:', e))
-            .finally(() => { mentionsLoadingOlder.current = false; });
-    }, [mentions, mentionsHaveMore]);
-
-    // Read here at once; Rust confirms through the change event.
-    const markMentionsReadHere = (ids: string[] | null) => {
-        const hit = (m: MentionEntry) => !m.read && (ids === null || ids.includes(m.id));
-        const newlyRead = mentions.filter(hit).length;
-        if (ids === null) setMentionUnread(0);
-        else if (newlyRead > 0) setMentionUnread((u) => Math.max(0, u - newlyRead));
-        setMentions((prev) => prev.map((m) => (hit(m) ? { ...m, read: true } : m)));
-    };
-
-    // Opening one: Rust marks it read, its chat opens and scrolls to it.
+    // Opening a mention: Rust marks it read, its chat opens and scrolls to it.
     const openMention = (entry: MentionEntry) => {
-        markMentionsReadHere([entry.id]);
+        inbox.patch((rows) => readRows(rows, [entry.id]));
         setIsExpanded(false);
         void openMentionInMain(entry.id, entry.open_key || entry.room);
     };
 
-    const markMentionRead = (entry: MentionEntry, e: React.MouseEvent) => {
+    const markMentionRead = (item: MentionItem, e: React.MouseEvent) => {
         e.stopPropagation();
-        markMentionsReadHere([entry.id]);
-        invoke('mark_mentions_read', { ids: [entry.id] })
+        inbox.patch((rows) => readRows(rows, [item.rowId]));
+        invoke('mark_mentions_read', { ids: mentionRowIds(item) })
             .catch((err) => Logger.debug('[DynamicIsland] mark_mentions_read failed:', err));
     };
 
-    const removeMention = (entry: MentionEntry, e: React.MouseEvent) => {
+    const removeMention = (item: MentionItem, e: React.MouseEvent) => {
         e.stopPropagation();
-        if (!entry.read) setMentionUnread((u) => Math.max(0, u - 1));
-        setMentions((prev) => prev.filter((m) => m.id !== entry.id));
-        invoke('remove_mention', { id: entry.id })
-            .catch((err) => Logger.debug('[DynamicIsland] remove_mention failed:', err));
+        inbox.patch((rows) => dropRows(rows, [item.rowId]));
+        for (const id of mentionRowIds(item)) {
+            invoke('remove_mention', { id })
+                .catch((err) => Logger.debug('[DynamicIsland] remove_mention failed:', err));
+        }
     };
 
     const toggleMentionMute = (entry: MentionEntry, e: React.MouseEvent) => {
         e.stopPropagation();
         void toggleMentionChatMuted(entry.room);
+    };
+
+    // Opening a whisper conversation: the Whispers window on it, which reads it.
+    const openWhisperRow = (whisper: WhisperRowMeta) => {
+        setIsExpanded(false);
+        openWhisperWithUser({
+            id: whisper.user_id,
+            login: whisper.user_login,
+            display_name: whisper.user_name,
+            profile_image_url: whisper.profile_image_url ?? undefined,
+        });
+    };
+
+    const markWhisperRead = (item: WhisperRowItem, e: React.MouseEvent) => {
+        e.stopPropagation();
+        inbox.patch((rows) => readRows(rows, [item.rowId]));
+        invoke('whisper_mark_read', { key: item.data.key })
+            .catch((err) => Logger.debug('[DynamicIsland] whisper_mark_read failed:', err));
+    };
+
+    // Archive is Twitch's own: the conversation leaves every inbox, here and on
+    // twitch.tv, until someone whispers again.
+    const archiveWhisper = (item: WhisperRowItem, e: React.MouseEvent) => {
+        e.stopPropagation();
+        inbox.patch((rows) => dropRows(rows, [item.rowId]));
+        invoke('whisper_archive', { key: item.data.key })
+            .catch((err) => Logger.debug('[DynamicIsland] whisper_archive failed:', err));
     };
 
     // Size the preview pill to its content so long streamer/game names are shown
@@ -1177,7 +1214,7 @@ const DynamicIsland = () => {
         // Whispers type, streamer mode, and not the conversation on screen),
         // the same decision the phones post from. The announcement already
         // carries the sender's picture.
-        const unlisten = listen<WhisperUpdate>('whisper-notify', (event) => {
+        const unlisten = listen<WhisperUpdatePayload>('whisper-notify', (event) => {
             const whisper = event.payload.message;
             if (!whisper || whisper.is_sent) return;
             const data = {
@@ -1188,25 +1225,12 @@ const DynamicIsland = () => {
                 text: whisper.message,
             };
             const profileImageUrl = event.payload.meta.profile_image_url ?? undefined;
+            const ownerId = event.payload.owner_id;
 
-            // Add to Dynamic Island if enabled
+            // The island shows the preview only: the conversation's history
+            // row is the inbox row Rust already has.
             if (useDynamicIsland) {
-                const notification: DynamicIslandNotification = {
-                    id: `whisper-${data.whisper_id}`,
-                    type: 'whisper',
-                    timestamp: Date.now(),
-                    read: false,
-                    data: {
-                        from_user_id: data.from_user_id,
-                        from_user_login: data.from_user_login,
-                        from_user_name: data.from_user_name,
-                        message: data.text,
-                        whisper_id: data.whisper_id,
-                        profile_image_url: profileImageUrl,
-                    } as WhisperNotificationData,
-                };
-
-                addNotification(notification);
+                showPreviewOf(toWhisperItem(event.payload.meta));
             }
 
             // The sound follows its own toggle, not the surface: inside the
@@ -1263,6 +1287,8 @@ const DynamicIsland = () => {
                     login: data.from_user_login,
                     name: data.from_user_name,
                     avatar: profileImageUrl ?? null,
+                    ownerId,
+                    ownerName: whisper.to_user_name || null,
                 },
             });
         });
@@ -1270,7 +1296,7 @@ const DynamicIsland = () => {
         return () => {
             unlisten.then((fn) => fn());
         };
-    }, [addNotification, playNotificationSound, soundEnabled, useDynamicIsland, useToast, addToast, openWhisperWithUser, mirrorNotification]);
+    }, [showPreviewOf, playNotificationSound, soundEnabled, useDynamicIsland, useToast, addToast, openWhisperWithUser, mirrorNotification]);
 
     // Rewards Twitch names for your account (a badge earned, a drop reward
     // waiting), off its own notification feed, polled and classified in Rust.
@@ -1961,16 +1987,17 @@ const DynamicIsland = () => {
         setNotifications(prev => prev.filter(n => n.id !== id));
     };
 
-    // Clear all notifications, the mentions with them: the button clears what
-    // the panel shows.
+    // Clear all: the island's own entries, the mentions, and the whispers shown
+    // here. The whispers stay in the Whispers window and on the phones; only the
+    // island and MultiChat stop listing them.
     const clearAllNotifications = () => {
         setNotifications([]);
-        if (mentions.length > 0 || mentionUnread > 0) {
-            setMentions([]);
-            setMentionsHaveMore(false);
-            setMentionUnread(0);
+        if (inbox.rows.length > 0 || islandUnread > 0) {
+            inbox.patch(() => []);
             invoke('clear_mention_inbox')
                 .catch((e) => Logger.debug('[DynamicIsland] clear_mention_inbox failed:', e));
+            invoke('whisper_island_clear')
+                .catch((e) => Logger.debug('[DynamicIsland] whisper_island_clear failed:', e));
         }
     };
 
@@ -1982,37 +2009,35 @@ const DynamicIsland = () => {
         );
     };
 
-    // Mark all notifications as read
+    // Mark all read: the island's own, every mention, every whisper conversation.
     const markAllAsRead = () => {
         setNotifications(prev =>
             prev.map(n => ({ ...n, read: true }))
         );
-        if (mentionUnread > 0) {
-            markMentionsReadHere(null);
+        if (islandUnread > 0 || inbox.rows.some(rowUnread)) {
+            inbox.patch((rows) => readRows(rows, null));
             invoke('mark_mentions_read', {})
                 .catch((e) => Logger.debug('[DynamicIsland] mark_mentions_read failed:', e));
+            invoke('whisper_mark_all_read')
+                .catch((e) => Logger.debug('[DynamicIsland] whisper_mark_all_read failed:', e));
         }
     };
 
-    // Get unread count: the island's own, plus every unread mention Rust
-    // holds (loaded or not).
-    const unreadCount = notifications.filter(n => !n.read).length + mentionUnread;
+    // Get unread count: the island's own, plus Rust's island count (every unread
+    // mention and whisper the island lists, loaded or not).
+    const unreadCount = notifications.filter(n => !n.read).length + islandUnread;
 
-    // One history, newest first. While older mentions are still unloaded the
-    // island's own entries stop at the oldest loaded mention, so loading the
-    // next page only ever adds below the end and never pushes rows down.
-    const items = useMemo<IslandItem[]>(() => {
-        const cutoff = mentionsHaveMore && mentions.length > 0
-            ? mentions[mentions.length - 1].at_ms
-            : -Infinity;
-        return [
-            ...notifications.filter((n) => n.timestamp >= cutoff),
-            ...mentions.map(toMentionItem),
-        ].sort((a, b) => b.timestamp - a.timestamp);
-    }, [notifications, mentions, mentionsHaveMore]);
+    // One history, newest first (see mergeIslandHistory).
+    const items = useMemo<IslandItem[]>(
+        () => mergeIslandHistory(notifications, inbox.rows, inbox.hasMore),
+        [notifications, inbox.rows, inbox.hasMore],
+    );
     // A platform mark beside the chat only where mentions from more than one
     // platform share the list.
-    const mentionPlatformsMix = useMemo(() => new Set(mentions.map((m) => m.platform)).size > 1, [mentions]);
+    const mentionPlatformsMix = useMemo(
+        () => new Set(inbox.rows.flatMap((r) => (r.kind === 'mention' ? [r.entry.platform] : []))).size > 1,
+        [inbox.rows],
+    );
 
 
     // Format time ago - uses 'now' state (updated every 30s) to avoid impure function calls during render
@@ -2291,6 +2316,11 @@ const DynamicIsland = () => {
                                 openMention(latestNotification.data);
                                 return;
                             }
+                            // A whisper's preview opens its conversation.
+                            if (showPreview && latestNotification?.type === 'whisper_row') {
+                                openWhisperRow(latestNotification.data);
+                                return;
+                            }
                             setIsExpanded(true);
                         }
                     }}
@@ -2338,6 +2368,9 @@ const DynamicIsland = () => {
                                             {/* A mention also says what was said, quieter, after its line. */}
                                             {latestNotification.type === 'mention' && !latestNotification.data.removed && !!latestNotification.data.text && (
                                                 <span className="ml-1.5 font-normal text-white/55">{latestNotification.data.text}</span>
+                                            )}
+                                            {latestNotification.type === 'whisper_row' && !!latestNotification.data.last_text && (
+                                                <span className="ml-1.5 font-normal text-white/55">{latestNotification.data.last_text}</span>
                                             )}
                                         </span>
                                     </motion.div>
@@ -2438,7 +2471,7 @@ const DynamicIsland = () => {
                                     className="flex-1 overflow-y-auto scrollbar-thin [mask-image:linear-gradient(to_bottom,#000_calc(100%-20px),transparent)]"
                                     onScroll={(e) => {
                                         const el = e.currentTarget;
-                                        if (el.scrollHeight - el.scrollTop - el.clientHeight < 240) loadOlderMentions();
+                                        if (el.scrollHeight - el.scrollTop - el.clientHeight < 240) inbox.loadOlder();
                                     }}
                                 >
                                     {items.length === 0 ? (
@@ -2463,6 +2496,7 @@ const DynamicIsland = () => {
                                                 && (i === 0 || groupLabel(items[i - 1].timestamp) !== label);
                                             const open = () => {
                                                 if (notification.type === 'mention') openMention(notification.data);
+                                                else if (notification.type === 'whisper_row') openWhisperRow(notification.data);
                                                 else void handleNotificationClick(notification);
                                             };
                                             return (
@@ -2493,8 +2527,11 @@ const DynamicIsland = () => {
                                                     {notification.type === 'mention' ? (
                                                         <MentionRowBody
                                                             entry={notification.data}
+                                                            foldedCount={notification.folded.length}
                                                             showPlatform={mentionPlatformsMix}
                                                         />
+                                                    ) : notification.type === 'whisper_row' ? (
+                                                        <WhisperRowBody whisper={notification.data} />
                                                     ) : notification.type === 'live' ? (
                                                         <>
                                                             {/* Live notification */}
@@ -2892,7 +2929,9 @@ const DynamicIsland = () => {
                                                                     type="button"
                                                                     aria-label="Mark as read"
                                                                     onClick={(e) => notification.type === 'mention'
-                                                                        ? markMentionRead(notification.data, e)
+                                                                        ? markMentionRead(notification, e)
+                                                                        : notification.type === 'whisper_row'
+                                                                        ? markWhisperRead(notification, e)
                                                                         : markAsRead(notification.id, e)}
                                                                     className="text-white/60 hover:text-green-400 transition-all p-0.5"
                                                                     data-keeps-player-fullscreen
@@ -2921,19 +2960,33 @@ const DynamicIsland = () => {
                                                                 </Tooltip>
                                                             );
                                                         })()}
-                                                        <Tooltip content={notification.type === 'mention' ? 'Remove' : 'Remove notification'} side="top">
-                                                            <button
-                                                                type="button"
-                                                                aria-label={notification.type === 'mention' ? 'Remove' : 'Remove notification'}
-                                                                onClick={(e) => notification.type === 'mention'
-                                                                    ? removeMention(notification.data, e)
-                                                                    : clearNotification(notification.id, e)}
-                                                                className="text-white/60 hover:text-white transition-all p-0.5"
-                                                                data-keeps-player-fullscreen
-                                                            >
-                                                                <X size={14} />
-                                                            </button>
-                                                        </Tooltip>
+                                                        {notification.type === 'whisper_row' ? (
+                                                            <Tooltip content="Archive" side="top">
+                                                                <button
+                                                                    type="button"
+                                                                    aria-label="Archive"
+                                                                    onClick={(e) => archiveWhisper(notification, e)}
+                                                                    className="text-white/60 hover:text-white transition-all p-0.5"
+                                                                    data-keeps-player-fullscreen
+                                                                >
+                                                                    <Archive size={14} />
+                                                                </button>
+                                                            </Tooltip>
+                                                        ) : (
+                                                            <Tooltip content={notification.type === 'mention' ? 'Remove' : 'Remove notification'} side="top">
+                                                                <button
+                                                                    type="button"
+                                                                    aria-label={notification.type === 'mention' ? 'Remove' : 'Remove notification'}
+                                                                    onClick={(e) => notification.type === 'mention'
+                                                                        ? removeMention(notification, e)
+                                                                        : clearNotification(notification.id, e)}
+                                                                    className="text-white/60 hover:text-white transition-all p-0.5"
+                                                                    data-keeps-player-fullscreen
+                                                                >
+                                                                    <X size={14} />
+                                                                </button>
+                                                            </Tooltip>
+                                                        )}
                                                         </div>
                                                     </div>
                                                 </motion.div>
