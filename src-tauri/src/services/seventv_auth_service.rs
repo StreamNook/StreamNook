@@ -261,22 +261,20 @@ impl SevenTVAuthService {
             .send()
             .await?;
 
-        if !response.status().is_success() {
-            // Token might be invalid, clear it
-            debug!("[7TV_AUTH] Token validation failed - clearing stored token");
-            let _ = Self::logout().await;
-            return Ok(false);
-        }
-
-        let response_json: serde_json::Value = response.json().await?;
-
-        // Check if we got user data (token is valid)
-        if response_json["data"]["users"]["me"]["id"].is_string() {
-            Ok(true)
-        } else {
-            // Token invalid
-            let _ = Self::logout().await;
-            Ok(false)
+        match validation_verdict(
+            response.status().as_u16(),
+            response.json().await.ok().as_ref(),
+        ) {
+            Validation::Valid => Ok(true),
+            Validation::Rejected => {
+                debug!("[7TV_AUTH] 7TV rejected the token - clearing it");
+                let _ = Self::logout().await;
+                Ok(false)
+            }
+            // A rate limit, an outage or a bad answer says nothing about the
+            // token: keep it, and trust its own expiry. Wiping it here signed
+            // people out of 7TV on any hiccup while Profile was open.
+            Validation::Unknown => Ok(!Self::is_token_expired(&token)),
         }
     }
 
@@ -400,18 +398,82 @@ impl SevenTVAuthService {
             .send()
             .await?;
 
-        if !response.status().is_success() {
-            let _ = Self::logout_for(twitch_id).await;
-            return Ok(false);
+        match validation_verdict(
+            response.status().as_u16(),
+            response.json().await.ok().as_ref(),
+        ) {
+            Validation::Valid => Ok(true),
+            Validation::Rejected => {
+                let _ = Self::logout_for(twitch_id).await;
+                Ok(false)
+            }
+            Validation::Unknown => Ok(!Self::is_token_expired(&token)),
         }
+    }
+}
 
-        let json: serde_json::Value = response.json().await?;
-        if json["data"]["users"]["me"]["id"].is_string() {
-            Ok(true)
-        } else {
-            let _ = Self::logout_for(twitch_id).await;
-            Ok(false)
-        }
+/// What a `users.me` check says about a 7TV token.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Validation {
+    Valid,
+    /// 7TV refused it (401, 403, or `LOGIN_REQUIRED`): clear it.
+    Rejected,
+    /// A rate limit, outage or odd answer: the token's fate is unknown, keep it.
+    Unknown,
+}
+
+pub(crate) fn validation_verdict(status: u16, body: Option<&serde_json::Value>) -> Validation {
+    if status == 401 || status == 403 {
+        return Validation::Rejected;
+    }
+    if !(200..300).contains(&status) {
+        return Validation::Unknown;
+    }
+    let Some(body) = body else {
+        return Validation::Unknown;
+    };
+    if body["data"]["users"]["me"]["id"].is_string() {
+        return Validation::Valid;
+    }
+    let login_required = body["errors"].as_array().is_some_and(|errors| {
+        errors.iter().any(|e| {
+            e["extensions"]["code"].as_str() == Some("LOGIN_REQUIRED")
+                || e["message"]
+                    .as_str()
+                    .is_some_and(|m| m.contains("LOGIN_REQUIRED"))
+        })
+    });
+    // A signed-out `me` comes back null with no error on some 7TV builds.
+    let me_missing = body["data"]["users"].is_object() && body["data"]["users"]["me"].is_null();
+    if login_required || (me_missing && body["errors"].is_null()) {
+        Validation::Rejected
+    } else {
+        Validation::Unknown
+    }
+}
+
+#[cfg(test)]
+mod validation_tests {
+    use super::{validation_verdict, Validation};
+    use serde_json::json;
+
+    #[test]
+    fn a_7tv_hiccup_keeps_the_token() {
+        assert_eq!(validation_verdict(429, None), Validation::Unknown);
+        assert_eq!(validation_verdict(503, None), Validation::Unknown);
+        assert_eq!(validation_verdict(200, None), Validation::Unknown);
+        let other = json!({ "errors": [{ "message": "internal" }], "data": null });
+        assert_eq!(validation_verdict(200, Some(&other)), Validation::Unknown);
+    }
+
+    #[test]
+    fn only_a_real_refusal_clears_it() {
+        assert_eq!(validation_verdict(401, None), Validation::Rejected);
+        let login =
+            json!({ "errors": [{ "extensions": { "code": "LOGIN_REQUIRED" } }], "data": null });
+        assert_eq!(validation_verdict(200, Some(&login)), Validation::Rejected);
+        let ok = json!({ "data": { "users": { "me": { "id": "01H" } } } });
+        assert_eq!(validation_verdict(200, Some(&ok)), Validation::Valid);
     }
 }
 

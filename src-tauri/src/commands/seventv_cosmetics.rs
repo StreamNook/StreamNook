@@ -59,26 +59,6 @@ fn seventv_user_id_from_jwt(token: &str) -> String {
     }
 }
 
-/// Shared init-script that surfaces the 7TV token via an `about:blank#7TV_TOKEN=`
-/// navigation the Rust side polls for.
-const SEVENTV_TOKEN_CAPTURE_SCRIPT: &str = r#"
-    (function() {
-        let tokenFound = false;
-        function checkForToken() {
-            if (tokenFound) return;
-            const token = localStorage.getItem('7tv-token');
-            if (token && token.length > 50) {
-                tokenFound = true;
-                window.location.href = 'about:blank#7TV_TOKEN=' + encodeURIComponent(token);
-                return;
-            }
-            setTimeout(checkForToken, 500);
-        }
-        setTimeout(checkForToken, 800);
-        setInterval(() => { if (!tokenFound) checkForToken(); }, 1000);
-    })();
-"#;
-
 // ============================================================================
 // 7TV Auth Commands
 // ============================================================================
@@ -688,79 +668,240 @@ pub async fn open_seventv_login_window_for_account(
 }
 
 /// Silently refresh an account's 7TV token by reloading the login page in a
-/// HIDDEN window using the account's persisted profile (or, for the primary, the
-/// shared main session). If the underlying session is still valid the page
-/// re-mints a token with no interaction and we recapture it. Returns true on
-/// success; on timeout the caller falls back to a visible reconnect. Best-effort.
+/// HIDDEN window. If the Twitch session behind it is alive, 7TV's OAuth round
+/// trip completes on its own and the callback writes a new token. Returns true
+/// only when a token NEWER than the stored one was captured; on false the
+/// caller falls back to a visible reconnect. Best-effort.
 #[cfg(desktop)]
 #[tauri::command]
 pub async fn refresh_seventv_token_for_account(
     app: AppHandle,
     account_id: String,
 ) -> Result<bool, String> {
-    let primary = is_primary_account(&account_id);
-    let window_label = format!("seventv-refresh-{}", chrono::Utc::now().timestamp_millis());
-    let login_url = SevenTVAuthService::get_login_url();
+    Ok(remint_seventv(&app, &account_id).await)
+}
 
-    let mut builder = WebviewWindowBuilder::new(
-        &app,
-        &window_label,
-        WebviewUrl::External(
-            login_url
-                .parse()
-                .map_err(|e| format!("Invalid URL: {}", e))?,
-        ),
+/// The capture script for a silent re-mint: it reports only a token whose JWT
+/// `exp` is past `min_exp`. 7tv.app keeps the OLD token in localStorage until
+/// its login callback replaces it, so the plain capture script grabbed that
+/// old token the moment the page loaded and "refreshed" to the same expiry
+/// (logged as a success every boot of the last week, then signed out).
+fn remint_capture_script(min_exp: i64) -> String {
+    format!(
+        r#"
+    (function() {{
+        const MIN_EXP = {min_exp};
+        function expOf(t) {{
+            try {{
+                const p = t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+                return JSON.parse(atob(p + '==='.slice((p.length + 3) % 4))).exp || 0;
+            }} catch (e) {{ return 0; }}
+        }}
+        let done = false;
+        function check() {{
+            if (done) return;
+            const t = localStorage.getItem('7tv-token');
+            if (t && t.length > 50 && expOf(t) > MIN_EXP) {{
+                done = true;
+                window.location.href = 'about:blank#7TV_TOKEN=' + encodeURIComponent(t);
+            }}
+        }}
+        setInterval(check, 500);
+    }})();
+"#
     )
-    .title("Refreshing 7TV")
-    .inner_size(900.0, 700.0)
-    .visible(false)
-    .initialization_script(SEVENTV_TOKEN_CAPTURE_SCRIPT);
+}
 
-    // Secondaries reload their own persisted profile; the primary uses the shared
-    // main session (no separate data dir), same as the Profile tab.
-    if !primary {
-        builder = builder.data_directory(seventv_profile_dir(&account_id)?);
+/// The stored token for an account: (exp, 7TV user id). The primary lives in
+/// the single slot, linked accounts in their own files.
+async fn stored_seventv_token(account_id: &str, primary: bool) -> Option<(i64, Option<String>)> {
+    let token = if primary {
+        SevenTVAuthService::get_token_info()
+            .await
+            .ok()?
+            .access_token
+    } else {
+        SevenTVAuthService::get_token_for(account_id).await.ok()?
+    };
+    Some((
+        SevenTVAuthService::token_expires_at(&token).unwrap_or(0),
+        SevenTVAuthService::token_user_id(&token),
+    ))
+}
+
+/// Whether a captured token may replace the stored one: strictly newer, and
+/// the same 7TV account when the stored one names it (a profile signed into a
+/// different Twitch account must never swap whose 7TV this is).
+pub(crate) fn remint_accepts(captured: &str, min_exp: i64, stored_user: Option<&str>) -> bool {
+    let newer = SevenTVAuthService::token_expires_at(captured).is_some_and(|exp| exp > min_exp);
+    let same_user = match (stored_user, SevenTVAuthService::token_user_id(captured)) {
+        (Some(had), Some(got)) => had == got,
+        _ => true,
+    };
+    newer && same_user
+}
+
+/// One hidden-window attempt in one browser profile (`None` is the app's
+/// default profile). Polls up to `secs` for a token `remint_accepts` takes.
+#[cfg(desktop)]
+async fn remint_in_profile(
+    app: &AppHandle,
+    data_dir: Option<std::path::PathBuf>,
+    min_exp: i64,
+    stored_user: Option<&str>,
+    secs: u64,
+) -> Option<String> {
+    let label = format!("seventv-refresh-{}", chrono::Utc::now().timestamp_millis());
+    let url = SevenTVAuthService::get_login_url().parse().ok()?;
+    let mut builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url))
+        .title("Refreshing 7TV")
+        .inner_size(900.0, 700.0)
+        .visible(false)
+        .initialization_script(&remint_capture_script(min_exp));
+    if let Some(dir) = data_dir {
+        builder = builder.data_directory(dir);
     }
-
-    let win = builder
-        .build()
-        .map_err(|e| format!("Failed to create refresh window: {}", e))?;
-
-    // Poll the hidden window for up to ~12s for a re-minted token.
-    let mut captured = false;
-    for _ in 0..24 {
+    let win = match builder.build() {
+        Ok(w) => w,
+        Err(e) => {
+            log::info!("[7TV] re-mint window could not open: {e}");
+            return None;
+        }
+    };
+    let mut got = None;
+    for _ in 0..secs * 2 {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        match crate::platform::webview_url::current_url(&win).await {
-            Some(url) => {
-                let url_str = url.to_string();
-                if let Some(token_part) = url_str.split("#7TV_TOKEN=").nth(1) {
-                    if let Ok(token) = urlencoding::decode(token_part) {
-                        let seventv_user_id = seventv_user_id_from_jwt(&token);
-                        let stored = if primary {
-                            SevenTVAuthService::store_token(
-                                token.to_string(),
-                                seventv_user_id,
-                                String::new(),
-                            )
-                            .await
-                        } else {
-                            SevenTVAuthService::store_token_for(
-                                &account_id,
-                                token.to_string(),
-                                seventv_user_id,
-                            )
-                            .await
-                        };
-                        captured = stored.is_ok();
-                        break;
-                    }
-                }
+        let Some(url) = crate::platform::webview_url::current_url(&win).await else {
+            continue;
+        };
+        let url = url.to_string();
+        let Some(part) = url.split("#7TV_TOKEN=").nth(1) else {
+            continue;
+        };
+        if let Ok(token) = urlencoding::decode(part) {
+            if remint_accepts(&token, min_exp, stored_user) {
+                got = Some(token.into_owned());
+            } else {
+                log::info!(
+                    "[7TV] re-mint captured a token that is not newer or not this account; ignored"
+                );
             }
-            // No URL yet, or the page is blocked: wait out the deadline.
-            None => {}
+        }
+        break;
+    }
+    let _ = win.close();
+    got
+}
+
+/// Re-mint an account's 7TV session without a window the user sees. Tries the
+/// profile the account connected 7TV in first (the app's default profile for
+/// the primary, its own 7TV profile for a linked account), then the account's
+/// Twitch web profile, the one the app keeps signed into Twitch, so the OAuth
+/// round trip completes even when the first profile's Twitch login has lapsed.
+#[cfg(desktop)]
+pub async fn remint_seventv(app: &AppHandle, account_id: &str) -> bool {
+    let primary = is_primary_account(account_id);
+    let Some((min_exp, stored_user)) = stored_seventv_token(account_id, primary).await else {
+        // Never connected, or signed out on purpose: nothing to keep alive.
+        return false;
+    };
+    // `None` is the app's default profile, where the primary connected 7TV.
+    let mut profiles: Vec<Option<std::path::PathBuf>> = Vec::new();
+    if primary {
+        profiles.push(None);
+    } else if let Ok(dir) = seventv_profile_dir(account_id) {
+        profiles.push(Some(dir));
+    }
+    if let Ok(dir) = crate::services::twitch_service::twitch_web_profile_dir(account_id) {
+        profiles.push(Some(dir));
+    }
+    for dir in profiles {
+        let Some(token) = remint_in_profile(app, dir, min_exp, stored_user.as_deref(), 30).await
+        else {
+            continue;
+        };
+        let user = seventv_user_id_from_jwt(&token);
+        let stored = if primary {
+            SevenTVAuthService::store_token(token, user, String::new()).await
+        } else {
+            SevenTVAuthService::store_token_for(account_id, token, user).await
+        };
+        if stored.is_ok() {
+            log::info!("[7TV] session re-minted silently");
+            let _ = if primary {
+                app.emit("seventv-connected", true)
+            } else {
+                app.emit("seventv-connected-account", account_id)
+            };
+            return true;
         }
     }
+    log::info!("[7TV] silent re-mint did not complete");
+    false
+}
 
-    let _ = win.close();
-    Ok(captured)
+/// Start re-minting this far ahead of a token's expiry.
+const REMINT_AHEAD_SECS: i64 = 7 * 24 * 60 * 60;
+
+/// Whether a token expiring at `exp` is due for a re-mint at `now`.
+pub(crate) fn remint_due(exp: i64, now: i64) -> bool {
+    exp - now <= REMINT_AHEAD_SECS
+}
+
+/// Keeps every connected account's 7TV session alive while the app runs: a
+/// first look shortly after launch, then every 6 hours, so an app left open
+/// for weeks re-mints too (the old check ran once per launch, from the page).
+#[cfg(desktop)]
+pub fn spawn_seventv_keepalive(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(45)).await;
+        loop {
+            let now = chrono::Utc::now().timestamp();
+            for account in AccountStore::list() {
+                let primary = is_primary_account(&account.user_id);
+                let Some((exp, _)) = stored_seventv_token(&account.user_id, primary).await else {
+                    continue;
+                };
+                if remint_due(exp, now) {
+                    remint_seventv(&app, &account.user_id).await;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(6 * 60 * 60)).await;
+        }
+    });
+}
+
+#[cfg(test)]
+mod remint_tests {
+    use super::{remint_accepts, remint_due};
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine;
+
+    fn jwt(exp: i64, sub: &str) -> String {
+        let payload = serde_json::json!({ "exp": exp, "sub": sub }).to_string();
+        format!("e30.{}.sig", URL_SAFE_NO_PAD.encode(payload))
+    }
+
+    #[test]
+    fn the_old_token_still_in_storage_is_not_a_refresh() {
+        // 7tv.app holds the old token until its callback runs; reading that
+        // back must not count as a re-mint.
+        assert!(!remint_accepts(&jwt(1_000, "u1"), 1_000, Some("u1")));
+        assert!(!remint_accepts(&jwt(900, "u1"), 1_000, Some("u1")));
+        assert!(remint_accepts(&jwt(1_001, "u1"), 1_000, Some("u1")));
+    }
+
+    #[test]
+    fn a_profile_signed_into_someone_else_never_swaps_the_account() {
+        assert!(!remint_accepts(&jwt(5_000, "u2"), 1_000, Some("u1")));
+        assert!(remint_accepts(&jwt(5_000, "u2"), 1_000, None));
+    }
+
+    #[test]
+    fn a_session_is_due_a_week_before_it_ends_and_after() {
+        let day = 24 * 60 * 60;
+        assert!(!remint_due(10 * day, 0));
+        assert!(remint_due(7 * day, 0));
+        assert!(remint_due(-day, 0));
+    }
 }

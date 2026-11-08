@@ -2,9 +2,9 @@
 //
 // 7TV mints 30-day session tokens and the app reads an expired one as signed
 // out, so without this every account "keeps getting signed out of 7TV" once a
-// month. Each shell has a way to re-mint silently (desktop reloads the login
-// in a hidden window, the phone in a hidden overlay); this decides WHEN to
-// try, the same way on both, and never more than once per window.
+// month. The phone re-mints silently in a hidden overlay and this decides WHEN
+// to try, never more than once per window. Desktop keeps its sessions alive in
+// Rust (`spawn_seventv_keepalive` in commands/seventv_cosmetics.rs).
 import { invoke } from '@tauri-apps/api/core';
 import { Logger } from '../utils/logger';
 
