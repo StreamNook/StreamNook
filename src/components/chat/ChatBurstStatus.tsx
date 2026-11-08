@@ -6,8 +6,9 @@
 import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { Repeat, Square } from 'lucide-react';
+import { Repeat, Stop } from 'phosphor-react';
 import { useAppStore } from '../../stores/AppStore';
+import { COMPOSER_STRIP, COMPOSER_STRIP_STYLE, GLAZE_PILL } from '../ui/glazeButtons';
 import { BURST_EVENT, type BurstStatus } from '../../utils/burstStatus';
 
 // How long a finished run stays on screen.
@@ -46,16 +47,21 @@ const ChatBurstStatus = ({ channelLogin }: { channelLogin?: string | null }) => 
   if (!status) return null;
   const running = status.state === 'running';
   return (
-    <div className="mb-2 flex items-center gap-2 px-3 py-2 bg-glass rounded-lg border border-borderSubtle">
-      <Repeat size={14} className={`flex-shrink-0 ${status.state === 'failed' ? 'text-warning' : 'text-accent'}`} />
-      <span className="text-xs text-textSecondary flex-1 min-w-0 truncate tabular-nums">{status.label}</span>
+    <div className={`${COMPOSER_STRIP} ${running ? '' : 'pr-3'}`} style={COMPOSER_STRIP_STYLE}>
+      <Repeat
+        size={16}
+        weight="bold"
+        aria-hidden
+        className={`shrink-0 ${status.state === 'failed' ? 'text-warning' : 'text-accent'}`}
+      />
+      <span className="min-w-0 flex-1 truncate text-[12.5px] leading-[18px] tabular-nums text-textSecondary">{status.label}</span>
       {running && (
         <button
           type="button"
           onClick={() => void invoke('stop_chat_burst', { channelLogin: channel }).catch(() => {})}
-          className="glass-button inline-flex flex-shrink-0 items-center gap-1 rounded-md px-2 py-0.5 text-[11px] text-textPrimary"
+          className={`${GLAZE_PILL} inline-flex h-7 shrink-0 items-center gap-1.5 px-3 text-[12px]`}
         >
-          <Square size={10} />
+          <Stop size={11} weight="fill" aria-hidden />
           Stop
         </button>
       )}

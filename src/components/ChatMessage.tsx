@@ -539,7 +539,7 @@ import { isThemeDark } from '../themes';
 
 import { Logger } from '../utils/logger';
 import { moderateWithToast, type ModRequest } from '../services/moderation';
-import { ArrowBendUpLeft, Copy, PushPin, PushPinSlash } from 'phosphor-react';
+import { ArrowBendUpLeft, ChatDots, Copy, PushPin, PushPinSlash } from 'phosphor-react';
 import { ModSlider } from './chat/ModSlider';
 import { HoverModButtons } from './chat/HoverModButtons';
 import { ModLineButtons } from './chat/ModLineButtons';
@@ -2794,9 +2794,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
         {/* Shared chat indicator */}
         {isFromDifferentChannel && (
           <div className="flex items-center gap-1.5 mb-2 pb-2 border-b border-borderSubtle">
-            <svg className="w-3.5 h-3.5 text-accent flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-            </svg>
+            <ChatDots size={14} weight="bold" aria-hidden className="text-accent flex-shrink-0" />
             <span className="text-xs text-accent font-semibold">From Shared Chat</span>
             {fetchedChannelName && (
               <>
@@ -3151,9 +3149,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
         {/* Shared chat indicator */}
         {isFromDifferentChannel && (
           <div className="flex items-center gap-1.5 mb-2 pb-2 border-b border-borderSubtle">
-            <svg className="w-3.5 h-3.5 text-accent flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-            </svg>
+            <ChatDots size={14} weight="bold" aria-hidden className="text-accent flex-shrink-0" />
             <span className="text-xs text-accent font-semibold">From Shared Chat</span>
             {fetchedChannelName && (
               <>
@@ -3626,9 +3622,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
               // old text-xs at the default 14px) instead of a fixed size.
               style={{ fontSize: `${Math.round((chatDesign?.font_size ?? 14) * 0.85)}px` }}
             >
-              <svg className="flex-shrink-0" style={{ width: '1.1em', height: '1.1em' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
-              </svg>
+              <ArrowBendUpLeft size="1.1em" weight="bold" aria-hidden className="flex-shrink-0" />
               <span className="font-semibold"><bdi>{getDisplayedName(overrideKey(parsed.replyInfo.parentUserId, parsed.provider ?? 'twitch'), parsed.replyInfo.parentShownName || parsed.replyInfo.parentDisplayName, userOverrides)}</bdi></span>
               <span className="truncate flex-1">
                 <bdi>{replyPreviewSegments
@@ -3970,7 +3964,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
               }}
             />
           )}
-          {dockOffered && (onMessageCopy || canReply || showInlinePin) && <div className="mx-0.5 h-4 w-px bg-white/10" />}
+          {dockOffered && (onMessageCopy || canReply || showInlinePin) && <div className="mx-0.5 h-4 w-px bg-textPrimary/15" />}
           {showInlinePin && broadcasterId && thisMessageId && parsed.provider === 'twitch' && (
             <Tooltip content={isThisPinned ? 'Unpin message' : 'Pin message'} side="top" requirePointerMove>
               <button
@@ -3992,7 +3986,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
                     useAppStore.getState().addToast(isThisPinned ? "Couldn't unpin that message" : "Couldn't pin that message", 'error');
                   });
                 }}
-                className={`p-1 rounded-md transition-colors ${isThisPinned ? 'text-accent hover:text-error hover:bg-error/15' : 'text-white/50 hover:text-accent hover:bg-accent/15'}`}
+                className={`p-1 rounded-md transition-colors ${isThisPinned ? 'text-accent hover:text-error hover:bg-error/15' : 'text-textSecondary hover:text-accent hover:bg-accent/15'}`}
               >
                 {isThisPinned ? <PushPinSlash size={14} weight="bold" /> : <PushPin size={14} weight="bold" />}
               </button>
@@ -4003,7 +3997,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
               <button
                 aria-label="Copy message"
                 onClick={(e) => { e.preventDefault(); onMessageCopy(parsed.content); }}
-                className="p-1 rounded-md text-white/50 hover:text-white hover:bg-surface-hover transition-colors"
+                className="p-1 rounded-md text-textSecondary hover:text-textPrimary hover:bg-surface-hover transition-colors"
               >
                 <Copy size={14} weight="bold" />
               </button>
@@ -4020,7 +4014,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
                   const messageId = parsed.tags.get('id');
                   if (messageId) onUsernameRightClick?.(messageId, parsed.username);
                 }}
-                className="p-1 rounded-md text-white/50 hover:text-white hover:bg-surface-hover transition-colors"
+                className="p-1 rounded-md text-textSecondary hover:text-textPrimary hover:bg-surface-hover transition-colors"
               >
                 <ArrowBendUpLeft size={14} weight="bold" />
               </button>

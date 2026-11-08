@@ -429,7 +429,7 @@ export const ModHoverPreview = ({ stored }: { stored: ChatDesignSettings | undef
   const [clicked, setClicked] = useState<string | null>(null);
   const [lengthsOpen, setLengthsOpen] = useState(false);
   const target = LOOTGOBLIN.name;
-  const dockButton = 'p-1 rounded-md text-white/50 hover:text-white hover:bg-surface-hover transition-colors';
+  const dockButton = 'p-1 rounded-md text-textSecondary hover:text-textPrimary hover:bg-surface-hover transition-colors';
   return (
     <SettingPreview
       caption={
@@ -462,7 +462,7 @@ export const ModHoverPreview = ({ stored }: { stored: ChatDesignSettings | undef
                 }
                 onDelete={() => setClicked(`delete ${target}'s message`)}
               />
-              <div className="mx-0.5 h-4 w-px bg-white/10" />
+              <div className="mx-0.5 h-4 w-px bg-textPrimary/15" />
               <button type="button" aria-label="Pin message" onClick={() => setClicked('pin the message')} className={dockButton}>
                 <PushPin size={14} weight="bold" />
               </button>

@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState, useCallback, useMemo, Fragment, useSyncExternalStore } from 'react';
 import { flushSync } from 'react-dom';
 import type { ReactNode, MouseEvent, CSSProperties, ChangeEvent, ClipboardEvent, KeyboardEvent } from 'react';
-import { ShieldCheck, Paperclip, X, CornerUpLeft, Pencil } from 'lucide-react';
+import { ShieldCheck, Paperclip, CornerUpLeft, Pencil } from 'lucide-react';
+import { ArrowBendUpLeft, PaperPlaneTilt, PencilSimple, X as PhX } from 'phosphor-react';
+import { COMPOSER_STRIP, COMPOSER_STRIP_STYLE } from '../ui/glazeButtons';
 import { EmotePickerPanel, useSwappingSmiley } from '../chat/EmotePickerPanel';
 import { open as openExternal } from '@tauri-apps/plugin-shell';
 import { connectModRoomConsent, type ModRoomChat, type ModRoomMember } from '../../services/modRoomService';
@@ -968,30 +970,42 @@ const ModRoomPane = ({ channelId, channelLogin, emotes, onStatus, onUsernameClic
           </div>
         )}
         {(replyingTo || editing) && (
+          // The composer strips' glaze; editing lights it in the warning color.
           <div
-            className="mb-2 flex items-center gap-2 rounded-md px-2 py-1 text-[11px]"
+            className={COMPOSER_STRIP}
             style={
               editing
-                ? { background: 'rgba(245,158,11,0.14)', boxShadow: 'inset 0 0 0 1px rgba(245,158,11,0.32)' }
-                : { background: 'rgba(255,255,255,0.05)' }
+                ? ({ ...COMPOSER_STRIP_STYLE, '--color-accent': 'var(--color-warning)' } as CSSProperties)
+                : COMPOSER_STRIP_STYLE
             }
           >
             {editing ? (
-              <span className="flex shrink-0 items-center gap-1 font-semibold text-amber-300">
-                <Pencil size={11} /> Editing message
-              </span>
+              <PencilSimple size={16} weight="bold" aria-hidden className="shrink-0 text-warning" />
             ) : (
-              <span className="flex shrink-0 items-center gap-1 text-textSecondary">
-                <CornerUpLeft size={11} /> Replying to <span className="text-accent">{replyingTo!.login}</span>
-              </span>
+              <ArrowBendUpLeft size={16} weight="bold" aria-hidden className="shrink-0 text-accent" />
             )}
-            {replyingTo && <span className="truncate text-textSecondary opacity-70">{replyingTo.text}</span>}
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-[12.5px] leading-[18px]">
+                {editing ? (
+                  <span className="font-semibold text-warning">Editing message</span>
+                ) : (
+                  <>
+                    <span className="text-textSecondary">Replying to </span>
+                    <span className="font-bold text-accent">{replyingTo!.login}</span>
+                  </>
+                )}
+              </div>
+              {replyingTo?.text && (
+                <div className="mt-0.5 truncate text-[12px] leading-[18px] text-textSecondary">{replyingTo.text}</div>
+              )}
+            </div>
             <button
+              type="button"
               onClick={cancelComposer}
               aria-label="Cancel"
-              className="ml-auto shrink-0 text-textSecondary transition-colors hover:text-textPrimary"
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-textSecondary transition-colors hover:bg-white/[0.08] hover:text-textPrimary"
             >
-              <X size={13} />
+              <PhX size={13} weight="bold" />
             </button>
           </div>
         )}
@@ -1014,9 +1028,7 @@ const ModRoomPane = ({ channelId, channelLogin, emotes, onStatus, onUsernameClic
             className="group grid h-[34px] w-[34px] place-items-center rounded transition-colors hover:bg-surface-hover disabled:opacity-40"
           >
             {showEmotes ? (
-              <svg className="h-4 w-4 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
-              </svg>
+              <PhX size={16} weight="bold" aria-hidden className="text-accent" />
             ) : (
               <img
                 src={getAppleEmojiUrl(smiley.currentSmiley)}
@@ -1063,9 +1075,7 @@ const ModRoomPane = ({ channelId, channelLogin, emotes, onStatus, onUsernameClic
             aria-label="Send"
             className="glass-button flex h-9 w-9 flex-shrink-0 items-center justify-center self-center rounded text-white transition-all duration-300 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-            </svg>
+            <PaperPlaneTilt size={20} weight="bold" aria-hidden />
           </button>
         </div>
       </div>

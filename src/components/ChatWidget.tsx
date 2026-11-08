@@ -5,7 +5,6 @@ import ChatMessageList from './ChatMessageList';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { openProfilePopup } from '../utils/openProfilePopup';
-import { Zap, Filter } from 'lucide-react';
 import ChatSearchBar from './chat/ChatSearchBar';
 import { fitHeaderDensity } from './chat/fitHeaderDensity';
 import AutomodQueueStrip from './chat/AutomodQueueStrip';
@@ -38,7 +37,8 @@ import { BlendSourcesButton } from './chat/BlendSourcesButton';
 import { historyKey as chatterHistoryKey } from '../utils/chatterIdentity';
 import { streamProvider } from '../utils/streamProvider';
 import type { ProviderId } from '../types/providers';
-import { ChatCircle, Chats, PushPin, ShieldCheck, Timer, UsersThree } from 'phosphor-react';
+import { CaretDown, ChatCircle, Chats, Funnel, Lightning, PaperPlaneTilt, PushPin, ShieldCheck, Timer, UsersThree, X } from 'phosphor-react';
+import { COMPOSER_STRIP, COMPOSER_STRIP_STYLE } from './ui/glazeButtons';
 import { ChatDockPanel, ChatDockSwitcher, ChatDockTabs } from './chat/ChatDock';
 import { useDockSwitcherFloor } from '../hooks/useChatDock';
 import ChatHeaderMenu, { type ChatHeaderMenuItem } from './chat/ChatHeaderMenu';
@@ -5110,7 +5110,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                       value={filterId ?? ''}
                       options={filterOptions}
                       onChange={(v) => setFilterId(v ? String(v) : null)}
-                      leadingIcon={<Filter size={11} />}
+                      leadingIcon={<Funnel size={11} weight="bold" />}
                       className={`chat-header-pill !px-2 ${filterId ? 'text-accent' : 'text-textSecondary hover:text-textPrimary'}`}
                       align="right"
                       ariaLabel="Message filter"
@@ -5233,12 +5233,8 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                           aria-label="Pinned message"
                           aria-expanded={isPinnedExpanded}
                         >
-                          <svg width="13" height="13" fill="currentColor" viewBox="0 0 16 16">
-                            <path d="M4.146.146A.5.5 0 0 1 4.5 0h7a.5.5 0 0 1 .5.5c0 .68-.342 1.174-.646 1.479-.126.125-.25.224-.354.298v4.431l.078.048c.203.127.476.314.751.555C12.36 7.775 13 8.527 13 9.5a.5.5 0 0 1-.5.5h-4v4.5a.5.5 0 0 1-1 0V10h-4A.5.5 0 0 1 3 9.5c0-.973.64-1.725 1.17-2.189A5.921 5.921 0 0 1 5 6.708V2.277a2.77 2.77 0 0 1-.354-.298C4.342 1.674 4 1.179 4 .5a.5.5 0 0 1 .146-.354z"/>
-                          </svg>
-                          <svg width="9" height="9" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" />
-                          </svg>
+                          <PushPin size={13} weight="fill" aria-hidden />
+                          <CaretDown size={9} weight="bold" aria-hidden />
                         </button>
                       </Tooltip>
                     );
@@ -5523,9 +5519,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                       </span>
                     )}
                     {/* Expand chevron */}
-                    <svg className="w-3 h-3 text-textSecondary/60 group-hover:text-textSecondary flex-shrink-0 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" />
-                    </svg>
+                    <CaretDown size={12} weight="bold" aria-hidden className="text-textSecondary/60 group-hover:text-textSecondary flex-shrink-0 transition-colors" />
                   </motion.button>
                 );
               })()}
@@ -5659,9 +5653,9 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
               isPaused ? (
                 <div className="sn-chat-paused absolute bottom-3 left-1/2 transform -translate-x-1/2 z-50 pointer-events-auto">
                   <button onMouseDown={(e) => e.preventDefault()} onClick={handleResume} className="flex items-center gap-2 whitespace-nowrap px-4 py-2 chrome-glaze chrome-glaze--control chrome-glaze--frosted text-white text-sm font-medium shadow-lg">
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                    <CaretDown size={16} weight="bold" aria-hidden />
                     <span>Chat Paused<PausedNewCount sliceKeys={pausedCountKeys} isPaused={isPaused} /></span>
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                    <CaretDown size={16} weight="bold" aria-hidden />
                   </button>
                 </div>
               ) : null
@@ -5864,12 +5858,14 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
               {/* /nuke dry run. Transient — it only exists while the command is
                   in the box, so it can't add permanent height to this shelf. */}
               {nukePreview && (
-                <div className="mb-2 flex items-center gap-2 px-3 py-2 bg-glass rounded-lg border border-borderSubtle">
-                  <Zap
-                    size={14}
-                    className={`flex-shrink-0 ${nukePreview.messages > 0 ? 'text-warning' : 'text-textSecondary'}`}
+                <div className={`${COMPOSER_STRIP} pr-3`} style={COMPOSER_STRIP_STYLE}>
+                  <Lightning
+                    size={16}
+                    weight="bold"
+                    aria-hidden
+                    className={`shrink-0 ${nukePreview.messages > 0 ? 'text-warning' : 'text-textSecondary'}`}
                   />
-                  <span className="text-xs text-textSecondary flex-1">
+                  <span className="min-w-0 flex-1 text-[12.5px] leading-[18px] text-textSecondary">
                     {nukePreview.messages === 0 ? (
                       'Nothing in the buffer matches that yet'
                     ) : (
@@ -5994,7 +5990,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                     className={`group absolute left-1 top-1/2 -translate-y-1/2 z-10 flex items-center justify-center w-7 h-7 text-textSecondary hover:text-textPrimary transition-colors duration-200`}
                   >
                     {showEmotePicker ? (
-                      <svg className="w-4 h-4 transition-all duration-200 text-accent group-hover:drop-shadow-[0_0_5px_color-mix(in_srgb,var(--color-accent-neon)_80%,transparent)]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" /></svg>
+                      <X size={16} weight="bold" aria-hidden className="transition-all duration-200 text-accent group-hover:drop-shadow-[0_0_5px_color-mix(in_srgb,var(--color-accent-neon)_80%,transparent)]" />
                     ) : (
                       <img
                         src={getAppleEmojiUrl(smiley.currentSmiley)}
@@ -6240,7 +6236,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                     // The message cheers: Send spends, so it wears the gem.
                     <img src={composerCheer.icon_url} alt="" className="h-5 w-5 object-contain" />
                   ) : (
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" /></svg>
+                    <PaperPlaneTilt size={20} weight="bold" aria-hidden />
                   )}
                 </button>
                 </Tooltip>

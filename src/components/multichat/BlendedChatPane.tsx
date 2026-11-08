@@ -29,6 +29,8 @@ import { Tooltip } from '../ui/Tooltip';
 import { isImeComposing } from '../../utils/imeComposing';
 import { useOutsidePress } from '../../hooks/useOutsidePress';
 import { CheerBar } from '../chat/CheerBar';
+import { ReplyContextCard } from '../chat/ReplyContextCard';
+import { CaretDown, PaperPlaneTilt } from 'phosphor-react';
 import { useCheerPromptStore } from '../../stores/cheerPromptStore';
 import { openBadgeInfo } from '../../stores/badgeSpotlightStore';
 import { twitchRowBadgeRef, type TwitchRowBadgeInfo } from '../../utils/badgeSpotlight';
@@ -283,9 +285,10 @@ export function BlendedChatPane({
   const tiktokConnected = usePlatformAccountStore((s) => s.tiktok.connected);
   // Right-click-a-name reply target. The send routes to THIS source + account,
   // overriding the multi-select for that one message.
-  const [replyingTo, setReplyingTo] = useState<{ messageId: string; username: string; channel: BlendedChannel } | null>(
-    null,
-  );
+  // `row` is the message being answered, for the card's cosmetics and quote.
+  const [replyingTo, setReplyingTo] = useState<
+    { messageId: string; username: string; channel: BlendedChannel; row: BackendChatMessage | null } | null
+  >(null);
   const inputRef = useRef<HTMLInputElement>(null);
   // A row's Copy puts its text in this composer, as in single-channel chat.
   const handleMessageCopy = useCallback((content: string) => {
@@ -374,7 +377,8 @@ export function BlendedChatPane({
     (messageId: string, username: string) => {
       const channel = idToChannelRef.current.get(messageId);
       if (!channel) return;
-      setReplyingTo({ messageId, username, channel });
+      const row = messagesRef.current.find((m) => typeof m !== 'string' && m.id === messageId);
+      setReplyingTo({ messageId, username, channel, row: row && typeof row !== 'string' ? row : null });
       requestAnimationFrame(() => inputRef.current?.focus({ preventScroll: true }));
     },
     // A ref identity, stable for the component's life: the callback still never
@@ -581,13 +585,9 @@ export function BlendedChatPane({
               onClick={handleResume}
               className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white shadow-lg chrome-glaze chrome-glaze--control chrome-glaze--frosted"
             >
-              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-              </svg>
+              <CaretDown size={16} weight="bold" aria-hidden />
               <span>Chat Paused{newSincePause > 0 ? ` (${newSincePause} new)` : ''}</span>
-              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-              </svg>
+              <CaretDown size={16} weight="bold" aria-hidden />
             </button>
           </div>
         )}
@@ -599,27 +599,13 @@ export function BlendedChatPane({
             held asks here once, and a refused one comes back to the box. */}
         <CheerBar channelLogin={cheerChannel} channelId={undefined} onSetText={setText} />
         {replyingTo && (
-          <div className="mb-2 flex items-center gap-2 rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5">
-            <svg className="h-3.5 w-3.5 shrink-0 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
-            </svg>
-            <ProviderLogo provider={provOf(replyingTo.channel)} size={13} />
-            <span className="min-w-0 flex-1 truncate text-xs text-textSecondary">
-              Replying to <span className="font-semibold text-textPrimary">{replyingTo.username}</span>
-              <span> on {replyingTo.channel.channelName}</span>
-            </span>
-            <Tooltip content="Cancel reply">
-              <button
-                type="button"
-                onClick={() => setReplyingTo(null)}
-                className="shrink-0 rounded p-0.5 text-textSecondary transition-colors hover:text-textPrimary"
-              >
-                <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </Tooltip>
-          </div>
+          // A merged feed always says which room the reply goes to.
+          <ReplyContextCard
+            username={replyingTo.username}
+            row={replyingTo.row}
+            source={{ provider: provOf(replyingTo.channel), channelName: replyingTo.channel.channelName }}
+            onCancel={() => setReplyingTo(null)}
+          />
         )}
         <div className="relative flex items-center gap-2">
           {/* Target picker: themed, grouped-by-provider, multi-select. */}
@@ -748,9 +734,7 @@ export function BlendedChatPane({
               }
               className="glass-button flex h-9 w-9 shrink-0 items-center justify-center self-center rounded text-white transition-all disabled:cursor-not-allowed disabled:opacity-50"
             >
-              <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-              </svg>
+              <PaperPlaneTilt size={20} weight="bold" aria-hidden />
             </button>
           </Tooltip>
         </div>

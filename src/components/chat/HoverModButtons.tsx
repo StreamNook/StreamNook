@@ -28,7 +28,7 @@ function DockTimeoutPresets({
             // the press, before the picker opens).
             data-mod-reason="true"
             aria-label={`Time out for ${step.label}`}
-            className="h-[22px] rounded-md px-1.5 text-[11px] font-semibold leading-none text-white/70 hover:text-warning hover:bg-warning/20 transition-colors"
+            className="h-[22px] rounded-md px-1.5 text-[11px] font-semibold leading-none text-textSecondary hover:text-warning hover:bg-warning/20 transition-colors"
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
@@ -166,7 +166,7 @@ export function HoverModButtons({
               e.preventDefault();
               onLengthsOpen(false);
             }}
-            className="flex h-[22px] w-4 items-center justify-center rounded-md text-white/50 hover:text-white hover:bg-surface-hover transition-colors"
+            className="flex h-[22px] w-4 items-center justify-center rounded-md text-textSecondary hover:text-textPrimary hover:bg-surface-hover transition-colors"
           >
             <X size={10} weight="bold" />
           </button>
@@ -196,7 +196,7 @@ export function HoverModButtons({
             aria-label={banArmed ? `Press again to ban ${targetName}` : `Ban ${targetName}`}
             onClick={(e) => press(e, null, null)}
             className={`p-1 rounded-md transition-colors ${
-              banArmed ? 'bg-error text-white' : 'text-white/50 hover:text-error hover:bg-error/15'
+              banArmed ? 'bg-error text-white' : 'text-textSecondary hover:text-error hover:bg-error/15'
             }`}
           >
             <Prohibit size={14} weight="bold" />
@@ -212,7 +212,7 @@ export function HoverModButtons({
               setPicking(null);
               onDelete();
             }}
-            className="p-1 rounded-md text-white/50 hover:text-error hover:bg-error/15 transition-colors"
+            className="p-1 rounded-md text-textSecondary hover:text-error hover:bg-error/15 transition-colors"
           >
             <Trash size={14} weight="bold" />
           </button>
@@ -230,7 +230,7 @@ export function HoverModButtons({
               data-mod-reason="true"
               aria-label={`Time out ${targetName} for 10m`}
               onClick={(e) => press(e, 600, '10m')}
-              className="flex h-[22px] items-center gap-1 rounded-md px-1 text-[11px] font-semibold leading-none text-white/50 hover:text-warning hover:bg-warning/20 transition-colors"
+              className="flex h-[22px] items-center gap-1 rounded-md px-1 text-[11px] font-semibold leading-none text-textSecondary hover:text-warning hover:bg-warning/20 transition-colors"
             >
               <Clock size={14} weight="bold" />
               10m
@@ -244,7 +244,7 @@ export function HoverModButtons({
                 setPicking(null);
                 onLengthsOpen(true);
               }}
-              className="flex h-[22px] w-4 items-center justify-center rounded-md text-white/50 hover:text-warning hover:bg-warning/20 transition-colors"
+              className="flex h-[22px] w-4 items-center justify-center rounded-md text-textSecondary hover:text-warning hover:bg-warning/20 transition-colors"
             >
               <CaretDown size={10} weight="bold" />
             </button>

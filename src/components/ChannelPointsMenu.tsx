@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { AnimatePresence, motion } from 'framer-motion';
 import { MessageSquareText, RefreshCw, Search, X } from 'lucide-react';
+import { CaretLeft, Check, X as PhX } from 'phosphor-react';
 import { useAppStore } from '../stores/AppStore';
 import { ChannelReward, ChannelRewardsSnapshot, RedeemOutcome, RewardBlock, UnlockedEmote } from '../types';
 
@@ -940,9 +941,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
               className="flex items-center gap-1 px-1.5 py-1 text-xs font-medium text-textSecondary hover:text-textPrimary hover:bg-glass rounded-md transition-colors"
               aria-label="Back to rewards"
             >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-              </svg>
+              <CaretLeft size={16} weight="bold" aria-hidden />
               Rewards
             </button>
             {isSheet ? (
@@ -1107,13 +1106,11 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
                 }}
                 className={`${GLAZE_PILL} grid h-8 w-8 place-items-center`}
               >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  {modifyStep === 'modifier' ? (
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                  ) : (
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  )}
-                </svg>
+                {modifyStep === 'modifier' ? (
+                  <CaretLeft size={18} weight="bold" aria-hidden />
+                ) : (
+                  <PhX size={18} weight="bold" aria-hidden />
+                )}
               </button>
               <div>
                 <h3 className="text-base font-semibold text-textPrimary">
@@ -1182,9 +1179,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
                           </span>
                           {isSelected && (
                             <div className="absolute top-1 right-1 w-4 h-4 bg-accent rounded-full flex items-center justify-center">
-                              <svg className="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-                              </svg>
+                              <Check size={10} weight="bold" aria-hidden className="text-white" />
                             </div>
                           )}
                         </button>
@@ -1228,9 +1223,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
                           <p className="text-[10px] text-textSecondary truncate">{shortCode} - {modInfo.description}</p>
                         </div>
                         {isSelected && (
-                          <svg className="w-5 h-5 text-accent flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                          </svg>
+                          <Check size={18} weight="bold" aria-hidden className="text-accent flex-shrink-0" />
                         )}
                       </button>
                     );
@@ -1315,9 +1308,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
                 }}
                 className={`${GLAZE_PILL} grid h-8 w-8 place-items-center`}
               >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
+                <PhX size={18} weight="bold" aria-hidden />
               </button>
               <div>
                 <h3 className="text-base font-semibold text-textPrimary">Choose an Emote</h3>
@@ -1377,9 +1368,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
                       </span>
                       {isSelected && (
                         <div className="absolute top-1 right-1 w-4 h-4 bg-accent rounded-full flex items-center justify-center">
-                          <svg className="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-                          </svg>
+                          <Check size={10} weight="bold" aria-hidden className="text-white" />
                         </div>
                       )}
                     </button>

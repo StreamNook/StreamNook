@@ -10,7 +10,7 @@ describe('the reply card over the composer', () => {
     expect(card).toContain('<PinnedChatter');
     expect(card).toContain('variant="line"');
     expect(card).toContain('shownName={row.metadata?.shown_name}');
-    expect(card).toContain('${GLAZE_BANNER} relative mb-2');
+    expect(card).toContain('className={COMPOSER_STRIP}');
     // Motion Off and Performance mode show it at once.
     expect(card).toContain('instant ? { duration: 0 }');
   });

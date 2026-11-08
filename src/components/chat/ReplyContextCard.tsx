@@ -5,14 +5,13 @@
 // like the other banners above the message box.
 import { motion } from 'framer-motion';
 import { ArrowBendUpLeft, X } from 'phosphor-react';
-import type { CSSProperties } from 'react';
 import { useAppStore } from '../../stores/AppStore';
 import { usePerformanceQuiet } from '../../utils/lowPower';
 import type { BackendChatMessage, MessageSegment } from '../../services/twitchChat';
 import type { ProviderId } from '../../types/providers';
 import { ProviderMark } from '../ProviderLogo';
 import { Tooltip } from '../ui/Tooltip';
-import { GLAZE_BANNER } from '../ui/glazeButtons';
+import { COMPOSER_STRIP, COMPOSER_STRIP_STYLE } from '../ui/glazeButtons';
 import { PinnedChatter } from './PinnedChatter';
 
 export interface ReplyContextProps {
@@ -68,8 +67,8 @@ export function ReplyContextCard({ username, row, source, onCancel }: ReplyConte
       initial={{ opacity: 0, y: 4 }}
       animate={{ opacity: 1, y: 0, transition: instant ? { duration: 0 } : { duration: 0.14, ease: EASE } }}
       data-reply-card=""
-      className={`${GLAZE_BANNER} relative mb-2 flex items-center gap-2.5 py-2 pl-3 pr-1.5`}
-      style={{ borderRadius: 12, '--glaze-frost': '24%' } as CSSProperties}
+      className={COMPOSER_STRIP}
+      style={COMPOSER_STRIP_STYLE}
     >
       <ArrowBendUpLeft size={16} weight="bold" aria-hidden className="shrink-0 text-accent" />
       <div className="min-w-0 flex-1">
