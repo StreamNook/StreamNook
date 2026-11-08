@@ -382,8 +382,10 @@ function DropsChatBarInner({ channelId, login, headerInset, emotePickerOpen, onD
       onPointerEnter={hover(true)}
       onPointerLeave={hover(false)}
       // The lip sits flush on the message box's top edge (over its border), so
-      // at rest it takes only its own height from the column.
-      className="relative z-[55] -mb-px flex-shrink-0 px-2 pt-1.5"
+      // at rest it takes only its own height from the column. The emote
+      // picker opens over this spot: the lip steps out of sight under it but
+      // keeps its height, so chat never shifts.
+      className={`relative z-[55] -mb-px flex-shrink-0 px-2 pt-1.5 ${emotePickerOpen ? 'invisible pointer-events-none' : ''}`}
     >
       <AnimatePresence>
         {open && (

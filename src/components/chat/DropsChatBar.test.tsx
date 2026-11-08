@@ -221,7 +221,7 @@ describe('the hover card wiring', () => {
   });
   it('sits in the column above the message box, never over the message list', () => {
     const src = readFileSync(resolve(__dirname, 'DropsChatBar.tsx'), 'utf8').replace(/\r\n/g, '\n');
-    expect(src).toContain('className="relative z-[55] -mb-px flex-shrink-0 px-2 pt-1.5"');
+    expect(src).toContain("className={`relative z-[55] -mb-px flex-shrink-0 px-2 pt-1.5 ${emotePickerOpen ? 'invisible pointer-events-none' : ''}`}");
   });
 });
 
