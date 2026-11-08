@@ -411,7 +411,7 @@ pub async fn install_solo_upstream_locked(upstream: SoloUpstream) -> Result<()> 
 /// Rust is not a browser and has no CORS rules, so fetching them from this side
 /// is exactly the part that is allowed.
 #[derive(Default)]
-struct PsegMap {
+pub(crate) struct PsegMap {
     /// index -> already-downloaded bytes, for segments fetched ahead of the
     /// player. warp 0.4 offers no public streaming body (its `wrap_stream` is
     /// crate-private), so a segment must be whole before it can be served —
@@ -498,10 +498,12 @@ impl PsegMap {
 
 /// Fetch a segment into the cache unless it is already there or already being
 /// fetched. Called for every segment a freshly-rewritten playlist names, so the
-/// bytes are usually resident before the player asks for them.
-fn prefetch_segment(index: u32) {
+/// bytes are usually resident before the player asks for them. `adapt` names
+/// the session whose link the download is timed against: the solo player's, or
+/// a tile's.
+fn prefetch_segment_in(map: &SharedPseg, index: u32, adapt: &str) {
     let url = {
-        let Ok(mut m) = pseg_map().lock() else { return };
+        let Ok(mut m) = map.lock() else { return };
         if m.cache.contains_key(&index) || m.inflight.contains(&index) {
             return;
         }
@@ -516,9 +518,11 @@ fn prefetch_segment(index: u32) {
         m.inflight.insert(index);
         url
     };
+    let map = map.clone();
+    let adapt = adapt.to_string();
     tokio::spawn(async move {
         // Prefetches run several at once; only one that ran alone timed the link.
-        let transfer = crate::services::link_adapt::begin_transfer(crate::services::link_adapt::SOLO);
+        let transfer = crate::services::link_adapt::begin_transfer(&adapt);
         let fetched = match HTTP_CLIENT.get(&url).send().await {
             // The reqwest body is already one contiguous `Bytes`; store it as is.
             Ok(res) if res.status().is_success() => res.bytes().await.ok(),
@@ -531,7 +535,7 @@ fn prefetch_segment(index: u32) {
         if let Some(bytes) = fetched.as_ref() {
             transfer.finish(bytes.len() as u64);
         }
-        if let Ok(mut m) = pseg_map().lock() {
+        if let Ok(mut m) = map.lock() {
             m.inflight.remove(&index);
             if let Some(bytes) = fetched {
                 m.cache.insert(index, bytes);
@@ -541,10 +545,100 @@ fn prefetch_segment(index: u32) {
     });
 }
 
-static PSEG: Lazy<std::sync::Mutex<PsegMap>> = Lazy::new(|| std::sync::Mutex::new(PsegMap::default()));
+/// A segment map that can be handed to a spawned prefetch. The solo player
+/// owns one (`PSEG`); every MultiNook tile owns its own, so two tiles never
+/// resolve each other's `pseg/<n>`.
+pub(crate) type SharedPseg = Arc<std::sync::Mutex<PsegMap>>;
+
+static PSEG: Lazy<SharedPseg> = Lazy::new(new_pseg);
 
 fn pseg_map() -> &'static std::sync::Mutex<PsegMap> {
     &PSEG
+}
+
+/// An empty segment map, for a relay that serves one stream.
+pub(crate) fn new_pseg() -> SharedPseg {
+    Arc::new(std::sync::Mutex::new(PsegMap::default()))
+}
+
+/// Forget a map's segments: the relay is about to serve a different stream.
+pub(crate) fn clear_pseg(map: &SharedPseg) {
+    if let Ok(mut m) = map.lock() {
+        m.clear();
+    }
+}
+
+/// `rewrite_absolute_segments` for a relay that is not the solo player: the
+/// playlist's absolute segment and init URIs become `pseg/<n>` in `map`, and the
+/// newest few are fetched ahead, timed against `adapt`'s link.
+pub(crate) fn rewrite_absolute_segments_for(map: &SharedPseg, playlist: &str, adapt: &str) -> String {
+    let (out, seen_indices, init) = match map.lock() {
+        Ok(mut m) => rewrite_uris_in(&mut m, playlist),
+        Err(_) => return playlist.to_string(),
+    };
+    // The init is needed before any segment can be decoded, so it goes first.
+    if let Some(idx) = init {
+        prefetch_segment_in(map, idx, adapt);
+    }
+    // Prefetch ONLY the newest few segments, never the whole playlist. A live
+    // YouTube playlist carries the entire DVR window (dozens of segments), and
+    // firing a download for each one saturates the connection and starves the
+    // single segment the player is actually waiting for. The player consumes
+    // from the live edge, so the tail is the only part worth fetching early.
+    let start = seen_indices.len().saturating_sub(PREFETCH_AHEAD);
+    for idx in &seen_indices[start..] {
+        prefetch_segment_in(map, *idx, adapt);
+    }
+    out
+}
+
+/// Serve a `pseg/<n>` request from `map`: from memory when it was fetched
+/// ahead, otherwise fetched now under the same rules as the solo relay. `None`
+/// when the path is not a `pseg/` path or names a segment this map never handed
+/// out.
+pub(crate) async fn serve_pseg_for(
+    map: &SharedPseg,
+    request_path: &str,
+    adapt: &str,
+) -> Option<warp::http::Response<bytes::Bytes>> {
+    let index = request_path.strip_prefix("pseg/")?.parse::<u32>().ok()?;
+    let (hit, target) = {
+        let m = map.lock().ok()?;
+        (m.cache.get(&index).cloned(), m.by_index.get(&index).cloned())
+    };
+    if let Some(bytes) = hit {
+        return Some(media_response(bytes));
+    }
+    let target = target?;
+    if !relay_may_fetch(&target) {
+        warn!("[StreamServer] refused a tile segment url that is not an https CDN host");
+        return Some(empty_cors(403));
+    }
+    let transfer = crate::services::link_adapt::begin_transfer(adapt);
+    Some(match HTTP_CLIENT.get(&target).send().await {
+        Ok(res) if res.status().is_success() => match res.bytes().await {
+            Ok(bytes) => {
+                transfer.finish(bytes.len() as u64);
+                if let Ok(mut m) = map.lock() {
+                    m.cache.insert(index, bytes.clone());
+                    m.trim_cache(index);
+                }
+                media_response(bytes)
+            }
+            Err(e) => {
+                error!("[StreamServer] tile segment body failed: {}", e);
+                empty_cors(502)
+            }
+        },
+        Ok(res) => {
+            warn!("[StreamServer] tile segment returned {}", res.status());
+            empty_cors(res.status().as_u16())
+        }
+        Err(e) => {
+            error!("[StreamServer] tile segment request failed: {}", e);
+            empty_cors(502)
+        }
+    })
 }
 
 /// Whether the relay may fetch `url` on a playlist's say-so.
@@ -584,6 +678,7 @@ fn relay_may_fetch(url: &str) -> bool {
 /// Returns the playlist plus the indices of the segment lines and of the init,
 /// so the caller decides what to fetch ahead. Pure apart from interning, which
 /// is what makes it testable without a runtime.
+#[cfg(test)]
 fn rewrite_uris(playlist: &str) -> (String, Vec<u32>, Option<u32>) {
     match pseg_map().lock() {
         Ok(mut m) => rewrite_uris_in(&mut m, playlist),
@@ -652,24 +747,11 @@ fn rewrite_map_line(m: &mut PsegMap, line: &str, init: &mut Option<u32>) -> Stri
     format!("{}pseg/{}{}", &line[..value_start], idx, &line[close..])
 }
 
-fn rewrite_absolute_segments(playlist: &str) -> String {
-    let (out, seen_indices, init) = rewrite_uris(playlist);
-    // The init is needed before any segment can be decoded, so it goes first.
-    if let Some(idx) = init {
-        prefetch_segment(idx);
-    }
+/// How many of a playlist's newest segments are fetched ahead of the player.
+const PREFETCH_AHEAD: usize = 3;
 
-    // Prefetch ONLY the newest few segments, never the whole playlist. A live
-    // YouTube playlist carries the entire DVR window — dozens of segments — and
-    // firing a download for each one saturates the connection and starves the
-    // single segment the player is actually waiting for. The player consumes
-    // from the live edge, so the tail is the only part worth fetching early.
-    const PREFETCH_AHEAD: usize = 3;
-    let start = seen_indices.len().saturating_sub(PREFETCH_AHEAD);
-    for idx in &seen_indices[start..] {
-        prefetch_segment(*idx);
-    }
-    out
+fn rewrite_absolute_segments(playlist: &str) -> String {
+    rewrite_absolute_segments_for(&PSEG, playlist, crate::services::link_adapt::SOLO)
 }
 
 /// `pseg/<n>` -> the absolute URL it stands for.
@@ -2129,6 +2211,30 @@ mod relay_rewrite_tests {
         );
         assert_eq!(segments.len(), 1);
         assert!(!out.contains("cdn.example.com"), "an upstream url leaked: {out}");
+    }
+
+    /// SN-263: a YouTube tile handed googlevideo urls straight to the player,
+    /// which CORS blocks. Each tile relay rewrites them into its own map, and one
+    /// tile's `pseg/<n>` never resolves to another tile's segment.
+    #[test]
+    fn each_tile_rewrites_absolute_segments_into_its_own_map() {
+        // http:// so the relay refuses to prefetch: no runtime, no network.
+        let a_list = "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:7\n#EXTINF:2.0,\nhttp://rr1.googlevideo.test/a/sq/7\n";
+        let b_list = "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:7\n#EXTINF:2.0,\nhttp://rr2.googlevideo.test/b/sq/7\n";
+        let (a, b) = (new_pseg(), new_pseg());
+        let a_out = rewrite_absolute_segments_for(&a, a_list, "tile-a");
+        let b_out = rewrite_absolute_segments_for(&b, b_list, "tile-b");
+        assert!(!a_out.contains("googlevideo"), "an upstream url leaked: {a_out}");
+        assert!(!b_out.contains("googlevideo"), "an upstream url leaked: {b_out}");
+        let index = |out: &str| -> u32 {
+            out.lines().find_map(|l| l.strip_prefix("pseg/")).unwrap().parse().unwrap()
+        };
+        let target = |map: &SharedPseg, n: u32| map.lock().unwrap().by_index.get(&n).cloned();
+        assert_eq!(target(&a, index(&a_out)).as_deref(), Some("http://rr1.googlevideo.test/a/sq/7"));
+        assert_eq!(target(&b, index(&b_out)).as_deref(), Some("http://rr2.googlevideo.test/b/sq/7"));
+
+        clear_pseg(&a);
+        assert_eq!(target(&a, index(&a_out)), None, "a retargeted tile forgets its old segments");
     }
 
     #[test]

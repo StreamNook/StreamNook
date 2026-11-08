@@ -3,6 +3,7 @@ use crate::services::ll_origin::{
     self, arc_bytes, empty_cors, media_response, opt_raw_query, parse_directive, parse_part_path,
     playlist_response, LlOrigin, PlaylistServe,
 };
+use crate::services::stream_server::{clear_pseg, new_pseg, SharedPseg};
 use anyhow::Result;
 use log::{debug, info, warn};
 use once_cell::sync::Lazy;
@@ -101,6 +102,10 @@ struct StreamInstance {
     /// What this tile's relay has seen of its upstream playlist, read by the
     /// provider end rule (`provider_tile_ended`).
     end_state: Arc<std::sync::Mutex<ProviderEndState>>,
+    /// This tile's absolute segment URLs, served back as `pseg/<n>` (see
+    /// `stream_server::rewrite_absolute_segments_for`). Per tile, so two tiles
+    /// never resolve each other's segments.
+    pseg: SharedPseg,
 }
 
 pub struct MultiNookServer;
@@ -388,6 +393,8 @@ impl MultiNookServer {
                 // The new upstream starts with a clean record of refusals.
                 *instance.end_state.lock().unwrap_or_else(|e| e.into_inner()) =
                     ProviderEndState::default();
+                // The old upstream's segment URLs mean nothing for the new one.
+                clear_pseg(&instance.pseg);
                 (instance.port, instance.ll_origin.clone(), instance.profile)
             } else {
                 let (Some((profile, refresher)), true) = (retarget, create) else {
@@ -417,6 +424,8 @@ impl MultiNookServer {
                 let proxy_url_clone = proxy_url.clone();
                 let ad_state_clone = ad_state.clone();
                 let end_state_clone = end_state.clone();
+                let pseg = new_pseg();
+                let pseg_clone = pseg.clone();
                 let origin_clone = origin.clone();
                 let sid = stream_id.to_string();
                 let profile_for_filter = profile;
@@ -433,6 +442,7 @@ impl MultiNookServer {
                     .and(warp::any().map(move || origin_clone.clone()))
                     .and(warp::any().map(move || profile_for_filter))
                     .and(warp::any().map(move || end_state_clone.clone()))
+                    .and(warp::any().map(move || pseg_clone.clone()))
                     .and_then(Self::proxy_handler)
                     .boxed();
 
@@ -464,6 +474,7 @@ impl MultiNookServer {
                         codec_steps: Vec::new(),
                         pending_swap: None,
                         end_state,
+                        pseg,
                     },
                 );
                 (port, origin, profile)
@@ -857,6 +868,7 @@ impl MultiNookServer {
         origin: Arc<LlOrigin>,
         profile: TileProfile,
         end_state: Arc<std::sync::Mutex<ProviderEndState>>,
+        pseg: SharedPseg,
     ) -> Result<warp::http::Response<bytes::Bytes>, warp::Rejection> {
         // Handle CORS preflight instantly without touching upstream.
         if method == warp::http::Method::OPTIONS {
@@ -946,8 +958,19 @@ impl MultiNookServer {
             );
         }
 
-        // Tiles only relay the media playlist on the non-LL path; stabilized
-        // segment URLs in it 302 back here via the `vseg/` route above.
+        // A provider tile's absolute segment URLs, rewritten out of its playlist
+        // below. Served from here because googlevideo sends no CORS header, so
+        // the player cannot fetch them from the CDN itself.
+        if profile == TileProfile::GenericHls {
+            if let Some(response) =
+                crate::services::stream_server::serve_pseg_for(&pseg, request_path, &stream_id).await
+            {
+                return Ok(response);
+            }
+        }
+
+        // Otherwise tiles only relay the media playlist on the non-LL path;
+        // stabilized segment URLs in it 302 back here via the `vseg/` route above.
         if request_path != "stream.m3u8" && !request_path.is_empty() {
             return Ok(empty_cors(404));
         }
@@ -1050,8 +1073,8 @@ impl MultiNookServer {
         // Detect ad markers for the per-tile state — same shared logic as the solo
         // player, read-only: the tile relay is ad-neutral and serves the upstream's
         // segments untouched. For playback only; the core never reports ads to a plugin.
-        // This server only relays the media playlist (not .ts), so every body is a
-        // playlist worth scanning; free. The one rewrite is lowering Twitch's
+        // Segments never reach this point (a provider tile's come back through
+        // `pseg/` above), so every body is a playlist worth scanning; free. The one rewrite is lowering Twitch's
         // over-declared #EXT-X-TARGETDURATION (6s for ~2s segments) to the real segment
         // size: hls.js derives its live-playlist RELOAD cadence from targetduration, so
         // the inflated 6 makes it re-poll too slowly to keep a small per-tile buffer fed
@@ -1086,6 +1109,12 @@ impl MultiNookServer {
             bytes = if stabilize_ok {
                 let base = crate::services::hls_projection::base_url_of(&url);
                 crate::services::hls_projection::stabilize(&stream_id, &work, &base).into_bytes()
+            } else if profile == TileProfile::GenericHls && status.is_success() {
+                // Same as the solo relay: absolute segment URLs come back through
+                // here. Kick's IVS is CORS-open, YouTube's googlevideo is not, and a
+                // tile that handed those to the player never started (SN-263).
+                crate::services::stream_server::rewrite_absolute_segments_for(&pseg, &work, &stream_id)
+                    .into_bytes()
             } else {
                 work.into_bytes()
             };
@@ -1156,6 +1185,7 @@ mod tests {
                     codec_steps: Vec::new(),
                     pending_swap: None,
                     end_state: Arc::new(std::sync::Mutex::new(ProviderEndState::default())),
+                    pseg: new_pseg(),
                 },
             );
             let held = |registry: &HashMap<String, StreamInstance>| registry.get(id).unwrap().pending_swap.clone();
@@ -1232,6 +1262,7 @@ mod tests {
                     codec_steps: Vec::new(),
                     pending_swap: None,
                     end_state: Arc::new(std::sync::Mutex::new(ProviderEndState::default())),
+                    pseg: new_pseg(),
                 },
             );
             TILE_ORIGINS
@@ -1464,6 +1495,7 @@ mod tests {
             codec_steps: Vec::new(),
             pending_swap: None,
             end_state: Arc::new(std::sync::Mutex::new(ProviderEndState::default())),
+            pseg: new_pseg(),
         };
         STREAM_REGISTRY.lock().await.insert(id.to_string(), instance);
         proxy_url
