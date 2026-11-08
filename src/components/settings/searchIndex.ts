@@ -1449,6 +1449,26 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   {
     tab: 'Chat',
     section: 'Emotes',
+    title: 'Emote words',
+    description: 'Show the word typed with each emote, under it, after it or in a chip, so emote-heavy chat reads as sentences. Emote names, emote labels, emote captions, readable chat.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Emotes',
+    title: 'Word size',
+    parent: 'Emote words',
+    description: 'How big the word beside each emote is, smaller or larger than its look draws it. Emote word text size, caption size.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Emotes',
+    title: 'Sentences only',
+    parent: 'Emote words',
+    description: 'Word only the emotes of messages that also have plain words; messages of nothing but emotes stay as they are. Emote spam.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Emotes',
     title: 'GIFs',
     description: 'Show Twitch GIFs posted by Tier 2 and Tier 3 subscribers, or swap each for a chip you click to reveal. Show GIFs in chat.'
   },
@@ -2374,6 +2394,12 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     section: 'Filters',
     title: 'Phrases',
     description: 'Hide overlay messages containing chosen words or phrases, case-insensitive. Profanity filter, banned words, phrase blocklist, spoiler shield. Previously "Hide messages containing".'
+  },
+  {
+    tab: 'Overlay',
+    section: 'Filters',
+    title: 'Hide link-only messages',
+    description: 'Hides an overlay message that is just a link; a link sent with other words still shows. URL, link spam, bare links.'
   },
   {
     tab: 'Overlay',

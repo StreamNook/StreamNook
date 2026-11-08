@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -18,6 +19,7 @@ import { eventCardClass, eventCardStyle } from '../chat/eventCard';
 import type { ModerationContext, RoomModeView } from '../../stores/chatConnectionStore';
 import { RoomModeIndicator } from '../chat/RoomModeIndicator';
 import { mentionHoldBackground } from '../chat/mentionHold';
+import { withEmoteWord, type EmoteWordsLook } from '../chat/emoteWords';
 import type { ChatEventSettings } from '../../types';
 import { Tooltip } from '../ui/Tooltip';
 import { calculateHalfPadding } from '../../utils/chatLayoutUtils';
@@ -282,6 +284,79 @@ export const DeletedMessagePreview = ({
           />
         </Row>
       </PreviewChat>
+    </SettingPreview>
+  );
+};
+
+// 7TV global emotes, so every viewer's sample draws real art.
+const SAMPLE_EMOTES = {
+  EZ: '01GB4CK01800090V9B3D8CGEEX',
+  FeelsOkayMan: '01GB46137R000BJ5HR8F6XV8J1',
+  peepoSad: '01GAZ4SBX80007YCE2RXBT44B2',
+  Clap: '01GAM8EFQ00004MXFXAJYKA859',
+} as const;
+type SampleEmote = keyof typeof SAMPLE_EMOTES;
+
+const EMOTE_WORD_SAMPLES: { who: Chatter; parts: (string | { emote: SampleEmote })[] }[] = [
+  { who: PIXELFOX, parts: ['that boss was', { emote: 'EZ' }, 'for him', { emote: 'FeelsOkayMan' }] },
+  { who: MOSSY, parts: ['i really thought we had it', { emote: 'peepoSad' }] },
+  { who: LOOTGOBLIN, parts: [{ emote: 'Clap' }, { emote: 'Clap' }, { emote: 'Clap' }] },
+];
+
+const EMOTE_WORD_CAPTIONS: Record<EmoteWordsLook, string> = {
+  off: 'emotes on their own',
+  under: 'the word in small print under each emote',
+  after: 'the word right after each emote',
+  chips: 'each emote and its word in a small pill',
+};
+
+/** Three lines of emote-heavy chat in the chosen Emote words look; the last
+ *  is emotes alone, which stays bare while "Sentences only" is on. */
+export const EmoteWordsPreview = ({
+  design,
+  look,
+  sentencesOnly,
+  wordScale,
+}: {
+  design: PreviewDesign;
+  look: EmoteWordsLook;
+  sentencesOnly: boolean;
+  /** Word size, set as the chat list sets it (`--sn-emote-word-scale`). */
+  wordScale: number;
+}) => {
+  const rows = EMOTE_WORD_SAMPLES.map(({ who, parts }, line) => {
+    const worded = look !== 'off' && (!sentencesOnly || parts.some((p) => typeof p === 'string'));
+    const text = parts.map((part, i) => {
+      const gap = i > 0 ? ' ' : '';
+      if (typeof part === 'string') return `${gap}${part}`;
+      const img = (
+        <img
+          key={i}
+          src={`https://cdn.7tv.app/emote/${SAMPLE_EMOTES[part.emote]}/2x.webp`}
+          alt={part.emote}
+          className="inline-block w-auto align-middle"
+          style={{ height: '2em', marginLeft: '0.125rem', marginRight: '0.125rem' }}
+          referrerPolicy="no-referrer"
+        />
+      );
+      return (
+        <Fragment key={i}>
+          {gap}
+          {worded ? withEmoteWord(look, img, part.emote, `w${i}`) : img}
+        </Fragment>
+      );
+    });
+    return (
+      <Row key={who.name}>
+        <PreviewLine design={design} who={who} text={text} minutesAgo={3 - line} first={line === 0} />
+      </Row>
+    );
+  });
+  return (
+    <SettingPreview caption={EMOTE_WORD_CAPTIONS[look]}>
+      <div style={{ '--sn-emote-word-scale': wordScale } as CSSProperties}>
+        <PreviewChat design={design}>{rows}</PreviewChat>
+      </div>
     </SettingPreview>
   );
 };

@@ -274,6 +274,16 @@ export interface ChatDesignSettings {
   // Use compact emote tooltips (just the name) instead of the upscaled
   // emote preview. Default false (preview tooltip is the current behavior).
   compact_emote_tooltips?: boolean;
+  // The typed word beside each emote, so a sentence of emotes still reads:
+  // a small caption under it, the word after it, or a pill of a small emote
+  // and the word. Default 'off'. Typed in Rust too (ChatDesignSettings).
+  emote_words?: 'off' | 'under' | 'after' | 'chips';
+  // Word only the emotes of a message that also has plain words (Rust's
+  // metadata.has_words), so emote-only messages stay bare. Default true.
+  emote_words_sentences_only?: boolean;
+  // Size of the emote's word against its look's own size, 0.6 to 1.4. Typed
+  // and held to that range in Rust (ChatDesignSettings). Default 1.
+  emote_words_scale?: number;
   // Apply FrankerFaceZ modifier effects (ffzW wide, ffzX/Y flips, ffzRainbow,
   // ...) to the preceding emote, like FFZ's own client. Default true. Off
   // renders modifier emotes as plain overlay emotes instead.
@@ -373,8 +383,10 @@ export interface ChatDesignSettings {
   // 'dankchat', 'limerino', 'jilchat', 'bchat'). Default none.
   hidden_badge_providers?: string[];
   // How many badges a chat row shows before folding the rest into a "+N"
-  // chip that unfolds on hover (tap on phones). 0 shows all. Default 3.
+  // chip that unfolds on hover (tap on phones). 0 shows all. Default 0.
   badge_fold_limit?: number;
+  // Set once Rust moved an install from the old default 3 to Show all.
+  badge_fold_show_all_adopted?: boolean;
   // StreamNook atmospheres (and the Cologne event look) behind members' chat
   // rows. Off keeps every row plain; profiles still show them. Default true.
   show_chat_atmospheres?: boolean;
@@ -424,6 +436,9 @@ export interface ChatDesignSettings {
   // step laid out on a rail over the message) or 'capsule' (the message
   // slides aside for a capsule that names the step).
   mod_slider_style?: 'preview' | 'rail' | 'capsule';
+  // The phones' swipes the other way round: left moderates (the slider
+  // mirrored) and right replies. Default false.
+  mod_slider_flipped?: boolean;
   // Line buttons: one-click action buttons at the start of every line a
   // moderator can act on. They take the left edge, so the slider grip is not
   // drawn while they are on. Default false.

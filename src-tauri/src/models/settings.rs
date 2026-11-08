@@ -390,6 +390,22 @@ pub struct ChatDesignSettings {
     pub paint_mentions_in_body: bool,
     #[serde(default)]
     pub compact_emote_tooltips: bool,
+    /// The typed word beside each emote, so a sentence of emotes still reads:
+    /// "off" (default) | "under" (a small caption under the emote) | "after"
+    /// (the word follows it) | "chips" (a pill of a small emote and the word).
+    #[serde(default = "default_emote_words")]
+    pub emote_words: String,
+    /// Word only the emotes of a message that also has plain words
+    /// (`MessageMetadata::has_words`), so an emote-only message stays bare.
+    #[serde(default = "default_true")]
+    pub emote_words_sentences_only: bool,
+    /// Size of the emote's word against its look's own size, held to
+    /// `EMOTE_WORDS_SCALE_MIN..=EMOTE_WORDS_SCALE_MAX` on every load. Default 1.
+    #[serde(
+        default = "default_emote_words_scale",
+        deserialize_with = "deserialize_emote_words_scale"
+    )]
+    pub emote_words_scale: f64,
     #[serde(default = "default_true")]
     pub ffz_emote_effects: bool,
     #[serde(default = "default_true")]
@@ -456,6 +472,10 @@ pub struct ChatDesignSettings {
     /// (the message slides aside for a capsule that names the step).
     #[serde(default = "default_mod_slider_style")]
     pub mod_slider_style: String,
+    /// The phones' swipes the other way round: left moderates (the slider
+    /// mirrored, Delete nearest the right edge) and right replies.
+    #[serde(default)]
+    pub mod_slider_flipped: bool,
     /// Line buttons: small action buttons at the start of every line a
     /// moderator can act on, one click each. They take the left edge, so the
     /// slider grip is not drawn while they are on. Moderators only.
@@ -493,9 +513,14 @@ pub struct ChatDesignSettings {
     #[serde(default)]
     pub hidden_badge_providers: Vec<String>,
     /// How many badges a chat row shows before folding the rest into a "+N"
-    /// chip (`services::badge_fold`). 0 shows them all. Default 3.
+    /// chip (`services::badge_fold`). 0 shows them all. Default 0.
     #[serde(default = "default_badge_fold_limit")]
     pub badge_fold_limit: u8,
+    /// Set once `move_badge_fold_to_show_all_once` has run. Field default
+    /// false so a file from before it existed takes the move; a new install
+    /// starts with it set.
+    #[serde(default)]
+    pub badge_fold_show_all_adopted: bool,
     /// StreamNook atmospheres (and the Cologne event look) behind members' chat
     /// rows. Profiles show them either way.
     #[serde(default = "default_true")]
@@ -590,7 +615,7 @@ fn default_badge_scale() -> f64 {
 }
 
 fn default_badge_fold_limit() -> u8 {
-    3
+    0
 }
 
 fn default_message_entrance() -> String {
@@ -639,6 +664,35 @@ where
 {
     let raw = serde_json::Value::deserialize(deserializer)?;
     Ok(clamp_gif_scale(raw.as_f64().unwrap_or_else(default_gif_scale)))
+}
+
+/// Smallest emote word: 0.6 of its look's own size.
+pub const EMOTE_WORDS_SCALE_MIN: f64 = 0.6;
+/// Largest emote word: 1.4 of its look's own size.
+pub const EMOTE_WORDS_SCALE_MAX: f64 = 1.4;
+
+fn default_emote_words_scale() -> f64 {
+    1.0
+}
+
+/// An emote word size held to its range, the default for anything that is not
+/// a finite number.
+pub fn clamp_emote_words_scale(value: f64) -> f64 {
+    if value.is_finite() {
+        value.clamp(EMOTE_WORDS_SCALE_MIN, EMOTE_WORDS_SCALE_MAX)
+    } else {
+        default_emote_words_scale()
+    }
+}
+
+fn deserialize_emote_words_scale<'de, D>(deserializer: D) -> Result<f64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = serde_json::Value::deserialize(deserializer)?;
+    Ok(clamp_emote_words_scale(
+        raw.as_f64().unwrap_or_else(default_emote_words_scale),
+    ))
 }
 fn default_emote_margin() -> f64 {
     0.125
@@ -711,6 +765,9 @@ impl Default for ChatDesignSettings {
             hide_shared_chat: false,
             paint_mentions_in_body: true,
             compact_emote_tooltips: false,
+            emote_words: default_emote_words(),
+            emote_words_sentences_only: true,
+            emote_words_scale: default_emote_words_scale(),
             ffz_emote_effects: true,
             bttv_emote_modifiers: true,
             giant_emotes: true,
@@ -729,6 +786,7 @@ impl Default for ChatDesignSettings {
             show_third_party_badges: true,
             hidden_badge_providers: Vec::new(),
             badge_fold_limit: default_badge_fold_limit(),
+            badge_fold_show_all_adopted: true,
             show_chat_atmospheres: true,
             message_entrance: default_message_entrance(),
             emoji_style: default_emoji_style(),
@@ -765,6 +823,7 @@ impl Default for ChatDesignSettings {
             mod_hold_buttons: true,
             mod_slider_length: default_mod_slider_length(),
             mod_slider_style: default_mod_slider_style(),
+            mod_slider_flipped: false,
             mod_line_buttons: false,
             mod_line_delete: true,
             mod_line_timeouts: default_mod_line_timeouts(),
@@ -2151,6 +2210,19 @@ impl Settings {
     /// every `false` there came from a header click aimed at one streamer, and
     /// it silently kept that platform out of every feed and every suggestion.
     /// The Settings switches stay the global control from here on.
+    /// One-time move of an existing install from "Badges before +N" 3 (the
+    /// old default) to Show all, the default since. Other limits were chosen
+    /// and stay. Runs once, so choosing 3 again afterwards sticks.
+    pub fn move_badge_fold_to_show_all_once(&mut self) {
+        let design = &mut self.chat_design;
+        if !design.badge_fold_show_all_adopted {
+            if design.badge_fold_limit == 3 {
+                design.badge_fold_limit = 0;
+            }
+            design.badge_fold_show_all_adopted = true;
+        }
+    }
+
     /// One-time move of an existing install from the room-mode chip (the old
     /// default) to the prompt, which says nothing unless a mode holds you back.
     /// Runs once, so choosing the chip again afterwards sticks.
@@ -2799,6 +2871,38 @@ mod backup_persistence_tests {
     /// other keys must survive a load and save, and a file without the room
     /// modes switch shows them.
     #[test]
+    fn badge_fold_moves_from_the_old_three_to_show_all_once() {
+        // An install from before the move, on the old default 3.
+        let mut value = serde_json::to_value(Settings::default()).unwrap();
+        let cd = value["chat_design"].as_object_mut().unwrap();
+        cd.remove("badge_fold_show_all_adopted");
+        cd.insert("badge_fold_limit".into(), 3.into());
+        let mut old: Settings = serde_json::from_value(value.clone()).unwrap();
+        assert!(!old.chat_design.badge_fold_show_all_adopted);
+        old.move_badge_fold_to_show_all_once();
+        assert_eq!(old.chat_design.badge_fold_limit, 0);
+        assert!(old.chat_design.badge_fold_show_all_adopted);
+
+        // Choosing 3 again afterwards sticks across later loads.
+        old.chat_design.badge_fold_limit = 3;
+        let mut again: Settings =
+            serde_json::from_value(serde_json::to_value(&old).unwrap()).unwrap();
+        again.move_badge_fold_to_show_all_once();
+        assert_eq!(again.chat_design.badge_fold_limit, 3);
+
+        // A limit someone picked (not the old default) stays.
+        value["chat_design"]["badge_fold_limit"] = 4.into();
+        let mut picked: Settings = serde_json::from_value(value).unwrap();
+        picked.move_badge_fold_to_show_all_once();
+        assert_eq!(picked.chat_design.badge_fold_limit, 4);
+
+        // A new install starts on Show all with nothing to move.
+        let fresh = Settings::default();
+        assert_eq!(fresh.chat_design.badge_fold_limit, 0);
+        assert!(fresh.chat_design.badge_fold_show_all_adopted);
+    }
+
+    #[test]
     fn room_modes_move_from_the_chip_to_the_prompt_once() {
         // An install from before the move, still on the old chip default.
         let mut value = serde_json::to_value(Settings::default()).unwrap();
@@ -3260,6 +3364,10 @@ fn default_timestamp_position() -> String {
 
 fn default_animate_emotes() -> String {
     "always".to_string()
+}
+
+fn default_emote_words() -> String {
+    "off".to_string()
 }
 
 fn default_backfill_opacity() -> u32 {

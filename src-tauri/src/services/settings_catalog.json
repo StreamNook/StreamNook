@@ -1336,6 +1336,52 @@
   {
    "page": "chat",
    "section": "Emotes",
+   "title": "Emote words",
+   "paths": [
+    "chat_design.emote_words"
+   ],
+   "nested": false,
+   "logo": null,
+   "detail": "Shows the word that was typed with each emote, so a message made mostly of emotes still reads as a sentence.",
+   "aliases": [
+    "emote names",
+    "emote labels",
+    "emote captions",
+    "readable chat"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Emotes",
+   "title": "Word size",
+   "paths": [
+    "chat_design.emote_words_scale"
+   ],
+   "nested": true,
+   "logo": null,
+   "detail": "",
+   "aliases": [
+    "emote word text size",
+    "caption size"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Emotes",
+   "title": "Sentences only",
+   "paths": [
+    "chat_design.emote_words_sentences_only"
+   ],
+   "nested": true,
+   "logo": null,
+   "detail": "",
+   "aliases": [
+    "emote spam"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Emotes",
    "title": "Animation",
    "paths": [
     "chat_design.animate_emotes"
@@ -2744,13 +2790,32 @@
    ],
    "nested": false,
    "logo": null,
-   "detail": "Swipe right on a message in a channel you moderate to delete it, time its sender out or ban them. Pull further for a longer timeout.",
+   "detail": "Swipe a message in a channel you moderate to delete it, time its sender out or ban them. Pull further for a longer timeout.",
    "aliases": [
     "swipe",
     "mod slider",
     "slide to timeout",
     "mod",
     "moderator"
+   ]
+  },
+  {
+   "page": "moderation",
+   "section": "Moderating Messages",
+   "title": "Left-handed swipes",
+   "paths": [
+    "chat_design.mod_slider_flipped"
+   ],
+   "nested": false,
+   "logo": null,
+   "detail": "Swipe left on a message to moderate it and right to reply, the other way round from the usual.",
+   "aliases": [
+    "left handed",
+    "ambidextrous",
+    "flip swipe",
+    "swap swipe",
+    "swipe direction",
+    "swipe to reply"
    ]
   },
   {

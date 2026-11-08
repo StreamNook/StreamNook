@@ -289,6 +289,11 @@ pub struct MessageMetadata {
     /// rule engine with the rest of the highlight verdict; the page only draws.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scrollbar_mark: Option<ScrollbarMark>,
+    /// The body has plain words besides its emotes (`segments_have_words`), so
+    /// `chat_design.emote_words_sentences_only` words its emotes. Stamped by
+    /// the rule engine; omitted when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub has_words: bool,
     /// The row worked out for a native renderer (`services::chat_row_view`):
     /// readable name colour, badge art, paint and the grouped body. Stamped
     /// only while a native shell asked for it; the web renderers derive the
@@ -411,6 +416,17 @@ pub enum MessageSegment {
         content: String,
         login: String,
     },
+}
+
+/// Whether a body says something in words besides its emotes: a text piece
+/// with a letter or digit, a mention or a link. Emoji, punctuation and
+/// cheers alone do not count, so "catJAM catJAM" and "KEKW !!" are emote-only.
+pub fn segments_have_words(segments: &[MessageSegment]) -> bool {
+    segments.iter().any(|seg| match seg {
+        MessageSegment::Text { content } => content.chars().any(char::is_alphanumeric),
+        MessageSegment::Mention { .. } | MessageSegment::Link { .. } => true,
+        _ => false,
+    })
 }
 
 /// Default source platform for messages deserialized from pre-multi-platform
@@ -711,4 +727,55 @@ pub struct PaintShadow {
     pub y: f32,
     pub blur: f32,
     pub color: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn text(s: &str) -> MessageSegment {
+        MessageSegment::Text {
+            content: s.to_string(),
+        }
+    }
+
+    fn emote(name: &str) -> MessageSegment {
+        MessageSegment::Emote {
+            content: name.to_string(),
+            emote_id: None,
+            emote_url: String::new(),
+            is_zero_width: None,
+            modifier_flags: None,
+            is_personal: None,
+            local_path: None,
+        }
+    }
+
+    #[test]
+    fn a_sentence_of_emotes_has_words() {
+        assert!(segments_have_words(&[
+            text("we "),
+            emote("PRAYGE"),
+            text(" they dont throw")
+        ]));
+        assert!(segments_have_words(&[
+            emote("KEKW"),
+            text(" "),
+            MessageSegment::Mention {
+                content: "@bob".into(),
+                login: "bob".into()
+            },
+        ]));
+    }
+
+    #[test]
+    fn emotes_spaces_and_punctuation_alone_have_none() {
+        assert!(!segments_have_words(&[
+            emote("catJAM"),
+            text(" "),
+            emote("catJAM")
+        ]));
+        assert!(!segments_have_words(&[emote("KEKW"), text(" !! ?")]));
+        assert!(!segments_have_words(&[]));
+    }
 }

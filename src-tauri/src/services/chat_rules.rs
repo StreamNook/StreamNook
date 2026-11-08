@@ -1229,6 +1229,7 @@ impl ChatRules {
         msg.metadata.filter_ids = ev.filter_ids;
         msg.metadata.suspicious = ev.suspicious;
         msg.metadata.scrollbar_mark = ev.scrollbar_mark;
+        msg.metadata.has_words = crate::models::chat_layout::segments_have_words(&msg.segments);
         msg.metadata.rules_evaluated = true;
     }
 

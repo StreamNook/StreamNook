@@ -96,6 +96,8 @@ export interface MessageMetadata {
   /** The author's name as every row type shows it, stamped by Rust (the
    *  viewer's nickname override is applied on top at render). */
   shown_name?: string;
+  /** The body has plain words besides its emotes, stamped by Rust. */
+  has_words?: boolean;
   /** The tick this row puts on the chat scrollbar, stamped by Rust. */
   scrollbar_mark?: ScrollbarMarkStamp;
 }

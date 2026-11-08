@@ -1,4 +1,5 @@
-import React, { useMemo, useState, useEffect, memo, useSyncExternalStore, type JSX } from 'react';
+import React, { useMemo, useState, useEffect, memo, useSyncExternalStore, useContext, type JSX } from 'react';
+import { PreviewChattersContext } from './chat/previewChatters';
 import { Gift } from 'lucide-react';
 import { parseBadges } from '../services/twitchBadges';
 import { Tooltip, type TooltipChildProps } from './ui/Tooltip';
@@ -8,6 +9,7 @@ import { isDiskCopyUrl } from '../utils/cacheFileUrl';
 import { getCachedEmojiUrl, parseEmojisSync } from '../services/emojiService';
 import { calculateHalfPadding } from '../utils/chatLayoutUtils';
 import { mentionHoldBackground } from './chat/mentionHold';
+import { withEmoteWord } from './chat/emoteWords';
 import { deletedBodyStyle, deletedRowDimmed, DEFAULT_DELETED_STYLE } from './chat/deletedMessage';
 import { ModerationTag } from './chat/ModerationTag';
 import { eventCardClass as eventCardClassFor, eventCardStyle as eventCardStyleFor } from './chat/eventCard';
@@ -1110,7 +1112,10 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   // `tags.get('user-id')`, which Kick and YouTube do not stamp at all, so every
   // non-Twitch row was classified as a non-member no matter who sent it.
   const senderMemberId = memberIdFor(cosmeticsKey);
-  const isSNSender = isStreamNookUser(senderMemberId);
+  // A settings preview's made-up chatters (chat/previewChatters); null in chat.
+  const previewChatters = useContext(PreviewChattersContext);
+  const previewChatter = cosmeticsKey ? previewChatters?.get(cosmeticsKey) : undefined;
+  const isSNSender = previewChatter?.streamNookMember ?? isStreamNookUser(senderMemberId);
 
   // Provider-aware ban/timeout. Twitch -> Helix `ban_user` (duration in SECONDS,
   // null = permanent ban). Kick -> `kick_ban_user` (duration in MINUTES, null =
@@ -1268,7 +1273,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     cologne,
   } = useChatUserStore(
     useShallow((s) => {
-      const u = cosmeticsKey ? s.users.get(cosmeticsKey) : undefined;
+      const u = cosmeticsKey ? (previewChatter ?? s.users.get(cosmeticsKey)) : undefined;
       // A member can keep their theme on their profile but off their chat rows.
       const themeInChat = atmospheresInChat && !u?.themeHiddenInChat;
       return {
@@ -2137,6 +2142,23 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   const memberContributes = (seg: EmoteSegment) =>
     ((seg.modifierFlags ?? 0) & MOD_PREFIX) !== 0 || ffzEffectsOn;
 
+  // Emote words: the typed word beside each emote so a sentence of emotes
+  // reads. Whether the body has plain words is Rust's stamp
+  // (metadata.has_words); an unstamped local row words its emotes.
+  const emoteWords = chatDesign?.emote_words ?? 'off';
+  const wordsHere =
+    emoteWords !== 'off' &&
+    (chatDesign?.emote_words_sentences_only === false || !stamped || parsed.metadata?.has_words === true);
+  // The word a group's target gets: a drawn emote, not an overlay standing
+  // alone or a personal emote already shown as its text.
+  const wordFor = (seg: EmoteSegment): string | null =>
+    wordsHere &&
+    seg.type === 'emote' &&
+    !seg.isZeroWidth &&
+    !(seg.isPersonal && chatDesign?.show_personal_emotes === false)
+      ? seg.content
+      : null;
+
   const renderGroup = (
     group: EmoteSegment | EmoteSegment[],
     index: number,
@@ -2196,10 +2218,13 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
           })}
         </span>
       );
-      if (!effectBits) return gridSpan;
-      return wrapWithEmoteEffects(gridSpan, effectBits, `group-${index}`, index > 0);
+      const drawn = effectBits ? wrapWithEmoteEffects(gridSpan, effectBits, `group-${index}`, index > 0) : gridSpan;
+      const word = giant ? null : wordFor(group[0]);
+      return word ? withEmoteWord(emoteWords, drawn, word, `word-${index}`) : drawn;
     }
-    return renderSegment(group, index.toString(), false, false, undefined, giant);
+    const drawn = renderSegment(group, index.toString(), false, false, undefined, giant);
+    const word = giant ? null : wordFor(group);
+    return word ? withEmoteWord(emoteWords, drawn, word, `word-${index}`) : drawn;
   };
 
   // The body is a chatter's own text, so it is a bidi island (<bdi>): Arabic

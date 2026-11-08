@@ -1226,6 +1226,8 @@ const ChatMessageList = memo(function ChatMessageList({
           '--sn-emote-scale': emoteScale,
           // Chat GIF size (ChatMessage); Rust holds the saved value to 0.5-2.
           '--sn-gif-scale': chatDesign?.gif_scale ?? 1,
+          // Emote words' Word size; Rust holds the saved value to 0.6-1.4.
+          '--sn-emote-word-scale': chatDesign?.emote_words_scale ?? 1,
           '--sn-emote-margin': `${emoteMargin}rem`,
           '--sn-backfill-opacity': Math.max(0.3, Math.min(1, (chatDesign?.backfill_opacity ?? 100) / 100)),
           '--sn-badge-scale': Math.max(0.5, Math.min(2.5, chatDesign?.badge_scale ?? 1)),
