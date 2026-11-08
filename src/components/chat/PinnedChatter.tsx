@@ -38,6 +38,8 @@ interface PinnedChatterProps {
    * no subscription, earned, global or third-party badges.
    */
   variant: 'card' | 'line' | 'bar';
+  /** Fold add-on badges past the chat's limit into a +N chip, as chat rows do. */
+  fold?: boolean;
   nameClassName?: string;
   /** Extra style for an unpainted name (a paint brings its own shadow). */
   plainNameStyle?: CSSProperties;
@@ -56,6 +58,7 @@ export function PinnedChatter({
   badges,
   channelId,
   variant,
+  fold,
   nameClassName,
   plainNameStyle,
   badgeClassName = '',
@@ -101,7 +104,7 @@ export function PinnedChatter({
             streamNookMemberId={look.streamNookMemberId}
             onBadgeClick={onBadgeClick}
             interactive={!isLine}
-            foldLimit={isLine ? undefined : look.foldLimit}
+            foldLimit={isLine && !fold ? undefined : look.foldLimit}
             keyPrefix="pin"
           />
         </span>

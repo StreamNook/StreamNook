@@ -177,18 +177,10 @@ const WhisperRowBody = ({ whisper }: { whisper: WhisperRowMeta }) => (
                     color={whisper.color ?? undefined}
                     badges={whisper.badges}
                     variant="line"
-                    nameClassName="min-w-0 truncate font-semibold"
+                    fold
+                    nameClassName="min-w-0 shrink-0 max-w-full truncate font-semibold"
                     plainNameStyle={{ color: whisper.color ? `oklch(from ${whisper.color} max(l, 0.75) c h)` : '#ffffff' }}
                 />
-                <span className="flex-1" />
-                {whisper.unread_count > 0 && (
-                    <span
-                        className="flex-shrink-0 min-w-[18px] h-[18px] px-1.5 rounded-full text-[11px] font-bold leading-[18px] text-center tabular-nums"
-                        style={{ background: 'var(--color-accent)', color: 'color-mix(in srgb, var(--color-accent) 14%, black)' }}
-                    >
-                        {whisper.unread_count > 99 ? '99+' : whisper.unread_count}
-                    </span>
-                )}
             </div>
             <p className="text-white/50 text-sm line-clamp-2 break-words mt-0.5">
                 {whisper.last_is_sent && <span className="text-white/35">You: </span>}
@@ -2917,10 +2909,18 @@ const DynamicIsland = () => {
                                                         fixed slot for every row, wide enough for the most
                                                         actions a row has, so the times share one edge and
                                                         text wraps at the same place whatever the row offers. */}
-                                                    <div className="relative flex w-[62px] flex-shrink-0 justify-end self-start pt-[3px]">
+                                                    <div className="relative flex w-[62px] flex-shrink-0 flex-col items-end self-start pt-[3px]">
                                                         <span className="text-[10.5px] text-white/30 transition-opacity group-hover:opacity-0 group-focus-within:opacity-0">
                                                             {formatTimeAgo(notification.timestamp)}
                                                         </span>
+                                                        {notification.type === 'whisper_row' && notification.data.unread_count > 0 && (
+                                                            <span
+                                                                className="mt-1 flex-shrink-0 min-w-[18px] h-[18px] px-1.5 rounded-full text-[11px] font-bold leading-[18px] text-center tabular-nums"
+                                                                style={{ background: 'var(--color-accent)', color: 'color-mix(in srgb, var(--color-accent) 14%, black)' }}
+                                                            >
+                                                                {notification.data.unread_count > 99 ? '99+' : notification.data.unread_count}
+                                                            </span>
+                                                        )}
                                                         <div className="absolute right-0 top-0 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
                                                         {/* Mark as read button - only show for unread notifications */}
                                                         {!notification.read && (

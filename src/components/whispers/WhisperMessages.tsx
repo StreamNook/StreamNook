@@ -7,6 +7,7 @@ import { motion } from 'framer-motion';
 import type { StoredWhisperMessage } from '../../types';
 import { Logger } from '../../utils/logger';
 import { deliveryOf } from '../../utils/whisperDelivery';
+import { Tooltip } from '../ui/Tooltip';
 import { WhisperParts } from './WhisperParts';
 import { canRetry, cutWords, deliveryLabel, threadLayout } from './whisperView';
 
@@ -54,14 +55,14 @@ const THEIRS_STYLE: CSSProperties = {
 };
 /** Yours: the same glass tinted with the theme accent. */
 const MINE_STYLE: CSSProperties = {
-  background: 'color-mix(in srgb, var(--color-accent) 30%, transparent)',
+  background: 'oklch(from var(--color-accent) min(l, 0.66) max(c, 0.06) h / 0.4)',
   boxShadow:
-    'inset 0 1px 0 color-mix(in srgb, white 16%, transparent), inset 0 0 0 1px color-mix(in srgb, var(--color-accent) 34%, transparent)',
+    'inset 0 1px 0 color-mix(in srgb, white 8%, transparent), inset 0 0 0 1px oklch(from var(--color-accent) min(l, 0.75) max(c, 0.06) h / 0.4)',
 };
 /** A send still on its way: fainter fill, full-strength text. */
 const MINE_PENDING_STYLE: CSSProperties = {
   ...MINE_STYLE,
-  background: 'color-mix(in srgb, var(--color-accent) 18%, transparent)',
+  background: 'oklch(from var(--color-accent) min(l, 0.66) max(c, 0.06) h / 0.24)',
 };
 /** A send that did not arrive: the rim takes the error color. */
 const MINE_FAILED_STYLE: CSSProperties = {
@@ -150,21 +151,21 @@ export function WhisperMessages({ messages, nowMs, formatTime, instant, onRetry,
             transition={{ duration: instant ? 0 : 0.14, ease: 'easeOut' }}
             className={`flex flex-col ${mine ? 'items-end' : 'items-start'} ${item.last ? 'pb-2.5' : 'pb-1'}`}
           >
-            <div
-              // tooltip-exempt: the bubble's own send time, no other hover target
-              title={formatTime(m.timestamp)}
-              className="max-w-[62%] rounded-[18px] px-[15px] py-[10px] text-[14.5px] leading-[21px] text-textPrimary break-words whitespace-pre-wrap [overflow-wrap:anywhere]"
-              style={style}
-            >
-              {m.deleted ? (
-                <span className="italic text-textMuted">Message deleted</span>
-              ) : (
-                <>
-                  <WhisperParts parts={m.parts} text={m.message} linkify={linkify} emoteClass={EMOTE_24} />
-                  {typeof m.edited_ms === 'number' && <span className="ml-1.5 text-[11.5px] text-textMuted">Edited</span>}
-                </>
-              )}
-            </div>
+            <Tooltip content={formatTime(m.timestamp)} side="top" describe>
+              <div
+                className="max-w-[62%] rounded-[18px] px-[15px] py-[10px] text-[14.5px] leading-[21px] text-textPrimary break-words whitespace-pre-wrap [overflow-wrap:anywhere]"
+                style={style}
+              >
+                {m.deleted ? (
+                  <span className="italic text-textMuted">Message deleted</span>
+                ) : (
+                  <>
+                    <WhisperParts parts={m.parts} text={m.message} linkify={linkify} emoteClass={EMOTE_24} />
+                    {typeof m.edited_ms === 'number' && <span className="ml-1.5 text-[11.5px] text-textMuted">Edited</span>}
+                  </>
+                )}
+              </div>
+            </Tooltip>
             {cut && <span className="pr-1.5 pt-1 text-[11.5px] text-textMuted">{cut}</span>}
             {item.showStatus && <StatusLine m={m} onRetry={onRetry} onDiscard={onDiscard} />}
           </motion.div>

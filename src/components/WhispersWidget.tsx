@@ -635,7 +635,7 @@ const WhispersWidget = ({ isOpen, onClose }: WhispersWidgetProps) => {
                 {/* Header: the title, the sync line, search, New whisper, Close.
                     Controls sit on the title's cap-height midpoint (items-center
                     on one 60 px row) and read a step quieter than the title. */}
-                <div className="flex h-[60px] shrink-0 items-center gap-3.5 border-b border-borderSubtle pl-[22px] pr-[18px]">
+                <div className="flex h-[60px] shrink-0 items-center gap-3.5 border-b border-borderSubtle pl-[22px] pr-[22px]">
                     <span className="text-[17px] font-bold leading-none text-textPrimary">Whispers</span>
                     {totalUnread > 0 && <UnreadCapsule count={totalUnread} />}
                     {!signedOut && (
@@ -663,7 +663,7 @@ const WhispersWidget = ({ isOpen, onClose }: WhispersWidgetProps) => {
                             disabled={isRefreshing || signedOut}
                             className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-textSecondary transition-colors hover:bg-white/[0.06] hover:text-textPrimary disabled:opacity-50"
                         >
-                            <RefreshCw size={17} className={syncing && !instant ? 'animate-spin' : ''} />
+                            <RefreshCw size={14} className={syncing && !instant ? 'animate-spin' : ''} />
                         </button>
                     </Tooltip>
                     <Tooltip content="New whisper" side="bottom">
@@ -688,7 +688,7 @@ const WhispersWidget = ({ isOpen, onClose }: WhispersWidgetProps) => {
                 </div>
 
                 {list?.session_problem && (
-                    <div className="shrink-0 px-[18px] pt-3">
+                    <div className="shrink-0 px-[22px] pt-3">
                         <div className={COMPOSER_STRIP} style={COMPOSER_STRIP_STYLE}>
                             <span className="min-w-0 flex-1 text-[12.5px] leading-[18px] text-textPrimary">{list.session_problem}</span>
                             <button type="button" onClick={signIn} className={`${GLAZE_PILL} h-7 shrink-0 px-3 text-[12.5px]`}>
@@ -701,7 +701,7 @@ const WhispersWidget = ({ isOpen, onClose }: WhispersWidgetProps) => {
                 <div className="flex min-h-0 flex-1">
                 {/* The conversations: 330 px, rows of 64 px */}
                 <div className="flex w-[330px] shrink-0 flex-col border-r border-borderSubtle min-h-0">
-                    <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-2.5 scrollbar-thin">
+                    <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-2.5 pt-2.5 pb-7 scrollbar-thin" style={{ maskImage: 'linear-gradient(to bottom, black calc(100% - 28px), transparent)', WebkitMaskImage: 'linear-gradient(to bottom, black calc(100% - 28px), transparent)' }}>
                         {signedOut ? (
                             <div className="flex h-full flex-col items-center justify-center p-6 text-center text-textMuted">
                                 <MessageCircle size={40} className="mb-3 text-accent/50 opacity-50" />
@@ -761,14 +761,15 @@ const WhispersWidget = ({ isOpen, onClose }: WhispersWidgetProps) => {
                                                         color={row.color ?? undefined}
                                                         badges={row.badges}
                                                         variant="line"
-                                                        nameClassName="min-w-0 truncate font-bold"
+                                                        fold
+                                                        nameClassName="min-w-0 shrink-0 max-w-full truncate font-bold"
                                                     />
                                                 </span>
                                                 <span className="flex-1" />
                                                 {/* The time, swapped for Archive on hover: one fixed slot,
                                                     so the row never reflows between the two. */}
                                                 <span className="relative flex h-5 w-[58px] shrink-0 items-center justify-end">
-                                                    <span className="text-[11.5px] tabular-nums text-textMuted transition-opacity group-hover:opacity-0 group-focus-within:opacity-0">
+                                                    <span className="relative top-px text-[11.5px] tabular-nums text-textMuted transition-opacity group-hover:opacity-0 group-focus-within:opacity-0">
                                                         {messageTime(row.last_message_timestamp, now)}
                                                     </span>
                                                     <Tooltip content="Archive" side="top">
@@ -892,7 +893,8 @@ const WhispersWidget = ({ isOpen, onClose }: WhispersWidgetProps) => {
                                                 color={activeRow.color ?? undefined}
                                                 badges={activeRow.badges}
                                                 variant="line"
-                                                nameClassName="min-w-0 truncate font-bold"
+                                                fold
+                                                nameClassName="min-w-0 shrink-0 max-w-full truncate font-bold"
                                             />
                                             {live && <span className="shrink-0 text-[13px] font-normal text-textMuted">@{activeRow.user_login}</span>}
                                         </span>
@@ -906,6 +908,7 @@ const WhispersWidget = ({ isOpen, onClose }: WhispersWidgetProps) => {
                                         )}
                                     </span>
                                 </button>
+                                <div className="flex shrink-0 items-center gap-3.5 self-start mt-[10px]">
                                 {activeRow.live && (
                                     <button type="button" onClick={watchLive} className={`${GLAZE_PILL} flex h-9 shrink-0 items-center gap-2 px-3.5 text-[13.5px] font-semibold`}>
                                         <Play size={15} fill="currentColor" aria-hidden />
@@ -941,10 +944,11 @@ const WhispersWidget = ({ isOpen, onClose }: WhispersWidgetProps) => {
                                         </div>
                                     )}
                                 </div>
+                                </div>
                             </div>
 
                             {/* Messages: glass bubbles, newest at the bottom */}
-                            <div ref={scrollRef} onScroll={onMessagesScroll} className="min-h-0 flex-1 overflow-y-auto px-[26px] py-[18px] scrollbar-thin">
+                            <div ref={scrollRef} onScroll={onMessagesScroll} className="min-h-0 flex-1 overflow-y-auto px-[22px] py-[18px] scrollbar-thin" style={{ maskImage: 'linear-gradient(to bottom, transparent, black 16px, black calc(100% - 12px), transparent)', WebkitMaskImage: 'linear-gradient(to bottom, transparent, black 16px, black calc(100% - 12px), transparent)' }}>
                                 <div className="flex min-h-full flex-col justify-end">
                                     {page && !page.hasMoreLocal && (page.olderOnTwitch || olderNote) && (
                                         <div className="mb-3 flex min-h-8 items-center justify-center gap-2 text-[12px] text-textMuted">
@@ -992,7 +996,7 @@ const WhispersWidget = ({ isOpen, onClose }: WhispersWidgetProps) => {
 
                             {/* Composer: an error strip above it when a send was refused
                                 before Rust filed it, then the glazed bar. */}
-                            <div className="relative shrink-0 px-[18px] pb-[18px]">
+                            <div className="relative shrink-0 px-[22px] pb-[18px]">
                                 {error && (
                                     <div className={COMPOSER_STRIP} style={COMPOSER_STRIP_STYLE} role="alert">
                                         <span className="min-w-0 flex-1 text-[12.5px] leading-[18px] text-error">{error}</span>
@@ -1002,7 +1006,7 @@ const WhispersWidget = ({ isOpen, onClose }: WhispersWidgetProps) => {
                                     </div>
                                 )}
                                 {showEmojiPicker && (
-                                    <div ref={emojiPickerRef} onPointerDownCapture={markInsideEmojiPicker} className="absolute bottom-full left-[18px] right-[18px] mb-2 glass-flyout no-live-blur rounded-xl !p-0 overflow-hidden" style={{ height: '320px' }}>
+                                    <div ref={emojiPickerRef} onPointerDownCapture={markInsideEmojiPicker} className="absolute bottom-full left-[22px] right-[22px] mb-2 glass-flyout no-live-blur rounded-xl !p-0 overflow-hidden" style={{ height: '320px' }}>
                                         <div className="p-3 border-b border-white/[0.06]">
                                             <input
                                                 type="text"
@@ -1112,8 +1116,7 @@ const WhispersWidget = ({ isOpen, onClose }: WhispersWidgetProps) => {
                     ) : (
                         <div className="flex min-h-0 flex-1 flex-col items-center justify-center p-8 text-textMuted">
                             <MessageCircle size={56} className="mb-4 text-accent opacity-30" />
-                            <span className="mb-1 text-lg font-semibold text-textPrimary">Pick a conversation</span>
-                            <span className="mb-6 text-sm text-textMuted">or start a new whisper</span>
+                            <span className="mb-6 text-lg font-semibold text-textPrimary">Pick a conversation</span>
                             <button
                                 type="button"
                                 onClick={() => setShowNewConversation(true)}
