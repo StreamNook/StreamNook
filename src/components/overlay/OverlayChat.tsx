@@ -38,7 +38,7 @@ import { giftBombOriginOf, isGiftBombAnnouncement, isGiftBombChild } from '../..
 import { adjustNameColor } from '../../utils/nameColor';
 import { badgeFoldLimit, foldBadges, foldKind, type FoldKind } from '../../utils/badgeFold';
 import { fitCount } from '../../utils/fitNumber';
-import { cachedBadgeUrl, emoteCandidates, gifLineIndex, hiResBadgeUrl, messageLineClamp, overlayBackdropIsDark, zeroWidthLayout } from './overlayLayout';
+import { cachedBadgeUrl, emoteCandidates, gifLineIndex, hiResBadgeUrl, isLinkOnlyMessage, messageLineClamp, overlayBackdropIsDark, zeroWidthLayout } from './overlayLayout';
 
 // The StreamNook identity badge on the overlay is just the member's equipped
 // cosmetic image (the app's rich hover card doesn't belong on a broadcast). The
@@ -692,6 +692,11 @@ const isBotMessage = (m: OverlayMessage): boolean => {
   return false;
 };
 
+// Uploaded pictures: on, and either from everyone or this sender is trusted. The
+// row and the link-only filter both ask, so a picture never counts as a bare link.
+const drawsUploadedImages = (style: OverlayStyle, m: OverlayMessage): boolean =>
+  style.showUploadedImages === true && (style.uploadedImagesFrom === 'everyone' || isTrustedSender(m.badges));
+
 // A community gift bomb is a `submysterygift` ("X is gifting N subs") plus N
 // individual `subgift`s that share an origin id. Keep the announcement, drop the
 // individual gifts, so the overlay shows ONE row instead of N. Order-independent
@@ -885,9 +890,7 @@ const OverlayRow = ({ message, style, expiring, enterDelay }: { message: Overlay
   // the broadcaster "badge" (the owner signal from the service) is dropped from the
   // rendered set and only used to detect the owner for the pill below.
   const isYtOwner = provider === 'youtube' && (message.badges ?? []).some((b) => b.name === 'broadcaster');
-  // Uploaded pictures: on, and either from everyone or this sender is trusted.
-  const imagesHere =
-    style.showUploadedImages === true && (style.uploadedImagesFrom === 'everyone' || isTrustedSender(message.badges));
+  const imagesHere = drawsUploadedImages(style, message);
   // Twitch badges also obey the per-category hide list (predictions, bits, ...),
   // matched by badge set id. Other platforms reuse names like 'subscriber', so
   // the categories apply to Twitch rows only.
@@ -1910,6 +1913,10 @@ export const OverlayChat = ({ messages, style: rawStyle, superSample = 1 }: { me
         const body = (m.content ?? '').toLowerCase();
         if (body && phrases.some((p) => body.includes(p))) return false;
       }
+      if (!isEvent && style.hideLinkOnly) {
+        const pictures = drawsUploadedImages(style, m);
+        if (isLinkOnlyMessage(m.segments, (url) => pictures && isUploadedImage(url))) return false;
+      }
       if (isEvent || isCheer) {
         // Deliberately not gated on cheerDisplay: the Bits & Super Chats toggle doing
         // nothing for Twitch cheers was a plain bug, and "hiding bits only works if you
@@ -1931,7 +1938,7 @@ export const OverlayChat = ({ messages, style: rawStyle, superSample = 1 }: { me
     }
     return { ordered: list, expiringIds: expiring, enterDelays: entranceDelays(list, seen, arrival, nowMs) };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages, sourcesKey, style.hideBots, style.seventvEmoteChanges, hiddenKey, hiddenProviderKey, blockedKey, style.hideCommands, cmdFilterKey, phraseKey, ageSec, expireTick]);
+  }, [messages, sourcesKey, style.hideBots, style.seventvEmoteChanges, hiddenKey, hiddenProviderKey, blockedKey, style.hideCommands, cmdFilterKey, phraseKey, style.hideLinkOnly, style.showUploadedImages, style.uploadedImagesFrom, ageSec, expireTick]);
 
   const windowMsgs = ordered.slice(-count);
   const rendered = style.direction === 'newTop' ? windowMsgs.slice().reverse() : windowMsgs;

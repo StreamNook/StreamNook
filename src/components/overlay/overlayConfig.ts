@@ -339,6 +339,9 @@ export interface OverlayStyle {
   /** Hide chat messages containing any of these words/phrases (case-insensitive
    *  substring). Never hides events. */
   hidePhrases: string[];
+  /** Hide chat messages that are nothing but links (punctuation aside). A link
+   *  with any words or emotes beside it still shows. Never hides events. */
+  hideLinkOnly: boolean;
   /** Remove a message this many seconds after it appeared on the overlay
    *  (0 = keep it until it scrolls off). */
   maxMessageAgeSec: number;
@@ -760,6 +763,7 @@ export const DEFAULT_OVERLAY_STYLE: OverlayStyle = {
   firstTimeColor: '',
   eventOutlineColor: '',
   hidePhrases: [],
+  hideLinkOnly: false,
   maxMessageAgeSec: 0,
   maxMessageLines: 0,
   showAvatars: true,
@@ -944,7 +948,8 @@ export const clampOverlayStyle = (s: OverlayStyle): OverlayStyle => {
     hidePhrases: phrases,
     hiddenEvents: [],
     hiddenProviderEvents: Array.from(providerEvents),
-    badgeLimit: badgeFoldLimit(s.badgeLimit),
+    // The overlay keeps its own default; chat's "show all" default is not its.
+    badgeLimit: typeof s.badgeLimit === 'number' ? badgeFoldLimit(s.badgeLimit) : DEFAULT_OVERLAY_STYLE.badgeLimit,
     // Absent on configs saved before badge categories existed → every badge shows.
     hiddenTwitchBadgeCategories: Array.from(new Set(
       (Array.isArray(s.hiddenTwitchBadgeCategories) ? s.hiddenTwitchBadgeCategories : [])

@@ -255,3 +255,23 @@ export const emoteCandidates = (segment: { emote_url?: string; emote_id?: string
     : [cachedEmoteUrl(inline), inline, cachedEmoteUrl(rebuilt), rebuilt];
   return Array.from(new Set(order.filter((u): u is string => !!u)));
 };
+
+// A message that is nothing but links: at least one link segment, and every
+// other piece is text with no letter or digit in it (spaces, "!", "->"). An emote,
+// a GIF or any word beside the link keeps the message, so "look at this <link>"
+// still shows. Read from the segments, so it follows the app's link rule
+// (link_detect.rs) and the site's port of it, not a second regex here.
+// `drawsAsPicture` says which links this row draws as an uploaded picture: those
+// are content, not bare links, so Show uploaded images alone decides them.
+export const isLinkOnlyMessage = (
+  segments: readonly MessageSegment[] | undefined,
+  drawsAsPicture: (url: string) => boolean = () => false,
+): boolean => {
+  if (!segments?.length) return false;
+  let links = 0;
+  for (const s of segments) {
+    if (s.type === 'link' && !drawsAsPicture(s.url)) links++;
+    else if (s.type !== 'text' || /[\p{L}\p{N}]/u.test(s.content ?? '')) return false;
+  }
+  return links > 0;
+};

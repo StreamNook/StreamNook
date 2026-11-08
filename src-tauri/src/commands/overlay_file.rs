@@ -165,8 +165,23 @@ const FIELDS: &[(&str, Kind)] = &[
     ("firstTimeColor", Kind::Color { allow_empty: true }),
     ("eventOutlineColor", Kind::Color { allow_empty: true }),
     ("hidePhrases", Kind::TextList),
-    ("maxMessageAgeSec", Kind::Num { min: 0.0, max: 600.0, step: 1.0 }),
-    ("maxMessageLines", Kind::Num { min: 0.0, max: 6.0, step: 1.0 }),
+    ("hideLinkOnly", Kind::Bool),
+    (
+        "maxMessageAgeSec",
+        Kind::Num {
+            min: 0.0,
+            max: 600.0,
+            step: 1.0,
+        },
+    ),
+    (
+        "maxMessageLines",
+        Kind::Num {
+            min: 0.0,
+            max: 6.0,
+            step: 1.0,
+        },
+    ),
     ("restoreOnReload", Kind::Bool),
     ("loadRecentChat", Kind::Bool),
     ("modCommands", Kind::Bool),

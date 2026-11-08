@@ -49,6 +49,7 @@
       "tiktok:gift"
     ],
     "superchatCurrency": "EUR",
+    "hideLinkOnly": true,
     "hideCommands": true,
     "commandFilters": [
       {
