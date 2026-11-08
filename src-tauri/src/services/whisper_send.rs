@@ -1061,7 +1061,7 @@ mod tests {
         assert_eq!(messages[0].delivery, Some(Delivery::Delivered));
     }
 
-    /// (reconciled, A14) Retry first refreshes the thread, so a Not delivered
+    /// Retry first refreshes the thread, so a Not delivered
     /// whisper whose Helix answer was 204 is adopted by Twitch's copy (new id,
     /// Delivered) and `retry` then finds no Not delivered message to resend; one
     /// that never got a 204 is not adoptable and is resent.
@@ -1080,7 +1080,7 @@ mod tests {
         assert!(!adoptable(&refused), "a send Helix refused was never delivered and is resent on Retry");
     }
 
-    /// (reconciled, section 8 `signout_drains_queue`) Signing out with a send
+    /// Signing out with a send
     /// still queued and one on the wire: the queued one is Not delivered with
     /// the sign-out sentence, the one on the wire is Unknown (checked later,
     /// never resent), both written through the closing account.

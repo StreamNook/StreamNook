@@ -437,7 +437,7 @@ fn other_id(thread: &GqlThread, viewer: &str) -> Option<String> {
 
 fn fresh_meta(key: &str, thread: &GqlThread) -> ConversationMeta {
     let o: Option<&GqlParticipant> = thread.other.as_ref();
-    // (reconciled) built on the store's own empty meta, so no field is missed.
+    // Built on the store's own empty meta, so no field is missed.
     ConversationMeta {
         user_login: o.map(|p| p.login.clone()).unwrap_or_default(),
         user_name: o.map(|p| p.display_name.clone()).unwrap_or_default(),
@@ -519,7 +519,7 @@ impl Engine {
         });
         if start {
             self.trigger(Reason::Follow);
-            // (reconciled) a send left waiting by an earlier run of the app (now
+            // A send left waiting by an earlier run of the app (now
             // Unknown) gets its real check against Twitch.
             crate::services::whisper_send::recheck_pending();
         }
@@ -820,7 +820,7 @@ impl Engine {
             let other_login = conv.meta.user_login.clone();
             let other_name = conv.meta.user_name.clone();
             let other = Who { id: &key, login: &other_login, name: &other_name };
-            // (reconciled) Known ids take Twitch's copy; the rest are offered to
+            // Known ids take Twitch's copy; the rest are offered to
             // whisper_send::adopt in one batch (it pairs Twitch's copies of our
             // own sends with their local copies, oldest first, and takes the
             // adopted ones out); what is left is new.
@@ -1653,7 +1653,7 @@ pub async fn probe() {
 /// What the old account leaves behind: its queued sends end, its data
 /// reaches disk, then it leaves memory (only after a good flush).
 async fn teardown(mut closing: Closing) {
-    crate::services::whisper_send::teardown(&closing).await; // (reconciled: 7.5 names it teardown)
+    crate::services::whisper_send::teardown(&closing).await;
     for _ in 0..5 {
         if whisper_store::flush_closing(&closing).is_ok() {
             match whisper_store::drop_owner(closing) {
@@ -1701,7 +1701,7 @@ pub fn note_socket_down() {
 pub fn note_away(away: bool) {
     engine().note_away(away);
     if !away {
-        // (reconciled) back on screen: sends still waiting get their real
+        // Back on screen: sends still waiting get their real
         // check now, since a phone's timers stop in the background.
         crate::services::whisper_send::recheck_pending();
     }
@@ -1726,8 +1726,8 @@ pub fn twitch_now(local_ms: i64) -> i64 {
     local_ms + engine().offset_ms.load(Ordering::Relaxed)
 }
 
-/// Twitch time minus local time, 0 until measured (reconciled: the name
-/// whisper_send and whisper_inbox read).
+/// Twitch time minus local time, 0 until measured (whisper_send and
+/// whisper_inbox read it).
 pub fn twitch_offset_ms() -> i64 {
     engine().offset_ms.load(Ordering::Relaxed)
 }
@@ -2133,7 +2133,7 @@ mod tests {
         r.twitch.add_thread("1000000000", 3, T0);
         let _ = r.follow("99999904");
         let closing = r.engine.follow(None).unwrap();
-        crate::services::whisper_send::teardown(&closing).await; // (reconciled: 7.5 names it teardown)
+        crate::services::whisper_send::teardown(&closing).await;
         whisper_store::flush_closing(&closing).unwrap();
         let _ = whisper_store::drop_owner(closing);
         let again = r.follow("99999904");
@@ -2148,7 +2148,7 @@ mod tests {
         seed(&scope, "1000000000", vec![local("x1", "1000000000", "99999905", T0, Origin::Twitch, false)], |_| {});
         let closing = r.engine.follow(None).unwrap();
         assert!(whisper_store::update(&scope, "1000000000", None, |_| ((), true)).is_err(), "closed scope refuses updates");
-        crate::services::whisper_send::teardown(&closing).await; // (reconciled: 7.5 names it teardown)
+        crate::services::whisper_send::teardown(&closing).await;
         whisper_store::flush_closing(&closing).unwrap();
         assert!(whisper_store::drop_owner(closing).is_ok());
         let back = r.follow("99999905");
@@ -2466,7 +2466,7 @@ mod tests {
         assert_eq!(marks, vec![false, true]);
     }
 
-    /// (reconciled, A15) An archive still owed to Twitch is dropped once a
+    /// An archive still owed to Twitch is dropped once a
     /// whisper from them arrived after it was asked for; with nothing newer it
     /// goes out.
     #[tokio::test]

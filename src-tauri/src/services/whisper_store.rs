@@ -178,7 +178,7 @@ pub struct ConversationMeta {
     #[serde(default)]
     pub file_stamp: Option<FileStamp>,
     /// Some message is one of our sends still waiting on Twitch (Sending,
-    /// Sent or Unknown); set by `recount` (reconciled).
+    /// Sent or Unknown); set by `recount`.
     #[serde(default)]
     pub delivery_pending: bool,
     /// Sequence numbers of local writes to fields a Twitch page also carries.
@@ -472,7 +472,7 @@ pub fn recount(meta: &mut ConversationMeta, messages: &[StoredWhisper]) {
         .max();
     let start = boundary.map_or(0, |b| b + 1).min(messages.len());
     meta.unread_count = messages[start..].iter().filter(|m| !m.is_sent && !m.deleted).count() as i32;
-    // (reconciled) a send still waiting on Twitch keeps the conversation on
+    // A send still waiting on Twitch keeps the conversation on
     // the delivery recheck list (whisper_send::recheck_pending).
     meta.delivery_pending = messages.iter().any(|m| {
         matches!(m.delivery, Some(Delivery::Sending) | Some(Delivery::Sent) | Some(Delivery::Unknown))

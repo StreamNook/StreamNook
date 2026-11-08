@@ -194,7 +194,7 @@ describe('what the archive event and the refresh answer say', () => {
   });
 });
 
-describe('the thread as drawn (design A)', () => {
+describe('the thread as drawn', () => {
   const NOW = new Date(2026, 10, 7, 21, 41).getTime();
   const MIN = 60_000;
   const at = (id: string, minutesAgo: number, over: Partial<StoredWhisperMessage> = {}) =>
