@@ -1897,6 +1897,182 @@ https://x/1080.m3u8\n";
         assert_eq!(v[0].url, "https://x/1080.m3u8");
     }
 
+    // --- Landscape goldens (SN-40) ----------------------------------------
+    // Captured from the selection code as it stood before the vertical view
+    // (short-edge measure, the several-source-flags rule, portrait numeric
+    // matching). Every landscape ladder must keep choosing exactly these
+    // renditions; "landscape unchanged" is claimed by these rows alone.
+
+    /// Best, worst, audio, a few numeric picks (label=url) and every cap step.
+    fn golden(v: &[Variant], pref: &[String]) -> Vec<String> {
+        let pick = |o: Option<(usize, String)>| match o {
+            Some((i, label)) => format!("{label}={}", v[i].url),
+            None => "none".to_string(),
+        };
+        let mut out = Vec::new();
+        for req in ["best", "worst", "audio_only", "1440p60", "720p60", "480p", "160p"] {
+            out.push(format!("{req}:{}", pick(select_variant_with(v, req, pref))));
+        }
+        for cap in [1080, 720, 480, 144] {
+            let url = capped_source_index(v, Some(cap)).map(|i| v[i].url.clone()).unwrap_or_default();
+            out.push(format!("cap{cap}:{url}"));
+        }
+        out
+    }
+
+    /// The menu, with the desktop's Auto in front where it applies.
+    fn menu(names: &[&str]) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        if !cfg!(mobile) {
+            out.push("auto".into());
+        }
+        out.extend(names.iter().map(|n| n.to_string()));
+        out
+    }
+
+    #[test]
+    fn landscape_golden_legacy_nickmercs() {
+        let v = parse();
+        let w = "https://video-weaver.example";
+        assert_eq!(
+            golden(&v, &s(&["h264"])),
+            vec![
+                format!("best:best={w}/chunked.m3u8"),
+                format!("worst:worst={w}/160p30.m3u8"),
+                format!("audio_only:audio_only={w}/audio_only.m3u8"),
+                format!("1440p60:1080p60={w}/chunked.m3u8"),
+                format!("720p60:720p60={w}/720p60.m3u8"),
+                format!("480p:480p30={w}/480p30.m3u8"),
+                format!("160p:160p30={w}/160p30.m3u8"),
+                format!("cap1080:{w}/chunked.m3u8"),
+                format!("cap720:{w}/720p60.m3u8"),
+                format!("cap480:{w}/480p30.m3u8"),
+                format!("cap144:{w}/160p30.m3u8"),
+            ]
+        );
+        assert_eq!(
+            quality_names(&v),
+            menu(&["1080p60", "720p60", "480p30", "160p30", "best", "audio_only", "worst"])
+        );
+    }
+
+    #[test]
+    fn landscape_golden_modern_ivs() {
+        let v = parse_master(MASTER_MODERN_IVS);
+        let w = "https://euc11.playlist.ttvnw.net";
+        assert_eq!(
+            golden(&v, &s(&["h264"])),
+            vec![
+                format!("best:best={w}/1080.m3u8"),
+                format!("worst:worst={w}/160.m3u8"),
+                format!("audio_only:audio_only={w}/audio.m3u8"),
+                format!("1440p60:1080p60={w}/1080.m3u8"),
+                format!("720p60:720p60={w}/720.m3u8"),
+                format!("480p:480p={w}/480.m3u8"),
+                format!("160p:160p={w}/160.m3u8"),
+                format!("cap1080:{w}/1080.m3u8"),
+                format!("cap720:{w}/720.m3u8"),
+                format!("cap480:{w}/480.m3u8"),
+                format!("cap144:{w}/160.m3u8"),
+            ]
+        );
+        assert_eq!(
+            quality_names(&v),
+            menu(&["1080p60", "720p60", "480p", "360p", "160p", "best", "audio_only", "worst"])
+        );
+    }
+
+    #[test]
+    fn landscape_golden_region_unlocked() {
+        let relay = "https://relay.example/quality-media?region=weur&u=1440";
+        let hevc = s(&["hevc", "h264"]);
+        let v = retain_playable(parse_master(MASTER_REGION_UNLOCKED), &hevc);
+        assert_eq!(
+            golden(&v, &hevc),
+            vec![
+                format!("best:best={relay}"),
+                "worst:worst=https://x/720.m3u8".to_string(),
+                "audio_only:audio_only=https://x/audio.m3u8".to_string(),
+                format!("1440p60:1440p60={relay}"),
+                "720p60:720p60=https://x/720.m3u8".to_string(),
+                "480p:720p60=https://x/720.m3u8".to_string(),
+                "160p:720p60=https://x/720.m3u8".to_string(),
+                "cap1080:https://x/1080.m3u8".to_string(),
+                "cap720:https://x/720.m3u8".to_string(),
+                "cap480:https://x/720.m3u8".to_string(),
+                "cap144:https://x/720.m3u8".to_string(),
+            ]
+        );
+        assert_eq!(quality_names(&v), menu(&["1440p60", "1080p60", "720p60", "best", "audio_only", "worst"]));
+
+        let h264 = s(&["h264"]);
+        let v = retain_playable(parse_master(MASTER_REGION_UNLOCKED), &h264);
+        assert_eq!(
+            golden(&v, &h264),
+            vec![
+                "best:best=https://x/1080.m3u8".to_string(),
+                "worst:worst=https://x/720.m3u8".to_string(),
+                "audio_only:audio_only=https://x/audio.m3u8".to_string(),
+                "1440p60:1080p60=https://x/1080.m3u8".to_string(),
+                "720p60:720p60=https://x/720.m3u8".to_string(),
+                "480p:720p60=https://x/720.m3u8".to_string(),
+                "160p:720p60=https://x/720.m3u8".to_string(),
+                "cap1080:https://x/1080.m3u8".to_string(),
+                "cap720:https://x/720.m3u8".to_string(),
+                "cap480:https://x/720.m3u8".to_string(),
+                "cap144:https://x/720.m3u8".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn landscape_golden_unflagged_and_codec_ladders() {
+        let anon = parse_master(
+            "#EXTM3U\n\
+#EXT-X-STREAM-INF:BANDWIDTH=8042999,RESOLUTION=1920x1080,FRAME-RATE=60.000,IVS-NAME=\"1080p60\",IVS-VARIANT-SOURCE=\"transcode\"\n\
+https://x/1080.m3u8\n\
+#EXT-X-STREAM-INF:BANDWIDTH=3322199,RESOLUTION=1280x720,FRAME-RATE=60.000,IVS-NAME=\"720p60\",IVS-VARIANT-SOURCE=\"transcode\"\n\
+https://x/720.m3u8\n\
+#EXT-X-STREAM-INF:BANDWIDTH=160000,CODECS=\"mp4a.40.2\",IVS-NAME=\"audio_only\",IVS-VARIANT-SOURCE=\"transcode\"\n\
+https://x/audio.m3u8\n",
+        );
+        assert_eq!(
+            golden(&anon, &s(&["h264"])),
+            vec![
+                "best:best=https://x/1080.m3u8",
+                "worst:worst=https://x/720.m3u8",
+                "audio_only:audio_only=https://x/audio.m3u8",
+                "1440p60:1080p60=https://x/1080.m3u8",
+                "720p60:720p60=https://x/720.m3u8",
+                "480p:720p60=https://x/720.m3u8",
+                "160p:720p60=https://x/720.m3u8",
+                "cap1080:https://x/1080.m3u8",
+                "cap720:https://x/720.m3u8",
+                "cap480:https://x/720.m3u8",
+                "cap144:https://x/720.m3u8",
+            ]
+        );
+
+        let v = codec_master();
+        assert_eq!(
+            golden(&v, &s(&["av1", "hevc", "h264"])),
+            vec![
+                "best:best=https://x/av1-1080.m3u8",
+                "worst:worst=https://x/hevc-720.m3u8",
+                "audio_only:best=https://x/av1-1080.m3u8",
+                "1440p60:1080p60-av1=https://x/av1-1080.m3u8",
+                "720p60:720p60-hevc=https://x/hevc-720.m3u8",
+                "480p:720p60-hevc=https://x/hevc-720.m3u8",
+                "160p:720p60-hevc=https://x/hevc-720.m3u8",
+                "cap1080:https://x/h264-1080.m3u8",
+                "cap720:https://x/hevc-720.m3u8",
+                "cap480:https://x/hevc-720.m3u8",
+                "cap144:https://x/hevc-720.m3u8",
+            ]
+        );
+        assert_eq!(quality_names(&v), menu(&["1080p60", "1080p60-av1", "720p60-hevc", "best", "worst"]));
+    }
+
     #[test]
     fn extracts_vod_id() {
         assert_eq!(

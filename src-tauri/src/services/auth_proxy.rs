@@ -496,3 +496,47 @@ pub(crate) fn extract_attr(line: &str, key: &str) -> Option<String> {
     let end = rest.find(',').unwrap_or(rest.len());
     Some(rest[..end].to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::twitch_resolver as tr;
+
+    /// A geo-blocked viewer's own master: the 1440p source is hidden, so its
+    /// 1080p tier is a transcode.
+    const VIEWER: &str = "#EXTM3U\n\
+#EXT-X-STREAM-INF:BANDWIDTH=160000,CODECS=\"mp4a.40.2\",IVS-NAME=\"audio_only\",IVS-VARIANT-SOURCE=\"transcode\"\n\
+https://v/audio.m3u8\n\
+#EXT-X-STREAM-INF:BANDWIDTH=6000000,RESOLUTION=1920x1080,CODECS=\"avc1.4D402A,mp4a.40.2\",FRAME-RATE=60.000,IVS-NAME=\"1080p60\",IVS-VARIANT-SOURCE=\"transcode\"\n\
+https://v/1080.m3u8\n\
+#EXT-X-STREAM-INF:BANDWIDTH=3400000,RESOLUTION=1280x720,CODECS=\"avc1.4D401F,mp4a.40.2\",FRAME-RATE=60.000,IVS-NAME=\"720p60\",IVS-VARIANT-SOURCE=\"transcode\"\n\
+https://v/720.m3u8\n";
+
+    /// The region relay's master for the same channel.
+    const REGION: &str = "#EXTM3U\n\
+#EXT-X-STREAM-INF:BANDWIDTH=9000000,RESOLUTION=2560x1440,CODECS=\"hev1.1.6.L150.90,mp4a.40.2\",FRAME-RATE=60.000,IVS-NAME=\"1440p60\",IVS-VARIANT-SOURCE=\"source\"\n\
+https://r/1440.m3u8\n\
+#EXT-X-STREAM-INF:BANDWIDTH=6000000,RESOLUTION=1920x1080,CODECS=\"avc1.4D402A,mp4a.40.2\",FRAME-RATE=60.000,IVS-NAME=\"1080p60\",IVS-VARIANT-SOURCE=\"transcode\"\n\
+https://r/1080.m3u8\n";
+
+    /// Landscape golden (SN-40): the geo-spliced master keeps choosing what
+    /// it chose before the vertical view (one source tier, the grafted one).
+    #[test]
+    fn landscape_golden_geo_spliced() {
+        let spliced = splice_missing_tiers(VIEWER, REGION);
+        let graft = format!("{}?region=weur&u={}", QUALITY_MEDIA_URL, "https%3A%2F%2Fr%2F1440.m3u8");
+        assert!(spliced.ends_with(&format!("{graft}\n")), "{spliced}");
+        let v = tr::parse_master(&spliced);
+        assert_eq!(v.len(), 4);
+        let url = |q: &str| tr::select_variant(&v, q).map(|(i, l)| format!("{l}={}", v[i].url));
+        assert_eq!(url("best"), Some(format!("best={graft}")));
+        assert_eq!(url("worst").as_deref(), Some("worst=https://v/720.m3u8"));
+        assert_eq!(url("1080p60").as_deref(), Some("1080p60=https://v/1080.m3u8"));
+        assert_eq!(url("1440p60"), Some(format!("1440p60={graft}")));
+        let mut menu = vec!["1440p60", "1080p60", "720p60", "best", "audio_only", "worst"];
+        if !cfg!(mobile) {
+            menu.insert(0, "auto");
+        }
+        assert_eq!(tr::quality_names(&v), menu);
+    }
+}
