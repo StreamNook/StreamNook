@@ -468,7 +468,8 @@ pub struct DualAsk {
 }
 
 /// A v2 answer still on its way when the start returned. `settle_late_v2`
-/// reads it once the start has answered.
+/// reads it once the start has answered. Dropped unread (a failed start, a
+/// menu read, a newer start parking its own), its fetch is aborted.
 pub struct LateV2 {
     fetch: auth_proxy::DualFetch,
     /// The dual-format note's key (a channel, or a VOD).
@@ -480,6 +481,13 @@ pub struct LateV2 {
 impl LateV2 {
     /// Nobody will read this answer.
     pub fn abort(self) {
+        drop(self);
+    }
+}
+
+impl Drop for LateV2 {
+    fn drop(&mut self) {
+        // A no-op once the fetch has finished (after `settle_late_v2`).
         self.fetch.abort();
     }
 }
@@ -508,7 +516,10 @@ pub(crate) fn vertical_playable(v2: &str, pref: Option<&[String]>) -> bool {
 /// What v2 said by the time a start serves: its master when it answered, the
 /// availability of its portrait group, and the fetch itself when it is still
 /// running (the start does not wait for it; see `twitch_view::v2_wait_until`).
-/// Every answer replaces the channel's dual-format note.
+/// Every answer replaces the channel's dual-format note. Unanswered, the
+/// availability is what the note already knows, so a restart that does not
+/// wait (a landscape one, the audio swap) keeps a dual channel's
+/// `vertical_available`; the late answer then corrects it either way.
 async fn read_v2(
     key: &str,
     dual: Option<auth_proxy::DualFetch>,
@@ -529,14 +540,14 @@ async fn read_v2(
             }
             (master, available, None)
         }
-        Err(_) => (None, false, Some(fetch)),
+        Err(_) => (None, twitch_view::dual_note(key) == Some(true), Some(fetch)),
     }
 }
 
 /// A late v2 answer, read after the start returned: whether its portrait
 /// picture is playable (None when v2 never answered). Replaces the note.
-pub async fn settle_late_v2(late: LateV2) -> Option<bool> {
-    let master = late.fetch.handle.await.ok().flatten()?;
+pub async fn settle_late_v2(mut late: LateV2) -> Option<bool> {
+    let master = (&mut late.fetch.handle).await.ok().flatten()?;
     let available = vertical_playable(&master, late.pref.as_deref());
     twitch_view::note_dual(&late.key, available);
     Some(available)
@@ -1016,43 +1027,51 @@ async fn build_live(
     quality: &str,
     ask: Option<DualAsk>,
 ) -> Result<(ResolvedLive, Option<LateV2>)> {
+    // v1 first: a v1 that cannot serve is the start's error at once, never
+    // after the wait for v2 (which it ends).
+    let land = match build(channel.clone(), v1, status.clone(), quality, View::Landscape) {
+        Ok(r) => r,
+        Err(e) => {
+            if let Some(dual) = dual {
+                dual.abort();
+            }
+            return Err(e);
+        }
+    };
     let pref = selection_pref(&channel);
     let (v2, available, late) = read_v2(&channel, dual, ask, pref.as_deref()).await;
     let late = late.map(|fetch| LateV2 { fetch, key: channel.clone(), pref });
     let want = ask.map_or(View::Landscape, |a| a.want);
-    build_served(channel, v1, v2, available, status, quality, want).map(|r| (r, late))
+    Ok((build_served(channel, land, v2, available, status, quality, want), late))
 }
 
 /// The served picture, given what v2 said: the narrowed portrait group when
-/// `want` is Vertical and v2 had a playable one, else the v1 master as is. A
-/// failed or late v2 (`v2` None) is landscape and never an error.
+/// `want` is Vertical and v2 had a playable one, else `land` (the v1 master's
+/// result) as is. A failed or late v2 (`v2` None) is landscape and never an
+/// error.
 fn build_served(
     channel: String,
-    v1: String,
+    land: ResolvedLive,
     v2: Option<String>,
     available: bool,
     status: PlaybackStatus,
     quality: &str,
     want: View,
-) -> Result<ResolvedLive> {
-    let vertical = match v2 {
+) -> ResolvedLive {
+    let mut r = match v2 {
         Some(v2) if available && want == View::Vertical => {
-            match build(channel.clone(), twitch_view::narrow(&v2, View::Vertical), status.clone(), quality, View::Vertical) {
-                Ok(r) => Some(r),
+            match build(channel.clone(), twitch_view::narrow(&v2, View::Vertical), status, quality, View::Vertical) {
+                Ok(r) => r,
                 Err(e) => {
                     debug!("[Resolver] {} portrait group unusable ({}); serving landscape", channel, e);
-                    None
+                    land
                 }
             }
         }
-        _ => None,
-    };
-    let mut r = match vertical {
-        Some(r) => r,
-        None => build(channel, v1, status, quality, View::Landscape)?,
+        _ => land,
     };
     r.vertical_available = available;
-    Ok(r)
+    r
 }
 
 /// Build a `ResolvedLive` from a master playlist a playback plugin supplied
@@ -1418,36 +1437,56 @@ pub async fn resolve_vod_with(
     ask: Option<DualAsk>,
 ) -> Result<(ResolvedMedia, Option<LateV2>)> {
     let (v1, dual) = fetch_vod_masters(vod_id, oauth_token, ask.is_some()).await?;
+    // v1 first, as live: a v1 that cannot serve is the open's error at once.
+    let land = match vod_media(vod_id, &v1, quality, View::Landscape) {
+        Ok(m) => m,
+        Err(e) => {
+            if let Some(dual) = dual {
+                dual.abort();
+            }
+            return Err(e);
+        }
+    };
     let key = twitch_view::vod_key(vod_id);
     let pref = selection_pref("");
     let (v2, available, late) = read_v2(&key, dual, ask, pref.as_deref()).await;
     let late = late.map(|fetch| LateV2 { fetch, key, pref });
-    let (master, view) = match v2 {
+    let mut media = match v2 {
         Some(v2) if available && ask.is_some_and(|a| a.want == View::Vertical) => {
-            (twitch_view::narrow(&v2, View::Vertical), View::Vertical)
+            match vod_media(vod_id, &twitch_view::narrow(&v2, View::Vertical), quality, View::Vertical) {
+                Ok(m) => m,
+                Err(e) => {
+                    debug!("[Resolver] VOD {} portrait group unusable ({}); serving landscape", vod_id, e);
+                    land
+                }
+            }
         }
-        _ => (v1, View::Landscape),
+        _ => land,
     };
-    let variants = playable_variants(&master, "");
+    media.vertical_available = available;
+    Ok((media, late))
+}
+
+/// One VOD master's result: its playable tiers, the pick for `quality`, and
+/// the menu.
+fn vod_media(vod_id: &str, master: &str, quality: &str, view: View) -> Result<ResolvedMedia> {
+    let variants = playable_variants(master, "");
     if variants.is_empty() {
         return Err(anyhow!("VOD {}: master playlist had no variants", vod_id));
     }
     let (idx, label) = select_variant(&variants, quality)
         .ok_or_else(|| anyhow!("VOD {}: no variant matched '{}'", vod_id, quality))?;
     let portrait = twitch_view::ladder_portrait(variants.iter().map(|v| (v.width, v.height)));
-    Ok((
-        ResolvedMedia {
-            url: variants[idx].url.clone(),
-            quality: label,
-            available: quality_names(&variants),
-            clip_source: None,
-            category: None,
-            view,
-            vertical_available: available,
-            portrait,
-        },
-        late,
-    ))
+    Ok(ResolvedMedia {
+        url: variants[idx].url.clone(),
+        quality: label,
+        available: quality_names(&variants),
+        clip_source: None,
+        category: None,
+        view,
+        vertical_available: false,
+        portrait,
+    })
 }
 
 /// Pick a clip quality. Clips ship a flat list of `<height>p<fps>` MP4 qualities
@@ -2492,7 +2531,8 @@ https://x/audio.m3u8\n",
         let v1 = MASTER_MODERN_IVS.to_string();
         let land_720 = "https://euc11.playlist.ttvnw.net/720.m3u8";
         let serve = |v2: Option<String>, available: bool, want: View| {
-            build_served("test-served".into(), v1.clone(), v2, available, status("test-served"), "720p60", want).unwrap()
+            let land = build("test-served".into(), v1.clone(), status("test-served"), "720p60", View::Landscape).unwrap();
+            build_served("test-served".into(), land, v2, available, status("test-served"), "720p60", want)
         };
 
         // v2 failed or was late: landscape from v1, no error.
@@ -2515,16 +2555,8 @@ https://x/audio.m3u8\n",
         assert!(r.available.iter().all(|n| seen.insert(n.clone())), "one name per tier: {:?}", r.available);
 
         // A vertical-only stream on v1 is portrait with no view to pick.
-        let r = build_served(
-            "test-served-vo".into(),
-            fixture("vertical_only_v1"),
-            None,
-            false,
-            status("test-served-vo"),
-            "best",
-            View::Vertical,
-        )
-        .unwrap();
+        let land = build("test-served-vo".into(), fixture("vertical_only_v1"), status("test-served-vo"), "best", View::Landscape).unwrap();
+        let r = build_served("test-served-vo".into(), land, None, false, status("test-served-vo"), "best", View::Vertical);
         assert_eq!((r.view, r.vertical_available, r.portrait), (View::Landscape, false, Some(true)));
         assert_eq!(r.url, "https://v1.example/chunked.m3u8");
     }
@@ -2576,6 +2608,91 @@ https://x/audio.m3u8\n",
         let (_, _, late) = read_v2("test-read-audio", Some(never()), audio, None).await;
         late.expect("not waited for").abort();
         assert!(begun.elapsed() < Duration::from_millis(900), "nothing waited");
+    }
+
+    #[tokio::test]
+    async fn a_landscape_restart_of_a_known_dual_channel_keeps_vertical_available() {
+        // An earlier start's v2 answered dual-format. The restart wants
+        // landscape, so it does not wait, and v2 has not answered yet: the
+        // note still says the pill can show.
+        let begun = Instant::now();
+        twitch_view::note_dual("test-keep-dual", true);
+        let land = Some(DualAsk { want: View::Landscape, audio_only: false });
+        let (r, late) = build_live(
+            "test-keep-dual".into(),
+            MASTER_MODERN_IVS.into(),
+            Some(never()),
+            status("test-keep-dual"),
+            "720p60",
+            land,
+        )
+        .await
+        .unwrap();
+        assert_eq!((r.view, r.vertical_available), (View::Landscape, true));
+        late.expect("v2 is left running for the late answer");
+        // The audio swap never waits either, and keeps it the same way.
+        let audio = Some(DualAsk { want: View::Vertical, audio_only: true });
+        let (r, _) = build_live(
+            "test-keep-dual".into(),
+            MASTER_MODERN_IVS.into(),
+            Some(never()),
+            status("test-keep-dual"),
+            "720p60",
+            audio,
+        )
+        .await
+        .unwrap();
+        assert_eq!((r.view, r.vertical_available), (View::Landscape, true));
+        // Known single-format, or never answered before: not available.
+        twitch_view::note_dual("test-keep-single", false);
+        for key in ["test-keep-single", "test-keep-unknown"] {
+            let (_, available, late) = read_v2(key, Some(never()), land, None).await;
+            assert!(!available, "{key}");
+            late.expect("not waited for").abort();
+        }
+        assert!(begun.elapsed() < Duration::from_millis(900), "nothing waited");
+    }
+
+    #[tokio::test]
+    async fn a_v1_that_cannot_serve_fails_without_waiting_for_v2() {
+        // A dual-format note makes a vertical start wait up to the 8 s
+        // deadline; a broken v1 must not sit through it.
+        let begun = Instant::now();
+        twitch_view::note_dual("test-v1-first", true);
+        let tall = Some(DualAsk { want: View::Vertical, audio_only: false });
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let fetch = auth_proxy::DualFetch {
+            handle: tokio::spawn(async move {
+                let _held = tx;
+                tokio::time::sleep(Duration::from_secs(3600)).await;
+                None
+            }),
+            started: Instant::now(),
+        };
+        let out = build_live("test-v1-first".into(), "#EXTM3U\n".into(), Some(fetch), status("test-v1-first"), "best", tall).await;
+        assert!(out.is_err());
+        assert!(begun.elapsed() < Duration::from_millis(900), "v1's error came at once");
+        // The v2 fetch was ended: its task dropped the sender without sending.
+        assert!(tokio::time::timeout(Duration::from_secs(2), rx).await.expect("v2 was aborted").is_err());
+    }
+
+    #[tokio::test]
+    async fn a_late_v2_nobody_reads_is_aborted_when_dropped() {
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let late = LateV2 {
+            fetch: auth_proxy::DualFetch {
+                handle: tokio::spawn(async move {
+                    let _held = tx;
+                    tokio::time::sleep(Duration::from_secs(3600)).await;
+                    None
+                }),
+                started: Instant::now(),
+            },
+            key: "test-late-drop".into(),
+            pref: None,
+        };
+        drop(late);
+        assert!(tokio::time::timeout(Duration::from_secs(2), rx).await.expect("the fetch was aborted").is_err());
     }
 
     #[test]
