@@ -25,8 +25,8 @@ interface StyledChatNameProps {
   accentColor: string;
   /** Extra node rendered inside the name span (e.g. the partner verified badge). */
   badge?: ReactNode;
-  /** Replaces the name's "Right-click to reply" tooltip: a StreamNook member's
-   *  decode card (MemberReveal), with its chassis class. */
+  /** A StreamNook member's decode card (MemberReveal), with its chassis class,
+   *  shown on hover. Other names have no hover card. */
   tooltip?: ReactNode;
   tooltipClassName?: string;
   /** Chat mode wraps the name in the reply tooltip + makes it clickable. The
@@ -114,13 +114,11 @@ export function StyledChatName({
           style={{ width: '0.45em', height: '0.45em', borderRadius: '9999px', backgroundColor: accentColor, marginRight: '0.4em', verticalAlign: '0.05em' }}
         />
       )}
-      {interactive ? (
-        <Tooltip
-          content={tooltip ?? 'Right-click to reply'}
-          side="top"
-          delay={tooltip ? 120 : undefined}
-          containerClassName={tooltip ? tooltipClassName : undefined}
-        >
+      {/* No "Right-click to reply" over every name: a right click anywhere on
+          the message replies, and the row's Reply button says so (SN-264). A
+          member's own card still shows here. */}
+      {interactive && tooltip ? (
+        <Tooltip content={tooltip} side="top" delay={120} containerClassName={tooltipClassName}>
           {nameSpan}
         </Tooltip>
       ) : (

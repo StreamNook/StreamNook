@@ -38,6 +38,7 @@ import { useUserColor } from '../services/userColorCache';
 import { memberIdFor } from '../utils/memberIdentity';
 import { isStreamNookUser, getStreamNookUserNumber, subscribeStreamNookRegistryVersion, getStreamNookRegistryVersion } from '../services/supabaseService';
 import { MemberReveal, MEMBER_REVEAL_CARD_CLASS } from './StreamNookBadge';
+import { PaintNameTip } from './chat/PaintNameTip';
 import { EmoteCreditLine } from './chat/EmoteCreditLine';
 import { canCredit } from '../services/emoteCredit';
 import { openEmoteCard, useEmoteCardStore, type EmoteCardTarget } from '../stores/emoteCardStore';
@@ -207,6 +208,13 @@ const SubGiftIcon = () => {
     <Gift size={20} className="text-accent" />
   );
 };
+
+/** The hover bar's Reply tooltip, which also teaches the right click. */
+const REPLY_TIP = (
+  <span>
+    Reply<span className="text-textSecondary"> · or right-click the message</span>
+  </span>
+);
 
 /** A YouTube channel owner's name: dark text in YouTube's gold pill (the values
  *  the overlay reads off YouTube's own chat, `OverlayChat.tsx`). */
@@ -3811,8 +3819,9 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             {isAction ? (
               // ACTION messages: entire content in username color
               <span style={{ ...usernameStyle, fontWeight: chatBodyWeight(chatDesign?.font_weight) }} className="break-words italic">
-                <Tooltip content="Right-click to reply" side="top">
-                  <span
+                {/* No hover tooltip: a right click anywhere on the message
+                    replies, as the row's Reply button says (SN-264). */}
+                <span
                     style={{ fontWeight: 700 }}
                     className="cursor-pointer hover:underline inline-block"
                     onClick={(e) => {
@@ -3849,8 +3858,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
                         <path fillRule="evenodd" d="M12.5 3.5 8 2 3.5 3.5 2 8l1.5 4.5L8 14l4.5-1.5L14 8l-1.5-4.5ZM7 11l4.5-4.5L10 5 7 8 5.5 6.5 4 8l3 3Z" clipRule="evenodd"></path>
                       </svg>
                     )}
-                  </span>
-                </Tooltip>
+                </span>
                 {' '}{replyMentionNode}{giantPluck ? giantPluck.inline : renderContent(contentWithEmotes)}
               </span>
             ) : (
@@ -3898,9 +3906,17 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
                   tooltip={
                     senderMemberNumber !== null ? (
                       <MemberReveal userId={senderMemberId} chatKey={cosmeticsKey} userNumber={senderMemberNumber} />
+                    ) : seventvPaint?.name ? (
+                      // The paint they wear, by name (SN-264). No paint, no card.
+                      <PaintNameTip
+                        paint={seventvPaint}
+                        color={effectiveColor ?? ''}
+                        shadowMode={paintShadowMode}
+                        still={stillEmotes}
+                      />
                     ) : undefined
                   }
-                  tooltipClassName={MEMBER_REVEAL_CARD_CLASS}
+                  tooltipClassName={senderMemberNumber !== null ? MEMBER_REVEAL_CARD_CLASS : undefined}
                 />
                 <span style={{ fontWeight: chatBodyWeight(chatDesign?.font_weight) }} className="text-textPrimary break-words">
                   {/* data-mod-body: the text the slider's Preview style strikes through. */}
@@ -4044,10 +4060,11 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
               </button>
             </Tooltip>
           )}
-          {/* The same reply a right click on the name starts, for those who
-              would rather click. */}
+          {/* The same reply a right click anywhere on the message starts, for
+              those who would rather click. Its tooltip is where the shortcut is
+              taught, in place of a tooltip over every name (SN-264). */}
           {canReply && (
-            <Tooltip content="Reply" side="top" requirePointerMove>
+            <Tooltip content={REPLY_TIP} side="top" requirePointerMove>
               <button
                 aria-label="Reply"
                 onClick={(e) => {

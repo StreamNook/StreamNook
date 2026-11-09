@@ -82,7 +82,9 @@ describe('mod buttons act only on still rows', () => {
     const row = read('components/ChatMessage.tsx');
     expect(row).toContain("'Pin message'} side=\"top\" requirePointerMove>");
     expect(row).toContain('<Tooltip content="Copy message" side="top" requirePointerMove>');
-    expect(row).toContain('<Tooltip content="Reply" side="top" requirePointerMove>');
+    // Reply's tooltip also teaches the right click (SN-264): REPLY_TIP.
+    expect(row).toContain('<Tooltip content={REPLY_TIP} side="top" requirePointerMove>');
+    expect(row).toContain('or right-click the message');
   });
 
   it("the dock's Reply sits right of Copy and starts the same reply a right click does", () => {
