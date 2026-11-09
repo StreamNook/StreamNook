@@ -3672,6 +3672,14 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     }
   };
 
+  /** Give up the reply being written: the reply and its typed text both go,
+   *  from Escape in the box or the reply card's X (SN-264). */
+  const cancelReply = () => {
+    setReplyingTo(null);
+    setMessageInput('');
+    inputRef.current?.focus({ preventScroll: true });
+  };
+
   const handleKeyPress = (e: React.KeyboardEvent) => {
     // An IME composing owns every key until it commits: Enter confirms the
     // candidate (it must not send or pick a suggestion), arrows walk candidates.
@@ -3798,6 +3806,15 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
       }
     }
     
+    // Escape gives up a reply (an open menu above took its own Escape first),
+    // the same as the reply's X: the reply and what was typed for it go (SN-264).
+    if (e.key === 'Escape' && replyingTo) {
+      e.preventDefault();
+      e.stopPropagation();
+      cancelReply();
+      return;
+    }
+
     // Arrow-key recall of previously-sent messages (Chatterino-style). Active
     // only when neither autocomplete dropdown is open (those return above for
     // arrows). ArrowUp walks back through history when the caret is on the first
@@ -5612,7 +5629,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                   username={replyingTo.username}
                   row={replyingTo.row}
                   source={replyingTo.source}
-                  onCancel={() => setReplyingTo(null)}
+                  onCancel={cancelReply}
                 />
               )}
 
