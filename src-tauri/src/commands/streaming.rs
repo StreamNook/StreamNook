@@ -213,15 +213,25 @@ fn launch_late_v2(ticket: Option<u64>) {
     });
 }
 
+/// Whether a start that names no view plays the remembered pick. The iPhone
+/// only for now: the Android shell does not send views yet, so a remembered
+/// Vertical there (an imported iPhone settings file) would put the portrait
+/// ladder in its 16:9 band with no way back. The Android vertical view lane
+/// flips this to `cfg!(mobile)` (and the pin
+/// `the_remembered_pick_plays_on_the_iphone_only` with it).
+const REMEMBERED_VIEW_PLAYS: bool = cfg!(target_os = "ios");
+
 /// The view a Twitch start wants (SN-40, `twitch_view::wanted`): the shell's
-/// request, else the remembered pick on a phone, landscape on the desktop,
+/// request, else the remembered pick on a phone (the iPhone for now,
+/// `REMEMBERED_VIEW_PLAYS`), landscape on the desktop,
 /// and always landscape while Android's TV screen mode shows the stream.
 fn wanted_view(view: Option<&str>, state: &State<'_, AppState>) -> View {
-    let remembered = state
-        .settings
-        .lock()
-        .map(|s| s.video_player.vertical_view)
-        .unwrap_or(false);
+    let remembered = REMEMBERED_VIEW_PLAYS
+        && state
+            .settings
+            .lock()
+            .map(|s| s.video_player.vertical_view)
+            .unwrap_or(false);
     #[cfg(target_os = "android")]
     let tv_owns = {
         let tv = crate::services::tv_screen::state();
@@ -235,7 +245,12 @@ fn wanted_view(view: Option<&str>, state: &State<'_, AppState>) -> View {
 /// What a solo start asks of the v2 usher: only a phone asks (the desktop
 /// never fetches it).
 fn dual_ask(want: View, quality: &str) -> Option<tr::DualAsk> {
-    cfg!(mobile).then(|| tr::DualAsk { want, audio_only: twitch_view::is_audio_only(quality) })
+    dual_ask_on(cfg!(mobile), want, quality)
+}
+
+/// `dual_ask` for a build that is (`phone`) or is not a phone.
+fn dual_ask_on(phone: bool, want: View, quality: &str) -> Option<tr::DualAsk> {
+    phone.then(|| tr::DualAsk { want, audio_only: twitch_view::is_audio_only(quality) })
 }
 
 /// What the player needs to run a VOD correctly (a recording VOD is a growing
@@ -1662,7 +1677,12 @@ pub async fn get_stream_qualities(
 
 /// The quality menu's v2 ask (Y9): only a Vertical view asks v2.
 fn menu_ask(view: Option<&str>, state: &State<'_, AppState>) -> Option<tr::DualAsk> {
-    dual_ask(wanted_view(view, state), "best").filter(|ask| ask.want == View::Vertical)
+    menu_ask_on(cfg!(mobile), wanted_view(view, state))
+}
+
+/// `menu_ask` for a build that is (`phone`) or is not a phone.
+fn menu_ask_on(phone: bool, want: View) -> Option<tr::DualAsk> {
+    dual_ask_on(phone, want, "best").filter(|ask| ask.want == View::Vertical)
 }
 
 #[tauri::command]
@@ -2060,5 +2080,33 @@ mod vertical_view_pins {
         assert_eq!(json["vertical_available"], true);
         assert_eq!(json["gave_up_ad_free"], true);
         assert_eq!(json["ticket"], 7);
+    }
+
+    #[test]
+    fn the_quality_menu_asks_v2_only_for_a_vertical_view() {
+        // Y9: a phone's Vertical menu asks v2 (and lists the narrowed group);
+        // a Landscape menu, and every desktop menu, never asks.
+        let ask = menu_ask_on(true, View::Vertical).expect("a vertical menu asks v2");
+        assert_eq!((ask.want, ask.audio_only), (View::Vertical, false));
+        assert!(menu_ask_on(true, View::Landscape).is_none());
+        assert!(menu_ask_on(false, View::Vertical).is_none());
+        assert!(menu_ask_on(false, View::Landscape).is_none());
+        // Both menus, the VOD's and the live one, go through it.
+        let b = body(&code(), "pub async fn get_stream_qualities(");
+        assert_eq!(b.matches("let ask = menu_ask(view.as_deref(), &state);").count(), 2, "{b}");
+        assert!(body(&code(), "fn menu_ask(").contains("menu_ask_on(cfg!(mobile), wanted_view(view, state))"));
+    }
+
+    #[test]
+    fn the_remembered_pick_plays_on_the_iphone_only() {
+        // M4, until the Android vertical view lane: that lane makes the
+        // Android shell send views, flips the const to `cfg!(mobile)` and
+        // changes this pin with it.
+        let src = code();
+        assert!(src.contains("const REMEMBERED_VIEW_PLAYS: bool = cfg!(target_os = \"ios\");"));
+        assert!(body(&src, "fn wanted_view(").contains("let remembered = REMEMBERED_VIEW_PLAYS\n"));
+        // An explicit view is honored on every phone whatever is remembered.
+        assert_eq!(twitch_view::wanted(Some("vertical"), false, true, false), View::Vertical);
+        assert_eq!(twitch_view::wanted(Some("landscape"), true, true, false), View::Landscape);
     }
 }
