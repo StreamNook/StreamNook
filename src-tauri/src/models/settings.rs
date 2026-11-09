@@ -240,6 +240,14 @@ pub struct VideoPlayerSettings {
     /// the Player settings switch sets it. The desktop player ignores it.
     #[serde(default)]
     pub zoom_to_fill: bool,
+    /// Phones only (SN-40). A dual-format Twitch stream (one that also
+    /// broadcasts a portrait picture) opens in its vertical view. Off by
+    /// default: landscape until the viewer picks Vertical on the player's view
+    /// pill, which remembers the last pick. Backend-owned: written only by
+    /// `commit_vertical_view` after a pick played (`adopt_backend_owned`
+    /// keeps it through every other save), read only by the core.
+    #[serde(default)]
+    pub vertical_view: bool,
 }
 
 fn default_background_mode() -> String {
@@ -286,6 +294,7 @@ impl Default for VideoPlayerSettings {
             sync_vod_progress: true,
             continue_watching_live: false,
             zoom_to_fill: false,
+            vertical_view: false,
         }
     }
 }
@@ -2138,6 +2147,9 @@ impl Settings {
         // identity fill; a window's copy of them is never written back.
         self.favorite_streamers = authoritative.favorite_streamers.clone();
         self.favorite_channels = authoritative.favorite_channels.clone();
+        // The vertical view pick changes only through `commit_vertical_view`
+        // (SN-40): a window's `video_player` group never carries it back.
+        self.video_player.vertical_view = authoritative.video_player.vertical_view;
     }
 
     /// One-time move of an existing install onto the first-run chat look,
@@ -2798,6 +2810,26 @@ mod backup_persistence_tests {
         assert!(parsed.video_player.zoom_to_fill);
         let saved = serde_json::to_value(&parsed).expect("serialize");
         assert_eq!(saved["video_player"]["zoom_to_fill"], serde_json::Value::Bool(true));
+    }
+
+    #[test]
+    fn vertical_view_defaults_off_round_trips_and_survives_a_stale_save() {
+        assert!(!Settings::default().video_player.vertical_view);
+        let mut value = serde_json::to_value(Settings::default()).expect("serialize");
+        value["video_player"]["vertical_view"] = serde_json::Value::Bool(true);
+        let parsed: Settings = serde_json::from_value(value).expect("parse");
+        assert!(parsed.video_player.vertical_view);
+        let saved = serde_json::to_value(&parsed).expect("serialize");
+        assert_eq!(saved["video_player"]["vertical_view"], serde_json::Value::Bool(true));
+        // An older file without the key loads with it off.
+        let mut older = serde_json::to_value(Settings::default()).expect("serialize");
+        older["video_player"].as_object_mut().unwrap().remove("vertical_view");
+        let older: Settings = serde_json::from_value(older).expect("an older file parses");
+        assert!(!older.video_player.vertical_view);
+        // A window's stale group never writes it back.
+        let mut incoming = Settings::default();
+        incoming.adopt_backend_owned(&parsed);
+        assert!(incoming.video_player.vertical_view);
     }
 
     #[test]

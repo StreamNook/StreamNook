@@ -45,6 +45,9 @@ pub fn frontend_owned_defaults() -> Value {
             "phone_layout": "beside",
             // A stream's landscape opens with chat shown until the person hides it.
             "landscape_open": true,
+            // A tall stream on an upright phone (SN-40) opens with the
+            // lower-third chat shown until the person clears it.
+            "vertical_open": true,
             "opacity": 55,
             "width": 340,
             "side": "auto",
@@ -365,6 +368,13 @@ pub async fn reset_settings(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn the_vertical_chat_opens_shown_by_default() {
+        let defaults = default_settings_value();
+        assert_eq!(defaults["fullscreen_chat"]["vertical_open"], json!(true));
+        assert_eq!(defaults["fullscreen_chat"]["landscape_open"], json!(true));
+    }
 
     #[test]
     fn an_older_write_never_lands_after_a_newer_one() {

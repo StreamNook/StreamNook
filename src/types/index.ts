@@ -77,6 +77,11 @@ export interface VideoPlayerSettings {
    *  top and bottom (never its sides, at most 1.5x). Set by a pinch on the
    *  video or the Player switch. Default false. Typed in Rust. */
   zoom_to_fill?: boolean;
+  /** Phones only (SN-40): a dual-format Twitch stream opens in its vertical
+   *  view. Default false. Typed in Rust and backend-owned: only the core's
+   *  `change_stream_view` writes it and only the core reads it, so no shell
+   *  patches or reads this field. */
+  vertical_view?: boolean;
   /** Scroll over the player to adjust volume. Default true. */
   scroll_volume?: boolean;
   /** Scroll down over the player to open the channel About drawer. Default
@@ -1404,6 +1409,9 @@ export interface FullscreenChatSettings {
   // phone_layout), as the person last left it. Default true: chat beside the
   // stream until they choose otherwise.
   landscape_open?: boolean;
+  // Phone only (SN-40). Whether a tall stream on an upright phone opens with
+  // the lower-third chat shown, as the person last left it. Default true.
+  vertical_open?: boolean;
 }
 
 /** How the Discord status looks. Mirrors Rust `DiscordPresenceSettings`

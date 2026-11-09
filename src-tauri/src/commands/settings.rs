@@ -220,6 +220,54 @@ pub(crate) fn commit_favorite_patch(
     Ok(true)
 }
 
+/// Remember the phones' vertical view pick (SN-40). Answers whether it
+/// changed anything.
+pub(crate) fn set_vertical_view(settings: &mut Settings, on: bool) -> bool {
+    if settings.video_player.vertical_view == on {
+        return false;
+    }
+    settings.video_player.vertical_view = on;
+    true
+}
+
+/// The one writer of `video_player.vertical_view`: `change_stream_view`, once
+/// the pick played. `still_current` runs under the settings lock, so a start
+/// that a newer one superseded never writes. Every other save keeps the field
+/// (`Settings::adopt_backend_owned`). Answers whether it wrote.
+pub(crate) fn commit_vertical_view(
+    app: &AppHandle,
+    state: &AppState,
+    on: bool,
+    still_current: impl FnOnce() -> bool,
+) -> Result<bool, String> {
+    let settings = {
+        let mut state_settings = state.settings.lock().map_err(|e| e.to_string())?;
+        if !still_current() || !set_vertical_view(&mut state_settings, on) {
+            return Ok(false);
+        }
+        state_settings.clone()
+    };
+    after_settings_change(&settings, false, None);
+    write_settings_to_disk(&settings)?;
+    flush_now_if_phone_idle();
+    let keys = vec!["video_player".to_string()];
+    let _ = app.emit(SETTINGS_UPDATED_EVENT, SettingsUpdated { source: None, keys });
+    Ok(true)
+}
+
+/// A backup or import that names `video_player` without `vertical_view` (one
+/// written before it existed) keeps the pick this install has (Z4): the field
+/// is portable, but its absence is not a choice.
+fn keep_absent_vertical_view(incoming: &serde_json::Map<String, serde_json::Value>, current: &Settings, imported: &mut Settings) {
+    let named = incoming
+        .get("video_player")
+        .and_then(|group| group.get("vertical_view"))
+        .is_some();
+    if !named {
+        imported.video_player.vertical_view = current.video_player.vertical_view;
+    }
+}
+
 /// A phone in the background can be ended at any moment, after its last
 /// flush, so a write made then goes to disk now.
 fn flush_now_if_phone_idle() {
@@ -1018,6 +1066,7 @@ pub(crate) fn apply_imported_settings(
         .map_err(|e| format!("That backup isn't compatible with this version: {}", e))?;
     imported.lift_custom_theme_muted();
     imported.map_legacy_event_keys();
+    keep_absent_vertical_view(incoming_obj, &current, &mut imported);
     favorite_channels::repair(&mut imported);
 
     let favorites_changed = favorite_channels::favorites_changed(&current, &imported);
@@ -1506,14 +1555,76 @@ mod patch_tests {
     }
 
     #[test]
-    fn both_commit_paths_flush_a_background_phone_and_the_import_repairs() {
+    fn every_commit_path_flushes_a_background_phone_and_the_import_repairs() {
         let src = this_file();
-        assert_eq!(src.matches("    flush_now_if_phone_idle();\n").count(), 2);
+        // commit_settings_patch, commit_favorite_patch, commit_vertical_view.
+        assert_eq!(src.matches("    flush_now_if_phone_idle();\n").count(), 3);
         let import = &src[src.find("pub(crate) fn apply_imported_settings(").unwrap()..];
         let import = &import[..import.find("\n}\n").unwrap()];
         assert!(import.contains("favorite_channels::repair(&mut imported);"));
         assert!(import.contains("favorite_channels::favorites_changed(&current, &imported)"));
         assert!(import.contains("crate::services::home_snapshot::note_discover_inputs_changed();"));
+    }
+
+    #[test]
+    fn set_vertical_view_flips_and_reports_a_change() {
+        let mut s = Settings::default();
+        assert!(!s.video_player.vertical_view, "landscape until picked");
+        assert!(set_vertical_view(&mut s, true));
+        assert!(s.video_player.vertical_view);
+        assert!(!set_vertical_view(&mut s, true), "unchanged: nothing to write");
+        assert!(set_vertical_view(&mut s, false));
+        assert!(!s.video_player.vertical_view);
+    }
+
+    #[test]
+    fn a_stale_video_player_patch_keeps_the_vertical_pick() {
+        let mut current = Settings::default();
+        set_vertical_view(&mut current, true);
+        // A window's copy of the group from before the pick.
+        let stale = serde_json::to_value(&Settings::default().video_player).unwrap();
+        let next = apply_settings_patch(&current, patch(json!({ "video_player": stale }))).unwrap();
+        assert!(next.video_player.vertical_view);
+        // A group without the key at all (an older shell).
+        let mut group = serde_json::to_value(&Settings::default().video_player).unwrap();
+        group.as_object_mut().unwrap().remove("vertical_view");
+        group["autoplay"] = json!(false);
+        let next = apply_settings_patch(&current, patch(json!({ "video_player": group }))).unwrap();
+        assert!(next.video_player.vertical_view);
+        assert!(!next.video_player.autoplay, "the rest of the group still applies");
+    }
+
+    #[test]
+    fn an_import_without_the_field_keeps_the_pick() {
+        let mut current = Settings::default();
+        current.video_player.vertical_view = true;
+        let mut imported = Settings::default();
+        let without = json!({ "video_player": { "autoplay": false } });
+        keep_absent_vertical_view(without.as_object().unwrap(), &current, &mut imported);
+        assert!(imported.video_player.vertical_view);
+        // A backup that names it wins.
+        let mut imported = Settings::default();
+        let with = json!({ "video_player": { "vertical_view": false } });
+        keep_absent_vertical_view(with.as_object().unwrap(), &current, &mut imported);
+        assert!(!imported.video_player.vertical_view);
+        // Import and backup restore both run it (both go through apply_imported_settings).
+        let src = this_file();
+        let import = &src[src.find("pub(crate) fn apply_imported_settings(").unwrap()..];
+        let import = &import[..import.find("\n}\n").unwrap()];
+        assert!(import.contains("keep_absent_vertical_view(incoming_obj, &current, &mut imported);"));
+    }
+
+    #[test]
+    fn the_vertical_pick_has_one_writer_that_takes_the_lock_writes_flushes_and_says_so() {
+        let src = this_file();
+        let body = &src[src.find("pub(crate) fn commit_vertical_view(").unwrap()..];
+        let body = &body[..body.find("\n}\n").unwrap()];
+        let at = |needle: &str| body.find(needle).unwrap_or_else(|| panic!("{needle} missing:\n{body}"));
+        assert!(at("state.settings.lock()") < at("still_current()"));
+        assert!(at("still_current()") < at("set_vertical_view(&mut state_settings, on)"));
+        assert!(at("set_vertical_view(&mut state_settings, on)") < at("write_settings_to_disk(&settings)?"));
+        assert!(at("write_settings_to_disk(&settings)?") < at("flush_now_if_phone_idle();"));
+        assert!(at("vec![\"video_player\".to_string()]") < at("app.emit(SETTINGS_UPDATED_EVENT"));
     }
 
     #[test]
