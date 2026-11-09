@@ -109,6 +109,13 @@ describe('barLine', () => {
   it('shows no bar with nothing left here', () => {
     expect(barLine(view({ complete: true }))).toBeNull();
   });
+  it('never counts a reward already owned on a campaign not started (a reissue)', () => {
+    const owned = { ...tier, id: 'o', name: 'Cap', claimed: true, status: 'Claimed', bar: 100 };
+    // Every reward already owned: nothing to earn by watching, so no lip.
+    expect(barLine(view({ complete: true, campaigns: [{ ...notStarted, drops: [owned, { ...owned, id: 'o2' }] }] }))).toBeNull();
+    // One left to earn: the lip names it, not the owned one, and counts only it.
+    expect(barLine(view({ campaigns: [{ ...notStarted, drops: [owned, tier] }] }))).toMatchObject({ name: 'Jacket', status: 'Starts when you watch' });
+  });
 });
 
 describe('drawerAfter', () => {

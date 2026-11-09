@@ -73,7 +73,13 @@ export function barLine(view: WatchDrops): BarLine | null {
       claimLabel: lead.claim_label,
     };
   }
-  const waiting = view.campaigns.filter((c) => !c.started && c.drops.length > 0);
+  // Campaigns here not started yet, by the rewards still to earn: one already
+  // owned (Twitch reissued the campaign around a reward you hold) is nothing to
+  // earn, so a campaign of owned rewards never brings the lip up.
+  const waiting = view.campaigns
+    .filter((c) => !c.started)
+    .map((c) => ({ art: c.art, drops: c.drops.filter((d) => !d.claimed) }))
+    .filter((c) => c.drops.length > 0);
   if (waiting.length === 0) return null;
   const first = waiting[0].drops[0];
   const rewards = waiting.reduce((n, c) => n + c.drops.length, 0);
