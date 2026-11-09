@@ -24,8 +24,10 @@ pub mod account_store;
 pub mod activity_history_service;
 // Phones only: ad-free live playback. Desktop keeps the ad-neutral core and
 // its `playback.resolve` plugin seam; a phone can't host a plugin (it is a
-// spawned native process), so the same work happens in-core there.
-#[cfg(mobile)]
+// spawned native process), so the same work happens in-core there. Its rules
+// (the splice, the filter, the vertical view's stand-down) are tested on
+// desktop; every call site stays `#[cfg(mobile)]`.
+#[cfg(any(mobile, test))]
 pub mod ad_bypass;
 pub mod ad_detect;
 pub mod app_paths;
