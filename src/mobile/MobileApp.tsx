@@ -40,6 +40,8 @@ import { CategoryStreamsScreen } from './screens/CategoryStreamsScreen';
 import { RewardsScreen } from './screens/RewardsScreen';
 import { CosmeticsScreen } from './screens/CosmeticsScreen';
 import { MentionsScreen } from './screens/MentionsScreen';
+import { InboxArrival } from './mentions/InboxArrival';
+import { InboxSheet } from './mentions/InboxSheet';
 import { installMentionInbox } from './mentions/mentionInbox';
 import { SongsScreen } from './screens/SongsScreen';
 import { installWhisperInbox } from './whispers/whisperInbox';
@@ -101,6 +103,9 @@ const MobileApp: React.FC = () => {
   // tab bar does not re-enter around a PiP round trip.
   const page = usePageState();
   const shellHidden = shellCovered || page.pip;
+  // A layer over the tabs (the inbox screen, settings, cosmetics, songs): the
+  // browsing card waits for the tabs to show again.
+  const layerOverTabs = useMobileNavStore((s) => s.mentionsOpen || !!s.settingsView || s.cosmeticsOpen || s.songsOpen);
   // The watch layer is up at full size over the shell: a stream, one still loading, or an offline
   // room (WatchScreen shows on `streamUrl || isLoading`), from the layer's first frame. Input
   // follows this one: the keyboard and the menus left open under the layer. The rests
@@ -250,6 +255,24 @@ const MobileApp: React.FC = () => {
           {/* Floating pill bar (fixed) and the full-screen layers above it. */}
           {/* Chats is a full-screen surface: no tab bar there. */}
           <MobileTabBar hidden={shellCovered || chatsShown} />
+          {/* Browsing (no chat on screen): a new mention's or whisper's card
+              rises over the tab bar, as it does over a chat's composer, and
+              folds into the title row's inbox count. Its edges line up with
+              the bar's. */}
+          {isAuthenticated && !shellOutOfSight && !chatsShown && !layerOverTabs && page.visible && (
+            <div
+              className="fixed z-30 h-[70px] pointer-events-none [&>button]:pointer-events-auto"
+              style={{
+                left: 'calc(var(--sn-safe-l, 0px) + 10px)',
+                right: 'calc(var(--sn-safe-r, 0px) + 10px)',
+                bottom: 'calc(var(--sn-safe-b, 0px) + 14px + var(--sn-tabbar-h, 56px) + 6px)',
+              }}
+            >
+              <InboxArrival side="right" surface="home" />
+            </div>
+          )}
+          {/* The inbox from the title row's button: the same sheet as a chat's tray. */}
+          <InboxSheet surface="home" />
           <CategoryStreamsScreen />
           <WatchScreen />
           <CosmeticsScreen />

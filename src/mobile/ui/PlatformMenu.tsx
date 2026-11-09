@@ -1,7 +1,8 @@
-// The platform choice in a screen's title row, so it spends no row of its own:
-// the chosen platform's logo with a small chevron saying it opens, and a small
-// glass menu hung from it listing every option with its logo and a check on
-// the chosen one. Following filters with it, Browse switches platform with it.
+// A choice in a screen's title row, so it spends no row of its own: the chosen
+// option's mark with a small chevron saying it opens, and a small glass menu
+// hung from it listing every option with its mark and a check on the chosen
+// one. Following filters platforms with it, Browse switches platform with it,
+// and both pick their layout (cards or a list) with it (`TitleMenu`).
 //
 // A menu rather than a sheet: it holds three short rows, and a sheet rising
 // from the bottom for that pulls the eye away from the title it belongs to.
@@ -18,6 +19,14 @@ export interface PlatformOption<T extends string> {
   label: string;
   /** The logos that stand for it; "All platforms" wears every one. */
   marks: ProviderId[];
+}
+
+/** An option of a `TitleMenu`: a platform's logos, or an icon. */
+export interface TitleMenuOption<T extends string> {
+  value: T;
+  label: string;
+  marks?: ProviderId[];
+  icon?: React.ReactNode;
 }
 
 export const ALL_PLATFORMS: PlatformOption<'all'> = { value: 'all', label: 'All platforms', marks: ['twitch', 'kick'] };
@@ -44,15 +53,31 @@ export const PlatformMarks: React.FC<{ marks: ProviderId[]; size?: number }> = (
 // The menu portals into <body>, outside .sn-mobile where --sn-safe-* live.
 const SAFE_R = 'var(--sn-inset-r, env(safe-area-inset-right, 0px))';
 
-export function PlatformMenu<T extends string>({
-  options,
-  value,
-  onChange,
-  size = 18,
-}: {
+/** The platform choice: a `TitleMenu` of platform logos. */
+export function PlatformMenu<T extends string>(props: {
   options: PlatformOption<T>[];
   value: T;
   onChange: (next: T) => void;
+  size?: number;
+}) {
+  return <TitleMenu label="Platform" {...props} />;
+}
+
+const OptionMark: React.FC<{ option: TitleMenuOption<string>; size: number }> = ({ option, size }) =>
+  option.icon ? <span className="flex text-textPrimary" aria-hidden>{option.icon}</span> : <PlatformMarks marks={option.marks ?? []} size={size} />;
+
+export function TitleMenu<T extends string>({
+  options,
+  value,
+  onChange,
+  label,
+  size = 18,
+}: {
+  options: TitleMenuOption<T>[];
+  value: T;
+  onChange: (next: T) => void;
+  /** What it chooses ("Platform", "Layout"), for its button and menu. */
+  label: string;
   size?: number;
 }) {
   const [open, setOpen] = useState(false);
@@ -108,16 +133,16 @@ export function PlatformMenu<T extends string>({
         className="sn-touch flex items-center justify-center gap-1 px-1 active:opacity-70 transition-opacity"
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label={`Platform: ${chosen.label}`}
+        aria-label={`${label}: ${chosen.label}`}
       >
-        <PlatformMarks marks={chosen.marks} size={size} />
+        <OptionMark option={chosen} size={size} />
         <CaretDown size={10} weight="bold" className="text-textSecondary" />
       </button>
       {createPortal(
         <AnimatePresence>
           {open && anchor && (
             <motion.div
-              key="platform-menu"
+              key="title-menu"
               className="fixed inset-0 z-[9000]"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -129,7 +154,7 @@ export function PlatformMenu<T extends string>({
               <div className="absolute inset-0" onClick={close} />
               <motion.div
                 role="menu"
-                aria-label="Platform"
+                aria-label={label}
                 className="sn-menu absolute min-w-[210px] origin-top-right"
                 style={{
                   top: anchor.top,
@@ -153,7 +178,7 @@ export function PlatformMenu<T extends string>({
                       {/* A fixed slot, so the pair and the single marks put
                           their labels on one line. */}
                       <span className="flex w-[30px] shrink-0 items-center justify-center">
-                        <PlatformMarks marks={o.marks} size={size} />
+                        <OptionMark option={o} size={size} />
                       </span>
                       <span className="flex-1 truncate">{o.label}</span>
                       {/* The slot stays when empty, so the menu is one width

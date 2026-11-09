@@ -5,7 +5,8 @@ import type { InboxSurface } from './mentionInbox';
 
 export type ComposerBusy = Readonly<Record<InboxSurface, boolean>>;
 
-export const NO_COMPOSER_BUSY: ComposerBusy = { watch: false, chats: false };
+// `home` has no composer: it stays false, and the browsing card never waits.
+export const NO_COMPOSER_BUSY: ComposerBusy = { watch: false, chats: false, home: false };
 
 /** The flags with `surface` set to `busy`, or null when that changes nothing. */
 export function withComposerBusy(current: ComposerBusy, surface: InboxSurface, busy: boolean): ComposerBusy | null {

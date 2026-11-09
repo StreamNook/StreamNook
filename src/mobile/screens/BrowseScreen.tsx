@@ -20,7 +20,8 @@ import { isTwitchStream, streamKey } from '../../utils/streamProvider';
 import { KICK_PLATFORM, PlatformMenu, TWITCH_PLATFORM } from '../ui/PlatformMenu';
 import { SegmentedControl, type Segment } from '../ui/SegmentedControl';
 import { ScreenHeader } from '../ui/ScreenHeader';
-import { TitleCapsule, ViewToggle } from '../ui/TitleControls';
+import { TitleCapsule, ViewMenu } from '../ui/TitleControls';
+import { InboxTitleButton } from '../mentions/InboxTitleButton';
 import { SearchField } from '../ui/SearchField';
 import { EmptyNote } from '../ui/EmptyNote';
 import type { ProviderCategory } from '../../types/providers';
@@ -296,7 +297,8 @@ export const BrowseScreen: React.FC = () => {
           <TitleCapsule>
             <PlatformMenu options={[TWITCH_PLATFORM, KICK_PLATFORM]} value={platform} onChange={switchPlatform} />
           </TitleCapsule>
-          {mode === 'live' && <ViewToggle value={view} onChange={setViewPersisted} />}
+          {mode === 'live' && <ViewMenu value={view} onChange={setViewPersisted} />}
+          <InboxTitleButton />
         </ScreenHeader>
         <div className="flex flex-col gap-2.5 px-4 pb-2">
           <SearchField

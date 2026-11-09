@@ -31,8 +31,10 @@ import { nextCounts } from './inboxModel';
 
 export type { InboxFilterId, InboxItem, InboxViewPayload, MentionArrival, MentionEntry, MentionPage };
 
-/** Where an inbox sheet opens: the chat under the player, or the Chats tab. */
-export type InboxSurface = 'watch' | 'chats';
+/** Where an inbox sheet opens: the chat under the player, the Chats tab's chat, or the tabs while
+ *  browsing (no chat on screen: the title row's inbox button and its card over
+ *  the tab bar). */
+export type InboxSurface = 'watch' | 'chats' | 'home';
 
 export const PAGE_SIZE = 40;
 

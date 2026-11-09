@@ -129,7 +129,8 @@ export const MobileChatPane: React.FC<{
    *  still and catches up in one render when seen again. */
   idle?: boolean;
   top?: React.ReactNode;
-  surface?: InboxSurface;
+  /** A chat's own surface; `home` (browsing) has no chat. */
+  surface?: Exclude<InboxSurface, 'home'>;
   /** The watch chat is not on screen (mini player, landscape with chat off): sheets that belong
    *  to its rows close. The app going to the background is not this. */
   hidden?: boolean;

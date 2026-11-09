@@ -884,6 +884,19 @@ html[data-theme-tone="light"] .sn-notif-trigger .sn-notif-face > svg {
   backdrop-filter: blur(calc(4px * var(--glass-strength))) saturate(110%);
 }
 
+/* The glaze tinted the theme accent: the same glass (blur, rims, the
+   Glassiness floor under it), its tint pushed from 8% accent to a third, for a
+   control whose state wants notice without a solid fill (the title row's inbox
+   while something is new). The rims warm with it. */
+.chrome-glaze--tinted {
+  --glaze-ring: 24%;
+  --glaze-inner: 14%;
+  background-image: linear-gradient(
+    color-mix(in srgb, var(--color-accent) 34%, transparent),
+    color-mix(in srgb, var(--color-accent) 34%, transparent)
+  );
+}
+
 /* A glazed control that floats over media rather than over app chrome.
    Clear glass reads as a smudge on a busy thumbnail: there is nothing behind it
    with a consistent tone, so the icon has to fight the picture. A frosted floor

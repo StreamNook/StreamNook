@@ -17,7 +17,8 @@ import { PROVIDERS } from '../../types/providers';
 import { ALL_PLATFORMS, KICK_PLATFORM, PlatformMenu, TWITCH_PLATFORM } from '../ui/PlatformMenu';
 import { EmptyNote } from '../ui/EmptyNote';
 import { ScreenHeader } from '../ui/ScreenHeader';
-import { TitleCapsule, ViewToggle } from '../ui/TitleControls';
+import { TitleCapsule, ViewMenu } from '../ui/TitleControls';
+import { InboxTitleButton } from '../mentions/InboxTitleButton';
 import { GlassHeart } from '../ui/menuIcons';
 
 /** Which platform Following shows. null is everything. */
@@ -156,7 +157,8 @@ export const FollowingScreen: React.FC = () => {
             />
           </TitleCapsule>
         )}
-        <ViewToggle value={view} onChange={setViewPersisted} />
+        <ViewMenu value={view} onChange={setViewPersisted} />
+        <InboxTitleButton />
       </ScreenHeader>
       <PullToRefresh
         onRefresh={refresh}
