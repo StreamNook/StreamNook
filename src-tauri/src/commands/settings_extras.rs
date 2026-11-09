@@ -120,7 +120,8 @@ pub struct AlertChannelRow {
     pub on: bool,
 }
 
-/// The channels the live-alert sheet lists, sorted by name.
+/// The channels the live-alert sheet lists: newest follow first on a phone,
+/// by name on desktop.
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct AlertChannels {
     pub channels: Vec<AlertChannelRow>,
@@ -266,7 +267,8 @@ fn push_settings_row(
 
 /// The sheet's rows from what was read, pure so its rules are tested: Twitch
 /// follows first, then (with `all`) the other platforms' follows and every
-/// favourite, each channel listed once by its canonical key, sorted by name.
+/// favourite, each channel listed once by its canonical key; sorted by name
+/// with `all`, else in Twitch's newest-follow-first order.
 /// The count is the listed channels whose alerts are off, `None` when the
 /// Twitch follows could not be read.
 fn alert_rows(
@@ -316,7 +318,13 @@ fn alert_rows(
             );
         }
     }
-    channels.sort_by_key(|c| c.stream.user_name.to_lowercase());
+    // Phones list Twitch follows only, in Twitch's own order: newest follow
+    // first (SN-264), so the channel just followed is at the top. Desktop mixes
+    // in other platforms and favourites, which carry no follow date, so it
+    // keeps one A to Z list.
+    if all {
+        channels.sort_by_key(|c| c.stream.user_name.to_lowercase());
+    }
     let muted_count = twitch_read.then(|| channels.iter().filter(|c| !c.on).count());
     (channels, muted_count)
 }
@@ -351,6 +359,17 @@ mod alert_rows_tests {
         assert_eq!(rows.len(), 1);
         assert!(!rows[0].on, "a legacy lowercased entry still mutes it");
         assert_eq!(count, Some(1));
+    }
+
+    #[test]
+    fn phones_keep_twitchs_newest_follow_first_order_and_desktop_sorts_by_name() {
+        // Twitch answers followed channels newest follow first.
+        let follows = || vec![twitch("3", "zed"), twitch("2", "amy"), twitch("1", "mo")];
+        let (phone, _) = alert_rows(follows(), true, &[], &[], &[], false);
+        let order = |rows: &[AlertChannelRow]| rows.iter().map(|r| r.stream.user_login.clone()).collect::<Vec<_>>();
+        assert_eq!(order(&phone), ["zed", "amy", "mo"]);
+        let (desktop, _) = alert_rows(follows(), true, &[], &[], &[], true);
+        assert_eq!(order(&desktop), ["amy", "mo", "zed"]);
     }
 
     #[test]

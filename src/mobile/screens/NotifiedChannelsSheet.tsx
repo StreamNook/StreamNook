@@ -7,7 +7,8 @@
 // stack and pop correctly on Android back.
 //
 // Fed by get_followed_channels_for_alerts: Rust pages through every channel
-// you follow, live or not, stops at a fixed number of pages, sorts by name and
+// you follow, live or not, stops at a fixed number of pages, keeps Twitch's
+// newest-follow-first order (SN-264) and
 // says per channel whether its alerts are on. Rows show Rust's answer; a store
 // change (a press here, the player's bell, a Copy) re-reads it, and a newer
 // read always wins over an older one.
