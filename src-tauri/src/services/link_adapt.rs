@@ -914,6 +914,17 @@ pub fn ladder_from(
     (out, current)
 }
 
+/// The width of a tier the platform lists without one, from its height and
+/// the ladder's shape: 16:9 on a landscape ladder, 9:16 on a portrait one (a
+/// tall stream's 1280-high tier is 720 wide, not 2275).
+fn fallback_width(height: u32, portrait: bool) -> u32 {
+    if portrait {
+        height * 9 / 16
+    } else {
+        height * 16 / 9
+    }
+}
+
 /// The ladder for a platform adapter's quality list (best first), with the
 /// pick known by name. A rendition the platform lists without a bitrate (or
 /// as 0) gets one estimated from its pixels against the tallest one that has
@@ -927,7 +938,8 @@ pub fn ladder_from_qualities(
         .filter(|q| q.bandwidth.is_some_and(|b| b > 0))
         .filter_map(|q| Some((q.height?, q.width, q.fps, q.bandwidth?)))
         .max_by_key(|(h, ..)| *h);
-    let pixels = |h: u32, w: Option<u32>| w.unwrap_or(h * 16 / 9) as f64 * h as f64;
+    let portrait = crate::services::twitch_view::ladder_portrait(qualities.iter().map(|q| (q.width, q.height))) == Some(true);
+    let pixels = |h: u32, w: Option<u32>| w.unwrap_or_else(|| fallback_width(h, portrait)) as f64 * h as f64;
     let variants: Vec<crate::services::twitch_resolver::Variant> = qualities
         .iter()
         .filter(|q| q.height.is_some())
@@ -2731,6 +2743,42 @@ mod tests {
         let (rungs, cur) = ladder_from_qualities(&qualities, "1080p60");
         assert_eq!((rungs.len(), cur), (2, 0));
         assert!(ladder_from_qualities(&qualities, "480p").0.is_empty());
+    }
+
+    #[test]
+    fn a_missing_width_follows_the_ladders_shape() {
+        assert_eq!(fallback_width(1080, false), 1920);
+        assert_eq!(fallback_width(1280, true), 720);
+        use crate::services::providers::source::PlaybackQuality;
+        let q = |name: &str, w: Option<u32>, h: u32, bw: Option<u64>| PlaybackQuality {
+            name: name.into(),
+            url: format!("https://p/{name}.m3u8"),
+            width: w,
+            height: Some(h),
+            fps: Some(30.0),
+            bandwidth: bw,
+        };
+        // A portrait ladder whose middle rung lists no width or bitrate: its
+        // estimate is a quarter of the area, as a 9:16 rung, not a 16:9 one.
+        let qualities = vec![
+            q("1920p", Some(1080), 1920, Some(6_000_000)),
+            q("1280p", None, 1280, None),
+            q("852p", Some(480), 852, Some(1_000_000)),
+        ];
+        let (rungs, _) = ladder_from_qualities(&qualities, "1920p");
+        let mid = rungs.iter().find(|r| r.name == "1280p").expect("estimated rung");
+        let area = (720.0 * 1280.0) / (1080.0 * 1920.0);
+        assert_eq!(mid.bandwidth, (6_000_000f64 * f64::powf(area, 0.75)) as u64);
+    }
+
+    #[test]
+    fn every_step_of_a_vertical_session_is_a_portrait_rung() {
+        use crate::services::twitch_view::{narrow, tests::fixture, View};
+        let tall = crate::services::twitch_resolver::parse_master(&narrow(&fixture("dual_v2"), View::Vertical));
+        let (rungs, cur) = ladder_from(&tall, "https://v2.example/1080p60-portrait.m3u8");
+        assert_eq!(cur, 0);
+        assert_eq!(rungs.len(), 5);
+        assert!(rungs.iter().all(|r| r.url.contains("-portrait")), "{rungs:?}");
     }
 
     #[test]

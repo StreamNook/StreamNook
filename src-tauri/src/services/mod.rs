@@ -266,6 +266,7 @@ pub mod twitch_integrity;
 pub mod bits;
 pub mod count_text;
 pub mod twitch_resolver;
+pub mod twitch_view;
 pub mod twitch_limits;
 pub mod token_vault;
 #[cfg(target_os = "android")]

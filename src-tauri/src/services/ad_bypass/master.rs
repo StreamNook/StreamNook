@@ -176,18 +176,20 @@ fn parse_name_height(line: &str) -> Option<u32> {
     digits.parse().ok()
 }
 
-/// The video height of an `#EXT-X-STREAM-INF` line, from `RESOLUTION=WxH` or
-/// the `NAME`/`IVS-NAME` label. None for audio-only.
+/// The size of an `#EXT-X-STREAM-INF` line's tier: the short edge of its
+/// `RESOLUTION=WxH`, else (no resolution) the height its `NAME`/`IVS-NAME`
+/// label carries. The label is never read when a resolution is there: the
+/// legacy vertical-only shape names a 720x1280 tier "1280p (source)", and a
+/// portrait tier measured by its long edge outranked every landscape one.
+/// On a landscape tier the short edge is its height. None for audio-only.
 fn stream_inf_height(inf: &str) -> Option<u32> {
     let res = extract_attr(inf, "RESOLUTION").and_then(|r| {
-        r.split(['x', 'X'])
-            .nth(1)
-            .and_then(|h| h.trim().parse::<u32>().ok())
+        let mut parts = r.split(['x', 'X']);
+        let w = parts.next().and_then(|w| w.trim().parse::<u32>().ok());
+        let h = parts.next().and_then(|h| h.trim().parse::<u32>().ok());
+        crate::services::twitch_view::short_edge(w, h)
     });
-    match (res, parse_name_height(inf)) {
-        (Some(a), Some(b)) => Some(a.max(b)),
-        (a, b) => a.or(b),
-    }
+    res.or_else(|| parse_name_height(inf))
 }
 
 /// What Twitch says it is withholding from this viewer and why.
@@ -561,6 +563,29 @@ https://modroom.streamnook.app/quality-media?u=https%3A%2F%2Fcdn%2F1440.m3u8\n";
             Some(1440)
         );
         assert_eq!(parse_name_height(r#"#EXT-X-MEDIA:NAME="audio_only""#), None);
+    }
+
+    #[test]
+    fn a_tier_is_measured_by_the_short_edge_of_its_resolution() {
+        assert_eq!(stream_inf_height("#EXT-X-STREAM-INF:RESOLUTION=1920x1080,IVS-NAME=\"1080p60\""), Some(1080));
+        // The legacy vertical-only source: named by its long edge.
+        assert_eq!(stream_inf_height("#EXT-X-STREAM-INF:RESOLUTION=720x1280,IVS-NAME=\"1280p (source)\""), Some(720));
+        assert_eq!(stream_inf_height("#EXT-X-STREAM-INF:BANDWIDTH=1,IVS-NAME=\"1440p60\""), Some(1440));
+        assert_eq!(stream_inf_height("#EXT-X-STREAM-INF:BANDWIDTH=1,CODECS=\"mp4a.40.2\""), None);
+    }
+
+    #[test]
+    fn a_vertical_only_relay_master_grafts_nothing_it_already_serves() {
+        // Every tier of the viewer's vertical-only master is on the relay, so
+        // nothing is grafted; the ladder logs by short edge (it read 1280, 720).
+        let relay = "#EXTM3U\n\
+#EXT-X-STREAM-INF:BANDWIDTH=3200000,RESOLUTION=720x1280,IVS-NAME=\"1280p (source)\",IVS-VARIANT-SOURCE=\"source\"\nhttps://relay/1280.m3u8\n\
+#EXT-X-STREAM-INF:BANDWIDTH=1700000,RESOLUTION=404x720,IVS-NAME=\"720p\"\nhttps://relay/720.m3u8\n";
+        let auth = "#EXTM3U\n\
+#EXT-X-STREAM-INF:BANDWIDTH=3200000,RESOLUTION=720x1280,IVS-NAME=\"1280p (source)\",IVS-VARIANT-SOURCE=\"source\"\nhttps://auth/1280.m3u8\n\
+#EXT-X-STREAM-INF:BANDWIDTH=1700000,RESOLUTION=404x720,IVS-NAME=\"720p\"\nhttps://auth/720.m3u8\n";
+        assert_eq!(splice(relay, auth), relay);
+        assert_eq!(sorted_heights(relay), vec![720, 404]);
     }
 
     #[test]

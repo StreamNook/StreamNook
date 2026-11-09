@@ -133,7 +133,11 @@ pub fn select(qualities: &[PlaybackQuality], requested: &str) -> Option<(usize, 
         return Some((i, qualities[i].name.clone()));
     }
 
-    // Numeric: match the requested height (e.g. "720", "720p", "720p60").
+    // Numeric: match the requested height (e.g. "720", "720p", "720p60")
+    // against each rendition's short edge, so a portrait stream's 720x1280
+    // tier is its "720p" (its height would read as 1280). On a landscape
+    // ladder the short edge is the height.
+    let edge = |q: &PlaybackQuality| crate::services::twitch_view::short_edge(q.width, q.height);
     if let Some(target) = req
         .trim_end_matches(|c: char| !c.is_ascii_digit())
         .split('p')
@@ -144,8 +148,8 @@ pub fn select(qualities: &[PlaybackQuality], requested: &str) -> Option<(usize, 
         let at_or_below = qualities
             .iter()
             .enumerate()
-            .filter(|(_, q)| q.height.map(|h| h <= target).unwrap_or(false))
-            .max_by_key(|(_, q)| q.height.unwrap_or(0));
+            .filter(|(_, q)| edge(q).map(|h| h <= target).unwrap_or(false))
+            .max_by_key(|(_, q)| edge(q).unwrap_or(0));
         if let Some((i, q)) = at_or_below {
             return Some((i, q.name.clone()));
         }
@@ -153,7 +157,7 @@ pub fn select(qualities: &[PlaybackQuality], requested: &str) -> Option<(usize, 
             .iter()
             .enumerate()
             .filter(|(_, q)| q.height.is_some())
-            .min_by_key(|(_, q)| q.height.unwrap_or(u32::MAX));
+            .min_by_key(|(_, q)| edge(q).unwrap_or(u32::MAX));
         if let Some((i, q)) = above {
             return Some((i, q.name.clone()));
         }
@@ -308,5 +312,29 @@ https://manifest.googlevideo.com/360/file.m3u8
         let q = parse(YT_MASTER, "https://manifest.googlevideo.com/master.m3u8");
         assert_eq!(q[0].name, "1080p");
         assert_eq!(q[1].name, "360p");
+    }
+
+    /// A portrait provider stream (an IRL broadcast from a phone).
+    const PORTRAIT_MASTER: &str = "\
+#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=4000000,RESOLUTION=1080x1920,FRAME-RATE=30
+https://p.example/1080.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=2000000,RESOLUTION=720x1280,FRAME-RATE=30
+https://p.example/720.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=900000,RESOLUTION=480x852,FRAME-RATE=30
+https://p.example/480.m3u8
+";
+
+    #[test]
+    fn a_portrait_ladder_matches_numeric_picks_by_short_edge() {
+        let q = parse(PORTRAIT_MASTER, "https://p.example/master.m3u8");
+        // Named by height ("1280p"), but "720p60" asks for the 720-wide tier.
+        assert_eq!(q[select(&q, "720p60").unwrap().0].url, "https://p.example/720.m3u8");
+        assert_eq!(q[select(&q, "1080p60").unwrap().0].url, "https://p.example/1080.m3u8");
+        assert_eq!(q[select(&q, "480p").unwrap().0].url, "https://p.example/480.m3u8");
+        assert_eq!(q[select(&q, "144").unwrap().0].url, "https://p.example/480.m3u8");
+        // The landscape ladder is unchanged (short edge = height).
+        let k = parse(KICK_MASTER, "https://host.example/master.m3u8");
+        assert_eq!(select(&k, "480p").unwrap().1, "480p");
     }
 }

@@ -11,7 +11,8 @@
 
 use crate::services::auth_proxy::{self, PlaybackStatus};
 use crate::services::muted_segments::MutedRange;
-use crate::services::quality::{pick_closest_quality, sort_qualities_descending};
+use crate::services::quality::{pick_closest_index, pick_closest_quality, short_edge_label, sort_qualities_descending};
+use crate::services::twitch_view;
 use crate::services::vod_chapters::{self, Chapter, ChapterNode};
 use crate::services::vod_storyboard::{self, Storyboard};
 use anyhow::{anyhow, Context, Result};
@@ -655,41 +656,82 @@ fn select_variant_with(variants: &[Variant], requested: &str, pref: &[String]) -
 
     // Numeric request: reuse the exact matching the Streamlink path used.
     let names: Vec<String> = variants.iter().map(|v| v.name.clone()).collect();
-    let chosen = pick_closest_quality(&req, &names)?;
-    let idx = variants
-        .iter()
-        .position(|v| v.name.eq_ignore_ascii_case(&chosen))?;
+    let idx = match portrait_numeric_index(variants, &req, &names) {
+        Some(idx) => idx,
+        None => {
+            let chosen = pick_closest_quality(&req, &names)?;
+            variants.iter().position(|v| v.name.eq_ignore_ascii_case(&chosen))?
+        }
+    };
     // At the matched resolution, prefer the most-efficient decodable codec (same
     // capability gate as "best"); keep the matched rendition when none is preferable.
     let idx = prefer_codec_at(variants, variants[idx].height, variants[idx].fps, pref).unwrap_or(idx);
     Some((idx, variants[idx].name.clone()))
 }
 
-/// The source rendition (codec-agnostic): Twitch tags it `GROUP-ID="chunked"`; if
-/// that's absent, the highest (height, fps, bandwidth) video rendition.
+/// A video tier's short edge (its height on a landscape tier, its width on a
+/// portrait one), which is what a tier is measured by against the display and
+/// against another tier. None for audio.
+fn short_edge(v: &Variant) -> Option<u32> {
+    twitch_view::short_edge(v.width, v.height)
+}
+
+/// Tiers ordered by (short edge, fps, bandwidth). On a landscape ladder the
+/// short edge is the height, so this is the order selection always used.
+fn by_short_edge(a: &Variant, b: &Variant) -> std::cmp::Ordering {
+    short_edge(a)
+        .cmp(&short_edge(b))
+        .then(a.fps.partial_cmp(&b.fps).unwrap_or(std::cmp::Ordering::Equal))
+        .then(a.bandwidth.cmp(&b.bandwidth))
+}
+
+/// The source rendition (codec-agnostic): the one video tier Twitch flags
+/// (`GROUP-ID="chunked"` / `IVS-VARIANT-SOURCE="source"`). When several are
+/// flagged (the v2 usher flags every tier, in a shuffled order) or none is,
+/// the highest (short edge, fps, bandwidth) among the flagged ones, else among
+/// every video tier.
 fn source_index(variants: &[Variant]) -> Option<usize> {
-    if let Some(i) = variants
-        .iter()
-        .position(|v| v.group_id.eq_ignore_ascii_case("chunked"))
-    {
-        return Some(i);
-    }
-    variants
+    let flagged: Vec<usize> = variants
         .iter()
         .enumerate()
-        .filter(|(_, v)| v.height.is_some())
-        .max_by(|(_, a), (_, b)| {
-            a.height
-                .cmp(&b.height)
-                .then(
-                    a.fps
-                        .partial_cmp(&b.fps)
-                        .unwrap_or(std::cmp::Ordering::Equal),
-                )
-                .then(a.bandwidth.cmp(&b.bandwidth))
-        })
+        .filter(|(_, v)| v.height.is_some() && v.group_id.eq_ignore_ascii_case("chunked"))
         .map(|(i, _)| i)
+        .collect();
+    if let [only] = flagged.as_slice() {
+        return Some(*only);
+    }
+    let pool: Vec<usize> = if flagged.is_empty() {
+        (0..variants.len()).filter(|&i| variants[i].height.is_some()).collect()
+    } else {
+        flagged
+    };
+    pool.into_iter()
+        .max_by(|&a, &b| by_short_edge(&variants[a], &variants[b]))
         .or(Some(0))
+}
+
+/// Whether a ladder's video tiers are taller than wide.
+fn ladder_is_portrait(variants: &[Variant]) -> bool {
+    twitch_view::ladder_portrait(variants.iter().map(|v| (v.width, v.height))) == Some(true)
+}
+
+/// A numeric request on a portrait ladder, matched by the tiers' short edge
+/// and fps rather than their names. A vertical-only stream on the legacy v1
+/// shape names its rungs by height (`720p` is 404x720, its 720x1280 source is
+/// `1280p (source)`), so a saved "720p60" means its 720-wide tier, not the
+/// 404-wide one. A tier named exactly as asked (a pick from this ladder's own
+/// menu) is still that tier. None on a landscape ladder, which keeps matching
+/// by name.
+fn portrait_numeric_index(variants: &[Variant], req: &str, names: &[String]) -> Option<usize> {
+    if !ladder_is_portrait(variants) || names.iter().any(|n| n.eq_ignore_ascii_case(req)) {
+        return None;
+    }
+    let video: Vec<usize> = (0..variants.len()).filter(|&i| short_edge(&variants[i]).is_some()).collect();
+    let labels: Vec<String> = video
+        .iter()
+        .map(|&i| short_edge_label(short_edge(&variants[i]).unwrap_or(0), variants[i].fps))
+        .collect();
+    pick_closest_index(req, &labels).map(|at| video[at])
 }
 
 /// "best" = the source quality, but in the most-preferred DECODABLE codec offered at
@@ -733,22 +775,16 @@ fn capped_source_index(variants: &[Variant], cap: Option<u32>) -> Option<usize> 
     // resolution and sits at index 0 in modern masters, so a bare `first()` or
     // an `.or(Some(0))` fallback here would silently serve an audio-only stream
     // on any ladder whose every tier is above the cap.
-    fn ordering(a: &Variant, b: &Variant) -> std::cmp::Ordering {
-        a.height
-            .cmp(&b.height)
-            .then(
-                a.fps
-                    .partial_cmp(&b.fps)
-                    .unwrap_or(std::cmp::Ordering::Equal),
-            )
-            .then(a.bandwidth.cmp(&b.bandwidth))
-    }
+    //
+    // A tier is measured by its short edge, like the display: a 1080x1920
+    // portrait tier fits a 1080 cap, where its height would read as 1920.
+    let ordering = by_short_edge;
 
     // The highest rendition that fits.
     if let Some((i, _)) = variants
         .iter()
         .enumerate()
-        .filter(|(_, v)| v.height.is_some_and(|h| h <= cap))
+        .filter(|(_, v)| short_edge(v).is_some_and(|e| e <= cap))
         .max_by(|(_, a), (_, b)| ordering(a, b))
     {
         return Some(i);
@@ -771,15 +807,16 @@ fn capped_source_index(variants: &[Variant], cap: Option<u32>) -> Option<usize> 
     source_index(variants)
 }
 
-/// "worst" = the lowest-height video rendition (audio_only has no resolution and
-/// is excluded). Falls back to the first rendition if none carry a resolution.
+/// "worst" = the lowest video rendition by short edge, then fps (audio_only has
+/// no resolution and is excluded). Falls back to the first rendition if none
+/// carry a resolution.
 fn worst_index(variants: &[Variant]) -> Option<usize> {
     variants
         .iter()
         .enumerate()
         .filter(|(_, v)| v.height.is_some())
         .min_by(|(_, a), (_, b)| {
-            a.height.cmp(&b.height).then(
+            short_edge(a).cmp(&short_edge(b)).then(
                 a.fps
                     .partial_cmp(&b.fps)
                     .unwrap_or(std::cmp::Ordering::Equal),
@@ -2071,6 +2108,99 @@ https://x/audio.m3u8\n",
             ]
         );
         assert_eq!(quality_names(&v), menu(&["1080p60", "1080p60-av1", "720p60-hevc", "best", "worst"]));
+    }
+
+    // --- Portrait ladders (SN-40) -------------------------------------------
+
+    use crate::services::twitch_view::tests::{fixture, three_shuffles};
+
+    const V2: &str = "https://v2.example";
+
+    #[test]
+    fn the_v2_source_is_the_top_tier_on_every_line_order() {
+        // v2 flags every tier (audio too) and shuffles them: the first flagged
+        // line was a random tier, sometimes the audio.
+        for m in three_shuffles(&fixture("dual_v2")) {
+            let tall = parse_master(&twitch_view::narrow(&m, twitch_view::View::Vertical));
+            let i = source_index(&tall).unwrap();
+            assert_eq!(tall[i].url, format!("{V2}/1080p60-portrait.m3u8"), "{m}");
+            let land = parse_master(&twitch_view::narrow(&m, twitch_view::View::Landscape));
+            let i = source_index(&land).unwrap();
+            assert_eq!(land[i].url, format!("{V2}/1080p60.m3u8"), "{m}");
+
+            // The top portrait tier is HEVC: an H.264-only phone plays 720x1280.
+            let h264 = s(&["h264"]);
+            let playable = retain_playable(tall.clone(), &h264);
+            let (i, label) = select_variant_with(&playable, "best", &h264).unwrap();
+            assert_eq!((playable[i].url.clone(), label), (format!("{V2}/720p60-portrait.m3u8"), "best".into()));
+            let hevc = s(&["h264", "hevc"]);
+            let playable = retain_playable(tall.clone(), &hevc);
+            let (i, _) = select_variant_with(&playable, "best", &hevc).unwrap();
+            assert_eq!(playable[i].url, format!("{V2}/1080p60-portrait.m3u8"));
+            // Worst is the smallest portrait rung, never the audio.
+            let (i, _) = select_variant_with(&tall, "worst", &hevc).unwrap();
+            assert_eq!(tall[i].url, format!("{V2}/160p30-portrait.m3u8"));
+        }
+    }
+
+    #[test]
+    fn one_flagged_source_keeps_the_fast_path() {
+        // The v1 shapes flag exactly one tier; it wins even below another tier.
+        let m = "#EXTM3U\n\
+#EXT-X-STREAM-INF:BANDWIDTH=9000000,RESOLUTION=2560x1440,IVS-NAME=\"1440p60\",IVS-VARIANT-SOURCE=\"transcode\"\nhttps://x/1440.m3u8\n\
+#EXT-X-STREAM-INF:BANDWIDTH=6000000,RESOLUTION=1920x1080,IVS-NAME=\"1080p60\",IVS-VARIANT-SOURCE=\"source\"\nhttps://x/1080.m3u8\n";
+        let v = parse_master(m);
+        assert_eq!(v[source_index(&v).unwrap()].url, "https://x/1080.m3u8");
+    }
+
+    #[test]
+    fn the_phone_cap_measures_the_short_edge() {
+        // The legacy vertical-only shape (lultarek): 720x1280 source named
+        // "1280p (source)", rungs named by height (720p = 404x720). Its height
+        // 1280 read as above a 1080 display and played the 404x720 rung.
+        let v = parse_master(&fixture("vertical_only_v1"));
+        let i = capped_source_index(&v, Some(1080)).unwrap();
+        assert_eq!((v[i].width, v[i].height, v[i].name.as_str()), (Some(720), Some(1280), "1280p (source)"));
+        let i = capped_source_index(&v, Some(720)).unwrap();
+        assert_eq!(v[i].url, "https://v1.example/chunked.m3u8");
+        let i = capped_source_index(&v, Some(480)).unwrap();
+        assert_eq!(v[i].url, "https://v1.example/720p30.m3u8", "404 wide fits 480");
+        let (i, _) = select_variant_with(&v, "worst", &s(&["h264"])).unwrap();
+        assert_eq!(v[i].url, "https://v1.example/160p30.m3u8");
+
+        // The dual-format portrait ladder (zerator): 1080x1920 fits a 1080 cap.
+        for m in three_shuffles(&fixture("dual_v2")) {
+            let tall = parse_master(&twitch_view::narrow(&m, twitch_view::View::Vertical));
+            let i = capped_source_index(&tall, Some(1080)).unwrap();
+            assert_eq!(tall[i].url, format!("{V2}/1080p60-portrait.m3u8"));
+            let h264 = retain_playable(tall.clone(), &s(&["h264"]));
+            let i = capped_source_index(&h264, Some(1080)).unwrap();
+            assert_eq!(h264[i].url, format!("{V2}/720p60-portrait.m3u8"));
+            let i = capped_source_index(&tall, Some(720)).unwrap();
+            assert_eq!(tall[i].url, format!("{V2}/720p60-portrait.m3u8"));
+        }
+    }
+
+    #[test]
+    fn a_saved_quality_matches_a_portrait_ladder_by_short_edge() {
+        let h264 = s(&["h264"]);
+        let v = parse_master(&fixture("vertical_only_v1"));
+        let pick = |q: &str| select_variant_with(&v, q, &h264).map(|(i, l)| (v[i].url.clone(), l));
+        // "720p60" is the 720-wide tier, not the rung this ladder calls 720p.
+        assert_eq!(pick("720p60"), Some(("https://v1.example/chunked.m3u8".into(), "1280p (source)".into())));
+        assert_eq!(pick("1080p60"), Some(("https://v1.example/chunked.m3u8".into(), "1280p (source)".into())));
+        // A pick from this ladder's own menu is still the tier it names.
+        assert_eq!(pick("720p"), Some(("https://v1.example/720p30.m3u8".into(), "720p".into())));
+        assert_eq!(pick("1280p (source)"), Some(("https://v1.example/chunked.m3u8".into(), "1280p (source)".into())));
+
+        // The v2 portrait ladder names by short edge already.
+        let tall = parse_master(&twitch_view::narrow(&fixture("dual_v2"), twitch_view::View::Vertical));
+        let (i, label) = select_variant_with(&tall, "720p60", &h264).unwrap();
+        assert_eq!((tall[i].width, tall[i].height, label.as_str()), (Some(720), Some(1280), "720p60"));
+        // 1080p60 there is HEVC; without it, the closest by short edge is 720x1280.
+        let playable = retain_playable(tall, &h264);
+        let (i, _) = select_variant_with(&playable, "1080p60", &h264).unwrap();
+        assert_eq!(playable[i].url, format!("{V2}/720p60-portrait.m3u8"));
     }
 
     #[test]

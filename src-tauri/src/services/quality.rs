@@ -107,9 +107,37 @@ pub fn pick_closest_quality(requested: &str, available: &[String]) -> Option<Str
     Some(candidates[0].0.clone())
 }
 
+/// `pick_closest_quality`, answering the position in `available`.
+pub fn pick_closest_index(requested: &str, available: &[String]) -> Option<usize> {
+    let chosen = pick_closest_quality(requested, available)?;
+    available.iter().position(|q| *q == chosen)
+}
+
+/// A tier's label by its short edge and fps ("720p60", "480p30"). A portrait
+/// ladder is matched against a saved quality through these, since its own
+/// names may count the long edge (the legacy vertical-only shape names a
+/// 404x720 rung "720p").
+pub fn short_edge_label(short_edge: u32, fps: Option<f64>) -> String {
+    format!("{}p{}", short_edge, fps.map_or(30, |f| f.round() as u32))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_portrait_ladder_matches_by_short_edge_labels() {
+        let labels = vec![
+            short_edge_label(720, Some(30.0)),
+            short_edge_label(404, Some(30.0)),
+            short_edge_label(270, Some(29.97)),
+        ];
+        assert_eq!(labels, s(&["720p30", "404p30", "270p30"]));
+        assert_eq!(pick_closest_index("720p60", &labels), Some(0));
+        assert_eq!(pick_closest_index("480p", &labels), Some(1));
+        assert_eq!(pick_closest_index("160p", &labels), Some(2));
+        assert_eq!(pick_closest_index("480p", &[]), None);
+    }
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| x.to_string()).collect()

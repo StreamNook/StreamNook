@@ -36,12 +36,12 @@
 //! regardless of the experimental setting. The two cannot both own the
 //! playlist, so `LlOrigin::start` returns inactive while `active()` is true.
 
-// Phone builds only (Android and iPhone). The unit tests run against the
-// Android target too (built with `cargo test --target aarch64-linux-android`
-// and executed on the device), so there is no reason to let this compile into
-// a desktop test build and every reason not to: a desktop `cargo test` is the
-// one place a supposedly frozen build could still break.
-#![cfg(mobile)]
+// Phone builds only (Android and iPhone), plus the desktop's test build: the
+// relay's rules (the splice, the filter, the vertical view's stand-down) are
+// tested in the shared desktop `cargo test` like `push_alerts` and
+// `live_poll`. Nothing in a desktop app build reaches it; every call site is
+// `#[cfg(mobile)]`.
+#![cfg(any(mobile, test))]
 
 pub mod filter;
 pub mod master;
