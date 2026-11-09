@@ -8,6 +8,7 @@ import { useAppStore } from '../stores/AppStore';
 import { aboutRevealNeedsShift, scrollAboutRevealOn } from '../utils/playerMouseControls';
 import { playerOverlayButtonOn } from '../utils/playerOverlayButtons';
 import { useChannelSocial } from '../hooks/useChannelSocial';
+import { ARMED_DANGER_CLASS } from '../hooks/useConfirmPress';
 import { LiveAlertBell } from './LiveAlertBell';
 import StreamerAboutPanel from './StreamerAboutPanel';
 
@@ -103,6 +104,8 @@ export default function ChannelAboutReveal({ enabled, channelLogin, children }: 
     followLoading,
     checkingFollowStatus,
     handleFollowClick,
+    unfollowArmed,
+    disarmUnfollow,
     isSubscribed,
     hasSubHistory,
     subscriberBadgeUrl,
@@ -222,10 +225,12 @@ export default function ChannelAboutReveal({ enabled, channelLogin, children }: 
                 <button
                   type="button"
                   onClick={handleFollowClick}
+                  onMouseLeave={disarmUnfollow}
                   disabled={followLoading || checkingFollowStatus}
+                  aria-pressed={unfollowArmed || undefined}
                   className={`flex items-center gap-1.5 px-3 py-1.5 glass-button rounded-lg text-xs font-semibold text-textPrimary ${
                     followLoading || checkingFollowStatus ? 'cursor-wait opacity-60' : ''
-                  }`}
+                  } ${unfollowArmed ? ARMED_DANGER_CLASS : ''}`}
                 >
                   {followLoading || checkingFollowStatus ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin text-textSecondary" />
@@ -234,7 +239,7 @@ export default function ChannelAboutReveal({ enabled, channelLogin, children }: 
                   ) : (
                     <Heart className="h-3.5 w-3.5 text-emerald-400" />
                   )}
-                  {isFollowing ? terms.following : terms.follow}
+                  {unfollowArmed ? `${terms.unfollow}?` : isFollowing ? terms.following : terms.follow}
                 </button>
                 )}
                 {offersMembership && playerOverlayButtonOn(playerOverlayButtons, 'subscribe') && (

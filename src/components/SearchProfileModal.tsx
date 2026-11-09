@@ -13,6 +13,7 @@ import { isApprovalClosed } from '../utils/twitchApproval';
 import { CardChip } from './ui/CardChip';
 import { SevenTvAvatar } from './SevenTvAvatar';
 import { sevenTvIdForStream } from '../services/sevenTvPictures';
+import { ARMED_DANGER_CLASS, useConfirmPress } from '../hooks/useConfirmPress';
 
 type ProfileTab = 'about' | 'clips' | 'videos';
 
@@ -58,7 +59,11 @@ export const SearchProfileModal = ({ user, onClose }: { user: TwitchStream, onCl
         return () => { mounted = false; };
     }, [user.user_login, user.profile_image_url]);
 
+    // An unfollow asks for a second press (SN-264).
+    const { armed: unfollowArmed, press: pressUnfollow, disarm: disarmUnfollow } = useConfirmPress();
+
     const handleFollowAction = async () => {
+        if (isFollowing && !pressUnfollow()) return;
         setFollowLoading(true);
         try {
             const command = isFollowing ? 'unfollow_channel' : 'follow_channel';
@@ -124,13 +129,15 @@ export const SearchProfileModal = ({ user, onClose }: { user: TwitchStream, onCl
                         <div className="flex items-center gap-3">
                             <button
                                 onClick={handleFollowAction}
+                                onMouseLeave={disarmUnfollow}
                                 disabled={followLoading || isFollowing === null}
+                                aria-pressed={unfollowArmed || undefined}
                                 className={`glass-button text-sm py-2 px-4 rounded-lg flex items-center justify-center gap-2 min-w-[110px] ${followLoading || isFollowing === null
                                     ? 'opacity-50 cursor-wait'
                                     : isFollowing
                                         ? 'hover:bg-red-500/20 text-red-400 border-red-500/30'
                                         : 'hover:bg-green-500/20 text-green-400 border-green-500/30'
-                                    }`}
+                                    } ${unfollowArmed ? ARMED_DANGER_CLASS : ''}`}
                             >
                                 {followLoading || isFollowing === null ? (
                                     <>
@@ -140,7 +147,7 @@ export const SearchProfileModal = ({ user, onClose }: { user: TwitchStream, onCl
                                 ) : isFollowing ? (
                                     <>
                                         <UserMinus size={16} />
-                                        <span>Unfollow</span>
+                                        <span>{unfollowArmed ? 'Unfollow?' : 'Unfollow'}</span>
                                     </>
                                 ) : (
                                     <>

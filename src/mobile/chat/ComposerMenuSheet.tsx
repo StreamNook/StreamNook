@@ -117,6 +117,7 @@ export const ComposerMenuSheet: React.FC<Props> = ({
     isFollowing,
     followLoading,
     handleFollowClick,
+    unfollowArmed,
     isSubscribed,
     hasSubHistory,
     subscriberBadgeUrl,
@@ -189,7 +190,9 @@ export const ComposerMenuSheet: React.FC<Props> = ({
         className={isFollowing ? '!text-error' : ''}
         icon={isFollowing ? <HeartBreak size={ICON} /> : <Heart size={ICON} className="text-success" />}
       >
-        {isFollowing ? 'Unfollow' : 'Follow'}
+        {/* A second tap unfollows (SN-264): the sheet stays open, so the
+            row says what the next tap will do. */}
+        {unfollowArmed ? 'Tap again to unfollow' : isFollowing ? 'Unfollow' : 'Follow'}
         {activeLabel ? ` ${activeLabel}` : ''}
       </GroupRow>
     ) : null;

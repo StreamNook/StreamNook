@@ -11,6 +11,7 @@ import type { ProviderId } from '../types/providers';
 import { IS_MOBILE } from '../utils/platform';
 import { isApprovalClosed } from '../utils/twitchApproval';
 import { subscribeBadgePending } from '../utils/subscribeBadge';
+import { useConfirmPress } from './useConfirmPress';
 
 interface ChannelSocialTarget {
   /** Which platform this channel is on. Pass it whenever the channel is NOT the
@@ -317,9 +318,15 @@ export function useChannelSocial({ provider: providerProp, userId, userLogin, us
   // What the controls show: the held relationship when Rust has one.
   const following = pushed ? pushed.following : isFollowing;
 
+  // An unfollow asks for a second press (SN-264): one stray click must not end
+  // a follow someone has kept for years. Following stays one press.
+  const unfollowConfirm = useConfirmPress();
+  const { press: pressUnfollow, disarm: disarmUnfollow } = unfollowConfirm;
+
   // Handle follow/unfollow action
   const handleFollowClick = useCallback(async () => {
     if (followLoading || (isTwitch ? !userId : !providerChannel)) return;
+    if (following && !pressUnfollow()) return;
 
     const action = following ? 'unfollow' : 'follow';
 
@@ -360,7 +367,7 @@ export function useChannelSocial({ provider: providerProp, userId, userLogin, us
     } finally {
       setFollowLoading(false);
     }
-  }, [userLogin, userId, following, followLoading, isTwitch, provider, providerChannel, userName]);
+  }, [userLogin, userId, following, followLoading, isTwitch, provider, providerChannel, userName, pressUnfollow]);
 
   // Track the subscribe window's label so we can auto-close it on a successful sub
   const subscribeWindowLabelRef = useRef<string | null>(null);
@@ -430,6 +437,10 @@ export function useChannelSocial({ provider: providerProp, userId, userLogin, us
     checkingFollowStatus: pushed ? false : checkingFollowStatus,
     heartDropAnimation,
     handleFollowClick,
+    /** The first unfollow press landed: the next press within a few seconds unfollows. */
+    unfollowArmed: unfollowConfirm.armed,
+    /** Call when the pointer leaves the control, so it never stays armed. */
+    disarmUnfollow,
     // Subscribe
     isSubscribed: pushed ? pushed.subscribed : isSubscribed,
     // A member's OWN badge when we have it, else the channel's base-tier badge

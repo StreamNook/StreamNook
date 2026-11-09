@@ -70,6 +70,7 @@ import { openBadgeSpotlight } from '../stores/badgeSpotlightStore';
 import { thirdPartyBadgeRef } from '../utils/badgeSpotlight';
 import { armedFor, moderateWithToast } from '../services/moderation';
 import { TwitchCardModerate } from './profile/TwitchCardModerate';
+import { ARMED_DANGER_CLASS, useConfirmPress } from '../hooks/useConfirmPress';
 
 // messageHistory arrives from two sources:
 //   1. The frontend's in-session userMessageHistory Map (full ParsedMessage shape
@@ -1401,8 +1402,12 @@ const UserProfileCard = ({
 
   const isStandaloneWindow = window.location.hash.startsWith('#/profile');
 
+  // An unfollow asks for a second press (SN-264), as on the player's heart.
+  const { armed: unfollowArmed, press: pressUnfollow, disarm: disarmUnfollow } = useConfirmPress();
+
   // Handle follow/unfollow action via GQL mutations
   const handleFollowAction = useCallback(async () => {
+    if (isFollowing && !pressUnfollow()) return;
     setFollowLoading(true);
 
     const action = isFollowing ? 'unfollow' : 'follow';
@@ -1425,7 +1430,7 @@ const UserProfileCard = ({
     } finally {
       setFollowLoading(false);
     }
-  }, [userId, username, isFollowing]);
+  }, [userId, username, isFollowing, pressUnfollow]);
 
   // Categorized badges - prefer cached profile for instant display
   const { twitchBadges, seventvBadges, thirdPartyBadges, totalBadgeCount } = useMemo(() => {
@@ -1686,11 +1691,16 @@ const UserProfileCard = ({
     'glass-button flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-2 text-xs text-white transition-colors hover:bg-accent/20';
   const memberActionBar = (
     <div className="flex items-stretch gap-1.5">
-      <Tooltip content={isFollowing ? `Unfollow ${displayName}` : `Follow ${displayName}`} side="top">
+      <Tooltip
+        content={unfollowArmed ? `Press again to unfollow ${displayName}` : isFollowing ? `Unfollow ${displayName}` : `Follow ${displayName}`}
+        side="top"
+      >
         <button
           onClick={handleFollowAction}
+          onMouseLeave={disarmUnfollow}
           disabled={followLoading}
-          className={`${memberActionBtn} ${followLoading ? 'cursor-wait opacity-50' : ''}`}
+          aria-pressed={unfollowArmed || undefined}
+          className={`${memberActionBtn} ${followLoading ? 'cursor-wait opacity-50' : ''} ${unfollowArmed ? ARMED_DANGER_CLASS : ''}`}
         >
           {followLoading ? (
             <Loader2 size={14} className="animate-spin text-accent" />
@@ -1699,7 +1709,7 @@ const UserProfileCard = ({
           ) : (
             <UserPlus size={14} className="text-success" />
           )}
-          {isFollowing ? 'Unfollow' : 'Follow'}
+          {unfollowArmed ? 'Unfollow?' : isFollowing ? 'Unfollow' : 'Follow'}
         </button>
       </Tooltip>
       <button onClick={handleWhisper} className={memberActionBtn}>
@@ -1877,16 +1887,21 @@ const UserProfileCard = ({
             {/* Actions: 2x2 grid + messages toggle */}
             <div className="space-y-2">
             <div className="grid grid-cols-2 gap-2">
-              <Tooltip content={followLoading ? 'Processing...' : isFollowing ? `Unfollow ${displayName}` : `Follow ${displayName}`} side="top">
+              <Tooltip
+                content={followLoading ? 'Processing...' : unfollowArmed ? `Press again to unfollow ${displayName}` : isFollowing ? `Unfollow ${displayName}` : `Follow ${displayName}`}
+                side="top"
+              >
                 <button
                   onClick={handleFollowAction}
+                  onMouseLeave={disarmUnfollow}
                   disabled={followLoading}
+                  aria-pressed={unfollowArmed || undefined}
                   className={`glass-button text-white text-xs py-2.5 px-3 rounded-md text-center transition-colors flex items-center justify-center gap-1.5 w-full ${followLoading
                     ? 'opacity-50 cursor-wait'
                     : isFollowing
                       ? 'hover:bg-error/20 border-red-500/30'
                       : 'hover:bg-success/20 border-green-500/30'
-                    }`}
+                    } ${unfollowArmed ? ARMED_DANGER_CLASS : ''}`}
                 >
                   {followLoading ? (
                     <>
@@ -1896,7 +1911,7 @@ const UserProfileCard = ({
                   ) : isFollowing ? (
                     <>
                       <UserMinus size={14} className="text-error" />
-                      <span>Unfollow</span>
+                      <span>{unfollowArmed ? 'Unfollow?' : 'Unfollow'}</span>
                     </>
                   ) : (
                     <>

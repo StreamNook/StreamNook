@@ -12,6 +12,7 @@ import { qualityLabel } from '../../utils/quality';
 import { useMediaGlow } from '../../utils/mediaGlow';
 import { useFlat } from '../../utils/lowPower';
 import { useChannelSocial } from '../../hooks/useChannelSocial';
+import { ARMED_DANGER_CLASS } from '../../hooks/useConfirmPress';
 import {
   ignoresPlayerMouse,
   createWheelAccumulator,
@@ -264,6 +265,8 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
     checkingFollowStatus,
     heartDropAnimation,
     handleFollowClick,
+    unfollowArmed,
+    disarmUnfollow,
     isSubscribed,
     hasSubHistory,
     cumulativeMonths,
@@ -918,17 +921,21 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
                       ? 'Checking follow status...'
                       : followLoading
                         ? 'Processing...'
-                        : isFollowing
-                          ? `Unfollow ${channelName || channelLogin}`
-                          : `Follow ${channelName || channelLogin}`
+                        : unfollowArmed
+                          ? `Press again to unfollow ${channelName || channelLogin}`
+                          : isFollowing
+                            ? `Unfollow ${channelName || channelLogin}`
+                            : `Follow ${channelName || channelLogin}`
                   }
                   delay={200}
                   side="top"
                 >
                   <button
                     onClick={handleFollowClick}
+                    onMouseLeave={disarmUnfollow}
                     disabled={followLoading || checkingFollowStatus}
-                    className={`${glassButton} ${followLoading || checkingFollowStatus ? 'opacity-60 cursor-wait' : ''}`}
+                    aria-pressed={unfollowArmed || undefined}
+                    className={`${glassButton} ${followLoading || checkingFollowStatus ? 'opacity-60 cursor-wait' : ''} ${unfollowArmed ? ARMED_DANGER_CLASS : ''}`}
                   >
                     {followLoading || checkingFollowStatus ? (
                       <Loader2 className="w-4 h-4 animate-spin text-textSecondary" />

@@ -60,6 +60,7 @@ import { AutomationPulse } from './ui/AutomationPulse';
 import { TogetherChip } from './SharedViewers';
 import { groupFor } from '../utils/sharedViewers';
 import { signInReasonText, useTwitchSignInReason } from '../utils/twitchSignIn';
+import { ARMED_DANGER_CLASS, useConfirmPress } from '../hooks/useConfirmPress';
 // Types for drops data
 interface DropCampaign {
     id: string;
@@ -1446,6 +1447,10 @@ const Home = () => {
         );
     };
 
+    const { armedKey: armedUnfollowKey, press: pressUnfollow, disarm: disarmUnfollow } = useConfirmPress();
+    const unfollowArmedFor = (stream: TwitchStream) =>
+        armedUnfollowKey === `${streamProvider(stream)}:${followIdentifier(stream)}`;
+
     const handleProviderFollowClick = (e: React.MouseEvent, stream: TwitchStream) => {
         e.stopPropagation();
         const provider = streamProvider(stream);
@@ -1460,6 +1465,8 @@ const Home = () => {
                 ? stream.user_id
                 : null;
         if (follows.isFollowed(provider, target) || (legacyKickId && follows.isFollowed(provider, legacyKickId))) {
+            // A second press on this row unfollows (SN-264).
+            if (!pressUnfollow(`${provider}:${target}`)) return;
             void follows.unfollow(provider, target);
             // Also remove the numeric-keyed legacy form, or the entry the old
             // bug wrote would survive the unfollow and re-read as followed.
@@ -2126,10 +2133,12 @@ const Home = () => {
                                                                                 exactly like Twitch's. Plus (not a heart) so it never reads
                                                                                 as the favourite control. */}
                                                                             {isProviderView && activeTab !== 'following' && (
-                                                                                <Tooltip content={isProviderFollowed(stream) ? `Unfollow on ${providerLabel(streamProvider(stream))}` : `Follow on ${providerLabel(streamProvider(stream))}`} side="top">
+                                                                                <Tooltip content={unfollowArmedFor(stream) ? `Press again to unfollow on ${providerLabel(streamProvider(stream))}` : isProviderFollowed(stream) ? `Unfollow on ${providerLabel(streamProvider(stream))}` : `Follow on ${providerLabel(streamProvider(stream))}`} side="top">
                                                                                 <button
                                                                                     onClick={(e) => handleProviderFollowClick(e, stream)}
-                                                                                    className="p-1 flex items-center justify-center bg-transparent transition-transform duration-300 hover:scale-110 active:scale-95"
+                                                                                    onMouseLeave={disarmUnfollow}
+                                                                                    aria-pressed={unfollowArmedFor(stream) || undefined}
+                                                                                    className={`p-1 flex items-center justify-center rounded-md bg-transparent transition-transform duration-300 hover:scale-110 active:scale-95 ${unfollowArmedFor(stream) ? ARMED_DANGER_CLASS : ''}`}
                                                                                 >
                                                                                     {isProviderFollowed(stream) ? (
                                                                                         <Check size={16} className="text-accent" strokeWidth={2.5} />
