@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "last_sync": 1794140806,
+  "last_sync": 1794235297,
   "entries": {
     "global_badges": {
       "id": "global_badges",
@@ -7840,10 +7840,10 @@
             }
           ]
         },
-        "cached_at": 1794140806
+        "cached_at": 1794235292
       },
       "metadata": {
-        "timestamp": 1794140806,
+        "timestamp": 1794235292,
         "expiry_days": 7,
         "source": "twitch",
         "version": 1
@@ -16402,7 +16402,7 @@
         "more_info": "Modern Warfare 4 is a limited-time global chat badge dedicated to the launch of the Call of Duty Modern Warfare 4. To earn it, you need to subscribe or gift a subscription (Prime subs doesn’t count) to streamer in the Call of Duty Modern Warfare 4 category. Event duration: 2026-10-23T17:00:00Z – 2026-11-13T17:59:00Z The badge is distributed via Twitch Drops and granted automatically after meeting the requirement."
       },
       "metadata": {
-        "timestamp": 1793628697,
+        "timestamp": 1794235297,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
