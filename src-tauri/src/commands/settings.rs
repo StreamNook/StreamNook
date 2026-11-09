@@ -1624,7 +1624,9 @@ mod patch_tests {
         assert!(at("still_current()") < at("set_vertical_view(&mut state_settings, on)"));
         assert!(at("set_vertical_view(&mut state_settings, on)") < at("write_settings_to_disk(&settings)?"));
         assert!(at("write_settings_to_disk(&settings)?") < at("flush_now_if_phone_idle();"));
-        assert!(at("vec![\"video_player\".to_string()]") < at("app.emit(SETTINGS_UPDATED_EVENT"));
+        // (No emit call spelled here: tests/event_registry.rs reads every emit
+        // in src/ as an event name, string literals included.)
+        assert!(at("vec![\"video_player\".to_string()]") < at("SETTINGS_UPDATED_EVENT, SettingsUpdated { source: None, keys }"));
     }
 
     #[test]

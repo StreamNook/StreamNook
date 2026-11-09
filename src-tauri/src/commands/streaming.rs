@@ -2017,7 +2017,9 @@ mod vertical_view_pins {
         assert!(inner < outer.find("launch_late_v2(").unwrap());
         let launch = body(&src, "fn launch_late_v2(");
         assert!(launch.contains("twitch_view::start_ticket_is_current(ticket)"));
-        assert!(launch.contains("app.emit(VERTICAL_AVAILABLE_EVENT"));
+        // (Spelled without the emit call: tests/event_registry.rs reads every
+        // emit in src/ as an event name, string literals included.)
+        assert!(launch.contains("VERTICAL_AVAILABLE_EVENT, json!({ \"ticket\": ticket"));
         assert_eq!(VERTICAL_AVAILABLE_EVENT, "vertical-available");
     }
 

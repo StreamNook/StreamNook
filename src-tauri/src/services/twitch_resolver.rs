@@ -2578,6 +2578,16 @@ https://x/audio.m3u8\n",
         assert!(begun.elapsed() < Duration::from_millis(900), "nothing waited");
     }
 
+    #[test]
+    fn the_vod_usher_query_is_unchanged() {
+        assert_eq!(
+            format!("https://usher.ttvnw.net/vod/{}?{}", "123", vod_usher_query("SIG", "{\"a\":1}")),
+            "https://usher.ttvnw.net/vod/123?platform=web&player_type=embed&allow_source=true\
+             &allow_audio_only=true&playlist_include_framerate=true&supported_codecs=av1,h264,h265\
+             &nauthsig=SIG&nauth=%7B%22a%22%3A1%7D"
+        );
+    }
+
     #[tokio::test]
     async fn a_late_v2_settles_after_the_start_and_notes_it() {
         let late = LateV2 { fetch: answered(Some(fixture("dual_v2"))), key: "test-late".into(), pref: None };

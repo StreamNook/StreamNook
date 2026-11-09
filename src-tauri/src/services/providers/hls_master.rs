@@ -148,8 +148,8 @@ pub fn select(qualities: &[PlaybackQuality], requested: &str) -> Option<(usize, 
         let at_or_below = qualities
             .iter()
             .enumerate()
-            .filter(|(_, q)| edge(q).map(|h| h <= target).unwrap_or(false))
-            .max_by_key(|(_, q)| edge(q).unwrap_or(0));
+            .filter(|(_, q)| edge(*q).map(|h| h <= target).unwrap_or(false))
+            .max_by_key(|(_, q)| edge(*q).unwrap_or(0));
         if let Some((i, q)) = at_or_below {
             return Some((i, q.name.clone()));
         }
@@ -157,7 +157,7 @@ pub fn select(qualities: &[PlaybackQuality], requested: &str) -> Option<(usize, 
             .iter()
             .enumerate()
             .filter(|(_, q)| q.height.is_some())
-            .min_by_key(|(_, q)| edge(q).unwrap_or(u32::MAX));
+            .min_by_key(|(_, q)| edge(*q).unwrap_or(u32::MAX));
         if let Some((i, q)) = above {
             return Some((i, q.name.clone()));
         }
