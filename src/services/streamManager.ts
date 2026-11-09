@@ -34,6 +34,11 @@ export interface StreamInfoView {
   language_name: string;
   languages: { code: string; name: string }[];
   summary: string;
+  /** The category in use first, then the ones saved here before. */
+  recent_categories: Category[];
+  /** The row the title's emoji menu opens on, and its heading. */
+  title_emoji: string[];
+  title_emoji_heading: string;
 }
 
 export interface RunningPoll {
@@ -133,6 +138,8 @@ export interface InfoCheck {
   ok: boolean;
   problems: { field: string; line: string }[];
   title_count: string;
+  /** How the count reads: quiet, near the limit, or past it. */
+  title_tone: 'quiet' | 'near' | 'over';
   tags_count: string;
   preview: {
     title: string;

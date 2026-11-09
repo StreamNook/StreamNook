@@ -334,6 +334,16 @@ pub struct StreamInfoView {
     pub languages: Vec<LanguageRow>,
     /// "Ranked grind to Diamond · Valorant", for the row's second line.
     pub summary: String,
+    /// The category in use first, then the ones you saved here before,
+    /// newest first: the category picker shows them before you type.
+    pub recent_categories: Vec<Category>,
+    /// The emoji row the title's emoji menu opens on: the emoji in the
+    /// title now, then the ones you put in titles before, or a starter set
+    /// while there are none.
+    pub title_emoji: Vec<String>,
+    /// That row's heading ("Your title emoji", or "Popular in titles" for the
+    /// starter set).
+    pub title_emoji_heading: String,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -373,7 +383,10 @@ pub struct FieldProblem {
 pub struct InfoCheck {
     pub ok: bool,
     pub problems: Vec<FieldProblem>,
+    /// "54 / 140", or "146 / 140 · 6 over" past the limit.
     pub title_count: String,
+    /// How the count is drawn: "quiet", "near" (the last 15) or "over".
+    pub title_tone: &'static str,
     pub tags_count: String,
     pub preview: PreviewTile,
     /// Changes against what Twitch has now; Save is pointless without one.
@@ -412,6 +425,22 @@ fn tag_problem(tag: &str) -> Option<&'static str> {
 pub fn clean_tag(raw: &str) -> String {
     raw.trim().trim_start_matches('#').to_string()
 }
+
+/// The count under the title and how loudly it reads. The length is in
+/// Unicode scalar values (`chars`), what Twitch's limit is measured in as far
+/// as we know: 🔴 is one, a family emoji joined from five is five.
+fn title_count(len: usize) -> (String, &'static str) {
+    if len > TITLE_MAX {
+        (format!("{len} / {TITLE_MAX} · {} over", len - TITLE_MAX), "over")
+    } else if len + TITLE_NEAR > TITLE_MAX {
+        (format!("{len} / {TITLE_MAX}"), "near")
+    } else {
+        (format!("{len} / {TITLE_MAX}"), "quiet")
+    }
+}
+
+/// The count turns amber this close to the limit.
+const TITLE_NEAR: usize = 15;
 
 pub fn check_stream_info(
     draft: &StreamInfoDraft,
@@ -460,10 +489,12 @@ pub fn check_stream_info(
         }
     };
     let category = draft.category.as_ref();
+    let (title_count, title_tone) = title_count(title_len);
     InfoCheck {
         ok: problems.is_empty(),
         problems,
-        title_count: format!("{title_len} / {TITLE_MAX}"),
+        title_count,
+        title_tone,
         tags_count: format!("{} / {TAGS_MAX}", tags.len()),
         preview: PreviewTile {
             title: title.to_string(),
@@ -518,6 +549,119 @@ pub fn info_from_helix(row: &Value, box_art_url: Option<String>) -> StreamInfoVi
         tags,
         language,
         languages: language_rows(),
+        recent_categories: Vec::new(),
+        title_emoji: Vec::new(),
+        title_emoji_heading: String::new(),
+    }
+}
+
+// ─────────────────────────────── recents ─────────────────────────────────────
+
+/// What a channel's past saves leave behind for the next edit, kept on this
+/// device only (`stream_manager_recents.json` in the app's data folder).
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct InfoRecents {
+    #[serde(default)]
+    pub categories: Vec<Category>,
+    #[serde(default)]
+    pub emoji: Vec<String>,
+}
+
+const RECENT_CATEGORIES_MAX: usize = 10;
+const RECENT_EMOJI_MAX: usize = 16;
+/// The emoji row before you have put any emoji in a title.
+const STARTER_EMOJI: [&str; 8] = ["🔴", "🎮", "🔥", "💜", "✨", "😂", "🏆", "🎉"];
+
+/// True for a grapheme drawn as an emoji: a pictograph, a flag, a keycap, or
+/// anything asking for emoji presentation.
+fn is_emoji(g: &str) -> bool {
+    let Some(first) = g.chars().next() else { return false };
+    let cp = first as u32;
+    matches!(cp, 0x1F000..=0x1FAFF | 0x2600..=0x27BF | 0x2300..=0x23FF | 0x2B00..=0x2BFF | 0x3030 | 0x303D | 0x3297 | 0x3299)
+        || g.contains('\u{20E3}')
+        || (g.contains('\u{FE0F}') && !first.is_alphanumeric())
+}
+
+/// The emoji in a title, first use first, each once.
+pub fn emoji_in(title: &str) -> Vec<String> {
+    use unicode_segmentation::UnicodeSegmentation;
+    let mut out: Vec<String> = Vec::new();
+    for g in title.graphemes(true) {
+        if is_emoji(g) && !out.iter().any(|e| e == g) {
+            out.push(g.to_string());
+        }
+    }
+    out
+}
+
+/// `front` then `rest`, each item once (by `same`), at most `cap`.
+fn merged<T: Clone>(front: &[T], rest: &[T], cap: usize, same: impl Fn(&T, &T) -> bool) -> Vec<T> {
+    let mut out: Vec<T> = Vec::new();
+    for item in front.iter().chain(rest) {
+        if out.len() == cap {
+            break;
+        }
+        if !out.iter().any(|o| same(o, item)) {
+            out.push(item.clone());
+        }
+    }
+    out
+}
+
+/// Fills the view's recent categories and emoji row from what is on the
+/// channel now and what earlier saves left.
+pub fn with_recents(info: &mut StreamInfoView, recents: Option<&InfoRecents>) {
+    let empty = InfoRecents::default();
+    let recents = recents.unwrap_or(&empty);
+    let current: Vec<Category> = info.category.iter().cloned().collect();
+    info.recent_categories = merged(&current, &recents.categories, RECENT_CATEGORIES_MAX, |a, b| a.id == b.id);
+    let in_title = emoji_in(&info.title);
+    info.title_emoji = merged(&in_title, &recents.emoji, RECENT_EMOJI_MAX, |a, b| a == b);
+    if info.title_emoji.is_empty() {
+        info.title_emoji = STARTER_EMOJI.iter().map(|e| e.to_string()).collect();
+        info.title_emoji_heading = "Popular in titles".into();
+    } else {
+        info.title_emoji_heading = "Your title emoji".into();
+    }
+}
+
+/// What a save adds to the channel's recents: its category and its emoji go
+/// to the front.
+pub fn after_save(recents: &InfoRecents, draft: &StreamInfoDraft) -> InfoRecents {
+    let category: Vec<Category> = draft.category.iter().cloned().collect();
+    InfoRecents {
+        categories: merged(&category, &recents.categories, RECENT_CATEGORIES_MAX, |a, b| a.id == b.id),
+        emoji: merged(&emoji_in(&draft.title), &recents.emoji, RECENT_EMOJI_MAX, |a, b| a == b),
+    }
+}
+
+fn recents_path() -> Option<std::path::PathBuf> {
+    crate::services::cache_service::get_app_data_dir().ok().map(|d| d.join("stream_manager_recents.json"))
+}
+
+fn read_all_recents() -> HashMap<String, InfoRecents> {
+    recents_path()
+        .and_then(|p| std::fs::read(p).ok())
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
+}
+
+fn read_recents(channel_id: &str) -> Option<InfoRecents> {
+    read_all_recents().remove(channel_id)
+}
+
+fn remember_save(channel_id: &str, draft: &StreamInfoDraft) {
+    let Some(path) = recents_path() else { return };
+    let mut all = read_all_recents();
+    let next = after_save(all.get(channel_id).unwrap_or(&InfoRecents::default()), draft);
+    all.insert(channel_id.to_string(), next);
+    match serde_json::to_vec(&all) {
+        Ok(bytes) => {
+            if let Err(e) = std::fs::write(&path, bytes) {
+                log::warn!("[{LOG_TAG}] could not keep the stream info recents: {e}");
+            }
+        }
+        Err(e) => log::warn!("[{LOG_TAG}] could not keep the stream info recents: {e}"),
     }
 }
 
@@ -1466,7 +1610,10 @@ pub async fn view(auth: &TwitchAuthService, channel_id: &str, channel_login: &st
         async { if wants(Section::Rewards) { Some(read_queue(auth, channel_id).await) } else { None } },
     );
     let info = match info {
-        Some(Ok(i)) => Some(i),
+        Some(Ok(mut i)) => {
+            with_recents(&mut i, read_recents(channel_id).as_ref());
+            Some(i)
+        }
         Some(Err(e)) => {
             problems.push(format!("Stream info: {e}"));
             None
@@ -1531,7 +1678,14 @@ pub async fn act(auth: &TwitchAuthService, channel_id: &str, channel_login: &str
         return ActOutcome { ok: false, message: why.into(), view: None, queue: None };
     }
     let queue_write = action.section() == Section::Rewards;
+    let saved_info = match &action {
+        Action::SaveInfo { draft } => Some(draft.clone()),
+        _ => None,
+    };
     let result = run(auth, channel_id, role, action).await;
+    if let (Ok(_), Some(draft)) = (&result, &saved_info) {
+        remember_save(channel_id, draft);
+    }
     let queue = if queue_write { read_queue(auth, channel_id).await.ok() } else { None };
     let view = view(auth, channel_id, channel_login).await.ok();
     match result {
@@ -1843,6 +1997,64 @@ mod tests {
         assert_eq!(current.language_name, "English");
         assert!(!check_stream_info(&draft("Ranked grind", &["English"]), Some(&current), "you", None, None).changed);
         assert!(check_stream_info(&draft("Ranked grind!", &["English"]), Some(&current), "you", None, None).changed);
+    }
+
+    #[test]
+    fn title_count_tones() {
+        let at = |n: usize| check_stream_info(&draft(&"a".repeat(n), &[]), None, "you", None, None);
+        assert_eq!((at(54).title_count.as_str(), at(54).title_tone), ("54 / 140", "quiet"));
+        assert_eq!(at(125).title_tone, "quiet");
+        assert_eq!(at(126).title_tone, "near");
+        assert_eq!((at(140).title_count.as_str(), at(140).title_tone), ("140 / 140", "near"));
+        assert_eq!((at(146).title_count.as_str(), at(146).title_tone), ("146 / 140 · 6 over", "over"));
+        // An emoji is one; a joined family counts each of its five parts.
+        assert_eq!(at_title("🔴 Live").title_count, "6 / 140");
+        assert_eq!(at_title("👨‍👩‍👧").title_count, "5 / 140");
+    }
+
+    fn at_title(t: &str) -> InfoCheck {
+        check_stream_info(&draft(t, &[]), None, "you", None, None)
+    }
+
+    #[test]
+    fn emoji_in_a_title() {
+        assert_eq!(emoji_in("🔴 Ranked grind to Diamond 💎 then 🔴 chill 🎧"), vec!["🔴", "💎", "🎧"]);
+        assert_eq!(emoji_in("👨‍👩‍👧 ❤️ 1️⃣ 🇺🇸 #1 © ok"), vec!["👨‍👩‍👧", "❤️", "1️⃣", "🇺🇸"]);
+        assert!(emoji_in("Ranked grind, día 3 · 日本語").is_empty());
+    }
+
+    #[test]
+    fn recents_lead_with_what_is_on_now() {
+        let row = json!({ "title": "🔴 Ranked 💎", "game_id": "1", "game_name": "Valorant", "tags": [], "broadcaster_language": "en" });
+        let mut info = info_from_helix(&row, None);
+        with_recents(&mut info, None);
+        assert_eq!(info.recent_categories.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), vec!["1"]);
+        assert_eq!(info.title_emoji, vec!["🔴", "💎"]);
+        assert_eq!(info.title_emoji_heading, "Your title emoji");
+
+        let cat = |id: &str| Category { id: id.into(), name: id.into(), box_art_url: String::new() };
+        let kept = InfoRecents { categories: vec![cat("2"), cat("1"), cat("3")], emoji: vec!["🎮".into(), "🔴".into()] };
+        with_recents(&mut info, Some(&kept));
+        assert_eq!(info.recent_categories.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), vec!["1", "2", "3"]);
+        assert_eq!(info.title_emoji, vec!["🔴", "💎", "🎮"]);
+
+        let plain = json!({ "title": "Ranked", "game_id": "", "tags": [], "broadcaster_language": "en" });
+        let mut bare = info_from_helix(&plain, None);
+        with_recents(&mut bare, None);
+        assert!(bare.recent_categories.is_empty());
+        assert_eq!(bare.title_emoji.len(), STARTER_EMOJI.len());
+        assert_eq!(bare.title_emoji_heading, "Popular in titles");
+    }
+
+    #[test]
+    fn a_save_moves_its_category_and_emoji_to_the_front() {
+        let cat = |id: &str| Category { id: id.into(), name: id.into(), box_art_url: String::new() };
+        let before = InfoRecents { categories: (0..10).map(|i| cat(&format!("c{i}"))).collect(), emoji: vec!["🎮".into()] };
+        let after = after_save(&before, &draft("✨ new run 🎮", &[]));
+        assert_eq!(after.categories.len(), RECENT_CATEGORIES_MAX);
+        assert_eq!(after.categories[0].id, "516575");
+        assert_eq!(after.categories[1].id, "c0");
+        assert_eq!(after.emoji, vec!["✨", "🎮"]);
     }
 
     #[test]

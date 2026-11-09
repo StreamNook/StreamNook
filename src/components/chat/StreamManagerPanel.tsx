@@ -1,8 +1,27 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { ReactNode } from 'react';
+import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react';
+import { createPortal } from 'react-dom';
+import { motion } from 'framer-motion';
 import { invoke } from '@tauri-apps/api/core';
-import { Megaphone, Pencil, Send, Tv, X } from 'lucide-react';
+import {
+  Check,
+  ChevronDown,
+  CircleAlert,
+  LoaderCircle,
+  Maximize2,
+  Megaphone,
+  Minimize2,
+  Pencil,
+  Search,
+  Send,
+  SmilePlus,
+  Tv,
+  Undo2,
+  X,
+} from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
+import { usePerformanceQuiet } from '../../utils/lowPower';
+import { TitleEmojiPicker } from './TitleEmojiPicker';
 import { Tooltip } from '../ui/Tooltip';
 import { ChannelPointsIcon } from '../ChannelPointsIcon';
 import { useOutsidePress } from '../../hooks/useOutsidePress';
@@ -22,6 +41,7 @@ import {
   type QueueView,
   type RaidTarget,
   type StreamInfoDraft,
+  type StreamInfoView,
   type StreamManagerView,
 } from '../../services/streamManager';
 
@@ -43,7 +63,7 @@ interface Props {
   onClose: () => void;
 }
 
-const LABEL = 'text-[11px] font-semibold uppercase tracking-wider text-white/50';
+const LABEL = 'text-[11px] font-semibold uppercase tracking-wider text-textSecondary';
 /** A full-size action's height and text: finger-sized in the phone's sheet. */
 const BIG = IS_MOBILE ? 'min-h-[44px] !text-[15px]' : 'h-9 !text-sm';
 
@@ -101,7 +121,7 @@ export function ManagerForm({
   const { busy, act } = useManagerAct(view, onOutcome, onDone);
   return (
     <>
-      {kind === 'info' && <InfoForm view={view} busy={busy} act={act} />}
+      {kind === 'info' && <InfoEditor view={view} onOutcome={onOutcome} onClose={onDone} framed={false} />}
       {kind === 'raid' && <RaidForm view={view} busy={busy} act={act} />}
       {kind === 'ads' && <AdsForm view={view} busy={busy} act={act} />}
       {kind === 'rewards' && <RewardsQueue view={view} queue={queue} onQueue={onQueue} busy={busy} act={act} />}
@@ -110,7 +130,16 @@ export function ManagerForm({
   );
 }
 
-export function StreamManagerPanel({ kind, view, queue, onQueue, onOutcome, onClose }: Props) {
+export function StreamManagerPanel(props: Props) {
+  // Stream info draws its own frame: a footer that stays put under the
+  // scrolling fields, and the expanded view in the middle of the screen.
+  if (props.kind === 'info') {
+    return <InfoEditor view={props.view} onOutcome={props.onOutcome} onClose={props.onClose} framed />;
+  }
+  return <BuilderPanel {...props} />;
+}
+
+function BuilderPanel({ kind, view, queue, onQueue, onOutcome, onClose }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
 
   const markInside = useOutsidePress(true, [rootRef], onClose);
@@ -158,23 +187,131 @@ interface FormProps {
 
 // ─── stream info ─────────────────────────────────────────────────────────────
 
-function InfoForm({ view, busy, act }: FormProps) {
+/**
+ * Unsaved stream info edits, one per channel, for this run of the app. Esc or
+ * a press outside closes the editor at once (the app's one outside rule), so
+ * the edit waits here and the next open picks it up. It is this window's own
+ * form state, never shared or stored, which is why it lives beside the form
+ * rather than in Rust.
+ */
+const keptDrafts = new Map<string, { draft: StreamInfoDraft; base: string }>();
+
+/** What Twitch had when an edit began. A kept edit made against something
+ *  else (the title changed meanwhile) starts fresh instead of resuming. */
+const infoBase = (info: StreamInfoView | null) =>
+  JSON.stringify([info?.title ?? '', info?.category?.id ?? '', info?.tags ?? [], info?.language ?? '']);
+
+const freshDraft = (info: StreamInfoView | null): StreamInfoDraft => ({
+  title: info?.title ?? '',
+  category: info?.category ?? null,
+  tags: info?.tags ?? [],
+  language: info?.language ?? '',
+});
+
+const boxArt = (c: Category, w: number, h: number) =>
+  c.box_art_url.replace('{width}', String(w)).replace('{height}', String(h));
+
+/** How long "Saved" shows before the editor closes itself. */
+const SAVED_HOLD_MS = 900;
+const KEY_CAP =
+  'font-sans rounded-md bg-surface/50 px-1.5 py-[3px] text-[10.5px] font-bold leading-none text-textSecondary ring-1 ring-inset ring-textPrimary/10';
+/** Close, expand and Discard: a step quieter than the content and Save. */
+const QUIET_PILL = `${GLAZE_PILL} !bg-white/[0.05] hover:!bg-white/[0.1] !text-textSecondary hover:!text-textPrimary`;
+/** Saved: the button's own glass tinted green, never a flat fill. */
+const SAVED_FILL: CSSProperties = {
+  background: 'color-mix(in srgb, var(--color-success) 30%, var(--color-background-tertiary))',
+};
+const TONE_CLASS = { quiet: 'text-textSecondary', near: 'text-warning', over: 'text-error' } as const;
+/** The body's bottom edge fades into the footer instead of cutting. */
+const FADE_BOTTOM: CSSProperties = { maskImage: 'linear-gradient(to bottom, black calc(100% - 16px), transparent)' };
+
+type SavePhase = 'idle' | 'saving' | 'saved' | 'failed';
+
+/**
+ * Stream info: the title (with an emoji menu and Twitch's count), category,
+ * tags and language, and the tile viewers will see. `framed` is the desktop
+ * editor over the message box, which can also open large in the middle of
+ * the screen; unframed is the phone's Manage channel sheet, which brings its
+ * own frame. Rust checks the draft, words the count and every problem, and
+ * runs the save; this only lays it out.
+ */
+function InfoEditor({
+  view,
+  onOutcome,
+  onClose,
+  framed,
+}: {
+  view: StreamManagerView;
+  onOutcome: (o: ActOutcome) => void;
+  onClose: () => void;
+  framed: boolean;
+}) {
   const info = view.info;
-  const [draft, setDraft] = useState<StreamInfoDraft>(() => ({
-    title: info?.title ?? '',
-    category: info?.category ?? null,
-    tags: info?.tags ?? [],
-    language: info?.language ?? '',
-  }));
+  const channelId = view.channel_id;
+  const [start] = useState(() => {
+    const base = infoBase(info);
+    const kept = keptDrafts.get(channelId);
+    if (kept && kept.base === base) return { draft: kept.draft, base, resumed: true };
+    keptDrafts.delete(channelId);
+    return { draft: freshDraft(info), base, resumed: false };
+  });
+  const [draft, setDraftState] = useState<StreamInfoDraft>(start.draft);
+  const [resumed, setResumed] = useState(start.resumed);
+  const touched = useRef(start.resumed);
   const [check, setCheck] = useState<InfoCheck | null>(null);
+  const [phase, setPhase] = useState<SavePhase>('idle');
+  const [failLine, setFailLine] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const [tagText, setTagText] = useState('');
   const [catQuery, setCatQuery] = useState<string | null>(null);
   const [catResults, setCatResults] = useState<Category[]>([]);
+  const [catIndex, setCatIndex] = useState(0);
+  const rootRef = useRef<HTMLDivElement>(null);
   const titleRef = useRef<HTMLTextAreaElement>(null);
+  const emojiButtonRef = useRef<HTMLButtonElement>(null);
+  const caretRef = useRef<[number, number] | null>(null);
+  const closeTimer = useRef<number | null>(null);
+  const motionOff = useAppStore((s) => s.settings.motion_mode) === 'off';
+  const perfQuiet = usePerformanceQuiet();
+  const instant = motionOff || perfQuiet;
+  const big = framed && expanded;
 
+  const setDraft = (change: (d: StreamInfoDraft) => StreamInfoDraft) => {
+    touched.current = true;
+    setDraftState(change);
+    if (phase === 'failed') setPhase('idle');
+  };
+
+  // Every change waits in keptDrafts until it is saved or thrown away.
   useEffect(() => {
-    titleRef.current?.focus();
+    if (touched.current) keptDrafts.set(channelId, { draft, base: start.base });
+  }, [draft, channelId, start.base]);
+
+  useEffect(() => () => {
+    if (closeTimer.current) window.clearTimeout(closeTimer.current);
   }, []);
+
+  // Typing goes straight into the title, caret at its end, on open and when
+  // the editor changes size (the field is a new one then).
+  useEffect(() => {
+    const t = titleRef.current;
+    if (!t) return;
+    t.focus();
+    t.setSelectionRange(t.value.length, t.value.length);
+  }, [expanded]);
+
+  const markInside = useOutsidePress(framed, [rootRef], onClose);
+  useEffect(() => {
+    if (!framed) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      onClose();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [framed, onClose]);
 
   // Rust checks the draft and builds the preview tile; asked after typing pauses.
   useEffect(() => {
@@ -194,7 +331,7 @@ function InfoForm({ view, busy, act }: FormProps) {
     if (catQuery === null || !catQuery.trim()) return;
     let alive = true;
     const t = window.setTimeout(() => {
-      void invoke<Category[]>('search_categories', { query: catQuery.trim(), limit: 8 })
+      void invoke<Category[]>('search_categories', { query: catQuery.trim(), limit: 10 })
         .then((rows) => alive && setCatResults(rows))
         .catch(() => alive && setCatResults([]));
     }, 180);
@@ -215,19 +352,105 @@ function InfoForm({ view, busy, act }: FormProps) {
   };
 
   const preview = check?.preview;
-  const boxArt = (c: Category) => c.box_art_url.replace('{width}', '52').replace('{height}', '72');
+  const tone = check?.title_tone ?? 'quiet';
+  // Past the limit the count says so in the box; the line would repeat it.
+  const titleProblem = tone === 'over' ? undefined : problemFor('title');
+  const canSave = phase !== 'saving' && phase !== 'saved' && !!check?.ok && check.changed;
 
-  return (
-    <div className="space-y-3">
-      <div>
-        <div className="flex items-baseline justify-between mb-1">
-          <label className={LABEL}>Title</label>
-          <span className="text-[10px] tabular-nums text-textSecondary">{check?.title_count ?? ''}</span>
-        </div>
-        {/* Wraps and grows with the title, so a long one (up to Twitch's 140)
-            reads whole while it is edited (SN-264). Still one line of text:
-            Enter and pasted line breaks become spaces. */}
+  const save = async () => {
+    if (!canSave) return;
+    setPhase('saving');
+    setFailLine(null);
+    setPickerOpen(false);
+    try {
+      const outcome = await managerAct(view.channel_id, view.channel_login, { kind: 'save_info', draft });
+      onOutcome(outcome);
+      if (!outcome.ok) {
+        setFailLine(outcome.message);
+        setPhase('failed');
+        return;
+      }
+      keptDrafts.delete(channelId);
+      touched.current = false;
+      setPhase('saved');
+      closeTimer.current = window.setTimeout(onClose, SAVED_HOLD_MS);
+    } catch (err) {
+      setFailLine(typeof err === 'string' ? err : 'Twitch did not answer.');
+      setPhase('failed');
+    }
+  };
+
+  /** Discard, and Start over on a picked-up edit: back to what Twitch has. */
+  const startOver = () => {
+    keptDrafts.delete(channelId);
+    touched.current = false;
+    setDraftState(freshDraft(info));
+    setResumed(false);
+    setPhase('idle');
+    setFailLine(null);
+    setTagText('');
+    setCatQuery(null);
+    titleRef.current?.focus();
+  };
+
+  const rememberCaret = () => {
+    const t = titleRef.current;
+    if (t) caretRef.current = [t.selectionStart, t.selectionEnd];
+  };
+  const insertEmoji = (emoji: string) => {
+    const t = titleRef.current;
+    const live = !!t && document.activeElement === t;
+    const len = draft.title.length;
+    const [a, b] = live ? [t.selectionStart, t.selectionEnd] : (caretRef.current ?? [len, len]);
+    const from = Math.min(a, len);
+    const title = draft.title.slice(0, from) + emoji + draft.title.slice(Math.min(b, len));
+    const caret = from + emoji.length;
+    caretRef.current = [caret, caret];
+    setDraft((d) => ({ ...d, title }));
+    if (live) requestAnimationFrame(() => t.setSelectionRange(caret, caret));
+  };
+
+  // Ctrl+Enter saves from anywhere; a plain Enter saves from the title and
+  // an empty tag box (they say so with preventDefault).
+  const onEditorKey = (e: ReactKeyboardEvent) => {
+    if (e.defaultPrevented || e.key !== 'Enter' || !(e.ctrlKey || e.metaKey) || isImeComposing(e)) return;
+    e.preventDefault();
+    void save();
+  };
+
+  // The large view's grid holds one full row of recents.
+  const recents = (info?.recent_categories ?? []).slice(0, big ? 5 : undefined);
+  const catList = catQuery === null ? [] : catQuery.trim() ? catResults : recents;
+  const pickCategory = (c: Category) => {
+    setDraft((d) => ({ ...d, category: c }));
+    setCatQuery(null);
+  };
+  const catCols = big ? 5 : 1;
+
+  const avatar = (px: number) =>
+    preview?.avatar_url ? (
+      <img src={preview.avatar_url} alt="" className="flex-shrink-0 rounded-full" style={{ width: px, height: px }} />
+    ) : (
+      <span className="flex-shrink-0 rounded-full bg-white/10" style={{ width: px, height: px }} />
+    );
+
+  // ── the fields ──
+
+  const titleField = (
+    <div>
+      <label htmlFor="sn-stream-title" className={`${LABEL} mb-1.5 block`}>
+        Title
+      </label>
+      <div
+        className={`glass-input !rounded-xl transition-[border-color] ${
+          tone === 'over' ? '!border-error/60' : 'focus-within:!border-accent/40'
+        }`}
+      >
+        {/* Wraps and grows with the title, so a long one reads whole while
+            it is edited (SN-264). Still one line of text: Enter saves, and
+            pasted line breaks become spaces. */}
         <textarea
+          id="sn-stream-title"
           ref={titleRef}
           rows={1}
           value={draft.title}
@@ -235,155 +458,507 @@ function InfoForm({ view, busy, act }: FormProps) {
             const title = e.target.value.replace(/\r?\n/g, ' ');
             setDraft((d) => ({ ...d, title }));
           }}
+          onSelect={rememberCaret}
+          onBlur={rememberCaret}
           onKeyDown={(e) => {
-            if (e.key === 'Enter') e.preventDefault();
+            if (isImeComposing(e)) return;
+            if (e.key === 'Escape' && pickerOpen) {
+              e.preventDefault();
+              e.stopPropagation();
+              setPickerOpen(false);
+            } else if (e.key === 'Enter') {
+              e.preventDefault();
+              void save();
+            }
           }}
-          className="glass-input block w-full resize-none px-3 py-2 text-sm leading-snug text-textPrimary placeholder-textSecondary [field-sizing:content] max-h-[8.5rem]"
           placeholder="What are you streaming?"
+          className={`block w-full resize-none bg-transparent px-3 pt-2.5 pb-1 leading-normal text-textPrimary placeholder-textSecondary outline-none [field-sizing:content] ${
+            big
+              ? 'min-h-[5.5rem] max-h-[12rem] text-[17px] font-semibold'
+              : IS_MOBILE
+                ? 'max-h-[8.5rem] text-[15px]'
+                : 'max-h-[8.5rem] text-[14px] font-medium'
+          }`}
         />
-        {problemFor('title') && <p className="mt-1 text-[11px] text-error">{problemFor('title')}</p>}
+        <div className="flex min-h-[30px] items-center justify-end gap-2 pb-1.5 pl-3 pr-1.5">
+          <span className={`text-[11.5px] font-semibold tabular-nums ${TONE_CLASS[tone]}`}>{check?.title_count ?? ''}</span>
+          {framed && (
+            <Tooltip content="Emoji" side="top">
+              <button
+                ref={emojiButtonRef}
+                type="button"
+                aria-label="Emoji"
+                aria-expanded={pickerOpen}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => setPickerOpen((o) => !o)}
+                className={`${pickerOpen ? `${GLAZE_PILL} !bg-white/[0.16]` : QUIET_PILL} grid h-7 w-7 place-items-center`}
+              >
+                <SmilePlus size={15} />
+              </button>
+            </Tooltip>
+          )}
+        </div>
       </div>
+      {titleProblem && <p className="mt-1 text-[11.5px] text-error">{titleProblem}</p>}
+    </div>
+  );
 
-      <div className="relative">
-        <label className={`${LABEL} block mb-1`}>Category</label>
-        {catQuery === null ? (
-          <button
-            onClick={() => setCatQuery('')}
-            className="glass-input w-full px-3 py-2 flex items-center gap-2.5 text-left text-sm text-textPrimary"
-          >
-            {draft.category?.box_art_url && (
-              <img src={boxArt(draft.category)} alt="" className="w-[18px] h-[24px] rounded-sm object-cover flex-shrink-0" />
-            )}
-            <span className={draft.category ? '' : 'text-textSecondary'}>{draft.category?.name ?? 'Pick a category'}</span>
-          </button>
-        ) : (
-          <>
+  const categoryField = (
+    <div className="relative">
+      <label className={`${LABEL} mb-1.5 block`}>Category</label>
+      {catQuery === null ? (
+        <button
+          type="button"
+          onClick={() => {
+            setCatQuery('');
+            setCatIndex(0);
+          }}
+          className="glass-input flex w-full items-center gap-2.5 !rounded-xl py-1.5 pl-2 pr-3 text-left transition-colors hover:!border-white/15"
+        >
+          {draft.category?.box_art_url ? (
+            <img src={boxArt(draft.category, 54, 72)} alt="" className="h-9 w-[27px] flex-shrink-0 rounded object-cover" />
+          ) : (
+            <span className="h-9 w-[27px] flex-shrink-0 rounded bg-white/[0.06]" />
+          )}
+          <span className={`flex-1 truncate text-sm font-medium ${draft.category ? 'text-textPrimary' : 'text-textSecondary'}`}>
+            {draft.category?.name ?? 'Pick a category'}
+          </span>
+          {big ? (
+            <span className="text-xs font-semibold text-textSecondary">Change</span>
+          ) : (
+            <ChevronDown size={15} className="text-textSecondary" aria-hidden />
+          )}
+        </button>
+      ) : (
+        <>
+          <div className="glass-input flex items-center gap-2 !rounded-xl px-3 focus-within:!border-accent/40">
+            <Search size={15} className="flex-shrink-0 text-textSecondary" aria-hidden />
             <input
               autoFocus
               value={catQuery}
-              onChange={(e) => setCatQuery(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key !== 'Escape') return;
-                e.stopPropagation();
-                setCatQuery(null);
+              onChange={(e) => {
+                setCatQuery(e.target.value);
+                setCatIndex(0);
               }}
-              placeholder="Search categories"
-              className="glass-input w-full px-3 py-2 text-sm text-textPrimary placeholder-textSecondary"
-            />
-            {catQuery.trim() && catResults.length > 0 && (
-              <div className="mt-1 rounded-md overflow-hidden hairline-y max-h-56 overflow-y-auto scrollbar-thin">
-                {catResults.map((c) => (
-                  <button
-                    key={c.id}
-                    onClick={() => {
-                      setDraft((d) => ({ ...d, category: c }));
-                      setCatQuery(null);
-                    }}
-                    className="w-full flex items-center gap-2.5 px-2.5 py-1.5 text-left hover:bg-white/[0.06] transition-colors"
-                  >
-                    <img src={boxArt(c)} alt="" className="w-[18px] h-[24px] rounded-sm object-cover flex-shrink-0" />
-                    <span className="text-sm text-textPrimary truncate">{c.name}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </>
-        )}
-      </div>
-
-      <div>
-        <div className="flex items-baseline justify-between mb-1">
-          <label className={LABEL}>Tags</label>
-          <span className="text-[10px] tabular-nums text-textSecondary">{check?.tags_count ?? ''}</span>
-        </div>
-        <div className="flex flex-wrap gap-1.5">
-          {draft.tags.map((t, i) => (
-            <span
-              key={`${t}-${i}`}
-              className={`h-6 pl-2 pr-1 rounded-md flex items-center gap-1 text-xs ${
-                problemFor(`tag:${i}`) ? 'bg-error/15 text-error' : 'bg-white/10 text-textSecondary'
-              }`}
-            >
-              {t}
-              <button
-                aria-label={`Remove ${t}`}
-                onClick={() => setDraft((d) => ({ ...d, tags: d.tags.filter((_, j) => j !== i) }))}
-                className="p-0.5 hover:text-textPrimary"
-              >
-                <X size={11} />
-              </button>
-            </span>
-          ))}
-          {draft.tags.length < view.limits.tags && (
-            <input
-              value={tagText}
-              onChange={(e) => setTagText(e.target.value)}
+              onBlur={() => setCatQuery(null)}
               onKeyDown={(e) => {
-                if (isImeComposing(e)) return;
-                if (e.key === 'Enter' || e.key === ',') {
+                const down = e.key === 'ArrowDown' ? catCols : e.key === 'ArrowRight' && big ? 1 : 0;
+                const up = e.key === 'ArrowUp' ? catCols : e.key === 'ArrowLeft' && big ? 1 : 0;
+                if (e.key === 'Escape') {
+                  e.stopPropagation();
+                  setCatQuery(null);
+                } else if (down || up) {
                   e.preventDefault();
-                  addTag();
-                } else if (e.key === 'Backspace' && !tagText && draft.tags.length) {
-                  setDraft((d) => ({ ...d, tags: d.tags.slice(0, -1) }));
+                  setCatIndex((i) => Math.max(0, Math.min(catList.length - 1, i + down - up)));
+                } else if (e.key === 'Enter') {
+                  e.preventDefault();
+                  const c = catList[catIndex];
+                  if (c) pickCategory(c);
                 }
               }}
-              onBlur={addTag}
-              placeholder="Add a tag"
-              className="h-6 w-24 flex-1 min-w-[6rem] bg-transparent text-xs text-textPrimary placeholder-textSecondary outline-none"
+              placeholder="Search categories"
+              className="h-12 min-w-0 flex-1 bg-transparent text-sm text-textPrimary placeholder-textSecondary outline-none"
             />
-          )}
-        </div>
-        {tagProblem && <p className="mt-1 text-[11px] text-error">{tagProblem}</p>}
-      </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
 
-      <div>
-        <label className={`${LABEL} block mb-1`}>Language</label>
-        <select
-          value={draft.language}
-          onChange={(e) => setDraft((d) => ({ ...d, language: e.target.value }))}
-          className="glass-input w-full px-3 py-2 text-sm text-textPrimary"
-        >
-          {(info?.languages ?? []).map((l) => (
-            <option key={l.code} value={l.code}>
-              {l.name}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      {preview && (
-        <div>
-          <label className={`${LABEL} block mb-1`}>What viewers see</label>
-          <div className="flex gap-2.5 p-2 rounded-lg bg-white/5">
-            <div className="w-[112px] aspect-video rounded-md overflow-hidden bg-white/5 flex-shrink-0">
-              {preview.thumbnail_url && <img src={preview.thumbnail_url} alt="" className="w-full h-full object-cover" />}
-            </div>
-            <div className="min-w-0 flex-1">
-              <p className="text-[13px] font-semibold text-textPrimary truncate">{preview.title || 'Your title'}</p>
-              <p className="text-xs text-textSecondary truncate">{preview.channel_name}</p>
-              <p className="text-xs text-textSecondary truncate">{preview.category_name}</p>
-              {preview.tags.length > 0 && (
-                <div className="mt-1 flex flex-wrap gap-1">
-                  {preview.tags.slice(0, 4).map((t) => (
-                    <span key={t} className="h-[18px] px-1.5 rounded bg-white/10 text-[10.5px] text-textSecondary flex items-center">
-                      {t}
-                    </span>
+  // The results take the place of the fields under Category while you
+  // search (those stay in the layout, unseen), so the box you clicked stays
+  // put and nothing shows through or gets cut off.
+  const searching = catQuery !== null && catList.length > 0;
+  const catResultsView = searching && (
+    <div className="absolute inset-0 z-10 overflow-y-auto scrollbar-thin">
+              {!catQuery?.trim() && <p className={`${LABEL} mb-1.5`}>Your recent categories</p>}
+              {big ? (
+                <div className="grid grid-cols-5 gap-2.5">
+                  {catList.map((c, i) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => pickCategory(c)}
+                      className="group min-w-0 text-center"
+                    >
+                      <img
+                        src={boxArt(c, 144, 192)}
+                        alt=""
+                        className={`aspect-[3/4] w-full rounded-md object-cover transition-shadow ${
+                          draft.category?.id === c.id
+                            ? 'ring-2 ring-white/75'
+                            : i === catIndex
+                              ? 'ring-2 ring-white/30'
+                              : 'group-hover:ring-2 group-hover:ring-white/20'
+                        }`}
+                      />
+                      <span className="mt-1 block truncate text-[11.5px] font-semibold text-textSecondary">{c.name}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div>
+                  {catList.map((c, i) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => pickCategory(c)}
+                      className={`flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-white/[0.06] ${
+                        i === catIndex ? 'bg-white/[0.07]' : ''
+                      }`}
+                    >
+                      <img src={boxArt(c, 54, 72)} alt="" className="h-8 w-6 flex-shrink-0 rounded-sm object-cover" />
+                      <span className="flex-1 truncate text-sm text-textPrimary">{c.name}</span>
+                      {draft.category?.id === c.id && <Check size={14} className="text-textSecondary" aria-hidden />}
+                    </button>
                   ))}
                 </div>
               )}
+    </div>
+  );
+  /** The fields under Category, with the search results over them. */
+  const underCategory = (fields: ReactNode) => (
+    <div className={`relative ${searching && big ? 'min-h-[196px]' : ''}`}>
+      <div className={`${big ? 'space-y-4' : 'space-y-3.5'} ${searching ? 'invisible' : ''}`}>{fields}</div>
+      {catResultsView}
+    </div>
+  );
+
+  const tagsField = (
+    <div>
+      <div className="mb-1.5 flex items-baseline justify-between">
+        <label className={LABEL}>Tags</label>
+        <span className="text-[11px] font-semibold tabular-nums text-textSecondary/80">{check?.tags_count ?? ''}</span>
+      </div>
+      <div className="flex flex-wrap items-center gap-1.5">
+        {draft.tags.map((t, i) => (
+          <span
+            key={`${t}-${i}`}
+            className={`${GLAZE_PILL} flex h-[26px] items-center gap-1 pl-2.5 pr-1 text-[12.5px] !font-medium ${
+              problemFor(`tag:${i}`) ? '!bg-error/15 !text-error' : ''
+            }`}
+          >
+            {t}
+            <button
+              type="button"
+              aria-label={`Remove ${t}`}
+              onClick={() => setDraft((d) => ({ ...d, tags: d.tags.filter((_, j) => j !== i) }))}
+              className="grid h-5 w-5 place-items-center rounded-full text-textSecondary transition-colors hover:bg-white/10 hover:text-textPrimary"
+            >
+              <X size={11} />
+            </button>
+          </span>
+        ))}
+        {draft.tags.length < view.limits.tags && (
+          <input
+            value={tagText}
+            onChange={(e) => setTagText(e.target.value)}
+            onKeyDown={(e) => {
+              if (isImeComposing(e)) return;
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                if (tagText.trim()) addTag();
+                else void save();
+              } else if (e.key === ',') {
+                e.preventDefault();
+                addTag();
+              } else if (e.key === 'Backspace' && !tagText && draft.tags.length) {
+                setDraft((d) => ({ ...d, tags: d.tags.slice(0, -1) }));
+              }
+            }}
+            onBlur={addTag}
+            placeholder="+ Add a tag"
+            className="h-[26px] min-w-[4.5rem] flex-1 bg-transparent px-1 text-[12.5px] text-textPrimary placeholder-textSecondary outline-none"
+          />
+        )}
+      </div>
+      {tagProblem && <p className="mt-1 text-[11.5px] text-error">{tagProblem}</p>}
+    </div>
+  );
+
+  const languageRow = (
+    <div>
+      <div className="flex items-center justify-between gap-3">
+        <label htmlFor="sn-stream-language" className="text-[13px] text-textSecondary">
+          Language
+        </label>
+        <div className="relative flex items-center">
+          <select
+            id="sn-stream-language"
+            value={draft.language}
+            onChange={(e) => setDraft((d) => ({ ...d, language: e.target.value }))}
+            className="cursor-pointer appearance-none bg-transparent pr-5 text-right text-[13px] font-semibold text-textPrimary outline-none"
+          >
+            {(info?.languages ?? []).map((l) => (
+              <option key={l.code} value={l.code} style={{ background: 'var(--color-background-tertiary)' }}>
+                {l.name}
+              </option>
+            ))}
+          </select>
+          <ChevronDown size={14} className="pointer-events-none absolute right-0 text-textSecondary" aria-hidden />
+        </div>
+      </div>
+      {problemFor('language') && <p className="mt-1 text-[11.5px] text-error">{problemFor('language')}</p>}
+    </div>
+  );
+
+  const live = (
+    <span className="absolute left-1.5 top-1.5 rounded bg-[#e5484d] px-1 py-px text-[10px] font-extrabold tracking-wide text-white">LIVE</span>
+  );
+
+  const previewCompact = preview && (
+    <div>
+      <p className={`${LABEL} mb-1.5`}>What viewers see</p>
+      <div className="flex gap-2.5 rounded-xl bg-surface/25 p-2 ring-1 ring-inset ring-textPrimary/[0.05]">
+        <div className="relative aspect-video w-[112px] flex-shrink-0 overflow-hidden rounded-lg bg-white/[0.05]">
+          {preview.thumbnail_url && (
+            <>
+              <img src={preview.thumbnail_url} alt="" className="h-full w-full object-cover" />
+              {live}
+            </>
+          )}
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="line-clamp-2 text-[13.5px] font-semibold leading-snug text-textPrimary">{preview.title || 'Your title'}</p>
+          <p className="mt-0.5 truncate text-[12.5px] text-textSecondary">
+            {[preview.channel_name, preview.category_name].filter(Boolean).join(' · ')}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+
+  const previewLarge = preview && (
+    <div className="min-w-0">
+      <p className={`${LABEL} mb-1.5`}>What viewers see</p>
+      <div className="relative aspect-video w-full overflow-hidden rounded-lg bg-white/[0.05]">
+        {preview.thumbnail_url && (
+          <>
+            <img src={preview.thumbnail_url} alt="" className="h-full w-full object-cover" />
+            {live}
+          </>
+        )}
+      </div>
+      <div className="mt-2.5 flex gap-2.5">
+        {avatar(30)}
+        <div className="min-w-0 flex-1">
+          <p className="line-clamp-2 text-[13.5px] font-semibold leading-snug text-textPrimary">{preview.title || 'Your title'}</p>
+          <p className="mt-0.5 truncate text-[12.5px] text-textSecondary">{preview.channel_name}</p>
+          {preview.category_name && <p className="truncate text-[12.5px] text-textSecondary">{preview.category_name}</p>}
+          {preview.tags.length > 0 && (
+            <div className="mt-1.5 flex flex-wrap gap-1">
+              {preview.tags.slice(0, 4).map((t) => (
+                <span key={t} className="rounded-full bg-surface/60 px-2 py-px text-[11px] text-textSecondary">
+                  {t}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+      <p className="mb-1.5 mt-4 text-[11.5px] font-semibold text-textSecondary/80">In the sidebar</p>
+      <div className="flex items-center gap-2.5 rounded-xl bg-surface/25 p-2 ring-1 ring-inset ring-textPrimary/[0.05]">
+        {avatar(28)}
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-[12.5px] font-semibold text-textPrimary">{preview.channel_name}</p>
+          <p className="truncate text-[12px] text-textSecondary">{preview.title || 'Your title'}</p>
+        </div>
+      </div>
+    </div>
+  );
+
+  const resumeLine = resumed && check?.changed && phase !== 'saved' && (
+    <div className="flex items-center gap-2 rounded-lg bg-surface/30 py-1.5 pl-2.5 pr-1.5 text-[12.5px] text-textSecondary ring-1 ring-inset ring-textPrimary/[0.06]">
+      <Undo2 size={14} className="flex-shrink-0" aria-hidden />
+      <span className="flex-1">Picking up your unsaved edit</span>
+      <button type="button" onClick={startOver} className={`${GLAZE_PILL} h-6 px-2.5 text-[12px]`}>
+        Start over
+      </button>
+    </div>
+  );
+
+  const failBox = phase === 'failed' && failLine && (
+    <div role="alert" className="flex items-start gap-2 rounded-lg bg-error/10 px-3 py-2 text-[12.5px] leading-snug text-error ring-1 ring-inset ring-error/25">
+      <CircleAlert size={15} className="mt-px flex-shrink-0" aria-hidden />
+      <span>
+        Couldn't save. {failLine} Your changes are still here.
+      </span>
+    </div>
+  );
+
+  const saveLabel =
+    phase === 'saving' ? 'Saving' : phase === 'saved' ? 'Saved' : phase === 'failed' ? 'Try again' : 'Save';
+  const footer = (
+    <div className={`flex items-center gap-2 ${framed ? `border-t border-textPrimary/[0.08] ${big ? 'px-5 py-3' : 'px-3.5 py-2.5'}` : 'pt-1'}`}>
+      {framed ? (
+        <span className="flex flex-1 items-center gap-1.5 text-[11.5px] text-textSecondary/80">
+          <kbd className={KEY_CAP}>Enter</kbd>
+          save
+          <kbd className={`${KEY_CAP} ml-1`}>Esc</kbd>
+          close
+        </span>
+      ) : (
+        <span className="flex-1" />
+      )}
+      {check?.changed && phase !== 'saved' && (
+        <button
+          type="button"
+          onClick={startOver}
+          disabled={phase === 'saving'}
+          className={`${QUIET_PILL} ${framed ? 'h-[34px] px-4 text-[13.5px]' : `${BIG} px-5`}`}
+        >
+          Discard
+        </button>
+      )}
+      <button
+        type="button"
+        onClick={() => void save()}
+        disabled={phase !== 'saved' && !canSave}
+        aria-live="polite"
+        className={`${ACCENT_BUTTON} flex items-center justify-center gap-1.5 disabled:cursor-not-allowed ${
+          framed ? `h-[34px] min-w-[104px] ${big ? 'px-6' : 'px-5'} !text-[13.5px]` : `${BIG} flex-1`
+        }`}
+        style={phase === 'saved' ? SAVED_FILL : ACCENT_FILL}
+      >
+        {phase === 'saving' && <LoaderCircle size={14} className="animate-spin" aria-hidden />}
+        {phase === 'saved' && <Check size={15} aria-hidden />}
+        {saveLabel}
+      </button>
+    </div>
+  );
+
+  const picker = framed && pickerOpen && info && (
+    <TitleEmojiPicker
+      anchorRef={emojiButtonRef}
+      recent={info.title_emoji}
+      recentHeading={info.title_emoji_heading}
+      onPick={insertEmoji}
+      onClose={() => setPickerOpen(false)}
+    />
+  );
+
+  // ── the frames ──
+
+  if (!framed) {
+    return (
+      <div className="space-y-3.5" onKeyDown={onEditorKey}>
+        {resumeLine}
+        {titleField}
+        {categoryField}
+        {underCategory(
+          <>
+            {tagsField}
+            {languageRow}
+            {previewCompact}
+          </>,
+        )}
+        {failBox}
+        {footer}
+      </div>
+    );
+  }
+
+  const iconButton = (label: string, onClick: () => void, icon: ReactNode, size: string) => (
+    <Tooltip content={label} side="top">
+      <button type="button" onClick={onClick} aria-label={label} className={`${QUIET_PILL} grid ${size} place-items-center`}>
+        {icon}
+      </button>
+    </Tooltip>
+  );
+
+  if (big) {
+    const ease = instant ? { duration: 0 } : { duration: 0.2, ease: [0.2, 0.8, 0.2, 1] as const };
+    return createPortal(
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={instant ? { duration: 0 } : { duration: 0.15 }}
+        // Pinned from the top, so a list opening inside grows it downward
+        // instead of re-centering it under the pointer.
+        className="fixed inset-0 z-[calc(var(--sn-z-over-player-lift,0)_+_200)] flex items-start justify-center bg-black/50 px-6 pb-6 pt-[max(24px,calc(50vh-300px))]"
+      >
+        <motion.div
+          ref={rootRef}
+          onPointerDownCapture={markInside}
+          onKeyDown={onEditorKey}
+          role="dialog"
+          aria-modal
+          aria-label="Stream info"
+          initial={{ opacity: 0, y: 8, scale: 0.97 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          transition={ease}
+          className="glass-flyout flex max-h-[min(760px,92vh)] w-[min(780px,96vw)] flex-col overflow-hidden rounded-2xl !p-0"
+        >
+          <div className="flex items-center gap-3 px-5 pb-3 pt-4">
+            {avatar(34)}
+            <div className="min-w-0 flex-1">
+              <p className="text-[16px] font-semibold leading-tight text-textPrimary">Stream info</p>
+              <p className="truncate text-[12.5px] text-textSecondary">
+                {[preview?.channel_name || view.channel_login, view.role_line].join(' · ')}
+              </p>
+            </div>
+            {/* On the title's line, not centered on title and subtitle. */}
+            <div className="-mt-[5px] flex gap-2 self-start">
+              {iconButton('Back to the panel', () => setExpanded(false), <Minimize2 size={14} />, 'h-[30px] w-[30px]')}
+              {iconButton('Close', onClose, <X size={15} />, 'h-[30px] w-[30px]')}
             </div>
           </div>
-        </div>
-      )}
+          {resumeLine && <div className="px-5 pb-3">{resumeLine}</div>}
+          <div
+            className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_260px] gap-6 overflow-y-auto scrollbar-thin px-5 pb-5 pt-0.5"
+            style={FADE_BOTTOM}
+          >
+            <div className="min-w-0 space-y-4">
+              {titleField}
+              {categoryField}
+              {underCategory(
+                <>
+                  {tagsField}
+                  {languageRow}
+                </>,
+              )}
+            </div>
+            {previewLarge}
+          </div>
+          {failBox && <div className="px-5 pb-3">{failBox}</div>}
+          {footer}
+          {picker}
+        </motion.div>
+      </motion.div>,
+      document.body,
+    );
+  }
 
-      <button
-        onClick={() => void act({ kind: 'save_info', draft }, true)}
-        disabled={busy || !check?.ok || !check.changed}
-        className={`${ACCENT_BUTTON} w-full ${BIG} disabled:cursor-not-allowed`}
-        style={ACCENT_FILL}
-      >
-        {busy ? 'Saving…' : check && !check.changed ? 'No changes' : 'Save'}
-      </button>
+  return (
+    <div
+      ref={rootRef}
+      onPointerDownCapture={markInside}
+      onKeyDown={onEditorKey}
+      className="glass-flyout rounded-xl !p-0 absolute bottom-full left-0 right-0 mb-2 z-[60] flex max-h-[70vh] flex-col overflow-hidden"
+    >
+      <div className="flex items-center gap-2 px-3.5 pb-2 pt-3">
+        <Pencil size={14} className="text-textSecondary" aria-hidden />
+        <span className="flex-1 text-sm font-semibold text-textPrimary">Stream info</span>
+        {iconButton('Open larger', () => setExpanded(true), <Maximize2 size={13} />, 'h-[26px] w-[26px]')}
+        {iconButton('Close', onClose, <X size={14} />, 'h-[26px] w-[26px]')}
+      </div>
+      {resumeLine && <div className="px-3.5 pb-2">{resumeLine}</div>}
+      <div className="min-h-0 flex-1 space-y-3.5 overflow-y-auto scrollbar-thin px-3.5 pb-4 pt-0.5" style={FADE_BOTTOM}>
+        {titleField}
+        {categoryField}
+        {underCategory(
+          <>
+            {tagsField}
+            {languageRow}
+            {previewCompact}
+          </>,
+        )}
+      </div>
+      {failBox && <div className="px-3.5 pb-2.5">{failBox}</div>}
+      {footer}
+      {picker}
     </div>
   );
 }
