@@ -1064,7 +1064,13 @@ pub fn parse_queue(body: &Value, now_ms: i64) -> QueueView {
                 cost: r["cost"].as_i64().unwrap_or(0),
                 paused: r["isPaused"].as_bool().unwrap_or(false),
                 enabled: r["isEnabled"].as_bool().unwrap_or(true),
-                image_url: r["image"]["url"].as_str().or(r["defaultImage"]["url"].as_str()).map(str::to_string),
+                // A reward with no art of its own wears Twitch's default reward
+                // picture. Not read from `defaultImage`: Twitch declares it
+                // non-null yet answered nil for one, which failed the whole queue
+                // ("got nil for non-null communitypointsimage", SN-264).
+                image_url: Some(
+                    r["image"]["url"].as_str().unwrap_or(DEFAULT_REWARD_IMAGE).to_string(),
+                ),
                 color: r["backgroundColor"].as_str().map(str::to_string),
                 heading: String::new(),
                 rows: vec![row],
@@ -1085,7 +1091,10 @@ pub fn parse_queue(body: &Value, now_ms: i64) -> QueueView {
 
 // ─────────────────────────────── GQL documents ───────────────────────────────
 
-pub const QUEUE_QUERY: &str = "query StreamManagerQueue($channelID: ID!) { channel(id: $channelID) { communityPointsRedemptionQueue(first: 50, options: { order: OLDEST, status: UNFULFILLED }) { edges { node { id status input timestamp rewardTitle user { id login displayName profileImageURL(width: 50) } reward { id title cost isPaused isEnabled backgroundColor image { url } defaultImage { url } } } } pageInfo { hasNextPage } } } }";
+pub const QUEUE_QUERY: &str = "query StreamManagerQueue($channelID: ID!) { channel(id: $channelID) { communityPointsRedemptionQueue(first: 50, options: { order: OLDEST, status: UNFULFILLED }) { edges { node { id status input timestamp rewardTitle user { id login displayName profileImageURL(width: 50) } reward { id title cost isPaused isEnabled backgroundColor image { url } } } } pageInfo { hasNextPage } } } }";
+/// Twitch's own picture for a custom reward with no image (the 4x size; the
+/// queue draws it small).
+pub const DEFAULT_REWARD_IMAGE: &str = "https://static-cdn.jtvnw.net/custom-reward-images/default-4.png";
 pub const ROLE_QUERY: &str = "query StreamManagerRole($channelID: ID!) { user(id: $channelID) { self { isEditor isModerator } } }";
 pub const RUNNING_QUERY: &str = "query StreamManagerRunning($channelID: ID!) { user(id: $channelID) { latestPoll { id status title } } channel(id: $channelID) { activePredictionEvents { id status title outcomes { id title color } } lockedPredictionEvents { id status title outcomes { id title color } } } }";
 pub const REDEMPTIONS_MUTATION: &str = "mutation StreamManagerRedemptions($input: UpdateCommunityPointsCustomRewardRedemptionStatusesByRedemptionsInput!) { updateCommunityPointsCustomRewardRedemptionStatusesByRedemptions(input: $input) { error { code } } }";
@@ -1890,7 +1899,7 @@ mod tests {
                 "id": id, "status": "UNFULFILLED", "input": input, "timestamp": at, "rewardTitle": title,
                 "user": { "id": "u", "login": user, "displayName": user, "profileImageURL": "https://p" },
                 "reward": { "id": reward, "title": title, "cost": 500, "isPaused": false, "isEnabled": true,
-                            "backgroundColor": "#00C7AC", "image": null, "defaultImage": { "url": "https://d" } }
+                            "backgroundColor": "#00C7AC", "image": null }
             } })
         };
         let body = json!({ "data": { "channel": { "communityPointsRedemptionQueue": {
@@ -1909,7 +1918,10 @@ mod tests {
         assert_eq!(q.groups[0].rows[0].input.as_deref(), Some("Veridis Quo"));
         assert_eq!(q.groups[0].rows[1].input, None);
         assert_eq!(q.groups[1].rows[0].line, "lunar · just now");
-        assert_eq!(q.groups[0].image_url.as_deref(), Some("https://d"));
+        // No art of its own: Twitch's default reward picture (SN-264), and the
+        // query no longer asks for `defaultImage`, which once came back nil.
+        assert_eq!(q.groups[0].image_url.as_deref(), Some(DEFAULT_REWARD_IMAGE));
+        assert!(!QUEUE_QUERY.contains("defaultImage"));
         assert!(q.empty_line.is_none());
         let empty = parse_queue(&json!({ "data": { "channel": { "communityPointsRedemptionQueue": { "edges": [] } } } }), now);
         assert_eq!(empty.empty_line.as_deref(), Some("Nothing waiting"));

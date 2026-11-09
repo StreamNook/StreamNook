@@ -170,7 +170,7 @@ function InfoForm({ view, busy, act }: FormProps) {
   const [tagText, setTagText] = useState('');
   const [catQuery, setCatQuery] = useState<string | null>(null);
   const [catResults, setCatResults] = useState<Category[]>([]);
-  const titleRef = useRef<HTMLInputElement>(null);
+  const titleRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     titleRef.current?.focus();
@@ -224,11 +224,21 @@ function InfoForm({ view, busy, act }: FormProps) {
           <label className={LABEL}>Title</label>
           <span className="text-[10px] tabular-nums text-textSecondary">{check?.title_count ?? ''}</span>
         </div>
-        <input
+        {/* Wraps and grows with the title, so a long one (up to Twitch's 140)
+            reads whole while it is edited (SN-264). Still one line of text:
+            Enter and pasted line breaks become spaces. */}
+        <textarea
           ref={titleRef}
+          rows={1}
           value={draft.title}
-          onChange={(e) => setDraft((d) => ({ ...d, title: e.target.value }))}
-          className="glass-input w-full px-3 py-2 text-sm text-textPrimary placeholder-textSecondary"
+          onChange={(e) => {
+            const title = e.target.value.replace(/\r?\n/g, ' ');
+            setDraft((d) => ({ ...d, title }));
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') e.preventDefault();
+          }}
+          className="glass-input block w-full resize-none px-3 py-2 text-sm leading-snug text-textPrimary placeholder-textSecondary [field-sizing:content] max-h-[8.5rem]"
           placeholder="What are you streaming?"
         />
         {problemFor('title') && <p className="mt-1 text-[11px] text-error">{problemFor('title')}</p>}
