@@ -121,25 +121,6 @@ export const MobileStreamCard: React.FC<{
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-live opacity-60" />
             <span className="relative inline-flex w-2 h-2 rounded-full bg-live ring-1 ring-black/40" />
           </span>
-          {/* Drops matter as much in list mode as in card mode, and the row had
-              no way to say so. Icon only: no space for the DROPS wordmark the
-              card carries. */}
-          {hasDrops && (
-            <CardChip
-              kind="drops"
-              style={{
-                position: 'absolute',
-                top: 4,
-                right: 4,
-                fontSize: 8,
-                padding: '2px 3px',
-                gap: 0,
-              }}
-              aria-label="Drops enabled"
-            >
-              <Package size={10} />
-            </CardChip>
-          )}
           {hypeTrain && (
             <CardChip
               kind={hypeTrain.isGolden ? 'hype-golden' : 'hype'}
@@ -205,13 +186,19 @@ export const MobileStreamCard: React.FC<{
           {showCategory && stream.game_name && (
             <div className="flex items-center gap-1 text-textMuted text-[12.5px] leading-[15px]">
               <span className="truncate">{stream.game_name}</span>
-              {/* The DROPS badge over the thumbnail already says this. */}
             </div>
           )}
-          {/* The streak rides the viewers line as amber words: as a dark chip it
-              was the heaviest thing in the text column. */}
+          {/* Drops and the streak ride the viewers line as words: as chips (the
+              drops box alone in a container on the preview, the streak as a
+              dark chip) they were the heaviest things on the row. */}
           <div className="flex items-center gap-2 text-[12.5px] leading-[15px]">
             <span className="text-textMuted">{stream.viewer_count.toLocaleString()} viewers</span>
+            {hasDrops && (
+              <span className="flex items-center gap-0.5 font-semibold text-accent-on-surface" aria-label="Drops enabled">
+                <Package size={11} weight="bold" aria-hidden />
+                Drops
+              </span>
+            )}
             {!!watchStreak && watchStreak > 0 && (
               <span
                 className="flex items-center gap-0.5 tabular-nums text-[#fcd34d]"
