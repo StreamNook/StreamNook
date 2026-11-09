@@ -47,6 +47,7 @@ import { useAppStore } from '../../stores/AppStore';
 import { parseEmojisSync, getAppleEmojiUrl } from '../../services/emojiService';
 import type { EmoteSet } from '../../services/emoteService';
 import { emoteWordMap, parseTextSegments, useTextEmotes, type EmoteWordMap } from '../../utils/emoteText';
+import { useOwnBadgeHidden } from '../../hooks/useOwnStreamNookBadge';
 
 interface ModRoomPaneProps {
   channelId: string;
@@ -279,6 +280,7 @@ const ModRoomMessageRow = ({
   const cologne = useChatUserStore((s) => (themeInChat ? s.users.get(m.userId)?.cologne ?? null : null));
   const paintShadowMode = useAppStore((s) => s.settings.cosmetics?.paint_shadows) ?? 'all';
 
+  const ownBadgeOff = useOwnBadgeHidden(m.userId);
   const isSN = isStreamNookUser(m.userId);
   const userNumber = getStreamNookUserNumber(m.userId);
   const atmosphere = getAtmosphere(atmosphereId);
@@ -335,7 +337,7 @@ const ModRoomMessageRow = ({
         )}
         <span>
           <span className="mr-1.5 align-middle text-[10px] tabular-nums text-textSecondary">{time}</span>
-          {isSN && (
+          {isSN && !ownBadgeOff && (
             <span className="mr-1 inline-flex align-middle">
               <StreamNookBadge userId={m.userId} className="sn-chat-badge--sn block h-[18px] w-[18px] object-contain" />
             </span>

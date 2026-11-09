@@ -16,6 +16,7 @@ import { useAppStore } from '../../stores/AppStore';
 import { useLowPower } from '../../utils/lowPower';
 import { ProfileNameplate } from './ProfileNameplate';
 import { useProfileLink } from './useProfileLink';
+import { useOwnBadgeHidden } from '../../hooks/useOwnStreamNookBadge';
 
 export function MemberProfileHero({
   userId,
@@ -35,6 +36,9 @@ export function MemberProfileHero({
   const lowPower = useLowPower();
   const motionOff = useAppStore((s) => s.settings.motion_mode) === 'off';
   const holdStill = lowPower || motionOff;
+  // Your own badge off your own name (clean screenshots); a preview of what
+  // others see keeps it.
+  const ownBadgeOff = useOwnBadgeHidden(userId) && !preview;
   const {
     info,
     namePaint,
@@ -182,7 +186,7 @@ export function MemberProfileHero({
                       imgBadge(b.src, `${b.title} (${b.provider.toUpperCase()})`, b.key || b.title),
                     )}
                     {bttvPro && imgBadge(bttvPro.src, 'BTTV Pro', 'bttvpro')}
-                    {memberNumber !== null && userId && (
+                    {memberNumber !== null && userId && !ownBadgeOff && (
                       <StreamNookBadge userId={userId} side="bottom" className="h-[18px] w-[18px] flex-shrink-0 object-contain" />
                     )}
                   </div>

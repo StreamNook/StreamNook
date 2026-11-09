@@ -21,6 +21,7 @@ import { memberIdFor } from '../utils/memberIdentity';
 import { getColorOverride, getDisplayedName } from '../utils/userChatOverrides';
 import { useNameColorAdjust } from './useNameColor';
 import { useStillChat } from '../utils/lowPower';
+import { useOwnBadgeHidden } from './useOwnStreamNookBadge';
 import type { ProviderId } from '../types/providers';
 
 const NO_TWITCH_BADGES: ResolvedTwitchBadge[] = [];
@@ -122,7 +123,9 @@ export function useChatterLook({ provider, userId, name, login, shownName, color
   }, [paint, baseColor, paintShadowMode, stillPaint]);
 
   const memberId = memberIdFor(key);
-  const streamNookMemberId = visible.streamNook && memberId && isStreamNookUser(memberId) ? memberId : null;
+  const ownBadgeOff = useOwnBadgeHidden(memberId);
+  const streamNookMemberId =
+    visible.streamNook && memberId && !ownBadgeOff && isStreamNookUser(memberId) ? memberId : null;
 
   return {
     displayName: getDisplayedName(key, shownName || name, overrides),

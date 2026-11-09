@@ -1627,6 +1627,13 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   {
     tab: 'Chat',
     section: 'Names & Badges',
+    title: 'My badge',
+    parent: 'Add-on badges',
+    description: 'Your StreamNook badge beside your own name on your screen, in chat and on your profile. Turn it off for clean screenshots. Hide my badge, unequip StreamNook badge.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Names & Badges',
     title: 'Custom mod & VIP badges',
     parent: 'Badges',
     description: "A channel's own moderator and VIP badges from FrankerFaceZ (FFZ) instead of the standard ones. Custom moderator and VIP badges, channel mod badge, custom VIP badge."

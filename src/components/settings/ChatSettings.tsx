@@ -604,6 +604,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
     ffz_custom_role_badges: stored?.ffz_custom_role_badges ?? true,
     show_third_party_badges: stored?.show_third_party_badges ?? true,
     hidden_badge_providers: stored?.hidden_badge_providers ?? [],
+    show_own_streamnook_badge: stored?.show_own_streamnook_badge ?? true,
     show_chat_atmospheres: stored?.show_chat_atmospheres ?? true,
     message_entrance: (stored?.message_entrance ?? ENTRANCE_FALLBACK) as 'none' | 'fade' | 'slide' | 'rise',
     emoji_style: (stored?.emoji_style ?? 'apple') as 'system' | 'apple' | 'google' | 'twitter' | 'facebook',
@@ -1871,7 +1872,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           title="Add-on badges"
           onReset={resetFor(['chat_design.show_third_party_badges', true])}
           description="Badges from 7TV, FFZ, Chatterino, Homies, Limerino, JilChat and the other badge services, plus StreamNook membership badges."
-          help="Services turns individual badge services off."
+          help="Services turns individual badge services off. My badge takes your StreamNook badge off your own name on your screen, for clean screenshots."
           control={
             <Toggle
               enabled={cd.show_third_party_badges}
@@ -1890,6 +1891,16 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
                     items={BADGE_PROVIDERS.map((p) => ({ id: p.id, label: p.label, mark: <ServiceMark id={p.id} size={14} /> }))}
                     isOn={(id) => !badgeProviderHidden(id)}
                     onToggle={toggleBadgeProvider}
+                  />
+                }
+              />
+              <SubControl
+                title="My badge"
+                onReset={resetFor(['chat_design.show_own_streamnook_badge', true])}
+                control={
+                  <Toggle
+                    enabled={cd.show_own_streamnook_badge}
+                    onChange={() => setDesign({ show_own_streamnook_badge: !cd.show_own_streamnook_badge })}
                   />
                 }
               />

@@ -2477,6 +2477,9 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   const isOwnMessage =
     parsed.metadata?.is_own === true ||
     (!!currentUser?.user_id && parsed.tags.get('user-id') === currentUser.user_id);
+  // Your own StreamNook badge stays off your own rows while you turned it off
+  // (clean screenshots); only this screen changes.
+  const snBadgeShown = snBadgeOn && !(isOwnMessage && chatDesign?.show_own_streamnook_badge === false);
   const isRaidNotice = parsed.tags.get('msg-id') === 'raid';
 
   // Resolve which built-in event (if any) should drive the row's tint. Order
@@ -2653,7 +2656,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             twitchBadges={visibleBadges}
             seventvBadge={seventvBadge}
             thirdPartyBadges={thirdPartyBadges}
-            streamNookMemberId={isSN && snBadgeOn ? senderUserId : null}
+            streamNookMemberId={isSN && snBadgeShown ? senderUserId : null}
             onBadgeClick={onBadgeClick}
             foldLimit={foldLimit}
             keyPrefix="ev0"
@@ -2826,7 +2829,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             twitchBadges={visibleBadges}
             seventvBadge={seventvBadge}
             thirdPartyBadges={thirdPartyBadges}
-            streamNookMemberId={isSN && snBadgeOn ? senderUserId : null}
+            streamNookMemberId={isSN && snBadgeShown ? senderUserId : null}
             onBadgeClick={onBadgeClick}
             foldLimit={foldLimit}
             keyPrefix="ev1"
@@ -2971,7 +2974,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             twitchBadges={visibleBadges}
             seventvBadge={seventvBadge}
             thirdPartyBadges={thirdPartyBadges}
-            streamNookMemberId={isSN && snBadgeOn ? senderUserId : null}
+            streamNookMemberId={isSN && snBadgeShown ? senderUserId : null}
             onBadgeClick={onBadgeClick}
             foldLimit={foldLimit}
             keyPrefix="ev2"
@@ -3057,7 +3060,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             twitchBadges={visibleBadges}
             seventvBadge={seventvBadge}
             thirdPartyBadges={thirdPartyBadges}
-            streamNookMemberId={isSN && snBadgeOn ? senderUserId : null}
+            streamNookMemberId={isSN && snBadgeShown ? senderUserId : null}
             onBadgeClick={onBadgeClick}
             foldLimit={foldLimit}
             keyPrefix="ev3"
@@ -3299,7 +3302,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             twitchBadges={visibleBadges}
             seventvBadge={seventvBadge}
             thirdPartyBadges={thirdPartyBadges}
-            streamNookMemberId={isSN && snBadgeOn ? senderUserId : null}
+            streamNookMemberId={isSN && snBadgeShown ? senderUserId : null}
             onBadgeClick={onBadgeClick}
             foldLimit={foldLimit}
             keyPrefix="ev4"
@@ -3800,7 +3803,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
                 twitchBadges={visibleBadges}
                 seventvBadge={seventvBadge}
                 thirdPartyBadges={thirdPartyBadges}
-                streamNookMemberId={isSN && snBadgeOn ? senderUserId : null}
+                streamNookMemberId={isSN && snBadgeShown ? senderUserId : null}
                 onBadgeClick={onBadgeClick}
                 foldLimit={foldLimit}
                 keyPrefix="badge"

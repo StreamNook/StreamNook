@@ -744,7 +744,9 @@ pub fn cached_sheet(user_id: &str, channel_id: Option<&str>, open_id: Option<&st
     let mut rand = rand_unit;
     let line = next_roast(&mut entry.roast, entry.roast_hours, open_id, &mut rand);
     set_roast(&mut entry.sheet, line);
-    Some(entry.sheet.clone())
+    let mut sheet = entry.sheet.clone();
+    without_own_badge(&sheet.user_id, &mut sheet.worn);
+    Some(sheet)
 }
 
 /// A finished build, written to the cache when it is the newest asked for. The
@@ -1212,7 +1214,19 @@ pub async fn profile_sheet(
         },
     )
     .await;
-    settle_roast(&key, open_id, built)
+    let mut sheet = settle_roast(&key, open_id, built);
+    without_own_badge(&sheet.user_id, &mut sheet.worn);
+    sheet
+}
+
+/// Leaves the viewer's own StreamNook badge off the row beside their name when
+/// they turned it off (`chat_row_view::own_badge_hidden`). Applied where a sheet
+/// or header leaves Rust, so cached and saved copies follow the switch too; the
+/// badge collection below the name keeps it.
+fn without_own_badge(user_id: &str, row: &mut Vec<ProfileBadge>) {
+    if crate::services::chat_row_view::own_badge_hidden(user_id) {
+        row.retain(|b| provider_key(b) != "streamnook");
+    }
 }
 
 // ---- The viewer's own identity header ----------------------------------------------
@@ -1289,7 +1303,8 @@ fn own_path() -> Option<std::path::PathBuf> {
 /// frame. None for another account or before the first build.
 pub fn cached_own_identity(user_id: &str) -> Option<OwnIdentity> {
     let bytes = std::fs::read(own_path()?).ok()?;
-    let header: OwnIdentity = serde_json::from_slice(&bytes).ok()?;
+    let mut header: OwnIdentity = serde_json::from_slice(&bytes).ok()?;
+    without_own_badge(&header.user_id, &mut header.badges);
     (header.user_id == user_id).then_some(header)
 }
 
@@ -1396,6 +1411,8 @@ pub async fn own_identity(user_id: &str, login: &str, display_name: &str) -> Own
     if should_persist_own(registry::members_loaded(), is_member, &loadout) {
         save_own_header(user_id, loadout_stamp, &header);
     }
+    let mut header = header;
+    without_own_badge(&header.user_id, &mut header.badges);
     header
 }
 

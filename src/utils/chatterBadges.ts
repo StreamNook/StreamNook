@@ -71,6 +71,22 @@ export function visibleChatterBadges<T, S>(
   };
 }
 
+/**
+ * Whether the viewer's own StreamNook badge stays off this member's name on
+ * this screen: the member is one of the viewer's accounts and the viewer turned
+ * `chat_design.show_own_streamnook_badge` off (clean screenshots). Others still
+ * see it; Rust applies the same rule (`chat_row_view::own_badge_hidden`).
+ */
+export function ownBadgeHidden(
+  memberId: string | null | undefined,
+  showOwn: boolean | undefined,
+  currentUserId: string | null | undefined,
+  linkedIds: readonly string[],
+): boolean {
+  if (showOwn !== false || !memberId) return false;
+  return memberId === currentUserId || linkedIds.includes(memberId);
+}
+
 /** A badge's provider as one key, whatever its spelling (`BTTV` and `bttv`). */
 const providerKey = (provider?: string) => (provider ?? '').toLowerCase();
 

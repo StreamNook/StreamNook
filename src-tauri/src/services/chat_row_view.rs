@@ -41,6 +41,9 @@ struct Prefs {
     show_badges: bool,
     show_third_party_badges: bool,
     hidden_badge_providers: Vec<String>,
+    /// The viewer's own StreamNook badge on their own rows
+    /// (`chat_design.show_own_streamnook_badge`).
+    show_own_sn_badge: bool,
     /// Members' atmospheres and Cologne look behind their rows.
     atmospheres: bool,
     bttv_modifiers: bool,
@@ -59,6 +62,7 @@ impl Default for Prefs {
             show_badges: true,
             show_third_party_badges: true,
             hidden_badge_providers: Vec::new(),
+            show_own_sn_badge: true,
             atmospheres: true,
             bttv_modifiers: true,
             ffz_effects: true,
@@ -127,6 +131,7 @@ pub fn refresh(settings: &Settings) {
         show_badges: d.show_badges,
         show_third_party_badges: d.show_third_party_badges,
         hidden_badge_providers: d.hidden_badge_providers.iter().map(|p| p.to_lowercase()).collect(),
+        show_own_sn_badge: d.show_own_streamnook_badge,
         atmospheres: d.show_chat_atmospheres,
         bttv_modifiers: d.bttv_emote_modifiers,
         ffz_effects: d.ffz_emote_effects,
@@ -134,12 +139,56 @@ pub fn refresh(settings: &Settings) {
         link_preview_keep_link: d.link_preview_keep_link,
         link_preview_trusted: d.link_preview_trusted_domains.clone(),
     };
+    let own_badge_changed = prefs().show_own_sn_badge != next.show_own_sn_badge;
+    // The ids matter only while the badge is off; the registry's own saves keep them current.
+    if !next.show_own_sn_badge {
+        set_own_accounts(crate::services::account_store::AccountStore::list().into_iter().map(|a| a.user_id).collect());
+    }
     if let Ok(mut guard) = PREFS.write() {
         *guard = Some(next);
     }
     let overrides = user_overrides_from(settings);
     if let Ok(mut guard) = OVERRIDES.write() {
         *guard = overrides;
+    }
+    if own_badge_changed {
+        repaint_own_rows();
+    }
+}
+
+/// Every Twitch account of the viewer's (primary and linked), kept from the
+/// account registry so the row stamp never reads the file.
+static OWN_ACCOUNTS: RwLock<Vec<String>> = RwLock::new(Vec::new());
+
+/// Called with the registry's ids whenever it is saved, and with each settings change.
+pub fn set_own_accounts(ids: Vec<String>) {
+    if let Ok(mut guard) = OWN_ACCOUNTS.write() {
+        *guard = ids;
+    }
+}
+
+/// Whether a member's StreamNook badge stays off this screen: the member is one
+/// of the viewer's own accounts and the viewer turned their own badge off
+/// (`chat_design.show_own_streamnook_badge`), for clean screenshots. Only this
+/// screen changes; nothing is written anywhere.
+pub fn own_badge_hidden(member_id: &str) -> bool {
+    own_badge_hidden_with(&prefs(), member_id)
+}
+
+fn own_badge_hidden_with(prefs: &Prefs, member_id: &str) -> bool {
+    !prefs.show_own_sn_badge
+        && !member_id.is_empty()
+        && OWN_ACCOUNTS.read().map(|own| own.iter().any(|id| id == member_id)).unwrap_or(false)
+}
+
+/// Repaints the viewer's own rows after the switch moved, through the member
+/// frame every shell already applies.
+fn repaint_own_rows() {
+    let own = OWN_ACCOUNTS.read().map(|o| o.clone()).unwrap_or_default();
+    for id in own {
+        if let Some(theme) = crate::services::member_theme::peek(&id) {
+            post_member_frame(&theme);
+        }
     }
 }
 
@@ -1284,7 +1333,9 @@ fn badges(msg: &ChatMessage, prefs: &Prefs, worn: Option<&WornView>) -> Vec<View
     // or YouTube the member is the one who claimed that account, never whoever
     // holds the same number on Twitch.
     if prefs.show_third_party_badges && !prefs.hidden_badge_providers.iter().any(|p| p == "streamnook") {
-        if let Some(badge) = member_of(msg).and_then(|member| member_badge(&member)) {
+        if let Some(badge) =
+            member_of(msg).filter(|member| !own_badge_hidden_with(prefs, member)).and_then(|member| member_badge(&member))
+        {
             out.push(badge);
         }
     }
@@ -1365,8 +1416,11 @@ fn queue_alias(key: String) {
 /// only that platform's rows of that account repaint.
 fn alias_frame(key: &str, member: &str, theme: &crate::services::member_theme::MemberTheme) -> String {
     let prefs = prefs();
-    let badge = member_badge(member)
-        .filter(|_| prefs.show_third_party_badges && !prefs.hidden_badge_providers.iter().any(|p| p == "streamnook"));
+    let badge = member_badge(member).filter(|_| {
+        prefs.show_third_party_badges
+            && !prefs.hidden_badge_providers.iter().any(|p| p == "streamnook")
+            && !own_badge_hidden_with(&prefs, member)
+    });
     serde_json::json!({
         "type": "ROW_MEMBER",
         "user_id": key,
@@ -1430,8 +1484,11 @@ fn known_member_theme(msg: &ChatMessage) -> Option<crate::services::member_theme
 /// theme or badge changed. Only native shells read it.
 pub fn member_frame(theme: &crate::services::member_theme::MemberTheme) -> String {
     let prefs = prefs();
-    let badge = member_badge(&theme.member_id)
-        .filter(|_| prefs.show_third_party_badges && !prefs.hidden_badge_providers.iter().any(|p| p == "streamnook"));
+    let badge = member_badge(&theme.member_id).filter(|_| {
+        prefs.show_third_party_badges
+            && !prefs.hidden_badge_providers.iter().any(|p| p == "streamnook")
+            && !own_badge_hidden_with(&prefs, &theme.member_id)
+    });
     serde_json::json!({
         "type": "ROW_MEMBER",
         "user_id": theme.member_id,
@@ -1824,6 +1881,17 @@ mod tests {
         let off = Prefs { ffz_effects: false, ..Prefs::default() };
         let drawn = spans_with(&[emote("Kappa", false, None), text(" "), emote("ffzX", true, Some(flip))], "x", off);
         assert_eq!(kinds(&drawn), vec!["e:Kappa+ffzX"]);
+    }
+
+    #[test]
+    fn own_streamnook_badge_hides_only_for_your_accounts_while_off() {
+        set_own_accounts(vec!["own-badge-test-1".into(), "own-badge-test-2".into()]);
+        let off = Prefs { show_own_sn_badge: false, ..Prefs::default() };
+        assert!(own_badge_hidden_with(&off, "own-badge-test-1"));
+        assert!(own_badge_hidden_with(&off, "own-badge-test-2"), "a linked account counts as yours");
+        assert!(!own_badge_hidden_with(&off, "someone-else"), "other members keep their badge");
+        assert!(!own_badge_hidden_with(&off, ""));
+        assert!(!own_badge_hidden_with(&Prefs::default(), "own-badge-test-1"), "on by default");
     }
 
     #[test]

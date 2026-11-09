@@ -521,6 +521,11 @@ pub struct ChatDesignSettings {
     pub show_third_party_badges: bool,
     #[serde(default)]
     pub hidden_badge_providers: Vec<String>,
+    /// Your own StreamNook badge beside your name on this screen (chat rows,
+    /// your profile header). Off leaves it out here only, for clean screenshots;
+    /// nothing is written anywhere else (`chat_row_view::own_badge_hidden`).
+    #[serde(default = "default_true")]
+    pub show_own_streamnook_badge: bool,
     /// How many badges a chat row shows before folding the rest into a "+N"
     /// chip (`services::badge_fold`). 0 shows them all. Default 0.
     #[serde(default = "default_badge_fold_limit")]
@@ -797,6 +802,7 @@ impl Default for ChatDesignSettings {
             ffz_custom_role_badges: true,
             show_third_party_badges: true,
             hidden_badge_providers: Vec::new(),
+            show_own_streamnook_badge: true,
             badge_fold_limit: default_badge_fold_limit(),
             badge_fold_show_all_adopted: true,
             show_chat_atmospheres: true,

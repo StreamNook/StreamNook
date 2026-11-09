@@ -116,6 +116,8 @@ impl AccountStore {
         // a future path the way three separate call sites could.
         crate::services::vod_progress_service::invalidate_owner();
         crate::services::vod_sync::reset();
+        // Chat rows leave out the viewer's own StreamNook badge by these ids.
+        crate::services::chat_row_view::set_own_accounts(accounts.iter().map(|a| a.user_id.clone()).collect());
         Ok(())
     }
 

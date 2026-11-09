@@ -390,6 +390,10 @@ export interface ChatDesignSettings {
   // 'ffz', 'bttv', 'chatterino', 'homies', 'moltorino', 'chatsen', 'chatty',
   // 'dankchat', 'limerino', 'jilchat', 'bchat'). Default none.
   hidden_badge_providers?: string[];
+  // Your own StreamNook badge beside your name on this screen (chat rows,
+  // profile headers). False leaves it out here only, for clean screenshots;
+  // others still see it. Default true.
+  show_own_streamnook_badge?: boolean;
   // How many badges a chat row shows before folding the rest into a "+N"
   // chip that unfolds on hover (tap on phones). 0 shows all. Default 0.
   badge_fold_limit?: number;
