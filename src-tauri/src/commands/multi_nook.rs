@@ -1093,12 +1093,18 @@ pub async fn promote_multi_nook_tile(
         quality: promotion.quality.clone(),
         mode: status.as_ref().map(|s| s.mode.clone()),
         entitled: status.as_ref().map(|s| s.entitled).unwrap_or(false),
+        // A tile is a landscape cell (v1, never v2), so a promoted Twitch
+        // tile serves landscape and knows nothing of a portrait picture.
+        view: status.as_ref().map(|_| "landscape".to_string()),
         proxy_region: status.and_then(|s| s.proxy_region),
         available: promotion.available.clone(),
         clip_source: None,
         category: None,
         vod: None,
         kind: None,
+        // The promoted tile is the solo player's start now (SN-40).
+        ticket: Some(crate::services::twitch_view::mint_start_ticket()),
+        ..Default::default()
     }))
 }
 

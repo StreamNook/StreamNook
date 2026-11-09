@@ -67,6 +67,20 @@ export type StreamStartResult = {
   /** VOD starts only: status, length, where to begin, and whether this VOD is
    *  standing in for a live broadcast the viewer rewound. */
   vod?: VodStartInfo;
+  /** Twitch live and VOD (SN-40): the picture served. Absent for other streams. */
+  view?: 'landscape' | 'vertical';
+  /** Twitch live and VOD: the view the core resolved this start to want. */
+  wanted?: 'landscape' | 'vertical';
+  /** The stream also broadcasts a playable portrait picture (dual-format). */
+  vertical_available?: boolean;
+  /** The served ladder is taller than wide; absent when unknown. */
+  portrait?: boolean;
+  /** Only `change_stream_view` to vertical: that pick gave up relayed ad-free playback. */
+  gave_up_ad_free?: boolean;
+  /** The solo start ticket; a `vertical-available` event names its start by it. */
+  ticket?: number;
+  /** Why ad-free playback is not in use although it is on: 'vertical'. */
+  reason?: string;
 };
 
 /** Chat-replay coordinates for a clip. Every field is optional: a clip whose parent VOD

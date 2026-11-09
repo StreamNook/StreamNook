@@ -5,6 +5,7 @@ use crate::services::providers::source::PlaybackKind;
 use crate::services::providers::watch_urls::{self, WatchTarget};
 use crate::services::stream_server::StreamServer;
 use crate::services::twitch_resolver as tr;
+use crate::services::twitch_view::{self, View};
 use log::debug;
 use serde::Serialize;
 use serde_json::json;
@@ -87,7 +88,7 @@ pub(crate) async fn resolve_via_plugin(
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct StreamStartResult {
     /// Local proxy URL (or direct MP4 for clips) the player should load.
     pub url: String,
@@ -133,6 +134,108 @@ pub struct StreamStartResult {
     /// rewound. Absent for live and clips.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vod: Option<VodStartInfo>,
+    /// Twitch live and VOD (SN-40): the picture served, "landscape" |
+    /// "vertical". Absent for every other stream.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub view: Option<String>,
+    /// Twitch live and VOD: the view this start wanted, as the core resolved
+    /// it (an absent request is the remembered pick on a phone).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wanted: Option<String>,
+    /// The stream also broadcasts a portrait picture this device can play
+    /// (dual-format), whichever one is served. Absent means false.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub vertical_available: bool,
+    /// The served ladder's video tiers are taller than wide; absent when no
+    /// tier says (Twitch clips).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub portrait: Option<bool>,
+    /// Only `change_stream_view` to Vertical sets it: that pick gave up the
+    /// relayed ad-free playback the landscape session had. Absent means false.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub gave_up_ad_free: bool,
+    /// The solo start ticket every start returns. A `vertical-available`
+    /// event names the start it belongs to by it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ticket: Option<u64>,
+    /// Why ad-free playback is not in use on this stream although it is on:
+    /// "vertical" when a phone's vertical view declined the relay.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// Announces a v2 answer that landed after its start returned (SN-40):
+/// `{ ticket, available }`. Shells apply it only for their current ticket.
+const VERTICAL_AVAILABLE_EVENT: &str = "vertical-available";
+
+/// The v2 answer of the start that just served, still on its way.
+static LATE_V2: std::sync::Mutex<Option<(u64, tr::LateV2)>> = std::sync::Mutex::new(None);
+
+/// Keep a start's unanswered v2 until the start has returned. Any earlier
+/// one is nobody's now.
+fn park_late_v2(ticket: u64, late: Option<tr::LateV2>) {
+    let previous = {
+        let mut parked = LATE_V2.lock().unwrap_or_else(|e| e.into_inner());
+        std::mem::replace(&mut *parked, late.map(|l| (ticket, l)))
+    };
+    if let Some((_, old)) = previous {
+        old.abort();
+    }
+}
+
+/// The start with `ticket` has returned: read its v2 answer when it lands and
+/// announce it, if that start is still the current one by then.
+fn launch_late_v2(ticket: Option<u64>) {
+    let parked = {
+        let mut parked = LATE_V2.lock().unwrap_or_else(|e| e.into_inner());
+        let mine = matches!((parked.as_ref(), ticket), (Some((t, _)), Some(returned)) if *t == returned);
+        if mine {
+            parked.take()
+        } else {
+            None
+        }
+    };
+    let Some((ticket, late)) = parked else {
+        return;
+    };
+    tauri::async_runtime::spawn(async move {
+        let Some(available) = tr::settle_late_v2(late).await else {
+            return;
+        };
+        if !twitch_view::start_ticket_is_current(ticket) {
+            return;
+        }
+        debug!("[Streaming] late v2 for start {ticket}: vertical_available={available}");
+        if let Some(app) = crate::services::providers::app_handle() {
+            use tauri::Emitter;
+            let _ = app.emit(VERTICAL_AVAILABLE_EVENT, json!({ "ticket": ticket, "available": available }));
+        }
+    });
+}
+
+/// The view a Twitch start wants (SN-40, `twitch_view::wanted`): the shell's
+/// request, else the remembered pick on a phone, landscape on the desktop,
+/// and always landscape while Android's TV screen mode shows the stream.
+fn wanted_view(view: Option<&str>, state: &State<'_, AppState>) -> View {
+    let remembered = state
+        .settings
+        .lock()
+        .map(|s| s.video_player.vertical_view)
+        .unwrap_or(false);
+    #[cfg(target_os = "android")]
+    let tv_owns = {
+        let tv = crate::services::tv_screen::state();
+        tv.enabled && tv.display.is_some()
+    };
+    #[cfg(not(target_os = "android"))]
+    let tv_owns = false;
+    twitch_view::wanted(view, remembered, cfg!(mobile), tv_owns)
+}
+
+/// What a solo start asks of the v2 usher: only a phone asks (the desktop
+/// never fetches it).
+fn dual_ask(want: View, quality: &str) -> Option<tr::DualAsk> {
+    cfg!(mobile).then(|| tr::DualAsk { want, audio_only: twitch_view::is_audio_only(quality) })
 }
 
 /// What the player needs to run a VOD correctly (a recording VOD is a growing
@@ -358,6 +461,7 @@ async fn start_provider_stream(
     }
 
     let url = serve_provider_playback(provider, channel, quality, &resolved, None).await?;
+    let portrait = provider_portrait(&resolved.qualities, &resolved.quality);
     Ok(StreamStartResult {
         url,
         quality: resolved.quality,
@@ -369,7 +473,20 @@ async fn start_provider_stream(
         category: None,
         vod: None,
         kind: Some("hls".to_string()),
+        portrait,
+        ..Default::default()
     })
+}
+
+/// Whether a provider stream (Kick, YouTube, TikTok) is taller than wide
+/// (SN-40): the chosen quality's width and height, else (the audio rendition,
+/// a tier listed without them) the ladder's. None when nothing says.
+fn provider_portrait(qualities: &[crate::services::providers::source::PlaybackQuality], chosen: &str) -> Option<bool> {
+    let picked = qualities
+        .iter()
+        .find(|q| q.name.eq_ignore_ascii_case(chosen))
+        .and_then(|q| twitch_view::ladder_portrait([(q.width, q.height)]));
+    picked.or_else(|| twitch_view::ladder_portrait(qualities.iter().map(|q| (q.width, q.height))))
 }
 
 /// "Auto": the quality the link decides. `auto` on every platform. On the
@@ -664,16 +781,22 @@ pub async fn resolve_clip_media(
         category: r.category,
         vod: None,
         kind: None,
+        ..Default::default()
     })
 }
 
+/// `view` (SN-40): "landscape" | "vertical", or absent for the remembered
+/// pick on a phone (landscape on the desktop).
 #[tauri::command]
 pub async fn start_stream(
     url: String,
     quality: String,
+    view: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<StreamStartResult, StartError> {
-    let result = start_stream_inner(url, quality, state).await;
+    let result = start_stream_inner(url, quality, view, state).await;
+    // A v2 answer still on its way is read only now the start has answered.
+    launch_late_v2(result.as_ref().ok().and_then(|r| r.ticket));
     // TV screen mode plays whatever the phone would: every start, restart and
     // quality change passes through here.
     #[cfg(target_os = "android")]
@@ -686,9 +809,12 @@ pub async fn start_stream(
 async fn start_stream_inner(
     url: String,
     quality: String,
+    view: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<StreamStartResult, StartError> {
     debug!("[Streaming] start_stream called for URL: {}", url);
+    // Every start, whatever it plays, supersedes the one before (SN-40).
+    let ticket = twitch_view::mint_start_ticket();
 
     // Clear the prior solo session up front; only a live resolve below
     // re-registers it (keeps a stale session off clip/VOD playback).
@@ -704,9 +830,11 @@ async fn start_stream_inner(
         crate::services::live_bookmark::starting(None);
         #[cfg(target_os = "android")]
         if crate::services::cast_session::takes_stream(provider) {
-            return Ok(cast_placeholder(provider, &channel, &quality));
+            return Ok(StreamStartResult { ticket: Some(ticket), ..cast_placeholder(provider, &channel, &quality) });
         }
-        return start_provider_stream(provider, &channel, &quality).await;
+        return start_provider_stream(provider, &channel, &quality)
+            .await
+            .map(|r| StreamStartResult { ticket: Some(ticket), ..r });
     }
 
     // Everything below this point is Twitch. The relay's full Twitch behaviour
@@ -734,13 +862,19 @@ async fn start_stream_inner(
             category: r.category,
             vod: None,
             kind: None,
+            ticket: Some(ticket),
+            ..Default::default()
         });
     }
+
+    // The picture this start wants (SN-40): asked, remembered, or forced
+    // landscape by a TV.
+    let want = wanted_view(view.as_deref(), &state);
 
     // VOD → HLS media playlist, relayed through the local stream server.
     if let Some(vod_id) = tr::vod_id_from_url(&url) {
         crate::services::live_bookmark::starting(None);
-        let mut result = start_vod(&vod_id, oauth.as_deref(), &quality, &state, None)
+        let (mut result, late) = start_vod(&vod_id, oauth.as_deref(), &quality, &state, None, want)
             .await
             .map_err(StartError::from)?;
         if let Some(v) = result.vod.as_mut() {
@@ -748,6 +882,8 @@ async fn start_stream_inner(
                 crate::services::live_bookmark::Origin::Deliberate,
             );
         }
+        result.ticket = Some(ticket);
+        park_late_v2(ticket, late);
         return Ok(result);
     }
 
@@ -760,54 +896,80 @@ async fn start_stream_inner(
 
     #[cfg(target_os = "android")]
     if crate::services::cast_session::takes_stream("twitch") {
-        return Ok(cast_placeholder("twitch", &channel, &quality));
+        return Ok(StreamStartResult { ticket: Some(ticket), ..cast_placeholder("twitch", &channel, &quality) });
     }
     // retry_streams = delay between attempts, stream_timeout = total budget, so a
-    // channel that just went live connects once its playlist appears.
-    let core = tr::resolve_live_resilient(
+    // channel that just went live connects once its playlist appears. A phone
+    // also asks the v2 usher (every ladder) beside each attempt.
+    let core = tr::resolve_live_resilient_with(
         &channel,
         oauth.as_deref(),
         &quality,
         streamlink_settings.retry_streams,
         streamlink_settings.stream_timeout,
+        dual_ask(want, &quality),
     )
     .await;
+    let (core, late) = match core {
+        Ok((r, late)) => (Ok(r), late),
+        Err(e) => (Err(e), None),
+    };
+    // Whether the stream also has a playable portrait picture, read from the
+    // core's own v2 answer: a plugin or relay master never carries it.
+    let vertical_available = core.as_ref().is_ok_and(|r| r.vertical_available);
+    let plan = twitch_view::serve_plan(want, core.as_ref().is_ok_and(|r| r.view == View::Vertical), cfg!(mobile));
 
-    // A resolution-owning plugin takes the non-entitled case when installed;
-    // otherwise (or when it declines or fails) the core resolution serves.
-    let resolved = resolve_via_plugin(
-        &state,
-        crate::services::stream_server::SOLO_STREAM_ID,
-        &channel,
-        &quality,
-        &core,
-    )
-    .await;
+    let resolved = if plan == twitch_view::ServePlan::Vertical {
+        // The portrait picture plays straight from Twitch: the plugin seam
+        // and the in-core relay are never asked (a relay serves v1 only), and
+        // the relay session the previous landscape start armed stands down.
+        #[cfg(mobile)]
+        crate::services::ad_bypass::decline_for_vertical();
+        None
+    } else {
+        // A resolution-owning plugin takes the non-entitled case when installed;
+        // otherwise (or when it declines or fails) the core resolution serves.
+        let resolved = resolve_via_plugin(
+            &state,
+            crate::services::stream_server::SOLO_STREAM_ID,
+            &channel,
+            &quality,
+            &core,
+        )
+        .await;
 
-    // A phone can't host a resolution plugin (it would be a spawned native
-    // process), so ad-free playback occupies the same seam in-core. It obeys
-    // the same contract: it declines the entitled case and any failure, and
-    // declining means the core resolution serves.
-    #[cfg(mobile)]
-    let resolved = match resolved {
-        Some(r) => Some(r),
-        None => {
-            let video = { state.settings.lock().unwrap().video_player.clone() };
-            crate::services::ad_bypass::resolve_master(
-                &channel,
-                &quality,
-                core.as_ref().ok(),
-                &video,
-                state.twitch_auth.clone(),
-            )
-            .await
-        }
+        // A phone can't host a resolution plugin (it would be a spawned native
+        // process), so ad-free playback occupies the same seam in-core. It obeys
+        // the same contract: it declines the entitled case and any failure, and
+        // declining means the core resolution serves.
+        #[cfg(mobile)]
+        let resolved = match resolved {
+            Some(r) => Some(r),
+            None => {
+                let video = { state.settings.lock().unwrap().video_player.clone() };
+                crate::services::ad_bypass::resolve_master(
+                    &channel,
+                    &quality,
+                    core.as_ref().ok(),
+                    &video,
+                    state.twitch_auth.clone(),
+                )
+                .await
+            }
+        };
+        resolved
     };
 
-    let r = match resolved {
+    let mut r = match resolved {
         Some(resolved) => resolved,
         None => core.map_err(|e| e.to_string())?,
     };
+    // Ad-free is on, but a vertical session plays without the relay (the
+    // status pages say why). An entitled viewer is ad-free either way.
+    let ad_free_on = cfg!(mobile) && state.settings.lock().map(|s| s.video_player.ad_bypass_enabled).unwrap_or(false);
+    if plan == twitch_view::ServePlan::Vertical && ad_free_on && !r.status.entitled {
+        r.status.reason = Some("vertical".to_string());
+    }
 
     log::info!(
         "[Streaming] {} '{}' → '{}' (mode={}) available={:?}",
@@ -817,6 +979,18 @@ async fn start_stream_inner(
         r.status.mode,
         r.available
     );
+    let proof = format!(
+        "[Streaming] {} view={} vertical_available={} portrait={:?}",
+        channel,
+        r.view.as_str(),
+        vertical_available,
+        r.portrait
+    );
+    if cfg!(debug_assertions) {
+        log::warn!("{proof}");
+    } else {
+        debug!("{proof}");
+    }
     auth_proxy::set_status(r.status.clone());
     // The link decides the rung from here on ("Auto" only), never past what
     // this device decodes; a link that just failed to hold this rung starts
@@ -876,6 +1050,7 @@ async fn start_stream_inner(
         .map(|s| s.video_player.resume_vod_playback)
         .unwrap_or(false);
     crate::services::live_bookmark::begin_live(&channel, resume);
+    park_late_v2(ticket, late);
     Ok(StreamStartResult {
         url,
         quality: r.quality,
@@ -887,6 +1062,13 @@ async fn start_stream_inner(
         category: None,
         vod: None,
         kind: None,
+        view: Some(r.view.as_str().to_string()),
+        wanted: Some(want.as_str().to_string()),
+        vertical_available,
+        portrait: r.portrait,
+        gave_up_ad_free: false,
+        ticket: Some(ticket),
+        reason: r.status.reason,
     })
 }
 
@@ -907,6 +1089,7 @@ fn cast_placeholder(provider: &str, channel: &str, quality: &str) -> StreamStart
         category: None,
         vod: None,
         kind: Some("cast".to_string()),
+        ..Default::default()
     }
 }
 
@@ -916,13 +1099,16 @@ const VOD_REMOTE_POSITION_BUDGET: std::time::Duration = std::time::Duration::fro
 /// Resolve a VOD, relay it, and decide where it starts. `start_override`
 /// (a live rewind's mapped position) wins over the stored resume position;
 /// otherwise the progress store answers, when the resume setting is on.
+/// `want` is the picture the start wants (SN-40); a phone asks the VOD's v2
+/// master for it, and an answer still on its way comes back beside the result.
 async fn start_vod(
     vod_id: &str,
     oauth: Option<&str>,
     quality: &str,
     state: &State<'_, AppState>,
     start_override: Option<f64>,
-) -> Result<StreamStartResult, String> {
+    want: View,
+) -> Result<(StreamStartResult, Option<tr::LateV2>), String> {
     let resume_enabled = state.settings.lock().unwrap().video_player.resume_vod_playback;
     // A position saved on another device lands in the store while the VOD
     // resolves, so the resume read below sees it. Bounded: a slow answer only
@@ -937,11 +1123,12 @@ async fn start_vod(
         }
     };
     let (resolved, info, ()) = tokio::join!(
-        tr::resolve_vod(vod_id, oauth, quality),
+        tr::resolve_vod_with(vod_id, oauth, quality, dual_ask(want, quality)),
         tr::fetch_vod_info(vod_id),
         remote_read
     );
-    let r = resolved.map_err(|e| e.to_string())?;
+    let (r, late) = resolved.map_err(|e| e.to_string())?;
+    let (view, vertical_available, portrait) = (r.view, r.vertical_available, r.portrait);
     let port = StreamServer::start_proxy_server_with(
         r.url,
         false,
@@ -963,10 +1150,17 @@ async fn start_vod(
         None => None,
     };
     debug!(
-        "[Streaming] vod {} → '{}' status={} len={:?} start={:?}",
-        vod_id, r.quality, info.status, info.length_seconds, start_position
+        "[Streaming] vod {} → '{}' status={} len={:?} start={:?} view={} vertical_available={} portrait={:?}",
+        vod_id,
+        r.quality,
+        info.status,
+        info.length_seconds,
+        start_position,
+        view.as_str(),
+        vertical_available,
+        portrait
     );
-    Ok(StreamStartResult {
+    let result = StreamStartResult {
         url: local_player_url(port),
         quality: r.quality,
         mode: None,
@@ -976,6 +1170,10 @@ async fn start_vod(
         clip_source: None,
         category: info.category,
         kind: None,
+        view: Some(view.as_str().to_string()),
+        wanted: Some(want.as_str().to_string()),
+        vertical_available,
+        portrait,
         vod: Some(VodStartInfo {
             video_id: vod_id.to_string(),
             status: info.status,
@@ -991,7 +1189,9 @@ async fn start_vod(
             chapters: info.chapters,
             storyboard: info.storyboard,
         }),
-    })
+        ..Default::default()
+    };
+    Ok((result, late))
 }
 
 /// Whether a live broadcast can be rewound: Twitch only keeps a recording
@@ -1110,6 +1310,7 @@ pub async fn rewind_live_stream(
     behind_secs: Option<f64>,
     position_secs: Option<f64>,
     quality: String,
+    view: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<StreamStartResult, String> {
     let channel = channel.trim().trim_start_matches('#').to_lowercase();
@@ -1129,23 +1330,30 @@ pub async fn rewind_live_stream(
         Some(p) => archive.clamp_position(p),
         None => archive.position_for(chrono::Utc::now(), behind_secs),
     };
+    // The recording takes the solo player from here: a new start (SN-40).
+    let ticket = twitch_view::mint_start_ticket();
+    let want = wanted_view(view.as_deref(), &state);
     state.watch_heartbeat.clear_target().await;
     crate::services::stream_server::set_solo_session(None);
     let oauth = state.twitch_auth.get_token().await.ok();
-    let mut result = start_vod(
+    let (mut result, late) = start_vod(
         &archive.video_id,
         oauth.as_deref(),
         &quality,
         &state,
         Some(position),
+        want,
     )
     .await?;
+    result.ticket = Some(ticket);
     if let Some(v) = result.vod.as_mut() {
         v.rewound_from_live = true;
         v.play_id = crate::services::live_bookmark::register_play(
             crate::services::live_bookmark::Origin::Rewind,
         );
     }
+    park_late_v2(ticket, late);
+    launch_late_v2(Some(ticket));
     crate::services::live_bookmark::begin_rewind(&channel, &archive.video_id, archive.recorded_at.as_deref());
     log::info!(
         "[Streaming] rewind {} → vod {} at {:.0}s (behind={:?}, position={:?})",
@@ -1163,6 +1371,10 @@ pub async fn stop_stream() -> Result<(), String> {
     // Every close of a live stream comes through here, the tray close too
     // (it stops the stream but not the watch session).
     crate::services::live_bookmark::end(crate::services::live_bookmark::EndKind::Async);
+    // A stop supersedes every start: a late v2 answer or a view pick of the
+    // stopped stream acts on nothing (SN-40).
+    twitch_view::mint_start_ticket();
+    park_late_v2(0, None);
     #[cfg(target_os = "android")]
     crate::services::tv_screen::on_local_stream(None);
     // Tear down the YouTube DASH relay for this stream too. Unconditional: it is
@@ -1390,9 +1602,12 @@ pub async fn get_ad_detection() -> crate::services::stream_server::AdDetectionSt
     crate::services::stream_server::ad_state()
 }
 
+/// `view` (SN-40): a Vertical view on a phone lists the portrait ladder (it
+/// asks v2 and narrows); every other ask lists today's landscape ladder.
 #[tauri::command]
 pub async fn get_stream_qualities(
     url: String,
+    view: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<Vec<String>, String> {
     // Provider streams answer from their own adapter (whose parsed master is
@@ -1419,24 +1634,42 @@ pub async fn get_stream_qualities(
             .map(|r| r.available)
             .map_err(|e| e.to_string())
     } else if let Some(vod_id) = tr::vod_id_from_url(&url) {
-        tr::resolve_vod(&vod_id, oauth.as_deref(), "best")
+        let ask = menu_ask(view.as_deref(), &state);
+        tr::resolve_vod_with(&vod_id, oauth.as_deref(), "best", ask)
             .await
-            .map(|r| r.available)
+            .map(|(r, late)| {
+                if let Some(late) = late {
+                    late.abort();
+                }
+                r.available
+            })
             .map_err(|e| e.to_string())
     } else {
         let channel =
             channel_from_url(&url).ok_or_else(|| format!("Unrecognized Twitch URL: {}", url))?;
-        tr::resolve_live(&channel, oauth.as_deref(), "best")
+        let ask = menu_ask(view.as_deref(), &state);
+        tr::resolve_live_with(&channel, oauth.as_deref(), "best", ask)
             .await
-            .map(|r| r.available)
+            .map(|(r, late)| {
+                if let Some(late) = late {
+                    late.abort();
+                }
+                r.available
+            })
             .map_err(|e| e.to_string())
     }
+}
+
+/// The quality menu's v2 ask (Y9): only a Vertical view asks v2.
+fn menu_ask(view: Option<&str>, state: &State<'_, AppState>) -> Option<tr::DualAsk> {
+    dual_ask(wanted_view(view, state), "best").filter(|ask| ask.want == View::Vertical)
 }
 
 #[tauri::command]
 pub async fn change_stream_quality(
     url: String,
     quality: String,
+    view: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<StreamStartResult, String> {
     // The viewer picked this quality, so it plays as picked: a codec hold on
@@ -1447,7 +1680,56 @@ pub async fn change_stream_quality(
     }
     // Don't stop the server - just update the stream URL.
     // The server keeps running on the same port.
-    start_stream(url, quality, state).await.map_err(|e| e.to_string())
+    start_stream(url, quality, view, state).await.map_err(|e| e.to_string())
+}
+
+/// The phones' view pill (SN-40): reload the stream in `view` ("landscape" |
+/// "vertical") the way a quality change reloads it, at the saved quality
+/// unless `quality` is given. It saves nothing but the pick itself
+/// (`video_player.vertical_view`, through `commit_vertical_view`), and that
+/// only when the start served what was picked and is still the current one;
+/// a quality is never saved and a codec hold never ended (only a quality pick
+/// ends one). The answer says whether this Vertical pick gave up the relayed
+/// ad-free playback the landscape session had.
+#[tauri::command]
+pub async fn change_stream_view(
+    app: crate::rt::AppHandle,
+    url: String,
+    view: String,
+    quality: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<StreamStartResult, String> {
+    let picked = View::parse(&view).ok_or_else(|| format!("Unknown view: {view}"))?;
+    let (quality, ad_free_on) = {
+        let settings = state.settings.lock().map_err(|e| e.to_string())?;
+        let quality = quality.filter(|q| !q.trim().is_empty()).unwrap_or_else(|| settings.quality.clone());
+        (quality, settings.video_player.ad_bypass_enabled)
+    };
+    // How the landscape session this pick replaces was served (Y18), read
+    // before the start rewrites it.
+    let before = channel_from_url(&url).and_then(|channel| auth_proxy::get_status(&channel));
+    let mut result = start_stream(url, quality, Some(picked.as_str().to_string()), state.clone())
+        .await
+        .map_err(|e| e.to_string())?;
+    let served = result.view.as_deref().and_then(View::parse);
+    if let (Some(served), Some(ticket)) = (served, result.ticket) {
+        if served == picked {
+            let saved = crate::commands::settings::commit_vertical_view(&app, &state, picked == View::Vertical, || {
+                twitch_view::saves_pick(picked, served, twitch_view::start_ticket_is_current(ticket))
+            });
+            if let Err(e) = saved {
+                log::warn!("[Streaming] could not remember the {} view: {}", picked.as_str(), e);
+            }
+        }
+    }
+    result.gave_up_ad_free = twitch_view::gave_up_ad_free(
+        picked,
+        served,
+        ad_free_on,
+        before.as_ref().map(|s| s.mode.as_str()),
+        before.as_ref().is_some_and(|s| s.entitled),
+    );
+    Ok(result)
 }
 
 #[tauri::command]
@@ -1657,5 +1939,124 @@ mod start_error_tests {
         );
         // Callers that only want words still get the message.
         assert_eq!(e.to_string(), "@someone's LIVE is 18+. Sign in to TikTok to watch it.");
+    }
+}
+
+/// The vertical view's rules in this file (SN-40), pinned by source because
+/// the order is the rule. Kept last in the file: the checks read only the
+/// code above this module.
+#[cfg(test)]
+mod vertical_view_pins {
+    use super::*;
+
+    fn code() -> String {
+        let src = include_str!("streaming.rs").replace("\r\n", "\n");
+        let end = src.find("mod vertical_view_pins").expect("this module");
+        src[..end].to_string()
+    }
+
+    /// The body of the function whose signature starts with `sig`.
+    fn body(src: &str, sig: &str) -> String {
+        let start = src.find(sig).unwrap_or_else(|| panic!("{sig} not found"));
+        let rest = &src[start..];
+        rest[..rest.find("\n}\n").expect("function end")].to_string()
+    }
+
+    #[test]
+    fn the_vertical_branch_runs_before_the_plugin_and_the_relay() {
+        let b = body(&code(), "async fn start_stream_inner(");
+        let vertical = b.find("if plan == twitch_view::ServePlan::Vertical {").expect("the vertical branch");
+        let other = vertical + b[vertical..].find("} else {").expect("the landscape branch");
+        let branch = &b[vertical..other];
+        assert!(branch.contains("#[cfg(mobile)]"), "{branch}");
+        assert!(branch.contains("crate::services::ad_bypass::decline_for_vertical();"), "{branch}");
+        assert!(!branch.contains("resolve_via_plugin") && !branch.contains("resolve_master"), "{branch}");
+        let plugin = b.find("resolve_via_plugin(").expect("the plugin seam");
+        let relay = b.find("crate::services::ad_bypass::resolve_master(").expect("the relay block");
+        assert!(other < plugin && plugin < relay, "the vertical branch comes first");
+        // The plan reads the core's own build, and the result reports the
+        // core's v2 answer whoever served (a relay master never carries it).
+        assert!(b.contains("core.as_ref().is_ok_and(|r| r.view == View::Vertical)"));
+        assert!(b.contains("let vertical_available = core.as_ref().is_ok_and(|r| r.vertical_available);"));
+    }
+
+    #[test]
+    fn one_function_mints_every_start_ticket() {
+        let src = code();
+        let inner = body(&src, "async fn start_stream_inner(");
+        let mint = inner.find("twitch_view::mint_start_ticket()").expect("start_stream_inner mints");
+        assert!(mint < inner.find("watch_urls::classify(").unwrap(), "before any kind of start");
+        assert!(body(&src, "pub async fn rewind_live_stream(").contains("twitch_view::mint_start_ticket()"));
+        // Every VOD start goes through start_stream_inner or the rewind.
+        assert_eq!(src.matches("start_vod(").count(), 3, "the fn, the VOD open, the rewind");
+        let view = include_str!("../services/twitch_view.rs").replace("\r\n", "\n");
+        assert_eq!(view.matches("START_TICKET.fetch_add(").count(), 1, "one minting function");
+    }
+
+    #[test]
+    fn a_view_pick_saves_only_the_view_and_ends_no_codec_hold() {
+        let src = code();
+        let b = body(&src, "pub async fn change_stream_view(");
+        assert!(!b.contains("release_codec_hold"), "only a quality pick ends a hold");
+        assert!(!b.contains("commit_settings_patch") && !b.contains("patch_settings"), "no quality is saved");
+        assert!(b.contains("crate::commands::settings::commit_vertical_view("));
+        assert!(b.contains("twitch_view::saves_pick(picked, served, twitch_view::start_ticket_is_current(ticket))"));
+        assert!(b.contains("settings.quality.clone()"), "the saved quality unless one is given");
+        let status = b.find("auth_proxy::get_status(").expect("the status before the start");
+        assert!(status < b.find("start_stream(").unwrap());
+        // Only this command sets the notice.
+        assert_eq!(src.matches("gave_up_ad_free = ").count(), 1);
+        assert!(b.contains("result.gave_up_ad_free = twitch_view::gave_up_ad_free("));
+    }
+
+    #[test]
+    fn late_v2_answers_are_read_only_after_the_start_returned() {
+        let src = code();
+        let outer = body(&src, "pub async fn start_stream(");
+        let inner = outer.find("start_stream_inner(").unwrap();
+        assert!(inner < outer.find("launch_late_v2(").unwrap());
+        let launch = body(&src, "fn launch_late_v2(");
+        assert!(launch.contains("twitch_view::start_ticket_is_current(ticket)"));
+        assert!(launch.contains("app.emit(VERTICAL_AVAILABLE_EVENT"));
+        assert_eq!(VERTICAL_AVAILABLE_EVENT, "vertical-available");
+    }
+
+    #[test]
+    fn a_provider_stream_is_portrait_by_its_chosen_quality() {
+        use crate::services::providers::source::PlaybackQuality;
+        let q = |name: &str, w: Option<u32>, h: Option<u32>| PlaybackQuality {
+            name: name.into(),
+            url: String::new(),
+            width: w,
+            height: h,
+            fps: None,
+            bandwidth: None,
+        };
+        let tall = vec![q("720p", Some(720), Some(1280)), q("audio_only", None, None)];
+        assert_eq!(provider_portrait(&tall, "720p"), Some(true));
+        assert_eq!(provider_portrait(&tall, "audio_only"), Some(true), "the audio keeps the ladder's answer");
+        let wide = vec![q("1080p60", Some(1920), Some(1080))];
+        assert_eq!(provider_portrait(&wide, "1080p60"), Some(false));
+        assert_eq!(provider_portrait(&[q("sd", None, Some(480))], "sd"), None, "no width: unknown");
+    }
+
+    #[test]
+    fn the_new_result_fields_stay_off_the_wire_when_unset() {
+        let json = serde_json::to_value(StreamStartResult::default()).unwrap();
+        for absent in ["view", "wanted", "vertical_available", "portrait", "gave_up_ad_free", "ticket", "reason"] {
+            assert!(json.get(absent).is_none(), "{absent} is skipped for old shells and the desktop");
+        }
+        let json = serde_json::to_value(StreamStartResult {
+            view: Some("vertical".into()),
+            vertical_available: true,
+            gave_up_ad_free: true,
+            ticket: Some(7),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(json["view"], "vertical");
+        assert_eq!(json["vertical_available"], true);
+        assert_eq!(json["gave_up_ad_free"], true);
+        assert_eq!(json["ticket"], 7);
     }
 }

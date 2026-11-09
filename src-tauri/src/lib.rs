@@ -2107,6 +2107,7 @@ pub fn run() {
             stop_ll_diag,
             get_stream_qualities,
             change_stream_quality,
+            change_stream_view,
             rewind_live_stream,
             get_live_rewind_info,
             // VOD watch position

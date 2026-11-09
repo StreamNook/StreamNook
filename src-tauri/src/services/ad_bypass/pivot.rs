@@ -42,7 +42,8 @@ struct ActiveStream {
     user_supplied: bool,
     /// Bases already known to be serving ads for this stream.
     tried: Vec<String>,
-    auth: TwitchAuthService,
+    /// None only in tests, which have no app to build one from.
+    auth: Option<TwitchAuthService>,
     last_pivot: Option<Instant>,
     in_flight: bool,
 }
@@ -80,13 +81,40 @@ pub fn arm(
         configured,
         user_supplied,
         tried: vec![base],
-        auth,
+        auth: Some(auth),
         last_pivot: None,
         in_flight: false,
     });
     // Drop the old record's `TwitchAuthService` outside the critical section.
     drop(previous);
     EMPTY_POLLS.store(0, Ordering::Relaxed);
+}
+
+/// Arm for a relayed stream with no account behind it (tests only).
+#[cfg(test)]
+pub(crate) fn arm_for_test(channel: &str) {
+    GENERATION.fetch_add(1, Ordering::SeqCst);
+    *active() = Some(ActiveStream {
+        channel: channel.to_string(),
+        quality: "best".to_string(),
+        configured: Vec::new(),
+        user_supplied: false,
+        tried: Vec::new(),
+        auth: None,
+        last_pivot: None,
+        in_flight: false,
+    });
+    EMPTY_POLLS.store(0, Ordering::Relaxed);
+}
+
+/// Whether a relayed stream is armed for escalation.
+pub fn armed() -> bool {
+    active().is_some()
+}
+
+/// The armed stream's generation (it moves on every arm and disarm).
+pub(crate) fn generation() -> u64 {
+    GENERATION.load(Ordering::SeqCst)
 }
 
 /// Disarm (stream stopped, or this stream isn't using a relay).
@@ -187,7 +215,10 @@ async fn run(generation: u64) {
 
     // Re-fetch the viewer's own master too: its above-relay tiers are signed
     // URLs, so the ones from the original resolve are no use by now.
-    let oauth = auth.get_token().await.ok();
+    let oauth = match &auth {
+        Some(auth) => auth.get_token().await.ok(),
+        None => None,
+    };
     let core = crate::services::twitch_resolver::resolve_live(&channel, oauth.as_deref(), &quality)
         .await
         .ok();

@@ -206,7 +206,8 @@ async fn assemble_row(login: &str, seed: &WatchSeed) -> TwitchStream {
 /// Start watching a live channel. `provider` names its platform (Twitch when
 /// absent); `login` is the Twitch login or the platform's channel (a Kick slug).
 /// `quality` defaults to the saved one; `relay_ready` skips the relay (it
-/// already serves this channel).
+/// already serves this channel). `view` is the picture a Twitch start wants
+/// (SN-40: "landscape" | "vertical", absent for the remembered pick).
 pub async fn start(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -215,6 +216,7 @@ pub async fn start(
     seed: Option<WatchSeed>,
     quality: Option<String>,
     relay_ready: bool,
+    view: Option<String>,
 ) -> Result<WatchStart, StartError> {
     let provider = provider.map(|p| p.trim().to_lowercase()).filter(|p| !p.is_empty() && p != "twitch");
     if let Some(provider) = provider {
@@ -236,7 +238,7 @@ pub async fn start(
         if relay_ready {
             None
         } else {
-            Some(streaming::start_stream(format!("https://twitch.tv/{login}"), quality, state).await)
+            Some(streaming::start_stream(format!("https://twitch.tv/{login}"), quality, view, state).await)
         }
     };
     let (started, row) = tokio::join!(relay, assemble_row(&login, &seed));
@@ -337,7 +339,8 @@ async fn start_provider(
         if relay_ready {
             None
         } else {
-            Some(streaming::start_stream(url.clone(), quality, state.clone()).await)
+            // Another platform has one picture: no view to ask for.
+            Some(streaming::start_stream(url.clone(), quality, None, state.clone()).await)
         }
     };
     let meta = async {

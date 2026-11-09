@@ -12,7 +12,8 @@ use tauri::{Manager, State};
 /// Start watching a live channel in the main view: relay, row, drops aim and
 /// watch session in one call (see services/watch_start.rs). `provider` is
 /// Twitch when absent; `login` is then a Twitch login, else the platform's
-/// channel (a Kick slug).
+/// channel (a Kick slug). `view` (SN-40): "landscape" | "vertical", absent
+/// for the remembered pick on a phone.
 #[tauri::command]
 pub async fn watch_start(
     app: AppHandle,
@@ -22,8 +23,9 @@ pub async fn watch_start(
     seed: Option<WatchSeed>,
     quality: Option<String>,
     relay_ready: Option<bool>,
+    view: Option<String>,
 ) -> Result<WatchStart, StartError> {
-    starts::start(app, state, provider, login, seed, quality, relay_ready.unwrap_or(false)).await
+    starts::start(app, state, provider, login, seed, quality, relay_ready.unwrap_or(false), view).await
 }
 
 /// Stop watching in the main view: relay, watch session, and unless MultiNook
