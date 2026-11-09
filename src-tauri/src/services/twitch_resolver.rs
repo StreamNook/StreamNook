@@ -12,7 +12,7 @@
 use crate::services::auth_proxy::{self, PlaybackStatus};
 use crate::services::muted_segments::MutedRange;
 use crate::services::quality::{pick_closest_index, pick_closest_quality, short_edge_label, sort_qualities_descending};
-use crate::services::twitch_view;
+use crate::services::twitch_view::{self, View};
 use crate::services::vod_chapters::{self, Chapter, ChapterNode};
 use crate::services::vod_storyboard::{self, Storyboard};
 use anyhow::{anyhow, Context, Result};
@@ -443,7 +443,103 @@ pub struct ResolvedLive {
     /// Entitlement / proxy decision, for the UI ad-source badge.
     pub status: PlaybackStatus,
     /// The master playlist we parsed (kept for the agreement harness / debugging).
+    /// A vertical result holds the NARROWED portrait text, so everything that
+    /// re-parses it (`link_adapt`'s ladder, the relay) sees one picture only.
     pub master: String,
+    /// The picture this resolution serves (SN-40). Landscape unless a
+    /// vertical one was asked for and v2 had a playable portrait group.
+    pub view: View,
+    /// v2 had a playable portrait group by the time this resolved, whichever
+    /// picture is served. Always false when v2 was not asked for.
+    pub vertical_available: bool,
+    /// The served ladder's video tiers are taller than wide; None when no
+    /// tier says.
+    pub portrait: Option<bool>,
+}
+
+/// What a phone's solo start asks of the v2 usher (SN-40). A resolve without
+/// it never fetches v2: tiles, Cast, the ad pivot, the soaks, the desktop.
+#[derive(Debug, Clone, Copy)]
+pub struct DualAsk {
+    /// The view the start wants (Remembered already resolved).
+    pub want: View,
+    /// The screen-off audio swap: never waits for v2.
+    pub audio_only: bool,
+}
+
+/// A v2 answer still on its way when the start returned. `settle_late_v2`
+/// reads it once the start has answered.
+pub struct LateV2 {
+    fetch: auth_proxy::DualFetch,
+    /// The dual-format note's key (a channel, or a VOD).
+    key: String,
+    /// The codec preference the portrait group must be playable under.
+    pref: Option<Vec<String>>,
+}
+
+impl LateV2 {
+    /// Nobody will read this answer.
+    pub fn abort(self) {
+        self.fetch.abort();
+    }
+}
+
+/// The preference `playable_variants` filters with on `channel`, or None
+/// while it keeps every tier (nothing reported, nothing failed).
+fn selection_pref(channel: &str) -> Option<Vec<String>> {
+    (codec_pref_reported() || !failed_for(channel).is_empty()).then(|| pref_for(channel))
+}
+
+/// Whether a v2 master carries a portrait picture this device can play (X9):
+/// a dual-format master (tagged portrait AND tagged landscape video, never by
+/// shape) with at least one portrait video tier that survives the codec
+/// preference (the iPhone's decodable filter rides `parse_master`, Android's
+/// codec holds ride `pref`). `pref` None keeps every tier, as
+/// `playable_variants` does before the player reports.
+pub(crate) fn vertical_playable(v2: &str, pref: Option<&[String]>) -> bool {
+    if !twitch_view::is_dual_format(v2) {
+        return false;
+    }
+    parse_master(&twitch_view::narrow(v2, View::Vertical))
+        .iter()
+        .any(|v| v.height.is_some() && pref.is_none_or(|p| decodable(v, p)))
+}
+
+/// What v2 said by the time a start serves: its master when it answered, the
+/// availability of its portrait group, and the fetch itself when it is still
+/// running (the start does not wait for it; see `twitch_view::v2_wait_until`).
+/// Every answer replaces the channel's dual-format note.
+async fn read_v2(
+    key: &str,
+    dual: Option<auth_proxy::DualFetch>,
+    ask: Option<DualAsk>,
+    pref: Option<&[String]>,
+) -> (Option<String>, bool, Option<auth_proxy::DualFetch>) {
+    let (Some(ask), Some(mut fetch)) = (ask, dual) else {
+        return (None, false, None);
+    };
+    let v1_done = Instant::now();
+    let until = twitch_view::v2_wait_until(ask.want, twitch_view::dual_note(key), ask.audio_only, fetch.started, v1_done);
+    match tokio::time::timeout(until.saturating_duration_since(Instant::now()), &mut fetch.handle).await {
+        Ok(joined) => {
+            let master = joined.ok().flatten();
+            let available = master.as_deref().is_some_and(|m| vertical_playable(m, pref));
+            if master.is_some() {
+                twitch_view::note_dual(key, available);
+            }
+            (master, available, None)
+        }
+        Err(_) => (None, false, Some(fetch)),
+    }
+}
+
+/// A late v2 answer, read after the start returned: whether its portrait
+/// picture is playable (None when v2 never answered). Replaces the note.
+pub async fn settle_late_v2(late: LateV2) -> Option<bool> {
+    let master = late.fetch.handle.await.ok().flatten()?;
+    let available = vertical_playable(&master, late.pref.as_deref());
+    twitch_view::note_dual(&late.key, available);
+    Some(available)
 }
 
 /// Parse a Twitch master playlist into its video renditions.
@@ -846,6 +942,19 @@ pub async fn resolve_live(
     oauth_token: Option<&str>,
     quality: &str,
 ) -> Result<ResolvedLive> {
+    resolve_live_with(channel, oauth_token, quality, None).await.map(|(r, _)| r)
+}
+
+/// `resolve_live`, and with `ask` (a phone's solo start, SN-40) also the v2
+/// master on the same token: a vertical start whose v2 has a playable
+/// portrait group is built from that group alone. A v2 still on its way when
+/// the start serves comes back as `LateV2`.
+pub async fn resolve_live_with(
+    channel: &str,
+    oauth_token: Option<&str>,
+    quality: &str,
+    ask: Option<DualAsk>,
+) -> Result<(ResolvedLive, Option<LateV2>)> {
     let channel = channel.to_lowercase();
 
     // Entitlement-first (only when logged in).
@@ -858,8 +967,8 @@ pub async fn resolve_live(
             None
         };
         if let Some(reason) = reason {
-            match auth_proxy::fetch_auth_master(&channel, Some(token)).await {
-                Ok(master) => {
+            match auth_proxy::fetch_auth_masters(&channel, Some(token), ask.is_some()).await {
+                Ok((master, dual)) => {
                     debug!(
                         "[Resolver] {} entitled ({}) → authed master direct",
                         channel, reason
@@ -870,8 +979,9 @@ pub async fn resolve_live(
                         entitled: true,
                         proxy_base: None,
                         proxy_region: None,
+                        reason: None,
                     };
-                    return build(channel, master, status, quality);
+                    return build_live(channel, master, dual, status, quality, ask).await;
                 }
                 Err(e) => debug!(
                     "[Resolver] {} entitled ({}) but auth master failed ({}); falling through",
@@ -883,15 +993,66 @@ pub async fn resolve_live(
 
     // Non-entitled: the direct master, with the viewer's own credential when
     // present and anonymously otherwise (same as the logged-out web player).
-    let master = auth_proxy::fetch_auth_master(&channel, oauth_token).await?;
+    let (master, dual) = auth_proxy::fetch_auth_masters(&channel, oauth_token, ask.is_some()).await?;
     let status = PlaybackStatus {
         channel: channel.clone(),
         mode: "auth-only".to_string(),
         entitled: false,
         proxy_base: None,
         proxy_region: None,
+        reason: None,
     };
-    build(channel, master, status, quality)
+    build_live(channel, master, dual, status, quality, ask).await
+}
+
+/// Build a live result from the v1 master and, when asked, what v2 said: the
+/// portrait group when the start wants Vertical and v2 has a playable one,
+/// else the v1 master exactly as before (landscape never depends on v2).
+async fn build_live(
+    channel: String,
+    v1: String,
+    dual: Option<auth_proxy::DualFetch>,
+    status: PlaybackStatus,
+    quality: &str,
+    ask: Option<DualAsk>,
+) -> Result<(ResolvedLive, Option<LateV2>)> {
+    let pref = selection_pref(&channel);
+    let (v2, available, late) = read_v2(&channel, dual, ask, pref.as_deref()).await;
+    let late = late.map(|fetch| LateV2 { fetch, key: channel.clone(), pref });
+    let want = ask.map_or(View::Landscape, |a| a.want);
+    build_served(channel, v1, v2, available, status, quality, want).map(|r| (r, late))
+}
+
+/// The served picture, given what v2 said: the narrowed portrait group when
+/// `want` is Vertical and v2 had a playable one, else the v1 master as is. A
+/// failed or late v2 (`v2` None) is landscape and never an error.
+fn build_served(
+    channel: String,
+    v1: String,
+    v2: Option<String>,
+    available: bool,
+    status: PlaybackStatus,
+    quality: &str,
+    want: View,
+) -> Result<ResolvedLive> {
+    let vertical = match v2 {
+        Some(v2) if available && want == View::Vertical => {
+            match build(channel.clone(), twitch_view::narrow(&v2, View::Vertical), status.clone(), quality, View::Vertical) {
+                Ok(r) => Some(r),
+                Err(e) => {
+                    debug!("[Resolver] {} portrait group unusable ({}); serving landscape", channel, e);
+                    None
+                }
+            }
+        }
+        _ => None,
+    };
+    let mut r = match vertical {
+        Some(r) => r,
+        None => build(channel, v1, status, quality, View::Landscape)?,
+    };
+    r.vertical_available = available;
+    Ok(r)
 }
 
 /// Build a `ResolvedLive` from a master playlist a playback plugin supplied
@@ -911,8 +1072,10 @@ pub fn resolve_from_master(
         entitled: false,
         proxy_base: base,
         proxy_region: region,
+        reason: None,
     };
-    build(channel, master, status, quality)
+    // A plugin or relay master is v1-shaped: landscape (an untagged ladder).
+    build(channel, master, status, quality, View::Landscape)
 }
 
 /// Retry `resolve_live` until it succeeds or the time budget elapses — the
@@ -934,13 +1097,28 @@ pub async fn resolve_live_resilient(
     retry_delay_secs: u32,
     budget_secs: u32,
 ) -> Result<ResolvedLive> {
+    resolve_live_resilient_with(channel, oauth_token, quality, retry_delay_secs, budget_secs, None)
+        .await
+        .map(|(r, _)| r)
+}
+
+/// `resolve_live_resilient` with a phone solo start's v2 ask: every retry
+/// asks v2 again beside v1 (a stream that just went live).
+pub async fn resolve_live_resilient_with(
+    channel: &str,
+    oauth_token: Option<&str>,
+    quality: &str,
+    retry_delay_secs: u32,
+    budget_secs: u32,
+    ask: Option<DualAsk>,
+) -> Result<(ResolvedLive, Option<LateV2>)> {
     let start = Instant::now();
     let mut attempt = 0u32;
     let mut budget_secs = budget_secs;
     let mut asked_live = false;
     loop {
         attempt += 1;
-        match resolve_live(channel, oauth_token, quality).await {
+        match resolve_live_with(channel, oauth_token, quality, ask).await {
             Ok(r) => return Ok(r),
             Err(e) => {
                 // No playlist, and Twitch says no stream either: the channel
@@ -991,11 +1169,14 @@ pub fn retry_budget_when_offline(budget_secs: u32, live: bool) -> u32 {
 }
 
 /// Parse a fetched master, select the variant, and assemble the result.
+/// `view` is the picture `master` holds (a vertical master is already
+/// narrowed to its portrait group).
 fn build(
     channel: String,
     master: String,
     status: PlaybackStatus,
     quality: &str,
+    view: View,
 ) -> Result<ResolvedLive> {
     let variants = playable_variants(&master, &channel);
     if variants.is_empty() {
@@ -1014,12 +1195,16 @@ fn build(
     let (idx, label) = select_variant_for(&variants, quality, &channel)
         .ok_or_else(|| anyhow!("{}: no variant matched '{}'", channel, quality))?;
     let available = quality_names(&menu_variants(&master, &channel));
+    let portrait = twitch_view::ladder_portrait(variants.iter().map(|v| (v.width, v.height)));
     Ok(ResolvedLive {
         url: variants[idx].url.clone(),
         quality: label,
         available,
         status,
         master,
+        view,
+        vertical_available: false,
+        portrait,
     })
 }
 
@@ -1074,6 +1259,13 @@ pub struct ResolvedMedia {
     pub clip_source: Option<ClipSource>,
     /// Clip resolution only (a VOD's comes from `fetch_vod_info`).
     pub category: Option<MediaCategory>,
+    /// The picture a VOD serves (SN-40); Landscape for a clip.
+    pub view: View,
+    /// The VOD's v2 had a playable portrait group (false for a clip).
+    pub vertical_available: bool,
+    /// The served ladder is taller than wide; None for a clip (its qualities
+    /// carry no dimensions).
+    pub portrait: Option<bool>,
 }
 
 /// Extract the numeric VOD id from a `.../videos/123456789` URL.
@@ -1108,7 +1300,13 @@ pub fn clip_slug_from_url(url: &str) -> Option<String> {
 /// Same persisted-query hash as live; the response carries
 /// `videoPlaybackAccessToken` (not `streamPlaybackAccessToken`) and usher uses
 /// the `nauthsig`/`nauth` param names. No client-integrity needed for VODs.
-async fn fetch_vod_master(vod_id: &str, oauth_token: Option<&str>) -> Result<String> {
+/// With `want_dual` the `/vod/v2/` master (every ladder, SN-40) is fetched
+/// beside it on the same token.
+async fn fetch_vod_masters(
+    vod_id: &str,
+    oauth_token: Option<&str>,
+    want_dual: bool,
+) -> Result<(String, Option<auth_proxy::DualFetch>)> {
     let client = auth_proxy::web_client();
 
     let gql_body = json!({
@@ -1156,26 +1354,48 @@ async fn fetch_vod_master(vod_id: &str, oauth_token: Option<&str>) -> Result<Str
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow!("no VOD token value"))?;
 
-    let usher = format!(
-        "https://usher.ttvnw.net/vod/{id}?platform=web&player_type=embed&allow_source=true\
+    let query = vod_usher_query(sig, value);
+    let usher = format!("https://usher.ttvnw.net/vod/{}?{}", vod_id, query);
+    let dual = want_dual.then(|| {
+        auth_proxy::spawn_v2(
+            format!("https://usher.ttvnw.net/vod/v2/{}.m3u8?{}&multigroup_video=true", vod_id, query),
+            format!("VOD {vod_id}"),
+        )
+    });
+
+    let fetched = async {
+        let master = client
+            .get(&usher)
+            .header("Referer", "https://player.twitch.tv")
+            .header("Origin", "https://player.twitch.tv")
+            .send()
+            .await
+            .context("VOD usher request failed")?;
+        if !master.status().is_success() {
+            return Err(anyhow!("VOD usher returned {}", master.status()));
+        }
+        Ok::<String, anyhow::Error>(master.text().await?)
+    };
+    match fetched.await {
+        Ok(master) => Ok((master, dual)),
+        Err(e) => {
+            if let Some(dual) = &dual {
+                dual.abort();
+            }
+            Err(e)
+        }
+    }
+}
+
+/// The VOD usher query with this playback token (v1 and v2 send the same).
+fn vod_usher_query(sig: &str, token: &str) -> String {
+    format!(
+        "platform=web&player_type=embed&allow_source=true\
          &allow_audio_only=true&playlist_include_framerate=true&supported_codecs=av1,h264,h265\
          &nauthsig={sig}&nauth={tok}",
-        id = vod_id,
         sig = sig,
-        tok = urlencoding::encode(value),
-    );
-
-    let master = client
-        .get(&usher)
-        .header("Referer", "https://player.twitch.tv")
-        .header("Origin", "https://player.twitch.tv")
-        .send()
-        .await
-        .context("VOD usher request failed")?;
-    if !master.status().is_success() {
-        return Err(anyhow!("VOD usher returned {}", master.status()));
-    }
-    Ok(master.text().await?)
+        tok = urlencoding::encode(token),
+    )
 }
 
 /// Resolve a VOD id to a media-playlist URL (parsed + variant-selected, same as
@@ -1185,20 +1405,49 @@ pub async fn resolve_vod(
     oauth_token: Option<&str>,
     quality: &str,
 ) -> Result<ResolvedMedia> {
-    let master = fetch_vod_master(vod_id, oauth_token).await?;
+    resolve_vod_with(vod_id, oauth_token, quality, None).await.map(|(r, _)| r)
+}
+
+/// `resolve_vod`, and with `ask` (a phone's VOD open, SN-40) also the
+/// `/vod/v2/` master: a vertical open whose v2 has a playable portrait group
+/// is built from that group alone, exactly as live.
+pub async fn resolve_vod_with(
+    vod_id: &str,
+    oauth_token: Option<&str>,
+    quality: &str,
+    ask: Option<DualAsk>,
+) -> Result<(ResolvedMedia, Option<LateV2>)> {
+    let (v1, dual) = fetch_vod_masters(vod_id, oauth_token, ask.is_some()).await?;
+    let key = twitch_view::vod_key(vod_id);
+    let pref = selection_pref("");
+    let (v2, available, late) = read_v2(&key, dual, ask, pref.as_deref()).await;
+    let late = late.map(|fetch| LateV2 { fetch, key, pref });
+    let (master, view) = match v2 {
+        Some(v2) if available && ask.is_some_and(|a| a.want == View::Vertical) => {
+            (twitch_view::narrow(&v2, View::Vertical), View::Vertical)
+        }
+        _ => (v1, View::Landscape),
+    };
     let variants = playable_variants(&master, "");
     if variants.is_empty() {
         return Err(anyhow!("VOD {}: master playlist had no variants", vod_id));
     }
     let (idx, label) = select_variant(&variants, quality)
         .ok_or_else(|| anyhow!("VOD {}: no variant matched '{}'", vod_id, quality))?;
-    Ok(ResolvedMedia {
-        url: variants[idx].url.clone(),
-        quality: label,
-        available: quality_names(&variants),
-        clip_source: None,
-        category: None,
-    })
+    let portrait = twitch_view::ladder_portrait(variants.iter().map(|v| (v.width, v.height)));
+    Ok((
+        ResolvedMedia {
+            url: variants[idx].url.clone(),
+            quality: label,
+            available: quality_names(&variants),
+            clip_source: None,
+            category: None,
+            view,
+            vertical_available: available,
+            portrait,
+        },
+        late,
+    ))
 }
 
 /// Pick a clip quality. Clips ship a flat list of `<height>p<fps>` MP4 qualities
@@ -1349,6 +1598,9 @@ pub async fn resolve_clip(
         available,
         clip_source: Some(clip_source),
         category: media_category(clip.get("game")),
+        view: View::Landscape,
+        vertical_available: false,
+        portrait: None,
     })
 }
 
@@ -2201,6 +2453,142 @@ https://x/audio.m3u8\n",
         let playable = retain_playable(tall, &h264);
         let (i, _) = select_variant_with(&playable, "1080p60", &h264).unwrap();
         assert_eq!(playable[i].url, format!("{V2}/720p60-portrait.m3u8"));
+    }
+
+    fn status(channel: &str) -> PlaybackStatus {
+        PlaybackStatus {
+            channel: channel.into(),
+            mode: "auth-only".into(),
+            entitled: false,
+            proxy_base: None,
+            proxy_region: None,
+            reason: None,
+        }
+    }
+
+    #[test]
+    fn vertical_needs_a_playable_portrait_group() {
+        let h264 = s(&["h264"]);
+        let dual = fixture("dual_v2");
+        assert!(vertical_playable(&dual, None));
+        for m in three_shuffles(&dual) {
+            assert!(vertical_playable(&m, Some(h264.as_slice())), "720x1280 is H.264");
+        }
+        // A portrait group that is HEVC only, for a phone without HEVC.
+        let hevc_only = "#EXTM3U\n\
+#EXT-X-STREAM-INF:BANDWIDTH=7635509,CODECS=\"avc1.4D402A,mp4a.40.2\",RESOLUTION=1920x1080,FRAME-RATE=60.000,IVS-NAME=\"1080p60\",IVS-GROUPS=\"landscape\",IVS-VARIANT-SOURCE=\"source\"\nhttps://x/1080.m3u8\n\
+#EXT-X-STREAM-INF:BANDWIDTH=5224532,CODECS=\"hev1.1.6.L123.90,mp4a.40.2\",RESOLUTION=1080x1920,FRAME-RATE=60.000,IVS-NAME=\"1080p60\",IVS-GROUPS=\"portrait\",IVS-VARIANT-SOURCE=\"source\"\nhttps://x/1080-portrait.m3u8\n";
+        assert!(!vertical_playable(hevc_only, Some(h264.as_slice())));
+        assert!(vertical_playable(hevc_only, Some(s(&["h264", "hevc"]).as_slice())));
+        // Vertical-only (untagged portrait) and v1 masters are not dual-format.
+        assert!(!vertical_playable(&fixture("vertical_only_v2"), None));
+        assert!(!vertical_playable(&fixture("vertical_only_v1"), None));
+        assert!(!vertical_playable(MASTER_MODERN_IVS, None));
+    }
+
+    #[test]
+    fn the_served_picture_follows_the_want_and_what_v2_said() {
+        let dual = fixture("dual_v2");
+        let v1 = MASTER_MODERN_IVS.to_string();
+        let land_720 = "https://euc11.playlist.ttvnw.net/720.m3u8";
+        let serve = |v2: Option<String>, available: bool, want: View| {
+            build_served("test-served".into(), v1.clone(), v2, available, status("test-served"), "720p60", want).unwrap()
+        };
+
+        // v2 failed or was late: landscape from v1, no error.
+        let r = serve(None, false, View::Vertical);
+        assert_eq!((r.view, r.vertical_available, r.url.as_str()), (View::Landscape, false, land_720));
+        assert_eq!((r.master.as_str(), r.portrait), (v1.as_str(), Some(false)));
+        // v2 answered with no playable portrait group: landscape.
+        let r = serve(Some(dual.clone()), false, View::Vertical);
+        assert_eq!((r.view, r.url.as_str()), (View::Landscape, land_720));
+        // Dual-format, wanted landscape: landscape, and the pill can show.
+        let r = serve(Some(dual.clone()), true, View::Landscape);
+        assert_eq!((r.view, r.vertical_available, r.url.as_str()), (View::Landscape, true, land_720));
+        assert_eq!(r.master, v1, "landscape never reads v2's bytes");
+        // Dual-format, wanted vertical: the narrowed portrait group.
+        let r = serve(Some(dual.clone()), true, View::Vertical);
+        assert_eq!((r.view, r.vertical_available, r.portrait), (View::Vertical, true, Some(true)));
+        assert_eq!(r.url, format!("{V2}/720p60-portrait.m3u8"));
+        assert_eq!(r.master, twitch_view::narrow(&dual, View::Vertical), "the result's master is the narrowed text");
+        let mut seen = std::collections::HashSet::new();
+        assert!(r.available.iter().all(|n| seen.insert(n.clone())), "one name per tier: {:?}", r.available);
+
+        // A vertical-only stream on v1 is portrait with no view to pick.
+        let r = build_served(
+            "test-served-vo".into(),
+            fixture("vertical_only_v1"),
+            None,
+            false,
+            status("test-served-vo"),
+            "best",
+            View::Vertical,
+        )
+        .unwrap();
+        assert_eq!((r.view, r.vertical_available, r.portrait), (View::Landscape, false, Some(true)));
+        assert_eq!(r.url, "https://v1.example/chunked.m3u8");
+    }
+
+    fn answered(text: Option<String>) -> auth_proxy::DualFetch {
+        auth_proxy::DualFetch { handle: tokio::spawn(async move { text }), started: Instant::now() }
+    }
+
+    fn never() -> auth_proxy::DualFetch {
+        auth_proxy::DualFetch {
+            handle: tokio::spawn(async {
+                tokio::time::sleep(Duration::from_secs(3600)).await;
+                None
+            }),
+            started: Instant::now(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_vertical_start_reads_v2_and_every_answer_replaces_the_note() {
+        let tall = Some(DualAsk { want: View::Vertical, audio_only: false });
+        let (m, available, late) = read_v2("test-read-dual", Some(answered(Some(fixture("dual_v2")))), tall, None).await;
+        assert!(m.is_some() && available && late.is_none());
+        assert_eq!(twitch_view::dual_note("test-read-dual"), Some(true));
+
+        let (_, available, _) = read_v2("test-read-single", Some(answered(Some(MASTER_MODERN_IVS.into()))), tall, None).await;
+        assert!(!available);
+        assert_eq!(twitch_view::dual_note("test-read-single"), Some(false));
+
+        // A failed v2 is no answer: the note stays as it was.
+        let (m, available, late) = read_v2("test-read-failed", Some(answered(None)), tall, None).await;
+        assert!(m.is_none() && !available && late.is_none());
+        assert_eq!(twitch_view::dual_note("test-read-failed"), None);
+    }
+
+    #[tokio::test]
+    async fn a_landscape_start_never_waits_for_v2() {
+        let begun = Instant::now();
+        let land = Some(DualAsk { want: View::Landscape, audio_only: false });
+        let (m, available, late) = read_v2("test-read-land", Some(never()), land, None).await;
+        assert!(m.is_none() && !available);
+        late.expect("v2 is left running").abort();
+        // Known not dual-format, or the audio swap: a vertical start does not wait either.
+        twitch_view::note_dual("test-read-nodual", false);
+        let tall = Some(DualAsk { want: View::Vertical, audio_only: false });
+        let (_, _, late) = read_v2("test-read-nodual", Some(never()), tall, None).await;
+        late.expect("not waited for").abort();
+        let audio = Some(DualAsk { want: View::Vertical, audio_only: true });
+        let (_, _, late) = read_v2("test-read-audio", Some(never()), audio, None).await;
+        late.expect("not waited for").abort();
+        assert!(begun.elapsed() < Duration::from_millis(900), "nothing waited");
+    }
+
+    #[tokio::test]
+    async fn a_late_v2_settles_after_the_start_and_notes_it() {
+        let late = LateV2 { fetch: answered(Some(fixture("dual_v2"))), key: "test-late".into(), pref: None };
+        assert_eq!(settle_late_v2(late).await, Some(true));
+        assert_eq!(twitch_view::dual_note("test-late"), Some(true));
+        let h264 = Some(s(&["h264"]));
+        let late = LateV2 { fetch: answered(Some(MASTER_MODERN_IVS.into())), key: "test-late-2".into(), pref: h264 };
+        assert_eq!(settle_late_v2(late).await, Some(false));
+        let late = LateV2 { fetch: answered(None), key: "test-late-3".into(), pref: None };
+        assert_eq!(settle_late_v2(late).await, None, "no answer");
+        assert_eq!(twitch_view::dual_note("test-late-3"), None);
     }
 
     #[test]
