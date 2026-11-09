@@ -11,7 +11,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useAppStore } from '../../stores/AppStore';
 import { useMobileNavStore } from '../navStore';
-import { bumpInbox, closeInboxSheet, inboxHooks } from '../mentions/mentionInbox';
+import { bumpInbox, inboxHooks, useMentionsStore, type InboxSurface } from '../mentions/mentionInbox';
 import { Logger } from '../../utils/logger';
 import { claimWhisper } from '../../utils/whisperClaim';
 import type {
@@ -122,12 +122,17 @@ export async function syncWhispersNow(): Promise<void> {
   await refreshWhisperStatus();
 }
 
-/** Open a conversation in its sheet: from an inbox row, a notification tap or
- *  the arrival card. Two sheets never stack: an open inbox gives way to it. */
-export async function openWhisperByKey(key: string): Promise<void> {
+/** Open a conversation on top of an inbox, so back leads to its list: an open
+ *  inbox (the chat's sheet, or You > Inbox) turns into the thread, from a row,
+ *  a notification tap or the arrival card. With none open, the card's chat
+ *  opens its inbox sheet on it; a notification tap opens You > Inbox on it. */
+export async function openWhisperByKey(key: string, surface?: InboxSurface): Promise<void> {
   if (!key) return;
-  closeInboxSheet();
-  useMobileNavStore.getState().openWhisper(key);
+  const nav = useMobileNavStore.getState();
+  nav.openWhisper(key);
+  if (useMentionsStore.getState().sheetIn || nav.mentionsOpen) return;
+  if (surface) useMentionsStore.setState({ sheetIn: surface, arrival: null });
+  else nav.setMentionsOpen(true);
 }
 
 function ownerMatches(ownerId: string | undefined): boolean {
@@ -143,7 +148,7 @@ let installed = false;
 export function installWhisperInbox(): () => void {
   if (installed) return () => {};
   installed = true;
-  inboxHooks.openWhisper = (key) => void openWhisperByKey(key);
+  inboxHooks.openWhisper = (key, surface) => void openWhisperByKey(key, surface);
   void refreshWhisperStatus();
   const unlisteners: (() => void)[] = [];
   let dead = false;

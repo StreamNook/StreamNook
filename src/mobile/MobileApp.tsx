@@ -41,7 +41,6 @@ import { RewardsScreen } from './screens/RewardsScreen';
 import { CosmeticsScreen } from './screens/CosmeticsScreen';
 import { MentionsScreen } from './screens/MentionsScreen';
 import { installMentionInbox } from './mentions/mentionInbox';
-import { WhisperSheet } from './whispers/WhisperSheet';
 import { SongsScreen } from './screens/SongsScreen';
 import { installWhisperInbox } from './whispers/whisperInbox';
 import { MobileClipSheet } from './watch/MobileClipSheet';
@@ -257,8 +256,6 @@ const MobileApp: React.FC = () => {
           <SettingsScreen />
           {/* Over settings and the watch layer: the chat menu opens it too. */}
           <MentionsScreen />
-          {/* Over the inbox too: a whisper notification tap opens a conversation from anywhere. */}
-          <WhisperSheet />
           {/* Over Whispers: a song card in any chat opens it too. */}
           <SongsScreen />
           {/* Consumes the same `clipModal` store field the desktop <ClipModal />

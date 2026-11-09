@@ -27,7 +27,7 @@ interface ArrivalView {
   open: () => void;
 }
 
-function arrivalView(a: InboxArrivalItem): ArrivalView {
+function arrivalView(a: InboxArrivalItem, surface: InboxSurface): ArrivalView {
   if (a.kind === 'mention') {
     const where = whereWords(a.entry);
     return {
@@ -54,7 +54,8 @@ function arrivalView(a: InboxArrivalItem): ArrivalView {
     place: null,
     text,
     body: <InboxParts parts={msg?.parts ?? []} text={text} emote={19} />,
-    open: () => inboxHooks.openWhisper?.(a.update.key),
+    // This chat's inbox sheet opens on the conversation.
+    open: () => inboxHooks.openWhisper?.(a.update.key, surface),
   };
 }
 
@@ -75,7 +76,7 @@ export const InboxArrival: React.FC<{ side: 'left' | 'right'; surface: InboxSurf
     return () => window.clearTimeout(t);
   }, [shown, seq]);
 
-  const v = arrival ? arrivalView(arrival) : null;
+  const v = arrival ? arrivalView(arrival, surface) : null;
   return (
     <AnimatePresence>
       {shown && v && (

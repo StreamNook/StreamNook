@@ -36,8 +36,10 @@ interface PinnedChatterProps {
    * `bar`: the collapsed pin bar. The name in its paint plus at most one
    * badge, the sender's Twitch role (broadcaster, staff, moderator, VIP);
    * no subscription, earned, global or third-party badges.
+   * `name`: the name alone in its paint or color, no badges at all (a phone
+   * inbox row, where a run of third-party badges left no room for the name).
    */
-  variant: 'card' | 'line' | 'bar';
+  variant: 'card' | 'line' | 'bar' | 'name';
   /** Fold add-on badges past the chat's limit into a +N chip, as chat rows do. */
   fold?: boolean;
   nameClassName?: string;
@@ -89,7 +91,7 @@ export function PinnedChatter({
           />
         </span>
       )}
-      {!isBar && look.hasBadges && (
+      {!isBar && variant !== 'name' && look.hasBadges && (
         <span
           className={`sn-badge-strip ${isLine ? 'min-w-0 shrink flex-wrap overflow-hidden' : ''} ${badgeClassName}`}
           // A line strip is exactly one badge tall: badges that do not fit wrap

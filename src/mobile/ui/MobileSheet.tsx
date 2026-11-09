@@ -15,6 +15,9 @@ import { useMobileNavStore } from '../navStore';
 export interface MobileSheetProps {
   open: boolean;
   onClose: () => void;
+  /** What Android's Back does, when it is not closing the sheet (a sheet showing
+   *  a page pushed on its list steps back to the list). Defaults to onClose. */
+  onBack?: () => void;
   title?: string;
   children: React.ReactNode;
   /** Max sheet height as a viewport fraction. Default 0.72. */
@@ -181,24 +184,25 @@ const SheetSurface: React.FC<Omit<MobileSheetProps, 'open'>> = ({
   );
 };
 
-export const MobileSheet: React.FC<MobileSheetProps> = ({ open, onClose, onExited, ...rest }) => {
+export const MobileSheet: React.FC<MobileSheetProps> = ({ open, onClose, onBack, onExited, ...rest }) => {
   const sheetId = useId();
   const pushSheet = useMobileNavStore((s) => s.pushSheet);
   const popSheet = useMobileNavStore((s) => s.popSheet);
+  const back = onBack ?? onClose;
 
   // Register in the Android back-button stack while open (external store sync).
   useEffect(() => {
     if (!open) return;
     pushSheet(sheetId);
     const onBackClose = (e: Event) => {
-      if ((e as CustomEvent<string>).detail === sheetId) onClose();
+      if ((e as CustomEvent<string>).detail === sheetId) back();
     };
     window.addEventListener('sn:close-sheet', onBackClose);
     return () => {
       window.removeEventListener('sn:close-sheet', onBackClose);
       popSheet(sheetId);
     };
-  }, [open, sheetId, pushSheet, popSheet, onClose]);
+  }, [open, sheetId, pushSheet, popSheet, back]);
 
   // The portal stays mounted so AnimatePresence has somewhere to play the exit.
   // An empty portal container costs nothing.

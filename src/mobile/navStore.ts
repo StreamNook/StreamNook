@@ -35,7 +35,8 @@ interface MobileNavState {
   cosmeticsOpen: boolean;
   /** The mentions inbox, over everything else (it opens from the chat too). */
   mentionsOpen: boolean;
-  /** The whisper conversation open in its bottom sheet, by its key. */
+  /** The whisper conversation shown in the open inbox (the chat's inbox sheet,
+   *  or You > Inbox) in place of its list, by its key. */
   whisperKey: string | null;
   /** Your songs, over everything else like Mentions (a song card in any chat
    *  opens it too). */
@@ -74,17 +75,17 @@ interface MobileNavState {
   openBrowseCategory: (category: TwitchCategory | null) => void;
   setCosmeticsOpen: (open: boolean) => void;
   setMentionsOpen: (open: boolean) => void;
-  /** One conversation, in the bottom sheet the chat menu uses, over whatever
-   *  is on screen (an open inbox sheet goes first; You > Inbox stays under it). */
+  /** The open inbox turns into this conversation (whisperInbox's
+   *  `openWhisperByKey` also opens an inbox when none is). */
   openWhisper: (key: string) => void;
-  /** Close the conversation's sheet. */
+  /** Back from the conversation to the inbox's list. */
   closeWhisper: () => void;
   /** Your songs, on one song's detail when `focus` is given. */
   openSongs: (focus?: string | null) => void;
   closeSongs: () => void;
   setSongsFocus: (key: string | null) => void;
   setPlayerMode: (mode: 'full' | 'mini') => void;
-  /** Back chain: top sheet (a whisper conversation is one) -> a song's detail -> songs -> inbox -> settings -> cosmetics -> minimize the watch layer
+  /** Back chain: top sheet (the inbox sheet steps from a conversation to its list first) -> a song's detail -> songs -> inbox (a conversation, then the list) -> settings -> cosmetics -> minimize the watch layer
    *  -> category drill -> a tab other than the start tab -> not consumed
    *  (native backgrounds the task). */
   handleBack: () => boolean;
@@ -163,7 +164,8 @@ export const useMobileNavStore = create<MobileNavState>((set, get) => ({
   clearSettingsTarget: () => set({ settingsTarget: null }),
   openBrowseCategory: (category) => set({ browseCategory: category }),
   setCosmeticsOpen: (open) => set({ cosmeticsOpen: open }),
-  setMentionsOpen: (open) => set({ mentionsOpen: open }),
+  // A conversation shown in You > Inbox goes with it.
+  setMentionsOpen: (open) => set(open ? { mentionsOpen: true } : { mentionsOpen: false, whisperKey: null }),
   openWhisper: (key) => set({ whisperKey: key }),
   closeWhisper: () => set({ whisperKey: null }),
   openSongs: (focus = null) => set({ songsOpen: true, songsFocus: focus }),
@@ -189,7 +191,8 @@ export const useMobileNavStore = create<MobileNavState>((set, get) => ({
         return true;
       }
       if (mentionsOpen) {
-        set({ mentionsOpen: false });
+        // A conversation steps back to the list first.
+        set(get().whisperKey ? { whisperKey: null } : { mentionsOpen: false });
         return true;
       }
       if (settingsView) {

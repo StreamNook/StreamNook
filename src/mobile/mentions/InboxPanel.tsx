@@ -218,8 +218,9 @@ const UnreadCapsule: React.FC<{ count: number }> = ({ count }) => (
 );
 
 /** A whisper conversation at its newest message, in direction A's row: the
- *  person's face (live ring while streaming), their paint and badges (the
- *  chat's own look), the time, what was said last ("You: " for yours), and the
+ *  person's face (live ring while streaming), their name in its paint or color
+ *  (no badges: a run of them pushed the name out of the line; the
+ *  conversation's header shows them), the time, what was said last ("You: " for yours), and the
  *  unread count as an accent capsule. Roomy (52 px face) on the Whispers chip;
  *  in All it keeps the mention rows' 32 px column so the timeline lines up. */
 const WhisperRow: React.FC<{ row: InboxWhisperItem; now: number; roomy: boolean; onHold: (row: InboxItem) => void }> = React.memo(
@@ -245,13 +246,12 @@ const WhisperRow: React.FC<{ row: InboxWhisperItem; now: number; roomy: boolean;
             <span className="flex items-center gap-1.5 min-w-0 leading-[20px]">
               <span className={`${roomy ? 'text-[15.5px]' : 'text-[14px]'} flex items-center gap-1 min-w-0`}>
                 <PinnedChatter
-                  variant="line"
+                  variant="name"
                   provider="twitch"
                   userId={m.user_id}
                   name={m.user_name || m.user_login}
                   login={m.user_login}
                   color={m.color ?? undefined}
-                  badges={m.badges}
                   nameClassName="font-bold truncate min-w-0"
                 />
               </span>

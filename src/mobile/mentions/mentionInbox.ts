@@ -94,11 +94,22 @@ export const useMentionsStore = create<MentionsState>(() => ({
 /** The tray's tap: open this chat's sheet, or close it when it is open. An
  *  arrival card folds away, since the sheet now shows it. */
 export function toggleInboxSheet(surface: InboxSurface): void {
-  useMentionsStore.setState((s) => ({ sheetIn: s.sheetIn === surface ? null : surface, arrival: null }));
+  const closing = useMentionsStore.getState().sheetIn === surface;
+  useMentionsStore.setState({ sheetIn: closing ? null : surface, arrival: null });
+  if (closing) dropSheetThread();
 }
 
 export function closeInboxSheet(): void {
-  if (useMentionsStore.getState().sheetIn) useMentionsStore.setState({ sheetIn: null });
+  if (!useMentionsStore.getState().sheetIn) return;
+  useMentionsStore.setState({ sheetIn: null });
+  dropSheetThread();
+}
+
+/** A conversation the sheet showed goes with it (the next sheet opens on the
+ *  list); one shown in You > Inbox stays there. */
+function dropSheetThread(): void {
+  const nav = useMobileNavStore.getState();
+  if (!nav.mentionsOpen && nav.whisperKey) nav.closeWhisper();
 }
 
 export function dismissArrival(seq: number): void {
@@ -142,8 +153,9 @@ export function noteInboxOpened(): void {
   void invoke('inbox_opened').catch((err) => Logger.debug('[Inbox] inbox_opened failed:', err));
 }
 
-/** Set by the whisper inbox when it installs: what a whisper row opens. */
-export const inboxHooks: { openWhisper: ((key: string) => void) | null } = { openWhisper: null };
+/** Set by the whisper inbox when it installs: what a whisper row (or a card,
+ *  with the chat it rose in) opens. */
+export const inboxHooks: { openWhisper: ((key: string, surface?: InboxSurface) => void) | null } = { openWhisper: null };
 
 /** A row tap: jump to the message (its whole fold reads as read), or open the
  *  whisper conversation. */

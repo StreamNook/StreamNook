@@ -1,19 +1,19 @@
-// A whisper conversation, in the bottom sheet the chat menu uses, over
-// whatever is on screen: an inbox row, a tapped whisper notification and the
-// arrival card all open it (navStore `openWhisper`). Mounted once by the
-// shell, so a notification tap finds it from anywhere.
+// A whisper conversation, shown by the inbox that opened it in place of its
+// list (the chat's inbox sheet, or You > Inbox): an inbox row, a tapped whisper
+// notification and the arrival card all open it (whisperInbox
+// `openWhisperByKey`), and back returns to the list.
 //
 // Rust holds the conversation (services/whisper_inbox.rs): this reads pages of
 // it, applies Rust's updates as they come, and relays sends, Retry, Discard,
 // Archive and older pages. Where a send stands (Sending, Checking, Sent,
 // Delivered, Not delivered) is Rust's; the thread only shows it.
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Archive, WarningCircle } from 'phosphor-react';
+import { Archive, ArrowLeft, WarningCircle } from 'phosphor-react';
 import { useAppStore } from '../../stores/AppStore';
 import { liveLine } from '../../components/whispers/whisperView';
-import { MobileSheet } from '../ui/MobileSheet';
 import { EmptyNote } from '../ui/EmptyNote';
 import { useMobileNavStore } from '../navStore';
+import { closeInboxSheet } from '../mentions/mentionInbox';
 import { SevenTvAvatar } from '../../components/SevenTvAvatar';
 import { PinnedChatter } from '../../components/chat/PinnedChatter';
 import { Logger } from '../../utils/logger';
@@ -155,10 +155,11 @@ const Status: React.FC<{ status: StatusLine; conversationKey: string; messageId:
     <span className="self-end pt-1 pr-1 text-[11.5px] text-textMuted">{status.label}</span>
   );
 
-/** One conversation: the thread, oldest at the top, and the composer, inside
- *  its bottom sheet (which brings the grabber, rides the keyboard and clears
- *  the gesture bar). */
-const ConversationView: React.FC<{ conversationKey: string; onArchived: () => void }> = ({ conversationKey, onArchived }) => {
+/** One conversation: the thread, oldest at the top, and the composer, in the
+ *  inbox that opened it. In the inbox sheet, the sheet brings the grabber, rides
+ *  the keyboard and clears the gesture bar; You > Inbox pads for them itself.
+ *  `onBack` returns to the inbox's list (Archive goes there too). */
+export const WhisperThread: React.FC<{ conversationKey: string; onBack: () => void }> = ({ conversationKey, onBack }) => {
   const revision = useWhispersStore((s) => s.revision);
   const lastUpdate = useWhispersStore((s) => s.lastUpdate);
   const [thread, setThread] = useState<ThreadState | null>(null);
@@ -302,7 +303,7 @@ const ConversationView: React.FC<{ conversationKey: string; onArchived: () => vo
 
   const archive = async () => {
     await archiveWhisper(conversationKey);
-    onArchived();
+    onBack();
   };
 
   const name = meta ? shownName(meta) : '';
@@ -315,10 +316,18 @@ const ConversationView: React.FC<{ conversationKey: string; onArchived: () => vo
   return (
     // The sheet is `flush`: this lays out and scrolls the thread itself.
     <div className="flex-1 min-h-0 flex flex-col">
-      {/* Direction A's header: the face (live ring while they stream), badges
-          and painted name, the live line (else @login, so the name never
-          shifts), Watch while live, and Archive a step quieter. */}
-      <div className="flex items-center gap-3 px-4 pt-1.5 pb-3.5 shrink-0 border-b border-borderSubtle">
+      {/* Direction A's header: back to the inbox, the face (live ring while
+          they stream), badges and painted name, the live line (else @login, so
+          the name never shifts), Watch while live, and Archive a step quieter. */}
+      <div className="flex items-center gap-3 pl-1 pr-4 pt-1.5 pb-3.5 shrink-0 border-b border-borderSubtle">
+        <button
+          type="button"
+          onClick={onBack}
+          className="sn-touch shrink-0 flex items-center justify-center text-textSecondary -mr-1.5"
+          aria-label="Inbox"
+        >
+          <ArrowLeft size={22} />
+        </button>
         {meta && <Picture id={meta.user_id} url={meta.profile_image_url} size={44} name={name} live={!!meta.live} />}
         <span className="flex-1 min-w-0 flex flex-col gap-[3px]">
           <span className="text-[16.5px] leading-[21px] flex items-center gap-1 min-w-0">
@@ -349,7 +358,9 @@ const ConversationView: React.FC<{ conversationKey: string; onArchived: () => vo
             type="button"
             onClick={() => {
               void useAppStore.getState().startStream(meta.user_login);
-              useMobileNavStore.getState().closeWhisper();
+              // The inbox holding the conversation goes, so the stream is in front.
+              closeInboxSheet();
+              useMobileNavStore.getState().setMentionsOpen(false);
             }}
             className="glaze-inset shrink-0 h-10 px-3.5 rounded-[13px] bg-white/[0.06] text-[14px] font-semibold text-textPrimary active:opacity-70"
           >
@@ -470,17 +481,5 @@ const ConversationView: React.FC<{ conversationKey: string; onArchived: () => vo
         </div>
       </div>
     </div>
-  );
-};
-
-/** The sheet host: open while navStore names a conversation. */
-export const WhisperSheet: React.FC = () => {
-  const openKey = useMobileNavStore((s) => s.whisperKey);
-  const closeWhisper = useMobileNavStore((s) => s.closeWhisper);
-  return (
-    // `fill`: the thread arrives after it opens, so it never grows under the finger.
-    <MobileSheet open={!!openKey} onClose={closeWhisper} maxHeightFraction={0.85} fill flush>
-      {openKey && <ConversationView key={openKey} conversationKey={openKey} onArchived={closeWhisper} />}
-    </MobileSheet>
   );
 };
