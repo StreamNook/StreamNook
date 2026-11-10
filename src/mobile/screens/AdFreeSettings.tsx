@@ -16,6 +16,7 @@ import { useSettingReset } from '../../components/settings/settingReset';
 import type { VideoPlayerSettings } from '../../types';
 import { Logger } from '../../utils/logger';
 import { fieldsIn, setSettingsFields } from '../../utils/settingsFields';
+import { AD_FREE_DETAIL } from '../watch/verticalView';
 
 // How long the relay box waits after the last keystroke before saving.
 const RELAY_SAVE_MS = 500;
@@ -41,7 +42,11 @@ function describeSource(
   mode: string | undefined,
   entitled: boolean,
   region: string | undefined,
+  reason?: string,
 ): { label: string; detail: string } {
+  // A vertical session never takes the relay (SN-40): say that, not that no
+  // relay answered.
+  if (reason === 'vertical' && !entitled) return { label: 'Direct', detail: AD_FREE_DETAIL };
   switch (mode) {
     case 'turbo':
       return {
@@ -124,7 +129,7 @@ const AdFreeSettings: React.FC = () => {
   useEffect(() => () => flushRelays(), [flushRelays]);
 
   const source = useMemo(
-    () => describeSource(adSource?.mode, !!adSource?.entitled, adSource?.region),
+    () => describeSource(adSource?.mode, !!adSource?.entitled, adSource?.region, adSource?.reason),
     [adSource],
   );
 

@@ -148,8 +148,17 @@ describe('the quality pick', () => {
 
 describe('the pill', () => {
   it('reloads through change_stream_view and takes its answer', async () => {
-    answer(() => ({ view: 'vertical', vertical_available: true, portrait: true, gave_up_ad_free: true }));
+    answer(() => ({
+      view: 'vertical',
+      vertical_available: true,
+      portrait: true,
+      gave_up_ad_free: true,
+      mode: 'auth-only',
+      reason: 'vertical',
+    }));
     await settle(useAppStore.getState().changeStreamView('vertical'));
+    // The Ad-free page says why no relay plays.
+    expect(useAppStore.getState().adSource).toEqual({ mode: 'auth-only', entitled: false, region: undefined, reason: 'vertical' });
     expect(lastArgs('change_stream_view')).toEqual({ url: 'https://twitch.tv/zerator', view: 'vertical', quality: null });
     expect(calls('change_stream_quality')).toHaveLength(0);
     const s = useAppStore.getState();

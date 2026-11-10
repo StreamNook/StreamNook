@@ -107,12 +107,17 @@ export type AdSource = {
   mode: string;
   entitled: boolean;
   region?: string;
+  /** Why ad-free is not in use although it is on (SN-40, phones: 'vertical'). */
+  reason?: string;
 };
 
 /** Derive the player ad-source note from a stream start result. */
 function adSourceFrom(result: StreamStartResult): AdSource | null {
   if (!result.mode) return null;
-  return { mode: result.mode, entitled: !!result.entitled, region: result.proxy_region };
+  const source: AdSource = { mode: result.mode, entitled: !!result.entitled, region: result.proxy_region };
+  // Only a phone's vertical session carries one; every other source is as before.
+  if (result.reason) source.reason = result.reason;
+  return source;
 }
 
 /**
