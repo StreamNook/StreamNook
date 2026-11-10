@@ -8,7 +8,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { motion } from 'framer-motion';
-import { ChevronLeft, Minimize2, RotateCw, X } from 'lucide-react';
+import { ArrowClockwise, CaretLeft, CornersIn, X } from 'phosphor-react';
 import { useOutsidePress } from '../../hooks/useOutsidePress';
 import { targetOf, type PageId, type QueueView, type StreamManagerView } from '../../services/streamManager';
 import { LivePage, ManagerForm, TITLES, type ManagerPanelKind } from './StreamManagerPanel';
@@ -138,7 +138,7 @@ export function ManageChannelWindow({
         <p className="text-[13.5px] text-textSecondary">{error ?? 'Loading…'}</p>
         {error && (
           <button type="button" onClick={onRetry} className={`${QUIET_PILL} flex h-8 items-center gap-1.5 px-3.5 text-[13px]`}>
-            <RotateCw size={13} aria-hidden />
+            <ArrowClockwise size={13} weight="bold" aria-hidden />
             Try again
           </button>
         )}
@@ -270,7 +270,7 @@ export function ManageChannelWindow({
           <div className="flex items-center gap-2 px-5 pb-3 pt-4">
             {sub && (
               <IconButton label="Back" onClick={() => setSub(null)} size="h-[30px] w-[30px]">
-                <ChevronLeft size={15} />
+                <CaretLeft size={15} weight="bold" />
               </IconButton>
             )}
             <div className="min-w-0 flex-1">
@@ -299,7 +299,7 @@ export function ManageChannelWindow({
             <div className="-mt-[5px] flex gap-2 self-start">
               {collapse && !sub && (
                 <IconButton label="Back to the panel" onClick={() => onCollapse(collapse)} size="h-[30px] w-[30px]">
-                  <Minimize2 size={14} />
+                  <CornersIn size={16} />
                 </IconButton>
               )}
               <IconButton label="Close" onClick={close} size="h-[30px] w-[30px]">

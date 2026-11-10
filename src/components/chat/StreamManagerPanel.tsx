@@ -4,21 +4,22 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { invoke } from '@tauri-apps/api/core';
 import {
   ArrowLeft,
-  BarChart3,
+  ArrowUUpLeft,
+  CaretDown,
+  ChartBar,
   Check,
-  ChevronDown,
-  LoaderCircle,
+  CircleNotch,
+  MagnifyingGlass,
   Megaphone,
-  Pencil,
-  Search,
-  Send,
-  SmilePlus,
+  PaperPlaneTilt,
+  PencilSimple,
+  Smiley,
+  TelevisionSimple,
   Trophy,
-  Tv,
-  Undo2,
   X,
-} from 'lucide-react';
+} from 'phosphor-react';
 import { TitleEmojiPicker } from './TitleEmojiPicker';
+import { CompactCardPreview, SidebarRowPreview, ViewerCardPreview } from './StreamInfoPreview';
 import { Tooltip } from '../ui/Tooltip';
 import { ChannelPointsIcon } from '../ChannelPointsIcon';
 import { isImeComposing } from '../../utils/imeComposing';
@@ -97,11 +98,11 @@ import {
 export type ManagerPanelKind = PanelKind;
 
 export const TITLES: Record<ManagerPanelKind, { title: string; icon: ReactNode }> = {
-  info: { title: 'Stream info', icon: <Pencil size={14} /> },
-  raid: { title: 'Raid a channel', icon: <Send size={14} /> },
-  ads: { title: 'Ad break', icon: <Tv size={14} /> },
+  info: { title: 'Stream info', icon: <PencilSimple size={16} /> },
+  raid: { title: 'Raid a channel', icon: <PaperPlaneTilt size={16} /> },
+  ads: { title: 'Ad break', icon: <TelevisionSimple size={16} /> },
   rewards: { title: 'Rewards queue', icon: <ChannelPointsIcon size={14} /> },
-  announce: { title: 'Announce', icon: <Megaphone size={14} /> },
+  announce: { title: 'Announce', icon: <Megaphone size={16} /> },
 };
 
 interface FormProps {
@@ -336,13 +337,6 @@ function InfoEditor({ view, layout, onClose, onExpand, handedOff = false }: Form
   };
   const catCols = big ? 5 : 1;
 
-  const avatar = (px: number) =>
-    preview?.avatar_url ? (
-      <img src={preview.avatar_url} alt="" className="flex-shrink-0 rounded-full" style={{ width: px, height: px }} />
-    ) : (
-      <span className="flex-shrink-0 rounded-full bg-textPrimary/10" style={{ width: px, height: px }} />
-    );
-
   // ── the fields ──
 
   const titleField = (
@@ -402,7 +396,7 @@ function InfoEditor({ view, layout, onClose, onExpand, handedOff = false }: Form
                 onClick={() => setPickerOpen((o) => !o)}
                 className={`${pickerOpen ? `${GLAZE_PILL} !bg-textPrimary/[0.16]` : QUIET_PILL} grid h-7 w-7 place-items-center`}
               >
-                <SmilePlus size={15} />
+                <Smiley size={15} />
               </button>
             </Tooltip>
           )}
@@ -435,12 +429,12 @@ function InfoEditor({ view, layout, onClose, onExpand, handedOff = false }: Form
           {big ? (
             <span className="text-xs font-semibold text-textSecondary">Change</span>
           ) : (
-            <ChevronDown size={15} className="text-textSecondary" aria-hidden />
+            <CaretDown size={14} weight="bold" className="text-textSecondary" aria-hidden />
           )}
         </button>
       ) : (
         <div className="glass-input flex items-center gap-2 !rounded-xl px-3 focus-within:!border-accent/40">
-          <Search size={15} className="flex-shrink-0 text-textSecondary" aria-hidden />
+          <MagnifyingGlass size={15} className="flex-shrink-0 text-textSecondary" aria-hidden />
           <input
             autoFocus
             value={catQuery}
@@ -519,7 +513,7 @@ function InfoEditor({ view, layout, onClose, onExpand, handedOff = false }: Form
             >
               <img src={boxArt(c, 54, 72)} alt="" className="h-8 w-6 flex-shrink-0 rounded-sm object-cover" />
               <span className="flex-1 truncate text-sm text-textPrimary">{c.name}</span>
-              {draft.category?.id === c.id && <Check size={14} className="text-textSecondary" aria-hidden />}
+              {draft.category?.id === c.id && <Check size={14} weight="bold" className="text-textSecondary" aria-hidden />}
             </button>
           ))}
         </div>
@@ -555,7 +549,7 @@ function InfoEditor({ view, layout, onClose, onExpand, handedOff = false }: Form
               onClick={() => setDraft((d) => ({ ...d, tags: d.tags.filter((_, j) => j !== i) }))}
               className="grid h-5 w-5 place-items-center rounded-full text-textSecondary transition-colors hover:bg-textPrimary/10 hover:text-textPrimary"
             >
-              <X size={11} />
+              <X size={11} weight="bold" />
             </button>
           </span>
         ))}
@@ -605,81 +599,37 @@ function InfoEditor({ view, layout, onClose, onExpand, handedOff = false }: Form
               </option>
             ))}
           </select>
-          <ChevronDown size={14} className="pointer-events-none absolute right-0 text-textSecondary" aria-hidden />
+          <CaretDown size={13} weight="bold" className="pointer-events-none absolute right-0 text-textSecondary" aria-hidden />
         </div>
       </div>
       {problemFor('language') && <p className="mt-1 text-[11.5px] text-error">{problemFor('language')}</p>}
     </div>
   );
 
-  const liveTag = (
-    <span className="absolute left-1.5 top-1.5 rounded bg-[#e5484d] px-1 py-px text-[10px] font-extrabold tracking-wide text-white">LIVE</span>
-  );
-
+  // The app's own live card and sidebar row, drawn from the form as typed.
   const previewCompact = preview && (
     <div>
       <p className={`${LABEL} mb-1.5`}>What viewers see</p>
-      <div className="flex gap-2.5 rounded-xl bg-surface/25 p-2 ring-1 ring-inset ring-textPrimary/[0.05]">
-        <div className="relative aspect-video w-[112px] flex-shrink-0 overflow-hidden rounded-lg bg-textPrimary/[0.05]">
-          {preview.thumbnail_url && (
-            <>
-              <img src={preview.thumbnail_url} alt="" className="h-full w-full object-cover" />
-              {liveTag}
-            </>
-          )}
-        </div>
-        <div className="min-w-0 flex-1">
-          <p className="line-clamp-2 text-[13.5px] font-semibold leading-snug text-textPrimary">{preview.title || 'Your title'}</p>
-          <p className="mt-0.5 truncate text-[12.5px] text-textSecondary">
-            {[preview.channel_name, preview.category_name].filter(Boolean).join(' · ')}
-          </p>
-        </div>
-      </div>
+      <CompactCardPreview preview={preview} />
     </div>
   );
 
   const previewLarge = preview && (
     <div className="min-w-0">
       <p className={`${LABEL} mb-1.5`}>What viewers see</p>
-      <div className="relative aspect-video w-full overflow-hidden rounded-lg bg-textPrimary/[0.05]">
-        {preview.thumbnail_url && (
-          <>
-            <img src={preview.thumbnail_url} alt="" className="h-full w-full object-cover" />
-            {liveTag}
-          </>
-        )}
-      </div>
-      <div className="mt-2.5 flex gap-2.5">
-        {avatar(30)}
-        <div className="min-w-0 flex-1">
-          <p className="line-clamp-2 text-[13.5px] font-semibold leading-snug text-textPrimary">{preview.title || 'Your title'}</p>
-          <p className="mt-0.5 truncate text-[12.5px] text-textSecondary">{preview.channel_name}</p>
-          {preview.category_name && <p className="truncate text-[12.5px] text-textSecondary">{preview.category_name}</p>}
-          {preview.tags.length > 0 && (
-            <div className="mt-1.5 flex flex-wrap gap-1">
-              {preview.tags.slice(0, 4).map((t) => (
-                <span key={t} className="rounded-full bg-surface/60 px-2 py-px text-[11px] text-textSecondary">
-                  {t}
-                </span>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-      <p className="mb-1.5 mt-4 text-[11.5px] font-semibold text-textSecondary/80">In the sidebar</p>
-      <div className="flex items-center gap-2.5 rounded-xl bg-surface/25 p-2 ring-1 ring-inset ring-textPrimary/[0.05]">
-        {avatar(28)}
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-[12.5px] font-semibold text-textPrimary">{preview.channel_name}</p>
-          <p className="truncate text-[12px] text-textSecondary">{preview.title || 'Your title'}</p>
-        </div>
+      <ViewerCardPreview preview={preview} />
+      <p className="mb-1 mt-4 text-[11.5px] font-semibold text-textSecondary/80">
+        {preview.thumbnail_url ? 'In the sidebar' : 'In the sidebar, once you are live'}
+      </p>
+      <div className="glass-panel rounded-lg p-1">
+        <SidebarRowPreview preview={preview} />
       </div>
     </div>
   );
 
   const resumeLine = resumed && check?.changed && phase !== 'done' && (
     <div className="flex items-center gap-2 rounded-lg bg-surface/30 py-1.5 pl-2.5 pr-1.5 text-[12.5px] text-textSecondary ring-1 ring-inset ring-textPrimary/[0.06]">
-      <Undo2 size={14} className="flex-shrink-0" aria-hidden />
+      <ArrowUUpLeft size={14} className="flex-shrink-0" aria-hidden />
       <span className="flex-1">Picking up your unsaved edit</span>
       <button type="button" onClick={startOver} className={`${GLAZE_PILL} h-6 px-2.5 text-[12px]`}>
         Start over
@@ -940,7 +890,7 @@ function RaidForm({ view, layout, onClose, onExpand }: FormProps) {
     <FormShell layout={layout} frame={frame} footer={layout === 'sheet' ? undefined : <FooterRow layout={layout} hints={[['Enter', 'pick'], ['Esc', 'close']]}>{null}</FooterRow>}>
       <div className={`space-y-2 ${step}`}>
         <div className={`${FIELD} flex items-center gap-2`}>
-          <Search size={15} className="flex-shrink-0 text-textSecondary" aria-hidden />
+          <MagnifyingGlass size={15} className="flex-shrink-0 text-textSecondary" aria-hidden />
           <input
             autoFocus={!sheet}
             value={d.query}
@@ -1138,10 +1088,10 @@ function RewardsQueue({ view, layout, queue, onQueue, onClose, onExpand }: FormP
                 {g.paused ? 'Resume' : 'Pause'}
               </RowButton>
               {all.phase === 'working' ? (
-                <LoaderCircle size={15} className="animate-spin text-textSecondary" aria-label="Completing all" />
+                <CircleNotch size={15} weight="bold" className="animate-spin text-textSecondary" aria-label="Completing all" />
               ) : all.phase === 'done' ? (
                 <span role="status" className="flex items-center gap-1 text-[12px] font-semibold text-success">
-                  <Check size={14} aria-hidden />
+                  <Check size={14} weight="bold" aria-hidden />
                   {all.line ?? 'Done'}
                 </span>
               ) : (
@@ -1180,10 +1130,10 @@ function RewardsQueue({ view, layout, queue, onQueue, onClose, onExpand }: FormP
                       </div>
                       <div className="flex flex-shrink-0 items-center gap-1" role="status">
                         {e.phase === 'working' ? (
-                          <LoaderCircle size={15} className="animate-spin text-textSecondary" aria-label="Working" />
+                          <CircleNotch size={15} weight="bold" className="animate-spin text-textSecondary" aria-label="Working" />
                         ) : e.phase === 'done' ? (
                           <span className={`flex items-center gap-1 text-[12px] font-semibold ${how ? 'text-success' : 'text-textSecondary'}`}>
-                            {how && <Check size={14} aria-hidden />}
+                            {how && <Check size={14} weight="bold" aria-hidden />}
                             {how ? 'Done' : 'Refunded'}
                           </span>
                         ) : isShowing(all) ? null : (
@@ -1366,17 +1316,17 @@ export function LiveRow({ view, layout, which }: { view: StreamManagerView; layo
       <div className={pad}>
         <div className="flex items-center gap-2.5">
           <span className="flex w-4 flex-shrink-0 items-center justify-center text-textSecondary" aria-hidden>
-            {which === 'poll' ? <BarChart3 size={14} /> : <Trophy size={14} />}
+            {which === 'poll' ? <ChartBar size={16} /> : <Trophy size={16} />}
           </span>
           <span className="min-w-0 flex-1">
             <span className={`block truncate ${layout === 'sheet' ? 'text-[15px]' : 'text-[13.5px]'} text-textPrimary`}>{shownLabel}</span>
             {shownTitle && <span className="block truncate text-[12px] text-textSecondary">{shownTitle}</span>}
           </span>
           {busy ? (
-            <LoaderCircle size={14} className="animate-spin text-textSecondary" aria-label="Working" />
+            <CircleNotch size={14} weight="bold" className="animate-spin text-textSecondary" aria-label="Working" />
           ) : (
             <span role="status" className="flex flex-shrink-0 items-center gap-1 text-[12px] font-semibold text-success">
-              <Check size={14} aria-hidden />
+              <Check size={14} weight="bold" aria-hidden />
               {entry.line}
             </span>
           )}
@@ -1388,13 +1338,13 @@ export function LiveRow({ view, layout, which }: { view: StreamManagerView; layo
     <div className={pad}>
       <div className="flex items-center gap-2.5">
         <span className="flex w-4 flex-shrink-0 items-center justify-center text-accent" aria-hidden>
-          {poll ? <BarChart3 size={14} /> : <Trophy size={14} />}
+          {poll ? <ChartBar size={16} /> : <Trophy size={16} />}
         </span>
         <span className="min-w-0 flex-1">
           <span className={`block truncate ${layout === 'sheet' ? 'text-[15px]' : 'text-[13.5px]'} text-textPrimary`}>{label}</span>
           {title && <span className="block truncate text-[12px] text-textSecondary">{title}</span>}
         </span>
-        {busy && <LoaderCircle size={14} className="animate-spin text-textSecondary" aria-label="Working" />}
+        {busy && <CircleNotch size={14} weight="bold" className="animate-spin text-textSecondary" aria-label="Working" />}
       </div>
       <div className="mt-2 flex flex-wrap gap-1.5 pl-[26px]">
         {poll && (

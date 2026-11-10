@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode, RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { motion } from 'framer-motion';
-import { Clock, Search } from 'lucide-react';
+import { Clock, MagnifyingGlass } from 'phosphor-react';
 import { useAppStore } from '../../stores/AppStore';
 import { useOutsidePress } from '../../hooks/useOutsidePress';
 import { usePerformanceQuiet } from '../../utils/lowPower';
@@ -216,7 +216,7 @@ export function TitleEmojiPicker({ anchorRef, recent, recentHeading, onPick, onC
       className="glass-flyout fixed z-[calc(var(--sn-z-over-player-lift,0)_+_210)] flex flex-col rounded-xl !p-2.5"
     >
       <label className="glass-input flex h-[34px] items-center gap-2 !rounded-lg px-2.5 text-textSecondary">
-        <Search size={15} className="flex-shrink-0" aria-hidden />
+        <MagnifyingGlass size={15} className="flex-shrink-0" aria-hidden />
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}

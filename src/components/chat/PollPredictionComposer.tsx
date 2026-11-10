@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { Reorder, useDragControls } from 'framer-motion';
-import { BarChart3, GripVertical, History, Trophy, X } from 'lucide-react';
+import { ChartBar, ClockCounterClockwise, DotsSixVertical, Trophy, X } from 'phosphor-react';
 import { managerAct, targetOf, type RecentPoll, type StreamManagerView } from '../../services/streamManager';
 import { Tooltip } from '../ui/Tooltip';
 import { BannerStatus, OverlayBanner, ShareRow } from './OverlayBanner';
@@ -168,8 +168,8 @@ export function PollPredictionComposer({ view, layout, initialKind, fixedKind, o
           ariaLabel="Poll or prediction"
           value={d.kind}
           options={[
-            { value: 'poll', label: 'Poll', icon: <BarChart3 size={14} aria-hidden /> },
-            { value: 'prediction', label: 'Prediction', icon: <Trophy size={14} aria-hidden /> },
+            { value: 'poll', label: 'Poll', icon: <ChartBar size={16} aria-hidden /> },
+            { value: 'prediction', label: 'Prediction', icon: <Trophy size={16} aria-hidden /> },
           ]}
           onChange={(k) => {
             setPicked(k);
@@ -192,7 +192,7 @@ export function PollPredictionComposer({ view, layout, initialKind, fixedKind, o
                 aria-expanded={showRecent}
                 className="text-textSecondary transition-colors hover:text-textPrimary"
               >
-                <History size={13} />
+                <ClockCounterClockwise size={13} />
               </button>
             </Tooltip>
           )}
@@ -300,7 +300,7 @@ export function PollPredictionComposer({ view, layout, initialKind, fixedKind, o
       <p className={`${LABEL} mb-1.5`}>Preview</p>
       <div className="pointer-events-none opacity-95">
         <OverlayBanner
-          icon={d.kind === 'poll' ? <BarChart3 className="h-4 w-4 text-accent-on-surface" /> : <Trophy className="h-4 w-4 text-accent-on-surface" />}
+          icon={d.kind === 'poll' ? <ChartBar size={16} className="text-accent-on-surface" /> : <Trophy size={16} className="text-accent-on-surface" />}
           kind={d.kind === 'poll' ? 'Poll' : 'Prediction'}
           title={d.title.trim() || (d.kind === 'poll' ? 'Your question' : 'Your prediction')}
           isExpanded
@@ -338,7 +338,7 @@ export function PollPredictionComposer({ view, layout, initialKind, fixedKind, o
       layout={layout}
       frame={{
         title: d.kind === 'poll' ? 'Start a poll' : 'Start a prediction',
-        icon: d.kind === 'poll' ? <BarChart3 size={14} /> : <Trophy size={14} />,
+        icon: d.kind === 'poll' ? <ChartBar size={16} /> : <Trophy size={16} />,
         onClose,
         onExpand: onExpand ? () => onExpand(d.kind) : undefined,
       }}
@@ -402,7 +402,7 @@ function ChoiceRow({
         aria-hidden
         className="grid h-8 w-6 flex-shrink-0 cursor-grab touch-none place-items-center text-textSecondary/70 hover:text-textSecondary active:cursor-grabbing"
       >
-        <GripVertical size={14} />
+        <DotsSixVertical size={14} weight="bold" />
       </span>
       <div className="flex min-w-0 flex-1 items-center gap-2">
         <input

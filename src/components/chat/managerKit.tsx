@@ -4,7 +4,7 @@
 // share. Layout only; every line and every rule comes from Rust.
 import { useCallback, useEffect, useRef } from 'react';
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react';
-import { Check, ChevronRight, CircleAlert, LoaderCircle, Maximize2, X } from 'lucide-react';
+import { CaretRight, Check, CircleNotch, CornersOut, WarningCircle, X } from 'phosphor-react';
 import { Tooltip } from '../ui/Tooltip';
 import { Dropdown } from '../ui/Dropdown';
 import { useAppStore } from '../../stores/AppStore';
@@ -164,11 +164,11 @@ export function ManagerFrame({ title, icon, badge, onClose, onExpand, footer, pr
         <span className="flex-1" />
         {onExpand && (
           <IconButton label="Open larger" onClick={onExpand}>
-            <Maximize2 size={13} />
+            <CornersOut size={16} />
           </IconButton>
         )}
         <IconButton label="Close" onClick={onClose}>
-          <X size={14} />
+          <X size={15} />
         </IconButton>
       </div>
       <div className="min-h-0 flex-1 space-y-3.5 overflow-y-auto scrollbar-thin px-3.5 pb-4 pt-0.5" style={FADE_BOTTOM}>
@@ -300,8 +300,8 @@ export function MainButton({
       }`}
       style={phase === 'done' ? SAVED_FILL : danger ? DANGER_FILL : ACCENT_FILL}
     >
-      {phase === 'working' && <LoaderCircle size={14} className="animate-spin" aria-hidden />}
-      {phase === 'done' && <Check size={15} aria-hidden />}
+      {phase === 'working' && <CircleNotch size={14} weight="bold" className="animate-spin" aria-hidden />}
+      {phase === 'done' && <Check size={15} weight="bold" aria-hidden />}
       {text}
     </button>
   );
@@ -338,7 +338,7 @@ export function ProblemLine({ line }: { line: string }) {
       role="alert"
       className="sn-error-text flex items-start gap-2 rounded-lg bg-error/10 px-3 py-2 text-[12.5px] leading-snug ring-1 ring-inset ring-error/25"
     >
-      <CircleAlert size={15} className="mt-px flex-shrink-0" aria-hidden />
+      <WarningCircle size={15} className="mt-px flex-shrink-0" aria-hidden />
       <span>{line}</span>
     </div>
   );
@@ -472,7 +472,7 @@ export function MenuRow({
         {iconEl}
         {words}
         {trailing}
-        <ChevronRight size={14} className="flex-shrink-0 text-textSecondary/70 group-hover:text-textSecondary" aria-hidden />
+        <CaretRight size={13} weight="bold" className="flex-shrink-0 text-textSecondary/70 group-hover:text-textSecondary" aria-hidden />
       </button>
     );
   }

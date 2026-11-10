@@ -3,7 +3,7 @@
 // chat, which asks in place. Shared by the Tools menu and the Manage channel
 // window's Moderation page. Every result shows on its row; nothing toasts.
 import { useEffect, useState } from 'react';
-import { Ban, DoorOpen, Eraser, Megaphone, PinOff, Zap } from 'lucide-react';
+import { Eraser, Lightning, Megaphone, Prohibit, PushPinSlash, SignIn } from 'phosphor-react';
 import { invoke } from '@tauri-apps/api/core';
 import { usePinStore } from '../../stores/pinStore';
 import { readTool, runTool, toolKey, useManagerStore } from './managerStore';
@@ -57,11 +57,12 @@ export function ModerationGroup({
 
   return (
     <GroupCard title="Moderation" layout={layout} hideTitle={hideTitle}>
-      {onAnnounce && <MenuRow layout={layout} icon={<Megaphone size={14} />} label="Announce" onClick={onAnnounce} />}
+      {onAnnounce && <MenuRow layout={layout} icon={<Megaphone size={16} />} label="Announce" onClick={onAnnounce} />}
       {unbanCount > 0 && (
         <MenuRow
           layout={layout}
-          icon={<DoorOpen size={14} />}
+          // Coming back in: phosphor 1.4.1 has no open door, and a shut one said the opposite.
+          icon={<SignIn size={16} />}
           label="Unban requests"
           trailing={<span className="text-[12px] tabular-nums text-textSecondary">{unbanCount}</span>}
           onClick={() => onOpen('unban')}
@@ -70,7 +71,7 @@ export function ModerationGroup({
       {(nukes > 0 || nuke.phase !== 'idle') && (
         <MenuRow
           layout={layout}
-          icon={<Zap size={14} className="text-warning" />}
+          icon={<Lightning size={16} weight="fill" className="text-warning" />}
           label="Stop running nuke"
           line={lineOf(nuke)}
           failed={nuke.phase === 'failed'}
@@ -99,7 +100,7 @@ export function ModerationGroup({
       )}
       <MenuRow
         layout={layout}
-        icon={<PinOff size={14} />}
+        icon={<PushPinSlash size={16} />}
         label="Unpin message"
         line={lineOf(unpin)}
         failed={unpin.phase === 'failed'}
@@ -123,7 +124,7 @@ export function ModerationGroup({
           </RowButton>
         }
       />
-      <MenuRow layout={layout} icon={<Ban size={14} />} label="Blocked terms" onClick={() => onOpen('blocked')} />
+      <MenuRow layout={layout} icon={<Prohibit size={16} />} label="Blocked terms" onClick={() => onOpen('blocked')} />
       {confirmClear ? (
         <div
           onKeyDown={(e) => {
@@ -135,7 +136,7 @@ export function ModerationGroup({
         >
           <MenuRow
             layout={layout}
-            icon={<Eraser size={14} />}
+            icon={<Eraser size={16} />}
             danger
             label="Clear everyone's chat?"
             below={
@@ -168,7 +169,7 @@ export function ModerationGroup({
       ) : (
         <MenuRow
           layout={layout}
-          icon={<Eraser size={14} />}
+          icon={<Eraser size={16} />}
           label="Clear chat"
           line={lineOf(clear)}
           failed={clear.phase === 'failed'}

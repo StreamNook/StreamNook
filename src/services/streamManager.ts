@@ -201,6 +201,11 @@ export interface InfoCheck {
     box_art_url: string | null;
     tags: string[];
     thumbnail_url: string | null;
+    /** While live: the count and start the live card's chips show. */
+    viewer_count?: number | null;
+    started_at?: string | null;
+    /** Twitch partner: the verified mark after the name. */
+    partner?: boolean;
   };
   changed: boolean;
 }

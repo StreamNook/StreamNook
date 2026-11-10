@@ -14,7 +14,20 @@
 // ChatWidget decides which apply and renders the button only when at least
 // one does, so the row never carries a button that opens an empty menu.
 import React, { useEffect, useId, useRef, useState } from 'react';
-import { BarChart3, ChevronLeft, Maximize2, Megaphone, Pencil, Pickaxe, Send, Settings, Shield, Trophy, Tv, Wrench } from 'lucide-react';
+import {
+  CaretLeft,
+  ChartBar,
+  CornersOut,
+  Gear,
+  Megaphone,
+  Package,
+  PaperPlaneTilt,
+  PencilSimple,
+  Shield,
+  TelevisionSimple,
+  Trophy,
+  Wrench,
+} from 'phosphor-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { SevenTVLogo } from '../emotesets/SevenTVLogo';
 import { Tooltip } from '../ui/Tooltip';
@@ -84,13 +97,13 @@ interface ChannelToolsMenuProps {
 }
 
 const ROW_ICON: Record<string, React.ReactNode> = {
-  info: <Pencil size={14} />,
-  poll: <BarChart3 size={14} />,
-  prediction: <Trophy size={14} />,
-  raid: <Send size={14} />,
-  ads: <Tv size={14} />,
+  info: <PencilSimple size={16} />,
+  poll: <ChartBar size={16} />,
+  prediction: <Trophy size={16} />,
+  raid: <PaperPlaneTilt size={16} />,
+  ads: <TelevisionSimple size={16} />,
   rewards: <ChannelPointsIcon size={14} />,
-  announce: <Megaphone size={14} />,
+  announce: <Megaphone size={16} />,
 };
 
 const ChannelToolsMenu: React.FC<ChannelToolsMenuProps> = ({
@@ -194,7 +207,7 @@ const ChannelToolsMenu: React.FC<ChannelToolsMenuProps> = ({
             inUse ? 'text-accent-neon' : 'text-textSecondary hover:text-accent-neon'
           }`}
         >
-          <Wrench size={18} strokeWidth={inUse ? 2.5 : 2} />
+          <Wrench size={18} weight={inUse ? 'fill' : 'regular'} />
           {/* Drops are being collected: the one thing in here worth seeing
               without opening it. */}
           {collecting && <span className="absolute top-1.5 right-1.5 h-1.5 w-1.5 rounded-full bg-success" aria-hidden />}
@@ -223,12 +236,12 @@ const ChannelToolsMenu: React.FC<ChannelToolsMenuProps> = ({
                   aria-label="Back to tools"
                   className="-ml-1 flex flex-1 items-center gap-1.5 text-sm font-semibold text-textPrimary transition-colors hover:text-textSecondary"
                 >
-                  <ChevronLeft size={15} strokeWidth={2.25} aria-hidden />
+                  <CaretLeft size={15} weight="bold" aria-hidden />
                   {page === 'blocked' ? 'Blocked terms' : 'Unban requests'}
                 </button>
               ) : (
                 <>
-                  <Wrench size={14} className="text-textSecondary" aria-hidden />
+                  <Wrench size={16} className="text-textSecondary" aria-hidden />
                   <span className="flex-1 text-sm font-semibold text-textPrimary">Tools</span>
                 </>
               )}
@@ -240,7 +253,7 @@ const ChannelToolsMenu: React.FC<ChannelToolsMenuProps> = ({
                     onOpenWindow(null);
                   }}
                 >
-                  <Maximize2 size={13} />
+                  <CornersOut size={16} />
                 </IconButton>
               )}
             </div>
@@ -255,7 +268,7 @@ const ChannelToolsMenu: React.FC<ChannelToolsMenuProps> = ({
                   <GroupCard title="Drops" layout="menu">
                     <MenuRow
                       layout="menu"
-                      icon={<Pickaxe size={14} />}
+                      icon={<Package size={16} />}
                       label={`Collect drops for ${drops.gameName}`}
                       labelFor={`${uid}-drops`}
                       line={dropsEntry.phase === 'done' || dropsEntry.phase === 'failed' ? dropsEntry.line : null}
@@ -348,7 +361,7 @@ const ChannelToolsMenu: React.FC<ChannelToolsMenuProps> = ({
                   <GroupCard title="Your settings" layout="menu">
                     <MenuRow
                       layout="menu"
-                      icon={<Shield size={14} />}
+                      icon={<Shield size={16} />}
                       label="Mod logs pane"
                       labelFor={`${uid}-modlogs`}
                       trailing={
@@ -380,7 +393,7 @@ const ChannelToolsMenu: React.FC<ChannelToolsMenuProps> = ({
                     />
                     <MenuRow
                       layout="menu"
-                      icon={<Settings size={14} />}
+                      icon={<Gear size={16} />}
                       label="Mod log settings"
                       onClick={() => {
                         close();

@@ -486,6 +486,12 @@ pub struct PreviewTile {
     /// The channel's live thumbnail when it is live, else none (the shells
     /// draw their own empty frame).
     pub thumbnail_url: Option<String>,
+    /// While live: how many watch and when it started (RFC 3339), so the
+    /// preview is the app's own live card with its chips.
+    pub viewer_count: Option<u64>,
+    pub started_at: Option<String>,
+    /// A Twitch partner: the cards draw the verified mark after the name.
+    pub partner: bool,
 }
 
 /// A tag is letters and digits only (any script), at most 25 of them.
@@ -587,6 +593,9 @@ pub fn check_stream_info(
                 .filter(|u| !u.is_empty()),
             tags,
             thumbnail_url,
+            viewer_count: None,
+            started_at: None,
+            partner: false,
         },
         changed,
     }
@@ -2532,12 +2541,26 @@ pub async fn check(channel_id: &str, draft: &StreamInfoDraft) -> InfoCheck {
     let user = users.as_ref().map(|(u, _)| u["data"][0].clone()).unwrap_or(Value::Null);
     let name = user["display_name"].as_str().unwrap_or_default().to_string();
     let avatar = user["profile_image_url"].as_str().map(str::to_string);
-    let thumb = session
+    let stream = session
         .helix_get(&format!("https://api.twitch.tv/helix/streams?user_id={channel_id}"))
         .await
         .ok()
-        .and_then(|(s, _)| s["data"][0]["thumbnail_url"].as_str().map(|t| box_art(t, 440, 248)));
-    check_stream_info(draft, current.as_ref(), &name, avatar, thumb)
+        .map(|(s, _)| s["data"][0].clone())
+        .unwrap_or(Value::Null);
+    let thumb = stream["thumbnail_url"].as_str().map(|t| box_art(t, 440, 248));
+    let mut out = check_stream_info(draft, current.as_ref(), &name, avatar, thumb);
+    live_facts(&mut out.preview, &stream, &user);
+    out
+}
+
+/// The live card's chips and mark for the preview, from Helix's stream row
+/// (empty while offline) and user row.
+pub fn live_facts(preview: &mut PreviewTile, stream: &Value, user: &Value) {
+    if preview.thumbnail_url.is_some() {
+        preview.viewer_count = stream["viewer_count"].as_u64();
+        preview.started_at = stream["started_at"].as_str().filter(|s| !s.is_empty()).map(str::to_string);
+    }
+    preview.partner = user["broadcaster_type"].as_str() == Some("partner");
 }
 
 /// Whether the signed-in account may open `section` here, or why not (typed
@@ -3286,6 +3309,22 @@ mod tests {
         let quiet = page_rows(Role::Broadcaster, None, None, None, Some(0));
         assert!(quiet.iter().find(|p| p.id == "rewards").unwrap().badge.is_none());
         assert!(quiet.iter().all(|p| p.live.is_none()));
+    }
+
+    #[test]
+    fn the_preview_carries_the_live_cards_facts_only_while_live() {
+        let user = json!({ "broadcaster_type": "partner" });
+        let stream = json!({ "viewer_count": 1234, "started_at": "2026-11-10T08:00:00Z" });
+        let mut live = check_stream_info(&draft("t", &[]), None, "you", None, Some("https://thumb".into())).preview;
+        live_facts(&mut live, &stream, &user);
+        assert_eq!(live.viewer_count, Some(1234));
+        assert_eq!(live.started_at.as_deref(), Some("2026-11-10T08:00:00Z"));
+        assert!(live.partner);
+        // Offline: no thumbnail, so no count or start even if a stale row says so.
+        let mut offline = check_stream_info(&draft("t", &[]), None, "you", None, None).preview;
+        live_facts(&mut offline, &stream, &json!({ "broadcaster_type": "affiliate" }));
+        assert_eq!((offline.viewer_count, offline.started_at), (None, None));
+        assert!(!offline.partner);
     }
 
     #[test]

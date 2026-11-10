@@ -5,7 +5,7 @@
 // (`chat_mode`, `shield`); a refusal shows on its row in Rust's words and the
 // switch stays where Twitch has it.
 import { useId, useState, type ReactNode } from 'react';
-import { Clock, Hash, MessageSquare, Shield, ShieldAlert, Users } from 'lucide-react';
+import { Hash, ShieldWarning, Smiley, Star, Timer, Users } from 'phosphor-react';
 import { Toggle } from '../ui/Toggle';
 import { managerAct, type ChatView, type ManagerTarget } from '../../services/streamManager';
 import {
@@ -23,11 +23,13 @@ import {
 import { GroupCard, MenuRow, RowButton, ValuePicker, type Layout } from './managerKit';
 
 const ICON: Record<ChatModeKind, ReactNode> = {
-  followers: <Users size={14} />,
-  slow: <Clock size={14} />,
-  subs: <Shield size={14} />,
-  emotes: <MessageSquare size={14} />,
-  unique: <Hash size={14} />,
+  // Users, not UsersThree: the three-person mark is the viewer count's.
+  followers: <Users size={16} />,
+  // Slow mode is a wait between messages, drawn as the chat header's timer.
+  slow: <Timer size={16} />,
+  subs: <Star size={16} />,
+  emotes: <Smiley size={16} />,
+  unique: <Hash size={16} />,
 };
 
 /** A length the list does not offer (set on twitch.tv), in words. */
@@ -133,7 +135,7 @@ export function ChatModesGroup({
           >
             <MenuRow
               layout={layout}
-              icon={icons ? <ShieldAlert size={14} /> : undefined}
+              icon={icons ? <ShieldWarning size={16} /> : undefined}
               label="Turn on Shield Mode?"
               detail="It can clear chat and tighten every mode."
               wrapDetail
@@ -160,7 +162,7 @@ export function ChatModesGroup({
         ) : (
           <MenuRow
             layout={layout}
-            icon={icons ? <ShieldAlert size={14} /> : undefined}
+            icon={icons ? <ShieldWarning size={16} /> : undefined}
             label="Shield Mode"
             labelFor={`${uid}-shield`}
             line={shieldEntry.phase === 'failed' ? shieldEntry.line : null}
