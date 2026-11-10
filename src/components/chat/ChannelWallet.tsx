@@ -173,7 +173,7 @@ const POP_OUT = { duration: 0.22, ease: [0.4, 0, 1, 1] } as const;
 const RING = { duration: 0.6, ease: [0.2, 0.8, 0.2, 1] } as const;
 const NOW = { duration: 0 } as const;
 
-/** A gain springs up out of the wallet button, big and bright: the channel's
+/** A gain hops up just over the wallet button, chat-sized and bright: the channel's
  *  own points icon (or the bits gem), "+N" in bold with a glow of its color,
  *  and "BONUS" for a chest, while a soft ring goes out around the button. Over
  *  everything at the message box's edge, the drops lip included. Motion Off
@@ -201,32 +201,32 @@ function GainPop({ pop, points, gemUrl }: { pop: Pop | null; points: WalletPoint
         {pop && (
           <motion.span
             key={pop.key}
-            // It rises clear of the drops lip on the message box's edge, and
-            // grows rightward from the button, which sits at the column's
-            // left edge, so nothing is cut off.
-            initial={{ opacity: 0, y: 18, scale: 0.5 }}
-            animate={{ opacity: 1, y: -30, scale: 1, transition: instant ? NOW : POP_IN }}
-            exit={{ opacity: 0, y: -44, scale: 0.96, transition: instant ? NOW : POP_OUT }}
+            // It rises a short hop over the button, staying beside the gain it
+            // reports, and grows rightward from the button, which sits at the
+            // column's left edge, so nothing is cut off.
+            initial={{ opacity: 0, y: 10, scale: 0.5 }}
+            animate={{ opacity: 1, y: -8, scale: 1, transition: instant ? NOW : POP_IN }}
+            exit={{ opacity: 0, y: -16, scale: 0.96, transition: instant ? NOW : POP_OUT }}
             aria-live="polite"
             className="pointer-events-none absolute bottom-full left-0 z-[60] mb-1 origin-bottom-left select-none"
           >
             <span
-              className={`flex items-center gap-1.5 whitespace-nowrap rounded-full py-1 pl-1.5 pr-2.5 leading-none ${isPoints ? 'text-accent-neon' : 'text-textPrimary'}`}
+              className={`flex items-center gap-1 whitespace-nowrap rounded-full py-[3px] pl-1 pr-2 leading-none ${isPoints ? 'text-accent-neon' : 'text-textPrimary'}`}
               style={GAIN_PLATE}
             >
               {isPoints ? (
-                <PointsGlyph iconUrl={points?.iconUrl ?? null} name={points?.name ?? null} size={20} className={points?.iconUrl ? '' : 'text-accent-neon'} />
+                <PointsGlyph iconUrl={points?.iconUrl ?? null} name={points?.name ?? null} size={15} className={points?.iconUrl ? '' : 'text-accent-neon'} />
               ) : (
-                <Gem url={gemUrl} size={18} />
+                <Gem url={gemUrl} size={14} />
               )}
               <span
-                className={`text-[19px] font-extrabold tabular-nums tracking-tight ${isPoints ? 'text-accent-neon' : 'text-textPrimary'}`}
+                className={`text-[14px] font-extrabold tabular-nums tracking-tight ${isPoints ? 'text-accent-neon' : 'text-textPrimary'}`}
                 style={GAIN_TEXT}
               >
                 +{pop.amount.toLocaleString()}
               </span>
               {pop.chest && (
-                <span className="text-[12px] font-bold uppercase tracking-[0.08em] text-textPrimary" style={GAIN_TEXT}>
+                <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-textPrimary" style={GAIN_TEXT}>
                   Bonus
                 </span>
               )}
