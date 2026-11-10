@@ -35,6 +35,7 @@ import { recordedLine, seekTarget } from '../watch/channelMedia';
 import { useChannelSheet } from '../watch/MobileChannelSheet';
 import { createZoomSurface, fillScale, registerZoomSurface, type ZoomSurface } from './videoFill';
 import { useZoomToFill } from './zoomToFill';
+import { ADS_NOTE, pill } from '../watch/verticalView';
 
 const CONTROLS_HIDE_MS = 3000;
 // Every bottom-bar glyph at one size, so no button out-pulls another.
@@ -137,6 +138,11 @@ export const MobilePlayer: React.FC<{
   /** Close video (SN-37): stops the stream; its chat carries on in Chats. Set
    *  only where the button belongs (closeVideoShown). */
   onCloseVideo?: () => void;
+  /** SN-40: the Vertical / Landscape pill shows in the header (a stream with
+   *  both pictures, where the tall layout can show). */
+  viewPill?: boolean;
+  /** SN-40: the bottom bar keeps above the tall layout's lower third, in px. */
+  controlsBottom?: number;
 }> = ({
   immersive = false,
   onToggleFullscreen,
@@ -151,6 +157,8 @@ export const MobilePlayer: React.FC<{
   offlineCardBelow = false,
   zoomable = false,
   onCloseVideo,
+  viewPill = false,
+  controlsBottom = 0,
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const { state, reason } = useMobileHlsEngine(videoRef);
@@ -539,6 +547,27 @@ export const MobilePlayer: React.FC<{
       zoomSurface.current = null;
     };
   }, []);
+  // The playing item's own shape (SN-40): the tall layout's fallback when the
+  // core knows no size (a provider stream). Keyed to the URL it was measured
+  // on, so every start clears it by itself; 0x0 says nothing.
+  const setMeasuredPortrait = useAppStore((s) => s.setStreamMeasuredPortrait);
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const read = () => {
+      const url = useAppStore.getState().streamUrl;
+      if (!url) return;
+      const w = video.videoWidth;
+      const h = video.videoHeight;
+      setMeasuredPortrait(url, w > 0 && h > 0 ? h > w : null);
+    };
+    video.addEventListener('loadedmetadata', read);
+    video.addEventListener('resize', read);
+    return () => {
+      video.removeEventListener('loadedmetadata', read);
+      video.removeEventListener('resize', read);
+    };
+  }, [setMeasuredPortrait]);
   // A layout effect, so a pinch's release (a discrete event) lands the new rest
   // before the browser paints: the picture never dips through the old one.
   useLayoutEffect(() => {
@@ -554,6 +583,14 @@ export const MobilePlayer: React.FC<{
   const measureFacesRef = useRef<HTMLSpanElement>(null);
   const measureNoUptimeRef = useRef<HTMLSpanElement>(null);
   const [giveWay, setGiveWay] = useState(0);
+  // SN-40: the Vertical / Landscape pill, before Close video; the counts give
+  // way first. The note beside it says once that vertical gave up ad-free.
+  const streamView = useAppStore((s) => s.streamView);
+  const changingView = useAppStore((s) => s.changingStreamView);
+  const adsNote = useAppStore((s) => s.verticalAdsNote);
+  const changeStreamView = useAppStore((s) => s.changeStreamView);
+  const pillWords = viewPill && streamView && !compact ? pill(streamView) : null;
+  const pillRef = useRef<HTMLSpanElement>(null);
   // Close video shows in the header unless the failure card is up, which
   // carries its own at the same spot (and hides the header under it).
   const closeInHeader = !!onCloseVideo && !(state === 'error' && !offline);
@@ -564,7 +601,8 @@ export const MobilePlayer: React.FC<{
     if (!row) return;
     const width = (el: Element | null) => (el ? el.getBoundingClientRect().width : 0);
     const measure = () => {
-      const available = row.clientWidth;
+      // The view pill keeps its room; everything else gives way around it.
+      const available = row.clientWidth - (pillRef.current ? width(pillRef.current) + 8 : 0);
       const name = width(measureNameRef.current);
       const subscribe = canSubscribe ? width(measureSubRef.current) + GAP_SUB : 0;
       const metrics = [
@@ -584,6 +622,7 @@ export const MobilePlayer: React.FC<{
     const observer = new ResizeObserver(measure);
     for (const el of [
       row,
+      pillRef.current,
       measureNameRef.current,
       measureSubRef.current,
       measureFullRef.current,
@@ -593,7 +632,7 @@ export const MobilePlayer: React.FC<{
       if (el) observer.observe(el);
     }
     return () => observer.disconnect();
-  }, [canSubscribe, currentStream?.user_name, currentStream?.broadcaster_type, streamIsTwitch, subLabel, collab, uptimeText, viewerCount, sleepOn]);
+  }, [canSubscribe, currentStream?.user_name, currentStream?.broadcaster_type, streamIsTwitch, subLabel, collab, uptimeText, viewerCount, sleepOn, pillWords?.text]);
 
   const onSurfaceTap = () => {
     setControlsVisible((v) => {
@@ -962,6 +1001,26 @@ export const MobilePlayer: React.FC<{
                       {metrics(giveWay >= GIVE_WAY_FACES, giveWay < GIVE_WAY_UPTIME, true)}
                     </span>
                   )}
+                  {pillWords && streamView && (
+                    <span ref={pillRef} className={`${vod ? 'ml-auto' : 'ml-2'} shrink-0 flex`}>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          scheduleHide();
+                          void changeStreamView(streamView === 'vertical' ? 'landscape' : 'vertical');
+                        }}
+                        disabled={changingView}
+                        aria-label={pillWords.spoken}
+                        aria-pressed={streamView === 'vertical'}
+                        className="chrome-glaze chrome-glaze--control relative -my-[3px] flex h-[26px] items-center rounded-full px-2.5 text-[12px] font-semibold leading-none text-white transition-opacity disabled:opacity-55"
+                      >
+                        {pillWords.text}
+                        {/* A finger-sized target around the small pill. */}
+                        <span className="absolute -inset-2" />
+                      </button>
+                    </span>
+                  )}
                   {/* Full-size copies for the give-way measurement. Invisible,
                       out of the accessibility tree, and in a zero-size clip so
                       their width never adds overflow to the row; clipped boxes
@@ -1038,7 +1097,14 @@ export const MobilePlayer: React.FC<{
             the last icon's ink ends where the uptime text does. */}
         <div
           className="absolute inset-x-0 bottom-0 flex flex-col pl-2.5 pr-3 pb-2"
-          style={immersive ? { paddingBottom: 'calc(var(--sn-safe-b, 0px) + 8px)' } : undefined}
+          style={
+            immersive
+              ? { paddingBottom: 'calc(var(--sn-safe-b, 0px) + 8px)' }
+              : controlsBottom > 0
+                ? // Above the tall layout's lower third (SN-40).
+                  { paddingBottom: 8 + controlsBottom }
+                : undefined
+          }
         >
           {vod && (
             <VodSeekBar
@@ -1264,6 +1330,18 @@ export const MobilePlayer: React.FC<{
           </div>
         </div>
       </div>
+
+      {/* SN-40: under the header's trailing end, by the pill, once per switch to
+          vertical that gave up ad-free; it keeps its own clock (the store's). */}
+      {adsNote && !compact && (
+        <div
+          role="status"
+          className="sn-popover pointer-events-none absolute right-3 z-20 max-w-[260px] rounded-2xl px-3 py-2 text-[12.5px] leading-snug text-textPrimary sn-chat-reveal"
+          style={{ top: 60 }}
+        >
+          {ADS_NOTE}
+        </div>
+      )}
 
       <QualitySheet open={qualityOpen} onClose={() => setQualityOpen(false)} />
       <TogetherSheet collab={collab} open={togetherOpen} onClose={() => setTogetherOpen(false)} />

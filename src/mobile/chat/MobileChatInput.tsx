@@ -144,6 +144,9 @@ interface Props {
   /** The chat pane this box belongs to, so a slash command's page action
    *  (/poll, /clearmessages) reaches only this pane. */
   source?: string;
+  /** Room kept free at the row's trailing end for a control the host draws
+   *  beside the box (the tall layout's chat button, SN-40), in px. */
+  trailingSlot?: number;
 }
 
 // Memoized below. The pane re-renders on every arriving chat message and the
@@ -172,6 +175,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
   inboxSurface = 'watch',
   paused = false,
   source = '',
+  trailingSlot = 0,
 }) => {
   const currentUser = useAppStore((s) => s.currentUser);
   const chatInput = useAppStore((s) => s.settings.chat_input);
@@ -748,9 +752,11 @@ const MobileChatInputImpl: React.FC<Props> = ({
       ref={composerRef}
       data-chat-composer=""
       onPointerDownCapture={markSuggestionsInside}
-      className="shrink-0 border-t border-borderSubtle"
+      // Over the tall layout's black there is no edge to draw (SN-40).
+      className={`shrink-0 ${trailingSlot > 0 ? '' : 'border-t border-borderSubtle'}`}
       style={{
         paddingBottom: 'calc(var(--sn-kb, 0px) + var(--sn-safe-b, 0px) + 10px)',
+        paddingRight: trailingSlot > 0 ? trailingSlot : undefined,
         transition: 'padding-bottom 0.15s ease-out',
       }}
     >

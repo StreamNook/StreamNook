@@ -6,6 +6,7 @@
 import { create } from 'zustand';
 import { useAppStore } from '../stores/AppStore';
 import { startTab } from './phonePrefs';
+import { nextChat, type VerticalChatState } from './watch/verticalView';
 import type { TwitchCategory } from '../types';
 
 export type MobileTab = 'following' | 'browse' | 'chats' | 'rewards' | 'you';
@@ -47,6 +48,15 @@ interface MobileNavState {
    *  (the tab shell stays live behind it). System PiP is separate: that hands
    *  the whole activity to the OS window. */
   playerMode: 'full' | 'mini';
+  /** The tall layout is up (SN-40: a tall picture on an upright phone in the
+   *  full player); the watch layer keeps it. */
+  verticalTall: boolean;
+  /** The tall layout's chat: the lower third, cleared (pure video) or grown up
+   *  the screen. Entered from `fullscreen_chat.vertical_open`; the grown chat
+   *  is never remembered. */
+  verticalChat: VerticalChatState;
+  setVerticalTall: (tall: boolean) => void;
+  setVerticalChat: (state: VerticalChatState) => void;
   /** Campaign the Activity screen should scroll to and flash, set when you
    *  tap the live drop progress while watching. Cleared once consumed. */
   focusDropCampaignId: string | null;
@@ -85,7 +95,7 @@ interface MobileNavState {
   closeSongs: () => void;
   setSongsFocus: (key: string | null) => void;
   setPlayerMode: (mode: 'full' | 'mini') => void;
-  /** Back chain: top sheet (the inbox sheet steps from a conversation to its list first) -> a song's detail -> songs -> inbox (a conversation, then the list) -> settings -> cosmetics -> minimize the watch layer
+  /** Back chain: top sheet (the inbox sheet steps from a conversation to its list first) -> a song's detail -> songs -> inbox (a conversation, then the list) -> settings -> cosmetics -> the tall layout's grown chat folds -> minimize the watch layer
    *  -> category drill -> a tab other than the start tab -> not consumed
    *  (native backgrounds the task). */
   handleBack: () => boolean;
@@ -120,6 +130,10 @@ export const useMobileNavStore = create<MobileNavState>((set, get) => ({
   songsOpen: false,
   songsFocus: null,
   playerMode: 'full',
+  verticalTall: false,
+  verticalChat: 'lower',
+  setVerticalTall: (tall) => set((s) => (s.verticalTall === tall ? s : { verticalTall: tall })),
+  setVerticalChat: (state) => set((s) => (s.verticalChat === state ? s : { verticalChat: state })),
   focusDropCampaignId: null,
   chatsReturnTab: startTab() === 'chats' ? 'following' : startTab(),
   chatsFloor: null,
@@ -207,8 +221,14 @@ export const useMobileNavStore = create<MobileNavState>((set, get) => ({
     }
     // Back from the full watch view shrinks into the in-app mini player, so
     // browsing continues with the stream alive. Closing is the mini player's X.
+    // The tall layout's grown chat folds back to the lower third first (SN-40).
     const app = useAppStore.getState();
-    if ((app.streamUrl || app.isLoading) && playerMode === 'full') {
+    const watchUp = !!(app.streamUrl || app.isLoading) && playerMode === 'full';
+    if (watchUp && get().verticalTall && get().verticalChat === 'expanded') {
+      set({ verticalChat: nextChat('expanded', 'back') });
+      return true;
+    }
+    if (watchUp) {
       set({ playerMode: 'mini' });
       return true;
     }

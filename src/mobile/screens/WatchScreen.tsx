@@ -77,7 +77,31 @@ import {
   setPreferredRefreshRate,
   setScreenBrightness,
   setBackExclusion,
+  setBarsLightContent,
+  setPipTall,
 } from '../nativeBridge';
+import { needsLightContentOn } from '../../themes';
+import { setSettingsFields } from '../../utils/settingsFields';
+import { useOutsidePress } from '../../hooks/useOutsidePress';
+import { useVodReplayStore } from '../../stores/vodReplayStore';
+import {
+  bandHeight,
+  entryState,
+  latch,
+  lowerHeight,
+  miniSize,
+  nextChat,
+  release,
+  tallLayout,
+  tallPicture,
+  tallSwipeCanStart,
+  type Posture,
+  type TallDrag,
+  type TallRegion,
+  type VerticalChatState,
+} from '../watch/verticalView';
+import { VerticalChatButton, VerticalChatHandle, VerticalMentionStrip } from '../watch/VerticalChat';
+import { foldedStack, VERTICAL_CHROME } from '../watch/verticalChatParts';
 import { DialIndicator, ZoomIndicator, type DialAxis, type DialReading } from '../watch/DialIndicator';
 import { dialCanStart } from '../watch/dialZone';
 import {
@@ -140,7 +164,11 @@ function clampMini(
   vh: number,
   ins: ResolvedInsets,
   floor: number = BOTTOM_GAP,
+  // The box's own size: 16:9, or 9:16 for a tall picture (SN-40).
+  size: { width: number; height: number } = { width: MINI_W, height: MINI_H },
 ): { x: number; y: number } {
+  const boxW = size.width;
+  const boxH = size.height;
   // Clear of the BACK strips at the sides, and of the status bar plus the home /
   // quick-switch strips top and bottom. An app cannot opt out of the home
   // gesture at all, so simply not overlapping it is the only thing that works.
@@ -153,12 +181,14 @@ function clampMini(
   // bounds the box lands at the top-left edge rather than off-screen. Getting
   // this order wrong is exactly how defect 1 above shipped.
   return {
-    x: Math.max(left, Math.min(vw - MINI_W - right, x)),
-    y: Math.max(top, Math.min(vh - MINI_H - bottom, y)),
+    x: Math.max(left, Math.min(vw - boxW - right, x)),
+    y: Math.max(top, Math.min(vh - boxH - bottom, y)),
   };
 }
 
 const TAP_SLOP_PX = 8;
+// The tall layout's grown chat handle (VerticalChatHandle), SN-40.
+const VERTICAL_HANDLE_H = 22;
 // Travel before the shrink is fully previewed. A fraction of the screen, not a
 // fixed pixel count, so the gesture feels the same on a compact phone and an
 // unfolded Fold.
@@ -175,6 +205,10 @@ const TWEEN = { duration: 0.25, ease: 'easeInOut' } as const;
 const SETTLE_FALLBACK_MS = 900;
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+
+/** The insets for this viewport: getComputedStyle forces a style resolve, and
+ *  the insets only change when the viewport does, so callers memoize on it. */
+const insetsFor = (_viewport: { w: number; h: number }): ResolvedInsets => readInsets();
 
 export const WatchScreen: React.FC = () => {
   const isLoading = useAppStore((s) => s.isLoading);
@@ -294,7 +328,7 @@ export const WatchScreen: React.FC = () => {
      *  box; dial: a vertical swipe over landscape video turning brightness
      *  (left half) or volume (right half); swipe: a sideways swipe over
      *  landscape video bringing chat in or out. */
-    kind: 'shrink' | 'move' | 'dial' | 'swipe';
+    kind: 'shrink' | 'move' | 'dial' | 'swipe' | 'tall';
     x: number;
     y: number;
     px: number;
@@ -310,6 +344,10 @@ export const WatchScreen: React.FC = () => {
     /** The chat swipe's last x and horizontal speed (CSS px per ms). */
     lastX?: number;
     vx?: number;
+    /** SN-40, a press in the tall layout: where it began, the chat's state
+     *  then (the drag decides from it), whether a drag up may start there (not
+     *  in the bottom gesture strip), and what it latched to at the slop. */
+    tall?: { region: TallRegion; from: VerticalChatState; upOk: boolean; drag: TallDrag };
     /** Absent when the press began in an edge strip (dialZone): that
      *  gesture is a tap or nothing, never a dial. */
     dial?: {
@@ -431,6 +469,75 @@ export const WatchScreen: React.FC = () => {
   const tvOwns = watching && tv.active && !castOwns;
   const playingHere = watching && !castOwns && !castEnded && !tvOwns;
   const channelId = currentStream?.user_id;
+
+  // SN-40: a tall picture on an upright phone takes the tall layout (the
+  // shared rule, verticalView.ts): the picture fills the width at 9:16 over
+  // black, chat is the lower third over it, and the mini box and PiP window
+  // turn 9:16. The core's answer leads; the measured frame stands in only when
+  // it knows no size, and only for the URL it was measured on.
+  const streamPortrait = useAppStore((s) => s.streamPortrait);
+  const measuredPortrait = useAppStore((s) =>
+    s.streamMeasuredUrl != null && s.streamMeasuredUrl === s.streamUrl ? s.streamMeasuredPortrait : null,
+  );
+  const mediaTypeNow = useAppStore((s) => s.currentMediaType);
+  const tallMedia =
+    mediaTypeNow === 'video'
+      ? 'vod'
+      : mediaTypeNow === 'clip'
+        ? 'clip'
+        : mediaTypeNow === 'offline_chat'
+          ? streamUrl === 'offline'
+            ? 'room'
+            : 'vod'
+          : 'live';
+  const tallInputs = {
+    w: viewport.w,
+    h: viewport.h,
+    largeScreen: shape.largeScreen,
+    splitY: shape.splitY,
+    twoPane: shape.twoPane,
+    fullDisplay: true,
+    pip,
+    playingHere,
+    offline: streamUrl === 'offline',
+    media: tallMedia,
+    tvCard: castOwns || tvOwns || castEnded,
+    portrait: streamPortrait,
+    measuredPortrait,
+  };
+  const tall = tallLayout({ ...tallInputs, playerMode: mini ? 'mini' : 'full' });
+  // The mini box of a stream that is tall here: 9:16, today's long edge.
+  const tallBox = tall || (mini && tallLayout({ ...tallInputs, playerMode: 'full' }));
+  const miniBox = useMemo(() => miniSize(tallBox), [tallBox]);
+  // The PiP window's shape follows the picture, however the phone is held.
+  const pipTall = playingHere && (tallMedia === 'live' || tallMedia === 'vod') && tallPicture(streamPortrait, measuredPortrait);
+  // The tall picture's height at rest and the lower third over its bottom.
+  const tallInsets = useMemo(() => insetsFor(viewport), [viewport]);
+  const tallBandH = bandHeight(viewport.w, viewport.h, tallInsets.top, tallInsets.bottom);
+  const tallLowerH = lowerHeight(tallBandH);
+  const verticalChat = useMobileNavStore((s) => s.verticalChat);
+  // The pill: a stream with both pictures, where the tall layout can show (an
+  // upright phone, playing here, the full player).
+  const verticalAvailable = useAppStore((s) => s.verticalAvailable);
+  const streamViewNow = useAppStore((s) => s.streamView);
+  const viewPillShown =
+    verticalAvailable &&
+    streamViewNow != null &&
+    playingHere &&
+    !mini &&
+    !pip &&
+    !shape.landscape &&
+    !shape.largeScreen &&
+    shape.splitY == null;
+  // A VOD's recorded chat on screen counts nothing while cleared.
+  const replayShown = useVodReplayStore((s) => s.active && s.showing === 'replay');
+  const verticalLower = tall && verticalChat === 'lower';
+  const verticalGrown = tall && verticalChat === 'expanded';
+  // Read at a touch, so a gesture decides from the layout it began in.
+  const tallRef = useRef(tall);
+  useLayoutEffect(() => {
+    tallRef.current = tall;
+  });
 
   // Side by side is decided by AVAILABLE WIDTH, not by orientation. An unfolded
   // Z Fold is about 840x757 — an aspect ratio near 1.1 — so asking "portrait or
@@ -616,8 +723,9 @@ export const WatchScreen: React.FC = () => {
         viewport.h,
         readInsets(),
         miniFloor,
+        { width: miniBox.width, height: miniBox.height },
       ),
-    [miniPos.x, miniPos.y, viewport.w, viewport.h, miniFloor],
+    [miniPos.x, miniPos.y, viewport.w, viewport.h, miniFloor, miniBox.width, miniBox.height],
   );
 
   // A phone held upright: the layer stays laid out at full size in every mode
@@ -632,7 +740,9 @@ export const WatchScreen: React.FC = () => {
     setPrevScaleModel(scaleModel);
     setModelJump(true);
   }
-  const miniScale = MINI_W / viewport.w;
+  // A tall picture's box is 9:16 (SN-40): the full-width tall band scaled to
+  // the box's width.
+  const miniScale = miniBox.width / viewport.w;
   // The box's own 200 px, laid out inside the full-width band and scaled back
   // up to fill it, for the few things drawn for the box itself.
   const miniFace: React.CSSProperties = {
@@ -677,9 +787,9 @@ export const WatchScreen: React.FC = () => {
   });
 
   useLayoutEffect(() => {
-    fitScale.set(MINI_W / viewport.w);
+    fitScale.set(miniBox.width / viewport.w);
     bandTop.set(bandRef.current?.offsetTop ?? 0);
-  }, [viewport.w, viewport.h, scaleModel, fitScale, bandTop]);
+  }, [viewport.w, viewport.h, scaleModel, fitScale, bandTop, miniBox.width]);
 
   // The box's resting corner. A drag of the box writes boxX/boxY itself (no
   // render per move) and its release animates them to the snapped spot.
@@ -866,7 +976,7 @@ export const WatchScreen: React.FC = () => {
     return () => clearTimeout(t);
     // The saved chat width, not the live one: the column's handle moves the
     // band every frame of a drag, and one report after the save lands is enough.
-  }, [watching, mini, pip, sideBySide, viewport.w, viewport.h, playerMain, chatBeside, fsChat?.width]);
+  }, [watching, mini, pip, sideBySide, viewport.w, viewport.h, playerMain, chatBeside, fsChat?.width, tallBox]);
 
   // A newly started stream always opens full (external store sync).
   useEffect(() => {
@@ -875,6 +985,87 @@ export const WatchScreen: React.FC = () => {
 
   // Pinned messages for the room on screen (shared with the Chats screen).
   const pinned = useRoomPins(watching);
+
+  // SN-40: the tall layout's chat, moved by every gesture and button through
+  // one door, with a light tick as the landscape swipe gives. Shown and cleared
+  // are remembered (`fullscreen_chat.vertical_open`, by path); the grown chat
+  // never is.
+  const moveVerticalChat = useCallback((next: VerticalChatState) => {
+    const nav = useMobileNavStore.getState();
+    const now = nav.verticalChat;
+    if (next === now) return;
+    nav.setVerticalChat(next);
+    hapticStep();
+    if (next === 'cleared' || now === 'cleared') {
+      void setSettingsFields({ 'fullscreen_chat.vertical_open': next !== 'cleared' }).catch(() => {});
+    }
+  }, []);
+  // The poll and prediction cards in the lower third: one-line strips, and a
+  // tap grows the chat with that card open.
+  const stackControl = useMemo(
+    () => foldedStack(topStack.control, verticalLower, () => moveVerticalChat('expanded')),
+    [topStack.control, verticalLower, moveVerticalChat],
+  );
+  // On every entry to the tall layout the chat starts as it was last left (the
+  // saved choice, read again); leaving it (a turn, the mini box, PiP, another
+  // stream) folds a grown chat down. Before paint, so no frame shows the old
+  // state.
+  useLayoutEffect(() => {
+    const nav = useMobileNavStore.getState();
+    nav.setVerticalTall(tall);
+    nav.setVerticalChat(
+      tall
+        ? entryState(useAppStore.getState().settings.fullscreen_chat?.vertical_open ?? true)
+        : nextChat(nav.verticalChat, 'rotate'),
+    );
+  }, [tall]);
+  useEffect(() => () => useMobileNavStore.getState().setVerticalTall(false), []);
+  // How the phone is held, for the view a start wants. Mini, PiP and the
+  // keyboard never change it: a PiP window's own shape is not a turn.
+  const setStreamPosture = useAppStore((s) => s.setStreamPosture);
+  const posture: Posture = shape.largeScreen
+    ? 'large'
+    : shape.splitY != null
+      ? 'tabletop'
+      : shape.landscape
+        ? 'landscape'
+        : 'upright';
+  const heldPosture = useRef<Posture>(posture);
+  useEffect(() => {
+    if (pip || isInPip() === true) {
+      setStreamPosture(heldPosture.current, tvOwns);
+      return;
+    }
+    heldPosture.current = posture;
+    setStreamPosture(posture, tvOwns);
+  }, [posture, tvOwns, pip, setStreamPosture]);
+  // The PiP window's shape, pushed whenever it changes (Android 12 enters PiP
+  // by itself on the way out, with the params it already has), and on mount, so
+  // a page reload sets it again.
+  useEffect(() => {
+    setPipTall(pipTall);
+  }, [pipTall]);
+  // The status bar sits over the tall picture's black: its icons are light
+  // there whatever the theme, and the theme's again once the layout goes.
+  useEffect(() => {
+    if (!tall) return;
+    setBarsLightContent(true);
+    return () => {
+      const bg = getComputedStyle(document.documentElement).getPropertyValue('--color-background').trim();
+      if (bg) setBarsLightContent(needsLightContentOn(bg));
+    };
+  }, [tall]);
+  // The grown chat is a pop-out over the picture: a tap on the picture folds
+  // it back to the lower third and presses nothing else (the one outside-tap
+  // mechanism). Its own chrome (the handle, the chat button) is inside.
+  const chatColumnRef = useRef<HTMLDivElement | null>(null);
+  const attachChatColumn = useCallback((el: HTMLDivElement | null) => {
+    chatColumnRef.current = el;
+    setChatColumnEl(el);
+  }, []);
+  const markGrownInside = useOutsidePress(tall && verticalChat === 'expanded', [chatColumnRef, VERTICAL_CHROME], () =>
+    moveVerticalChat(nextChat('expanded', 'tapPicture')),
+  );
 
   // Ends the single-finger gesture in flight with no decision (a second finger
   // began a pinch or took over from a resting thumb): a dial's readout lingers,
@@ -1063,6 +1254,39 @@ export const WatchScreen: React.FC = () => {
         suppressClick.current = false;
         return;
       }
+      if (!mini && tallRef.current) {
+        // The tall layout (SN-40): the picture, the lower third's touch area
+        // and the grown chat's handle share this gesture, latched once at the
+        // slop and decided on release from the chat's state at touch-down
+        // (verticalView.ts latch / release). A swipe never starts in a side
+        // edge's Back strip.
+        const ins = readInsets();
+        const region = ((e.currentTarget as HTMLElement).dataset.tallRegion as TallRegion | undefined) ?? 'picture';
+        gesture.current = {
+          id: e.pointerId,
+          kind: 'tall',
+          x: e.clientX,
+          y: e.clientY,
+          px: miniClamped.x,
+          py: miniClamped.y,
+          lastY: e.clientY,
+          lastT: e.timeStamp,
+          vy: 0,
+          progress: 0,
+          moved: false,
+          swipeOk: tallSwipeCanStart(e.clientX, window.innerWidth, ins.gestureLeft, ins.gestureRight),
+          lastX: e.clientX,
+          vx: 0,
+          tall: {
+            region,
+            from: useMobileNavStore.getState().verticalChat,
+            upOk: e.clientY <= window.innerHeight - ins.gestureBottom,
+            drag: 'none',
+          },
+        };
+        suppressClick.current = false;
+        return;
+      }
       gesture.current = {
         id: e.pointerId,
         kind: mini ? 'move' : 'shrink',
@@ -1102,6 +1326,44 @@ export const WatchScreen: React.FC = () => {
       if (!g || g.id !== e.pointerId) return;
       const dx = e.clientX - g.x;
       const dy = e.clientY - g.y;
+      if (!g.moved && (Math.abs(dx) > TAP_SLOP_PX || Math.abs(dy) > TAP_SLOP_PX) && g.kind === 'tall' && g.tall) {
+        // SN-40: what the tall-layout drag is, latched here for good.
+        let drag = latch(g.tall.region, g.tall.from, dx, dy);
+        if (drag === 'swipe' && !g.swipeOk) drag = 'none';
+        if (drag === 'expand' && !g.tall.upOk) drag = 'none';
+        if (drag === 'mini') {
+          // Down on the picture or the lower third: the layer shrinks toward
+          // the mini box, exactly as the portrait drag does (below).
+          g.kind = 'shrink';
+        } else if (drag === 'none') {
+          gesture.current = null;
+          suppressClick.current = true;
+          touches.drop(e.pointerId);
+          return;
+        } else {
+          g.tall.drag = drag;
+          g.moved = true;
+          g.lastX = e.clientX;
+          g.lastY = e.clientY;
+          g.lastT = e.timeStamp;
+          (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+          touches.latch(e.pointerId, 'swipe');
+          return;
+        }
+      }
+      if (g.kind === 'tall') {
+        if (!g.moved) return;
+        // Both speeds, for a flick that clears, grows or folds the chat.
+        const dtt = e.timeStamp - g.lastT;
+        if (dtt > 0) {
+          g.vx = (e.clientX - (g.lastX ?? e.clientX)) / dtt;
+          g.vy = (e.clientY - g.lastY) / dtt;
+        }
+        g.lastX = e.clientX;
+        g.lastY = e.clientY;
+        g.lastT = e.timeStamp;
+        return;
+      }
       if (!g.moved && (Math.abs(dx) > TAP_SLOP_PX || Math.abs(dy) > TAP_SLOP_PX)) {
         // A dial is a mostly vertical swipe. One that leaves the slop sideways
         // (a stray swipe across the picture, a thumb resting while the phone
@@ -1229,7 +1491,7 @@ export const WatchScreen: React.FC = () => {
         return;
       }
       if (g.kind === 'move') {
-        const to = clampMini(g.px + dx, g.py + dy, viewport.w, viewport.h, readInsets());
+        const to = clampMini(g.px + dx, g.py + dy, viewport.w, viewport.h, readInsets(), BOTTOM_GAP, miniBox);
         if (scaleModel) {
           // Straight onto the transform: no render per move.
           boxX.set(to.x);
@@ -1246,7 +1508,7 @@ export const WatchScreen: React.FC = () => {
       if (scaleModel) prog.set(g.progress);
       else setShrink(g.progress);
     },
-    [viewport.w, viewport.h, chatColumnEl, scaleModel, boxX, boxY, prog, touches],
+    [viewport.w, viewport.h, chatColumnEl, scaleModel, boxX, boxY, prog, touches, miniBox],
   );
 
   const onBandPointerUp = useCallback(
@@ -1262,6 +1524,28 @@ export const WatchScreen: React.FC = () => {
       gesture.current = null;
       suppressClick.current = g.moved;
       setDragging(false);
+
+      if (g.kind === 'tall' && g.tall) {
+        const t = g.tall;
+        if (!g.moved) {
+          // A tap: the lower third grows the chat, the handle folds it. The
+          // picture's tap is its click (the controls, or the outside tap that
+          // folds a grown chat). The click that trails this tap lands on what
+          // the new state puts under the finger: eat it.
+          if (t.region === 'lowerThird' || t.region === 'handle') {
+            swallowTrailingClick();
+            moveVerticalChat(nextChat(t.from, t.region === 'lowerThird' ? 'tapChatArea' : 'dragDown'));
+          }
+          return;
+        }
+        swallowTrailingClick();
+        // A finger that stopped before lifting is not a flick.
+        const fresh = e.timeStamp - g.lastT <= 50;
+        moveVerticalChat(
+          release(t.drag, t.from, e.clientX - g.x, e.clientY - g.y, fresh ? (g.vx ?? 0) : 0, fresh ? g.vy : 0),
+        );
+        return;
+      }
 
       if (g.kind === 'dial') {
         // The readout lingers for a beat so the final value can be read, then
@@ -1316,9 +1600,9 @@ export const WatchScreen: React.FC = () => {
           const ins = readInsets();
           const leftBound = MINI_GUTTER + Math.max(ins.left, ins.gestureLeft);
           const rightBound =
-            viewport.w - MINI_W - MINI_GUTTER - Math.max(ins.right, ins.gestureRight);
-          const snappedX = pos.x + MINI_W / 2 < viewport.w / 2 ? leftBound : rightBound;
-          return clampMini(snappedX, pos.y, viewport.w, viewport.h, ins);
+            viewport.w - miniBox.width - MINI_GUTTER - Math.max(ins.right, ins.gestureRight);
+          const snappedX = pos.x + miniBox.width / 2 < viewport.w / 2 ? leftBound : rightBound;
+          return clampMini(snappedX, pos.y, viewport.w, viewport.h, ins, BOTTOM_GAP, miniBox);
         };
         if (scaleModel) {
           // The drag only moved the transform; the stored spot learns the
@@ -1343,7 +1627,7 @@ export const WatchScreen: React.FC = () => {
       if (!scaleModel) setShrink(0);
       if (g.progress >= COMMIT_FRACTION || g.vy >= FLING_VY) setPlayerMode('mini');
     },
-    [viewport.w, viewport.h, setPlayerMode, scaleModel, boxX, boxY, reduceMotion, touches, finishPinch],
+    [viewport.w, viewport.h, setPlayerMode, scaleModel, boxX, boxY, reduceMotion, touches, finishPinch, miniBox, moveVerticalChat],
   );
 
   // The OS took the gesture (edge swipe, notification shade, an incoming call).
@@ -1471,10 +1755,16 @@ export const WatchScreen: React.FC = () => {
       ? 'w-full h-full relative'
       : mini
         ? // The scale model's box: the full-width 16:9 band, scaled. No accent
-          // rim or cast under it; the box has its own shadow.
-          'w-full relative shrink-0 min-h-0 aspect-video'
+          // rim or cast under it; the box has its own shadow. A tall picture's
+          // band keeps its tall height (SN-40), so the box is 9:16.
+          `w-full relative shrink-0 min-h-0${tallBox ? '' : ' aspect-video'}`
       : sideBySide
         ? 'shrink-0 h-full relative'
+      : tallBox
+        ? // The tall layout (SN-40): the picture at 9:16 over black, under the
+          // status bar, chat over its lower third. No rim and no cast: nothing
+          // meets it at an edge.
+          'w-full relative shrink-0 min-h-0'
         : // A resizable band gets an explicit height; aspect-video would fight
           // it. The video is object-contain either way, so a band shorter than
           // 16:9 pillarboxes instead of cropping or stretching.
@@ -1537,6 +1827,15 @@ export const WatchScreen: React.FC = () => {
               overlaySide === 'left' ? 'left-0 sn-chat-overlay--left' : 'right-0'
             }`
           : 'hidden'
+      : tall
+        ? // The tall layout (SN-40): the same chat over the picture, the lower
+          // third plus the message box under it, or grown up the screen;
+          // cleared, hidden as the mini box hides it (mounted, room joined).
+          verticalChat === 'cleared'
+          ? 'hidden'
+          : `absolute left-0 right-0 bottom-0 z-30 flex flex-col${
+              verticalChat === 'expanded' ? ' glass-flyout rounded-t-2xl sn-chat-reveal' : ''
+            }`
       : scaleModel
         ? // Never resized here. As Xtra does, it goes the moment a minimize
           // starts and is back the moment an expand starts; while the box is
@@ -1611,7 +1910,8 @@ export const WatchScreen: React.FC = () => {
     >
       {/* The layer's background: gone the moment a minimize starts, so only
           the band shrinks, and back the moment an expand starts. */}
-      {scaleModel && !mini && <div aria-hidden className="absolute inset-0 bg-background" />}
+      {/* Black behind a tall picture (SN-40), the status bar over it. */}
+      {scaleModel && !mini && <div aria-hidden className={`absolute inset-0 ${tall ? 'bg-black' : 'bg-background'}`} />}
       <div
         // relative: the landscape chat overlay positions against this box.
         // A phone's beside column honours the overlay's side preference; the
@@ -1633,9 +1933,10 @@ export const WatchScreen: React.FC = () => {
         {scaleModel && mini && (
           <div
             aria-hidden
-            className="absolute left-0 right-0 aspect-video pointer-events-none"
+            className={`absolute left-0 right-0 pointer-events-none${tallBox ? '' : ' aspect-video'}`}
             style={{
               top: 'var(--sn-safe-t, 0px)',
+              ...(tallBox ? { height: tallBandH } : null),
               borderRadius: 12 / miniScale,
               boxShadow: `0 ${12 / miniScale}px ${32 / miniScale}px -${8 / miniScale}px rgba(0,0,0,0.65)`,
             }}
@@ -1667,7 +1968,11 @@ export const WatchScreen: React.FC = () => {
                 { width: phoneBeside || chatBeside ? playerWidth : '100%' }
               : (resizable || tabletop) && shrink === 0
                 ? { height: playerMain }
-                : null),
+                : tallBox
+                  ? // The tall picture (SN-40): 9:16 across the width, capped so
+                    // the message box still fits under it.
+                    { height: tallBandH }
+                  : null),
             // Scale model: the box's corners (fixed for the whole move, in the
             // band's own pixels), and in the box the band is the one thing that
             // takes touches (the layer passes the rest through to Home).
@@ -1736,6 +2041,10 @@ export const WatchScreen: React.FC = () => {
               offlineCardBelow={offlineChin}
               zoomable={zoomable}
               onCloseVideo={closeVideoOn ? () => void closeVideo(true) : undefined}
+              // SN-40: the Vertical / Landscape pill where the tall layout can
+              // show, and the bottom bar kept above the lower third.
+              viewPill={viewPillShown}
+              controlsBottom={tall && verticalChat !== 'cleared' ? tallLowerH : 0}
               onToggleLayout={
                 // Nothing to arrange while chat is hidden.
                 canChooseLayout && !mini && !pip && !(largeToggle && largeChatHidden)
@@ -1867,9 +2176,11 @@ export const WatchScreen: React.FC = () => {
         )}
 
         <motion.div
-          ref={setChatColumnEl}
+          ref={attachChatColumn}
           className={chatClass}
           data-sn-out-of-sight={chatOutOfSight ? 'true' : undefined}
+          // A press in the grown chat (or a sheet it opened) is inside it.
+          onPointerDownCapture={markGrownInside}
           style={
             // Side by side, the row deliberately carries no top padding so the
             // video runs edge to edge under the status bar. Chat is not video:
@@ -1892,6 +2203,18 @@ export const WatchScreen: React.FC = () => {
                     [overlaySide === 'left' ? 'paddingLeft' : 'paddingRight']:
                       `var(--sn-safe-${overlaySide === 'left' ? 'l' : 'r'}, 0px)`,
                   } as React.CSSProperties)
+                : tall
+                  ? ({
+                      // The lower third starts on the picture's lower 36% and
+                      // the keyboard lifts it whole; grown, its top is where the
+                      // 16:9 layout's chat starts.
+                      top:
+                        verticalChat === 'expanded'
+                          ? tallInsets.top + (viewport.w * 9) / 16
+                          : `calc(${tallInsets.top + tallBandH - tallLowerH}px - var(--sn-kb, 0px))`,
+                      '--fs-chat-opacity': `${overlayOpacity}%`,
+                      ...(verticalChat === 'expanded' ? { padding: 0, borderRadius: '16px 16px 0 0' } : null),
+                    } as React.CSSProperties)
                 : scaleModel
                   ? undefined
                   : chatFreeze
@@ -1930,7 +2253,13 @@ export const WatchScreen: React.FC = () => {
                 // and below the card stack under it. This header is absolutely
                 // positioned over the top of the chat column, so at top:0 it
                 // covered the tabs completely.
-                top: topStackBottom ?? (chatTabsVisible ? CHAT_TAB_STRIP_H : 0),
+                // The lower third has no tab strip; the grown chat's handle sits
+                // over its strip (SN-40).
+                top:
+                  topStackBottom ??
+                  (verticalLower
+                    ? 0
+                    : (chatTabsVisible ? CHAT_TAB_STRIP_H : 0) + (verticalGrown ? VERTICAL_HANDLE_H : 0)),
               }}
             >
               {/* The hype train belongs to the STREAM, not to whichever chat
@@ -1942,23 +2271,75 @@ export const WatchScreen: React.FC = () => {
                   onExpire={() => useAppStore.getState().setCurrentHypeTrain(null)}
                 />
               )}
+              {/* Folded to its line in the lower third: a tap grows the chat
+                  with the pin open (SN-40). */}
               <PinnedBanner
                 pins={pinned}
                 channelId={chatChannelId ?? undefined}
-                expanded={pins.open}
-                onToggle={() => pins.setOpen(!pins.open)}
+                expanded={pins.open && !verticalLower}
+                onToggle={
+                  verticalLower
+                    ? () => {
+                        pins.setOpen(true);
+                        moveVerticalChat('expanded');
+                      }
+                    : () => pins.setOpen(!pins.open)
+                }
                 collapsedStyle={pins.style}
               />
               {/* Last in DOM, so first on screen: the mention you just opened. */}
-              {showMentionCard && mentionCard && <MentionContextCard entry={mentionCard} />}
+              {showMentionCard &&
+                mentionCard &&
+                (verticalLower ? (
+                  <VerticalMentionStrip onOpen={() => moveVerticalChat('expanded')} />
+                ) : (
+                  <MentionContextCard entry={mentionCard} />
+                ))}
             </div>
 
+          {/* The grown chat's handle (SN-40): a tap or a drag down folds it. */}
+          {verticalGrown && (
+            <VerticalChatHandle
+              onPointerDown={onBandPointerDown}
+              onPointerMove={onBandPointerMove}
+              onPointerUp={onBandPointerUp}
+              onPointerCancel={onBandPointerCancel}
+              onClick={() => moveVerticalChat(nextChat('expanded', 'dragDown'))}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') moveVerticalChat(nextChat('expanded', 'dragDown'));
+              }}
+            />
+          )}
           <MobileChatPane
             readOnly={chatOverlay}
             // Hidden under the mini player, in PiP or a chat-less landscape, or
             // the app in the background: the list holds still until seen.
             idle={chatClass === 'hidden' || !pageVisible}
             hidden={chatClass === 'hidden'}
+            // The lower third has no tab strip (SN-40); the grown chat has it.
+            strip={!(tall && verticalChat !== 'expanded')}
+            vertical={tall ? verticalChat : undefined}
+            lowerTouch={
+              tall ? (
+                // The lower third's touch area over the inert rows: a tap or a
+                // drag up grows the chat, sideways clears it, down shrinks the
+                // player. TalkBack's double tap lands here too.
+                <div
+                  data-tall-region="lowerThird"
+                  role="button"
+                  aria-label="Show full chat"
+                  className="absolute inset-0 z-10"
+                  style={{ touchAction: 'none' }}
+                  onPointerDown={onBandPointerDown}
+                  onPointerMove={onBandPointerMove}
+                  onPointerUp={onBandPointerUp}
+                  onPointerCancel={onBandPointerCancel}
+                  // An accessibility click that comes with no touch of its own;
+                  // a real tap's click is eaten by its pointerup.
+                  onClick={() => moveVerticalChat(nextChat(useMobileNavStore.getState().verticalChat, 'tapChatArea'))}
+                />
+              ) : undefined
+            }
             top={
               // Poll + prediction cards are exactly the desktop components:
               // they self-fetch off the channel. Either can be turned off.
@@ -1974,14 +2355,14 @@ export const WatchScreen: React.FC = () => {
                   <PredictionOverlay
                     channelId={currentStream.user_id}
                     channelLogin={currentStream.user_login}
-                    stack={topStack.control.prediction}
+                    stack={stackControl.prediction}
                   />
                 )}
                 {currentStream && streamScoped && !chatOverlay && showPolls && (
                   <PollOverlay
                     channelId={currentStream.user_id}
                     channelLogin={currentStream.user_login}
-                    stack={topStack.control.poll}
+                    stack={stackControl.poll}
                   />
                 )}
               </ChatOverlayStack>
@@ -2016,6 +2397,23 @@ export const WatchScreen: React.FC = () => {
             />
           )}
         </motion.div>
+
+        {/* SN-40: beside the message box, centered on its field (the
+            composer's 10 px foot over the gesture bar, its 40 px row), its
+            ink on the row's 10 px gutter. Outside the chat, so it stays while
+            chat is cleared, carrying the count of what arrived since. */}
+        {tall && (
+          <div
+            className="pointer-events-none absolute right-[10px] z-40"
+            style={{ bottom: 'calc(var(--sn-kb, 0px) + var(--sn-safe-b, 0px) + 10px)' }}
+          >
+            <VerticalChatButton
+              state={verticalChat}
+              replay={replayShown}
+              onPress={() => moveVerticalChat(nextChat(verticalChat, 'tapChatButton'))}
+            />
+          </div>
+        )}
       </div>
 
       {/* A hairline edge on the floating box, so it reads over any thumbnail

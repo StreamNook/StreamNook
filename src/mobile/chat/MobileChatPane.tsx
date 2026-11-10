@@ -63,6 +63,7 @@ import { PausedOverlay } from './ResumeLiveButton';
 import { useComposerRiserLift } from './pausedOverlay';
 import { openBadgeInfo } from '../../stores/badgeSpotlightStore';
 import { twitchRowBadgeRef, type TwitchRowBadgeInfo } from '../../utils/badgeSpotlight';
+import { CHAT_BUTTON_SLOT, type VerticalChatState } from '../watch/verticalView';
 
 /** A tapped badge in a row opens the phone's badge sheet (BadgeSheet, mounted in MobileApp).
  *  Module scope, so the rows' memo never sees a new callback. */
@@ -135,7 +136,27 @@ export const MobileChatPane: React.FC<{
   /** The watch chat is not on screen (mini player, landscape with chat off): sheets that belong
    *  to its rows close. The app going to the background is not this. */
   hidden?: boolean;
-}> = ({ readOnly = false, strip = true, paused = false, idle = false, top, surface = 'watch', hidden = false }) => {
+  /** The tall layout's chat (SN-40): `lower` (and `cleared`, out of sight) is the lower third
+   *  over the picture, its rows inert and each on its own backing, live, with no row swipes,
+   *  hold or fan; `expanded` is the full chat grown up the screen. Absent everywhere else. */
+  vertical?: VerticalChatState;
+  /** The lower third's own touch area over the rows (the watch layer's: a tap or a drag up grows
+   *  the chat, sideways clears it, down shrinks the player). */
+  lowerTouch?: React.ReactNode;
+}> = ({
+  readOnly = false,
+  strip = true,
+  paused = false,
+  idle = false,
+  top,
+  surface = 'watch',
+  hidden = false,
+  vertical,
+  lowerTouch,
+}) => {
+  // The lower third (or cleared, which keeps its rules while out of sight): rows held at the
+  // newest, inert, every gesture on them the watch layer's.
+  const folded = vertical === 'lower' || vertical === 'cleared';
   // This pane's own name, so a slash command's page action (/clearmessages,
   // /poll) reaches only the pane it was typed in.
   const paneSource = useId();
@@ -265,7 +286,8 @@ export const MobileChatPane: React.FC<{
     [noSend, gating.blocked, gating.warning, activeProvider, kickConnected],
   );
   // The room's own platform threads replies (YouTube and TikTok send a reply as a plain line).
-  const replyEnabled = REPLY_PROVIDERS.includes(activeProvider) && composerTakesText(composer);
+  // Never on the lower third's inert rows (SN-40).
+  const replyEnabled = REPLY_PROVIDERS.includes(activeProvider) && composerTakesText(composer) && !folded;
   // Moderator tools are ON wherever you have the badge. A mod opening their own
   // channel expects their tools, and making them hunt for a toggle every time is
   // the wrong default. The destructive actions are protected by the fan's
@@ -541,6 +563,12 @@ export const MobileChatPane: React.FC<{
     listScrollToBottomRef.current?.();
   }, [pause]);
 
+  // The lower third is always live (SN-40): a list held paused never sits behind the picture,
+  // where nothing could scroll it back.
+  useEffect(() => {
+    if (folded && isPaused) resumeLive();
+  }, [folded, isPaused, resumeLive]);
+
   // Tapping the "replying to" line jumps to the message being replied to.
   //
   // Everything except this handler already existed: ChatMessage has carried the
@@ -700,7 +728,7 @@ export const MobileChatPane: React.FC<{
   // Left-handed swipes: left moderates, right replies.
   const swipeFlipped = useAppStore((s) => s.settings.chat_design?.mod_slider_flipped ?? false);
   const holdModButtons = useAppStore((s) => s.settings.chat_design?.mod_hold_buttons ?? true);
-  const swipeOn = swipeSetting && modToolsArmed && !!broadcasterId && !noSend;
+  const swipeOn = swipeSetting && modToolsArmed && !!broadcasterId && !noSend && !folded;
   // Rows take sideways swipes: right for a moderator's slider, left for a reply.
   const rowSwipeOn = swipeOn || replyEnabled;
   const press = useLongPressDrag({
@@ -1081,12 +1109,14 @@ export const MobileChatPane: React.FC<{
         // `sn-row-swipe` gives the rows themselves `touch-action: pan-y`. On this wrapper it would do
         // nothing, since the browser reads touch-action only from the touched element up to its
         // scroll container.
-        className={`flex-1 min-h-0 relative select-none [-webkit-touch-callout:none] ${strip || listMask ? '' : 'sn-fade-top'} ${rowSwipeOn ? 'sn-row-swipe' : ''}`}
+        // The lower third (SN-40): every row on its own soft backing and inert, and no hold, fan
+        // or row swipe; the watch layer's touch area over the rows owns every touch there.
+        className={`flex-1 min-h-0 relative select-none [-webkit-touch-callout:none] ${strip || listMask ? '' : 'sn-fade-top'} ${rowSwipeOn ? 'sn-row-swipe' : ''}${folded ? ' sn-chat-vertical' : ''}`}
         onContextMenu={onListContextMenu}
-        onPointerDown={press.onPointerDown}
-        onPointerMove={press.onPointerMove}
-        onPointerUp={press.onPointerUp}
-        onPointerCancel={press.onPointerCancel}
+        onPointerDown={folded ? undefined : press.onPointerDown}
+        onPointerMove={folded ? undefined : press.onPointerMove}
+        onPointerUp={folded ? undefined : press.onPointerUp}
+        onPointerCancel={folded ? undefined : press.onPointerCancel}
       >
         <HoldWhile hold={idle}>
           <ChatMessageList
@@ -1095,7 +1125,7 @@ export const MobileChatPane: React.FC<{
             emptyNote={replayOn ? replayError : historyLoaded ? 'No recent messages' : null}
             renderToken={renderToken}
             isPaused={isPaused}
-            onPauseIntent={() => pause(true)}
+            onPauseIntent={folded ? undefined : () => pause(true)}
             onScroll={onScroll}
             touchPauseRatio={rowSwipeOn ? touchPauseRatio : undefined}
             onUsernameClick={onUsernameClick}
@@ -1134,13 +1164,15 @@ export const MobileChatPane: React.FC<{
           lift={overlayLift}
           onResume={resumeLive}
         />
+        {folded && lowerTouch}
       </div>
       {/* Outside the list, so a press in them never reaches its gestures. */}
       {onScreen && !readOnly && <InboxArrival side={inboxSide} surface={surface} />}
       <InboxSheet surface={surface} />
       </div>
-      {/* The landscape overlay has no room for it and shows whichever is chosen. */}
-      {vodHere && !readOnly && (
+      {/* The landscape overlay and the lower third have no room for it and show whichever is
+          chosen; the grown chat shows it. */}
+      {vodHere && !readOnly && !folded && (
         <div
           className="px-2.5 pt-1.5"
           // With no composer under it, the switch clears the gesture bar itself.
@@ -1162,6 +1194,8 @@ export const MobileChatPane: React.FC<{
       )}
       {!noSend && (
         <MobileChatInput
+          // The tall layout's chat button sits beside the message box (SN-40).
+          trailingSlot={vertical ? CHAT_BUTTON_SLOT : 0}
           inboxSurface={surface}
           channel={activeTab?.login ?? null}
           provider={activeProvider}

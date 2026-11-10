@@ -424,6 +424,24 @@ body:has(.sn-mobile) .glass-input:focus {
     inset 1px 0 0 0 rgba(255, 255, 255, 0.1),
     0 0 40px -10px rgba(0, 0, 0, 0.6);
 }
+/* The tall layout's lower third (SN-40): chat over a tall picture, each row on
+   its own soft backing that hugs its text, in the theme's background at the
+   landscape overlay's opacity (--fs-chat-opacity, set on the chat column), the
+   theme's ink on top. A solid tint, no blur: one backing per row over video
+   that repaints every frame (glass-exempt: chat over video, the no-text-over-art
+   rule's video exception). The rows are inert: the watch layer's touch area
+   over them owns every touch, and TalkBack still reads them. */
+.sn-mobile .sn-chat-vertical .chat-message-row {
+  pointer-events: none;
+  padding-top: 1px;
+  padding-bottom: 1px;
+}
+.sn-mobile .sn-chat-vertical .chat-message-row > * {
+  width: fit-content;
+  max-width: 100%;
+  border-radius: 12px;
+  background-color: color-mix(in srgb, var(--color-background) var(--fs-chat-opacity, 55%), transparent);
+}
 .sn-mobile .sn-chat-overlay--left {
   box-shadow:
     inset -1px 0 0 0 rgba(255, 255, 255, 0.1),
