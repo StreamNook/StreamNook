@@ -381,7 +381,12 @@ export function GroupCard({
         className={
           layout === 'sheet'
             ? 'divide-y divide-borderSubtle overflow-hidden rounded-2xl bg-white/[0.05]'
-            : 'divide-y divide-textPrimary/[0.06] overflow-hidden rounded-xl bg-surface/25 ring-1 ring-inset ring-textPrimary/[0.06]'
+            : layout === 'menu'
+              ? // The Tools menu's rows sit straight on the flyout's frost, one
+                // continuous glass surface: boxes, outlines and dividers here
+                // break it into flat grey blocks.
+                'flex flex-col'
+              : 'divide-y divide-textPrimary/[0.06] overflow-hidden rounded-xl bg-surface/25 ring-1 ring-inset ring-textPrimary/[0.06]'
         }
       >
         {children}
@@ -462,7 +467,7 @@ export function MenuRow({
         onClick={onClick}
         className={`group flex w-full items-center gap-2.5 text-left transition-colors hover:bg-textPrimary/[0.05] ${
           IS_MOBILE ? 'sn-touch active:opacity-70' : ''
-        } ${ROW_PAD[layout]}`}
+        } ${layout === 'menu' ? 'rounded-lg' : ''} ${ROW_PAD[layout]}`}
       >
         {iconEl}
         {words}
