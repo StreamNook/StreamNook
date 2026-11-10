@@ -1366,6 +1366,34 @@ const UserProfileCard = ({
     setCardPosition({ x, y });
   }, [position, showMessages, isMemberCard]);
 
+  // The guess above is only a first place. A card's real height runs well past
+  // it (a member with hundreds of badges fills its 88vh cap), and opened low in
+  // a tall window it ran off the bottom of the screen. Once the card has its
+  // size, and whenever that size or the window changes, it is lifted to stay
+  // inside the window.
+  useEffect(() => {
+    const card = cardRef.current;
+    // The card's own window (`#/profile`) sizes itself; nothing to place.
+    if (!card || window.location.hash.startsWith('#/profile')) return;
+    const padding = 10;
+    const keepInside = () => {
+      const height = card.offsetHeight;
+      if (!height) return;
+      setCardPosition((at) => {
+        const maxY = Math.max(padding, window.innerHeight - height - padding);
+        return at.y > maxY ? { ...at, y: maxY } : at;
+      });
+    };
+    keepInside();
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(keepInside);
+    observer?.observe(card);
+    window.addEventListener('resize', keepInside);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', keepInside);
+    };
+  }, []);
+
   const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!(e.target as HTMLElement).closest('.profile-card-header')) return;
     setIsDragging(true);
