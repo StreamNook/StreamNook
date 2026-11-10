@@ -130,6 +130,14 @@ export function clearToolDraft(key: string): void {
   write(key, { ...cur, draft: undefined });
 }
 
+/** Replaces only the key's draft: its phase and line stay, so a failure's
+ *  line is never wiped by something that is not an edit. */
+export function replaceToolDraft(key: string, draft: unknown): void {
+  const cur = getTool(key);
+  if (cur.draft === draft) return;
+  write(key, { ...cur, draft });
+}
+
 /** In `ms`, changes the key's draft with `change` (which gets the draft as it
  *  is then). Runs whether or not a form is mounted; `timerKey` names it, so a
  *  later call with the same name replaces it. */
@@ -142,10 +150,18 @@ export function changeDraftLater(key: string, timerKey: string, ms: number, chan
       timers.delete(timerKey);
       const cur = getTool(key);
       if (cur.draft === undefined) return;
-      const next = change(cur.draft);
-      if (next !== cur.draft) write(key, { ...cur, draft: next });
+      replaceToolDraft(key, change(cur.draft));
     }, ms),
   );
+}
+
+/** Counts `forgetAccount` calls, so work that began as one account can tell
+ *  the store has been emptied for another since. */
+let epoch = 0;
+
+/** The store's account epoch now (`forgetAccount` moves it on). */
+export function storeEpoch(): number {
+  return epoch;
 }
 
 export interface RunAnswer {
@@ -226,6 +242,7 @@ export async function runTool(key: string, run: () => Promise<RunAnswer>, opts: 
  * write counter keeps counting, so no old timer can match a new write.
  */
 export function forgetAccount(): void {
+  epoch += 1;
   for (const t of timers.values()) clearTimeout(t);
   timers.clear();
   entries.clear();
@@ -411,6 +428,21 @@ export function landedInfo(held: InfoHeld, info: StreamInfoView | null): InfoHel
     }
   }
   return changed ? { ...held, landing } : held;
+}
+
+/**
+ * A Stream info save of `sent` went through: its fields show as landing on
+ * `key` until Twitch's read has them, or for `LANDING_MS`. Nothing is written
+ * when the store was emptied for another account since the save began
+ * (`epochAtSave`), so the next account never sees the last one's title.
+ */
+export function landInfoSave(key: string, sent: Partial<StreamInfoDraft>, epochAtSave: number): boolean {
+  if (epochAtSave !== epoch) return false;
+  const stamp = nextStamp();
+  const cur = (getTool(key).draft as InfoHeld | undefined) ?? { edits: {}, tagText: '', landing: {} };
+  replaceToolDraft(key, landingAfterSave(cur, sent, stamp));
+  changeDraftLater(key, `${key}:landing:${stamp}`, LANDING_MS, (d) => landingExpired(d as InfoHeld, stamp));
+  return true;
 }
 
 /** The save stamped `stamp` is over: its own landing fields go, and no other

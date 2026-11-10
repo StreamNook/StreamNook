@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
 vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
 
-const { managerState, accountChanged, retryDelay, twitchAccountOf } = await import('./streamManager');
+const { managerState, accountChanged, retryDelay, twitchAccountOf, surfaceId, firstWatchSeq } = await import('./streamManager');
 type State = Parameters<typeof managerState>[0];
 type View = NonNullable<State['view']>;
 type Queue = NonNullable<State['queue']>;
@@ -136,6 +136,21 @@ describe('the account', () => {
     expect(twitchAccountOf(null)).toBeNull();
     expect(twitchAccountOf(row('connected', '42') as never)).toBe('42');
     expect(twitchAccountOf(row('expired', '42') as never)).toBeNull();
+  });
+});
+
+describe('interest across reloads', () => {
+  it("a reloaded page never reuses the last page's surface names", () => {
+    expect(surfaceId(1_789_000_000_000.7, 1)).toBe('sm-1789000000000-1');
+    expect(surfaceId(1_789_000_000_500, 1)).not.toBe(surfaceId(1_789_000_000_000, 1));
+  });
+
+  it("a page's first watch number is above anything the page before sent", () => {
+    const before = 1_789_000_000_000;
+    const after = before + 1;
+    // The old page's last number after a thousand calls in its one millisecond.
+    expect(firstWatchSeq(after)).toBeGreaterThan(firstWatchSeq(before) + 999);
+    expect(Number.isSafeInteger(firstWatchSeq(4_102_444_800_000) + 1_000_000)).toBe(true);
   });
 });
 

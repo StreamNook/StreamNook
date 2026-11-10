@@ -43,15 +43,13 @@ import {
 } from '../../services/streamManager';
 import {
   INFO_FIELDS,
-  LANDING_MS,
-  changeDraftLater,
   codePoints,
   infoEdits,
   infoUnderEdits,
+  landInfoSave,
   landedInfo,
-  landingAfterSave,
-  landingExpired,
-  nextStamp,
+  replaceToolDraft,
+  storeEpoch,
   type InfoHeld,
   getTool,
   isShowing,
@@ -202,8 +200,8 @@ function InfoEditor({ view, layout, onClose, onExpand, handedOff = false }: Form
   useEffect(() => {
     const cur = getTool(key).draft as InfoHeld | undefined;
     if (!cur) return;
-    const next = landedInfo(cur, info);
-    if (next !== cur) setToolDraft(key, next);
+    // Only the draft: a failed save's line stays until it is read or answered.
+    replaceToolDraft(key, landedInfo(cur, info));
   }, [key, info]);
   const [check, setCheck] = useState<InfoCheck | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -287,13 +285,11 @@ function InfoEditor({ view, layout, onClose, onExpand, handedOff = false }: Form
     // else changed in another field meanwhile.
     const sent = { ...held.edits };
     const fields = INFO_FIELDS.filter((f) => f in sent);
+    // A switch to another account while it runs empties the store: then
+    // nothing of this save is kept for the next account.
+    const epochAtSave = storeEpoch();
     const ok = await runTool(key, () => managerAct(targetOf(view), { kind: 'save_info', draft, fields }));
-    if (ok) {
-      const stamp = nextStamp();
-      const cur = (getTool(key).draft as InfoHeld | undefined) ?? NO_EDITS;
-      setToolDraft(key, landingAfterSave(cur, sent, stamp));
-      changeDraftLater(key, `${key}:landing:${stamp}`, LANDING_MS, (d) => landingExpired(d as InfoHeld, stamp));
-    }
+    if (ok) landInfoSave(key, sent, epochAtSave);
     if (ok && layout !== 'window') closeSoon();
   };
 

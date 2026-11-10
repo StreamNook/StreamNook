@@ -91,13 +91,68 @@ describe('who manages here', () => {
   });
 });
 
+/** A source with Windows line ends made plain. */
+const src = (p: string) => read(p).replace(/\r\n/g, '\n');
+/** From the first `from` to the next `to` after it. */
+const between = (s: string, from: string, to: string) => {
+  const a = s.indexOf(from);
+  expect(a, from).toBeGreaterThanOrEqual(0);
+  const b = s.indexOf(to, a + from.length);
+  expect(b, to).toBeGreaterThan(a);
+  return s.slice(a, b);
+};
+/** The effect that adds the listener for `event`, up to where it adds it. */
+const listenerOf = (s: string, event: string) => {
+  const at = s.indexOf(`addEventListener('${event}'`);
+  expect(at, event).toBeGreaterThan(0);
+  return s.slice(s.lastIndexOf('useEffect(', at), at);
+};
+
+describe('the follow-up fixes stay wired', () => {
+  it('a failed read is tried again on the backoff', () => {
+    const retry = between(src('services/streamManager.ts'), 'const failed = active', 'const setQueue');
+    expect(retry).toContain('retryDelay(failures.current)');
+  });
+
+  it('a Stream info save lands its fields, and only for the account it began as', () => {
+    const save = between(src('components/chat/StreamManagerPanel.tsx'), 'const save = async () => {', 'const startOver');
+    expect(save.indexOf('const epochAtSave = storeEpoch()')).toBeLessThan(save.indexOf('await runTool('));
+    expect(save).toContain('if (ok) landInfoSave(key, sent, epochAtSave)');
+    const land = between(src('components/chat/managerStore.ts'), 'export function landInfoSave', '\n}\n');
+    for (const part of ['if (epochAtSave !== epoch) return false', 'landingAfterSave(', 'changeDraftLater(']) expect(land).toContain(part);
+  });
+
+  it("Twitch's read showing a sent field changes only the draft, never a failure's line", () => {
+    const effect = between(src('components/chat/StreamManagerPanel.tsx'), '// A sent field shows until', '}, [key, info]);');
+    expect(effect).toContain('replaceToolDraft(key, landedInfo(');
+    expect(effect).not.toContain('setToolDraft(');
+  });
+
+  it('a Tools menu that goes away while open is not left counted as open', () => {
+    expect(src('components/chat/ChannelToolsMenu.tsx')).toContain('useEffect(() => () => onOpenChange?.(false), [onOpenChange]);');
+    expect(src('components/ChatWidget.tsx')).toContain('if (!toolSections.any && toolsMenuOpen) setToolsMenuOpen(false);');
+  });
+
+  it("the phone's sheet does not come back open by itself", () => {
+    expect(src('mobile/chat/MobileChatInput.tsx')).toContain("if (manageOpen && manages !== 'yes') setManageOpen(false);");
+  });
+
+  it('interest names and numbers survive a reload', () => {
+    const sm = src('services/streamManager.ts');
+    expect(sm).toContain('let watchSeq = firstWatchSeq(PAGE_START);');
+    expect(sm).toContain('useState(() => surfaceId(PAGE_START, (surfaceCount += 1)))');
+  });
+});
+
 describe('slash commands reach only their pane', () => {
-  it.each(['components/ChatWidget.tsx', 'mobile/chat/MobileChatInput.tsx', 'mobile/chat/MobileChatPane.tsx'])(
-    '%s asks acceptsComposerEvent',
-    (file) => {
-      expect(read(file)).toContain('acceptsComposerEvent(');
-    },
-  );
+  it.each([
+    ['components/ChatWidget.tsx', 'streamnook-open-poll-composer', 'acceptsComposerEvent(detail, paneSource, currentStream?.user_login)'],
+    ['components/ChatWidget.tsx', 'streamnook-clear-local-chat', 'acceptsComposerEvent((e as CustomEvent<PaneEventDetail>).detail, paneSource, currentStream?.user_login)'],
+    ['mobile/chat/MobileChatInput.tsx', 'streamnook-open-poll-composer', 'acceptsComposerEvent(detail, source, channel)'],
+    ['mobile/chat/MobileChatPane.tsx', 'streamnook-clear-local-chat', 'acceptsComposerEvent((e as CustomEvent<PaneEventDetail>).detail, paneSource, null)'],
+  ])('%s: the %s listener asks acceptsComposerEvent', (file, event, call) => {
+    expect(listenerOf(src(file), event)).toContain(call);
+  });
 
   it('the pane events carry their source', () => {
     const ui = read('utils/slashUi.ts');

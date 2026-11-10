@@ -453,8 +453,24 @@ export function retryDelay(attempt: number): number {
 
 // ─── interest ─────────────────────────────────────────────────────────────────
 
+/** When this page began, in whole milliseconds (`performance.timeOrigin`). */
+const pageStart = (): number =>
+  Math.floor(typeof performance !== 'undefined' && performance.timeOrigin ? performance.timeOrigin : Date.now());
+
+/** A surface's name, unique across reloads of the same window: Rust keeps
+ *  interest per window and surface, and a reloaded page must never reuse
+ *  the last page's names. */
+export const surfaceId = (pageStartMs: number, n: number): string => `sm-${Math.floor(pageStartMs)}-${n}`;
+
+/** The first watch number a page sends: above any number an earlier page of
+ *  the same window could have sent (up to a thousand calls per millisecond
+ *  it lived), so Rust never takes a new page's call for an older one. Stays
+ *  a safe integer for any real date. */
+export const firstWatchSeq = (pageStartMs: number): number => Math.floor(pageStartMs) * 1000;
+
+const PAGE_START = pageStart();
 let surfaceCount = 0;
-let watchSeq = 0;
+let watchSeq = firstWatchSeq(PAGE_START);
 
 /** Tells Rust one surface (`surface`, unique in this page) is open for a
  *  channel, or no longer is. Later calls always carry a higher `seq`. */
@@ -477,7 +493,7 @@ export function useManagerInterest(
   channelLogin: string,
   opts: { pauseWhileHidden?: boolean } = {},
 ): void {
-  const [surface] = useState(() => `sm-surface-${(surfaceCount += 1)}`);
+  const [surface] = useState(() => surfaceId(PAGE_START, (surfaceCount += 1)));
   const account = useTwitchAccount();
   const pause = !!opts.pauseWhileHidden;
   const [hidden, setHidden] = useState(false);

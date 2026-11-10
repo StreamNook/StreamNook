@@ -137,6 +137,9 @@ const ChannelToolsMenu: React.FC<ChannelToolsMenuProps> = ({
   useEffect(() => {
     onOpenChange?.(isOpen);
   }, [isOpen, onOpenChange]);
+  // Gone while open (the channel changed, the Tools button went away): the
+  // host must not think the menu is still open.
+  useEffect(() => () => onOpenChange?.(false), [onOpenChange]);
 
   const close = () => {
     setIsOpen(false);

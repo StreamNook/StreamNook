@@ -2852,6 +2852,8 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   // While a surface (or the Tools menu) is open, Rust keeps this channel's
   // view current on its own: deadlines, Twitch's pushes, a re-read now and then.
   const [toolsMenuOpen, setToolsMenuOpen] = useState(false);
+  // No Tools button, no menu: a menu that went away while open is closed.
+  if (!toolSections.any && toolsMenuOpen) setToolsMenuOpen(false);
   const managerChannelId = currentStream?.user_id;
   const managerLogin = currentStream?.user_login ?? '';
   useManagerInterest(!!managerPanel, managerChannelId, managerLogin);

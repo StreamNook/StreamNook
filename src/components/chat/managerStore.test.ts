@@ -11,7 +11,10 @@ import {
   landedInfo,
   landingAfterSave,
   landingExpired,
+  landInfoSave,
   lastPage,
+  replaceToolDraft,
+  storeEpoch,
   managesHere,
   rememberPage,
   shownInfo,
@@ -265,6 +268,26 @@ describe('stream info edits', () => {
     expect(expired.landing.title).toEqual({ value: 'B', stamp: 2 });
     expect(expired.landing.tags).toBeUndefined();
     expect(landingExpired(expired, 1)).toBe(expired);
+  });
+
+  it("changing only the draft keeps a failed save's line", async () => {
+    await runTool(K, () => Promise.resolve({ ok: false, message: 'Twitch said no' }));
+    replaceToolDraft(K, landingAfterSave(empty, { title: 'A' }, 1));
+    expect(getTool(K)).toMatchObject({ phase: 'failed', line: 'Twitch said no' });
+  });
+
+  it('a save that went through shows its fields as landing, then lets them go', () => {
+    expect(landInfoSave(K, { title: 'Sent' }, storeEpoch())).toBe(true);
+    expect((getTool(K).draft as InfoHeld).landing.title?.value).toBe('Sent');
+    vi.advanceTimersByTime(LANDING_MS);
+    expect((getTool(K).draft as InfoHeld).landing.title).toBeUndefined();
+  });
+
+  it('a save that ends after a switch to another account leaves nothing for it', () => {
+    const atSave = storeEpoch();
+    forgetAccount();
+    expect(landInfoSave(K, { title: 'Old account title' }, atSave)).toBe(false);
+    expect(getTool(K).draft).toBeUndefined();
   });
 
   it('the timer runs whether or not the form is open, and only on its own name', () => {
