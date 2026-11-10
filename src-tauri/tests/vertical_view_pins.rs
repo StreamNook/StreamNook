@@ -45,7 +45,10 @@ fn no_shell_reads_or_writes_the_vertical_pick() {
     let mut readers = Vec::new();
     for file in &sources {
         let rel = file.strip_prefix(&root).unwrap_or(file);
-        if rel == declaration {
+        // The declaration, and tests that pin the shells never write it (they
+        // have to name the field to look for it).
+        let name = rel.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if rel == declaration || name.contains(".test.") {
             continue;
         }
         let text = std::fs::read_to_string(file).unwrap_or_default();
