@@ -168,9 +168,12 @@ pub struct HereDrop {
     /// Its minutes are in but Twitch has not granted the claim and there is
     /// no page to link an account (the auto-claim tries again later).
     pub watched: bool,
+    /// Watching cannot earn it: it needs an earlier reward first (an
+    /// evolution stage whose earlier form is not held). Never leads.
+    pub locked: bool,
     pub lead: bool,
-    /// "Claimed", "Ready", "Claiming", "Connect", "Watched", "12m to watch"
-    /// or "Starts when you watch".
+    /// "Claimed", "Ready", "Claiming", "Connect", "Watched", "Locked",
+    /// "12m to watch" or "Starts when you watch".
     pub status: String,
     pub detail: Option<String>,
     pub bar: Option<f32>,
@@ -384,6 +387,9 @@ pub struct Inputs<'a> {
     pub instances: &'a HashMap<String, String>,
     pub claims: &'a HashMap<String, ClaimState>,
     pub ungranted: &'a HashSet<String>,
+    /// Rewards watching cannot earn yet, by drop id, with the badge each
+    /// needs first (`evolution::locked_stages`).
+    pub locked: &'a HashMap<String, String>,
     /// The reward the lip showed last, so a tie never trades it away.
     pub held_lead: Option<&'a str>,
     pub now_ms: i64,
@@ -398,6 +404,7 @@ static NO_OVERLAY: Lazy<HashMap<String, (i32, DateTime<Utc>)>> = Lazy::new(HashM
 static NO_INSTANCES: Lazy<HashMap<String, String>> = Lazy::new(HashMap::new);
 static NO_CLAIMS: Lazy<HashMap<String, ClaimState>> = Lazy::new(HashMap::new);
 static NO_UNGRANTED: Lazy<HashSet<String>> = Lazy::new(HashSet::new);
+static NO_LOCKED: Lazy<HashMap<String, String>> = Lazy::new(HashMap::new);
 
 impl<'a> Inputs<'a> {
     /// A place, the list and an inventory only (the phones' own read).
@@ -416,6 +423,7 @@ impl<'a> Inputs<'a> {
             instances: &NO_INSTANCES,
             claims: &NO_CLAIMS,
             ungranted: &NO_UNGRANTED,
+            locked: &NO_LOCKED,
             held_lead: None,
             now_ms,
         }
@@ -514,6 +522,8 @@ struct Row<'a> {
     pending: bool,
     connect: bool,
     watched: bool,
+    /// The badge it needs first, when watching cannot earn it yet.
+    locked: Option<String>,
 }
 
 /// A campaign's watch-time rewards, fewest minutes first, and its clock.
@@ -596,15 +606,21 @@ fn rows<'a>(
                 .and_then(|p| p.twitch_progress.as_ref())
                 .is_some_and(|t| t.ready_to_claim);
             let pending = !own && i.claims.get(&d.id) == Some(&ClaimState::Pending);
-            let earned = started && (shown >= need || twitch_ready);
+            // One Twitch already finished is claimed whatever it needed.
+            let locked = i
+                .locked
+                .get(&d.id)
+                .filter(|_| !own && !pending && !twitch_ready)
+                .cloned();
+            let earned = locked.is_none() && started && (shown >= need || twitch_ready);
             let ungranted = i.ungranted.contains(&d.id);
             // Twitch will not grant it until the game account is linked: one
             // whose minutes are in while Twitch says the account is not
             // linked, or one it already took but did not grant.
-            let connect = !own && !pending && link && (ungranted || (needs_link && earned));
+            let connect = !own && !pending && locked.is_none() && link && (ungranted || (needs_link && earned));
             // Not granted, with no page to link anything; the auto-claim
             // tries it again later.
-            let watched = !own && !pending && !connect && ungranted;
+            let watched = !own && !pending && !connect && locked.is_none() && ungranted;
             // A claim already sent, or one Twitch will not grant, never
             // offers Claim.
             let ready = !own && !pending && !connect && !watched && earned;
@@ -617,6 +633,7 @@ fn rows<'a>(
                 pending,
                 connect,
                 watched,
+                locked,
             }
         })
         .collect();
@@ -671,6 +688,8 @@ fn here_drop(r: &Row, i: &Inputs, started: bool, lead: bool) -> HereDrop {
         "Watched".to_string()
     } else if r.ready {
         "Ready".to_string()
+    } else if r.locked.is_some() {
+        "Locked".to_string()
     } else if !started {
         "Starts when you watch".to_string()
     } else {
@@ -695,14 +714,18 @@ fn here_drop(r: &Row, i: &Inputs, started: bool, lead: bool) -> HereDrop {
         pending: r.pending,
         connect: r.connect,
         watched: r.watched,
+        locked: r.locked.is_some(),
         lead,
         status,
         detail: if r.owned {
             None
+        } else if let Some(needs) = &r.locked {
+            Some(crate::services::evolution::locked_words(needs))
         } else {
             drop_words::progress_line(d, i.now_ms).or_else(|| drop_words::requirement_text(d))
         },
-        bar: Some(if r.owned {
+        // Minutes Twitch shows on a locked reward go nowhere, so no bar.
+        bar: r.locked.is_none().then_some(if r.owned {
             100.0
         } else {
             (r.shown as f32 / r.need as f32 * 100.0).min(100.0)
@@ -845,10 +868,11 @@ pub fn build(i: &Inputs) -> WatchDrops {
             })
         })
         .collect();
+    // A locked reward is nothing to earn here: it never leads, counts or sorts.
     let work = |b: &Built| -> (u8, i32) {
         b.rows
             .iter()
-            .filter(|r| !r.owned)
+            .filter(|r| !r.owned && r.locked.is_none())
             .map(Row::rank)
             .min()
             .unwrap_or((u8::MAX, i32::MAX))
@@ -872,7 +896,7 @@ pub fn build(i: &Inputs) -> WatchDrops {
             b.rows
                 .iter()
                 .enumerate()
-                .filter(|(_, r)| !r.owned)
+                .filter(|(_, r)| !r.owned && r.locked.is_none())
                 .map(move |(ri, r)| ((bi, ri), r.rank()))
         })
         .collect();
@@ -892,10 +916,12 @@ pub fn build(i: &Inputs) -> WatchDrops {
     view.lead = lead_at.map(|(bi, ri)| lead_drop(built[bi].c, &built[bi].rows, ri, i));
     let unowned: u32 = built
         .iter()
-        .map(|b| b.rows.iter().filter(|r| !r.owned).count() as u32)
+        .map(|b| b.rows.iter().filter(|r| !r.owned && r.locked.is_none()).count() as u32)
         .sum();
+    let locked = built.iter().any(|b| b.rows.iter().any(|r| !r.owned && r.locked.is_some()));
     view.more = unowned.saturating_sub(view.lead.is_some() as u32);
-    view.complete = !built.is_empty() && unowned == 0;
+    // Only what is left locked is not everything claimed.
+    view.complete = !built.is_empty() && unowned == 0 && !locked;
     view.campaigns = built
         .iter()
         .enumerate()
@@ -949,7 +975,7 @@ fn more_art(campaigns: &[HereCampaign]) -> Vec<String> {
     campaigns
         .iter()
         .flat_map(|c| &c.drops)
-        .filter(|d| !d.claimed && !d.lead && !d.image.is_empty())
+        .filter(|d| !d.claimed && !d.lead && !d.locked && !d.image.is_empty())
         .map(|d| d.image.clone())
         .take(2)
         .collect()
@@ -1142,6 +1168,8 @@ struct State {
     seen_claims: HashSet<(String, String)>,
     claims: HashMap<String, Claim>,
     ungranted: HashSet<String>,
+    /// Rewards watching cannot earn yet (`evolution::locked_stages`).
+    locked: HashMap<String, String>,
     read_wanted: bool,
     /// When the wanted read was asked for: a read that started before then
     /// (a claim or a push arrived while it ran) does not answer it.
@@ -1220,6 +1248,12 @@ pub fn set_lip_hidden(hidden: bool) {
     send(out);
 }
 
+/// Rewards watching cannot earn yet, as of the last look, for reads made
+/// outside the model (the phones' own bar read).
+pub fn locked() -> HashMap<String, String> {
+    with_state(|s| s.locked.clone())
+}
+
 /// The model now.
 pub fn current() -> WatchDropsSnapshot {
     with_state(|s| WatchDropsSnapshot {
@@ -1244,6 +1278,7 @@ fn rebuild(s: &mut State) -> Option<WatchDropsSnapshot> {
                 instances: &s.instances,
                 claims: &claims,
                 ungranted: &s.ungranted,
+                locked: &s.locked,
                 held_lead: s.view.lead.as_ref().map(|l| l.drop_id.as_str()),
                 now_ms,
             })
@@ -1704,13 +1739,16 @@ async fn step(app: &AppHandle, h: &Handles) -> Option<Duration> {
     let list = campaigns(h).await;
     let second = crate::services::reward_drops::cached();
     let gate = gate_open(&place, &list, &second);
-    let (out, due) = with_state(|s| {
+    let locked = crate::services::evolution::locked_stages(app).await;
+    let (out, due, locked_changed) = with_state(|s| {
         if playing && !s.playing {
             s.stall.play_edge(Instant::now());
         }
         s.playing = playing;
         s.solo = solo;
         s.list = list;
+        let locked_changed = s.locked != locked;
+        s.locked = locked;
         s.gate_open = gate;
         let out = set_place(s, Some(place.clone()));
         if !gate {
@@ -1735,9 +1773,13 @@ async fn step(app: &AppHandle, h: &Handles) -> Option<Duration> {
         if due {
             s.last_attempt = Some(Instant::now());
         }
-        (out, due)
+        (out, due, locked_changed)
     });
     send(out);
+    // Autopilot works only lines that can move; it hears the new set at once.
+    if locked_changed {
+        state.plugin_host.push_drops_settings();
+    }
     if due {
         if let Err(e) =
             inventory_newer_than(Utc::now(), &h.client, &h.device_id, &h.session_id).await
@@ -2244,6 +2286,26 @@ mod tests {
         older.insert("t1".to_string(), (35, read - chrono::Duration::seconds(10)));
         i.overlay = &older;
         assert_eq!(build(&i).campaigns[0].drops[0].current_minutes, 20);
+    }
+
+    #[test]
+    fn a_reward_that_needs_an_earlier_one_is_locked_and_never_leads() {
+        // Reported by Jonas: Gengar's line showed as in progress forever for
+        // an account with no Gastly.
+        let place = golden::place();
+        let (list, inv) = one_tier(20);
+        let mut i = Inputs::bare(&place, &list, Some(&inv), now_ms());
+        assert!(build(&i).lead.is_some());
+        let locked = HashMap::from([("t1".to_string(), "Gastly".to_string())]);
+        i.locked = &locked;
+        let view = build(&i);
+        assert!(view.lead.is_none());
+        assert_eq!((view.more, view.complete), (0, false));
+        let row = &view.campaigns[0].drops[0];
+        assert!(row.locked && !row.ready && !row.lead);
+        assert_eq!(row.status, "Locked");
+        assert_eq!(row.detail.as_deref(), Some("Needs the Gastly badge first"));
+        assert_eq!(row.bar, None);
     }
 
     fn state_with(user: &str) -> State {
@@ -2945,6 +3007,7 @@ mod tests {
                 "image",
                 "instance_id",
                 "lead",
+                "locked",
                 "name",
                 "pending",
                 "ready",

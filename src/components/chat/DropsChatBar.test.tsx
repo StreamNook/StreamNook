@@ -106,6 +106,10 @@ describe('barLine', () => {
     expect(barLine(view({ campaigns: [notStarted] }))).toMatchObject({ name: 'Jacket', status: 'Starts when you watch', percent: 0 });
     expect(barLine(view({ campaigns: [notStarted, { ...notStarted, id: 'c3' }] }))?.name).toBe('2 rewards to earn here');
   });
+  it('never brings the lip up for a reward that needs an earlier one first', () => {
+    const locked = { ...tier, locked: true, status: 'Locked', detail: 'Needs the Gastly badge first', bar: null };
+    expect(barLine(view({ campaigns: [{ ...notStarted, drops: [locked] }] }))).toBeNull();
+  });
   it('shows no bar with nothing left here', () => {
     expect(barLine(view({ complete: true }))).toBeNull();
   });

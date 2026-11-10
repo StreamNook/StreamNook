@@ -67,12 +67,11 @@ pub fn pick(items: &[InventoryItem], channel_id: &str, login: &str, game_id: &st
         game_id: game_id.to_string(),
         game_name: game_name.to_string(),
     };
-    let view = crate::services::watch_drops::build(&crate::services::watch_drops::Inputs::bare(
-        &place,
-        &[],
-        Some(&inventory),
-        chrono::Utc::now().timestamp_millis(),
-    ));
+    let locked = crate::services::watch_drops::locked();
+    let view = crate::services::watch_drops::build(&crate::services::watch_drops::Inputs {
+        locked: &locked,
+        ..crate::services::watch_drops::Inputs::bare(&place, &[], Some(&inventory), chrono::Utc::now().timestamp_millis())
+    });
     if view.lead.is_none() {
         log::warn!(
             "[DropProgress] no match: game=\"{game_name}\" channel=\"{login}\" campaigns={} listed={}",

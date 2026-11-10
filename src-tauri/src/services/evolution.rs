@@ -221,6 +221,68 @@ pub(crate) fn build_board(
     EvolutionBoard { tracks: out }
 }
 
+/// The evolution stages watching cannot move for this account, by reward
+/// group id, each with the badge it needs first. A line whose first form is
+/// not held is locked from its current stage on (Haunter needs Gastly), and
+/// every stage after the current one waits on the stage before it (Gengar
+/// needs Haunter). Twitch reports all of them in progress with their
+/// preconditions met, so this is what keeps Autopilot and the drops lip from
+/// chasing one forever. A line whose base is unknown is left to Twitch. Pure.
+pub(crate) fn locked_from(campaigns: &[DropCampaign], groups: &[TrackGroup], badges: &BadgeIndex) -> HashMap<String, String> {
+    let board = build_board(campaigns, groups, &HashMap::new(), badges, 0);
+    let mut out = HashMap::new();
+    for lane in board.tracks.iter().flat_map(|t| &t.lanes) {
+        let Some(current) = lane.current else { continue };
+        for (i, stage) in lane.stages.iter().enumerate().skip(current) {
+            let needs = if i == current {
+                match &lane.blocked_by {
+                    Some(base) => base.clone(),
+                    None => continue,
+                }
+            } else {
+                lane.stages[i - 1].title.clone()
+            };
+            out.insert(stage.group_id.clone(), needs);
+        }
+    }
+    out
+}
+
+/// How long the badge copy behind `locked_stages` is reused.
+const LOCKED_BADGES_SECS: u64 = 120;
+
+static LOCKED_BADGES: Lazy<Mutex<Option<(Instant, BadgeIndex)>>> = Lazy::new(|| Mutex::new(None));
+
+/// `locked_from` for the signed-in Drops account, from the second drops list
+/// as last read (no request of its own). Empty when nothing is evolving.
+pub async fn locked_stages(app: &crate::rt::AppHandle) -> HashMap<String, String> {
+    let groups = crate::services::reward_drops::track_groups();
+    if !groups.iter().any(|g| g.lane.is_some()) {
+        return HashMap::new();
+    }
+    let campaigns = crate::services::reward_drops::cached();
+    let fresh = LOCKED_BADGES
+        .lock()
+        .ok()
+        .and_then(|c| c.as_ref().filter(|(at, _)| at.elapsed().as_secs() < LOCKED_BADGES_SECS).map(|(_, b)| b.clone()));
+    let badges = match fresh {
+        Some(b) => b,
+        None => {
+            let b = badge_index(app).await;
+            if let Ok(mut c) = LOCKED_BADGES.lock() {
+                *c = Some((Instant::now(), b.clone()));
+            }
+            b
+        }
+    };
+    locked_from(&campaigns, &groups, &badges)
+}
+
+/// The words a locked stage shows: "Needs the Gastly badge first".
+pub fn locked_words(needs: &str) -> String {
+    format!("Needs the {needs} badge first")
+}
+
 /// A line's stages in evolution order, as indices into `titles` (Twitch's
 /// order): each comes after the stage it evolves from. A stage whose base is
 /// unknown, or outside the lane, keeps its place in Twitch's order. Pure.
@@ -620,6 +682,46 @@ mod tests {
         // Two stages naming each other cannot loop.
         let cycle = |t: &str| Some(if t == "Gengar" { "Haunter" } else { "Gengar" }.to_string());
         assert_eq!(evolution_order(&titles[..2], cycle).len(), 2);
+    }
+
+    fn locked_for(owned: &[&str]) -> HashMap<String, String> {
+        let campaigns = vec![campaign(vec![
+            stage_drop("g-haunter", "Haunter", Value::Null),
+            stage_drop("g-gengar", "Gengar", Value::Null),
+            stage_drop("g-pikachu", "Pikachu", Value::Null),
+            stage_drop("g-ball", "Pokémon Night Out Themed Poke Ball", Value::Null),
+        ])];
+        let groups = vec![
+            group("g-haunter", Some("lane-gastly")),
+            group("g-gengar", Some("lane-gastly")),
+            group("g-pikachu", Some("lane-pichu")),
+            group("g-ball", None),
+        ];
+        locked_from(&campaigns, &groups, &index(owned))
+    }
+
+    #[test]
+    fn a_line_without_its_first_form_is_locked_from_the_start() {
+        // SN report (Jonas): no Gastly, because the Poke Ball was missed, yet
+        // Autopilot chased Gengar forever.
+        let locked = locked_for(&[]);
+        assert_eq!(locked.get("g-haunter").map(String::as_str), Some("Gastly"));
+        assert_eq!(locked.get("g-gengar").map(String::as_str), Some("Haunter"));
+        assert_eq!(locked.get("g-pikachu").map(String::as_str), Some("Pichu"));
+        // The balls are not a line and are never locked.
+        assert!(!locked.contains_key("g-ball"));
+        assert_eq!(locked_words("Gastly"), "Needs the Gastly badge first");
+    }
+
+    #[test]
+    fn a_held_first_form_unlocks_only_the_next_stage() {
+        let locked = locked_for(&["Gastly"]);
+        assert!(!locked.contains_key("g-haunter"));
+        assert_eq!(locked.get("g-gengar").map(String::as_str), Some("Haunter"));
+        let next = locked_for(&["Gastly", "Haunter"]);
+        assert!(!next.contains_key("g-gengar"));
+        // A finished line has nothing locked.
+        assert!(!locked_for(&["Gastly", "Haunter", "Gengar", "Pichu", "Pikachu"]).contains_key("g-gengar"));
     }
 
     #[test]

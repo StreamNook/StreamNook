@@ -168,10 +168,38 @@ pub async fn get(
         }
     }
     let now = chrono::Utc::now().timestamp_millis();
-    let last = LAST.lock().ok();
-    match last.as_ref().and_then(|l| l.as_ref()) {
-        Some(source) => build(source.inventory.as_ref(), &source.campaigns, query, now),
-        None => build(None, &[], query, now),
+    let mut view = {
+        let last = LAST.lock().ok();
+        match last.as_ref().and_then(|l| l.as_ref()) {
+            Some(source) => build(source.inventory.as_ref(), &source.campaigns, query, now),
+            None => build(None, &[], query, now),
+        }
+    };
+    apply_locked(&mut view, &crate::services::watch_drops::locked());
+    view
+}
+
+/// Rewards watching cannot earn yet (an evolution stage whose earlier form is
+/// not held) read "Locked" with what they need, and show no bar. Pure.
+fn apply_locked(view: &mut RewardsDrops, locked: &std::collections::HashMap<String, String>) {
+    if locked.is_empty() {
+        return;
+    }
+    let rows = view
+        .in_progress
+        .iter_mut()
+        .chain(view.available.iter_mut())
+        .flat_map(|g| g.campaigns.iter_mut())
+        .flat_map(|c| c.drops.iter_mut());
+    for row in rows {
+        if row.claimed || row.done {
+            continue;
+        }
+        if let Some(needs) = locked.get(&row.id) {
+            row.status = "Locked".to_string();
+            row.detail = Some(crate::services::evolution::locked_words(needs));
+            row.bar = None;
+        }
     }
 }
 
@@ -518,6 +546,22 @@ mod tests {
         assert_eq!(view.available[0].art, "https://x/ttv-boxart/Valorant-144x192.jpg");
         assert_eq!(view.earned.len(), 10);
         assert_eq!(view.earned[0].game, None);
+    }
+
+    #[test]
+    fn a_stage_that_needs_an_earlier_form_reads_locked() {
+        let started = campaign("1", "Pokemon", 20, vec![drop("gengar", 60, Some(30), false), drop("x", 60, Some(30), false)]);
+        let inventory = inv(vec![item(started.clone(), CampaignStatus::Active, 1)], 0);
+        let mut view = build(Some(&inventory), &[started], "", now());
+        let locked = std::collections::HashMap::from([("gengar".to_string(), "Haunter".to_string())]);
+        apply_locked(&mut view, &locked);
+        let rows = &view.in_progress[0].campaigns[0].drops;
+        let gengar = rows.iter().find(|r| r.id == "gengar").unwrap();
+        assert_eq!(gengar.status, "Locked");
+        assert_eq!(gengar.detail.as_deref(), Some("Needs the Haunter badge first"));
+        assert_eq!(gengar.bar, None);
+        let other = rows.iter().find(|r| r.id == "x").unwrap();
+        assert_ne!(other.status, "Locked");
     }
 
     #[test]

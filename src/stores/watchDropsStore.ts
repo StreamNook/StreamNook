@@ -41,6 +41,8 @@ export interface HereDrop {
   connect: boolean;
   /** Minutes in, but Twitch has not granted the claim and there is no page to link; the auto-claim tries again later. */
   watched: boolean;
+  /** Watching cannot earn it yet: it needs an earlier reward first (`detail` says which). Never the lead. */
+  locked?: boolean;
   lead: boolean;
   status: string;
   detail: string | null;

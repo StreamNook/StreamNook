@@ -97,7 +97,8 @@ impl HostInner {
 
     /// Hands the stored drops settings to every running plugin that takes them
     /// (`drops.configure`). The host owns this hand-off: it runs when such a
-    /// plugin finishes starting and after every drops-settings save, so the
+    /// plugin finishes starting, after every drops-settings save and when the
+    /// evolution stages the account cannot earn change (`watch_drops`), so the
     /// plugin never runs on its defaults or on an older copy, and a page that
     /// pushed too early (before the plugin was up) no longer matters. The
     /// settings are read when the push runs, so overlapping pushes all carry
@@ -128,6 +129,13 @@ impl HostInner {
             map.insert(
                 "evolution_bases".into(),
                 json!(crate::services::evolution::evolution_bases().await),
+            );
+            // Nor this: the evolution stages this account cannot earn yet, by
+            // reward group, with the badge each needs first. A line whose
+            // first form is not held is never worked or followed.
+            map.insert(
+                "evolution_locked".into(),
+                json!(crate::services::evolution::locked_stages(&self.app).await),
             );
         }
         for tx in targets {
