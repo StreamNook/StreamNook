@@ -29,6 +29,16 @@ import { setWindowFullscreen } from '../utils/windowFullscreen';
 import { useAccountRosterStore } from './accountRosterStore';
 import { twitchSignInReason } from '../utils/twitchSignIn';
 import { authFailureOutcome, HELD_SESSION_RECHECK_MS, isNetworkAuthError, readProfile } from '../utils/authErrors';
+import {
+  availableAfter,
+  holdsLate,
+  parseView,
+  restartOnPosture,
+  wantedView,
+  type Posture,
+  type StreamView,
+  type VerticalAvailable,
+} from '../mobile/watch/verticalView';
 
 /** `watch_open_room`: the room, or the live row for a stale card. */
 type RoomOpenResult = {
@@ -336,6 +346,38 @@ export interface AppState {
   rewindLive: (target: { positionSecs?: number; behindSecs?: number | null }) => Promise<void>;
   /** Leave a rewind and rejoin the live edge. */
   returnToLive: () => Promise<void>;
+  /** Phones (SN-40): the picture playing, `landscape` or `vertical`; null for
+   *  a stream that is not Twitch's, and always null on desktop. */
+  streamView: StreamView | null;
+  /** The stream also broadcasts a playable portrait picture: the Vertical
+   *  pill shows. */
+  verticalAvailable: boolean;
+  /** The core's answer for the served ladder's shape; null when it knows no
+   *  size (the measured frame stands in then). */
+  streamPortrait: boolean | null;
+  /** The playing item's own frame shape (MobilePlayer), valid only for the URL
+   *  it was measured on, so every start clears it by itself. */
+  streamMeasuredPortrait: boolean | null;
+  streamMeasuredUrl: string | null;
+  /** This session's pick from the pill; null until one is made. */
+  streamViewPick: StreamView | null;
+  /** A view change is in flight: the pill waits for it. */
+  changingStreamView: boolean;
+  /** A switch to vertical gave up the ad-free relay: the note by the pill
+   *  shows for a few seconds, once per switch. */
+  verticalAdsNote: boolean;
+  /** How the phone is held, and whether TV screen mode owns the picture: what
+   *  the wanted view is read from. Mini, PiP and the keyboard never change it. */
+  streamPosture: Posture;
+  streamTvOwns: boolean;
+  /** The pill: reloads the stream in `view` through `change_stream_view`, which
+   *  keeps the saved quality and remembers the pick only when it served it. */
+  changeStreamView: (view: StreamView) => Promise<void>;
+  /** The watch layer's posture and TV facts; a change can restart a stream with
+   *  both pictures into the one now wanted (never saved). */
+  setStreamPosture: (posture: Posture, tvOwns: boolean) => void;
+  /** MobilePlayer's measured frame for `url` (null at 0x0). */
+  setStreamMeasuredPortrait: (url: string, portrait: boolean | null) => void;
   /** A Twitch clip playing in the centered overlay modal, or null. The modal is
    *  independent of the main stream pipeline (a clip is a direct MP4), so the
    *  current stream/chat stays mounted underneath and resumes on close — the
@@ -853,6 +895,16 @@ function ensureWatchSessionListeners(set: StoreSet, get: StoreGet): void {
     void get().handleStreamOffline();
   });
 
+  // Phones (SN-40): the v2 usher answered after the start returned. Applied
+  // only for the start it names (applyLateView).
+  if (IS_MOBILE) {
+    void listen<VerticalAvailable>('vertical-available', (event) => {
+      const p = event.payload;
+      if (typeof p?.ticket !== 'number') return;
+      onLateView(set, get, { ticket: p.ticket, available: !!p.available });
+    });
+  }
+
   // How many are waiting in the open offline room's chat (Rust, each minute).
   void listen<{ login: string; count: number }>('watch-session://waiting', (event) => {
     const { offlineRoom } = get();
@@ -1100,6 +1152,223 @@ async function settleStop(): Promise<void> {
  *  releases the loader freeze it set itself. */
 let lastSwapSeq = 0;
 
+// --- Vertical view (SN-40), phones only --------------------------------------
+//
+// Which picture a phone start asks for and what it was served. The rules are
+// the shared ones (mobile/watch/verticalView.ts, the iPhone's SNKit twin);
+// this is only their state. Desktop never sends a view and never writes any
+// of it: every function here returns at once off the phone.
+
+/** The core's resolution of the remembered pick, learned from a start that
+ *  sent no view (its `wanted`). */
+let rememberedView: StreamView | null = null;
+/** The core's ticket for the start playing now (`vertical-available` names it). */
+let viewTicket: number | null = null;
+/** A late answer that reached the shell before its own start's result. */
+let heldLateView: VerticalAvailable | null = null;
+/** Bumped when what played is gone: a view step queued for it skips. */
+let viewSession = 0;
+/** The view steps (the pill, a turn's restart) run one after another, each
+ *  behind any restart or audio swap still running. */
+let viewStepTail: Promise<void> = Promise.resolve();
+let postureTimer: ReturnType<typeof setTimeout> | null = null;
+let adsNoteTimer: ReturnType<typeof setTimeout> | null = null;
+/** A turn settles before it can restart anything (the iPhone's 400 ms). */
+const POSTURE_SETTLE_MS = 400;
+/** How long the note by the pill stays. */
+const ADS_NOTE_MS = 5000;
+
+/** The view a phone start asks for now: Landscape while the phone is turned
+ *  or the TV owns the picture, else this session's pick, else null (send
+ *  nothing: the core plays the remembered pick). */
+function wantedViewNow(get: StoreGet): StreamView | null {
+  const s = get();
+  return wantedView({ posture: s.streamPosture, tv: s.streamTvOwns, airplay: false, sessionPick: s.streamViewPick });
+}
+
+/** What a start sends as `view`: the wanted view on a phone; undefined on
+ *  desktop, which sends no `view` key at all. */
+function startView(get: StoreGet): StreamView | null | undefined {
+  return IS_MOBILE ? wantedViewNow(get) : undefined;
+}
+
+/** `args` with the `view` a start sends; untouched when there is none to send. */
+function withView<T extends object>(args: T, view: StreamView | null | undefined): T {
+  return view === undefined ? args : { ...args, view };
+}
+
+/** Takes a Twitch start's answer: the picture served, whether there are two,
+ *  the ladder's shape and the ticket. `asked` is the view the start sent: a
+ *  start that sent none learns the core's remembered pick from it. */
+function applyViewResult(set: StoreSet, get: StoreGet, result: StreamStartResult, asked: StreamView | null | undefined): void {
+  if (!IS_MOBILE) return;
+  viewTicket = result.ticket ?? null;
+  if (asked == null) {
+    const remembered = parseView(result.wanted);
+    if (remembered) rememberedView = remembered;
+  }
+  set({
+    streamView: parseView(result.view),
+    verticalAvailable: !!result.vertical_available,
+    streamPortrait: result.portrait ?? null,
+  });
+  Logger.info(
+    `[Streaming] view=${result.view ?? '-'} wanted=${result.wanted ?? '-'} vertical_available=${!!result.vertical_available} portrait=${result.portrait ?? '-'} ticket=${result.ticket ?? '-'} asked=${asked ?? 'remembered'}`,
+  );
+  // A late answer that came ahead of this result applies now, if it is this start's.
+  const held = heldLateView;
+  if (held && viewTicket != null && held.ticket <= viewTicket) {
+    heldLateView = null;
+    if (held.ticket === viewTicket) applyLateView(set, get, held);
+  }
+}
+
+/** The core found (or ruled out) the portrait picture after the start
+ *  returned: the pill follows, and a session that wants vertical (the
+ *  remembered pick) restarts into it. */
+function onLateView(set: StoreSet, get: StoreGet, event: VerticalAvailable): void {
+  if (!IS_MOBILE) return;
+  if (holdsLate(event, viewTicket)) {
+    if ((heldLateView?.ticket ?? 0) <= event.ticket) heldLateView = event;
+    return;
+  }
+  applyLateView(set, get, event);
+}
+
+function applyLateView(set: StoreSet, get: StoreGet, event: VerticalAvailable): void {
+  const now = get().verticalAvailable;
+  const next = availableAfter(event, now, viewTicket);
+  if (next === now) return;
+  set({ verticalAvailable: next });
+  Logger.info(`[Vertical] late answer for ticket ${event.ticket}: available ${next}`);
+  restartIfWanted(set, get, 'late portrait picture');
+}
+
+/** What played is gone (a close, another channel, a VOD or a room): the view
+ *  starts over. A restart, quality or view change of the same media keeps it. */
+function resetViewSession(set: StoreSet): void {
+  if (!IS_MOBILE) return;
+  viewSession += 1;
+  rememberedView = null;
+  viewTicket = null;
+  heldLateView = null;
+  if (postureTimer) clearTimeout(postureTimer);
+  postureTimer = null;
+  if (adsNoteTimer) clearTimeout(adsNoteTimer);
+  adsNoteTimer = null;
+  set({
+    streamView: null,
+    verticalAvailable: false,
+    streamPortrait: null,
+    streamViewPick: null,
+    changingStreamView: false,
+    verticalAdsNote: false,
+  });
+}
+
+/** Queues a view step behind the last one and behind any restart or audio swap
+ *  still running, so a view never lands under a relay another step owns. A
+ *  step queued for media that has since gone skips. */
+function queueViewStep(step: () => Promise<void>): Promise<void> {
+  const session = viewSession;
+  const run = viewStepTail.then(async () => {
+    await settleTransientSwap();
+    if (restartInFlight) await restartInFlight.catch(() => {});
+    if (session !== viewSession) return;
+    await step();
+  });
+  viewStepTail = run.catch(() => {});
+  return run;
+}
+
+/** A Twitch stream (live, a rewind, a VOD) is playing on the main player. */
+function playsTwitch(s: AppState): boolean {
+  return !!s.currentStream && !!s.streamUrl && s.streamUrl !== 'offline' && streamProvider(s.currentStream) === 'twitch';
+}
+
+/** A posture, TV or late-answer change: a stream with both pictures restarts
+ *  quietly into the one now wanted (never saved), once the step before it is
+ *  done; the rule is read again when the step runs. */
+function restartIfWanted(set: StoreSet, get: StoreGet, why: string): void {
+  if (!IS_MOBILE) return;
+  const wants = (): boolean => {
+    const s = get();
+    return (
+      playsTwitch(s) &&
+      restartOnPosture({
+        verticalAvailable: s.verticalAvailable,
+        served: s.streamView,
+        wantedNow: wantedViewNow(get) ?? rememberedView,
+      })
+    );
+  };
+  if (!wants()) return;
+  Logger.info(`[Vertical] ${why}: wants ${wantedViewNow(get) ?? rememberedView}, playing ${get().streamView}; restarting`);
+  void queueViewStep(async () => {
+    if (!wants()) return;
+    const s = get();
+    if (s.liveRewind) {
+      // A rewound broadcast comes back in the recording at the playhead.
+      const at = getPlayerControls()?.getCurrentTime();
+      await get().rewindLive({ positionSecs: at != null && Number.isFinite(at) ? at : undefined });
+    } else if (s.currentMediaType === 'live') {
+      // No reason: a turn is never counted toward a codec hold.
+      await get().restartStream({ quiet: true });
+    } else {
+      await reloadVodInView(set, get, 'start_stream', startView(get));
+    }
+  });
+}
+
+/** A VOD (a channel's video, or an offline room's latest broadcast) loads
+ *  again in `view` at its playhead: a turn's restart (`start_stream`) or the
+ *  pill (`change_stream_view`). Returns the core's answer, or null when a newer
+ *  start won. */
+async function reloadVodInView(
+  set: StoreSet,
+  get: StoreGet,
+  command: 'start_stream' | 'change_stream_view',
+  view: StreamView | null | undefined,
+): Promise<StreamStartResult | null> {
+  const s = get();
+  const url = s.originalMediaUrl;
+  if (!url || !s.vodPlayback) return null;
+  const at = getPlayerControls()?.getCurrentTime();
+  const seq = ++twitchStartSeq;
+  set({ isRestartingStream: true });
+  try {
+    const result =
+      command === 'change_stream_view'
+        ? await invoke<StreamStartResult>('change_stream_view', { url, view, quality: null })
+        : await invoke<StreamStartResult>('start_stream', withView({ url, quality: s.settings.quality }, view));
+    if (seq !== twitchStartSeq || get().originalMediaUrl !== url) return null;
+    applyViewResult(set, get, result, view);
+    const vod = result.vod ?? get().vodPlayback;
+    set({
+      streamUrl: result.url,
+      activeQuality: result.quality,
+      availableQualities: result.available ?? [],
+      // The playhead before the new picture's URL, so the player begins there.
+      vodPlayback: vod && at != null && Number.isFinite(at) ? { ...vod, start_position_secs: at } : vod,
+      isRestartingStream: false,
+    });
+    return result;
+  } finally {
+    if (seq === twitchStartSeq && get().isRestartingStream) set({ isRestartingStream: false });
+  }
+}
+
+/** The note by the pill: vertical gave up the ad-free relay. Once per switch,
+ *  on its own clock, so a rebuilt player bar never replays it. */
+function showAdsNote(set: StoreSet): void {
+  if (adsNoteTimer) clearTimeout(adsNoteTimer);
+  set({ verticalAdsNote: true });
+  adsNoteTimer = setTimeout(() => {
+    adsNoteTimer = null;
+    set({ verticalAdsNote: false });
+  }, ADS_NOTE_MS);
+}
+
 /** Every start on either path takes a number, so only the latest one clears
  *  the loading flag on the phone. The phone drops the old URL at the tap
  *  (`showSwitchAtOnce`), which leaves `isLoading` as the only thing holding
@@ -1235,6 +1504,8 @@ async function startProviderStream(
   const seq = ++providerStartSeq;
   const superseded = () => seq !== providerStartSeq;
   const loadTicket = ++startLoadSeq;
+  // Another channel starts the vertical view over (SN-40, phones).
+  if (!isSameChannel(get().currentStream, provider, channel)) resetViewSession(set);
   showSwitchAtOnce(provider, channel, seed, set, get);
   set({ isLoading: true, streamOpenSeq: get().streamOpenSeq + 1 });
   trackActivity(`Started watching: ${key}`);
@@ -1307,13 +1578,20 @@ async function startProviderStream(
     // start time), lets drops and points go of any Twitch channel and starts
     // the watch session's live check. A promoted tile's relay already serves
     // the channel, so only the rest runs for it.
-    const started = await invoke<WatchStartResult>('watch_start', {
-      login: channel,
-      provider,
-      seed: seed ?? null,
-      quality: requestedQuality,
-      relayReady: !!preResolved,
-    });
+    const asked = startView(get);
+    const started = await invoke<WatchStartResult>(
+      'watch_start',
+      withView(
+        {
+          login: channel,
+          provider,
+          seed: seed ?? null,
+          quality: requestedQuality,
+          relayReady: !!preResolved,
+        },
+        asked,
+      ),
+    );
     // A newer start won while we were resolving. Rust touched nothing, and
     // publishing this result would point the player at the losing stream.
     if (started.superseded || superseded() || !started.row) {
@@ -1324,6 +1602,8 @@ async function startProviderStream(
     if (!result) throw new Error('No stream to play');
     if (!preResolved) logQualityFallback(requestedQuality, result.quality);
     const info: TwitchStream = { ...started.row, provider, user_login: started.row.user_login || channel };
+    // A provider's picture can be tall too (a TikTok LIVE): the core says so.
+    applyViewResult(set, get, result, asked);
 
     set({
       streamUrl: result.url,
@@ -1589,6 +1869,16 @@ export const useAppStore = create<AppState>((set, get) => ({
   liveRewindAvailable: null,
   liveRewindAnchor: null,
   liveLeftOffSecs: null,
+  streamView: null,
+  verticalAvailable: false,
+  streamPortrait: null,
+  streamMeasuredPortrait: null,
+  streamMeasuredUrl: null,
+  streamViewPick: null,
+  changingStreamView: false,
+  verticalAdsNote: false,
+  streamPosture: 'upright',
+  streamTvOwns: false,
   clipModal: null,
   vodModal: null,
   clipEditor: null,
@@ -2266,8 +2556,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (currentStream) {
         await stopStream();
       }
-      const result = await invoke<StreamStartResult>('start_stream', { url: url, quality: settings.quality });
+      // A VOD or clip is new media: its vertical view starts over (phones).
+      resetViewSession(set);
+      const asked = startView(get);
+      const result = await invoke<StreamStartResult>('start_stream', withView({ url: url, quality: settings.quality }, asked));
       logQualityFallback(settings.quality, result.quality);
+      applyViewResult(set, get, result, asked);
       // A clip replays the chat from the moment it was cut. The resolver looks the
       // coordinates up for ANY clip, so prefer its answer over whatever the caller
       // happened to carry, and fall back to the caller for paths that pre-resolved.
@@ -2403,12 +2697,19 @@ export const useAppStore = create<AppState>((set, get) => ({
       // as a restart does, so the old hls.js instance does not churn errors
       // against the changing upstream.
       set({ isRestartingStream: true });
-      const result = await invoke<StreamStartResult>('rewind_live_stream', {
-        channel,
-        behindSecs: target.behindSecs ?? null,
-        positionSecs: target.positionSecs ?? null,
-        quality: settings.quality,
-      });
+      const asked = startView(get);
+      const result = await invoke<StreamStartResult>(
+        'rewind_live_stream',
+        withView(
+          {
+            channel,
+            behindSecs: target.behindSecs ?? null,
+            positionSecs: target.positionSecs ?? null,
+            quality: settings.quality,
+          },
+          asked,
+        ),
+      );
       const s = get();
       // Superseded (a newer swap or start) or switched away while resolving:
       // the relay now serves something else, drop this result.
@@ -2416,6 +2717,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         if (seq === lastSwapSeq) set({ isRestartingStream: false });
         return;
       }
+      applyViewResult(set, get, result, asked);
       set({
         streamUrl: result.url,
         activeQuality: result.quality,
@@ -2441,15 +2743,17 @@ export const useAppStore = create<AppState>((set, get) => ({
     lastSwapSeq = seq;
     try {
       set({ isRestartingStream: true });
-      const result = await invoke<StreamStartResult>('start_stream', {
-        url: `https://twitch.tv/${channel}`,
-        quality: settings.quality,
-      });
+      const asked = startView(get);
+      const result = await invoke<StreamStartResult>(
+        'start_stream',
+        withView({ url: `https://twitch.tv/${channel}`, quality: settings.quality }, asked),
+      );
       const s = get();
       if (seq !== twitchStartSeq || s.liveRewind?.channel !== channel) {
         if (seq === lastSwapSeq) set({ isRestartingStream: false });
         return;
       }
+      applyViewResult(set, get, result, asked);
       set({
         streamUrl: result.url,
         activeQuality: result.quality,
@@ -2563,6 +2867,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       // Whatever failed above: a half-closed stream (no URL, its row still set)
       // would keep its chat tab pinned for good.
       set({ streamUrl: null, activeQuality: null, availableQualities: [], adSource: null, playbackKind: null, currentStream: null, currentMediaType: null, currentHypeTrain: null, streamOriginCategory: null, vodPlayback: null, liveRewind: null, liveRewindAvailable: null, liveRewindAnchor: null, liveLeftOffSecs: null, offlineRoom: null, offlineRoomLive: null, offlineRoomJoining: false });
+      resetViewSession(set);
       finishStop();
       if (stopInFlight === stopping) stopInFlight = null;
     }
@@ -2621,11 +2926,13 @@ export const useAppStore = create<AppState>((set, get) => ({
         set({ isRestartingStream: true });
         await invoke('stop_stream');
         await new Promise((resolve) => setTimeout(resolve, 300));
-        const result = await invoke<StreamStartResult>('start_stream', {
-          url: buildProviderUrl(provider, channel),
-          quality,
-        });
+        const asked = startView(get);
+        const result = await invoke<StreamStartResult>(
+          'start_stream',
+          withView({ url: buildProviderUrl(provider, channel), quality }, asked),
+        );
         logQualityFallback(quality, result.quality);
+        applyViewResult(set, get, result, asked);
         set({
           streamUrl: result.url,
           activeQuality: result.quality,
@@ -2698,9 +3005,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       const url = `https://twitch.tv/${channel}`;
       Logger.debug(`[Stream] Restarting: ${url} at quality: ${quality}`);
       
-      const result = await invoke<StreamStartResult>('start_stream', { url, quality });
+      // The view wanted when the start goes out (a turn during the stop is
+      // seen), never the one that happened to be served (SN-40, phones).
+      const asked = startView(get);
+      const result = await invoke<StreamStartResult>('start_stream', withView({ url, quality }, asked));
       Logger.debug('[Stream] Restarted successfully:', result.url);
       logQualityFallback(quality, result.quality);
+      applyViewResult(set, get, result, asked);
 
       set({ streamUrl: result.url, activeQuality: result.quality, adSource: adSourceFrom(result), availableQualities: result.available ?? [], playbackKind: 'hls', currentStream: streamInfo, vodPlayback: null, liveRewind: null, isRestartingStream: false });
 
@@ -2794,7 +3105,9 @@ export const useAppStore = create<AppState>((set, get) => ({
           ? `https://twitch.tv/${currentStream.user_login}`
           : buildProviderUrl(provider, currentStream.user_login);
       const targetUrl = (currentMediaType !== 'live' && originalMediaUrl) ? originalMediaUrl : liveUrl;
-      const qualities = await invoke('get_stream_qualities', { url: targetUrl }) as string[];
+      // A phone asks for the menu of the picture it plays (a vertical ladder's).
+      const view = IS_MOBILE ? (get().streamView ?? wantedViewNow(get)) : undefined;
+      const qualities = await invoke('get_stream_qualities', withView({ url: targetUrl }, view)) as string[];
       Logger.debug('[Qualities] Available:', qualities);
       return qualities;
     } catch (e) {
@@ -2873,11 +3186,11 @@ export const useAppStore = create<AppState>((set, get) => ({
             : buildProviderUrl(provider, currentStream.user_login);
         const targetUrl = currentMediaType !== 'live' && originalMediaUrl ? originalMediaUrl : liveUrl;
         // `start_stream`, not `change_stream_quality`: this swap is not the
-        // viewer's pick, so a codec hold on the channel stays.
-        const result = await invoke<StreamStartResult>('start_stream', {
-          url: targetUrl,
-          quality,
-        });
+        // viewer's pick, so a codec hold on the channel stays. A phone sends
+        // the picture it serves (SN-40): a screen-off swap never waits on the
+        // v2 usher and never changes the picture.
+        const asked = IS_MOBILE ? (get().streamView ?? wantedViewNow(get)) : undefined;
+        const result = await invoke<StreamStartResult>('start_stream', withView({ url: targetUrl, quality }, asked));
         // start_stream brought the relay up for `login`. Closing PiP with its X fires visibilitychange (this
         // downshift) and sn:pip-closed (exitStream) in the same instant, and the
         // late swap used to remount the player on an audio-only URL with
@@ -2902,6 +3215,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         }
         // streamUrl only. activeQuality is left alone on purpose so the UI keeps
         // showing what the VIEWER chose, not the state we swapped in behind them.
+        // The ticket is this start's now (a late v2 answer names it).
+        applyViewResult(set, get, result, asked);
         set({ streamUrl: result.url });
         Logger.info(`[TransientQuality] swapped to ${result.quality} (no settings write)`);
       } catch (e) {
@@ -2943,10 +3258,14 @@ export const useAppStore = create<AppState>((set, get) => ({
           : buildProviderUrl(provider, currentStream.user_login);
       const targetUrl = (currentMediaType !== 'live' && originalMediaUrl) ? originalMediaUrl : liveUrl;
 
-      const result = await invoke<StreamStartResult>('change_stream_quality', {
-        url: targetUrl,
-        quality: quality
-      });
+      // A phone keeps the picture it wants (SN-40); a quality pick never saves
+      // a view (only change_stream_view does).
+      const asked = startView(get);
+      const result = await invoke<StreamStartResult>(
+        'change_stream_quality',
+        withView({ url: targetUrl, quality: quality }, asked),
+      );
+      applyViewResult(set, get, result, asked);
 
       // Persist the user's choice (the *intent*), not the actually-played
       // quality — next stream might offer the requested one even if this one
@@ -2968,6 +3287,84 @@ export const useAppStore = create<AppState>((set, get) => ({
       get().addToast(`Failed to change quality: ${e}`, 'error');
       set({ isLoading: false, isRestartingStream: false });
     }
+  },
+  changeStreamView: async (view) => {
+    if (!IS_MOBILE) return;
+    const first = get();
+    if (!playsTwitch(first) || first.changingStreamView) return;
+    set({ changingStreamView: true });
+    const session = viewSession;
+    try {
+      await queueViewStep(async () => {
+        const s = get();
+        if (!playsTwitch(s) || !s.currentStream) return;
+        // The pick takes effect when the step runs, right before its invoke: a
+        // step still waiting does not change what the one running asks for.
+        const before = s.streamViewPick;
+        set({ streamViewPick: view });
+        trackActivity(`Changed view to: ${view}`);
+        try {
+          const vodPlays = !s.liveRewind && s.currentMediaType !== 'live';
+          let result: StreamStartResult | null;
+          if (vodPlays) {
+            result = await reloadVodInView(set, get, 'change_stream_view', view);
+          } else {
+            // Live, or a rewind playing the broadcast's recording at its playhead.
+            const channel = s.currentStream.user_login;
+            const rewind = s.liveRewind;
+            const at = rewind ? getPlayerControls()?.getCurrentTime() : null;
+            const url = rewind ? `https://www.twitch.tv/videos/${rewind.videoId}` : `https://twitch.tv/${channel}`;
+            const seq = ++twitchStartSeq;
+            set({ isRestartingStream: true });
+            result = await invoke<StreamStartResult>('change_stream_view', { url, view, quality: null });
+            const now = get();
+            if (seq !== twitchStartSeq || session !== viewSession || now.currentStream?.user_login !== channel) {
+              if (seq === twitchStartSeq) set({ isRestartingStream: false });
+              return;
+            }
+            applyViewResult(set, get, result, view);
+            const vod = result.vod ?? now.vodPlayback;
+            set({
+              streamUrl: result.url,
+              activeQuality: result.quality,
+              adSource: rewind ? null : adSourceFrom(result),
+              availableQualities: result.available ?? [],
+              playbackKind: 'hls',
+              vodPlayback: rewind ? (vod && at != null && Number.isFinite(at) ? { ...vod, start_position_secs: at } : vod) : null,
+              isRestartingStream: false,
+            });
+          }
+          if (!result) return;
+          Logger.info(`[Vertical] view ${view} -> ${result.view ?? '-'} gave up ad-free ${!!result.gave_up_ad_free}`);
+          // The core saved the pick only if it served it: that is the remembered one now.
+          if (result.view === view) rememberedView = view;
+          if (result.gave_up_ad_free) showAdsNote(set);
+        } catch (e) {
+          set({ streamViewPick: before, isRestartingStream: false });
+          Logger.error('[Vertical] change_stream_view failed:', e);
+          get().addToast("Couldn't switch the view", 'error');
+        }
+      });
+    } finally {
+      if (session === viewSession) set({ changingStreamView: false });
+    }
+  },
+  setStreamPosture: (posture, tvOwns) => {
+    if (!IS_MOBILE) return;
+    const s = get();
+    if (s.streamPosture === posture && s.streamTvOwns === tvOwns) return;
+    set({ streamPosture: posture, streamTvOwns: tvOwns });
+    if (postureTimer) clearTimeout(postureTimer);
+    postureTimer = setTimeout(() => {
+      postureTimer = null;
+      restartIfWanted(set, get, `posture ${posture}${tvOwns ? ', on the TV' : ''}`);
+    }, POSTURE_SETTLE_MS);
+  },
+  setStreamMeasuredPortrait: (url, portrait) => {
+    if (!IS_MOBILE) return;
+    const s = get();
+    if (s.streamMeasuredUrl === url && s.streamMeasuredPortrait === portrait) return;
+    set({ streamMeasuredUrl: url, streamMeasuredPortrait: portrait });
   },
   startStream: async (channel, providedStreamInfo?, skipChatRefresh = false, preResolved?: StreamStartResult) => {
     // A close still running (Home shows before it ends) finishes first.
@@ -2997,6 +3394,11 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     // Phone: the new channel's header now, the old video gone now.
     const loadTicket = ++startLoadSeq;
+    // Another channel (or the live stream after its VOD or room) starts the
+    // vertical view over (SN-40, phones); the same live channel keeps its pick.
+    if (!(isSameChannel(get().currentStream, 'twitch', channel) && get().currentMediaType === 'live')) {
+      resetViewSession(set);
+    }
     showSwitchAtOnce('twitch', channel, providedStreamInfo, set, get);
     set({ streamOpenSeq: get().streamOpenSeq + 1 });
 
@@ -3050,18 +3452,28 @@ export const useAppStore = create<AppState>((set, get) => ({
       // starts the watch session (services/watch_start.rs). A promoted tile's
       // relay already serves the channel, so only the rest runs for it.
       const seed = providedStreamInfo;
-      const started = await invoke<WatchStartResult>('watch_start', {
-        login: channel,
-        seed: seed ?? null,
-        quality: requestedQuality,
-        relayReady: !!preResolved,
-      });
+      const asked = startView(get);
+      const started = await invoke<WatchStartResult>(
+        'watch_start',
+        withView(
+          {
+            login: channel,
+            seed: seed ?? null,
+            quality: requestedQuality,
+            relayReady: !!preResolved,
+          },
+          asked,
+        ),
+      );
       // A newer start (or a stop) won while this one resolved: Rust touched
       // nothing, and neither does the store.
       if (started.superseded || superseded() || !started.row) return;
       const result = preResolved ?? started.stream;
       if (!result) throw new Error('No stream to play');
       if (!preResolved) logQualityFallback(requestedQuality, result.quality);
+      // A promoted tile's relay was resolved as landscape and taught nothing
+      // about the remembered pick.
+      applyViewResult(set, get, result, preResolved ? 'landscape' : asked);
       // The row is Rust's; only the unified lists' provider marks ride along.
       const info: TwitchStream = { ...started.row, provider: seed?.provider, watch_url: seed?.watch_url };
       // The signed-in broadcaster opening their own live channel: it opens
@@ -3127,6 +3539,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     const seq = ++twitchStartSeq;
     const superseded = () => seq !== twitchStartSeq;
     const login = parseKey(channel).channel;
+    // A room plays nothing: its vertical view starts over (SN-40, phones).
+    resetViewSession(set);
     set({ isLoading: true });
     trackActivity(`Joined offline chat: ${login}`);
     // A replay from whatever played before must not keep driving the panel.
@@ -3210,10 +3624,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ isLoading: true });
     try {
       const requestedQuality = get().settings.quality;
-      const result = await invoke<StreamStartResult>('start_stream', { url, quality: requestedQuality });
+      resetViewSession(set);
+      const asked = startView(get);
+      const result = await invoke<StreamStartResult>('start_stream', withView({ url, quality: requestedQuality }, asked));
       // Left the room while it resolved.
       if (get().offlineRoom !== room || get().currentMediaType !== 'offline_chat') return;
       logQualityFallback(requestedQuality, result.quality);
+      applyViewResult(set, get, result, asked);
       const cs = get().currentStream;
       set({
         streamUrl: result.url,
@@ -3252,6 +3669,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       .then((m) => m.stopVodReplay())
       .catch(() => {});
     await invoke('stop_stream').catch((e) => Logger.warn('[Offline room] Error stopping the VOD:', e));
+    resetViewSession(set);
     const { currentStream: cs, offlineRoom: room } = get();
     set({
       streamUrl: 'offline',

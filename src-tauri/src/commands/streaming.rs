@@ -213,17 +213,16 @@ fn launch_late_v2(ticket: Option<u64>) {
     });
 }
 
-/// Whether a start that names no view plays the remembered pick. The iPhone
-/// only for now: the Android shell does not send views yet, so a remembered
-/// Vertical there (an imported iPhone settings file) would put the portrait
-/// ladder in its 16:9 band with no way back. The Android vertical view lane
-/// flips this to `cfg!(mobile)` (and the pin
-/// `the_remembered_pick_plays_on_the_iphone_only` with it).
-const REMEMBERED_VIEW_PLAYS: bool = cfg!(target_os = "ios");
+/// Whether a start that names no view plays the remembered pick: on both
+/// phones, whose shells send the view they want (Landscape while turned, the
+/// session's pick) and send none only to ask for the remembered one. Never on
+/// the desktop, which has one picture (pinned by
+/// `the_remembered_pick_plays_on_the_phones_only`).
+const REMEMBERED_VIEW_PLAYS: bool = cfg!(mobile);
 
 /// The view a Twitch start wants (SN-40, `twitch_view::wanted`): the shell's
-/// request, else the remembered pick on a phone (the iPhone for now,
-/// `REMEMBERED_VIEW_PLAYS`), landscape on the desktop,
+/// request, else the remembered pick on a phone (`REMEMBERED_VIEW_PLAYS`),
+/// landscape on the desktop,
 /// and always landscape while Android's TV screen mode shows the stream.
 fn wanted_view(view: Option<&str>, state: &State<'_, AppState>) -> View {
     let remembered = REMEMBERED_VIEW_PLAYS
@@ -2098,12 +2097,14 @@ mod vertical_view_pins {
     }
 
     #[test]
-    fn the_remembered_pick_plays_on_the_iphone_only() {
-        // M4, until the Android vertical view lane: that lane makes the
-        // Android shell send views, flips the const to `cfg!(mobile)` and
-        // changes this pin with it.
+    fn the_remembered_pick_plays_on_the_phones_only() {
+        // Both phone shells send the view they want (the Android shell since
+        // the SN-40 Android lane), so a start naming none plays the
+        // remembered pick on either phone and never on the desktop.
         let src = code();
-        assert!(src.contains("const REMEMBERED_VIEW_PLAYS: bool = cfg!(target_os = \"ios\");"));
+        assert!(src.contains("const REMEMBERED_VIEW_PLAYS: bool = cfg!(mobile);"));
+        assert!(!cfg!(mobile) || REMEMBERED_VIEW_PLAYS);
+        assert!(cfg!(mobile) || !REMEMBERED_VIEW_PLAYS);
         assert!(body(&src, "fn wanted_view(").contains("let remembered = REMEMBERED_VIEW_PLAYS\n"));
         // An explicit view is honored on every phone whatever is remembered.
         assert_eq!(twitch_view::wanted(Some("vertical"), false, true, false), View::Vertical);
