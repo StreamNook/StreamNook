@@ -54,6 +54,7 @@ import type { SeventvEmoteChange } from '../components/overlay/overlayConfig';
 import type { BackendChatMessage } from '../services/twitchChat';
 import { patchHeldRows } from './heldRowPatch';
 import { withClearedEntry } from './clearedContexts';
+import { countNew, countsAsNew } from '../utils/countableRow';
 
 // Hard caps borrowed from the prior single-channel hook. Keeping them as
 // per-channel limits means a 5-channel MultiChat caps memory at 5x the
@@ -252,6 +253,10 @@ interface ChannelSlice {
    *  trimmed. Historical backfill (prepended, not live) is intentionally
    *  excluded — only `pushMessage` bumps it. */
   liveMessageCount: number;
+  /** Monotonic count of the live rows that are news (SN-40, `countsAsNew`:
+   *  not a system line, not hidden by a setting). Never trimmed and never reset,
+   *  not even by a hard refresh: the phone's cleared chat anchors on it. */
+  liveCountableCount: number;
   /** Monotonic count of live rows the Rust rule engine stamped as mentioning
    *  or replying to the signed-in user. Never decremented or reset, so a
    *  "last seen" baseline stays valid after the rows themselves are trimmed. */
@@ -906,6 +911,7 @@ function flushPending(): void {
     // evict recent subs/redemptions/raids from the shared buffer. liveMessageCount
     // still counts every message (drives the accurate "N new since paused" badge).
     slice.liveMessageCount += queued.length;
+    slice.liveCountableCount += countNew(queued, hiddenChatEvents());
     slice.liveMentionCount += countMentionsOfMe(queued);
     // Copy-on-write (see the helpers above pushMessage): the array identity
     // changes with its content, so consumers can memoize on it.
@@ -1086,6 +1092,7 @@ function emptySlice(
     isPausedForBuffer: false,
     resumeOverflow: 0,
     liveMessageCount: 0,
+    liveCountableCount: 0,
     liveMentionCount: 0,
     seenMessageIds: new Set(),
     pendingUpgradeIds: new Set(),
@@ -1275,6 +1282,7 @@ function releaseHistoryHold(slice: ChannelSlice): boolean {
   slice.historyHold = null;
   if (hold.held.length === 0) return false;
   slice.liveMessageCount += hold.held.length;
+  slice.liveCountableCount += countNew(hold.held, hiddenChatEvents());
   slice.liveMentionCount += countMentionsOfMe(hold.held);
   slice.messages = trimWithEventRetention(
     slice.messages.concat(hold.held),
@@ -1282,6 +1290,12 @@ function releaseHistoryHold(slice: ChannelSlice): boolean {
     slice.liveMessageCount,
   );
   return true;
+}
+
+/** The event kinds the viewer hid from the list (Chat > Events), read where a
+ *  row is counted as news so the count never includes a row the list drops. */
+function hiddenChatEvents(): readonly string[] | undefined {
+  return useAppStore.getState().settings?.chat_events?.hidden_provider_events;
 }
 
 function pushMessage(slice: ChannelSlice, msg: any) {
@@ -1292,6 +1306,7 @@ function pushMessage(slice: ChannelSlice, msg: any) {
   // Monotonic — counts the append regardless of any trim below. Drives the
   // accurate "N new since paused" badge.
   slice.liveMessageCount++;
+  if (countsAsNew(msg, hiddenChatEvents())) slice.liveCountableCount++;
   if (isMentionOfMe(msg)) slice.liveMentionCount++;
   slice.messages = trimWithEventRetention(slice.messages.concat([msg]), limit, slice.liveMessageCount);
 }
@@ -4383,6 +4398,14 @@ export function useChannelMessageCount(channel: string | null | undefined): numb
   if (!channel) return 0;
   const slice = useChatConnectionStore.getState().channels.get(channel.toLowerCase());
   return slice ? slice.messages.length : 0;
+}
+
+/** The monotonic count of a channel's live rows that are news (SN-40), read
+ *  only while `on`: off, it reads null and re-renders for nothing, so the
+ *  phone's chat button costs nothing while chat shows. */
+export function useChannelCountableCount(channel: string | null | undefined, on: boolean): number | null {
+  const key = on && channel ? channel.toLowerCase() : null;
+  return useChatConnectionStore((state) => (key ? (state.channels.get(key)?.liveCountableCount ?? 0) : null));
 }
 
 /** React hook returning the monotonic count of live messages in a channel that
