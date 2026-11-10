@@ -44,6 +44,7 @@ import {
   clearToolDraft,
   codePoints,
   getTool,
+  isShowing,
   raidStart,
   readTool,
   runTool,
@@ -143,8 +144,14 @@ function useNow(ms: number): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (ms <= 0) return;
+    // Right away too, so a countdown that starts on an open form never
+    // shows the time since the form opened.
+    const first = window.setTimeout(() => setNow(Date.now()), 0);
     const t = window.setInterval(() => setNow(Date.now()), ms);
-    return () => window.clearInterval(t);
+    return () => {
+      window.clearTimeout(first);
+      window.clearInterval(t);
+    };
   }, [ms]);
   return now;
 }
@@ -702,6 +709,17 @@ function InfoEditor({ view, layout, onClose, onExpand, handedOff = false }: Form
     />
   );
 
+  // Twitch's stream info could not be read: never offer a form that would
+  // save empty fields (no tags) over the channel's.
+  if (!info) {
+    const why = view.problems.find((p) => p.startsWith('Stream info')) ?? 'Stream info could not be read right now.';
+    return (
+      <FormShell layout={layout} frame={frameOf('info', { view, layout, onClose })} problem={why}>
+        <p className="text-[13px] text-textSecondary">Open it again in a moment to try once more.</p>
+      </FormShell>
+    );
+  }
+
   return (
     <FormShell layout={layout} frame={frameOf('info', { view, layout, onClose, onExpand })} footer={footer} problem={failLine}>
       <div onKeyDown={onEditorKey} className={big ? 'space-y-4' : 'space-y-3.5'}>
@@ -832,6 +850,9 @@ function RaidForm({ view, layout, onClose, onExpand }: FormProps) {
   };
 
   const frame = frameOf('raid', { view, layout, onClose, onExpand });
+  // The three steps share one height in the panel, so it never jumps
+  // between search, confirm and the countdown.
+  const step = layout === 'panel' ? 'min-h-[232px]' : '';
 
   if (raid) {
     const cancel = readTool(v, cancelKey);
@@ -861,7 +882,7 @@ function RaidForm({ view, layout, onClose, onExpand }: FormProps) {
     );
     return (
       <FormShell layout={layout} frame={frame} footer={footer} problem={failWords(cancel) ?? failWords(go)}>
-        <div className="space-y-3 pt-1 text-center">
+        <div className={`flex flex-col items-center justify-center gap-3 pt-1 text-center ${step}`}>
           <RaidRing deadline={raid.deadline_ms} total={raid.total_ms} now={now} instant={instant} />
           <p className="text-[13.5px] text-textSecondary">
             Raiding <span className="font-semibold text-textPrimary">{raid.target_name}</span>
@@ -900,7 +921,7 @@ function RaidForm({ view, layout, onClose, onExpand }: FormProps) {
               put({ ...d, target: null });
             }
           }}
-          className="flex flex-col items-center gap-2 pt-1 text-center outline-none"
+          className={`flex flex-col items-center justify-center gap-2 pt-1 text-center outline-none ${step}`}
         >
           {avatarOf(t.avatar_url, 56)}
           <p className="text-[15px] font-semibold text-textPrimary">Raid {t.name}?</p>
@@ -916,7 +937,7 @@ function RaidForm({ view, layout, onClose, onExpand }: FormProps) {
   const shown = d.query.trim() ? results : [];
   return (
     <FormShell layout={layout} frame={frame} footer={layout === 'sheet' ? undefined : <FooterRow layout={layout} hints={[['Enter', 'pick'], ['Esc', 'close']]}>{null}</FooterRow>}>
-      <div className="space-y-2">
+      <div className={`space-y-2 ${step}`}>
         <div className={`${FIELD} flex items-center gap-2`}>
           <Search size={15} className="flex-shrink-0 text-textSecondary" aria-hidden />
           <input
@@ -981,7 +1002,10 @@ function AdsForm({ view, layout, onClose, onExpand }: FormProps) {
   const detail = view.sections.find((x) => x.id === 'ads')?.detail;
   // Within the hour it counts down to the second; further off Rust's words.
   const soon = next !== null && next > now && next - now < 3_600_000;
-  const nextLine = soon ? `Next ad in ${countdown(next, now)} · ${s?.snooze_line ?? ''}` : detail;
+  // The countdown ends its line, so nothing after it moves as it ticks; the
+  // snoozes go on their own quieter line.
+  const nextLine = soon ? `Next ad in ${countdown(next, now)}` : detail;
+  const snoozeLine = soon ? (s?.snooze_line ?? null) : null;
 
   const footer = (
     <FooterRow layout={layout} hints={[['Esc', 'close']]}>
@@ -1012,7 +1036,8 @@ function AdsForm({ view, layout, onClose, onExpand }: FormProps) {
     <FormShell layout={layout} frame={frameOf('ads', { view, layout, onClose, onExpand })} footer={footer} problem={failWords(runEntry) ?? failWords(snooze)}>
       {(nextLine || s?.preroll_line || ads.schedule_hint) && (
         <div className="space-y-0.5">
-          {nextLine && <p className="text-[13.5px] tabular-nums text-textPrimary">{nextLine}</p>}
+          {nextLine && <p className="text-[13.5px] text-textPrimary">{nextLine}</p>}
+          {snoozeLine && <p className="text-xs text-textSecondary">{snoozeLine}</p>}
           {s?.preroll_line && <p className="text-xs text-textSecondary">{s.preroll_line}</p>}
           {ads.schedule_hint && <p className="text-xs text-textSecondary">{ads.schedule_hint}</p>}
         </div>
@@ -1060,18 +1085,28 @@ function RewardsQueue({ view, layout, queue, onQueue, onClose, onExpand }: FormP
   }, [ch, onQueue]);
 
   const rowKey = (id: string) => toolKey(ch, `rewards:${id}`);
-  const showing = (phase: string) => phase === 'working' || phase === 'done';
-  const held = (id: string) => showing(readTool(v, rowKey(id)).phase);
-  const groups = withHeld(queue?.groups ?? [], leaving, held);
+  const allKeyOf = (rewardId: string) => toolKey(ch, `rewards:all:${rewardId}`);
+  const groups = withHeld(queue?.groups ?? [], leaving, (l) => isShowing(readTool(v, l.key)));
+
+  /** Rows acted on stay until their write settles; settled ones are let go. */
+  const hold = (rows: LeavingRow[]) =>
+    setLeaving((l) => [...l.filter((x) => !rows.some((r) => r.row.id === x.row.id) && isShowing(getTool(x.key))), ...rows]);
 
   const actOn = (g: QueueGroup, r: QueueRow, index: number, fulfill: boolean) => {
     const key = rowKey(r.id);
     if (getTool(key).phase === 'working') return;
-    // Rows gone and settled are let go as new ones are acted on.
-    setLeaving((l) => [...l.filter((x) => x.row.id !== r.id && showing(getTool(rowKey(x.row.id)).phase)), { row: r, group: g, index }]);
+    hold([{ row: r, group: g, index, key }]);
     void runTool(key, () => managerAct(ch, view.channel_login, { kind: 'redemptions', ids: [r.id], fulfill }), {
       draft: { fulfill },
+      forget: true,
     });
+  };
+
+  const completeAll = (g: QueueGroup) => {
+    const key = allKeyOf(g.reward_id);
+    if (getTool(key).phase === 'working') return;
+    hold(g.rows.map((row, index) => ({ row, group: g, index, key })));
+    void runTool(key, () => managerAct(ch, view.channel_login, { kind: 'reward_queue', reward_id: g.reward_id, fulfill: true }));
   };
 
   const body = error ? (
@@ -1084,13 +1119,13 @@ function RewardsQueue({ view, layout, queue, onQueue, onClose, onExpand }: FormP
     <div className="space-y-3">
       {groups.map((g) => {
         const pauseKey = toolKey(ch, `reward:${g.reward_id}`);
-        const allKey = toolKey(ch, `rewards:all:${g.reward_id}`);
         const pause = readTool(v, pauseKey);
-        const all = readTool(v, allKey);
-        const headLine = failWords(pause) ?? failWords(all) ?? (all.phase === 'done' ? all.line : null);
+        const all = readTool(v, allKeyOf(g.reward_id));
+        // Only refusals add a line; Complete all's result takes its button's place.
+        const headLine = failWords(pause) ?? failWords(all);
         return (
           <div key={g.reward_id}>
-            <div className="mb-1 flex items-center gap-2">
+            <div className="mb-1 flex min-h-7 items-center gap-2 px-2.5">
               <span className="min-w-0 flex-1 truncate text-xs font-semibold text-textSecondary">{g.heading}</span>
               <RowButton
                 layout={layout}
@@ -1101,18 +1136,19 @@ function RewardsQueue({ view, layout, queue, onQueue, onClose, onExpand }: FormP
               >
                 {g.paused ? 'Resume' : 'Pause'}
               </RowButton>
-              {g.rows.length > 1 && (
-                <RowButton
-                  layout={layout}
-                  disabled={all.phase === 'working'}
-                  onClick={() =>
-                    void runTool(allKey, () =>
-                      managerAct(ch, view.channel_login, { kind: 'reward_queue', reward_id: g.reward_id, fulfill: true }),
-                    )
-                  }
-                >
-                  Complete all
-                </RowButton>
+              {all.phase === 'working' ? (
+                <LoaderCircle size={15} className="animate-spin text-textSecondary" aria-label="Completing all" />
+              ) : all.phase === 'done' ? (
+                <span role="status" className="flex items-center gap-1 text-[12px] font-semibold text-success">
+                  <Check size={14} aria-hidden />
+                  {all.line ?? 'Done'}
+                </span>
+              ) : (
+                g.rows.length > 1 && (
+                  <RowButton layout={layout} onClick={() => completeAll(g)}>
+                    Complete all
+                  </RowButton>
+                )
               )}
             </div>
             {headLine && (
@@ -1136,7 +1172,8 @@ function RewardsQueue({ view, layout, queue, onQueue, onClose, onExpand }: FormP
                     >
                       {avatarOf(r.avatar_url, 24)}
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-[11px] text-textSecondary">{r.line}</p>
+                        {/* With nothing typed, who and when is the whole row: full size. */}
+                        <p className={`truncate ${r.input ? 'text-[11px] text-textSecondary' : 'text-[13px] text-textPrimary'}`}>{r.line}</p>
                         {r.input && <p className="break-words text-sm text-textPrimary">{r.input}</p>}
                         {e.phase === 'failed' && <ResultLine line={e.line} failed />}
                       </div>
@@ -1148,7 +1185,7 @@ function RewardsQueue({ view, layout, queue, onQueue, onClose, onExpand }: FormP
                             {how && <Check size={14} aria-hidden />}
                             {how ? 'Done' : 'Refunded'}
                           </span>
-                        ) : (
+                        ) : isShowing(all) ? null : (
                           <>
                             <button
                               type="button"
@@ -1308,15 +1345,45 @@ export function LiveRow({ view, layout, which }: { view: StreamManagerView; layo
   const ch = view.channel_id;
   const key = toolKey(ch, `live:${which}`);
   const entry = useTool(key);
-  const run = (action: Parameters<typeof managerAct>[2]) => void runTool(key, () => managerAct(ch, view.channel_login, action));
   const busy = entry.phase === 'working';
   const row = view.sections.find((s) => s.id === which);
   const poll = which === 'poll' ? view.poll : null;
   const prediction = which === 'prediction' ? view.prediction : null;
-  if (!poll && !prediction) return null;
   const label = prediction?.status === 'locked' ? 'Prediction locked' : (row?.label ?? (poll ? 'Poll running' : 'Prediction running'));
   const title = poll?.title ?? prediction?.title ?? '';
+  // What the row said when it was pressed: once the write ends the poll or
+  // prediction, the row stays with its result until the result has shown.
+  const pressed = entry.draft as { label: string; title: string } | undefined;
+  const run = (action: Parameters<typeof managerAct>[2]) =>
+    void runTool(key, () => managerAct(ch, view.channel_login, action), { draft: { label, title } });
+  const settled = !poll && !prediction;
+  if (settled && !(isShowing(entry) && pressed)) return null;
+  const shownLabel = settled ? pressed!.label : label;
+  const shownTitle = settled ? pressed!.title : title;
   const pad = layout === 'sheet' ? 'px-3 py-2.5' : layout === 'window' ? 'px-3.5 py-3' : 'px-3 py-2';
+  if (settled) {
+    return (
+      <div className={pad}>
+        <div className="flex items-center gap-2.5">
+          <span className="flex w-4 flex-shrink-0 items-center justify-center text-textSecondary" aria-hidden>
+            {which === 'poll' ? <BarChart3 size={14} /> : <Trophy size={14} />}
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className={`block truncate ${layout === 'sheet' ? 'text-[15px]' : 'text-[13.5px]'} text-textPrimary`}>{shownLabel}</span>
+            {shownTitle && <span className="block truncate text-[12px] text-textSecondary">{shownTitle}</span>}
+          </span>
+          {busy ? (
+            <LoaderCircle size={14} className="animate-spin text-textSecondary" aria-label="Working" />
+          ) : (
+            <span role="status" className="flex flex-shrink-0 items-center gap-1 text-[12px] font-semibold text-success">
+              <Check size={14} aria-hidden />
+              {entry.line}
+            </span>
+          )}
+        </div>
+      </div>
+    );
+  }
   return (
     <div className={pad}>
       <div className="flex items-center gap-2.5">
@@ -1352,7 +1419,7 @@ export function LiveRow({ view, layout, which }: { view: StreamManagerView; layo
             </RowButton>
           ))}
         {prediction && (
-          <RowButton layout={layout} danger disabled={busy} onClick={() => run({ kind: 'cancel_prediction' })}>
+          <RowButton layout={layout} tone="danger" disabled={busy} onClick={() => run({ kind: 'cancel_prediction' })}>
             Refund
           </RowButton>
         )}
@@ -1370,7 +1437,7 @@ export function LiveRow({ view, layout, which }: { view: StreamManagerView; layo
 export function LivePage({ view, which }: { view: StreamManagerView; which: 'poll' | 'prediction' }) {
   return (
     <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin px-5 pb-5 pt-1">
-      <GroupCard title={which === 'poll' ? 'Running now' : 'Open now'} layout="window">
+      <GroupCard title={which === 'poll' ? 'Running now' : 'Open now'} layout="window" hideTitle>
         <LiveRow view={view} layout="window" which={which} />
       </GroupCard>
     </div>

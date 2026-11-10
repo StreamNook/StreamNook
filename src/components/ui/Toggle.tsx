@@ -26,11 +26,13 @@ export const Toggle = ({ enabled, onChange, ariaLabel, disabled = false, id }: T
     disabled={disabled}
     onClick={onChange}
     className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors flex-shrink-0 ${
-      enabled ? 'bg-accent' : 'bg-gray-600'
+      // Off is the theme's ink at a quarter, so on a light theme it stays a
+      // step quieter than on (a fixed slate read as "on" there).
+      enabled ? 'bg-accent' : 'bg-textPrimary/25'
     } ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
   >
     <span
-      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+      className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-[0_1px_2px_rgba(0,0,0,0.3)] transition-transform ${
         enabled ? 'translate-x-6' : 'translate-x-1'
       }`}
     />

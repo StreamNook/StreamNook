@@ -37,8 +37,30 @@ describe('stream manager results show in place', () => {
   });
 });
 
+describe('stream manager writes', () => {
+  it("chat modes go through Rust's door, never straight to Helix", () => {
+    const modes = read('components/chat/ChatModesGroup.tsx');
+    expect(modes).toMatch(/managerAct\(channelId, channelLogin, chatModeAction\(/);
+    for (const file of FAMILY) expect(read(file), file).not.toContain('update_chat_settings');
+  });
+
+  it('a channel switch or a lost role closes every surface, by the tested rule', () => {
+    const widget = read('components/ChatWidget.tsx');
+    const at = widget.indexOf('mustCloseSurfaces(');
+    expect(at).toBeGreaterThan(0);
+    const block = widget.slice(at, at + 600);
+    for (const set of ['setManagerPanel(null)', 'setComposerKind(null)', 'setManagerWindow(null)']) expect(block).toContain(set);
+  });
+});
+
 describe('stream manager keys', () => {
-  it.each(['components/chat/managerKit.tsx', 'components/chat/ChannelToolsMenu.tsx', 'components/chat/ManageChannelWindow.tsx'])(
+  it.each([
+    'components/chat/managerKit.tsx',
+    'components/chat/ChannelToolsMenu.tsx',
+    'components/chat/ManageChannelWindow.tsx',
+    'components/chat/TitleEmojiPicker.tsx',
+    'components/ui/Dropdown.tsx',
+  ])(
     '%s answers its own keys',
     (file) => {
       expect(read(file)).toContain('data-sn-owns-keys');

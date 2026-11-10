@@ -3,7 +3,7 @@
 // chat, which asks in place. Shared by the Tools menu and the Manage channel
 // window's Moderation page. Every result shows on its row; nothing toasts.
 import { useEffect, useState } from 'react';
-import { Ban, DoorOpen, Megaphone, PinOff, Slash, Zap } from 'lucide-react';
+import { Ban, DoorOpen, Eraser, Megaphone, PinOff, Zap } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { usePinStore } from '../../stores/pinStore';
 import { readTool, runTool, toolKey, useManagerStore } from './managerStore';
@@ -18,7 +18,10 @@ export function ModerationGroup({
   unbanCount,
   onOpen,
   onAnnounce,
+  hideTitle = false,
 }: {
+  /** The window's Moderation page already says what this is. */
+  hideTitle?: boolean;
   layout: Layout | 'menu';
   channelId: string;
   channelLogin: string;
@@ -53,7 +56,7 @@ export function ModerationGroup({
   const lineOf = (e: { phase: string; line: string | null }) => (e.phase === 'done' || e.phase === 'failed' ? e.line : null);
 
   return (
-    <GroupCard title="Moderation" layout={layout}>
+    <GroupCard title="Moderation" layout={layout} hideTitle={hideTitle}>
       {onAnnounce && <MenuRow layout={layout} icon={<Megaphone size={14} />} label="Announce" onClick={onAnnounce} />}
       {unbanCount > 0 && (
         <MenuRow
@@ -132,14 +135,14 @@ export function ModerationGroup({
         >
           <MenuRow
             layout={layout}
-            icon={<Slash size={14} />}
+            icon={<Eraser size={14} />}
             danger
             label="Clear everyone's chat?"
-            trailing={
+            below={
               <>
                 <RowButton
                   layout={layout}
-                  danger
+                  tone="commit"
                   autoFocus
                   onClick={() => {
                     setConfirmClear(false);
@@ -165,8 +168,7 @@ export function ModerationGroup({
       ) : (
         <MenuRow
           layout={layout}
-          icon={<Slash size={14} />}
-          danger
+          icon={<Eraser size={14} />}
           label="Clear chat"
           line={lineOf(clear)}
           failed={clear.phase === 'failed'}

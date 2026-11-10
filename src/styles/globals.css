@@ -9163,3 +9163,12 @@ html[data-sn-low-power] .sn-tbt-pointer {
     transform: scaleX(1);
   }
 }
+
+/* Small red text (a refusal under a row, a failed save): the theme's red moved
+   toward the page's ink so it reads at 4.5:1, where the plain red is ~3.9:1. */
+.sn-error-text {
+  color: color-mix(in srgb, var(--color-error) 70%, white);
+}
+:root[data-theme-tone='light'] .sn-error-text {
+  color: color-mix(in srgb, var(--color-error) 75%, black);
+}

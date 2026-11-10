@@ -11,7 +11,7 @@ import { ManagerForm, LiveRow, TITLES, type ManagerPanelKind } from '../../compo
 import PollPredictionComposer from '../../components/chat/PollPredictionComposer';
 import { ChatModesGroup } from '../../components/chat/ChatModesGroup';
 import { GroupCard, MenuRow } from '../../components/chat/managerKit';
-import { liveFromView, type ChatModeKind } from '../../components/chat/managerStore';
+import { liveFromView, liveHeld, useManagerStore, type ChatModeKind } from '../../components/chat/managerStore';
 import { useStreamManager, type ManagerSection } from '../../services/streamManager';
 import { BlockedTermsPage } from './BlockedTermsPage';
 
@@ -26,6 +26,7 @@ interface Props {
 
 export const ManageChannelSheet: React.FC<Props> = ({ open, onClose, channelId, channelLogin }) => {
   const { view, queue, setQueue, error } = useStreamManager(channelId, channelLogin, open);
+  const storeVersion = useManagerStore();
   const [page, setPage] = useState<Page>('home');
 
   const close = () => {
@@ -58,7 +59,7 @@ export const ManageChannelSheet: React.FC<Props> = ({ open, onClose, channelId, 
   return (
     <MobileSheet open={open} onClose={close} maxHeightFraction={0.92} fill>
       <div className="flex flex-col h-full min-h-0">
-        <div className="relative flex items-center justify-center h-11 shrink-0 px-2">
+        <div className="relative flex min-h-11 shrink-0 items-center justify-center px-2 py-1">
           {page !== 'home' && (
             <button
               onClick={home}
@@ -68,7 +69,13 @@ export const ManageChannelSheet: React.FC<Props> = ({ open, onClose, channelId, 
               Back
             </button>
           )}
-          <span className="text-[16px] font-semibold text-textPrimary">{title}</span>
+          <span className="flex flex-col items-center">
+            <span className="text-[16px] font-semibold text-textPrimary">{title}</span>
+            {/* Whose channel and your role here, under the title like the desktop window. */}
+            {page === 'home' && view && (
+              <span className="text-[12.5px] text-textMuted">{[view.channel_login, view.role_line].join(' · ')}</span>
+            )}
+          </span>
         </div>
 
         <div className="flex-1 min-h-0 overflow-y-auto px-3 pb-4 sn-manage-touch">
@@ -76,12 +83,11 @@ export const ManageChannelSheet: React.FC<Props> = ({ open, onClose, channelId, 
 
           {view && page === 'home' && (
             <div className="flex flex-col gap-4 pt-1">
-              <p className="px-1 text-[13px] text-textMuted">{view.role_line}</p>
-
               {streamRows.length > 0 && (
                 <GroupCard title="Stream" layout="sheet">
                   {streamRows.map((s) =>
-                    (s.id === 'poll' && view.poll) || (s.id === 'prediction' && view.prediction) ? (
+                    (s.id === 'poll' && (view.poll || liveHeld(storeVersion, view.channel_id, 'poll'))) ||
+                    (s.id === 'prediction' && (view.prediction || liveHeld(storeVersion, view.channel_id, 'prediction'))) ? (
                       <LiveRow key={s.id} view={view} layout="sheet" which={s.id} />
                     ) : (
                       <MenuRow

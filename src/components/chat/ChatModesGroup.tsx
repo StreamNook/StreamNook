@@ -9,7 +9,6 @@ import { Clock, Hash, MessageSquare, Shield, ShieldAlert, Users } from 'lucide-r
 import { Toggle } from '../ui/Toggle';
 import { managerAct, type ChatView } from '../../services/streamManager';
 import {
-  CHAT_MODE_HOLD_MS,
   chatModeAction,
   readTool,
   runTool,
@@ -18,6 +17,8 @@ import {
   useManagerStore,
   type ChatModeKind,
   type LiveModes,
+  type ModeState,
+  type ModeWanted,
 } from './managerStore';
 import { GroupCard, MenuRow, RowButton, ValuePicker, type Layout } from './managerKit';
 
@@ -29,12 +30,16 @@ const ICON: Record<ChatModeKind, ReactNode> = {
   unique: <Hash size={14} />,
 };
 
+/** A length the list does not offer (set on twitch.tv), in words. */
+const lengthWords = (kind: ChatModeKind, v: number) => (kind === 'slow' ? `${v}s` : v === 0 ? 'Any follower' : `${v} min`);
+
 export function ChatModesGroup({
   layout,
   channelId,
   channelLogin,
   chat,
   live,
+  hideTitle = false,
 }: {
   layout: Layout | 'menu';
   channelId: string;
@@ -42,6 +47,8 @@ export function ChatModesGroup({
   chat: ChatView;
   /** What the room has now: IRC ROOMSTATE on the desktop, Rust's view on the phone. */
   live: LiveModes;
+  /** The window's Chat modes page already says what this is. */
+  hideTitle?: boolean;
 }) {
   const v = useManagerStore();
   const uid = useId();
@@ -50,10 +57,8 @@ export function ChatModesGroup({
 
   const send = (mode: ChatModeKind, on: boolean, value?: number | null) => {
     const key = toolKey(channelId, `chat:${mode}`);
-    void runTool(key, () => managerAct(channelId, channelLogin, chatModeAction(mode, on, value)), {
-      draft: { on, value: on ? (value ?? null) : null },
-      holdMs: CHAT_MODE_HOLD_MS,
-    });
+    const wanted: ModeWanted = { on, value: on ? (value ?? null) : null, roomAtPress: live[mode] };
+    void runTool(key, () => managerAct(channelId, channelLogin, chatModeAction(mode, on, value)), { draft: wanted });
   };
 
   const shieldKey = toolKey(channelId, 'shield');
@@ -70,14 +75,17 @@ export function ChatModesGroup({
   };
 
   return (
-    <GroupCard title="Chat modes" layout={layout}>
+    <GroupCard title="Chat modes" layout={layout} hideTitle={hideTitle}>
       {chat.modes.map((m) => {
         const kind = m.kind as ChatModeKind;
         const key = toolKey(channelId, `chat:${kind}`);
         const entry = readTool(v, key);
-        const shown = shownMode(entry, live[kind]);
+        // Rust's read after the last write, which the act answered with.
+        const fromView: ModeState = { on: m.on, value: m.on ? m.value : null };
+        const shown = shownMode(entry, live[kind], fromView);
         const id = `${uid}-${kind}`;
         const value = shown.value ?? m.value ?? m.options[0]?.value ?? 0;
+        const listed = m.options.some((o) => o.value === value);
         return (
           <MenuRow
             key={kind}
@@ -93,10 +101,10 @@ export function ChatModesGroup({
                   <ValuePicker
                     value={value}
                     options={m.options}
-                    shown={shown.value === m.value ? m.value_label : null}
+                    shown={listed ? null : lengthWords(kind, value)}
                     ariaLabel={`${m.label} length`}
-                    onChange={(v) => {
-                      if (entry.phase !== 'working') send(kind, true, v);
+                    onChange={(n) => {
+                      if (entry.phase !== 'working') send(kind, true, n);
                     }}
                   />
                 )}
@@ -128,11 +136,12 @@ export function ChatModesGroup({
               icon={icons ? <ShieldAlert size={14} /> : undefined}
               label="Turn on Shield Mode?"
               detail="It can clear chat and tighten every mode."
-              trailing={
+              wrapDetail
+              below={
                 <>
                   <RowButton
                     layout={layout}
-                    danger
+                    tone="commit"
                     autoFocus
                     onClick={() => {
                       setConfirmShield(false);
@@ -142,7 +151,7 @@ export function ChatModesGroup({
                     Turn on
                   </RowButton>
                   <RowButton layout={layout} onClick={() => setConfirmShield(false)}>
-                    No
+                    Cancel
                   </RowButton>
                 </>
               }

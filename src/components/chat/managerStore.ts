@@ -31,9 +31,6 @@ export const IDLE: ToolEntry = Object.freeze({ phase: 'idle', line: null, gen: 0
 export const DONE_HOLD_MS = 1400;
 /** How long a closing panel shows its result before it closes itself. */
 export const SAVED_HOLD_MS = 900;
-/** A chat mode keeps showing what you asked for this long, while the room's
- *  own mode line (IRC ROOMSTATE) catches up. */
-export const CHAT_MODE_HOLD_MS = 5000;
 
 const entries = new Map<string, ToolEntry>();
 const timers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -58,6 +55,15 @@ export const toolKey = (channelId: string, tool: string): string => `${channelId
 export function getTool(key: string): ToolEntry {
   return entries.get(key) ?? IDLE;
 }
+
+/** A write is running or its result still shows: whatever it acted on stays
+ *  on screen (a row the write removed, a running poll it ended). */
+export const isShowing = (e: ToolEntry): boolean => e.phase === 'working' || e.phase === 'done';
+
+/** A running poll's or prediction's row is still showing its last write
+ *  (End, Remove, a winner, Refund), though the view no longer has it. */
+export const liveHeld = (storeVersion: number, channelId: string, which: 'poll' | 'prediction'): boolean =>
+  isShowing(readTool(storeVersion, toolKey(channelId, `live:${which}`)));
 
 /** A key's entry as of `storeVersion` (from `useManagerStore`), for a render
  *  that reads several keys. Passing the version is what makes a compiled
@@ -119,6 +125,8 @@ export interface RunOptions {
   holdMs?: number;
   /** Stored as the draft while the write runs (a chat mode's wanted state). */
   draft?: unknown;
+  /** Drop the key once its done line has shown (one key per redemption). */
+  forget?: boolean;
 }
 
 const ERR_NO_ANSWER = 'Twitch did not answer.';
@@ -166,7 +174,13 @@ export async function runTool(key: string, run: () => Promise<RunAnswer>, opts: 
     setTimeout(() => {
       timers.delete(key);
       const e = getTool(key);
-      if (e.gen === gen && e.phase === 'done') write(key, { ...e, phase: 'idle', line: null });
+      if (e.gen !== gen || e.phase !== 'done') return;
+      if (opts.forget) {
+        entries.delete(key);
+        notify();
+      } else {
+        write(key, { ...e, phase: 'idle', line: null });
+      }
     }, opts.holdMs ?? DONE_HOLD_MS),
   );
   return true;
@@ -178,6 +192,18 @@ export function resetManagerStore(): void {
   timers.clear();
   entries.clear();
   notify();
+}
+
+// ─── which surface is open ────────────────────────────────────────────────────
+
+/**
+ * Whether a ChatWidget must close its stream manager panel, builder and
+ * window now: the channel changed under them, or the manager no longer
+ * applies here. Either way nothing open may write on.
+ */
+export function mustCloseSurfaces(was: { channelId: string | null | undefined }, now: { channelId: string | null | undefined; manages: boolean }, anyOpen: boolean): boolean {
+  if (was.channelId !== now.channelId) return true;
+  return anyOpen && !now.manages;
 }
 
 // ─── pages ────────────────────────────────────────────────────────────────────
@@ -288,7 +314,13 @@ export function switchKind(
     const empty = choices.findIndex((c) => !c.text.trim());
     choices = empty >= 0 ? choices.filter((_, i) => i !== empty) : choices.slice(0, limits.max);
   }
-  while (choices.length < limits.min) choices = [...choices, { id: newChoiceId(), text: '' }];
+  // Padding ids come from the draft, so the same switch shown again in a later
+  // render keeps the same boxes (and the caret in them).
+  const taken = new Set(choices.map((c) => c.id));
+  for (let n = 0; choices.length < limits.min; n += 1) {
+    const id = `${kind}-pad-${n}`;
+    if (!taken.has(id)) choices = [...choices, { id, text: '' }];
+  }
   return { ...d, kind, choices, seconds: Math.min(Math.max(d.seconds, limits.minSecs), limits.maxSecs) };
 }
 
@@ -359,14 +391,27 @@ export function modeMatches(wanted: ModeState, live: ModeState): boolean {
   return !wanted.on || wanted.value == null || wanted.value === live.value;
 }
 
-/** What a mode row shows: what you asked for while it runs and until the room
- *  catches up (within the key's hold), else the room's own state. */
-export function shownMode(entry: ToolEntry, live: ModeState): ModeState {
-  const wanted = entry.draft as ModeState | undefined;
+const sameMode = (a: ModeState, b: ModeState) => a.on === b.on && (a.value ?? null) === (b.value ?? null);
+
+/** What was asked for on a mode, and the room as it was at the press. */
+export interface ModeWanted extends ModeState {
+  roomAtPress: ModeState;
+}
+
+/**
+ * What a mode row shows. While the write runs: what was asked for. A refusal:
+ * the room. After a write that went through, until the room's own line
+ * (IRC ROOMSTATE) changes from what it was at the press: Rust's read after
+ * the write (`afterWrite`, from its view), else what was asked for. Once the
+ * room moves, the room.
+ */
+export function shownMode(entry: ToolEntry, live: ModeState, afterWrite: ModeState | null): ModeState {
+  const wanted = entry.draft as ModeWanted | undefined;
   if (!wanted) return live;
   if (entry.phase === 'working') return wanted;
-  if (entry.phase === 'done' && !modeMatches(wanted, live)) return wanted;
-  return live;
+  if (entry.phase === 'failed') return live;
+  if (modeMatches(wanted, live) || !sameMode(live, wanted.roomAtPress)) return live;
+  return afterWrite ?? wanted;
 }
 
 // ─── rewards ──────────────────────────────────────────────────────────────────
@@ -379,12 +424,14 @@ export interface LeavingRow {
   group: QueueGroup;
   /** Where it sat in its reward's list. */
   index: number;
+  /** The store key whose write holds it (its own, or its reward's Complete all). */
+  key: string;
 }
 
-/** The queue with the rows acted on still in place (`held` ids). A reward the
- *  queue no longer has comes back after the others, holding only those rows. */
-export function withHeld(groups: QueueGroup[], leaving: LeavingRow[], held: (id: string) => boolean): QueueGroup[] {
-  const back = leaving.filter((l) => held(l.row.id));
+/** The queue with the rows acted on still in place (while `held`). A reward
+ *  the queue no longer has comes back after the others, holding only those rows. */
+export function withHeld(groups: QueueGroup[], leaving: LeavingRow[], held: (l: LeavingRow) => boolean): QueueGroup[] {
+  const back = leaving.filter(held);
   if (!back.length) return groups;
   const put = (rows: QueueRow[], mine: LeavingRow[]) => {
     const out = [...rows];

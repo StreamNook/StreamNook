@@ -18,7 +18,8 @@ import { ModerationGroup } from './ModerationGroup';
 import BlockedTermsSheet from './BlockedTermsSheet';
 import UnbanRequestsPage from './UnbanRequestsPage';
 import { useUnbanRequests } from './unbanRequests';
-import { collapseTarget, groupPages, initialPage, isPanelKind, lastPage, liveFromRoom, rememberPage } from './managerStore';
+import { collapseTarget, groupPages, initialPage, isPanelKind, lastPage, liveFromRoom, liveHeld, rememberPage, useManagerStore } from './managerStore';
+import { Dropdown } from '../ui/Dropdown';
 import { IconButton, LABEL, QUIET_PILL, easeFor, useEscape, useInstant } from './managerKit';
 
 const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -57,41 +58,52 @@ export function ManageChannelWindow({
   onClose,
 }: Props) {
   const dialogRef = useRef<HTMLDivElement>(null);
+  const v = useManagerStore();
   const instant = useInstant();
-  const [picked, setPicked] = useState<PageId | null>(() => requested);
+  // Read once, on open: the page asked for, else the last one used here.
+  const [picked, setPicked] = useState<PageId | null>(() => requested ?? lastPage(channelId));
   const [sub, setSub] = useState<'blocked' | 'unban' | null>(null);
-  const [carried, setCarried] = useState(handedOff);
+  // The page whose draft came along from the other size, and the pages
+  // already shown here: neither says "Picking up your unsaved edit".
+  const [handedPage] = useState<PageId | null>(() => (handedOff ? requested : null));
+  const [seen, setSeen] = useState<PageId[]>([]);
   const pages = view?.pages ?? [];
   // The same list the Tools menu counts (one read, then Rust's pushes).
   const unban = useUnbanRequests(channelId, channelLogin, pages.some((p) => p.id === 'moderation'));
-  const page = view ? initialPage(picked, lastPage(channelId), pages) : null;
+  const page = view ? initialPage(picked, null, pages) : null;
 
   useEffect(() => {
     if (page) rememberPage(channelId, page);
   }, [channelId, page]);
 
-  // Focus moves in on open and on every page, and goes back where it was
-  // (the Tools button, the panel's Open larger) when the window closes.
+  // Focus goes back where it was when the window closes, or to this chat's
+  // Tools button when that is gone (a panel's Open larger, the menu's).
   useLayoutEffect(() => {
     const before = document.activeElement as HTMLElement | null;
     return () => {
-      if (before && document.contains(before)) before.focus();
+      const back =
+        before && before !== document.body && document.contains(before)
+          ? before
+          : document.querySelector<HTMLElement>(`[data-sn-tools-button="${CSS.escape(channelLogin.toLowerCase())}"]`);
+      back?.focus();
     };
-  }, []);
+  }, [channelLogin]);
+  // Focus moves in on open and on every page: to the first field to type in,
+  // never onto a decision (a length, a winner, Cancel raid); else the page.
   useEffect(() => {
     const root = dialogRef.current?.querySelector<HTMLElement>('[data-sn-page]');
     if (!root || root.contains(document.activeElement)) return;
-    const first = root.querySelector<HTMLElement>('input:not([disabled]), textarea:not([disabled]), button:not([disabled])');
-    (first ?? dialogRef.current)?.focus();
+    const first = root.querySelector<HTMLElement>('input:not([disabled]), textarea:not([disabled])');
+    (first ?? root).focus();
   }, [page, sub]);
 
   const markInside = useOutsidePress(true, [dialogRef], onClose);
   useEscape(true, () => (sub ? setSub(null) : onClose()));
 
   const go = (p: PageId) => {
+    if (page && !seen.includes(page)) setSeen([...seen, page]);
     setPicked(p);
     setSub(null);
-    setCarried(false);
   };
 
   const trapTab = (e: ReactKeyboardEvent) => {
@@ -100,10 +112,16 @@ export function ManageChannelWindow({
     if (!items.length) return;
     const first = items[0];
     const last = items[items.length - 1];
-    if (e.shiftKey && document.activeElement === first) {
+    const at = document.activeElement as HTMLElement | null;
+    // From the window itself, the page, or a list portaled out of it, Tab
+    // comes back in rather than going to the app behind.
+    if (!at || !items.includes(at)) {
+      e.preventDefault();
+      (e.shiftKey ? last : first).focus();
+    } else if (e.shiftKey && at === first) {
       e.preventDefault();
       last.focus();
-    } else if (!e.shiftKey && document.activeElement === last) {
+    } else if (!e.shiftKey && at === last) {
       e.preventDefault();
       first.focus();
     }
@@ -138,11 +156,12 @@ export function ManageChannelWindow({
         queue={queue}
         onQueue={onQueue}
         onClose={close}
-        handedOff={carried}
+        handedOff={page === handedPage || seen.includes(page)}
       />
     );
   } else if (page === 'poll' || page === 'prediction') {
-    body = (page === 'poll' ? view.poll : view.prediction) ? (
+    // A poll ended here stays on its page until its result has shown.
+    body = (page === 'poll' ? view.poll : view.prediction) || liveHeld(v, channelId, page) ? (
       <LivePage view={view} which={page} />
     ) : (
       <PollPredictionComposer key="builder" view={view} layout="window" fixedKind={page} onClose={close} />
@@ -151,7 +170,14 @@ export function ManageChannelWindow({
     body = (
       <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin px-5 pb-5 pt-1">
         {view.chat ? (
-          <ChatModesGroup layout="window" channelId={channelId} channelLogin={channelLogin} chat={view.chat} live={liveFromRoom(roomState)} />
+          <ChatModesGroup
+            layout="window"
+            hideTitle
+            channelId={channelId}
+            channelLogin={channelLogin}
+            chat={view.chat}
+            live={liveFromRoom(roomState)}
+          />
         ) : (
           <p className="text-[13px] text-textSecondary">{view.problems.find((p) => p.startsWith('Chat')) ?? 'Loading…'}</p>
         )}
@@ -165,7 +191,14 @@ export function ManageChannelWindow({
         <UnbanRequestsPage key={channelId} rows={unban.rows} resolve={unban.resolve} />
       ) : (
         <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin px-5 pb-5 pt-1">
-          <ModerationGroup layout="window" channelId={channelId} channelLogin={channelLogin} unbanCount={unban.rows.length} onOpen={setSub} />
+          <ModerationGroup
+            layout="window"
+            hideTitle
+            channelId={channelId}
+            channelLogin={channelLogin}
+            unbanCount={unban.rows.length}
+            onOpen={setSub}
+          />
         </div>
       );
   }
@@ -175,11 +208,13 @@ export function ManageChannelWindow({
   const nav = (
     <nav
       aria-label="Manage channel"
-      className="flex flex-shrink-0 gap-1 overflow-x-auto border-b border-textPrimary/[0.06] px-3 py-2 min-[760px]:w-[208px] min-[760px]:flex-col min-[760px]:gap-3 min-[760px]:overflow-x-visible min-[760px]:overflow-y-auto min-[760px]:border-b-0 min-[760px]:border-r min-[760px]:px-2.5 min-[760px]:py-4"
+      // Under 760 px the header's page menu stands in for it: a strip of
+      // pages there would cut the last ones off with nothing saying so.
+      className="hidden w-[208px] flex-shrink-0 flex-col gap-3 overflow-y-auto border-r border-textPrimary/[0.06] px-2.5 py-4 min-[760px]:flex"
     >
       {groupPages(pages).map((g) => (
-        <div key={g.group} className="flex flex-shrink-0 gap-1 min-[760px]:flex-col min-[760px]:gap-0.5">
-          <p className={`${LABEL} hidden px-2.5 pb-1 min-[760px]:block`}>{g.group}</p>
+        <div key={g.group} className="flex flex-col gap-0.5">
+          <p className={`${LABEL} px-2.5 pb-1`}>{g.group}</p>
           {g.rows.map((p) => {
             const on = p.id === page;
             return (
@@ -240,7 +275,25 @@ export function ManageChannelWindow({
               </IconButton>
             )}
             <div className="min-w-0 flex-1">
-              <p className="truncate text-[16px] font-semibold leading-tight text-textPrimary">{title}</p>
+              {view && page && !sub && pages.length > 1 && (
+                <div className="-ml-0.5 min-[760px]:hidden">
+                  <Dropdown
+                    bare
+                    value={page}
+                    options={pages.map((p) => ({ value: p.id, label: p.live ? `${p.label} · ${p.live}` : p.label }))}
+                    onChange={(p) => go(p)}
+                    ariaLabel="Page"
+                    className="text-[16px] font-semibold leading-tight text-textPrimary"
+                  />
+                </div>
+              )}
+              <p
+                className={`truncate text-[16px] font-semibold leading-tight text-textPrimary ${
+                  view && page && !sub && pages.length > 1 ? 'hidden min-[760px]:block' : ''
+                }`}
+              >
+                {title}
+              </p>
               {view && <p className="truncate text-[12.5px] text-textSecondary">{[view.channel_login, view.role_line].join(' · ')}</p>}
             </div>
             {/* On the title's line, not centered on title and subtitle. */}
@@ -255,7 +308,7 @@ export function ManageChannelWindow({
               </IconButton>
             </div>
           </div>
-          <div data-sn-page className="flex min-h-0 flex-1 flex-col">
+          <div data-sn-page tabIndex={-1} className="flex min-h-0 flex-1 flex-col outline-none">
             {body}
           </div>
         </div>

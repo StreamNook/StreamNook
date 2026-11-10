@@ -68,6 +68,7 @@ import { useChatTopStack } from './chat/chatTopStack';
 import PollPredictionComposer from './chat/PollPredictionComposer';
 import StreamManagerPanel, { type ManagerPanelKind } from './chat/StreamManagerPanel';
 import ManageChannelWindow from './chat/ManageChannelWindow';
+import { mustCloseSurfaces } from './chat/managerStore';
 import { useStreamManager, type PageId } from '../services/streamManager';
 import HypeTrainBanner from './HypeTrainBanner';
 import ViewersPanel from './ViewersPanel';
@@ -2804,19 +2805,25 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   // Opened from the other size with what was typed: no "Picking up" line.
   const [managerHandedOff, setManagerHandedOff] = useState(false);
   const [managerChannel, setManagerChannel] = useState(currentStream?.user_id);
-  if (managerChannel !== currentStream?.user_id) {
-    setManagerChannel(currentStream?.user_id);
-    setManagerPanel(null);
-    setComposerKind(null);
-    setManagerWindow(null);
+  const managerSurfaceOpen = !!(managerPanel || composerKind || managerWindow);
+  if (
+    mustCloseSurfaces(
+      { channelId: managerChannel },
+      { channelId: currentStream?.user_id, manages: toolSections.polls },
+      managerSurfaceOpen,
+    )
+  ) {
+    if (managerChannel !== currentStream?.user_id) setManagerChannel(currentStream?.user_id);
+    if (managerSurfaceOpen) {
+      setManagerPanel(null);
+      setComposerKind(null);
+      setManagerWindow(null);
+    }
   }
-  if (!toolSections.polls && (managerPanel || composerKind || managerWindow)) {
-    setManagerPanel(null);
-    setComposerKind(null);
-    setManagerWindow(null);
-  }
+  // Read for moderators too (a VOD replay's chat), so the Tools menu's Chat
+  // modes card always has the room's modes or says why not.
   const streamManager = useStreamManager(
-    toolSections.polls ? currentStream?.user_id : null,
+    toolSections.polls || toolSections.moderate ? currentStream?.user_id : null,
     currentStream?.user_login ?? '',
     true,
   );
@@ -5754,6 +5761,8 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                     onStartPoll={(kind) => openManagerBuilder(kind)}
                     pollBuilderOpen={!!composerKind || !!managerPanel || !!managerWindow}
                     manager={streamManager.view}
+                    managerError={streamManager.error}
+                    onRetryManager={() => void streamManager.refresh()}
                     onOpenManager={(kind) => openManagerPanel(kind)}
                     onOpenWindow={(page) => openManagerWindow(page)}
                     drops={dropsTool}

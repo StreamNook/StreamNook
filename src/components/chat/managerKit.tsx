@@ -3,7 +3,7 @@
 // and rows the Tools menu, the Manage channel window and the phone's sheet
 // share. Layout only; every line and every rule comes from Rust.
 import { useCallback, useEffect, useRef } from 'react';
-import type { CSSProperties, ReactNode } from 'react';
+import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react';
 import { Check, ChevronRight, CircleAlert, LoaderCircle, Maximize2, X } from 'lucide-react';
 import { Tooltip } from '../ui/Tooltip';
 import { Dropdown } from '../ui/Dropdown';
@@ -31,6 +31,11 @@ export const SAVED_FILL: CSSProperties = {
 export const TONE_CLASS = { quiet: 'text-textSecondary', near: 'text-warning', over: 'text-error' } as const;
 /** A scrolling body's bottom edge fades into the footer instead of cutting. */
 export const FADE_BOTTOM: CSSProperties = { maskImage: 'linear-gradient(to bottom, black calc(100% - 16px), transparent)' };
+/** Both edges fade (a body under a header divider); the top fade is shorter
+ *  than the body's top padding, so the first line is crisp at rest. */
+export const FADE_BOTH: CSSProperties = {
+  maskImage: 'linear-gradient(to bottom, transparent, black 10px, black calc(100% - 16px), transparent)',
+};
 const FADE_RIGHT: CSSProperties = { maskImage: 'linear-gradient(to right, black calc(100% - 20px), transparent)' };
 /** A full-size action on the phone: finger-sized. */
 export const BIG = 'min-h-[44px] !text-[15px]';
@@ -237,7 +242,7 @@ export function FooterRow({
   children: ReactNode;
 }) {
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex min-h-[34px] items-center gap-2">
       {layout !== 'sheet' && hints?.length ? (
         <span
           className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden whitespace-nowrap text-[11.5px] text-textSecondary/80"
@@ -331,7 +336,7 @@ export function ProblemLine({ line }: { line: string }) {
   return (
     <div
       role="alert"
-      className="flex items-start gap-2 rounded-lg bg-error/10 px-3 py-2 text-[12.5px] leading-snug text-error ring-1 ring-inset ring-error/25"
+      className="sn-error-text flex items-start gap-2 rounded-lg bg-error/10 px-3 py-2 text-[12.5px] leading-snug ring-1 ring-inset ring-error/25"
     >
       <CircleAlert size={15} className="mt-px flex-shrink-0" aria-hidden />
       <span>{line}</span>
@@ -343,19 +348,35 @@ export function ProblemLine({ line }: { line: string }) {
 export function ResultLine({ line, failed }: { line: string | null; failed: boolean }) {
   if (!line) return null;
   return (
-    <p role="status" className={`text-[11.5px] leading-snug ${failed ? 'text-error' : 'text-textSecondary'}`}>
+    <p role="status" className={`text-[11.5px] leading-snug ${failed ? 'sn-error-text' : 'text-textSecondary'}`}>
       {line}
     </p>
   );
 }
 
-/** A titled group of rows (Chat modes, Moderation, Your settings). */
-export function GroupCard({ title, layout, children }: { title: string; layout: Layout | 'menu'; children: ReactNode }) {
+/** A titled group of rows (Chat modes, Moderation, Your settings). In the
+ *  window, a card that is the whole page drops its title: the page's own
+ *  title already says it (`hideTitle`). */
+export function GroupCard({
+  title,
+  layout,
+  hideTitle = false,
+  children,
+}: {
+  title: string;
+  layout: Layout | 'menu';
+  hideTitle?: boolean;
+  children: ReactNode;
+}) {
+  const titleClass =
+    layout === 'sheet'
+      ? 'px-3 text-[12px] font-semibold uppercase tracking-wide text-textMuted'
+      : layout === 'window'
+        ? LABEL
+        : `${LABEL} px-3`;
   return (
-    <section className={layout === 'sheet' ? 'space-y-1.5' : 'space-y-1'}>
-      <h3 className={`${layout === 'sheet' ? 'px-3 text-[12px] font-semibold uppercase tracking-wide text-textMuted' : `${LABEL} px-2.5`}`}>
-        {title}
-      </h3>
+    <section aria-label={hideTitle ? title : undefined} className={layout === 'sheet' ? 'space-y-1.5' : 'space-y-1'}>
+      {!hideTitle && <h3 className={titleClass}>{title}</h3>}
       <div
         className={
           layout === 'sheet'
@@ -373,8 +394,10 @@ const ROW_PAD = { menu: 'min-h-[40px] px-3 py-2', panel: 'min-h-[40px] px-3 py-2
 
 /**
  * One row of a card: icon, label, an optional quieter second line, what sits
- * at its end (a count, a switch, a value, its buttons) and its own result
- * line. With `onClick` the whole row opens something and ends in a chevron.
+ * at its end (a count, a switch, a value, its buttons), then its own result
+ * line and any second line of buttons (`below`) under the words, so the
+ * row's top line never moves when one appears. With `onClick` the whole row
+ * opens something and ends in a chevron.
  */
 export function MenuRow({
   layout,
@@ -382,9 +405,11 @@ export function MenuRow({
   label,
   labelFor,
   detail,
+  wrapDetail = false,
   trailing,
   line,
   failed = false,
+  below,
   onClick,
   danger = false,
 }: {
@@ -394,34 +419,41 @@ export function MenuRow({
   /** The switch this row's label names, so a press on the words flips it. */
   labelFor?: string;
   detail?: ReactNode;
+  /** The second line wraps instead of cutting off (a confirm's reason). */
+  wrapDetail?: boolean;
   trailing?: ReactNode;
   line?: string | null;
   failed?: boolean;
+  below?: ReactNode;
   onClick?: () => void;
   danger?: boolean;
 }) {
   const text = layout === 'sheet' ? 'text-[15px]' : 'text-[13.5px]';
+  const ink = danger ? 'sn-error-text' : 'text-textPrimary';
   const words = (
     <span className="min-w-0 flex-1">
       {labelFor ? (
-        <label htmlFor={labelFor} className={`block cursor-pointer truncate ${text} ${danger ? 'text-error' : 'text-textPrimary'}`}>
+        <label htmlFor={labelFor} className={`block cursor-pointer truncate ${text} ${ink}`}>
           {label}
         </label>
       ) : (
-        <span className={`block truncate ${text} ${danger ? 'text-error' : 'text-textPrimary'}`}>{label}</span>
+        <span className={`block truncate ${text} ${ink}`}>{label}</span>
       )}
-      {detail && <span className="block truncate text-[12px] text-textSecondary">{detail}</span>}
-      {line && (
-        <span className="mt-0.5 block">
-          <ResultLine line={line} failed={failed} />
-        </span>
-      )}
+      {detail && <span className={`block text-[12px] text-textSecondary ${wrapDetail ? 'leading-snug' : 'truncate'}`}>{detail}</span>}
     </span>
   );
   const iconEl = icon && (
-    <span className={`flex w-4 flex-shrink-0 items-center justify-center ${danger ? 'text-error' : 'text-textSecondary'}`} aria-hidden>
+    <span className={`flex w-4 flex-shrink-0 items-center justify-center ${danger ? 'sn-error-text' : 'text-textSecondary'}`} aria-hidden>
       {icon}
     </span>
+  );
+  // Under the words: the icon's column (16 px) plus the gap (10 px).
+  const indent = icon ? 'pl-[26px]' : '';
+  const under = (line || below) && (
+    <div className={`mt-1 space-y-1.5 ${indent}`}>
+      {below && <div className="flex flex-wrap gap-1.5">{below}</div>}
+      {line && <ResultLine line={line} failed={failed} />}
+    </div>
   );
   if (onClick) {
     return (
@@ -440,42 +472,52 @@ export function MenuRow({
     );
   }
   return (
-    <div className={`flex items-center gap-2.5 ${ROW_PAD[layout]}`}>
-      {iconEl}
-      {words}
-      {trailing && <span className="flex flex-shrink-0 items-center gap-1.5">{trailing}</span>}
+    <div className={ROW_PAD[layout]}>
+      <div className="flex items-center gap-2.5">
+        {iconEl}
+        {words}
+        {trailing && <span className="flex flex-shrink-0 items-center gap-1.5">{trailing}</span>}
+      </div>
+      {under}
     </div>
   );
 }
 
-/** A small action inside a row (End, Lock, Turn on): quiet, or red for one
- *  that can't be taken back. */
+/**
+ * A small action inside a row (End, Lock, Turn on). `quiet` is the plain
+ * glass; `danger` is red-tinted glass for one that can't be taken back
+ * (Refund); `commit` is the filled red that says yes to a confirm in place.
+ */
 export function RowButton({
   layout,
   onClick,
   disabled,
-  danger = false,
+  tone = 'quiet',
   autoFocus = false,
   children,
 }: {
   layout: Layout | 'menu';
   onClick: () => void;
   disabled?: boolean;
-  danger?: boolean;
+  tone?: 'quiet' | 'danger' | 'commit';
   /** Takes focus when it appears (a confirm in place), so Esc and Enter answer it. */
   autoFocus?: boolean;
   children: ReactNode;
 }) {
+  const look =
+    tone === 'commit'
+      ? `${ACCENT_BUTTON} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-error/50`
+      : tone === 'danger'
+        ? `${GLAZE_PILL} sn-error-text !bg-error/[0.12] hover:!bg-error/[0.2] ring-1 ring-inset ring-error/25`
+        : GLAZE_PILL;
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={disabled}
       autoFocus={autoFocus}
-      className={`${danger ? ACCENT_BUTTON : GLAZE_PILL} ${
-        layout === 'sheet' ? 'h-9 px-3.5 !text-[14px]' : 'h-7 px-3 !text-[12px]'
-      }`}
-      style={danger ? DANGER_FILL : undefined}
+      className={`${look} ${layout === 'sheet' ? 'h-9 px-3.5 !text-[14px]' : 'h-7 px-3 !text-[12px]'}`}
+      style={tone === 'commit' ? DANGER_FILL : undefined}
     >
       {children}
     </button>
@@ -496,16 +538,37 @@ export function Segmented<T extends string | number>({
   onChange: (value: T) => void;
   ariaLabel: string;
 }) {
+  const at = Math.max(
+    0,
+    options.findIndex((o) => o.value === value),
+  );
+  // One stop for Tab, on the pick; the arrow keys move the pick.
+  const onKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    const step = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
+    if (!step || !options.length) return;
+    e.preventDefault();
+    const next = options[(at + step + options.length) % options.length];
+    onChange(next.value);
+    const el = e.currentTarget.querySelector<HTMLButtonElement>(`[data-seg="${String(next.value)}"]`);
+    requestAnimationFrame(() => el?.focus());
+  };
   return (
-    <div role="radiogroup" aria-label={ariaLabel} className="flex gap-1 rounded-full bg-surface/30 p-[3px] ring-1 ring-inset ring-textPrimary/[0.06]">
-      {options.map((o) => {
-        const on = o.value === value;
+    <div
+      role="radiogroup"
+      aria-label={ariaLabel}
+      onKeyDown={onKey}
+      className="flex gap-1 rounded-full bg-surface/30 p-[3px] ring-1 ring-inset ring-textPrimary/[0.06]"
+    >
+      {options.map((o, i) => {
+        const on = i === at;
         return (
           <button
             key={String(o.value)}
+            data-seg={String(o.value)}
             type="button"
             role="radio"
             aria-checked={on}
+            tabIndex={on ? 0 : -1}
             onClick={() => onChange(o.value)}
             className={`flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-full font-semibold transition-colors ${
               layout === 'sheet' ? 'h-9 text-[14px]' : 'h-7 text-[12.5px]'
@@ -544,7 +607,7 @@ export function ValuePicker({
       onChange={onChange}
       ariaLabel={ariaLabel}
       placeholder={shown ?? undefined}
-      className="h-7 rounded-full bg-textPrimary/[0.06] px-2.5 text-[12.5px] font-semibold text-textSecondary hover:text-textPrimary"
+      className="h-6 rounded-full bg-textPrimary/[0.06] px-2.5 text-[12.5px] font-semibold text-textSecondary hover:text-textPrimary"
     />
   );
 }

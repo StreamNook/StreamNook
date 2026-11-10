@@ -208,6 +208,7 @@ export function TitleEmojiPicker({ anchorRef, recent, recentHeading, onPick, onC
       }}
       role="dialog"
       aria-label="Emoji for your title"
+      data-sn-owns-keys=""
       initial={{ opacity: 0, y: -4, scale: 0.98 }}
       animate={{ opacity: 1, y: 0, scale: 1 }}
       transition={instant ? { duration: 0 } : { duration: 0.16, ease: [0.2, 0.8, 0.2, 1] }}

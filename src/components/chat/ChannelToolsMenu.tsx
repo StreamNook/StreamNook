@@ -30,8 +30,8 @@ import { ModerationGroup } from './ModerationGroup';
 import BlockedTermsSheet from './BlockedTermsSheet';
 import UnbanRequestsPage from './UnbanRequestsPage';
 import { countLabel, useUnbanRequests } from './unbanRequests';
-import { liveFromRoom, readTool, runTool, toolKey, useManagerStore, type RunAnswer } from './managerStore';
-import { FADE_BOTTOM, GroupCard, IconButton, LABEL, MenuRow, easeFor, useEscape, useInstant } from './managerKit';
+import { liveFromRoom, liveHeld, readTool, runTool, toolKey, useManagerStore, type RunAnswer } from './managerStore';
+import { FADE_BOTH, GroupCard, IconButton, MenuRow, QUIET_PILL, easeFor, useEscape, useInstant } from './managerKit';
 import { ChannelPointsIcon } from '../ChannelPointsIcon';
 
 export interface DropsTool {
@@ -63,6 +63,9 @@ interface ChannelToolsMenuProps {
   pollBuilderOpen: boolean;
   /** Rust's stream manager view for this channel, null until read. */
   manager: StreamManagerView | null;
+  /** Why the view could not be read, and reading it again. */
+  managerError: string | null;
+  onRetryManager: () => void;
   /** Open one of the stream manager's panels above the message box. */
   onOpenManager: (kind: ManagerPanelKind) => void;
   /** Open the Manage channel window, on `page` or the last one used here. */
@@ -99,6 +102,8 @@ const ChannelToolsMenu: React.FC<ChannelToolsMenuProps> = ({
   onStartPoll,
   pollBuilderOpen,
   manager,
+  managerError,
+  onRetryManager,
   onOpenManager,
   onOpenWindow,
   onOpenChange,
@@ -180,6 +185,8 @@ const ChannelToolsMenu: React.FC<ChannelToolsMenuProps> = ({
           }}
           aria-label={unbanWords ? `Channel tools, ${unbanWords}` : 'Channel tools'}
           aria-expanded={isOpen}
+          // Where focus goes back to when the Manage channel window closes.
+          data-sn-tools-button={channelLogin.toLowerCase()}
           className={`sn-composer-tool relative flex items-center justify-center w-9 h-9 transition-colors duration-200 ${
             inUse ? 'text-accent-neon' : 'text-textSecondary hover:text-accent-neon'
           }`}
@@ -203,20 +210,24 @@ const ChannelToolsMenu: React.FC<ChannelToolsMenuProps> = ({
             exit={{ opacity: 0, y: 10, scale: 0.97 }}
             transition={easeFor(instant)}
             // The glazed controls' menu body, like the chat header's flyouts.
-            className="glass-flyout absolute z-[60] bottom-full left-0 right-0 mb-2 max-h-[560px] flex flex-col overflow-hidden rounded-xl origin-bottom"
+            className="glass-flyout !p-0 absolute z-[60] bottom-full left-0 right-0 mb-2 max-h-[560px] flex flex-col overflow-hidden rounded-xl origin-bottom"
           >
+            {/* The panels' header: icon and title, a step above the card labels. */}
             <div className="flex items-center gap-2 border-b border-textPrimary/[0.06] px-3.5 py-2.5">
               {page !== 'tools' ? (
                 <button
                   onClick={() => setPage('tools')}
                   aria-label="Back to tools"
-                  className={`${LABEL} -ml-1 flex flex-1 items-center gap-1 transition-colors hover:text-textPrimary`}
+                  className="-ml-1 flex flex-1 items-center gap-1.5 text-sm font-semibold text-textPrimary transition-colors hover:text-textSecondary"
                 >
-                  <ChevronLeft size={13} strokeWidth={2.5} />
+                  <ChevronLeft size={15} strokeWidth={2.25} aria-hidden />
                   {page === 'blocked' ? 'Blocked terms' : 'Unban requests'}
                 </button>
               ) : (
-                <span className={`${LABEL} flex-1`}>Tools</span>
+                <>
+                  <Wrench size={14} className="text-textSecondary" aria-hidden />
+                  <span className="flex-1 text-sm font-semibold text-textPrimary">Tools</span>
+                </>
               )}
               {page === 'tools' && canExpand && (
                 <IconButton
@@ -236,7 +247,7 @@ const ChannelToolsMenu: React.FC<ChannelToolsMenuProps> = ({
             ) : page === 'unban' && canModerate ? (
               <UnbanRequestsPage key={broadcasterId} rows={unbanRows} resolve={resolveUnban} />
             ) : (
-              <div className="min-h-0 flex-1 space-y-3 overflow-y-auto custom-scrollbar p-2.5" style={FADE_BOTTOM}>
+              <div className="min-h-0 flex-1 space-y-3 overflow-y-auto custom-scrollbar px-2.5 pb-4 pt-3.5" style={FADE_BOTH}>
                 {drops && (
                   <GroupCard title="Drops" layout="menu">
                     <MenuRow
@@ -265,7 +276,11 @@ const ChannelToolsMenu: React.FC<ChannelToolsMenuProps> = ({
                   <GroupCard title={isBroadcaster ? 'Your channel' : 'Channel'} layout="menu">
                     {channelRows.map((row) => {
                       // A running poll or prediction is its controls, not a builder.
-                      if ((row.id === 'poll' && manager.poll) || (row.id === 'prediction' && manager.prediction)) {
+                      // It stays after End or Refund until that result has shown.
+                      if (
+                        (row.id === 'poll' && (manager.poll || liveHeld(storeVersion, broadcasterId, 'poll'))) ||
+                        (row.id === 'prediction' && (manager.prediction || liveHeld(storeVersion, broadcasterId, 'prediction')))
+                      ) {
                         return <LiveRow key={row.id} view={manager} layout="menu" which={row.id} />;
                       }
                       return (
@@ -286,15 +301,35 @@ const ChannelToolsMenu: React.FC<ChannelToolsMenuProps> = ({
                   </GroupCard>
                 )}
 
-                {canModerate && manager?.chat && (
-                  <ChatModesGroup
-                    layout="menu"
-                    channelId={broadcasterId}
-                    channelLogin={channelLogin}
-                    chat={manager.chat}
-                    live={liveFromRoom(roomState)}
-                  />
-                )}
+                {canModerate &&
+                  (manager?.chat ? (
+                    <ChatModesGroup
+                      layout="menu"
+                      channelId={broadcasterId}
+                      channelLogin={channelLogin}
+                      chat={manager.chat}
+                      live={liveFromRoom(roomState)}
+                    />
+                  ) : (
+                    // Never missing without a word: still reading, or why not.
+                    <GroupCard title="Chat modes" layout="menu">
+                      <MenuRow
+                        layout="menu"
+                        label={
+                          !manager && !managerError
+                            ? 'Reading the room…'
+                            : (manager?.problems.find((p) => p.startsWith('Chat modes')) ?? managerError ?? 'Chat modes could not be read')
+                        }
+                        trailing={
+                          (managerError || manager) && (
+                            <button type="button" onClick={onRetryManager} className={`${QUIET_PILL} h-7 px-3 text-[12px]`}>
+                              Try again
+                            </button>
+                          )
+                        }
+                      />
+                    </GroupCard>
+                  ))}
 
                 {canModerate && (
                   <ModerationGroup

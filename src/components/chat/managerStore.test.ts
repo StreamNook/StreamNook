@@ -1,7 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  CHAT_MODE_HOLD_MS,
   DONE_HOLD_MS,
   chatModeAction,
   clampPoints,
@@ -12,10 +11,13 @@ import {
   groupPages,
   growChoices,
   initialPage,
+  isShowing,
   liveFromRoom,
   liveFromView,
+  liveHeld,
   modeMatches,
   moveChoice,
+  mustCloseSurfaces,
   raidStart,
   resetManagerStore,
   runTool,
@@ -118,12 +120,30 @@ describe('runTool', () => {
     expect(getTool(toolKey('chan-b', 'raid')).phase).toBe('idle');
   });
 
-  it('a chat mode keeps what was asked for during its longer hold', async () => {
-    const key = toolKey('chan-a', 'chat:slow');
-    await runTool(key, ok('Chat updated'), { draft: { on: true, value: null }, holdMs: CHAT_MODE_HOLD_MS });
-    vi.advanceTimersByTime(DONE_HOLD_MS + 1);
-    expect(getTool(key).phase).toBe('done');
-    expect(getTool(key).draft).toEqual({ on: true, value: null });
+  it('a per-redemption key is dropped once its result has shown', async () => {
+    const key = toolKey('chan-a', 'rewards:r1');
+    await runTool(key, ok('Completed'), { draft: { fulfill: true }, forget: true });
+    expect(isShowing(getTool(key))).toBe(true);
+    vi.advanceTimersByTime(DONE_HOLD_MS);
+    expect(getTool(key)).toMatchObject({ phase: 'idle', gen: 0, draft: undefined });
+  });
+
+  it('a poll row ended here stays held while its result shows', async () => {
+    const v = 0;
+    await runTool(toolKey('chan-a', 'live:poll'), ok('Poll ended'));
+    expect(liveHeld(v, 'chan-a', 'poll')).toBe(true);
+    expect(liveHeld(v, 'chan-b', 'poll')).toBe(false);
+    vi.advanceTimersByTime(DONE_HOLD_MS);
+    expect(liveHeld(v, 'chan-a', 'poll')).toBe(false);
+  });
+});
+
+describe('surfaces', () => {
+  it('a channel switch closes them, open or not, and so does no longer managing', () => {
+    expect(mustCloseSurfaces({ channelId: 'a' }, { channelId: 'b', manages: true }, false)).toBe(true);
+    expect(mustCloseSurfaces({ channelId: 'a' }, { channelId: 'a', manages: false }, true)).toBe(true);
+    expect(mustCloseSurfaces({ channelId: 'a' }, { channelId: 'a', manages: false }, false)).toBe(false);
+    expect(mustCloseSurfaces({ channelId: 'a' }, { channelId: 'a', manages: true }, true)).toBe(false);
   });
 });
 
@@ -191,6 +211,14 @@ describe('the builder', () => {
     expect(back.seconds).toBe(30);
   });
 
+  it('the same switch shown twice gives the same boxes, so a render never re-keys them', () => {
+    const one = { ...freshBuilder('poll'), choices: [box('x')] };
+    const lim = { max: 10, min: 3, minSecs: 30, maxSecs: 1800 };
+    expect(switchKind(one, 'prediction', lim).choices.map((c) => c.id)).toEqual(switchKind(one, 'prediction', lim).choices.map((c) => c.id));
+    const ids = switchKind(one, 'prediction', lim).choices.map((c) => c.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
   it('moves a choice with Alt+Up/Down, and not past either end', () => {
     const c = [box('a'), box('b'), box('c')];
     expect(moveChoice(c, 1, -1).map((x) => x.text)).toEqual(['b', 'a', 'c']);
@@ -224,16 +252,28 @@ describe('chat modes', () => {
     expect(chatModeAction('followers', true, 10)).toEqual({ kind: 'chat_mode', mode: 'followers', on: true, value: 10 });
   });
 
-  it('shows what was asked for until the room catches up, then the room; a refusal shows the room', () => {
-    const entry = (phase: ToolEntry['phase'], draft: unknown): ToolEntry => ({ phase, line: null, gen: 1, draft, base: null, sent: undefined });
-    const off = { on: false, value: null };
-    const wanted = { on: true, value: null };
-    expect(shownMode(entry('working', wanted), off)).toEqual(wanted);
-    expect(shownMode(entry('done', wanted), off)).toEqual(wanted);
-    expect(shownMode(entry('done', wanted), { on: true, value: 30 })).toEqual({ on: true, value: 30 });
-    expect(shownMode(entry('failed', wanted), off)).toEqual(off);
-    expect(shownMode(entry('idle', wanted), off)).toEqual(off);
-    expect(modeMatches({ on: true, value: 10 }, { on: true, value: 30 })).toBe(false);
+  const entry = (phase: ToolEntry['phase'], draft: unknown): ToolEntry => ({ phase, line: null, gen: 1, draft, base: null, sent: undefined });
+  const off = { on: false, value: null };
+  const on30 = { on: true, value: 30 };
+  const wanted = { on: true, value: null, roomAtPress: off };
+
+  it('shows what was asked for while it runs, the room once it matches, the room after a refusal', () => {
+    expect(shownMode(entry('working', wanted), off, off)).toEqual(wanted);
+    expect(shownMode(entry('done', wanted), on30, off)).toEqual(on30);
+    expect(shownMode(entry('failed', wanted), off, off)).toEqual(off);
+    expect(modeMatches({ on: true, value: 10 }, on30)).toBe(false);
+  });
+
+  it("while the room's line lags, trusts Rust's read after the write over the old room, long after the hold", () => {
+    expect(shownMode(entry('done', wanted), off, on30)).toEqual(on30);
+    expect(shownMode(entry('idle', wanted), off, on30)).toEqual(on30);
+    // No read yet: what was asked for.
+    expect(shownMode(entry('idle', wanted), off, null)).toEqual(wanted);
+  });
+
+  it('once the room moves on its own, shows the room', () => {
+    const someoneElse = { on: true, value: 5 };
+    expect(shownMode(entry('idle', { on: false, value: null, roomAtPress: on30 }), someoneElse, off)).toEqual(someoneElse);
   });
 });
 
@@ -253,15 +293,19 @@ describe('rewards', () => {
 
   it('keeps a row acted on in its place while its result shows, even after the queue drops it', () => {
     const g = group('r1', [row('a'), row('b'), row('c')]);
-    const leaving: LeavingRow[] = [{ row: row('b'), group: g, index: 1 }];
+    const leaving: LeavingRow[] = [{ row: row('b'), group: g, index: 1, key: 'c:rewards:b' }];
     const after = [group('r1', [row('a'), row('c')])];
     expect(withHeld(after, leaving, () => true)[0].rows.map((r) => r.id)).toEqual(['a', 'b', 'c']);
     expect(withHeld(after, leaving, () => false)[0].rows.map((r) => r.id)).toEqual(['a', 'c']);
   });
 
-  it('brings back a reward whose last row left', () => {
-    const g = group('r2', [row('z')]);
-    const out = withHeld([], [{ row: row('z'), group: g, index: 0 }], () => true);
-    expect(out.map((x) => [x.reward_id, x.rows.map((r) => r.id)])).toEqual([['r2', ['z']]]);
+  it("brings back a reward whose rows all left (Complete all), held by its reward's key", () => {
+    const g = group('r2', [row('y'), row('z')]);
+    const leaving: LeavingRow[] = [
+      { row: row('y'), group: g, index: 0, key: 'c:rewards:all:r2' },
+      { row: row('z'), group: g, index: 1, key: 'c:rewards:all:r2' },
+    ];
+    const out = withHeld([], leaving, (l) => l.key === 'c:rewards:all:r2');
+    expect(out.map((x) => [x.reward_id, x.rows.map((r) => r.id)])).toEqual([['r2', ['y', 'z']]]);
   });
 });

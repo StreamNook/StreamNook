@@ -84,7 +84,9 @@ export function PollPredictionComposer({ view, layout, initialKind, fixedKind, o
   const [blank] = useState(() => freshBuilder(want ?? 'poll'));
   const raw = (entry.draft as BuilderDraft | undefined) ?? blank;
   // The kind asked for (the menu's row, a slash command, the side list, the
-  // switch) wins over a kept draft's: shown at once, kept just after.
+  // switch) wins over a kept draft's. It is only shown here; the store gets
+  // it with the next edit (`put` writes `d`), never from an effect, so two
+  // builders open on one channel never write each other's kind back and forth.
   const d = want && raw.kind !== want ? switchKind(raw, want, limitsOf(view, want)) : raw;
   const limits = limitsOf(view, d.kind);
   const [showRecent, setShowRecent] = useState(false);
@@ -94,10 +96,6 @@ export function PollPredictionComposer({ view, layout, initialKind, fixedKind, o
   const instant = useInstant();
   const sheet = layout === 'sheet';
   const big = layout === 'window';
-
-  useEffect(() => {
-    if (want && raw.kind !== want) setToolDraft(key, d);
-  }, [d, key, raw.kind, want]);
 
   // On a phone the keyboard would cover the form the moment it opens.
   useEffect(() => {
@@ -276,7 +274,7 @@ export function PollPredictionComposer({ view, layout, initialKind, fixedKind, o
       </div>
 
       <div>
-        <p className={`${LABEL} mb-1.5`}>Runs for {durationLabel}</p>
+        <p className={`${LABEL} mb-1.5`}>Runs for</p>
         <Segmented
           layout={layout}
           ariaLabel="How long it runs"
@@ -291,7 +289,7 @@ export function PollPredictionComposer({ view, layout, initialKind, fixedKind, o
           <label htmlFor={`sn-builder-points-${layout}`} className={`${LABEL} mb-1.5 block`}>
             Extra votes with channel points
           </label>
-          <div className="flex items-center gap-2">
+          <div className={`${FIELD} flex items-center gap-2`}>
             <ChannelPointsIcon size={14} className="flex-shrink-0 text-accent" />
             <input
               id={`sn-builder-points-${layout}`}
@@ -301,7 +299,7 @@ export function PollPredictionComposer({ view, layout, initialKind, fixedKind, o
               value={d.points || ''}
               onChange={(e) => put({ ...d, points: Math.max(0, Number(e.target.value) || 0) })}
               placeholder="Off"
-              className={`${FIELD} h-9 flex-1 text-sm`}
+              className="h-9 min-w-0 flex-1 bg-transparent text-sm text-textPrimary placeholder-textSecondary outline-none"
             />
             <span className="flex-shrink-0 text-[11.5px] text-textSecondary">per vote</span>
           </div>
@@ -413,16 +411,18 @@ function ChoiceRow({
       dragListener={false}
       dragControls={controls}
       transition={instant ? { duration: 0 } : undefined}
-      className="flex items-center gap-1.5"
+      // The grip and Remove sit inside the box, so every box in the column
+      // shares the Question box's edges.
+      className={`${FIELD} flex items-center gap-1 !pl-1 !pr-1.5 ${n > max ? '!border-error/60' : ''}`}
     >
       <span
         onPointerDown={(e) => controls.start(e)}
         aria-hidden
-        className="grid h-8 w-5 flex-shrink-0 cursor-grab touch-none place-items-center text-textSecondary/70 hover:text-textSecondary active:cursor-grabbing"
+        className="grid h-8 w-6 flex-shrink-0 cursor-grab touch-none place-items-center text-textSecondary/70 hover:text-textSecondary active:cursor-grabbing"
       >
         <GripVertical size={14} />
       </span>
-      <div className={`${FIELD} flex min-w-0 flex-1 items-center gap-2 ${n > max ? '!border-error/60' : ''}`}>
+      <div className="flex min-w-0 flex-1 items-center gap-2">
         <input
           id={`sn-choice-${choice.id}`}
           value={choice.text}
@@ -446,7 +446,7 @@ function ChoiceRow({
         onClick={onRemove}
         disabled={!removable}
         aria-label={`Remove option ${index + 1}`}
-        className="grid h-8 w-6 flex-shrink-0 place-items-center text-textSecondary transition-colors hover:text-error disabled:invisible"
+        className="grid h-7 w-6 flex-shrink-0 place-items-center rounded-full text-textSecondary transition-colors hover:text-error disabled:invisible"
       >
         <X size={13} />
       </button>

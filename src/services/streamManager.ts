@@ -254,8 +254,17 @@ export const getStreamManager = (channelId: string, channelLogin: string) =>
 export const checkStreamInfo = (channelId: string, draft: StreamInfoDraft) =>
   invoke<InfoCheck>('check_stream_info', { channelId, draft });
 
+/** This window's hooks, told every act's answer for the channel it was sent to. */
+const answerListeners = new Set<(channelId: string, outcome: ActOutcome) => void>();
+
+/** One write through Rust's door. The answer's view reaches this window's
+ *  hooks before the caller sees it, so a result never shows over the view
+ *  from before the write; other windows get Rust's push. */
 export const managerAct = (channelId: string, channelLogin: string, action: ManagerAction) =>
-  invoke<ActOutcome>('stream_manager_act', { channelId, channelLogin, action });
+  invoke<ActOutcome>('stream_manager_act', { channelId, channelLogin, action }).then((outcome) => {
+    for (const l of [...answerListeners]) l(channelId, outcome);
+    return outcome;
+  });
 
 export const getRewardQueue = (channelId: string) => invoke<QueueView>('get_reward_queue', { channelId });
 
@@ -329,6 +338,11 @@ export function useStreamManager(channelId: string | null | undefined, channelLo
   useEffect(() => {
     if (!active || !id) return;
     void refresh();
+    const onAnswer = (ch: string, outcome: ActOutcome) => {
+      if (outcome.view) dispatch({ type: 'view', channelId: ch, view: outcome.view });
+      if (outcome.queue) dispatch({ type: 'queue', channelId: ch, queue: outcome.queue });
+    };
+    answerListeners.add(onAnswer);
     let off: (() => void) | undefined;
     let alive = true;
     void listen<ManagerPush>('stream-manager-state', (e) => {
@@ -341,22 +355,17 @@ export function useStreamManager(channelId: string | null | undefined, channelLo
     });
     return () => {
       alive = false;
+      answerListeners.delete(onAnswer);
       off?.();
     };
   }, [active, id, refresh]);
-
-  /** An action's answer for `forChannel` (the channel it was sent to). */
-  const apply = useCallback((outcome: ActOutcome, forChannel: string) => {
-    if (outcome.view) dispatch({ type: 'view', channelId: forChannel, view: outcome.view });
-    if (outcome.queue) dispatch({ type: 'queue', channelId: forChannel, queue: outcome.queue });
-  }, []);
 
   /** A queue read for `forChannel`. */
   const setQueue = useCallback((forChannel: string, queue: QueueView) => {
     dispatch({ type: 'queue', channelId: forChannel, queue });
   }, []);
 
-  return { view: current.view, queue: current.queue, error: current.error, refresh, apply, setQueue };
+  return { view: current.view, queue: current.queue, error: current.error, refresh, setQueue };
 }
 
 /** `m:ss` left until `deadlineMs`, never below zero. */

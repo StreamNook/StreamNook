@@ -152,6 +152,8 @@ export function Dropdown<T extends string | number>({
                     <motion.div
                         ref={menuRef}
                         role="listbox"
+                        // A key pressed in the open list is the list's, never the player's.
+                        data-sn-owns-keys=""
                         style={menuStyle}
                         onMouseLeave={onPreview ? () => onPreview(null) : undefined}
                         initial={{ opacity: 0, y: -4, scale: 0.97 }}
