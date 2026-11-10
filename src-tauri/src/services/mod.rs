@@ -176,6 +176,7 @@ pub mod theme_palette;
 pub mod settings_backups;
 pub mod install_marker;
 pub mod settings_catalog;
+pub mod search_relevance;
 pub mod alert_types;
 // Phones only: go-live push registration. Its rules are tested on desktop.
 #[cfg(any(mobile, test))]

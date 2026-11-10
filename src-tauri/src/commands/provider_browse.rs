@@ -58,6 +58,7 @@ pub async fn provider_search(provider: String, query: String) -> Result<StreamPa
         .await
         .map_err(|e| e.to_string())?;
     crate::services::hidden_channels::retain_provider(&mut page.streams, crate::services::hidden_channels::Realm::Search);
+    crate::services::search_relevance::keep_relevant(&query, &mut page.streams);
     Ok(page)
 }
 
@@ -65,8 +66,12 @@ pub async fn provider_search(provider: String, query: String) -> Result<StreamPa
 #[derive(Clone, serde::Serialize)]
 pub struct SearchBatch {
     pub provider: String,
-    /// The rows exactly as that platform's own search command returns them.
+    /// The rows that name the query, best match first.
     pub streams: serde_json::Value,
+    /// Each row's match strength (`services::search_relevance`, 0 best), on
+    /// the same scale for every platform, so the page can merge the platforms
+    /// with the channel itself first.
+    pub ranks: Vec<u8>,
     /// Set when the platform failed, as opposed to matching nothing.
     pub error: Option<String>,
 }
@@ -90,7 +95,8 @@ pub async fn search_platforms(
                 .map_err(|e| e.to_string())
                 .and_then(|mut rows| {
                     crate::services::hidden_channels::retain_twitch(&mut rows, crate::services::hidden_channels::Realm::Search);
-                    serde_json::to_value(rows).map_err(|e| e.to_string())
+                    let ranks = crate::services::search_relevance::twitch_ranks(query, &rows);
+                    Ok((serde_json::to_value(rows).map_err(|e| e.to_string())?, ranks))
                 })
         } else {
             match source_for(&provider).await {
@@ -100,18 +106,20 @@ pub async fn search_platforms(
                     .map_err(|e| e.to_string())
                     .and_then(|mut page| {
                         crate::services::hidden_channels::retain_provider(&mut page.streams, crate::services::hidden_channels::Realm::Search);
-                        serde_json::to_value(page.streams).map_err(|e| e.to_string())
+                        let ranks = crate::services::search_relevance::keep_relevant(query, &mut page.streams);
+                        Ok((serde_json::to_value(page.streams).map_err(|e| e.to_string())?, ranks))
                     }),
                 Err(e) => Err(e),
             }
         };
         let batch = match found {
-            Ok(streams) => SearchBatch { provider, streams, error: None },
+            Ok((streams, ranks)) => SearchBatch { provider, streams, ranks, error: None },
             Err(e) => {
                 log::warn!("[Search] {} search failed: {}", provider, e);
                 SearchBatch {
                     provider,
                     streams: serde_json::Value::Array(Vec::new()),
+                    ranks: Vec::new(),
                     error: Some(e),
                 }
             }

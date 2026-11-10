@@ -13,7 +13,7 @@ import { motion, LayoutGroup, AnimatePresence } from 'framer-motion';
 import { usemultiNookStore } from '../stores/multiNookStore';
 
 import { invoke } from '@tauri-apps/api/core';
-import { searchPlatforms } from '../services/platformSearch';
+import { mergeSearchBatches, searchPlatforms, type SearchBatch } from '../services/platformSearch';
 import type { TwitchStream, TwitchCategory, CategoryInfo, TwitchClip, TwitchVideo } from '../types';
 import LoadingWidget from './LoadingWidget';
 import StreamTitleWithEmojis from './StreamTitleWithEmojis';
@@ -1361,14 +1361,16 @@ const Home = () => {
                         ? WATCHABLE_PROVIDERS.filter((pv) => pv !== 'twitch' && PROVIDER_WATCH[pv].search)
                         : []),
                 ];
-                const found = new Map<ProviderId, TwitchStream[]>();
+                const found = new Map<ProviderId, SearchBatch>();
                 setCategorySearchResults([]);
                 await searchPlatforms(q, platforms, (batch) => {
                     if (seq !== searchSeqRef.current) return;
                     if (batch.error) Logger.warn(`${batch.provider} search failed:`, batch.error);
-                    found.set(batch.provider, batch.streams);
-                    // In a fixed order, whatever order the platforms answer in.
-                    setSearchResults(platforms.flatMap((pv) => found.get(pv) ?? []));
+                    found.set(batch.provider, batch);
+                    // Rust drops the rows that do not name the query and ranks
+                    // the rest on one scale, so the channel itself leads
+                    // whichever platform answers first.
+                    setSearchResults(mergeSearchBatches(platforms, found));
                 });
             }
             setRecentSearches(addRecentSearch(searchScope, q, usedMode));
