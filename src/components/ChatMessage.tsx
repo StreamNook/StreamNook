@@ -62,7 +62,7 @@ import { isHomeRow, rowProvider } from '../utils/chatAuthority';
 import { ProviderLogo } from './ProviderLogo';
 import { getDisplayedName, getColorOverride } from '../utils/userChatOverrides';
 import { overrideKey, rowOverrideKey, rowSenderNames, rowShownName, stripLeadingName, withShownSender } from '../utils/chatterName';
-import { useNameColorAdjust } from '../hooks/useNameColor';
+import { NameColorToneContext, useNameColorAdjust } from '../hooks/useNameColor';
 import { vendorEmojiUrl } from '../services/emojiService';
 import { categoryOf, chatEventTemplateContext } from '../utils/chatEvents';
 import { renderEventTemplate } from './overlay/overlayConfig';
@@ -2544,7 +2544,8 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   // (hooks before any conditional return). Read from the shared cache during
   // render, so a row that mounts after the first never flashes in unmarked;
   // only a room not known yet asks, and its answer lands here.
-  const sourceDark = isThemeDark();
+  // What the row sits on: the phones' chat over video is dark in every theme (SN-40).
+  const sourceDark = useContext(NameColorToneContext) ?? isThemeDark();
   const sourceKey = isFromSharedChat && sourceRoomId ? sharedSourceKey(sourceRoomId, sourceDark) : null;
   const [askedSource, setAskedSource] = useState<{ key: string; source: SharedSource } | null>(null);
   const sharedSource = sourceKey

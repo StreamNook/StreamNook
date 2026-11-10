@@ -7,7 +7,7 @@
 // subscription per tab, so every open room stays connected and switching tabs is
 // a re-render rather than a reconnect. This pane renders whichever tab is active
 // via `useChannelChat`.
-import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useDeferredValue, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { acceptsComposerEvent, type PaneEventDetail } from '../../components/chat/managerStore';
 import { HandPointing, X } from 'phosphor-react';
 import ChatMessageList from '../../components/ChatMessageList';
@@ -64,6 +64,8 @@ import { useComposerRiserLift } from './pausedOverlay';
 import { openBadgeInfo } from '../../stores/badgeSpotlightStore';
 import { twitchRowBadgeRef, type TwitchRowBadgeInfo } from '../../utils/badgeSpotlight';
 import { CHAT_BUTTON_SLOT, type VerticalChatState } from '../watch/verticalView';
+import { OVER_VIDEO_CLASS, useOverVideoStyle, useThemeDark } from './overVideo';
+import { NameColorToneContext } from '../../hooks/useNameColor';
 
 /** A tapped badge in a row opens the phone's badge sheet (BadgeSheet, mounted in MobileApp).
  *  Module scope, so the rows' memo never sees a new callback. */
@@ -157,6 +159,16 @@ export const MobileChatPane: React.FC<{
   // The lower third (or cleared, which keeps its rules while out of sight): rows held at the
   // newest, inert, every gesture on them the watch layer's.
   const folded = vertical === 'lower' || vertical === 'cleared';
+  // Chat straight over the video (the lower third, the landscape overlay, which is the only
+  // read-only pane) takes dark ink in a light theme (overVideo.ts): the lower third's list
+  // carries the variables here, the overlay's whole column carries them in the watch screen.
+  // Its names are adjusted for the dark backing; `null` leaves every other pane on the theme.
+  // The names follow a beat behind, in a render React can interrupt, so growing, folding or
+  // turning the phone never waits on every row rendering again.
+  const themeDark = useThemeDark();
+  const overVideo = folded || readOnly;
+  const nameTone = useDeferredValue(overVideo && !themeDark ? true : null);
+  const lowerInk = useOverVideoStyle(folded);
   // This pane's own name, so a slash command's page action (/clearmessages,
   // /poll) reaches only the pane it was typed in.
   const paneSource = useId();
@@ -1099,7 +1111,13 @@ export const MobileChatPane: React.FC<{
       <div className="flex-1 min-h-0 relative flex flex-col">
       <div
         ref={listRef}
-        style={listMask ? { WebkitMaskImage: listMask, maskImage: listMask } : undefined}
+        // The lower third's rows take dark ink in every theme (overVideo.ts); the composer
+        // under them keeps the theme.
+        style={
+          listMask || lowerInk
+            ? { ...lowerInk, ...(listMask ? { WebkitMaskImage: listMask, maskImage: listMask } : null) }
+            : undefined
+        }
         data-chat-list=""
         // `select-none` is load-bearing, not tidiness: Android WebView answers a
         // long-press on text by starting its OWN text selection, which wins the
@@ -1111,7 +1129,7 @@ export const MobileChatPane: React.FC<{
         // scroll container.
         // The lower third (SN-40): every row on its own soft backing and inert, and no hold, fan
         // or row swipe; the watch layer's touch area over the rows owns every touch there.
-        className={`flex-1 min-h-0 relative select-none [-webkit-touch-callout:none] ${strip || listMask ? '' : 'sn-fade-top'} ${rowSwipeOn ? 'sn-row-swipe' : ''}${folded ? ' sn-chat-vertical' : ''}`}
+        className={`flex-1 min-h-0 relative select-none [-webkit-touch-callout:none] ${strip || listMask ? '' : 'sn-fade-top'} ${rowSwipeOn ? 'sn-row-swipe' : ''}${folded ? ` sn-chat-vertical ${OVER_VIDEO_CLASS}` : ''}`}
         onContextMenu={onListContextMenu}
         onPointerDown={folded ? undefined : press.onPointerDown}
         onPointerMove={folded ? undefined : press.onPointerMove}
@@ -1119,6 +1137,7 @@ export const MobileChatPane: React.FC<{
         onPointerCancel={folded ? undefined : press.onPointerCancel}
       >
         <HoldWhile hold={idle}>
+          <NameColorToneContext.Provider value={nameTone}>
           <ChatMessageList
             scrollToBottomRef={listScrollToBottomRef}
             messages={shownMessages}
@@ -1143,6 +1162,7 @@ export const MobileChatPane: React.FC<{
             homeProvider={activeProvider}
             getMessageId={getMessageId}
           />
+          </NameColorToneContext.Provider>
         </HoldWhile>
         {swipeOn && !hintLearned && (
           <div className="pointer-events-none absolute left-0 right-0 top-2 z-10 flex justify-center">

@@ -481,6 +481,24 @@ const writeSurfaceGlass = (strength: number): void => {
     root.style.setProperty('--color-surface-active', blendSurfaceForGlass(surfaceActive, tertiary, strength));
 };
 
+/**
+ * A palette's three surface tints at the glassiness on screen now, over the
+ * given tertiary floor: what applyTheme and the Glassiness slider paint, for a
+ * surface that draws another palette than the theme's (the phones' chat over
+ * video). Changes with themeVersion.
+ */
+export const glassSurfaces = (
+    palette: Pick<ThemePalette, 'surface' | 'surfaceHover' | 'surfaceActive'>,
+    tertiary: string,
+): { surface: string; surfaceHover: string; surfaceActive: string } => {
+    const strength = effectiveGlassStrength();
+    return {
+        surface: blendSurfaceForGlass(palette.surface, tertiary, strength),
+        surfaceHover: blendSurfaceForGlass(palette.surfaceHover, tertiary, strength),
+        surfaceActive: blendSurfaceForGlass(palette.surfaceActive, tertiary, strength),
+    };
+};
+
 // ─── Theme version ───────────────────────────────────────────────────────────
 // Bumped by every writer of the colors a page reads back from the live CSS
 // (applyTheme, Rust's floors landing late, the glass setters), so a surface

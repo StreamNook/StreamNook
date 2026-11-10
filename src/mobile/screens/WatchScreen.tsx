@@ -125,6 +125,7 @@ import { createBandTouches } from '../watch/bandTouches';
 import { backClaimSide, chatSwipeIntent, chatSwipeSide } from '../watch/chatSwipe';
 import { currentZoomSurface, type ZoomSurface } from '../player/videoFill';
 import { writeZoomToFill } from '../player/zoomToFill';
+import { OVER_VIDEO_CLASS, useOverVideoStyle } from '../chat/overVideo';
 
 const MINI_W = 200;
 const MINI_H = Math.round((MINI_W * 9) / 16);
@@ -599,6 +600,7 @@ export const WatchScreen: React.FC = () => {
   const sideBySide = !tabletop && shape.twoPane && !mini && !pip && (twoColumns || immersiveLandscape);
   const chatBeside = sideBySide && twoColumns;
   const chatOverlay = sideBySide && immersiveLandscape && landscapeChat && phoneOverlayChat;
+  const overlayInk = useOverVideoStyle(chatOverlay);
   // Only the stacked portrait band has room below it for the offline card;
   // everywhere else the card stays over the art.
   const offlineChin = !sideBySide && !tabletop && !mini && !pip;
@@ -1823,7 +1825,7 @@ export const WatchScreen: React.FC = () => {
           ? // Floats over the picture at the chosen edge. z-30 puts it above
             // the player's control layer, which is inset away from this edge
             // (see controlsInset below) so the two never fight for a touch.
-            `absolute top-0 bottom-0 z-30 flex flex-col sn-chat-overlay sn-chat-reveal ${
+            `absolute top-0 bottom-0 z-30 flex flex-col sn-chat-overlay sn-chat-reveal ${OVER_VIDEO_CLASS} ${
               overlaySide === 'left' ? 'left-0 sn-chat-overlay--left' : 'right-0'
             }`
           : 'hidden'
@@ -2196,6 +2198,9 @@ export const WatchScreen: React.FC = () => {
               ? { paddingTop: 'var(--sn-safe-t, 0px)' }
               : chatOverlay
                 ? ({
+                    // Chat over the video takes dark ink in a light theme: the
+                    // column's tint, its tabs and every row (overVideo.ts).
+                    ...overlayInk,
                     width: overlayWidth,
                     '--fs-chat-opacity': `${overlayOpacity}%`,
                     // The bars are hidden in landscape but a camera cutout is

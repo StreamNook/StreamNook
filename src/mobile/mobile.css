@@ -494,6 +494,15 @@ body:has(.sn-mobile) .glass-input:focus {
 :root[data-theme-tone='light'] .sn-segment-track .glaze-selected {
   background-color: color-mix(in srgb, var(--color-text-primary) 10%, transparent);
 }
+/* Chat over the video takes the dark ink in every theme (SN-40, overVideo.ts),
+   so the light-theme rules that could reach into it draw as a dark theme
+   there: the chosen tab's dark pill, and red text lifted toward white. */
+:root[data-theme-tone='light'] .sn-mobile .sn-over-video .glaze-selected {
+  background-color: rgb(0 0 0 / 0.72);
+}
+:root[data-theme-tone='light'] .sn-mobile .sn-over-video .sn-error-text {
+  color: color-mix(in srgb, var(--color-error) 70%, white);
+}
 
 /* The floor under the floating tab bar: the page's own background rising from
    clear on an eased curve (smoothstep, to 92%), so content scrolling down fades
