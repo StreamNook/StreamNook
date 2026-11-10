@@ -52,8 +52,10 @@ import { isTwitchStream } from '../../utils/streamProvider';
 import { formatShortCount } from '../../utils/streamStats';
 import { bitsOn } from '../../utils/wallet';
 import { usePlatformAccountStore } from '../../stores/platformAccountStore';
-import { ManageChannelSheet } from './ManageChannelSheet';
+import { ManageChannelSheet, type ManageSheetPage } from './ManageChannelSheet';
 import { ModerationSheet } from './ModerationSheet';
+import { accountChanged, useStreamManager, useTwitchAccount } from '../../services/streamManager';
+import { acceptsComposerEvent, managesHere, type PaneEventDetail } from '../../components/chat/managerStore';
 import { useHiddenPinWaiting, usePinsOpen } from '../watch/pinsOpen';
 import { useOutsidePress } from '../../hooks/useOutsidePress';
 import { measureText, pickFittingText } from './placeholderFit';
@@ -137,6 +139,11 @@ interface Props {
   onCloseChat?: () => void;
   /** Which chat's inbox sheet the tray opens. */
   inboxSurface?: InboxSurface;
+  /** The pane is mounted but out of sight: the stream manager is not read. */
+  paused?: boolean;
+  /** The chat pane this box belongs to, so a slash command's page action
+   *  (/poll, /clearmessages) reaches only this pane. */
+  source?: string;
 }
 
 // Memoized below. The pane re-renders on every arriving chat message and the
@@ -163,6 +170,8 @@ const MobileChatInputImpl: React.FC<Props> = ({
   onReload,
   onCloseChat,
   inboxSurface = 'watch',
+  paused = false,
+  source = '',
 }) => {
   const currentUser = useAppStore((s) => s.currentUser);
   const chatInput = useAppStore((s) => s.settings.chat_input);
@@ -176,7 +185,49 @@ const MobileChatInputImpl: React.FC<Props> = ({
   const roomKey = channel ? `${provider}:${channel.toLowerCase()}` : '';
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [manageOpen, setManageOpen] = useState(false);
+  const [managePage, setManagePage] = useState<ManageSheetPage>('home');
   const [moderationOpen, setModerationOpen] = useState(false);
+  // The stream manager for this chat, read while it shows: moderators have a
+  // badge, but an editor is known only from Rust's view, so the Manage channel
+  // row shows once it says you manage here.
+  const account = useTwitchAccount();
+  const twitchRoom = isTwitch && !!channel && !!channelId;
+  const manager = useStreamManager(
+    twitchRoom ? channelId : null,
+    channel ?? '',
+    twitchRoom && !paused && !!account,
+    isModerator ? 'moderator' : '',
+  );
+  const manages = managesHere({
+    twitch: twitchRoom,
+    signedIn: !!account,
+    replay: false,
+    modBadge: isModerator,
+    broadcaster: !!account && channelId === account,
+    pages: manager.view && manager.view.channel_id === channelId ? manager.view.pages.length : null,
+  });
+  // Another Twitch account: nothing opened as the last one stays open.
+  const [seenAccount, setSeenAccount] = useState(account);
+  if (account !== null && account !== seenAccount) {
+    setSeenAccount(account);
+    if (accountChanged(seenAccount, account)) {
+      setManageOpen(false);
+      setModerationOpen(false);
+    }
+  }
+  // /poll and /prediction typed in this box open the sheet's builder (Rust
+  // has already checked that you may run one here).
+  useEffect(() => {
+    const open = (e: Event) => {
+      const detail = (e as CustomEvent<PaneEventDetail>).detail;
+      if (!acceptsComposerEvent(detail, source, channel)) return;
+      if (detail?.kind !== 'poll' && detail?.kind !== 'prediction') return;
+      setManagePage(detail.kind);
+      setManageOpen(true);
+    };
+    window.addEventListener('streamnook-open-poll-composer', open);
+    return () => window.removeEventListener('streamnook-open-poll-composer', open);
+  }, [source, channel]);
   // A pin folded away by Pinned Messages > Style: Hidden opens from the menu.
   const pins = usePinsOpen();
   const hiddenPinWaiting = useHiddenPinWaiting();
@@ -386,9 +437,15 @@ const MobileChatInputImpl: React.FC<Props> = ({
           return;
         }
         const reply: { text?: string } = {};
-        await applySlashOutcome(answer, key, '', (msg) => {
-          reply.text = msg;
-        });
+        await applySlashOutcome(
+          answer,
+          key,
+          '',
+          (msg) => {
+            reply.text = msg;
+          },
+          source,
+        );
         if (reply.text === undefined) {
           sent();
           return;
@@ -465,9 +522,16 @@ const MobileChatInputImpl: React.FC<Props> = ({
         // A command may answer with text to send (/me); that send is judged
         // like any other, so a dropped one keeps the draft too.
         const chat: { pending?: Promise<SendChannelOutcome | null> } = {};
-        const handled = await handleSlashCommand(message, channelId, channel, (msg) => {
-          chat.pending = chatSend(msg);
-        });
+        const handled = await handleSlashCommand(
+          message,
+          channelId,
+          channel,
+          (msg) => {
+            chat.pending = chatSend(msg);
+          },
+          0,
+          source,
+        );
         if (handled && !chat.pending) {
           sent();
           return;
@@ -488,9 +552,15 @@ const MobileChatInputImpl: React.FC<Props> = ({
         }
         if (answer?.handled) {
           const chat: { pending?: Promise<SendChannelOutcome | null> } = {};
-          await applySlashOutcome(answer, channel, channelId ?? '', (msg) => {
-            chat.pending = chatSend(msg);
-          });
+          await applySlashOutcome(
+            answer,
+            channel,
+            channelId ?? '',
+            (msg) => {
+              chat.pending = chatSend(msg);
+            },
+            source,
+          );
           if (!chat.pending) {
             sent();
             return;
@@ -1218,7 +1288,14 @@ const MobileChatInputImpl: React.FC<Props> = ({
         onAddChat={onAddChat}
         onReload={onReload}
         onBrowseCommands={channel && isTwitch ? () => setCommandsOpen(true) : undefined}
-        onManageChannel={channel && channelId && isTwitch && isModerator ? () => setManageOpen(true) : undefined}
+        onManageChannel={
+          channel && channelId && manages === 'yes'
+            ? () => {
+                setManagePage('home');
+                setManageOpen(true);
+              }
+            : undefined
+        }
         onModeration={channel && channelId && isTwitch && isModerator ? () => setModerationOpen(true) : undefined}
         onShowPinned={hiddenPinWaiting ? () => pins.setOpen(true) : undefined}
         onCloseChat={onCloseChat}
@@ -1230,15 +1307,22 @@ const MobileChatInputImpl: React.FC<Props> = ({
           onClose={() => setModerationOpen(false)}
           channelId={channelId}
           channelLogin={channel}
-          onManageChannel={() => setTimeout(() => setManageOpen(true), 260)}
+          onManageChannel={() =>
+            setTimeout(() => {
+              setManagePage('home');
+              setManageOpen(true);
+            }, 260)
+          }
         />
       )}
-      {channel && channelId && isTwitch && isModerator && (
+      {channel && channelId && manages === 'yes' && (
         <ManageChannelSheet
           open={manageOpen}
           onClose={() => setManageOpen(false)}
           channelId={channelId}
           channelLogin={channel}
+          manager={manager}
+          initialPage={managePage}
         />
       )}
       <MobileCommandSheet

@@ -30,19 +30,29 @@ import {
   getRewardQueue,
   managerAct,
   searchRaidTargets,
+  targetOf,
   type Category,
   type InfoCheck,
+  type ManagerAction,
   type QueueGroup,
   type QueueRow,
   type QueueView,
   type RaidTarget,
   type StreamInfoDraft,
-  type StreamInfoView,
   type StreamManagerView,
 } from '../../services/streamManager';
 import {
-  clearToolDraft,
+  INFO_FIELDS,
+  LANDING_MS,
+  changeDraftLater,
   codePoints,
+  infoEdits,
+  infoUnderEdits,
+  landedInfo,
+  landingAfterSave,
+  landingExpired,
+  nextStamp,
+  type InfoHeld,
   getTool,
   isShowing,
   raidStart,
@@ -160,23 +170,7 @@ const failWords = (e: { phase: string; line: string | null }) => (e.phase === 'f
 
 // ─── stream info ─────────────────────────────────────────────────────────────
 
-/** What Twitch had when an edit began. A kept edit made against something
- *  else (the title changed meanwhile) starts fresh instead of resuming. */
-const infoBase = (info: StreamInfoView | null) =>
-  JSON.stringify([info?.title ?? '', info?.category?.id ?? '', info?.tags ?? [], info?.language ?? '']);
-
-const freshDraft = (info: StreamInfoView | null): StreamInfoDraft => ({
-  title: info?.title ?? '',
-  category: info?.category ?? null,
-  tags: info?.tags ?? [],
-  language: info?.language ?? '',
-});
-
-/** Stream info's draft in the store: the fields and a half-typed tag. */
-interface InfoHeld {
-  draft: StreamInfoDraft;
-  tagText: string;
-}
+const NO_EDITS: InfoHeld = { edits: {}, tagText: '', landing: {} };
 
 const boxArt = (c: Category, w: number, h: number) =>
   c.box_art_url.replace('{width}', String(w)).replace('{height}', String(h));
@@ -191,25 +185,26 @@ function InfoEditor({ view, layout, onClose, onExpand, handedOff = false }: Form
   const channelId = view.channel_id;
   const key = toolKey(channelId, 'info');
   const entry = useTool(key);
-  const base = infoBase(info);
-  const fresh = useMemo(() => freshDraft(info), [info]);
-  // Decided once, when this editor opens: a kept edit made against other info
-  // than Twitch has now starts over; one handed over from the other size
-  // carries on without saying so.
-  const [opened] = useState(() => {
-    const kept = getTool(key);
-    const has = kept.draft !== undefined;
-    const fits = has && kept.base === base;
-    return { stale: has && !fits ? kept.draft : undefined, resumed: fits && !handedOff };
+  // Only the fields you changed are kept, over what Twitch has now, so a kept
+  // edit never puts back a title or category someone else changed meanwhile.
+  const held = (entry.draft as InfoHeld | undefined) ?? NO_EDITS;
+  const under = useMemo(() => infoUnderEdits(info, held.landing), [info, held.landing]);
+  const draft = useMemo(() => ({ ...under, ...held.edits }), [under, held.edits]);
+  const tagText = held.tagText;
+  const edited = Object.keys(held.edits).length > 0;
+  // Decided once, when this editor opens: a kept edit handed over from the
+  // other size carries on without saying so.
+  const [resumed, setResumed] = useState(() => {
+    const kept = getTool(key).draft as InfoHeld | undefined;
+    return !!kept && Object.keys(kept.edits).length > 0 && !handedOff;
   });
+  // A sent field shows until Twitch's read has it.
   useEffect(() => {
-    if (opened.stale !== undefined) clearToolDraft(key);
-  }, [key, opened.stale]);
-  // A stale kept edit is never shown, even for the moment before it is cleared.
-  const held = entry.draft !== undefined && entry.draft === opened.stale ? undefined : (entry.draft as InfoHeld | undefined);
-  const draft = held?.draft ?? fresh;
-  const tagText = held?.tagText ?? '';
-  const [resumed, setResumed] = useState(opened.resumed);
+    const cur = getTool(key).draft as InfoHeld | undefined;
+    if (!cur) return;
+    const next = landedInfo(cur, info);
+    if (next !== cur) setToolDraft(key, next);
+  }, [key, info]);
   const [check, setCheck] = useState<InfoCheck | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [catQuery, setCatQuery] = useState<string | null>(null);
@@ -223,12 +218,14 @@ function InfoEditor({ view, layout, onClose, onExpand, handedOff = false }: Form
   const sheet = layout === 'sheet';
   const phase = entry.phase;
 
-  /** Every change waits in the store until it is saved or thrown away. */
-  const put = (next: InfoHeld) => {
-    setToolDraft(key, next, held ? entry.base : base);
+  /** Every change waits in the store until it is saved or thrown away; only
+   *  the fields that differ from what shows under them count as edits. */
+  const put = (next: StreamInfoDraft, nextTagText: string) => {
+    const cur = (getTool(key).draft as InfoHeld | undefined) ?? NO_EDITS;
+    setToolDraft(key, { ...cur, edits: infoEdits(next, under), tagText: nextTagText });
   };
-  const setDraft = (change: (d: StreamInfoDraft) => StreamInfoDraft) => put({ draft: change(draft), tagText });
-  const setTagText = (t: string) => put({ draft, tagText: t });
+  const setDraft = (change: (d: StreamInfoDraft) => StreamInfoDraft) => put(change(draft), tagText);
+  const setTagText = (t: string) => put(draft, t);
 
   // Typing goes straight into the title, caret at its end. Not on the phone,
   // where the keyboard would cover the form the moment it opens.
@@ -274,28 +271,36 @@ function InfoEditor({ view, layout, onClose, onExpand, handedOff = false }: Form
   const addTag = () => {
     const raw = tagText.trim();
     if (!raw) return;
-    put({ draft: { ...draft, tags: [...draft.tags, raw] }, tagText: '' });
+    put({ ...draft, tags: [...draft.tags, raw] }, '');
   };
 
   const preview = check?.preview;
   const tone = check?.title_tone ?? 'quiet';
   // Past the limit the count says so in the box; the line would repeat it.
   const titleProblem = tone === 'over' ? undefined : problemFor('title');
-  const canSave = phase !== 'working' && phase !== 'done' && !!check?.ok && check.changed;
+  const canSave = phase !== 'working' && phase !== 'done' && edited && !!check?.ok && check.changed;
 
   const save = async () => {
     if (!canSave) return;
     setPickerOpen(false);
-    const sent = draft;
-    const ok = await runTool(key, () => managerAct(channelId, view.channel_login, { kind: 'save_info', draft: sent }), {
-      clearDraft: true,
-    });
+    // Only the fields you changed go: a save never puts back what someone
+    // else changed in another field meanwhile.
+    const sent = { ...held.edits };
+    const fields = INFO_FIELDS.filter((f) => f in sent);
+    const ok = await runTool(key, () => managerAct(targetOf(view), { kind: 'save_info', draft, fields }));
+    if (ok) {
+      const stamp = nextStamp();
+      const cur = (getTool(key).draft as InfoHeld | undefined) ?? NO_EDITS;
+      setToolDraft(key, landingAfterSave(cur, sent, stamp));
+      changeDraftLater(key, `${key}:landing:${stamp}`, LANDING_MS, (d) => landingExpired(d as InfoHeld, stamp));
+    }
     if (ok && layout !== 'window') closeSoon();
   };
 
   /** Discard, and Start over on a picked-up edit: back to what Twitch has. */
   const startOver = () => {
-    clearToolDraft(key);
+    const cur = (getTool(key).draft as InfoHeld | undefined) ?? NO_EDITS;
+    setToolDraft(key, { ...cur, edits: {}, tagText: '' });
     setResumed(false);
     setCatQuery(null);
     titleRef.current?.focus();
@@ -846,7 +851,7 @@ function RaidForm({ view, layout, onClose, onExpand }: FormProps) {
   const start = async (repeat: boolean) => {
     const action = raidStart(d.target, repeat);
     if (!action) return;
-    await runTool(key, () => managerAct(ch, view.channel_login, action), { clearDraft: true });
+    await runTool(key, () => managerAct(targetOf(view), action), { clearDraft: true });
   };
 
   const frame = frameOf('raid', { view, layout, onClose, onExpand });
@@ -862,7 +867,7 @@ function RaidForm({ view, layout, onClose, onExpand }: FormProps) {
         <SecondaryButton
           layout={layout}
           disabled={cancel.phase === 'working' || go.phase === 'working'}
-          onClick={() => void runTool(cancelKey, () => managerAct(ch, view.channel_login, { kind: 'cancel_raid' }))}
+          onClick={() => void runTool(cancelKey, () => managerAct(targetOf(view), { kind: 'cancel_raid' }))}
         >
           {cancel.phase === 'working' ? 'Canceling' : 'Cancel raid'}
         </SecondaryButton>
@@ -874,7 +879,7 @@ function RaidForm({ view, layout, onClose, onExpand }: FormProps) {
           done="Sent"
           disabled={cancel.phase === 'working'}
           onClick={async () => {
-            const ok = await runTool(nowKey, () => managerAct(ch, view.channel_login, { kind: 'raid_now' }));
+            const ok = await runTool(nowKey, () => managerAct(targetOf(view), { kind: 'raid_now' }));
             if (ok && layout !== 'window') closeSoon();
           }}
         />
@@ -1013,7 +1018,7 @@ function AdsForm({ view, layout, onClose, onExpand }: FormProps) {
         <SecondaryButton
           layout={layout}
           disabled={snooze.phase === 'working' || snooze.phase === 'done'}
-          onClick={() => void runTool(snoozeKey, () => managerAct(ch, view.channel_login, { kind: 'snooze_ad' }))}
+          onClick={() => void runTool(snoozeKey, () => managerAct(targetOf(view), { kind: 'snooze_ad' }))}
         >
           {snooze.phase === 'working' ? 'Snoozing' : snooze.phase === 'done' ? 'Snoozed' : 'Snooze next ad'}
         </SecondaryButton>
@@ -1025,7 +1030,7 @@ function AdsForm({ view, layout, onClose, onExpand }: FormProps) {
         working="Starting"
         done="Started"
         onClick={async () => {
-          const ok = await runTool(runKey, () => managerAct(ch, view.channel_login, { kind: 'run_ad', seconds }));
+          const ok = await runTool(runKey, () => managerAct(targetOf(view), { kind: 'run_ad', seconds }));
           if (ok && layout !== 'window') closeSoon();
         }}
       />
@@ -1096,7 +1101,7 @@ function RewardsQueue({ view, layout, queue, onQueue, onClose, onExpand }: FormP
     const key = rowKey(r.id);
     if (getTool(key).phase === 'working') return;
     hold([{ row: r, group: g, index, key }]);
-    void runTool(key, () => managerAct(ch, view.channel_login, { kind: 'redemptions', ids: [r.id], fulfill }), {
+    void runTool(key, () => managerAct(targetOf(view), { kind: 'redemptions', ids: [r.id], fulfill }), {
       draft: { fulfill },
       forget: true,
     });
@@ -1106,7 +1111,7 @@ function RewardsQueue({ view, layout, queue, onQueue, onClose, onExpand }: FormP
     const key = allKeyOf(g.reward_id);
     if (getTool(key).phase === 'working') return;
     hold(g.rows.map((row, index) => ({ row, group: g, index, key })));
-    void runTool(key, () => managerAct(ch, view.channel_login, { kind: 'reward_queue', reward_id: g.reward_id, fulfill: true }));
+    void runTool(key, () => managerAct(targetOf(view), { kind: 'reward_queue', reward_id: g.reward_id, fulfill: true }));
   };
 
   const body = error ? (
@@ -1131,7 +1136,7 @@ function RewardsQueue({ view, layout, queue, onQueue, onClose, onExpand }: FormP
                 layout={layout}
                 disabled={pause.phase === 'working'}
                 onClick={() =>
-                  void runTool(pauseKey, () => managerAct(ch, view.channel_login, { kind: 'reward', reward_id: g.reward_id, paused: !g.paused }))
+                  void runTool(pauseKey, () => managerAct(targetOf(view), { kind: 'reward', reward_id: g.reward_id, paused: !g.paused }))
                 }
               >
                 {g.paused ? 'Resume' : 'Pause'}
@@ -1261,7 +1266,7 @@ function AnnounceForm({ view, layout, onClose, onExpand }: FormProps) {
 
   const send = async () => {
     if (!ready) return;
-    const ok = await runTool(key, () => managerAct(ch, view.channel_login, { kind: 'announce', text: d.text, color: d.color }), {
+    const ok = await runTool(key, () => managerAct(targetOf(view), { kind: 'announce', text: d.text, color: d.color }), {
       clearDraft: true,
     });
     if (ok && layout !== 'window') closeSoon();
@@ -1354,8 +1359,7 @@ export function LiveRow({ view, layout, which }: { view: StreamManagerView; layo
   // What the row said when it was pressed: once the write ends the poll or
   // prediction, the row stays with its result until the result has shown.
   const pressed = entry.draft as { label: string; title: string } | undefined;
-  const run = (action: Parameters<typeof managerAct>[2]) =>
-    void runTool(key, () => managerAct(ch, view.channel_login, action), { draft: { label, title } });
+  const run = (action: ManagerAction) => void runTool(key, () => managerAct(targetOf(view), action), { draft: { label, title } });
   const settled = !poll && !prediction;
   if (settled && !(isShowing(entry) && pressed)) return null;
   const shownLabel = settled ? pressed!.label : label;

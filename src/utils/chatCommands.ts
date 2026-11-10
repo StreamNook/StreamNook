@@ -9,7 +9,9 @@ import { AUDIO_GRAPH_SUPPORTED } from './audioBoost';
 export interface CommandDefinition {
   name: string;
   description: string;
-  category: 'Everyone' | 'Moderator' | 'Chat Flow' | 'Engagement' | 'Broadcaster' | 'Custom';
+  // Channel: the stream manager's commands, run through Rust's one door, which
+  // refuses in words whoever Twitch does not let use them; never locked here.
+  category: 'Everyone' | 'Moderator' | 'Chat Flow' | 'Engagement' | 'Broadcaster' | 'Channel' | 'Custom';
   usage: string;
   // Optional fields used by the guided multi-step /remind flow autocomplete.
   insertText?: string; // text inserted on Tab/Enter (defaults to `name`)
@@ -61,12 +63,12 @@ export const COMMAND_DEFINITIONS: CommandDefinition[] = [
   // Engagement
   { name: 'announce', usage: '/announce <message>', description: 'Highlight a message for chat\'s attention', category: 'Engagement' , examples: ['/announce Raffle winners in five minutes'], details: 'The message shows with a colored band in every viewer’s chat, the same as the Twitch /announce.' },
   { name: 'shoutout', usage: '/shoutout <username>', description: 'Share another streamer\'s channel', category: 'Engagement' , examples: ['/shoutout someone'], details: 'Posts an official Twitch shoutout with the channel card. Twitch allows one every two minutes, and the same person once per hour.' },
-  { name: 'poll', usage: '/poll', description: 'Open the poll builder. Channel owner only, because Twitch does not let moderators run polls through the API', category: 'Broadcaster' },
+  { name: 'poll', usage: '/poll', description: 'Open the poll builder. Broadcaster, editors and moderators', category: 'Channel' },
   
   // Broadcaster
   { name: 'commercial', usage: '/commercial [seconds]', description: 'Run a commercial for all viewers (30-180s)', category: 'Broadcaster' , examples: ['/commercial', '/commercial 90'], details: 'Runs an ad break for viewers without ad-free status. Length must be 30, 60, 90, 120, 150 or 180 seconds.' },
   { name: 'goal', usage: '/goal', description: 'Make or edit a sub or follower goal', category: 'Broadcaster' , details: 'Opens your Creator Goals page on Twitch, the only place goals can be made or changed.' },
-  { name: 'prediction', usage: '/prediction', description: 'Open the prediction builder. Channel owner only, because Twitch does not let moderators run predictions through the API', category: 'Broadcaster' },
+  { name: 'prediction', usage: '/prediction', description: 'Open the prediction builder. Broadcaster, editors and moderators', category: 'Channel' },
   { name: 'raid', usage: '/raid <channel>', description: 'Send viewers to another live channel', category: 'Broadcaster' , examples: ['/raid someone'], details: 'Starts the raid countdown. Everyone watching moves to the target when it fires. Cancel with /unraid.' },
   { name: 'unraid', aliases: ['raidcancel'], usage: '/unraid', description: 'Cancel the active raid', category: 'Broadcaster' },
   { name: 'marker', usage: '/marker [description]', description: 'Add a stream marker', category: 'Broadcaster' , examples: ['/marker', '/marker great play'], details: 'Adds a marker at the current point in the VOD so you can find the moment later in the highlighter.' },
@@ -80,8 +82,8 @@ export const COMMAND_DEFINITIONS: CommandDefinition[] = [
   { name: 'clip', aliases: ['createclip'], usage: '/clip', description: 'Create a clip of the last 30 seconds of the current stream', category: 'Everyone' , details: 'Creates a clip through Twitch and copies the link. The clip editor opens in your browser if you want to trim it.' },
   { name: 'chatters', usage: '/chatters', description: 'Show how many chatters are connected right now', category: 'Everyone' , local: true },
   { name: 'ignore', usage: '/ignore <user>', description: 'Hide a user from your chat everywhere (local only)', category: 'Everyone' , local: true, examples: ['/ignore someuser'], details: 'Hides that person in every StreamNook chat. Twitch never knows. Undo it with /unignore.' },
-  { name: 'settitle', usage: '/settitle <title>', description: 'Set the stream title (broadcaster only)', category: 'Broadcaster' , examples: ['/settitle Chill Sunday stream'] },
-  { name: 'setgame', usage: '/setgame <category>', description: 'Set the stream category by name (broadcaster only)', category: 'Broadcaster' , examples: ['/setgame Just Chatting', '/setgame Elden Ring'], details: 'The name is matched against the Twitch category list, so spell it the way Twitch does.' },
+  { name: 'settitle', usage: '/settitle <title>', description: 'Set the stream title. Broadcaster and editors', category: 'Channel' , examples: ['/settitle Chill Sunday stream'] },
+  { name: 'setgame', usage: '/setgame <category>', description: 'Set the stream category by name. Broadcaster and editors', category: 'Channel' , examples: ['/setgame Just Chatting', '/setgame Elden Ring'], details: 'The name has to match a Twitch category, in any case. A near miss lists the closest ones.' },
   { name: 'overlay', usage: '/overlay [channel]', description: 'Float this (or another) channel in a see-through always-on-top chat window', category: 'Everyone' , local: true, desktopOnly: true, examples: ['/overlay', '/overlay someone'], details: 'A see-through, always-on-top chat you can park over a game. Ctrl+Alt+N makes every overlay click-through or clickable again.' },
   { name: 'uptime', usage: '/uptime', description: "Show this channel's current stream uptime", category: 'Everyone' , local: true },
   { name: 'song', usage: '/song', description: 'Identify the music currently playing in the stream', category: 'Everyone' , local: true, details: 'Listens to a few seconds of the stream audio and looks the track up. Nothing is posted to chat unless you paste the result.' },
@@ -92,11 +94,11 @@ export const COMMAND_DEFINITIONS: CommandDefinition[] = [
   { name: 'banid', usage: '/banid <userID> [reason]', description: 'Ban by Twitch user ID (works on suspended accounts that /ban no longer reaches)', category: 'Moderator' , examples: ['/banid 12345678 ban evasion'] },
   { name: 'nuke', usage: '/nuke <pattern> <action> <past[:future]>', description: 'Mass-action by phrase or /regex/. action = delete | ban | duration. Example: /nuke spam ban 5m:1m. Use /nuke stop to end a running window early.', category: 'Moderator' , examples: ['/nuke spam ban 5m:1m', '/nuke /bad\\s*word/ delete 10m', '/nuke stop'], details: 'Looks back over the past window and acts on every message that matches. A future window keeps catching new matches for that long. The preview above the box shows how many messages and people it would hit before you press Enter.' },
   { name: 'undo', usage: '/undo', description: 'Reverse the most recent /nuke on this channel (bans and timeouts only, deletes are permanent)', category: 'Moderator' , details: 'Unbans or untimes-out everyone the last /nuke hit. Deleted messages cannot come back.' },
-  { name: 'endpoll', usage: '/endpoll', description: 'End the running poll and leave the result on screen. Channel owner only', category: 'Broadcaster' },
-  { name: 'cancelpoll', aliases: ['deletepoll'], usage: '/cancelpoll', description: 'Cancel the running poll and hide it entirely. Channel owner only', category: 'Broadcaster' },
-  { name: 'lockprediction', usage: '/lockprediction', description: 'Stop taking bets on the running prediction. Channel owner only', category: 'Broadcaster' },
-  { name: 'cancelprediction', usage: '/cancelprediction', description: 'Cancel the running prediction and refund everyone. Channel owner only', category: 'Broadcaster' },
-  { name: 'completeprediction', usage: '/completeprediction <number|title>', description: 'Pay out the running prediction to a winning outcome, by position or name. Channel owner only', category: 'Broadcaster' , examples: ['/completeprediction 1', '/completeprediction Yes'] },
+  { name: 'endpoll', usage: '/endpoll', description: 'End the running poll and leave the result on screen. Broadcaster, editors and moderators', category: 'Channel' },
+  { name: 'cancelpoll', aliases: ['deletepoll'], usage: '/cancelpoll', description: 'Cancel the running poll and hide it entirely. Broadcaster, editors and moderators', category: 'Channel' },
+  { name: 'lockprediction', usage: '/lockprediction', description: 'Stop taking bets on the running prediction. Broadcaster, editors and moderators', category: 'Channel' },
+  { name: 'cancelprediction', usage: '/cancelprediction', description: 'Cancel the running prediction and refund everyone. Broadcaster, editors and moderators', category: 'Channel' },
+  { name: 'completeprediction', usage: '/completeprediction <number|title>', description: 'Pay out the running prediction to a winning outcome, by position or name. Broadcaster, editors and moderators', category: 'Channel' , examples: ['/completeprediction 1', '/completeprediction Yes'] },
   { name: 'pin', usage: '/pin <id|@user> [duration] | /pin <message>', description: 'Pin a message by its id, pin that person\'s most recent one, or send a message and pin it. Length from 30s to 30m for an id or a user; leave it off to pin until the stream ends', category: 'Moderator' , examples: ['/pin @someuser', '/pin @someuser 5m', '/pin Giveaway starts at the top of the hour'], details: 'Pinned messages sit above chat for everyone until the timer ends or a mod runs /unpin. A message you send with /pin stays pinned until the stream ends.' },
   { name: 'unpin', usage: '/unpin', description: 'Remove the currently pinned message', category: 'Moderator' },
   { name: 'blockterm', usage: '/blockterm <phrase>', description: 'Add a phrase to the channel\'s AutoMod blocked terms', category: 'Moderator' , examples: ['/blockterm free followers'], details: 'AutoMod holds any message with that phrase for moderator review.' },

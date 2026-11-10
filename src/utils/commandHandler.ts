@@ -86,12 +86,15 @@ async function sendSpecial(channel: string, text: string, replyTo: string | unde
   }
 }
 
-/** Apply an answer in the room it was typed in. */
+/** Apply an answer in the room it was typed in. `source`: the chat pane it was
+ *  typed in, so a page action meant for that pane (/poll, /clearmessages)
+ *  reaches only it. */
 export async function applySlashOutcome(
   outcome: SlashOutcome,
   channel: string,
   broadcasterId: string,
   sendMessageToChat: (msg: string) => void,
+  source = '',
 ): Promise<void> {
   const addToast = useAppStore.getState().addToast;
   for (const t of outcome.toasts) addToast(t.text, t.kind);
@@ -101,7 +104,7 @@ export async function applySlashOutcome(
   const quiet = IS_ANDROID && outcome.ui?.kind === 'identify_song' && getListening() !== null;
   // Before the lines, so /clearmessages prints into the emptied chat and
   // /reconnect says so after the reload.
-  if (outcome.ui) await applySlashUi(outcome.ui, channel, broadcasterId);
+  if (outcome.ui) await applySlashUi(outcome.ui, channel, broadcasterId, source);
   if (!quiet) for (const line of outcome.notices) noticeIn(channel, line);
   if (outcome.send != null) {
     if (outcome.reply_to || outcome.pin_after_send) {
@@ -123,6 +126,7 @@ export const handleSlashCommand = async (
   broadcasterLogin: string,
   sendMessageToChat: (msg: string) => void,
   depth = 0,
+  source = '',
 ): Promise<boolean> => {
   let outcome: SlashOutcome;
   try {
@@ -134,6 +138,6 @@ export const handleSlashCommand = async (
     return true;
   }
   if (!outcome.handled) return false;
-  await applySlashOutcome(outcome, broadcasterLogin, broadcasterId, sendMessageToChat);
+  await applySlashOutcome(outcome, broadcasterLogin, broadcasterId, sendMessageToChat, source);
   return true;
 };

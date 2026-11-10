@@ -1,8 +1,7 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { Reorder, useDragControls } from 'framer-motion';
 import { BarChart3, GripVertical, History, Trophy, X } from 'lucide-react';
-import { managerAct, type StreamManagerView } from '../../services/streamManager';
-import { useAppStore } from '../../stores/AppStore';
+import { managerAct, targetOf, type RecentPoll, type StreamManagerView } from '../../services/streamManager';
 import { Tooltip } from '../ui/Tooltip';
 import { BannerStatus, OverlayBanner, ShareRow } from './OverlayBanner';
 import { ChannelPointsIcon } from '../ChannelPointsIcon';
@@ -32,11 +31,6 @@ import { FIELD, FooterRow, FormShell, LABEL, MainButton, Segmented, useCloseSoon
  * Twitch's limits come from Rust's view; Rust checks them again and runs the
  * create through its one door.
  */
-
-interface RecentEntry {
-  title: string;
-  options: string[];
-}
 
 interface Props {
   view: StreamManagerView;
@@ -72,8 +66,6 @@ function BoxCount({ n, max, always }: { n: number; max: number; always: boolean 
 }
 
 export function PollPredictionComposer({ view, layout, initialKind, fixedKind, onClose, onExpand }: Props) {
-  const settings = useAppStore((s) => s.settings);
-  const updateSettings = useAppStore((s) => s.updateSettings);
   const ch = view.channel_id;
   const key = toolKey(ch, 'builder');
   const entry = useTool(key);
@@ -107,10 +99,8 @@ export function PollPredictionComposer({ view, layout, initialKind, fixedKind, o
     setToolDraft(key, next);
   };
 
-  const recents: RecentEntry[] = useMemo(
-    () => (d.kind === 'poll' ? settings.recent_polls : settings.recent_predictions) ?? [],
-    [d.kind, settings.recent_polls, settings.recent_predictions],
-  );
+  // Kept by Rust on this device (newest first); never written from here.
+  const recents: RecentPoll[] = (d.kind === 'poll' ? view.recent_polls : view.recent_predictions) ?? [];
 
   const filled = d.choices.map((c) => c.text.trim()).filter(Boolean);
   const titleCount = codePoints(d.title.trim());
@@ -130,18 +120,11 @@ export function PollPredictionComposer({ view, layout, initialKind, fixedKind, o
   const removeChoice = (id: string) => put({ ...d, choices: d.choices.filter((c) => c.id !== id) });
   const focusChoice = (id: string) => requestAnimationFrame(() => document.getElementById(`sn-choice-${id}`)?.focus());
 
-  const applyRecent = (r: RecentEntry) => {
+  const applyRecent = (r: RecentPoll) => {
     const choices: BuilderChoice[] = r.options.slice(0, limits.max).map((text) => ({ id: newChoiceId(), text }));
     put({ ...d, title: r.title, choices: growChoices(choices, limits.max) });
     setShowRecent(false);
     titleRef.current?.focus();
-  };
-
-  const rememberRecent = (r: RecentEntry) => {
-    const k = d.kind === 'poll' ? 'recent_polls' : 'recent_predictions';
-    const prior = recents.filter((x) => x.title.toLowerCase() !== r.title.toLowerCase());
-    const latest = useAppStore.getState().settings;
-    void updateSettings({ ...latest, [k]: [r, ...prior].slice(0, 10) });
   };
 
   const start = async () => {
@@ -155,16 +138,15 @@ export function PollPredictionComposer({ view, layout, initialKind, fixedKind, o
       key,
       () =>
         managerAct(
-          ch,
-          view.channel_login,
+          targetOf(view),
           sentKind === 'poll'
             ? { kind: 'create_poll', title, choices: filled, seconds: d.seconds, points_per_vote: d.points > 0 ? d.points : null }
             : { kind: 'create_prediction', title, outcomes: filled, seconds: d.seconds },
         ),
       { clearDraft: true },
     );
+    // Rust keeps the recents: the answer's view already lists this one.
     if (!ok) return;
-    rememberRecent({ title, options: filled });
     if (!big) closeSoon();
   };
 

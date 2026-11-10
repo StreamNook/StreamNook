@@ -7,7 +7,7 @@
 import { useId, useState, type ReactNode } from 'react';
 import { Clock, Hash, MessageSquare, Shield, ShieldAlert, Users } from 'lucide-react';
 import { Toggle } from '../ui/Toggle';
-import { managerAct, type ChatView } from '../../services/streamManager';
+import { managerAct, type ChatView, type ManagerTarget } from '../../services/streamManager';
 import {
   chatModeAction,
   readTool,
@@ -35,15 +35,14 @@ const lengthWords = (kind: ChatModeKind, v: number) => (kind === 'slow' ? `${v}s
 
 export function ChatModesGroup({
   layout,
-  channelId,
-  channelLogin,
+  target,
   chat,
   live,
   hideTitle = false,
 }: {
   layout: Layout | 'menu';
-  channelId: string;
-  channelLogin: string;
+  /** The channel the switches write to, as the account the view was read as. */
+  target: ManagerTarget;
   chat: ChatView;
   /** What the room has now: IRC ROOMSTATE on the desktop, Rust's view on the phone. */
   live: LiveModes;
@@ -54,11 +53,12 @@ export function ChatModesGroup({
   const uid = useId();
   const [confirmShield, setConfirmShield] = useState(false);
   const icons = layout !== 'sheet';
+  const channelId = target.channel_id;
 
   const send = (mode: ChatModeKind, on: boolean, value?: number | null) => {
     const key = toolKey(channelId, `chat:${mode}`);
     const wanted: ModeWanted = { on, value: on ? (value ?? null) : null, roomAtPress: live[mode] };
-    void runTool(key, () => managerAct(channelId, channelLogin, chatModeAction(mode, on, value)), { draft: wanted });
+    void runTool(key, () => managerAct(target, chatModeAction(mode, on, value)), { draft: wanted });
   };
 
   const shieldKey = toolKey(channelId, 'shield');
@@ -71,7 +71,7 @@ export function ChatModesGroup({
         ? shieldWanted.on
         : chat.shield;
   const sendShield = (on: boolean) => {
-    void runTool(shieldKey, () => managerAct(channelId, channelLogin, { kind: 'shield', on }), { draft: { on } });
+    void runTool(shieldKey, () => managerAct(target, { kind: 'shield', on }), { draft: { on } });
   };
 
   return (

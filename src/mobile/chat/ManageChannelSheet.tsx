@@ -4,7 +4,7 @@
 // sheet. Rust builds the view and runs every write (services/stream_manager.rs);
 // the forms are the desktop's own in their sheet layout, so both apps say the
 // same thing, and every result shows in place.
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { CaretLeft } from 'phosphor-react';
 import { MobileSheet } from '../ui/MobileSheet';
 import { ManagerForm, LiveRow, TITLES, type ManagerPanelKind } from '../../components/chat/StreamManagerPanel';
@@ -12,22 +12,38 @@ import PollPredictionComposer from '../../components/chat/PollPredictionComposer
 import { ChatModesGroup } from '../../components/chat/ChatModesGroup';
 import { GroupCard, MenuRow } from '../../components/chat/managerKit';
 import { liveFromView, liveHeld, useManagerStore, type ChatModeKind } from '../../components/chat/managerStore';
-import { useStreamManager, type ManagerSection } from '../../services/streamManager';
+import { targetOf, useManagerInterest, type ManagerSection, type StreamManagerHandle } from '../../services/streamManager';
 import { BlockedTermsPage } from './BlockedTermsPage';
 
-type Page = 'home' | 'poll' | 'prediction' | 'blocked' | ManagerPanelKind;
+export type ManageSheetPage = 'home' | 'poll' | 'prediction' | 'blocked' | ManagerPanelKind;
+type Page = ManageSheetPage;
 
 interface Props {
   open: boolean;
   onClose: () => void;
   channelId: string;
   channelLogin: string;
+  /** The chat's stream manager (MobileChatInput reads it while the chat shows). */
+  manager: StreamManagerHandle;
+  /** The page it opens on (/poll and /prediction open their builder). */
+  initialPage?: ManageSheetPage;
 }
 
-export const ManageChannelSheet: React.FC<Props> = ({ open, onClose, channelId, channelLogin }) => {
-  const { view, queue, setQueue, error } = useStreamManager(channelId, channelLogin, open);
+export const ManageChannelSheet: React.FC<Props> = ({ open, onClose, channelId, channelLogin, manager, initialPage = 'home' }) => {
+  const { view, queue, setQueue, error, refresh } = manager;
   const storeVersion = useManagerStore();
-  const [page, setPage] = useState<Page>('home');
+  const [page, setPage] = useState<Page>(initialPage);
+  // Every open reads the channel again, and starts on the page asked for.
+  const [wasOpen, setWasOpen] = useState(open);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) setPage(initialPage);
+  }
+  useEffect(() => {
+    if (open) void refresh();
+  }, [open, refresh]);
+  // While it is open (and the app is in front), Rust keeps the view current.
+  useManagerInterest(open, channelId, channelLogin, { pauseWhileHidden: true });
 
   const close = () => {
     setPage('home');
@@ -106,8 +122,7 @@ export const ManageChannelSheet: React.FC<Props> = ({ open, onClose, channelId, 
               {view.chat && (
                 <ChatModesGroup
                   layout="sheet"
-                  channelId={view.channel_id}
-                  channelLogin={view.channel_login}
+                  target={targetOf(view)}
                   chat={view.chat}
                   live={liveFromView(view.chat.modes.map((m) => ({ kind: m.kind as ChatModeKind, on: m.on, value: m.value })))}
                 />

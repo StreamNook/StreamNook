@@ -2,6 +2,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   DONE_HOLD_MS,
+  LANDING_MS,
+  acceptsComposerEvent,
+  changeDraftLater,
+  forgetAccount,
+  fromInfo,
+  infoEdits,
+  landedInfo,
+  landingAfterSave,
+  landingExpired,
+  lastPage,
+  managesHere,
+  rememberPage,
+  shownInfo,
+  type InfoHeld,
   chatModeAction,
   clampPoints,
   codePoints,
@@ -30,7 +44,7 @@ import {
   type LeavingRow,
   type ToolEntry,
 } from './managerStore';
-import type { PageRow, QueueGroup, QueueRow, RaidTarget } from '../../services/streamManager';
+import type { PageRow, QueueGroup, QueueRow, RaidTarget, StreamInfoView } from '../../services/streamManager';
 
 // The stream manager's per-window store: one write per key at a time, results
 // that outlive the form, drafts kept unless a write cleared exactly what it
@@ -138,12 +152,128 @@ describe('runTool', () => {
   });
 });
 
+describe('the account', () => {
+  it('a switch forgets every draft, result, timer and remembered page', async () => {
+    setToolDraft(K, { title: 'typed as the last account' });
+    await runTool(toolKey('chan-a', 'raid'), ok('Raiding X'));
+    rememberPage('chan-a', 'raid');
+    forgetAccount();
+    expect(getTool(K).draft).toBeUndefined();
+    expect(getTool(toolKey('chan-a', 'raid')).phase).toBe('idle');
+    expect(lastPage('chan-a')).toBeNull();
+  });
+
+  it("an old write's timer never ends a write made after the store was emptied", async () => {
+    await runTool(K, ok('first'));
+    const firstGen = getTool(K).gen;
+    forgetAccount();
+    await runTool(K, ok('second'));
+    // One counter for the window, never reset: the new write is numbered past the old.
+    expect(getTool(K).gen).toBeGreaterThan(firstGen);
+  });
+});
+
+describe('who manages here', () => {
+  const base = { twitch: true, signedIn: true, replay: false, modBadge: false, broadcaster: false, pages: null as number | null };
+
+  it('a badge says yes at once; an editor waits for Rust, then its pages decide', () => {
+    expect(managesHere({ ...base, modBadge: true })).toBe('yes');
+    expect(managesHere({ ...base, broadcaster: true })).toBe('yes');
+    expect(managesHere(base)).toBe('unknown');
+    expect(managesHere({ ...base, pages: 4 })).toBe('yes');
+    expect(managesHere({ ...base, pages: 0 })).toBe('no');
+  });
+
+  it('never off Twitch, signed out, or for a non-moderator on a replay', () => {
+    expect(managesHere({ ...base, twitch: false, modBadge: true })).toBe('no');
+    expect(managesHere({ ...base, signedIn: false, pages: 4 })).toBe('no');
+    expect(managesHere({ ...base, replay: true, pages: 4 })).toBe('no');
+    expect(managesHere({ ...base, replay: true, modBadge: true })).toBe('yes');
+  });
+});
+
 describe('surfaces', () => {
-  it('a channel switch closes them, open or not, and so does no longer managing', () => {
-    expect(mustCloseSurfaces({ channelId: 'a' }, { channelId: 'b', manages: true }, false)).toBe(true);
-    expect(mustCloseSurfaces({ channelId: 'a' }, { channelId: 'a', manages: false }, true)).toBe(true);
-    expect(mustCloseSurfaces({ channelId: 'a' }, { channelId: 'a', manages: false }, false)).toBe(false);
-    expect(mustCloseSurfaces({ channelId: 'a' }, { channelId: 'a', manages: true }, true)).toBe(false);
+  const was = { channelId: 'a', account: 'u1' };
+  it('a channel switch closes them, open or not, and so does being known not to manage', () => {
+    expect(mustCloseSurfaces(was, { channelId: 'b', account: 'u1', manages: 'yes' }, false)).toBe(true);
+    expect(mustCloseSurfaces(was, { channelId: 'a', account: 'u1', manages: 'no' }, true)).toBe(true);
+    expect(mustCloseSurfaces(was, { channelId: 'a', account: 'u1', manages: 'no' }, false)).toBe(false);
+    expect(mustCloseSurfaces(was, { channelId: 'a', account: 'u1', manages: 'yes' }, true)).toBe(false);
+  });
+
+  it('nothing closes while it is still unknown whether you manage here', () => {
+    expect(mustCloseSurfaces(was, { channelId: 'a', account: 'u1', manages: 'unknown' }, true)).toBe(false);
+  });
+
+  it('another Twitch account closes them; the account becoming known does not', () => {
+    expect(mustCloseSurfaces(was, { channelId: 'a', account: 'u2', manages: 'yes' }, true)).toBe(true);
+    expect(mustCloseSurfaces({ channelId: 'a', account: null }, { channelId: 'a', account: 'u1', manages: 'yes' }, true)).toBe(false);
+    expect(mustCloseSurfaces(was, { channelId: 'a', account: null, manages: 'yes' }, true)).toBe(false);
+  });
+});
+
+describe('slash command events', () => {
+  it('only the pane the command was typed in, while it shows that channel', () => {
+    expect(acceptsComposerEvent({ source: 'p1', channel: 'Chan', kind: 'poll' }, 'p1', 'chan')).toBe(true);
+    expect(acceptsComposerEvent({ source: 'p1', channel: 'chan' }, 'p2', 'chan')).toBe(false);
+    expect(acceptsComposerEvent({ source: 'p1', channel: 'other' }, 'p1', 'chan')).toBe(false);
+    // A pane that does not compare rooms (the phone's) goes by its source.
+    expect(acceptsComposerEvent({ source: 'p1', channel: 'any' }, 'p1', null)).toBe(true);
+  });
+
+  it('an event with no source goes to the pane showing its channel only', () => {
+    expect(acceptsComposerEvent({ channel: 'chan' }, 'p1', 'chan')).toBe(true);
+    expect(acceptsComposerEvent({ channel: 'chan' }, 'p1', 'other')).toBe(false);
+    expect(acceptsComposerEvent({}, 'p1', 'chan')).toBe(false);
+    expect(acceptsComposerEvent(undefined, 'p1', 'chan')).toBe(false);
+  });
+});
+
+describe('stream info edits', () => {
+  const cat = (id: string) => ({ id, name: id, box_art_url: '' });
+  const info = (title: string, category = cat('1')) =>
+    ({ title, category, tags: ['a'], language: 'en' }) as unknown as StreamInfoView;
+  const twitch = fromInfo(info('Old title'));
+  const empty: InfoHeld = { edits: {}, tagText: '', landing: {} };
+
+  it('keeps only the fields that differ from what shows under them', () => {
+    expect(infoEdits({ ...twitch, title: 'New' }, twitch)).toEqual({ title: 'New' });
+    expect(infoEdits(twitch, twitch)).toEqual({});
+    expect(infoEdits({ ...twitch, category: { ...cat('1'), name: 'renamed' } }, twitch)).toEqual({});
+    expect(infoEdits({ ...twitch, tags: ['a', 'b'] }, twitch)).toEqual({ tags: ['a', 'b'] });
+  });
+
+  it('a saved field shows as sent until Twitch has it, and a field typed since stays an edit', () => {
+    const held: InfoHeld = { ...empty, edits: { title: 'Typed after Save', category: cat('2') } };
+    const after = landingAfterSave(held, { title: 'Sent', category: cat('2') }, 7);
+    expect(after.edits).toEqual({ title: 'Typed after Save' });
+    expect(after.landing.title).toEqual({ value: 'Sent', stamp: 7 });
+    expect(after.landing.category?.value).toEqual(cat('2'));
+    // Twitch's read still has the old title: the sent one shows under the edit.
+    expect(shownInfo(info('Old title'), { ...after, edits: {} }).title).toBe('Sent');
+    // Another window's save of the title shows; the category the read does not have yet stays.
+    const landed = landedInfo(after, info('Sent'));
+    expect(landed.landing.title).toBeUndefined();
+    expect(landed.landing.category).toBeDefined();
+    expect(landedInfo(landed, info('Sent'))).toBe(landed);
+  });
+
+  it("a save's timer drops only its own fields", () => {
+    const one = landingAfterSave(empty, { title: 'A', tags: ['x'] }, 1);
+    const two = landingAfterSave(one, { title: 'B' }, 2);
+    const expired = landingExpired(two, 1);
+    expect(expired.landing.title).toEqual({ value: 'B', stamp: 2 });
+    expect(expired.landing.tags).toBeUndefined();
+    expect(landingExpired(expired, 1)).toBe(expired);
+  });
+
+  it('the timer runs whether or not the form is open, and only on its own name', () => {
+    setToolDraft(K, landingAfterSave(empty, { title: 'A' }, 3));
+    changeDraftLater(K, `${K}:landing:3`, LANDING_MS, (d) => landingExpired(d as InfoHeld, 3));
+    vi.advanceTimersByTime(LANDING_MS - 1);
+    expect((getTool(K).draft as InfoHeld).landing.title).toBeDefined();
+    vi.advanceTimersByTime(1);
+    expect((getTool(K).draft as InfoHeld).landing.title).toBeUndefined();
   });
 });
 
@@ -252,7 +382,7 @@ describe('chat modes', () => {
     expect(chatModeAction('followers', true, 10)).toEqual({ kind: 'chat_mode', mode: 'followers', on: true, value: 10 });
   });
 
-  const entry = (phase: ToolEntry['phase'], draft: unknown): ToolEntry => ({ phase, line: null, gen: 1, draft, base: null, sent: undefined });
+  const entry = (phase: ToolEntry['phase'], draft: unknown): ToolEntry => ({ phase, line: null, gen: 1, draft, sent: undefined });
   const off = { on: false, value: null };
   const on30 = { on: true, value: 30 };
   const wanted = { on: true, value: null, roomAtPress: off };

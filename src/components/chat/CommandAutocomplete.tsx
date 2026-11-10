@@ -78,9 +78,11 @@ const CommandItem: React.FC<{
               ? 'bg-amber-500/20 text-amber-300'
               : command.category === 'Moderator' || command.category === 'Chat Flow'
                 ? 'bg-green-500/20 text-green-300'
-                : command.category === 'Everyone'
-                  ? 'bg-white/10 text-white/50'
-                  : 'bg-purple-500/20 text-purple-300'
+                : command.category === 'Channel'
+                  ? 'bg-sky-500/20 text-sky-300'
+                  : command.category === 'Everyone'
+                    ? 'bg-white/10 text-white/50'
+                    : 'bg-purple-500/20 text-purple-300'
         }`}>
           {command.badgeLabel ?? command.category}
         </span>

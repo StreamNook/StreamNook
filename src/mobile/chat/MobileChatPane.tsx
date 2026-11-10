@@ -7,7 +7,8 @@
 // subscription per tab, so every open room stays connected and switching tabs is
 // a re-render rather than a reconnect. This pane renders whichever tab is active
 // via `useChannelChat`.
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { acceptsComposerEvent, type PaneEventDetail } from '../../components/chat/managerStore';
 import { HandPointing, X } from 'phosphor-react';
 import ChatMessageList from '../../components/ChatMessageList';
 import {
@@ -135,6 +136,9 @@ export const MobileChatPane: React.FC<{
    *  to its rows close. The app going to the background is not this. */
   hidden?: boolean;
 }> = ({ readOnly = false, strip = true, paused = false, idle = false, top, surface = 'watch', hidden = false }) => {
+  // This pane's own name, so a slash command's page action (/clearmessages,
+  // /poll) reaches only the pane it was typed in.
+  const paneSource = useId();
   const currentUser = useAppStore((s) => s.currentUser);
   const addToast = useAppStore((s) => s.addToast);
 
@@ -628,8 +632,10 @@ export const MobileChatPane: React.FC<{
       if (!isTwitchRoom || !d?.userId || !d.username) return;
       setSheetUser({ userId: d.userId, username: d.username, displayName: d.displayName ?? d.username, color: '' });
     };
-    const clearRows = () => {
+    const clearRows = (e: Event) => {
       if (!activeChannel) return;
+      // The pane's own box typed it; the room is whichever this pane shows.
+      if (!acceptsComposerEvent((e as CustomEvent<PaneEventDetail>).detail, paneSource, null)) return;
       const ids = new Set<string>();
       for (const message of messages) {
         const id = getMessageId(message);
@@ -643,7 +649,7 @@ export const MobileChatPane: React.FC<{
       window.removeEventListener('streamnook-open-user-card', openCard);
       window.removeEventListener('streamnook-clear-local-chat', clearRows);
     };
-  }, [isTwitchRoom, activeChannel, messages, getMessageId]);
+  }, [isTwitchRoom, activeChannel, messages, getMessageId, paneSource]);
   // Messages AutoMod held, inline where they arrived, for a moderator of this
   // room: Allow and Deny on the row, which folds once someone decides it.
   const heldKey = isModerator && activeChannel ? activeChannel.toLowerCase() : '';
@@ -1174,6 +1180,8 @@ export const MobileChatPane: React.FC<{
           onAddChat={handleAddChat}
           onReload={handleReload}
           onCloseChat={handleCloseChat}
+          paused={paused}
+          source={paneSource}
         />
       )}
       {/* Channel context matters: Twitch badges like sub tiers and moderator are

@@ -68,8 +68,8 @@ import { useChatTopStack } from './chat/chatTopStack';
 import PollPredictionComposer from './chat/PollPredictionComposer';
 import StreamManagerPanel, { type ManagerPanelKind } from './chat/StreamManagerPanel';
 import ManageChannelWindow from './chat/ManageChannelWindow';
-import { mustCloseSurfaces } from './chat/managerStore';
-import { useStreamManager, type PageId } from '../services/streamManager';
+import { acceptsComposerEvent, managesHere, mustCloseSurfaces, type PaneEventDetail } from './chat/managerStore';
+import { useManagerInterest, useStreamManager, useTwitchAccount, type PageId } from '../services/streamManager';
 import HypeTrainBanner from './HypeTrainBanner';
 import ViewersPanel from './ViewersPanel';
 import ModRoomPane from './modroom/ModRoomPane';
@@ -2784,15 +2784,38 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     }
   };
 
-  // The Tools button's sections (chat/ChannelToolsMenu). Polls are Twitch's
-  // broadcaster-only create endpoints; drops need the drops plugin, since core
-  // earns natively on the watched channel with no automation control; the
-  // moderation rows are all Helix calls, so Twitch only.
+  // This pane's own name, so a slash command's page action (/poll,
+  // /clearmessages) reaches only the pane it was typed in.
+  const paneSource = useId();
+  // The stream manager, read from Rust for every signed-in Twitch chat (one
+  // read, then Rust's pushes), so the Tools menu opens with its rows already
+  // there, and so an editor (who has no badge) is known to manage here.
+  // Moderators on a VOD replay's chat too, for the Chat modes card.
+  const twitchAccount = useTwitchAccount();
+  const streamManager = useStreamManager(
+    isTwitch && !!twitchAccount ? currentStream?.user_id : null,
+    currentStream?.user_login ?? '',
+    true,
+    `${isModerator ? 'm' : ''}${isBroadcaster ? 'b' : ''}`,
+  );
+  const managerView = streamManager.view && streamManager.view.channel_id === currentStream?.user_id ? streamManager.view : null;
+  const manages = managesHere({
+    twitch: isTwitch && !!currentStream?.user_id,
+    signedIn: !!twitchAccount,
+    replay: !!isVodReplay,
+    modBadge: !!isModerator,
+    broadcaster: !!isBroadcaster,
+    pages: managerView ? managerView.pages.length : null,
+  });
+  // The Tools button's sections (chat/ChannelToolsMenu). The stream manager's
+  // rows show wherever Rust says you manage; drops need the drops plugin,
+  // since core earns natively on the watched channel with no automation
+  // control; the moderation rows are all Helix calls, so Twitch only.
   const toolSections = channelToolSections({
     isTwitch,
     isModerator: !!isModerator,
-    isBroadcaster: !!isBroadcaster,
     isVodReplay: !!isVodReplay,
+    manages,
     hasDropsCampaign: !!dropsCampaign && !!externalDropsProvider,
   });
   // The stream manager, read from Rust when a chat you manage opens (one read,
@@ -2804,29 +2827,42 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   const [managerWindow, setManagerWindow] = useState<{ page: PageId | null } | null>(null);
   // Opened from the other size with what was typed: no "Picking up" line.
   const [managerHandedOff, setManagerHandedOff] = useState(false);
-  const [managerChannel, setManagerChannel] = useState(currentStream?.user_id);
+  // The channel and the last known account the surfaces were opened for.
+  const [managerSeen, setManagerSeen] = useState<{ channelId: string | undefined; account: string | null }>(() => ({
+    channelId: currentStream?.user_id,
+    account: twitchAccount,
+  }));
   const managerSurfaceOpen = !!(managerPanel || composerKind || managerWindow);
   if (
     mustCloseSurfaces(
-      { channelId: managerChannel },
-      { channelId: currentStream?.user_id, manages: toolSections.polls },
+      managerSeen,
+      { channelId: currentStream?.user_id, account: twitchAccount, manages },
       managerSurfaceOpen,
     )
   ) {
-    if (managerChannel !== currentStream?.user_id) setManagerChannel(currentStream?.user_id);
+    setManagerSeen({ channelId: currentStream?.user_id, account: twitchAccount ?? managerSeen.account });
     if (managerSurfaceOpen) {
       setManagerPanel(null);
       setComposerKind(null);
       setManagerWindow(null);
     }
+  } else if (twitchAccount !== null && managerSeen.account === null) {
+    setManagerSeen({ ...managerSeen, account: twitchAccount });
   }
-  // Read for moderators too (a VOD replay's chat), so the Tools menu's Chat
-  // modes card always has the room's modes or says why not.
-  const streamManager = useStreamManager(
-    toolSections.polls || toolSections.moderate ? currentStream?.user_id : null,
-    currentStream?.user_login ?? '',
-    true,
-  );
+  // While a surface (or the Tools menu) is open, Rust keeps this channel's
+  // view current on its own: deadlines, Twitch's pushes, a re-read now and then.
+  const [toolsMenuOpen, setToolsMenuOpen] = useState(false);
+  const managerChannelId = currentStream?.user_id;
+  const managerLogin = currentStream?.user_login ?? '';
+  useManagerInterest(!!managerPanel, managerChannelId, managerLogin);
+  useManagerInterest(!!composerKind, managerChannelId, managerLogin);
+  useManagerInterest(!!managerWindow, managerChannelId, managerLogin);
+  useManagerInterest(toolsMenuOpen, managerChannelId, managerLogin);
+  // Opening any of them reads the channel at once.
+  const refreshManager = streamManager.refresh;
+  useEffect(() => {
+    if (managerSurfaceOpen || toolsMenuOpen) void refreshManager();
+  }, [managerSurfaceOpen, toolsMenuOpen, refreshManager]);
   const openManagerPanel = (kind: ManagerPanelKind, handedOff = false) => {
     setComposerKind(null);
     setManagerWindow(null);
@@ -2845,17 +2881,13 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     setManagerHandedOff(handedOff);
     setManagerWindow({ page });
   };
-  // /poll and /prediction open the builder: only on the surface whose channel
-  // the command was typed in (scoped like the prefill event), and only where
-  // the stream manager applies.
-  const pollsAllowed = toolSections.polls;
+  // /poll and /prediction open the builder: only in the pane the command was
+  // typed in, while it still shows that channel. Rust has already checked
+  // that you may run one here, so the listener is always attached.
   useEffect(() => {
-    if (!pollsAllowed) return;
     const handler = (e: Event) => {
-      const detail = (e as CustomEvent<{ channel?: string; kind?: string }>).detail;
-      const mine = currentStream?.user_login?.toLowerCase();
-      const theirs = detail?.channel?.toLowerCase();
-      if (mine && theirs && mine !== theirs) return;
+      const detail = (e as CustomEvent<PaneEventDetail>).detail;
+      if (!acceptsComposerEvent(detail, paneSource, currentStream?.user_login)) return;
       if (detail?.kind === 'poll' || detail?.kind === 'prediction') {
         setManagerPanel(null);
         setManagerWindow(null);
@@ -2865,7 +2897,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     };
     window.addEventListener('streamnook-open-poll-composer', handler);
     return () => window.removeEventListener('streamnook-open-poll-composer', handler);
-  }, [currentStream?.user_login, pollsAllowed]);
+  }, [currentStream?.user_login, paneSource]);
   const dropsTool: DropsTool | null =
     toolSections.drops && dropsCampaign
       ? {
@@ -2892,7 +2924,9 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     setLocallyHiddenMessageIds(new Set());
   }, [currentStream?.user_id]);
   useEffect(() => {
-    const handler = () => {
+    const handler = (e: Event) => {
+      // Only the pane /clearmessages was typed in.
+      if (!acceptsComposerEvent((e as CustomEvent<PaneEventDetail>).detail, paneSource, currentStream?.user_login)) return;
       const ids = new Set<string>();
       messagesRef.current.forEach((m) => {
         const id = getMessageId(m);
@@ -2902,7 +2936,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     };
     window.addEventListener('streamnook-clear-local-chat', handler);
     return () => window.removeEventListener('streamnook-clear-local-chat', handler);
-  }, [getMessageId]);
+  }, [getMessageId, paneSource, currentStream?.user_login]);
 
   // Shift-clicking a message's timeout/ban control drops the command into the
   // composer instead of firing it, so the reason can be edited before sending.
@@ -3365,7 +3399,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
         return null;
       });
       if (outcome?.handled) {
-        await applySlashOutcome(outcome, providerKey, '', (msg) => void sendMessage(msg));
+        await applySlashOutcome(outcome, providerKey, '', (msg) => void sendMessage(msg), paneSource);
         return;
       }
     }
@@ -3607,7 +3641,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                       badges: '',
                     })
                 : (msg: string) => void sendMessage(msg);
-            if (await handleSlashCommand(messageToSend, isTwitch ? currentStream?.user_id || '' : '', room, send)) {
+            if (await handleSlashCommand(messageToSend, isTwitch ? currentStream?.user_id || '' : '', room, send, 0, paneSource)) {
               return;
             }
           }
@@ -3639,9 +3673,11 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                     color: undefined,
                     badges: '',
                   })
-                : sendMessage(msg)
+                : sendMessage(msg),
+            0,
+            paneSource,
           );
-          
+
           if (handled) {
             return;
           }
@@ -4100,6 +4136,8 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
           if (cmd.category === 'Everyone') return true;
           if (cmd.category === 'Moderator' || cmd.category === 'Chat Flow') return isModerator;
           if (cmd.category === 'Engagement' || cmd.category === 'Broadcaster') return isModerator || isBroadcaster;
+          // Polls, predictions, title and category: for whoever Rust says manages here (editors too).
+          if (cmd.category === 'Channel') return manages === 'yes';
           return false;
         });
         const userCommands = buildUserCommandDefinitions(settings.chat_commands?.user_commands);
@@ -4195,7 +4233,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     setShowMentionAutocomplete(false);
     setMentionQuery('');
     setMentionStartPosition(null);
-  }, [mentionMatches, isModerator, isBroadcaster, settings.chat_commands?.user_commands, settings.reminders?.reminders, settings.chat_input?.emote_colon_search_enabled, emoteTabState, emoteList, openEmoteList, closeEmoteList]);
+  }, [mentionMatches, isModerator, isBroadcaster, manages, settings.chat_commands?.user_commands, settings.reminders?.reminders, settings.chat_input?.emote_colon_search_enabled, emoteTabState, emoteList, openEmoteList, closeEmoteList]);
 
   // Insert a command string directly from other UI elements (like UserProfileCard)
   const preFillCommand = useCallback((cmdText: string) => {
@@ -5765,6 +5803,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                     onRetryManager={() => void streamManager.refresh()}
                     onOpenManager={(kind) => openManagerPanel(kind)}
                     onOpenWindow={(page) => openManagerWindow(page)}
+                    onOpenChange={setToolsMenuOpen}
                     drops={dropsTool}
                     roomState={roomState}
                   />

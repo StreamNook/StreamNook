@@ -23,7 +23,7 @@ import { Logger } from '../../utils/logger';
 import { useAppStore } from '../../stores/AppStore';
 import { useFitAbove } from '../../hooks/useFitAbove';
 import { useOutsidePress } from '../../hooks/useOutsidePress';
-import type { PageId, StreamManagerView } from '../../services/streamManager';
+import { targetOf, type PageId, type StreamManagerView } from '../../services/streamManager';
 import { LiveRow, type ManagerPanelKind } from './StreamManagerPanel';
 import { ChatModesGroup } from './ChatModesGroup';
 import { ModerationGroup } from './ModerationGroup';
@@ -305,8 +305,7 @@ const ChannelToolsMenu: React.FC<ChannelToolsMenuProps> = ({
                   (manager?.chat ? (
                     <ChatModesGroup
                       layout="menu"
-                      channelId={broadcasterId}
-                      channelLogin={channelLogin}
+                      target={targetOf(manager)}
                       chat={manager.chat}
                       live={liveFromRoom(roomState)}
                     />

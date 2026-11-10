@@ -7,7 +7,17 @@
 // line and runs every write (services/stream_manager.rs); nothing here is
 // shared between windows or stored.
 import { useSyncExternalStore } from 'react';
-import type { ManagerAction, PageId, PageRow, RaidTarget, QueueGroup, QueueRow } from '../../services/streamManager';
+import type {
+  InfoField,
+  ManagerAction,
+  PageId,
+  PageRow,
+  RaidTarget,
+  QueueGroup,
+  QueueRow,
+  StreamInfoDraft,
+  StreamInfoView,
+} from '../../services/streamManager';
 
 export type ToolPhase = 'idle' | 'working' | 'done' | 'failed';
 
@@ -15,17 +25,17 @@ export interface ToolEntry {
   phase: ToolPhase;
   /** Rust's line for the last write: what happened, or why not. */
   line: string | null;
-  /** Counts writes on this key, so a timer from an older write never ends a newer one. */
+  /** This write's number, from one counter for the whole window that never
+   *  goes back, so a timer from an older write (even one from before the
+   *  store was emptied) never ends a newer one. */
   gen: number;
   /** What the form holds (typed by the form that owns the key). */
   draft: unknown;
-  /** For Stream info: what Twitch had when the edit began. */
-  base: string | null;
   /** The draft a write in flight was sent with. */
   sent: unknown;
 }
 
-export const IDLE: ToolEntry = Object.freeze({ phase: 'idle', line: null, gen: 0, draft: undefined, base: null, sent: undefined }) as ToolEntry;
+export const IDLE: ToolEntry = Object.freeze({ phase: 'idle', line: null, gen: 0, draft: undefined, sent: undefined }) as ToolEntry;
 
 /** How long "Done" shows before a key goes back to idle. */
 export const DONE_HOLD_MS = 1400;
@@ -36,6 +46,14 @@ const entries = new Map<string, ToolEntry>();
 const timers = new Map<string, ReturnType<typeof setTimeout>>();
 const listeners = new Set<() => void>();
 let version = 0;
+/** Every write's and every save's number. Never reset. */
+let counter = 0;
+
+/** The next number from the window's one counter. */
+export function nextStamp(): number {
+  counter += 1;
+  return counter;
+}
 
 function notify(): void {
   version += 1;
@@ -94,13 +112,12 @@ export function useTool(key: string): ToolEntry {
 
 /** Replaces the key's draft. A failed key goes back to idle: the edit is the
  *  answer to the failure. A working or done key keeps its phase. */
-export function setToolDraft(key: string, draft: unknown, base?: string | null): void {
+export function setToolDraft(key: string, draft: unknown): void {
   const cur = getTool(key);
   const failed = cur.phase === 'failed';
   write(key, {
     ...cur,
     draft,
-    base: base === undefined ? cur.base : base,
     phase: failed ? 'idle' : cur.phase,
     line: failed ? null : cur.line,
   });
@@ -109,8 +126,26 @@ export function setToolDraft(key: string, draft: unknown, base?: string | null):
 /** Back to nothing typed (Discard, Start over, a finished write). */
 export function clearToolDraft(key: string): void {
   const cur = getTool(key);
-  if (cur.draft === undefined && cur.base === null) return;
-  write(key, { ...cur, draft: undefined, base: null });
+  if (cur.draft === undefined) return;
+  write(key, { ...cur, draft: undefined });
+}
+
+/** In `ms`, changes the key's draft with `change` (which gets the draft as it
+ *  is then). Runs whether or not a form is mounted; `timerKey` names it, so a
+ *  later call with the same name replaces it. */
+export function changeDraftLater(key: string, timerKey: string, ms: number, change: (draft: unknown) => unknown): void {
+  const old = timers.get(timerKey);
+  if (old) clearTimeout(old);
+  timers.set(
+    timerKey,
+    setTimeout(() => {
+      timers.delete(timerKey);
+      const cur = getTool(key);
+      if (cur.draft === undefined) return;
+      const next = change(cur.draft);
+      if (next !== cur.draft) write(key, { ...cur, draft: next });
+    }, ms),
+  );
 }
 
 export interface RunAnswer {
@@ -144,7 +179,7 @@ export async function runTool(key: string, run: () => Promise<RunAnswer>, opts: 
   const old = timers.get(key);
   if (old) clearTimeout(old);
   timers.delete(key);
-  const gen = cur.gen + 1;
+  const gen = nextStamp();
   const draft = opts.draft === undefined ? cur.draft : opts.draft;
   write(key, { ...cur, draft, phase: 'working', line: null, gen, sent: draft });
   let answer: RunAnswer;
@@ -167,7 +202,6 @@ export async function runTool(key: string, run: () => Promise<RunAnswer>, opts: 
     line: answer.message,
     sent: undefined,
     draft: keepDraft ? now.draft : undefined,
-    base: keepDraft ? now.base : null,
   });
   timers.set(
     key,
@@ -186,24 +220,211 @@ export async function runTool(key: string, run: () => Promise<RunAnswer>, opts: 
   return true;
 }
 
-/** Tests only: forget everything. */
-export function resetManagerStore(): void {
+/**
+ * The Twitch account changed: every draft, result, timer and remembered page
+ * goes, so nothing typed or done as one account shows to the next. The
+ * write counter keeps counting, so no old timer can match a new write.
+ */
+export function forgetAccount(): void {
   for (const t of timers.values()) clearTimeout(t);
   timers.clear();
   entries.clear();
+  lastPages.clear();
   notify();
+}
+
+/** Tests only: forget everything. */
+export function resetManagerStore(): void {
+  forgetAccount();
+}
+
+// ─── who manages here ─────────────────────────────────────────────────────────
+
+export type Manages = 'yes' | 'no' | 'unknown';
+
+/**
+ * Whether the signed-in account manages this channel, for the Tools button and
+ * the phone's Manage channel row, on desktop and phone alike. A moderator or
+ * broadcaster badge says yes at once; an editor has no badge, so Rust's view
+ * decides (`pages`: how many pages it lists, null until it lands for this
+ * channel). A replay's chat offers moderators their chat tools only.
+ */
+export function managesHere(c: {
+  twitch: boolean;
+  signedIn: boolean;
+  replay: boolean;
+  modBadge: boolean;
+  broadcaster: boolean;
+  pages: number | null;
+}): Manages {
+  if (!c.twitch || !c.signedIn) return 'no';
+  if (c.modBadge || c.broadcaster) return 'yes';
+  if (c.replay) return 'no';
+  if (c.pages === null) return 'unknown';
+  return c.pages > 0 ? 'yes' : 'no';
 }
 
 // ─── which surface is open ────────────────────────────────────────────────────
 
 /**
- * Whether a ChatWidget must close its stream manager panel, builder and
- * window now: the channel changed under them, or the manager no longer
- * applies here. Either way nothing open may write on.
+ * Whether a chat must close its stream manager panel, builder and window now:
+ * the channel changed under them, the Twitch account changed (`was.account`
+ * is the last known one), or the manager is known not to apply here. While
+ * that is still unknown nothing closes. Either way nothing open may write on.
  */
-export function mustCloseSurfaces(was: { channelId: string | null | undefined }, now: { channelId: string | null | undefined; manages: boolean }, anyOpen: boolean): boolean {
+export function mustCloseSurfaces(
+  was: { channelId: string | null | undefined; account: string | null },
+  now: { channelId: string | null | undefined; account: string | null; manages: Manages },
+  anyOpen: boolean,
+): boolean {
   if (was.channelId !== now.channelId) return true;
-  return anyOpen && !now.manages;
+  if (was.account !== null && now.account !== null && was.account !== now.account) return true;
+  return anyOpen && now.manages === 'no';
+}
+
+// ─── slash command events ─────────────────────────────────────────────────────
+
+/** What a pane-scoped slash event (`streamnook-open-poll-composer`,
+ *  `streamnook-clear-local-chat`) carries. */
+export interface PaneEventDetail {
+  /** The chat pane the command was typed in. */
+  source?: string;
+  channel?: string;
+  kind?: string;
+}
+
+/**
+ * Whether this pane (`mySource`, showing `myLogin`) acts on a slash event:
+ * only the pane it was typed in, and only while it still shows that channel.
+ * An event with no source (typed somewhere that does not say) is taken by the
+ * pane showing its channel.
+ */
+export function acceptsComposerEvent(detail: PaneEventDetail | null | undefined, mySource: string, myLogin: string | null | undefined): boolean {
+  const mine = (myLogin ?? '').toLowerCase();
+  const theirs = (detail?.channel ?? '').toLowerCase();
+  if (detail?.source) return detail.source === mySource && (!theirs || !mine || theirs === mine);
+  return !!theirs && theirs === mine;
+}
+
+// ─── stream info edits ────────────────────────────────────────────────────────
+
+/** A field's value as Stream info holds it. */
+type InfoValue = StreamInfoDraft[InfoField];
+
+/** What a sent field shows until Twitch's read has it, and the save that sent it. */
+export type InfoLanding = Partial<Record<InfoField, { value: InfoValue; stamp: number }>>;
+
+/** Stream info's entry in the store: the fields typed and not yet saved, a
+ *  half-typed tag, and the fields a save sent that Twitch does not show yet. */
+export interface InfoHeld {
+  edits: Partial<StreamInfoDraft>;
+  tagText: string;
+  landing: InfoLanding;
+}
+
+export const INFO_FIELDS: readonly InfoField[] = ['title', 'category', 'tags', 'language'];
+
+/** How long a sent field shows before Twitch's own value does again. */
+export const LANDING_MS = 10_000;
+
+/** Twitch's info as a draft. */
+export function fromInfo(info: StreamInfoView | null): StreamInfoDraft {
+  return {
+    title: info?.title ?? '',
+    category: info?.category ?? null,
+    tags: info?.tags ?? [],
+    language: info?.language ?? '',
+  };
+}
+
+export function sameInfoValue(field: InfoField, a: InfoValue | undefined, b: InfoValue | undefined): boolean {
+  switch (field) {
+    case 'category': {
+      const x = a as StreamInfoDraft['category'] | undefined;
+      const y = b as StreamInfoDraft['category'] | undefined;
+      return (x?.id ?? '') === (y?.id ?? '');
+    }
+    case 'tags': {
+      const x = (a as string[] | undefined) ?? [];
+      const y = (b as string[] | undefined) ?? [];
+      return x.length === y.length && x.every((t, i) => t === y[i]);
+    }
+    default:
+      return (a ?? '') === (b ?? '');
+  }
+}
+
+/** What the form shows under the edits: Twitch's info, with sent fields that
+ *  have not landed yet over it. */
+export function infoUnderEdits(info: StreamInfoView | null, landing: InfoLanding): StreamInfoDraft {
+  const out = fromInfo(info);
+  for (const f of INFO_FIELDS) {
+    const l = landing[f];
+    if (l) (out as unknown as Record<InfoField, InfoValue>)[f] = l.value;
+  }
+  return out;
+}
+
+/** The whole form: what is under the edits, then the edits. */
+export function shownInfo(info: StreamInfoView | null, held: InfoHeld | undefined): StreamInfoDraft {
+  return { ...infoUnderEdits(info, held?.landing ?? {}), ...(held?.edits ?? {}) };
+}
+
+/** The edits for a form now showing `next`: only the fields that differ from
+ *  what shows under them. A field typed back to that value is no edit. */
+export function infoEdits(next: StreamInfoDraft, under: StreamInfoDraft): Partial<StreamInfoDraft> {
+  const out: Partial<StreamInfoDraft> = {};
+  for (const f of INFO_FIELDS) {
+    if (!sameInfoValue(f, next[f], under[f])) (out as Record<InfoField, InfoValue>)[f] = next[f];
+  }
+  return out;
+}
+
+/**
+ * After a save of `sent` (stamped `stamp`) went through: the sent fields leave
+ * the edits and show as landing, except a field typed again since Save was
+ * pressed, which stays an edit.
+ */
+export function landingAfterSave(held: InfoHeld, sent: Partial<StreamInfoDraft>, stamp: number): InfoHeld {
+  const edits: Partial<StreamInfoDraft> = { ...held.edits };
+  const landing: InfoLanding = { ...held.landing };
+  for (const f of INFO_FIELDS) {
+    if (!(f in sent)) continue;
+    const value = sent[f] as InfoValue;
+    landing[f] = { value, stamp };
+    if (f in edits && sameInfoValue(f, edits[f], value)) delete edits[f];
+  }
+  return { ...held, edits, landing };
+}
+
+/** Landing fields Twitch's read now shows are dropped. */
+export function landedInfo(held: InfoHeld, info: StreamInfoView | null): InfoHeld {
+  if (!info) return held;
+  const now = fromInfo(info);
+  let changed = false;
+  const landing: InfoLanding = { ...held.landing };
+  for (const f of INFO_FIELDS) {
+    const l = landing[f];
+    if (l && sameInfoValue(f, l.value, now[f])) {
+      delete landing[f];
+      changed = true;
+    }
+  }
+  return changed ? { ...held, landing } : held;
+}
+
+/** The save stamped `stamp` is over: its own landing fields go, and no other
+ *  save's (a later save of the same field keeps showing). */
+export function landingExpired(held: InfoHeld, stamp: number): InfoHeld {
+  let changed = false;
+  const landing: InfoLanding = { ...held.landing };
+  for (const f of INFO_FIELDS) {
+    if (landing[f]?.stamp === stamp) {
+      delete landing[f];
+      changed = true;
+    }
+  }
+  return changed ? { ...held, landing } : held;
 }
 
 // ─── pages ────────────────────────────────────────────────────────────────────

@@ -10,7 +10,7 @@ import { createPortal } from 'react-dom';
 import { motion } from 'framer-motion';
 import { ChevronLeft, Minimize2, RotateCw, X } from 'lucide-react';
 import { useOutsidePress } from '../../hooks/useOutsidePress';
-import type { PageId, QueueView, StreamManagerView } from '../../services/streamManager';
+import { targetOf, type PageId, type QueueView, type StreamManagerView } from '../../services/streamManager';
 import { LivePage, ManagerForm, TITLES, type ManagerPanelKind } from './StreamManagerPanel';
 import PollPredictionComposer from './PollPredictionComposer';
 import { ChatModesGroup } from './ChatModesGroup';
@@ -173,8 +173,7 @@ export function ManageChannelWindow({
           <ChatModesGroup
             layout="window"
             hideTitle
-            channelId={channelId}
-            channelLogin={channelLogin}
+            target={targetOf(view)}
             chat={view.chat}
             live={liveFromRoom(roomState)}
           />

@@ -23,6 +23,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
+  Clapperboard,
   CornerDownLeft,
   LayoutGrid,
   Lock,
@@ -47,7 +48,7 @@ import { ACCENT_BUTTON, ACCENT_FILL, GLAZE_PILL } from '../ui/glazeButtons';
 type Category = CommandDefinition['category'];
 type RailKey = 'all' | Category;
 
-const CATEGORY_ORDER: Category[] = ['Everyone', 'Moderator', 'Chat Flow', 'Engagement', 'Broadcaster', 'Custom'];
+export const CATEGORY_ORDER: Category[] = ['Everyone', 'Moderator', 'Chat Flow', 'Engagement', 'Channel', 'Broadcaster', 'Custom'];
 
 export const RAIL: { key: RailKey; label: string; icon: LucideIcon; blurb: string }[] = [
   {
@@ -64,8 +65,9 @@ export const RAIL: { key: RailKey; label: string; icon: LucideIcon; blurb: strin
     icon: SlidersHorizontal,
     blurb: 'Slow, followers-only, sub-only and emote-only modes.',
   },
-  { key: 'Engagement', label: 'Engagement', icon: Megaphone, blurb: 'Announcements, shoutouts and polls.' },
-  { key: 'Broadcaster', label: 'Broadcaster', icon: Radio, blurb: 'Raids, ads, markers, title and category.' },
+  { key: 'Engagement', label: 'Engagement', icon: Megaphone, blurb: 'Announcements and shoutouts.' },
+  { key: 'Channel', label: 'Channel', icon: Clapperboard, blurb: 'Polls, predictions, title and category.' },
+  { key: 'Broadcaster', label: 'Broadcaster', icon: Radio, blurb: 'Raids, ads, markers and your team.' },
   { key: 'Custom', label: 'Your commands', icon: Sparkles, blurb: 'Custom commands from Settings, Chat, Custom Commands.' },
 ];
 
@@ -74,6 +76,7 @@ const WHO: Record<Category, string> = {
   Moderator: 'Moderators and the broadcaster',
   'Chat Flow': 'Moderators and the broadcaster',
   Engagement: 'Moderators and the broadcaster',
+  Channel: 'The broadcaster, editors and moderators',
   Broadcaster: 'Broadcaster only',
   Custom: 'Your own command',
 };
@@ -100,7 +103,9 @@ export interface CommandBrowserProps {
 // the core's `command_catalog::lock_for`: Twitch takes the owner's commands only from the
 // channel owner, so a moderator sees them locked too.
 export function lockFor(cmd: CommandDefinition, isModerator: boolean, isBroadcaster: boolean): { tag: string; line: string } | null {
-  if (cmd.category === 'Everyone' || cmd.category === 'Custom') return null;
+  // Channel commands are never locked: who may use them depends on being an
+  // editor, which chat never says, so Rust answers in words when it cannot.
+  if (cmd.category === 'Everyone' || cmd.category === 'Custom' || cmd.category === 'Channel') return null;
   if (cmd.category === 'Broadcaster' && !isBroadcaster) {
     return { tag: 'Broadcaster', line: 'Needs the broadcaster in this channel' };
   }

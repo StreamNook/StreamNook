@@ -102,10 +102,10 @@ async function screenRectOf(el: HTMLElement) {
   };
 }
 
-/** Do what `ui` asks in the room `channel` (Twitch id `channelId`). Kinds that
- *  only start something (a clip, song recognition, a stream reload) return
- *  before it finishes. */
-export async function applySlashUi(ui: SlashUi, channel: string, channelId: string): Promise<void> {
+/** Do what `ui` asks in the room `channel` (Twitch id `channelId`), typed in the
+ *  chat pane `source`. Kinds that only start something (a clip, song
+ *  recognition, a stream reload) return before it finishes. */
+export async function applySlashUi(ui: SlashUi, channel: string, channelId: string, source = ''): Promise<void> {
   try {
     switch (ui.kind) {
       case 'open_user_card':
@@ -117,11 +117,12 @@ export async function applySlashUi(ui: SlashUi, channel: string, channelId: stri
         );
         return;
       case 'clear_local_chat':
-        window.dispatchEvent(new CustomEvent('streamnook-clear-local-chat'));
+        // Only the pane it was typed in (acceptsComposerEvent).
+        window.dispatchEvent(new CustomEvent('streamnook-clear-local-chat', { detail: { source, channel } }));
         return;
       case 'open_poll_composer':
         window.dispatchEvent(
-          new CustomEvent('streamnook-open-poll-composer', { detail: { channel: ui.channel, kind: ui.composer } }),
+          new CustomEvent('streamnook-open-poll-composer', { detail: { source, channel: ui.channel, kind: ui.composer } }),
         );
         return;
       case 'create_clip':
