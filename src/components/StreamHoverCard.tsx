@@ -122,9 +122,13 @@ const StreamHoverCard = ({ stream, hasDrops, collab }: StreamHoverCardProps) => 
                     </div>
                 )}
 
-                <div className="mt-1 text-[11px] text-textMuted truncate">
-                    {stream.game_name || 'Just Chatting'}
-                </div>
+                {/* No category (YouTube and TikTok send none) means no line, not
+                    a made-up one: the title above already says what is on. */}
+                {stream.game_name && (
+                    <div className="mt-1 text-[11px] text-textMuted truncate">
+                        {stream.game_name}
+                    </div>
+                )}
 
                 {collab && (
                     <div className="mt-2 flex items-center gap-2 min-w-0">

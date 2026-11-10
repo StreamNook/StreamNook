@@ -268,7 +268,9 @@ const StreamItem = memo(({
                         )}
                     </div>
                     <div className="flex items-center gap-1 text-xs text-textMuted truncate">
-                        <span className="truncate">{stream.game_name || 'Just Chatting'}</span>
+                        {/* No category (YouTube and TikTok send none): the title
+                            says what is on instead. Never a made-up category. */}
+                        <span className="truncate">{stream.game_name || stream.title}</span>
                         {/* Drops indicator - show next to game name */}
                         {hasDrops && (
                             <Tooltip content="Drops enabled" delay={100} side="top">
