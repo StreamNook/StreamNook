@@ -3364,7 +3364,13 @@ function TabButton({
             e.stopPropagation();
             onRemove();
           }}
-          className="absolute right-2 top-1/2 grid h-3.5 w-3.5 -translate-y-1/2 place-items-center rounded-full text-textMuted opacity-0 transition-all hover:bg-error/20 hover:text-error group-hover:opacity-100"
+          // Always there, a step quieter than the name, so the tab reads as
+          // balanced (logo left, remove right) instead of the name looking
+          // off center until a hover shows the X. It gives its slot to the
+          // unread count, which steps aside for it on hover.
+          className={`absolute right-2 top-1/2 grid h-3.5 w-3.5 -translate-y-1/2 place-items-center rounded-full text-textMuted transition-all hover:bg-error/20 hover:text-error group-hover:opacity-100 ${
+            unread > 0 && !isVisible ? 'opacity-0' : 'opacity-60'
+          }`}
         >
           <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.5">
             <line x1="1.5" y1="1.5" x2="6.5" y2="6.5" />
