@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "last_sync": 1794235297,
+  "last_sync": 1794319124,
   "entries": {
     "global_badges": {
       "id": "global_badges",
@@ -7840,10 +7840,10 @@
             }
           ]
         },
-        "cached_at": 1794235292
+        "cached_at": 1794319034
       },
       "metadata": {
-        "timestamp": 1794235292,
+        "timestamp": 1794319034,
         "expiry_days": 7,
         "source": "twitch",
         "version": 1
@@ -16130,7 +16130,7 @@
         "more_info": "DayZ Yellow King is a limited-time global chat badge dedicated to the launch of DayZ Badlands expansion. To earn it, you need to subscribe or gift a subscription (Prime subs doesn’t count) to streamer in the DayZ category. Event duration: 2026-10-08T11:00:00Z – 2026-10-19T08:59:00Z The badge is distributed via Twitch Drops and granted automatically after meeting the requirement."
       },
       "metadata": {
-        "timestamp": 1793711684,
+        "timestamp": 1794319060,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
@@ -16146,7 +16146,7 @@
         "more_info": "Vaultbreakers is a limited-time global chat badge dedicated to the Vaultbreakers. To earn it, you need to watch 60 minutes of any livestream in the Vaultbreakers category. Event duration: 2026-10-08T17:00:00Z – 2026-10-15T16:59:00Z The badge is distributed via Twitch Drops and granted automatically after meeting the requirement. There is also a paid badge from this campaign: Vaultbreakers Golden"
       },
       "metadata": {
-        "timestamp": 1793711691,
+        "timestamp": 1794319103,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
@@ -16162,7 +16162,7 @@
         "more_info": "Vaultbreakers Golden is a limited-time global chat badge dedicated to the Vaultbreakers. To earn it, you need to subscribe or gift a subscription (Prime subs doesn’t count) to streamer in the Vaultbreakers category. Event duration: 2026-10-08T17:00:00Z – 2026-10-15T16:59:00Z The badge is distributed via Twitch Drops and granted automatically after meeting the requirement. There is also a free badge from this campaign: Vaultbreakers"
       },
       "metadata": {
-        "timestamp": 1793711692,
+        "timestamp": 1794319124,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
@@ -16658,7 +16658,7 @@
         "more_info": "Hunt Red is a limited-time global chat badge dedicated to the Hunt: Showdown 1896. To earn it, you needed to subscribe or gift a subscription (Prime subs doesn’t count) to streamer in the Hunt: Showdown 1896 category. Event duration: 2026-10-26T14:54:00Z – 2026-11-09T13:59:00Z The badge is distributed via Twitch Drops and granted automatically after the requirement is met. There’s also a free badge from this campaign: Hunt White"
       },
       "metadata": {
-        "timestamp": 1793711688,
+        "timestamp": 1794319082,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
@@ -16674,7 +16674,7 @@
         "more_info": "Hunt White is a limited-time global chat badge dedicated to the Hunt: Showdown 1896. To earn it, you need to watch 15 minutes of any livestream in the Hunt: Showdown 1896 category. Event duration: 2026-10-26T14:54:00Z – 2026-11-09T13:59:00Z The badge is distributed via Twitch Drops and granted automatically after the requirement is met. There’s also a paid badge from this campaign: HuntRed"
       },
       "metadata": {
-        "timestamp": 1793711689,
+        "timestamp": 1794319091,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
@@ -16719,10 +16719,10 @@
       "data": {
         "date_added": "2 November 2026",
         "usage_stats": null,
-        "more_info": "Alliance is a limited-time global chat badge dedicated to the launch of WoW: Forever. To earn it, you need to subscribe or gift a subscription (Prime subs doesn’t count) to streamer in the World of Warcraft category. Event duration: from November 4 The badge is distributed via Twitch Drops and granted automatically after meeting the requirement. There is also an Horde badge."
+        "more_info": "Alliance is a limited-time global chat badge dedicated to the launch of WoW: Forever. To earn it, you need to subscribe or gift a subscription (Prime subs doesn’t count) to streamer in the World of Warcraft category. Event duration: 2026-11-04T16:00:00Z – 2026-12-01T07:58:00Z The badge is distributed via Twitch Drops and granted automatically after meeting the requirement. There is also an Horde badge."
       },
       "metadata": {
-        "timestamp": 1793711682,
+        "timestamp": 1794319049,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
@@ -16735,10 +16735,10 @@
       "data": {
         "date_added": "2 November 2026",
         "usage_stats": null,
-        "more_info": "Horde is a limited-time global chat badge dedicated to the launch of WoW: Forever. To earn it, you need to subscribe or gift a subscription (Prime subs doesn’t count) to streamer in the World of Warcraft category. Event duration: from November 4 The badge is distributed via Twitch Drops and granted automatically after meeting the requirement. There is also an Alliance badge."
+        "more_info": "Horde is a limited-time global chat badge dedicated to the launch of WoW: Forever. To earn it, you need to subscribe or gift a subscription (Prime subs doesn’t count) to streamer in the World of Warcraft category. Event duration: 2026-11-04T16:00:00Z – 2026-12-01T07:58:00Z The badge is distributed via Twitch Drops and granted automatically after meeting the requirement. There is also an Alliance badge."
       },
       "metadata": {
-        "timestamp": 1793711686,
+        "timestamp": 1794319072,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
