@@ -3029,9 +3029,6 @@ static TICKING: AtomicBool = AtomicBool::new(false);
 
 /// Note a view's out-of-date time for its channel.
 fn arm(view: &StreamManagerView) {
-    if cfg!(target_os = "ios") {
-        return;
-    }
     let mut fresh = locked(&FRESH);
     let f = fresh.entry(view.channel_id.clone()).or_default();
     if !should_arm(f.armed_rev, view.rev) {
@@ -3044,9 +3041,6 @@ fn arm(view: &StreamManagerView) {
 
 /// A window says a manager surface shows `channel` (or no longer does).
 pub fn watch(label: &str, surface: &str, channel: Option<(String, String)>, seq: u64) {
-    if cfg!(target_os = "ios") {
-        return;
-    }
     let on = channel.is_some();
     let channel_id = channel.as_ref().map(|(id, _)| id.clone());
     if let Err(why) = interest_after(&mut locked(&INTEREST), label, surface, channel, seq) {
