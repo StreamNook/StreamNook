@@ -1493,6 +1493,24 @@ impl TwitchService {
         Ok(token.access_token)
     }
 
+    /// `get_token`, plus the account generation read while the slot is held,
+    /// so the pair always names one account: a switch takes the slot to move
+    /// either, and a refresh never moves the generation.
+    pub async fn get_token_with_generation() -> Result<(String, u64)> {
+        let slot = Self::primary_slot().await;
+        let generation = Self::account_generation();
+        let mut token = Self::load_slot_token(&slot)?;
+        let buffer_time = 300;
+        if Utc::now().timestamp() >= (token.expires_at - buffer_time) {
+            if token.refresh_token.is_empty() {
+                return Err(TokenError::Refused
+                    .into_error("Token expired and no refresh token available. Please log in again."));
+            }
+            token = Self::renew_primary(slot, token.refresh_token).await?;
+        }
+        Ok((token.access_token, generation))
+    }
+
     /// After a server refused `rejected`: the token now in the slot, refreshed
     /// first only if it is still that same token. Holds the slot throughout,
     /// so a sign-in or switch that landed meanwhile is never overwritten.
@@ -5031,9 +5049,18 @@ impl TwitchService {
         settings: serde_json::Value,
     ) -> Result<()> {
         let token = Self::get_token().await?;
-        let client = crate::services::http::client().clone();
         let user_info = Self::get_user_info().await?;
-        let moderator_id = &user_info.id;
+        Self::update_chat_settings_as(&token, &user_info.id, broadcaster_id, settings).await
+    }
+
+    /// `update_chat_settings` as the account `token` belongs to (`moderator_id`).
+    pub(crate) async fn update_chat_settings_as(
+        token: &str,
+        moderator_id: &str,
+        broadcaster_id: &str,
+        settings: serde_json::Value,
+    ) -> Result<()> {
+        let client = crate::services::http::client().clone();
 
         let url = format!(
             "https://api.twitch.tv/helix/chat/settings?broadcaster_id={}&moderator_id={}",
@@ -6364,9 +6391,19 @@ impl TwitchService {
         color: Option<&str>,
     ) -> Result<()> {
         let token = Self::get_token().await?;
-        let client = crate::services::http::client().clone();
         let user_info = Self::get_user_info().await?;
-        let moderator_id = &user_info.id;
+        Self::send_chat_announcement_as(&token, &user_info.id, broadcaster_id, message, color).await
+    }
+
+    /// `send_chat_announcement` as the account `token` belongs to (`moderator_id`).
+    pub(crate) async fn send_chat_announcement_as(
+        token: &str,
+        moderator_id: &str,
+        broadcaster_id: &str,
+        message: &str,
+        color: Option<&str>,
+    ) -> Result<()> {
+        let client = crate::services::http::client().clone();
 
         let url = format!(
             "https://api.twitch.tv/helix/chat/announcements?broadcaster_id={}&moderator_id={}",
@@ -6435,6 +6472,11 @@ impl TwitchService {
     /// Start Commercial
     pub async fn start_commercial(broadcaster_id: &str, length: u32) -> Result<()> {
         let token = Self::get_token().await?;
+        Self::start_commercial_as(&token, broadcaster_id, length).await
+    }
+
+    /// `start_commercial` as the account `token` belongs to.
+    pub(crate) async fn start_commercial_as(token: &str, broadcaster_id: &str, length: u32) -> Result<()> {
         let client = crate::services::http::client().clone();
 
         let url = "https://api.twitch.tv/helix/channels/commercial";
@@ -6476,8 +6518,18 @@ impl TwitchService {
         points_per_vote: Option<u32>,
     ) -> Result<serde_json::Value> {
         let token = Self::get_token().await?;
-        let client = crate::services::http::client().clone();
+        Self::create_poll_as(&token, broadcaster_id, title, choices, duration, points_per_vote).await
+    }
 
+    /// `create_poll` as the account `token` belongs to.
+    pub(crate) async fn create_poll_as(
+        token: &str,
+        broadcaster_id: &str,
+        title: &str,
+        choices: &[String],
+        duration: u32,
+        points_per_vote: Option<u32>,
+    ) -> Result<serde_json::Value> {
         let mut payload = serde_json::json!({
             "broadcaster_id": broadcaster_id,
             "title": title,
@@ -6492,7 +6544,7 @@ impl TwitchService {
             payload["channel_points_per_vote"] = serde_json::json!(cost);
         }
 
-        Self::helix_json_post("https://api.twitch.tv/helix/polls", &token, payload, "create poll")
+        Self::helix_json_post("https://api.twitch.tv/helix/polls", token, payload, "create poll")
             .await
     }
 
@@ -6654,12 +6706,17 @@ impl TwitchService {
     /// End a poll. `status` is TERMINATED (show the result) or ARCHIVED (hide it).
     pub async fn end_poll(broadcaster_id: &str, poll_id: &str, status: &str) -> Result<serde_json::Value> {
         let token = Self::get_token().await?;
+        Self::end_poll_as(&token, broadcaster_id, poll_id, status).await
+    }
+
+    /// `end_poll` as the account `token` belongs to.
+    pub(crate) async fn end_poll_as(token: &str, broadcaster_id: &str, poll_id: &str, status: &str) -> Result<serde_json::Value> {
         let payload = serde_json::json!({
             "broadcaster_id": broadcaster_id,
             "id": poll_id,
             "status": status,
         });
-        Self::helix_json_patch("https://api.twitch.tv/helix/polls", &token, payload, "end poll").await
+        Self::helix_json_patch("https://api.twitch.tv/helix/polls", token, payload, "end poll").await
     }
 
     /// Create a prediction. Broadcaster-only (`channel:manage:predictions`).
@@ -6672,6 +6729,17 @@ impl TwitchService {
         window: u32,
     ) -> Result<serde_json::Value> {
         let token = Self::get_token().await?;
+        Self::create_prediction_as(&token, broadcaster_id, title, outcomes, window).await
+    }
+
+    /// `create_prediction` as the account `token` belongs to.
+    pub(crate) async fn create_prediction_as(
+        token: &str,
+        broadcaster_id: &str,
+        title: &str,
+        outcomes: &[String],
+        window: u32,
+    ) -> Result<serde_json::Value> {
         let payload = serde_json::json!({
             "broadcaster_id": broadcaster_id,
             "title": title,
@@ -6683,7 +6751,7 @@ impl TwitchService {
         });
         Self::helix_json_post(
             "https://api.twitch.tv/helix/predictions",
-            &token,
+            token,
             payload,
             "create prediction",
         )
@@ -6699,6 +6767,17 @@ impl TwitchService {
         winning_outcome_id: Option<&str>,
     ) -> Result<serde_json::Value> {
         let token = Self::get_token().await?;
+        Self::end_prediction_as(&token, broadcaster_id, prediction_id, status, winning_outcome_id).await
+    }
+
+    /// `end_prediction` as the account `token` belongs to.
+    pub(crate) async fn end_prediction_as(
+        token: &str,
+        broadcaster_id: &str,
+        prediction_id: &str,
+        status: &str,
+        winning_outcome_id: Option<&str>,
+    ) -> Result<serde_json::Value> {
         let mut payload = serde_json::json!({
             "broadcaster_id": broadcaster_id,
             "id": prediction_id,
@@ -6709,7 +6788,7 @@ impl TwitchService {
         }
         Self::helix_json_patch(
             "https://api.twitch.tv/helix/predictions",
-            &token,
+            token,
             payload,
             "end prediction",
         )
@@ -6823,6 +6902,11 @@ impl TwitchService {
     /// Start Raid
     pub async fn start_raid(broadcaster_id: &str, target_user_id: &str) -> Result<()> {
         let token = Self::get_token().await?;
+        Self::start_raid_as(&token, broadcaster_id, target_user_id).await
+    }
+
+    /// `start_raid` as the account `token` belongs to.
+    pub(crate) async fn start_raid_as(token: &str, broadcaster_id: &str, target_user_id: &str) -> Result<()> {
         let client = crate::services::http::client().clone();
 
         let url = format!(
@@ -6850,6 +6934,11 @@ impl TwitchService {
     /// Cancel Raid
     pub async fn cancel_raid(broadcaster_id: &str) -> Result<()> {
         let token = Self::get_token().await?;
+        Self::cancel_raid_as(&token, broadcaster_id).await
+    }
+
+    /// `cancel_raid` as the account `token` belongs to.
+    pub(crate) async fn cancel_raid_as(token: &str, broadcaster_id: &str) -> Result<()> {
         let client = crate::services::http::client().clone();
 
         let url = format!(
@@ -6981,9 +7070,13 @@ impl TwitchService {
     /// Update Shield Mode (Helix: PUT /moderation/shield_mode)
     pub async fn update_shield_mode(broadcaster_id: &str, is_active: bool) -> Result<()> {
         let token = Self::get_token().await?;
-        let client = crate::services::http::client().clone();
         let user_info = Self::get_user_info().await?;
-        let moderator_id = &user_info.id;
+        Self::update_shield_mode_as(&token, &user_info.id, broadcaster_id, is_active).await
+    }
+
+    /// `update_shield_mode` as the account `token` belongs to (`moderator_id`).
+    pub(crate) async fn update_shield_mode_as(token: &str, moderator_id: &str, broadcaster_id: &str, is_active: bool) -> Result<()> {
+        let client = crate::services::http::client().clone();
 
         let url = format!(
             "https://api.twitch.tv/helix/moderation/shield_mode?broadcaster_id={}&moderator_id={}",
@@ -8368,6 +8461,7 @@ mod slot_tests {
         let service = service.as_str();
         for refresh in [
             "pub async fn get_token()",
+            "pub async fn get_token_with_generation()",
             "pub(crate) async fn get_token_after_reject(",
             "pub async fn force_refresh_token()",
             "async fn renew_primary(",

@@ -65,6 +65,22 @@ pub async fn post_status(
     tag: &str,
     integrity: Option<&crate::services::twitch_integrity::Integrity>,
 ) -> Result<serde_json::Value, (Option<u16>, String)> {
+    post_status_dated(token, body, tag, integrity).await.map(|(json, _)| json)
+}
+
+/// An HTTP `Date` header (`Tue, 10 Nov 2026 12:00:00 GMT`) in unix ms.
+pub fn http_date_ms(value: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc2822(value.trim()).ok().map(|d| d.timestamp_millis())
+}
+
+/// `post_status`, plus Twitch's clock at the answer (its `Date` header, unix
+/// ms), so times in this answer can be put on the local clock.
+pub async fn post_status_dated(
+    token: Option<&str>,
+    body: serde_json::Value,
+    tag: &str,
+    integrity: Option<&crate::services::twitch_integrity::Integrity>,
+) -> Result<(serde_json::Value, Option<i64>), (Option<u16>, String)> {
     let mut req = crate::services::http::client().post(GQL_URL).header("Client-ID", TWITCH_WEB_CLIENT_ID);
     req = match integrity {
         Some(i) => req
@@ -84,6 +100,11 @@ pub async fn post_status(
     if !resp.status().is_success() {
         return Err((Some(resp.status().as_u16()), format!("GQL answered {}", resp.status())));
     }
+    let date = resp
+        .headers()
+        .get(reqwest::header::DATE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(http_date_ms);
     let json: serde_json::Value = resp
         .json()
         .await
@@ -91,5 +112,14 @@ pub async fn post_status(
     if let Some(errors) = json.get("errors") {
         log::warn!("[{tag}] GQL errors: {errors}");
     }
-    Ok(json)
+    Ok((json, date))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn reads_an_http_date() {
+        assert_eq!(super::http_date_ms("Tue, 10 Nov 2026 12:00:00 GMT"), Some(1_794_312_000_000));
+        assert_eq!(super::http_date_ms("not a date"), None);
+    }
 }

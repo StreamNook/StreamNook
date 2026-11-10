@@ -24,7 +24,7 @@ struct Fake {
 fn default_answer(cmd: &str, _args: &Value) -> Result<Value, String> {
     match cmd {
         "get_user_by_login" => Ok(json!({ "id": "7", "login": "bob", "display_name": "Bob" })),
-        "get_active_poll" => Ok(json!({ "id": "poll-9" })),
+        "stream_manager_act" => Ok(json!({ "ok": true, "message": "Done in Rust", "view": null, "queue": null, "user_id": "1" })),
         "chat_send_paced" => Ok(json!({ "is_sent": true, "drop_reason": null })),
         "run_chat_burst" => Ok(json!({ "message": "Spam started: 2 messages at 1000 ms apart. /spam stop ends it", "status": null })),
         c if c.starts_with("slash_") => Ok(json!("ok")),
@@ -244,20 +244,94 @@ async fn a_failed_lookup_is_never_called_not_found() {
 #[tokio::test]
 async fn ending_a_poll_says_why_it_could_not() {
     let fake = Fake::new();
-    // A moderator: Twitch takes this only from the owner, so it is refused up front.
-    let mod_try = run(&fake, "/endpoll").await;
-    assert_eq!(toast(&mod_try, ToastKind::Error), ["/endpoll: only the broadcaster can end a poll on Twitch"]);
-    assert!(fake.calls("get_active_poll").is_empty());
-
-    *fake.role.lock().unwrap() = Role::Broadcaster;
-    // A lookup Twitch refused is an error, never "no poll".
-    fake.answer(|cmd, _| if cmd == "get_active_poll" { Err("you are not a moderator in this channel".into()) } else { Ok(Value::Null) });
+    // Rust's door decides who may and says why not, in its own words.
+    fake.answer(|cmd, _| match cmd {
+        "stream_manager_act" => Ok(json!({ "ok": false, "message": "Could not read the running poll: Twitch did not answer" })),
+        _ => Ok(Value::Null),
+    });
     let refused = run(&fake, "/cancelpoll").await;
-    assert_eq!(toast(&refused, ToastKind::Error), ["Couldn't read the running poll: you are not a moderator in this channel"]);
-    // No poll really running.
-    fake.answer(|_, _| Ok(Value::Null));
-    let none = run(&fake, "/endpoll").await;
-    assert_eq!(toast(&none, ToastKind::Error), ["No poll is running right now"]);
+    assert_eq!(toast(&refused, ToastKind::Error), ["Could not read the running poll: Twitch did not answer"]);
+    assert!(toast(&refused, ToastKind::Success).is_empty());
+    // The door itself failing is an error too.
+    fake.answer(|cmd, _| if cmd == "stream_manager_act" { Err("Sign in to Twitch first".into()) } else { Ok(Value::Null) });
+    let failed = run(&fake, "/endpoll").await;
+    assert_eq!(toast(&failed, ToastKind::Error), ["Sign in to Twitch first"]);
+}
+
+#[tokio::test]
+async fn manager_commands_go_through_the_windows_door() {
+    let cases: &[(&str, Value)] = &[
+        ("/endpoll", json!({ "kind": "end_poll", "show_results": true })),
+        ("/cancelpoll", json!({ "kind": "end_poll", "show_results": false })),
+        ("/deletepoll", json!({ "kind": "end_poll", "show_results": false })),
+        ("/lockprediction", json!({ "kind": "lock_prediction" })),
+        ("/cancelprediction", json!({ "kind": "cancel_prediction" })),
+        ("/completeprediction 2", json!({ "kind": "resolve_prediction_pick", "pick": "2" })),
+        ("/unraid", json!({ "kind": "cancel_raid" })),
+        ("/settitle Chill stream", json!({ "kind": "save_info", "draft": { "title": "Chill stream" }, "fields": ["title"] })),
+        ("/raid bob", json!({ "kind": "raid", "target_id": "7", "target_login": "bob", "target_name": "Bob" })),
+    ];
+    for (line, action) in cases {
+        let fake = Fake::new();
+        let o = run(&fake, line).await;
+        assert_eq!(
+            fake.calls("stream_manager_act"),
+            vec![json!({ "channelId": "42", "channelLogin": "chan", "action": action })],
+            "{line}"
+        );
+        assert_eq!(toast(&o, ToastKind::Success), vec!["Done in Rust"], "{line}");
+        for old in ["get_active_poll", "end_poll", "finish_prediction", "start_raid", "cancel_raid", "update_channel_info", "slash_raid_now"] {
+            assert!(fake.calls(old).is_empty(), "{line} still calls {old}");
+        }
+    }
+    // /raidsend, for the broadcaster.
+    let fake = Fake::new();
+    fake.login_as("chan");
+    run_in(&fake, "chan", "/raidsend").await;
+    assert_eq!(fake.calls("stream_manager_act")[0]["action"], json!({ "kind": "raid_now" }));
+}
+
+#[tokio::test]
+async fn setgame_needs_the_exact_category() {
+    let fake = Fake::new();
+    fake.answer(|cmd, a| match cmd {
+        "search_categories" => Ok(json!([
+            { "id": "1", "name": "Elden Ring Nightreign", "box_art_url": "x" },
+            { "id": "2", "name": "Elden Ring", "box_art_url": "y" },
+        ])),
+        _ => default_answer(cmd, a),
+    });
+    run(&fake, "/setgame elden ring").await;
+    assert_eq!(
+        fake.calls("stream_manager_act")[0]["action"],
+        json!({ "kind": "save_info", "draft": { "title": "", "category": { "id": "2", "name": "Elden Ring", "box_art_url": "y" } }, "fields": ["category"] })
+    );
+    let fake = Fake::new();
+    fake.answer(|cmd, _| match cmd {
+        "search_categories" => Ok(json!([{ "id": "1", "name": "Elden Ring" }, { "id": "3", "name": "Eldest" }])),
+        _ => Ok(Value::Null),
+    });
+    let o = run(&fake, "/setgame elden").await;
+    assert_eq!(toast(&o, ToastKind::Error), vec!["No category named elden. Did you mean: Elden Ring, Eldest?"]);
+    assert!(fake.calls("stream_manager_act").is_empty());
+    assert_eq!(pick_category(&json!([]), "zzz"), Err("No category named zzz".to_string()));
+}
+
+#[tokio::test]
+async fn commands_that_change_the_manager_tell_it_to_read_again() {
+    for line in [
+        "/slow 10", "/slowoff", "/followers 10m", "/followersoff", "/subscribers", "/uniquechatoff", "/emoteonly",
+        "/shield", "/shieldoff", "/announce hi", "/announceblue hi", "/commercial 30",
+    ] {
+        let fake = Fake::new();
+        run(&fake, line).await;
+        assert_eq!(fake.calls("stream_manager_publish"), vec![json!({ "channelId": "42" })], "{line}");
+        // A failure says nothing changed.
+        let failing = Fake::new();
+        failing.answer(|cmd, _| if cmd == "stream_manager_publish" { Ok(Value::Null) } else { Err("refused".into()) });
+        run(&failing, line).await;
+        assert!(failing.calls("stream_manager_publish").is_empty(), "{line} published after a failure");
+    }
 }
 
 #[tokio::test]
@@ -450,16 +524,6 @@ async fn slow_and_followers_read_their_lengths() {
 }
 
 #[tokio::test]
-async fn deletepoll_archives_the_running_poll() {
-    let fake = Fake::new();
-    // Polls are the channel owner's to end.
-    *fake.role.lock().unwrap() = Role::Broadcaster;
-    let o = run(&fake, "/deletepoll").await;
-    assert_eq!(fake.calls("end_poll"), vec![json!({ "broadcasterId": "42", "pollId": "poll-9", "status": "ARCHIVED" })]);
-    assert_eq!(toast(&o, ToastKind::Success), vec!["Poll canceled"]);
-}
-
-#[tokio::test]
 async fn vote_followage_and_gift_pass_their_arguments() {
     let fake = Fake::new();
     run(&fake, "/vote 2").await;
@@ -536,7 +600,7 @@ async fn broadcaster_only_commands_refuse_viewers_before_calling_twitch() {
     let o = run(&fake, "/raidsend").await;
     assert_eq!(toast(&o, ToastKind::Error), vec!["/raidsend is for the broadcaster of this channel"]);
     run(&fake, "/massunban").await;
-    assert!(fake.calls("slash_raid_now").is_empty());
+    assert!(fake.calls("stream_manager_act").is_empty());
     assert!(fake.calls("slash_mass_unban_start").is_empty());
 }
 
@@ -963,14 +1027,31 @@ fn uptime_reads_hours_and_minutes() {
 #[tokio::test]
 async fn phones_refuse_desktop_only_commands_and_the_builders() {
     let fake = Fake::new();
-    for line in ["/proc notepad", "/popup", "/poll", "/prediction", "/screenshot"] {
+    for line in ["/proc notepad", "/popup", "/screenshot"] {
         let o = dispatch(ctx(&fake, "chan", Platform::Android), line.to_string(), 0).await;
         let typed = line.split_whitespace().next().unwrap();
         assert_eq!(toast(&o, ToastKind::Info), vec![format!("{typed} works in the desktop app")], "{line}");
         assert!(o.ui.is_none());
     }
+    // Android has the builder; the iPhone does not yet.
+    for line in ["/poll", "/prediction"] {
+        let o = dispatch(ctx(&fake, "chan", Platform::Ios), line.to_string(), 0).await;
+        assert_eq!(toast(&o, ToastKind::Info), vec![format!("{line} works in the desktop and Android apps")]);
+        assert!(o.ui.is_none());
+    }
+    let o = dispatch(ctx(&fake, "chan", Platform::Android), "/prediction".to_string(), 0).await;
+    assert_eq!(o.ui, Some(Ui::OpenPollComposer { channel: "chan".into(), composer: "prediction".into() }));
     let o = run(&fake, "/poll").await;
     assert_eq!(o.ui, Some(Ui::OpenPollComposer { channel: "chan".into(), composer: "poll".into() }));
+    assert_eq!(
+        fake.calls("stream_manager_can").last().cloned(),
+        Some(json!({ "channelId": "42", "channelLogin": "chan", "section": "poll" }))
+    );
+    // Rust's refusal is the toast, and the builder stays shut.
+    fake.answer(|cmd, _| if cmd == "stream_manager_can" { Err("This needs a moderator or editor".into()) } else { Ok(Value::Null) });
+    let o = run(&fake, "/poll").await;
+    assert_eq!(toast(&o, ToastKind::Error), vec!["This needs a moderator or editor"]);
+    assert!(o.ui.is_none());
 }
 
 #[tokio::test]

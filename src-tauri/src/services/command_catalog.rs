@@ -16,7 +16,7 @@ const SONG_ID: u8 = 8;
 pub struct Builtin {
     pub name: &'static str,
     pub aliases: &'static [&'static str],
-    /// "Everyone" | "Moderator" | "Chat Flow" | "Engagement" | "Broadcaster"
+    /// "Everyone" | "Moderator" | "Chat Flow" | "Engagement" | "Channel" | "Broadcaster"
     pub category: &'static str,
     pub usage: &'static str,
     pub description: &'static str,
@@ -89,10 +89,10 @@ pub static BUILTINS: &[Builtin] = &[
     cmd("emoteonlyoff", &[], "Chat Flow", "/emoteonlyoff", "Disable emote only mode", "", &[], 0),
     cmd("announce", &[], "Engagement", "/announce <message>", "Highlight a message for chat's attention", "The message shows with a colored band in every viewer’s chat, the same as the Twitch /announce.", &["/announce Raffle winners in five minutes"], 0),
     cmd("shoutout", &[], "Engagement", "/shoutout <username>", "Share another streamer's channel", "Posts an official Twitch shoutout with the channel card. Twitch allows one every two minutes, and the same person once per hour.", &["/shoutout someone"], 0),
-    cmd("poll", &[], "Broadcaster", "/poll", "Open the poll builder. Channel owner only, because Twitch does not let moderators run polls through the API", "", &[], 0),
+    cmd("poll", &[], "Channel", "/poll", "Open the poll builder. Broadcaster, editors and moderators", "", &[], 0),
     cmd("commercial", &[], "Broadcaster", "/commercial [seconds]", "Run a commercial for all viewers (30-180s)", "Runs an ad break for viewers without ad-free status. Length must be 30, 60, 90, 120, 150 or 180 seconds.", &["/commercial", "/commercial 90"], 0),
     cmd("goal", &[], "Broadcaster", "/goal", "Make or edit a sub or follower goal", "Opens your Creator Goals page on Twitch, the only place goals can be made or changed.", &[], 0),
-    cmd("prediction", &[], "Broadcaster", "/prediction", "Open the prediction builder. Channel owner only, because Twitch does not let moderators run predictions through the API", "", &[], 0),
+    cmd("prediction", &[], "Channel", "/prediction", "Open the prediction builder. Broadcaster, editors and moderators", "", &[], 0),
     cmd("raid", &[], "Broadcaster", "/raid <channel>", "Send viewers to another live channel", "Starts the raid countdown. Everyone watching moves to the target when it fires. Cancel with /unraid.", &["/raid someone"], 0),
     cmd("unraid", &["raidcancel"], "Broadcaster", "/unraid", "Cancel the active raid", "", &[], 0),
     cmd("marker", &[], "Broadcaster", "/marker [description]", "Add a stream marker", "Adds a marker at the current point in the VOD so you can find the moment later in the highlighter.", &["/marker", "/marker great play"], 0),
@@ -104,8 +104,8 @@ pub static BUILTINS: &[Builtin] = &[
     cmd("clip", &["createclip"], "Everyone", "/clip", "Create a clip of the last 30 seconds of the current stream", "Creates a clip through Twitch and copies the link. The clip editor opens in your browser if you want to trim it.", &[], 0),
     cmd("chatters", &[], "Everyone", "/chatters", "Show how many chatters are connected right now", "", &[], LOCAL),
     cmd("ignore", &[], "Everyone", "/ignore <user>", "Hide a user from your chat everywhere (local only)", "Hides that person in every StreamNook chat. Twitch never knows. Undo it with /unignore.", &["/ignore someuser"], LOCAL),
-    cmd("settitle", &[], "Broadcaster", "/settitle <title>", "Set the stream title (broadcaster only)", "", &["/settitle Chill Sunday stream"], 0),
-    cmd("setgame", &[], "Broadcaster", "/setgame <category>", "Set the stream category by name (broadcaster only)", "The name is matched against the Twitch category list, so spell it the way Twitch does.", &["/setgame Just Chatting", "/setgame Elden Ring"], 0),
+    cmd("settitle", &[], "Channel", "/settitle <title>", "Set the stream title. Broadcaster and editors", "", &["/settitle Chill Sunday stream"], 0),
+    cmd("setgame", &[], "Channel", "/setgame <category>", "Set the stream category by name. Broadcaster and editors", "The name has to match a Twitch category, in any case. A near miss lists the closest ones.", &["/setgame Just Chatting", "/setgame Elden Ring"], 0),
     cmd("overlay", &[], "Everyone", "/overlay [channel]", "Float this (or another) channel in a see-through always-on-top chat window", "A see-through, always-on-top chat you can park over a game. Ctrl+Alt+N makes every overlay click-through or clickable again.", &["/overlay", "/overlay someone"], LOCAL | DESKTOP_ONLY),
     cmd("uptime", &[], "Everyone", "/uptime", "Show this channel's current stream uptime", "", &[], LOCAL),
     cmd("song", &[], "Everyone", "/song", "Identify the music currently playing in the stream", "Listens to a few seconds of the stream audio and looks the track up. Nothing is posted to chat unless you paste the result.", &[], LOCAL | SONG_ID),
@@ -116,11 +116,11 @@ pub static BUILTINS: &[Builtin] = &[
     cmd("banid", &[], "Moderator", "/banid <userID> [reason]", "Ban by Twitch user ID (works on suspended accounts that /ban no longer reaches)", "", &["/banid 12345678 ban evasion"], 0),
     cmd("nuke", &[], "Moderator", "/nuke <pattern> <action> <past[:future]>", "Mass-action by phrase or /regex/. action = delete | ban | duration. Example: /nuke spam ban 5m:1m. Use /nuke stop to end a running window early.", "Looks back over the past window and acts on every message that matches. A future window keeps catching new matches for that long. The preview above the box shows how many messages and people it would hit before you press Enter.", &["/nuke spam ban 5m:1m", "/nuke /bad\\s*word/ delete 10m", "/nuke stop"], 0),
     cmd("undo", &[], "Moderator", "/undo", "Reverse the most recent /nuke on this channel (bans and timeouts only, deletes are permanent)", "Unbans or untimes-out everyone the last /nuke hit. Deleted messages cannot come back.", &[], 0),
-    cmd("endpoll", &[], "Broadcaster", "/endpoll", "End the running poll and leave the result on screen. Channel owner only", "", &[], 0),
-    cmd("cancelpoll", &["deletepoll"], "Broadcaster", "/cancelpoll", "Cancel the running poll and hide it entirely. Channel owner only", "", &[], 0),
-    cmd("lockprediction", &[], "Broadcaster", "/lockprediction", "Stop taking bets on the running prediction. Channel owner only", "", &[], 0),
-    cmd("cancelprediction", &[], "Broadcaster", "/cancelprediction", "Cancel the running prediction and refund everyone. Channel owner only", "", &[], 0),
-    cmd("completeprediction", &[], "Broadcaster", "/completeprediction <number|title>", "Pay out the running prediction to a winning outcome, by position or name. Channel owner only", "", &["/completeprediction 1", "/completeprediction Yes"], 0),
+    cmd("endpoll", &[], "Channel", "/endpoll", "End the running poll and leave the result on screen. Broadcaster, editors and moderators", "", &[], 0),
+    cmd("cancelpoll", &["deletepoll"], "Channel", "/cancelpoll", "Cancel the running poll and hide it entirely. Broadcaster, editors and moderators", "", &[], 0),
+    cmd("lockprediction", &[], "Channel", "/lockprediction", "Stop taking bets on the running prediction. Broadcaster, editors and moderators", "", &[], 0),
+    cmd("cancelprediction", &[], "Channel", "/cancelprediction", "Cancel the running prediction and refund everyone. Broadcaster, editors and moderators", "", &[], 0),
+    cmd("completeprediction", &[], "Channel", "/completeprediction <number|title>", "Pay out the running prediction to a winning outcome, by position or name. Broadcaster, editors and moderators", "", &["/completeprediction 1", "/completeprediction Yes"], 0),
     cmd("pin", &[], "Moderator", "/pin <id|@user> [duration] | /pin <message>", "Pin a message by its id, pin that person's most recent one, or send a message and pin it. Length from 30s to 30m for an id or a user; leave it off to pin until the stream ends", "Pinned messages sit above chat for everyone until the timer ends or a mod runs /unpin. A message you send with /pin stays pinned until the stream ends.", &["/pin @someuser", "/pin @someuser 5m", "/pin Giveaway starts at the top of the hour"], 0),
     cmd("unpin", &[], "Moderator", "/unpin", "Remove the currently pinned message", "", &[], 0),
     cmd("blockterm", &[], "Moderator", "/blockterm <phrase>", "Add a phrase to the channel's AutoMod blocked terms", "AutoMod holds any message with that phrase for moderator review.", &["/blockterm free followers"], 0),
@@ -155,7 +155,7 @@ pub static BUILTINS: &[Builtin] = &[
     cmd("reply", &["msgreply"], "Everyone", "/reply <@user> <message>", "Reply to someone's last message", "", &["/reply @someuser good point"], 0),
     cmd("say", &[], "Everyone", "/say <text>", "Send text exactly as typed, skipping your custom commands", "", &["/say !discord"], 0),
     cmd("shrug", &[], "Everyone", "/shrug [message]", "Send your message with ¯\\_(ツ)_/¯ on the end", "", &["/shrug", "/shrug no idea"], 0),
-    cmd("lurk", &[], "Everyone", "/lurk [note]", "Tell chat you are lurking", "", &["/lurk", "/lurk making dinner"], 0),
+    cmd("lurk", &[], "Everyone", "/lurk [note]", "Tell chat you are lurking, with a random line each time", "", &["/lurk", "/lurk making dinner"], 0),
     cmd("squishy", &[], "Everyone", "/squishy", "Post the notsquishY copypasta", "", &[], 0),
     cmd("redeem", &[], "Everyone", "/redeem", "Open this channel's rewards", "", &[], LOCAL | DESKTOP_ONLY),
     cmd("reconnect", &["rejoin"], "Everyone", "/reconnect", "Reconnect this chat without restarting the stream", "", &[], LOCAL),
@@ -255,17 +255,20 @@ pub fn category_label(category: &str) -> &'static str {
         "Moderator" => "Moderator",
         "Chat Flow" => "Chat modes",
         "Engagement" => "Engagement",
+        "Channel" => "Channel",
         "Broadcaster" => "Broadcaster",
         _ => "Your commands",
     }
 }
 
-/// Everyone and custom commands never lock; Broadcaster commands need the
-/// broadcaster (Twitch takes them only on the channel owner's own token, so a
-/// moderator is refused too); the rest need a moderator or the broadcaster.
+/// Everyone and custom commands never lock; Channel commands never lock either
+/// (editors run them, and chat cannot tell an editor: Rust refuses in words
+/// when the account may not); Broadcaster commands need the broadcaster
+/// (Twitch takes them only on the channel owner's own token, so a moderator is
+/// refused too); the rest need a moderator or the broadcaster.
 pub fn lock_for(category: &str, is_moderator: bool, is_broadcaster: bool) -> Option<&'static str> {
     match category {
-        "Everyone" | "Custom" => None,
+        "Everyone" | "Custom" | "Channel" => None,
         "Broadcaster" if !is_broadcaster => Some("Needs the broadcaster in this channel"),
         _ if !is_moderator && !is_broadcaster => Some("Needs moderator status in this channel"),
         _ => None,
@@ -399,6 +402,22 @@ mod tests {
         assert!(names.len() > 100);
         let ours: Vec<&str> = BUILTINS.iter().map(|b| b.name).collect();
         assert_eq!(names, ours, "the command table drifted from src/utils/chatCommands.ts");
+        // Each row's words and category match too.
+        let rows: Vec<&str> = page[start..end].lines().filter(|l| l.trim().starts_with("{ name: '")).collect();
+        for (row, b) in rows.iter().zip(BUILTINS) {
+            let escaped = b.description.replace('\\', "\\\\");
+            let description = format!("description: '{}'", escaped.replace('\'', "\\'"));
+            let description_dq = format!("description: \"{}\"", escaped.replace('"', "\\\""));
+            assert!(row.contains(&description) || row.contains(&description_dq), "{}: description drifted", b.name);
+            assert!(row.contains(&format!("category: '{}'", b.category)), "{}: category drifted", b.name);
+        }
+    }
+
+    #[test]
+    fn every_category_has_a_header() {
+        for b in BUILTINS {
+            assert_ne!(category_label(b.category), "Your commands", "{} has an unknown category", b.name);
+        }
     }
 
     #[test]
@@ -423,6 +442,10 @@ mod tests {
         assert_eq!(owner.iter().find(|r| r.name == "editor").unwrap().lock, None);
         let raid = catalog(true, false, false, &[], "raidsend");
         assert_eq!(raid[0].lock.as_deref(), Some("Needs the broadcaster in this channel"));
+        // Editors run Channel commands, and chat cannot tell an editor: no lock.
+        let title = catalog(true, false, false, &[], "settitle");
+        assert_eq!((title[0].category.as_str(), title[0].lock.as_deref()), ("Channel", None));
+        assert_eq!(catalog(true, false, false, &[], "/poll")[0].lock, None);
         assert!(catalog(true, false, false, &[], "mods").iter().all(|r| r.lock.is_none() || r.category != "Everyone"));
     }
 

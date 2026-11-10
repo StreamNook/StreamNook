@@ -24,6 +24,11 @@ pub fn portable(settings: &Settings) -> Option<Value> {
             obj.remove(*key);
         }
     }
+    // The poll builder's recent lists live beside settings, in Rust's own
+    // file, and travel with every backup. Carried over first, so a backup
+    // taken before the manager ever opened still holds the old lists.
+    crate::services::stream_manager::seed_poll_recents(&settings.extra);
+    crate::services::stream_manager::with_poll_recents(&mut value, &crate::services::stream_manager::poll_recents());
     Some(value)
 }
 

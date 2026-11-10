@@ -552,6 +552,12 @@ impl ChannelPointsWebSocketService {
                             None
                         };
 
+                        // A poll, prediction or reward that changed state: an
+                        // open Stream manager for that channel reads again.
+                        if let Some(cid) = channel_id.as_deref() {
+                            crate::services::stream_manager::pubsub_event(topic_type, cid, &message_data);
+                        }
+
                         match topic_type {
                             "community-points-user-v1" => {
                                 Self::handle_points_event(

@@ -428,6 +428,15 @@ impl Limiter {
         self.insert_send(now, limit);
     }
 
+    /// The role USERSTATE last gave `as_login` in `channel`, or None before
+    /// one came or while the limiter speaks for another account.
+    fn known_role(&self, as_login: &str, channel: &str) -> Option<Role> {
+        if self.own_login.as_deref() != Some(as_login.trim().to_ascii_lowercase().as_str()) {
+            return None;
+        }
+        self.channels.get(&key(channel)).and_then(|f| f.role)
+    }
+
     /// The account's standing in `channel` for the room-mode words: unknown
     /// until USERSTATE says, except in the account's own channel.
     fn standing(&self, channel: &str) -> Standing {
@@ -589,6 +598,14 @@ pub fn record_sent(channel: &str, text: &str) {
         return;
     }
     limiter().record(channel, text, Instant::now());
+}
+
+/// What USERSTATE last said `as_login` is in `channel`; None before it said,
+/// or when chat is signed in as someone else.
+pub fn known_role(as_login: &str, channel: &str) -> Option<Role> {
+    let mut l = limiter();
+    own_login_hint(&mut l);
+    l.known_role(as_login, channel)
 }
 
 /// The limits and room modes in force for `channel`.
@@ -1023,6 +1040,16 @@ mod tests {
         for (end, budget) in &l.sends {
             assert!(l.in_window(*end) <= *budget);
         }
+    }
+
+    #[test]
+    fn known_role_waits_for_userstate_and_the_right_account() {
+        let mut l = lim();
+        l.own_login = Some("me".into());
+        assert_eq!(l.known_role("me", "chan"), None);
+        l.facts("chan").role = Some(Role::Moderator);
+        assert_eq!(l.known_role("Me", "#Chan"), Some(Role::Moderator));
+        assert_eq!(l.known_role("someoneelse", "chan"), None);
     }
 
     #[test]

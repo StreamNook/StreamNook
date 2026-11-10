@@ -6,6 +6,16 @@ use crate::rt::AppHandle;
 use crate::services::stream_manager::{self, ActOutcome, Action, InfoCheck, QueueView, RaidTarget, StreamInfoDraft, StreamManagerView};
 use tauri::{Emitter, State};
 
+/// Carry the poll recents settings kept over to Rust's own file, once per run.
+fn seed_recents(state: &AppState) {
+    static SEEDED: std::sync::Once = std::sync::Once::new();
+    SEEDED.call_once(|| {
+        // Cloned first: the recents lock is never taken while settings are held.
+        let extra = state.settings.lock().map(|s| s.extra.clone()).unwrap_or_default();
+        stream_manager::seed_poll_recents(&extra);
+    });
+}
+
 /// Everything the manager shows for a Twitch channel, for the signed-in
 /// account's role there.
 #[tauri::command]
@@ -14,6 +24,7 @@ pub async fn get_stream_manager(
     channel_id: String,
     channel_login: String,
 ) -> Result<StreamManagerView, String> {
+    seed_recents(&state);
     stream_manager::view(&state.twitch_auth, &channel_id, &channel_login).await
 }
 
@@ -25,7 +36,8 @@ pub async fn check_stream_info(channel_id: String, draft: StreamInfoDraft) -> Re
 
 /// Run one stream manager action. The answer carries the fresh view; every
 /// other window showing this channel's manager gets it as
-/// `stream-manager-state`.
+/// `stream-manager-state`. With `expected_user_id`, an action refuses when
+/// another Twitch account is signed in by now.
 #[tauri::command]
 pub async fn stream_manager_act(
     app: AppHandle,
@@ -33,8 +45,11 @@ pub async fn stream_manager_act(
     channel_id: String,
     channel_login: String,
     action: Action,
+    expected_user_id: Option<String>,
 ) -> Result<ActOutcome, String> {
-    let outcome = stream_manager::act(&state.twitch_auth, &channel_id, &channel_login, action).await;
+    seed_recents(&state);
+    let outcome =
+        stream_manager::act(&state.twitch_auth, &channel_id, &channel_login, action, expected_user_id.as_deref()).await;
     if let Some(view) = &outcome.view {
         let _ = app.emit(
             "stream-manager-state",
@@ -42,6 +57,25 @@ pub async fn stream_manager_act(
         );
     }
     Ok(outcome)
+}
+
+/// A window's manager surface (panel, builder, window, Tools menu, phone
+/// sheet) opened on a channel (`on`) or closed. While any surface shows a
+/// channel, Rust reads it again by itself and sends `stream-manager-state`.
+/// `seq` only goes up within a page; an older call for the same surface is
+/// ignored.
+#[tauri::command]
+pub async fn stream_manager_watch(
+    window: crate::rt::Window,
+    surface: String,
+    channel_id: String,
+    channel_login: String,
+    on: bool,
+    seq: u64,
+) -> Result<(), String> {
+    let channel = (on && !channel_id.is_empty()).then(|| (channel_id, channel_login));
+    stream_manager::watch(window.label(), &surface, channel, seq);
+    Ok(())
 }
 
 /// The channel points redemptions waiting in a channel, grouped by reward.

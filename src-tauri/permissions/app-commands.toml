@@ -368,6 +368,7 @@ allow = [
   "get_stream_manager",
   "check_stream_info",
   "stream_manager_act",
+  "stream_manager_watch",
   "get_reward_queue",
   "search_raid_targets",
   "discord_presence_preview",

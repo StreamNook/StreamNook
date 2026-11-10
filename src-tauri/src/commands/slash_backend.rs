@@ -158,8 +158,6 @@ impl TauriBackend {
             "remove_channel_moderator" => unit(tw::remove_channel_moderator(s(&a, "broadcasterId"), s(&a, "targetUserId")).await),
             "add_channel_vip" => unit(tw::add_channel_vip(s(&a, "broadcasterId"), s(&a, "targetUserId")).await),
             "remove_channel_vip" => unit(tw::remove_channel_vip(s(&a, "broadcasterId"), s(&a, "targetUserId")).await),
-            "start_raid" => unit(tw::start_raid(s(&a, "broadcasterId"), s(&a, "targetUserId")).await),
-            "cancel_raid" => unit(tw::cancel_raid(s(&a, "broadcasterId")).await),
             "create_stream_marker" => unit(tw::create_stream_marker(s(&a, "userId"), os(&a, "description")).await),
             "update_user_chat_color" => unit(tw::update_user_chat_color(s(&a, "targetUserId"), s(&a, "color")).await),
             "block_user" => unit(tw::block_user(s(&a, "targetUserId")).await),
@@ -194,14 +192,34 @@ impl TauriBackend {
             "update_shield_mode" => {
                 unit(tw::update_shield_mode(s(&a, "broadcasterId"), a["isActive"].as_bool().unwrap_or(false)).await)
             }
-            "update_channel_info" => unit(
-                crate::commands::moderation_tools::update_channel_info(s(&a, "broadcasterId"), os(&a, "title"), os(&a, "gameName")).await,
-            ),
-            "get_active_poll" => to(tw::get_active_poll(s(&a, "broadcasterId")).await),
-            "end_poll" => tw::end_poll(s(&a, "broadcasterId"), s(&a, "pollId"), s(&a, "status")).await,
-            "finish_prediction" => {
-                let action = serde_json::from_value(a["action"].clone()).map_err(|e| e.to_string())?;
-                to(tw::finish_prediction(s(&a, "broadcasterId"), action, os(&a, "outcome")).await)
+            // Typed Stream manager commands go through the window's one door.
+            "stream_manager_act" => {
+                let action: crate::services::stream_manager::Action =
+                    serde_json::from_value(a["action"].clone()).map_err(|e| e.to_string())?;
+                let outcome = crate::commands::stream_manager::stream_manager_act(
+                    app,
+                    self.state(),
+                    s(&a, "channelId"),
+                    s(&a, "channelLogin"),
+                    action,
+                    None,
+                )
+                .await?;
+                to(Ok(outcome))
+            }
+            "stream_manager_can" => {
+                let section: crate::services::stream_manager::Section =
+                    serde_json::from_value(a["section"].clone()).map_err(|e| e.to_string())?;
+                let auth = self.state().twitch_auth.clone();
+                unit(crate::services::stream_manager::can_open(&auth, &s(&a, "channelId"), &s(&a, "channelLogin"), section).await)
+            }
+            "stream_manager_publish" => {
+                crate::services::stream_manager::changed_outside(&s(&a, "channelId"));
+                Ok(Value::Null)
+            }
+            "search_categories" => {
+                let limit = ou32(&a, "limit").unwrap_or(10);
+                to(TwitchService::search_categories(&s(&a, "query"), limit).await.map_err(|e| e.to_string()))
             }
             "add_blocked_term" => tw::add_blocked_term(s(&a, "broadcasterId"), s(&a, "text")).await,
             "remove_blocked_term" => unit(tw::remove_blocked_term(s(&a, "broadcasterId"), s(&a, "text")).await),
@@ -332,7 +350,6 @@ impl TauriBackend {
             "slash_low_trust" => to(sl::slash_low_trust(s(&a, "channel")).await),
             "slash_shared_chat" => to(sl::slash_shared_chat(s(&a, "broadcasterId"), s(&a, "channel")).await),
             "slash_raid_candidates" => to(sl::slash_raid_candidates(self.state()).await),
-            "slash_raid_now" => unit(sl::slash_raid_now(s(&a, "broadcasterId")).await),
             "slash_lead_mod" => {
                 to(sl::slash_lead_mod(s(&a, "broadcasterId"), s(&a, "target"), a["assign"].as_bool().unwrap_or(false)).await)
             }

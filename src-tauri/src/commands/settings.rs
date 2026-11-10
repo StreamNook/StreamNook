@@ -957,13 +957,9 @@ pub async fn export_settings(path: String, state: State<'_, AppState>) -> Result
 /// The backup file's text: every setting but this machine's session and login keys.
 fn portable_settings_json(state: &AppState) -> Result<String, String> {
     let settings = { state.settings.lock().unwrap().clone() };
-    let mut value = serde_json::to_value(&settings)
-        .map_err(|e| format!("Failed to serialize settings: {}", e))?;
-    if let Some(obj) = value.as_object_mut() {
-        for key in NON_PORTABLE_KEYS {
-            obj.remove(*key);
-        }
-    }
+    // One function for both the backup file and the daily copies.
+    let value = crate::services::settings_backups::portable(&settings)
+        .ok_or_else(|| "Failed to serialize settings".to_string())?;
     serde_json::to_string_pretty(&value).map_err(|e| format!("Failed to serialize settings: {}", e))
 }
 
@@ -1074,6 +1070,9 @@ pub(crate) fn apply_imported_settings(
         let mut state_settings = state.settings.lock().map_err(|e| e.to_string())?;
         *state_settings = imported.clone();
     }
+    // The backup's recent polls and predictions go in front of the ones kept
+    // here (settings are not held while the recents file is written).
+    crate::services::stream_manager::import_poll_recents(incoming_obj);
     // The same refresh set as every other write path, so imported reminders,
     // chat rules and the notification polls apply without waiting for a save.
     after_settings_change(&imported, favorites_changed, Some(state.layout_service.as_ref()));
@@ -1564,6 +1563,15 @@ mod patch_tests {
         assert!(import.contains("favorite_channels::repair(&mut imported);"));
         assert!(import.contains("favorite_channels::favorites_changed(&current, &imported)"));
         assert!(import.contains("crate::services::home_snapshot::note_discover_inputs_changed();"));
+        // The poll builder's recents ride every backup both ways.
+        assert!(import.contains("crate::services::stream_manager::import_poll_recents(incoming_obj);"));
+        let export = &src[src.find("fn portable_settings_json(").unwrap()..];
+        let export = &export[..export.find("\n}\n").unwrap()];
+        assert!(export.contains("crate::services::settings_backups::portable(&settings)"));
+        let backups = include_str!("../services/settings_backups.rs").replace("\r\n", "\n");
+        let portable = &backups[backups.find("pub fn portable(").unwrap()..];
+        let portable = &portable[..portable.find("\n}\n").unwrap()];
+        assert!(portable.find("seed_poll_recents(&settings.extra)").unwrap() < portable.find("with_poll_recents(").unwrap());
     }
 
     #[test]

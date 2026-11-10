@@ -45,6 +45,7 @@ use commands::image_upload::{
 };
 use commands::stream_manager::{
     check_stream_info, get_reward_queue, get_stream_manager, search_raid_targets, stream_manager_act,
+    stream_manager_watch,
 };
 use commands::{
     accounts::*, activity_history::*, announcements::*, app::*, badge_metadata::*, badge_service::*,
@@ -1038,6 +1039,11 @@ pub fn run() {
         // relay sessions, and nothing in the new page knows their ids, so the
         // sessions are released as it starts loading. The first load finds none.
         .on_page_load(|webview, payload| {
+            // A new page shows no Stream manager until it says so, on every
+            // platform: the old page's surfaces would keep Rust reading.
+            if payload.event() == tauri::webview::PageLoadEvent::Started {
+                services::stream_manager::clear_label(webview.label());
+            }
             // A reload drops the old page's open dialogs: its wrapper never got
             // to say they closed, so Performance mode would read the window as
             // in front until it closed.
@@ -2316,6 +2322,7 @@ pub fn run() {
             get_stream_manager,
             check_stream_info,
             stream_manager_act,
+            stream_manager_watch,
             get_reward_queue,
             search_raid_targets,
             // Discord Rich Presence (desktop only)
@@ -2941,6 +2948,7 @@ pub fn run() {
                 services::app_exit::note_window_destroyed(&label);
                 services::performance_mode::note_window_destroyed(&label);
                 services::whisper_claims::forget_window(&label);
+                services::stream_manager::clear_label(&label);
                 // A destroyed webview never runs its React cleanup, so any
                 // chat consumer claims it still holds would pin those channels
                 // JOINed (and their IRC traffic flowing) forever. Sweep them;

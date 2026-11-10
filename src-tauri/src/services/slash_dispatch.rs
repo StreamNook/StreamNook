@@ -22,8 +22,9 @@
 //!
 //! - `open_user_card { user_id, login, display_name }`: `/user`, `/usercard`.
 //! - `clear_local_chat`: `/clearmessages` empties this room's visible rows.
-//! - `open_poll_composer { channel, composer }`: desktop `/poll`, `/prediction`
-//!   (`composer` is "poll" or "prediction").
+//! - `open_poll_composer { channel, composer }`: desktop and Android `/poll`,
+//!   `/prediction`, once Rust says the account may run one here (`composer`
+//!   is "poll" or "prediction").
 //! - `create_clip`: `/clip [title]` clips the room it was typed in.
 //! - `identify_song`: `/song` listens to the player's audio.
 //! - `open_songs`: `/songs` opens Your songs, every song you identified.
@@ -1074,8 +1075,13 @@ fn dispatch_with(ctx: Ctx, text: String, depth: u32, allow_custom: bool) -> BoxF
         }
 
         let def = find_builtin(&command);
-        if ctx.platform.phone() && (def.is_some_and(|d| d.desktop_only()) || command == "poll" || command == "prediction") {
+        if ctx.platform.phone() && def.is_some_and(|d| d.desktop_only()) {
             o.info(format!("/{typed} works in the desktop app"));
+            return o;
+        }
+        // The iPhone app has no poll or prediction builder yet.
+        if ctx.platform == Platform::Ios && (command == "poll" || command == "prediction") {
+            o.info(format!("/{typed} works in the desktop and Android apps"));
             return o;
         }
 
@@ -1414,20 +1420,24 @@ async fn core(c: &Call<'_>, o: &mut Outcome) -> Result<Flow, String> {
             let secs = (if c.args.is_empty() { Some(30) } else { js_parse_int(c.arg(0)) }).unwrap_or(30);
             b.invoke("update_chat_settings", modes(json!({ "slow_mode": true, "slow_mode_wait_time": secs }))).await?;
             o.ok(format!("Slow mode enabled ({secs}s)"));
+            manager_changed(c).await;
         }
         "slowoff" => {
             b.invoke("update_chat_settings", modes(json!({ "slow_mode": false }))).await?;
             o.ok("Slow mode disabled");
+            manager_changed(c).await;
         }
         "followers" => {
             let raw = if c.arg(0).is_empty() { "0" } else { c.arg(0) };
             let minutes = followers_minutes(raw).map(Value::from).unwrap_or(Value::Null);
             b.invoke("update_chat_settings", modes(json!({ "follower_mode": true, "follower_mode_duration": minutes }))).await?;
             o.ok("Followers-only mode enabled");
+            manager_changed(c).await;
         }
         "followersoff" => {
             b.invoke("update_chat_settings", modes(json!({ "follower_mode": false }))).await?;
             o.ok("Followers-only mode disabled");
+            manager_changed(c).await;
         }
         "subscribers" | "subscribersoff" | "uniquechat" | "uniquechatoff" | "emoteonly" | "emoteonlyoff" => {
             let (field, on, done) = match c.command {
@@ -1442,6 +1452,7 @@ async fn core(c: &Call<'_>, o: &mut Outcome) -> Result<Flow, String> {
             s.insert(field.to_string(), json!(on));
             b.invoke("update_chat_settings", modes(Value::Object(s))).await?;
             o.ok(done);
+            manager_changed(c).await;
         }
         "announce" | "announceblue" | "announcegreen" | "announceorange" | "announcepurple" => {
             if c.args.is_empty() {
@@ -1455,8 +1466,25 @@ async fn core(c: &Call<'_>, o: &mut Outcome) -> Result<Flow, String> {
                 _ => "purple",
             };
             b.invoke("send_chat_announcement", json!({ "broadcasterId": id, "message": c.from(0), "color": color })).await?;
+            manager_changed(c).await;
         }
-        "shoutout" | "mod" | "unmod" | "vip" | "unvip" | "raid" | "block" | "unblock" => {
+        "raid" => {
+            if c.args.is_empty() {
+                return Ok(Flow::Usage);
+            }
+            if !need_channel(c, o) {
+                return Ok(Flow::Done);
+            }
+            let username = strip_first_at(c.arg(0));
+            match user_or_why(b, &username, format!("User {username} not found")).await {
+                Ok(u) => {
+                    let action = json!({ "kind": "raid", "target_id": u.id, "target_login": u.login, "target_name": u.display_name });
+                    manager_act(c, o, action).await?;
+                }
+                Err(why) => o.err(why),
+            }
+        }
+        "shoutout" | "mod" | "unmod" | "vip" | "unvip" | "block" | "unblock" => {
             if c.args.is_empty() {
                 return Ok(Flow::Usage);
             }
@@ -1467,7 +1495,6 @@ async fn core(c: &Call<'_>, o: &mut Outcome) -> Result<Flow, String> {
                 "unmod" => ("remove_channel_moderator", format!("{username} is no longer a moderator"), true),
                 "vip" => ("add_channel_vip", format!("{username} is now a VIP"), true),
                 "unvip" => ("remove_channel_vip", format!("{username} is no longer a VIP"), true),
-                "raid" => ("start_raid", format!("Raiding {username}"), true),
                 "block" => ("block_user", format!("Blocked {username}"), false),
                 _ => ("unblock_user", format!("Unblocked {username}"), false),
             };
@@ -1484,10 +1511,13 @@ async fn core(c: &Call<'_>, o: &mut Outcome) -> Result<Flow, String> {
             let length = (if c.args.is_empty() { Some(30) } else { js_parse_int(c.arg(0)) }).unwrap_or(30);
             b.invoke("start_commercial", json!({ "broadcasterId": id, "length": length })).await?;
             o.ok(format!("Started {length}s commercial"));
+            manager_changed(c).await;
         }
         "unraid" => {
-            b.invoke("cancel_raid", json!({ "broadcasterId": id })).await?;
-            o.ok("Raid canceled");
+            if !need_channel(c, o) {
+                return Ok(Flow::Done);
+            }
+            manager_act(c, o, json!({ "kind": "cancel_raid" })).await?;
         }
         "marker" => {
             b.invoke("create_stream_marker", json!({ "userId": id, "description": opt(&c.from(0)) })).await?;
@@ -1585,6 +1615,7 @@ async fn core(c: &Call<'_>, o: &mut Outcome) -> Result<Flow, String> {
             let on = c.command == "shield";
             b.invoke("update_shield_mode", json!({ "broadcasterId": id, "isActive": on })).await?;
             o.ok(if on { "Shield mode activated" } else { "Shield mode deactivated" });
+            manager_changed(c).await;
         }
         "me" => return Ok(Flow::PassThrough),
         "clearmessages" => {
@@ -1679,14 +1710,18 @@ async fn core(c: &Call<'_>, o: &mut Outcome) -> Result<Flow, String> {
                 o.info(if title { "Usage: /settitle <title>" } else { "Usage: /setgame <category>" });
                 return Ok(Flow::Done);
             }
-            let args = if title {
-                json!({ "broadcasterId": id, "title": value, "gameName": null })
-            } else {
-                json!({ "broadcasterId": id, "title": null, "gameName": value })
-            };
-            match b.invoke("update_channel_info", args).await {
-                Ok(_) => o.ok(if title { "Stream title updated".to_string() } else { format!("Category set to {value}") }),
-                Err(e) => o.err(e),
+            if title {
+                let action = json!({ "kind": "save_info", "draft": { "title": value }, "fields": ["title"] });
+                manager_act(c, o, action).await?;
+                return Ok(Flow::Done);
+            }
+            let found = b.invoke("search_categories", json!({ "query": value, "limit": 10 })).await?;
+            match pick_category(&found, &value) {
+                Ok(category) => {
+                    let action = json!({ "kind": "save_info", "draft": { "title": "", "category": category }, "fields": ["category"] });
+                    manager_act(c, o, action).await?;
+                }
+                Err(why) => o.err(why),
             }
         }
         "overlay" | "popup" => {
@@ -1795,47 +1830,35 @@ async fn core(c: &Call<'_>, o: &mut Outcome) -> Result<Flow, String> {
             }
         }
         "poll" | "prediction" => {
-            o.ui = Some(Ui::OpenPollComposer { channel: login.clone(), composer: c.command.to_string() });
+            if !need_channel(c, o) {
+                return Ok(Flow::Done);
+            }
+            // Rust says whether this account may run one here before the
+            // builder opens, so it never opens onto a refusal.
+            let can = b
+                .invoke("stream_manager_can", json!({ "channelId": id, "channelLogin": login, "section": c.command }))
+                .await;
+            match can {
+                Ok(_) => o.ui = Some(Ui::OpenPollComposer { channel: login.clone(), composer: c.command.to_string() }),
+                Err(why) => o.err(why),
+            }
         }
         "endpoll" | "cancelpoll" => {
-            if id.is_empty() {
-                o.err(format!("/{}: no active channel", c.command));
+            if !need_channel(c, o) {
                 return Ok(Flow::Done);
             }
-            // Twitch reads and ends polls only on the channel owner's own token.
-            if b.role(&login) != Role::Broadcaster {
-                o.err(format!("/{}: only the broadcaster can end a poll on Twitch", c.command));
-                return Ok(Flow::Done);
-            }
-            let active = match b.invoke("get_active_poll", json!({ "broadcasterId": id })).await {
-                Ok(active) => active,
-                Err(e) => {
-                    o.err(format!("Couldn't read the running poll: {e}"));
-                    return Ok(Flow::Done);
-                }
-            };
-            let Some(poll_id) = active["id"].as_str().filter(|s| !s.is_empty()).map(str::to_string) else {
-                o.err("No poll is running right now");
-                return Ok(Flow::Done);
-            };
-            let end = c.command == "endpoll";
-            let status = if end { "TERMINATED" } else { "ARCHIVED" };
-            match b.invoke("end_poll", json!({ "broadcasterId": id, "pollId": poll_id, "status": status })).await {
-                Ok(_) => o.ok(if end { "Poll ended" } else { "Poll canceled" }),
-                Err(e) => o.err(e),
-            }
+            manager_act(c, o, json!({ "kind": "end_poll", "show_results": c.command == "endpoll" })).await?;
         }
         "lockprediction" | "cancelprediction" | "completeprediction" => {
-            if id.is_empty() {
-                o.err(format!("/{}: no active channel", c.command));
+            if !need_channel(c, o) {
                 return Ok(Flow::Done);
             }
-            let action = c.command.replacen("prediction", "", 1);
-            let outcome = c.from(0).trim().to_string();
-            match b.invoke("finish_prediction", json!({ "broadcasterId": id, "action": action, "outcome": opt(&outcome) })).await {
-                Ok(done) => o.ok(done.as_str().unwrap_or("").to_string()),
-                Err(e) => o.err(e),
-            }
+            let action = match c.command {
+                "lockprediction" => json!({ "kind": "lock_prediction" }),
+                "cancelprediction" => json!({ "kind": "cancel_prediction" }),
+                _ => json!({ "kind": "resolve_prediction_pick", "pick": c.from(0).trim() }),
+            };
+            manager_act(c, o, action).await?;
         }
         "blockterm" | "unblockterm" => {
             if id.is_empty() || login.is_empty() {
@@ -2076,6 +2099,58 @@ const SQUISHY: &str =
 fn ext_usage(o: &mut Outcome, command: &str, fallback: &str) {
     let usage = find_builtin(command).map(|d| d.usage).unwrap_or(fallback);
     o.info(format!("Usage: {usage}"));
+}
+
+/// One Stream manager action through the door the Manage channel window uses,
+/// so a typed command and a press get the same rules and words.
+async fn manager_act(c: &Call<'_>, o: &mut Outcome, action: Value) -> Result<(), String> {
+    let answer = match c
+        .b()
+        .invoke("stream_manager_act", json!({ "channelId": c.id(), "channelLogin": c.login(), "action": action }))
+        .await
+    {
+        Ok(a) => a,
+        // Rust's own words, as the window shows them.
+        Err(why) => {
+            o.err(why);
+            return Ok(());
+        }
+    };
+    let message = answer["message"].as_str().unwrap_or_default().to_string();
+    if answer["ok"].as_bool().unwrap_or(false) {
+        o.ok(message);
+    } else {
+        o.err(message);
+    }
+    Ok(())
+}
+
+/// A typed command changed something an open Stream manager shows: it reads
+/// again. Never fails the command.
+async fn manager_changed(c: &Call<'_>) {
+    if !c.id().is_empty() {
+        let _ = c.b().invoke("stream_manager_publish", json!({ "channelId": c.id() })).await;
+    }
+}
+
+/// The category `/setgame` names among the search results: the one whose
+/// name is the same in any case, else why not, with the closest few.
+pub fn pick_category(found: &Value, name: &str) -> Result<Value, String> {
+    let rows = found.as_array().map(Vec::as_slice).unwrap_or_default();
+    let wanted = name.trim();
+    if let Some(row) = rows.iter().find(|r| r["name"].as_str().is_some_and(|n| n.trim().eq_ignore_ascii_case(wanted))) {
+        return Ok(json!({
+            "id": row["id"].as_str().unwrap_or_default(),
+            "name": row["name"].as_str().unwrap_or_default(),
+            "box_art_url": row["box_art_url"].as_str().unwrap_or_default(),
+        }));
+    }
+    let near: Vec<&str> = rows.iter().filter_map(|r| r["name"].as_str()).take(3).collect();
+    if near.is_empty() {
+        Err(format!("No category named {wanted}"))
+    } else {
+        Err(format!("No category named {wanted}. Did you mean: {}?", near.join(", ")))
+    }
 }
 
 fn need_channel(c: &Call<'_>, o: &mut Outcome) -> bool {
@@ -2752,8 +2827,7 @@ async fn extended(c: &Call<'_>, o: &mut Outcome) -> Result<bool, String> {
             if !need_channel(c, o) || !need_broadcaster(c, o) {
                 return Ok(true);
             }
-            b.invoke("slash_raid_now", json!({ "broadcasterId": id })).await?;
-            o.ok("Raid sent");
+            manager_act(c, o, json!({ "kind": "raid_now" })).await?;
         }
         "massunban" => {
             if !need_channel(c, o) || !need_broadcaster(c, o) {
