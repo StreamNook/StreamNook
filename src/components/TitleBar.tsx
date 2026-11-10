@@ -59,10 +59,14 @@ const TitleBar = () => {
   // whole-store subscription, so the title bar re-rendered on every unrelated
   // store tick.
   const { openSettings, setShowDropsOverlay, setShowMarketplaceOverlay, setShowBadgesOverlay, setShowWhispersOverlay, toggleTheaterMode, toggleWindowFullscreen, toggleKeepOnTop } = useAppStore.getState();
-  const { dropProgressActive, dropProgressComplete, isTheaterMode, streamUrl, currentMediaType, settings, updateInfo } = useAppStore(
+  const { dropProgressActive, dropProgressComplete, dropsDoneKey, dropsOpen, isTheaterMode, streamUrl, currentMediaType, settings, updateInfo } = useAppStore(
     useShallow((s) => ({
       dropProgressActive: s.dropProgressActive,
       dropProgressComplete: s.dropProgressComplete,
+      // Which campaign the "done" check is about, so opening Drops puts the
+      // box back for that one only; a different finished campaign checks again.
+      dropsDoneKey: s.liveDropProgress?.current_campaign ?? '',
+      dropsOpen: s.showDropsOverlay,
       isTheaterMode: s.isTheaterMode,
       streamUrl: s.streamUrl,
       currentMediaType: s.currentMediaType,
@@ -80,6 +84,13 @@ const TitleBar = () => {
   const [updateProgress, setUpdateProgress] = useState<string | null>(null);
   const [updateError, setUpdateError] = useState<string | null>(null);
   const [showAbout, setShowAbout] = useState(false);
+  // The finished campaign whose check was already seen (Drops opened while it
+  // showed). The check is news, not a standing state: once looked at, the
+  // drops button goes back to its box until another campaign finishes.
+  const [dropsDoneSeen, setDropsDoneSeen] = useState<string | null>(null);
+  // However Drops was opened (this button, a shortcut, the palette). Adjusted
+  // during render, React's alternative to an effect for following a prop.
+  if (dropsOpen && dropProgressComplete && dropsDoneSeen !== dropsDoneKey) setDropsDoneSeen(dropsDoneKey);
   const [, setShowSplash] = useState(false);
   const [dropsSettings, setDropsSettings] = useState<DropsSettings | null>(null);
   const [isMaximized, setIsMaximized] = useState(false);
@@ -837,7 +848,7 @@ const TitleBar = () => {
               const showProgressBadge = dropProgressActive;
               // Every watch-time reward for the watched game is earned — show a
               // "done" check instead of the idle gift. Active progress wins over it.
-              const showCompleteBadge = dropProgressComplete && !dropProgressActive;
+              const showCompleteBadge = dropProgressComplete && !dropProgressActive && dropsDoneSeen !== dropsDoneKey;
 
               // The drops button pulses while automation runs.
               // Silver = channel points only, Gold = drops only, Iridescent = both
