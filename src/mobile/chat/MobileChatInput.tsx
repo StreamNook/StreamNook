@@ -206,9 +206,10 @@ const MobileChatInputImpl: React.FC<Props> = ({
     broadcaster: !!account && channelId === account,
     pages: manager.view && manager.view.channel_id === channelId ? manager.view.pages.length : null,
   });
-  // Not (or no longer known to be) yours to manage: the sheet is gone, and it
-  // must not come back open by itself later.
-  if (manageOpen && manages !== 'yes') setManageOpen(false);
+  // Known not to be yours to manage: the sheet is gone, and it must not come
+  // back open by itself later. While still unknown it stays asked for: a typed
+  // /poll Rust already allowed opens as soon as this chat's view lands.
+  if (manageOpen && manages === 'no') setManageOpen(false);
   // Another Twitch account: nothing opened as the last one stays open.
   const [seenAccount, setSeenAccount] = useState(account);
   if (account !== null && account !== seenAccount) {

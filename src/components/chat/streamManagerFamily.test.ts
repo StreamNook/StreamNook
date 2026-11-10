@@ -134,7 +134,8 @@ describe('the follow-up fixes stay wired', () => {
   });
 
   it("the phone's sheet does not come back open by itself", () => {
-    expect(src('mobile/chat/MobileChatInput.tsx')).toContain("if (manageOpen && manages !== 'yes') setManageOpen(false);");
+    // Closes on a known no only: a typed /poll waits for the view while unknown.
+    expect(src('mobile/chat/MobileChatInput.tsx')).toContain("if (manageOpen && manages === 'no') setManageOpen(false);");
   });
 
   it('interest names and numbers survive a reload', () => {
