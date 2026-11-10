@@ -175,6 +175,8 @@ pub struct StreamManagerView {
     /// The rows of the Stream group, in order. Rows the role cannot use are
     /// left out, so no row ever opens onto a refusal.
     pub sections: Vec<SectionRow>,
+    /// The Manage channel window's side list, in order.
+    pub pages: Vec<PageRow>,
     pub info: Option<StreamInfoView>,
     pub poll: Option<RunningPoll>,
     pub prediction: Option<RunningPrediction>,
@@ -311,6 +313,56 @@ pub fn section_rows(
         queue_count.filter(|n| *n > 0).map(|n| format!("{n} waiting")),
     );
     push(Section::Announce, "Announce", None, None);
+    rows
+}
+
+/// One row of the Manage channel window's side list.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct PageRow {
+    /// "info", "poll", "prediction", "raid", "ads", "rewards", "announce",
+    /// "chat_modes", "moderation".
+    pub id: &'static str,
+    /// The heading it sits under: "Your channel", "Channel" or "Chat".
+    pub group: &'static str,
+    pub label: &'static str,
+    /// A live mark in words: "running", "locked", "counting down".
+    pub live: Option<&'static str>,
+    /// A short count ("3").
+    pub badge: Option<String>,
+}
+
+/// The window's pages for `role`, in order: the channel's tools, then chat's.
+/// Like the menu's rows, only what the role may use here.
+pub fn page_rows(
+    role: Role,
+    poll: Option<&RunningPoll>,
+    prediction: Option<&RunningPrediction>,
+    raid: Option<&RaidView>,
+    queue_count: Option<usize>,
+) -> Vec<PageRow> {
+    let channel = if role.broadcaster() { "Your channel" } else { "Channel" };
+    let mut rows = Vec::new();
+    let mut push = |section: Section, id: &'static str, group: &'static str, label: &'static str, live: Option<&'static str>, badge: Option<String>| {
+        if can_use(role, section).is_ok() {
+            rows.push(PageRow { id, group, label, live, badge });
+        }
+    };
+    push(Section::Info, "info", channel, "Stream info", None, None);
+    push(Section::Poll, "poll", channel, "Poll", poll.map(|_| "running"), None);
+    push(
+        Section::Prediction,
+        "prediction",
+        channel,
+        "Prediction",
+        prediction.map(|p| if p.status == "locked" { "locked" } else { "running" }),
+        None,
+    );
+    push(Section::Raid, "raid", channel, "Raid", raid.map(|_| "counting down"), None);
+    push(Section::Ads, "ads", channel, "Ad break", None, None);
+    push(Section::Rewards, "rewards", channel, "Rewards queue", None, queue_count.filter(|n| *n > 0).map(|n| n.to_string()));
+    push(Section::Announce, "announce", "Chat", "Announce", None, None);
+    push(Section::Chat, "chat_modes", "Chat", "Chat modes", None, None);
+    push(Section::Chat, "moderation", "Chat", "Moderation", None, None);
     rows
 }
 
@@ -824,6 +876,8 @@ pub struct RaidView {
     pub target_name: String,
     /// When the countdown ends by itself; the shells tick `m:ss` to it.
     pub deadline_ms: i64,
+    /// The whole countdown, so the shells can draw how much is left.
+    pub total_ms: i64,
 }
 
 static RAIDS: Lazy<Mutex<HashMap<String, RaidView>>> = Lazy::new(|| Mutex::new(HashMap::new()));
@@ -1588,6 +1642,7 @@ pub async fn view(auth: &TwitchAuthService, channel_id: &str, channel_login: &st
         role,
         role_line: role_line(role),
         sections: Vec::new(),
+        pages: Vec::new(),
         info: None,
         poll: None,
         prediction: None,
@@ -1642,7 +1697,8 @@ pub async fn view(auth: &TwitchAuthService, channel_id: &str, channel_login: &st
     let raid = if wants(Section::Raid) { pending_raid(channel_id, now) } else { None };
     let (poll, prediction) = running;
     let sections = section_rows(role, info.as_ref(), poll.as_ref(), prediction.as_ref(), raid.as_ref(), ads.as_ref(), queue_count, now);
-    Ok(StreamManagerView { sections, info, poll, prediction, raid, ads, chat, queue_count, problems, ..empty() })
+    let pages = page_rows(role, poll.as_ref(), prediction.as_ref(), raid.as_ref(), queue_count);
+    Ok(StreamManagerView { sections, pages, info, poll, prediction, raid, ads, chat, queue_count, problems, ..empty() })
 }
 
 /// The info form's check, with the channel's name, picture and live
@@ -1802,6 +1858,7 @@ async fn run(auth: &TwitchAuthService, channel_id: &str, role: Role, action: Act
                     target_login,
                     target_name: target_name.clone(),
                     deadline_ms: now_ms() + RAID_COUNTDOWN_MS,
+                    total_ms: RAID_COUNTDOWN_MS,
                 }),
             );
             Ok(format!("Raiding {target_name}"))
@@ -1956,6 +2013,42 @@ mod tests {
         assert_eq!(row.detail.as_deref(), Some("Which boss?"));
         // An empty queue has no count.
         assert!(rows.iter().find(|r| r.id == Section::Rewards).unwrap().badge.is_none());
+    }
+
+    #[test]
+    fn pages_follow_the_role() {
+        let ids = |role: Role| page_rows(role, None, None, None, None).iter().map(|p| p.id).collect::<Vec<_>>();
+        assert_eq!(
+            ids(Role::Broadcaster),
+            vec!["info", "poll", "prediction", "raid", "ads", "rewards", "announce", "chat_modes", "moderation"]
+        );
+        assert_eq!(ids(Role::Moderator), vec!["poll", "prediction", "rewards", "announce", "chat_modes", "moderation"]);
+        assert_eq!(ids(Role::Editor), vec!["info", "poll", "prediction", "rewards"]);
+        assert_eq!(
+            ids(Role::ModeratorEditor),
+            vec!["info", "poll", "prediction", "rewards", "announce", "chat_modes", "moderation"]
+        );
+        assert!(ids(Role::Viewer).is_empty());
+        let mine = page_rows(Role::Broadcaster, None, None, None, None);
+        assert_eq!(mine[0].group, "Your channel");
+        assert_eq!(mine.iter().find(|p| p.id == "announce").unwrap().group, "Chat");
+        assert_eq!(page_rows(Role::Moderator, None, None, None, None)[0].group, "Channel");
+    }
+
+    #[test]
+    fn pages_mark_what_is_running() {
+        let poll = RunningPoll { id: "p".into(), title: "Q".into() };
+        let prediction = RunningPrediction { id: "e".into(), title: "W".into(), status: "locked".into(), outcomes: vec![] };
+        let raid = RaidView { target_id: "t".into(), target_login: "t".into(), target_name: "T".into(), deadline_ms: 1, total_ms: 1 };
+        let rows = page_rows(Role::Broadcaster, Some(&poll), Some(&prediction), Some(&raid), Some(3));
+        let get = |id: &str| rows.iter().find(|p| p.id == id).unwrap().clone();
+        assert_eq!(get("poll").live, Some("running"));
+        assert_eq!(get("prediction").live, Some("locked"));
+        assert_eq!(get("raid").live, Some("counting down"));
+        assert_eq!(get("rewards").badge.as_deref(), Some("3"));
+        let quiet = page_rows(Role::Broadcaster, None, None, None, Some(0));
+        assert!(quiet.iter().find(|p| p.id == "rewards").unwrap().badge.is_none());
+        assert!(quiet.iter().all(|p| p.live.is_none()));
     }
 
     #[test]
@@ -2205,7 +2298,7 @@ mod tests {
 
     #[test]
     fn a_raid_countdown_expires() {
-        set_raid("c1", Some(RaidView { target_id: "t".into(), target_login: "t".into(), target_name: "T".into(), deadline_ms: 100 }));
+        set_raid("c1", Some(RaidView { target_id: "t".into(), target_login: "t".into(), target_name: "T".into(), deadline_ms: 100, total_ms: 100 }));
         assert!(pending_raid("c1", 50).is_some());
         assert!(pending_raid("c1", 150).is_none());
         assert!(pending_raid("c1", 50).is_none());
