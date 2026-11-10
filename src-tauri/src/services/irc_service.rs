@@ -19,7 +19,6 @@ use futures_util::{SinkExt, StreamExt};
 use log::{debug, error, info, warn};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use tokio::sync::{broadcast, Mutex};
@@ -5996,25 +5995,20 @@ impl IrcService {
             let tx_clone = tx_for_warp.clone();
             ws.on_upgrade(move |socket| Self::handle_local_ws(socket, tx_clone, born))
         });
-        // Pick a free port via an ephemeral probe bind, then hand it to warp. (warp 0.4
-        // exposes no ephemeral bind that returns the port, and a fixed random port in a
-        // small range can collide; an OS-allocated port + the bring-up lock above make a
-        // collision negligible.) The old random-port path could return a port whose
-        // server silently failed to bind, leaving callers to hit "refused".
-        let probe = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        // Bind an OS-allocated port and hand that very listener to warp. Probing a
+        // port, letting it go and having warp bind it again left a gap another
+        // bind could take: warp then panicked on the bind and the caller held a
+        // port nothing served ("refused" for good).
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
             .await
-            .map_err(|e| anyhow::anyhow!("WS bridge port probe failed: {}", e))?;
-        let port = probe
+            .map_err(|e| anyhow::anyhow!("WS bridge bind failed: {}", e))?;
+        let port = listener
             .local_addr()
             .map_err(|e| anyhow::anyhow!("WS bridge local_addr failed: {}", e))?
             .port();
-        drop(probe);
-        let addr = SocketAddr::from(([127, 0, 0, 1], port));
         let handle = tokio::spawn(async move {
-            warp::serve(local_ws).run(addr).await;
+            warp::serve(local_ws).incoming(listener).run().await;
         });
-        // Let warp re-bind the freed port before callers connect (frontend also retries).
-        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
 
         // Only now (bind succeeded) publish the live socket so providers/the frontend
         // attach to a server that is actually listening.
@@ -6053,20 +6047,18 @@ impl IrcService {
             let tx_clone = tx_for_warp.clone();
             ws.on_upgrade(move |socket| Self::handle_local_ws(socket, tx_clone, born))
         });
-        let probe = match previous {
+        // The listener warp serves is the one bound here (no probe-and-rebind gap).
+        let listener = match previous {
             Some(p) => match tokio::net::TcpListener::bind(("127.0.0.1", p)).await {
                 Ok(listener) => listener,
                 Err(_) => tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?,
             },
             None => tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?,
         };
-        let port = probe.local_addr()?.port();
-        drop(probe);
-        let addr = SocketAddr::from(([127, 0, 0, 1], port));
+        let port = listener.local_addr()?.port();
         let handle = tokio::spawn(async move {
-            warp::serve(local_ws).run(addr).await;
+            warp::serve(local_ws).incoming(listener).run().await;
         });
-        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
         WS_SERVER_BORN.store(born, std::sync::atomic::Ordering::SeqCst);
         *get_ws_server_handle().lock().await = Some(handle);
         *get_ws_port().lock().await = Some(port);
