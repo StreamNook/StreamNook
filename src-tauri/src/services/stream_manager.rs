@@ -2940,6 +2940,17 @@ const PUBLISH_GAP_MS: i64 = 3000;
 /// the last call's sequence number and, while on, (channel id, login).
 pub type InterestMap = HashMap<(String, String), (u64, Option<(String, String)>)>;
 
+/// Drops the interest of windows that went away without saying so. A shell
+/// with no webview windows at all (the iPhone's headless core, whose one
+/// screen is native) lists none, and there nothing is dropped: its sheet's
+/// interest would otherwise go on the first tick and nothing would read again.
+pub fn keep_open_windows(interest: &mut InterestMap, open: &[String]) {
+    if open.is_empty() {
+        return;
+    }
+    interest.retain(|(label, _), _| open.iter().any(|l| l == label));
+}
+
 /// The most surfaces one window may hold on at once.
 const SURFACES_PER_WINDOW: usize = 16;
 
@@ -3111,7 +3122,8 @@ fn start_ticking() {
                 // A window that went away without saying so.
                 if let Some(app) = crate::services::providers::app_handle() {
                     use tauri::Manager;
-                    interest.retain(|(label, _), _| app.get_webview_window(label).is_some());
+                    let open: Vec<String> = app.webview_windows().into_keys().collect();
+                    keep_open_windows(&mut interest, &open);
                 }
                 watched(&interest)
             };
@@ -3663,6 +3675,21 @@ mod tests {
         }
         assert!(interest_after(&mut m, "main", "one-too-many", chan(), 10).is_err());
         assert!(interest_after(&mut m, "popout", "panel", chan(), 1).is_ok());
+    }
+
+    #[test]
+    fn a_shell_without_webviews_keeps_its_sheet_watched() {
+        let chan = || Some(("1".to_string(), "one".to_string()));
+        let mut m = InterestMap::new();
+        interest_after(&mut m, "main", "ios-sheet-1", chan(), 1).unwrap();
+        interest_after(&mut m, "popout-x", "panel", chan(), 1).unwrap();
+        // The iPhone's headless core lists no webview windows: nothing goes.
+        keep_open_windows(&mut m, &[]);
+        assert_eq!(m.len(), 2);
+        // Desktop: a window gone without saying so loses its surfaces.
+        keep_open_windows(&mut m, &["main".to_string()]);
+        assert_eq!(m.keys().map(|(l, _)| l.as_str()).collect::<Vec<_>>(), vec!["main"]);
+        assert_eq!(watched(&m).get("1").map(String::as_str), Some("one"));
     }
 
     #[test]
