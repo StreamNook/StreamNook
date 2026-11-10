@@ -659,6 +659,12 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   },
   {
     tab: 'Chat',
+    section: 'Message Layout',
+    title: 'Italic /me messages',
+    description: "A /me message is written in the chatter's name color and slants, as on Twitch. Off keeps it upright. /me, action, italics, slanted, upright."
+  },
+  {
+    tab: 'Chat',
     section: 'Mentions & Replies',
     title: 'Flash',
     parent: 'Highlight',
@@ -1407,7 +1413,7 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     section: 'Mentions & Replies',
     title: 'Italic',
     parent: '@name style',
-    description: 'Whether an @name slants: like the message, never, or always. @name italic, /me.'
+    description: 'Whether an @name slants: like the message, never, or always. @name italic.'
   },
   {
     tab: 'Chat',

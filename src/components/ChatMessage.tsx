@@ -3820,8 +3820,12 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             }}
           >
             {isAction ? (
-              // ACTION messages: entire content in username color
-              <span style={{ ...usernameStyle, fontWeight: chatBodyWeight(chatDesign?.font_weight) }} className="break-words italic">
+              // ACTION messages: entire content in username color, slanted
+              // unless Italic /me messages is off.
+              <span
+                style={{ ...usernameStyle, fontWeight: chatBodyWeight(chatDesign?.font_weight) }}
+                className={`break-words ${chatDesign?.action_italic === false ? '' : 'italic'}`}
+              >
                 {/* No hover tooltip: a right click anywhere on the message
                     replies, as the row's Reply button says (SN-264). */}
                 <span

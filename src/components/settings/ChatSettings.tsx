@@ -625,6 +625,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
     reply_sound_volume: stored?.reply_sound_volume,
     mention_weight: stored?.mention_weight,
     mention_italic: stored?.mention_italic,
+    action_italic: stored?.action_italic,
     mention_style: stored?.mention_style,
     mention_text_color: stored?.mention_text_color,
     chat_dock_switcher: stored?.chat_dock_switcher,
@@ -1584,6 +1585,18 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
             ]}
           />
         </SettingsRow>
+
+        <SettingsRow
+          title="Italic /me messages"
+          onReset={resetFor(['chat_design.action_italic', true])}
+          description="A /me message is written in the chatter's name color and slants, as on Twitch. Off keeps it upright."
+          control={
+            <Toggle
+              enabled={cd.action_italic ?? true}
+              onChange={() => setDesign({ action_italic: !(cd.action_italic ?? true) })}
+            />
+          }
+        />
 
         <SettingsRow
           title="Message animation"

@@ -597,6 +597,9 @@ pub struct ChatDesignSettings {
     /// @mention slant: inherit (italic inside /me messages) | never | always.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mention_italic: Option<String>,
+    /// /me messages slant (absent = true, as Twitch shows them); false keeps them upright.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action_italic: Option<bool>,
     /// @mention shape: plain (coloured text, the default) | pill (tinted capsule).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mention_style: Option<String>,
@@ -827,6 +830,7 @@ impl Default for ChatDesignSettings {
             reply_sound_volume: None,
             mention_weight: None,
             mention_italic: None,
+            action_italic: None,
             mention_style: None,
             mention_text_color: None,
             chat_dock_switcher: None,

@@ -349,6 +349,8 @@ export interface ChatDesignSettings {
   mention_weight?: 'regular' | 'medium' | 'bold';
   /** @mention slant: inherit (italic inside /me messages, the default), never, or always. */
   mention_italic?: 'inherit' | 'never' | 'always';
+  /** /me messages slant (default true); false keeps them upright. */
+  action_italic?: boolean;
   /** @mention shape: plain coloured text (default) or a tinted pill. */
   mention_style?: 'plain' | 'pill';
   /** @mention colour. Absent follows the mentioned user's name colour. */

@@ -819,6 +819,25 @@
   {
    "page": "chat",
    "section": "Message Layout",
+   "title": "Italic /me messages",
+   "paths": [
+    "chat_design.action_italic"
+   ],
+   "nested": false,
+   "logo": null,
+   "detail": "A /me message is written in the chatter's name color and slants, as on Twitch. Off keeps it upright.",
+   "aliases": [
+    "/me",
+    "action",
+    "italics",
+    "slanted",
+    "upright"
+   ],
+   "hidden_on_ios": true
+  },
+  {
+   "page": "chat",
+   "section": "Message Layout",
    "title": "Message animation",
    "paths": [
     "chat_design.message_entrance"
