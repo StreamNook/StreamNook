@@ -1025,7 +1025,7 @@ fn uptime_reads_hours_and_minutes() {
 // ───────────────────────────── platforms ─────────────────────────────
 
 #[tokio::test]
-async fn phones_refuse_desktop_only_commands_and_the_builders() {
+async fn phones_refuse_desktop_only_commands_and_open_the_builders() {
     let fake = Fake::new();
     for line in ["/proc notepad", "/popup", "/screenshot"] {
         let o = dispatch(ctx(&fake, "chan", Platform::Android), line.to_string(), 0).await;
@@ -1033,11 +1033,11 @@ async fn phones_refuse_desktop_only_commands_and_the_builders() {
         assert_eq!(toast(&o, ToastKind::Info), vec![format!("{typed} works in the desktop app")], "{line}");
         assert!(o.ui.is_none());
     }
-    // Android has the builder; the iPhone does not yet.
-    for line in ["/poll", "/prediction"] {
+    // Both phones have the builders: the iPhone's are Manage channel's Poll and Prediction pages.
+    for (line, composer) in [("/poll", "poll"), ("/prediction", "prediction")] {
         let o = dispatch(ctx(&fake, "chan", Platform::Ios), line.to_string(), 0).await;
-        assert_eq!(toast(&o, ToastKind::Info), vec![format!("{line} works in the desktop and Android apps")]);
-        assert!(o.ui.is_none());
+        assert!(toast(&o, ToastKind::Info).is_empty(), "{line}");
+        assert_eq!(o.ui, Some(Ui::OpenPollComposer { channel: "chan".into(), composer: composer.into() }));
     }
     let o = dispatch(ctx(&fake, "chan", Platform::Android), "/prediction".to_string(), 0).await;
     assert_eq!(o.ui, Some(Ui::OpenPollComposer { channel: "chan".into(), composer: "prediction".into() }));

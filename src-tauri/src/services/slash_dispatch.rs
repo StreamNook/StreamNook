@@ -1079,11 +1079,6 @@ fn dispatch_with(ctx: Ctx, text: String, depth: u32, allow_custom: bool) -> BoxF
             o.info(format!("/{typed} works in the desktop app"));
             return o;
         }
-        // The iPhone app has no poll or prediction builder yet.
-        if ctx.platform == Platform::Ios && (command == "poll" || command == "prediction") {
-            o.info(format!("/{typed} works in the desktop and Android apps"));
-            return o;
-        }
 
         // Kick, YouTube and other rooms run only what needs no Twitch API.
         if ctx.channel.contains(':') && !PLATFORM_NEUTRAL.contains(&command.as_str()) {
