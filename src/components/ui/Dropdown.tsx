@@ -94,8 +94,13 @@ export function Dropdown<T extends string | number>({
             if (triggerRef.current?.contains(t) || menuRef.current?.contains(t)) return;
             setOpen(false);
         };
+        // Esc closes the list and nothing else: heard first (capture) and
+        // kept from the panel, window or menu the list sits in.
         const onKey = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') setOpen(false);
+            if (e.key !== 'Escape') return;
+            e.preventDefault();
+            e.stopPropagation();
+            setOpen(false);
         };
         // Keep the portalled menu glued to its trigger as the page scrolls or the
         // window resizes, rather than closing it. A scroll inside the menu's own
@@ -106,12 +111,12 @@ export function Dropdown<T extends string | number>({
             reposition();
         };
         document.addEventListener('mousedown', onDown);
-        document.addEventListener('keydown', onKey);
+        document.addEventListener('keydown', onKey, true);
         window.addEventListener('resize', onResize);
         window.addEventListener('scroll', onScroll, true);
         return () => {
             document.removeEventListener('mousedown', onDown);
-            document.removeEventListener('keydown', onKey);
+            document.removeEventListener('keydown', onKey, true);
             window.removeEventListener('resize', onResize);
             window.removeEventListener('scroll', onScroll, true);
         };

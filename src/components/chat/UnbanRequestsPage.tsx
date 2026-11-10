@@ -8,7 +8,6 @@
 import { useState } from 'react';
 import { Tooltip } from '../ui/Tooltip';
 import { ACCENT_BUTTON, ACCENT_FILL, GLAZE_PILL } from '../ui/glazeButtons';
-import { useAppStore } from '../../stores/AppStore';
 import { UNBAN_REPLY_MAX, type UnbanRequest } from './unbanRequests';
 
 interface UnbanRequestsPageProps {
@@ -20,12 +19,19 @@ interface UnbanRequestsPageProps {
 export default function UnbanRequestsPage({ rows, resolve }: UnbanRequestsPageProps) {
   const [busy, setBusy] = useState<string | null>(null);
   const [replies, setReplies] = useState<Record<string, string>>({});
+  // Twitch's refusal for a row, shown under its buttons.
+  const [refused, setRefused] = useState<Record<string, string>>({});
 
   const act = async (row: UnbanRequest, approve: boolean) => {
     setBusy(row.id);
+    setRefused((cur) => {
+      const next = { ...cur };
+      delete next[row.id];
+      return next;
+    });
     const err = await resolve(row.id, approve, replies[row.id] ?? '');
     setBusy(null);
-    if (err) useAppStore.getState().addToast(err, 'error');
+    if (err) setRefused((cur) => ({ ...cur, [row.id]: err }));
     else
       setReplies((cur) => {
         const next = { ...cur };
@@ -82,6 +88,11 @@ export default function UnbanRequestsPage({ rows, resolve }: UnbanRequestsPagePr
               </button>
             </Tooltip>
           </div>
+          {refused[row.id] && (
+            <p role="status" className="mt-2 text-[11.5px] leading-snug text-error">
+              {refused[row.id]}
+            </p>
+          )}
         </li>
       ))}
     </ul>

@@ -11,11 +11,14 @@ interface ToggleProps {
   /** Announced to screen readers when the row's own label isn't adjacent. */
   ariaLabel?: string;
   disabled?: boolean;
+  /** For a row's `<label htmlFor>`, so a press on its words flips it. */
+  id?: string;
 }
 
-export const Toggle = ({ enabled, onChange, ariaLabel, disabled = false }: ToggleProps) => {
+export const Toggle = ({ enabled, onChange, ariaLabel, disabled = false, id }: ToggleProps) => {
   return (
   <button
+    id={id}
     type="button"
     role="switch"
     aria-checked={enabled}

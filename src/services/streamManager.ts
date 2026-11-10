@@ -3,10 +3,35 @@
 // (services/stream_manager.rs); these types only mirror what it sends.
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useReducer } from 'react';
 
 export type ManagerRole = 'broadcaster' | 'editor' | 'moderator' | 'moderator_editor' | 'viewer';
 export type ManagerSection = 'info' | 'poll' | 'prediction' | 'raid' | 'ads' | 'rewards' | 'chat' | 'announce';
+
+/** A page of the Manage channel window. */
+export type PageId =
+  | 'info'
+  | 'poll'
+  | 'prediction'
+  | 'raid'
+  | 'ads'
+  | 'rewards'
+  | 'announce'
+  | 'chat_modes'
+  | 'moderation';
+
+/** One row of the window's side list, in Rust's order, only what the role
+ *  may use here. */
+export interface PageRow {
+  id: PageId;
+  /** "Your channel", "Channel" or "Chat": the heading it sits under. */
+  group: string;
+  label: string;
+  /** "running", "locked", "counting down": a live mark, in words. */
+  live: string | null;
+  /** A short count ("3"). */
+  badge: string | null;
+}
 
 export interface Choice {
   label: string;
@@ -58,6 +83,8 @@ export interface RaidView {
   target_login: string;
   target_name: string;
   deadline_ms: number;
+  /** The whole countdown, for the ring. */
+  total_ms: number;
 }
 
 export interface AdSchedule {
@@ -116,6 +143,8 @@ export interface StreamManagerView {
   role: ManagerRole;
   role_line: string;
   sections: SectionRow[];
+  /** The Manage channel window's side list. */
+  pages: PageRow[];
   info: StreamInfoView | null;
   poll: RunningPoll | null;
   prediction: RunningPrediction | null;
@@ -239,35 +268,73 @@ interface ManagerPush {
   queue: QueueView | null;
 }
 
+/** One hook's copy of a channel's view. Everything in it belongs to `channelId`. */
+export interface ManagerState {
+  channelId: string | null;
+  view: StreamManagerView | null;
+  queue: QueueView | null;
+  error: string | null;
+}
+
+export type ManagerEvent =
+  | { type: 'switch'; channelId: string | null }
+  | { type: 'view'; channelId: string; view: StreamManagerView }
+  | { type: 'queue'; channelId: string; queue: QueueView }
+  | { type: 'error'; channelId: string; error: string };
+
+const blank = (channelId: string | null): ManagerState => ({ channelId, view: null, queue: null, error: null });
+
+/**
+ * The hook's state, keyed by channel. A switch forgets the old channel at
+ * once; a read, answer or push for any other channel than the current one
+ * (a late answer from the channel you left) is dropped, so nothing of that
+ * channel ever shows on, or is written from, this one.
+ */
+export function managerState(s: ManagerState, e: ManagerEvent): ManagerState {
+  if (e.type === 'switch') return e.channelId === s.channelId ? s : blank(e.channelId);
+  if (!s.channelId || e.channelId !== s.channelId) return s;
+  switch (e.type) {
+    case 'view':
+      return e.view.channel_id === s.channelId ? { ...s, view: e.view, error: null } : s;
+    case 'queue':
+      return { ...s, queue: e.queue };
+    case 'error':
+      return { ...s, error: e.error };
+  }
+}
+
 /**
  * The manager's view for a channel while `active`: read on activation, kept
- * current by every window's writes (`stream-manager-state`). `apply` takes the
- * view an action answered with.
+ * current by every window's writes (`stream-manager-state`). The view, queue
+ * and error are always this channel's: a switch empties them until the new
+ * channel's read lands.
  */
 export function useStreamManager(channelId: string | null | undefined, channelLogin: string, active: boolean) {
-  const [view, setView] = useState<StreamManagerView | null>(null);
-  const [queue, setQueue] = useState<QueueView | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const id = channelId || null;
+  const [state, dispatch] = useReducer(managerState, id, blank);
+  if (state.channelId !== id) dispatch({ type: 'switch', channelId: id });
+  // This render still holds the old channel's copy; never hand it out.
+  const current = state.channelId === id ? state : blank(id);
 
   const refresh = useCallback(async () => {
-    if (!channelId) return;
+    if (!id) return;
     try {
-      setView(await getStreamManager(channelId, channelLogin));
-      setError(null);
+      const view = await getStreamManager(id, channelLogin);
+      dispatch({ type: 'view', channelId: id, view });
     } catch (e) {
-      setError(typeof e === 'string' ? e : 'Could not read the channel');
+      dispatch({ type: 'error', channelId: id, error: typeof e === 'string' ? e : 'Could not read the channel' });
     }
-  }, [channelId, channelLogin]);
+  }, [id, channelLogin]);
 
   useEffect(() => {
-    if (!active || !channelId) return;
+    if (!active || !id) return;
     void refresh();
     let off: (() => void) | undefined;
     let alive = true;
     void listen<ManagerPush>('stream-manager-state', (e) => {
-      if (e.payload.channel_id !== channelId) return;
-      setView(e.payload.view);
-      if (e.payload.queue) setQueue(e.payload.queue);
+      const ch = e.payload.channel_id;
+      dispatch({ type: 'view', channelId: ch, view: e.payload.view });
+      if (e.payload.queue) dispatch({ type: 'queue', channelId: ch, queue: e.payload.queue });
     }).then((u) => {
       if (alive) off = u;
       else u();
@@ -276,14 +343,20 @@ export function useStreamManager(channelId: string | null | undefined, channelLo
       alive = false;
       off?.();
     };
-  }, [active, channelId, refresh]);
+  }, [active, id, refresh]);
 
-  const apply = useCallback((outcome: ActOutcome) => {
-    if (outcome.view) setView(outcome.view);
-    if (outcome.queue) setQueue(outcome.queue);
+  /** An action's answer for `forChannel` (the channel it was sent to). */
+  const apply = useCallback((outcome: ActOutcome, forChannel: string) => {
+    if (outcome.view) dispatch({ type: 'view', channelId: forChannel, view: outcome.view });
+    if (outcome.queue) dispatch({ type: 'queue', channelId: forChannel, queue: outcome.queue });
   }, []);
 
-  return { view, queue, setQueue, error, refresh, apply };
+  /** A queue read for `forChannel`. */
+  const setQueue = useCallback((forChannel: string, queue: QueueView) => {
+    dispatch({ type: 'queue', channelId: forChannel, queue });
+  }, []);
+
+  return { view: current.view, queue: current.queue, error: current.error, refresh, apply, setQueue };
 }
 
 /** `m:ss` left until `deadlineMs`, never below zero. */

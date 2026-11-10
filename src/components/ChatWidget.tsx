@@ -67,7 +67,8 @@ import { ChatOverlayStack } from './chat/ChatOverlayStack';
 import { useChatTopStack } from './chat/chatTopStack';
 import PollPredictionComposer from './chat/PollPredictionComposer';
 import StreamManagerPanel, { type ManagerPanelKind } from './chat/StreamManagerPanel';
-import { useStreamManager } from '../services/streamManager';
+import ManageChannelWindow from './chat/ManageChannelWindow';
+import { useStreamManager, type PageId } from '../services/streamManager';
 import HypeTrainBanner from './HypeTrainBanner';
 import ViewersPanel from './ViewersPanel';
 import ModRoomPane from './modroom/ModRoomPane';
@@ -1894,22 +1895,10 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     { messages: number; users: number; action: string } | null
   >(null);
 
-  // Poll / prediction builder. Broadcaster-only, because Twitch scopes both
-  // create endpoints to the channel owner.
+  // Poll / prediction builder above the message box: the stream manager's
+  // builder (Rust says who may start one). /poll and /prediction open it
+  // through the event handled beside the rest of the stream manager below.
   const [composerKind, setComposerKind] = useState<'poll' | 'prediction' | null>(null);
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent<{ channel?: string; kind?: string }>).detail;
-      // Scoped like the prefill event: only the surface whose channel the
-      // command was typed in should open a builder.
-      const mine = currentStream?.user_login?.toLowerCase();
-      const theirs = detail?.channel?.toLowerCase();
-      if (mine && theirs && mine !== theirs) return;
-      if (detail?.kind === 'poll' || detail?.kind === 'prediction') setComposerKind(detail.kind);
-    };
-    window.addEventListener('streamnook-open-poll-composer', handler);
-    return () => window.removeEventListener('streamnook-open-poll-composer', handler);
-  }, [currentStream?.user_login]);
 
   useEffect(() => {
     const raw = messageInput.trim();
@@ -2765,33 +2754,32 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
 
   useVisibleInterval(handleDropProgressChange, 60 * 60 * 1000);
 
-  // Handler to toggle collecting drops for current channel. Automation is plugin-
-  // powered; this control only renders when a plugin provides automation, so route
-  // start/stop to it.
-  const handleToggleAutomation = async () => {
-    if (!dropsCampaign) return;
-    if (!useAppStore.getState().externalDropsProvider) return;
-
+  // Start or stop collecting drops for the current channel. Automation is
+  // plugin-powered; this control only renders when a plugin provides it, so
+  // start and stop go to it. The Tools menu's Drops row shows the answer.
+  const handleToggleAutomation = async (): Promise<{ ok: boolean; message: string }> => {
+    if (!dropsCampaign || !useAppStore.getState().externalDropsProvider) {
+      return { ok: false, message: 'Nothing to collect here right now' };
+    }
+    const game = dropsCampaign.game_name;
     if (isDropProgressing) {
-      // Stop collecting
       try {
         await invoke('plugins_invoke_action', { action: 'drops.stop', args: {} });
         setIsDropProgressing(false);
-        useAppStore.getState().addToast(`Stopped collecting drops for ${dropsCampaign.game_name}`, 'info');
+        return { ok: true, message: `Stopped collecting drops for ${game}` };
       } catch (err) {
         Logger.error('[ChatWidget] Failed to stop collecting:', err);
-        useAppStore.getState().addToast('Failed to stop collecting drops', 'error');
+        return { ok: false, message: typeof err === 'string' && err ? err : 'Could not stop collecting drops' };
       }
-    } else {
-      // Start collecting (the plugin resolves an eligible channel itself)
-      try {
-        await invoke('plugins_invoke_action', { action: 'drops.run', args: { campaign_id: dropsCampaign.id } });
-        setIsDropProgressing(true);
-        useAppStore.getState().addToast(`Started collecting drops for ${dropsCampaign.game_name}`, 'success');
-      } catch (err) {
-        Logger.error('[ChatWidget] Failed to start collecting:', err);
-        useAppStore.getState().addToast('Failed to start collecting drops', 'error');
-      }
+    }
+    try {
+      // The plugin resolves an eligible channel itself.
+      await invoke('plugins_invoke_action', { action: 'drops.run', args: { campaign_id: dropsCampaign.id } });
+      setIsDropProgressing(true);
+      return { ok: true, message: `Collecting drops for ${game}` };
+    } catch (err) {
+      Logger.error('[ChatWidget] Failed to start collecting:', err);
+      return { ok: false, message: typeof err === 'string' && err ? err : 'Could not start collecting drops' };
     }
   };
 
@@ -2808,24 +2796,76 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   });
   // The stream manager, read from Rust when a chat you manage opens (one read,
   // then Rust's pushes), so the Tools menu opens with its rows already there.
+  // At most one of: a panel over the message box, the builder, the Manage
+  // channel window. A channel switch, or no longer managing this one, closes
+  // all three at once, so nothing of one channel is ever written from another.
   const [managerPanel, setManagerPanel] = useState<ManagerPanelKind | null>(null);
+  const [managerWindow, setManagerWindow] = useState<{ page: PageId | null } | null>(null);
+  // Opened from the other size with what was typed: no "Picking up" line.
+  const [managerHandedOff, setManagerHandedOff] = useState(false);
   const [managerChannel, setManagerChannel] = useState(currentStream?.user_id);
   if (managerChannel !== currentStream?.user_id) {
     setManagerChannel(currentStream?.user_id);
     setManagerPanel(null);
+    setComposerKind(null);
+    setManagerWindow(null);
+  }
+  if (!toolSections.polls && (managerPanel || composerKind || managerWindow)) {
+    setManagerPanel(null);
+    setComposerKind(null);
+    setManagerWindow(null);
   }
   const streamManager = useStreamManager(
     toolSections.polls ? currentStream?.user_id : null,
     currentStream?.user_login ?? '',
     true,
   );
+  const openManagerPanel = (kind: ManagerPanelKind, handedOff = false) => {
+    setComposerKind(null);
+    setManagerWindow(null);
+    setManagerHandedOff(handedOff);
+    setManagerPanel(kind);
+  };
+  const openManagerBuilder = (kind: 'poll' | 'prediction', handedOff = false) => {
+    setManagerPanel(null);
+    setManagerWindow(null);
+    setManagerHandedOff(handedOff);
+    setComposerKind(kind);
+  };
+  const openManagerWindow = (page: PageId | null, handedOff = false) => {
+    setManagerPanel(null);
+    setComposerKind(null);
+    setManagerHandedOff(handedOff);
+    setManagerWindow({ page });
+  };
+  // /poll and /prediction open the builder: only on the surface whose channel
+  // the command was typed in (scoped like the prefill event), and only where
+  // the stream manager applies.
+  const pollsAllowed = toolSections.polls;
+  useEffect(() => {
+    if (!pollsAllowed) return;
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<{ channel?: string; kind?: string }>).detail;
+      const mine = currentStream?.user_login?.toLowerCase();
+      const theirs = detail?.channel?.toLowerCase();
+      if (mine && theirs && mine !== theirs) return;
+      if (detail?.kind === 'poll' || detail?.kind === 'prediction') {
+        setManagerPanel(null);
+        setManagerWindow(null);
+        setManagerHandedOff(false);
+        setComposerKind(detail.kind);
+      }
+    };
+    window.addEventListener('streamnook-open-poll-composer', handler);
+    return () => window.removeEventListener('streamnook-open-poll-composer', handler);
+  }, [currentStream?.user_login, pollsAllowed]);
   const dropsTool: DropsTool | null =
     toolSections.drops && dropsCampaign
       ? {
           gameName: dropsCampaign.game_name,
           collecting: isDropProgressing,
           busy: isLoadingDrops,
-          onToggle: () => void handleToggleAutomation(),
+          toggle: handleToggleAutomation,
         }
       : null;
 
@@ -5510,23 +5550,45 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                 )}
               </AnimatePresence>
               {/* Channel Points Menu - renders at full width like emote picker */}
-              {composerKind && currentStream?.user_id && (
+              {composerKind && streamManager.view && (
                 <PollPredictionComposer
-                  broadcasterId={currentStream.user_id}
-                  channelLogin={currentStream.user_login}
+                  key={`${streamManager.view.channel_id}:${composerKind}`}
+                  view={streamManager.view}
+                  layout="panel"
                   initialKind={composerKind}
                   onClose={() => setComposerKind(null)}
-                  onOutcome={streamManager.apply}
+                  onExpand={(kind) => openManagerWindow(kind, true)}
                 />
               )}
               {managerPanel && streamManager.view && (
                 <StreamManagerPanel
+                  key={`${streamManager.view.channel_id}:${managerPanel}`}
                   kind={managerPanel}
                   view={streamManager.view}
                   queue={streamManager.queue}
                   onQueue={streamManager.setQueue}
-                  onOutcome={streamManager.apply}
+                  handedOff={managerHandedOff}
+                  onExpand={() => openManagerWindow(managerPanel, true)}
                   onClose={() => setManagerPanel(null)}
+                />
+              )}
+              {managerWindow && currentStream?.user_id && (
+                <ManageChannelWindow
+                  key={currentStream.user_id}
+                  view={streamManager.view}
+                  error={streamManager.error}
+                  onRetry={() => void streamManager.refresh()}
+                  channelId={currentStream.user_id}
+                  channelLogin={currentStream.user_login}
+                  requested={managerWindow.page}
+                  handedOff={managerHandedOff}
+                  queue={streamManager.queue}
+                  onQueue={streamManager.setQueue}
+                  roomState={roomState}
+                  onCollapse={(target) =>
+                    target === 'poll' || target === 'prediction' ? openManagerBuilder(target, true) : openManagerPanel(target, true)
+                  }
+                  onClose={() => setManagerWindow(null)}
                 />
               )}
               <AnimatePresence>
@@ -5689,17 +5751,11 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                     isBroadcaster={!!isBroadcaster}
                     canModerate={toolSections.moderate}
                     canRunPolls={toolSections.polls}
-                    onStartPoll={(kind) => {
-                      setManagerPanel(null);
-                      setComposerKind(kind);
-                    }}
-                    pollBuilderOpen={!!composerKind || !!managerPanel}
+                    onStartPoll={(kind) => openManagerBuilder(kind)}
+                    pollBuilderOpen={!!composerKind || !!managerPanel || !!managerWindow}
                     manager={streamManager.view}
-                    onOpenManager={(kind) => {
-                      setComposerKind(null);
-                      setManagerPanel(kind);
-                    }}
-                    onManagerOutcome={streamManager.apply}
+                    onOpenManager={(kind) => openManagerPanel(kind)}
+                    onOpenWindow={(page) => openManagerWindow(page)}
                     drops={dropsTool}
                     roomState={roomState}
                   />

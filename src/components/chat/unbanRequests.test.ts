@@ -32,6 +32,7 @@ describe('unban requests strip', () => {
 describe('where unban requests live on desktop', () => {
   const widget = readFileSync(resolve(__dirname, '..', 'ChatWidget.tsx'), 'utf8');
   const menu = readFileSync(resolve(__dirname, 'ChannelToolsMenu.tsx'), 'utf8');
+  const moderation = readFileSync(resolve(__dirname, 'ModerationGroup.tsx'), 'utf8');
 
   it('nothing above the message box', () => {
     expect(widget).not.toContain('UnbanRequests');
@@ -39,9 +40,10 @@ describe('where unban requests live on desktop', () => {
 
   it('a Moderation row with the count, opening its own page in the Tools menu', () => {
     expect(menu).toMatch(/useUnbanRequests\(\s*broadcasterId,\s*channelLogin,/);
-    expect(menu).toMatch(/label="Unban requests"[\s\S]{0,80}badge=\{String\(unbanRows\.length\)\}/);
-    expect(menu).toContain("setPage('unban')");
+    expect(menu).toContain('unbanCount={unbanRows.length}');
+    expect(menu).toContain('onOpen={setPage}');
     expect(menu).toContain('<UnbanRequestsPage');
+    expect(moderation).toMatch(/unbanCount > 0 && \([\s\S]{0,200}label="Unban requests"[\s\S]{0,200}onOpen\('unban'\)/);
   });
 
   it('the phone composer menu counts them on its Moderation row', () => {

@@ -1,41 +1,37 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { managerAct, type ActOutcome } from '../../services/streamManager';
-import { BarChart3, Trophy, Plus, X, ChevronUp, ChevronDown, History } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { Reorder, useDragControls } from 'framer-motion';
+import { BarChart3, GripVertical, History, Trophy, X } from 'lucide-react';
+import { managerAct, type StreamManagerView } from '../../services/streamManager';
 import { useAppStore } from '../../stores/AppStore';
 import { Tooltip } from '../ui/Tooltip';
 import { BannerStatus, OverlayBanner, ShareRow } from './OverlayBanner';
 import { ChannelPointsIcon } from '../ChannelPointsIcon';
-import { Logger } from '../../utils/logger';
-import { useOutsidePress } from '../../hooks/useOutsidePress';
-import { ACCENT_BUTTON, ACCENT_FILL, GLAZE_PILL } from '../ui/glazeButtons';
-import { IS_MOBILE } from '../../utils/platform';
+import { isImeComposing } from '../../utils/imeComposing';
+import {
+  codePoints,
+  freshBuilder,
+  growChoices,
+  moveChoice,
+  newChoiceId,
+  runTool,
+  setToolDraft,
+  switchKind,
+  toolKey,
+  useTool,
+  type BuilderChoice,
+  type BuilderDraft,
+  type BuilderKind,
+} from './managerStore';
+import { FIELD, FooterRow, FormShell, LABEL, MainButton, Segmented, useCloseSoon, useInstant, type Layout } from './managerKit';
 
 /**
- * Builder for a Twitch poll or prediction, anchored above the chat input.
- *
- * Deliberately a popover on the shared chat glass rather than a modal: it opens
- * where your hands already are and leaves the stream and chat visible while you
- * fill it in. The preview underneath is the REAL OverlayBanner the viewers get,
- * not a mock-up, so what you see is what goes live.
+ * The builder for a Twitch poll or prediction: in the panel over the message
+ * box, a page of the Manage channel window (where the side list picks Poll
+ * or Prediction and the preview sits beside the fields) or the phone's
+ * Manage channel sheet. The preview is the REAL OverlayBanner viewers get.
+ * Twitch's limits come from Rust's view; Rust checks them again and runs the
+ * create through its one door.
  */
-
-// Twitch's own limits. Enforced here so a create can't fail on something the
-// form could have told you about first.
-const LIMITS = {
-  poll: { title: 60, option: 25, min: 2, max: 5, minSecs: 15, maxSecs: 1800 },
-  prediction: { title: 45, option: 25, min: 2, max: 10, minSecs: 30, maxSecs: 1800 },
-} as const;
-
-const DURATIONS = [
-  { label: '30s', value: 30 },
-  { label: '1m', value: 60 },
-  { label: '2m', value: 120 },
-  { label: '5m', value: 300 },
-  { label: '10m', value: 600 },
-  { label: '30m', value: 1800 },
-];
-
-type Kind = 'poll' | 'prediction';
 
 interface RecentEntry {
   title: string;
@@ -43,390 +39,418 @@ interface RecentEntry {
 }
 
 interface Props {
-  broadcasterId: string;
-  channelLogin: string;
-  /** Pre-selects a tab when opened from /poll or /prediction. */
-  initialKind?: Kind;
+  view: StreamManagerView;
+  layout: Layout;
+  /** The kind to open on (Start a prediction, /prediction). */
+  initialKind?: BuilderKind;
+  /** The window's page: the kind is the side list's, with no switch here. */
+  fixedKind?: BuilderKind;
   onClose: () => void;
-  /** The stream manager's answer, so the Tools menu shows the running poll. */
-  onOutcome?: (outcome: ActOutcome) => void;
-  /** Drawn in a page (the phone's Manage channel sheet) rather than as a
-   *  popover above the message box: no frame, no outside-press close. */
-  inline?: boolean;
+  /** Open in the Manage channel window (the panel only). */
+  onExpand?: (kind: BuilderKind) => void;
 }
 
-export function PollPredictionComposer({
-  broadcasterId,
-  channelLogin,
-  initialKind = 'poll',
-  onClose,
-  onOutcome,
-  inline = false,
-}: Props) {
+const limitsOf = (view: StreamManagerView, kind: BuilderKind) => {
+  const l = view.limits;
+  return kind === 'poll'
+    ? { title: l.poll_title, option: l.poll_choice, min: l.poll_choices_min, max: l.poll_choices_max, minSecs: l.poll_seconds_min, maxSecs: l.poll_seconds_max }
+    : {
+        title: l.prediction_title,
+        option: l.prediction_outcome,
+        min: l.prediction_outcomes_min,
+        max: l.prediction_outcomes_max,
+        minSecs: l.prediction_seconds_min,
+        maxSecs: l.prediction_seconds_max,
+      };
+};
+
+/** A count inside a box: quiet, amber in its last five, red past it. */
+function BoxCount({ n, max, always }: { n: number; max: number; always: boolean }) {
+  if (!always && n < max - 5) return null;
+  const tone = n > max ? 'text-error' : n > max - 5 ? 'text-warning' : 'text-textSecondary';
+  return <span className={`flex-shrink-0 text-[11px] font-semibold tabular-nums ${tone}`}>{`${n} / ${max}`}</span>;
+}
+
+export function PollPredictionComposer({ view, layout, initialKind, fixedKind, onClose, onExpand }: Props) {
   const settings = useAppStore((s) => s.settings);
   const updateSettings = useAppStore((s) => s.updateSettings);
-  const addToast = useAppStore((s) => s.addToast);
-
-  const [kind, setKind] = useState<Kind>(initialKind);
-  const [title, setTitle] = useState('');
-  const [options, setOptions] = useState<string[]>(['', '']);
-  const [duration, setDuration] = useState(120);
-  const [pointsPerVote, setPointsPerVote] = useState(0);
-  const [busy, setBusy] = useState(false);
+  const ch = view.channel_id;
+  const key = toolKey(ch, 'builder');
+  const entry = useTool(key);
+  const [startKind] = useState(initialKind);
+  // The kind picked here with the switch, once there is one.
+  const [picked, setPicked] = useState<BuilderKind | null>(null);
+  const want = fixedKind ?? picked ?? startKind ?? null;
+  const [blank] = useState(() => freshBuilder(want ?? 'poll'));
+  const raw = (entry.draft as BuilderDraft | undefined) ?? blank;
+  // The kind asked for (the menu's row, a slash command, the side list, the
+  // switch) wins over a kept draft's: shown at once, kept just after.
+  const d = want && raw.kind !== want ? switchKind(raw, want, limitsOf(view, want)) : raw;
+  const limits = limitsOf(view, d.kind);
   const [showRecent, setShowRecent] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
+  const [tried, setTried] = useState(false);
   const titleRef = useRef<HTMLInputElement>(null);
-
-  const limits = LIMITS[kind];
-  const recents: RecentEntry[] = useMemo(
-    () => (kind === 'poll' ? settings.recent_polls : settings.recent_predictions) ?? [],
-    [kind, settings.recent_polls, settings.recent_predictions],
-  );
+  const closeSoon = useCloseSoon(onClose);
+  const instant = useInstant();
+  const sheet = layout === 'sheet';
+  const big = layout === 'window';
 
   useEffect(() => {
-    // On a phone the keyboard would cover the form the moment it opens.
-    if (!inline) titleRef.current?.focus();
-  }, [inline]);
+    if (want && raw.kind !== want) setToolDraft(key, d);
+  }, [d, key, raw.kind, want]);
 
-  // Escape closes; click-away closes. Matches the emote picker and mod menu.
-  const markInside = useOutsidePress(!inline, [rootRef], onClose);
+  // On a phone the keyboard would cover the form the moment it opens.
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.stopPropagation();
-        onClose();
-      }
-    };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [onClose]);
+    if (!sheet) titleRef.current?.focus();
+  }, [sheet]);
 
-  // Switching tabs keeps what you've typed but trims to the new maximum, so
-  // moving a 7-outcome prediction to a poll doesn't silently drop your work
-  // without the count making it obvious.
-  const switchKind = (next: Kind) => {
-    setKind(next);
-    setOptions((prev) => prev.slice(0, LIMITS[next].max));
-    setDuration((d) => Math.min(Math.max(d, LIMITS[next].minSecs), LIMITS[next].maxSecs));
+  const put = (next: BuilderDraft) => {
+    setTried(false);
+    setToolDraft(key, next);
   };
 
-  const setOption = (i: number, value: string) =>
-    setOptions((prev) => prev.map((o, idx) => (idx === i ? value : o)));
+  const recents: RecentEntry[] = useMemo(
+    () => (d.kind === 'poll' ? settings.recent_polls : settings.recent_predictions) ?? [],
+    [d.kind, settings.recent_polls, settings.recent_predictions],
+  );
 
-  const moveOption = (i: number, delta: number) =>
-    setOptions((prev) => {
-      const next = [...prev];
-      const j = i + delta;
-      if (j < 0 || j >= next.length) return prev;
-      [next[i], next[j]] = [next[j], next[i]];
-      return next;
-    });
-
-  const filled = options.map((o) => o.trim()).filter(Boolean);
-  const problem =
-    !title.trim()
-      ? 'Give it a title'
-      : filled.length < limits.min
-        ? `Needs at least ${limits.min} options`
+  const filled = d.choices.map((c) => c.text.trim()).filter(Boolean);
+  const titleCount = codePoints(d.title.trim());
+  const over = titleCount > limits.title || d.choices.some((c) => codePoints(c.text.trim()) > limits.option);
+  const problem = !d.title.trim()
+    ? 'Add a question'
+    : filled.length < limits.min
+      ? `Add at least ${limits.min} ${d.kind === 'poll' ? 'choices' : 'outcomes'}`
+      : over
+        ? 'Shorten what is over its count'
         : null;
 
-  const applyRecent = (entry: RecentEntry) => {
-    setTitle(entry.title.slice(0, limits.title));
-    setOptions(entry.options.slice(0, limits.max).map((o) => o.slice(0, limits.option)));
+  const durations = view.limits.durations.filter((x) => x.value >= limits.minSecs && x.value <= limits.maxSecs);
+
+  const setChoice = (id: string, text: string) =>
+    put({ ...d, choices: growChoices(d.choices.map((c) => (c.id === id ? { ...c, text } : c)), limits.max) });
+  const removeChoice = (id: string) => put({ ...d, choices: d.choices.filter((c) => c.id !== id) });
+  const focusChoice = (id: string) => requestAnimationFrame(() => document.getElementById(`sn-choice-${id}`)?.focus());
+
+  const applyRecent = (r: RecentEntry) => {
+    const choices: BuilderChoice[] = r.options.slice(0, limits.max).map((text) => ({ id: newChoiceId(), text }));
+    put({ ...d, title: r.title, choices: growChoices(choices, limits.max) });
     setShowRecent(false);
     titleRef.current?.focus();
   };
 
-  const rememberRecent = (entry: RecentEntry) => {
-    const key = kind === 'poll' ? 'recent_polls' : 'recent_predictions';
-    const prior = (recents ?? []).filter(
-      (r) => r.title.toLowerCase() !== entry.title.toLowerCase(),
-    );
-    void updateSettings({ ...settings, [key]: [entry, ...prior].slice(0, 10) });
+  const rememberRecent = (r: RecentEntry) => {
+    const k = d.kind === 'poll' ? 'recent_polls' : 'recent_predictions';
+    const prior = recents.filter((x) => x.title.toLowerCase() !== r.title.toLowerCase());
+    const latest = useAppStore.getState().settings;
+    void updateSettings({ ...latest, [k]: [r, ...prior].slice(0, 10) });
   };
 
-  const submit = async () => {
-    if (problem || busy) return;
-    setBusy(true);
-    try {
-      // One Rust door: Helix for the broadcaster, Twitch's own GQL for a
-      // moderator or editor, with Twitch's limits checked first.
-      const outcome = await managerAct(
-        broadcasterId,
-        channelLogin,
-        kind === 'poll'
-          ? {
-              kind: 'create_poll',
-              title: title.trim(),
-              choices: filled,
-              seconds: duration,
-              points_per_vote: pointsPerVote > 0 ? pointsPerVote : null,
-            }
-          : { kind: 'create_prediction', title: title.trim(), outcomes: filled, seconds: duration },
-      );
-      onOutcome?.(outcome);
-      addToast(outcome.message, outcome.ok ? 'success' : 'error');
-      if (!outcome.ok) return;
-      rememberRecent({ title: title.trim(), options: filled });
-      onClose();
-    } catch (err) {
-      Logger.error(`[Composer] create ${kind} failed:`, err);
-      // The Rust layer passes Twitch's own message through, which names the
-      // offending field on a 400.
-      addToast(typeof err === 'string' ? err : `Could not start the ${kind}`, 'error');
-    } finally {
-      setBusy(false);
+  const start = async () => {
+    if (problem) {
+      setTried(true);
+      return;
     }
+    const title = d.title.trim();
+    const sentKind = d.kind;
+    const ok = await runTool(
+      key,
+      () =>
+        managerAct(
+          ch,
+          view.channel_login,
+          sentKind === 'poll'
+            ? { kind: 'create_poll', title, choices: filled, seconds: d.seconds, points_per_vote: d.points > 0 ? d.points : null }
+            : { kind: 'create_prediction', title, outcomes: filled, seconds: d.seconds },
+        ),
+      { clearDraft: true },
+    );
+    if (!ok) return;
+    rememberRecent({ title, options: filled });
+    if (!big) closeSoon();
   };
 
-  const durationLabel = DURATIONS.find((d) => d.value === duration)?.label ?? `${duration}s`;
+  const onEnter = (e: ReactKeyboardEvent, next?: () => void) => {
+    if (e.key !== 'Enter' || isImeComposing(e)) return;
+    e.preventDefault();
+    if (!problem || !next) void start();
+    else next();
+  };
 
-  return (
-    <div
-      ref={rootRef}
-      onPointerDownCapture={markInside}
-      className={
-        inline
-          ? 'flex flex-col'
-          : 'glass-flyout rounded-xl !p-0 absolute bottom-full left-0 right-0 mb-2 z-[60] flex flex-col max-h-[70vh] overflow-hidden'
-      }
-    >
-      {/* Kind switch */}
-      <div className={`flex items-center gap-1 ${inline ? 'pb-2' : 'p-2'}`}>
-        {(['poll', 'prediction'] as const).map((k) => {
-          const active = kind === k;
-          const Icon = k === 'poll' ? BarChart3 : Trophy;
-          return (
-            <button
-              key={k}
-              onClick={() => switchKind(k)}
-              className={`flex-1 flex h-7 items-center justify-center gap-1.5 ${
-                active ? `${ACCENT_BUTTON} !text-xs` : `${GLAZE_PILL} text-xs`
-              }`}
-              style={active ? ACCENT_FILL : undefined}
-            >
-              <Icon size={14} />
-              {k === 'poll' ? 'Poll' : 'Prediction'}
-            </button>
-          );
-        })}
-        {/* In a page the sheet's Back closes it. */}
-        {!inline && (
-          <Tooltip content="Close" side="top">
-            <button
-              onClick={onClose}
-              className={`${GLAZE_PILL} grid h-7 w-7 flex-shrink-0 place-items-center`}
-              aria-label="Close"
-            >
-              <X size={14} />
-            </button>
-          </Tooltip>
+  const noun = d.kind === 'poll' ? 'poll' : 'prediction';
+  const durationLabel = durations.find((x) => x.value === d.seconds)?.label ?? `${d.seconds}s`;
+
+  const fields = (
+    <div className="space-y-3.5">
+      {!fixedKind && (
+        <Segmented
+          layout={layout}
+          ariaLabel="Poll or prediction"
+          value={d.kind}
+          options={[
+            { value: 'poll', label: 'Poll', icon: <BarChart3 size={14} aria-hidden /> },
+            { value: 'prediction', label: 'Prediction', icon: <Trophy size={14} aria-hidden /> },
+          ]}
+          onChange={(k) => {
+            setPicked(k);
+            put(switchKind(d, k, limitsOf(view, k)));
+          }}
+        />
+      )}
+
+      <div>
+        <div className="mb-1.5 flex items-center justify-between">
+          <label htmlFor={`sn-builder-title-${layout}`} className={LABEL}>
+            {d.kind === 'poll' ? 'Question' : 'Prediction'}
+          </label>
+          {recents.length > 0 && (
+            <Tooltip content="Reuse a recent one" side="top">
+              <button
+                type="button"
+                onClick={() => setShowRecent((v) => !v)}
+                aria-label="Recent"
+                aria-expanded={showRecent}
+                className="text-textSecondary transition-colors hover:text-textPrimary"
+              >
+                <History size={13} />
+              </button>
+            </Tooltip>
+          )}
+        </div>
+        <div className={`${FIELD} flex items-center gap-2 ${titleCount > limits.title ? '!border-error/60' : ''}`}>
+          <input
+            id={`sn-builder-title-${layout}`}
+            ref={titleRef}
+            value={d.title}
+            onChange={(e) => put({ ...d, title: e.target.value })}
+            onKeyDown={(e) => onEnter(e, () => d.choices[0] && focusChoice(d.choices[0].id))}
+            placeholder={d.kind === 'poll' ? 'What should we play next?' : 'Do we win this one?'}
+            className={`min-w-0 flex-1 bg-transparent text-textPrimary placeholder-textSecondary outline-none ${big ? 'h-11 text-[15px] font-semibold' : 'h-10 text-sm'}`}
+          />
+          <BoxCount n={titleCount} max={limits.title} always />
+        </div>
+        {showRecent && recents.length > 0 && (
+          <div className="mt-1.5 overflow-hidden rounded-lg bg-surface/30 ring-1 ring-inset ring-textPrimary/[0.06]">
+            {recents.map((r, i) => (
+              <button
+                key={`${r.title}-${i}`}
+                type="button"
+                onClick={() => applyRecent(r)}
+                className="w-full px-2.5 py-1.5 text-left transition-colors hover:bg-textPrimary/[0.06]"
+              >
+                <span className="block truncate text-xs text-textPrimary">{r.title}</span>
+                <span className="block truncate text-[10.5px] text-textSecondary">{r.options.join(' · ')}</span>
+              </button>
+            ))}
+          </div>
         )}
       </div>
 
-      <div className={`overflow-y-auto scrollbar-thin pb-3 space-y-3 ${inline ? '' : 'px-3'}`}>
-        {/* Title */}
-        <div>
-          <div className="flex items-baseline justify-between mb-1">
-            <label className="text-[11px] font-semibold uppercase tracking-wider text-white/50">
-              {kind === 'poll' ? 'Question' : 'Prediction'}
-            </label>
-            <div className="flex items-center gap-2">
-              {recents.length > 0 && (
-                <Tooltip content="Reuse a recent one" side="top">
-                  <button
-                    onClick={() => setShowRecent((v) => !v)}
-                    className="text-textSecondary hover:text-textPrimary transition-colors"
-                    aria-label="Recent"
-                  >
-                    <History size={13} />
-                  </button>
-                </Tooltip>
-              )}
-              <span className="text-[10px] tabular-nums text-textSecondary">
-                {title.length}/{limits.title}
-              </span>
-            </div>
-          </div>
-          <input
-            ref={titleRef}
-            value={title}
-            maxLength={limits.title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder={kind === 'poll' ? 'What should we play next?' : 'Do we win this one?'}
-            className="glass-input w-full px-3 py-2 text-sm text-textPrimary placeholder-textSecondary"
-          />
-          {showRecent && recents.length > 0 && (
-            <div className="mt-1.5 rounded-md overflow-hidden hairline-y">
-              {recents.map((r, i) => (
-                <button
-                  key={`${r.title}-${i}`}
-                  onClick={() => applyRecent(r)}
-                  className="w-full text-left px-2.5 py-1.5 hover:bg-white/[0.06] transition-colors"
-                >
-                  <span className="block text-xs text-textPrimary truncate">{r.title}</span>
-                  <span className="block text-[10px] text-textSecondary truncate">
-                    {r.options.join(' · ')}
-                  </span>
-                </button>
-              ))}
-            </div>
-          )}
+      <div>
+        <div className="mb-1.5 flex items-baseline justify-between">
+          <span className={LABEL}>{d.kind === 'poll' ? 'Choices' : 'Outcomes'}</span>
+          <span className="text-[11px] font-semibold tabular-nums text-textSecondary/80">
+            {filled.length} / {limits.max}
+          </span>
         </div>
+        <Reorder.Group axis="y" values={d.choices} onReorder={(choices) => put({ ...d, choices })} className="space-y-1.5">
+          {d.choices.map((c, i) => (
+            <ChoiceRow
+              key={c.id}
+              choice={c}
+              index={i}
+              count={d.choices.length}
+              max={limits.option}
+              removable={d.choices.length > limits.min && !(i === d.choices.length - 1 && !c.text.trim())}
+              instant={instant}
+              onText={(t) => setChoice(c.id, t)}
+              onRemove={() => removeChoice(c.id)}
+              onMove={(delta) => {
+                put({ ...d, choices: moveChoice(d.choices, i, delta) });
+                focusChoice(c.id);
+              }}
+              onEnter={(e) => onEnter(e, () => (d.choices[i + 1] ? focusChoice(d.choices[i + 1].id) : undefined))}
+            />
+          ))}
+        </Reorder.Group>
+      </div>
 
-        {/* Options */}
+      <div>
+        <p className={`${LABEL} mb-1.5`}>Runs for {durationLabel}</p>
+        <Segmented
+          layout={layout}
+          ariaLabel="How long it runs"
+          value={d.seconds}
+          options={durations.map((x) => ({ value: x.value, label: x.label }))}
+          onChange={(seconds) => put({ ...d, seconds })}
+        />
+      </div>
+
+      {d.kind === 'poll' && (
         <div>
-          <div className="flex items-baseline justify-between mb-1">
-            <label className="text-[11px] font-semibold uppercase tracking-wider text-white/50">
-              {kind === 'poll' ? 'Choices' : 'Outcomes'}
-            </label>
-            <span className="text-[10px] tabular-nums text-textSecondary">
-              {filled.length}/{limits.max}
-            </span>
+          <label htmlFor={`sn-builder-points-${layout}`} className={`${LABEL} mb-1.5 block`}>
+            Extra votes with channel points
+          </label>
+          <div className="flex items-center gap-2">
+            <ChannelPointsIcon size={14} className="flex-shrink-0 text-accent" />
+            <input
+              id={`sn-builder-points-${layout}`}
+              type="number"
+              min={0}
+              max={1000000}
+              value={d.points || ''}
+              onChange={(e) => put({ ...d, points: Math.max(0, Number(e.target.value) || 0) })}
+              placeholder="Off"
+              className={`${FIELD} h-9 flex-1 text-sm`}
+            />
+            <span className="flex-shrink-0 text-[11.5px] text-textSecondary">per vote</span>
           </div>
-          <div className="space-y-1.5">
-            {options.map((opt, i) => (
-              <div key={i} className="flex items-center gap-1.5">
-                <input
-                  value={opt}
-                  maxLength={limits.option}
-                  onChange={(e) => setOption(i, e.target.value)}
-                  placeholder={`Option ${i + 1}`}
-                  className="glass-input flex-1 min-w-0 px-3 py-1.5 text-sm text-textPrimary placeholder-textSecondary"
-                />
-                <div className="flex flex-col">
-                  <button
-                    onClick={() => moveOption(i, -1)}
-                    disabled={i === 0}
-                    aria-label="Move up"
-                    className="text-textSecondary hover:text-textPrimary disabled:opacity-25 transition-colors"
-                  >
-                    <ChevronUp size={12} />
-                  </button>
-                  <button
-                    onClick={() => moveOption(i, 1)}
-                    disabled={i === options.length - 1}
-                    aria-label="Move down"
-                    className="text-textSecondary hover:text-textPrimary disabled:opacity-25 transition-colors"
-                  >
-                    <ChevronDown size={12} />
-                  </button>
-                </div>
-                <button
-                  onClick={() => setOptions((p) => p.filter((_, idx) => idx !== i))}
-                  disabled={options.length <= limits.min}
-                  aria-label="Remove"
-                  className="text-textSecondary hover:text-error disabled:opacity-25 transition-colors"
-                >
-                  <X size={13} />
-                </button>
+        </div>
+      )}
+      {tried && problem && (
+        <p role="status" className="text-[12px] text-warning">
+          {problem}
+        </p>
+      )}
+    </div>
+  );
+
+  const preview = (
+    <div className="min-w-0">
+      <p className={`${LABEL} mb-1.5`}>Preview</p>
+      <div className="pointer-events-none opacity-95">
+        <OverlayBanner
+          icon={d.kind === 'poll' ? <BarChart3 className="h-4 w-4 text-accent-on-surface" /> : <Trophy className="h-4 w-4 text-accent-on-surface" />}
+          kind={d.kind === 'poll' ? 'Poll' : 'Prediction'}
+          title={d.title.trim() || (d.kind === 'poll' ? 'Your question' : 'Your prediction')}
+          isExpanded
+          onToggleExpanded={() => {}}
+          badges={<BannerStatus>{durationLabel}</BannerStatus>}
+        >
+          <div className="space-y-2 px-3 pb-3">
+            {(filled.length ? filled : ['Option 1', 'Option 2']).map((o, i) => (
+              <div key={i} className="block">
+                <ShareRow title={o} percent={0} />
               </div>
             ))}
           </div>
-          {options.length < limits.max && (
-            <button
-              onClick={() => setOptions((p) => [...p, ''])}
-              className={`${GLAZE_PILL} mt-1.5 w-full flex items-center justify-center gap-1.5 ${IS_MOBILE ? 'min-h-[44px] text-[15px]' : 'h-7 text-xs'}`}
-            >
-              <Plus size={12} />
-              Add {kind === 'poll' ? 'choice' : 'outcome'}
-            </button>
-          )}
-        </div>
-
-        {/* Duration */}
-        <div>
-          <label className="block text-[11px] font-semibold uppercase tracking-wider text-white/50 mb-1">
-            Runs for {durationLabel}
-          </label>
-          <div className="flex gap-1">
-            {DURATIONS.filter((d) => d.value >= limits.minSecs && d.value <= limits.maxSecs).map(
-              (d) => (
-                <button
-                  key={d.value}
-                  onClick={() => setDuration(d.value)}
-                  className={`flex-1 h-7 ${
-                    duration === d.value ? `${ACCENT_BUTTON} !text-xs` : `${GLAZE_PILL} text-xs`
-                  }`}
-                  style={duration === d.value ? ACCENT_FILL : undefined}
-                >
-                  {d.label}
-                </button>
-              ),
-            )}
-          </div>
-        </div>
-
-        {/* Poll-only: extra votes bought with points */}
-        {kind === 'poll' && (
-          <div>
-            <label className="block text-[11px] font-semibold uppercase tracking-wider text-white/50 mb-1">
-              Extra votes with channel points
-            </label>
-            <div className="flex items-center gap-2">
-              <ChannelPointsIcon size={14} className="text-accent flex-shrink-0" />
-              <input
-                type="number"
-                min={0}
-                max={1000000}
-                value={pointsPerVote || ''}
-                onChange={(e) => setPointsPerVote(Math.max(0, Number(e.target.value) || 0))}
-                placeholder="Off"
-                className="glass-input flex-1 px-3 py-1.5 text-sm text-textPrimary placeholder-textSecondary"
-              />
-              <span className="text-[11px] text-textSecondary flex-shrink-0">per vote</span>
-            </div>
-          </div>
-        )}
-
-        {/* Live preview: the real banner, not a mock */}
-        <div>
-          <label className="block text-[11px] font-semibold uppercase tracking-wider text-white/50 mb-1">
-            Preview
-          </label>
-          <div className="pointer-events-none opacity-95">
-            <OverlayBanner
-              icon={
-                kind === 'poll' ? (
-                  <BarChart3 className="w-4 h-4 text-accent-on-surface" />
-                ) : (
-                  <Trophy className="w-4 h-4 text-accent-on-surface" />
-                )
-              }
-              kind={kind === 'poll' ? 'Poll' : 'Prediction'}
-              title={title.trim() || (kind === 'poll' ? 'Your question' : 'Your prediction')}
-              isExpanded
-              onToggleExpanded={() => {}}
-              badges={<BannerStatus>{durationLabel}</BannerStatus>}
-            >
-              <div className="px-3 pb-3 space-y-2">
-                {(filled.length ? filled : ['Option 1', 'Option 2']).map((o, i) => (
-                  <div key={i} className="block">
-                    <ShareRow title={o} percent={0} />
-                  </div>
-                ))}
-              </div>
-            </OverlayBanner>
-          </div>
-        </div>
-      </div>
-
-      {/* Commit */}
-      <div className={inline ? 'pt-0' : 'p-3 pt-0'}>
-        <button
-          onClick={submit}
-          disabled={!!problem || busy}
-          className={`${ACCENT_BUTTON} w-full disabled:cursor-not-allowed ${IS_MOBILE ? 'min-h-[44px] !text-[15px]' : 'h-9 !text-sm'}`}
-          style={ACCENT_FILL}
-        >
-          {busy
-            ? 'Starting…'
-            : problem
-              ? problem
-              : `Start ${kind === 'poll' ? 'poll' : 'prediction'}`}
-        </button>
+        </OverlayBanner>
       </div>
     </div>
+  );
+
+  const footer = (
+    <FooterRow layout={layout} hints={[['Enter', 'start'], ['Esc', 'close']]}>
+      <MainButton
+        layout={layout}
+        phase={entry.phase}
+        label={`Start ${noun}`}
+        working="Starting"
+        done="Started"
+        onClick={() => void start()}
+        disabled={!!problem}
+      />
+    </FooterRow>
+  );
+
+  return (
+    <FormShell
+      layout={layout}
+      frame={{
+        title: d.kind === 'poll' ? 'Start a poll' : 'Start a prediction',
+        icon: d.kind === 'poll' ? <BarChart3 size={14} /> : <Trophy size={14} />,
+        onClose,
+        onExpand: onExpand ? () => onExpand(d.kind) : undefined,
+      }}
+      footer={footer}
+      problem={entry.phase === 'failed' ? entry.line : null}
+    >
+      {big ? (
+        <div className="grid grid-cols-1 gap-6 min-[760px]:grid-cols-[minmax(0,1fr)_280px]">
+          {fields}
+          {preview}
+        </div>
+      ) : (
+        <>
+          {fields}
+          {preview}
+        </>
+      )}
+    </FormShell>
+  );
+}
+
+/** One choice: a drag handle (the only place a drag starts, so a scroll in
+ *  the sheet never moves a row), its box with its count, and Remove. */
+function ChoiceRow({
+  choice,
+  index,
+  count,
+  max,
+  removable,
+  instant,
+  onText,
+  onRemove,
+  onMove,
+  onEnter,
+}: {
+  choice: BuilderChoice;
+  index: number;
+  count: number;
+  max: number;
+  removable: boolean;
+  instant: boolean;
+  onText: (t: string) => void;
+  onRemove: () => void;
+  onMove: (delta: number) => void;
+  onEnter: (e: ReactKeyboardEvent) => void;
+}) {
+  const controls = useDragControls();
+  const n = codePoints(choice.text.trim());
+  return (
+    <Reorder.Item
+      value={choice}
+      dragListener={false}
+      dragControls={controls}
+      transition={instant ? { duration: 0 } : undefined}
+      className="flex items-center gap-1.5"
+    >
+      <span
+        onPointerDown={(e) => controls.start(e)}
+        aria-hidden
+        className="grid h-8 w-5 flex-shrink-0 cursor-grab touch-none place-items-center text-textSecondary/70 hover:text-textSecondary active:cursor-grabbing"
+      >
+        <GripVertical size={14} />
+      </span>
+      <div className={`${FIELD} flex min-w-0 flex-1 items-center gap-2 ${n > max ? '!border-error/60' : ''}`}>
+        <input
+          id={`sn-choice-${choice.id}`}
+          value={choice.text}
+          onChange={(e) => onText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+              e.preventDefault();
+              onMove(e.key === 'ArrowUp' ? -1 : 1);
+              return;
+            }
+            onEnter(e);
+          }}
+          placeholder={`Option ${index + 1}`}
+          aria-label={`Option ${index + 1} of ${count}`}
+          className="h-9 min-w-0 flex-1 bg-transparent text-sm text-textPrimary placeholder-textSecondary outline-none"
+        />
+        <BoxCount n={n} max={max} always={false} />
+      </div>
+      <button
+        type="button"
+        onClick={onRemove}
+        disabled={!removable}
+        aria-label={`Remove option ${index + 1}`}
+        className="grid h-8 w-6 flex-shrink-0 place-items-center text-textSecondary transition-colors hover:text-error disabled:invisible"
+      >
+        <X size={13} />
+      </button>
+    </Reorder.Item>
   );
 }
 

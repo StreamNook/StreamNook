@@ -202,6 +202,7 @@ export function TitleEmojiPicker({ anchorRef, recent, recentHeading, onPick, onC
       onPointerDownCapture={markInside}
       onKeyDown={(e) => {
         if (e.key !== 'Escape') return;
+        e.preventDefault();
         e.stopPropagation();
         onClose();
       }}

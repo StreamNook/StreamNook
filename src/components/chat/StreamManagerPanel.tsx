@@ -1,30 +1,26 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react';
-import { createPortal } from 'react-dom';
-import { motion } from 'framer-motion';
+import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
 import { invoke } from '@tauri-apps/api/core';
 import {
+  ArrowLeft,
+  BarChart3,
   Check,
   ChevronDown,
-  CircleAlert,
   LoaderCircle,
-  Maximize2,
   Megaphone,
-  Minimize2,
   Pencil,
   Search,
   Send,
   SmilePlus,
+  Trophy,
   Tv,
   Undo2,
   X,
 } from 'lucide-react';
-import { useAppStore } from '../../stores/AppStore';
-import { usePerformanceQuiet } from '../../utils/lowPower';
 import { TitleEmojiPicker } from './TitleEmojiPicker';
 import { Tooltip } from '../ui/Tooltip';
 import { ChannelPointsIcon } from '../ChannelPointsIcon';
-import { useOutsidePress } from '../../hooks/useOutsidePress';
 import { isImeComposing } from '../../utils/imeComposing';
 import { IS_MOBILE } from '../../utils/platform';
 import { ACCENT_BUTTON, ACCENT_FILL, GLAZE_PILL } from '../ui/glazeButtons';
@@ -34,38 +30,62 @@ import {
   getRewardQueue,
   managerAct,
   searchRaidTargets,
-  type ActOutcome,
   type Category,
   type InfoCheck,
-  type ManagerAction,
+  type QueueGroup,
+  type QueueRow,
   type QueueView,
   type RaidTarget,
   type StreamInfoDraft,
   type StreamInfoView,
   type StreamManagerView,
 } from '../../services/streamManager';
+import {
+  clearToolDraft,
+  codePoints,
+  getTool,
+  raidStart,
+  readTool,
+  runTool,
+  setToolDraft,
+  toolKey,
+  useManagerStore,
+  useTool,
+  withHeld,
+  type LeavingRow,
+  type PanelKind,
+  type RaidDraft,
+} from './managerStore';
+import {
+  FIELD,
+  FooterRow,
+  FormShell,
+  GroupCard,
+  LABEL,
+  MainButton,
+  QUIET_PILL,
+  ResultLine,
+  RowButton,
+  SecondaryButton,
+  Segmented,
+  TONE_CLASS,
+  easeFor,
+  useCloseSoon,
+  useInstant,
+  type Layout,
+} from './managerKit';
 
 /**
- * The stream manager's builders, anchored above the message box like the
- * poll builder: stream info, raid, ad break, rewards queue and announcements.
- * Everything here draws Rust's view (services/stream_manager.rs) and every
- * write goes through its one door; this file only lays it out.
+ * The stream manager's forms: stream info, raid, ad break, rewards queue and
+ * announcements, plus the running poll and prediction rows. Each draws in
+ * three layouts: the panel over the message box, a page of the Manage channel
+ * window, and the phone's Manage channel sheet. Everything here draws Rust's
+ * view (services/stream_manager.rs) and every write goes through its one
+ * door; drafts and results live in managerStore, so they survive the panel
+ * closing, opening larger and collapsing back.
  */
 
-export type ManagerPanelKind = 'info' | 'raid' | 'ads' | 'rewards' | 'announce';
-
-interface Props {
-  kind: ManagerPanelKind;
-  view: StreamManagerView;
-  queue: QueueView | null;
-  onQueue: (q: QueueView) => void;
-  onOutcome: (o: ActOutcome) => void;
-  onClose: () => void;
-}
-
-const LABEL = 'text-[11px] font-semibold uppercase tracking-wider text-textSecondary';
-/** A full-size action's height and text: finger-sized in the phone's sheet. */
-const BIG = IS_MOBILE ? 'min-h-[44px] !text-[15px]' : 'h-9 !text-sm';
+export type ManagerPanelKind = PanelKind;
 
 export const TITLES: Record<ManagerPanelKind, { title: string; icon: ReactNode }> = {
   info: { title: 'Stream info', icon: <Pencil size={14} /> },
@@ -75,126 +95,63 @@ export const TITLES: Record<ManagerPanelKind, { title: string; icon: ReactNode }
   announce: { title: 'Announce', icon: <Megaphone size={14} /> },
 };
 
-/**
- * One runner for every write: Rust answers with the line to show and the view
- * after it. `onDone` runs after a write that succeeded and asked to close.
- */
-export function useManagerAct(view: StreamManagerView, onOutcome: (o: ActOutcome) => void, onDone: () => void) {
-  const addToast = useAppStore((s) => s.addToast);
-  const [busy, setBusy] = useState(false);
-  const act: Act = async (action, closeOnSuccess = false) => {
-    if (busy) return false;
-    setBusy(true);
-    try {
-      const outcome = await managerAct(view.channel_id, view.channel_login, action);
-      onOutcome(outcome);
-      addToast(outcome.message, outcome.ok ? 'success' : 'error');
-      if (outcome.ok && closeOnSuccess) onDone();
-      return outcome.ok;
-    } catch (err) {
-      addToast(typeof err === 'string' ? err : 'That did not go through', 'error');
-      return false;
-    } finally {
-      setBusy(false);
-    }
-  };
-  return { busy, act };
-}
-
-/** The form for one builder, without its frame: the desktop popover and the
- *  phone's Manage channel sheet both draw it. */
-export function ManagerForm({
-  kind,
-  view,
-  queue,
-  onQueue,
-  onOutcome,
-  onDone,
-}: {
-  kind: ManagerPanelKind;
-  view: StreamManagerView;
-  queue: QueueView | null;
-  onQueue: (q: QueueView) => void;
-  onOutcome: (o: ActOutcome) => void;
-  onDone: () => void;
-}) {
-  const { busy, act } = useManagerAct(view, onOutcome, onDone);
-  return (
-    <>
-      {kind === 'info' && <InfoEditor view={view} onOutcome={onOutcome} onClose={onDone} framed={false} />}
-      {kind === 'raid' && <RaidForm view={view} busy={busy} act={act} />}
-      {kind === 'ads' && <AdsForm view={view} busy={busy} act={act} />}
-      {kind === 'rewards' && <RewardsQueue view={view} queue={queue} onQueue={onQueue} busy={busy} act={act} />}
-      {kind === 'announce' && <AnnounceForm view={view} busy={busy} act={act} />}
-    </>
-  );
-}
-
-export function StreamManagerPanel(props: Props) {
-  // Stream info draws its own frame: a footer that stays put under the
-  // scrolling fields, and the expanded view in the middle of the screen.
-  if (props.kind === 'info') {
-    return <InfoEditor view={props.view} onOutcome={props.onOutcome} onClose={props.onClose} framed />;
-  }
-  return <BuilderPanel {...props} />;
-}
-
-function BuilderPanel({ kind, view, queue, onQueue, onOutcome, onClose }: Props) {
-  const rootRef = useRef<HTMLDivElement>(null);
-
-  const markInside = useOutsidePress(true, [rootRef], onClose);
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.stopPropagation();
-        onClose();
-      }
-    };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
-  const head = TITLES[kind];
-  return (
-    <div
-      ref={rootRef}
-      onPointerDownCapture={markInside}
-      className="glass-flyout rounded-xl !p-0 absolute bottom-full left-0 right-0 mb-2 z-[60] flex flex-col max-h-[70vh] overflow-hidden"
-    >
-      <div className="flex items-center gap-2 px-3 py-2.5">
-        <span className="flex items-center justify-center text-textSecondary">{head.icon}</span>
-        <span className="flex-1 text-sm font-semibold text-textPrimary">{head.title}</span>
-        <Tooltip content="Close" side="top">
-          <button onClick={onClose} className={`${GLAZE_PILL} grid h-6 w-6 place-items-center`} aria-label="Close">
-            <X size={14} />
-          </button>
-        </Tooltip>
-      </div>
-      <div className="overflow-y-auto scrollbar-thin px-3 pb-3">
-        <ManagerForm kind={kind} view={view} queue={queue} onQueue={onQueue} onOutcome={onOutcome} onDone={onClose} />
-      </div>
-    </div>
-  );
-}
-
-type Act = (action: ManagerAction, closeOnSuccess?: boolean) => Promise<boolean>;
-
 interface FormProps {
   view: StreamManagerView;
-  busy: boolean;
-  act: Act;
+  layout: Layout;
+  onClose: () => void;
+  /** Open this tool in the Manage channel window (the panel only). */
+  onExpand?: () => void;
+  /** Opened from the other size with what was typed: no "Picking up" line. */
+  handedOff?: boolean;
 }
 
-// ─── stream info ─────────────────────────────────────────────────────────────
+interface QueueProps {
+  queue: QueueView | null;
+  onQueue: (channelId: string, q: QueueView) => void;
+}
 
-/**
- * Unsaved stream info edits, one per channel, for this run of the app. Esc or
- * a press outside closes the editor at once (the app's one outside rule), so
- * the edit waits here and the next open picks it up. It is this window's own
- * form state, never shared or stored, which is why it lives beside the form
- * rather than in Rust.
- */
-const keptDrafts = new Map<string, { draft: StreamInfoDraft; base: string }>();
+/** One form in the layout asked for. */
+export function ManagerForm({ kind, ...props }: FormProps & QueueProps & { kind: ManagerPanelKind }) {
+  switch (kind) {
+    case 'info':
+      return <InfoEditor {...props} />;
+    case 'raid':
+      return <RaidForm {...props} />;
+    case 'ads':
+      return <AdsForm {...props} />;
+    case 'rewards':
+      return <RewardsQueue {...props} />;
+    case 'announce':
+      return <AnnounceForm {...props} />;
+  }
+}
+
+/** The desktop panel over the message box. */
+export function StreamManagerPanel(props: Omit<FormProps, 'layout'> & QueueProps & { kind: ManagerPanelKind }) {
+  return <ManagerForm {...props} layout="panel" />;
+}
+
+const frameOf = (kind: ManagerPanelKind, p: FormProps) => ({
+  title: TITLES[kind].title,
+  icon: TITLES[kind].icon,
+  onClose: p.onClose,
+  onExpand: p.onExpand,
+});
+
+/** Now, ticking every `ms` while `ms` > 0. */
+function useNow(ms: number): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (ms <= 0) return;
+    const t = window.setInterval(() => setNow(Date.now()), ms);
+    return () => window.clearInterval(t);
+  }, [ms]);
+  return now;
+}
+
+const failWords = (e: { phase: string; line: string | null }) => (e.phase === 'failed' ? e.line : null);
+
+// ─── stream info ─────────────────────────────────────────────────────────────
 
 /** What Twitch had when an edit began. A kept edit made against something
  *  else (the title changed meanwhile) starts fresh instead of resuming. */
@@ -208,116 +165,79 @@ const freshDraft = (info: StreamInfoView | null): StreamInfoDraft => ({
   language: info?.language ?? '',
 });
 
+/** Stream info's draft in the store: the fields and a half-typed tag. */
+interface InfoHeld {
+  draft: StreamInfoDraft;
+  tagText: string;
+}
+
 const boxArt = (c: Category, w: number, h: number) =>
   c.box_art_url.replace('{width}', String(w)).replace('{height}', String(h));
 
-/** How long "Saved" shows before the editor closes itself. */
-const SAVED_HOLD_MS = 900;
-const KEY_CAP =
-  'font-sans rounded-md bg-surface/50 px-1.5 py-[3px] text-[10.5px] font-bold leading-none text-textSecondary ring-1 ring-inset ring-textPrimary/10';
-/** Close, expand and Discard: a step quieter than the content and Save. */
-const QUIET_PILL = `${GLAZE_PILL} !bg-white/[0.05] hover:!bg-white/[0.1] !text-textSecondary hover:!text-textPrimary`;
-/** Saved: the button's own glass tinted green, never a flat fill. */
-const SAVED_FILL: CSSProperties = {
-  background: 'color-mix(in srgb, var(--color-success) 30%, var(--color-background-tertiary))',
-};
-const TONE_CLASS = { quiet: 'text-textSecondary', near: 'text-warning', over: 'text-error' } as const;
-/** The body's bottom edge fades into the footer instead of cutting. */
-const FADE_BOTTOM: CSSProperties = { maskImage: 'linear-gradient(to bottom, black calc(100% - 16px), transparent)' };
-
-type SavePhase = 'idle' | 'saving' | 'saved' | 'failed';
-
 /**
  * Stream info: the title (with an emoji menu and Twitch's count), category,
- * tags and language, and the tile viewers will see. `framed` is the desktop
- * editor over the message box, which can also open large in the middle of
- * the screen; unframed is the phone's Manage channel sheet, which brings its
- * own frame. Rust checks the draft, words the count and every problem, and
- * runs the save; this only lays it out.
+ * tags and language, and the tile viewers will see. Rust checks the draft,
+ * words the count and every problem, and runs the save; this only lays it out.
  */
-function InfoEditor({
-  view,
-  onOutcome,
-  onClose,
-  framed,
-}: {
-  view: StreamManagerView;
-  onOutcome: (o: ActOutcome) => void;
-  onClose: () => void;
-  framed: boolean;
-}) {
+function InfoEditor({ view, layout, onClose, onExpand, handedOff = false }: FormProps) {
   const info = view.info;
   const channelId = view.channel_id;
-  const [start] = useState(() => {
-    const base = infoBase(info);
-    const kept = keptDrafts.get(channelId);
-    if (kept && kept.base === base) return { draft: kept.draft, base, resumed: true };
-    keptDrafts.delete(channelId);
-    return { draft: freshDraft(info), base, resumed: false };
+  const key = toolKey(channelId, 'info');
+  const entry = useTool(key);
+  const base = infoBase(info);
+  const fresh = useMemo(() => freshDraft(info), [info]);
+  // Decided once, when this editor opens: a kept edit made against other info
+  // than Twitch has now starts over; one handed over from the other size
+  // carries on without saying so.
+  const [opened] = useState(() => {
+    const kept = getTool(key);
+    const has = kept.draft !== undefined;
+    const fits = has && kept.base === base;
+    return { stale: has && !fits ? kept.draft : undefined, resumed: fits && !handedOff };
   });
-  const [draft, setDraftState] = useState<StreamInfoDraft>(start.draft);
-  const [resumed, setResumed] = useState(start.resumed);
-  const touched = useRef(start.resumed);
+  useEffect(() => {
+    if (opened.stale !== undefined) clearToolDraft(key);
+  }, [key, opened.stale]);
+  // A stale kept edit is never shown, even for the moment before it is cleared.
+  const held = entry.draft !== undefined && entry.draft === opened.stale ? undefined : (entry.draft as InfoHeld | undefined);
+  const draft = held?.draft ?? fresh;
+  const tagText = held?.tagText ?? '';
+  const [resumed, setResumed] = useState(opened.resumed);
   const [check, setCheck] = useState<InfoCheck | null>(null);
-  const [phase, setPhase] = useState<SavePhase>('idle');
-  const [failLine, setFailLine] = useState<string | null>(null);
-  const [expanded, setExpanded] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [tagText, setTagText] = useState('');
   const [catQuery, setCatQuery] = useState<string | null>(null);
   const [catResults, setCatResults] = useState<Category[]>([]);
   const [catIndex, setCatIndex] = useState(0);
-  const rootRef = useRef<HTMLDivElement>(null);
   const titleRef = useRef<HTMLTextAreaElement>(null);
   const emojiButtonRef = useRef<HTMLButtonElement>(null);
   const caretRef = useRef<[number, number] | null>(null);
-  const closeTimer = useRef<number | null>(null);
-  const motionOff = useAppStore((s) => s.settings.motion_mode) === 'off';
-  const perfQuiet = usePerformanceQuiet();
-  const instant = motionOff || perfQuiet;
-  const big = framed && expanded;
+  const closeSoon = useCloseSoon(onClose);
+  const big = layout === 'window';
+  const sheet = layout === 'sheet';
+  const phase = entry.phase;
 
-  const setDraft = (change: (d: StreamInfoDraft) => StreamInfoDraft) => {
-    touched.current = true;
-    setDraftState(change);
-    if (phase === 'failed') setPhase('idle');
+  /** Every change waits in the store until it is saved or thrown away. */
+  const put = (next: InfoHeld) => {
+    setToolDraft(key, next, held ? entry.base : base);
   };
+  const setDraft = (change: (d: StreamInfoDraft) => StreamInfoDraft) => put({ draft: change(draft), tagText });
+  const setTagText = (t: string) => put({ draft, tagText: t });
 
-  // Every change waits in keptDrafts until it is saved or thrown away.
+  // Typing goes straight into the title, caret at its end. Not on the phone,
+  // where the keyboard would cover the form the moment it opens.
   useEffect(() => {
-    if (touched.current) keptDrafts.set(channelId, { draft, base: start.base });
-  }, [draft, channelId, start.base]);
-
-  useEffect(() => () => {
-    if (closeTimer.current) window.clearTimeout(closeTimer.current);
-  }, []);
-
-  // Typing goes straight into the title, caret at its end, on open and when
-  // the editor changes size (the field is a new one then).
-  useEffect(() => {
+    if (sheet) return;
     const t = titleRef.current;
     if (!t) return;
     t.focus();
     t.setSelectionRange(t.value.length, t.value.length);
-  }, [expanded]);
-
-  const markInside = useOutsidePress(framed, [rootRef], onClose);
-  useEffect(() => {
-    if (!framed) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      e.stopPropagation();
-      onClose();
-    };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [framed, onClose]);
+  }, [sheet]);
 
   // Rust checks the draft and builds the preview tile; asked after typing pauses.
   useEffect(() => {
     let alive = true;
     const t = window.setTimeout(() => {
-      void checkStreamInfo(view.channel_id, draft)
+      void checkStreamInfo(channelId, draft)
         .then((c) => alive && setCheck(c))
         .catch(() => {});
     }, 200);
@@ -325,7 +245,7 @@ function InfoEditor({
       alive = false;
       window.clearTimeout(t);
     };
-  }, [draft, view.channel_id]);
+  }, [draft, channelId]);
 
   useEffect(() => {
     if (catQuery === null || !catQuery.trim()) return;
@@ -347,48 +267,29 @@ function InfoEditor({
   const addTag = () => {
     const raw = tagText.trim();
     if (!raw) return;
-    setDraft((d) => ({ ...d, tags: [...d.tags, raw] }));
-    setTagText('');
+    put({ draft: { ...draft, tags: [...draft.tags, raw] }, tagText: '' });
   };
 
   const preview = check?.preview;
   const tone = check?.title_tone ?? 'quiet';
   // Past the limit the count says so in the box; the line would repeat it.
   const titleProblem = tone === 'over' ? undefined : problemFor('title');
-  const canSave = phase !== 'saving' && phase !== 'saved' && !!check?.ok && check.changed;
+  const canSave = phase !== 'working' && phase !== 'done' && !!check?.ok && check.changed;
 
   const save = async () => {
     if (!canSave) return;
-    setPhase('saving');
-    setFailLine(null);
     setPickerOpen(false);
-    try {
-      const outcome = await managerAct(view.channel_id, view.channel_login, { kind: 'save_info', draft });
-      onOutcome(outcome);
-      if (!outcome.ok) {
-        setFailLine(outcome.message);
-        setPhase('failed');
-        return;
-      }
-      keptDrafts.delete(channelId);
-      touched.current = false;
-      setPhase('saved');
-      closeTimer.current = window.setTimeout(onClose, SAVED_HOLD_MS);
-    } catch (err) {
-      setFailLine(typeof err === 'string' ? err : 'Twitch did not answer.');
-      setPhase('failed');
-    }
+    const sent = draft;
+    const ok = await runTool(key, () => managerAct(channelId, view.channel_login, { kind: 'save_info', draft: sent }), {
+      clearDraft: true,
+    });
+    if (ok && layout !== 'window') closeSoon();
   };
 
   /** Discard, and Start over on a picked-up edit: back to what Twitch has. */
   const startOver = () => {
-    keptDrafts.delete(channelId);
-    touched.current = false;
-    setDraftState(freshDraft(info));
+    clearToolDraft(key);
     setResumed(false);
-    setPhase('idle');
-    setFailLine(null);
-    setTagText('');
     setCatQuery(null);
     titleRef.current?.focus();
   };
@@ -431,14 +332,14 @@ function InfoEditor({
     preview?.avatar_url ? (
       <img src={preview.avatar_url} alt="" className="flex-shrink-0 rounded-full" style={{ width: px, height: px }} />
     ) : (
-      <span className="flex-shrink-0 rounded-full bg-white/10" style={{ width: px, height: px }} />
+      <span className="flex-shrink-0 rounded-full bg-textPrimary/10" style={{ width: px, height: px }} />
     );
 
   // ── the fields ──
 
   const titleField = (
     <div>
-      <label htmlFor="sn-stream-title" className={`${LABEL} mb-1.5 block`}>
+      <label htmlFor={`sn-stream-title-${layout}`} className={`${LABEL} mb-1.5 block`}>
         Title
       </label>
       <div
@@ -450,7 +351,7 @@ function InfoEditor({
             it is edited (SN-264). Still one line of text: Enter saves, and
             pasted line breaks become spaces. */}
         <textarea
-          id="sn-stream-title"
+          id={`sn-stream-title-${layout}`}
           ref={titleRef}
           rows={1}
           value={draft.title}
@@ -482,7 +383,7 @@ function InfoEditor({
         />
         <div className="flex min-h-[30px] items-center justify-end gap-2 pb-1.5 pl-3 pr-1.5">
           <span className={`text-[11.5px] font-semibold tabular-nums ${TONE_CLASS[tone]}`}>{check?.title_count ?? ''}</span>
-          {framed && (
+          {!sheet && (
             <Tooltip content="Emoji" side="top">
               <button
                 ref={emojiButtonRef}
@@ -491,7 +392,7 @@ function InfoEditor({
                 aria-expanded={pickerOpen}
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => setPickerOpen((o) => !o)}
-                className={`${pickerOpen ? `${GLAZE_PILL} !bg-white/[0.16]` : QUIET_PILL} grid h-7 w-7 place-items-center`}
+                className={`${pickerOpen ? `${GLAZE_PILL} !bg-textPrimary/[0.16]` : QUIET_PILL} grid h-7 w-7 place-items-center`}
               >
                 <SmilePlus size={15} />
               </button>
@@ -513,12 +414,12 @@ function InfoEditor({
             setCatQuery('');
             setCatIndex(0);
           }}
-          className="glass-input flex w-full items-center gap-2.5 !rounded-xl py-1.5 pl-2 pr-3 text-left transition-colors hover:!border-white/15"
+          className="glass-input flex w-full items-center gap-2.5 !rounded-xl py-1.5 pl-2 pr-3 text-left transition-colors hover:!border-textPrimary/15"
         >
           {draft.category?.box_art_url ? (
             <img src={boxArt(draft.category, 54, 72)} alt="" className="h-9 w-[27px] flex-shrink-0 rounded object-cover" />
           ) : (
-            <span className="h-9 w-[27px] flex-shrink-0 rounded bg-white/[0.06]" />
+            <span className="h-9 w-[27px] flex-shrink-0 rounded bg-textPrimary/[0.06]" />
           )}
           <span className={`flex-1 truncate text-sm font-medium ${draft.category ? 'text-textPrimary' : 'text-textSecondary'}`}>
             {draft.category?.name ?? 'Pick a category'}
@@ -530,37 +431,36 @@ function InfoEditor({
           )}
         </button>
       ) : (
-        <>
-          <div className="glass-input flex items-center gap-2 !rounded-xl px-3 focus-within:!border-accent/40">
-            <Search size={15} className="flex-shrink-0 text-textSecondary" aria-hidden />
-            <input
-              autoFocus
-              value={catQuery}
-              onChange={(e) => {
-                setCatQuery(e.target.value);
-                setCatIndex(0);
-              }}
-              onBlur={() => setCatQuery(null)}
-              onKeyDown={(e) => {
-                const down = e.key === 'ArrowDown' ? catCols : e.key === 'ArrowRight' && big ? 1 : 0;
-                const up = e.key === 'ArrowUp' ? catCols : e.key === 'ArrowLeft' && big ? 1 : 0;
-                if (e.key === 'Escape') {
-                  e.stopPropagation();
-                  setCatQuery(null);
-                } else if (down || up) {
-                  e.preventDefault();
-                  setCatIndex((i) => Math.max(0, Math.min(catList.length - 1, i + down - up)));
-                } else if (e.key === 'Enter') {
-                  e.preventDefault();
-                  const c = catList[catIndex];
-                  if (c) pickCategory(c);
-                }
-              }}
-              placeholder="Search categories"
-              className="h-12 min-w-0 flex-1 bg-transparent text-sm text-textPrimary placeholder-textSecondary outline-none"
-            />
-          </div>
-        </>
+        <div className="glass-input flex items-center gap-2 !rounded-xl px-3 focus-within:!border-accent/40">
+          <Search size={15} className="flex-shrink-0 text-textSecondary" aria-hidden />
+          <input
+            autoFocus
+            value={catQuery}
+            onChange={(e) => {
+              setCatQuery(e.target.value);
+              setCatIndex(0);
+            }}
+            onBlur={() => setCatQuery(null)}
+            onKeyDown={(e) => {
+              const down = e.key === 'ArrowDown' ? catCols : e.key === 'ArrowRight' && big ? 1 : 0;
+              const up = e.key === 'ArrowUp' ? catCols : e.key === 'ArrowLeft' && big ? 1 : 0;
+              if (e.key === 'Escape') {
+                e.preventDefault();
+                e.stopPropagation();
+                setCatQuery(null);
+              } else if (down || up) {
+                e.preventDefault();
+                setCatIndex((i) => Math.max(0, Math.min(catList.length - 1, i + down - up)));
+              } else if (e.key === 'Enter') {
+                e.preventDefault();
+                const c = catList[catIndex];
+                if (c) pickCategory(c);
+              }
+            }}
+            placeholder="Search categories"
+            className="h-12 min-w-0 flex-1 bg-transparent text-sm text-textPrimary placeholder-textSecondary outline-none"
+          />
+        </div>
       )}
     </div>
   );
@@ -571,51 +471,51 @@ function InfoEditor({
   const searching = catQuery !== null && catList.length > 0;
   const catResultsView = searching && (
     <div className="absolute inset-0 z-10 overflow-y-auto scrollbar-thin">
-              {!catQuery?.trim() && <p className={`${LABEL} mb-1.5`}>Your recent categories</p>}
-              {big ? (
-                <div className="grid grid-cols-5 gap-2.5">
-                  {catList.map((c, i) => (
-                    <button
-                      key={c.id}
-                      type="button"
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => pickCategory(c)}
-                      className="group min-w-0 text-center"
-                    >
-                      <img
-                        src={boxArt(c, 144, 192)}
-                        alt=""
-                        className={`aspect-[3/4] w-full rounded-md object-cover transition-shadow ${
-                          draft.category?.id === c.id
-                            ? 'ring-2 ring-white/75'
-                            : i === catIndex
-                              ? 'ring-2 ring-white/30'
-                              : 'group-hover:ring-2 group-hover:ring-white/20'
-                        }`}
-                      />
-                      <span className="mt-1 block truncate text-[11.5px] font-semibold text-textSecondary">{c.name}</span>
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <div>
-                  {catList.map((c, i) => (
-                    <button
-                      key={c.id}
-                      type="button"
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => pickCategory(c)}
-                      className={`flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-white/[0.06] ${
-                        i === catIndex ? 'bg-white/[0.07]' : ''
-                      }`}
-                    >
-                      <img src={boxArt(c, 54, 72)} alt="" className="h-8 w-6 flex-shrink-0 rounded-sm object-cover" />
-                      <span className="flex-1 truncate text-sm text-textPrimary">{c.name}</span>
-                      {draft.category?.id === c.id && <Check size={14} className="text-textSecondary" aria-hidden />}
-                    </button>
-                  ))}
-                </div>
-              )}
+      {!catQuery?.trim() && <p className={`${LABEL} mb-1.5`}>Your recent categories</p>}
+      {big ? (
+        <div className="grid grid-cols-5 gap-2.5">
+          {catList.map((c, i) => (
+            <button
+              key={c.id}
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => pickCategory(c)}
+              className="group min-w-0 text-center"
+            >
+              <img
+                src={boxArt(c, 144, 192)}
+                alt=""
+                className={`aspect-[3/4] w-full rounded-md object-cover transition-shadow ${
+                  draft.category?.id === c.id
+                    ? 'ring-2 ring-textPrimary/75'
+                    : i === catIndex
+                      ? 'ring-2 ring-textPrimary/30'
+                      : 'group-hover:ring-2 group-hover:ring-textPrimary/20'
+                }`}
+              />
+              <span className="mt-1 block truncate text-[11.5px] font-semibold text-textSecondary">{c.name}</span>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div>
+          {catList.map((c, i) => (
+            <button
+              key={c.id}
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => pickCategory(c)}
+              className={`flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-textPrimary/[0.06] ${
+                i === catIndex ? 'bg-textPrimary/[0.07]' : ''
+              }`}
+            >
+              <img src={boxArt(c, 54, 72)} alt="" className="h-8 w-6 flex-shrink-0 rounded-sm object-cover" />
+              <span className="flex-1 truncate text-sm text-textPrimary">{c.name}</span>
+              {draft.category?.id === c.id && <Check size={14} className="text-textSecondary" aria-hidden />}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
   /** The fields under Category, with the search results over them. */
@@ -645,7 +545,7 @@ function InfoEditor({
               type="button"
               aria-label={`Remove ${t}`}
               onClick={() => setDraft((d) => ({ ...d, tags: d.tags.filter((_, j) => j !== i) }))}
-              className="grid h-5 w-5 place-items-center rounded-full text-textSecondary transition-colors hover:bg-white/10 hover:text-textPrimary"
+              className="grid h-5 w-5 place-items-center rounded-full text-textSecondary transition-colors hover:bg-textPrimary/10 hover:text-textPrimary"
             >
               <X size={11} />
             </button>
@@ -681,12 +581,12 @@ function InfoEditor({
   const languageRow = (
     <div>
       <div className="flex items-center justify-between gap-3">
-        <label htmlFor="sn-stream-language" className="text-[13px] text-textSecondary">
+        <label htmlFor={`sn-stream-language-${layout}`} className="text-[13px] text-textSecondary">
           Language
         </label>
         <div className="relative flex items-center">
           <select
-            id="sn-stream-language"
+            id={`sn-stream-language-${layout}`}
             value={draft.language}
             onChange={(e) => setDraft((d) => ({ ...d, language: e.target.value }))}
             className="cursor-pointer appearance-none bg-transparent pr-5 text-right text-[13px] font-semibold text-textPrimary outline-none"
@@ -704,7 +604,7 @@ function InfoEditor({
     </div>
   );
 
-  const live = (
+  const liveTag = (
     <span className="absolute left-1.5 top-1.5 rounded bg-[#e5484d] px-1 py-px text-[10px] font-extrabold tracking-wide text-white">LIVE</span>
   );
 
@@ -712,11 +612,11 @@ function InfoEditor({
     <div>
       <p className={`${LABEL} mb-1.5`}>What viewers see</p>
       <div className="flex gap-2.5 rounded-xl bg-surface/25 p-2 ring-1 ring-inset ring-textPrimary/[0.05]">
-        <div className="relative aspect-video w-[112px] flex-shrink-0 overflow-hidden rounded-lg bg-white/[0.05]">
+        <div className="relative aspect-video w-[112px] flex-shrink-0 overflow-hidden rounded-lg bg-textPrimary/[0.05]">
           {preview.thumbnail_url && (
             <>
               <img src={preview.thumbnail_url} alt="" className="h-full w-full object-cover" />
-              {live}
+              {liveTag}
             </>
           )}
         </div>
@@ -733,11 +633,11 @@ function InfoEditor({
   const previewLarge = preview && (
     <div className="min-w-0">
       <p className={`${LABEL} mb-1.5`}>What viewers see</p>
-      <div className="relative aspect-video w-full overflow-hidden rounded-lg bg-white/[0.05]">
+      <div className="relative aspect-video w-full overflow-hidden rounded-lg bg-textPrimary/[0.05]">
         {preview.thumbnail_url && (
           <>
             <img src={preview.thumbnail_url} alt="" className="h-full w-full object-cover" />
-            {live}
+            {liveTag}
           </>
         )}
       </div>
@@ -769,7 +669,7 @@ function InfoEditor({
     </div>
   );
 
-  const resumeLine = resumed && check?.changed && phase !== 'saved' && (
+  const resumeLine = resumed && check?.changed && phase !== 'done' && (
     <div className="flex items-center gap-2 rounded-lg bg-surface/30 py-1.5 pl-2.5 pr-1.5 text-[12.5px] text-textSecondary ring-1 ring-inset ring-textPrimary/[0.06]">
       <Undo2 size={14} className="flex-shrink-0" aria-hidden />
       <span className="flex-1">Picking up your unsaved edit</span>
@@ -779,57 +679,20 @@ function InfoEditor({
     </div>
   );
 
-  const failBox = phase === 'failed' && failLine && (
-    <div role="alert" className="flex items-start gap-2 rounded-lg bg-error/10 px-3 py-2 text-[12.5px] leading-snug text-error ring-1 ring-inset ring-error/25">
-      <CircleAlert size={15} className="mt-px flex-shrink-0" aria-hidden />
-      <span>
-        Couldn't save. {failLine} Your changes are still here.
-      </span>
-    </div>
-  );
+  const failLine = phase === 'failed' && entry.line ? `Couldn't save. ${entry.line} Your changes are still here.` : null;
 
-  const saveLabel =
-    phase === 'saving' ? 'Saving' : phase === 'saved' ? 'Saved' : phase === 'failed' ? 'Try again' : 'Save';
   const footer = (
-    <div className={`flex items-center gap-2 ${framed ? `border-t border-textPrimary/[0.08] ${big ? 'px-5 py-3' : 'px-3.5 py-2.5'}` : 'pt-1'}`}>
-      {framed ? (
-        <span className="flex flex-1 items-center gap-1.5 text-[11.5px] text-textSecondary/80">
-          <kbd className={KEY_CAP}>Enter</kbd>
-          save
-          <kbd className={`${KEY_CAP} ml-1`}>Esc</kbd>
-          close
-        </span>
-      ) : (
-        <span className="flex-1" />
-      )}
-      {check?.changed && phase !== 'saved' && (
-        <button
-          type="button"
-          onClick={startOver}
-          disabled={phase === 'saving'}
-          className={`${QUIET_PILL} ${framed ? 'h-[34px] px-4 text-[13.5px]' : `${BIG} px-5`}`}
-        >
+    <FooterRow layout={layout} hints={[['Enter', 'save'], ['Esc', 'close']]}>
+      {check?.changed && phase !== 'done' && (
+        <SecondaryButton layout={layout} onClick={startOver} disabled={phase === 'working'}>
           Discard
-        </button>
+        </SecondaryButton>
       )}
-      <button
-        type="button"
-        onClick={() => void save()}
-        disabled={phase !== 'saved' && !canSave}
-        aria-live="polite"
-        className={`${ACCENT_BUTTON} flex items-center justify-center gap-1.5 disabled:cursor-not-allowed ${
-          framed ? `h-[34px] min-w-[104px] ${big ? 'px-6' : 'px-5'} !text-[13.5px]` : `${BIG} flex-1`
-        }`}
-        style={phase === 'saved' ? SAVED_FILL : ACCENT_FILL}
-      >
-        {phase === 'saving' && <LoaderCircle size={14} className="animate-spin" aria-hidden />}
-        {phase === 'saved' && <Check size={15} aria-hidden />}
-        {saveLabel}
-      </button>
-    </div>
+      <MainButton layout={layout} phase={phase} label="Save" working="Saving" done="Saved" onClick={() => void save()} disabled={!canSave} />
+    </FooterRow>
   );
 
-  const picker = framed && pickerOpen && info && (
+  const picker = !sheet && pickerOpen && info && (
     <TitleEmojiPicker
       anchorRef={emojiButtonRef}
       recent={info.title_emoji}
@@ -839,77 +702,12 @@ function InfoEditor({
     />
   );
 
-  // ── the frames ──
-
-  if (!framed) {
-    return (
-      <div className="space-y-3.5" onKeyDown={onEditorKey}>
+  return (
+    <FormShell layout={layout} frame={frameOf('info', { view, layout, onClose, onExpand })} footer={footer} problem={failLine}>
+      <div onKeyDown={onEditorKey} className={big ? 'space-y-4' : 'space-y-3.5'}>
         {resumeLine}
-        {titleField}
-        {categoryField}
-        {underCategory(
-          <>
-            {tagsField}
-            {languageRow}
-            {previewCompact}
-          </>,
-        )}
-        {failBox}
-        {footer}
-      </div>
-    );
-  }
-
-  const iconButton = (label: string, onClick: () => void, icon: ReactNode, size: string) => (
-    <Tooltip content={label} side="top">
-      <button type="button" onClick={onClick} aria-label={label} className={`${QUIET_PILL} grid ${size} place-items-center`}>
-        {icon}
-      </button>
-    </Tooltip>
-  );
-
-  if (big) {
-    const ease = instant ? { duration: 0 } : { duration: 0.2, ease: [0.2, 0.8, 0.2, 1] as const };
-    return createPortal(
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={instant ? { duration: 0 } : { duration: 0.15 }}
-        // Pinned from the top, so a list opening inside grows it downward
-        // instead of re-centering it under the pointer.
-        className="fixed inset-0 z-[calc(var(--sn-z-over-player-lift,0)_+_200)] flex items-start justify-center bg-black/50 px-6 pb-6 pt-[max(24px,calc(50vh-300px))]"
-      >
-        <motion.div
-          ref={rootRef}
-          onPointerDownCapture={markInside}
-          onKeyDown={onEditorKey}
-          role="dialog"
-          aria-modal
-          aria-label="Stream info"
-          initial={{ opacity: 0, y: 8, scale: 0.97 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          transition={ease}
-          className="glass-flyout flex max-h-[min(760px,92vh)] w-[min(780px,96vw)] flex-col overflow-hidden rounded-2xl !p-0"
-        >
-          <div className="flex items-center gap-3 px-5 pb-3 pt-4">
-            {avatar(34)}
-            <div className="min-w-0 flex-1">
-              <p className="text-[16px] font-semibold leading-tight text-textPrimary">Stream info</p>
-              <p className="truncate text-[12.5px] text-textSecondary">
-                {[preview?.channel_name || view.channel_login, view.role_line].join(' · ')}
-              </p>
-            </div>
-            {/* On the title's line, not centered on title and subtitle. */}
-            <div className="-mt-[5px] flex gap-2 self-start">
-              {iconButton('Back to the panel', () => setExpanded(false), <Minimize2 size={14} />, 'h-[30px] w-[30px]')}
-              {iconButton('Close', onClose, <X size={15} />, 'h-[30px] w-[30px]')}
-            </div>
-          </div>
-          {resumeLine && <div className="px-5 pb-3">{resumeLine}</div>}
-          <div
-            className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_260px] gap-6 overflow-y-auto scrollbar-thin px-5 pb-5 pt-0.5"
-            style={FADE_BOTTOM}
-          >
+        {big ? (
+          <div className="grid grid-cols-1 gap-6 min-[760px]:grid-cols-[minmax(0,1fr)_260px]">
             <div className="min-w-0 space-y-4">
               {titleField}
               {categoryField}
@@ -922,342 +720,659 @@ function InfoEditor({
             </div>
             {previewLarge}
           </div>
-          {failBox && <div className="px-5 pb-3">{failBox}</div>}
-          {footer}
-          {picker}
-        </motion.div>
-      </motion.div>,
-      document.body,
-    );
-  }
-
-  return (
-    <div
-      ref={rootRef}
-      onPointerDownCapture={markInside}
-      onKeyDown={onEditorKey}
-      className="glass-flyout rounded-xl !p-0 absolute bottom-full left-0 right-0 mb-2 z-[60] flex max-h-[70vh] flex-col overflow-hidden"
-    >
-      <div className="flex items-center gap-2 px-3.5 pb-2 pt-3">
-        <Pencil size={14} className="text-textSecondary" aria-hidden />
-        <span className="flex-1 text-sm font-semibold text-textPrimary">Stream info</span>
-        {iconButton('Open larger', () => setExpanded(true), <Maximize2 size={13} />, 'h-[26px] w-[26px]')}
-        {iconButton('Close', onClose, <X size={14} />, 'h-[26px] w-[26px]')}
-      </div>
-      {resumeLine && <div className="px-3.5 pb-2">{resumeLine}</div>}
-      <div className="min-h-0 flex-1 space-y-3.5 overflow-y-auto scrollbar-thin px-3.5 pb-4 pt-0.5" style={FADE_BOTTOM}>
-        {titleField}
-        {categoryField}
-        {underCategory(
+        ) : (
           <>
-            {tagsField}
-            {languageRow}
-            {previewCompact}
-          </>,
+            {titleField}
+            {categoryField}
+            {underCategory(
+              <>
+                {tagsField}
+                {languageRow}
+                {previewCompact}
+              </>,
+            )}
+          </>
         )}
       </div>
-      {failBox && <div className="px-3.5 pb-2.5">{failBox}</div>}
-      {footer}
       {picker}
-    </div>
+    </FormShell>
   );
 }
 
 // ─── raid ────────────────────────────────────────────────────────────────────
 
-function RaidForm({ view, busy, act }: FormProps) {
-  const [query, setQuery] = useState('');
+const RING = 52;
+const RING_C = 2 * Math.PI * RING;
+
+/** The raid's countdown as a ring that empties, with m:ss in its middle. */
+function RaidRing({ deadline, total, now, instant }: { deadline: number; total: number; now: number; instant: boolean }) {
+  const left = Math.max(0, deadline - now);
+  const frac = total > 0 ? Math.min(1, left / total) : 0;
+  return (
+    <div className="relative mx-auto h-[128px] w-[128px]" role="timer" aria-label={`Raid in ${countdown(deadline, now)}`}>
+      <svg viewBox="0 0 128 128" className="h-full w-full -rotate-90" aria-hidden>
+        <circle cx="64" cy="64" r={RING} fill="none" strokeWidth="6" className="stroke-textPrimary/[0.08]" />
+        <circle
+          cx="64"
+          cy="64"
+          r={RING}
+          fill="none"
+          strokeWidth="6"
+          strokeLinecap="round"
+          stroke="var(--color-accent)"
+          strokeDasharray={RING_C}
+          strokeDashoffset={RING_C * (1 - frac)}
+          style={{ transition: instant ? 'none' : 'stroke-dashoffset 250ms linear' }}
+        />
+      </svg>
+      <span className="absolute inset-0 grid place-items-center text-[26px] font-bold tabular-nums text-textPrimary">
+        {countdown(deadline, now)}
+      </span>
+    </div>
+  );
+}
+
+const avatarOf = (url: string | null, px: number) =>
+  url ? (
+    <img src={url} alt="" className="flex-shrink-0 rounded-full" style={{ width: px, height: px }} />
+  ) : (
+    <span className="flex-shrink-0 rounded-full bg-textPrimary/10" style={{ width: px, height: px }} />
+  );
+
+/**
+ * Raid: search, pick a live channel, then confirm once (Start raid / Back).
+ * While the raid counts down it shows as a ring with Cancel and Raid now.
+ */
+function RaidForm({ view, layout, onClose, onExpand }: FormProps) {
+  const v = useManagerStore();
+  const ch = view.channel_id;
+  const key = toolKey(ch, 'raid');
+  const cancelKey = toolKey(ch, 'raid:cancel');
+  const nowKey = toolKey(ch, 'raid:now');
+  const entry = readTool(v, key);
+  const d = (entry.draft as RaidDraft | undefined) ?? { query: '', target: null };
+  const put = (next: RaidDraft) => setToolDraft(key, next);
   const [results, setResults] = useState<RaidTarget[]>([]);
-  const [now, setNow] = useState(() => Date.now());
+  const [index, setIndex] = useState(0);
   const raid = view.raid;
+  const now = useNow(raid ? 250 : 0);
+  const instant = useInstant();
+  const closeSoon = useCloseSoon(onClose);
+  const sheet = layout === 'sheet';
+  const confirmRef = useRef<HTMLDivElement>(null);
+  const targetId = d.target?.id ?? null;
+
+  // The confirm step takes the keys (Enter starts, Esc goes back) when it opens.
+  useEffect(() => {
+    if (targetId && !sheet) confirmRef.current?.focus();
+  }, [targetId, sheet]);
 
   useEffect(() => {
-    if (!raid) return;
-    const t = window.setInterval(() => setNow(Date.now()), 500);
-    return () => window.clearInterval(t);
-  }, [raid]);
-
-  useEffect(() => {
-    if (raid || !query.trim()) return;
+    if (raid || d.target || !d.query.trim()) return;
     let alive = true;
     const t = window.setTimeout(() => {
-      void searchRaidTargets(query, view.channel_id)
-        .then((r) => alive && setResults(r))
+      void searchRaidTargets(d.query, ch)
+        .then((r) => {
+          if (!alive) return;
+          setResults(r);
+          setIndex(Math.max(0, r.findIndex((x) => x.live)));
+        })
         .catch(() => alive && setResults([]));
     }, 220);
     return () => {
       alive = false;
       window.clearTimeout(t);
     };
-  }, [query, raid, view.channel_id]);
+  }, [d.query, d.target, raid, ch]);
+
+  const start = async (repeat: boolean) => {
+    const action = raidStart(d.target, repeat);
+    if (!action) return;
+    await runTool(key, () => managerAct(ch, view.channel_login, action), { clearDraft: true });
+  };
+
+  const frame = frameOf('raid', { view, layout, onClose, onExpand });
 
   if (raid) {
+    const cancel = readTool(v, cancelKey);
+    const go = readTool(v, nowKey);
+    const footer = (
+      <FooterRow layout={layout} hints={[['Esc', 'close']]}>
+        <SecondaryButton
+          layout={layout}
+          disabled={cancel.phase === 'working' || go.phase === 'working'}
+          onClick={() => void runTool(cancelKey, () => managerAct(ch, view.channel_login, { kind: 'cancel_raid' }))}
+        >
+          {cancel.phase === 'working' ? 'Canceling' : 'Cancel raid'}
+        </SecondaryButton>
+        <MainButton
+          layout={layout}
+          phase={go.phase}
+          label="Raid now"
+          working="Sending"
+          done="Sent"
+          disabled={cancel.phase === 'working'}
+          onClick={async () => {
+            const ok = await runTool(nowKey, () => managerAct(ch, view.channel_login, { kind: 'raid_now' }));
+            if (ok && layout !== 'window') closeSoon();
+          }}
+        />
+      </FooterRow>
+    );
     return (
-      <div className="space-y-3">
-        <div className="text-center pt-1">
-          <p className="text-sm text-textSecondary">Raiding {raid.target_name}</p>
-          <p className="text-3xl font-bold tabular-nums text-textPrimary mt-1">{countdown(raid.deadline_ms, now)}</p>
+      <FormShell layout={layout} frame={frame} footer={footer} problem={failWords(cancel) ?? failWords(go)}>
+        <div className="space-y-3 pt-1 text-center">
+          <RaidRing deadline={raid.deadline_ms} total={raid.total_ms} now={now} instant={instant} />
+          <p className="text-[13.5px] text-textSecondary">
+            Raiding <span className="font-semibold text-textPrimary">{raid.target_name}</span>
+          </p>
         </div>
-        <div className="flex gap-2">
-          <button
-            onClick={() => void act({ kind: 'cancel_raid' })}
-            disabled={busy}
-            className={`${GLAZE_PILL} flex-1 ${BIG}`}
-          >
-            Cancel raid
-          </button>
-          <button
-            onClick={() => void act({ kind: 'raid_now' }, true)}
-            disabled={busy}
-            className={`${ACCENT_BUTTON} flex-1 ${BIG}`}
-            style={ACCENT_FILL}
-          >
-            Raid now
-          </button>
-        </div>
-      </div>
+      </FormShell>
     );
   }
 
-  return (
-    <div className="space-y-2">
-      <input
-        autoFocus
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        placeholder="Search for a channel"
-        className="glass-input w-full px-3 py-2 text-sm text-textPrimary placeholder-textSecondary"
-      />
-      {(query.trim() ? results : []).map((t) => (
-        <button
-          key={t.id}
-          disabled={busy || !t.live}
-          onClick={() => void act({ kind: 'raid', target_id: t.id, target_login: t.login, target_name: t.name })}
-          className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-left hover:bg-white/[0.06] transition-colors disabled:opacity-50 disabled:hover:bg-transparent"
-        >
-          {t.avatar_url ? (
-            <img src={t.avatar_url} alt="" className="w-7 h-7 rounded-full flex-shrink-0" />
-          ) : (
-            <span className="w-7 h-7 rounded-full bg-white/10 flex-shrink-0" />
-          )}
-          <span className="min-w-0 flex-1">
-            <span className="block text-sm font-semibold text-textPrimary truncate">{t.name}</span>
-            <span className="block text-xs text-textSecondary truncate">{t.line}</span>
+  if (d.target) {
+    const t = d.target;
+    const footer = (
+      <FooterRow layout={layout} hints={[['Enter', 'start'], ['Esc', 'back']]}>
+        <SecondaryButton layout={layout} onClick={() => put({ ...d, target: null })} disabled={entry.phase === 'working'}>
+          <span className="flex items-center gap-1.5">
+            <ArrowLeft size={14} aria-hidden />
+            Back
           </span>
-        </button>
-      ))}
-    </div>
+        </SecondaryButton>
+        <MainButton layout={layout} phase={entry.phase} label="Start raid" working="Starting" done="Started" onClick={() => void start(false)} />
+      </FooterRow>
+    );
+    return (
+      <FormShell layout={layout} frame={frame} footer={footer} problem={failWords(entry)}>
+        <div
+          tabIndex={-1}
+          ref={confirmRef}
+          onKeyDown={(e) => {
+            if (isImeComposing(e)) return;
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              void start(e.repeat);
+            } else if (e.key === 'Escape') {
+              e.preventDefault();
+              e.stopPropagation();
+              put({ ...d, target: null });
+            }
+          }}
+          className="flex flex-col items-center gap-2 pt-1 text-center outline-none"
+        >
+          {avatarOf(t.avatar_url, 56)}
+          <p className="text-[15px] font-semibold text-textPrimary">Raid {t.name}?</p>
+          <p className="text-[12.5px] text-textSecondary">{t.line}</p>
+          <p className="max-w-[300px] text-[12.5px] leading-snug text-textSecondary">
+            Your viewers go with you when the countdown ends. You can cancel until then.
+          </p>
+        </div>
+      </FormShell>
+    );
+  }
+
+  const shown = d.query.trim() ? results : [];
+  return (
+    <FormShell layout={layout} frame={frame} footer={layout === 'sheet' ? undefined : <FooterRow layout={layout} hints={[['Enter', 'pick'], ['Esc', 'close']]}>{null}</FooterRow>}>
+      <div className="space-y-2">
+        <div className={`${FIELD} flex items-center gap-2`}>
+          <Search size={15} className="flex-shrink-0 text-textSecondary" aria-hidden />
+          <input
+            autoFocus={!sheet}
+            value={d.query}
+            onChange={(e) => put({ query: e.target.value, target: null })}
+            onKeyDown={(e) => {
+              if (isImeComposing(e)) return;
+              if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                e.preventDefault();
+                const step = e.key === 'ArrowDown' ? 1 : -1;
+                setIndex((i) => Math.max(0, Math.min(shown.length - 1, i + step)));
+              } else if (e.key === 'Enter') {
+                e.preventDefault();
+                const pick = shown[index];
+                if (pick?.live) put({ ...d, target: pick });
+              }
+            }}
+            placeholder="Search for a channel"
+            className="h-10 min-w-0 flex-1 bg-transparent text-sm text-textPrimary placeholder-textSecondary outline-none"
+          />
+        </div>
+        {shown.map((t, i) => (
+          <button
+            key={t.id}
+            type="button"
+            disabled={!t.live}
+            onClick={() => put({ ...d, target: t })}
+            className={`flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-textPrimary/[0.06] disabled:opacity-50 disabled:hover:bg-transparent ${
+              i === index && t.live ? 'bg-textPrimary/[0.07]' : ''
+            }`}
+          >
+            {avatarOf(t.avatar_url, 28)}
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm font-semibold text-textPrimary">{t.name}</span>
+              <span className="block truncate text-xs text-textSecondary">{t.line}</span>
+            </span>
+          </button>
+        ))}
+      </div>
+    </FormShell>
   );
 }
 
 // ─── ads ─────────────────────────────────────────────────────────────────────
 
-function AdsForm({ view, busy, act }: FormProps) {
+/** Ad break: the next ad counting down live, a length, Snooze and Run. */
+function AdsForm({ view, layout, onClose, onExpand }: FormProps) {
+  const v = useManagerStore();
   const ads = view.ads;
-  const [seconds, setSeconds] = useState(ads?.lengths[1]?.value ?? 60);
-  const detail = view.sections.find((s) => s.id === 'ads')?.detail;
+  const ch = view.channel_id;
+  const runKey = toolKey(ch, 'ads:run');
+  const snoozeKey = toolKey(ch, 'ads:snooze');
+  const runEntry = readTool(v, runKey);
+  const snooze = readTool(v, snoozeKey);
+  const seconds = (runEntry.draft as number | undefined) ?? ads?.lengths[1]?.value ?? 60;
+  const s = ads?.schedule ?? null;
+  const next = s?.next_ad_ms ?? null;
+  const now = useNow(next ? 1000 : 0);
+  const closeSoon = useCloseSoon(onClose);
   if (!ads) return null;
-  const s = ads.schedule;
+  const detail = view.sections.find((x) => x.id === 'ads')?.detail;
+  // Within the hour it counts down to the second; further off Rust's words.
+  const soon = next !== null && next > now && next - now < 3_600_000;
+  const nextLine = soon ? `Next ad in ${countdown(next, now)} · ${s?.snooze_line ?? ''}` : detail;
+
+  const footer = (
+    <FooterRow layout={layout} hints={[['Esc', 'close']]}>
+      {s && s.snoozes_left > 0 && (
+        <SecondaryButton
+          layout={layout}
+          disabled={snooze.phase === 'working' || snooze.phase === 'done'}
+          onClick={() => void runTool(snoozeKey, () => managerAct(ch, view.channel_login, { kind: 'snooze_ad' }))}
+        >
+          {snooze.phase === 'working' ? 'Snoozing' : snooze.phase === 'done' ? 'Snoozed' : 'Snooze next ad'}
+        </SecondaryButton>
+      )}
+      <MainButton
+        layout={layout}
+        phase={runEntry.phase}
+        label="Run ad break"
+        working="Starting"
+        done="Started"
+        onClick={async () => {
+          const ok = await runTool(runKey, () => managerAct(ch, view.channel_login, { kind: 'run_ad', seconds }));
+          if (ok && layout !== 'window') closeSoon();
+        }}
+      />
+    </FooterRow>
+  );
+
   return (
-    <div className="space-y-3">
-      {(detail || s?.preroll_line || ads.schedule_hint) && (
+    <FormShell layout={layout} frame={frameOf('ads', { view, layout, onClose, onExpand })} footer={footer} problem={failWords(runEntry) ?? failWords(snooze)}>
+      {(nextLine || s?.preroll_line || ads.schedule_hint) && (
         <div className="space-y-0.5">
-          {detail && <p className="text-sm text-textPrimary">{detail}</p>}
+          {nextLine && <p className="text-[13.5px] tabular-nums text-textPrimary">{nextLine}</p>}
           {s?.preroll_line && <p className="text-xs text-textSecondary">{s.preroll_line}</p>}
           {ads.schedule_hint && <p className="text-xs text-textSecondary">{ads.schedule_hint}</p>}
         </div>
       )}
       <div>
-        <label className={`${LABEL} block mb-1`}>Length</label>
-        <div className="flex gap-1">
-          {ads.lengths.map((l) => (
-            <button
-              key={l.value}
-              onClick={() => setSeconds(l.value)}
-              className={`flex-1 h-7 ${seconds === l.value ? `${ACCENT_BUTTON} !text-xs` : `${GLAZE_PILL} text-xs`}`}
-              style={seconds === l.value ? ACCENT_FILL : undefined}
-            >
-              {l.label}
-            </button>
-          ))}
-        </div>
+        <p className={`${LABEL} mb-1.5`}>Length</p>
+        <Segmented
+          layout={layout}
+          ariaLabel="Ad length"
+          value={seconds}
+          options={ads.lengths.map((l) => ({ value: l.value, label: l.label }))}
+          onChange={(v) => setToolDraft(runKey, v)}
+        />
       </div>
-      <div className="flex gap-2">
-        {s && s.snoozes_left > 0 && (
-          <button
-            onClick={() => void act({ kind: 'snooze_ad' })}
-            disabled={busy}
-            className={`${GLAZE_PILL} flex-1 ${BIG}`}
-          >
-            Snooze next ad
-          </button>
-        )}
-        <button
-          onClick={() => void act({ kind: 'run_ad', seconds }, true)}
-          disabled={busy}
-          className={`${ACCENT_BUTTON} flex-1 ${BIG}`}
-          style={ACCENT_FILL}
-        >
-          {busy ? 'Starting…' : 'Run ad break'}
-        </button>
-      </div>
-    </div>
+    </FormShell>
   );
 }
 
 // ─── rewards queue ───────────────────────────────────────────────────────────
 
-function RewardsQueue({
-  view,
-  queue,
-  onQueue,
-  busy,
-  act,
-}: FormProps & { queue: QueueView | null; onQueue: (q: QueueView) => void }) {
+/**
+ * Rewards queue: who redeemed what, oldest first, by reward. A row you
+ * complete or reject says Done or Refunded, then slides out.
+ */
+function RewardsQueue({ view, layout, queue, onQueue, onClose, onExpand }: FormProps & QueueProps) {
+  const v = useManagerStore();
   const [error, setError] = useState<string | null>(null);
-  const channelId = view.channel_id;
+  const [leaving, setLeaving] = useState<LeavingRow[]>([]);
+  const instant = useInstant();
+  const ch = view.channel_id;
+  const sheet = layout === 'sheet';
 
   useEffect(() => {
     let alive = true;
-    void getRewardQueue(channelId)
+    void getRewardQueue(ch)
       .then((q) => {
         if (!alive) return;
-        onQueue(q);
+        onQueue(ch, q);
         setError(null);
       })
       .catch((e) => alive && setError(typeof e === 'string' ? e : 'Could not read the queue'));
     return () => {
       alive = false;
     };
-  }, [channelId, onQueue]);
+  }, [ch, onQueue]);
 
-  const groups = useMemo(() => queue?.groups ?? [], [queue]);
-  if (error) return <p className="text-sm text-textSecondary py-2">{error}</p>;
-  if (!queue) return <p className="text-sm text-textSecondary py-2">Loading…</p>;
-  if (queue.empty_line) return <p className="text-sm text-textSecondary py-2">{queue.empty_line}</p>;
+  const rowKey = (id: string) => toolKey(ch, `rewards:${id}`);
+  const showing = (phase: string) => phase === 'working' || phase === 'done';
+  const held = (id: string) => showing(readTool(v, rowKey(id)).phase);
+  const groups = withHeld(queue?.groups ?? [], leaving, held);
 
-  return (
+  const actOn = (g: QueueGroup, r: QueueRow, index: number, fulfill: boolean) => {
+    const key = rowKey(r.id);
+    if (getTool(key).phase === 'working') return;
+    // Rows gone and settled are let go as new ones are acted on.
+    setLeaving((l) => [...l.filter((x) => x.row.id !== r.id && showing(getTool(rowKey(x.row.id)).phase)), { row: r, group: g, index }]);
+    void runTool(key, () => managerAct(ch, view.channel_login, { kind: 'redemptions', ids: [r.id], fulfill }), {
+      draft: { fulfill },
+    });
+  };
+
+  const body = error ? (
+    <p className="py-2 text-sm text-textSecondary">{error}</p>
+  ) : !queue ? (
+    <p className="py-2 text-sm text-textSecondary">Loading…</p>
+  ) : groups.length === 0 ? (
+    <p className="py-2 text-sm text-textSecondary">{queue.empty_line ?? 'Nothing waiting'}</p>
+  ) : (
     <div className="space-y-3">
-      {groups.map((g) => (
-        <div key={g.reward_id}>
-          <div className="flex items-center gap-2 mb-1">
-            <span className="flex-1 min-w-0 text-xs font-semibold text-textSecondary truncate">{g.heading}</span>
-            <button
-              onClick={() => void act({ kind: 'reward', reward_id: g.reward_id, paused: !g.paused })}
-              disabled={busy}
-              className={`${GLAZE_PILL} sm-btn sm-head h-5 px-2.5 text-[11px]`}
-            >
-              {g.paused ? 'Resume' : 'Pause'}
-            </button>
-            {g.rows.length > 1 && (
-              <button
-                onClick={() => void act({ kind: 'reward_queue', reward_id: g.reward_id, fulfill: true })}
-                disabled={busy}
-                className={`${GLAZE_PILL} sm-btn sm-head h-5 px-2.5 text-[11px]`}
+      {groups.map((g) => {
+        const pauseKey = toolKey(ch, `reward:${g.reward_id}`);
+        const allKey = toolKey(ch, `rewards:all:${g.reward_id}`);
+        const pause = readTool(v, pauseKey);
+        const all = readTool(v, allKey);
+        const headLine = failWords(pause) ?? failWords(all) ?? (all.phase === 'done' ? all.line : null);
+        return (
+          <div key={g.reward_id}>
+            <div className="mb-1 flex items-center gap-2">
+              <span className="min-w-0 flex-1 truncate text-xs font-semibold text-textSecondary">{g.heading}</span>
+              <RowButton
+                layout={layout}
+                disabled={pause.phase === 'working'}
+                onClick={() =>
+                  void runTool(pauseKey, () => managerAct(ch, view.channel_login, { kind: 'reward', reward_id: g.reward_id, paused: !g.paused }))
+                }
               >
-                Complete all
-              </button>
-            )}
-          </div>
-          <div className="rounded-lg bg-white/5 divide-y divide-white/5">
-            {g.rows.map((r) => (
-              <div key={r.id} className={`sm-row flex gap-2.5 px-2.5 py-2 ${r.input ? 'items-start' : 'items-center'}`}>
-                {r.avatar_url ? (
-                  <img src={r.avatar_url} alt="" className={`w-6 h-6 rounded-full flex-shrink-0 ${r.input ? 'mt-0.5' : ''}`} />
-                ) : (
-                  <span className={`w-6 h-6 rounded-full bg-white/10 flex-shrink-0 ${r.input ? 'mt-0.5' : ''}`} />
-                )}
-                <div className="min-w-0 flex-1">
-                  <p className="text-[11px] text-textSecondary truncate">{r.line}</p>
-                  {r.input && <p className="text-sm text-textPrimary break-words">{r.input}</p>}
-                </div>
-                <div className="sm-acts flex gap-1 flex-shrink-0">
-                  <button
-                    onClick={() => void act({ kind: 'redemptions', ids: [r.id], fulfill: true })}
-                    disabled={busy}
-                    className={`${ACCENT_BUTTON} sm-btn h-6 px-2.5 ${IS_MOBILE ? '' : '!text-[11px]'}`}
-                    style={ACCENT_FILL}
-                  >
-                    Complete
-                  </button>
-                  <Tooltip content="Refunds the points" side="top">
-                    <button
-                      onClick={() => void act({ kind: 'redemptions', ids: [r.id], fulfill: false })}
-                      disabled={busy}
-                      className={`${GLAZE_PILL} sm-btn h-6 px-2.5 text-[11px]`}
-                    >
-                      Reject
-                    </button>
-                  </Tooltip>
-                </div>
+                {g.paused ? 'Resume' : 'Pause'}
+              </RowButton>
+              {g.rows.length > 1 && (
+                <RowButton
+                  layout={layout}
+                  disabled={all.phase === 'working'}
+                  onClick={() =>
+                    void runTool(allKey, () =>
+                      managerAct(ch, view.channel_login, { kind: 'reward_queue', reward_id: g.reward_id, fulfill: true }),
+                    )
+                  }
+                >
+                  Complete all
+                </RowButton>
+              )}
+            </div>
+            {headLine && (
+              <div className="mb-1">
+                <ResultLine line={headLine} failed={pause.phase === 'failed' || all.phase === 'failed'} />
               </div>
-            ))}
+            )}
+            <div className="overflow-hidden rounded-lg bg-textPrimary/[0.04]">
+              <AnimatePresence initial={false} mode="popLayout">
+                {g.rows.map((r, i) => {
+                  const e = readTool(v, rowKey(r.id));
+                  const how = (e.draft as { fulfill: boolean } | undefined)?.fulfill;
+                  return (
+                    <motion.div
+                      key={r.id}
+                      layout={instant ? false : 'position'}
+                      initial={false}
+                      exit={{ opacity: 0, x: 24 }}
+                      transition={easeFor(instant)}
+                      className={`flex gap-2.5 border-t border-textPrimary/[0.05] px-2.5 py-2 first:border-t-0 ${r.input ? 'items-start' : 'items-center'}`}
+                    >
+                      {avatarOf(r.avatar_url, 24)}
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-[11px] text-textSecondary">{r.line}</p>
+                        {r.input && <p className="break-words text-sm text-textPrimary">{r.input}</p>}
+                        {e.phase === 'failed' && <ResultLine line={e.line} failed />}
+                      </div>
+                      <div className="flex flex-shrink-0 items-center gap-1" role="status">
+                        {e.phase === 'working' ? (
+                          <LoaderCircle size={15} className="animate-spin text-textSecondary" aria-label="Working" />
+                        ) : e.phase === 'done' ? (
+                          <span className={`flex items-center gap-1 text-[12px] font-semibold ${how ? 'text-success' : 'text-textSecondary'}`}>
+                            {how && <Check size={14} aria-hidden />}
+                            {how ? 'Done' : 'Refunded'}
+                          </span>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => actOn(g, r, i, true)}
+                              className={`${ACCENT_BUTTON} ${sheet ? 'h-9 px-3.5 !text-[14px]' : 'h-7 px-3 !text-[12px]'}`}
+                              style={ACCENT_FILL}
+                            >
+                              Complete
+                            </button>
+                            <Tooltip content="Refunds the points" side="top">
+                              <button
+                                type="button"
+                                onClick={() => actOn(g, r, i, false)}
+                                className={`${GLAZE_PILL} ${sheet ? 'h-9 px-3.5 text-[14px]' : 'h-7 px-3 text-[12px]'}`}
+                              >
+                                Reject
+                              </button>
+                            </Tooltip>
+                          </>
+                        )}
+                      </div>
+                    </motion.div>
+                  );
+                })}
+              </AnimatePresence>
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
       {queue.more && <p className="text-xs text-textSecondary">More are waiting; they show here as these clear.</p>}
     </div>
+  );
+
+  return (
+    <FormShell
+      layout={layout}
+      frame={{ ...frameOf('rewards', { view, layout, onClose, onExpand }), badge: queue && queue.count > 0 ? <span className="text-[12px] tabular-nums text-textSecondary">{queue.count}</span> : undefined }}
+    >
+      {body}
+    </FormShell>
   );
 }
 
 // ─── announce ────────────────────────────────────────────────────────────────
 
-const ANNOUNCE_DOT: Record<string, string> = {
-  primary: 'bg-accent',
-  blue: 'bg-blue-500',
-  green: 'bg-green-500',
-  orange: 'bg-orange-500',
-  purple: 'bg-purple-500',
+/** Twitch's announcement colors, for the live preview's edge. */
+const ANNOUNCE_EDGE: Record<string, string> = {
+  primary: 'var(--color-accent)',
+  blue: 'linear-gradient(#00d6d6, #9146ff)',
+  green: 'linear-gradient(#00db84, #57bee6)',
+  orange: 'linear-gradient(#ffb31a, #e0e000)',
+  purple: 'linear-gradient(#9146ff, #ff75e6)',
 };
+const ANNOUNCE_MAX = 500;
 
-function AnnounceForm({ view, busy, act }: FormProps) {
-  const [text, setText] = useState('');
-  const [color, setColor] = useState('primary');
+interface AnnounceDraft {
+  text: string;
+  color: string;
+}
+
+/** Announce: the text, its color, and how it will look in chat. */
+function AnnounceForm({ view, layout, onClose, onExpand }: FormProps) {
+  const ch = view.channel_id;
+  const key = toolKey(ch, 'announce');
+  const entry = useTool(key);
+  const d = (entry.draft as AnnounceDraft | undefined) ?? { text: '', color: 'primary' };
   const colors = view.chat?.announce_colors ?? [];
+  const count = codePoints(d.text.trim());
+  const over = count > ANNOUNCE_MAX;
+  const closeSoon = useCloseSoon(onClose);
+  const sheet = layout === 'sheet';
+  const ready = count > 0 && !over;
+
   const send = async () => {
-    if (await act({ kind: 'announce', text, color }, true)) setText('');
+    if (!ready) return;
+    const ok = await runTool(key, () => managerAct(ch, view.channel_login, { kind: 'announce', text: d.text, color: d.color }), {
+      clearDraft: true,
+    });
+    if (ok && layout !== 'window') closeSoon();
   };
+
+  const footer = (
+    <FooterRow layout={layout} hints={[['Enter', 'send'], ['Shift+Enter', 'new line']]}>
+      <MainButton layout={layout} phase={entry.phase} label="Announce" working="Sending" done="Announced" onClick={() => void send()} disabled={!ready} />
+    </FooterRow>
+  );
+
   return (
-    <div className="space-y-3">
-      <textarea
-        autoFocus
-        value={text}
-        rows={3}
-        maxLength={500}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && !e.shiftKey && !isImeComposing(e)) {
-            e.preventDefault();
-            void send();
-          }
-        }}
-        placeholder="Your announcement"
-        className="glass-input w-full px-3 py-2 text-sm text-textPrimary placeholder-textSecondary resize-none"
-      />
-      <div className="flex items-center gap-1.5">
-        {colors.map((c) => (
-          <Tooltip key={c.id} content={c.label} side="top">
-            <button
-              onClick={() => setColor(c.id)}
-              aria-label={c.label}
-              aria-pressed={color === c.id}
-              className={`w-6 h-6 rounded-full flex items-center justify-center transition-shadow ${
-                color === c.id ? 'ring-2 ring-white/70' : ''
-              }`}
-            >
-              <span className={`w-4 h-4 rounded-full ${ANNOUNCE_DOT[c.id] ?? 'bg-white/40'}`} />
-            </button>
-          </Tooltip>
-        ))}
-        <button
-          onClick={() => void send()}
-          disabled={busy || !text.trim()}
-          className={`${ACCENT_BUTTON} ml-auto px-4 ${IS_MOBILE ? 'min-h-[44px] !text-[15px]' : 'h-8 !text-sm'}`}
-          style={ACCENT_FILL}
-        >
-          Announce
-        </button>
+    <FormShell layout={layout} frame={frameOf('announce', { view, layout, onClose, onExpand })} footer={footer} problem={failWords(entry)}>
+      <div className={`glass-input !rounded-xl ${over ? '!border-error/60' : 'focus-within:!border-accent/40'}`}>
+        <textarea
+          autoFocus={!sheet}
+          value={d.text}
+          rows={3}
+          aria-label="Your announcement"
+          onChange={(e) => setToolDraft(key, { ...d, text: e.target.value })}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey && !isImeComposing(e)) {
+              e.preventDefault();
+              void send();
+            }
+          }}
+          placeholder="Your announcement"
+          className="block w-full resize-none bg-transparent px-3 pt-2.5 pb-1 text-sm text-textPrimary placeholder-textSecondary outline-none"
+        />
+        <div className="flex justify-end px-3 pb-1.5">
+          <span className={`text-[11.5px] font-semibold tabular-nums ${over ? 'text-error' : count > ANNOUNCE_MAX - 50 ? 'text-warning' : 'text-textSecondary'}`}>
+            {count} / {ANNOUNCE_MAX}
+          </span>
+        </div>
       </div>
+      {colors.length > 0 && (
+        <div className="flex items-center gap-1.5">
+          <span className={`${LABEL} mr-1`}>Color</span>
+          {colors.map((c) => (
+            <Tooltip key={c.id} content={c.label} side="top">
+              <button
+                type="button"
+                onClick={() => setToolDraft(key, { ...d, color: c.id })}
+                aria-label={c.label}
+                aria-pressed={d.color === c.id}
+                className={`grid h-7 w-7 place-items-center rounded-full transition-shadow ${d.color === c.id ? 'ring-2 ring-textPrimary/60' : ''}`}
+              >
+                <span className="h-4 w-4 rounded-full" style={{ background: ANNOUNCE_EDGE[c.id] ?? 'var(--color-accent)' }} />
+              </button>
+            </Tooltip>
+          ))}
+        </div>
+      )}
+      <div>
+        <p className={`${LABEL} mb-1.5`}>In chat</p>
+        <div className="flex overflow-hidden rounded-lg bg-surface/30 ring-1 ring-inset ring-textPrimary/[0.06]">
+          <span className="w-[4px] flex-shrink-0" style={{ background: ANNOUNCE_EDGE[d.color] ?? 'var(--color-accent)' }} aria-hidden />
+          <div className="min-w-0 flex-1 px-3 py-2">
+            <p className="flex items-center gap-1.5 text-[11.5px] font-semibold text-textSecondary">
+              <Megaphone size={13} aria-hidden />
+              Announcement
+            </p>
+            <p className="mt-1 break-words text-[13.5px] text-textPrimary">
+              <span className="font-semibold">{view.channel_login}</span>: {d.text.trim() || 'Your announcement'}
+            </p>
+          </div>
+        </div>
+      </div>
+    </FormShell>
+  );
+}
+
+// ─── running poll and prediction ─────────────────────────────────────────────
+
+/**
+ * A running poll or prediction: its name, then its controls (End keeps the
+ * result on screen, Remove hides it; Lock, "{outcome} won" once locked,
+ * Refund). The result shows on the row.
+ */
+export function LiveRow({ view, layout, which }: { view: StreamManagerView; layout: Layout | 'menu'; which: 'poll' | 'prediction' }) {
+  const ch = view.channel_id;
+  const key = toolKey(ch, `live:${which}`);
+  const entry = useTool(key);
+  const run = (action: Parameters<typeof managerAct>[2]) => void runTool(key, () => managerAct(ch, view.channel_login, action));
+  const busy = entry.phase === 'working';
+  const row = view.sections.find((s) => s.id === which);
+  const poll = which === 'poll' ? view.poll : null;
+  const prediction = which === 'prediction' ? view.prediction : null;
+  if (!poll && !prediction) return null;
+  const label = prediction?.status === 'locked' ? 'Prediction locked' : (row?.label ?? (poll ? 'Poll running' : 'Prediction running'));
+  const title = poll?.title ?? prediction?.title ?? '';
+  const pad = layout === 'sheet' ? 'px-3 py-2.5' : layout === 'window' ? 'px-3.5 py-3' : 'px-3 py-2';
+  return (
+    <div className={pad}>
+      <div className="flex items-center gap-2.5">
+        <span className="flex w-4 flex-shrink-0 items-center justify-center text-accent" aria-hidden>
+          {poll ? <BarChart3 size={14} /> : <Trophy size={14} />}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className={`block truncate ${layout === 'sheet' ? 'text-[15px]' : 'text-[13.5px]'} text-textPrimary`}>{label}</span>
+          {title && <span className="block truncate text-[12px] text-textSecondary">{title}</span>}
+        </span>
+        {busy && <LoaderCircle size={14} className="animate-spin text-textSecondary" aria-label="Working" />}
+      </div>
+      <div className="mt-2 flex flex-wrap gap-1.5 pl-[26px]">
+        {poll && (
+          <>
+            <RowButton layout={layout} disabled={busy} onClick={() => run({ kind: 'end_poll', show_results: true })}>
+              End
+            </RowButton>
+            <RowButton layout={layout} disabled={busy} onClick={() => run({ kind: 'end_poll', show_results: false })}>
+              Remove
+            </RowButton>
+          </>
+        )}
+        {prediction?.status === 'active' && (
+          <RowButton layout={layout} disabled={busy} onClick={() => run({ kind: 'lock_prediction' })}>
+            Lock
+          </RowButton>
+        )}
+        {prediction?.status === 'locked' &&
+          prediction.outcomes.map((o) => (
+            <RowButton key={o.id} layout={layout} disabled={busy} onClick={() => run({ kind: 'resolve_prediction', outcome_id: o.id })}>
+              {o.title} won
+            </RowButton>
+          ))}
+        {prediction && (
+          <RowButton layout={layout} danger disabled={busy} onClick={() => run({ kind: 'cancel_prediction' })}>
+            Refund
+          </RowButton>
+        )}
+      </div>
+      {(entry.phase === 'done' || entry.phase === 'failed') && (
+        <div className="mt-1.5 pl-[26px]">
+          <ResultLine line={entry.line} failed={entry.phase === 'failed'} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The window's page for a running poll or prediction. */
+export function LivePage({ view, which }: { view: StreamManagerView; which: 'poll' | 'prediction' }) {
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin px-5 pb-5 pt-1">
+      <GroupCard title={which === 'poll' ? 'Running now' : 'Open now'} layout="window">
+        <LiveRow view={view} layout="window" which={which} />
+      </GroupCard>
     </div>
   );
 }

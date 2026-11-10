@@ -180,3 +180,32 @@ describe('ordinary bindings', () => {
     expect(page).not.toHaveBeenCalled();
   });
 });
+
+describe('surfaces that answer their own keys', () => {
+  const inside = { closest: (s: string) => (s === '[data-sn-owns-keys]' ? {} : null) };
+
+  it('a bare key pressed in one never reaches a binding', () => {
+    const win = new FakeWindow();
+    const capture = createKeybindingDispatcher(win as unknown as Window);
+    const e = { ...press('KeyM', 'm'), target: inside };
+    dispatch(win, capture, e as unknown as Press);
+    expect(toggleMute).not.toHaveBeenCalled();
+    expect(e.defaultPrevented).toBe(false);
+  });
+
+  it('Esc closing one never also leaves full screen', () => {
+    const win = new FakeWindow();
+    const capture = createKeybindingDispatcher(win as unknown as Window);
+    dispatch(win, capture, { ...press('Escape', 'Escape'), target: inside } as unknown as Press);
+    expect(exitFullscreen).not.toHaveBeenCalled();
+    expect(win.listeners).toHaveLength(0);
+  });
+
+  it('a key pressed anywhere else still does', () => {
+    const win = new FakeWindow();
+    const capture = createKeybindingDispatcher(win as unknown as Window);
+    const outside = { closest: () => null };
+    dispatch(win, capture, { ...press('KeyM', 'm'), target: outside } as unknown as Press);
+    expect(toggleMute).toHaveBeenCalledTimes(1);
+  });
+});

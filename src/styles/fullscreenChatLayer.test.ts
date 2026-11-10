@@ -60,6 +60,7 @@ describe('chat over the player full screen', () => {
     'components/EmoteCard.tsx',
     'components/chat/CommandMenu.tsx',
     'components/chat/BlendSourcesButton.tsx',
+    'components/chat/ManageChannelWindow.tsx',
   ])('%s lifts its page-level layer over the full-screen player', (file) => {
     expect(readFileSync(resolve(src, file), 'utf8')).toContain('--sn-z-over-player-lift');
   });

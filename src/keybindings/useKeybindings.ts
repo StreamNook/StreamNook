@@ -35,6 +35,13 @@ function isEditableTarget(target: EventTarget | null): boolean {
   return target.closest('input, textarea, select, [contenteditable=""], [contenteditable="true"]') !== null;
 }
 
+/** Inside a surface that answers its own keys (`data-sn-owns-keys`: the
+ *  stream manager's panels and window, the Tools menu). */
+function insideKeyOwner(target: EventTarget | null): boolean {
+  const el = target as { closest?: (selectors: string) => unknown } | null;
+  return !!el && typeof el.closest === 'function' && el.closest('[data-sn-owns-keys]') != null;
+}
+
 function activeContexts(): Set<KeybindContext> {
   const s = useAppStore.getState();
   const set = new Set<KeybindContext>(['global']);
@@ -118,6 +125,10 @@ export function createKeybindingDispatcher(target: KeyTarget): (e: KeyboardEvent
     // chat can ever trigger a binding — not a letter, not a digit, not a
     // symbol. Ctrl/Cmd combos (e.g. Ctrl+K) never produce text, so they stay.
     if (isEditableTarget(e.target) && !(e.ctrlKey || e.metaKey)) return;
+    // A bare key pressed in a surface that answers its own keys is its own:
+    // Space on a switch there never pauses the stream, and Esc closing it
+    // never also leaves full screen.
+    if (insideKeyOwner(e.target) && !(e.ctrlKey || e.metaKey)) return;
 
     const canonical = eventToCanonical(e);
     const contexts = activeContexts();
