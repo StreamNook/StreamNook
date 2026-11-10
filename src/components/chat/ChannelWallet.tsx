@@ -160,6 +160,15 @@ const GAIN_TEXT: CSSProperties = {
   textShadow:
     '0 1px 2px color-mix(in srgb, var(--color-background) 90%, transparent), 0 0 1px var(--color-background), 0 0 10px color-mix(in srgb, currentColor 45%, transparent), 0 0 22px color-mix(in srgb, currentColor 25%, transparent)',
 };
+// The pop rises over live chat, where a contour alone lost to busy rows (text
+// and emotes right behind the digits). A soft plate in the theme's ground sits
+// behind it, nearly opaque so nothing reads through, with a hairline of the
+// gain's color. No blur: it moves the whole time it shows.
+const GAIN_PLATE: CSSProperties = {
+  background: 'color-mix(in srgb, var(--color-background) 96%, transparent)',
+  boxShadow:
+    '0 0 0 1px color-mix(in srgb, currentColor 28%, transparent), 0 4px 14px color-mix(in srgb, #000 35%, transparent)',
+};
 const POP_OUT = { duration: 0.22, ease: [0.4, 0, 1, 1] } as const;
 const RING = { duration: 0.6, ease: [0.2, 0.8, 0.2, 1] } as const;
 const NOW = { duration: 0 } as const;
@@ -201,7 +210,10 @@ function GainPop({ pop, points, gemUrl }: { pop: Pop | null; points: WalletPoint
             aria-live="polite"
             className="pointer-events-none absolute bottom-full left-0 z-[60] mb-1 origin-bottom-left select-none"
           >
-            <span className="flex items-center gap-1.5 whitespace-nowrap leading-none">
+            <span
+              className={`flex items-center gap-1.5 whitespace-nowrap rounded-full py-1 pl-1.5 pr-2.5 leading-none ${isPoints ? 'text-accent-neon' : 'text-textPrimary'}`}
+              style={GAIN_PLATE}
+            >
               {isPoints ? (
                 <PointsGlyph iconUrl={points?.iconUrl ?? null} name={points?.name ?? null} size={20} className={points?.iconUrl ? '' : 'text-accent-neon'} />
               ) : (
