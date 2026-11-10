@@ -154,6 +154,42 @@ const SettingsDialog = () => {
   // yet on the first frames; poll by rAF (2s cap) until it does, then apply the
   // same pinned-header (data-settings-sticky) compensation as before. Sync
   // mounts resolve on the first attempt, matching the old double-rAF timing.
+  // The page can still be changing height while it scrolls: a freshly opened
+  // tab's sections above the target finish drawing (previews, pickers, art),
+  // so a scroll aimed once ended a section or two past it (a search for "/me"
+  // landed on Links, below the @name style row it named). When the scroll
+  // stops, the row is measured again and the scroll corrected, a few times at
+  // most, and never once the reader scrolls or presses a key themselves.
+  const settleOn = (container: HTMLElement, el: HTMLElement, offBy: () => number) => {
+    let corrections = 0;
+    const deadline = performance.now() + 3000;
+    const stop = () => {
+      container.removeEventListener('scrollend', onSettled);
+      container.removeEventListener('wheel', stop);
+      container.removeEventListener('pointerdown', stop);
+      container.removeEventListener('keydown', stop);
+    };
+    function onSettled() {
+      const off = offBy();
+      if (!el.isConnected || Math.abs(off) <= 6 || corrections >= 3 || performance.now() > deadline) {
+        stop();
+        return;
+      }
+      corrections += 1;
+      container.scrollBy({ top: off, behavior: 'smooth' });
+    }
+    container.addEventListener('scrollend', onSettled);
+    container.addEventListener('wheel', stop, { passive: true });
+    container.addEventListener('pointerdown', stop);
+    container.addEventListener('keydown', stop);
+    // A target already in place scrolls nowhere, so no scrollend comes; and a
+    // page that grows after the scroll stopped sends none either. Look once
+    // more a second in (mid-scroll, a correction just re-aims the same scroll).
+    window.setTimeout(() => {
+      if (corrections === 0) onSettled();
+    }, 1000);
+  };
+
   const scrollToSection = (sectionId: string, entry?: SettingsIndexEntry) => {
     const start = performance.now();
     const attempt = () => {
@@ -168,14 +204,14 @@ const SettingsDialog = () => {
       }
       if (el && contentRef.current) {
         if (entry) flashSettingRow(el);
-        const containerTop = contentRef.current.getBoundingClientRect().top;
-        const elTop = el.getBoundingClientRect().top;
-        const sticky = contentRef.current.querySelector('[data-settings-sticky]');
-        const stickyOffset = sticky ? sticky.getBoundingClientRect().height : 0;
-        contentRef.current.scrollBy({
-          top: elTop - containerTop - 8 - stickyOffset,
-          behavior: 'smooth',
-        });
+        const container = contentRef.current;
+        const offBy = () => {
+          const sticky = container.querySelector('[data-settings-sticky]');
+          const stickyOffset = sticky ? sticky.getBoundingClientRect().height : 0;
+          return el.getBoundingClientRect().top - container.getBoundingClientRect().top - 8 - stickyOffset;
+        };
+        container.scrollBy({ top: offBy(), behavior: 'smooth' });
+        settleOn(container, el, offBy);
         return;
       }
       if (performance.now() - start < 2000) requestAnimationFrame(attempt);
