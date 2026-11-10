@@ -169,15 +169,59 @@ const GAIN_PLATE: CSSProperties = {
   boxShadow:
     '0 0 0 1px color-mix(in srgb, currentColor 28%, transparent), 0 4px 14px color-mix(in srgb, #000 35%, transparent)',
 };
-const POP_OUT = { duration: 0.22, ease: [0.4, 0, 1, 1] } as const;
-const RING = { duration: 0.6, ease: [0.2, 0.8, 0.2, 1] } as const;
+// The pill tucking back into the button: it gathers speed as it goes.
+const TUCK = { duration: 0.3, ease: [0.5, 0, 0.75, 0] } as const;
+// The ring goes out as the pill lands in the button.
+const RING = { duration: 0.6, ease: [0.2, 0.8, 0.2, 1], delay: 0.2 } as const;
+const ROLL_EASE = [0.2, 0.9, 0.25, 1] as const;
+const SPIN = { duration: 0.6, delay: 0.08, ease: 'easeOut' } as const;
 const NOW = { duration: 0 } as const;
+const DIGITS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
 
-/** A gain hops up just over the wallet button, chat-sized and bright: the channel's
- *  own points icon (or the bits gem), "+N" in bold with a glow of its color,
- *  and "BONUS" for a chest, while a soft ring goes out around the button. Over
- *  everything at the message box's edge, the drops lip included. Motion Off
- *  and Performance mode show and hide it in place. */
+/** "+N" whose digits roll up to their value inside their own line, the way
+ *  the paused chat's counter counts; each later digit lands a beat after the
+ *  one before, separators stand still. Read aloud as the plain number. */
+function RollingGain({ amount, instant }: { amount: number; instant: boolean }) {
+  const text = amount.toLocaleString();
+  let order = 0;
+  return (
+    <>
+      <span className="sr-only">+{text}</span>
+      <span aria-hidden className="inline-flex">
+        <span>+</span>
+        {[...text].map((ch, i) => {
+          if (!/\d/.test(ch)) return <span key={i}>{ch}</span>;
+          const step = order++;
+          return (
+            <span key={i} className="inline-block h-[1em] overflow-hidden">
+              <motion.span
+                className="flex flex-col"
+                initial={instant ? false : { y: '0em' }}
+                animate={{
+                  y: `${-Number(ch)}em`,
+                  transition: instant ? NOW : { duration: 0.52 + step * 0.14, delay: 0.12, ease: ROLL_EASE },
+                }}
+              >
+                {DIGITS.map((d) => (
+                  <span key={d} className="block h-[1em]">
+                    {d}
+                  </span>
+                ))}
+              </motion.span>
+            </span>
+          );
+        })}
+      </span>
+    </>
+  );
+}
+
+/** A gain springs up just over the wallet button, chat-sized and bright: the
+ *  channel's own points icon (or the bits gem) turns once, "+N" rolls up to
+ *  its value, "BONUS" for a chest; then the pill tucks back into the button
+ *  and a soft ring goes out around it as it lands. Over everything at the
+ *  message box's edge, the drops lip included. Motion Off and Performance
+ *  mode show and hide it in place. */
 function GainPop({ pop, points, gemUrl }: { pop: Pop | null; points: WalletPoints | null; gemUrl: string | null }) {
   const motionOff = useAppStore((s) => s.settings.motion_mode) === 'off';
   const performanceQuiet = usePerformanceQuiet();
@@ -190,9 +234,10 @@ function GainPop({ pop, points, gemUrl }: { pop: Pop | null; points: WalletPoint
           <motion.span
             key={`${pop.key}-ring`}
             aria-hidden
-            initial={{ opacity: 0.75, scale: 0.85 }}
-            animate={{ opacity: 0, scale: 1.55, transition: RING }}
-            exit={{ opacity: 0, transition: NOW }}
+            // Unseen while the pill shows; it plays as the pill tucks in.
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 0 }}
+            exit={{ opacity: [0.75, 0], scale: [0.85, 1.55], transition: RING }}
             className={`pointer-events-none absolute inset-0 rounded-full border-2 ${isPoints ? 'border-accent-neon/70' : 'border-textPrimary/50'}`}
           />
         )}
@@ -203,10 +248,11 @@ function GainPop({ pop, points, gemUrl }: { pop: Pop | null; points: WalletPoint
             key={pop.key}
             // It rises a short hop over the button, staying beside the gain it
             // reports, and grows rightward from the button, which sits at the
-            // column's left edge, so nothing is cut off.
-            initial={{ opacity: 0, y: 10, scale: 0.5 }}
+            // column's left edge, so nothing is cut off. It leaves the way it
+            // came: back down into the button.
+            initial={{ opacity: 0, y: 10, scale: 0.6 }}
             animate={{ opacity: 1, y: -8, scale: 1, transition: instant ? NOW : POP_IN }}
-            exit={{ opacity: 0, y: -16, scale: 0.96, transition: instant ? NOW : POP_OUT }}
+            exit={{ opacity: 0, y: 14, scale: 0.35, transition: instant ? NOW : TUCK }}
             aria-live="polite"
             className="pointer-events-none absolute bottom-full left-0 z-[60] mb-1 origin-bottom-left select-none"
           >
@@ -214,16 +260,22 @@ function GainPop({ pop, points, gemUrl }: { pop: Pop | null; points: WalletPoint
               className={`flex items-center gap-1 whitespace-nowrap rounded-full py-[3px] pl-1 pr-2 leading-none ${isPoints ? 'text-accent-neon' : 'text-textPrimary'}`}
               style={GAIN_PLATE}
             >
-              {isPoints ? (
-                <PointsGlyph iconUrl={points?.iconUrl ?? null} name={points?.name ?? null} size={15} className={points?.iconUrl ? '' : 'text-accent-neon'} />
-              ) : (
-                <Gem url={gemUrl} size={14} />
-              )}
+              <motion.span
+                className="flex"
+                initial={instant ? false : { rotate: 0 }}
+                animate={{ rotate: instant ? 0 : 360, transition: instant ? NOW : SPIN }}
+              >
+                {isPoints ? (
+                  <PointsGlyph iconUrl={points?.iconUrl ?? null} name={points?.name ?? null} size={15} className={points?.iconUrl ? '' : 'text-accent-neon'} />
+                ) : (
+                  <Gem url={gemUrl} size={14} />
+                )}
+              </motion.span>
               <span
                 className={`text-[14px] font-extrabold tabular-nums tracking-tight ${isPoints ? 'text-accent-neon' : 'text-textPrimary'}`}
                 style={GAIN_TEXT}
               >
-                +{pop.amount.toLocaleString()}
+                <RollingGain amount={pop.amount} instant={instant} />
               </span>
               {pop.chest && (
                 <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-textPrimary" style={GAIN_TEXT}>
