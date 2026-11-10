@@ -83,6 +83,12 @@ class MainActivity : TauriActivity() {
   // icon and label. Pushed from JS on every mute change, from either control.
   @Volatile private var pipMuted: Boolean = false
 
+  // The picture's shape for the PiP window (SN-40 vertical view): a tall stream
+  // floats as a 9:16 window, everything else as 16:9. The page pushes it
+  // whenever it changes, not at entry, so Android 12's auto-enter already has
+  // it; a page reload pushes it again on mount.
+  @Volatile private var pipTall: Boolean = false
+
   // The video's rect in window coordinates. Without it the OS crops and scales
   // the WHOLE activity into the PiP window, so the frames before the web layer
   // repaints show whatever full-screen panel happened to be open.
@@ -178,7 +184,8 @@ class MainActivity : TauriActivity() {
   /** The single source of PictureInPictureParams, used by every entry point and
    *  by every in-place update. */
   private fun buildPipParams(): PictureInPictureParams {
-    val b = PictureInPictureParams.Builder().setAspectRatio(Rational(16, 9))
+    // 9:16 is inside the system's 1:2.39 to 2.39:1 range for PiP aspect ratios.
+    val b = PictureInPictureParams.Builder().setAspectRatio(if (pipTall) Rational(9, 16) else Rational(16, 9))
     pipSourceRect?.let { b.setSourceRectHint(it) }
 
     // Web content cannot draw usable controls inside a PiP window: taps there go
@@ -634,6 +641,14 @@ class MainActivity : TauriActivity() {
           /* PiP unavailable on this device/config */
         }
       }
+    }
+
+    /** The PiP window's shape: true for a tall picture (9:16), false for 16:9. */
+    @JavascriptInterface
+    fun setPipTall(tall: Boolean) {
+      if (pipTall == tall) return
+      pipTall = tall
+      refreshPipParams()
     }
 
     /** Flip the PiP mute action's icon to match the player. */

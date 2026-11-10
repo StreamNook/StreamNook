@@ -13,6 +13,7 @@ interface SNBridge {
   isInPip?(): boolean;
   consumePipClosed?(): boolean;
   setPipSourceRect?(l: number, t: number, r: number, b: number): void;
+  setPipTall?(tall: boolean): void;
   setPipMuted?(muted: boolean): void;
   share?(text: string, subject: string): void;
   areNotificationsEnabled?(): boolean;
@@ -226,6 +227,16 @@ export function setPipSourceRect(l: number, t: number, r: number, b: number): vo
     bridge()?.setPipSourceRect?.(l, t, r, b);
   } catch {
     /* bridge absent */
+  }
+}
+
+/** The PiP window's shape (SN-40): 9:16 for a tall picture, 16:9 otherwise.
+ *  Pushed whenever it changes, so Android 12's auto-enter already has it. */
+export function setPipTall(tall: boolean): void {
+  try {
+    bridge()?.setPipTall?.(tall);
+  } catch {
+    /* bridge absent, or an app build from before the call */
   }
 }
 
