@@ -4,10 +4,24 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
 vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
 
-const { managerState, blankManager, accountChanged, retryDelay, twitchAccountOf } = await import('./streamManager');
+const { managerState, accountChanged, retryDelay, twitchAccountOf } = await import('./streamManager');
 type State = Parameters<typeof managerState>[0];
 type View = NonNullable<State['view']>;
 type Queue = NonNullable<State['queue']>;
+
+// The state an empty hook starts with (what `blankManager` builds), written
+// out here so these tests read only the reducer.
+const blankManager = (channelId: string | null): State => ({
+  channelId,
+  account: null,
+  view: null,
+  queue: null,
+  error: null,
+  viewRev: 0,
+  queueRev: 0,
+  viewSeq: 0,
+  errors: 0,
+});
 
 // The stream manager hook keeps one channel's copy, for one account: after a
 // switch nothing of the channel you left shows, a late read, answer or push

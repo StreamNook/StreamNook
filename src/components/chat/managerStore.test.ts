@@ -166,7 +166,7 @@ describe('the account', () => {
   it("an old write's timer never ends a write made after the store was emptied", async () => {
     await runTool(K, ok('first'));
     const firstGen = getTool(K).gen;
-    forgetAccount();
+    resetManagerStore();
     await runTool(K, ok('second'));
     // One counter for the window, never reset: the new write is numbered past the old.
     expect(getTool(K).gen).toBeGreaterThan(firstGen);
@@ -233,10 +233,10 @@ describe('stream info edits', () => {
   const cat = (id: string) => ({ id, name: id, box_art_url: '' });
   const info = (title: string, category = cat('1')) =>
     ({ title, category, tags: ['a'], language: 'en' }) as unknown as StreamInfoView;
-  const twitch = fromInfo(info('Old title'));
   const empty: InfoHeld = { edits: {}, tagText: '', landing: {} };
 
   it('keeps only the fields that differ from what shows under them', () => {
+    const twitch = fromInfo(info('Old title'));
     expect(infoEdits({ ...twitch, title: 'New' }, twitch)).toEqual({ title: 'New' });
     expect(infoEdits(twitch, twitch)).toEqual({});
     expect(infoEdits({ ...twitch, category: { ...cat('1'), name: 'renamed' } }, twitch)).toEqual({});
