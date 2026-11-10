@@ -17,6 +17,12 @@ import { boundedAdd } from '../../utils/boundedMap';
 import { foldBadges, foldKind, type FoldKind } from '../../utils/badgeFold';
 import { markBadgeArtFailed, useFailedBadgeArt } from '../../utils/badgeArtFailures';
 
+/** How long the pointer rests on a badge before its card shows: the same quick
+ *  60 ms as an emote's (ChatMessage `EMOTE_TOOLTIP_DELAY_MS`), so the two kinds
+ *  of art in a row answer the same. The shared Tooltip default (250 ms) is for
+ *  buttons. */
+const BADGE_TOOLTIP_DELAY_MS = 60;
+
 /** What a resolved Twitch badge carries (twitchBadges.parseBadges), or a
  *  Kick / YouTube / TikTok badge in the same slot (`provider` set). */
 export interface TwitchBadgeInfo {
@@ -197,7 +203,7 @@ export function ChatBadgeIcons({
       url: src,
       remote: info.image_url_4x || info.image_url_1x,
       node: (
-        <Tooltip content={<BadgeHoverCard badge={ref} clickable={hoverClickable} />} side="top" requirePointerMove>
+        <Tooltip content={<BadgeHoverCard badge={ref} clickable={hoverClickable} />} side="top" delay={BADGE_TOOLTIP_DELAY_MS} requirePointerMove>
           {clickable ? (
             <button
               type="button"
@@ -233,7 +239,7 @@ export function ChatBadgeIcons({
       kind: 'seventv',
       url,
       node: (
-        <Tooltip content={<BadgeHoverCard badge={ref} clickable={hoverClickable} />} side="top" requirePointerMove>
+        <Tooltip content={<BadgeHoverCard badge={ref} clickable={hoverClickable} />} side="top" delay={BADGE_TOOLTIP_DELAY_MS} requirePointerMove>
           {clickable ? (
             <button type="button" aria-label={ref.title} className={BADGE_BUTTON_CLASS} onClick={() => openBadgeInfo(ref)}>
               {img}
@@ -275,7 +281,7 @@ export function ChatBadgeIcons({
         kind: 'addon',
         url,
         node: (
-          <Tooltip content={<BadgeHoverCard badge={ref} clickable={hoverClickable} />} side="top" requirePointerMove>
+          <Tooltip content={<BadgeHoverCard badge={ref} clickable={hoverClickable} />} side="top" delay={BADGE_TOOLTIP_DELAY_MS} requirePointerMove>
             {clickable ? (
               <button type="button" aria-label={ref.title} className={BADGE_BUTTON_CLASS} onClick={() => openBadgeInfo(ref)}>
                 {img}
