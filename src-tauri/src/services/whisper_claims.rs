@@ -180,6 +180,8 @@ pub fn set_claim(label: &str, owner: &str, key: Option<String>, page_load: &str,
         (opened, s.newly_counting())
     };
     if let Some(key) = opened {
+        // The viewer opened it: a phone may run Twitch's security check.
+        crate::services::twitch_integrity::user_asked();
         whisper_sync::trigger(Reason::ConversationOpened(key));
     }
     after_change(new);

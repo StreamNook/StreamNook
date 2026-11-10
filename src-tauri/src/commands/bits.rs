@@ -174,6 +174,7 @@ pub async fn send_cheer(
     // Twitch refuses a cheer without its security token (IntegrityCheckFailed,
     // nothing spent). Mint one, and if Twitch refuses a cached one, mint again
     // and send once more: the refused send never reached the bits.
+    crate::services::twitch_integrity::user_asked();
     let integrity = match crate::services::twitch_integrity::get().await {
         Ok(i) => Some(i),
         Err(e) => {

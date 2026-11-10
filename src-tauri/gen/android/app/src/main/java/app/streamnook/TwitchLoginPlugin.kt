@@ -2,7 +2,9 @@ package app.streamnook
 
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.content.res.ColorStateList
 import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
@@ -15,6 +17,8 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.TextView
 import app.tauri.annotation.Command
 import app.tauri.annotation.InvokeArg
@@ -111,6 +115,20 @@ class MintArgs {
 
 /** How often the security check's page is asked for its address. */
 private const val MINT_POLL_MS = 250L
+
+/** Height of the twitch.tv page inside the security check's card. */
+private const val MINT_PAGE_DP = 44
+
+/** The card's fade in and out. */
+private const val MINT_FADE_MS = 150L
+
+/** The check's page is plain text: shown small and muted in the card's colors. */
+private const val MINT_PAGE_STYLE = """(() => {
+  const s = document.createElement('style');
+  s.textContent = 'html,body{background:transparent!important;color:#ADADB8!important;margin:0!important;' +
+    'font:11px/1.35 monospace!important;overflow:hidden!important}pre{margin:0!important;white-space:pre-wrap!important}';
+  (document.head || document.documentElement).appendChild(s);
+})();"""
 
 /** A hidden re-mint either completes on its own quickly or it will not at all. */
 private const val HIDDEN_WATCH_TIMEOUT_MS = 30 * 1000L
@@ -570,11 +588,15 @@ class TwitchLoginPlugin(private val activity: Activity) : Plugin(activity) {
     // ── Twitch's security check (an integrity token) ────────────────────────
     // Twitch answers some private calls only with a token its in-page bot check
     // mints, and the check has to run in a browser on a twitch.tv page. Here that
-    // browser is a 1 px WebView on the app's cookie jar (the signed-in twitch.tv
-    // session), in the login overlay's own browser identity. One check at a time;
-    // a visible sign-in always wins; every outcome removes the view and answers.
+    // browser is a WebView on the app's cookie jar (the signed-in twitch.tv
+    // session), in the login overlay's own browser identity, shown in a labeled
+    // card at the bottom of the screen for as long as the check runs. Rust asks
+    // only right after the viewer cheered, whispered, opened whispers or saved in
+    // the Stream manager, never in the background (SN-267). One check at a time;
+    // a visible sign-in always wins; every outcome removes the card and answers.
 
     private var mintView: WebView? = null
+    private var mintCard: View? = null
     private var mintInvoke: Invoke? = null
     private var mintTick: Runnable? = null
     private var mintDeadline: Runnable? = null
@@ -599,17 +621,57 @@ class TwitchLoginPlugin(private val activity: Activity) : Plugin(activity) {
                 answerMint(invoke, null, "no window to run the check in")
                 return@runOnUiThread
             }
+            // The page itself, at a readable size inside the card.
             val wv = WebView(activity).apply {
-                // Drawn (a page that is never drawn may not run its timers), but
-                // one pixel, nearly transparent, never focused or touched.
-                layoutParams = FrameLayout.LayoutParams(1, 1).apply { gravity = Gravity.TOP or Gravity.START }
-                alpha = 0.01f
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, dp(MINT_PAGE_DP)
+                ).apply { topMargin = dp(8) }
+                setBackgroundColor(Color.TRANSPARENT)
                 isFocusable = false
-                isClickable = false
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
                 settings.javaScriptEnabled = true
                 settings.domStorageEnabled = true
                 settings.userAgentString = chromeUa
+            }
+            val spinner = ProgressBar(activity).apply {
+                isIndeterminate = true
+                indeterminateTintList = ColorStateList.valueOf(Color.parseColor("#ADADB8"))
+                layoutParams = LinearLayout.LayoutParams(dp(16), dp(16)).apply { marginEnd = dp(10) }
+            }
+            val label = TextView(activity).apply {
+                text = "Checking with Twitch…"
+                setTextColor(Color.parseColor("#EFEFF1"))
+                textSize = 14f
+            }
+            val row = LinearLayout(activity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                addView(spinner)
+                addView(label)
+            }
+            val insets = ViewCompat.getRootWindowInsets(decor)
+                ?.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
+            val card = LinearLayout(activity).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(16), dp(12), dp(16), dp(12))
+                background = GradientDrawable().apply {
+                    setColor(Color.parseColor("#F218181B"))
+                    cornerRadius = dp(16).toFloat()
+                }
+                elevation = dp(6).toFloat()
+                // Touches on the card stay on the card; the app around it is untouched.
+                isClickable = true
+                layoutParams = FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    gravity = Gravity.BOTTOM
+                    leftMargin = dp(12) + (insets?.left ?: 0)
+                    rightMargin = dp(12) + (insets?.right ?: 0)
+                    bottomMargin = dp(12) + (insets?.bottom ?: 0)
+                }
+                alpha = 0f
+                addView(row)
+                addView(wv)
             }
             CookieManager.getInstance().setAcceptCookie(true)
             CookieManager.getInstance().setAcceptThirdPartyCookies(wv, true)
@@ -627,12 +689,17 @@ class TwitchLoginPlugin(private val activity: Activity) : Plugin(activity) {
 
                 override fun onPageFinished(view: WebView, url: String?) {
                     super.onPageFinished(view, url)
+                    if (view !== mintView) return
+                    // The page's plain text, in the card's colors.
+                    view.evaluateJavascript(MINT_PAGE_STYLE, null)
                     // Without start-of-page scripts the check starts once the page is
                     // in; the script itself acts only on the check's page, once.
-                    if (!documentStart && view === mintView) view.evaluateJavascript(args.script, null)
+                    if (!documentStart) view.evaluateJavascript(args.script, null)
                 }
             }
-            decor.addView(wv)
+            decor.addView(card)
+            card.animate().alpha(1f).setDuration(MINT_FADE_MS).start()
+            mintCard = card
             mintView = wv
             mintInvoke = invoke
             lateinit var tick: Runnable
@@ -666,11 +733,20 @@ class TwitchLoginPlugin(private val activity: Activity) : Plugin(activity) {
         mintDeadline?.let { storageWatchHandler.removeCallbacks(it) }
         mintTick = null
         mintDeadline = null
-        mintView?.let { v ->
-            (v.parent as? ViewGroup)?.removeView(v)
-            v.destroy()
-        }
+        val view = mintView
+        val card = mintCard
         mintView = null
+        mintCard = null
+        if (card != null) {
+            // Fades out, then goes; the check is already over for every caller.
+            card.animate().cancel()
+            card.animate().alpha(0f).setDuration(MINT_FADE_MS).withEndAction {
+                (card.parent as? ViewGroup)?.removeView(card)
+                view?.destroy()
+            }.start()
+        } else {
+            view?.destroy()
+        }
         val pending = mintInvoke
         mintInvoke = null
         if (pending != null) answerMint(pending, url, error)

@@ -4,6 +4,8 @@
 //! Twitch account, never one the page passes.
 
 use crate::rt::Window;
+// Each command the viewer starts lets a phone run Twitch's security check.
+use crate::services::twitch_integrity;
 use crate::services::whisper_inbox::{self, WhisperList, WhisperPage, WhisperUpdate};
 // Named `sender` here: the module and the `whisper_send` command share a name.
 use crate::services::whisper_send::{self as sender, SendTarget};
@@ -61,6 +63,7 @@ pub async fn whisper_mark_read(key: String) -> Result<(), String> {
 /// Mark every conversation read, here and on Twitch.
 #[tauri::command]
 pub async fn whisper_mark_all_read() -> Result<(), String> {
+    twitch_integrity::user_asked();
     whisper_inbox::mark_all_read()
 }
 
@@ -75,6 +78,7 @@ pub async fn whisper_send(
     expect_owner: Option<String>,
     expect_owner_name: Option<String>,
 ) -> Result<WhisperUpdate, String> {
+    twitch_integrity::user_asked();
     sender::send(target, text, expect_owner, expect_owner_name).await
 }
 
@@ -82,6 +86,7 @@ pub async fn whisper_send(
 /// a phone's inbox, the Whispers window): sync if a minute has passed.
 #[tauri::command]
 pub async fn inbox_opened() -> Result<(), String> {
+    twitch_integrity::user_asked();
     whisper_sync::trigger(whisper_sync::Reason::InboxOpened);
     Ok(())
 }
@@ -89,6 +94,7 @@ pub async fn inbox_opened() -> Result<(), String> {
 /// Send a Not delivered whisper again (after checking Twitch does not have it).
 #[tauri::command]
 pub async fn whisper_retry(key: String, message_id: String) -> Result<WhisperUpdate, String> {
+    twitch_integrity::user_asked();
     sender::retry(key, message_id).await
 }
 
@@ -101,18 +107,21 @@ pub async fn whisper_discard(key: String, message_id: String) -> Result<(), Stri
 /// Archive a conversation on Twitch and here.
 #[tauri::command]
 pub async fn whisper_archive(key: String) -> Result<(), String> {
+    twitch_integrity::user_asked();
     whisper_inbox::archive(&key).await
 }
 
 /// Load one more page of a conversation's older history from Twitch.
 #[tauri::command]
 pub async fn whisper_load_older(key: String) -> Result<u32, String> {
+    twitch_integrity::user_asked();
     whisper_sync::load_older(key).await
 }
 
 /// Sync the signed-in account's whispers with Twitch now.
 #[tauri::command]
 pub async fn whisper_sync_now() -> Result<SyncOutcome, String> {
+    twitch_integrity::user_asked();
     Ok(whisper_sync::sync_now().await)
 }
 

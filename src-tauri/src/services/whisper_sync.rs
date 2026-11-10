@@ -103,6 +103,9 @@ pub trait Minter: Send + Sync {
     fn cached(&self) -> Option<Integrity>;
     fn invalidate(&self);
     fn last_success_ms(&self) -> Option<i64>;
+    /// Whether a mint may start now (a phone mints only right after the
+    /// viewer acted). A run that may not mint goes on without a token.
+    fn may_mint(&self) -> bool;
 }
 /// The twitch.tv web session the app already holds.
 pub trait WebSession: Send + Sync {
@@ -147,6 +150,9 @@ impl Minter for IntegrityMinter {
     }
     fn last_success_ms(&self) -> Option<i64> {
         crate::services::twitch_integrity::last_success_ms()
+    }
+    fn may_mint(&self) -> bool {
+        crate::services::twitch_integrity::may_mint()
     }
 }
 struct AppWebSession;
@@ -770,6 +776,11 @@ impl Engine {
             return Some(i);
         }
         if run.mints_left == 0 {
+            return None;
+        }
+        // Not yet allowed (a phone waits for the viewer to open whispers): no
+        // mint, and nothing spent or backed off, so the next run asks again.
+        if !self.env.minter.may_mint() {
             return None;
         }
         let now = self.now();
@@ -1881,6 +1892,7 @@ mod tests {
     }
     struct FakeMinter {
         ok: Mutex<bool>,
+        may: Mutex<bool>,
         device: String,
         mints: AtomicU32,
         cached: Mutex<Option<Integrity>>,
@@ -1904,6 +1916,9 @@ mod tests {
         }
         fn last_success_ms(&self) -> Option<i64> {
             None
+        }
+        fn may_mint(&self) -> bool {
+            *lock(&self.may)
         }
     }
 
@@ -2156,7 +2171,7 @@ mod tests {
         let twitch = FakeTwitch::new(owner);
         let clock = Arc::new(FakeClock(AtomicI64::new(T0 + 400 * 86_400_000)));
         let sleeper = Arc::new(FakeSleeper { clock: Arc::clone(&clock), slept: Mutex::new(Vec::new()) });
-        let minter = Arc::new(FakeMinter { ok: Mutex::new(true), device: "dev-a".into(), mints: AtomicU32::new(0), cached: Mutex::new(None) });
+        let minter = Arc::new(FakeMinter { ok: Mutex::new(true), may: Mutex::new(true), device: "dev-a".into(), mints: AtomicU32::new(0), cached: Mutex::new(None) });
         let session = Arc::new(FakeSession { twitch: Arc::clone(&twitch), token: Mutex::new(Some(format!("token-{owner}"))), reharvests: AtomicU32::new(0) });
         let events = Arc::new(FakeEvents::default());
         let spawned: Arc<Mutex<Vec<BoxFut<()>>>> = Arc::new(Mutex::new(Vec::new()));
@@ -2440,6 +2455,21 @@ mod tests {
         let scope = r.follow("99999915");
         r.run(&scope, Reason::Manual).await;
         assert_eq!(r.minter.mints.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_run_that_may_not_mint_waits_without_backing_off() {
+        let r = rig("99999977");
+        r.twitch.add_thread("1000000000", 150, T0);
+        *lock(&r.minter.may) = false;
+        let scope = r.follow("99999977");
+        assert!(matches!(r.run(&scope, Reason::Manual).await, SyncOutcome::Partial { .. }));
+        assert_eq!(r.minter.mints.load(Ordering::SeqCst), 0, "no page opened");
+        assert_eq!(r.messages(&scope, "1000000000").len(), 100, "page 1 still lands");
+        *lock(&r.minter.may) = true;
+        r.run(&scope, Reason::ResumePartial).await;
+        assert_eq!(r.minter.mints.load(Ordering::SeqCst), 1, "the next allowed run mints at once");
+        assert_eq!(r.messages(&scope, "1000000000").len(), 150);
     }
 
     #[tokio::test]

@@ -2,7 +2,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- Lets the app ASK to be exempted from battery optimisation. Android
          withholds network from jobs entirely in the Rare and Restricted standby
          buckets, and the exemption allowlist is what lifts an app out of those,

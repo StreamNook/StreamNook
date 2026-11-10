@@ -512,6 +512,7 @@ pub async fn typed_cheer(
     }
     // The viewer is about to see the confirm card: mint Twitch's security
     // token now, so the send does not wait on it.
+    crate::services::twitch_integrity::user_asked();
     crate::services::twitch_integrity::warm();
     Some(check_for(auth, text, &key, channel_id, &set, &cheers, &ch, sender_is_main, false).await)
 }

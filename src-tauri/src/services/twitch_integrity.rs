@@ -75,6 +75,13 @@ const NATIVE_DEADLINE_MS: u64 = 28_000;
 /// The longest a phone mint can hold `MINTING`, whatever the phone side does.
 #[allow(dead_code)]
 const NATIVE_CEILING_MS: u64 = 35_000;
+/// When the viewer last did something that needs the token (a cheer, a
+/// whisper sent, whispers opened, a Stream manager save). On Android the check
+/// runs only within `ASK_WINDOW` of that, on screen, never on its own in the
+/// background: a page the viewer never asked for is what made Play Protect
+/// flag the app.
+static ASKED_AT: Mutex<Option<Instant>> = Mutex::new(None);
+const ASK_WINDOW: Duration = Duration::from_secs(60);
 
 fn cached() -> Option<Integrity> {
     let guard = CACHE.lock().unwrap_or_else(|e| e.into_inner());
@@ -111,9 +118,36 @@ fn keep_for(expiration_ms: i64, now_ms: i64) -> Duration {
     left.saturating_sub(EXPIRY_MARGIN).min(MAX_AGE)
 }
 
+/// The viewer just did something that needs the token: on Android a mint may
+/// run for the next `ASK_WINDOW`.
+pub fn user_asked() {
+    *ASKED_AT.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
+}
+
+fn asked_within(at: Option<Instant>, now: Instant) -> bool {
+    at.is_some_and(|t| now.saturating_duration_since(t) < ASK_WINDOW)
+}
+
+/// Whether a mint may start now. Desktop: always. Android: only with the app
+/// open, shortly after the viewer acted (`user_asked`).
+pub fn may_mint() -> bool {
+    if !cfg!(target_os = "android") {
+        return true;
+    }
+    !crate::services::window_visibility::phone_idle()
+        && asked_within(*ASKED_AT.lock().unwrap_or_else(|e| e.into_inner()), Instant::now())
+}
+
 /// A token for the signed-in twitch.tv session: the cached one, or a fresh
-/// mint (one at a time; callers waiting share it).
+/// mint (one at a time; callers waiting share it). A mint the viewer did not
+/// ask for is refused without counting as a failure.
 pub async fn get() -> Result<Integrity, String> {
+    if let Some(t) = cached() {
+        return Ok(t);
+    }
+    if !may_mint() {
+        return Err("Twitch's security check waits for you to cheer, whisper or save".into());
+    }
     get_with(mint()).await
 }
 
@@ -149,8 +183,9 @@ pub fn warm() {
     if cached().is_some() {
         return;
     }
-    // A phone in the background never opens a page to mint.
-    if crate::services::window_visibility::phone_idle() {
+    // A phone opens the page only right after the viewer acted, never in the
+    // background.
+    if !may_mint() {
         return;
     }
     let failed_recently = LAST_FAILURE
@@ -407,6 +442,16 @@ mod tests {
         let r = read_fragment("https://www.twitch.tv/robots.txt#SN_INTEGRITY_ERR=not%20signed%20in").unwrap();
         assert_eq!(r.unwrap_err(), "not signed in");
         assert!(read_fragment("https://www.twitch.tv/robots.txt#SN_MINT").is_none());
+    }
+
+    #[test]
+    fn a_phone_mints_only_within_a_minute_of_the_viewer_acting() {
+        let now = Instant::now() + Duration::from_secs(600);
+        assert!(!asked_within(None, now), "never asked");
+        assert!(asked_within(Some(now), now));
+        assert!(asked_within(Some(now - Duration::from_secs(59)), now));
+        assert!(!asked_within(Some(now - ASK_WINDOW), now), "the window has closed");
+        assert!(!asked_within(Some(now - Duration::from_secs(3600)), now));
     }
 
     #[test]

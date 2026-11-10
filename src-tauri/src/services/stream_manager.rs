@@ -1475,6 +1475,8 @@ async fn gql(auth: &TwitchAuthService, body: Value) -> Result<Value, String> {
         .map(|e| e.iter().any(|x| x["message"].as_str().unwrap_or("").to_ascii_lowercase().contains("integrity")))
         .unwrap_or(false);
     if integrity {
+        // Every call here comes from the Stream manager the viewer has open.
+        crate::services::twitch_integrity::user_asked();
         if let Ok(i) = crate::services::twitch_integrity::get().await {
             return twitch_web_gql::post_with(Some(&token), body, LOG_TAG, Some(&i)).await;
         }
