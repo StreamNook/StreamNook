@@ -157,15 +157,28 @@ export function ProviderLogo({
   const isDark = useThemeIsDark();
   const src = providerLogo(provider, !isDark);
   if (src) {
+    // The caller's classes go on a wrapper and the optical correction on the
+    // image inside it. Callers place the mark with classes such as
+    // `-translate-y-1/2`, which write `transform`; on the image itself the
+    // correction's inline `transform` replaced that, so YouTube's mark (the
+    // only one with a correction) sat half its height low on the MultiChat
+    // tabs while Twitch and Kick centered.
+    const transform = opticalTransform(provider, opticalAlign);
     return (
       <Tooltip content={meta.label}>
-        <img
-          src={src}
-          alt={meta.label}
-          draggable={false}
-          className={`shrink-0 ${className}`}
-          style={{ width: size, height: size, transform: opticalTransform(provider, opticalAlign) }}
-        />
+        <span
+          role="img"
+          aria-label={meta.label}
+          className={`inline-flex shrink-0 ${className}`}
+          style={{ width: size, height: size }}
+        >
+          <img
+            src={src}
+            alt=""
+            draggable={false}
+            style={{ width: size, height: size, transform }}
+          />
+        </span>
       </Tooltip>
     );
   }
