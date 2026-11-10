@@ -475,8 +475,12 @@ pub async fn search_settings(query: String) -> Result<Vec<crate::services::setti
 
 /// The alert types this build sends, in the order the phones list them: each
 /// with its setting, its OS category, and whether the setup wizard offers it.
+///
+/// Async so it answers off the main thread: a plain `fn` command runs ON it,
+/// and right after a reboot or an update (the main thread busy bringing up
+/// windows) Settings > Notifications, which waits for this list, stayed blank.
 #[tauri::command]
-pub fn get_alert_types() -> Vec<crate::services::alert_types::AlertType> {
+pub async fn get_alert_types() -> Vec<crate::services::alert_types::AlertType> {
     crate::services::alert_types::alert_types()
 }
 

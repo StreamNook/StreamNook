@@ -44,6 +44,11 @@ void loadAlertTypes();
 
 // The operating system's name for its own notifications.
 const SYSTEM_NAME = IS_MAC ? 'macOS' : IS_LINUX ? 'desktop' : 'Windows';
+
+// How long the page waits for that list before it draws without it. The list
+// normally answers in a frame; a page that waited on it with no limit stayed
+// empty when it never came. Late rows then join "Notify me about" in place.
+const ALERT_TYPES_WAIT_MS = 1200;
 const IS_WINDOWS_DESKTOP = !IS_MAC && !IS_LINUX;
 
 // What each type's notification does on desktop beyond its one-line detail,
@@ -167,6 +172,12 @@ const NotificationsSettings = () => {
   const { settings, updateSettings, addToast } = useAppStore();
   const resetFor = useSettingReset();
   const alertTypes = useAlertTypes();
+  const [stopWaiting, setStopWaiting] = useState(false);
+  useEffect(() => {
+    if (alertTypes !== null) return;
+    const timer = setTimeout(() => setStopWaiting(true), ALERT_TYPES_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, [alertTypes]);
   // macOS asks before StreamNook's first system notification; elsewhere this
   // is granted and never read.
   const { permission, ask } = useSystemNotifyPermission();
@@ -322,8 +333,9 @@ const NotificationsSettings = () => {
 
   // The list is read once a run, started when this code loaded; until it
   // answers (a moment, the first time) the page waits rather than drawing
-  // without its types and then pushing everything under them down.
-  if (alertTypes === null) return null;
+  // without its types and then pushing everything under them down, but only
+  // for ALERT_TYPES_WAIT_MS.
+  if (alertTypes === null && !stopWaiting) return null;
 
   return (
     <div className="space-y-8">
@@ -462,7 +474,7 @@ const NotificationsSettings = () => {
             label="Notify me about"
             description="Pick which events are worth a notification."
           >
-            {alertTypes.map((type) => {
+            {(alertTypes ?? []).map((type) => {
               const key = alertKey(type);
               if (!key) return null;
               const saved = liveNotifications[key];
