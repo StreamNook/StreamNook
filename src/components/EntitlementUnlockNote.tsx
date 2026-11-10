@@ -7,6 +7,7 @@ import {
   getCosmeticsVersion,
   getUserCosmeticSlugs,
   getCosmeticBySlug,
+  isCosmeticsRegistryLoaded,
 } from '../services/supabaseService';
 import { COSMETIC_ASSET_CHAT_BY_SLUG } from './cosmeticAssets';
 
@@ -47,11 +48,14 @@ export const EntitlementUnlockNote = () => {
     }
 
     // Record what the user already owns so only a FUTURE growth counts as an
-    // unlock. Never notifies. No-op until the registry has loaded (version 0),
-    // so we don't baseline against an empty set and then "discover" their
-    // existing badges as brand new.
+    // unlock. Never notifies. No-op until Rust says the cosmetics have really
+    // loaded, so we don't baseline against an empty set and then "discover"
+    // their existing badges as brand new. A version above 0 is not enough:
+    // after a reboot or an update the first snapshot arrives before Rust's
+    // read finishes (`cosmeticsLoaded: false`, no grants), and a baseline taken
+    // from it announced every supporter's tier again on each launch.
     const establishBaseline = (): boolean => {
-      if (getCosmeticsVersion() === 0) return false;
+      if (getCosmeticsVersion() === 0 || !isCosmeticsRegistryLoaded()) return false;
       baselineUserIdRef.current = userId;
       // getUserCosmeticSlugs returns ONLY explicit entitlements (it excludes the
       // is_default Member badge), which is exactly the paid-grant set we track.
