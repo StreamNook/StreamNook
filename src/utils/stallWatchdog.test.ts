@@ -459,7 +459,8 @@ describe('the player and the store wire them', () => {
   it('only the viewer quality change ends a codec hold', () => {
     const transient = slice(store, 'applyTransientQuality: async (quality: string) => {', 'changeStreamQuality: async (quality: string) => {');
     expect(transient).not.toContain("'change_stream_quality'");
-    expect(transient).toContain("invoke<StreamStartResult>('start_stream', {");
+    // The phone's swap names the picture it serves (SN-40); the command is the same.
+    expect(transient).toContain("invoke<StreamStartResult>('start_stream', withView({");
     const viewer = slice(store, 'changeStreamQuality: async (quality: string) => {', 'startStream: async (');
     expect(viewer).toContain("'change_stream_quality'");
   });
