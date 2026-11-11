@@ -2,16 +2,30 @@ import { useTooltipStore } from "../../stores/TooltipStore";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { useState, useCallback } from "react";
+import { NameColorToneContext } from "../../hooks/useNameColor";
+import { useOverVideoStyle } from "../../mobile/chat/overVideo";
 
 // Default tooltip container chrome. Callers can override via the
 // containerClassName prop on <Tooltip>; when set, this default is replaced
 // entirely so e.g. StreamNookBadge can render a pill-shaped popover.
+//
+// Every tooltip skin is dark glass (this one, the stream hover card, the
+// member card), in every theme. In a light theme the bubble takes Frosted
+// Glass's color variables, the way chat over video does, so text written with
+// the theme's tokens (text-textPrimary, text-warning...) reads light on it
+// instead of the light theme's dark ink. A dark theme is untouched.
 const DEFAULT_TOOLTIP_CONTAINER_CLASS =
   "rounded-md bg-glass-ink/80 px-2.5 py-1.5 text-xs font-medium text-textPrimary shadow-xl backdrop-blur-xl border border-white/10 max-w-xs break-words pointer-events-none text-center leading-tight";
+
+// A plain label that wraps splits into even lines instead of leaving one word
+// alone on the second. Not for rich content: its left-aligned lines would get
+// shorter while the bubble kept its width, leaving a gap down the right side.
+const PLAIN_LABEL_CLASS = `${DEFAULT_TOOLTIP_CONTAINER_CLASS} text-balance`;
 
 export const TooltipManager = () => {
   const { isVisible, content, rect, side: initialSide, containerClassName } = useTooltipStore();
   const [dimensions, setDimensions] = useState({ width: 0, height: 0, content: null as any });
+  const darkInk = useOverVideoStyle(true);
 
   // Reset dimensions during render if content changes (React 18 pattern)
   if (isVisible && content !== dimensions.content) {
@@ -178,9 +192,16 @@ export const TooltipManager = () => {
             <div
               // Frosted glass styling by default; callers can override via the
               // containerClassName prop on <Tooltip> for a different shape/skin.
-              className={containerClassName ?? DEFAULT_TOOLTIP_CONTAINER_CLASS}
+              className={
+                containerClassName ??
+                (typeof content === "string" ? PLAIN_LABEL_CLASS : DEFAULT_TOOLTIP_CONTAINER_CLASS)
+              }
+              style={darkInk}
             >
-              {content}
+              {/* Names inside are drawn on dark glass, whatever the theme. */}
+              <NameColorToneContext.Provider value={true}>
+                {content}
+              </NameColorToneContext.Provider>
             </div>
           </motion.div>
           </motion.div>
