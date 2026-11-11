@@ -21,6 +21,8 @@ export interface DropRow {
   detail: string | null;
   /** 0 to 100; null for a drop watch time does not earn. */
   bar: number | null;
+  /** Not earnable yet (needs an earlier reward first): dimmed, after the rest, `detail` says what it needs. */
+  locked?: boolean;
 }
 
 export interface CampaignCard {

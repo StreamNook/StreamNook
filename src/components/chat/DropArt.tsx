@@ -10,12 +10,16 @@ export function DropArt({
   size,
   radius,
   aspect,
+  dim,
 }: {
   image: string;
   size: number | 'fill';
   radius?: number;
   aspect?: string;
+  /** A reward out of reach: faded and grey, like the Drops page draws it. */
+  dim?: boolean;
 }) {
+  const faded = dim ? ' opacity-40 grayscale' : '';
   const r = radius ?? (size === 'fill' ? 8 : size >= 40 ? 10 : size >= 24 ? 7 : 5);
   const box =
     size === 'fill'
@@ -28,10 +32,10 @@ export function DropArt({
       alt=""
       draggable={false}
       style={box}
-      className={`drops-art shrink-0 ${aspect ? 'object-contain' : 'object-cover'}`}
+      className={`drops-art shrink-0 ${aspect ? 'object-contain' : 'object-cover'}${faded}`}
     />
   ) : (
-    <span style={box} className="drops-art flex shrink-0 items-center justify-center bg-textPrimary/[0.08]">
+    <span style={box} className={`drops-art flex shrink-0 items-center justify-center bg-textPrimary/[0.08]${faded}`}>
       <Gift size={glyph} className="text-accent-on-surface" />
     </span>
   );

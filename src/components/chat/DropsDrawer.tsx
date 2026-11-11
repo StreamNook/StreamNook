@@ -47,7 +47,8 @@ export default function DropsDrawer({ view, instant, maxHeight, claimingId, onCl
 /** What the drawer lists, without its own glass or scroll: desktop's drawer
  *  wraps it in a panel over chat, the phones' lip in a bottom sheet. */
 export function DrawerBody({ view, claimingId, onClaim }: Pick<Props, 'view' | 'claimingId' | 'onClaim'>) {
-  const left = view.campaigns.reduce((n, c) => n + c.drops.filter((d) => !d.claimed).length, 0);
+  // A reward out of reach is nothing left to earn here.
+  const left = view.campaigns.reduce((n, c) => n + c.drops.filter((d) => !d.claimed && !d.locked).length, 0);
   const one = view.campaigns.length === 1 ? view.campaigns[0] : null;
   return (
     <>
@@ -217,17 +218,24 @@ function Tile({
 }) {
   return (
     <div className={`glaze-inset drops-tile flex min-w-0 flex-col gap-1.5 p-2 ${tileState(drop)}`}>
-      <DropArt image={drop.image} size="fill" aspect={pair ? '16 / 10' : undefined} />
+      <DropArt image={drop.image} size="fill" aspect={pair ? '16 / 10' : undefined} dim={drop.locked} />
       {/* Three across, a name gets two lines (the same two in every tile, so
           the bars line up); two across there is room for it on one. */}
       <div
-        className={`text-[11px] leading-[14px] text-textPrimary/90 ${pair ? 'truncate text-[11.5px]' : 'line-clamp-2 h-7'}`}
+        className={`text-[11px] leading-[14px] ${drop.locked ? 'text-textSecondary' : 'text-textPrimary/90'} ${pair ? 'truncate text-[11.5px]' : 'line-clamp-2 h-7'}`}
       >
         {drop.name}
       </div>
       <Bar drop={drop} />
       <div className="flex min-h-[22px] items-center">
-        <Trailing drop={drop} linkUrl={linkUrl} claiming={claiming} onClaim={onClaim} wide />
+        {drop.locked ? (
+          // Out of reach: no label, only what it needs first.
+          <span className="line-clamp-2 text-[10.5px] leading-[13px] text-textSecondary" title={drop.detail ?? undefined}>
+            {drop.detail}
+          </span>
+        ) : (
+          <Trailing drop={drop} linkUrl={linkUrl} claiming={claiming} onClaim={onClaim} wide />
+        )}
       </div>
     </div>
   );
@@ -259,10 +267,12 @@ function WideTile({
   const art = big ? 64 : bare ? 40 : 52;
   return (
     <div className={`glaze-inset drops-tile flex items-center gap-[11px] p-2.5 ${tileState(drop)} ${big || bare ? '' : 'mt-2.5'}`}>
-      <DropArt image={drop.image} size={art} radius={big ? 10 : 8} />
+      <DropArt image={drop.image} size={art} radius={big ? 10 : 8} dim={drop.locked} />
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-baseline justify-between gap-2">
-          <span className={`min-w-0 truncate font-medium text-textPrimary ${big ? 'text-[13px]' : 'text-[12.5px]'}`}>
+          <span
+            className={`min-w-0 truncate font-medium ${drop.locked ? 'text-textSecondary' : 'text-textPrimary'} ${big ? 'text-[13px]' : 'text-[12.5px]'}`}
+          >
             {drop.name}
           </span>
           {waiting && time && (

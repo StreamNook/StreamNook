@@ -169,11 +169,13 @@ pub struct HereDrop {
     /// no page to link an account (the auto-claim tries again later).
     pub watched: bool,
     /// Watching cannot earn it: it needs an earlier reward first (an
-    /// evolution stage whose earlier form is not held). Never leads.
+    /// evolution stage whose earlier form is not held). Drawn out of reach
+    /// (dimmed, no bar, after the rest), with `detail` saying what it needs.
+    /// Never leads.
     pub locked: bool,
     pub lead: bool,
-    /// "Claimed", "Ready", "Claiming", "Connect", "Watched", "Locked",
-    /// "12m to watch" or "Starts when you watch".
+    /// "Claimed", "Ready", "Claiming", "Connect", "Watched", "12m to watch"
+    /// or "Starts when you watch"; empty for a locked reward.
     pub status: String,
     pub detail: Option<String>,
     pub bar: Option<f32>,
@@ -588,7 +590,7 @@ fn rows<'a>(
         })
         .max()
         .unwrap_or(0);
-    let rows = tiers
+    let mut rows = tiers
         .iter()
         .zip(base)
         .map(|(d, (have, own))| {
@@ -636,7 +638,9 @@ fn rows<'a>(
                 locked,
             }
         })
-        .collect();
+        .collect::<Vec<_>>();
+    // Out-of-reach rewards sit after everything still earnable.
+    rows.sort_by_key(|r| r.locked.is_some());
     (rows, clock)
 }
 
@@ -689,7 +693,9 @@ fn here_drop(r: &Row, i: &Inputs, started: bool, lead: bool) -> HereDrop {
     } else if r.ready {
         "Ready".to_string()
     } else if r.locked.is_some() {
-        "Locked".to_string()
+        // Out of reach reads like any reward that can't be had: no label,
+        // only its `detail` saying what it needs first.
+        String::new()
     } else if !started {
         "Starts when you watch".to_string()
     } else {
@@ -2303,9 +2309,35 @@ mod tests {
         assert_eq!((view.more, view.complete), (0, false));
         let row = &view.campaigns[0].drops[0];
         assert!(row.locked && !row.ready && !row.lead);
-        assert_eq!(row.status, "Locked");
+        // Out of reach, not labeled: only what it needs first.
+        assert_eq!(row.status, "");
         assert_eq!(row.detail.as_deref(), Some("Needs the Gastly badge first"));
         assert_eq!(row.bar, None);
+    }
+
+    #[test]
+    fn a_locked_reward_sits_after_the_earnable_ones() {
+        // A campaign with an unclaimed reward that has another reward after it
+        // (a claimed one is never locked).
+        let movable = |k: &HereCampaign| k.drops.iter().position(|d| !d.claimed).is_some_and(|at| at + 1 < k.drops.len());
+        let place = golden::place();
+        let case = golden::cases()
+            .into_iter()
+            .find(|c| {
+                build(&Inputs::bare(&place, &c.list, Some(&c.inventory), now_ms()))
+                    .campaigns
+                    .iter()
+                    .any(movable)
+            })
+            .expect("a golden case with an unclaimed reward before another");
+        let i = Inputs::bare(&place, &case.list, Some(&case.inventory), now_ms());
+        let before = build(&i);
+        let campaign = before.campaigns.iter().find(|k| movable(k)).unwrap();
+        let first = campaign.drops.iter().find(|d| !d.claimed).unwrap().id.clone();
+        let locked = HashMap::from([(first.clone(), "Gastly".to_string())]);
+        let after = build(&Inputs { locked: &locked, ..i });
+        let drops = &after.campaigns.iter().find(|k| k.id == campaign.id).unwrap().drops;
+        assert_eq!(drops.last().map(|d| d.id.as_str()), Some(first.as_str()));
     }
 
     fn state_with(user: &str) -> State {

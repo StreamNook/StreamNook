@@ -861,17 +861,23 @@ export const RewardsScreen: React.FC = () => {
                     alt=""
                     draggable={false}
                     className={`w-10 h-10 rounded-md object-cover shrink-0 ring-1 ring-white/10 ${
-                      drop.claimed ? '' : 'opacity-90'
+                      drop.locked ? 'opacity-40 grayscale' : drop.claimed ? '' : 'opacity-90'
                     }`}
                   />
                 ) : (
-                  <div className="w-10 h-10 rounded-md bg-surface flex items-center justify-center shrink-0">
+                  <div
+                    className={`w-10 h-10 rounded-md bg-surface flex items-center justify-center shrink-0 ${
+                      drop.locked ? 'opacity-40' : ''
+                    }`}
+                  >
                     <Gift size={16} className="text-textMuted" />
                   </div>
                 )}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-baseline gap-2">
-                    <span className="text-[13px] text-textPrimary truncate">{drop.name}</span>
+                    <span className={`text-[13px] truncate ${drop.locked ? 'text-textSecondary' : 'text-textPrimary'}`}>
+                      {drop.name}
+                    </span>
                     <span
                       className={`ml-auto text-[11px] shrink-0 tabular-nums ${
                         drop.claimed ? 'text-success' : drop.done ? 'text-success font-semibold' : 'text-textMuted'

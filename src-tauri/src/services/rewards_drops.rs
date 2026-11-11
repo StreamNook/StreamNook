@@ -105,6 +105,9 @@ pub struct DropRow {
     pub detail: Option<String>,
     /// Bar fill 0 to 100; None for a drop watch time does not earn.
     pub bar: Option<f32>,
+    /// Not earnable yet (it needs an earlier reward first): drawn out of
+    /// reach, dimmed and after the rest, with `detail` saying what it needs.
+    pub locked: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -180,26 +183,30 @@ pub async fn get(
 }
 
 /// Rewards watching cannot earn yet (an evolution stage whose earlier form is
-/// not held) read "Locked" with what they need, and show no bar. Pure.
+/// not held) read like a reward out of reach: no status, what they need as the
+/// detail, no bar, and after every reward still earnable. Pure.
 fn apply_locked(view: &mut RewardsDrops, locked: &std::collections::HashMap<String, String>) {
     if locked.is_empty() {
         return;
     }
-    let rows = view
+    let cards = view
         .in_progress
         .iter_mut()
         .chain(view.available.iter_mut())
-        .flat_map(|g| g.campaigns.iter_mut())
-        .flat_map(|c| c.drops.iter_mut());
-    for row in rows {
-        if row.claimed || row.done {
-            continue;
+        .flat_map(|g| g.campaigns.iter_mut());
+    for card in cards {
+        for row in card.drops.iter_mut() {
+            if row.claimed || row.done {
+                continue;
+            }
+            if let Some(needs) = locked.get(&row.id) {
+                row.locked = true;
+                row.status = String::new();
+                row.detail = Some(crate::services::evolution::locked_words(needs));
+                row.bar = None;
+            }
         }
-        if let Some(needs) = locked.get(&row.id) {
-            row.status = "Locked".to_string();
-            row.detail = Some(crate::services::evolution::locked_words(needs));
-            row.bar = None;
-        }
+        card.drops.sort_by_key(|r| r.locked);
     }
 }
 
@@ -302,6 +309,7 @@ fn drop_row(drop: &TimeBasedDrop, now_ms: i64) -> DropRow {
         status,
         detail,
         bar,
+        locked: false,
     }
 }
 
@@ -549,19 +557,21 @@ mod tests {
     }
 
     #[test]
-    fn a_stage_that_needs_an_earlier_form_reads_locked() {
+    fn a_stage_that_needs_an_earlier_form_reads_out_of_reach_and_last() {
         let started = campaign("1", "Pokemon", 20, vec![drop("gengar", 60, Some(30), false), drop("x", 60, Some(30), false)]);
         let inventory = inv(vec![item(started.clone(), CampaignStatus::Active, 1)], 0);
         let mut view = build(Some(&inventory), &[started], "", now());
         let locked = std::collections::HashMap::from([("gengar".to_string(), "Haunter".to_string())]);
         apply_locked(&mut view, &locked);
         let rows = &view.in_progress[0].campaigns[0].drops;
-        let gengar = rows.iter().find(|r| r.id == "gengar").unwrap();
-        assert_eq!(gengar.status, "Locked");
+        let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, ["x", "gengar"]);
+        let gengar = &rows[1];
+        assert!(gengar.locked);
+        assert_eq!(gengar.status, "");
         assert_eq!(gengar.detail.as_deref(), Some("Needs the Haunter badge first"));
         assert_eq!(gengar.bar, None);
-        let other = rows.iter().find(|r| r.id == "x").unwrap();
-        assert_ne!(other.status, "Locked");
+        assert!(!rows[0].locked && !rows[0].status.is_empty());
     }
 
     #[test]
