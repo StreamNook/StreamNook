@@ -29,6 +29,7 @@ import { SettingsSection, SettingsRow, SegmentedSelect, SwitchList } from './_pr
 import { useSettingReset } from './settingReset';
 import { Toggle } from '../ui/Toggle';
 import { usePhonePrefs } from '../../mobile/phonePrefs';
+import { sideChatMin } from '../../mobile/watch/sideChat';
 import { useNameColorAdjust } from '../../hooks/useNameColor';
 import { CURRENCY_OPTIONS } from '../../services/currencyService';
 import { EVENT_CATEGORIES, EVENT_TEMPLATE_EXAMPLES, PROVIDER_CATEGORY_LABELS, PROVIDER_EVENT_CATEGORIES } from '../overlay/overlayConfig';
@@ -851,8 +852,9 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           description="How wide the chat column is over the video."
           control={
             <InlineSlider
-              value={Math.max(240, Math.min(640, settings.fullscreen_chat?.width ?? 340))}
-              min={240}
+              // A phone's side column goes narrower than the desktop overlay (SN-268).
+              value={Math.max(sideChatMin(IS_MOBILE), Math.min(640, settings.fullscreen_chat?.width ?? 340))}
+              min={sideChatMin(IS_MOBILE)}
               max={640}
               step={20}
               label="Full screen chat width"

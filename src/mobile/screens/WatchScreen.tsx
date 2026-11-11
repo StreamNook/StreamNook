@@ -48,6 +48,7 @@ import { toggleLiveMute, useLiveVideoMuted, useLiveVideoPaused } from '../player
 import { miniLayerTransform } from '../watch/miniLayer';
 import { keepsAudioAfterPip } from '../player/lockScreenAudio';
 import { MobileChatPane } from '../chat/MobileChatPane';
+import { PHONE_SIDE_CHAT_MIN, composerFolds, sideChatShownWidth } from '../watch/sideChat';
 import {
   CHAT_TAB_STRIP_H,
   useActiveChatChannelId,
@@ -634,9 +635,26 @@ export const WatchScreen: React.FC = () => {
   );
   // The handle's range is the whole screen's (the column's background runs to
   // the edge through the cutout inset; only its text keeps clear of the cutout),
-  // and the video always keeps at least 240 beside it.
-  const overlayMaxWidth = Math.max(240, Math.round(shape.w - 240));
-  const overlayWidth = Math.min(Math.max(240, overlayWidthLive ?? fsChat?.width ?? 340), overlayMaxWidth);
+  // and the video always keeps at least 240 beside it. The column itself goes
+  // down to the phone's floor, narrow enough for a 16:9 picture at full height
+  // (SN-268); a saved width under the desktop's floor reads there as 240.
+  const overlayMaxWidth = Math.max(PHONE_SIDE_CHAT_MIN, Math.round(shape.w - 240));
+  const overlayWidth = Math.min(Math.max(PHONE_SIDE_CHAT_MIN, overlayWidthLive ?? fsChat?.width ?? 340), overlayMaxWidth);
+  // Beside the video, a column under the bar's room folds the bar to a button
+  // (SN-268). Writing opens the column wide enough to write in, the picture
+  // giving way for as long as the bar is open; it folds back on send or a tap
+  // outside. Not saved: the width the viewer chose is what it returns to.
+  const composerFolded = phoneBeside && composerFolds(overlayWidth);
+  const [writing, setWriting] = useState(false);
+  if (writing && !composerFolded) setWriting(false);
+  const besideWidth = phoneBeside ? sideChatShownWidth(overlayWidth, overlayMaxWidth, writing) : overlayWidth;
+  const composerFold = useMemo(
+    () =>
+      composerFolded
+        ? { open: writing, onOpen: () => setWriting(true), onClose: () => setWriting(false) }
+        : undefined,
+    [composerFolded, writing],
+  );
   const overlayOpacity = Math.max(0, Math.min(100, overlayOpacityLive ?? fsChat?.opacity ?? 55));
   // Resizable only where there is genuinely a trade to make. On a phone the
   // 16:9 band is simply right, and there is no surplus to hand to chat.
@@ -658,7 +676,7 @@ export const WatchScreen: React.FC = () => {
   // Where the seam falls. On a Fold this is the hinge itself, so neither pane is
   // bisected by the crease; elsewhere the split the viewer chose. On a phone it
   // is the chat column's width, which the column's own handle drags live.
-  const playerWidth = phoneBeside ? shape.w - overlayWidth : chatBeside ? playerMain : shape.w;
+  const playerWidth = phoneBeside ? shape.w - besideWidth : chatBeside ? playerMain : shape.w;
   // Where a sideways swipe on the picture brings chat in from (SN-30), or null
   // where chat is not a side column.
   const columnsOnReturn = watchLayout === 'auto' ? autoColumns : watchLayout === 'columns' && sideFits;
@@ -2317,6 +2335,7 @@ export const WatchScreen: React.FC = () => {
           )}
           <MobileChatPane
             readOnly={chatOverlay}
+            composerFold={composerFold}
             // Hidden under the mini player, in PiP or a chat-less landscape, or
             // the app in the background: the list holds still until seen.
             idle={chatClass === 'hidden' || !pageVisible}
@@ -2377,7 +2396,7 @@ export const WatchScreen: React.FC = () => {
             <ChatOverlayChrome
               side={overlaySide}
               width={overlayWidth}
-              minWidth={240}
+              minWidth={PHONE_SIDE_CHAT_MIN}
               maxWidth={overlayMaxWidth}
               onWidthChange={setOverlayWidthLive}
               onWidthCommit={(w) => void writeOverlay({ width: w })}
@@ -2391,11 +2410,13 @@ export const WatchScreen: React.FC = () => {
           )}
           {/* Beside the picture there is nothing to see through, so only the
               width handle: dragging it hands the picture the difference. */}
-          {phoneBeside && (
+          {/* Put away while a folded bar is open for writing: that width is
+              borrowed, not the one the handle sets. */}
+          {phoneBeside && !(composerFold?.open ?? false) && (
             <ChatOverlayChrome
               side={overlaySide}
               width={overlayWidth}
-              minWidth={240}
+              minWidth={PHONE_SIDE_CHAT_MIN}
               maxWidth={overlayMaxWidth}
               onWidthChange={setOverlayWidthLive}
               onWidthCommit={(w) => void writeOverlay({ width: w })}

@@ -14,9 +14,10 @@
 // several chat tabs open the composer must target the tab you are looking at,
 // which is not necessarily the stream playing.
 import React, { Fragment, useCallback, useEffect, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import { invoke } from '@tauri-apps/api/core';
-import { DotsThreeVertical, WarningCircle, X } from 'phosphor-react';
+import { ChatCircleText, DotsThreeVertical, WarningCircle, X } from 'phosphor-react';
 import { emotePanelHeight, useLastKeyboardHeight } from '../ui/keyboardHeight';
 import { CircleSlash, Inbox as InboxIcon, X as XIcon } from 'lucide-react';
 import { KeyboardHideIcon, KeyboardShowIcon } from '../ui/KeyboardHideIcon';
@@ -147,6 +148,18 @@ interface Props {
   /** Room kept free at the row's trailing end for a control the host draws
    *  beside the box (the tall layout's chat button, SN-40), in px. */
   trailingSlot?: number;
+  /** A chat column too narrow for a usable bar (the side chat beside the video
+   *  dragged thin, SN-268): the bar folds to one round button until it is
+   *  tapped. The host widens the column while it is open and folds it again on
+   *  `onClose`. Absent wherever the bar always has room. */
+  fold?: ComposerFold;
+}
+
+/** The message bar folded to a button (SN-268). */
+export interface ComposerFold {
+  open: boolean;
+  onOpen: () => void;
+  onClose: () => void;
 }
 
 // Memoized below. The pane re-renders on every arriving chat message and the
@@ -176,7 +189,9 @@ const MobileChatInputImpl: React.FC<Props> = ({
   paused = false,
   source = '',
   trailingSlot = 0,
+  fold,
 }) => {
+  const folded = !!fold && !fold.open;
   const currentUser = useAppStore((s) => s.currentUser);
   const chatInput = useAppStore((s) => s.settings.chat_input);
   const isTwitch = provider === 'twitch';
@@ -268,6 +283,8 @@ const MobileChatInputImpl: React.FC<Props> = ({
   const failure = failures[roomKey];
   const shownFailure = failure && text.trim() === failure.text ? failure : null;
   const [emotesOpen, setEmotesOpen] = useState(false);
+  // A folded bar has no room for the panel; it opens again with the bar.
+  if (folded && emotesOpen) setEmotesOpen(false);
   // The panel's height: the keyboard it stands in for.
   const keyboardHeight = useLastKeyboardHeight();
   // A swipe down on the panel's top (search and tabs) puts it away.
@@ -298,12 +315,24 @@ const MobileChatInputImpl: React.FC<Props> = ({
   const [commandsOpen, setCommandsOpen] = useState(false);
   const [sending, setSending] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  // The folded bar opens inside the tap that asked for it (the button, or a
+  // reply swipe): the bar is rendered synchronously, so the field exists to take
+  // the keyboard while the touch still counts as the user's.
+  const foldRef = useRef(fold);
+  useEffect(() => {
+    foldRef.current = fold;
+  }, [fold]);
+  const unfold = useCallback(() => {
+    const f = foldRef.current;
+    if (f && !f.open) flushSync(() => f.onOpen());
+  }, []);
   // The pane starts a reply from inside a touch handler and calls this there, so the keyboard
   // rises with it. In an emote-only room the emote panel is how one types, so it opens instead.
   const emoteOnly = gating.blocked === 'emote_only';
   useEffect(() => {
     if (!focusRef) return;
     const focus = () => {
+      unfold();
       if (emoteOnly) setEmotesOpen(true);
       else inputRef.current?.focus();
     };
@@ -311,7 +340,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
     return () => {
       if (focusRef.current === focus) focusRef.current = null;
     };
-  }, [focusRef, emoteOnly]);
+  }, [focusRef, emoteOnly, unfold]);
   // A streak share the banner armed: the next send goes to it instead of to
   // chat, with whatever is typed (nothing typed is fine).
   const armedShare = useRef<ArmedShare | null>(null);
@@ -426,6 +455,8 @@ const MobileChatInputImpl: React.FC<Props> = ({
     const sent = () => {
       setDraftFor(key, '');
       setFailureFor(key, null);
+      // A bar unfolded to write this folds back, and the picture gets its width again.
+      foldRef.current?.onClose();
     };
     const failed = (why: string) => setFailureFor(key, { text: message, why });
     // The reply this send goes out with: a reply started while it is on its way is kept.
@@ -673,6 +704,13 @@ const MobileChatInputImpl: React.FC<Props> = ({
     suggestionsHiddenFor !== text;
   // A tap outside the composer puts the suggestions away with the keyboard.
   const markSuggestionsInside = useOutsidePress(showSuggestions, [composerRef], () => setSuggestionsHiddenFor(text));
+  // An unfolded bar folds back on a tap outside it, the draft kept (SN-268).
+  // Its sheets and panels count as inside (presses travel through portals).
+  const markFoldInside = useOutsidePress(!!fold?.open, [composerRef], () => foldRef.current?.onClose());
+  const markInside = () => {
+    markSuggestionsInside();
+    markFoldInside();
+  };
 
   // A new mention's card rises into the room just above the bar. The bar's own
   // risers use that room too (the suggestions strip over a draft, the emote
@@ -704,7 +742,8 @@ const MobileChatInputImpl: React.FC<Props> = ({
     const observer = new ResizeObserver(read);
     observer.observe(el);
     return () => observer.disconnect();
-  }, []);
+    // A folded bar has no field; it is measured again once it unfolds.
+  }, [folded]);
   // What each end of the bar holds. Send is always the right end's job (see
   // the button); the swap setting decides which of the tray and the chat menu
   // sits left. A narrow bar folds the tray away and the menu takes the right.
@@ -751,7 +790,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
     <div
       ref={composerRef}
       data-chat-composer=""
-      onPointerDownCapture={markSuggestionsInside}
+      onPointerDownCapture={markInside}
       // Over the tall layout's black there is no edge to draw (SN-40).
       className={`shrink-0 ${trailingSlot > 0 ? '' : 'border-t border-borderSubtle'}`}
       style={{
@@ -762,13 +801,15 @@ const MobileChatInputImpl: React.FC<Props> = ({
     >
       {/* Shareable streaks, same place desktop puts them: directly above the
           composer, because sharing sends whatever you have typed along with it. */}
-      <StreakBanners
-        channel={channel}
-        channelId={channelId}
-        armedRef={armedShare}
-        onArmedChange={setShareArmed}
-        focusComposer={() => inputRef.current?.focus()}
-      />
+      {!folded && (
+        <StreakBanners
+          channel={channel}
+          channelId={channelId}
+          armedRef={armedShare}
+          onArmedChange={setShareArmed}
+          focusComposer={() => inputRef.current?.focus()}
+        />
+      )}
       {/* No warning line here, deliberately. It rendered `gating.reason`, which
           is the exact string the disabled field's placeholder already shows, in
           the same warning colour -- the same sentence twice, stacked. The
@@ -779,6 +820,28 @@ const MobileChatInputImpl: React.FC<Props> = ({
           chat here again. Where the room's words live, so it cannot scroll away;
           Rust unlocks the field once Twitch takes the acknowledgement. */}
       {gating.warning && channelId && <WarningBox warning={gating.warning} roomId={channelId} />}
+      {folded ? (
+        // The column is too narrow for a field (SN-268): one round button at
+        // the bar's end opens the whole bar, with the keyboard. A dot says a
+        // draft or a message the room refused is waiting in it.
+        <div className="flex justify-end px-2.5 pt-2">
+          <button
+            onClick={() => {
+              unfold();
+              if (emoteOnly) setEmotesOpen(true);
+              else inputRef.current?.focus();
+            }}
+            className="chrome-glaze chrome-glaze--control relative shrink-0 flex items-center justify-center w-10 h-10 text-textSecondary active:text-textPrimary"
+            aria-label={text ? 'Finish your message' : 'Write a message'}
+          >
+            <ChatCircleText size={22} weight="bold" />
+            {(text || replyTo) && (
+              <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-accent" aria-hidden />
+            )}
+          </button>
+        </div>
+      ) : (
+        <>
       {/* A message the room did not take. The text stays in the field; this
           says why once, beside it, with the two ways forward. */}
       {shownFailure && (
@@ -1251,6 +1314,8 @@ const MobileChatInputImpl: React.FC<Props> = ({
           className={PANEL_CLASS}
         />
       </div>
+        </>
+      )}
 
       {/* The rewards, as a sheet: the phone's own surface for a menu like this.
           Its first open does not wait on Twitch: the read below fills Rust's

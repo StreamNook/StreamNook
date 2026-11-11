@@ -23,7 +23,7 @@ import { parseMessage } from '../../services/twitchChat';
 import type { BackendChatMessage } from '../../services/twitchChat';
 import { Logger } from '../../utils/logger';
 import { moderateWithToast } from '../../services/moderation';
-import { MobileChatInput, type ChatGating } from './MobileChatInput';
+import { MobileChatInput, type ChatGating, type ComposerFold } from './MobileChatInput';
 import { MobileDropsLip } from './MobileDropsLip';
 import { UserProfileSheet, type SheetUser } from '../profile/UserProfileSheet';
 import { EmoteSheet } from './EmoteSheet';
@@ -145,6 +145,9 @@ export const MobileChatPane: React.FC<{
   /** The lower third's own touch area over the rows (the watch layer's: a tap or a drag up grows
    *  the chat, sideways clears it, down shrinks the player). */
   lowerTouch?: React.ReactNode;
+  /** The side chat beside the video is too narrow for a message bar (SN-268): the bar folds to a
+   *  button, and the host widens the column while it is open. */
+  composerFold?: ComposerFold;
 }> = ({
   readOnly = false,
   strip = true,
@@ -155,6 +158,7 @@ export const MobileChatPane: React.FC<{
   hidden = false,
   vertical,
   lowerTouch,
+  composerFold,
 }) => {
   // The lower third (or cleared, which keeps its rules while out of sight): rows held at the
   // newest, inert, every gesture on them the watch layer's.
@@ -1216,6 +1220,7 @@ export const MobileChatPane: React.FC<{
         <MobileChatInput
           // The tall layout's chat button sits beside the message box (SN-40).
           trailingSlot={vertical ? CHAT_BUTTON_SLOT : 0}
+          fold={composerFold}
           inboxSurface={surface}
           channel={activeTab?.login ?? null}
           provider={activeProvider}
