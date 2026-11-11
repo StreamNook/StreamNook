@@ -36,6 +36,27 @@ export function getPlayerControls(): PlayerControls | null {
   return current;
 }
 
+// The phone's player has no Plyr adapter; it registers a reader of its own
+// <video>'s playhead for as long as it is mounted.
+let phoneClock: (() => number | null) | null = null;
+
+/** The phone's player: its playhead reader while it is mounted. Returns the
+ *  unregister, which leaves a newer player's reader alone. */
+export function registerPlayheadClock(reader: () => number | null): () => void {
+  phoneClock = reader;
+  return () => {
+    if (phoneClock === reader) phoneClock = null;
+  };
+}
+
+/** The watched player's playhead in seconds (the phone's player while it is
+ *  mounted, else the desktop player's), or null when unknown. A VOD reloaded
+ *  for a quality or view change starts here. */
+export function playheadSecs(): number | null {
+  const t = phoneClock ? phoneClock() : (current?.getCurrentTime() ?? null);
+  return t == null || !Number.isFinite(t) ? null : t;
+}
+
 /** True when a real player is mounted and accepting control. */
 export function isPlayerControllable(): boolean {
   return current !== null && current.isActive();

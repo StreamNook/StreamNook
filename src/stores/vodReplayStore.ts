@@ -14,7 +14,7 @@
 import { create } from 'zustand';
 import { useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { getPlayerControls } from '../keybindings/playerControls';
+import { playheadSecs, registerPlayheadClock } from '../keybindings/playerControls';
 import type { BackendChatMessage } from '../services/twitchChat';
 import { EMPTY_ROOM_STATE } from './chatConnectionStore';
 import { Logger } from '../utils/logger';
@@ -85,7 +85,6 @@ let inFlight = false;
 // reader for its session; the phone's player registers one for as long as it is
 // mounted (`registerReplayClock`); otherwise the desktop player's controls.
 let timeSource: (() => number | null) | null = null;
-let playerClock: (() => number | null) | null = null;
 // The VOD channel's badge set, indexed once per session before its first rows
 // show: replay never joins the room, which is what loads it for live chat, so
 // without it sub and bits badges draw Twitch's default art.
@@ -114,22 +113,14 @@ function call<T>(cmd: string, args: Record<string, unknown>): Promise<T> {
 
 /** Playhead in PLAYER time (0 = start of whatever is playing), or null if unavailable. */
 function playerTime(): number | null {
-  const t = timeSource
-    ? timeSource()
-    : playerClock
-      ? playerClock()
-      : (getPlayerControls()?.getCurrentTime() ?? null);
+  const t = timeSource ? timeSource() : playheadSecs();
   return t == null || Number.isNaN(t) ? null : t;
 }
 
-/** The phone's player: where replay reads the playhead while it is mounted.
- *  Returns the unregister, which leaves a newer player's clock alone. */
-export function registerReplayClock(reader: () => number | null): () => void {
-  playerClock = reader;
-  return () => {
-    if (playerClock === reader) playerClock = null;
-  };
-}
+/** The phone's player: where replay (and a VOD reload) reads the playhead
+ *  while it is mounted. Returns the unregister, which leaves a newer player's
+ *  clock alone. */
+export const registerReplayClock = registerPlayheadClock;
 
 function apply(step: ReplayStep): void {
   const error = step.error ?? null;

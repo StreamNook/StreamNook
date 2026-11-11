@@ -7,7 +7,7 @@ import { Logger, setDiagnosticsEnabled } from '../utils/logger';
 import { noticeHidden, type NoticeId } from '../utils/notices';
 import { getAppVersion } from '../utils/appVersion';
 // Direct import (not via the keybindings index) to avoid a storecommands cycle.
-import { getPlayerControls } from '../keybindings/playerControls';
+import { getPlayerControls, playheadSecs } from '../keybindings/playerControls';
 import { qualitiesEquivalent } from '../utils/quality';
 import { compactChatPlacement } from '../utils/compactView';
 import { reportCodecPreference } from '../utils/codecPreference';
@@ -1315,8 +1315,8 @@ function restartIfWanted(set: StoreSet, get: StoreGet, why: string): void {
     const s = get();
     if (s.liveRewind) {
       // A rewound broadcast comes back in the recording at the playhead.
-      const at = getPlayerControls()?.getCurrentTime();
-      await get().rewindLive({ positionSecs: at != null && Number.isFinite(at) ? at : undefined });
+      const at = playheadSecs();
+      await get().rewindLive({ positionSecs: at ?? undefined });
     } else if (s.currentMediaType === 'live') {
       // No reason: a turn is never counted toward a codec hold.
       await get().restartStream({ quiet: true });
@@ -1339,7 +1339,7 @@ async function reloadVodInView(
   const s = get();
   const url = s.originalMediaUrl;
   if (!url || !s.vodPlayback) return null;
-  const at = getPlayerControls()?.getCurrentTime();
+  const at = playheadSecs();
   const seq = ++twitchStartSeq;
   set({ isRestartingStream: true });
   try {
@@ -3256,7 +3256,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       // change_stream_quality, so the old player must stop polling it.
       set({ isLoading: true, isRestartingStream: true });
 
-      const { currentMediaType, originalMediaUrl } = get();
+      const { currentMediaType, originalMediaUrl, vodPlayback } = get();
+      // Only a rewind whose recording is playing (the player has its timeline).
+      const liveRewind = vodPlayback ? get().liveRewind : null;
       const provider = streamProvider(currentStream);
       // The backend dispatches on this URL, so a provider stream re-resolves
       // through its own adapter (whose parsed master is cached, making a quality
@@ -3265,7 +3267,15 @@ export const useAppStore = create<AppState>((set, get) => ({
         provider === 'twitch'
           ? `https://twitch.tv/${currentStream.user_login}`
           : buildProviderUrl(provider, currentStream.user_login);
-      const targetUrl = (currentMediaType !== 'live' && originalMediaUrl) ? originalMediaUrl : liveUrl;
+      const vodPlays = currentMediaType !== 'live' && !!originalMediaUrl;
+      // A rewound broadcast plays its recording: it stays in it, not back at live.
+      const targetUrl = liveRewind
+        ? `https://www.twitch.tv/videos/${liveRewind.videoId}`
+        : vodPlays
+          ? originalMediaUrl
+          : liveUrl;
+      // A VOD or a rewind picks up where it was (SN-270), as a view change does.
+      const at = liveRewind || vodPlays ? playheadSecs() : null;
 
       // A phone keeps the picture it wants (SN-40); a quality pick never saves
       // a view (only change_stream_view does).
@@ -3282,7 +3292,20 @@ export const useAppStore = create<AppState>((set, get) => ({
       const newSettings = { ...get().settings, quality: quality };
       await patchSettings({ quality });
 
-      set({ streamUrl: result.url, activeQuality: result.quality, adSource: adSourceFrom(result), availableQualities: result.available ?? [], playbackKind: (result.kind as 'hls' | 'flv' | 'mp4') ?? 'hls', settings: newSettings, isLoading: false, isRestartingStream: false });
+      // The playhead before the new quality's URL, so the player begins there.
+      const vod = result.vod ?? get().vodPlayback;
+      const keepsPlace = at != null && !!vod;
+      set({
+        streamUrl: result.url,
+        activeQuality: result.quality,
+        adSource: liveRewind ? null : adSourceFrom(result),
+        availableQualities: result.available ?? [],
+        playbackKind: (result.kind as 'hls' | 'flv' | 'mp4') ?? 'hls',
+        settings: newSettings,
+        ...(keepsPlace ? { vodPlayback: { ...vod, start_position_secs: at } } : {}),
+        isLoading: false,
+        isRestartingStream: false,
+      });
       if (qualitiesEquivalent(quality, result.quality)) {
         get().addToast(`Quality changed to ${result.quality}`, 'success', undefined, { notice: 'quality_changed' });
       } else {
@@ -3321,7 +3344,7 @@ export const useAppStore = create<AppState>((set, get) => ({
             // Live, or a rewind playing the broadcast's recording at its playhead.
             const channel = s.currentStream.user_login;
             const rewind = s.liveRewind;
-            const at = rewind ? getPlayerControls()?.getCurrentTime() : null;
+            const at = rewind ? playheadSecs() : null;
             const url = rewind ? `https://www.twitch.tv/videos/${rewind.videoId}` : `https://twitch.tv/${channel}`;
             const seq = ++twitchStartSeq;
             set({ isRestartingStream: true });

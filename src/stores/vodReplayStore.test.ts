@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const invoke = vi.fn();
 vi.mock('@tauri-apps/api/core', () => ({ invoke: (cmd: string, args: unknown) => invoke(cmd, args) }));
 vi.mock('./chatConnectionStore', () => ({ EMPTY_ROOM_STATE: {} }));
-vi.mock('../keybindings/playerControls', () => ({ getPlayerControls: () => null }));
 vi.mock('../utils/logger', () => ({ Logger: { warn: () => {} } }));
 
 import {
