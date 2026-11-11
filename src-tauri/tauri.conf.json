@@ -1,6 +1,6 @@
 {
   "productName": "StreamNook",
-  "version": "8.9.0",
+  "version": "8.9.1",
   "identifier": "com.streamnook.dev",
   "build": {
     "beforeDevCommand": "npm run dev",
