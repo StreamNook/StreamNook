@@ -1,5 +1,6 @@
 import { useState, useMemo, useCallback, type JSX } from 'react';
-import { Package, Gift, Check, Clock, AlertCircle, ChevronDown, ChevronRight, Search, Filter, Sparkles, Ban, Star } from 'lucide-react';
+import { Package, Gift, Check, Clock, AlertCircle, ChevronDown, ChevronRight, Search, Filter, Sparkles, Ban, Star, Link2 } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
 import type { InventoryItem, DropProgress, CampaignStatus, CompletedDrop, TimeBasedDrop } from '../../types';
 import { Tooltip } from '../ui/Tooltip';
 import { Dropdown } from '../ui/Dropdown';
@@ -26,6 +27,41 @@ function isDropCollectible(drop: TimeBasedDrop): boolean {
     
     // Default: not collectible if we can't determine watch time requirement
     return false;
+}
+
+// The publisher's "connect account" page for a campaign whose rewards Twitch
+// grants only once the game account is linked; none when it is linked, or when
+// Twitch names no link (badge campaigns report not connected too).
+function connectLink(item: InventoryItem): string | undefined {
+    return !item.campaign.is_account_connected && item.campaign.account_link ? item.campaign.account_link : undefined;
+}
+
+const CONNECT_FIRST = 'Connect your game account first';
+
+// Opens the link page in the real browser (a publisher-side sign-in, not a
+// twitch.tv cookie flow), and asks the Drops page to re-check the link when
+// StreamNook has focus again, so Claim lights up with no restart.
+function openConnect(url: string) {
+    invoke('open_browser_url', { url }).catch(() => {});
+    window.dispatchEvent(new CustomEvent('drops-connect-initiated'));
+}
+
+function ConnectButton({ url }: { url: string }) {
+    return (
+        <Tooltip content="Open the account-connection page in your browser, where you're already signed in to Twitch and the game." delay={200} side="top">
+            <button
+                type="button"
+                onClick={(e) => {
+                    e.stopPropagation();
+                    openConnect(url);
+                }}
+                className="glass-button flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold text-accent shrink-0"
+            >
+                <Link2 size={12} />
+                Connect account
+            </button>
+        </Tooltip>
+    );
 }
 
 interface DropsInventoryTabProps {
@@ -63,6 +99,10 @@ export default function DropsInventoryTab({
             totalDrops: number;
             claimedDrops: number;
             claimableDrops: number;
+            /** Ready drops that wait on a linked game account. */
+            blockedDrops: number;
+            /** The first such campaign's connect page. */
+            connectUrl?: string;
             inProgressDrops: number;
             hasExpired: boolean;
         }>();
@@ -80,6 +120,7 @@ export default function DropsInventoryTab({
                     totalDrops: 0,
                     claimedDrops: 0,
                     claimableDrops: 0,
+                    blockedDrops: 0,
                     inProgressDrops: 0,
                     hasExpired: false
                 });
@@ -93,6 +134,9 @@ export default function DropsInventoryTab({
             if (item.status === 'Expired') {
                 group.hasExpired = true;
             }
+
+            const link = connectLink(item);
+            const claimableBefore = group.claimableDrops;
 
             // Count claimable and in-progress drops
             item.campaign.time_based_drops.forEach(drop => {
@@ -121,6 +165,10 @@ export default function DropsInventoryTab({
                     }
                 }
             });
+            if (link && group.claimableDrops > claimableBefore) {
+                group.blockedDrops += group.claimableDrops - claimableBefore;
+                group.connectUrl ??= link;
+            }
         });
 
         return Array.from(groups.values()).sort((a, b) => {
@@ -176,6 +224,8 @@ export default function DropsInventoryTab({
         const claimableDrops: { dropId: string; dropInstanceId?: string }[] = [];
 
         group.items.forEach(item => {
+            // Twitch keeps these unclaimed until the game account is linked.
+            if (connectLink(item)) return;
             item.campaign.time_based_drops.forEach(drop => {
                 const dropProgress = drop.progress || progress.find(p => p.drop_id === drop.id);
                 // Twitch marks these earned itself, subscription rewards included.
@@ -502,21 +552,32 @@ export default function DropsInventoryTab({
 
                                     {/* Status Indicators */}
                                     <div className="flex items-center gap-2 shrink-0">
+                                        {group.connectUrl && <ConnectButton url={group.connectUrl} />}
                                         {group.claimableDrops > 0 && (
                                             <>
                                                 <span className="px-2 py-1 text-xs font-bold rounded-lg bg-warning/20 text-warning border border-warning/30 animate-pulse sn-decor">
                                                     {group.claimableDrops} to claim
                                                 </span>
-                                                {/* Claim All Button */}
-                                                <Tooltip content={`Claim all ${group.claimableDrops} drops for ${group.gameName}`} delay={200} side="top">
+                                                {/* Claim All Button: greyed while every ready drop waits on a linked account */}
+                                                <Tooltip
+                                                    content={
+                                                        group.blockedDrops >= group.claimableDrops
+                                                            ? CONNECT_FIRST
+                                                            : `Claim all ${group.claimableDrops - group.blockedDrops} drops for ${group.gameName}`
+                                                    }
+                                                    delay={200}
+                                                    side="top"
+                                                >
                                                 <button
                                                     onClick={(e) => {
                                                         e.stopPropagation();
                                                         handleClaimAllForGame(group.gameId, group.gameName);
                                                     }}
-                                                    disabled={claimingGameId === group.gameId}
+                                                    disabled={claimingGameId === group.gameId || group.blockedDrops >= group.claimableDrops}
                                                     className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-md shrink-0
-                                                        ${claimingGameId === group.gameId
+                                                        ${group.blockedDrops >= group.claimableDrops
+                                                            ? 'bg-success/30 text-white/60 cursor-not-allowed shadow-none'
+                                                            : claimingGameId === group.gameId
                                                             ? 'bg-success/50 text-white cursor-wait'
                                                             : 'bg-success hover:bg-success/80 active:bg-success/70 text-white hover:shadow-lg hover:shadow-green-500/20 transform hover:scale-105 active:scale-95'
                                                         }`}
@@ -582,6 +643,7 @@ interface CampaignSectionProps {
 function CampaignSection({ item, progress, onClaimDrop, getStatusBadge }: CampaignSectionProps) {
     const campaign = item.campaign;
     const isExpired = item.status === 'Expired';
+    const link = connectLink(item);
 
     // Format dates
     const formatDate = (dateString: string | Date) => {
@@ -598,6 +660,7 @@ function CampaignSection({ item, progress, onClaimDrop, getStatusBadge }: Campai
                         {campaign.name}
                     </h4>
                     {getStatusBadge(item.status)}
+                    {link && <ConnectButton url={link} />}
                 </div>
                 <div className="flex items-center gap-2 text-xs text-textMuted shrink-0">
                     <Clock size={12} />
@@ -708,6 +771,8 @@ function CampaignSection({ item, progress, onClaimDrop, getStatusBadge }: Campai
                                         </span>
                                     ) : isClaimed ? (
                                         <span className="text-[10px] text-success font-medium">Claimed</span>
+                                    ) : isClaimable && link ? (
+                                        <span className="text-[10px] text-textSecondary font-medium">Ready once your game account is connected</span>
                                     ) : isClaimable ? (
                                         <span className="text-[10px] text-warning font-semibold animate-pulse sn-decor">Ready to claim!</span>
                                     ) : !collectible ? (
@@ -734,7 +799,18 @@ function CampaignSection({ item, progress, onClaimDrop, getStatusBadge }: Campai
                             </div>
 
                             {/* Claim Button - only for collectible drops that are complete */}
-                            {isClaimable && (
+                            {isClaimable && link ? (
+                                // Twitch keeps it unclaimed until the game account is linked.
+                                <Tooltip content={CONNECT_FIRST} delay={200} side="top">
+                                    <button
+                                        type="button"
+                                        disabled
+                                        className="px-3 py-1.5 bg-success/30 text-white/60 text-xs font-bold rounded-lg shrink-0 cursor-not-allowed"
+                                    >
+                                        {claimLabel(drop, dropProgress)}
+                                    </button>
+                                </Tooltip>
+                            ) : isClaimable ? (
                                 <button
                                     onClick={(e) => {
                                         e.stopPropagation();
@@ -744,7 +820,7 @@ function CampaignSection({ item, progress, onClaimDrop, getStatusBadge }: Campai
                                 >
                                     {claimLabel(drop, dropProgress)}
                                 </button>
-                            )}
+                            ) : null}
 
                             {/* Event/Special Badge for non-collectible drops */}
                             {!collectible && !isClaimed && !isClaimable && (

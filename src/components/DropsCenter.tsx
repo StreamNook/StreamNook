@@ -474,6 +474,12 @@ export default function DropsCenter() {
         });
         setUnifiedGames(prev => prev.map(patchGame));
         setSelectedGame(prev => (prev ? patchGame(prev) : prev));
+        // The Inventory tab's Connect: a fresh inventory carries the new
+        // isAccountConnected, so its Claim buttons light up. The campaigns
+        // just read are reused.
+        invoke<DropsOverview>('get_drops_overview', { reuseCampaigns: true })
+            .then(overview => setInventoryItems(overview.inventory_items))
+            .catch(() => {});
     }, []);
 
     useEffect(() => {

@@ -106,6 +106,32 @@ fn drop_earned(p: &DropProgress) -> bool {
 /// granted: marked claimed, or gone from the inventory (Twitch evicts a
 /// campaign once its last drop is claimed, and the campaign list then shows
 /// the tier at 0 minutes with no instance).
+/// Every campaign's "connect account" link from the campaign list reads this
+/// run, expired campaigns included. Twitch's Inventory answer carries
+/// `isAccountConnected` but never the link, so the Inventory tab takes it from
+/// here to offer Connect on a campaign whose reward waits on a linked account.
+static ACCOUNT_LINKS: once_cell::sync::Lazy<std::sync::Mutex<HashMap<String, String>>> =
+    once_cell::sync::Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
+
+pub(crate) fn remember_account_link(campaign_id: &str, link: &str) {
+    if let Ok(mut links) = ACCOUNT_LINKS.lock() {
+        links.insert(campaign_id.to_string(), link.to_string());
+    }
+}
+
+/// Gives each unlinked inventory campaign its connect link, when a campaign
+/// list read has seen one. A connected campaign, or one Twitch names no link
+/// for (badge campaigns report not connected too), is left as it is.
+pub(crate) fn fill_account_links(items: &mut [InventoryItem]) {
+    let Ok(links) = ACCOUNT_LINKS.lock() else { return };
+    for item in items.iter_mut() {
+        let c = &mut item.campaign;
+        if !c.is_account_connected && c.account_link.as_deref().is_none_or(str::is_empty) {
+            c.account_link = links.get(&c.id).cloned();
+        }
+    }
+}
+
 fn claim_confirmed(after: Option<&DropProgress>) -> bool {
     match after {
         Some(p) => p.is_claimed || p.drop_instance_id.is_none() || !drop_earned(p),
@@ -1469,6 +1495,15 @@ impl DropsService {
                     .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
                     .map(|dt| dt.with_timezone(&Utc))
                     .unwrap_or_else(|| Utc::now() + chrono::Duration::days(365));
+
+                // Its connect link is kept even for an expired campaign: the
+                // Inventory can still hold a reward from it waiting on a link.
+                if let (Some(id), Some(link)) = (
+                    campaign_json["id"].as_str(),
+                    campaign_json["accountLinkURL"].as_str().filter(|s| !s.is_empty()),
+                ) {
+                    remember_account_link(id, link);
+                }
 
                 // Check if campaign is active (not upcoming or expired)
                 let now = Utc::now();

@@ -562,6 +562,12 @@ pub fn overview(
     titles: BadgeTitles,
     locked: &HashMap<String, String>,
 ) -> DropsOverview {
+    // The campaign list read beside this inventory has run by now, so every
+    // link it saw (expired campaigns too) is known.
+    let mut inventory = inventory;
+    if let Some(inv) = inventory.as_mut() {
+        crate::services::drops_service::fill_account_links(&mut inv.items);
+    }
     let games = build_with_locked(campaigns, &progress, inventory.as_ref(), &titles.known, locked);
     // Only rewards the page lists, each with the words it shows.
     let locked_drops = games
@@ -687,6 +693,28 @@ mod tests {
             claimed_drops: claimed,
             drops_in_progress: 0,
         }
+    }
+
+    #[test]
+    fn an_unlinked_inventory_campaign_gets_the_link_the_list_saw_even_when_expired() {
+        crate::services::drops_service::remember_account_link("acct-expired", "https://publisher.example/link");
+        crate::services::drops_service::remember_account_link("acct-linked", "https://publisher.example/other");
+        let mut needs = campaign("acct-expired", "cod", 1, vec![]);
+        needs.is_account_connected = false;
+        let mut linked = campaign("acct-linked", "cod", 1, vec![]);
+        linked.is_account_connected = true;
+        // A badge campaign also reports not connected, but Twitch names no link for it.
+        let mut badge = campaign("acct-badge", "event", 1, vec![]);
+        badge.is_account_connected = false;
+        let mut expired = item(needs, 0);
+        expired.status = CampaignStatus::Expired;
+        let inv = inventory(vec![expired, item(linked, 0), item(badge, 0)], vec![]);
+
+        let view = overview(&[], vec![], Some(inv), None, BadgeTitles::default(), &HashMap::new());
+        let link = |id: &str| view.inventory_items.iter().find(|i| i.campaign.id == id).unwrap().campaign.account_link.clone();
+        assert_eq!(link("acct-expired").as_deref(), Some("https://publisher.example/link"));
+        assert_eq!(link("acct-linked"), None, "a connected campaign needs no Connect");
+        assert_eq!(link("acct-badge"), None);
     }
 
     #[test]

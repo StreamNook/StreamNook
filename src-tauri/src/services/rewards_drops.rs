@@ -165,7 +165,11 @@ pub async fn get(
         if let Err(e) = &campaigns {
             log::warn!("[Rewards] campaign list read failed: {e}");
         }
-        let source = Source { inventory: inventory.ok(), campaigns: campaigns.unwrap_or_default() };
+        let mut inventory = inventory.ok();
+        if let Some(inv) = inventory.as_mut() {
+            crate::services::drops_service::fill_account_links(&mut inv.items);
+        }
+        let source = Source { inventory, campaigns: campaigns.unwrap_or_default() };
         if let Ok(mut last) = LAST.lock() {
             *last = Some(source);
         }
