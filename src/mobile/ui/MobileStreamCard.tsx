@@ -121,6 +121,18 @@ export const MobileStreamCard: React.FC<{
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-live opacity-60" />
             <span className="relative inline-flex w-2 h-2 rounded-full bg-live ring-1 ring-black/40" />
           </span>
+          {/* Drops sits on the preview's top-right corner as a small glyph chip,
+              as the iPhone row and the big card show it, so the text column
+              keeps to the stream itself. */}
+          {hasDrops && (
+            <CardChip
+              kind="drops"
+              aria-label="Drops enabled"
+              style={{ position: 'absolute', top: 4, right: 4, padding: '2px 4px' }}
+            >
+              <Package size={9} weight="bold" aria-hidden />
+            </CardChip>
+          )}
           {hypeTrain && (
             <CardChip
               kind={hypeTrain.isGolden ? 'hype-golden' : 'hype'}
@@ -183,22 +195,9 @@ export const MobileStreamCard: React.FC<{
               </svg>
             )}
           </div>
-          {/* Drops rides the category line as a small tinted pill (the glyph
-              and the word): noticed at a glance, and never a lone box on the
-              preview. The category gives way first (one line, ellipsis); the
-              pill keeps its size. Without a category line it stands alone. */}
-          {((showCategory && stream.game_name) || hasDrops) && (
-            <div className="flex items-center gap-1.5 min-w-0 text-textMuted text-[12.5px] leading-[15px]">
-              {showCategory && stream.game_name && <span className="truncate min-w-0">{stream.game_name}</span>}
-              {hasDrops && (
-                <span
-                  className="shrink-0 flex items-center gap-0.5 rounded-full px-1.5 py-px text-[11px] leading-[14px] font-semibold text-accent-on-surface bg-accent/15"
-                  aria-label="Drops enabled"
-                >
-                  <Package size={10} weight="bold" aria-hidden />
-                  Drops
-                </span>
-              )}
+          {showCategory && stream.game_name && (
+            <div className="flex items-center min-w-0 text-textMuted text-[12.5px] leading-[15px]">
+              <span className="truncate min-w-0">{stream.game_name}</span>
             </div>
           )}
           {/* The streak rides the viewers line as amber words: as a dark chip it

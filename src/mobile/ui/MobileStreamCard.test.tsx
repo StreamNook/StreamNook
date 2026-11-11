@@ -47,6 +47,20 @@ describe('stream row', () => {
   it('draws no picture for a row without one', () => {
     expect(row({ ...stream, profile_image_url: '' } as TwitchStream)).not.toContain('data-face');
   });
+
+  it('puts Drops on the preview, not in the text column', () => {
+    const html = row({ ...stream, drops_earnable: true } as TwitchStream);
+    const textColumn = html.indexOf('<h3');
+    const chip = html.indexOf('aria-label="Drops enabled"');
+    expect(chip).toBeGreaterThan(html.indexOf('sn-card-thumb'));
+    expect(chip).toBeLessThan(textColumn);
+    expect(html.slice(textColumn)).not.toContain('Drops');
+    expect(html.slice(textColumn)).toContain('>Art<');
+  });
+
+  it('draws no Drops chip on a row without drops', () => {
+    expect(row(stream)).not.toContain('Drops enabled');
+  });
 });
 
 const card = (s: TwitchStream, tagFilter?: CardTagFilter) =>
