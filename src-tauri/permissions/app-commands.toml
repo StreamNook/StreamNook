@@ -382,6 +382,7 @@ allow = [
   "complete_setup",
   "set_chat_user_hidden",
   "set_favorite_category",
+  "set_suggest_platforms",
   "set_favorite_channel",
   "set_channel_hidden",
   "set_hidden_channel_blocked",

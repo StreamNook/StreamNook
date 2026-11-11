@@ -421,6 +421,34 @@ pub async fn set_favorite_category(
     Ok(())
 }
 
+/// Leave `off` out of All: those platforms are no longer searched, fetched or
+/// suggested there (`services::suggest_platforms`). Edited in place, so a
+/// window holding an older copy never sends it back. Answers the list as
+/// stored: never every platform.
+#[tauri::command]
+pub async fn set_suggest_platforms(
+    app: AppHandle,
+    off: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<Vec<String>, String> {
+    let (stored, settings) = {
+        let mut state_settings = state.settings.lock().map_err(|e| e.to_string())?;
+        let (stored, changed) = crate::services::suggest_platforms::write(&mut state_settings, &off);
+        if !changed {
+            return Ok(stored);
+        }
+        (stored, state_settings.clone())
+    };
+    after_settings_change(&settings, false, None);
+    write_settings_to_disk(&settings)?;
+    let _ = app.emit(
+        SETTINGS_UPDATED_EVENT,
+        SettingsUpdated { source: None, keys: vec![crate::services::suggest_platforms::KEY.to_string()] },
+    );
+    crate::services::home_snapshot::note_suggest_platforms_changed();
+    Ok(stored)
+}
+
 /// What a favorite press stored: whether the channel is a favorite now, and the
 /// id it is stored under, which can differ from what the shell keyed the press
 /// by (a YouTube row by video id, a Twitch room by login).

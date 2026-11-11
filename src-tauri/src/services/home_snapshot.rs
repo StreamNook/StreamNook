@@ -788,6 +788,19 @@ pub fn note_discover_inputs_changed() {
     });
 }
 
+/// The viewer changed which platforms All suggests from: rebuild the Discover
+/// lists without the ones turned off now, and fetch any turned back on.
+pub fn note_suggest_platforms_changed() {
+    note_discover_inputs_changed();
+    let Some(inner) = SERVICE.get() else { return };
+    let inner = inner.clone();
+    tauri::async_runtime::spawn(async move {
+        if inner.discover_wanted() {
+            refresh_directories(&inner, unified_discover::MOUNT_STALE_SECS).await;
+        }
+    });
+}
+
 /// The main window, the only one with a Home, is up: neither hidden to the
 /// tray nor minimized, with its Home still mounted and nobody looking at it.
 /// A destroyed main window is not up either.
@@ -799,6 +812,17 @@ fn main_window_shown(app: &AppHandle) -> bool {
 }
 
 /// `Settings.favorite_streamers`, copied out from under the lock.
+/// The platforms the viewer left out of All (`services::suggest_platforms`).
+fn suggest_off(app: &AppHandle) -> Vec<String> {
+    let Some(state) = app_state(app) else { return Vec::new() };
+    let off = state
+        .settings
+        .lock()
+        .map(|s| crate::services::suggest_platforms::read(&s))
+        .unwrap_or_default();
+    off
+}
+
 fn favorite_ids(app: &AppHandle) -> Vec<String> {
     let Some(state) = app_state(app) else { return Vec::new() };
     let ids = state
@@ -1099,6 +1123,7 @@ async fn rebuild_discover(inner: &Inner) {
     let provider_followed_live = provider_live_service::snapshot().await;
     let favorites_live = favorite_live_service::snapshot().await;
     let favorite_ids = favorite_ids(&inner.app);
+    let off = suggest_off(&inner.app);
     let (home_list, sidebar_list) = {
         let s = inner.snap.read().await;
         let inputs = unified_discover::Inputs {
@@ -1109,13 +1134,13 @@ async fn rebuild_discover(inner: &Inner) {
             favorite_ids: &favorite_ids,
         };
         let home_list = if home {
-            discover.rebuild(Surface::Home, View::home(), &inputs)
+            discover.rebuild(Surface::Home, View::home().leaving_out(&off), &inputs)
         } else {
             None
         };
         let sidebar_list = sidebar.as_deref().and_then(|scope| {
             discover
-                .rebuild(Surface::Sidebar, View::sidebar(scope), &inputs)
+                .rebuild(Surface::Sidebar, View::sidebar(scope).leaving_out(&off), &inputs)
                 .map(|streams| (scope.to_string(), streams))
         });
         (home_list, sidebar_list)
@@ -1138,11 +1163,13 @@ async fn rebuild_discover(inner: &Inner) {
 async fn refresh_directories(inner: &Arc<Inner>, max_age: u64) {
     let home = inner.unified_mounted();
     let sidebar = inner.sidebar_scope();
+    // A platform left out of All is not fetched for it at all.
+    let off = suggest_off(&inner.app);
     let wanted = |provider: &str| {
-        (home && View::home().reads(provider))
+        (home && View::home().leaving_out(&off).reads(provider))
             || sidebar
                 .as_deref()
-                .is_some_and(|scope| View::sidebar(scope).reads(provider))
+                .is_some_and(|scope| View::sidebar(scope).leaving_out(&off).reads(provider))
     };
     let now = now_secs();
     let due: Vec<(&'static str, Arc<dyn StreamSource>)> = {
@@ -1482,6 +1509,7 @@ pub async fn snapshot() -> HomeSnapshot {
     let provider_followed_live = provider_live_service::snapshot().await;
     let favorites_live = favorite_live_service::snapshot().await;
     let favorite_ids = favorite_ids(&inner.app);
+    let off = suggest_off(&inner.app);
     let discover = inner.discover.lock().await;
     let mut snap = inner.snap.read().await.clone();
     let unified = discover.build(
@@ -1492,7 +1520,7 @@ pub async fn snapshot() -> HomeSnapshot {
             favorites_live: &favorites_live,
             favorite_ids: &favorite_ids,
         },
-        View::home(),
+        View::home().leaving_out(&off),
     );
     snap.unified_discover = unified;
     crate::services::hidden_channels::retain_discover(&mut snap.unified_discover, crate::services::hidden_channels::Realm::Browse);

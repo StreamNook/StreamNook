@@ -14,6 +14,8 @@ import { usemultiNookStore } from '../stores/multiNookStore';
 
 import { invoke } from '@tauri-apps/api/core';
 import { mergeSearchBatches, searchPlatforms, type SearchBatch } from '../services/platformSearch';
+import { PlatformStackPicker } from './PlatformStackPicker';
+import { currentSuggestOff, suggestOn } from '../utils/suggestPlatforms';
 import type { TwitchStream, TwitchCategory, CategoryInfo, TwitchClip, TwitchVideo } from '../types';
 import LoadingWidget from './LoadingWidget';
 import StreamTitleWithEmojis from './StreamTitleWithEmojis';
@@ -1292,6 +1294,19 @@ const Home = () => {
     // text and `mode` forces streamer- or category-search regardless of the tab
     // it's launched from. Called with no args from the input (Enter), it keeps
     // the original tab-driven behavior.
+    // A press in the search bar's platform picker: a platform turned off leaves
+    // the results on screen at once, one turned back on searches again.
+    const onSuggestPlatformsChange = (off: ProviderId[], turnedOn: ProviderId | null) => {
+        if (turnedOn) {
+            if (activeTab === 'search' && searchMode === 'streamers' && searchQuery.trim()) void handleSearch();
+            return;
+        }
+        setSearchResults((rows) => {
+            const kept = rows.filter((s) => !off.includes(streamProvider(s)));
+            return kept.length === rows.length ? rows : kept;
+        });
+    };
+
     const handleSearch = async (opts?: { query?: string; mode?: SearchMode }) => {
         const q = (opts?.query ?? searchQuery).trim();
         if (!q) return;
@@ -1355,12 +1370,11 @@ const Home = () => {
                 // same way unified Discover merges directories. Rust searches them
                 // all at once and hands back each platform's rows as it answers,
                 // so a slow or failing platform never holds back the others.
-                const platforms: ProviderId[] = [
-                    'twitch',
-                    ...(isUnifiedView
-                        ? WATCHABLE_PROVIDERS.filter((pv) => pv !== 'twitch' && PROVIDER_WATCH[pv].search)
-                        : []),
-                ];
+                // On All, only the platforms the picker has on (read now, so a
+                // search started by the press that turned one on includes it).
+                const platforms: ProviderId[] = isUnifiedView
+                    ? suggestOn(currentSuggestOff()).filter((pv) => pv === 'twitch' || PROVIDER_WATCH[pv].search)
+                    : ['twitch'];
                 const found = new Map<ProviderId, SearchBatch>();
                 setCategorySearchResults([]);
                 await searchPlatforms(q, platforms, (batch) => {
@@ -2840,6 +2854,12 @@ const Home = () => {
                             className="absolute -inset-[1px] flex items-center glass-input !rounded-xl z-20"
                             style={{ pointerEvents: isSearchExpanded ? 'auto' : 'none' }}
                         >
+                            {/* Which platforms All searches and suggests from. */}
+                            {isUnifiedView && (
+                                <div className="absolute inset-y-0 left-1.5 z-10 flex items-center">
+                                    <PlatformStackPicker onChange={onSuggestPlatformsChange} />
+                                </div>
+                            )}
                             <input
                                 ref={searchInputRef}
                                 type="text"
@@ -2855,7 +2875,7 @@ const Home = () => {
                                         setIsSearchExpanded(false);
                                     }
                                 }}
-                                className="flex-1 bg-transparent text-center text-white text-sm px-10 py-1.5 focus:outline-none h-full w-full"
+                                className={`flex-1 bg-transparent text-center text-white text-sm ${isUnifiedView ? 'px-24' : 'px-10'} py-1.5 focus:outline-none h-full w-full`}
                             />
 
                             {/* Close button - ONLY visible when text exists */}

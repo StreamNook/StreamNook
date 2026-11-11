@@ -86,6 +86,9 @@ pub struct View<'a> {
     pub scope: &'a str,
     /// Rows taken from the top of each platform's directory.
     pub per_provider: usize,
+    /// Platforms the viewer left out of All (`services::suggest_platforms`).
+    /// Only `all` reads it: a platform picked on its own always shows.
+    pub off: &'a [String],
 }
 
 impl<'a> View<'a> {
@@ -94,6 +97,7 @@ impl<'a> View<'a> {
         View {
             scope: "all",
             per_provider: PER_PROVIDER as usize,
+            off: &[],
         }
     }
 
@@ -104,16 +108,28 @@ impl<'a> View<'a> {
         View {
             scope,
             per_provider: if scope == "all" { 25 } else { 50 },
+            off: &[],
         }
+    }
+
+    /// This view without the platforms the viewer left out of All.
+    pub fn leaving_out(self, off: &'a [String]) -> View<'a> {
+        View { off, ..self }
     }
 
     fn all(&self) -> bool {
         self.scope == "all"
     }
 
+    /// Whether this view shows `provider` at all: always on its own scope,
+    /// and on `all` unless the viewer left it out.
+    fn shows(&self, provider: &str) -> bool {
+        self.scope == provider || (self.all() && crate::services::suggest_platforms::shows(self.off, provider))
+    }
+
     /// Whether this view reads `provider`'s directory.
     pub fn reads(&self, provider: &str) -> bool {
-        provider != "twitch" && (self.all() || self.scope == provider)
+        provider != "twitch" && self.shows(provider)
     }
 }
 
@@ -282,7 +298,7 @@ impl UnifiedDiscover {
             .filter(|id| favorites.contains(id.as_str()))
             .collect();
 
-        let picks: &[TwitchStream] = if view.all() || view.scope == "twitch" {
+        let picks: &[TwitchStream] = if view.shows("twitch") {
             inputs.recommended
         } else {
             &[]
@@ -677,6 +693,28 @@ mod tests {
         assert_eq!(keys(&d.build(&w.inputs(), View::sidebar("twitch"))), ["a"]);
         w.followed_live = vec![twitch("1", "a", 500)];
         assert!(d.build(&w.inputs(), View::sidebar("twitch")).is_empty());
+    }
+
+    #[test]
+    fn a_platform_left_out_of_all_is_neither_read_nor_shown_but_follows_stay_out_of_it() {
+        let mut d = UnifiedDiscover::default();
+        let mut w = World::default();
+        w.recommended = vec![twitch("1", "a", 50)];
+        land(&mut d, "kick", vec![row("kick", "10", "k", 30)], T0);
+        land(&mut d, "youtube", vec![row("youtube", UC, "vid00000001", 70)], T0);
+        let off = vec!["youtube".to_string(), "kick".to_string()];
+        // zoox's setup: All is Twitch's picks alone, in the grid and the sidebar.
+        assert_eq!(keys(&d.build(&w.inputs(), View::home().leaving_out(&off))), ["a"]);
+        assert_eq!(keys(&d.build(&w.inputs(), View::sidebar("all").leaving_out(&off))), ["a"]);
+        assert!(!View::home().leaving_out(&off).reads("youtube"), "an off platform's directory is not fetched");
+        assert!(View::home().leaving_out(&off).reads("tiktok"));
+        // A platform picked on its own on the rail always shows.
+        assert_eq!(keys(&d.build(&w.inputs(), View::sidebar("youtube").leaving_out(&off))), ["youtube:vid00000001"]);
+        assert!(View::sidebar("youtube").leaving_out(&off).reads("youtube"));
+        // Twitch off leaves its picks out of All, and the others in.
+        let twitch_off = vec!["twitch".to_string()];
+        assert_eq!(keys(&d.build(&w.inputs(), View::home().leaving_out(&twitch_off))), ["youtube:vid00000001", "kick:k"]);
+        assert_eq!(keys(&d.build(&w.inputs(), View::sidebar("twitch").leaving_out(&twitch_off))), ["a"]);
     }
 
     #[test]
