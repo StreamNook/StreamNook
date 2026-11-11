@@ -36,6 +36,16 @@ pub enum SectionKind {
     Other,
 }
 
+/// A platform the notes name, drawn as its logo.
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Platform {
+    Windows,
+    Macos,
+    Android,
+    Iphone,
+}
+
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct NoteItem {
     pub title: String,
@@ -59,6 +69,13 @@ pub enum NoteNode {
     },
     Note {
         desc: String,
+    },
+    /// A heading that names platforms ("Windows and macOS", "Android and
+    /// iPhone", "Everywhere"); the sections under it are theirs. An empty list
+    /// is every platform.
+    Platform {
+        label: String,
+        platforms: Vec<Platform>,
     },
     Section {
         label: Option<String>,
@@ -94,6 +111,45 @@ static BULLET_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[-*]\s+").unwrap());
 static BOLD_ITEM_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"^\*\*(.+?)\*\*\s*[:—-]?\s*(.*)$").unwrap());
 static CALLOUT_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\[!\w+\]$").unwrap());
+static WORD_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"[A-Za-z]+").unwrap());
+
+fn platform_word(word: &str) -> Option<Platform> {
+    match word {
+        "windows" => Some(Platform::Windows),
+        "macos" => Some(Platform::Macos),
+        "android" => Some(Platform::Android),
+        "iphone" | "ios" => Some(Platform::Iphone),
+        _ => None,
+    }
+}
+
+/// The platforms a `###` heading is about, or `None` for an ordinary section
+/// heading ("Features"). "Everywhere" is every platform (an empty list), and
+/// "Mobile" the two phones.
+fn heading_platforms(label: &str) -> Option<Vec<Platform>> {
+    let mut found: Vec<Platform> = Vec::new();
+    let mut everywhere = false;
+    for word in WORD_RE.find_iter(label).map(|m| m.as_str().to_lowercase()) {
+        let named: Vec<Platform> = match word.as_str() {
+            "everywhere" => {
+                everywhere = true;
+                vec![]
+            }
+            "mobile" => vec![Platform::Android, Platform::Iphone],
+            "desktop" => vec![Platform::Windows, Platform::Macos],
+            w => platform_word(w).into_iter().collect(),
+        };
+        for p in named {
+            if !found.contains(&p) {
+                found.push(p);
+            }
+        }
+    }
+    if everywhere {
+        return Some(Vec::new());
+    }
+    (!found.is_empty()).then_some(found)
+}
 static BOILERPLATE_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
         r"(?i)^(#{1,4}\s*(installation|install|bundle components|downloads?|how to (install|update))\b|installation$)",
@@ -222,11 +278,28 @@ impl Parser {
             self.nodes.push(NoteNode::Image { alt: c[1].to_string(), url: c[2].to_string() });
             return;
         }
-        if let Some(rest) = line.strip_prefix("###") {
+        // A `####` heading is a section inside a platform heading.
+        if let Some(rest) = line.strip_prefix("####") {
             if rest.starts_with(char::is_whitespace) {
                 self.flush_hero();
                 let label = LEADING_JUNK_RE.replace(rest.trim(), "").trim().to_string();
                 self.open_section(Some(label));
+                return;
+            }
+        }
+        if let Some(rest) = line.strip_prefix("###") {
+            if rest.starts_with(char::is_whitespace) {
+                self.flush_hero();
+                let label = LEADING_JUNK_RE.replace(rest.trim(), "").trim().to_string();
+                match heading_platforms(&label) {
+                    Some(platforms) => {
+                        self.section = None;
+                        self.nodes.push(NoteNode::Platform { label, platforms });
+                    }
+                    None => {
+                        self.open_section(Some(label));
+                    }
+                }
                 return;
             }
         }
@@ -555,6 +628,62 @@ mod tests {
 
     fn item(title: &str, desc: &str, plain: bool) -> NoteItem {
         NoteItem { title: title.into(), desc: desc.into(), plain }
+    }
+
+    fn section(label: Option<&str>, kind: SectionKind, items: Vec<NoteItem>) -> NoteNode {
+        NoteNode::Section { label: label.map(Into::into), kind, intro: vec![], items }
+    }
+
+    #[test]
+    fn platform_headings_hold_the_sections_under_them() {
+        let nodes = parse_notes(
+            "### Windows and macOS\n\n#### Features\n- Picker.\n\n#### Bug Fixes\n- Tiles play.\n\n### Android and iPhone\n\n#### Features\n- Tall streams.\n\n### Android\n- Inbox in the title row.\n\n### Everywhere\n- Notices.",
+        );
+        assert_eq!(
+            nodes,
+            vec![
+                NoteNode::Platform {
+                    label: "Windows and macOS".into(),
+                    platforms: vec![Platform::Windows, Platform::Macos]
+                },
+                section(Some("Features"), SectionKind::Features, vec![item("Picker.", "", true)]),
+                section(Some("Bug Fixes"), SectionKind::Fixes, vec![item("Tiles play.", "", true)]),
+                NoteNode::Platform {
+                    label: "Android and iPhone".into(),
+                    platforms: vec![Platform::Android, Platform::Iphone]
+                },
+                section(Some("Features"), SectionKind::Features, vec![item("Tall streams.", "", true)]),
+                NoteNode::Platform { label: "Android".into(), platforms: vec![Platform::Android] },
+                section(None, SectionKind::Other, vec![item("Inbox in the title row.", "", true)]),
+                NoteNode::Platform { label: "Everywhere".into(), platforms: vec![] },
+                section(None, SectionKind::Other, vec![item("Notices.", "", true)]),
+            ]
+        );
+    }
+
+    #[test]
+    fn emoji_headings_of_older_releases_still_nest() {
+        let nodes = parse_notes("### 🖥️ Windows and macOS\n\n#### ✨ Features\n- Drops line.\n\n### 📱 Mobile\n- Whispers.");
+        assert_eq!(
+            nodes,
+            vec![
+                NoteNode::Platform {
+                    label: "Windows and macOS".into(),
+                    platforms: vec![Platform::Windows, Platform::Macos]
+                },
+                section(Some("Features"), SectionKind::Features, vec![item("Drops line.", "", true)]),
+                NoteNode::Platform { label: "Mobile".into(), platforms: vec![Platform::Android, Platform::Iphone] },
+                section(None, SectionKind::Other, vec![item("Whispers.", "", true)]),
+            ]
+        );
+    }
+
+    #[test]
+    fn only_platform_words_make_a_platform_heading() {
+        assert_eq!(heading_platforms("Features"), None);
+        assert_eq!(heading_platforms("Bug Fixes"), None);
+        assert_eq!(heading_platforms("macOS"), Some(vec![Platform::Macos]));
+        assert_eq!(heading_platforms("Desktop and mobile"), Some(vec![Platform::Windows, Platform::Macos, Platform::Android, Platform::Iphone]));
     }
 
     #[test]

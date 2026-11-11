@@ -1807,6 +1807,9 @@ export type ChangelogSectionKind =
   | 'features'
   | 'other';
 
+/** Mirrors `services::changelog::Platform`: a platform drawn as its logo. */
+export type ChangelogPlatform = 'windows' | 'macos' | 'android' | 'iphone';
+
 export interface ChangelogItem {
   title: string;
   desc: string;
@@ -1819,6 +1822,8 @@ export type ChangelogNode =
   | { t: 'hero'; title: string; desc: string }
   | { t: 'image'; url: string; alt: string }
   | { t: 'note'; desc: string }
+  /** A heading naming platforms; an empty list is every platform. */
+  | { t: 'platform'; label: string; platforms: ChangelogPlatform[] }
   | {
       t: 'section';
       label: string | null;
