@@ -8286,6 +8286,10 @@ mod bridge_close_tests {
     #[tokio::test]
     async fn a_full_stop_closes_the_page_socket_it_left_open() {
         let _serial = serial().lock().await;
+        // Each test has its own runtime, and the other test's bridge dies with its
+        // runtime just after that test lets go of the lock. Outdate it first, so the
+        // bridge this test talks to is built on this test's runtime.
+        close_page_sockets();
         let port = IrcService::ensure_local_ws_bridge().await.expect("bridge up");
         let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/"))
             .await
