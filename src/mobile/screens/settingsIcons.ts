@@ -103,6 +103,7 @@ import {
   MoveVertical,
   NotebookPen,
   Package,
+  PackageCheck,
   PackageOpen,
   PaintBucket,
   Paintbrush,
@@ -387,6 +388,14 @@ const BY_SECTION: Record<string, Record<string, LucideIcon>> = {
   'Moderating Messages': { Style: Paintbrush, Length: MoveHorizontal, Steps: ListOrdered },
   'Highlight Appearance': { Style: PaintBucket },
   'Settings file': { Export: Share, Import: Download },
+  'Small notices': {
+    'Welcome back': Hand,
+    'Drop claimed': PackageCheck,
+    Copied: Copy,
+    'Quality changes': Gauge,
+    'Stream restarted': RefreshCw,
+    'Resumed video': History,
+  },
   Mentions: {
     'Counts as a mention': ListChecks,
     'Name without @': AtSign,

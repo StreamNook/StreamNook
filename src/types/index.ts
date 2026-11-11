@@ -1030,6 +1030,14 @@ export interface LiveNotificationSettings {
   // Channel logins excluded from live alerts. Empty means everything you follow
   // notifies, so an upgrade changes nothing until a channel is opted out.
   muted_live_channels?: string[];
+  // Small notices, each on its own switch (src/utils/notices.ts, Rust
+  // services/notice_types.json). Absent means on.
+  notice_welcome_back?: boolean;
+  notice_drop_claimed?: boolean;
+  notice_copied?: boolean;
+  notice_quality_changed?: boolean;
+  notice_stream_restarted?: boolean;
+  notice_vod_resumed?: boolean;
 }
 
 export type AutoSwitchMode = 'same_category' | 'followed_streams';

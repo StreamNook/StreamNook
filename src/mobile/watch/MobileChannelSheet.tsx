@@ -263,7 +263,7 @@ const ChannelMedia: React.FC<{ channel: TwitchStream }> = ({ channel }) => {
             type="button"
             onClick={() => {
               if (held) void navigator.clipboard?.writeText(held.url).catch(() => {});
-              useAppStore.getState().addToast('Link copied', 'success');
+              useAppStore.getState().addToast('Link copied', 'success', undefined, { notice: 'copied' });
               setHeld(null);
             }}
             className="flex min-h-12 items-center gap-3 text-[15px] text-textPrimary"

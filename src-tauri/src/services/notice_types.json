@@ -1,0 +1,46 @@
+{
+ "notices": [
+  {
+   "id": "welcome_back",
+   "title": "Welcome back",
+   "detail": "The greeting when StreamNook opens signed in",
+   "setting": "live_notifications.notice_welcome_back",
+   "platforms": ["desktop"]
+  },
+  {
+   "id": "drop_claimed",
+   "title": "Drop claimed",
+   "detail": "When a drop reward is claimed, by you or for you",
+   "setting": "live_notifications.notice_drop_claimed",
+   "platforms": ["desktop", "android"]
+  },
+  {
+   "id": "copied",
+   "title": "Copied",
+   "detail": "When a link, emote or name is copied",
+   "setting": "live_notifications.notice_copied",
+   "platforms": ["desktop", "android"]
+  },
+  {
+   "id": "quality_changed",
+   "title": "Quality changes",
+   "detail": "When the stream's quality switches",
+   "setting": "live_notifications.notice_quality_changed",
+   "platforms": ["desktop"]
+  },
+  {
+   "id": "stream_restarted",
+   "title": "Stream restarted",
+   "detail": "When a player setting restarts the stream",
+   "setting": "live_notifications.notice_stream_restarted",
+   "platforms": ["desktop"]
+  },
+  {
+   "id": "vod_resumed",
+   "title": "Resumed video",
+   "detail": "When a video picks up where you left off",
+   "setting": "live_notifications.notice_vod_resumed",
+   "platforms": ["desktop"]
+  }
+ ]
+}

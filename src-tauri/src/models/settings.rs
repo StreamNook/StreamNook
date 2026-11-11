@@ -979,6 +979,20 @@ pub struct LiveNotificationSettings {
     // upgrade changes nothing until someone opts a channel out.
     #[serde(default)]
     pub muted_live_channels: Vec<String>,
+    // Small notices, each switched on its own (services/notice_types.json
+    // lists them; the frontend passes the id to addToast as `notice`).
+    #[serde(default = "default_true")]
+    pub notice_welcome_back: bool,
+    #[serde(default = "default_true")]
+    pub notice_drop_claimed: bool,
+    #[serde(default = "default_true")]
+    pub notice_copied: bool,
+    #[serde(default = "default_true")]
+    pub notice_quality_changed: bool,
+    #[serde(default = "default_true")]
+    pub notice_stream_restarted: bool,
+    #[serde(default = "default_true")]
+    pub notice_vod_resumed: bool,
 }
 
 fn default_true() -> bool {
@@ -1032,6 +1046,12 @@ impl Default for LiveNotificationSettings {
             background_interval_minutes: 15,
             push_notifications: true,
             muted_live_channels: Vec::new(),
+            notice_welcome_back: true,
+            notice_drop_claimed: true,
+            notice_copied: true,
+            notice_quality_changed: true,
+            notice_stream_restarted: true,
+            notice_vod_resumed: true,
         }
     }
 }

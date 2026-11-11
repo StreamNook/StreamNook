@@ -317,7 +317,7 @@ function EmoteTile({
                 <button
                   onClick={() => {
                     navigator.clipboard?.writeText(`https://7tv.app/emotes/${emote.emoteId}`);
-                    addToast('Emote link copied', 'success');
+                    addToast('Emote link copied', 'success', undefined, { notice: 'copied' });
                   }}
                   className="p-1 rounded bg-glass text-textSecondary hover:text-textPrimary hover:bg-glass-active"
                 >

@@ -42,6 +42,7 @@ import { fieldsIn, setSettingsFields } from '../../utils/settingsFields';
 import { ProviderMark } from '../../components/ProviderLogo';
 import { roomName, roomProvider, setRoomMuted } from '../mentions/mentionInbox';
 import { alertKey, alertOn, useAlertTypes } from '../alertTypes';
+import { noticeHidden, noticeKey, useNoticeTypes } from '../../utils/notices';
 
 // The "Notify me about" rows are the alert types Rust lists for this build
 // (services/alert_types.rs), the same list and words the iPhone draws. Types
@@ -191,6 +192,7 @@ const MobileNotificationsSettings: React.FC = () => {
     };
   }, [mutedList]);
   const alertTypes = useAlertTypes() ?? [];
+  const noticeTypes = useNoticeTypes() ?? [];
 
   // Every fix on this screen happens in Android's own settings, which means
   // leaving the app and coming back. Without re-reading on return the panel
@@ -409,6 +411,28 @@ const MobileNotificationsSettings: React.FC = () => {
               );
             })}
           </SettingsSection>
+
+          {noticeTypes.length > 0 && (
+            <SettingsSection label="Small notices">
+              {noticeTypes.map((notice) => {
+                const on = !noticeHidden(prefs, notice.id);
+                return (
+                  <SettingsRow
+                    key={notice.id}
+                    title={notice.title}
+                    description={notice.detail}
+                    onReset={resetWith([notice.setting, true])}
+                    control={
+                      <Toggle
+                        on={on}
+                        onChange={() => void patch({ [noticeKey(notice.id)]: !on } as Partial<LiveNotificationSettings>)}
+                      />
+                    }
+                  />
+                );
+              })}
+            </SettingsSection>
+          )}
 
           <MentionsSection />
 

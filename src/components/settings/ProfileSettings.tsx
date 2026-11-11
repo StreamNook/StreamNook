@@ -939,7 +939,7 @@ const ProfileSettings = () => {
       })();
       const copied = await copyImageToClipboard(result.blob, result.mime);
       if (copied) {
-        addToast(`Profile ${label} copied to clipboard${statsSuffix}`, 'success');
+        addToast(`Profile ${label} copied to clipboard${statsSuffix}`, 'success', undefined, { notice: 'copied' });
       } else {
         // Clipboard rejected the MIME (common for image/gif on some platforms).
         // Fall back to triggering a download so the user can drag the file

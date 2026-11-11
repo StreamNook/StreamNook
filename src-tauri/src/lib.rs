@@ -2366,6 +2366,7 @@ pub fn run() {
             search_settings,
             get_changed_settings,
             get_alert_types,
+            get_notice_types,
             services::client_capabilities::get_client_capabilities,
             list_settings_backups,
             restore_settings_backup,

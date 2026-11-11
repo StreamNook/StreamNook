@@ -79,7 +79,7 @@ function Card({ emote, onClose }: { emote: EmoteCardTarget; onClose: () => void 
 
   const copyName = () => {
     void navigator.clipboard.writeText(emote.name).then(
-      () => useAppStore.getState().addToast(`Copied ${emote.name}`, 'success'),
+      () => useAppStore.getState().addToast(`Copied ${emote.name}`, 'success', undefined, { notice: 'copied' }),
       () => useAppStore.getState().addToast('Could not copy the name', 'error'),
     );
   };

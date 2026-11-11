@@ -43,6 +43,7 @@ import {
 import { consumePendingChannel, consumePendingMention, consumePendingWhisper } from '../nativeBridge';
 import { openWhisperByKey } from '../whispers/whisperInbox';
 import { alertOn, loadAlertTypes } from '../alertTypes';
+import { noticeHidden } from '../../utils/notices';
 import { openMentionById } from '../mentions/mentionInbox';
 import { applyPlaybackAdapt, type PlaybackAdapt } from '../player/linkAdapt';
 import { useFollowsStore, type ProviderStreamRow } from '../../stores/followsStore';
@@ -431,6 +432,7 @@ export function useMobileBoot(): void {
         (event) => {
           const prefs = notifyPrefs();
           if (prefs?.enabled === false || prefs?.show_drops_notifications === false) return;
+          if (noticeHidden(prefs, 'drop_claimed')) return;
           const d = event.payload;
           void postSystemNotification({
             title: 'Drop claimed',

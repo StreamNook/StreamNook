@@ -3301,7 +3301,7 @@ const VideoPlayer = () => {
     if (!at || at < 1) return;
     if (resumeToastedRef.current === vodPlayback.video_id) return;
     resumeToastedRef.current = vodPlayback.video_id;
-    useAppStore.getState().addToast(`Resumed from ${formatVodTime(at)}`, 'info');
+    useAppStore.getState().addToast(`Resumed from ${formatVodTime(at)}`, 'info', undefined, { notice: 'vod_resumed' });
   }, [vodPlayback]);
   const rewindLive = useAppStore((s) => s.rewindLive);
   const returnToLive = useAppStore((s) => s.returnToLive);

@@ -38,6 +38,7 @@ import { lastUpdateStatus, type BundleUpdateStatus } from '../services/updateSta
 import { settingsOnceLoaded } from '../utils/settingsOnceLoaded';
 import { playNotificationSound as playGatedNotificationSound } from '../utils/notificationSound';
 import { liveActivityText } from '../utils/liveActivity';
+import { noticeHidden } from '../utils/notices';
 import { IS_MOBILE } from '../utils/platform';
 import {
     MIRRORED_NOTIFICATION_ACTIVATE_EVENT,
@@ -1463,6 +1464,8 @@ const DynamicIsland = () => {
     useEffect(() => {
         const unlisten = listen<DropClaimedEvent>('drop-claimed', (event) => {
             if (!notificationsEnabled || !showDropsNotifications) return;
+            // Switched off as a small notice: no entry, toast, sound or system notification.
+            if (noticeHidden(useAppStore.getState().settings?.live_notifications, 'drop_claimed')) return;
 
             const data = event.payload;
 

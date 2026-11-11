@@ -4,6 +4,7 @@ import { listen, emit } from '@tauri-apps/api/event';
 import type { Settings, TwitchUser, TwitchStream, UserInfo, TwitchCategory, HypeTrainData, ModLogEvent, DropProgressStatus, VodStartInfo, LiveRewindInfo, HomeSnapshot, HomeSnapshotUpdate, HypeTrainBulkStatus, ContinueWatchingItem, FollowingLists, Collaboration, SharedChat, OfflineRoom } from '../types';
 import { trackActivity } from '../services/logService';
 import { Logger, setDiagnosticsEnabled } from '../utils/logger';
+import { noticeHidden, type NoticeId } from '../utils/notices';
 import { getAppVersion } from '../utils/appVersion';
 // Direct import (not via the keybindings index) to avoid a storecommands cycle.
 import { getPlayerControls } from '../keybindings/playerControls';
@@ -614,7 +615,7 @@ export interface AppState {
    *  id; pass `id` to be able to remove it. */
   /** `islandOnly` records it in the Dynamic Island's history without the
    *  toast, for an answer already shown elsewhere. */
-  addToast: (message: string | React.ReactNode, type: 'info' | 'success' | 'warning' | 'error' | 'live' | 'channel_points', action?: { label: string; onClick: () => void }, options?: { skipIsland?: boolean; islandOnly?: boolean; alwaysShow?: boolean; avatarUrl?: string; avatarSevenTvId?: string; source?: 'plugin'; sticky?: boolean; id?: number; title?: string; songKey?: string }) => void;
+  addToast: (message: string | React.ReactNode, type: 'info' | 'success' | 'warning' | 'error' | 'live' | 'channel_points', action?: { label: string; onClick: () => void }, options?: { skipIsland?: boolean; islandOnly?: boolean; alwaysShow?: boolean; avatarUrl?: string; avatarSevenTvId?: string; source?: 'plugin'; sticky?: boolean; id?: number; title?: string; songKey?: string; notice?: NoticeId }) => void;
   removeToast: (id: number) => void;
   loadSettings: () => Promise<void>;
   updateSettings: (newSettings: Settings) => Promise<void>;
@@ -2233,6 +2234,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     // hidden grind ones), which are celebratory milestones that should land
     // even when the user has muted routine notifications.
     const alwaysShow = type === 'error' || type === 'warning' || options?.alwaysShow === true;
+    // A small notice the person switched off (Settings > Notifications > Small
+    // notices) shows nowhere, island included. Never an error or a warning.
+    if (!alwaysShow && noticeHidden(ln, options?.notice)) return;
 
     // Mirror action feedback into the Dynamic Island: these are notifications
     // too, so they should leave a record in the notification center even when
@@ -2946,7 +2950,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           currentStream: streamInfo,
           isRestartingStream: false,
         });
-        if (!quiet) get().addToast('Stream restarted with new settings', 'success');
+        if (!quiet) get().addToast('Stream restarted with new settings', 'success', undefined, { notice: 'stream_restarted' });
       } catch (e) {
         Logger.error(`[${provider}] Failed to restart:`, e);
         set({ isRestartingStream: false });
@@ -3021,7 +3025,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({ streamUrl: result.url, activeQuality: result.quality, adSource: adSourceFrom(result), availableQualities: result.available ?? [], playbackKind: 'hls', currentStream: streamInfo, vodPlayback: null, liveRewind: null, isRestartingStream: false });
 
       // Show toast notification
-      if (!quiet) get().addToast('Stream restarted with new settings', 'success');
+      if (!quiet) get().addToast('Stream restarted with new settings', 'success', undefined, { notice: 'stream_restarted' });
     } catch (e) {
       Logger.error('[Stream] Failed to restart:', e);
 
@@ -3280,7 +3284,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       set({ streamUrl: result.url, activeQuality: result.quality, adSource: adSourceFrom(result), availableQualities: result.available ?? [], playbackKind: (result.kind as 'hls' | 'flv' | 'mp4') ?? 'hls', settings: newSettings, isLoading: false, isRestartingStream: false });
       if (qualitiesEquivalent(quality, result.quality)) {
-        get().addToast(`Quality changed to ${result.quality}`, 'success');
+        get().addToast(`Quality changed to ${result.quality}`, 'success', undefined, { notice: 'quality_changed' });
       } else {
         Logger.info(`[Stream] Quality fallback: ${quality} -> ${result.quality}`);
         get().addToast(`Switched to "${result.quality}": this stream has no "${quality}"`, 'info');
@@ -4190,6 +4194,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           get().addToast(`Welcome back, ${userInfo.display_name}!`, 'success', undefined, {
             avatarUrl: userInfo.profile_image_url,
             avatarSevenTvId: userInfo.id,
+            notice: 'welcome_back',
           }),
         );
       }

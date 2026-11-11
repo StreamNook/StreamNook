@@ -40,7 +40,7 @@ export function EmoteSheet({ open, target, stack, onClose, onExited, onSwitch, o
 
 function copyName(name: string): void {
   void navigator.clipboard.writeText(name).then(
-    () => useAppStore.getState().addToast(`Copied ${name}`, 'success'),
+    () => useAppStore.getState().addToast(`Copied ${name}`, 'success', undefined, { notice: 'copied' }),
     () => useAppStore.getState().addToast('Could not copy the name', 'error'),
   );
 }

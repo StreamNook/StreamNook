@@ -484,6 +484,14 @@ pub async fn get_alert_types() -> Vec<crate::services::alert_types::AlertType> {
     crate::services::alert_types::alert_types()
 }
 
+/// The small notices this build shows, each of which can be switched off on
+/// its own (Settings > Notifications > Small notices). Async for the same
+/// reason as `get_alert_types`.
+#[tauri::command]
+pub async fn get_notice_types() -> Vec<crate::services::notice_types::NoticeType> {
+    crate::services::notice_types::notice_types()
+}
+
 /// The settings rows whose values differ from a fresh install, in page order,
 /// for the "changed from default" review.
 #[tauri::command]

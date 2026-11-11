@@ -179,6 +179,7 @@ pub mod settings_catalog;
 pub mod search_relevance;
 pub mod suggest_platforms;
 pub mod alert_types;
+pub mod notice_types;
 // Phones only: go-live push registration. Its rules are tested on desktop.
 #[cfg(any(mobile, test))]
 pub mod push_alerts;

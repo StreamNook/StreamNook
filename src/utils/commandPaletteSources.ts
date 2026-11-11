@@ -119,7 +119,7 @@ export interface PaletteItem {
 export async function copyToClipboard(text: string, successMessage?: string): Promise<void> {
   try {
     await navigator.clipboard.writeText(text);
-    useAppStore.getState().addToast(successMessage ?? 'Copied to clipboard', 'success');
+    useAppStore.getState().addToast(successMessage ?? 'Copied to clipboard', 'success', undefined, { notice: 'copied' });
   } catch (err) {
     Logger.warn('[CommandPalette] clipboard write failed:', err);
     useAppStore.getState().addToast('Copy failed', 'error');

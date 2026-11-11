@@ -314,7 +314,7 @@ export default function EmoteDetail({ ctx, canManage, sets, workingSetId, channe
           {/* Always-available */}
           <div className="flex items-center gap-2 pt-1">
             <button
-              onClick={() => { navigator.clipboard?.writeText(`https://7tv.app/emotes/${ctx.emoteId}`); addToast('Emote link copied', 'success'); }}
+              onClick={() => { navigator.clipboard?.writeText(`https://7tv.app/emotes/${ctx.emoteId}`); addToast('Emote link copied', 'success', undefined, { notice: 'copied' }); }}
               className="text-xs text-textSecondary hover:text-textPrimary flex items-center gap-1.5"
             >
               <Copy size={13} /> Copy link

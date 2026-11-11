@@ -2498,6 +2498,105 @@
   },
   {
    "page": "notifications",
+   "section": "Small notices",
+   "title": "Welcome back",
+   "paths": [
+    "live_notifications.notice_welcome_back"
+   ],
+   "nested": false,
+   "detail": "The greeting when StreamNook opens signed in",
+   "logo": null,
+   "aliases": [
+    "greeting",
+    "sign in toast",
+    "small notices"
+   ],
+   "needs": "notice:welcome_back"
+  },
+  {
+   "page": "notifications",
+   "section": "Small notices",
+   "title": "Drop claimed",
+   "paths": [
+    "live_notifications.notice_drop_claimed"
+   ],
+   "nested": false,
+   "detail": "When a drop reward is claimed, by you or for you",
+   "logo": null,
+   "aliases": [
+    "claimed drop",
+    "drop toast",
+    "small notices"
+   ],
+   "needs": "notice:drop_claimed"
+  },
+  {
+   "page": "notifications",
+   "section": "Small notices",
+   "title": "Copied",
+   "paths": [
+    "live_notifications.notice_copied"
+   ],
+   "nested": false,
+   "detail": "When a link, emote or name is copied",
+   "logo": null,
+   "aliases": [
+    "clipboard",
+    "copy toast",
+    "small notices"
+   ],
+   "needs": "notice:copied"
+  },
+  {
+   "page": "notifications",
+   "section": "Small notices",
+   "title": "Quality changes",
+   "paths": [
+    "live_notifications.notice_quality_changed"
+   ],
+   "nested": false,
+   "detail": "When the stream's quality switches",
+   "logo": null,
+   "aliases": [
+    "quality changed",
+    "small notices"
+   ],
+   "needs": "notice:quality_changed"
+  },
+  {
+   "page": "notifications",
+   "section": "Small notices",
+   "title": "Stream restarted",
+   "paths": [
+    "live_notifications.notice_stream_restarted"
+   ],
+   "nested": false,
+   "detail": "When a player setting restarts the stream",
+   "logo": null,
+   "aliases": [
+    "restart toast",
+    "small notices"
+   ],
+   "needs": "notice:stream_restarted"
+  },
+  {
+   "page": "notifications",
+   "section": "Small notices",
+   "title": "Resumed video",
+   "paths": [
+    "live_notifications.notice_vod_resumed"
+   ],
+   "nested": false,
+   "detail": "When a video picks up where you left off",
+   "logo": null,
+   "aliases": [
+    "resumed from",
+    "small notices"
+   ],
+   "needs": "notice:vod_resumed"
+  },
+  {
+   "page": "notifications",
    "section": "Mentions",
    "title": "Counts as a mention",
    "paths": [],

@@ -52,6 +52,9 @@ fn build_has(need: &str) -> bool {
     if let Some(alert) = need.strip_prefix("alert:") {
         return crate::services::alert_types::works(alert);
     }
+    if let Some(notice) = need.strip_prefix("notice:") {
+        return crate::services::notice_types::shows(notice);
+    }
     crate::services::client_capabilities::has(need)
 }
 
@@ -359,8 +362,10 @@ mod tests {
         for row in rows() {
             for need in row.needs.iter().flat_map(|n| n.split('|')) {
                 let alert = need.strip_prefix("alert:").is_some_and(|id| crate::services::alert_types::ids().contains(&id));
+                let notice = need.strip_prefix("notice:").is_some_and(|id| crate::services::notice_types::ids().contains(&id));
                 let ok = known.contains(&need)
                     || alert
+                    || notice
                     || matches!(need, "watch:youtube" | "watch:tiktok" | "watch:twitch" | "watch:kick");
                 assert!(ok, "{} needs an unknown capability {need}", row.title);
             }
@@ -396,6 +401,25 @@ mod tests {
                 assert_eq!(row.needs.as_deref(), Some(format!("alert:{}", alert.id).as_str()));
             }
         }
+    }
+
+    #[test]
+    fn notice_rows_follow_the_notice_list() {
+        for platform in ["desktop", "android"] {
+            for notice in crate::services::notice_types::for_platform(platform) {
+                let row = rows().iter().find(|r| r.paths.contains(&notice.setting)).unwrap_or_else(|| panic!("no row for {}", notice.id));
+                assert_eq!((row.page.as_str(), row.section.as_str(), row.title.as_str()), ("notifications", "Small notices", notice.title.as_str()));
+                assert_eq!(row.detail, notice.detail, "{} words differ", notice.id);
+                assert_eq!(row.needs.as_deref(), Some(format!("notice:{}", notice.id).as_str()));
+            }
+        }
+        // Android searches find the two it shows and none of the desktop-only ones.
+        let android = |n: &str| match n.strip_prefix("notice:") {
+            Some(id) => crate::services::notice_types::shows_on(id, "android"),
+            None => true,
+        };
+        assert!(titles(&search_on("copied", 5, false, &android)).contains(&"Copied"));
+        assert!(!titles(&search_on("welcome back", 5, false, &android)).contains(&"Welcome back"));
     }
 
     #[test]

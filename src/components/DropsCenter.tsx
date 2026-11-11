@@ -273,7 +273,7 @@ export default function DropsCenter() {
         try {
             Logger.debug('[DropsCenter] Claiming drop:', dropId, 'with dropInstanceId:', dropInstanceId);
             await invoke('claim_drop', { dropId, dropInstanceId });
-            addToast('Drop claimed successfully!', 'success');
+            addToast('Drop claimed successfully!', 'success', undefined, { notice: 'drop_claimed' });
 
             // Mark the drop claimed locally for instant feedback.
             setProgress(prev => prev.map(p => (p.drop_id === dropId ? { ...p, is_claimed: true } : p)));

@@ -433,7 +433,7 @@ function ClipModalInner({
   const copyLink = async () => {
     try {
       await navigator.clipboard.writeText(url);
-      addToast('Clip link copied', 'success');
+      addToast('Clip link copied', 'success', undefined, { notice: 'copied' });
     } catch {
       addToast('Could not copy link', 'error');
     }

@@ -13,7 +13,7 @@ export function useDropClaim() {
     setClaiming(dropId);
     try {
       await invoke<string>('claim_drop', { dropId, dropInstanceId: instanceId });
-      useAppStore.getState().addToast('Drop claimed', 'success');
+      useAppStore.getState().addToast('Drop claimed', 'success', undefined, { notice: 'drop_claimed' });
     } catch (err) {
       Logger.error('[DropsChatBar] claim failed:', err);
       useAppStore.getState().addToast('Could not claim that drop.', 'error');

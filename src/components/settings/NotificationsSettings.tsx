@@ -26,6 +26,7 @@ import { RESTLESS_ACCOLADE_ID, bumpTestNotificationClicks } from '../../utils/no
 import { restlessReached } from '../../utils/clientAccolades';
 import { earnClientAccolade } from '../../utils/earnAccolade';
 import { alertKey, loadAlertTypes, useAlertTypes } from '../../mobile/alertTypes';
+import { loadNoticeTypes, noticeHidden, noticeKey, useNoticeTypes } from '../../utils/notices';
 import { openSystemNotifySettings, useSystemNotifyPermission } from '../../utils/systemNotifyPermission';
 
 import { Logger } from '../../utils/logger';
@@ -41,6 +42,7 @@ import { LiveAlertChannelsModal } from './LiveAlertChannelsModal';
 // draws whole on its first frame rather than growing a section under the
 // reader.
 void loadAlertTypes();
+void loadNoticeTypes();
 
 // The operating system's name for its own notifications.
 const SYSTEM_NAME = IS_MAC ? 'macOS' : IS_LINUX ? 'desktop' : 'Windows';
@@ -172,6 +174,7 @@ const NotificationsSettings = () => {
   const { settings, updateSettings, addToast } = useAppStore();
   const resetFor = useSettingReset();
   const alertTypes = useAlertTypes();
+  const noticeTypes = useNoticeTypes();
   const [stopWaiting, setStopWaiting] = useState(false);
   useEffect(() => {
     if (alertTypes !== null) return;
@@ -598,6 +601,33 @@ const NotificationsSettings = () => {
               );
             })}
           </SettingsSection>
+
+          {noticeTypes && noticeTypes.length > 0 && (
+            <SettingsSection
+              label="Small notices"
+              description="Short confirmations you can do without. Errors always show."
+            >
+              {noticeTypes.map((notice) => {
+                const on = !noticeHidden(liveNotifications, notice.id);
+                return (
+                  <SettingsRow
+                    key={notice.id}
+                    title={notice.title}
+                    onReset={resetFor(notice.setting)}
+                    description={notice.detail}
+                    control={
+                      <Toggle
+                        enabled={on}
+                        onChange={() =>
+                          updateLiveNotifications({ [noticeKey(notice.id)]: !on } as Partial<LiveNotificationSettings>)
+                        }
+                      />
+                    }
+                  />
+                );
+              })}
+            </SettingsSection>
+          )}
 
           <SettingsSection
             label="Sound"
