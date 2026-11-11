@@ -1174,6 +1174,11 @@ pub struct MultiNookSlot {
     pub channel_name: Option<String>,
     pub volume: f32,
     pub muted: bool,
+    /// Muted by the viewer on the tile itself, not by focus: focus, promote,
+    /// maximize, dock and undock leave it muted. Named here because this
+    /// struct is typed (a field it does not name is dropped on save).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held_muted: Option<bool>,
     pub is_focused: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream_url: Option<String>,

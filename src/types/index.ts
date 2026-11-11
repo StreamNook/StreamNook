@@ -1168,6 +1168,10 @@ export interface MultiNookSlot {
   channelName?: string;   // The capitalization-correct display name
   volume: number;         // 0.0 to 1.0
   muted: boolean;         // Mute state
+  /** Muted by you on the tile itself (its player), not by focus. Focus,
+   *  promote, maximize, dock and undock never unmute it; your own unmute on
+   *  the tile clears it. Saved with the grid (Rust `held_muted`). */
+  heldMuted?: boolean;
   isFocused: boolean;     // Whether this stream has focus (unmuted while all others are muted)
   streamUrl?: string;     // The local proxy URL (ephemeral, not saved)
   isMinimized?: boolean;  // Whether the stream is tucked into the tray to save grid space

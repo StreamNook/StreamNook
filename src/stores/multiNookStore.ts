@@ -922,7 +922,7 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
     if (slotToRemove?.isFocused && newSlots.length > 0) {
       newSlots.forEach(s => {
         if (!s.isMinimized) {
-          s.muted = false;
+          s.muted = !!s.heldMuted;
         }
       });
     }
@@ -1034,7 +1034,7 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
     // Set, never toggled: making the focused tile main must not unfocus it.
     const focused = next.map((s) => {
       const isFocused = s.id === id;
-      const muted = s.id !== id;
+      const muted = s.id !== id || !!s.heldMuted;
       if (s.isFocused === isFocused && s.muted === muted) return s;
       return { ...s, isFocused, muted };
     });
@@ -1127,7 +1127,8 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
       // Toggling focus off clears focus from all and unmutes all non-docked;
       // focusing THIS slot focuses + unmutes it and mutes everyone else.
       const isFocused = isCurrentlyFocused ? false : s.id === id;
-      const muted = isCurrentlyFocused ? (s.isMinimized ? true : false) : s.id !== id;
+      // A tile you muted yourself stays muted through either (heldMuted).
+      const muted = isCurrentlyFocused ? (s.isMinimized ? true : !!s.heldMuted) : s.id !== id || !!s.heldMuted;
       if (s.isFocused === isFocused && s.muted === muted) return s;
       return { ...s, isFocused, muted };
     });
@@ -1157,7 +1158,7 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
     // exactly like the solo player. Mirrors toggleFocusSlot's "focus this" branch.
     const newSlots = slots.map(s => {
       const isFocused = s.id === id;
-      const muted = s.id !== id;
+      const muted = s.id !== id || !!s.heldMuted;
       if (s.isFocused === isFocused && s.muted === muted) return s;
       return { ...s, isFocused, muted };
     });
@@ -1195,7 +1196,7 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
       }
       // If we are docking the focused stream, it loses focus, so we unmute the rest of visible streams
       if (wasFocused && !s.isMinimized) {
-        return { ...s, muted: false };
+        return { ...s, muted: !!s.heldMuted };
       }
       return s;
     });
@@ -1218,7 +1219,7 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
           ...s, 
           isMinimized: false,
           // Unmute if there is NO focused stream. If someone HAS focus, stay muted.
-          muted: hasFocusedStream ? true : false 
+          muted: hasFocusedStream ? true : !!s.heldMuted
         };
       }
       return s;
@@ -1245,7 +1246,7 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
     const newSlots = slots.map(s => {
       if (s.id === id) {
         // Restore and focus
-        return { ...s, isMinimized: false, isFocused: true, muted: false };
+        return { ...s, isMinimized: false, isFocused: true, muted: !!s.heldMuted };
       }
       if (s.id === slotToDock.id) {
         // Dock the old one. If it was the maximized tile, the grid restore is

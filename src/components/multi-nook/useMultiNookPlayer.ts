@@ -38,6 +38,15 @@ import { HLS_START_CONFIG, resumeLoadAfterRecover, startLoadOnManifest } from '.
 import { watchStalls } from '../../utils/stallWatchdog';
 import { createRecovery } from '../../utils/recovery';
 import { isViewerPlay, shouldKeepHeldPause } from './keepHeldPause';
+import type { MultiNookSlot } from '../../types';
+
+/** A mute or unmute done by hand on the tile, remembered as `heldMuted`.
+ *  The store already holds any mute it asked for (focus, dock), so a player
+ *  whose mute disagrees with the store was changed by the viewer: its mute
+ *  button, a middle click, or the wheel taking it to zero. Nothing otherwise. */
+function heldMuteChange(slot: MultiNookSlot | undefined, playerMuted: boolean): Partial<MultiNookSlot> | null {
+  return slot && slot.muted !== playerMuted ? { heldMuted: playerMuted } : null;
+}
 
 /** Whether the tile `streamId` plays the signed-in account's own Twitch
  *  channel, compared by login the way the Own channel shortcut finds it. */
@@ -529,7 +538,7 @@ export const useMultiNookPlayer = ({
 
             const newVol = playerRef.current.volume;
             const newMuted = playerRef.current.muted;
-            usemultiNookStore.getState().updateSlot(streamId, { volume: newVol, muted: newMuted });
+            usemultiNookStore.getState().updateSlot(streamId, { volume: newVol, muted: newMuted, ...heldMuteChange(currentState, newMuted) });
           });
 
           playerRef.current.on('controlsshown', () => setShowControls(true));
@@ -827,7 +836,7 @@ export const useMultiNookPlayer = ({
 
             const newVol = playerRef.current.volume;
             const newMuted = playerRef.current.muted;
-            usemultiNookStore.getState().updateSlot(streamId, { volume: newVol, muted: newMuted });
+            usemultiNookStore.getState().updateSlot(streamId, { volume: newVol, muted: newMuted, ...heldMuteChange(currentState, newMuted) });
           });
 
           playerRef.current.on('controlsshown', () => setShowControls(true));
