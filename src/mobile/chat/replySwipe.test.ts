@@ -14,6 +14,7 @@ import {
   SNAP_BACK_MS,
   canReplyTo,
   composerTakesText,
+  notSentYet,
   replyAfterSend,
   replyArmed,
   replyHintWords,
@@ -112,5 +113,13 @@ describe('the paused hint fits its column', () => {
   it('says right with Left-handed swipes, from the shared table', () => {
     expect(replyHintWords(999, measure, true)).toBe(cases.words.hintFlipped);
     expect(replyHintWords(cases.words.hintFlipped.length * 6 - 1, measure, true)).toBe(cases.words.hintShortFlipped);
+  });
+});
+
+describe('a line Twitch has not echoed yet', () => {
+  it('is known by its local id, so the swipe offers no Delete on it', () => {
+    expect(notSentYet('local-1f2e')).toBe(true);
+    expect(notSentYet('kick-local-9')).toBe(true);
+    expect(notSentYet('b0c4e7d2-1a2b-4c3d-9e8f-0a1b2c3d4e5f')).toBe(false);
   });
 });

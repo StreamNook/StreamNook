@@ -30,6 +30,9 @@ export const REPLY_PROVIDERS: readonly string[] = ['twitch', 'kick'];
 /** Ids of your own rows the platform has not answered yet: nothing can reply to them. */
 export const PROVISIONAL_PREFIXES: readonly string[] = ['local-', 'kick-local-'];
 
+/** One of your own lines still under its local id: nothing can reply to it or delete it yet. */
+export const notSentYet = (messageId: string): boolean => PROVISIONAL_PREFIXES.some((p) => messageId.startsWith(p));
+
 /** What a reply starts with. */
 export interface ReplyTarget {
   messageId: string;

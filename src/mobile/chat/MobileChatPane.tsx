@@ -51,7 +51,7 @@ import { useAutomodStore } from '../../stores/automodStore';
 import { heldRowMessage, heldRows, isHeldRowId, mergeHeld } from './heldRows';
 import { SwipeModerator } from './SwipeModerator';
 import { messageReach, reachCanDelete, reachCanTimeout, type MessageReach, type SwipeTarget, type TouchSlider } from './swipeSteps';
-import { REPLY_PROVIDERS, canReplyTo, composerTakesText, replyAfterSend, replyHintWords, replyRowOf, type ComposerState, type ReplyTarget } from './replySwipe';
+import { REPLY_PROVIDERS, canReplyTo, composerTakesText, notSentYet, replyAfterSend, replyHintWords, replyRowOf, type ComposerState, type ReplyTarget } from './replySwipe';
 import { learnReplyHint, replyHintOnPause, useReplyHintLearned } from './replyHint';
 import { measureText } from './placeholderFit';
 import { usePlatformAccountStore } from '../../stores/platformAccountStore';
@@ -821,7 +821,8 @@ export const MobileChatPane: React.FC<{
    *  Delete alone on the viewer's own message, nothing on the broadcaster's. */
   const reachOf = useCallback(
     (messageId: string): { target: SwipeTarget; reach: MessageReach } | null => {
-      if (isHeldRowId(messageId)) return null;
+      // A line Twitch has not echoed yet has only a local id, which no delete can name.
+      if (isHeldRowId(messageId) || notSentYet(messageId)) return null;
       for (const message of messages) {
         if (getMessageId(message) !== messageId) continue;
         try {
@@ -847,7 +848,9 @@ export const MobileChatPane: React.FC<{
       if (found && found.reach !== 'nothing') return found.target;
       // Why a press starts no swipe, for the app log (the iPhone logs the same).
       const why = !found
-        ? 'no chatter on this row'
+        ? notSentYet(messageId)
+          ? 'Twitch has not echoed this line yet, so it has no id to delete'
+          : 'no chatter on this row'
         : `Twitch allows nothing on it (own ${found.target.userId === currentUser?.user_id}, role ${viewerRole ?? 'viewer'}, sender badges ${found.target.badges.join(',') || 'none'})`;
       Logger.warn('[Swipe]', `down on ${messageId}: not swipeable: ${why}`);
       return null;
