@@ -9,6 +9,7 @@ import { motion } from 'framer-motion';
 import { Check } from 'phosphor-react';
 import type { HereCampaign, HereDrop, WatchDrops } from '../../stores/watchDropsStore';
 import { ACCENT_BUTTON, SUCCESS_FILL } from '../ui/glazeButtons';
+import { Tooltip } from '../ui/Tooltip';
 import { ConnectButton } from './DropsConnectButton';
 import { DropArt } from './DropArt';
 import { splitStatus } from './dropsStatusText';
@@ -229,10 +230,11 @@ function Tile({
       <Bar drop={drop} />
       <div className="flex min-h-[22px] items-center">
         {drop.locked ? (
-          // Out of reach: no label, only what it needs first.
-          <span className="line-clamp-2 text-[10.5px] leading-[13px] text-textSecondary" title={drop.detail ?? undefined}>
-            {drop.detail}
-          </span>
+          // Out of reach: no label, only what it needs first. Two lines can cut
+          // it short, so hovering shows it whole.
+          <Tooltip content={drop.detail ?? ''} disabled={!drop.detail} describe>
+            <span className="line-clamp-2 text-[10.5px] leading-[13px] text-textSecondary">{drop.detail}</span>
+          </Tooltip>
         ) : (
           <Trailing drop={drop} linkUrl={linkUrl} claiming={claiming} onClaim={onClaim} wide />
         )}

@@ -84,7 +84,9 @@ describe('the lower third gates (source pins)', () => {
       expect(pane).toContain(`${handler}={folded ? undefined : press.${handler}}`);
     }
     expect(pane).toContain('onPauseIntent={folded ? undefined : () => pause(true)}');
-    expect(pane).toContain("${folded ? ' sn-chat-vertical' : ''}");
+    // The folded list carries sn-chat-vertical (the over-video ink beside it is
+    // overVideo.test.ts's pin).
+    expect(pane).toMatch(/\$\{folded \? [`'] sn-chat-vertical\b/);
     expect(pane).toContain('{folded && lowerTouch}');
   });
 
