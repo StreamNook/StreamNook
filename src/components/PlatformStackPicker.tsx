@@ -27,12 +27,24 @@ const STRIP = {
   gone: { opacity: 0, y: '-50%', scale: 0.96, transition: { duration: 0.12, ease: EASE, opacity: { duration: 0.06, delay: 0.06 } } },
 };
 
-// Each logo starts back at the stack and springs out to its place.
+// Each logo starts back at the stack and springs out to its place: `i` slots
+// from the stack, toward `dir` (1 rightward from a stack on the left, -1
+// leftward from one on the right).
+interface ItemCustom {
+  i: number;
+  dir: 1 | -1;
+}
 const ITEM = {
-  hidden: (i: number) => ({ opacity: 0, x: -(i + 1) * SLOT_PX * 0.5, scale: 0.6 }),
+  hidden: ({ i, dir }: ItemCustom) => ({ opacity: 0, x: -dir * (i + 1) * SLOT_PX * 0.5, scale: 0.6 }),
   shown: { opacity: 1, x: 0, scale: 1, transition: { duration: 0.26, ease: OVERSHOOT } },
-  gone: (i: number) => ({ opacity: 0, x: -(i + 1) * SLOT_PX * 0.25, scale: 0.8, transition: { duration: 0.12, ease: EASE } }),
+  gone: ({ i, dir }: ItemCustom) => ({ opacity: 0, x: -dir * (i + 1) * SLOT_PX * 0.25, scale: 0.8, transition: { duration: 0.12, ease: EASE } }),
 };
+
+// Coin and mark sizes: the search bar's, and the smaller sidebar header's.
+const SIZES = {
+  md: { coin: 22, mark: 13, overlap: 5, item: 'h-7 w-7', itemMark: 15 },
+  sm: { coin: 18, mark: 11, overlap: 4, item: 'h-6 w-6', itemMark: 13 },
+} as const;
 
 /**
  * Which platforms the All view searches and suggests from, inside the search
@@ -44,8 +56,20 @@ const ITEM = {
  *
  * `onChange` hears each press: the platforms now off, and the one turned back
  * on (null when one was turned off), so results on screen can follow.
+ * `align="end"` is for a stack at a row's right end (the sidebar's Recommended
+ * header): the logos fan out leftward, staying inside the row.
  */
-export function PlatformStackPicker({ onChange }: { onChange?: (off: ProviderId[], turnedOn: ProviderId | null) => void }) {
+export function PlatformStackPicker({
+  onChange,
+  size = 'md',
+  align = 'start',
+}: {
+  onChange?: (off: ProviderId[], turnedOn: ProviderId | null) => void;
+  size?: keyof typeof SIZES;
+  align?: 'start' | 'end';
+}) {
+  const s = SIZES[size];
+  const dir: 1 | -1 = align === 'end' ? -1 : 1;
   const off = useSuggestOff();
   const on = suggestOn(off);
   const [open, setOpen] = useState(false);
@@ -116,7 +140,7 @@ export function PlatformStackPicker({ onChange }: { onChange?: (off: ProviderId[
       <button
         ref={stackRef}
         type="button"
-        aria-label={`Searching ${names}`}
+        aria-label={`Platforms on: ${names}`}
         aria-expanded={open}
         onMouseDown={(e) => e.preventDefault()}
         onPointerMove={(e) => {
@@ -132,15 +156,15 @@ export function PlatformStackPicker({ onChange }: { onChange?: (off: ProviderId[
           held.current = true;
           setOpen(true);
         }}
-        className={`flex h-7 items-center rounded-lg px-1.5 transition-opacity duration-150 hover:bg-white/5 ${open ? 'opacity-0' : 'opacity-100'}`}
+        className={`flex items-center rounded-lg transition-opacity duration-150 hover:bg-white/5 ${size === 'sm' ? 'h-6 px-1' : 'h-7 px-1.5'} ${open ? 'opacity-0' : size === 'sm' ? 'opacity-75 hover:opacity-100' : 'opacity-100'}`}
       >
         {on.map((p, i) => (
           <span
             key={p}
-            className="relative flex h-[22px] w-[22px] items-center justify-center rounded-full bg-black/70 shadow-[0_0_0_1.5px_rgba(0,0,0,0.55)]"
-            style={{ marginLeft: i === 0 ? 0 : -5, zIndex: on.length - i }}
+            className="relative flex items-center justify-center rounded-full bg-black/70 shadow-[0_0_0_1.5px_rgba(0,0,0,0.55)]"
+            style={{ width: s.coin, height: s.coin, marginLeft: i === 0 ? 0 : -s.overlap, zIndex: on.length - i }}
           >
-            <ProviderMark provider={p} size={13} />
+            <ProviderMark provider={p} size={s.mark} />
           </span>
         ))}
       </button>
@@ -150,8 +174,8 @@ export function PlatformStackPicker({ onChange }: { onChange?: (off: ProviderId[
           <motion.div
             role="group"
             aria-label="Platforms to search and suggest from"
-            className="sn-popover absolute left-0 top-1/2 z-10 flex items-center gap-0.5 rounded-[10px] p-0.5"
-            style={{ transformOrigin: 'left center' }}
+            className={`sn-popover absolute top-1/2 z-10 flex items-center gap-0.5 rounded-[10px] p-0.5 ${align === 'end' ? 'right-0' : 'left-0'}`}
+            style={{ transformOrigin: align === 'end' ? 'right center' : 'left center' }}
             variants={STRIP}
             initial="hidden"
             animate="shown"
@@ -166,16 +190,16 @@ export function PlatformStackPicker({ onChange }: { onChange?: (off: ProviderId[
                 <Tooltip key={p} content={tip} side="bottom" delay={250}>
                 <motion.button
                   type="button"
-                  custom={i}
+                  custom={{ i: dir === 1 ? i : WATCHABLE_PROVIDERS.length - 1 - i, dir }}
                   variants={ITEM}
                   aria-pressed={isOn}
                   aria-label={label}
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => press(p)}
-                  className={`relative flex h-7 w-7 items-center justify-center rounded-lg transition-colors duration-150 ${isOn ? 'bg-white/10 hover:bg-white/15' : 'hover:bg-white/10'} ${last ? 'cursor-default' : ''}`}
+                  className={`relative flex ${s.item} items-center justify-center rounded-lg transition-colors duration-150 ${isOn ? 'bg-white/10 hover:bg-white/15' : 'hover:bg-white/10'} ${last ? 'cursor-default' : ''}`}
                 >
                   <span className={`-translate-y-px transition-[opacity,filter] duration-150 ${isOn ? '' : 'opacity-60 grayscale brightness-200'}`}>
-                    <ProviderMark provider={p} size={15} />
+                    <ProviderMark provider={p} size={s.itemMark} />
                   </span>
                   <span
                     aria-hidden="true"

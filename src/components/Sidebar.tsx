@@ -14,6 +14,7 @@ import { TogetherTag } from './SharedViewers';
 import { groupFor, type ChannelGroup } from '../utils/sharedViewers';
 import StreamHoverCard, { STREAM_HOVER_CARD_CLASS } from './StreamHoverCard';
 import { ProviderLogo } from './ProviderLogo';
+import { PlatformStackPicker } from './PlatformStackPicker';
 import { SevenTvAvatar } from './SevenTvAvatar';
 import { sevenTvIdForStream } from '../services/sevenTvPictures';
 import { useFollowsStore } from '../stores/followsStore';
@@ -89,13 +90,16 @@ interface SectionHeaderProps {
     /** Fully-rendered icon override, for marks that need SVG attrs a
      *  className can't carry (the glass-gradient heart). */
     iconNode?: React.ReactNode;
+    /** A control at the row's right end, drawn only while the sidebar is
+     *  expanded (the Recommended header's platform picker). */
+    trailing?: React.ReactNode;
 }
 
 // Hoisted to module scope (and memoized) so it keeps a stable component
 // identity across Sidebar re-renders. Defining it inside Sidebar made React
 // treat it as a brand-new component type on every render, which unmounted and
 // remounted the whole list on each background refresh — the visible "glitch".
-const SectionHeader = memo(({ icon: Icon, label, count, showExpanded, iconClassName = '', iconNode }: SectionHeaderProps) => (
+const SectionHeader = memo(({ icon: Icon, label, count, showExpanded, iconClassName = '', iconNode, trailing }: SectionHeaderProps) => (
     <div className={`
         flex items-center gap-2 px-2 py-2 text-textSecondary
         ${showExpanded ? 'justify-start' : 'justify-center'}
@@ -105,6 +109,8 @@ const SectionHeader = memo(({ icon: Icon, label, count, showExpanded, iconClassN
             <>
                 <span className="text-xs font-semibold uppercase tracking-wider">{label}</span>
                 <span className="text-xs text-textMuted">({count})</span>
+                {/* The negative margin keeps the header its usual height. */}
+                {trailing && <span className="-my-1 ml-auto flex items-center">{trailing}</span>}
             </>
         )}
     </div>
@@ -1160,7 +1166,15 @@ const Sidebar = ({ side = 'left' }: { side?: 'left' | 'right' }) => {
                     {/* Recommended Streams Section */}
                     {hasRecommended && (
                         <div>
-                            <SectionHeader icon={Sparkles} label={secondSection.label} count={secondSection.streams.length} showExpanded={showExpanded} />
+                            <SectionHeader
+                                icon={Sparkles}
+                                label={secondSection.label}
+                                count={secondSection.streams.length}
+                                showExpanded={showExpanded}
+                                // On All: which platforms it suggests from, the
+                                // same choice as the search bar's picker.
+                                trailing={onAll ? <PlatformStackPicker size="sm" align="end" /> : undefined}
+                            />
                             <div className="space-y-0.5">
                                 {secondSection.streams.map(stream => renderStreamItem(stream, false))}
                             </div>
