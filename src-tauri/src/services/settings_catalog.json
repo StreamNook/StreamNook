@@ -166,6 +166,24 @@
   {
    "page": "player",
    "section": "Playback",
+   "title": "Brightness and volume swipes",
+   "paths": [
+    "video_player.swipe_dials"
+   ],
+   "nested": false,
+   "logo": null,
+   "detail": "On its side, swipe up or down on the left of the video for brightness, on the right for volume. Off keeps a swipe across the screen from changing either.",
+   "aliases": [
+    "gestures",
+    "brightness",
+    "volume swipe",
+    "swipe",
+    "dial"
+   ]
+  },
+  {
+   "page": "player",
+   "section": "Playback",
    "title": "Start quality",
    "paths": [
     "quality"

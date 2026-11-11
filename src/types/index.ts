@@ -77,6 +77,9 @@ export interface VideoPlayerSettings {
    *  top and bottom (never its sides, at most 1.5x). Set by a pinch on the
    *  video or the Player switch. Default false. Typed in Rust. */
   zoom_to_fill?: boolean;
+  /** Phones only (SN-269): on its side, a vertical swipe on the video sets
+   *  brightness (left half) or volume (right half). Default true. Typed in Rust. */
+  swipe_dials?: boolean;
   /** Phones only (SN-40): a dual-format Twitch stream opens in its vertical
    *  view. Default false. Typed in Rust and backend-owned: only the core's
    *  `change_stream_view` writes it and only the core reads it, so no shell

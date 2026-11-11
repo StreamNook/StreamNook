@@ -240,6 +240,11 @@ pub struct VideoPlayerSettings {
     /// the Player settings switch sets it. The desktop player ignores it.
     #[serde(default)]
     pub zoom_to_fill: bool,
+    /// Phones only (SN-269). On its side, a swipe up or down on the left half
+    /// of the video sets the screen brightness, on the right half the volume.
+    /// Off leaves vertical swipes on the video alone. On by default.
+    #[serde(default = "default_true")]
+    pub swipe_dials: bool,
     /// Phones only (SN-40). A dual-format Twitch stream (one that also
     /// broadcasts a portrait picture) opens in its vertical view. Off by
     /// default: landscape until the viewer picks Vertical on the player's view
@@ -294,6 +299,7 @@ impl Default for VideoPlayerSettings {
             sync_vod_progress: true,
             continue_watching_live: false,
             zoom_to_fill: false,
+            swipe_dials: true,
             vertical_view: false,
         }
     }

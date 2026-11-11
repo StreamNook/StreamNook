@@ -5,6 +5,11 @@
 // Rust: the answer is needed synchronously at pointerdown, and it is arithmetic
 // on the finger's position (the iPhone's twin is SNKit `Dial.canStart`).
 
+/** Whether the brightness and volume swipes are on (SN-269): Player >
+ *  "Brightness and volume swipes", on unless switched off. */
+export const swipeDialsOn = (videoPlayer: { swipe_dials?: boolean } | undefined): boolean =>
+  videoPlayer?.swipe_dials !== false;
+
 /** The quiet strip at each edge: about a fingertip, in CSS px (= dp). */
 export const DIAL_EDGE_GUARD = 48;
 

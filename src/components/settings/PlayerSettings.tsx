@@ -605,6 +605,21 @@ const PlayerSettings = () => {
           </SettingsRow>
         )}
 
+        {/* Phone-only (SN-269): the landscape brightness and volume swipes. */}
+        {IS_MOBILE && (
+          <SettingsRow
+            title="Brightness and volume swipes"
+            onReset={resetFor(['video_player.swipe_dials', true])}
+            description="On its side, swipe up or down on the left of the video for brightness, on the right for volume. Off keeps a swipe across the screen from changing either."
+            control={
+              <Toggle
+                enabled={videoPlayer?.swipe_dials ?? true}
+                onChange={() => setVideoPlayer({ swipe_dials: !(videoPlayer?.swipe_dials ?? true) })}
+              />
+            }
+          />
+        )}
+
         <SettingsRow
           title="Start quality"
           onReset={resetFor('quality')}

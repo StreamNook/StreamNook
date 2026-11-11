@@ -195,6 +195,7 @@ const BY_TITLE: Record<string, LucideIcon> = {
   Autoplay: Play,
   'Background play': Headphones,
   'Zoom to fill': Expand,
+  'Brightness and volume swipes': SunDim,
   'Start quality': Tv,
   'Start muted': VolumeX,
   'Start volume': Volume2,

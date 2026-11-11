@@ -104,7 +104,7 @@ import {
 import { VerticalChatButton, VerticalChatHandle, VerticalMentionStrip } from '../watch/VerticalChat';
 import { foldedStack, VERTICAL_CHROME } from '../watch/verticalChatParts';
 import { DialIndicator, ZoomIndicator, type DialAxis, type DialReading } from '../watch/DialIndicator';
-import { dialCanStart } from '../watch/dialZone';
+import { dialCanStart, swipeDialsOn } from '../watch/dialZone';
 import {
   dialHundredth,
   dialTenth,
@@ -1220,10 +1220,13 @@ export const WatchScreen: React.FC = () => {
         // An offline room has no picture to dial (the iPhone's room takes the
         // touch the same way), so a press there is a tap or nothing as well.
         const offlineRoom = useAppStore.getState().streamUrl === 'offline';
+        // Brightness and volume swipes switched off (SN-269): the press is a
+        // tap or a chat swipe, as in an offline room.
+        const dialsOff = !swipeDialsOn(useAppStore.getState().settings.video_player);
         // A press in an edge strip neither dials nor swipes; an offline room's
         // press may swipe chat in but never dials.
         const swipeOk = dialCanStart(e.clientY, window.innerHeight, ins.gestureTop, ins.gestureBottom);
-        if (offlineRoom || !swipeOk) {
+        if (offlineRoom || dialsOff || !swipeOk) {
           gesture.current = {
             id: e.pointerId,
             kind: 'dial',

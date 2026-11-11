@@ -1,5 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import { DIAL_EDGE_GUARD, dialCanStart } from './dialZone';
+import { readFileSync } from 'node:fs';
+import { DIAL_EDGE_GUARD, dialCanStart, swipeDialsOn } from './dialZone';
+
+describe('the brightness and volume swipes switch (SN-269)', () => {
+  it('is on until it is switched off', () => {
+    expect(swipeDialsOn(undefined)).toBe(true);
+    expect(swipeDialsOn({})).toBe(true);
+    expect(swipeDialsOn({ swipe_dials: true })).toBe(true);
+    expect(swipeDialsOn({ swipe_dials: false })).toBe(false);
+  });
+  it('off, a landscape press takes the no-dial path (a tap or a chat swipe)', () => {
+    const watch = readFileSync(new URL('../screens/WatchScreen.tsx', import.meta.url), 'utf8');
+    expect(watch).toMatch(/const dialsOff = !swipeDialsOn\(/);
+    expect(watch).toMatch(/if \(offlineRoom \|\| dialsOff \|\| !swipeOk\)/);
+  });
+});
 
 describe('where a landscape dial can start', () => {
   it('starts over the middle of the picture', () => {
