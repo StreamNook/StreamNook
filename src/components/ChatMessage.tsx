@@ -3516,6 +3516,21 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   const lineButtonsOn = chatDesign?.mod_line_buttons === true;
   const showModLine = canActOnChatter && lineButtonsOn && !!modLine?.length && !!thisMessageId;
   const showModSlider = canActOnChatter && !lineButtonsOn && chatDesign?.mod_slider !== false;
+  // A moderator's own Twitch message: the slider with Delete alone, the one
+  // thing Twitch lets a moderator do to their own line. Not the channel
+  // owner's own messages, which Twitch refuses to delete at all.
+  const showOwnDeleteSlider =
+    canModerateThisRow &&
+    isOwnMessage &&
+    !viewerOwnsChannel &&
+    (!parsed.provider || parsed.provider === 'twitch') &&
+    !!broadcasterId &&
+    // A line just sent shows under a local id until Twitch's echo gives it the
+    // real one (irc_service), and only the real one can be deleted.
+    !!thisMessageId &&
+    !thisMessageId.startsWith('local-') &&
+    !lineButtonsOn &&
+    chatDesign?.mod_slider !== false;
 
   // Right-click anywhere on a message replies to it, as on the name. A part
   // that handled the click itself keeps it (the name; an emote, which goes
@@ -3620,6 +3635,9 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
           is hovered, so idle rows carry none of it. */}
       {hoverArmed && showModSlider && (
         <ModSlider provider={parsed.provider ?? 'twitch'} target={modTarget()} messageId={thisMessageId} />
+      )}
+      {hoverArmed && showOwnDeleteSlider && (
+        <ModSlider provider="twitch" target={modTarget()} messageId={thisMessageId} deleteOnly />
       )}
 
       {/* Built-in event label (first-time chatter, returning, self, raid) */}

@@ -137,6 +137,9 @@ interface ModSliderProps {
   onApply?: (step: ModStep) => void;
   /** Show the grip without a hover (the settings preview). */
   hint?: boolean;
+  /** Only the Delete step: a moderator's own message, where Twitch allows
+   *  nothing else (no timeout or ban of yourself). */
+  deleteOnly?: boolean;
 }
 
 /** Capture can throw when the pointer is already gone (released between the
@@ -256,13 +259,17 @@ function railMark(step: ModStep, dots: boolean): ReactNode {
   return dots ? <i className="sn-mod-rail-dot" /> : step.label;
 }
 
-export function ModSlider({ provider, target, messageId, onApply, hint = false }: ModSliderProps) {
+export function ModSlider({ provider, target, messageId, onApply, hint = false, deleteOnly = false }: ModSliderProps) {
   const allSteps = useModSliderSteps(provider, useSliderConfig());
   const length = useAppStore((s) => s.settings.chat_design?.mod_slider_length) ?? 'medium';
   const storedStyle = useAppStore((s) => s.settings.chat_design?.mod_slider_style);
   const look: SliderStyle = storedStyle === 'rail' || storedStyle === 'capsule' ? storedStyle : 'preview';
   const stepPx = STEP_PX[length] ?? STEP_PX.medium;
-  const steps = messageId ? allSteps : allSteps?.filter((s) => s.action !== 'delete') ?? null;
+  const steps = deleteOnly
+    ? (messageId ? allSteps?.filter((s) => s.action === 'delete') ?? null : [])
+    : messageId
+      ? allSteps
+      : allSteps?.filter((s) => s.action !== 'delete') ?? null;
   // null = idle; CANCEL_ZONE or OFF_ROW = pulled, a release does nothing;
   // 0+ = the step.
   const [step, setStep] = useState<number | null>(null);
@@ -614,6 +621,9 @@ export function ModSlider({ provider, target, messageId, onApply, hint = false }
           : dragLook === 'preview' && current
             ? stepLabel(current)
             : null;
+
+  // Delete only, and Delete is not one of this person's steps: nothing to pull.
+  if (deleteOnly && steps?.length === 0) return null;
 
   return (
     <>
