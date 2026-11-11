@@ -5,7 +5,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from
 import { X, Broadcast } from 'phosphor-react';
 import { useChatTabsStore } from './chatTabsStore';
 import { ProviderMark } from '../../components/ProviderLogo';
-import { pickFolding, TAB_GAP, TAB_GAP_TIGHT, type FoldTab, type Folding } from './tabFolding';
+import { NAME_STUB, pickFolding, TAB_GAP, TAB_GAP_TIGHT, type FoldTab, type Folding } from './tabFolding';
 import { SevenTvAvatar } from '../../components/SevenTvAvatar';
 
 /** Fixed so the chat header, which is absolutely positioned over the top of the
@@ -83,7 +83,7 @@ const ChatTabStripImpl: React.FC<{
   const leadingRef = useRef<HTMLDivElement | null>(null);
   const trailingRef = useRef<HTMLDivElement | null>(null);
   const measureRef = useRef<HTMLDivElement | null>(null);
-  const [folding, setFolding] = useState<Folding>({ folded: new Set(), tight: false });
+  const [folding, setFolding] = useState<Folding>({ folded: new Set(), tight: false, bare: false });
   const fit = useCallback(() => {
     const group = groupRef.current;
     const measure = measureRef.current;
@@ -91,7 +91,15 @@ const ChatTabStripImpl: React.FC<{
     const width = (el: Element | null | undefined) => (el ? el.getBoundingClientRect().width : 0);
     const sized: FoldTab[] = tabs.map((t) => {
       const of = (form: string) => width(measure.querySelector(`[data-room="${CSS.escape(t.channel)}"][data-form="${form}"]`));
-      return { channel: t.channel, label: t.label, full: of('full'), uncapped: of('uncapped'), folded: of('folded'), foldedTight: of('tight') };
+      return {
+        channel: t.channel,
+        label: t.label,
+        full: of('full'),
+        uncapped: of('uncapped'),
+        stub: of('stub'),
+        folded: of('folded'),
+        foldedTight: of('tight'),
+      };
     });
     const beside = [leadingRef.current, trailingRef.current].filter((el) => el && el.childElementCount > 0);
     const available =
@@ -101,7 +109,10 @@ const ChatTabStripImpl: React.FC<{
       CAPSULE_PADDING * 2;
     const next = pickFolding(sized, activeChannel, available);
     setFolding((prev) =>
-      prev.tight === next.tight && prev.folded.size === next.folded.size && [...next.folded].every((c) => prev.folded.has(c))
+      prev.tight === next.tight &&
+      prev.bare === next.bare &&
+      prev.folded.size === next.folded.size &&
+      [...next.folded].every((c) => prev.folded.has(c))
         ? prev
         : next,
     );
@@ -122,7 +133,11 @@ const ChatTabStripImpl: React.FC<{
   if (tabs.length < (always ? 1 : 2)) return null;
 
   const crowded = folding.folded.size > 0;
-  const pill = (tab: (typeof tabs)[number], form: { folded: boolean; crowded: boolean; tight: boolean }, live: boolean) => (
+  const pill = (
+    tab: (typeof tabs)[number],
+    form: { folded: boolean; crowded: boolean; tight: boolean; bare?: boolean; nameMax?: number },
+    live: boolean,
+  ) => (
     <RoomPill
       key={tab.channel}
       tab={tab}
@@ -154,7 +169,16 @@ const ChatTabStripImpl: React.FC<{
             style={{ gap: folding.tight ? TAB_GAP_TIGHT : TAB_GAP }}
           >
             {tabs.map((tab) =>
-              pill(tab, { folded: folding.folded.has(tab.channel), crowded, tight: folding.tight }, true),
+              pill(
+                tab,
+                {
+                  folded: folding.folded.has(tab.channel),
+                  crowded,
+                  tight: folding.tight,
+                  bare: folding.bare && tab.channel === activeChannel,
+                },
+                true,
+              ),
             )}
           </div>
         </div>
@@ -175,6 +199,9 @@ const ChatTabStripImpl: React.FC<{
             </div>
             <div className="flex" data-room={tab.channel} data-form="uncapped">
               {pill(tab, { folded: false, crowded: true, tight: false }, false)}
+            </div>
+            <div className="flex" data-room={tab.channel} data-form="stub">
+              {pill(tab, { folded: false, crowded: true, tight: false, bare: true, nameMax: NAME_STUB }, false)}
             </div>
             <div className="flex" data-room={tab.channel} data-form="folded">
               {pill(tab, { folded: true, crowded: true, tight: false }, false)}
@@ -207,15 +234,19 @@ const RoomPill: React.FC<{
   crowded: boolean;
   /** The row is at its tightest: a folded room is a smaller face with less air. */
   tight: boolean;
+  /** No broadcast mark: the room on screen in a row too narrow for it. */
+  bare?: boolean;
+  /** A cap on the name (the measure's stub form). */
+  nameMax?: number;
   mark: boolean;
   onSelect?: () => void;
   onClose?: () => void;
-}> = ({ tab, active, folded, crowded, tight, mark, onSelect, onClose }) => {
+}> = ({ tab, active, folded, crowded, tight, bare = false, nameMax, mark, onSelect, onClose }) => {
   const face = folded && tight ? 16 : 20;
   return (
     <div
       data-active-room={active ? 'true' : undefined}
-      className={`flex items-center rounded-full h-8 ${active ? 'min-w-0 glaze-selected' : 'shrink-0'}`}
+      className={`flex items-center rounded-full h-8 ${active ? `${folded ? 'shrink-0' : 'min-w-0'} glaze-selected` : 'shrink-0'}`}
       style={{ paddingLeft: folded ? (tight ? 2 : 6) : 10, paddingRight: folded ? (tight ? 2 : 6) : 4 }}
     >
       <button
@@ -254,14 +285,14 @@ const RoomPill: React.FC<{
             />
           )}
         </span>
-        {tab.pinnedToStream && <Broadcast size={11} weight="fill" className="text-accent shrink-0" />}
+        {tab.pinnedToStream && !bare && <Broadcast size={11} weight="fill" className="text-accent shrink-0" />}
         {/* Two rooms can share a name across platforms; the mark tells them apart. */}
         {mark && <ProviderMark provider={tab.provider} size={11} />}
         {!folded && (
           // At most 96 px, unless the others folded for it.
           <span
             className={`min-w-0 text-[13px] truncate ${active ? 'text-textPrimary font-semibold' : 'text-textSecondary'}`}
-            style={{ maxWidth: crowded && active ? undefined : 96 }}
+            style={{ maxWidth: nameMax ?? (crowded && active ? undefined : 96) }}
           >
             {tab.label}
           </span>
