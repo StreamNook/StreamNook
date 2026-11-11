@@ -75,6 +75,7 @@ export default function DropsCenter() {
     // badge reward (e.g. "YOU GOT THIS") apart from an in-game item, since both can carry
     // a null distribution_type and the same generic quests asset URL.
     const [knownBadgeTitles, setKnownBadgeTitles] = useState<Set<string>>(new Set());
+    const [lockedDrops, setLockedDrops] = useState<Record<string, string>>({});
     const [isLoading, setIsLoading] = useState(true);
     const [, setError] = useState<string | null>(null);
 
@@ -217,6 +218,7 @@ export default function DropsCenter() {
         setCompletedDrops(overview.completed_drops);
         setEarnedBadgeTitles(new Set(overview.earned_badge_titles));
         setKnownBadgeTitles(new Set(overview.known_badge_titles));
+        setLockedDrops(overview.locked_drops ?? {});
         setUnifiedGames(overview.games);
         setSelectedGame(prev => (prev ? overview.games.find(g => g.id === prev.id) ?? prev : prev));
     };
@@ -1113,6 +1115,7 @@ export default function DropsCenter() {
                                 progress={progress}
                                 earnedBadgeTitles={earnedBadgeTitles}
                                 knownBadgeTitles={knownBadgeTitles}
+                                lockedDrops={lockedDrops}
                                 dropProgress={dropProgress}
                                 onClaimDrop={handleClaimDrop}
                                 onWatchChannel={handleStreamClick}

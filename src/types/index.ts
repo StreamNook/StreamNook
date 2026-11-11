@@ -2468,6 +2468,9 @@ export interface DropsOverview {
   earned_badge_titles: string[];
   /** Earned plus Twitch's global catalog, lowercased. */
   known_badge_titles: string[];
+  /** Rewards this account cannot earn yet (an evolution stage whose earlier
+   *  form is not held), by drop id: "Needs the Gastly badge first". */
+  locked_drops: Record<string, string>;
 }
 
 // Drops inventory types

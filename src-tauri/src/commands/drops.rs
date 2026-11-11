@@ -51,15 +51,20 @@ pub async fn get_drops_overview(
         let favorites = drops_service.get_settings().await.favorite_games;
         (campaigns, statistics, inventory, progress, favorites, locked_ms)
     };
-    let ((campaigns, statistics, inventory, progress, favorites, locked_ms), known) =
-        tokio::join!(gather, drops_overview::badge_titles());
+    // Evolution stages this account cannot earn yet: Twitch reports them in
+    // progress, so the page would otherwise show Gengar filling up without Gastly.
+    let ((campaigns, statistics, inventory, progress, favorites, locked_ms), known, locked) = tokio::join!(
+        gather,
+        drops_overview::badge_titles(),
+        crate::services::evolution::locked_stages(&app)
+    );
     log::debug!(
         "[Drops] overview in {} ms (waited {} ms for the drops lock)",
         started.elapsed().as_millis(),
         locked_ms
     );
 
-    let overview = drops_overview::overview(&campaigns, progress, inventory, statistics, known);
+    let overview = drops_overview::overview(&campaigns, progress, inventory, statistics, known, &locked);
     if !reuse_campaigns {
         let announce = state
             .settings

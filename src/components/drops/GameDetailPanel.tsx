@@ -171,6 +171,10 @@ interface GameDetailPanelProps {
     completedDrops: CompletedDrop[]; // List of all completed drops from inventory
     earnedBadgeTitles: Set<string>; // Set of earned badge titles (lowercase) for name-based ownership matching
     knownBadgeTitles: Set<string>; // Earned + global badge catalog titles (lowercase) for reward-kind labeling
+    /** Rewards this account cannot earn yet, by drop id, with what they need
+     *  first (Rust's DropsOverview.locked_drops). They read like a reward out of
+     *  reach: dimmed, no bar, after the rest, never in progress or ready. */
+    lockedDrops: Record<string, string>;
     dropProgress: DropProgressStatus | null;
 
     isOpen: boolean;
@@ -235,6 +239,7 @@ export default function GameDetailPanel({
     completedDrops,
     earnedBadgeTitles,
     knownBadgeTitles,
+    lockedDrops,
     dropProgress,
 
     isOpen,
@@ -563,11 +568,14 @@ export default function GameDetailPanel({
                                 // "Owned" per the panel's single ownership rule, so the
                                 // tally always agrees with the sections and cards below.
                                 const isClaimed = isDropOwned(drop, dp);
+                                // A stage this account cannot earn yet: out of reach,
+                                // whatever minutes Twitch shows on it.
+                                const locked = isClaimed ? null : lockedDrops[drop.id] ?? null;
                                 const current = isClaimed ? required : (dp?.current_minutes_watched || 0);
-                                const percent = twitch
+                                const percent = locked ? 0 : twitch
                                     ? dropPercent(dp, drop)
                                     : required > 0 ? Math.min((current / required) * 100, 100) : 0;
-                                const isReady = !isClaimed && (twitch ? twitch.ready_to_claim : percent >= 100);
+                                const isReady = !isClaimed && !locked && (twitch ? twitch.ready_to_claim : percent >= 100);
                                 const isCollectible = isDropCollectible(drop, game.inventory_items);
                                 return {
                                     dropId: drop.id,
@@ -578,17 +586,20 @@ export default function GameDetailPanel({
                                     isClaimed,
                                     isReady,
                                     isInProgress: !isClaimed && !isReady && percent > 0,
+                                    locked,
                                     isCollectible,
                                     kind: getRewardKind(benefit, knownBadgeTitles),
                                     // Only locked, unearned rewards need a "how to unlock" hint.
                                     // The reward name is the strongest signal (e.g. "Gifted Sub Drop"),
                                     // with the campaign description as the fallback source.
-                                    requirement: !isCollectible && !isClaimed && !isReady
+                                    requirement: !isCollectible && !isClaimed && !isReady && !locked
                                         ? dropRequirementText(drop) ?? unlockRequirementText(benefit?.name || drop.name, campaignDescription)
                                         : null,
                                 };
                             })
                             .sort((a, b) => {
+                                // Out-of-reach stages sit after everything still earnable.
+                                if (!!a.locked !== !!b.locked) return a.locked ? 1 : -1;
                                 const am = a.requiredMinutes > 0 ? a.requiredMinutes : Number.MAX_SAFE_INTEGER;
                                 const bm = b.requiredMinutes > 0 ? b.requiredMinutes : Number.MAX_SAFE_INTEGER;
                                 return am - bm;
@@ -621,7 +632,14 @@ export default function GameDetailPanel({
                                                             <div className="mt-0.5 font-normal text-textSecondary leading-snug">{r.requirement}</div>
                                                         </div>
                                                     )
-                                                    : `${r.name} · ${rewardKindLabel(r.kind)}${r.requiredMinutes > 0 ? ` · ${r.requiredMinutes}m` : ''}`
+                                                    : r.locked
+                                                        ? (
+                                                            <div className="text-left max-w-[15rem]">
+                                                                <div className="font-semibold text-textPrimary">{r.name}</div>
+                                                                <div className="mt-0.5 font-normal text-textSecondary leading-snug">{r.locked}</div>
+                                                            </div>
+                                                        )
+                                                        : `${r.name} · ${rewardKindLabel(r.kind)}${r.requiredMinutes > 0 ? ` · ${r.requiredMinutes}m` : ''}`
                                             }
                                             delay={200}
                                             side="top"
@@ -635,7 +653,7 @@ export default function GameDetailPanel({
                                                             src={r.image}
                                                             alt={r.name}
                                                             loading="lazy"
-                                                            className={`w-full h-full object-contain p-1.5 ${r.isClaimed ? 'opacity-40' : ''}`}
+                                                            className={`w-full h-full object-contain p-1.5 ${r.isClaimed ? 'opacity-40' : r.locked ? 'opacity-40 grayscale' : ''}`}
                                                         />
                                                     ) : (
                                                         <div className="w-full h-full flex items-center justify-center">
@@ -670,7 +688,7 @@ export default function GameDetailPanel({
 
                                                 {/* Reward kind plate, straddling the bottom border like a name tag */}
                                                 <div className="absolute bottom-0 left-1/2 -translate-x-1/2 translate-y-1/2 z-10">
-                                                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide bg-background border border-borderLight shadow-sm ${r.kind === 'badge' ? 'text-accent' : r.kind === 'emote' ? 'text-textSecondary' : 'text-textMuted'}`}>
+                                                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide bg-background border border-borderLight shadow-sm ${r.locked ? 'text-textMuted' : r.kind === 'badge' ? 'text-accent' : r.kind === 'emote' ? 'text-textSecondary' : 'text-textMuted'}`}>
                                                         {rewardKindLabel(r.kind)}
                                                     </span>
                                                 </div>
@@ -749,6 +767,8 @@ export default function GameDetailPanel({
                         const _totalMinutesWatched = progress.filter(p =>
                             p.current_minutes_watched > 0 &&
                             !p.is_claimed &&
+                            // Minutes Twitch shows on a stage not earnable yet go nowhere.
+                            !lockedDrops[p.drop_id] &&
                             p.current_minutes_watched < p.required_minutes_watched // Not yet 100%
                         );
 
@@ -979,6 +999,7 @@ export default function GameDetailPanel({
                                             inventoryItems={game.inventory_items}
                                             progress={progress}
                                             isDropOwned={isDropOwned}
+                                            lockedDrops={lockedDrops}
                                             dropProgress={dropProgress}
                                             onClaimDrop={onClaimDrop}
                                             onWatch={() => openWatchPicker(campaign)}
@@ -1033,6 +1054,7 @@ export default function GameDetailPanel({
                                             inventoryItems={game.inventory_items}
                                             progress={progress}
                                             isDropOwned={isDropOwned}
+                                            lockedDrops={lockedDrops}
                                             dropProgress={dropProgress}
                                             onClaimDrop={onClaimDrop}
                                             onWatch={() => openWatchPicker(campaign)}
@@ -1398,6 +1420,8 @@ interface CampaignCardProps {
     // the SAME predicate its section was filtered by, or a "Completed"
     // campaign can render an unearned-looking card that still offers Mine.
     isDropOwned: (drop: TimeBasedDrop, dp?: DropProgress | null) => boolean;
+    /** Rewards not earnable yet, by drop id, with what they need first. */
+    lockedDrops: Record<string, string>;
     dropProgress: DropProgressStatus | null;
     onClaimDrop: (dropId: string, dropInstanceId?: string) => void;
     onWatch: () => void; // native: open the channel picker to watch this campaign
@@ -1411,6 +1435,7 @@ function CampaignCard({
     inventoryItems,
     progress,
     isDropOwned,
+    lockedDrops,
     dropProgress,
     onClaimDrop,
     onWatch,
@@ -1441,13 +1466,16 @@ function CampaignCard({
         // same benefit id, or a held badge). Watch-time in progress wins inside
         // the rule, so a fresh drop is never hidden by a cross-campaign match.
         const isGloballyCompleted = isDropOwned(drop, dropProgress);
+        // Not earnable yet (an evolution stage whose earlier form is not held):
+        // whatever Twitch shows on it, it is neither in progress nor ready.
+        const isLocked = !isGloballyCompleted && !dropProgress?.is_claimed && !!lockedDrops[drop.id];
 
         const required = dropProgress?.required_minutes_watched || drop.required_minutes_watched || 0;
         const current = dropProgress
             ? (dropProgress.is_claimed ? required : (dropProgress.current_minutes_watched || 0))
             : (isGloballyCompleted ? required : 0);
 
-        const progressPercent = required > 0 ? (current / required) * 100 : 0;
+        const progressPercent = isLocked ? 0 : required > 0 ? (current / required) * 100 : 0;
 
         return {
             dropId: drop.id,
@@ -1462,6 +1490,7 @@ function CampaignCard({
             // render as grey/0%. isClaimed stays for the actual Claim affordance.
             isEarned: (dropProgress?.is_claimed || false) || isGloballyCompleted,
             progressPercent, // Show actual progress, not forced 100%
+            isLocked,
             isInProgress: progressPercent > 0 && progressPercent < 100 && !dropProgress?.is_claimed,
             isCollectible: isDropCollectible(drop, inventoryItems), // Track if drop is collectible - check inventory as fallback
             isGloballyCompleted, // Track if this drop was earned from a previous/expired campaign
@@ -1484,7 +1513,7 @@ function CampaignCard({
     // started mine at 0 minutes MUST count: requiring credited minutes here
     // kept the badge hidden for the first minute(s) after clicking Mine.
     const stillCollecting = dropRewards.some(
-        r => r.isCollectible && !r.isEarned && r.progressPercent < 100
+        r => r.isCollectible && !r.isEarned && !r.isLocked && r.progressPercent < 100
     );
 
     // The live status reports the campaign by ID (external provider) or by
@@ -1626,10 +1655,14 @@ function CampaignCard({
                 unlocks on its own days), so each gets its own row. */}
             {campaign.separate_progress && (
                 <div className="space-y-3">
-                    {campaign.time_based_drops.map(drop => {
+                    {/* Stages not earnable yet go after the rest, out of focus. */}
+                    {[...campaign.time_based_drops]
+                        .sort((a, b) => Number(!!lockedDrops[a.id]) - Number(!!lockedDrops[b.id]))
+                        .map(drop => {
                         const dp = resolveDropProgress(drop.id, drop.progress);
                         const t = dp?.twitch_progress;
                         const earned = t?.earned;
+                        const lockedWords = !dp?.is_claimed ? lockedDrops[drop.id] : undefined;
                         const image = earned?.image_url || drop.next_reward?.image_url || drop.benefit_edges?.[0]?.image_url || '';
                         const requirement = dropRequirementText(drop)
                             ?? (drop.required_minutes_watched > 0 ? `${drop.required_minutes_watched} min` : null);
@@ -1639,7 +1672,34 @@ function CampaignCard({
                                 : 'Not started');
                         const percent = dropPercent(dp, drop);
                         const claimed = !!dp?.is_claimed;
-                        const ready = !!t?.ready_to_claim;
+                        const ready = !lockedWords && !!t?.ready_to_claim;
+                        if (lockedWords) {
+                            // Out of reach for now: reads like a reward that can't be
+                            // had, with what it needs first, and no bar to fill.
+                            return (
+                                <div key={drop.id} className="flex items-center gap-3">
+                                    {image ? (
+                                        <img
+                                            src={image}
+                                            alt={drop.name}
+                                            loading="lazy"
+                                            className="w-10 h-10 shrink-0 rounded-lg object-contain p-1 bg-background border border-borderLight opacity-40 grayscale"
+                                        />
+                                    ) : (
+                                        <div className="w-10 h-10 shrink-0 rounded-lg bg-background border border-borderLight flex items-center justify-center">
+                                            <Gift size={16} className="text-textMuted" />
+                                        </div>
+                                    )}
+                                    <div className="flex-1 min-w-0">
+                                        <div className="flex items-baseline gap-2 min-w-0">
+                                            <span className="text-xs font-semibold text-textSecondary truncate">{drop.name}</span>
+                                            {requirement && <span className="text-[10px] text-textMuted shrink-0">{requirement}</span>}
+                                        </div>
+                                        <div className="mt-1 text-[10px] text-textMuted truncate">{lockedWords}</div>
+                                    </div>
+                                </div>
+                            );
+                        }
                         return (
                             <div key={drop.id} className="flex items-center gap-3">
                                 <div className="relative shrink-0">

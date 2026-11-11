@@ -64,6 +64,10 @@ pub struct DropsOverview {
     /// Earned plus globally catalogued badge titles, lowercased: how the reward
     /// list tells a badge from an in-game item when both look alike.
     pub known_badge_titles: Vec<String>,
+    /// Rewards this account cannot earn yet (an evolution stage whose earlier
+    /// form is not held), by drop id, with what they need first ("Needs the
+    /// Gastly badge first"). They count as neither in progress nor ready.
+    pub locked_drops: HashMap<String, String>,
 }
 
 fn normalize(name: &str) -> String {
@@ -122,6 +126,19 @@ pub fn build(
     progress: &[DropProgress],
     inventory: Option<&InventoryResponse>,
     known_badge_titles: &HashSet<String>,
+) -> Vec<DropGame> {
+    build_with_locked(campaigns, progress, inventory, known_badge_titles, &HashMap::new())
+}
+
+/// `build`, with the drops watching cannot move yet (`evolution::locked_stages`,
+/// by drop id) left out of the in-progress and ready counts: Twitch reports a
+/// locked evolution stage as in progress, but no watching earns it.
+fn build_with_locked(
+    campaigns: &[DropCampaign],
+    progress: &[DropProgress],
+    inventory: Option<&InventoryResponse>,
+    known_badge_titles: &HashSet<String>,
+    locked: &HashMap<String, String>,
 ) -> Vec<DropGame> {
     let live: HashMap<&str, &DropProgress> =
         progress.iter().map(|p| (p.drop_id.as_str(), p)).collect();
@@ -201,7 +218,7 @@ pub fn build(
         let game = games.get_mut(&key).expect("created above");
         game.total_active_drops += campaign.time_based_drops.len();
         game.release_ms = game.release_ms.max(campaign.start_at.timestamp_millis());
-        for drop in &campaign.time_based_drops {
+        for drop in campaign.time_based_drops.iter().filter(|d| !locked.contains_key(&d.id)) {
             if let Some(p) = &drop.progress {
                 if !p.is_claimed && p.current_minutes_watched > 0 {
                     game.drops_in_progress += 1;
@@ -237,7 +254,7 @@ pub fn build(
                         .any(|b| owned.benefit_ids.contains(&b.id) || owned_by_name(&b.name)));
             if is_owned {
                 owned_count += 1;
-            } else if p.is_some_and(|p| {
+            } else if !locked.contains_key(&drop.id) && p.is_some_and(|p| {
                 p.required_minutes_watched > 0 && p.current_minutes_watched >= p.required_minutes_watched
             }) {
                 game.has_claimable = true;
@@ -543,8 +560,20 @@ pub fn overview(
     inventory: Option<InventoryResponse>,
     statistics: Option<DropsStatistics>,
     titles: BadgeTitles,
+    locked: &HashMap<String, String>,
 ) -> DropsOverview {
-    let games = build(campaigns, &progress, inventory.as_ref(), &titles.known);
+    let games = build_with_locked(campaigns, &progress, inventory.as_ref(), &titles.known, locked);
+    // Only rewards the page lists, each with the words it shows.
+    let locked_drops = games
+        .iter()
+        .flat_map(|g| &g.active_campaigns)
+        .flat_map(|c| &c.time_based_drops)
+        .filter_map(|d| {
+            locked
+                .get(&d.id)
+                .map(|needs| (d.id.clone(), crate::services::evolution::locked_words(needs)))
+        })
+        .collect();
     let (inventory_items, completed_drops) = inventory
         .map(|inv| (inv.items, inv.completed_drops))
         .unwrap_or_default();
@@ -561,6 +590,7 @@ pub fn overview(
         progress,
         earned_badge_titles: sorted(titles.earned),
         known_badge_titles: sorted(titles.known),
+        locked_drops,
     }
 }
 
@@ -683,6 +713,27 @@ mod tests {
         let campaigns = vec![campaign("1", "Rust", 1, vec![drop("d1", 0, "event")])];
         let games = build(&campaigns, &[progress("d1", 0, 0, false)], None, &HashSet::new());
         assert!(!games[0].has_claimable);
+    }
+
+    #[test]
+    fn the_overview_carries_locked_stages_and_counts_them_nowhere() {
+        // Twitch reports Gengar in progress and fully watched, but Gastly is not held.
+        let campaigns = vec![campaign("1", "Pokemon", 1, vec![drop("ball", 60, "Poke Ball"), drop("gengar", 60, "Gengar")])];
+        let live = vec![progress("ball", 10, 60, false), progress("gengar", 60, 60, false)];
+        let locked = HashMap::from([
+            ("gengar".to_string(), "Gastly".to_string()),
+            ("elsewhere".to_string(), "Ralts".to_string()),
+        ]);
+        let o = overview(&campaigns, live, None, None, BadgeTitles::default(), &locked);
+        assert_eq!(
+            o.locked_drops,
+            HashMap::from([("gengar".to_string(), "Needs the Gastly badge first".to_string())])
+        );
+        assert_eq!(o.games[0].drops_in_progress, 1);
+        assert!(!o.games[0].has_claimable);
+        let free = overview(&campaigns, vec![progress("gengar", 60, 60, false)], None, None, BadgeTitles::default(), &HashMap::new());
+        assert!(free.locked_drops.is_empty());
+        assert!(free.games[0].has_claimable);
     }
 
     #[test]
