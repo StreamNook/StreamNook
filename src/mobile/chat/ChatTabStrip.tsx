@@ -242,12 +242,15 @@ const RoomPill: React.FC<{
   onSelect?: () => void;
   onClose?: () => void;
 }> = ({ tab, active, folded, crowded, tight, bare = false, nameMax, mark, onSelect, onClose }) => {
-  const face = folded && tight ? 16 : 20;
+  // The room on screen keeps the full face, so folded to its face its backing
+  // is a circle.
+  const small = folded && tight && !active;
+  const face = small ? 16 : 20;
   return (
     <div
       data-active-room={active ? 'true' : undefined}
       className={`flex items-center rounded-full h-8 ${active ? `${folded ? 'shrink-0' : 'min-w-0'} glaze-selected` : 'shrink-0'}`}
-      style={{ paddingLeft: folded ? (tight ? 2 : 6) : 10, paddingRight: folded ? (tight ? 2 : 6) : 4 }}
+      style={{ paddingLeft: folded ? (small ? 2 : 6) : 10, paddingRight: folded ? (small ? 2 : 6) : 4 }}
     >
       <button
         onClick={onSelect}
