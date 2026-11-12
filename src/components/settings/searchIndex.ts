@@ -1,4 +1,5 @@
 import { IS_MOBILE } from '../../utils/platform';
+import { settingNeedMet } from '../../utils/settingNeeds';
 export interface SettingsIndexEntry {
   tab: string;
   section: string;
@@ -8,6 +9,10 @@ export interface SettingsIndexEntry {
    *  SubControl. Search shows it in the trail and lands inside that row. */
   parent?: string;
   description?: string;
+  /** A need (utils/settingNeeds.ts) this window must meet before the setting is
+   *  offered: a row drawn only for some accounts. Search and the update-notes
+   *  links skip the entry while the need is unmet. */
+  needs?: string;
 }
 
 const tokenize = (s: string): string[] =>
@@ -27,6 +32,7 @@ export const searchSettings = (
 
   for (const entry of SETTINGS_INDEX) {
     if (allowTabs && !allowTabs.includes(entry.tab)) continue;
+    if (entry.needs && !settingNeedMet(entry.needs)) continue;
     const title = entry.title.toLowerCase();
     const description = entry.description?.toLowerCase() ?? '';
     const section = entry.section.toLowerCase();
@@ -55,6 +61,13 @@ export const searchSettings = (
   scored.sort((a, b) => b.score - a.score);
   return scored.slice(0, limit).map((s) => s.entry);
 };
+
+/** The entry a link names (by row title, on its tab when one is given), skipping
+ *  a setting this window cannot show right now. */
+export const findSettingsEntry = (title: string, tab?: string | null): SettingsIndexEntry | undefined =>
+  SETTINGS_INDEX.find(
+    (e) => e.title === title && (!tab || e.tab === tab) && (!e.needs || settingNeedMet(e.needs)),
+  );
 
 // Manual index for the in-Settings search box. Mirrors the rendered
 // <SettingsSection>/<SettingsRow> tree in src/components/settings/. `sectionId`
@@ -1458,6 +1471,13 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     section: 'Emotes',
     title: 'Emoji style',
     description: 'Which set draws the emoji in messages: Apple, Google, Twitter, Facebook, or your system emoji.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Emotes',
+    title: 'Smiley style',
+    needs: 'smiley_style',
+    description: 'Which art your text faces :) ;) <3 are drawn in: Robots, Purple or Monkeys (Purple and Monkeys come with Twitch Prime or Turbo). Changes your Twitch account. Smilies, smiley, faces, emoticons, robots, purple, monkeys, prime, turbo.'
   },
   {
     tab: 'Chat',

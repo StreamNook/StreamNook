@@ -4,6 +4,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { Smile } from 'lucide-react';
 import { FALLBACK_SETTING_ICON, settingIcon, settingIconFor, settingRowName } from './settingsIcons';
 
 interface Row {
@@ -35,6 +36,10 @@ describe('phone settings glyphs', () => {
   it('lets a section own a short name that repeats', () => {
     expect(settingIconFor('Links', 'Style')).not.toBe(settingIconFor('Chat Events', 'Style'));
     expect(settingIconFor('Emotes', 'Spacing')).not.toBe(settingIconFor('Message Layout', 'Spacing'));
+  });
+
+  it('gives the Smiley style row the smile glyph', () => {
+    expect(settingIconFor('Emotes', 'Smiley style')).toBe(Smile);
   });
 
   it('falls back to the generic glyph rather than none', () => {

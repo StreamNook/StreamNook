@@ -55,6 +55,8 @@ import type { BackendChatMessage } from '../services/twitchChat';
 import { patchHeldRows } from './heldRowPatch';
 import { withClearedEntry } from './clearedContexts';
 import { countNew, countsAsNew } from '../utils/countableRow';
+import { setSettingNeed } from '../utils/settingNeeds';
+import type { OwnSmilies, SmileyStyle, SmileySwap } from '../components/settings/smileyStyle';
 
 // Hard caps borrowed from the prior single-channel hook. Keeping them as
 // per-channel limits means a 5-channel MultiChat caps memory at 5x the
@@ -704,7 +706,7 @@ export async function ensureChannelEmotes(
       // Twitch keeps the full BTTV/FFZ/7TV/native fetch. TikTok has no
       // channel-emote fetch — its messages are plain text baked at parse time,
       // so there is no picker set to fetch.
-      const set =
+      let set =
         provider === 'kick'
           ? await fetchKickChannelEmotes(channel.toLowerCase())
           : provider === 'youtube'
@@ -713,6 +715,9 @@ export async function ensureChannelEmotes(
               ? null
               : await fetchAllEmotes(channel.toLowerCase(), channelId);
       if (set) {
+        // Twitch's text faces follow the account's current smiley set, so a
+        // fetch that began before a switch cannot store the old faces.
+        if (provider === 'twitch') set = withSmileySwap(set);
         emoteCache.set(key, set);
         notifyEmoteSubscribers(key);
       }
@@ -727,6 +732,88 @@ export async function ensureChannelEmotes(
   inflightEmoteFetches.set(key, promise);
   return promise;
 }
+
+// --- Your smiley set ---------------------------------------------------------
+// Twitch draws an account's text faces (:) ;) <3 R) ...) in the set the account
+// picked. Rust decides which rows leave and which arrive and sends them as a
+// swap; this window applies it to the Twitch emote sets it holds and to every
+// Twitch set it stores afterwards. `rev` orders what Rust sends, so an older
+// answer never undoes a newer one.
+let ownSmiliesRev = -1;
+let ownSmiliesSwap: SmileySwap | null = null;
+let ownSmiliesView: SmileyStyle | null = null;
+const ownSmiliesSubscribers = new Set<() => void>();
+
+/** `set` wearing the account's smiley set; the same object when nothing changes. */
+function withSmileySwap(set: EmoteSet): EmoteSet {
+  const swap = ownSmiliesSwap;
+  if (!swap) return set;
+  const leaving = new Set(swap.remove_ids);
+  const arriving = new Set(swap.rows.map((row) => row.id));
+  const holdsFaces = set.twitch.some(
+    (e) => e.provider === 'twitch' && (e.emote_type === 'smilies' || leaving.has(e.id) || arriving.has(e.id)),
+  );
+  if (!holdsFaces) return set;
+  const kept = set.twitch.filter(
+    (e) => !(e.provider === 'twitch' && (leaving.has(e.id) || (e.emote_type === 'smilies' && !arriving.has(e.id)))),
+  );
+  const have = new Set(kept.filter((e) => e.provider === 'twitch').map((e) => e.id));
+  const added = enhanceRustEmotes(swap.rows.filter((row) => !have.has(row.id)));
+  if (kept.length === set.twitch.length && added.length === 0) return set;
+  return { ...set, twitch: [...kept, ...added] };
+}
+
+function applyOwnSmilies(next: OwnSmilies): void {
+  if (!next || typeof next.rev !== 'number' || next.rev <= ownSmiliesRev) return;
+  ownSmiliesRev = next.rev;
+  ownSmiliesSwap = next.swap ?? null;
+  ownSmiliesView = next.view ?? null;
+  setSettingNeed('smiley_style', next.shown === true);
+  for (const [key, held] of emoteCache) {
+    // Twitch sets are keyed by the bare login; Kick and YouTube carry a prefix.
+    if (key.includes(':')) continue;
+    const swapped = withSmileySwap(held);
+    if (swapped === held) continue;
+    emoteCache.set(key, swapped);
+    notifyEmoteSubscribers(key);
+  }
+  for (const cb of Array.from(ownSmiliesSubscribers)) {
+    try {
+      cb();
+    } catch (err) {
+      Logger.warn('[ChatStore] smiley style subscriber threw:', err);
+    }
+  }
+}
+
+/** The newest smiley view Rust has sent this window, with its `rev`. */
+export function getOwnSmilies(): { rev: number; view: SmileyStyle | null } {
+  return { rev: ownSmiliesRev, view: ownSmiliesView };
+}
+
+/** Called whenever a newer smiley view arrives. Returns the unsubscribe. */
+export function subscribeOwnSmilies(cb: () => void): () => void {
+  ownSmiliesSubscribers.add(cb);
+  return () => {
+    ownSmiliesSubscribers.delete(cb);
+  };
+}
+
+// One listener per window, started when the store loads (every chat surface
+// runs on this store). `twitch://smilies-changed` is a broadcast to all windows,
+// so the global listener is the right kind. After it is in place, one read
+// catches up on anything Rust emitted before it existed.
+function listenForOwnSmilies(): void {
+  void Promise.resolve()
+    .then(() => listen<OwnSmilies>('twitch://smilies-changed', (e) => applyOwnSmilies(e.payload)))
+    .catch((e) => Logger.debug('[ChatStore] smilies listener unavailable:', e))
+    .then(() => invoke<OwnSmilies | null>('get_own_smilies'))
+    .then((current) => {
+      if (current) applyOwnSmilies(current);
+    })
+    .catch((e) => Logger.debug('[ChatStore] own smilies unavailable:', e));
+}
+listenForOwnSmilies();
 
 // --- Helpers ----------------------------------------------------------------
 

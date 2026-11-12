@@ -18,6 +18,7 @@ import { SettingsRow, SettingsSection } from '../settings/_primitives';
 import { Toggle } from '../ui/Toggle';
 import { findSettingTarget, flashSettingRow } from '../settings/settingsNavigation';
 import { searchSettings, type SettingsIndexEntry } from '../settings/searchIndex';
+import { useSettingNeedsVersion } from '../../utils/settingNeeds';
 
 type SettingsTab = 'chat' | 'theme' | 'connections' | 'panes';
 
@@ -155,13 +156,17 @@ export default function ChatOnlySettingsModal({
     return () => window.removeEventListener('keydown', handler);
   }, [open, onClose]);
 
+  const needsVersion = useSettingNeedsVersion();
   const results = useMemo(() => {
+    // A row that exists only for some accounts is dropped from the search while
+    // its need is unmet, so a need that flips has to run it again.
+    void needsVersion;
     if (!searching) return [];
     const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
     const extra = MC_TAB_ENTRIES.filter((e) => matchEntry(e, tokens));
     const chat = searchSettings(query, 50, ['Chat']);
     return [...extra, ...chat];
-  }, [query, searching]);
+  }, [query, searching, needsVersion]);
 
   const activeMeta = TABS.find((t) => t.id === tab) ?? TABS[0];
   const HeroIcon = activeMeta.icon;

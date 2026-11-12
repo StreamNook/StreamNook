@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { ChevronRight, SearchX } from 'lucide-react';
 import { searchSettings, type SettingsIndexEntry } from './searchIndex';
+import { useSettingNeedsVersion } from '../../utils/settingNeeds';
 
 interface SettingsSearchResultsProps {
   query: string;
@@ -43,7 +44,13 @@ const SettingsSearchResults = ({
   onSelect,
   results: provided,
 }: SettingsSearchResultsProps) => {
-  const results = useMemo(() => provided ?? searchSettings(query), [provided, query]);
+  const needsVersion = useSettingNeedsVersion();
+  const results = useMemo(() => {
+    // The search drops an entry whose need is unmet, so a need that flips has
+    // to run it again.
+    void needsVersion;
+    return provided ?? searchSettings(query);
+  }, [provided, query, needsVersion]);
 
   if (results.length === 0) {
     return (

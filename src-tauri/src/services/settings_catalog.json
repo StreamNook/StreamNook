@@ -1374,6 +1374,28 @@
   {
    "page": "chat",
    "section": "Emotes",
+   "title": "Smiley style",
+   "paths": [],
+   "nested": false,
+   "logo": null,
+   "detail": "How :) ;) <3 look when you type them. This changes your Twitch account, so everyone sees your pick.",
+   "aliases": [
+    "smilies",
+    "smiley",
+    "faces",
+    "emoticons",
+    "robots",
+    "purple",
+    "monkeys",
+    "prime",
+    "turbo",
+    ":)"
+   ],
+   "needs": "smiley_style"
+  },
+  {
+   "page": "chat",
+   "section": "Emotes",
    "title": "Personal emotes",
    "paths": [
     "chat_design.show_personal_emotes"

@@ -264,10 +264,8 @@ const SettingsDialog = () => {
   useEffect(() => {
     if (!isSettingsOpen || !settingsInitialRow) return;
     let live = true;
-    void import('./settings/searchIndex').then(({ SETTINGS_INDEX }) => {
-      const entry = SETTINGS_INDEX.find(
-        (e) => e.title === settingsInitialRow && (!settingsInitialTab || e.tab === settingsInitialTab),
-      );
+    void import('./settings/searchIndex').then(({ findSettingsEntry }) => {
+      const entry = findSettingsEntry(settingsInitialRow, settingsInitialTab);
       if (live && entry) handleResultSelect(entry);
     });
     return () => {

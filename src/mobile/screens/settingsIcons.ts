@@ -261,6 +261,7 @@ const BY_TITLE: Record<string, LucideIcon> = {
   'Short links': Link2,
   Underline: Underline,
   'Emoji style': Smile,
+  'Smiley style': Smile,
   'Personal emotes': SmilePlus,
   'Emote words': Captions,
   'Sentences only': WholeWord,

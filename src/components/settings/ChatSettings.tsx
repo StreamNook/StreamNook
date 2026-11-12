@@ -64,6 +64,8 @@ import limerinoLogo from '../../assets/limerino-logo.png';
 import jilchatLogo from '../../assets/jilchat-logo.png';
 import bchatLogo from '../../assets/bchat-logo.png';
 import { badgeFoldLimit } from '../../utils/badgeFold';
+import { useSmileyStyle } from './useSmileyStyle';
+import { SmileyStylePicker } from './SmileyStylePicker';
 
 /** Platforms that can join a combined feed. Derived from the chat-capability
  *  flags rather than hand-listed, so a newly chat-enabled platform appears here
@@ -472,6 +474,9 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
   useRequestSettingsWide(livePreview);
   const { settings, updateSettings } = useAppStore();
   const resetFor = useSettingReset();
+  // The account's smiley set lives on Twitch, not in Settings: no reset arrow,
+  // and the row is drawn only when Rust has the account's set (the view).
+  const smiley = useSmileyStyle();
   // Phone-shell preferences (see mobile/phonePrefs.ts); only read on the phone.
   const mentionHaptic = usePhonePrefs((s) => s.mentionHaptic);
   const setMentionHaptic = usePhonePrefs((s) => s.setMentionHaptic);
@@ -2411,6 +2416,16 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
             ]}
           />
         </SettingsRow>
+
+        {smiley.view && (
+          <SettingsRow
+            title="Smiley style"
+            description="How :) ;) <3 look when you type them. This changes your Twitch account, so everyone sees your pick."
+            help="Twitch keeps this on your account, the same choice its Prime and Turbo settings make, so twitch.tv and other apps show it too."
+          >
+            <SmileyStylePicker view={smiley.view} pending={smiley.pending} onSelect={smiley.select} />
+          </SettingsRow>
+        )}
 
         <SettingsRow
           title="Personal emotes"
