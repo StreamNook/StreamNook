@@ -407,8 +407,8 @@ pub fn remove_favorite_emote(emote_id: &str) -> Result<()> {
     let mut favorites: Vec<serde_json::Value> =
         serde_json::from_str(&data).unwrap_or_else(|_| Vec::new());
 
-    // Remove the emote with matching id
-    favorites.retain(|e| e.get("id").and_then(|v| v.as_str()) != Some(emote_id));
+    // Remove the emote with matching id, and any smiley of another set with the same face
+    drop_favorite(&mut favorites, emote_id);
 
     // Save back to file
     let json = serde_json::to_string(&favorites)?;
@@ -416,6 +416,16 @@ pub fn remove_favorite_emote(emote_id: &str) -> Result<()> {
     forget_favorite_ids();
 
     Ok(())
+}
+
+/// Removes `emote_id` from the favorites, and with it every smiley of another
+/// set that shows the same face, so a face is never left starred by an id from
+/// the set the account wore before.
+pub(crate) fn drop_favorite(favorites: &mut Vec<serde_json::Value>, emote_id: &str) {
+    favorites.retain(|e| match e.get("id").and_then(|v| v.as_str()) {
+        Some(id) => id != emote_id && !crate::services::twitch_smilies::same_face(id, emote_id),
+        None => true,
+    });
 }
 
 // Favorite emote ids, parsed once for completion ranking (which runs on every

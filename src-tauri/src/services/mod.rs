@@ -132,6 +132,7 @@ pub mod emote_restamp;
 pub mod emote_service;
 pub mod emote_set_cache;
 pub mod twitch_smilies;
+pub mod twitch_smiley_style;
 pub mod eventsub_budget;
 pub mod eventsub_moderation;
 pub mod eventsub_service;

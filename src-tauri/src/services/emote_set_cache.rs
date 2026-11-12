@@ -144,6 +144,8 @@ pub fn load(channel_id: &str) -> Option<EmoteSet> {
         // Files written before the smilies were renamed hold Helix's pattern
         // names (`\:-?\)`); read them as the faces a fresh fetch gives.
         crate::services::twitch_smilies::tidy_names(&mut set.twitch);
+        // A dictionary saved before a switch of the account's smiley style.
+        crate::services::twitch_smilies::wear_own(&mut set.twitch);
         set
     })
 }
@@ -250,4 +252,9 @@ pub fn save_provider<T: serde::Serialize>(provider: &str, key: &str, value: &T) 
         }
         Err(e) => warn!("[EmoteSetCache] failed to serialize {provider}-{key}: {e}"),
     }
+}
+
+/// The file `load_provider` and `save_provider` use for `provider` and `key`.
+pub(crate) fn provider_path(provider: &str, key: &str) -> Option<PathBuf> {
+    path_for(&format!("{provider}-{key}")).ok()
 }

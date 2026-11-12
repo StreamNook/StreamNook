@@ -55,6 +55,9 @@ fn build_has(need: &str) -> bool {
     if let Some(notice) = need.strip_prefix("notice:") {
         return crate::services::notice_types::shows(notice);
     }
+    if need == "smiley_style" {
+        return crate::services::twitch_smiley_style::row_shown();
+    }
     crate::services::client_capabilities::has(need)
 }
 
@@ -378,7 +381,7 @@ mod tests {
 
     #[test]
     fn every_need_names_a_real_capability() {
-        let known = ["combined_chat", "chat_dock", "scrollbar_marks", "spell_dictionary"];
+        let known = ["combined_chat", "chat_dock", "scrollbar_marks", "spell_dictionary", "smiley_style"];
         for row in rows() {
             for need in row.needs.iter().flat_map(|n| n.split('|')) {
                 let alert = need.strip_prefix("alert:").is_some_and(|id| crate::services::alert_types::ids().contains(&id));

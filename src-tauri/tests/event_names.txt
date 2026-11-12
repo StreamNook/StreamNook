@@ -131,6 +131,7 @@ twitch-overlay-close
 twitch-overlay-open
 twitch-overlay-url
 twitch-reward-received
+twitch://smilies-changed
 unban-requests
 update://status
 user-history-message

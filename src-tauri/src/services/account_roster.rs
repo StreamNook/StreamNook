@@ -132,8 +132,20 @@ pub fn twitch_user_id() -> Option<String> {
     TWITCH_IDENTITY.lock().ok().and_then(|c| c.as_ref().map(|u| u.id.clone()))
 }
 
-/// Record (or clear) who the primary Twitch account is.
+/// Record (or clear) who the primary Twitch account is, for the account as it is now.
 pub fn set_twitch_identity(info: Option<UserInfo>) {
+    set_twitch_identity_at(info, crate::services::twitch_service::TwitchService::account_generation());
+}
+
+/// `set_twitch_identity` for a profile read under account generation `generation`.
+/// Sets nothing and answers false when the account has changed since (a profile
+/// read with the old account's token must not name the new account). Clearing
+/// is always right, so it never answers false.
+pub fn set_twitch_identity_at(info: Option<UserInfo>, generation: u64) -> bool {
+    if info.is_some() && generation != crate::services::twitch_service::TwitchService::account_generation() {
+        return false;
+    }
+    let account_id = info.as_ref().map(|u| u.id.clone());
     let changed = match TWITCH_IDENTITY.lock() {
         Ok(mut cell) => {
             // Another member (or none): their linked-account claims start over.
@@ -154,9 +166,14 @@ pub fn set_twitch_identity(info: Option<UserInfo>) {
         }
         Err(_) => false,
     };
+    // The identity lock is released: the smiley style follows the account.
+    if let Some(id) = account_id {
+        crate::services::twitch_smiley_style::on_identity(&id, generation);
+    }
     if changed {
         notify();
     }
+    true
 }
 
 /// A platform's session was revoked or expired on the platform's side.

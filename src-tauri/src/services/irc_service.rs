@@ -975,6 +975,20 @@ pub(crate) async fn held_channel_emotes(key: &str) -> Option<EmoteSet> {
     get_channel_emotes().lock().await.get(key).cloned()
 }
 
+/// Puts the Twitch smilies of every held channel table in the signed-in
+/// account's own style, and rebuilds the parse table of each one that changed.
+pub(crate) async fn replace_own_smilies() {
+    let mut map = get_channel_emotes().lock().await;
+    let Some(swap) = crate::services::twitch_smilies::own_swap() else {
+        return;
+    };
+    for (key, set) in map.iter_mut() {
+        if crate::services::twitch_smilies::apply_swap(&mut set.twitch, &swap) {
+            rebuild_parse_lookup(key, set);
+        }
+    }
+}
+
 /// Run `f` over a user's 7TV personal emotes (name -> emote), which work in
 /// every channel. `None` until 7TV has reported that user's personal set; ours
 /// arrives through the presence we post on each channel we join.
@@ -4077,7 +4091,7 @@ impl IrcService {
         // slow or down.
         let mut seeded = get_channel_emotes().lock().await.contains_key(&key);
         if !seeded {
-            if let Some(disk_set) = crate::services::emote_set_cache::load(user_id) {
+            if let Some(mut disk_set) = crate::services::emote_set_cache::load(user_id) {
                 let mut map = get_channel_emotes().lock().await;
                 if !map.contains_key(&key) {
                     debug!(
@@ -4085,6 +4099,8 @@ impl IrcService {
                         channel_name,
                         disk_set.seven_tv.len()
                     );
+                    // The saved dictionary may predate a switch of the account's smiley style.
+                    crate::services::twitch_smilies::wear_own(&mut disk_set.twitch);
                     rebuild_parse_lookup(&key, &disk_set);
                     map.insert(key.clone(), disk_set);
                     note_emote_table_installed(&key);
@@ -4292,6 +4308,9 @@ impl IrcService {
                 replayed_to,
                 &mut emote_set.seven_tv,
             );
+            // A switch of the account's smiley style since this fetch began
+            // must not be undone by its older answer.
+            crate::services::twitch_smilies::wear_own(&mut emote_set.twitch);
             rebuild_parse_lookup(key, &emote_set);
             map.insert(key.to_string(), emote_set);
             late
@@ -8347,3 +8366,7 @@ mod bridge_close_tests {
         assert!(closed.is_err(), "the socket stays open, got {closed:?}");
     }
 }
+
+#[cfg(test)]
+#[path = "irc_service_smiley_tests.rs"]
+mod smiley_ordering_tests;

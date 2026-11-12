@@ -56,7 +56,8 @@ pub fn emotes_in(text: &str, find: impl Fn(&str) -> Option<RecentEmote>) -> Vec<
 /// and anything past `MAX`.
 pub fn remember(list: &mut VecDeque<RecentEmote>, used: Vec<RecentEmote>) {
     for e in used {
-        list.retain(|o| o.id != e.id);
+        // A stored `<3` of another smiley set is the same face as this one.
+        list.retain(|o| o.id != e.id && !crate::services::twitch_smilies::same_face(&o.id, &e.id));
         list.push_front(e);
     }
     list.truncate(MAX);

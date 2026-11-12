@@ -878,6 +878,8 @@ impl TwitchService {
     /// holding the slot.
     pub(crate) fn bump_account_generation() {
         ACCOUNT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        // The old account's smiley style is forgotten at once, on every door.
+        crate::services::twitch_smiley_style::on_account_moved();
     }
 
     fn get_token_file_path() -> Result<PathBuf> {
@@ -916,8 +918,10 @@ impl TwitchService {
     /// account generation.
     fn delete_token_file(_slot: &SlotGuard) -> Result<()> {
         let result = token_vault::remove(&Self::get_token_file_path()?);
-        crate::services::account_roster::set_twitch_identity(None);
+        // Bump first: whatever was read for the signed-out account is dropped
+        // before the identity goes.
         Self::bump_account_generation();
+        crate::services::account_roster::set_twitch_identity(None);
         #[cfg(mobile)]
         crate::services::push_alerts::server::token_changed(None);
         result
@@ -1951,7 +1955,8 @@ impl TwitchService {
     }
 
     pub async fn get_user_info() -> Result<UserInfo> {
-        let token = Self::get_token().await?;
+        // The token and the account generation it belongs to, read together.
+        let (token, generation) = Self::get_token_with_generation().await?;
         let info = Self::get_user_info_with_token(&token).await?;
         // The token check runs alongside this read and can clear every account
         // while it is in flight. A profile read from the token it just removed
@@ -1961,7 +1966,9 @@ impl TwitchService {
                 "Sign-in required: Twitch needs you to sign in again"
             ));
         }
-        crate::services::account_roster::set_twitch_identity(Some(info.clone()));
+        if !crate::services::account_roster::set_twitch_identity_at(Some(info.clone()), generation) {
+            return Err(anyhow::anyhow!("The Twitch account changed while it was being read"));
+        }
         // Every client confirms its member here, at start and after signing in.
         crate::services::member_signin::signed_in(&info);
         Ok(info)

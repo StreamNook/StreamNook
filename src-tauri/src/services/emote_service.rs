@@ -977,6 +977,56 @@ struct CachedEmoteSet {
     seven_tv_ok: bool,
 }
 
+/// How a fetch of the signed-in user's emote list ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HelixOutcome {
+    /// Every page answered 200.
+    Answered,
+    /// Twitch refused the token (none, or a 401 or 403).
+    Refused,
+    /// A network failure, a 5xx, a 429, or a page that did not answer.
+    Failed,
+}
+
+/// Caches a fetched set after putting its Twitch smilies in the signed-in
+/// account's own style, on the set itself, so the set handed back to the caller
+/// and the cached one are the same. Called inside the cache's write lock, so a
+/// fetch that began before a switch cannot cache the old faces.
+fn put_dressed(
+    cache: &mut lru::LruCache<String, CachedEmoteSet>,
+    key: String,
+    set: &mut EmoteSet,
+    timestamp: SystemTime,
+    seven_tv_ok: bool,
+) {
+    crate::services::twitch_smilies::wear_own(&mut set.twitch);
+    cache.put(
+        key,
+        CachedEmoteSet {
+            set: set.clone(),
+            timestamp,
+            seven_tv_ok,
+        },
+    );
+}
+
+/// The user id remembered for exactly this token.
+fn cached_id_for(cache: &Option<(String, String)>, token: &str) -> Option<String> {
+    cache
+        .as_ref()
+        .filter(|(cached, _)| cached == token)
+        .map(|(_, id)| id.clone())
+}
+
+/// How a refused request ends a fetch of the signed-in user's emote list.
+fn helix_failure_outcome(status: u16) -> HelixOutcome {
+    if matches!(status, 401 | 403) {
+        HelixOutcome::Refused
+    } else {
+        HelixOutcome::Failed
+    }
+}
+
 // Clone is cheap (two Arcs, a pooled client handle, a Duration) and lets
 // callers snapshot the service out of a lock before a network fetch instead of
 // holding the lock across the await.
@@ -991,8 +1041,9 @@ pub struct EmoteService {
     client: reqwest::Client,
     // Cache duration (5 minutes like the TS version)
     cache_duration: Duration,
-    // Cached authorized user ID to prevent rate-limiting on /validate
-    cached_user_id: Arc<RwLock<Option<String>>>,
+    // Cached authorized user ID to prevent rate-limiting on /validate, with the
+    // token it was read for: another account's token never borrows it.
+    cached_user_id: Arc<RwLock<Option<(String, String)>>>,
 }
 
 /// The `broadcaster_id` to send to Twitch's user-emotes endpoint, if any.
@@ -1326,14 +1377,7 @@ impl EmoteService {
                 SystemTime::now()
             };
 
-            cache.put(
-                cache_key,
-                CachedEmoteSet {
-                    set: emote_set.clone(),
-                    timestamp,
-                    seven_tv_ok,
-                },
-            );
+            put_dressed(&mut cache, cache_key, &mut emote_set, timestamp, seven_tv_ok);
         }
 
         Ok((emote_set, seven_tv_ok))
@@ -1372,13 +1416,13 @@ impl EmoteService {
         let held = crate::services::irc_service::held_channel_emotes(&room).await?;
         let mut cache = self.cache.write().await;
         if cache.peek(channel_id).is_none() {
-            cache.put(
+            let mut held = held;
+            put_dressed(
+                &mut cache,
                 channel_id.to_string(),
-                CachedEmoteSet {
-                    set: held,
-                    timestamp: SystemTime::now(),
-                    seven_tv_ok: fetch_was_whole(channel_id),
-                },
+                &mut held,
+                SystemTime::now(),
+                fetch_was_whole(channel_id),
             );
         }
         None
@@ -1481,6 +1525,18 @@ impl EmoteService {
         cache.peek(channel_id).map(|c| f(&c.set))
     }
 
+    /// Puts the Twitch smilies of every cached set in the signed-in account's
+    /// own style.
+    pub async fn normalize_cached_smilies(&self) {
+        let mut cache = self.cache.write().await;
+        let Some(swap) = crate::services::twitch_smilies::own_swap() else {
+            return;
+        };
+        for (_, entry) in cache.iter_mut() {
+            crate::services::twitch_smilies::apply_swap(&mut entry.set.twitch, &swap);
+        }
+    }
+
     /// Clear the memory cache
     pub async fn clear_cache(&self) {
         let mut cache = self.cache.write().await;
@@ -1564,18 +1620,44 @@ impl EmoteService {
         access_token: Option<&str>,
         broadcaster_id: Option<&str>,
     ) -> Result<Vec<Emote>> {
+        self.fetch_user_twitch_emotes_typed(access_token, broadcaster_id).await.1
+    }
+
+    /// `fetch_user_twitch_emotes`, also saying how the fetch ended, for the loop
+    /// that waits for a new account's list (`twitch_smiley_style`).
+    pub(crate) async fn fetch_user_twitch_emotes_typed(
+        &self,
+        access_token: Option<&str>,
+        broadcaster_id: Option<&str>,
+    ) -> (HelixOutcome, Result<Vec<Emote>>) {
+        let mut outcome = HelixOutcome::Failed;
+        let result = self
+            .fetch_user_twitch_emotes_inner(access_token, broadcaster_id, &mut outcome)
+            .await;
+        (outcome, result)
+    }
+
+    async fn fetch_user_twitch_emotes_inner(
+        &self,
+        access_token: Option<&str>,
+        broadcaster_id: Option<&str>,
+        outcome: &mut HelixOutcome,
+    ) -> Result<Vec<Emote>> {
         let token = match access_token {
             Some(t) if !t.is_empty() => t,
             _ => {
                 debug!("[EmoteService] No access token provided, using global emotes fallback");
+                *outcome = HelixOutcome::Refused;
                 return Ok(Self::get_global_twitch_emotes());
             }
         };
 
-        // Get user ID from cache, or fetch it via /validate
+        let started_at = chrono::Utc::now().timestamp_millis();
+
+        // Get user ID from cache (only for this very token), or fetch it via /validate
         let user_id = {
             let mut cache_write = self.cached_user_id.write().await;
-            if let Some(id) = cache_write.clone() {
+            if let Some(id) = cached_id_for(&cache_write, token) {
                 id
             } else {
                 // Fetch the user ID from the token validation endpoint
@@ -1587,6 +1669,7 @@ impl EmoteService {
                     .await?;
 
                 if !validate_response.status().is_success() {
+                    *outcome = helix_failure_outcome(validate_response.status().as_u16());
                     return Err(anyhow::anyhow!("Token validation failed"));
                 }
 
@@ -1596,7 +1679,7 @@ impl EmoteService {
                     .ok_or_else(|| anyhow::anyhow!("No user_id in token validation response"))?
                     .to_string();
 
-                *cache_write = Some(fetched_id.clone());
+                *cache_write = Some((token.to_string(), fetched_id.clone()));
                 fetched_id
             }
         };
@@ -1609,6 +1692,8 @@ impl EmoteService {
         // Build the API URL with pagination support
         let mut all_emotes: Vec<Emote> = Vec::new();
         let mut cursor: Option<String> = None;
+        // Every page answered 200.
+        let mut complete = true;
 
         loop {
             let mut url = format!(
@@ -1642,6 +1727,8 @@ impl EmoteService {
                     status, error_text
                 );
 
+                *outcome = helix_failure_outcome(status.as_u16());
+                complete = false;
                 // Return fallback on error
                 if all_emotes.is_empty() {
                     return Ok(Self::get_global_twitch_emotes());
@@ -1708,14 +1795,30 @@ impl EmoteService {
             all_emotes.len()
         );
 
+        // Helix names the smilies (`:)`, `;)`, `<3`) by their old match
+        // pattern; every reader wants the face.
+        crate::services::twitch_smilies::tidy_names(&mut all_emotes);
+
+        // A complete answer, even one with no emotes at all, says which smilies
+        // this account has; a partial one says nothing.
+        if complete {
+            *outcome = HelixOutcome::Answered;
+            let smilies: Vec<Emote> = all_emotes
+                .iter()
+                .filter(|e| e.emote_type.as_deref() == Some("smilies"))
+                .cloned()
+                .collect();
+            crate::services::twitch_smiley_style::note_helix(&user_id, started_at, smilies);
+        }
+
         // If we got no emotes (e.g., new account), return hardcoded globals
         if all_emotes.is_empty() {
             return Ok(Self::get_global_twitch_emotes());
         }
 
-        // Helix names the smilies (`:)`, `;)`, `<3`) by their old match
-        // pattern; every reader wants the face.
-        crate::services::twitch_smilies::tidy_names(&mut all_emotes);
+        // The account's own smiley style, read now: a switch since this fetch
+        // began is not undone by its older answer.
+        crate::services::twitch_smilies::wear_own(&mut all_emotes);
         Ok(all_emotes)
     }
 
@@ -3348,3 +3451,7 @@ mod keep_held_rows_tests {
         assert_eq!(names(&fresh.bttv), ["globalOnly"]);
     }
 }
+
+#[cfg(test)]
+#[path = "emote_service_smiley_tests.rs"]
+mod smiley_tests;

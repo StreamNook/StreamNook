@@ -1,0 +1,10 @@
+{
+  "data": {
+    "currentUser": {
+      "id": "42",
+      "hasPrime": false,
+      "hasTurbo": false,
+      "primeSettings": null
+    }
+  }
+}

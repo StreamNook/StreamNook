@@ -369,6 +369,20 @@ pub fn build(set: Option<&EmoteSet>, ctx: &Context<'_>, tab: Option<Tab>, query:
     let ready = set.is_some();
     let set = set.unwrap_or(&empty);
 
+    // Favorites and Recently used keep the ids they were stored with, which may
+    // belong to another smiley set; the room's own set shows the same face.
+    let favorites_in_room = crate::services::twitch_smilies::resolve_ids(&set.twitch, ctx.favorites);
+    let recent_in_room = crate::services::twitch_smilies::resolve_ids(&set.twitch, ctx.recent);
+    let ctx = &Context {
+        room: ctx.room,
+        channel_id: ctx.channel_id,
+        favorites: &favorites_in_room,
+        recent: &recent_in_room,
+        ffz_subwoofer: ctx.ffz_subwoofer,
+        owner_names: ctx.owner_names,
+        personal: ctx.personal,
+    };
+
     let tabs = tabs_here
         .iter()
         .map(|t| PickerTab { id: t.wire(), count: tab_emotes(set, *t, ctx).len() })
@@ -686,3 +700,7 @@ mod tests {
         assert_eq!(a.tabs[0], PickerTab { id: "favorites", count: 1 }, "the count is the favorites");
     }
 }
+
+#[cfg(test)]
+#[path = "emote_picker_smilies_tests.rs"]
+mod smilies_tests;
