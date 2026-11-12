@@ -6249,7 +6249,12 @@ fn native_emote_positions(text: &str, twitch: &[Emote]) -> Vec<EmotePos> {
     let mut pos = 0usize;
     for word in text.split(' ') {
         let len = word.chars().count();
-        if let Some(id) = by_name.get(word).copied() {
+        // A smiley also takes the other forms its pattern allows (`:-)`).
+        let id = by_name
+            .get(word)
+            .copied()
+            .or_else(|| crate::services::twitch_smilies::smiley_for(word, twitch).map(|e| e.id.as_str()));
+        if let Some(id) = id {
             if len > 0 {
                 out.push(EmotePos {
                     id: id.to_string(),
@@ -6623,6 +6628,21 @@ mod own_message_tests {
         assert_eq!(own_emotes_tag("Kappa hi Kappa PogChamp", &set), "25:0-4,9-13/88:15-22");
         assert_eq!(own_emotes_tag("héllo Kappa", &set), "25:6-10");
         assert_eq!(own_emotes_tag("no emotes here", &set), "");
+    }
+
+    #[test]
+    fn a_sent_smiley_is_tagged_with_the_senders_set() {
+        // SN-272: Helix names smilies by pattern; a sent `;)` drew as text.
+        // The ids stand in for a set other than the robot faces: the row takes
+        // whatever ids Helix listed for the sender, i.e. the set they picked.
+        let mut set = vec![twitch_emote("25", "Kappa"), twitch_emote("498", r"\;-?\)"), twitch_emote("499", r"\:-?\)")];
+        for e in set.iter_mut().skip(1) {
+            e.emote_type = Some("smilies".into());
+        }
+        crate::services::twitch_smilies::tidy_names(&mut set);
+        assert_eq!(own_emotes_tag("night ;) Kappa", &set), "498:6-7/25:9-13");
+        assert_eq!(own_emotes_tag(":-) :)", &set), "499:0-2,4-5");
+        assert_eq!(own_emotes_tag("a;) :)b", &set), "");
     }
 
     #[test]

@@ -82,7 +82,11 @@ fn emotes_tag(text: &str, twitch: &[Emote]) -> String {
     let mut pos = 0usize;
     for word in text.trim_end().split(' ') {
         let len = word.chars().count();
-        if let Some(id) = by_name.get(word).copied().filter(|_| len > 0) {
+        let id = by_name
+            .get(word)
+            .copied()
+            .or_else(|| crate::services::twitch_smilies::smiley_for(word, twitch).map(|e| e.id.as_str()));
+        if let Some(id) = id.filter(|_| len > 0) {
             if !ranges.contains_key(id) {
                 order.push(id);
             }

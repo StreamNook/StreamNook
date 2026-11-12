@@ -1713,6 +1713,9 @@ impl EmoteService {
             return Ok(Self::get_global_twitch_emotes());
         }
 
+        // Helix names the smilies (`:)`, `;)`, `<3`) by their old match
+        // pattern; every reader wants the face.
+        crate::services::twitch_smilies::tidy_names(&mut all_emotes);
         Ok(all_emotes)
     }
 

@@ -139,7 +139,13 @@ fn read_stored(channel_id: &str) -> Option<StoredEmoteSet> {
 /// is no file or it can't be parsed (a corrupt file is treated as absent and
 /// gets overwritten on next save).
 pub fn load(channel_id: &str) -> Option<EmoteSet> {
-    read_stored(channel_id).map(|stored| stored.set)
+    read_stored(channel_id).map(|stored| {
+        let mut set = stored.set;
+        // Files written before the smilies were renamed hold Helix's pattern
+        // names (`\:-?\)`); read them as the faces a fresh fetch gives.
+        crate::services::twitch_smilies::tidy_names(&mut set.twitch);
+        set
+    })
 }
 
 /// Persist a channel's emote set, but NEVER let a deficient fetch shrink a good
