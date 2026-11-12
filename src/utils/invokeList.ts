@@ -29,7 +29,7 @@ export async function invokeList<T>(command: string): Promise<T[]> {
         }),
       ]);
       if (Array.isArray(list) && list.length > 0) {
-        if (attempt > 0) Logger.info(`[invokeList] ${command} answered on try ${attempt + 1}`);
+        Logger.info(`[invokeList] ${command}: ${list.length} on try ${attempt + 1}`);
         return list;
       }
       Logger.warn(`[invokeList] ${command} answered an empty list (try ${attempt + 1})`);
