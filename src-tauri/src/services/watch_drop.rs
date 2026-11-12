@@ -39,8 +39,8 @@ pub struct WatchDrop {
 }
 
 /// What the watched channel is earning, from the inventory, by the shared
-/// picker (services/watch_drops.rs): a finished drop waiting on a claim first,
-/// then the one with the fewest minutes left, on the campaign's own clock
+/// picker (services/watch_drops.rs): the one still earning with the fewest
+/// minutes left (a finished drop never holds the bar), on the campaign's own clock
 /// (Twitch zeroes a claimed reward's counter) and skipping rewards already
 /// owned. Campaigns count only when earnable on this channel AND in the game
 /// it is streaming, or earning right now across categories; with the game not
@@ -227,11 +227,14 @@ mod tests {
     }
 
     #[test]
-    fn a_finished_drop_waiting_on_a_claim_comes_first() {
+    fn a_finished_drop_waiting_on_a_claim_hands_the_bar_on() {
+        // SN-272: a reward whose minutes are in never holds the bar; the one
+        // still earning does, and with none left there is no bar.
         let items = vec![item("1", "Rust", &[], vec![drop("b", 120, 119, false), drop("c", 60, 60, false)])];
         let bar = pick(&items, "", "x", "g-Rust", "").unwrap();
-        assert_eq!((bar.drop_id.as_str(), bar.complete, bar.trailing.as_str()), ("c", true, ""));
-        assert_eq!(bar.claim_label, "Claim");
+        assert_eq!((bar.drop_id.as_str(), bar.complete), ("b", false));
+        let done = vec![item("1", "Rust", &[], vec![drop("c", 60, 60, false)])];
+        assert!(pick(&done, "", "x", "g-Rust", "").is_none());
     }
 
     #[test]

@@ -43,17 +43,17 @@
     "ts": { "drop_id": "t1", "campaign_id": "c1", "current_minutes": 30, "required_minutes": 60, "cumulative": 30 }
   },
   {
-    "name": "a_ready_unclaimed_tier_leads_with_claim",
+    "name": "a_ready_unclaimed_tier_hands_the_lip_on",
     "campaigns": [ { "id": "c1", "game": "Rust", "tiers": [ { "id": "t1", "need": 60, "have": 60 }, { "id": "t2", "need": 120, "have": 60 } ] } ],
-    "rust": { "lead": "t1", "lead_shown": 60, "lead_ready": true, "complete": false, "listed": ["c1"], "more": 1 },
-    "differs": "TS skips a ready unclaimed tier (keeps tiers above the clock only) and shows t2 at 60 of 120; Rust shows t1 ready with Claim", "via_pick": true,
+    "rust": { "lead": "t2", "lead_shown": 60, "lead_ready": false, "complete": false, "listed": ["c1"], "more": 0 },
+    "differs": null, "via_pick": true,
     "ts": { "drop_id": "t2", "campaign_id": "c1", "current_minutes": 60, "required_minutes": 120, "cumulative": 60 }
   },
   {
-    "name": "a_ready_last_tier_is_not_complete",
+    "name": "a_ready_last_tier_shows_no_lip_and_is_not_complete",
     "campaigns": [ { "id": "c1", "game": "Rust", "tiers": [ { "id": "t1", "need": 60, "have": 60 } ] } ],
-    "rust": { "lead": "t1", "lead_shown": 60, "lead_ready": true, "complete": false, "listed": ["c1"], "more": 0 },
-    "differs": "TS answers null (the badge then reads complete); Rust leads with the ready tier, not complete", "via_pick": true,
+    "rust": { "lead": null, "lead_shown": 0, "lead_ready": false, "complete": false, "listed": ["c1"], "more": 0 },
+    "differs": "TS answers null and the badge then reads complete; Rust leads with nothing (the minutes are in) but is not complete until it is claimed", "via_pick": true,
     "ts": null
   },
   {

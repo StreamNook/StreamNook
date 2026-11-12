@@ -651,10 +651,9 @@ impl Row<'_> {
         self.ready || self.pending || self.connect || self.watched
     }
 
-    /// The lip's order, then minutes left: one to claim, then one still
-    /// earning, then one the lip only shows when nothing else is left (a
-    /// claim in flight, one waiting on a link, or not granted), so a finished
-    /// reward never parks the lip while another is making progress.
+    /// The drawer's campaign order, then minutes left: one to claim, then one
+    /// still earning, then a claim in flight, one waiting on a link, or one
+    /// not granted. The lip reads it over rewards still earning only.
     fn rank(&self) -> (u8, i32) {
         let kind = if self.ready {
             0
@@ -890,10 +889,15 @@ pub fn build(i: &Inputs) -> WatchDrops {
             b.c.name.to_lowercase(),
         ))
     });
-    // The lip's reward, by `Row::rank`: one to claim, else the one still
-    // earning closest to done, ties to the first in drawer order. The reward
-    // already on the lip keeps it while it is the same kind and within the
-    // slack of the closest, so rewards finishing together never trade places.
+    // The lip's reward: the one still earning closest to done, ties to the
+    // first in drawer order. A reward whose minutes are in (ready to claim,
+    // being claimed, waiting on a game account link, not granted) never leads:
+    // watching does nothing more for it, so the lip moves on to one still
+    // earning or goes away (SN-272: a finished drop parked on top of chat).
+    // The drawer and the Drops page still list it with its Claim or Connect.
+    // The reward already on the lip keeps it while it is within the slack of
+    // the closest, so rewards finishing together never trade places.
+    let earning = |r: &Row| !r.owned && r.locked.is_none() && !r.waits();
     let candidates: Vec<((usize, usize), (u8, i32))> = built
         .iter()
         .enumerate()
@@ -902,7 +906,7 @@ pub fn build(i: &Inputs) -> WatchDrops {
             b.rows
                 .iter()
                 .enumerate()
-                .filter(|(_, r)| !r.owned && r.locked.is_none())
+                .filter(|(_, r)| earning(r))
                 .map(move |(ri, r)| ((bi, ri), r.rank()))
         })
         .collect();
@@ -925,7 +929,12 @@ pub fn build(i: &Inputs) -> WatchDrops {
         .map(|b| b.rows.iter().filter(|r| !r.owned && r.locked.is_none()).count() as u32)
         .sum();
     let locked = built.iter().any(|b| b.rows.iter().any(|r| !r.owned && r.locked.is_some()));
-    view.more = unowned.saturating_sub(view.lead.is_some() as u32);
+    // "+N" counts only what watching still earns, like the lead.
+    let still_earning: u32 = built
+        .iter()
+        .map(|b| b.rows.iter().filter(|r| earning(r)).count() as u32)
+        .sum();
+    view.more = still_earning.saturating_sub(view.lead.is_some() as u32);
     // Only what is left locked is not everything claimed.
     view.complete = !built.is_empty() && unowned == 0 && !locked;
     view.campaigns = built
@@ -976,12 +985,14 @@ pub fn build(i: &Inputs) -> WatchDrops {
 }
 
 /// The bar's stacked pictures: the first two rewards still to earn here
-/// besides the lead, each with the picture its own drawer row shows.
+/// besides the lead, each with the picture its own drawer row shows. One whose
+/// minutes are in is not still to earn.
 fn more_art(campaigns: &[HereCampaign]) -> Vec<String> {
     campaigns
         .iter()
         .flat_map(|c| &c.drops)
         .filter(|d| !d.claimed && !d.lead && !d.locked && !d.image.is_empty())
+        .filter(|d| !(d.ready || d.pending || d.connect || d.watched))
         .map(|d| d.image.clone())
         .take(2)
         .collect()
@@ -2074,7 +2085,7 @@ mod tests {
             }
             let first: Vec<String> = rows
                 .iter()
-                .filter(|d| !d.claimed && !d.lead)
+                .filter(|d| !d.claimed && !d.lead && !(d.ready || d.pending || d.connect || d.watched))
                 .map(|d| d.image.clone())
                 .take(2)
                 .collect();
@@ -2745,9 +2756,8 @@ mod tests {
         assert_eq!(pending.campaigns[0].drops[0].status, "Claiming");
         // The UI branches on the booleans: a claim in flight never offers Claim again.
         assert!(!pending.campaigns[0].drops[0].ready && pending.campaigns[0].drops[0].pending);
-        let lead = pending.lead.as_ref().expect("the tier still leads");
-        assert!(!lead.complete);
-        assert_eq!(lead.status, "Claiming");
+        // Its minutes are in: the lip lets it go (SN-272), the drawer keeps it.
+        assert!(pending.lead.is_none(), "a claim in flight never parks the lip");
         let mut ungranted = HashSet::new();
         ungranted.insert("t1".to_string());
         let mut j = Inputs::bare(&place, &list, Some(&inv), now_ms());
@@ -2755,15 +2765,49 @@ mod tests {
         let watched = build(&j);
         assert_eq!(watched.campaigns[0].drops[0].status, "Watched");
         assert!(!watched.campaigns[0].drops[0].ready && watched.campaigns[0].drops[0].watched);
-        // Nothing else is left, so the lip still shows it rather than vanish.
-        assert!(watched.lead.as_ref().is_some_and(|l| !l.complete && l.status == "Watched"));
+        // Nothing else is left to earn, so the lip goes away.
+        assert!(watched.lead.is_none());
+        assert_eq!(watched.more, 0);
+    }
+
+    #[test]
+    fn a_finished_drop_never_stays_on_top_of_chat() {
+        // SN-272 (zoox): a drop whose minutes are in sat on the lip with
+        // Connect because the game account was not linked. Ready, Connect and
+        // Watched all let the lip go; the drawer still offers the action.
+        let place = golden::place();
+        let (mut list, mut inv) = tiers(true, &[("a", 60, 60)]);
+        assert!(lead_of_opt(&list, &inv).is_none(), "Ready alone: no lip");
+        for c in list.iter_mut() {
+            c.account_link = Some("https://game.example/link".into());
+            c.is_account_connected = false;
+        }
+        inv.items[0].campaign.is_account_connected = false;
+        let view = build(&Inputs::bare(&place, &list, Some(&inv), now_ms()));
+        assert!(view.campaigns[0].drops[0].connect, "the drawer offers Connect");
+        assert!(view.lead.is_none(), "Connect alone: no lip");
+        assert!(!view.complete, "not claimed, so not complete");
+        // The phones' bar reads the same lead.
+        assert!(lead_for(&view).is_none());
+        // With another reward still earning, the lip shows that one, and the
+        // finished one is neither counted nor stacked.
+        let (list, inv) = tiers(true, &[("a", 60, 60), ("b", 120, 30)]);
+        let view = build(&Inputs::bare(&place, &list, Some(&inv), now_ms()));
+        assert_eq!(view.lead.as_ref().map(|l| l.drop_id.as_str()), Some("b"));
+        assert_eq!(view.more, 0);
+        assert!(view.more_art.is_empty());
+    }
+
+    fn lead_of_opt(list: &[DropCampaign], inv: &InventoryResponse) -> Option<String> {
+        let place = golden::place();
+        build(&Inputs::bare(&place, list, Some(inv), now_ms())).lead.map(|l| l.drop_id)
     }
 
     #[test]
     fn a_stuck_reward_never_parks_the_lip_while_another_is_earning() {
         let place = golden::place();
         let (list, inv) = tiers(true, &[("a", 60, 60), ("b", 120, 70), ("c", 240, 70)]);
-        assert_eq!(lead_of(&list, &inv, None), "a", "Ready leads");
+        assert_eq!(lead_of(&list, &inv, None), "b", "a finished one never leads");
         let mut claims = HashMap::new();
         claims.insert("a".to_string(), ClaimState::Pending);
         let mut i = Inputs::bare(&place, &list, Some(&inv), now_ms());
@@ -2833,7 +2877,7 @@ mod tests {
     fn the_lip_moves_to_the_next_reward_once_the_closest_is_claimed() {
         let place = golden::place();
         let (list, inv) = tiers(false, &[("t1", 30, 40), ("t2", 60, 40), ("t3", 90, 40)]);
-        assert_eq!(lead_of(&list, &inv, None), "t1", "the finished tier leads");
+        assert_eq!(lead_of(&list, &inv, None), "t2", "the finished tier hands the lip on");
         let mut claims = HashMap::new();
         claims.insert("t1".to_string(), ClaimState::Claimed);
         let mut i = Inputs::bare(&place, &list, Some(&inv), now_ms());
@@ -2864,7 +2908,7 @@ mod tests {
         assert!(tuck_holds(&t, &earning));
         // Minutes ticking up keep it tucked.
         assert!(tuck_holds(&t, &view_of(&[("a", 60, 45), ("b", 120, 45)], Some("a"))));
-        // Ready to claim brings it back.
+        // Ready to claim hands the lip to the next reward, which brings it back.
         assert!(!tuck_holds(&t, &view_of(&[("a", 60, 60), ("b", 120, 60)], Some("a"))));
         // The next reward starting brings it back.
         let mut claims = HashMap::new();
@@ -2895,13 +2939,12 @@ mod tests {
         // Truly further along: the lip follows it.
         let (list, inv) = tiers(true, &[("a", 60, 50), ("b", 60, 52)]);
         assert_eq!(lead_of(&list, &inv, Some("a")), "b");
-        // Both finish together: the first, or the one already shown.
+        // Both finish together: nothing is left to earn, so no lip.
         let (list, inv) = tiers(true, &[("a", 60, 60), ("b", 60, 60)]);
-        assert_eq!(lead_of(&list, &inv, None), "a");
-        assert_eq!(lead_of(&list, &inv, Some("b")), "b");
-        // A finished one always takes the lip from one still earning.
+        assert!(lead_of_opt(&list, &inv).is_none());
+        // A finished one never takes the lip from one still earning.
         let (list, inv) = tiers(true, &[("a", 60, 59), ("b", 60, 60)]);
-        assert_eq!(lead_of(&list, &inv, Some("a")), "b");
+        assert_eq!(lead_of(&list, &inv, Some("b")), "a");
         // One running count: equal tiers finish together, the first leads.
         let (list, inv) = tiers(false, &[("a", 60, 45), ("b", 60, 45), ("c", 120, 45)]);
         assert_eq!(lead_of(&list, &inv, None), "a");
