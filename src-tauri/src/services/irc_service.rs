@@ -346,6 +346,8 @@ async fn confirm_join(key: &str) {
         record_lifecycle(&format!("JOIN #{} confirmed", key));
         // A reward that asks for text reaches chat with only its id.
         crate::services::channel_rewards::note_chat_joined(key);
+        // Other viewers' redemptions reach this room even with no stream playing.
+        crate::services::chat_room_redemptions::nudge();
     }
     refresh_join_hint(&t);
 }
@@ -364,6 +366,7 @@ async fn tracker_forget(key: &str) {
     let mut t = get_join_tracker().lock().await;
     t.forget(key);
     refresh_join_hint(&t);
+    crate::services::chat_room_redemptions::nudge();
 }
 
 async fn tracker_clear() {

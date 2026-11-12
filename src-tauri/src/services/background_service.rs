@@ -202,6 +202,8 @@ impl BackgroundService {
     /// socket follows the watched channel again under the new credential, or
     /// comes down without one. With no watched channel it is left alone.
     pub async fn reaim_for_account(&self) {
+        // The open chat rooms' redemption feed listens with this sign-in too.
+        crate::services::chat_room_redemptions::nudge();
         let watched = self.watched.read().await.clone();
         if let Some((channel_id, login)) = watched {
             self.set_watched_channel(channel_id, login).await;

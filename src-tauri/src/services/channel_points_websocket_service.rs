@@ -65,6 +65,34 @@ fn claim_emit_is_first_in(
     true
 }
 
+/// What a socket is for. `Watched` is the one that follows the channel on
+/// screen with every topic (points, predictions, polls, warnings, the
+/// redemption feed). `ChatRooms` carries only the redemption feed, for every
+/// open Twitch chat room (`services::chat_room_redemptions`), so other
+/// viewers' redemptions reach a chat whose stream is not playing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SocketScope {
+    Watched,
+    ChatRooms,
+}
+
+/// The rooms whose redemption feed the watched socket carries. The chat-rooms
+/// socket leaves these to it, so a room both watched and open in chat gets
+/// each redemption once.
+static WATCHED_FEED_ROOMS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+
+fn watched_feed_rooms() -> std::sync::MutexGuard<'static, HashSet<String>> {
+    WATCHED_FEED_ROOMS
+        .get_or_init(|| Mutex::new(HashSet::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+}
+
+/// Whether the watched socket carries `channel_id`'s redemption feed.
+fn watched_feed_covers(channel_id: &str) -> bool {
+    watched_feed_rooms().contains(channel_id)
+}
+
 /// Mapping structure for channel information
 #[derive(Debug, Clone)]
 pub struct ChannelMapping {
@@ -92,6 +120,7 @@ pub struct ChannelPointsWebSocketService {
     /// a duplicate keeper on each connect_to_channels call, and to terminate
     /// the keeper on disconnect_all.
     ping_keeper_handle: Arc<TokioMutex<Option<JoinHandle<()>>>>,
+    scope: SocketScope,
 }
 
 #[derive(Debug)]
@@ -123,6 +152,15 @@ struct PubSubData {
 
 impl ChannelPointsWebSocketService {
     pub fn new() -> Self {
+        Self::with_scope(SocketScope::Watched)
+    }
+
+    /// The redemption-feed-only socket for open chat rooms.
+    pub fn new_chat_rooms() -> Self {
+        Self::with_scope(SocketScope::ChatRooms)
+    }
+
+    fn with_scope(scope: SocketScope) -> Self {
         Self {
             connections: Arc::new(RwLock::new(Vec::new())),
             auth_token: Arc::new(RwLock::new(String::new())),
@@ -132,6 +170,7 @@ impl ChannelPointsWebSocketService {
             active_viewing_channels: Arc::new(RwLock::new(HashSet::new())),
             reader_task_handles: Arc::new(TokioMutex::new(Vec::new())),
             ping_keeper_handle: Arc::new(TokioMutex::new(None)),
+            scope,
         }
     }
 
@@ -219,25 +258,33 @@ impl ChannelPointsWebSocketService {
         *self.auth_token.write().await = auth_token.to_string();
         *self.user_id.write().await = user_id.to_string();
 
-        // 4 topics per channel + 2 global = 42 per connection, under the
-        // connection cap. Safe only because LISTEN is batched; see twitch_limits.
-        const MAX_CHANNELS_PER_CONNECTION: usize = 10;
+        // Watched: 4 topics per channel + 3 user topics = 43 per connection,
+        // under the connection cap. Chat rooms: one topic per room. Safe only
+        // because LISTEN is batched; see twitch_limits.
+        let (per_connection, max_connections) = match self.scope {
+            SocketScope::Watched => (10, 10),
+            // Twitch allows 10 connections per IP and the watched socket uses
+            // one; 4 here still covers 200 open rooms.
+            SocketScope::ChatRooms => (PUBSUB_MAX_TOPICS_PER_CONNECTION, 4),
+        };
 
-        // Calculate how many WebSocket connections we need
-        let num_connections =
-            (channel_ids.len() + MAX_CHANNELS_PER_CONNECTION - 1) / MAX_CHANNELS_PER_CONNECTION;
+        // Split channels into chunks for each connection
+        let chunks: Vec<_> = channel_ids
+            .chunks(per_connection)
+            .take(max_connections)
+            .collect();
 
         debug!(
-            "Creating {} WebSocket connection(s) for {} channels",
-            num_connections.min(10),
+            "Creating {} {:?} WebSocket connection(s) for {} channels",
+            chunks.len(),
+            self.scope,
             channel_ids.len()
         );
 
-        // Split channels into chunks for each connection (max 10 connections)
-        let chunks: Vec<_> = channel_ids
-            .chunks(MAX_CHANNELS_PER_CONNECTION)
-            .take(10) // Max 10 connections per IP as recommended
-            .collect();
+        if self.scope == SocketScope::Watched {
+            let covered: HashSet<String> = chunks.iter().flat_map(|c| c.iter().cloned()).collect();
+            *watched_feed_rooms() = covered;
+        }
 
         for (index, chunk) in chunks.iter().enumerate() {
             // Add longer delay before first connection and between connections
@@ -270,6 +317,7 @@ impl ChannelPointsWebSocketService {
             let connections = self.connections.clone();
             let channel_mappings = self.channel_mappings.clone();
             let active_viewing_channels = self.active_viewing_channels.clone();
+            let scope = self.scope;
 
             let handle = tokio::spawn(async move {
                 if let Err(e) = Self::handle_connection(
@@ -281,6 +329,7 @@ impl ChannelPointsWebSocketService {
                     index,
                     channel_mappings,
                     active_viewing_channels,
+                    scope,
                 )
                 .await
                 {
@@ -298,6 +347,14 @@ impl ChannelPointsWebSocketService {
 
     /// Build PubSub topics for a set of channels
     fn build_topics_for_channels(&self, channel_ids: &[String], user_id: &str) -> Vec<String> {
+        if self.scope == SocketScope::ChatRooms {
+            // The redemption feed alone. The user topics stay on the watched
+            // socket: a second copy of them would report every points rise twice.
+            return channel_ids
+                .iter()
+                .map(|id| format!("community-points-channel-v1.{}", id))
+                .collect();
+        }
         let mut topics = Vec::new();
 
         // Add community points topics for the user (global) - MOST IMPORTANT
@@ -349,9 +406,11 @@ impl ChannelPointsWebSocketService {
         index: usize,
         channel_mappings: Arc<RwLock<HashMap<String, ChannelMapping>>>,
         active_viewing_channels: Arc<RwLock<HashSet<String>>>,
+        scope: SocketScope,
     ) -> Result<()> {
         debug!(
-            "Connecting WebSocket #{} with {} topics",
+            "Connecting {:?} WebSocket #{} with {} topics",
+            scope,
             index,
             topics.len()
         );
@@ -476,6 +535,7 @@ impl ChannelPointsWebSocketService {
                             &channel_mappings,
                             &active_viewing_channels,
                             &listen_acks,
+                            scope,
                         )
                         .await;
                     }
@@ -521,6 +581,7 @@ impl ChannelPointsWebSocketService {
                 index,
                 channel_mappings,
                 active_viewing_channels,
+                scope,
             ))
             .await
         } else {
@@ -538,6 +599,7 @@ impl ChannelPointsWebSocketService {
         channel_mappings: &Arc<RwLock<HashMap<String, ChannelMapping>>>,
         active_viewing_channels: &Arc<RwLock<HashSet<String>>>,
         listen_acks: &Arc<AtomicUsize>,
+        scope: SocketScope,
     ) {
         match msg.msg_type.as_str() {
             "MESSAGE" => {
@@ -551,6 +613,16 @@ impl ChannelPointsWebSocketService {
                         } else {
                             None
                         };
+
+                        // The chat-rooms socket carries only the redemption
+                        // feed, and leaves a room the watched socket also
+                        // carries to it, so nothing is handled twice.
+                        if scope == SocketScope::ChatRooms
+                            && (topic_type != "community-points-channel-v1"
+                                || channel_id.as_deref().is_none_or(watched_feed_covers))
+                        {
+                            return;
+                        }
 
                         // A poll, prediction or reward that changed state: an
                         // open Stream manager for that channel reads again.
@@ -614,6 +686,7 @@ impl ChannelPointsWebSocketService {
                                     channel_id,
                                     channel_mappings,
                                     active_viewing_channels,
+                                    scope,
                                 )
                                 .await;
                             }
@@ -1319,16 +1392,20 @@ impl ChannelPointsWebSocketService {
     /// received one (`IrcService::publish_redemption_row`). Input rewards are
     /// skipped: their text is not public, and their chat message already shows
     /// the redemption, as message-style rewards do.
+    ///
+    /// On the watched socket only channels being watched count. The
+    /// chat-rooms socket follows open chat rooms alone, and
+    /// `publish_redemption_row` delivers only to a joined room.
     async fn handle_channel_redemption_event(
         message_data: Value,
         app_handle: &AppHandle,
         channel_id: Option<String>,
         channel_mappings: &Arc<RwLock<HashMap<String, ChannelMapping>>>,
         active_viewing_channels: &Arc<RwLock<HashSet<String>>>,
+        scope: SocketScope,
     ) {
-        // Only for channels we're actively watching (skip background farming channels).
         let Some(cid) = channel_id else { return };
-        if !active_viewing_channels.read().await.contains(&cid) {
+        if scope == SocketScope::Watched && !active_viewing_channels.read().await.contains(&cid) {
             return;
         }
 
@@ -1406,6 +1483,18 @@ impl ChannelPointsWebSocketService {
             debug!("Community redemption on {}: channel login unknown, row skipped", cid);
             return;
         };
+
+        // Your own redemption is also drawn by `reward_redeem` the moment the
+        // redeem succeeds, under its transaction id; whichever lands second
+        // is dropped.
+        if !crate::services::reward_redeem::own_row_is_first(
+            crate::services::reward_redeem::RowSource::Feed,
+            &cid,
+            user_id,
+            reward_id,
+        ) {
+            return;
+        }
 
         debug!(
             "Community redemption on {}: {} redeemed '{}' ({} pts)",
@@ -1505,6 +1594,10 @@ impl ChannelPointsWebSocketService {
         let mut connections = self.connections.write().await;
         connections.clear();
         drop(connections);
+
+        if self.scope == SocketScope::Watched {
+            watched_feed_rooms().clear();
+        }
 
         // register_channel_mapping inserts on every watched-channel change and
         // nothing ever removed an entry, so this grew for the life of the

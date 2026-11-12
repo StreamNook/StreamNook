@@ -244,13 +244,64 @@ pub async fn redeem(
     done
 }
 
-/// Your own redemption as a row in that channel's chat when Twitch's
-/// redemption feed will not bring it. The feed is followed only for the
-/// channel being watched, so a redeem from a chat with no stream playing (the
-/// phones' Chats screen, a chat-only window) left no row anywhere. A watched
-/// channel is left to the feed, which carries Twitch's own redemption id, so
-/// the row is never drawn twice. A reward that takes text needs neither: its
-/// chat message is its row.
+/// Which path drew a redemption row: Twitch's redemption feed, or the echo
+/// below that `redeem` draws for your own redemption.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RowSource {
+    Feed,
+    Echo,
+}
+
+/// Longer than the feed trails the redeem's answer (well under a second
+/// unless the socket is reconnecting), far shorter than the time between two
+/// redemptions of one reward by one viewer.
+const OWN_ROW_PAIR_WINDOW: std::time::Duration = std::time::Duration::from_secs(30);
+
+type PairMap = HashMap<String, Vec<(RowSource, std::time::Instant)>>;
+
+fn pending_rows() -> &'static Mutex<PairMap> {
+    static PENDING: std::sync::OnceLock<Mutex<PairMap>> = std::sync::OnceLock::new();
+    PENDING.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Your own redemption reaches chat twice: the echo when the redeem succeeds
+/// (its row id from the transaction id) and the feed (its row id from
+/// Twitch's redemption id), in either order, or only one of them when the
+/// feed does not cover the room or its socket is down. Each arrival calls
+/// this: false when the other path already drew this redemption, in which
+/// case the caller draws nothing. Every feed row passes through; another
+/// viewer's never meets an echo, so it is always drawn.
+pub(crate) fn own_row_is_first(source: RowSource, room_id: &str, user_id: &str, reward_id: &str) -> bool {
+    if room_id.is_empty() || user_id.is_empty() || reward_id.is_empty() {
+        return true;
+    }
+    let key = format!("{room_id}|{user_id}|{reward_id}");
+    let mut map = pending_rows().lock().unwrap_or_else(|e| e.into_inner());
+    own_row_is_first_in(&mut map, key, source, std::time::Instant::now())
+}
+
+/// The rule itself, over a map the caller owns. Each arrival either takes the
+/// oldest unmatched arrival from the other path (and is dropped) or waits for
+/// its partner, so two redemptions of one reward in a row still draw two rows.
+fn own_row_is_first_in(map: &mut PairMap, key: String, source: RowSource, now: std::time::Instant) -> bool {
+    map.retain(|_, list| {
+        list.retain(|(_, at)| now.duration_since(*at) < OWN_ROW_PAIR_WINDOW);
+        !list.is_empty()
+    });
+    let list = map.entry(key).or_default();
+    if let Some(i) = list.iter().position(|(s, _)| *s != source) {
+        list.remove(i);
+        return false;
+    }
+    list.push((source, now));
+    true
+}
+
+/// Your own redemption as a row in that channel's chat the moment the redeem
+/// succeeds. Twitch's redemption feed brings it too (`chat_room_redemptions`
+/// follows every open chat room), but only when its socket is up and a beat
+/// later; `own_row_is_first` keeps whichever copy lands first. A reward that
+/// takes text needs neither: its chat message is its row.
 async fn echo_own_redemption(login: &str, room_id: &str, reward: &ChannelReward, tx: &str) {
     use crate::models::settings::AppState;
     use crate::services::irc_service::{IrcService, RedemptionRow};
@@ -266,12 +317,10 @@ async fn echo_own_redemption(login: &str, room_id: &str, reward: &ChannelReward,
     if !shown {
         return;
     }
-    let ws = state.background_service.lock().await.websocket_service.clone();
-    let watched = ws.lock().await.is_active_channel(room_id).await;
-    if watched {
+    let Ok(me) = crate::services::twitch_service::TwitchService::get_user_info().await else { return };
+    if !own_row_is_first(RowSource::Echo, room_id, &me.id, &reward.id) {
         return;
     }
-    let Ok(me) = crate::services::twitch_service::TwitchService::get_user_info().await else { return };
     let (badges, color) = crate::services::chat_history::ChatHistory::last_look(room_id, &me.id)
         .map(|(badges, color)| (badges.join(","), color.unwrap_or_default()))
         .unwrap_or_default();
@@ -303,6 +352,47 @@ async fn echo_own_redemption(login: &str, room_id: &str, reward: &ChannelReward,
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn own_redemption_is_drawn_once_whichever_copy_lands_first() {
+        let mut map = PairMap::new();
+        let t = Instant::now();
+        let k = || "room|me|r1".to_string();
+        // Echo first, then the feed's copy.
+        assert!(own_row_is_first_in(&mut map, k(), RowSource::Echo, t));
+        assert!(!own_row_is_first_in(&mut map, k(), RowSource::Feed, t + Duration::from_millis(400)));
+        // Feed first, then the echo.
+        assert!(own_row_is_first_in(&mut map, k(), RowSource::Feed, t + Duration::from_secs(1)));
+        assert!(!own_row_is_first_in(&mut map, k(), RowSource::Echo, t + Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn two_redemptions_in_a_row_draw_two_rows() {
+        let mut map = PairMap::new();
+        let t = Instant::now();
+        let k = || "room|me|r1".to_string();
+        assert!(own_row_is_first_in(&mut map, k(), RowSource::Echo, t));
+        assert!(own_row_is_first_in(&mut map, k(), RowSource::Echo, t));
+        assert!(!own_row_is_first_in(&mut map, k(), RowSource::Feed, t));
+        assert!(!own_row_is_first_in(&mut map, k(), RowSource::Feed, t));
+        // Both pairs are spent: a third feed row is a new redemption.
+        assert!(own_row_is_first_in(&mut map, k(), RowSource::Feed, t));
+    }
+
+    #[test]
+    fn a_copy_that_never_comes_does_not_hide_a_later_redemption() {
+        let mut map = PairMap::new();
+        let t = Instant::now();
+        let k = || "room|me|r1".to_string();
+        // The feed did not cover the room: the echo waits alone, then expires.
+        assert!(own_row_is_first_in(&mut map, k(), RowSource::Echo, t));
+        let later = t + OWN_ROW_PAIR_WINDOW + Duration::from_secs(1);
+        assert!(own_row_is_first_in(&mut map, k(), RowSource::Feed, later));
+        // Another viewer, or another reward, never pairs with mine.
+        assert!(own_row_is_first_in(&mut map, "room|me|r2".into(), RowSource::Echo, later));
+        assert!(own_row_is_first_in(&mut map, "room|them|r2".into(), RowSource::Feed, later));
+    }
 
     #[test]
     fn kinds_follow_the_built_in_type_never_the_title() {

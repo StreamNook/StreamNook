@@ -45,6 +45,7 @@ pub mod channel_media;
 pub mod channel_avatars;
 pub mod ll_diagnostics;
 pub mod channel_points_websocket_service;
+pub mod chat_room_redemptions;
 pub mod chat_logger_service;
 pub mod automod_queue;
 pub mod chat_bridge_route;
