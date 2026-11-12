@@ -11,24 +11,24 @@
 - Manage channel opens as one window with results shown right where you act. Stream info gets an emoji menu and previews your title as your live card and sidebar row, channel editors get Tools too, saves send only what you changed, and the manager keeps itself current while it's open.
 - A platform picker in the search bar and on the Recommended header leaves a platform out of search, Discover and Recommended. Reported by zoox (SN-264).
 - Go-live notifications can show the streamer's own go-live message instead of the title.
-- Predictions waiting on their result open folded, and predictions can start collapsed.
-- Rest on a painted name to see its paint. Escape gives up a reply, and the reply's X clears what you typed.
-- Unfollowing asks for a second press.
-- The +N points pop rolls its digits up on a soft plate just over the wallet button, then tucks back into it.
-- A MultiChat tab always shows its X, a step quieter, so the name reads centered.
-- A Drops reward that waits on a linked game account offers Connect account on the Inventory list, and its Claim stays greyed until the link is made.
+- Predictions waiting on their result open folded, and predictions can start collapsed. Reported by zoox (SN-264).
+- Rest on a painted name to see its paint. Escape gives up a reply, and the reply's X clears what you typed. Reported by zoox (SN-264).
+- Unfollowing asks for a second press. Reported by zoox (SN-264).
+- The +N points pop rolls its digits up on a soft plate just over the wallet button, then tucks back into it. Reported by zoox (SN-264).
+- A MultiChat tab always shows its X, a step quieter, so the name reads centered. Reported by zoox (SN-264).
+- A Drops reward that waits on a linked game account offers Connect account on the Inventory list, and its Claim stays greyed until the link is made. Reported by zoox (SN-264).
 - The update notes draw each platform's logo beside its heading.
 
 #### Bug Fixes
 - YouTube tiles in MultiNook play again. Reported by Lemithehater (SN-263).
 - A MultiNook tile you muted stays muted through focus, promote, maximize, dock and undock. Reported by zoox (SN-264).
-- Settings > Notifications no longer opens blank right after a reboot or an update, and the supporter unlock note no longer greets you on every launch.
-- Searching for a YouTube or TikTok channel shows only lives that name it, with the channel itself first, and a stream with no category shows its title instead of Just Chatting.
-- A tall user card stays inside the window, a badge's card opens as quickly as an emote's, and a settings search lands on its row.
-- The drops button's done check clears once you open Drops, the drops lip stays inside chat and waits for the mouse to rest, and it never counts rewards you already own.
+- Settings > Notifications no longer opens blank right after a reboot or an update, and the supporter unlock note no longer greets you on every launch. Reported by zoox (SN-264).
+- Searching for a YouTube or TikTok channel shows only lives that name it, with the channel itself first, and a stream with no category shows its title instead of Just Chatting. Reported by zoox (SN-264).
+- A tall user card stays inside the window, a badge's card opens as quickly as an emote's, and a settings search lands on its row. Reported by zoox (SN-264).
+- The drops button's done check clears once you open Drops, the drops lip stays inside chat and waits for the mouse to rest, and it never counts rewards you already own. Reported by zoox (SN-264).
 - A Pokémon evolution stage you can't earn yet is dimmed with what it needs first, and Autopilot moves past a line it can't start.
 - Tooltips in a light theme read light on their dark glass.
-- The YouTube logo on a MultiChat tab sits centered like Twitch and Kick.
+- The YouTube logo on a MultiChat tab sits centered like Twitch and Kick. Reported by zoox (SN-264).
 - The update notes show their sub-headings as headings instead of as raw text.
 
 ### Android and iPhone
@@ -39,13 +39,13 @@
 - Brightness and volume swipes can be switched off in Player settings. Requested by NoPro (SN-269).
 
 #### Bug Fixes
-- Chat over the video stays readable in a light theme.
-- In a narrow side chat, the room on screen keeps a readable name or folds to its face.
-- A message you just sent offers no mod swipe until Twitch confirms it.
+- Chat over the video stays readable in a light theme. Requested by Pears (SN-40).
+- In a narrow side chat, the room on screen keeps a readable name or folds to its face. Requested by NoPro (SN-268).
+- A message you just sent offers no mod swipe until Twitch confirms it. Reported by zoox (SN-264).
 
 ### Android
 - The inbox opens from the title row on Following and Browse, and a whisper opens as its own thread inside it.
-- Followed channels in alerts list newest follow first.
+- Followed channels in alerts list newest follow first. Reported by zoox (SN-264).
 - Drops on a compact stream row is a small chip on the preview, as on iPhone.
 - Twitch's security check runs only right after you act, in a card you can see, and an unused install permission is gone. Reported by NoPro (SN-267).
 
@@ -54,8 +54,8 @@
 
 ### Everywhere
 - Small notices like Welcome back, Drop claimed and Copied can each be switched off. Errors always show. Reported by zoox (SN-264).
-- Moderators get the mod slider on their own messages, with Delete, the one action Twitch allows there.
-- Italic /me messages can be turned off.
+- Moderators get the mod slider on their own messages, with Delete, the one action Twitch allows there. Reported by zoox (SN-264).
+- Italic /me messages can be turned off. Reported by zoox (SN-264).
 - Changing a VOD's quality keeps your place instead of starting over at 0:00. Reported by Bbtc100 (SN-270).
 - YouTube chat shows moderator and verified badges, and the channel owner's name in a gold pill.
 - A My badge switch hides your own StreamNook badge on your own name. Others still see it.
