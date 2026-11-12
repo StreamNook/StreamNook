@@ -237,3 +237,19 @@ fn a_stored_id_resolves_to_the_same_face_in_the_room() {
     let plain = vec![kappa()];
     assert_eq!(resolve_ids(&plain, &stored), stored);
 }
+
+#[test]
+fn a_starred_smiley_ranks_as_the_same_face_in_every_set() {
+    let stored: HashSet<String> = ["9", "25"].iter().map(|s| s.to_string()).collect();
+    let by_face = favorites_by_face(&stored).expect("a smiley is starred");
+    // The robot `<3` stars the purple and the monkey `<3` too.
+    for id in ["9", "445", "483", "25"] {
+        assert!(by_face.contains(id), "{id} ranks as a favorite");
+    }
+    // Only that face: the monkey `:)` is not starred.
+    assert!(!by_face.contains("499"));
+    assert_eq!(by_face.len(), 4);
+    // A list without a smiley is used as it is.
+    let plain: HashSet<String> = ["25", "88"].iter().map(|s| s.to_string()).collect();
+    assert!(favorites_by_face(&plain).is_none());
+}

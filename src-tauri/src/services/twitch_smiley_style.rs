@@ -755,7 +755,9 @@ pub(crate) fn backoff_ms(failures: u32) -> i64 {
 struct Refresh {
     last_attempt_ms: i64,
     failures: u32,
-    in_flight: bool,
+    /// The account generation of the read that is running, if one is. A read
+    /// left over from the previous account never holds up the new one's.
+    in_flight: Option<u64>,
 }
 
 static REFRESH: Lazy<Mutex<Refresh>> = Lazy::new(|| Mutex::new(Refresh::default()));
@@ -764,10 +766,16 @@ fn lock_refresh() -> std::sync::MutexGuard<'static, Refresh> {
     REFRESH.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// Whether a read may start now: none is running, the last failures' wait is
-/// over, and the record (if any) is older than `max_age_ms`.
-fn read_due(read_at_ms: Option<i64>, now: i64, refresh: &Refresh, max_age_ms: i64) -> bool {
-    if refresh.in_flight {
+/// Whether a read may start now: none is running for this account, the last
+/// failures' wait is over, and the record (if any) is older than `max_age_ms`.
+fn read_due(
+    read_at_ms: Option<i64>,
+    now: i64,
+    refresh: &Refresh,
+    max_age_ms: i64,
+    account_gen: u64,
+) -> bool {
+    if refresh.in_flight == Some(account_gen) {
         return false;
     }
     if refresh.failures > 0 && now < refresh.last_attempt_ms + backoff_ms(refresh.failures) {
@@ -779,12 +787,20 @@ fn read_due(read_at_ms: Option<i64>, now: i64, refresh: &Refresh, max_age_ms: i6
     }
 }
 
-/// A read in progress; dropping it lets the next one start.
-struct Attempt;
+/// A read in progress for one account generation; dropping it lets the next
+/// one start.
+struct Attempt {
+    account_gen: u64,
+}
 
 impl Attempt {
     fn finish(self, verdict: Verdict) {
         let mut refresh = lock_refresh();
+        // The account moved while this read ran: its outcome is not the new
+        // account's, so it neither counts a failure nor clears one.
+        if self.account_gen != TwitchService::account_generation() {
+            return;
+        }
         match verdict {
             Verdict::Committed => refresh.failures = 0,
             Verdict::NoAnswer | Verdict::Failed => {
@@ -797,18 +813,26 @@ impl Attempt {
 
 impl Drop for Attempt {
     fn drop(&mut self) {
-        lock_refresh().in_flight = false;
+        let mut refresh = lock_refresh();
+        if refresh.in_flight == Some(self.account_gen) {
+            refresh.in_flight = None;
+        }
     }
 }
 
-fn begin_attempt(now: i64, read_at_ms: Option<i64>, max_age_ms: i64) -> Option<Attempt> {
+fn begin_attempt(
+    now: i64,
+    read_at_ms: Option<i64>,
+    max_age_ms: i64,
+    account_gen: u64,
+) -> Option<Attempt> {
     let mut refresh = lock_refresh();
-    if !read_due(read_at_ms, now, &refresh, max_age_ms) {
+    if !read_due(read_at_ms, now, &refresh, max_age_ms, account_gen) {
         return None;
     }
-    refresh.in_flight = true;
+    refresh.in_flight = Some(account_gen);
     refresh.last_attempt_ms = now;
-    Some(Attempt)
+    Some(Attempt { account_gen })
 }
 
 struct ReadContext {
@@ -849,7 +873,7 @@ pub(crate) fn commit_read(
 /// `max_age_ms` (and none is running, and the back-off allows it).
 pub(crate) async fn run_read(io: &dyn Gql, max_age_ms: i64) -> Option<Verdict> {
     let ctx = read_context()?;
-    let attempt = begin_attempt(now_ms(), ctx.read_at_ms, max_age_ms)?;
+    let attempt = begin_attempt(now_ms(), ctx.read_at_ms, max_age_ms, ctx.account_gen)?;
     let outcome = io.read().await;
     let (verdict, changed) =
         commit_read(ctx.gen, ctx.account_gen, &ctx.user_id, &outcome, now_ms());

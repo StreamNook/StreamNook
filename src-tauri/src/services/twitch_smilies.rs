@@ -300,6 +300,25 @@ pub fn same_face(a: &str, b: &str) -> bool {
     matches!((face_of(a), face_of(b)), (Some(x), Some(y)) if x == y)
 }
 
+/// A favorites list in which a starred smiley also stars the same face in the
+/// other sets, so a face starred before a smiley style switch keeps its rank
+/// in Tab and the fill menu after it. `None` when no stored id is a smiley,
+/// so an ordinary list is used as it is and never copied.
+pub fn favorites_by_face(ids: &HashSet<String>) -> Option<HashSet<String>> {
+    let faces: HashSet<&str> = ids.iter().filter_map(|id| face_of(id)).collect();
+    if faces.is_empty() {
+        return None;
+    }
+    let mut out = ids.clone();
+    out.extend(
+        FACE_INDEX
+            .iter()
+            .filter(|(_, (_, face))| faces.contains(face))
+            .map(|(id, _)| id.to_string()),
+    );
+    Some(out)
+}
+
 /// The image of a smiley.
 pub fn emote_url(id: &str) -> String {
     format!("https://static-cdn.jtvnw.net/emoticons/v2/{id}/default/dark/2.0")

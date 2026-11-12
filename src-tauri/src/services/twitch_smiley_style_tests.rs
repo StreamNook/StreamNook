@@ -163,6 +163,8 @@ fn view_for_a_prime_account() {
     assert!(view.can_switch);
     assert_eq!(view.upgrade_url, "https://www.twitch.tv/settings/prime");
     assert_eq!(view.current, expected_current_of(&json_of(PRIME)));
+    // The fixture is Twitch's real answer: its current set is PURPLE.
+    assert_eq!(view.current, "purple");
     let keys: Vec<&str> = view.sets.iter().map(|s| s.key.as_str()).collect();
     assert_eq!(keys, ["robots", "purple", "monkeys"]);
     assert!(view.sets.iter().all(|s| s.available));
@@ -181,10 +183,16 @@ fn view_for_a_prime_account() {
             );
         }
     }
-    assert_eq!(read.ids.len(), 3);
+    // Each catalog key pairs with the id Twitch named that set, written out
+    // so a mix-up between sets cannot hide behind a computed expectation.
+    let pairs: Vec<(&str, &str)> = read
+        .ids
+        .iter()
+        .map(|(k, id)| (k.as_str(), id.as_str()))
+        .collect();
     assert_eq!(
-        read.ids.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(),
-        ["robots", "purple", "monkeys"]
+        pairs,
+        [("robots", "ROBOTS"), ("purple", "PURPLE"), ("monkeys", "MONKEYS")]
     );
 }
 
@@ -269,14 +277,14 @@ fn faces_read_as_patterns_or_faces() {
 
 #[test]
 fn update_body_names_the_operation_and_input() {
-    let body = update_body("42", "33");
+    let body = update_body("42", "MONKEYS");
     assert_eq!(
         body["operationName"],
         "SettingsPrimePage_PrimeEmotesSetPicker_UpdatePrimeSettings"
     );
     assert_eq!(
         body["variables"]["input"],
-        json!({ "primeEmoticonsSetName": "33", "userID": "42" })
+        json!({ "primeEmoticonsSetName": "MONKEYS", "userID": "42" })
     );
     let query = body["query"].as_str().unwrap();
     assert!(query.starts_with(&["mutation ", UPDATE_NAME, "("].concat()));
@@ -295,28 +303,28 @@ fn update_body_names_the_operation_and_input() {
 #[test]
 fn update_outcome_definite_and_unknown() {
     assert_eq!(
-        classify_write(&confirmed("33"), "33"),
+        classify_write(&confirmed("MONKEYS"), "MONKEYS"),
         WriteOutcome::Confirmed
     );
-    assert_eq!(classify_write(&confirmed("0"), "33"), WriteOutcome::Refused);
+    assert_eq!(classify_write(&confirmed("ROBOTS"), "MONKEYS"), WriteOutcome::Refused);
     assert_eq!(
-        classify_write(&json!({ "errors": [{ "message": "service error" }] }), "33"),
+        classify_write(&json!({ "errors": [{ "message": "service error" }] }), "MONKEYS"),
         WriteOutcome::Refused
     );
     assert_eq!(
         classify_write(
             &json!({ "errors": [{ "message": "failed integrity check" }] }),
-            "33"
+            "MONKEYS"
         ),
         WriteOutcome::Refused
     );
-    assert_eq!(classify_write(&Value::Null, "33"), WriteOutcome::Unknown);
+    assert_eq!(classify_write(&Value::Null, "MONKEYS"), WriteOutcome::Unknown);
     assert_eq!(
-        classify_write(&json!("not json"), "33"),
+        classify_write(&json!("not json"), "MONKEYS"),
         WriteOutcome::Unknown
     );
     assert_eq!(
-        classify_write(&json!({ "data": { "updatePrimeSettings": null } }), "33"),
+        classify_write(&json!({ "data": { "updatePrimeSettings": null } }), "MONKEYS"),
         WriteOutcome::Unknown
     );
 }
@@ -341,14 +349,14 @@ async fn integrity_retry_sends_twice_with_a_token() {
             if calls.fetch_add(1, Ordering::SeqCst) == 0 {
                 Ok(json!({ "errors": [{ "message": "failed integrity check" }] }))
             } else {
-                Ok(confirmed("33"))
+                Ok(confirmed("MONKEYS"))
             }
         }
     };
     let answer = write_with_retry(send, || async { Ok(token()) })
         .await
         .unwrap();
-    assert_eq!(classify_write(&answer, "33"), WriteOutcome::Confirmed);
+    assert_eq!(classify_write(&answer, "MONKEYS"), WriteOutcome::Confirmed);
     assert_eq!(*sent.lock().unwrap(), vec![None, Some("t".to_string())]);
 }
 
@@ -358,14 +366,14 @@ async fn a_clean_answer_is_sent_once_and_an_unmintable_token_keeps_the_first_ans
     let clean = write_with_retry(
         |_| {
             calls.fetch_add(1, Ordering::SeqCst);
-            async { Ok(confirmed("33")) }
+            async { Ok(confirmed("MONKEYS")) }
         },
         || async { Ok(token()) },
     )
     .await
     .unwrap();
     assert_eq!(calls.load(Ordering::SeqCst), 1);
-    assert_eq!(classify_write(&clean, "33"), WriteOutcome::Confirmed);
+    assert_eq!(classify_write(&clean, "MONKEYS"), WriteOutcome::Confirmed);
 
     let calls = AtomicUsize::new(0);
     let refused = write_with_retry(
@@ -378,7 +386,7 @@ async fn a_clean_answer_is_sent_once_and_an_unmintable_token_keeps_the_first_ans
     .await
     .unwrap();
     assert_eq!(calls.load(Ordering::SeqCst), 1);
-    assert_eq!(classify_write(&refused, "33"), WriteOutcome::Refused);
+    assert_eq!(classify_write(&refused, "MONKEYS"), WriteOutcome::Refused);
 }
 
 #[tokio::test]
@@ -923,55 +931,79 @@ fn backoff_schedule() {
     let now = 10_000_000;
     let idle = Refresh::default();
     // The row mounts: a record under 30 s old is fresh enough.
-    assert!(!read_due(Some(now - 29_000), now, &idle, ROW_FRESH_MS));
-    assert!(read_due(Some(now - 31_000), now, &idle, ROW_FRESH_MS));
-    assert!(read_due(None, now, &idle, ROW_FRESH_MS));
+    assert!(!read_due(Some(now - 29_000), now, &idle, ROW_FRESH_MS, 1));
+    assert!(read_due(Some(now - 31_000), now, &idle, ROW_FRESH_MS, 1));
+    assert!(read_due(None, now, &idle, ROW_FRESH_MS, 1));
     // The scheduler: ten minutes.
     assert!(!read_due(
         Some(now - 9 * 60_000),
         now,
         &idle,
-        SCHEDULE_MAX_AGE_MS
+        SCHEDULE_MAX_AGE_MS,
+        1
     ));
     assert!(read_due(
         Some(now - 11 * 60_000),
         now,
         &idle,
-        SCHEDULE_MAX_AGE_MS
+        SCHEDULE_MAX_AGE_MS,
+        1
     ));
     // After two failures the next read waits twenty minutes from the last attempt.
     let failing = Refresh {
         last_attempt_ms: now,
         failures: 2,
-        in_flight: false,
+        in_flight: None,
     };
-    assert!(!read_due(None, now + 19 * 60_000, &failing, 0));
-    assert!(read_due(None, now + 20 * 60_000, &failing, 0));
-    // One read at a time.
+    assert!(!read_due(None, now + 19 * 60_000, &failing, 0, 1));
+    assert!(read_due(None, now + 20 * 60_000, &failing, 0, 1));
+    // One read at a time per account; the previous account's read never
+    // holds up the new account's first one.
     let running = Refresh {
-        in_flight: true,
+        in_flight: Some(1),
         ..Refresh::default()
     };
-    assert!(!read_due(None, now, &running, 0));
+    assert!(!read_due(None, now, &running, 0, 1));
+    assert!(read_due(None, now, &running, 0, 2));
+}
+
+#[tokio::test]
+async fn a_read_left_from_the_previous_account_neither_blocks_nor_counts() {
+    let _lock = TEST_LOCK.lock().await;
+    let _t = begin_test();
+    let old_gen = TwitchService::account_generation();
+    let old = begin_attempt(1_000, None, 0, old_gen).expect("the old account's read starts");
+    TwitchService::bump_account_generation();
+    let new_gen = TwitchService::account_generation();
+    let new = begin_attempt(1_001, None, 0, new_gen).expect("the new account reads at once");
+    // The old read lands late and fails: the new account is not charged.
+    old.finish(Verdict::Failed);
+    assert_eq!(lock_refresh().failures, 0);
+    // And it does not free the new account's slot.
+    assert_eq!(lock_refresh().in_flight, Some(new_gen));
+    assert!(begin_attempt(1_002, None, 0, new_gen).is_none(), "one at a time");
+    new.finish(Verdict::Committed);
+    assert_eq!(lock_refresh().in_flight, None);
 }
 
 #[tokio::test]
 async fn a_read_attempt_counts_failures_and_success_resets_them() {
     let _lock = TEST_LOCK.lock().await;
     let _t = begin_test();
-    let first = begin_attempt(1_000, None, 0).expect("the first read may start");
-    assert!(begin_attempt(1_001, None, 0).is_none(), "one at a time");
+    let g = TwitchService::account_generation();
+    let first = begin_attempt(1_000, None, 0, g).expect("the first read may start");
+    assert!(begin_attempt(1_001, None, 0, g).is_none(), "one at a time");
     first.finish(Verdict::Failed);
     assert_eq!(lock_refresh().failures, 1);
     assert!(
-        begin_attempt(1_000 + 9 * 60_000, None, 0).is_none(),
+        begin_attempt(1_000 + 9 * 60_000, None, 0, g).is_none(),
         "ten minutes after a failure"
     );
-    let second = begin_attempt(1_000 + 10 * 60_000, None, 0).expect("the wait is over");
+    let second = begin_attempt(1_000 + 10 * 60_000, None, 0, g).expect("the wait is over");
     second.finish(Verdict::Committed);
     assert_eq!(lock_refresh().failures, 0);
     // A read that was dropped for its fence says nothing about Twitch.
-    let third = begin_attempt(2_000_000, None, 0).unwrap();
+    let third = begin_attempt(2_000_000, None, 0, g).unwrap();
     third.finish(Verdict::Dropped(Dropped::Generation));
     assert_eq!(lock_refresh().failures, 0);
 }

@@ -250,7 +250,10 @@ pub async fn match_emote_tokens(
 
     // Taken before any set is locked, so nothing awaits under those locks.
     let seventv_globals: HashSet<String> = seventv_globals_snapshot().await.into_iter().map(|e| e.id).collect();
-    let favorites = cache_service::favorite_emote_ids();
+    let stored_favorites = cache_service::favorite_emote_ids();
+    // A smiley starred in another set ranks as the same face in this one.
+    let by_face = crate::services::twitch_smilies::favorites_by_face(&stored_favorites);
+    let favorites: &HashSet<String> = by_face.as_ref().unwrap_or(&stored_favorites);
     let ffz_subwoofer = crate::commands::ffz::cached_is_subwoofer().await;
 
     let mut collector = Collector::new(
@@ -263,7 +266,7 @@ pub async fn match_emote_tokens(
         },
         Context {
             channel_id: channel_id.as_deref(),
-            favorites: &favorites,
+            favorites,
             seventv_globals: &seventv_globals,
             ffz_subwoofer,
         },
