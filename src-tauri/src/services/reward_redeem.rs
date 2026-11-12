@@ -188,7 +188,9 @@ pub async fn redeem(
     }
     let cost = reward.cost;
     let channel_id = channel_id.to_string();
+    let room_id = channel_id.clone();
     let tx = transaction_for(&login, reward_id, &text);
+    let tx_id = tx.clone();
     use crate::commands::drops as cmd;
     let result = match kind {
         RewardKind::Highlight => cmd::send_highlighted_message(channel_id, text.clone(), cost, Some(tx)).await,
@@ -235,8 +237,67 @@ pub async fn redeem(
     };
     if done.success {
         forget_transaction(&login, reward_id, &text);
+        if kind == RewardKind::Standard {
+            echo_own_redemption(&login, &room_id, &reward, &tx_id).await;
+        }
     }
     done
+}
+
+/// Your own redemption as a row in that channel's chat when Twitch's
+/// redemption feed will not bring it. The feed is followed only for the
+/// channel being watched, so a redeem from a chat with no stream playing (the
+/// phones' Chats screen, a chat-only window) left no row anywhere. A watched
+/// channel is left to the feed, which carries Twitch's own redemption id, so
+/// the row is never drawn twice. A reward that takes text needs neither: its
+/// chat message is its row.
+async fn echo_own_redemption(login: &str, room_id: &str, reward: &ChannelReward, tx: &str) {
+    use crate::models::settings::AppState;
+    use crate::services::irc_service::{IrcService, RedemptionRow};
+    use tauri::Manager;
+    let Some(app) = crate::services::providers::app_handle() else { return };
+    let state = app.state::<AppState>();
+    let shown = state
+        .settings
+        .lock()
+        .ok()
+        .and_then(|s| s.extra.get("show_channel_point_redemptions").and_then(|v| v.as_bool()))
+        .unwrap_or(true);
+    if !shown {
+        return;
+    }
+    let ws = state.background_service.lock().await.websocket_service.clone();
+    let watched = ws.lock().await.is_active_channel(room_id).await;
+    if watched {
+        return;
+    }
+    let Ok(me) = crate::services::twitch_service::TwitchService::get_user_info().await else { return };
+    let (badges, color) = crate::services::chat_history::ChatHistory::last_look(room_id, &me.id)
+        .map(|(badges, color)| (badges.join(","), color.unwrap_or_default()))
+        .unwrap_or_default();
+    let points_icon_url = crate::services::channel_state::get(login)
+        .await
+        .and_then(|s| s.points)
+        .filter(|p| p.enabled)
+        .and_then(|p| p.icon_url);
+    let user_name = if me.display_name.is_empty() { me.login.clone() } else { me.display_name.clone() };
+    IrcService::publish_redemption_row(RedemptionRow {
+        channel: login.to_string(),
+        room_id: room_id.to_string(),
+        redemption_id: tx.to_string(),
+        user_id: me.id,
+        user_login: me.login,
+        user_name,
+        reward_id: reward.id.clone(),
+        reward_title: reward.title.clone(),
+        reward_cost: reward.cost as i64,
+        image_url: reward.image_url.clone().unwrap_or_default(),
+        background_color: reward.background_color.clone(),
+        points_icon_url,
+        badges,
+        color,
+    })
+    .await;
 }
 
 #[cfg(test)]
