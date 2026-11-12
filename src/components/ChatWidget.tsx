@@ -85,6 +85,7 @@ import { CheerBar } from './chat/CheerBar';
 import { useCheerDraft } from '../stores/cheerPromptStore';
 import { channelToolSections } from '../utils/channelTools';
 import ResubNotificationBanner, { ResubNotification } from './ResubNotificationBanner';
+import { onOwnSubSettled } from '../utils/ownSubWatch';
 import WatchStreakBanner, { WatchStreakMilestone } from './WatchStreakBanner';
 import { EmoteSet, queueChannelEmotesForCaching, setEmoteCacheBurst, youTubeChannelEmojiRows, type YouTubeChannelEmoji } from '../services/emoteService';
 import { useEmotePalette, type PaletteChannel } from '../hooks/useEmotePalette';
@@ -2605,6 +2606,9 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     };
     
     fetchResubNotification();
+    // Your sub here may have just changed (the subscribe page closed, or Twitch
+    // confirmed it): a resub only reaches chat once shared, so offer it again.
+    return onOwnSubSettled(currentStream?.user_login, () => void fetchResubNotification());
   }, [isTwitch, currentStream?.user_login, resubDismissed]);
 
   // Fetch watch streak milestone when entering a new channel. Skipped in

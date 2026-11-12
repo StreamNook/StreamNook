@@ -28,6 +28,7 @@ import { WatchStreakFlame } from '../../components/icons/WatchStreakFlame';
 import { ACCENT_BUTTON, ACCENT_FILL, BANNER_STYLE, GLAZE_BANNER } from '../../components/ui/glazeButtons';
 import { invoke } from '@tauri-apps/api/core';
 import { Logger } from '../../utils/logger';
+import { onOwnSubSettled } from '../../utils/ownSubWatch';
 
 interface WatchStreakMilestone {
   milestone_id: string;
@@ -126,6 +127,9 @@ export const StreakBanners: React.FC<Props> = ({ channel, channelId, armedRef, o
         Logger.debug('[Streaks] watch streak unavailable:', err);
         take({ streak: null });
       }
+      await readResub();
+    })();
+    async function readResub() {
       try {
         const r = await invoke<ResubNotification | null>('get_resub_notification', { channelLogin: channel });
         take({ resub: r ?? null });
@@ -133,9 +137,13 @@ export const StreakBanners: React.FC<Props> = ({ channel, channelId, armedRef, o
         Logger.debug('[Streaks] resub unavailable:', err);
         take({ resub: null });
       }
-    })();
+    }
+    // Your sub here may have just changed (Twitch confirmed it while the
+    // subscribe page was open): a resub only reaches chat once shared.
+    const stopSettled = onOwnSubSettled(channel, () => void readResub());
     return () => {
       cancelled = true;
+      stopSettled();
     };
   }, [room, channel, channelId]);
 

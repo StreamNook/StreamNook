@@ -11,6 +11,7 @@ import type { ProviderId } from '../types/providers';
 import { IS_MOBILE } from '../utils/platform';
 import { isApprovalClosed } from '../utils/twitchApproval';
 import { subscribeBadgePending } from '../utils/subscribeBadge';
+import { onOwnSubSettled, stopOwnSubWatch, watchSubscribePage } from '../utils/ownSubWatch';
 import { useConfirmPress } from './useConfirmPress';
 
 interface ChannelSocialTarget {
@@ -77,6 +78,13 @@ export function useChannelSocial({ provider: providerProp, userId, userLogin, us
   const [hasSubHistory, setHasSubHistory] = useState<boolean>(false);
   const [cumulativeMonths, setCumulativeMonths] = useState<number>(0);
   const [subscriberBadgeUrl, setSubscriberBadgeUrl] = useState<string | null>(null);
+  // Bumped when your sub to this channel may have changed (the subscribe page
+  // closed, or Twitch confirmed the sub), so an unwatched channel reads again.
+  const [subReadTick, setSubReadTick] = useState(0);
+  useEffect(() => {
+    if (!enabled || !isTwitch) return;
+    return onOwnSubSettled(userLogin, () => setSubReadTick((t) => t + 1));
+  }, [enabled, isTwitch, userLogin]);
   // Whether this channel sells the paid tier at all. Twitch/Kick always do; on
   // YouTube most channels have no memberships, so the Join button should not be
   // offered there. Defaults to true so nothing is hidden before the answer lands.
@@ -289,7 +297,7 @@ export function useChannelSocial({ provider: providerProp, userId, userLogin, us
     return () => {
       cancelled = true;
     };
-  }, [enabled, userId, userLogin, currentUser?.login, provider, providerChannel, providerFollows, hasPushed]);
+  }, [enabled, userId, userLogin, currentUser?.login, provider, providerChannel, providerFollows, hasPushed, subReadTick]);
 
   // The channel's own subscriber art, from Rust (`channel_sub_badge`), for
   // Twitch and Kick: the channel's badge, else the platform's standard one,
@@ -383,6 +391,8 @@ export function useChannelSocial({ provider: providerProp, userId, userLogin, us
 
       // Only react to the current user's own subscription on this channel's window
       if (currentUserLogin && login === currentUserLogin && subscribeWindowLabelRef.current) {
+        // The chat notice got there first: the watch on Twitch can stop.
+        if (userLogin) stopOwnSubWatch(userLogin);
         useAppStore.getState().addToast(
           `Subscription successful! ${msgId === 'subgift' ? 'Gift sent!' : 'Thank you for subscribing!'}`,
           'success'
@@ -404,7 +414,16 @@ export function useChannelSocial({ provider: providerProp, userId, userLogin, us
     return () => {
       window.removeEventListener('twitch-subscription-detected', handleSubscriptionDetected);
     };
-  }, [enabled, currentUser?.login]);
+  }, [enabled, currentUser?.login, userLogin]);
+
+  // The page closed, or the watch on Twitch confirmed the sub: nothing is left
+  // for the chat notice to close or thank.
+  useEffect(() => {
+    if (!enabled || !isTwitch || !userLogin) return;
+    return onOwnSubSettled(userLogin, () => {
+      subscribeWindowLabelRef.current = null;
+    });
+  }, [enabled, isTwitch, userLogin]);
 
   // Open the Twitch subscribe page for this channel in a dedicated window,
   // isolated to the active (main) account's Twitch web profile so you subscribe
@@ -422,11 +441,16 @@ export function useChannelSocial({ provider: providerProp, userId, userLogin, us
         provider,
       });
       subscribeWindowLabelRef.current = label;
+      // Twitch posts a resub (Prime included) in chat only once it is shared,
+      // so the chat notice may never come: ask Twitch itself while the page is
+      // open. Only from "not subscribed", so an upgrade never reads as done.
+      const wasSubscribed = pushed ? pushed.subscribed : isSubscribed;
+      if (isTwitch && userId && !wasSubscribed) watchSubscribePage(userLogin, userId, label);
     } catch (e) {
       Logger.error('[useChannelSocial] Error opening subscribe window:', e);
       subscribeWindowLabelRef.current = null;
     }
-  }, [userLogin, userName, provider]);
+  }, [userLogin, userName, provider, isTwitch, userId, pushed, isSubscribed]);
 
   const badgeUrl = (pushed ? pushed.badge_url : subscriberBadgeUrl) || chatMemberBadge || channelArtUrl;
 

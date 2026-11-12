@@ -7,6 +7,7 @@ import { Logger } from '../utils/logger';
 import { IS_WEBKITGTK } from '../utils/platform';
 import { useAppStore } from '../stores/AppStore';
 import { useFollowsStore } from '../stores/followsStore';
+import { settleOwnSub, subscribePanelLogin } from '../utils/ownSubWatch';
 
 // In-app Twitch overlay (login, drops sign-in, subscribe). React owns the chrome
 // (the read-only address bar, and for subscribe the centered panel); the Twitch
@@ -134,6 +135,13 @@ export default function TwitchOverlay() {
     listen<{ label: string }>('twitch-overlay-close', (e) => {
       const closing = overlayRef.current;
       setOverlay((cur) => (cur && cur.label === e.payload.label ? null : cur));
+      // A Twitch subscribe page closed: Twitch posts a resub only once it is
+      // shared, so read the sub and the share offer again rather than waiting
+      // for a chat notice that may never come.
+      const subLogin = subscribePanelLogin(e.payload.label);
+      if (subLogin && closing?.label === e.payload.label && !closing.profile) {
+        settleOwnSub(subLogin, e.payload.label);
+      }
       // YouTube puts a full account switcher in every page it serves, including the
       // sign-in overlay and the /join membership panel, and both run in the app's
       // own YouTube profile. Switching channel there is real but leaves nothing in
