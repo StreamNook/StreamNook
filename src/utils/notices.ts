@@ -56,7 +56,8 @@ export function loadNoticeTypes(): Promise<NoticeType[]> {
 export function useNoticeTypes(): NoticeType[] | null {
   const [list, setList] = useState<NoticeType[] | null>(cached);
   useEffect(() => {
-    if (cached) return;
+    // Always asks: the list can land between the first render and this
+    // effect, and returning early then left the section empty for the run.
     let live = true;
     void loadNoticeTypes().then((l) => {
       if (live) setList(l);

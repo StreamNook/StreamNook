@@ -42,7 +42,9 @@ export function loadAlertTypes(): Promise<AlertType[]> {
 export function useAlertTypes(): AlertType[] | null {
   const [list, setList] = useState<AlertType[] | null>(cached);
   useEffect(() => {
-    if (cached) return;
+    // Always asks, even when the list is already in: it can land after this
+    // hook's first render and before this effect, and an early return here
+    // left the page on null for the whole run (Notify me about empty).
     let live = true;
     void loadAlertTypes().then((l) => {
       if (live) setList(l);
