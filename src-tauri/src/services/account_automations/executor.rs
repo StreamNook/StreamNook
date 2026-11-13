@@ -72,6 +72,10 @@ pub struct Job {
     pub(crate) open_lanes: Vec<String>,
     /// The event's room (`claims::event_room`).
     pub(crate) room: String,
+    /// The first action this pass runs (a job resumed after a Wait starts past it).
+    pub(crate) start_at: usize,
+    /// The claims and flags a Wait carried over to this pass.
+    pub(crate) carry: Mutex<Option<JobRun>>,
 }
 
 impl Job {
@@ -114,6 +118,8 @@ impl Job {
             unready,
             open_lanes,
             room,
+            start_at: 0,
+            carry: Mutex::new(None),
         }
     }
 
@@ -121,7 +127,7 @@ impl Job {
         &self.compiled.rules[self.index]
     }
 
-    fn plan_of(&self, action: usize) -> Option<&ClassPlan> {
+    pub(crate) fn plan_of(&self, action: usize) -> Option<&ClassPlan> {
         self.plans.iter().find(|p| p.actions.contains(&action))
     }
 
@@ -130,12 +136,12 @@ impl Job {
     }
 
     /// The person the event came from (none for a badge drop).
-    fn person(&self) -> Option<&str> {
+    pub(crate) fn person(&self) -> Option<&str> {
         (!self.badge() && !self.facts.user_id.is_empty()).then_some(self.facts.user_id.as_str())
     }
 
     /// The chat the event is in: the owner's for a badge drop.
-    fn login(&self) -> String {
+    pub(crate) fn login(&self) -> String {
         if self.badge() {
             self.rule().owner_login.clone()
         } else {
@@ -143,11 +149,11 @@ impl Job {
         }
     }
 
-    fn lane(&self) -> (String, String) {
+    pub(crate) fn lane(&self) -> (String, String) {
         (self.rule().rule.send_as.id.clone(), self.login())
     }
 
-    fn accounts(&self) -> Vec<String> {
+    pub(crate) fn accounts(&self) -> Vec<String> {
         let rule = &self.rule().rule;
         let mut ids = vec![rule.send_as.id.clone()];
         if rule.owner.id != rule.send_as.id {
@@ -157,7 +163,7 @@ impl Job {
     }
 
     /// Time left before the age bound, if any.
-    fn left(&self) -> Option<Duration> {
+    pub(crate) fn left(&self) -> Option<Duration> {
         self.age_bound.checked_sub(self.admitted_at.elapsed()).filter(|d| !d.is_zero())
     }
 
@@ -365,28 +371,30 @@ pub(crate) struct WonCall {
 }
 
 #[derive(Default)]
-struct ClassRun {
-    calls: Vec<WonCall>,
+pub(crate) struct ClassRun {
+    pub(crate) calls: Vec<WonCall>,
     /// A send of the class was Sent or Unknown: the claims are kept.
-    sent_or_unknown: bool,
+    pub(crate) sent_or_unknown: bool,
     /// The class claimed (or a cached win stands in for a claim).
-    won: bool,
+    pub(crate) won: bool,
 }
 
 #[derive(Default)]
-struct JobRun {
-    classes: HashMap<String, ClassRun>,
+pub(crate) struct JobRun {
+    pub(crate) classes: HashMap<String, ClassRun>,
     /// Classes already logged as cooling down.
-    cooling: HashSet<String>,
+    pub(crate) cooling: HashSet<String>,
     /// A Refused or Unknown send stopped every later outward action.
-    stopped: bool,
+    pub(crate) stopped: bool,
+    /// A Wait ended the pass: the next action to run and the seconds to wait first.
+    pub(crate) resume_at: Option<(usize, u32)>,
 }
 
 /// Run every action of `job` in rule order, then give back what it won and
 /// never used.
 pub(crate) async fn run_job(engine: &Arc<Engine>, job: &Job) {
-    let mut run = JobRun::default();
-    for (index, action) in job.rule().rule.actions.iter().enumerate() {
+    let mut run = job.carry.lock().unwrap_or_else(|e| e.into_inner()).take().unwrap_or_default();
+    for (index, action) in job.rule().rule.actions.iter().enumerate().skip(job.start_at) {
         if engine.executor.canceled(job) {
             break;
         }
@@ -399,6 +407,52 @@ pub(crate) async fn run_job(engine: &Arc<Engine>, job: &Job) {
                 if job.open_lanes.iter().any(|l| l == guards::LOCAL_LANE) {
                     notify_action(engine, job, action).await;
                 }
+            }
+            Action::Announce { .. } => {
+                // Ticketed `post:` booking and the full chat path; the door is the
+                // engine's Announce door at step 10 (`outward_action` branches on the action).
+                if run.stopped {
+                    continue;
+                }
+                let Some(plan) = job.plan_of(index).cloned() else { continue };
+                if !job.open_lanes.contains(&plan.class.key()) {
+                    if run.cooling.insert(plan.class.key()) {
+                        skip(engine, job, guards::COOLING);
+                    }
+                    continue;
+                }
+                if job.live {
+                    outward_action(engine, job, action, &plan, &mut run).await;
+                } else {
+                    test_action(engine, job, action, &plan).await;
+                }
+            }
+            // The door classes, by name (a guard would not count toward exhaustiveness):
+            // Command, Whisper and the moderation actions, and a Whisper rule's Reply, which
+            // whispers back and never reaches the chat path (C5).
+            Action::Command { .. } | Action::Whisper { .. } | Action::Timeout { .. } | Action::Delete { .. } | Action::Pin { .. } | Action::Shoutout { .. } => {
+                door_arm(engine, job, index, action, &mut run).await;
+            }
+            Action::Reply { .. } if job.rule().rule.is_whisper_rule() => {
+                door_arm(engine, job, index, action, &mut run).await;
+            }
+            Action::JoinChat { .. } | Action::LeaveChat { .. } | Action::Log { .. } => {
+                let text = match action {
+                    Action::Log { .. } => job.facts.text.clone(),
+                    _ => String::new(),
+                };
+                super::doors::run_control_action(engine, job, action, &text).await;
+            }
+            Action::Wait { seconds, .. } => {
+                if !job.live {
+                    engine.log(entry(job, EntryKind::Test, &chat_key_of(&job.login()), format!("Would wait {seconds} seconds")));
+                    continue;
+                }
+                // Release the permit and the order slot: the rest of the job is
+                // re-queued after the wait with a fresh `admitted_at`; its won
+                // claims stand and guards and holds run again when it ends.
+                run.resume_at = Some((index + 1, *seconds));
+                break;
             }
             Action::Reply { .. } | Action::Send { .. } => {
                 if run.stopped {
@@ -420,8 +474,69 @@ pub(crate) async fn run_job(engine: &Arc<Engine>, job: &Job) {
             }
         }
     }
+    if let Some((next, seconds)) = run.resume_at.take() {
+        resume_after_wait(engine, job, run, next, seconds);
+        return;
+    }
     finish(engine, job, run).await;
     engine.announce_status();
+}
+
+/// One door-class action of `run_job` (Command, Whisper, the moderation
+/// actions, a Whisper rule's Reply): the lane's cooling check, then the live
+/// door path or the Test line.
+async fn door_arm(engine: &Arc<Engine>, job: &Job, index: usize, action: &Action, run: &mut JobRun) {
+    if run.stopped {
+        return;
+    }
+    let Some(plan) = job.plan_of(index).cloned() else { return };
+    if !job.open_lanes.contains(&plan.class.key()) {
+        if run.cooling.insert(plan.class.key()) {
+            skip(engine, job, guards::COOLING);
+        }
+        return;
+    }
+    if job.live {
+        super::doors::run_door_action(engine, job, action, &plan, run).await;
+    } else {
+        super::doors::test_door_action(engine, job, action, &plan).await;
+    }
+}
+
+/// A Wait ended the pass: after `seconds` (or a cancel) the rest of the job
+/// runs as a new job in the same lane, with a fresh `admitted_at`, its claims
+/// carried and the holds and final checks run again (not admission: the original
+/// admission stands). A cancel or a switched-off rule gives the claims back.
+fn resume_after_wait(engine: &Arc<Engine>, job: &Job, run: JobRun, next: usize, seconds: u32) {
+    let engine = engine.clone();
+    let spawner = engine.clone();
+    let compiled = job.compiled.clone();
+    let (index, facts, live, plans, room) = (job.index, job.facts.clone(), job.live, job.plans.clone(), job.room.clone());
+    let (drops, links, unready) = (job.drops.clone(), job.links.clone(), job.unready.clone());
+    let probe = Job::new(&engine, compiled.clone(), index, facts.clone(), drops.clone(), links.clone(), live, plans.clone(), unready.clone(), job.open_lanes.clone(), room.clone(), engine.now());
+    spawner.spawn(async move {
+        if !engine.executor.pause(&probe, Duration::from_secs(u64::from(seconds))).await {
+            finish(&engine, &probe, run).await;
+            return;
+        }
+        // The original admission stands (M10): a second `admit` would count a second
+        // fire against the rule's rate and meet the job's own stamps as a cooldown.
+        // After the wait only the holds and the final checks run, and every action
+        // runs them again at its own step 5 and 9 (`local_checks` reads `held`,
+        // the rule's mode and the cancel generation). Nothing re-stamps.
+        // The rule's mode NOW (a recompile may have switched it off or to Test during
+        // the wait), never the pre-Wait snapshot's.
+        let rule_id = compiled.rules[index].rule.id.clone();
+        let wanted = if live { super::compile::Mode::Live } else { super::compile::Mode::Test };
+        if engine.compiled().rule(&rule_id).and_then(|c| c.mode) != Some(wanted) || engine.executor.canceled(&probe) {
+            finish(&engine, &probe, run).await;
+            return;
+        }
+        let mut job = Job::new(&engine, compiled, index, facts, drops, links, live, plans, unready, probe.open_lanes.clone(), room, engine.now());
+        job.start_at = next;
+        *job.carry.lock().unwrap_or_else(|e| e.into_inner()) = Some(run);
+        engine.executor.submit(&engine, job);
+    });
 }
 
 /// Give back the claim of every class none of whose sends was Sent or Unknown.
@@ -458,7 +573,7 @@ fn target(job: &Job, action: &Action) -> (String, String, Option<String>) {
     }
 }
 
-fn chat_key_of(login: &str) -> String {
+pub(crate) fn chat_key_of(login: &str) -> String {
     crate::services::chat_rules::channel_filter_key("twitch", login)
 }
 
@@ -491,9 +606,17 @@ async fn vars(engine: &Arc<Engine>, job: &Job, drops: &[&BadgeSeen]) -> Vars {
     vars
 }
 
+/// A text's variables filled, with no line picking and no cleaning of a
+/// command's slash: for a Command line, a Timeout reason.
+pub(crate) async fn expand_plain(engine: &Arc<Engine>, job: &Job, text: &str) -> Result<String, String> {
+    template::outward_text_ok(&job.rule().rule, &job.facts, text).map_err(str::to_string)?;
+    let vars = vars(engine, job, &[]).await;
+    Ok(template::expand(text, &vars))
+}
+
 /// The action's text for this event: one line picked (the batch line for a
 /// badge batch of several), variables filled, cleaned.
-async fn render(engine: &Arc<Engine>, job: &Job, action: &Action, won: &[usize]) -> Result<String, String> {
+pub(crate) async fn render(engine: &Arc<Engine>, job: &Job, action: &Action, won: &[usize]) -> Result<String, String> {
     let cr = job.rule();
     let drops: Vec<&BadgeSeen> = won.iter().filter_map(|i| job.drops.get(*i)).collect();
     let lines = action.lines();
@@ -505,6 +628,10 @@ async fn render(engine: &Arc<Engine>, job: &Job, action: &Action, won: &[usize])
     };
     let text = match batch_text {
         Some(text) => text,
+        None if matches!(action, Action::Announce { .. }) => match action {
+            Action::Announce { text, .. } => text.clone(),
+            _ => String::new(),
+        },
         None => {
             if lines.is_empty() {
                 return Err("Skipped: nothing to send".into());
@@ -522,12 +649,12 @@ async fn render(engine: &Arc<Engine>, job: &Job, action: &Action, won: &[usize])
     template::clean(&template::expand(&text, &vars), cr.rule.vary).map_err(|e| e.words().to_string())
 }
 
-fn entry(job: &Job, kind: EntryKind, channel: &str, text: String) -> NewEntry {
+pub(crate) fn entry(job: &Job, kind: EntryKind, channel: &str, text: String) -> NewEntry {
     let rule = &job.rule().rule;
     NewEntry { kind, rule_id: rule.id.clone(), rule_name: rule.name.clone(), channel: channel.to_string(), text }
 }
 
-fn skip(engine: &Arc<Engine>, job: &Job, reason: &str) {
+pub(crate) fn skip(engine: &Arc<Engine>, job: &Job, reason: &str) {
     engine.log(entry(job, EntryKind::Skipped, &chat_key_of(&job.login()), reason.to_string()));
 }
 
@@ -571,6 +698,57 @@ async fn test_action(engine: &Arc<Engine>, job: &Job, action: &Action, plan: &Cl
 
 // ---- the outward path -------------------------------------------------------------------
 
+/// A reserved Announce slot that gives itself back on drop unless an Announce
+/// went out (Sent or Unknown keep it).
+struct AnnounceSlot<'a> {
+    holds: &'a Mutex<super::doors::Holds>,
+    room: String,
+    slot: i64,
+    kept: bool,
+}
+
+impl Drop for AnnounceSlot<'_> {
+    fn drop(&mut self) {
+        if !self.kept {
+            lock(self.holds).give_back_announce(&self.room, self.slot);
+        }
+    }
+}
+
+/// An Announce's send: the engine door, settling the booked ticket like the
+/// chat door (`record_ticket` on Sent and Unknown, `cancel_booking` on Refused).
+/// The room's 2 s spacing was reserved under the lock and waited out before
+/// booking (`outward_action`, below), so nothing sleeps here, after step 9's
+/// final checks; the rails (send_as is the primary, moderator or broadcaster
+/// there) are read once more, synchronously, right before the request.
+async fn announce_send(engine: &Arc<Engine>, job: &Job, ticket: &mut Ticket, send: &ChatSend, color: &str) -> SendOutcome {
+    if let Err(reason) = super::doors::announce_preflight(engine, job) {
+        chat_send_limiter::cancel_booking(ticket);
+        return SendOutcome::Refused(reason);
+    }
+    chat_send_limiter::mark_sending(ticket);
+    let outcome = engine.outward.mod_doors().announce(&send.token, &send.send_as, &send.room_id, &send.text, color).await;
+    use crate::services::twitch_service::DoorOutcome;
+    match outcome {
+        DoorOutcome::Sent => {
+            chat_send_limiter::record_ticket(ticket);
+            SendOutcome::Sent { message_id: None }
+        }
+        DoorOutcome::Unknown => {
+            chat_send_limiter::record_ticket(ticket);
+            SendOutcome::Unknown
+        }
+        DoorOutcome::Refused(text) => {
+            chat_send_limiter::cancel_booking(ticket);
+            SendOutcome::Refused(text)
+        }
+        DoorOutcome::RefusedUnauthorized(_) => {
+            chat_send_limiter::cancel_booking(ticket);
+            SendOutcome::Refused(format!("{} (401)", crate::services::chat_service::UNAUTHORIZED))
+        }
+    }
+}
+
 /// Book a slot for `text` on `send_as`'s limiter (the main account's own when
 /// it is the main account); with `vary`, a duplicate books once more with the
 /// invisible variation.
@@ -592,7 +770,7 @@ fn book(engine: &Engine, job: &Job, login: &str, text: &str) -> Result<(Duration
 
 /// The final checks that read only local state (no await), in one place so
 /// step 9 runs them with no await between them and the request.
-fn local_checks(engine: &Arc<Engine>, job: &Job, chat_key: &str, booked_away: &Option<Away>, live_now: bool) -> Result<(), String> {
+pub(crate) fn local_checks(engine: &Arc<Engine>, job: &Job, chat_key: &str, booked_away: &Option<Away>, live_now: bool) -> Result<(), String> {
     let rule = &job.rule().rule;
     if engine.executor.canceled(job) {
         return Err("Stopped".into());
@@ -642,7 +820,7 @@ fn local_checks(engine: &Arc<Engine>, job: &Job, chat_key: &str, booked_away: &O
 
 /// Every final check (step 5): the awaits (where the chat is open, liveness)
 /// first, then the local reads.
-async fn final_checks(engine: &Arc<Engine>, job: &Job, login: &str, booked_away: &Option<Away>) -> Result<(), String> {
+pub(crate) async fn final_checks(engine: &Arc<Engine>, job: &Job, login: &str, booked_away: &Option<Away>) -> Result<(), String> {
     match &job.rule().rule.only_if.channels {
         ChannelScope::AnyOpen {} => {
             let adopted = lock(&engine.rec).adopted.contains_key(login);
@@ -664,7 +842,7 @@ async fn final_checks(engine: &Arc<Engine>, job: &Job, login: &str, booked_away:
 
 /// The verified tokens for the job's sender and owner. A token is used for an
 /// account only when Twitch says it is that account's.
-async fn verify_accounts(engine: &Arc<Engine>, job: &Job) -> Result<(VerifiedToken, VerifiedToken), String> {
+pub(crate) async fn verify_accounts(engine: &Arc<Engine>, job: &Job) -> Result<(VerifiedToken, VerifiedToken), String> {
     let rule = &job.rule().rule;
     // The checks spend the job's own remaining age, never more.
     let budget = job.left().ok_or("Skipped: too late to answer")?;
@@ -746,7 +924,8 @@ pub(crate) enum Reading {
     /// The whisper budget: this person was whispered in the last hour.
     WhisperHour,
     /// The whisper budget: the people-a-day count is reached.
-    WhisperDay,
+    /// The server's `retry_after_ms` from this very answer.
+    WhisperDay { retry_after_ms: Option<i64> },
     /// Every event element is held by another session.
     Held { holder: String, same_device: bool, age_ms: i64, settle_ms: i64 },
 }
@@ -761,8 +940,8 @@ pub(crate) fn read_answer(elements: &[Element], answers: &[ElementAnswer]) -> Re
     if answers.iter().any(|a| !a.won && a.reason.as_deref() == Some("hour")) {
         return Reading::WhisperHour;
     }
-    if answers.iter().any(|a| !a.won && a.reason.as_deref() == Some("day")) {
-        return Reading::WhisperDay;
+    if let Some(a) = answers.iter().find(|a| !a.won && a.reason.as_deref() == Some("day")) {
+        return Reading::WhisperDay { retry_after_ms: a.retry_after_ms };
     }
     if let Some(loser) = answers.iter().find(|a| !a.won && matches!(a.reason.as_deref(), Some("gap" | "rulecd" | "person" | "reminder_kw"))) {
         return Reading::Cooldown { holder: loser.holder_name.clone().unwrap_or_default(), free_at_ms: loser.free_at_ms };
@@ -811,7 +990,7 @@ fn lost_words(holder: &str, same_device: bool) -> String {
 /// verified token; a lost exact event is claimed again at 1.5, 3, 6 and 12 s
 /// from the loss while its holder may still give it back.
 #[allow(clippy::too_many_arguments)]
-async fn claim_class(
+pub(crate) async fn claim_class(
     engine: &Arc<Engine>,
     job: &Job,
     plan: &ClassPlan,
@@ -825,7 +1004,7 @@ async fn claim_class(
     let prefs = engine.compiled().prefs.clone();
     let lane = plan.class.key();
     let person = job.person();
-    let Some(trigger) = claims::trigger_family(&rule.when, &job.facts) else {
+    let Some(trigger) = claims::rule_trigger_family(rule, &job.facts) else {
         return Claimed::Skip(claims::BUILD_FAILED.into());
     };
     let family = claims::event_family(&trigger, &plan.class);
@@ -890,7 +1069,13 @@ async fn claim_class(
             Reading::WhisperHour => {
                 return Claimed::Skip(format!("Already whispered @{} in the last hour", job.facts.user_login));
             }
-            Reading::WhisperDay => return Claimed::Skip(WHISPER_DAY_FULL.into()),
+            Reading::WhisperDay { retry_after_ms } => {
+                // New recipients wait until the oldest counted recipient's 24 h ends;
+                // no claim per event (D272, D289).
+                let until = chrono::Utc::now().timestamp_millis() + retry_after_ms.unwrap_or(3_600_000);
+                lock(&engine.door_holds).hold_new_recipients_until(until);
+                return Claimed::Skip(WHISPER_DAY_FULL.into());
+            }
             Reading::Held { holder, same_device, age_ms, settle_ms } => {
                 let loss = *lost_at.get_or_insert_with(Instant::now);
                 let offsets = engine.timings.claims.reclaim_at;
@@ -954,6 +1139,23 @@ async fn outward_action(engine: &Arc<Engine>, job: &Job, action: &Action, plan: 
         Err(reason) => return skip(engine, job, &reason),
     };
     let booked_away = engine.away();
+
+    // An Announce: its rails (send_as the primary, a moderator or the broadcaster
+    // there), then the room's next 2 s slot reserved under the lock; the wait is
+    // here, before booking, never after step 9. A held Announce re-books after
+    // the hold instead of skipping; other sends and other rooms are not held.
+    // The slot is given back on every skip and on a Refused (the guard's drop), and kept on Sent and Unknown.
+    let mut announce_slot: Option<AnnounceSlot> = None;
+    if matches!(action, Action::Announce { .. }) {
+        if let Err(reason) = super::doors::announce_preflight(engine, job) {
+            return skip(engine, job, &reason);
+        }
+        let (wait_ms, slot) = lock(&engine.door_holds).reserve_announce(&room_id, engine.now());
+        announce_slot = Some(AnnounceSlot { holds: &engine.door_holds, room: room_id.clone(), slot, kept: false });
+        if wait_ms > 0 && !engine.executor.pause(job, Duration::from_millis(wait_ms as u64)).await {
+            return skip(engine, job, "Stopped");
+        }
+    }
 
     // Step 3: book. Steps 4 to 6: wait, check, re-book on moved spacing.
     let (wait, mut ticket, booked_text) = match book(engine, job, &login, &text) {
@@ -1074,7 +1276,16 @@ async fn outward_action(engine: &Arc<Engine>, job: &Job, action: &Action, plan: 
 
     // Step 10: the send. The door marks, records or cancels the ticket.
     let send = ChatSend { token: token.token, text: text.clone(), parent, login: login.clone(), room_id, send_as: send_as.clone() };
-    let outcome = engine.outward.chat_send(&mut ticket, &send).await;
+    let outcome = if let Action::Announce { color, .. } = action {
+        announce_send(engine, job, &mut ticket, &send, color).await
+    } else {
+        engine.outward.chat_send(&mut ticket, &send).await
+    };
+    if let Some(slot) = announce_slot.as_mut() {
+        if matches!(outcome, SendOutcome::Sent { .. } | SendOutcome::Unknown) {
+            slot.kept = true;
+        }
+    }
     let now = engine.now();
     match outcome {
         SendOutcome::Sent { .. } => {
@@ -1675,7 +1886,7 @@ mod tests {
         let hour = vec![ElementAnswer::lost(0, "rail"), ElementAnswer::lost(1, "hour")];
         assert_eq!(read_answer(&elements, &hour), Reading::WhisperHour);
         let day = vec![ElementAnswer::lost(0, "rail"), ElementAnswer::lost(1, "day")];
-        assert_eq!(read_answer(&elements, &day), Reading::WhisperDay);
+        assert_eq!(read_answer(&elements, &day), Reading::WhisperDay { retry_after_ms: None });
     }
 
     #[test]

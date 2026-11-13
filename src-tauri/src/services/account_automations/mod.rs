@@ -628,7 +628,7 @@ impl Engine {
         let ctx = self.match_ctx(away.as_ref(), false);
         for verdict in matcher::evaluate(compiled, &facts, &ctx) {
             if verdict.fired {
-                self.admit_rule(compiled, verdict.rule, facts.clone(), Vec::new(), HashMap::new(), now);
+                self.admit_rule(compiled, verdict.rule, facts.clone(), Vec::new(), HashMap::new(), now, None);
             }
         }
     }
@@ -643,6 +643,7 @@ impl Engine {
         drops: Vec<BadgeSeen>,
         links: HashMap<String, Option<String>>,
         now: i64,
+        bound: Option<Duration>,
     ) {
         let cr = &compiled.rules[index];
         let Some(mode) = cr.mode else { return };
@@ -666,7 +667,10 @@ impl Engine {
                         return;
                     }
                 }
-                let job = Job::new(self, compiled.clone(), index, facts, drops, links, live, plans, unready, open, room, now);
+                let mut job = Job::new(self, compiled.clone(), index, facts, drops, links, live, plans, unready, open, room, now);
+                if let Some(bound) = bound {
+                    job.age_bound = bound;
+                }
                 self.executor.submit(self, job);
             }
         }
@@ -833,7 +837,7 @@ impl Engine {
                 let ctx = engine.match_ctx(away.as_ref(), false);
                 let verdict = matcher::evaluate_rule(&compiled, index, &facts, &ctx);
                 if verdict.fired {
-                    engine.admit_rule(&compiled, index, facts, drops, links, engine.now());
+                    engine.admit_rule(&compiled, index, facts, drops, links, engine.now(), None);
                 } else if let Some(reason) = verdict.reason {
                     engine.skip(&compiled.rules[index].rule, "", &reason);
                 }
