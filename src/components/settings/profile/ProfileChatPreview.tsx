@@ -10,6 +10,7 @@ import { AtmosphereBackground } from '../../AtmosphereBackground';
 import { ChatBadgeIcons, type ResolvedTwitchBadge, type SevenTvBadgeLike } from '../../chat/ChatBadgeIcons';
 import { Tooltip } from '../../ui/Tooltip';
 import { computePaintStyle } from '../../../services/seventvService';
+import { paintSwapStyle } from '../../../services/paintStyle';
 import { getAtmosphere, type Atmosphere } from '../../../services/atmospheres';
 import type { ThirdPartyBadge } from '../../../services/badgeService';
 import { previewEmoteUrl, rollPreviewChat, type PreviewEmote } from '../../../utils/previewChat';
@@ -78,6 +79,8 @@ export function ProfileChatPreview({
   };
   // Your fold limit from Chat settings, so the line folds like your chat does.
   const foldLimit = badgeFoldLimit(useAppStore((s) => s.settings?.chat_design?.badge_fold_limit));
+  // Your paint shadow setting, so the name glows as it does in your chat.
+  const shadowMode = useAppStore((s) => s.settings?.cosmetics?.paint_shadows) ?? 'all';
   // The worn Twitch badge in the shape chat rows carry; the key is the one the
   // badge art cache uses, so the line draws the disk copy chat would.
   const twitchBadges = useMemo<ResolvedTwitchBadge[]>(
@@ -157,7 +160,7 @@ export function ProfileChatPreview({
           <span
             key={paintId}
             className={`align-middle font-semibold ${fresh.has(paintId) ? 'sn-cosmetic-swap sn-cosmetic-swap--name' : ''}`}
-            style={paint ? computePaintStyle(paint as never, '#9146FF') : undefined}
+            style={paint ? paintSwapStyle(computePaintStyle(paint as never, '#9146FF', shadowMode)) : undefined}
           >
             {displayName}
           </span>

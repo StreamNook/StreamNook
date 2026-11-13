@@ -18,6 +18,7 @@ import {
   queueCosmeticForCaching,
   clearUserCache as clear7TVCache,
 } from '../../services/seventvService';
+import { paintSwapStyle } from '../../services/paintStyle';
 import { FallbackImage } from '../FallbackImage';
 import { getCachedBadgeUrl } from '../../services/badgeImageCacheService';
 import { Tooltip } from '../ui/Tooltip';
@@ -1340,7 +1341,7 @@ const ProfileSettings = () => {
               className={`${cardInColumn ? 'text-2xl' : 'text-3xl'} font-bold ${
                 freshOnCard.has(`paint-${seventvPaint?.id ?? 'none'}`) ? 'sn-cosmetic-swap sn-cosmetic-swap--name' : ''
               }`}
-              style={seventvPaint ? computePaintStyle(seventvPaint as any, '#9146FF') : { color: 'var(--text-primary)' }}
+              style={seventvPaint ? paintSwapStyle(computePaintStyle(seventvPaint as any, '#9146FF')) : { color: 'var(--text-primary)' }}
             >
               {currentUser.display_name || currentUser.login}
             </h3>

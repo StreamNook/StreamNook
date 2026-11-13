@@ -247,6 +247,19 @@ export const computePaintStyleUncached = (
   return style;
 };
 
+/**
+ * A paint style for a name that plays the cosmetic swap (`.sn-cosmetic-swap--name`).
+ * The swap animates `filter` and `opacity`, which would otherwise replace the
+ * paint's own drop-shadows and opacity while it runs; these variables let its
+ * keyframes keep them.
+ */
+export function paintSwapStyle(style: CSSProperties): CSSProperties {
+  const vars: Record<string, string | number> = {};
+  if (style.filter) vars['--sn-paint-filter'] = style.filter;
+  if (style.opacity !== undefined) vars['--sn-paint-opacity'] = style.opacity;
+  return { ...style, ...vars } as CSSProperties;
+}
+
 // Compute the full CSS style for a paint.
 // Memoized: same (paintId, userColor, shadowMode, still) returns the same object ref.
 // `still` (Battery Saver) draws an image paint's first frame.
