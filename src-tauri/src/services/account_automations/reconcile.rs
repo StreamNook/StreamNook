@@ -19,6 +19,7 @@ use tokio::sync::watch;
 use crate::models::automations::{ChannelScope, RunState, MAX_ENGINE_CHATS};
 
 use super::compile::Compiled;
+use super::own_topics::{self, TopicKind};
 use super::{lock, now_ms, Engine};
 
 /// Chat start attempts: 5 s, doubling to 5 min, reset on success and on an
@@ -67,6 +68,8 @@ pub(crate) struct State {
     pub(crate) joined: BTreeSet<String>,
     /// Live-only watches held, by login.
     refs: BTreeSet<String>,
+    /// P3: the own-channel topics last handed to the whisper session.
+    own: Option<(String, BTreeSet<TopicKind>)>,
     pub(crate) backoff: Backoff,
     last_run: RunState,
     gallery_next: Option<Instant>,
@@ -79,6 +82,7 @@ impl State {
         State {
             joined: BTreeSet::new(),
             refs: BTreeSet::new(),
+            own: None,
             backoff: Backoff::new(t.chat_start_first, t.chat_start_cap),
             last_run: RunState::Off,
             gallery_next: None,
@@ -198,8 +202,11 @@ pub(crate) async fn pass(engine: &Arc<Engine>, st: &mut State) {
     engine.set_kept(st.joined.iter().cloned().collect());
 
     // Liveness watches for only-live rules (their room ids looked up once).
-    let wanted_refs: BTreeSet<String> =
-        if active { compiled.only_live_chats.iter().map(|l| l.to_lowercase()).collect() } else { BTreeSet::new() };
+    let wanted_refs: BTreeSet<String> = if active {
+        compiled.only_live_chats.iter().chain(compiled.live_watch.iter()).map(|l| l.to_lowercase()).collect()
+    } else {
+        BTreeSet::new()
+    };
     for login in st.refs.difference(&wanted_refs).cloned().collect::<Vec<_>>() {
         engine.local.unwatch_live(&login).await;
         st.refs.remove(&login);
@@ -213,6 +220,31 @@ pub(crate) async fn pass(engine: &Arc<Engine>, st: &mut State) {
             Err(e) => log::debug!("[Automations] no room id for {login}: {e}"),
         }
     }
+
+    // P3: the own-channel topics the main account's rules need, handed to the
+    // whisper session (which subscribes them while its socket is up). Nothing
+    // is held while Off or in the background; the held text of each rule is
+    // read back from the session's state.
+    let main = engine.main_id();
+    let want = if active { own_topics::wanted(&compiled, main.as_deref()) } else { None };
+    if want != st.own {
+        match &want {
+            Some((owner, kinds)) => engine.local.hold_own_topics(owner, kinds).await,
+            None => {
+                if let Some((owner, _)) = &st.own {
+                    engine.local.release_own_topics(owner).await;
+                }
+            }
+        }
+        st.own = want;
+    }
+    engine.set_own_held(if active {
+        own_topics::rule_holds(&compiled, main.as_deref(), &engine.local.own_topic_state())
+    } else {
+        std::collections::HashMap::new()
+    });
+    // P3: the Highlight actions of the running Message rules.
+    crate::services::chat_rules::set_automation_highlights(if active { compiled.highlights.clone() } else { Vec::new() });
 
     // The badge batcher's clock and the gallery.
     if active && !compiled.badge_rules.is_empty() {

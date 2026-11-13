@@ -28,7 +28,9 @@ pub mod logfile;
 pub mod matcher;
 pub mod notify;
 pub mod outward;
+pub mod own_topics;
 pub mod reconcile;
+pub mod speak;
 pub mod store;
 pub mod template;
 pub mod templates;
@@ -62,6 +64,7 @@ use self::facts::Facts;
 use self::guards::{Admit, Guards, Trip};
 use self::local::{AccountChange, AccountChanges, Local};
 use self::notify::{NotifyRequest, Notifier};
+use self::own_topics::{SeenKeys, TopicKind};
 use self::outward::Outward;
 use self::store::{Device, Files};
 use self::verify::{TokenRefusal, VerifiedToken};
@@ -262,6 +265,10 @@ pub struct Engine {
     /// Door holds: a kind in a chat after a 429 (D273's own budgets).
     pub(crate) door_holds: Mutex<doors::Holds>,
     pub(crate) logfile: logfile::LogFile,
+    /// P3: event keys of the own-channel notifications answered lately.
+    own_seen: Mutex<SeenKeys>,
+    /// P3: each own-channel rule's held text, by rule id (reconcile writes it).
+    own_held: Mutex<HashMap<String, String>>,
     pub(crate) rec: Mutex<RecShared>,
     pub(crate) starting: AtomicBool,
     kept: Mutex<Vec<String>>,
@@ -368,6 +375,18 @@ pub struct StatusSnapshot {
     pub foreground: bool,
 }
 
+/// A watched channel went live or offline, as `channel_state` saw it. The
+/// start is Helix's `started_at` text (parsed to epoch seconds, so Helix and
+/// GQL spellings give one key); for an offline edge it is the broadcast that
+/// ended.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LiveEdge {
+    pub login: String,
+    pub channel_id: String,
+    pub online: bool,
+    pub started_at: String,
+}
+
 static ENGINE: OnceLock<Arc<Engine>> = OnceLock::new();
 
 /// The running engine, if `init` has run.
@@ -416,6 +435,8 @@ impl Engine {
             chat_joins: timed::ChatJoins::default(),
             door_holds: Mutex::new(doors::Holds::default()),
             logfile: log_file,
+            own_seen: Mutex::new(SeenKeys::new()),
+            own_held: Mutex::new(HashMap::new()),
             rec: Mutex::new(RecShared::default()),
             starting: AtomicBool::new(false),
             kept: Mutex::new(Vec::new()),
@@ -995,7 +1016,11 @@ impl Engine {
             .iter()
             .map(|cr| {
                 let id = cr.rule.id.clone();
-                let held = cr.held.clone().or_else(|| guards.rate_held_until(&id, now).map(|_| guards::RATE_HELD.to_string()));
+                let held = cr
+                    .held
+                    .clone()
+                    .or_else(|| self.own_held_for(&id))
+                    .or_else(|| guards.rate_held_until(&id, now).map(|_| guards::RATE_HELD.to_string()));
                 let status = RuleStatus {
                     name: cr.rule.name.clone(),
                     enabled: cr.rule.enabled,
@@ -1070,6 +1095,71 @@ impl Engine {
             *last = Some(snapshot.clone());
         }
         self.local.emit_status(&snapshot);
+    }
+
+    // ---- P3: your channel and live changes ---------------------------------------
+
+    /// A notification from one of the own-channel topics the whisper session
+    /// holds. The events are the main account's (the session's user): the
+    /// rows are built in its channel and room, and only rules it owns match.
+    pub fn on_own_topic(self: &Arc<Self>, kind: TopicKind, event: &serde_json::Value) {
+        if self.families.load(Ordering::Relaxed) & compile::FAMILY_OWN == 0 {
+            return;
+        }
+        self.note_work();
+        if !self.foreground() {
+            return;
+        }
+        let compiled = self.compiled();
+        let Some(owner) = self.main_id() else { return };
+        let Some(login) = compiled.login(&owner).map(str::to_string) else { return };
+        let Some(facts) = facts::from_own(kind, event, &owner, &login, now_ms()) else { return };
+        // Twitch may redeliver; an event is answered once on this device.
+        if !lock(&self.own_seen).first_time(&facts.event_key) {
+            return;
+        }
+        let now = self.now();
+        self.admit(&compiled, Arc::new(facts), now);
+    }
+
+    /// A watched channel went live or offline (both `channel_state` writers).
+    /// Online: skipped when the broadcast started more than 10 minutes ago by
+    /// Twitch's clock. Both: once per broadcast, kept across restarts.
+    pub fn on_live_edge(self: &Arc<Self>, edge: LiveEdge) {
+        if self.families.load(Ordering::Relaxed) & compile::FAMILY_LIVE == 0 {
+            return;
+        }
+        self.note_work();
+        if !self.foreground() {
+            return;
+        }
+        let Some(started_s) = facts::started_epoch(&edge.started_at) else { return };
+        let compiled = self.compiled();
+        let key = crate::services::chat_rules::channel_filter_key("twitch", &edge.login);
+        if !compiled.live_index.contains_key(&key) {
+            return;
+        }
+        let wall = now_ms();
+        if edge.online && !facts::online_edge_fresh(started_s, self.local.twitch_now(wall)) {
+            return;
+        }
+        if !lock(&self.counts).note_live_edge(&edge.login, edge.online, started_s) {
+            return;
+        }
+        self.note_counts_changed();
+        let facts = facts::from_live(&edge.login, &edge.channel_id, edge.online, started_s, wall);
+        let now = self.now();
+        self.admit(&compiled, Arc::new(facts), now);
+    }
+
+    /// Reconcile worked out each own-channel rule's held text (a topic
+    /// refused, no socket, not the main account); an empty map clears them.
+    pub(crate) fn set_own_held(&self, holds: HashMap<String, String>) {
+        *lock(&self.own_held) = holds;
+    }
+
+    pub(crate) fn own_held_for(&self, rule_id: &str) -> Option<String> {
+        lock(&self.own_held).get(rule_id).cloned()
     }
 
     /// The breaker tripped: Live turns automations off; Test only says so.
@@ -1293,6 +1383,27 @@ pub fn on_clearchat(channel: &str, target_user_id: Option<&str>, ban_duration_s:
 pub fn on_badges(seen: BadgeSeen) {
     if let Some(engine) = ENGINE.get() {
         engine.on_badges(seen);
+    }
+}
+
+/// A notification from an own-channel topic the whisper session holds.
+pub fn on_own_topic(kind: TopicKind, event: &serde_json::Value) {
+    if let Some(engine) = ENGINE.get() {
+        engine.on_own_topic(kind, event);
+    }
+}
+
+/// A watched channel went live or offline (`channel_state`'s two writers).
+pub fn on_live_edge(edge: LiveEdge) {
+    if let Some(engine) = ENGINE.get() {
+        engine.on_live_edge(edge);
+    }
+}
+
+/// The whisper session's own-topic state changed: reconcile reads it again.
+pub fn own_topics_changed() {
+    if let Some(engine) = ENGINE.get() {
+        engine.request_refresh();
     }
 }
 
@@ -1904,5 +2015,96 @@ mod tests {
         kit.engine.note_arrivals(vec![("glitchcon".into(), "1".into())]);
         assert!(kit.engine.is_recent_arrival("glitchcon", "1"));
         assert!(!kit.engine.is_recent_arrival("glitchcon", "2"));
+    }
+
+    #[tokio::test]
+    async fn a_follow_notifies_once_even_when_twitch_redelivers_it() {
+        let kit = Kit::new();
+        kit.settings(RunState::On, vec![own_rule("f", true, json!({ "kind": "follow" }), vec![notify_titled("New follower {user}")])]).await;
+        let event = json!({ "user_id": "7", "user_login": "fan", "user_name": "Fan", "followed_at": "2026-11-13T05:00:00Z" });
+        kit.engine.on_own_topic(TopicKind::Follow, &event);
+        kit.engine.on_own_topic(TopicKind::Follow, &event);
+        kit.idle().await;
+        let titles: Vec<String> = kit.local.notifications().into_iter().map(|n| n.title).collect();
+        assert_eq!(titles, vec!["New follower Fan".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn an_own_event_fires_nothing_while_run_is_off_or_the_app_is_in_the_background() {
+        let kit = Kit::new();
+        let event = json!({ "id": "p1", "title": "Pizza?" });
+        kit.settings(RunState::Off, vec![own_rule("p", true, json!({ "kind": "poll_started" }), vec![notify_titled("{poll}")])]).await;
+        kit.engine.on_own_topic(TopicKind::PollBegin, &event);
+        kit.idle().await;
+        assert!(kit.local.notifications().is_empty(), "Off");
+        kit.settings(RunState::On, vec![own_rule("p", true, json!({ "kind": "poll_started" }), vec![notify_titled("{poll}")])]).await;
+        kit.engine.presence.store(false, Ordering::SeqCst);
+        kit.engine.recompile().await;
+        kit.engine.on_own_topic(TopicKind::PollBegin, &json!({ "id": "p2", "title": "Again?" }));
+        kit.idle().await;
+        assert!(kit.local.notifications().is_empty(), "the background runs no rules");
+        kit.engine.presence.store(true, Ordering::SeqCst);
+        kit.engine.recompile().await;
+        kit.engine.on_own_topic(TopicKind::PollBegin, &json!({ "id": "p3", "title": "Back?" }));
+        kit.idle().await;
+        assert_eq!(kit.local.notifications()[0].title, "Back?");
+    }
+
+    #[tokio::test]
+    async fn a_live_edge_notifies_once_per_broadcast_and_not_when_stale() {
+        let kit = Kit::new();
+        kit.settings(RunState::On, vec![live_change_rule("l", true, "friend", "555", vec![notify_titled("{channel} is live")])]).await;
+        let edge = |at: chrono::DateTime<chrono::Utc>| LiveEdge {
+            login: "friend".into(),
+            channel_id: "555".into(),
+            online: true,
+            started_at: at.to_rfc3339(),
+        };
+        let started = chrono::Utc::now() - chrono::Duration::minutes(2);
+        kit.engine.on_live_edge(edge(started));
+        // The poll that follows `note_live`: the same broadcast, spelled another way (epoch seconds make one key).
+        kit.engine.on_live_edge(LiveEdge { started_at: started.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(), ..edge(started) });
+        kit.idle().await;
+        assert_eq!(kit.local.notifications().len(), 1);
+        assert_eq!(kit.local.notifications()[0].title, "friend is live");
+        // Eleven minutes old by Twitch's clock: nothing.
+        kit.engine.on_live_edge(edge(chrono::Utc::now() - chrono::Duration::minutes(11)));
+        kit.idle().await;
+        assert_eq!(kit.local.notifications().len(), 1);
+        // Freshness reads Twitch's clock: 5 minutes ahead makes a 6 minute old start 11 old.
+        kit.local.set_twitch_offset_ms(5 * 60_000);
+        kit.engine.on_live_edge(edge(chrono::Utc::now() - chrono::Duration::minutes(6)));
+        kit.idle().await;
+        assert_eq!(kit.local.notifications().len(), 1, "freshness is by Twitch time");
+        kit.local.set_twitch_offset_ms(0);
+        // A channel the rules do not name is never answered.
+        kit.engine.on_live_edge(LiveEdge { login: "stranger".into(), ..edge(started) });
+        kit.idle().await;
+        assert_eq!(kit.local.notifications().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_offline_edge_fires_the_offline_rule_once_per_ended_broadcast() {
+        let kit = Kit::new();
+        kit.settings(RunState::On, vec![live_change_rule("off", false, "friend", "555", vec![notify_titled("{channel} left")])]).await;
+        let ended = chrono::Utc::now() - chrono::Duration::hours(3);
+        let edge = LiveEdge { login: "friend".into(), channel_id: "555".into(), online: false, started_at: ended.to_rfc3339() };
+        kit.engine.on_live_edge(edge.clone());
+        kit.engine.on_live_edge(edge);
+        kit.idle().await;
+        assert_eq!(kit.local.notifications().len(), 1, "an offline edge has no 10 minute rule; it is once per broadcast");
+        assert_eq!(kit.local.notifications()[0].title, "friend left");
+    }
+
+    #[tokio::test]
+    async fn the_status_names_why_an_own_channel_rule_is_not_listening() {
+        let kit = Kit::new();
+        kit.settings(RunState::On, vec![own_rule("f", true, json!({ "kind": "follow" }), vec![notify_titled("x")])]).await;
+        let mut holds = HashMap::new();
+        holds.insert("f".to_string(), "Waiting for a Twitch connection".to_string());
+        kit.engine.set_own_held(holds);
+        assert_eq!(kit.engine.status().rules[0].held.as_deref(), Some("Waiting for a Twitch connection"));
+        kit.engine.set_own_held(HashMap::new());
+        assert_eq!(kit.engine.status().rules[0].held, None);
     }
 }

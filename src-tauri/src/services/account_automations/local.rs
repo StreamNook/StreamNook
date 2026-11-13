@@ -14,7 +14,11 @@ use crate::services::channel_state::ChannelState;
 
 use super::activity::Entry;
 use super::badges::Probe;
+use std::collections::BTreeSet;
+
 use super::notify::{NotifyPayload, NotifyRequest};
+use super::own_topics::{OwnState, TopicKind};
+use super::speak::SpeakPayload;
 use super::StatusSnapshot;
 
 /// The account store's account-change guard, as a seam of its own: the
@@ -91,6 +95,24 @@ pub trait Local: AccountChanges {
     fn own_role(&self, as_login: &str, channel: &str) -> Option<crate::services::chat_send_limiter::Role>;
     /// People the whisper store says `owner` has whispered with (`whisper_store::knows`), for the To picker.
     fn whisper_people(&self, owner_id: &str) -> Vec<WhisperPerson>;
+
+    // ---- P3 (default bodies: a fake or a build with no whisper socket hears nothing) ----
+
+    /// The own-channel topics `owner_id`'s rules need; replaces the last set.
+    /// The whisper session subscribes them while it is up.
+    async fn hold_own_topics(&self, _owner_id: &str, _kinds: &BTreeSet<TopicKind>) {}
+    /// Delete the own-channel subscriptions (with the token that made them).
+    async fn release_own_topics(&self, _owner_id: &str) {}
+    /// What the whisper session holds for the engine.
+    fn own_topic_state(&self) -> OwnState {
+        OwnState::default()
+    }
+    /// Twitch's clock for a local wall time (the whisper socket measures the offset).
+    fn twitch_now(&self, wall_ms: i64) -> i64 {
+        wall_ms
+    }
+    /// A Speak line to the players (`automations://speak`; global on iOS).
+    fn emit_speak(&self, _targets: &[String], _payload: &SpeakPayload) {}
 }
 
 /// One person the Whisper action's picker lists.
@@ -320,6 +342,35 @@ impl Local for RealLocal {
             .filter(|(id, _, _)| !id.is_empty() && crate::services::whisper_store::knows(&scope, id))
             .map(|(user_id, login, name)| WhisperPerson { user_id, login, name })
             .collect()
+    }
+
+    async fn hold_own_topics(&self, owner_id: &str, kinds: &BTreeSet<TopicKind>) {
+        crate::services::whisper_service::hold_own_topics(owner_id, kinds);
+    }
+
+    async fn release_own_topics(&self, owner_id: &str) {
+        crate::services::whisper_service::release_own_topics(owner_id).await;
+    }
+
+    fn own_topic_state(&self) -> OwnState {
+        crate::services::whisper_service::own_topic_state()
+    }
+
+    fn twitch_now(&self, wall_ms: i64) -> i64 {
+        crate::services::whisper_sync::twitch_now(wall_ms)
+    }
+
+    fn emit_speak(&self, targets: &[String], payload: &SpeakPayload) {
+        use tauri::Emitter;
+        #[cfg(target_os = "ios")]
+        {
+            let _ = targets;
+            let _ = self.app.emit("automations://speak", payload);
+        }
+        #[cfg(not(target_os = "ios"))]
+        for target in targets {
+            let _ = self.app.emit_to(target.as_str(), "automations://speak", payload);
+        }
     }
 }
 
