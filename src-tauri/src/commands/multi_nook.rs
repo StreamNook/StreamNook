@@ -959,6 +959,23 @@ pub async fn stop_all_multi_nooks() -> Result<(), String> {
     MultiNookServer::stop_all().await.map_err(|e| e.to_string())
 }
 
+/// The main window is gone, and its grid with it: every tile's relay stops
+/// (`stop_all_multi_nooks` also clears the watch-time tiles), and the grid's
+/// PubSub raid socket and live-metadata poll, which only the page declared
+/// channels for, are told there are none. The tile stop is awaited, so the
+/// caller's `still_current` is read again after it: a main window reopened
+/// meanwhile keeps the sockets its own grid declared.
+pub async fn stop_all_for_closed_main(app: &AppHandle, still_current: &(impl Fn() -> bool + Sync)) {
+    if let Err(e) = stop_all_multi_nooks().await {
+        log::warn!("[MultiNook] main closed: could not stop every tile: {e}");
+    }
+    if !still_current() {
+        return;
+    }
+    crate::services::multi_nook_raids::set_channels(app, vec![]);
+    crate::services::multi_nook_meta::set_channels(app, vec![]);
+}
+
 /// What a promoted tile puts in place on the solo relay: the profile its own
 /// upstream needs (Twitch for a Twitch tile, the generic one for any other) and
 /// the tile's re-signer, if it has one.

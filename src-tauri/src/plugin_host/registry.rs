@@ -5,7 +5,8 @@
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use crate::services::cache_service;
 
@@ -114,17 +115,58 @@ fn registry_path() -> Result<PathBuf> {
 
 pub fn load() -> Result<Registry> {
     let path = registry_path()?;
-    if !path.exists() {
-        return Ok(Registry::default());
-    }
-    let json = std::fs::read_to_string(&path)?;
-    Ok(serde_json::from_str(&json)?)
+    let registry: Registry = if path.exists() {
+        let json = std::fs::read_to_string(&path)?;
+        serde_json::from_str(&json)?
+    } else {
+        Registry::default()
+    };
+    // Whether a drops-automation provider is installed and allowed decides if
+    // the app may keep running with no window.
+    #[cfg(desktop)]
+    crate::services::background_mode::note_registry(&registry);
+    Ok(registry)
 }
 
+/// Renames after a Windows sharing violation are retried this many times.
+const RENAME_RETRIES: u32 = 5;
+
+/// A rename that failed because something (a scanner, an indexer) briefly
+/// holds the target open.
+fn is_sharing_error(e: &std::io::Error) -> bool {
+    e.kind() == std::io::ErrorKind::PermissionDenied || matches!(e.raw_os_error(), Some(5 | 32 | 33))
+}
+
+fn rename_with_retries(from: &Path, to: &Path) -> std::io::Result<()> {
+    let mut attempt = 0;
+    loop {
+        match std::fs::rename(from, to) {
+            Ok(()) => return Ok(()),
+            Err(e) if attempt < RENAME_RETRIES && is_sharing_error(&e) => {
+                attempt += 1;
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+/// Every registry writer goes through here. The file is written beside the
+/// registry and renamed over it, so a crash or a reader never sees half a
+/// file.
 pub fn save(registry: &Registry) -> Result<()> {
     let path = registry_path()?;
     let json = serde_json::to_string_pretty(registry)?;
-    std::fs::write(&path, json)?;
+    let mut tmp_name = path.as_os_str().to_owned();
+    tmp_name.push(".tmp");
+    let tmp = PathBuf::from(tmp_name);
+    std::fs::write(&tmp, json)?;
+    if let Err(e) = rename_with_retries(&tmp, &path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e.into());
+    }
+    #[cfg(desktop)]
+    crate::services::background_mode::note_registry(registry);
     Ok(())
 }
 

@@ -516,7 +516,9 @@ pub async fn list_settings_backups() -> Result<Vec<crate::services::settings_bac
 #[tauri::command]
 pub async fn restore_settings_backup(app: AppHandle, id: String, state: State<'_, AppState>) -> Result<(), String> {
     let backup = crate::services::settings_backups::read(&id)?;
-    crate::commands::settings::apply_imported_settings(&app, &state, &backup)
+    let _write = crate::commands::drops::DROPS_SETTINGS_WRITE.lock().await;
+    let imported = crate::commands::settings::apply_imported_settings(&app, &state, &backup)?;
+    crate::commands::drops::apply_drops_settings(&app, &state, imported.drops, None).await
 }
 
 fn theme_inputs(state: &AppState) -> Result<(String, Vec<Value>, Option<String>), String> {

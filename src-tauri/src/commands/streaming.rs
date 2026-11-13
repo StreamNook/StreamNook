@@ -1382,6 +1382,17 @@ pub async fn rewind_live_stream(
 
 #[tauri::command]
 pub async fn stop_stream() -> Result<(), String> {
+    stop_stream_if(&|| true).await
+}
+
+/// `stop_stream`, for a stop that is only still wanted while `still_current`
+/// holds (the main teardown: a main window reopened meanwhile owns the relay).
+/// It is checked first, because the next lines mint a start ticket, and again
+/// after the relay awaits, right before the server goes down.
+pub async fn stop_stream_if(still_current: &(impl Fn() -> bool + Sync)) -> Result<(), String> {
+    if !still_current() {
+        return Ok(());
+    }
     // Every close of a live stream comes through here, the tray close too
     // (it stops the stream but not the watch session).
     crate::services::live_bookmark::end(crate::services::live_bookmark::EndKind::Async);
@@ -1396,8 +1407,14 @@ pub async fn stop_stream() -> Result<(), String> {
     // Without it a stopped stream's session stayed registered, held its init
     // segments and cache, and counted against the relay cap.
     crate::services::youtube_dash::stop(crate::services::stream_server::SOLO_STREAM_ID).await;
+    if !still_current() {
+        return Ok(());
+    }
     // Same for the TikTok relay, and same reasoning: unknown ids are a no-op.
     crate::services::tiktok_relay::stop(crate::services::stream_server::SOLO_STREAM_ID);
+    if !still_current() {
+        return Ok(());
+    }
     StreamServer::stop().await.map_err(|e| e.to_string())
 }
 
@@ -1751,16 +1768,45 @@ pub async fn change_stream_view(
     Ok(result)
 }
 
+/// A window says the viewer is watching this channel (the predictions and
+/// bonus-chest sets). It runs under the lock every move of earning runs under,
+/// and does nothing once main is gone, so a late call from a closing window
+/// cannot undo the main teardown. No Rust code calls this command: Rust calls
+/// `register_active_channel_inner`, which takes no lock (`follow` already holds it).
 #[tauri::command]
 pub async fn register_active_channel(
     channel_id: String,
+    app: crate::rt::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    let _aim = crate::services::watch_start::earning_aim().await;
+    #[cfg(desktop)]
+    if !crate::services::window_visibility::window_open(&app, "main") {
+        return Ok(());
+    }
+    #[cfg(not(desktop))]
+    let _ = &app;
+    register_active_channel_inner(channel_id, &state).await
+}
+
+/// `register_active_channel`'s body, with no lock: the caller holds the earning
+/// lock already (re-entering that tokio mutex would deadlock).
+pub async fn register_active_channel_inner(channel_id: String, state: &AppState) -> Result<(), String> {
     let bg_service = state.background_service.lock().await;
     let ws_service_mutex = bg_service.websocket_service.clone();
     let ws_service = ws_service_mutex.lock().await;
     ws_service.register_active_channel(&channel_id).await;
     Ok(())
+}
+
+/// Empties the whole active-viewing set: main and its grid are its only
+/// writers, and both are gone (a channel a `follow` registered before its
+/// session existed, and grid tiles registered from the page, all go).
+pub async fn clear_active_channels(state: &AppState) {
+    let bg_service = state.background_service.lock().await;
+    let ws_service_mutex = bg_service.websocket_service.clone();
+    let ws_service = ws_service_mutex.lock().await;
+    ws_service.clear_active_channels().await;
 }
 
 #[tauri::command]

@@ -40,6 +40,12 @@ static IN_FLIGHT: AtomicU64 = AtomicU64::new(0);
 /// runs under this, so neither replaces the other's halfway.
 static EARNING_AIM: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+/// The earning lock for other modules (the grid-focus task, the locked
+/// commands): everything that moves earning takes this one lock.
+pub(crate) async fn earning_aim() -> tokio::sync::MutexGuard<'static, ()> {
+    EARNING_AIM.lock().await
+}
+
 /// Closing the grid found a start in flight and left earning to it. If that
 /// start then fails or is superseded it never aims earning, so once it ends,
 /// however it ends, the grid's exit is decided again.
@@ -443,7 +449,7 @@ async fn follow(app: AppHandle, ticket: u64, login: String, row: TwitchStream) {
             let _ = crate::commands::drops::stop_drops_monitoring(state.clone()).await;
         } else {
             crate::commands::drops::monitor_watched_channel(&app, row.user_id.clone(), login.clone()).await;
-            let _ = streaming::register_active_channel(row.user_id.clone(), state.clone()).await;
+            let _ = streaming::register_active_channel_inner(row.user_id.clone(), &state).await;
         }
     }
     if !current(ticket) {
@@ -639,6 +645,63 @@ pub async fn stop(app: AppHandle, state: State<'_, AppState>, preserve_backend: 
     }
 }
 
+/// The main window is gone: everything it was playing and earning on goes down,
+/// through the app's own stop steps, each guarded by `still_current` (main is
+/// still absent, no newer main window, the app not shutting down; see
+/// `background_mode::teardown_still_current`). `end_session` ends the watch
+/// session too (a keep-alive close); otherwise the session is kept, as for Go
+/// Live and the tray closes. Every step is an idempotent stop, so running after
+/// the page already stopped the stream is harmless.
+///
+/// The earning lock is taken first and held to the end: a start's earning aim
+/// waits behind this and lands after it, and the checks below cannot be
+/// outrun by a start that took the session or the relay meanwhile.
+#[cfg(desktop)]
+pub(crate) async fn stop_for_closed_main(
+    app: AppHandle,
+    still_current: impl Fn() -> bool + Send + Sync,
+    end_session: bool,
+) {
+    let _aim = EARNING_AIM.lock().await;
+    if !still_current() {
+        return;
+    }
+    // A grid exit deferred to a start must not re-aim earning once this lock
+    // is released.
+    GRID_EXIT_DEFERRED.store(false, Ordering::Release);
+    // A start still resolving is superseded, as a viewer's stop does it, and
+    // a relay it brings up afterwards goes down.
+    STOPPED.store(true, Ordering::Release);
+    supersede();
+    if let Err(e) = streaming::stop_stream_if(&still_current).await {
+        log::warn!("[WatchStart] main closed: stop_stream failed: {e}");
+    }
+    // MultiNook's tiles, its raid and metadata sockets, and the grid's own
+    // state; never the grid-exit earning move (this lane clears earning below).
+    if still_current() {
+        crate::commands::multi_nook::stop_all_for_closed_main(&app, &still_current).await;
+    }
+    if still_current() {
+        watch_session::close_grid_now(&app).await;
+    }
+    if end_session {
+        watch_session::end_session(app.clone(), &still_current).await;
+    }
+    if still_current() {
+        crate::services::sleep_timer::cancel(&app);
+    }
+    if still_current() {
+        crate::services::watch_minutes::set_source(crate::services::watch_minutes::MAIN, None);
+    }
+    if still_current() {
+        crate::commands::drops::stop_drops_monitoring_inner(&app).await;
+    }
+    if still_current() {
+        streaming::clear_active_channels(&app.state::<AppState>()).await;
+    }
+    log::info!("[WatchStart] main closed: the stream, the grid and earning stopped");
+}
+
 /// Where earning goes once MultiNook's grid has closed or emptied.
 #[derive(Debug, PartialEq)]
 enum AfterGrid {
@@ -667,6 +730,7 @@ fn after_grid(start_in_flight: bool, grid_open: bool, session: Option<&WatchTarg
 /// in flight aims earning itself, so this leaves it alone.
 pub async fn earning_after_grid(app: &AppHandle) {
     let _aim = EARNING_AIM.lock().await;
+    if !crate::services::window_visibility::window_open(app, "main") { return; }
     let state = app.state::<AppState>();
     loop {
         let in_flight = IN_FLIGHT.load(Ordering::Acquire) != 0;

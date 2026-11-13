@@ -109,6 +109,9 @@ pub async fn run_supervisor(host: Arc<HostInner>, plugin_id: String) {
 
         let outcome = run_once(&host, &record).await;
         host.running.write().await.remove(&plugin_id);
+        // Whatever status this provider last sent no longer holds.
+        #[cfg(desktop)]
+        crate::services::background_mode::note_provider_stopped(&plugin_id);
 
         match outcome {
             RunOutcome::CleanShutdown => break,
@@ -134,6 +137,8 @@ pub async fn run_supervisor(host: Arc<HostInner>, plugin_id: String) {
         }
     }
     host.running.write().await.remove(&plugin_id);
+    #[cfg(desktop)]
+    crate::services::background_mode::note_provider_stopped(&plugin_id);
     debug!("[PluginHost] supervisor for {} ended", plugin_id);
 }
 
@@ -215,6 +220,7 @@ async fn run_once(host: &Arc<HostInner>, record: &InstalledPlugin) -> RunOutcome
         "data_dir": super::registry::plugin_data_dir(&record.id)
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default(),
+        "host_session": super::host_session_id(),
         "log_dir": super::registry::plugin_state_dir(&record.id)
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default(),

@@ -116,7 +116,13 @@ pub async fn import(interactive: bool) -> Result<KickImportReport> {
         use tauri::{Manager, WebviewUrl};
 
         let app = app_handle().ok_or_else(|| anyhow!("app handle not available for Kick sync"))?;
-        let label = format!("kick-sync-{}", SEQ.fetch_add(1, Ordering::Relaxed));
+        // A window the viewer can see is a user window (`app_exit::is_user_window`
+        // matches `kick-sync-shown-*`); the silent probe stays a hidden helper.
+        let label = if interactive {
+            format!("kick-sync-shown-{}", SEQ.fetch_add(1, Ordering::Relaxed))
+        } else {
+            format!("kick-sync-{}", SEQ.fetch_add(1, Ordering::Relaxed))
+        };
 
         let (tx, rx) = oneshot::channel::<KickImportReport>();
         pending().lock().await.insert(label.clone(), tx);

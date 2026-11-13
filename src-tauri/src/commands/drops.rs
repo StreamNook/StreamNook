@@ -144,7 +144,7 @@ pub const DROPS_SETTINGS_UPDATED_EVENT: &str = "drops-settings-updated";
 
 /// Serializes drops-settings saves, so a patch's read-modify-write cannot
 /// interleave with another save and lose its keys.
-static DROPS_SETTINGS_WRITE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+pub(crate) static DROPS_SETTINGS_WRITE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[tauri::command]
 pub async fn update_drops_settings(
@@ -153,7 +153,7 @@ pub async fn update_drops_settings(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let _write = DROPS_SETTINGS_WRITE.lock().await;
-    save_drops_settings(&app, &state, settings).await
+    apply_drops_settings(&app, &state, settings, None).await
 }
 
 /// Changes only the named top-level drops settings, applied onto the copy Rust
@@ -169,8 +169,10 @@ pub async fn patch_drops_settings(
     let _write = DROPS_SETTINGS_WRITE.lock().await;
     let current = state.drops_service.lock().await.get_settings().await;
     let next = apply_drops_patch(&current, patch)?;
-    save_drops_settings(&app, &state, next.clone()).await?;
-    Ok(next)
+    apply_drops_settings(&app, &state, next, None).await?;
+    // The stored copy, not the patch result: `told_keep_running` is Rust's own,
+    // and a patch may have named it.
+    Ok(state.drops_service.lock().await.get_settings().await)
 }
 
 fn apply_drops_patch(
@@ -187,20 +189,35 @@ fn apply_drops_patch(
     serde_json::from_value(value).map_err(|e| format!("Invalid drops settings change: {e}"))
 }
 
-async fn save_drops_settings(
+/// The one way drops settings are saved: the drops service, the main settings,
+/// disk, the realtime points socket, the plugin hand-off, the event and, on
+/// desktop, the Missing badges background mode (autostart and tray).
+///
+/// It never takes `DROPS_SETTINGS_WRITE`: every caller holds it across its own
+/// read-modify-write and this call (the two drops commands, a settings import,
+/// a backup restore, `background_mode::mark_told`), so saves cannot interleave.
+/// `told_keep_running` is Rust's own: whatever the caller sent is replaced by
+/// the stored value, unless `told_override` names one (only `mark_told` does).
+pub async fn apply_drops_settings(
     app: &AppHandle,
-    state: &State<'_, AppState>,
-    settings: DropsSettings,
+    state: &AppState,
+    mut next: DropsSettings,
+    told_override: Option<bool>,
 ) -> Result<(), String> {
-    // Update the in-memory drops service settings
-    let drops_service = state.drops_service.lock().await;
-    drops_service.update_settings(settings.clone()).await;
-    drop(drops_service); // Release the lock before accessing main settings
+    // Update the in-memory drops service settings, keeping the copy it held for
+    // the background-mode hook below.
+    let previous = {
+        let drops_service = state.drops_service.lock().await;
+        let previous = drops_service.get_settings().await;
+        next.told_keep_running = told_override.unwrap_or(previous.told_keep_running);
+        drops_service.update_settings(next.clone()).await;
+        previous
+    };
 
     // Also persist to the main settings file so changes survive app restart
     {
         let mut app_settings = state.settings.lock().map_err(|e| e.to_string())?;
-        app_settings.drops = settings.clone();
+        app_settings.drops = next.clone();
     }
 
     // Save to disk through the shared (debounced) settings writer; the state
@@ -219,11 +236,15 @@ async fn save_drops_settings(
         .background_service
         .lock()
         .await
-        .set_automation_active(settings.auto_claim_channel_points)
+        .set_automation_active(next.auto_claim_channel_points)
         .await;
 
-    let _ = app.emit(DROPS_SETTINGS_UPDATED_EVENT, &settings);
+    let _ = app.emit(DROPS_SETTINGS_UPDATED_EVENT, &next);
     state.plugin_host.push_drops_settings();
+    #[cfg(desktop)]
+    crate::services::background_mode::on_drops_settings_saved(app, &previous, &next);
+    #[cfg(not(desktop))]
+    let _ = previous;
     Ok(())
 }
 
@@ -636,12 +657,22 @@ async fn report_active_channel(state: &State<'_, AppState>, channel_id: &str, lo
         .await;
 }
 
+/// A window pointing drops monitoring at its channel. It runs under the lock
+/// every move of earning runs under, and does nothing once main is gone, so a
+/// late call from a closing window cannot re-aim what the main teardown just
+/// stopped. No Rust code calls this command: Rust uses `monitor_watched_channel`,
+/// which takes no lock (its callers already hold it).
 #[tauri::command]
 pub async fn start_drops_monitoring(
     channel_id: String,
     channel_name: String,
     app_handle: AppHandle,
 ) -> Result<(), String> {
+    let _aim = crate::services::watch_start::earning_aim().await;
+    #[cfg(desktop)]
+    if !crate::services::window_visibility::window_open(&app_handle, "main") {
+        return Ok(());
+    }
     monitor_watched_channel(&app_handle, channel_id, channel_name).await;
     Ok(())
 }
@@ -661,6 +692,22 @@ pub async fn monitor_watched_channel(app: &AppHandle, channel_id: String, login:
 
 #[tauri::command]
 pub async fn stop_drops_monitoring(state: State<'_, AppState>) -> Result<(), String> {
+    stop_monitoring_for(&state).await;
+    Ok(())
+}
+
+/// `stop_drops_monitoring` for Rust code holding only the app handle (the main
+/// teardown). Nothing to stop when the app state is not registered.
+pub async fn stop_drops_monitoring_inner(app: &AppHandle) {
+    let Some(state) = app.try_state::<AppState>() else {
+        return;
+    };
+    stop_monitoring_for(&state).await;
+}
+
+/// What stopping drops monitoring does, on the state itself: the monitor, the
+/// heartbeat target (reported to the plugin host), the realtime channel.
+async fn stop_monitoring_for(state: &AppState) {
     {
         let drops_service = state.drops_service.lock().await;
         drops_service.stop_monitoring().await;
@@ -677,7 +724,6 @@ pub async fn stop_drops_monitoring(state: State<'_, AppState>) -> Result<(), Str
         .await
         .clear_watched_channel()
         .await;
-    Ok(())
 }
 
 #[tauri::command]

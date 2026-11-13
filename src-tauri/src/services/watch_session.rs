@@ -501,6 +501,30 @@ fn with_grid<R>(f: impl FnOnce(&mut Option<Grid>) -> R) -> R {
     f(&mut guard)
 }
 
+/// The grid is gone: the sequence moves on (a focus still settling gives way)
+/// and the state clears. Returns the new sequence number.
+fn clear_grid_in(grid: &mut Option<Grid>, seq: &AtomicU64) -> u64 {
+    let next = seq.fetch_add(1, Ordering::AcqRel) + 1;
+    *grid = None;
+    next
+}
+
+fn clear_grid() -> u64 {
+    with_grid(|g| clear_grid_in(g, &GRID_SEQ))
+}
+
+/// The main window is gone, and with it the grid: its state clears and the
+/// sockets that followed its focus re-aim at what is left. It never moves
+/// earning (`earning_after_grid`) and never declares a focus (`set_grid_focus`):
+/// the main teardown clears earning itself, under the earning lock.
+#[cfg(desktop)]
+pub async fn close_grid_now(app: &AppHandle) {
+    clear_grid();
+    crate::services::watch_drops::poke();
+    aim_watch_socket(app).await;
+    refresh_raid_fallback(app);
+}
+
 /// Whose broadcaster the watch socket follows.
 #[derive(Debug, PartialEq)]
 enum SocketTarget {
@@ -574,8 +598,7 @@ fn settle_focus(grid: &mut Option<Grid>, channel: FocusedChannel) -> Option<bool
 /// socket off the stream on screen.
 pub fn set_grid_focus(app: AppHandle, focus: Option<GridFocus>) {
     let Some(focus) = focus else {
-        let seq = GRID_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
-        with_grid(|g| *g = None);
+        let seq = clear_grid();
         crate::services::watch_drops::poke();
         // Settles too: a grid that remounts declares its tile again at once,
         // and the socket should not drop and come back for it.
@@ -614,6 +637,14 @@ pub fn set_grid_focus(app: AppHandle, focus: Option<GridFocus>) {
             log::debug!("[WatchSession] MultiNook focus {login} has no channel id");
             return;
         };
+        // Earning moves under the lock a start and the grid closing re-aim
+        // under, taken after the lookup above so no network call runs while it
+        // is held. Held through the registration below.
+        let _aim = crate::services::watch_start::earning_aim().await;
+        // Main closed while this focus settled: there is nothing to aim at.
+        if !crate::services::window_visibility::window_open(&app, "main") {
+            return;
+        }
         let channel = FocusedChannel { id, login };
         let moved = with_grid(|g| {
             if GRID_SEQ.load(Ordering::Acquire) != seq {
@@ -1470,6 +1501,20 @@ mod tests {
             "provider": provider, "login": "chan", "user_id": user_id, "authenticated": authenticated,
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn clear_grid_bumps_the_sequence_and_clears_the_grid() {
+        let mut grid = Some(Grid {
+            twitch: Some(FocusedChannel { id: "1".into(), login: "chan".into() }),
+        });
+        let seq = AtomicU64::new(7);
+        assert_eq!(clear_grid_in(&mut grid, &seq), 8, "the new sequence is returned");
+        assert!(grid.is_none(), "the grid state is gone");
+        assert_eq!(seq.load(Ordering::Acquire), 8, "a focus still settling gives way");
+        // Clearing an already closed grid still moves the sequence on.
+        assert_eq!(clear_grid_in(&mut grid, &seq), 9);
+        assert!(grid.is_none());
     }
 
     #[test]

@@ -116,6 +116,18 @@ pub async fn handle_host_method(
                     "message": message,
                 }),
             );
+            // The toast above is main's. With main off screen the notice goes to
+            // the OS or MultiChat instead (the gate is inside), and the plugin's
+            // request is not held while that happens.
+            #[cfg(desktop)]
+            {
+                let app = host.app.clone();
+                let name = record.name.clone();
+                let text = message.to_string();
+                tauri::async_runtime::spawn(async move {
+                    crate::services::background_mode::deliver_plugin_notice(app, name, text).await;
+                });
+            }
             Ok(json!({}))
         }
         "register_panel" => {
@@ -381,6 +393,10 @@ fn validate_panel_schema(schema: &Value) -> Result<(), RpcErr> {
     Ok(())
 }
 
+/// The status slot a drops-automation plugin fills.
+#[cfg(desktop)]
+const DROPS_STATUS_SLOT: &str = "drops.status";
+
 /// `set_status` notification: the plugin pushes a value into a named status
 /// slot it declared. The host forwards it to the frontend as a `plugin://status`
 /// event for whatever UI region owns that slot. Slots the plugin did not
@@ -397,6 +413,11 @@ pub fn handle_set_status(host: &Arc<HostInner>, record: &InstalledPlugin, params
         "plugin://status",
         json!({ "plugin_id": record.id, "slot": slot, "value": value }),
     );
+    // The tray and the keep-alive rule read the provider's drops status.
+    #[cfg(desktop)]
+    if slot == DROPS_STATUS_SLOT {
+        crate::services::background_mode::note_drops_status(&record.id, &value);
+    }
 }
 
 /// `log` notification from a plugin: append to its log file, never answered.

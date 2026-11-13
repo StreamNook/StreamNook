@@ -1037,7 +1037,12 @@ pub async fn share_settings_file(app: AppHandle, to: String, state: State<'_, Ap
 pub async fn import_settings_text(app: AppHandle, json: String, state: State<'_, AppState>) -> Result<(), String> {
     let incoming: serde_json::Value = serde_json::from_str(&json)
         .map_err(|_| "That file isn't a valid StreamNook settings backup.".to_string())?;
-    apply_imported_settings(&app, &state, &incoming)
+    // The import and the drops hand-off form one write: nothing saves drops
+    // settings in between (this machine's start_at_login and told_keep_running
+    // are kept by the import, the rest reaches the plugin and the tray).
+    let _write = crate::commands::drops::DROPS_SETTINGS_WRITE.lock().await;
+    let imported = apply_imported_settings(&app, &state, &incoming)?;
+    crate::commands::drops::apply_drops_settings(&app, &state, imported.drops, None).await
 }
 
 /// Apply a previously exported backup at `path`. Portable preferences from the
@@ -1053,7 +1058,9 @@ pub async fn import_settings(app: AppHandle, path: String, state: State<'_, AppS
         fs::read_to_string(&path).map_err(|e| format!("Couldn't read that file: {}", e))?;
     let incoming: serde_json::Value = serde_json::from_str(&contents)
         .map_err(|_| "That file isn't a valid StreamNook settings backup.".to_string())?;
-    apply_imported_settings(&app, &state, &incoming)
+    let _write = crate::commands::drops::DROPS_SETTINGS_WRITE.lock().await;
+    let imported = apply_imported_settings(&app, &state, &incoming)?;
+    crate::commands::drops::apply_drops_settings(&app, &state, imported.drops, None).await
 }
 
 /// Put every portable key of a backup over the live settings (session and
@@ -1062,7 +1069,7 @@ pub(crate) fn apply_imported_settings(
     app: &AppHandle,
     state: &AppState,
     incoming: &serde_json::Value,
-) -> Result<(), String> {
+) -> Result<Settings, String> {
     let incoming_obj = incoming
         .as_object()
         .ok_or_else(|| "That file isn't a valid StreamNook settings backup.".to_string())?;
@@ -1092,6 +1099,7 @@ pub(crate) fn apply_imported_settings(
     imported.map_legacy_event_keys();
     keep_absent_vertical_view(incoming_obj, &current, &mut imported);
     favorite_channels::repair(&mut imported);
+    keep_this_machines_drops_fields(&current, &mut imported);
 
     let favorites_changed = favorite_channels::favorites_changed(&current, &imported);
     {
@@ -1111,7 +1119,16 @@ pub(crate) fn apply_imported_settings(
     // right after this returns and must find the imported file on disk.
     write_settings_to_disk_sync(&imported)?;
     let _ = app.emit(SETTINGS_UPDATED_EVENT, SettingsUpdated { source: None, keys });
-    Ok(())
+    Ok(imported)
+}
+
+/// Two drops fields belong to this machine and survive an import or a backup
+/// restore: whether it starts at login (another computer's choice means
+/// nothing here) and whether the "still running in the tray" notice was shown
+/// to this viewer here. Everything else in the drops group comes from the file.
+fn keep_this_machines_drops_fields(current: &Settings, imported: &mut Settings) {
+    imported.drops.start_at_login = current.drops.start_at_login;
+    imported.drops.told_keep_running = current.drops.told_keep_running;
 }
 
 #[tauri::command]
@@ -1679,6 +1696,36 @@ mod patch_tests {
             .find("let rev = crate::services::home_snapshot::following_rev_now().await;")
             .expect("the door answers the revision from following_rev_now");
         assert!(commit < rev, "the revision is read after the write");
+    }
+
+    #[test]
+    fn an_import_keeps_this_machines_start_at_login() {
+        // This computer starts at login and has shown the tray notice.
+        let mut current = Settings::default();
+        current.drops.start_at_login = true;
+        current.drops.told_keep_running = true;
+        // A backup from another computer: login start off, notice not shown,
+        // Missing badges on.
+        let mut imported = Settings::default();
+        imported.drops.start_at_login = false;
+        imported.drops.told_keep_running = false;
+        imported.drops.collect_missing_badges = true;
+        keep_this_machines_drops_fields(&current, &mut imported);
+        assert!(imported.drops.start_at_login, "this computer's login start stays");
+        assert!(imported.drops.told_keep_running, "the notice shown here stays shown");
+        assert!(imported.drops.collect_missing_badges, "every other drops choice comes from the backup");
+        // The other way: an import never turns login start on.
+        let current = Settings::default();
+        let mut imported = Settings::default();
+        imported.drops.start_at_login = true;
+        keep_this_machines_drops_fields(&current, &mut imported);
+        assert!(!imported.drops.start_at_login);
+        // Import and backup restore both run it (both go through apply_imported_settings).
+        let src = this_file();
+        let import = &src[src.find("pub(crate) fn apply_imported_settings(").unwrap()..];
+        let import = &import[..import.find("\n}\n").unwrap()];
+        assert!(import.contains("keep_this_machines_drops_fields(&current, &mut imported);"));
+        assert!(import.ends_with("    Ok(imported)"));
     }
 
     #[test]

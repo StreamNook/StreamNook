@@ -211,6 +211,13 @@ impl ChannelPointsWebSocketService {
         self.active_viewing_channels.read().await.contains(channel_id)
     }
 
+    /// Forget every channel registered as being watched: the main window and
+    /// its grid are gone, so none of them is being watched any more.
+    pub async fn clear_active_channels(&self) {
+        self.active_viewing_channels.write().await.clear();
+        debug!("Cleared every active watching channel for predictions");
+    }
+
     /// Unregister a channel that is no longer being watched
     pub async fn unregister_active_channel(&self, channel_id: &str) {
         let mut active = self.active_viewing_channels.write().await;
