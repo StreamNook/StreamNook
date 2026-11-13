@@ -178,8 +178,12 @@ fn every_restore_path_pauses() {
 #[test]
 fn outward_names_primary_only_inside_its_one_line_primary_id() {
     let src = norm(OUTWARD);
-    // Drop the `primary_id` function (its signature to the closing brace), then comments.
-    let start = src.find("fn primary_id(").expect("primary_id");
+    // Drop the real `primary_id` (its signature to the closing brace; the
+    // trait's bodiless declaration comes first, so find the one with a body),
+    // then comments.
+    let start = src
+        .find("fn primary_id(&self) -> Option<String> {\n        real_only();")
+        .expect("the real primary_id");
     let end = start + src[start..].find("\n    }\n").expect("primary_id ends");
     let without = format!("{}{}", &src[..start], &src[end..]);
     let code: String = without
