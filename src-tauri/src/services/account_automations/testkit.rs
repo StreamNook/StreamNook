@@ -30,7 +30,13 @@ use super::executor::Job;
 use super::guards;
 use super::local::{AccountChange, AccountChanges, Local};
 use super::notify::{NotifyPayload, NotifyRequest};
-use super::outward::{ChatSend, Outward};
+use super::outward::{ChatSend, CommandDoors, ModDoors, Outward, WhisperDoor, WhisperTo};
+use super::local::WhisperPerson;
+use super::timed;
+use super::timers;
+use crate::services::twitch_service::{DoorOutcome, SearchFail};
+use crate::services::whisper_send::Outcome as WhisperOutcome;
+use crate::services::whisper_service::WhisperEvent;
 use super::store::Device;
 pub use super::verify::{BoxFuture, Fetch, Identity, TokenRefusal, TokenVerifier, Validation, VerifiedToken, VerifyIo};
 use super::{facts, lock, now_ms, Clock, Deps, Engine, Spawn, StatusSnapshot, Timings};
@@ -664,6 +670,195 @@ pub enum FakeToken {
     Unreachable,
 }
 
+/// What a fake Command door answers and records. Every call is also pushed onto
+/// the fake outward's `calls()` log (`command:chat_settings`, ...), so a test
+/// reads the order search, claim, write.
+pub struct FakeCommandDoors {
+    state: Arc<Mutex<OutState>>,
+    pub log: Mutex<Vec<String>>,
+    pub settings: Mutex<Vec<(String, String, String, Value)>>,
+    pub markers: Mutex<Vec<(String, String, Option<String>)>>,
+    pub infos: Mutex<Vec<(String, String, Option<String>, Option<String>)>>,
+    pub searches: Mutex<Vec<(String, String)>>,
+    /// Answers in order; Sent when empty.
+    pub answers: Mutex<VecDeque<DoorOutcome>>,
+    /// The `SetGame` read's answer; an empty list when unset.
+    pub search_answer: Mutex<Option<Result<Vec<Value>, SearchFail>>>,
+}
+
+impl FakeCommandDoors {
+    fn new(state: Arc<Mutex<OutState>>) -> FakeCommandDoors {
+        FakeCommandDoors {
+            state,
+            log: Mutex::new(Vec::new()),
+            settings: Mutex::new(Vec::new()),
+            markers: Mutex::new(Vec::new()),
+            infos: Mutex::new(Vec::new()),
+            searches: Mutex::new(Vec::new()),
+            answers: Mutex::new(VecDeque::new()),
+            search_answer: Mutex::new(None),
+        }
+    }
+
+    fn note(&self, name: &str) {
+        lock(&self.state).calls.push(format!("command:{name}"));
+        lock(&self.log).push(name.to_string());
+    }
+
+    fn next(&self) -> DoorOutcome {
+        lock(&self.answers).pop_front().unwrap_or(DoorOutcome::Sent)
+    }
+}
+
+#[async_trait]
+impl CommandDoors for FakeCommandDoors {
+    async fn chat_settings(&self, token: &str, moderator_id: &str, room: &str, settings: &Value) -> DoorOutcome {
+        self.note("chat_settings");
+        lock(&self.settings).push((token.into(), moderator_id.into(), room.into(), settings.clone()));
+        self.next()
+    }
+    async fn marker(&self, token: &str, broadcaster_id: &str, description: Option<&str>) -> DoorOutcome {
+        self.note("marker");
+        lock(&self.markers).push((token.into(), broadcaster_id.into(), description.map(str::to_string)));
+        self.next()
+    }
+    async fn channel_info(&self, token: &str, broadcaster_id: &str, title: Option<&str>, game_id: Option<&str>) -> DoorOutcome {
+        self.note("channel_info");
+        lock(&self.infos).push((token.into(), broadcaster_id.into(), title.map(str::to_string), game_id.map(str::to_string)));
+        self.next()
+    }
+    async fn search_categories(&self, token: &str, query: &str) -> Result<Vec<Value>, SearchFail> {
+        self.note("search_categories");
+        lock(&self.searches).push((token.into(), query.into()));
+        lock(&self.search_answer).clone().unwrap_or_else(|| Ok(Vec::new()))
+    }
+}
+
+/// The fake moderation, Pin, Announce and Shoutout doors.
+pub struct FakeModDoors {
+    state: Arc<Mutex<OutState>>,
+    pub log: Mutex<Vec<String>>,
+    pub timeouts: Mutex<Vec<(String, String, String, String, u32)>>,
+    pub deletes: Mutex<Vec<(String, String, String, String)>>,
+    pub pins: Mutex<Vec<(String, String, String, String, Option<u32>)>>,
+    pub announces: Mutex<Vec<(String, String, String, String, String)>>,
+    pub shoutouts: Mutex<Vec<(String, String, String, String)>>,
+    announce_at: Mutex<Vec<tokio::time::Instant>>,
+    /// Parks `timeout` while closed (a test holds twelve jobs at the door).
+    gate: Gate,
+    pub answers: Mutex<VecDeque<DoorOutcome>>,
+}
+
+impl FakeModDoors {
+    fn new(state: Arc<Mutex<OutState>>) -> FakeModDoors {
+        FakeModDoors {
+            state,
+            log: Mutex::new(Vec::new()),
+            timeouts: Mutex::new(Vec::new()),
+            deletes: Mutex::new(Vec::new()),
+            pins: Mutex::new(Vec::new()),
+            announces: Mutex::new(Vec::new()),
+            shoutouts: Mutex::new(Vec::new()),
+            announce_at: Mutex::new(Vec::new()),
+            gate: Gate::open(),
+            answers: Mutex::new(VecDeque::new()),
+        }
+    }
+
+    fn note(&self, name: &str) {
+        lock(&self.state).calls.push(format!("mod:{name}"));
+        lock(&self.log).push(name.to_string());
+    }
+
+    fn next(&self) -> DoorOutcome {
+        lock(&self.answers).pop_front().unwrap_or(DoorOutcome::Sent)
+    }
+
+    /// When each Announce reached the door (the runtime's clock, virtual under `start_paused`).
+    pub fn announce_times(&self) -> Vec<tokio::time::Instant> {
+        lock(&self.announce_at).clone()
+    }
+
+    /// Park every `timeout` at the door until `release_timeouts`.
+    pub fn park_timeouts(&self) {
+        self.gate.close();
+    }
+
+    pub fn release_timeouts(&self) {
+        self.gate.release();
+    }
+}
+
+#[async_trait]
+impl ModDoors for FakeModDoors {
+    async fn timeout(&self, token: &str, moderator_id: &str, room: &str, target: &str, seconds: u32, _reason: Option<&str>) -> DoorOutcome {
+        self.note("timeout");
+        self.gate.pass().await;
+        lock(&self.timeouts).push((token.into(), moderator_id.into(), room.into(), target.into(), seconds));
+        self.next()
+    }
+    async fn delete(&self, token: &str, moderator_id: &str, room: &str, message_id: &str) -> DoorOutcome {
+        self.note("delete");
+        lock(&self.deletes).push((token.into(), moderator_id.into(), room.into(), message_id.into()));
+        self.next()
+    }
+    async fn pin(&self, token: &str, moderator_id: &str, room: &str, message_id: &str, seconds: Option<u32>) -> DoorOutcome {
+        self.note("pin");
+        lock(&self.pins).push((token.into(), moderator_id.into(), room.into(), message_id.into(), seconds));
+        self.next()
+    }
+    async fn announce(&self, token: &str, moderator_id: &str, room: &str, text: &str, color: &str) -> DoorOutcome {
+        self.note("announce");
+        lock(&self.announce_at).push(tokio::time::Instant::now());
+        lock(&self.announces).push((token.into(), moderator_id.into(), room.into(), text.into(), color.into()));
+        self.next()
+    }
+    async fn shoutout(&self, token: &str, moderator_id: &str, room: &str, target: &str) -> DoorOutcome {
+        self.note("shoutout");
+        lock(&self.shoutouts).push((token.into(), moderator_id.into(), room.into(), target.into()));
+        self.next()
+    }
+}
+
+/// The fake whisper door.
+pub struct FakeWhisperDoor {
+    state: Arc<Mutex<OutState>>,
+    /// The user ids `knows` answers yes to.
+    pub known: Mutex<BTreeSet<String>>,
+    pub sent: Mutex<Vec<(String, WhisperTo, String)>>,
+    /// What the next sends end as; Sent when unset.
+    pub outcome: Mutex<Option<(Result<(), String>, WhisperOutcome)>>,
+    /// The whole whisper list is read (`history_complete`); false by default.
+    pub history: Mutex<bool>,
+}
+
+impl FakeWhisperDoor {
+    fn new(state: Arc<Mutex<OutState>>) -> FakeWhisperDoor {
+        FakeWhisperDoor {
+            state,
+            known: Mutex::new(BTreeSet::new()),
+            sent: Mutex::new(Vec::new()),
+            outcome: Mutex::new(None),
+            history: Mutex::new(false),
+        }
+    }
+}
+
+#[async_trait]
+impl WhisperDoor for FakeWhisperDoor {
+    async fn knows(&self, _owner_id: &str, user_id: &str) -> bool {
+        lock(&self.known).contains(user_id)
+    }
+    async fn send(&self, send_as: &str, to: &WhisperTo, text: &str) -> (Result<(), String>, WhisperOutcome) {
+        lock(&self.state).calls.push("whisper:send".into());
+        lock(&self.sent).push((send_as.into(), to.clone(), text.into()));
+        lock(&self.outcome).clone().unwrap_or((Ok(()), WhisperOutcome::Sent))
+    }
+    async fn history_complete(&self, _owner_id: &str) -> bool {
+        *lock(&self.history)
+    }
+}
+
 /// A scripted HTTP answer for the next claim or release.
 #[derive(Clone, Debug)]
 pub enum FakeHttp {
@@ -826,6 +1021,21 @@ pub struct FakeOutward {
     state: Arc<Mutex<OutState>>,
     generation: Arc<AtomicU64>,
     verifier: TokenVerifier,
+    pub command_doors: Arc<FakeCommandDoors>,
+    pub mod_doors: Arc<FakeModDoors>,
+    pub whisper_door: Arc<FakeWhisperDoor>,
+    /// Tokens `drop_token` was told to forget, and the accounts `record_send_401` named.
+    dropped: Mutex<Vec<VerifiedToken>>,
+    send_401s: Mutex<Vec<String>>,
+    /// `room_id("me")` answers the main account's id (a Timer in your own channel).
+    own_room_is_main: AtomicBool,
+    /// The next claim loses on this reason (and `retry_after_ms`).
+    loss: Mutex<Option<(String, Option<i64>)>>,
+    /// An account's second `verified_token` of the test answers this instead.
+    second_verify: Mutex<HashMap<String, FakeToken>>,
+    /// The first verify after a claim call (step 9's) answers this instead.
+    after_claim: Mutex<HashMap<String, FakeToken>>,
+    verifies: Mutex<HashMap<String, usize>>,
     send_gate: Gate,
     claim_gate: Gate,
     release_gate: Gate,
@@ -843,6 +1053,9 @@ impl FakeOutward {
         let state = Arc::new(Mutex::new(OutState::default()));
         let generation = Arc::new(AtomicU64::new(1));
         let io = fake_io(state.clone(), main.clone(), alt.clone(), clock, generation.clone());
+        let command_doors = Arc::new(FakeCommandDoors::new(state.clone()));
+        let mod_doors = Arc::new(FakeModDoors::new(state.clone()));
+        let whisper_door = Arc::new(FakeWhisperDoor::new(state.clone()));
         FakeOutward {
             server,
             main,
@@ -850,6 +1063,16 @@ impl FakeOutward {
             state,
             generation,
             verifier: TokenVerifier::new(io),
+            command_doors,
+            mod_doors,
+            whisper_door,
+            dropped: Mutex::new(Vec::new()),
+            send_401s: Mutex::new(Vec::new()),
+            own_room_is_main: AtomicBool::new(false),
+            loss: Mutex::new(None),
+            second_verify: Mutex::new(HashMap::new()),
+            after_claim: Mutex::new(HashMap::new()),
+            verifies: Mutex::new(HashMap::new()),
             send_gate: Gate::open(),
             claim_gate: Gate::open(),
             release_gate: Gate::open(),
@@ -1044,6 +1267,24 @@ impl FakeOutward {
 impl Outward for FakeOutward {
     async fn verified_token(&self, account_id: &str, budget: Duration) -> Result<VerifiedToken, TokenRefusal> {
         lock(&self.state).verify_calls += 1;
+        let nth = {
+            let mut seen = lock(&self.verifies);
+            let n = seen.entry(account_id.to_string()).or_insert(0);
+            *n += 1;
+            *n
+        };
+        // Step 9's re-verify: the first verify of `id` once a claim call has gone out.
+        let claimed = lock(&self.state).claim_calls > 0;
+        if claimed {
+            if let Some(how) = lock(&self.after_claim).remove(account_id) {
+                return Err(refusal_of(account_id, how));
+            }
+        }
+        if nth == 2 {
+            if let Some(how) = lock(&self.second_verify).remove(account_id) {
+                return Err(refusal_of(account_id, how));
+            }
+        }
         self.verifier.verify(account_id, budget).await
     }
 
@@ -1070,7 +1311,29 @@ impl Outward for FakeOutward {
         self.generation.load(Ordering::SeqCst)
     }
 
-    async fn room_id(&self, _login: &str) -> Result<String, String> {
+    fn command_doors(&self) -> &dyn CommandDoors {
+        &*self.command_doors
+    }
+
+    fn mod_doors(&self) -> &dyn ModDoors {
+        &*self.mod_doors
+    }
+
+    fn whisper_door(&self) -> &dyn WhisperDoor {
+        &*self.whisper_door
+    }
+
+    fn drop_token(&self, token: &VerifiedToken) {
+        lock(&self.dropped).push(token.clone());
+        self.verifier.drop_token_of(&token.token);
+    }
+
+    fn record_send_401(&self, account_id: &str) {
+        lock(&self.send_401s).push(account_id.to_string());
+        self.verifier.record_send_401(account_id);
+    }
+
+    async fn room_id(&self, login: &str) -> Result<String, String> {
         let delay = {
             let mut s = lock(&self.state);
             s.calls.push("room_id".into());
@@ -1079,6 +1342,9 @@ impl Outward for FakeOutward {
         self.room_started.hit();
         self.room_gate.pass().await;
         tokio::time::sleep(delay).await;
+        if login == "me" && self.own_room_is_main.load(Ordering::SeqCst) {
+            return Ok(self.main.clone());
+        }
         Ok("4242".into())
     }
 
@@ -1150,7 +1416,15 @@ impl Outward for FakeOutward {
             match scripted {
                 Some(FakeHttp::Network) => Err("network: refused".to_string()),
                 Some(FakeHttp::Status(status, body)) => Ok(ApiResponse { status, ok: (200..300).contains(&status), body }),
-                None => Ok(ApiResponse { status: 200, ok: true, body: self.server.handle(&account, body).to_string() }),
+                None => {
+                    let mut answer = self.server.handle(&account, body);
+                    if !release {
+                        if let Some((reason, retry)) = lock(&self.loss).take() {
+                            lose_claim(&mut answer, &reason, retry);
+                        }
+                    }
+                    Ok(ApiResponse { status: 200, ok: true, body: answer.to_string() })
+                }
             }
         };
         if !release {
@@ -1175,6 +1449,10 @@ struct ChatState {
     watched: BTreeSet<String>,
     live: HashMap<String, Option<bool>>,
     watch: Option<String>,
+    /// What USERSTATE said an account is in a channel.
+    roles: HashMap<(String, String), crate::services::chat_send_limiter::Role>,
+    /// The whisper picker's people.
+    people: Vec<WhisperPerson>,
 }
 
 pub struct FakeLocal {
@@ -1303,6 +1581,12 @@ impl Local for FakeLocal {
     fn settings(&self) -> (Automations, AutomationPrefs) {
         lock(&self.settings).clone()
     }
+    fn own_role(&self, as_login: &str, channel: &str) -> Option<crate::services::chat_send_limiter::Role> {
+        lock(&self.chat).roles.get(&(as_login.to_string(), channel.to_string())).copied()
+    }
+    fn whisper_people(&self, _owner_id: &str) -> Vec<WhisperPerson> {
+        lock(&self.chat).people.clone()
+    }
     async fn chats_held_by(&self, label: &str) -> Vec<String> {
         let mut rooms: Vec<String> =
             lock(&self.chat).holders.iter().filter(|(_, h)| h.contains(label)).map(|(r, _)| r.clone()).collect();
@@ -1406,6 +1690,391 @@ impl AccountChanges for FakeLocal {
     }
 }
 
+// ---- P2 helpers ---------------------------------------------------------------------------------
+
+/// Turn a claim answer into a loss on `reason`: the element of the kind
+/// `counted` (else the last) loses with `reason` and the others roll back with
+/// `rail`, as the claim function answers.
+fn lose_claim(answer: &mut Value, reason: &str, retry_after_ms: Option<i64>) {
+    let Some(list) = answer["elements"].as_array_mut() else { return };
+    if list.is_empty() {
+        return;
+    }
+    let at = list.iter().position(|e| e["kind"] == "counted").unwrap_or(list.len() - 1);
+    for (i, e) in list.iter_mut().enumerate() {
+        e["won"] = json!(false);
+        e["reason"] = json!(if i == at { reason } else { "rail" });
+    }
+    list[at]["retry_after_ms"] = json!(retry_after_ms);
+}
+
+impl FakeOutward {
+    /// The next claim loses on `reason` (`hour`, `day`, `gap`, ...).
+    pub fn script_claim_loss(&self, reason: &str) {
+        *lock(&self.loss) = Some((reason.into(), None));
+    }
+    /// The same, with the server's `retry_after_ms` (a `day` loss).
+    pub fn script_claim_loss_with_retry(&self, reason: &str, retry_after_ms: i64) {
+        *lock(&self.loss) = Some((reason.into(), Some(retry_after_ms)));
+    }
+    /// The second `verified_token` of `id` in the test answers `how` (step 9's).
+    pub fn script_second_verify(&self, id: &str, how: FakeToken) {
+        lock(&self.second_verify).insert(id.into(), how);
+    }
+    pub fn slow_claims(&self, d: Duration) {
+        self.delay_claims(d);
+    }
+    /// Tokens `drop_token` was told to forget, in order.
+    pub fn dropped_tokens(&self) -> Vec<VerifiedToken> {
+        lock(&self.dropped).clone()
+    }
+    /// Accounts `record_send_401` named, in order.
+    pub fn send_401s(&self) -> Vec<String> {
+        lock(&self.send_401s).clone()
+    }
+}
+
+impl FakeLocal {
+    /// USERSTATE said `login` is `role` in `channel`.
+    pub fn set_role(&self, login: &str, channel: &str, role: crate::services::chat_send_limiter::Role) {
+        lock(&self.chat).roles.insert((login.to_string(), channel.to_string()), role);
+    }
+    /// The whisper picker lists these people.
+    pub fn set_people(&self, people: Vec<WhisperPerson>) {
+        lock(&self.chat).people = people;
+    }
+}
+
+impl Kit {
+    /// A kit whose Timer rules post in the owner's own channel: the fake room
+    /// lookup answers the main account's id for "me", which is what `SetTitle`
+    /// and `SetGame` need (the room must be the verified user).
+    pub fn new_timed_own() -> Kit {
+        let kit = Kit::new();
+        kit.outward.own_room_is_main.store(true, Ordering::SeqCst);
+        kit
+    }
+
+    /// A Timer rule in the owner's own channel that runs one Command line (a JSON rule: Live, no cooldowns).
+    pub fn timed_rule(&self, id: &str, line: &str) -> Value {
+        rule(
+            id,
+            true,
+            json!({ "kind": "timer", "every_seconds": 300, "min_messages": 0 }),
+            json!({ "kind": "own" }),
+            vec![json!({ "kind": "command", "id": "a-1", "line": line })],
+        )
+    }
+
+    /// One tick of the timed machine, a second after the last (injected steady and wall times).
+    async fn step_timers(&self) {
+        // One second on the kit's clock; the engine's own steady time is what the joins and phases use.
+        self.clock.advance(Duration::from_secs(1));
+        let steady = self.engine.now();
+        let wall = self.timed_wall.fetch_add(1000, Ordering::SeqCst) + 1000;
+        timed::tick(&self.engine, steady, wall).await;
+    }
+
+    /// Step the timed machine `seconds` seconds, then wait for the jobs.
+    pub async fn advance_timers(&self, seconds: u32) {
+        for _ in 0..seconds {
+            self.step_timers().await;
+        }
+        self.idle().await;
+    }
+
+    /// Run a Timer rule's next fire: step second by second until the machine stamps it (it arms on the first tick), then wait for the job.
+    pub async fn fire_timed(&self, rule_id: &str) {
+        let compiled = self.engine.compiled();
+        let cr = compiled.rules.iter().find(|r| r.rule.id == rule_id).expect("rule");
+        let crate::models::automations::Trigger::Timer { every_seconds, .. } = cr.rule.when else {
+            panic!("fire_timed drives Timer rules")
+        };
+        let key = if matches!(cr.rule.only_if.channels, crate::models::automations::ChannelScope::Own {}) {
+            cr.own_key.clone()
+        } else {
+            cr.these_keys[0].clone()
+        };
+        let stamp = |engine: &Engine| lock(&engine.counts).timed(rule_id, &key).last_fire_ms;
+        let before = stamp(&self.engine);
+        let steps = i64::from(every_seconds) + timers::offset_ms(&key, every_seconds) / 1000 + 3;
+        for _ in 0..steps {
+            self.step_timers().await;
+            if stamp(&self.engine) != before {
+                break;
+            }
+        }
+        self.idle().await;
+    }
+
+    /// A kit with one Timer rule in this test's chat: every `every_s` seconds, after `min_messages` other lines, it sends "timer line".
+    pub async fn new_timer_rule(every_s: u32, min_messages: u32) -> Kit {
+        let kit = Kit::new();
+        // The rule posts in this test's chat, which is not the owner's: other chats must be allowed.
+        kit.prefs(|p| p.other_channels = true).await;
+        let mut rules = vec![rule(
+            "t1",
+            true,
+            json!({ "kind": "timer", "every_seconds": every_s, "min_messages": min_messages }),
+            this_chat(),
+            vec![send("a-1", None, "timer line")],
+        )];
+        // Varied: the limiter refuses a repeat of the same text inside 30 s, and a fire every
+        // 5 minutes of a rule with one fixed line must not be a duplicate in the tests.
+        rules[0]["vary"] = json!(true);
+        kit.settings(RunState::On, rules).await;
+        kit
+    }
+
+    /// Two devices on the same claim server, both running that Timer rule.
+    pub async fn pair_with_timer(every_s: u32, min_messages: u32) -> (Kit, Kit) {
+        let a = Kit::new_timer_rule(every_s, min_messages).await;
+        let b = a.second_device();
+        b.prefs(|p| p.other_channels = true).await;
+        let rules = lock(&a.local.settings).0.rules.clone();
+        b.settings(RunState::On, rules).await;
+        (a, b)
+    }
+
+    /// One live line from someone else in this test's chat (the Timer's counter reads it).
+    pub async fn chat_line_from_other(&self) {
+        let id = format!("line-{}", NEXT_IDS.fetch_add(1, Ordering::SeqCst));
+        self.engine.on_chat(&chat_row(&id, "viewer", "just chatting"), false);
+    }
+
+    /// Compile again (an edit or an account change would).
+    pub async fn recompile(&self) {
+        self.engine.recompile().await;
+    }
+
+    /// A kit with one Whisper rule: when someone you have whispered with
+    /// whispers, whisper "hi" back to them (the `to: null` Reply form).
+    pub async fn new_whisper_rule() -> Kit {
+        let kit = Kit::new();
+        let rules = vec![rule(
+            "w1",
+            true,
+            json!({ "kind": "whisper", "text": null }),
+            json!({ "kind": "own" }),
+            vec![json!({ "kind": "whisper", "id": "a-1", "to": null, "texts": [{ "id": "l-1", "text": "hi" }], "pick": "in_order" })],
+        )];
+        kit.settings(RunState::On, rules).await;
+        kit
+    }
+
+    /// A whisper from `from` that Twitch stamped `age_ms` ago, as `record_incoming` hands it to the engine.
+    pub async fn whisper_in(&self, whisper_id: &str, from: &str, age_ms: i64) {
+        let ev = WhisperEvent {
+            from_user_id: from.into(),
+            from_user_login: format!("u{from}"),
+            from_user_name: format!("U{from}"),
+            to_user_id: main_id(),
+            to_user_login: "me".into(),
+            to_user_name: "me".into(),
+            whisper_id: whisper_id.into(),
+            text: "hello".into(),
+        };
+        let twitch_ms = crate::services::whisper_sync::twitch_now(now_ms()) - age_ms;
+        // Awaited: the gates and the admission finish before the jobs are waited on (no sleep).
+        self.engine.on_whisper_now(&main_id(), &ev, twitch_ms).await;
+        self.idle().await;
+    }
+
+    /// A mention from `viewer` carrying these badges (`moderator`, `vip`, ...).
+    pub async fn fire_with_roles(&self, id: &str, roles: &[&str]) {
+        let mut row = chat_row(id, "viewer", "hey @me");
+        row.badges = roles.iter().map(|r| serde_json::from_value(json!({ "name": r, "version": "1" })).expect("a badge")).collect();
+        self.engine.on_chat(&row, false);
+        self.idle().await;
+    }
+}
+
+/// A token refusal for a scripted `FakeToken` (the second verify and the verify after a claim).
+fn refusal_of(account_id: &str, how: FakeToken) -> TokenRefusal {
+    match how {
+        FakeToken::WrongAccount(actual) => TokenRefusal::WrongAccount { expected: account_id.to_string(), actual },
+        FakeToken::Unreachable => TokenRefusal::Unreachable("Twitch did not answer".into()),
+        FakeToken::NoToken => TokenRefusal::NoToken("no usable Twitch token is stored".into()),
+        _ => TokenRefusal::Refused(FETCH_REFUSED.into()),
+    }
+}
+
+/// A JSON rule with this trigger, scope and actions (Live, no cooldowns): the testkit's private `rule`, public.
+pub fn rule_value(id: &str, when: Value, channels: Value, actions: Vec<Value>) -> Value {
+    rule(id, true, when, channels, actions)
+}
+
+/// `n` chats of this test: (login, room id), each its own lane.
+pub fn many_chats(n: usize) -> Vec<(String, String)> {
+    (0..n).map(|i| (format!("{}x{i}", chan()), format!("77{i}"))).collect()
+}
+
+/// A mention rule in these chats whose one action is a Timeout of 600 s.
+pub fn timeout_rule_in(id: &str, chats: &[(String, String)]) -> Value {
+    let list: Vec<Value> = chats.iter().map(|(login, room)| chat_ref(login, room)).collect();
+    rule(
+        id,
+        true,
+        mention(),
+        json!({ "kind": "these", "list": list }),
+        vec![json!({ "kind": "timeout", "id": "a-1", "seconds": 600, "reason": "" })],
+    )
+}
+
+fn role_badges(roles: &[&str]) -> Vec<crate::models::chat_layout::Badge> {
+    roles.iter().map(|r| serde_json::from_value(json!({ "name": r, "version": "1" })).expect("a badge")).collect()
+}
+
+impl FakeOutward {
+    /// The first `verified_token` of `id` that happens after a claim call has gone out answers `how` (step 9's re-verify).
+    pub fn script_verify_after_claim(&self, id: &str, how: FakeToken) {
+        lock(&self.after_claim).insert(id.into(), how);
+    }
+
+    /// How many times `verified_token` was asked for `id` (a Kick id must stay 0, D277).
+    pub fn verifies_of(&self, id: &str) -> usize {
+        lock(&self.verifies).get(id).copied().unwrap_or(0)
+    }
+}
+
+impl FakeServer {
+    /// Move the server's clock on by `ms` (a windowed claim really expires).
+    pub fn advance(&self, ms: i64) {
+        lock(&self.state).skew_ms += ms;
+    }
+}
+
+impl FakeLocal {
+    /// A window lets go of `room`.
+    pub fn unhold(&self, label: &str, room: &str) {
+        if let Some(holders) = lock(&self.chat).holders.get_mut(room) {
+            holders.remove(label);
+        }
+    }
+}
+
+impl Kit {
+    /// The compiled rule as the engine holds it (after `normalize`).
+    pub fn stored_rule(&self, id: &str) -> Value {
+        self.engine.compiled().rule(id).map(|c| c.rule.to_value()).expect("a compiled rule")
+    }
+
+    /// Why the compiled rule cannot run, if it cannot.
+    pub fn compiled_rule_held(&self, id: &str) -> Option<String> {
+        self.engine.compiled().rule(id).and_then(|c| c.held.clone())
+    }
+
+    /// `validate` of this rule value, as `automations_save_rule` runs it (no other rules stored).
+    pub fn save_errors(&self, rule: Value) -> Vec<crate::models::automations::FieldError> {
+        let mut rule = crate::models::automations::Rule::from_value(&rule).expect("a readable rule");
+        crate::models::automations::validate(&mut rule, &crate::models::automations::ValidateCtx::default())
+    }
+
+    /// Engine bookings made on this test thread (E25i).
+    pub fn engine_bookings(&self) -> usize {
+        crate::services::chat_send_limiter::engine_bookings_for_test()
+    }
+
+    /// This test's chat as the chat rules key it.
+    pub fn chat_key(&self) -> String {
+        crate::services::chat_rules::channel_filter_key("twitch", &chan())
+    }
+
+    /// One mention from a different viewer in each of these chats, all handed to the engine before any job has run.
+    pub fn fire_rows_in_no_wait(&self, chats: &[(String, String)], roles: &[&str]) {
+        for (i, (login, room)) in chats.iter().enumerate() {
+            let mut row = chat_row(&format!("many-{i}"), &format!("viewer{i}"), "hey @me");
+            row.channel = login.clone();
+            row.tags.insert("room-id".into(), room.clone());
+            row.badges = role_badges(roles);
+            self.engine.on_chat(&row, false);
+        }
+    }
+
+    /// A mention from `user` in the owner's own room (login "me", room id = the main account's id), no wait.
+    pub fn fire_own_room_no_wait(&self, id: &str, user: &str) {
+        let mut row = chat_row(id, user, "hey @me");
+        row.channel = "me".into();
+        row.tags.insert("room-id".into(), main_id());
+        self.engine.on_chat(&row, false);
+    }
+
+    /// A mention from `viewer{i}` in each chat, then wait for the jobs.
+    pub async fn fire_rows_in(&self, chats: &[(String, String)], roles: &[&str]) {
+        self.fire_rows_in_no_wait(chats, roles);
+        self.idle().await;
+    }
+
+    /// A Kit with a Delay rule in this test's chat that sends "delay line" (varied, so the limiter's 30 s duplicate rule never refuses it).
+    pub async fn new_delay_rule(seconds: u32) -> Kit {
+        let kit = Kit::new();
+        kit.prefs(|p| p.other_channels = true).await;
+        let mut delay = rule("d1", true, json!({ "kind": "delay", "seconds": seconds }), this_chat(), vec![send("a-1", None, "delay line")]);
+        delay["vary"] = json!(true);
+        kit.settings(RunState::On, vec![delay]).await;
+        kit
+    }
+
+    /// Two devices on one claim server, both running that Delay rule.
+    pub async fn pair_with_delay(seconds: u32) -> (Kit, Kit) {
+        let a = Kit::new_delay_rule(seconds).await;
+        let b = a.second_device();
+        b.prefs(|p| p.other_channels = true).await;
+        let rules = lock(&a.local.settings).0.rules.clone();
+        b.settings(RunState::On, rules).await;
+        (a, b)
+    }
+
+    /// A window opened `chat`: it holds the chat under "main" and the engine notes the join.
+    pub async fn open_window_chat(&self, chat: &str) {
+        self.local.hold("main", chat);
+        super::note_window_claim_on(&self.engine, chat);
+    }
+
+    /// The last window let go of `chat`: the hold goes and the engine forgets the join (`note_window_release_on`).
+    pub async fn close_window_chat(&self, chat: &str) {
+        self.local.unhold("main", chat);
+        super::note_window_release_on(&self.engine, chat);
+    }
+
+    /// Step each kit's timed machine one second at a time, with its clock and the shared
+    /// claim server's clock, waiting for the jobs each second, so a windowed claim really
+    /// expires and jobs run in order. Every kit passed shares one server (a pair).
+    pub async fn advance_all(kits: &[&Kit], seconds: u32) {
+        for _ in 0..seconds {
+            for kit in kits {
+                kit.step_timers().await;
+            }
+            kits[0].server.advance(1000);
+            for kit in kits {
+                kit.idle().await;
+            }
+        }
+    }
+
+    /// A kit whose Kick actor is connected in the fake Kick door (P4's `connect_kick`).
+    pub fn new_kick_actor() -> Kit {
+        let kit = Kit::new();
+        kit.outward.connect_kick(KICK_ME, "mykick");
+        kit
+    }
+
+    /// P4's Kick message rule (a Kick `send_as`, "hello" fires it) whose actions are these.
+    pub fn kick_rule_with(&self, id: &str, actions: Value) -> Value {
+        let mut rule = kick_these_rule(id, &["alpha"]);
+        rule["actions"] = actions;
+        rule
+    }
+
+    /// A Kick row saying "hello" from viewer 7001 carrying these badges, then wait for the jobs.
+    pub async fn fire_kick_row(&self, id: &str, roles: &[&str]) {
+        let mut row = kick_row(id, "7001", "hello");
+        row.badges = role_badges(roles);
+        self.engine.on_chat(&row, false);
+        self.idle().await;
+    }
+}
+
 // ---- the kit ---------------------------------------------------------------------------------
 
 /// The main account's send limiter is one per process, so engine tests that
@@ -1454,6 +2123,11 @@ pub struct Kit {
     pub server: Arc<FakeServer>,
     /// The token verifier's clock.
     pub clock: TestClock,
+    pub command_doors: Arc<FakeCommandDoors>,
+    pub mod_doors: Arc<FakeModDoors>,
+    pub whisper_door: Arc<FakeWhisperDoor>,
+    /// The timed machine's injected wall time (ms); its steady time is the engine's own clock.
+    timed_wall: AtomicI64,
     rx: Mutex<Option<watch::Receiver<u64>>>,
     /// Dropped last: the main limiter is this test's until the kit is gone.
     _turn: PrimaryLease,
@@ -1485,7 +2159,19 @@ impl Kit {
             spawn: test_spawner(),
         });
         engine.presence.store(true, Ordering::SeqCst);
-        Kit { engine, outward, local, server, clock, rx: Mutex::new(Some(rx)), _turn: turn }
+        Kit {
+            engine,
+            command_doors: outward.command_doors.clone(),
+            mod_doors: outward.mod_doors.clone(),
+            whisper_door: outward.whisper_door.clone(),
+            outward,
+            local,
+            server,
+            clock,
+            timed_wall: AtomicI64::new(now_ms()),
+            rx: Mutex::new(Some(rx)),
+            _turn: turn,
+        }
     }
 
     /// Another device signed in to the same accounts, on the same claim server.

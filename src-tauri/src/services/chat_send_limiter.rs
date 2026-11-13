@@ -1112,7 +1112,20 @@ pub fn acquire_within_as(
 }
 
 /// `acquire_within_as` on a known limiter.
+#[cfg(test)]
+thread_local! {
+    static ENGINE_BOOKINGS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many engine bookings this test thread has made (any account).
+#[cfg(test)]
+pub(crate) fn engine_bookings_for_test() -> usize {
+    ENGINE_BOOKINGS.with(|c| c.get())
+}
+
 pub(crate) fn acquire_within_on(account: LimiterKey, channel: &str, text: &str, max_wait: Duration) -> Result<(Duration, Ticket), Refusal> {
+    #[cfg(test)]
+    ENGINE_BOOKINGS.with(|c| c.set(c.get() + 1));
     let now = Instant::now();
     let modes = match &account {
         LimiterKey::Alt(_) => limiter().channels.get(&key(channel)).map(|f| f.modes),
