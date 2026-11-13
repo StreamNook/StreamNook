@@ -20,6 +20,15 @@
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />
 
+    <!-- Text to speech (automations' Speak action and /tts): Android 11 and up
+         hide other apps unless this app names what it asks for, and without
+         this entry the speech engine is not found. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+    </queries>
+
     <!-- Backup and phone-to-phone transfer carry the settings only. Everything
          else in the data dir belongs to this install: the sealed sign-ins AND
          the key that opens them, the web session, the push and job state, and
