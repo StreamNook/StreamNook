@@ -140,29 +140,6 @@ fn build_client() -> reqwest::Client {
         .unwrap_or_else(|_| reqwest::Client::new())
 }
 
-#[cfg(test)]
-mod held_claims_tests {
-    use super::*;
-
-    fn connection(labels: &[&str]) -> Connection {
-        Connection { consumers: labels.iter().map(|s| s.to_string()).collect(), task: None }
-    }
-
-    #[tokio::test]
-    async fn the_adapter_reports_what_a_label_holds_and_whether_another_holds_it() {
-        let provider = YouTubeProvider::new();
-        {
-            let mut conns = provider.conns.lock().await;
-            conns.insert("uc-alpha".into(), connection(&["automations"]));
-            conns.insert("uc-beta".into(), connection(&["automations", "main"]));
-        }
-        assert_eq!(provider.channels_held_by("automations").await, vec!["uc-alpha".to_string(), "uc-beta".to_string()]);
-        assert!(!provider.held_by_other_than("UC-Alpha", "automations").await, "the adapter keys lowercase");
-        assert!(provider.held_by_other_than("uc-beta", "automations").await);
-        assert!(!provider.held_by_other_than("nothing", "automations").await);
-    }
-}
-
 #[async_trait]
 impl ChatProvider for YouTubeProvider {
     fn id(&self) -> &'static str {
@@ -3493,5 +3470,28 @@ mod parity_tests {
         let msg = parse_membership(&new_member, "youtube:chan");
         assert_eq!(msg.tags.get("msg-id").map(String::as_str), Some("membership"));
         assert!(msg.tags.get("msg-param-milestone").is_none());
+    }
+}
+
+#[cfg(test)]
+mod held_claims_tests {
+    use super::*;
+
+    fn connection(labels: &[&str]) -> Connection {
+        Connection { consumers: labels.iter().map(|s| s.to_string()).collect(), task: None }
+    }
+
+    #[tokio::test]
+    async fn the_adapter_reports_what_a_label_holds_and_whether_another_holds_it() {
+        let provider = YouTubeProvider::new();
+        {
+            let mut conns = provider.conns.lock().await;
+            conns.insert("uc-alpha".into(), connection(&["automations"]));
+            conns.insert("uc-beta".into(), connection(&["automations", "main"]));
+        }
+        assert_eq!(provider.channels_held_by("automations").await, vec!["uc-alpha".to_string(), "uc-beta".to_string()]);
+        assert!(!provider.held_by_other_than("UC-Alpha", "automations").await, "the adapter keys lowercase");
+        assert!(provider.held_by_other_than("uc-beta", "automations").await);
+        assert!(!provider.held_by_other_than("nothing", "automations").await);
     }
 }
