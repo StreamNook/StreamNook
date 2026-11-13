@@ -60,6 +60,9 @@ import { acceptsComposerEvent, managesHere, type PaneEventDetail } from '../../c
 import { useHiddenPinWaiting, usePinsOpen } from '../watch/pinsOpen';
 import { useOutsidePress } from '../../hooks/useOutsidePress';
 import { measureText, pickFittingText } from './placeholderFit';
+import { PhoneHintLayer, RoomDeckFace } from '../../components/chat/ComposerDeck';
+import { phoneHints, useGifsOffered } from '../../components/chat/composerHints';
+import { useLowPower } from '../../utils/lowPower';
 
 // The emote menu takes the keyboard's place, at the keyboard's last height,
 // the platform's own emoji-keyboard pattern: the emote button swaps one for
@@ -384,7 +387,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
       return out;
     });
   };
-  const { currentSmiley, isSmileyTransitioning, cycleEmoteSmiley } = useSwappingSmiley();
+  const { currentSmiley, cycleEmoteSmiley } = useSwappingSmiley();
   // The wallet follows the chat you are typing in, like everything else in
   // this composer: a cheer posts in that room, and its rewards are that
   // channel's. Before, the points readout followed the watched stream while
@@ -693,6 +696,26 @@ const MobileChatInputImpl: React.FC<Props> = ({
           ? [roomModes.prompt, roomModes.prompt_short ?? roomModes.prompt]
           : ['Send a message'];
   const placeholder = pickFittingText(placeholderWordings, fieldBox.width - 2, (t) => measureText(t, fieldBox.font));
+  // The teaching placeholder, desktop's (chat/ComposerDeck): while the plain
+  // prompt shows and the box is empty, it says "Search a GIF" in turn with
+  // the prompt, where the channel offers GIFs (Twitch). The phone teaches no
+  // "/": typing it brings no command list here; commands have their own
+  // button in the field.
+  const motionMode = useAppStore((s) => s.settings.motion_mode);
+  const lowPower = useLowPower();
+  const gifsOffered = useGifsOffered(isTwitch, channelId);
+  const deckGifs = gifsOffered && !hideEmoteButton && !roomModes?.modes.some((m) => m.kind === 'emote_only');
+  const hintGate = phoneHints({
+    gifs: deckGifs,
+    plainPrompt:
+      !gating.warning && !shareArmed && !gating.blocked && slowWait <= 0 && !hidePlaceholder && !roomModes?.prompt && !needsKickSignIn,
+    empty: text === '',
+    typing,
+    panelOpen: emotesOpen || pointsOpen,
+    motionMode,
+    lowPower,
+  });
+  const deckRoom = channel ? { provider, channel } : null;
   // Characters as Twitch counts them (code points, so an emoji is one).
   const charCount = text.length >= COUNTER_FROM ? Array.from(text).length : text.length;
 
@@ -946,20 +969,14 @@ const MobileChatInputImpl: React.FC<Props> = ({
               className={`shrink-0 w-9 h-9 flex items-center justify-center text-[20px] leading-none active:opacity-70 ${
                 emotesOpen ? 'text-accent' : ''
               }`}
-              aria-label="Emotes and emoji"
+              aria-label={isTwitch ? 'Emotes, emoji and GIFs' : 'Emotes and emoji'}
               aria-pressed={emotesOpen}
             >
-              {/* Always the emoji button; the way back to the keyboard is the
-                  bar's right end while the panel is open. */}
-              <span
-                className="transition-[opacity,transform] duration-100"
-                style={{
-                  opacity: isSmileyTransitioning ? 0 : 1,
-                  transform: isSmileyTransitioning ? 'scale(0.8)' : 'scale(1)',
-                }}
-              >
-                {currentSmiley}
-              </span>
+              {/* Always the emote button (the way back to the keyboard is the
+                  bar's right end while the panel is open). Its face is the
+                  chat's emote of the moment, else the smiley; the slash card
+                  or the GIF chip while the box is about those. */}
+              <RoomDeckFace room={deckRoom} text={text} gifs={deckGifs} gate={hintGate} smiley={currentSmiley} />
             </button>
           )}
           {needsKickSignIn ? (
@@ -971,6 +988,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
               {kickBusy ? 'Waiting for you to sign in' : 'Sign in to Kick to chat'}
             </button>
           ) : (
+            <div className="relative flex-1 min-w-0 flex items-center">
             <textarea
               ref={inputRef}
               value={text}
@@ -995,6 +1013,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
                 }
               }}
               placeholder={placeholder}
+              data-hint-layer={hintGate.layer ? '' : undefined}
               // Typing is switched off, not just discouraged, when the badges prove
               // the send would be rejected. The placeholder says why, in the
               // field's ordinary placeholder ink: a statement, not an alarm.
@@ -1005,6 +1024,14 @@ const MobileChatInputImpl: React.FC<Props> = ({
               className="flex-1 min-w-0 resize-none bg-transparent py-2 text-[15px] leading-[1.4] text-textPrimary outline-none max-h-[96px] placeholder:text-textMuted"
               enterKeyHint="send"
             />
+            <PhoneHintLayer
+              room={deckRoom}
+              gifs={deckGifs}
+              gate={hintGate}
+              pick={(wordings) => pickFittingText(wordings, fieldBox.width - 2, (t) => measureText(t, fieldBox.font))}
+              className="py-2 text-[15px] leading-[1.4] text-textMuted"
+            />
+            </div>
           )}
           {/* Near Twitch's limit, the count: quiet, orange in the last 20, red
               past it. The room's chat modes have no icon here: the chat menu

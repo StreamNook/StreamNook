@@ -34,6 +34,11 @@ export interface ComposerLook {
   /** The prompt in the empty field, full and for a narrow row. */
   placeholder: string;
   placeholderNarrow: string;
+  /** The box shows the idle "Send a message", so its hints may teach what the
+   *  emote menu holds. Any prompt saying something you can act on (sign in,
+   *  a streak, a room mode, sub-only) wins over them, and a disabled or
+   *  prompt-less box teaches nothing. */
+  teaches: boolean;
 }
 
 /** Your Chat Input settings applied to the composer's situation. */
@@ -77,6 +82,19 @@ export function composerLook(prefs: ChatInputSettings | undefined, s: ComposerSi
     roomModesChip: roomModes && !roomModesAsPrompt ? roomModes : null,
     placeholder,
     placeholderNarrow: placeholder ? narrow : '',
+    teaches:
+      s.canSend &&
+      !s.signInOwed &&
+      !s.watchStreak &&
+      !s.resub &&
+      !roomModePrompt &&
+      // A mode that stops you, or a warning to acknowledge, says so in the
+      // chip style too: nothing to teach over it.
+      !s.roomModes?.blocked &&
+      !s.roomModes?.warning &&
+      !s.subOnlyBlocked &&
+      !s.inputDisabled &&
+      !prefs?.hide_placeholder,
   };
 }
 

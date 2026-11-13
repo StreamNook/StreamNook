@@ -2848,13 +2848,13 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
             // On this phone the suggestions strip inserts an emote but does
             // not open the picker, so its words promise only the strip.
             IS_MOBILE
-              ? 'Removes the smiley from inside the message box, and with it the emote picker. Emote suggestions still show above the box.'
-              : 'Removes the smiley from inside the message box, and with it the menu of emotes, GIFs and commands. Tab completion, : search and typing / still work.'
+              ? 'Removes the emote button from inside the message box, and with it the emote picker. Emote suggestions still show above the box.'
+              : 'Removes the emote button from inside the message box, and with it the menu of emotes, GIFs and commands. Tab completion, : search and typing / still work.'
           }
           help={
             IS_MOBILE
               ? undefined
-              : 'The smiley opens one menu for everything that goes into a message: Emotes, GIFs where the channel allows them, and Commands, a browsable list of every command you can run here with examples you can click into the box.'
+              : 'The emote button opens one menu for everything that goes into a message: Emotes, GIFs where the channel allows them, and Commands, a browsable list of every command you can run here with examples you can click into the box. It wears the emote chat is using most right now, and hovering it shows the GIF and command cards behind it.'
           }
           control={
             <Toggle

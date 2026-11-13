@@ -139,7 +139,9 @@ import {
   composerPaddingLeft as composerPaddingLeftFor,
   sendButtonClass,
 } from './chat/composerParts';
-import { EmoteSmileyButton } from './chat/EmoteSmileyButton';
+import { ComposerDeck } from './chat/ComposerDeck';
+import { desktopHints, useGifsOffered } from './chat/composerHints';
+import { useLowPower } from '../utils/lowPower';
 
 interface ParsedMessage {
   username: string;
@@ -1876,6 +1878,17 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   const composerCheer = useCheerDraft(isTwitch ? (channelOverride?.user_login ?? currentStream?.user_login) : null, messageInput);
   const visiblePlaceholder = look.placeholder;
   const visiblePlaceholderNarrow = look.placeholderNarrow;
+  // The teaching placeholder (chat/ComposerDeck) rests on the plain prompt
+  // once the box has held anything, however it got there (typed, picked,
+  // Tab, history), until you leave the composer: an active chatter never sees
+  // it move under the caret after a send. Derived while rendering, so every
+  // writer counts.
+  const [hintEngaged, setHintEngaged] = useState(false);
+  if (messageInput !== '' && !hintEngaged) setHintEngaged(true);
+  const lowPower = useLowPower();
+  // The menu's GIFs section shows on the same answer (Rust caches it).
+  const gifsOffered = useGifsOffered(isTwitch, currentStream?.user_id);
+  const emoteOnlyRoom = !!roomState?.modes?.modes.some((m) => m.kind === 'emote_only');
   // A render that changes the prompt writes the full one onto the field; put
   // the short one back while the row is narrow (the row's width observer
   // covers resizes).
@@ -2096,6 +2109,18 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   // Never more than the room's own wait, even if the wall clock jumped back.
   const slowRemaining =
     slowUntil > 0 && slowTick.until === slowUntil ? Math.min(slowSeconds, slowTick.left) : 0;
+  // When the empty box teaches what the emote menu holds (chat/ComposerDeck).
+  const hintGate = desktopHints({
+    teaches: look.teaches,
+    empty: messageInput === '',
+    engaged: hintEngaged,
+    slowWait: slowRemaining,
+    replying: !!replyingTo,
+    menuOpen: showEmotePicker,
+    remindOverlay: remindOverlayActive,
+    motionMode: settings.motion_mode,
+    lowPower,
+  });
   useEffect(() => {
     if (slowUntil <= 0) return;
     // Every count reads the clock against this deadline, including the first,
@@ -5817,13 +5842,27 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                 {/* Input container with emoji button inset on the left and
                     the room's chat-mode chip inset on the right. */}
                 <div className="sn-composer-field relative flex-1 min-w-0 flex items-center">
-                  {/* Emoji button — inset left inside the input */}
-                  {showEmoteButton && (
-                  <EmoteSmileyButton
+                  {/* The emote button (the deck), inset left inside the input,
+                      and the empty box's teaching hints over the field. */}
+                  <ComposerDeck
+                    showButton={showEmoteButton}
                     open={showEmotePicker}
+                    room={emoteMatchTarget.channel ? { provider, channel: emoteMatchTarget.channel } : null}
                     smiley={smiley.currentSmiley}
-                    transitioning={smiley.isSmileyTransitioning}
                     label={isTwitch ? 'Emotes, GIFs and commands' : 'Emotes and commands'}
+                    slash
+                    // A GIF sends nothing an emote-only room accepts.
+                    gifs={gifsOffered && !emoteOnlyRoom}
+                    text={messageInput}
+                    gate={hintGate}
+                    layerClassName="text-sm leading-[1.4] text-textSecondary"
+                    // The field's padding plus its 1px border, so the hints
+                    // sit exactly where its own placeholder does.
+                    layerStyle={{
+                      paddingTop: '9px',
+                      paddingLeft: `calc(${composerPaddingLeft} + 1px)`,
+                      paddingRight: 'calc(var(--sn-room-pad, 12px) + 1px)',
+                    }}
                     buttonRef={emoteButtonRef}
                     onClick={() => {
                       // Twitch only. A non-Twitch pane legitimately has an empty
@@ -5841,7 +5880,6 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                     }}
                     onMouseLeave={smiley.cycleEmoteSmiley}
                   />
-                  )}
                   {/* Send-as account picker, just right of the emote button */}
                   {showSendAsPicker && (
                     <div className="absolute left-8 top-1/2 -translate-y-1/2 z-10">
@@ -5952,6 +5990,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                     placeholder={visiblePlaceholder}
                     data-placeholder-wide={visiblePlaceholder}
                     data-placeholder-narrow={visiblePlaceholderNarrow}
+                    data-hint-layer={hintGate.layer ? '' : undefined}
                     // glass-exempt: the input is clear on purpose; the highlight layer under it carries the surface.
                     {...composerInputLook({
                       remindOverlay: remindOverlayActive,
@@ -5962,7 +6001,10 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                     })}
                     rows={1}
                     disabled={isInputDisabled}
-                    onBlur={() => {
+                    onBlur={(e) => {
+                      // The empty box may teach again once you have left the
+                      // composer (Send, the deck and the tools are part of it).
+                      if (!(e.relatedTarget as HTMLElement | null)?.closest?.('.sn-composer-row')) setHintEngaged(false);
                       // Delay hiding to allow click on autocomplete
                       setTimeout(() => setShowMentionAutocomplete(false), 150);
                       setTimeout(() => setShowCommandAutocomplete(false), 150);

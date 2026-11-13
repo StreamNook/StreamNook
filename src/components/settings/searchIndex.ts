@@ -857,7 +857,7 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Chat',
     section: 'Chat Input',
     title: 'Hide emote button',
-    description: 'Remove the smiley from inside the message box, and with it the menu of emotes, GIFs and commands (the command list moved into that menu; "Hide command button" is gone). Tab completion, : search and typing / still work. Previously "Hide the emote button".'
+    description: 'Remove the emote button (the smiley, or the emote chat is using most) from inside the message box, and with it the menu of emotes, GIFs and commands (the command list moved into that menu; "Hide command button" is gone). Tab completion, : search and typing / still work. Previously "Hide the emote button".'
   },
   {
     tab: 'Chat',

@@ -1,5 +1,5 @@
 // Settings > Chat preview's message box, built from the parts chat's composer
-// uses (chat/composerParts, EmoteSmileyButton, WalletFace, RoomModeIndicator,
+// uses (chat/composerParts, EmoteDeckButton, WalletFace, RoomModeIndicator,
 // the drops bar, the Tab completion views) so every Chat Input, Tab Completion
 // and Drops setting shows as chat shows it. Nothing here sends or opens
 // anything; the field is read-only.
@@ -8,7 +8,8 @@ import { AnimatePresence } from 'framer-motion';
 import { PaperPlaneTilt } from 'phosphor-react';
 import { useAppStore } from '../../stores/AppStore';
 import { composerInputLook, composerLook, composerPaddingLeft, sendButtonClass } from '../chat/composerParts';
-import { EmoteSmileyButton } from '../chat/EmoteSmileyButton';
+import { EmoteDeckButton } from '../chat/EmoteDeckButton';
+import { fanCards } from '../chat/composerHints';
 import { RoomModeIndicator } from '../chat/RoomModeIndicator';
 import { WalletFace, type WalletPoints } from '../chat/ChannelWallet';
 import { DropsChatBarView, PREVIEW_LINE } from '../chat/DropsChatBar';
@@ -113,7 +114,14 @@ export function PreviewComposer({
               )}
               <div className="sn-composer-field relative flex-1 min-w-0 flex items-center">
                 {look.showEmoteButton && (
-                  <EmoteSmileyButton open={false} smiley="😀" transitioning={false} label="Emotes, GIFs and commands" />
+                  <EmoteDeckButton
+                    open={false}
+                    face="moment"
+                    cards={fanCards('moment', { slash: true, gifs: true })}
+                    moment={null}
+                    smiley="😀"
+                    label="Emotes, GIFs and commands"
+                  />
                 )}
                 <AnimatePresence>
                   {candidates.length > 0 && tabStyle === 'carousel' && (
