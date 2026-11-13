@@ -30,6 +30,7 @@ import {
   loadAutomationVariables,
   newElementId,
   previewSample,
+  saveRuleChecked,
   sameRuleBody,
   withTrigger,
   type AutomationAccount,
@@ -39,7 +40,8 @@ import {
 } from '../../../utils/automations';
 import { ActionEditor } from './ActionEditor';
 import { BadgeDropFields } from './BadgeDropFields';
-import { EVENT_ITEMS, ROLE_ITEMS } from './labels';
+import { EVENT_ITEMS, P2_TRIGGERS, ROLE_ITEMS } from './labels';
+import { ExpressionField, P2AddActions, P2TriggerFields, isP2Trigger } from './P2Fields';
 import {
   Block,
   DANGER_BUTTON,
@@ -66,6 +68,7 @@ const TRIGGERS: { value: TriggerKind; label: string }[] = [
   { value: 'first_message', label: 'Someone chats for the first time' },
   { value: 'channel_event', label: 'Someone subs, gifts, raids or cheers' },
   { value: 'badge_drop', label: 'A new Twitch badge drops' },
+  ...P2_TRIGGERS,
 ];
 
 const MODES: { value: AutomationMatchMode; label: string }[] = [
@@ -229,9 +232,14 @@ export function RuleEditor({ initial, isNew, accounts, otherChannelsOn, onClose,
   const save = () => {
     setSaving(true);
     setMessage(null);
-    automationsApi
-      .saveRule(draft, isNew ? 0 : draft.updated_ms)
-      .then((res) => {
+    saveRuleChecked(draft, isNew ? 0 : draft.updated_ms)
+      .then(({ rule: sent, answer: res, problems }) => {
+        if (!res) {
+          setErrors(problems);
+          setMessage('Fix the marked fields to save.');
+          return;
+        }
+        if (sent !== draft) setDraft(sent);
         setErrors(res.errors);
         setStale(false);
         if (res.saved) {
@@ -409,6 +417,8 @@ export function RuleEditor({ initial, isNew, accounts, otherChannelsOn, onClose,
             ))}
           </>
         )}
+
+        {isP2Trigger(when) && <P2TriggerFields when={when} errors={errors} onChange={(next) => update((r) => ({ ...r, when: next }))} />}
 
         {when.kind === 'badge_drop' && (
           <BadgeDropFields
@@ -642,6 +652,7 @@ export function RuleEditor({ initial, isNew, accounts, otherChannelsOn, onClose,
             index={i}
             count={draft.actions.length}
             badgeRule={badge}
+            timedOwn={(draft.when.kind === 'timer' || draft.when.kind === 'clock') && draft.only_if.channels.kind === 'own'}
             errors={errors}
             variables={variables}
             preview={preview?.texts.find((t) => t.action_id === a.id)?.text ?? null}
@@ -666,9 +677,26 @@ export function RuleEditor({ initial, isNew, accounts, otherChannelsOn, onClose,
               <Plus size={13} />
               Notify me
             </button>
+            {!badge && (
+              <P2AddActions
+                rule={draft}
+                sendAsIsMain={accounts.some((a) => a.id === draft.send_as.id && a.main)}
+                onAdd={(next) => update((r) => ({ ...r, actions: [...r.actions, next] }))}
+              />
+            )}
           </div>
         )}
       </Block>
+
+      {(draft.when.kind === 'message' || draft.when.kind === 'mention' || draft.when.kind === 'first_message' || draft.when.kind === 'channel_event') && (
+        <Block title="Advanced">
+          <ExpressionField
+            value={draft.only_if.expression}
+            errors={errors}
+            onChange={(expression) => setIf({ expression })}
+          />
+        </Block>
+      )}
 
       {hasOutward && (
         <Block title="Send as">

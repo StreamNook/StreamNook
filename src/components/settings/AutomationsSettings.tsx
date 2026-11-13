@@ -69,6 +69,7 @@ const AutomationsSettings = () => {
   const other = prefs?.other_channels ?? false;
   const gap = prefs?.other_channel_gap_seconds ?? 30;
   const notes = prefs?.chat_notes ?? true;
+  const whisperDay = prefs?.whisper_people_per_day ?? 20;
   // A settings link to one rule (`streamnook://settings/Automations?rule=<id>`)
   // arrives as the row `rule:<id>`.
   const linkedRule = initialRow?.startsWith('rule:') ? initialRow.slice('rule:'.length) : null;
@@ -221,6 +222,21 @@ const AutomationsSettings = () => {
           description="A line only you see in chat when a rule acts, or would act in Test."
           onReset={resetFor('automation_prefs.chat_notes')}
           control={<Toggle enabled={notes} onChange={() => write('chat_notes', !notes)} ariaLabel="Chat notes" />}
+        />
+        <SettingsRow
+          title="Whisper people a day"
+          description="The most new people your rules may whisper in a day, across all your devices."
+          onReset={resetFor('automation_prefs.whisper_people_per_day')}
+          control={
+            <InlineSlider
+              value={whisperDay}
+              min={1}
+              max={30}
+              label="People a day"
+              format={(v) => `${v}/day`}
+              onChange={(v) => write('whisper_people_per_day', v)}
+            />
+          }
         />
         <SettingsRow
           title="Device name"

@@ -3015,6 +3015,12 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   {
     tab: 'Automations',
     section: 'Automations',
+    title: 'Whisper people a day',
+    description: 'The most new people your rules may whisper in a day, across all your devices.'
+  },
+  {
+    tab: 'Automations',
+    section: 'Automations',
     title: 'Device name',
     description: 'The name your other devices show when this one answers first.'
   },

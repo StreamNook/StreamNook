@@ -386,6 +386,7 @@ const BY_SECTION: Record<string, Record<string, LucideIcon>> = {
     Pace: Gauge,
     'Other channels': Globe,
     'Chat notes': NotebookPen,
+    'Whisper people a day': MessageCircle,
     'Device name': Signature,
   },
   'Chat Placement': { Position: PanelLeft },

@@ -732,7 +732,7 @@ export interface AutomationPrefs {
   other_channel_gap_seconds: number;
   /** Default true. */
   chat_notes: boolean;
-  /** 1 to 40. Default 20. */
+  /** 1 to 30. Default 20. */
   whisper_people_per_day: number;
 }
 
@@ -773,7 +773,12 @@ export type AutomationTrigger =
       min_viewers: number;
       min_bits: number;
     }
-  | { kind: 'badge_drop'; on: AutomationBadgeLeg; link: AutomationBadgeLink; batch_text: string };
+  | { kind: 'badge_drop'; on: AutomationBadgeLeg; link: AutomationBadgeLink; batch_text: string }
+  | { kind: 'whisper'; text: AutomationTextMatch | null }
+  | { kind: 'timer'; every_seconds: number; min_messages: number }
+  | { kind: 'clock'; at: string; days: AutomationWeekday[] }
+  | { kind: 'uptime'; seconds: number; late_ok: boolean }
+  | { kind: 'delay'; seconds: number };
 
 export interface AutomationChannelRef {
   id: string;
@@ -810,7 +815,17 @@ export interface AutomationConditions {
   only_away: boolean;
   shared_chat: boolean;
   hours: AutomationHours | null;
+  /** The saved-filter language, chat rows only. */
+  expression: string | null;
 }
+
+export interface AutomationWhisperTarget {
+  user_id: string;
+  login: string;
+  name: string;
+}
+
+export type AutomationAnnounceColor = 'primary' | 'blue' | 'green' | 'orange' | 'purple';
 
 export interface AutomationLine {
   id: string;
@@ -832,7 +847,18 @@ export type AutomationAction =
       sound: string | null;
       /** 0 to 1. */
       volume: number;
-    };
+    }
+  | { kind: 'command'; id: string; line: string }
+  | { kind: 'whisper'; id: string; to: AutomationWhisperTarget | null; texts: AutomationLine[]; pick: AutomationPick }
+  | { kind: 'timeout'; id: string; seconds: number; reason: string }
+  | { kind: 'delete'; id: string }
+  | { kind: 'pin'; id: string; seconds: number | null }
+  | { kind: 'announce'; id: string; text: string; color: AutomationAnnounceColor }
+  | { kind: 'shoutout'; id: string }
+  | { kind: 'join_chat'; id: string; channel: AutomationChannelRef }
+  | { kind: 'leave_chat'; id: string; channel: AutomationChannelRef }
+  | { kind: 'wait'; id: string; seconds: number }
+  | { kind: 'log'; id: string; to_file: boolean };
 
 export interface AutomationLimits {
   rule_cooldown_seconds: number;

@@ -11,7 +11,9 @@ import { IS_MAC, IS_MOBILE } from '../../../utils/platform';
 import { Tooltip } from '../../ui/Tooltip';
 import { InlineSlider } from '../../plugins/settingsPageKit';
 import { ChannelPicker } from '../ChannelPicker';
+import { isP2Action } from '../../../utils/automations';
 import { ACTION_NAMES, ACTION_WORDS } from './labels';
+import { P2ActionFields } from './P2Fields';
 import { Disclosure, Field, HINT, INPUT, QUIET_BUTTON, SELECT, SwitchLine } from './parts';
 
 const MAX_LINES = 20;
@@ -254,6 +256,8 @@ interface ActionEditorProps {
   count: number;
   /** Badge rules post in your channel and never reply. */
   badgeRule: boolean;
+  /** A Timer or Clock rule in your own channel: the command forms that need it are offered. */
+  timedOwn: boolean;
   /** Every error of the rule; this picks its own by path. */
   errors: readonly AutomationFieldError[];
   variables: readonly AutomationVariable[];
@@ -269,6 +273,7 @@ export function ActionEditor({
   index,
   count,
   badgeRule,
+  timedOwn,
   errors,
   variables,
   preview,
@@ -286,6 +291,7 @@ export function ActionEditor({
   // line before any), or at the end of a Notify's text.
   const insert = (name: string) => {
     const token = `{${name}}`;
+    if (isP2Action(action)) return;
     if (action.kind === 'notify') {
       onChange({ ...action, body: `${action.body}${token}` });
       return;
@@ -338,6 +344,14 @@ export function ActionEditor({
 
       {action.kind === 'notify' ? (
         <NotifyFields action={action} at={at} errors={errors} onChange={onChange} />
+      ) : isP2Action(action) ? (
+        <P2ActionFields
+          action={action}
+          at={at}
+          errors={errors}
+          timedOwn={timedOwn}
+          onChange={onChange}
+        />
       ) : (
         <>
           {action.kind === 'send' && !badgeRule && <SendWhere action={action} onChange={onChange} />}

@@ -25,6 +25,17 @@ export const ACTION_NAMES: Record<AutomationAction['kind'], string> = {
   reply: 'Reply',
   send: 'Post a message',
   notify: 'Notify me',
+  command: 'Run a command',
+  whisper: 'Whisper',
+  timeout: 'Time them out',
+  delete: 'Delete the message',
+  pin: 'Pin the message',
+  announce: 'Announce',
+  shoutout: 'Shout them out',
+  join_chat: 'Keep a chat joined',
+  leave_chat: 'Stop keeping a chat joined',
+  wait: 'Wait',
+  log: 'Log it',
 };
 
 /** An action's word before its text in a preview or a Try it result. */
@@ -32,4 +43,31 @@ export const ACTION_WORDS: Record<AutomationAction['kind'], string> = {
   reply: 'Reply',
   send: 'Post',
   notify: 'Notify',
+  command: 'Run',
+  whisper: 'Whisper',
+  timeout: 'Time out',
+  delete: 'Delete',
+  pin: 'Pin',
+  announce: 'Announce',
+  shoutout: 'Shout out',
+  join_chat: 'Join',
+  leave_chat: 'Leave',
+  wait: 'Wait',
+  log: 'Log',
 };
+
+export const P2_TRIGGERS: { value: 'whisper' | 'timer' | 'clock' | 'uptime' | 'delay'; label: string }[] = [
+  { value: 'whisper', label: 'A whisper' },
+  { value: 'timer', label: 'Every so often' },
+  { value: 'clock', label: 'At a time' },
+  { value: 'uptime', label: 'When the stream reaches' },
+  { value: 'delay', label: 'After the chat opens' },
+];
+
+export const ANNOUNCE_COLORS: { value: 'primary' | 'blue' | 'green' | 'orange' | 'purple'; label: string }[] = [
+  { value: 'primary', label: 'Default' },
+  { value: 'blue', label: 'Blue' },
+  { value: 'green', label: 'Green' },
+  { value: 'orange', label: 'Orange' },
+  { value: 'purple', label: 'Purple' },
+];

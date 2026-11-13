@@ -373,7 +373,134 @@ export function actionOf(kind: AutomationAction['kind']): AutomationAction {
       return { kind, id: newElementId('a'), to: null, texts: [newLine()], pick: 'random' };
     case 'notify':
       return { kind, id: newElementId('a'), title: '', body: '', toast: true, system: false, sound: null, volume: 1 };
+    case 'command':
+      return { kind, id: newElementId('a'), line: '/slow 30' };
+    case 'whisper':
+      return { kind, id: newElementId('a'), to: null, texts: [newLine()], pick: 'random' };
+    case 'timeout':
+      return { kind, id: newElementId('a'), seconds: 600, reason: '' };
+    case 'delete':
+    case 'shoutout':
+      return { kind, id: newElementId('a') };
+    case 'pin':
+      return { kind, id: newElementId('a'), seconds: null };
+    case 'announce':
+      return { kind, id: newElementId('a'), text: '', color: 'primary' };
+    case 'join_chat':
+    case 'leave_chat':
+      return { kind, id: newElementId('a'), channel: { id: newElementId('c'), key: '', room_id: '', name: '' } };
+    case 'wait':
+      return { kind, id: newElementId('a'), seconds: 5 };
+    case 'log':
+      return { kind, id: newElementId('a'), to_file: false };
   }
+}
+
+/** The allowed Command forms, in the picker's order. Tested against
+ *  `src-tauri/tests/fixtures/automation_command_forms.json`. */
+export const COMMAND_FORMS: readonly { word: string; label: string; arg: 'none' | 'seconds' | 'duration' | 'text' | 'required_text'; own_timed_only: boolean }[] = [
+  { word: 'slow', label: 'Slow mode on', arg: 'seconds', own_timed_only: false },
+  { word: 'slowoff', label: 'Slow mode off', arg: 'none', own_timed_only: false },
+  { word: 'followers', label: 'Followers-only on', arg: 'duration', own_timed_only: false },
+  { word: 'followersoff', label: 'Followers-only off', arg: 'none', own_timed_only: false },
+  { word: 'subscribers', label: 'Subscribers-only on', arg: 'none', own_timed_only: false },
+  { word: 'subscribersoff', label: 'Subscribers-only off', arg: 'none', own_timed_only: false },
+  { word: 'uniquechat', label: 'Unique chat on', arg: 'none', own_timed_only: false },
+  { word: 'uniquechatoff', label: 'Unique chat off', arg: 'none', own_timed_only: false },
+  { word: 'emoteonly', label: 'Emote-only on', arg: 'none', own_timed_only: false },
+  { word: 'emoteonlyoff', label: 'Emote-only off', arg: 'none', own_timed_only: false },
+  { word: 'marker', label: 'Add a stream marker', arg: 'text', own_timed_only: false },
+  { word: 'settitle', label: 'Set the stream title', arg: 'required_text', own_timed_only: true },
+  { word: 'setgame', label: 'Set the category', arg: 'required_text', own_timed_only: true },
+];
+
+/** The word and argument of a stored command line: `/slow 60` is ['slow', '60']. */
+export function splitCommand(line: string): [string, string] {
+  const body = line.trim().replace(/^\//, '');
+  const i = body.search(/\s/);
+  return i < 0 ? [body.toLowerCase(), ''] : [body.slice(0, i).toLowerCase(), body.slice(i).trim()];
+}
+
+export const joinCommand = (word: string, arg: string): string => (arg.trim() ? `/${word} ${arg.trim()}` : `/${word}`);
+
+/** What a command's argument field shows: what was typed for this command word (a trailing space included, so
+ *  "Just Chatting" can be typed), else the argument stored in the line. */
+export const shownArgument = (typed: { word: string; text: string } | null, word: string, stored: string): string =>
+  typed && typed.word === word ? typed.text : stored;
+
+/** `pick_category`'s rule: the row whose name equals the typed one in any case. */
+export function pickCategory(rows: readonly { id?: string; name?: string }[], typed: string): string | null {
+  const wanted = typed.trim().toLowerCase();
+  const row = rows.find((r) => (r.name ?? '').trim().toLowerCase() === wanted && r.id && r.id !== '0');
+  return row?.name ?? null;
+}
+
+/** `/setgame` at save: each Command action whose line is `/setgame <name>` (a plain name, no `{variable}`)
+ *  is looked up through `search_categories` and stored by the category's own name. A name that is no
+ *  category, or a lookup that failed, comes back as a field error on that action's `line` with the two
+ *  sentences both platforms use ("No category named X", "Couldn't look up categories: <reason>"), and
+ *  the rule is not sent to Rust. Every other action passes through untouched. */
+export async function resolveSetGames(
+  actions: readonly AutomationAction[],
+): Promise<{ actions: AutomationAction[]; problems: AutomationFieldError[] }> {
+  const out: AutomationAction[] = [];
+  const problems: AutomationFieldError[] = [];
+  for (const [i, a] of actions.entries()) {
+    const [word, arg] = a.kind === 'command' ? splitCommand(a.line) : ['', ''];
+    if (a.kind !== 'command' || word !== 'setgame' || !arg.trim() || arg.includes('{')) {
+      out.push(a);
+      continue;
+    }
+    try {
+      const rows = await invoke<{ id?: string; name?: string }[]>('search_categories', { query: arg.trim(), limit: 10 });
+      const name = pickCategory(rows, arg);
+      if (name) {
+        out.push({ ...a, line: joinCommand('setgame', name) });
+      } else {
+        out.push(a);
+        problems.push({ path: `actions[${i}].line`, message: `No category named ${arg.trim()}` });
+      }
+    } catch (e) {
+      out.push(a);
+      problems.push({ path: `actions[${i}].line`, message: `Couldn't look up categories: ${errorText(e)}` });
+    }
+  }
+  return { actions: out, problems };
+}
+
+/** Save a rule the way the editor does: `/setgame` lines are looked up first, and on a miss or a failed lookup
+ *  nothing is sent (`answer` is null and `problems` says why). `rule` is what was sent. */
+export async function saveRuleChecked(
+  draft: AutomationRule,
+  expectedUpdatedMs: number,
+): Promise<{ rule: AutomationRule; answer: AutomationSaveResult | null; problems: AutomationFieldError[] }> {
+  const { actions, problems } = await resolveSetGames(draft.actions);
+  if (problems.length > 0) return { rule: draft, answer: null, problems };
+  const rule = actions.some((a, i) => a !== draft.actions[i]) ? { ...draft, actions } : draft;
+  return { rule, answer: await automationsApi.saveRule(rule, expectedUpdatedMs), problems: [] };
+}
+
+export type P2ActionKind = 'command' | 'whisper' | 'timeout' | 'delete' | 'pin' | 'announce' | 'shoutout' | 'join_chat' | 'leave_chat' | 'wait' | 'log';
+export type P2Action = Extract<AutomationAction, { kind: P2ActionKind }>;
+
+export const isP2Action = (a: AutomationAction): a is P2Action =>
+  !(a.kind === 'reply' || a.kind === 'send' || a.kind === 'notify');
+
+/** Chat-message triggers: the moderation actions work on one. */
+export const isChatMessageTrigger = (t: AutomationTrigger): boolean => t.kind === 'message' || t.kind === 'mention' || t.kind === 'first_message';
+export const isTimedTrigger = (t: AutomationTrigger): boolean => t.kind === 'timer' || t.kind === 'clock' || t.kind === 'uptime' || t.kind === 'delay';
+
+/** The P2 actions a rule offers in its Add row (the main account only, as Rust holds it otherwise). */
+export function offeredP2Actions(when: AutomationTrigger, sendAsIsMain: boolean): P2ActionKind[] {
+  const out: P2ActionKind[] = ['wait', 'log'];
+  if (!sendAsIsMain) return out;
+  if (when.kind === 'whisper') return ['whisper', ...out];
+  const chat = isChatMessageTrigger(when);
+  const raid = when.kind === 'channel_event' && when.events.includes('raid');
+  const list: P2ActionKind[] = ['command', 'whisper'];
+  if (chat) list.push('announce', 'timeout', 'delete', 'pin', 'shoutout');
+  else if (raid) list.push('shoutout');
+  return [...list, 'join_chat', 'leave_chat', ...out];
 }
 
 export function triggerOf(kind: TriggerKind): AutomationTrigger {
@@ -388,6 +515,16 @@ export function triggerOf(kind: TriggerKind): AutomationTrigger {
       return { kind, events: ['sub'], min_months: 0, min_gifts: 0, min_viewers: 0, min_bits: 0 };
     case 'badge_drop':
       return { kind, on: 'both', link: { preset: 'streamnook', custom: '', if_not_ready: 'streamnook' }, batch_text: '' };
+    case 'whisper':
+      return { kind, text: null };
+    case 'timer':
+      return { kind, every_seconds: 900, min_messages: 10 };
+    case 'clock':
+      return { kind, at: '19:00', days: [] };
+    case 'uptime':
+      return { kind, seconds: 3600, late_ok: false };
+    case 'delay':
+      return { kind, seconds: 60 };
   }
 }
 
@@ -402,7 +539,11 @@ export function withTrigger(rule: AutomationRule, kind: TriggerKind): Automation
       rule.when.kind === 'badge_drop' && rule.limits.rule_cooldown_seconds === 0
         ? DEFAULT_LIMITS.rule_cooldown_seconds
         : rule.limits.rule_cooldown_seconds;
-    return { ...rule, when, limits: { ...rule.limits, rule_cooldown_seconds: cooldown } };
+    const scope = rule.only_if.channels;
+    const own = { kind: 'own' } as const;
+    const channels = (isTimedTrigger(when) && scope.kind === 'any_open') || when.kind === 'whisper' ? own : scope;
+    const only_live = isTimedTrigger(when) && when.kind !== 'delay' ? true : rule.only_if.only_live;
+    return { ...rule, when, only_if: { ...rule.only_if, channels, only_live, expression: isChatMessageTrigger(when) || when.kind === 'channel_event' ? rule.only_if.expression : null }, limits: { ...rule.limits, rule_cooldown_seconds: cooldown } };
   }
   return {
     ...rule,
@@ -441,6 +582,7 @@ export function blankRule(owner: AutomationAccountRef): AutomationRule {
       only_away: false,
       shared_chat: false,
       hours: null,
+      expression: null,
     },
     actions: [actionOf('reply')],
     limits: { ...DEFAULT_LIMITS },
@@ -452,8 +594,12 @@ export function blankRule(owner: AutomationAccountRef): AutomationRule {
 }
 
 function withNewIds(a: AutomationAction): AutomationAction {
-  if (a.kind === 'notify') return { ...a, id: newElementId('a') };
+  if (a.kind === 'join_chat' || a.kind === 'leave_chat') {
+    return { ...a, id: newElementId('a'), channel: { ...a.channel, id: newElementId('c') } };
+  }
+  if (!('texts' in a)) return { ...a, id: newElementId('a') };
   const texts = a.texts.map((l) => ({ ...l, id: newElementId('l') }));
+  if (a.kind === 'whisper') return { ...a, id: newElementId('a'), texts };
   if (a.kind === 'send') {
     return { ...a, id: newElementId('a'), texts, to: a.to ? { ...a.to, id: newElementId('c') } : null };
   }
@@ -498,7 +644,8 @@ export function splitNames(text: string): string[] {
   return [...new Set(names)];
 }
 
-export const isOutward = (a: AutomationAction): boolean => a.kind === 'reply' || a.kind === 'send';
+export const isOutward = (a: AutomationAction): boolean =>
+  !(a.kind === 'notify' || a.kind === 'log' || a.kind === 'join_chat' || a.kind === 'leave_chat' || a.kind === 'wait');
 
 /** Where a rule lands when it moves one place: before the returned id, or at
  *  the end for null. Null overall when it is already at that end. */
@@ -544,7 +691,13 @@ export function previewSample(draft: AutomationRule): AutomationTestSample {
         },
       };
     case 'badge_drop':
+    case 'timer':
+    case 'clock':
+    case 'uptime':
+    case 'delay':
       return { ...base, text: '' };
+    case 'whisper':
+      return { ...base, text: when.text?.pattern.trim() || 'Hello' };
   }
 }
 
