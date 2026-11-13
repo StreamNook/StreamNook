@@ -2831,6 +2831,22 @@
    ]
   },
   {
+   "page": "automations",
+   "section": "Automations",
+   "title": "Whisper people a day",
+   "paths": [
+    "automation_prefs.whisper_people_per_day"
+   ],
+   "nested": false,
+   "logo": null,
+   "detail": "The most new people your rules may whisper in a day, across all your devices.",
+   "aliases": [
+    "whispers",
+    "automations",
+    "dms"
+   ]
+  },
+  {
    "page": "chat",
    "section": "Event Highlights",
    "title": "First-time chatters",

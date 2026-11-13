@@ -2786,6 +2786,10 @@ pub fn run() {
             commands::account_automations::automations_check_link,
             commands::account_automations::automations_notify_claim,
             commands::account_automations::automations_pip,
+            commands::account_automations_p2::automations_open_log_folder,
+            commands::account_automations_p2::automations_whisper_people,
+            #[cfg(mobile)]
+            commands::account_automations_p2::automations_share_log,
             // IVR account facts
             get_ivr_user_summary,
             get_ivr_subage_summary,

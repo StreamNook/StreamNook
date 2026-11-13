@@ -29,6 +29,7 @@ allow = [
   "set_low_power",
   "get_app_presence",
   "export_logs",
+  "automations_share_log",
   "share_settings_file",
   "import_settings_text",
   "cast_get_state",

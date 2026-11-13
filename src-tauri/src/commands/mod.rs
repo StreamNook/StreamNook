@@ -1,4 +1,5 @@
 pub mod account_automations;
+pub mod account_automations_p2;
 pub mod accounts;
 pub mod activity_history;
 pub mod announcements;
