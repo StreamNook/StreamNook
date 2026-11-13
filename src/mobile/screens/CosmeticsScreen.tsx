@@ -279,7 +279,7 @@ export const CosmeticsScreen: React.FC = () => {
         const res = await invoke<{ success: boolean }>('set_seventv_paint', { userId: sevenTvId, paintId: next });
         if (!res.success) throw new Error('7TV refused the paint change');
         clear7TVCache();
-        applyLocalCosmeticSelection(userId, { paintId: next });
+        applyLocalCosmeticSelection(userId, { paintId: next, paint: paint.def });
       } catch (err) {
         setExt(before);
         sevenTvWriteFailed(err, 'paint');

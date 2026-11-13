@@ -210,41 +210,78 @@ export function invalidateUserCosmetics(userId: string): void {
  * fetched) and republish, so chat rows + the profile card repaint at once.
  *
  * Pass only the field that changed: `{ paintId }` leaves badges untouched and
- * vice-versa. A null id means "unequipped" (nothing selected). Returns false if
- * nothing is cached for the user yet, so the caller can fall back to a fetch.
+ * vice-versa. A null id means "unequipped" (nothing selected). Pass the chosen
+ * definition too (`paint` / `badge`) when the caller has it.
+ *
+ * The chat entry holds only what is WORN (the chat path never reads the whole
+ * inventory), so a new pick is usually missing from it: the definition is then
+ * taken from the caller, or from the profile cache's inventory. The profile
+ * cache keeps its own owned list and only moves the mark. When no definition is
+ * known, the chat entry is re-read from Rust, which holds the pick over 7TV's
+ * lagging reads. Returns whether chat was updated at once.
  */
 export function applyLocalCosmeticSelection(
   userId: string,
-  change: { paintId?: string | null; badgeId?: string | null },
+  change: { paintId?: string | null; badgeId?: string | null; paint?: unknown; badge?: unknown },
 ): boolean {
-  const current = inMemoryCosmeticsCache.get(userId);
-  if (!current) return false;
-
-  const next: CachedCosmetics = {
-    ...current,
-    paints:
-      'paintId' in change
-        ? current.paints.map((p) => ({ ...p, selected: p.id === change.paintId }))
-        : current.paints,
-    badges:
-      'badgeId' in change
-        ? current.badges.map((b) => ({ ...b, selected: b.id === change.badgeId }))
-        : current.badges,
+  const profile = inMemoryProfileCache.get(userId);
+  const owned = profile?.seventvCosmetics;
+  const definitionOf = (id: string | null | undefined, given: unknown, lists: Array<any[] | undefined>) => {
+    if (!id) return null;
+    if ((given as { id?: unknown } | null | undefined)?.id === id) return given;
+    for (const list of lists) {
+      const found = list?.find((item) => item?.id === id);
+      if (found) return found;
+    }
+    return null;
   };
+  const current = inMemoryCosmeticsCache.get(userId);
+  const paintDef = definitionOf(change.paintId, change.paint, [current?.paints, owned?.paints]);
+  const badgeDef = definitionOf(change.badgeId, change.badge, [current?.badges, owned?.badges]);
 
   // The full-profile cache embeds the same cosmetics, so keep it in sync or the
-  // profile overlay keeps serving the old selection after a change.
-  const profile = inMemoryProfileCache.get(userId);
-  if (profile) {
+  // profile overlay and the picker keep serving the old selection after a change.
+  // It holds the whole inventory: move the mark, never swap in chat's worn list.
+  if (profile && owned) {
     inMemoryProfileCache.set(userId, {
       ...profile,
-      seventvCosmetics: next,
+      seventvCosmetics: {
+        ...owned,
+        paints: 'paintId' in change ? wearInList(owned.paints, change.paintId ?? null, paintDef) : owned.paints,
+        badges: 'badgeId' in change ? wearInList(owned.badges, change.badgeId ?? null, badgeDef) : owned.badges,
+      },
       lastUpdated: Date.now(),
     });
   }
 
-  publishCosmetics(userId, next);
+  const unknown =
+    ('paintId' in change && change.paintId && !paintDef) || ('badgeId' in change && change.badgeId && !badgeDef);
+  if (!current || unknown) {
+    void revalidateOwnCosmetics(userId);
+    return false;
+  }
+
+  publishCosmetics(userId, {
+    ...current,
+    paints: 'paintId' in change ? wearInList(current.paints, change.paintId ?? null, paintDef) : current.paints,
+    badges: 'badgeId' in change ? wearInList(current.badges, change.badgeId ?? null, badgeDef) : current.badges,
+  });
   return true;
+}
+
+/**
+ * `list` with `chosenId` marked worn and nothing else. A pick the list lacks
+ * (a worn-only list holds just the previous one) joins the front from its
+ * definition, so the new item is never lost by being absent.
+ */
+export function wearInList<T extends { id?: unknown; selected?: boolean }>(
+  list: T[],
+  chosenId: string | null,
+  definition: unknown,
+): T[] {
+  const marked = list.map((item) => ({ ...item, selected: chosenId !== null && item.id === chosenId }));
+  if (chosenId === null || list.some((item) => item.id === chosenId) || !definition) return marked;
+  return [{ ...(definition as T), selected: true }, ...marked];
 }
 
 /**

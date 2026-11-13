@@ -131,7 +131,7 @@ export function ProfileChatPreview({
           a long message wraps to the left edge like a real row; the min height
           gives an atmosphere two lines to read in. */}
       <div
-        className="relative isolate w-full max-w-[402px] overflow-hidden rounded-lg border border-white/[0.06]"
+        className="relative isolate w-full max-w-[402px] overflow-hidden rounded-lg border border-borderSubtle"
         style={{ paddingLeft: 18, paddingRight: 18, paddingTop: 7, paddingBottom: 7, minHeight: 60 }}
       >
         {chatAtm && <AtmosphereBackground atm={chatAtm} variant="chat" />}

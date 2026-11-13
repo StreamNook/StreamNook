@@ -70,7 +70,7 @@ import {
   pauseCardAnimations,
   type CaptureMode,
 } from '../../utils/shareProfile';
-import { clearCosmeticsMemoryCache, invalidateUserCosmetics, getCosmeticsWithFallback, applyLocalCosmeticSelection } from '../../services/cosmeticsCache';
+import { clearCosmeticsMemoryCache, applyLocalCosmeticSelection } from '../../services/cosmeticsCache';
 import { buildBttvProBadge, resolveBttvProUrl, withBttvPro } from '../../services/bttvProBadge';
 import { toggleLoadoutBadge, wearCategory, wearCategoryOfKey } from '../../utils/chatterBadges';
 import { invoke } from '@tauri-apps/api/core';
@@ -776,14 +776,9 @@ const ProfileSettings = () => {
         // clear7TVCache drops the lower-level 7TV-service entry so a later natural
         // fetch is fresh once 7TV is consistent (prevents stale resurrection).
         clear7TVCache();
-        if (currentUser?.user_id) {
-          const applied = applyLocalCosmeticSelection(currentUser.user_id, { paintId });
-          if (!applied) {
-            // Nothing cached to flip — fall back to a fresh fetch.
-            invalidateUserCosmetics(currentUser.user_id);
-            void getCosmeticsWithFallback(currentUser.user_id).catch(() => {});
-          }
-        }
+        // Hands over the definition: chat's cache holds only the old paint, so
+        // the new one is not in it. Re-reads on its own when it cannot flip.
+        if (currentUser?.user_id) applyLocalCosmeticSelection(currentUser.user_id, { paintId, paint });
       }
     } catch (e: unknown) {
       Logger.error('[ProfileSettings] Failed to update paint:', e);
@@ -811,13 +806,7 @@ const ProfileSettings = () => {
         // so re-fetching would re-cache the old badge. clear7TVCache keeps the
         // lower-level entry fresh for a later natural fetch.
         clear7TVCache();
-        if (currentUser?.user_id) {
-          const applied = applyLocalCosmeticSelection(currentUser.user_id, { badgeId });
-          if (!applied) {
-            invalidateUserCosmetics(currentUser.user_id);
-            void getCosmeticsWithFallback(currentUser.user_id).catch(() => {});
-          }
-        }
+        if (currentUser?.user_id) applyLocalCosmeticSelection(currentUser.user_id, { badgeId, badge });
         updateProfilePreview({ bumpBadges: true }); // re-resolve the preview's badge row
       }
     } catch (e: unknown) {
