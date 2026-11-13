@@ -21,6 +21,7 @@ import DropsInventoryTab from './drops/DropsInventoryTab';
 import { Tooltip } from './ui/Tooltip';
 
 import { Logger } from '../utils/logger';
+import { stopArgs, stopToast } from '../utils/dropsStop';
 import { getWatchDrops, overlayWatchTiers } from '../stores/watchDropsStore';
 // Twitch SVG Icon Component
 const TwitchIcon = ({ size = 20 }: { size?: number }) => (
@@ -49,6 +50,7 @@ interface DropsSettings {
     auto_reserve_on_watch?: boolean;
     priority_channels?: Array<{ channel_id: string; channel_login: string; display_name: string }>;
     prefer_missing_badges?: boolean;
+    collect_missing_badges?: boolean;
 }
 
 // A campaign has something mineable if any of its drops is watch-time earnable.
@@ -323,13 +325,16 @@ export default function DropsCenter() {
     // provider's own per-card control, so core issues no start action. Stop is
     // the one provider-driven control core still issues, and only when a provider
     // is present (the Stop button is hidden otherwise).
-    const stopAutomation = async () => {
+    const stopAutomation = async (campaignId: string | null) => {
         if (!externalDropsProviderId) return;
-        await invoke('plugins_invoke_action', { action: 'drops.stop', args: {} });
+        await invoke('plugins_invoke_action', { action: 'drops.stop', args: stopArgs(campaignId) });
     };
 
     const handleStopAutomation = async () => {
         try {
+            // The campaign the cockpit shows, read before the state below is cleared:
+            // Stop sets aside only that one.
+            const stoppedCampaignId = dropProgress?.current_drop?.campaign_id || dropProgress?.current_campaign || null;
             // Immediately update local state to reflect stopped automation
             setDropProgress(prev => prev ? {
                 ...prev,
@@ -344,8 +349,8 @@ export default function DropsCenter() {
             setProgress([]);
 
             // Then call the backend to actually stop
-            await stopAutomation();
-            addToast('Automation stopped', 'info');
+            await stopAutomation(stoppedCampaignId);
+            addToast(stopToast(dropsSettings ?? useAppStore.getState().settings?.drops, 'Automation stopped'), 'info');
         } catch (err) {
             Logger.error('Failed to stop automation:', err);
         }

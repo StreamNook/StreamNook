@@ -159,6 +159,7 @@ import { SegmentedSelect } from './settings/_primitives';
 import type { TwitchStream, HypeTrainData, MentionEntry } from '../types';
 
 import { Logger } from '../utils/logger';
+import { stopArgs, stopToast } from '../utils/dropsStop';
 
 // Unsent composer text per channel key, for the per-channel draft restore.
 const chatDrafts = new Map<string, string>();
@@ -2795,9 +2796,12 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     const game = dropsCampaign.game_name;
     if (isDropProgressing) {
       try {
-        await invoke('plugins_invoke_action', { action: 'drops.stop', args: {} });
+        await invoke('plugins_invoke_action', { action: 'drops.stop', args: stopArgs(dropsCampaign.id) });
         setIsDropProgressing(false);
-        return { ok: true, message: `Stopped collecting drops for ${game}` };
+        return {
+          ok: true,
+          message: stopToast(useAppStore.getState().settings?.drops, `Stopped collecting drops for ${game}`),
+        };
       } catch (err) {
         Logger.error('[ChatWidget] Failed to stop collecting:', err);
         return { ok: false, message: typeof err === 'string' && err ? err : 'Could not stop collecting drops' };

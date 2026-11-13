@@ -99,14 +99,17 @@ const InterfaceSettings = () => {
     // Full (default) animates everything; Reduced keeps fades but drops
     // movement; Off makes the UI instant and snappy (best on low-end PCs).
     const closeToTray: CloseToTrayMode = settings.close_to_tray ?? 'with-popouts';
+    // Missing badges keeps StreamNook in the tray on every setting but Always minimize,
+    // which already does, so only the other two say so.
+    const keepsForBadges = ' While Missing badges and Keep running when closed are on, closing keeps StreamNook in the tray.';
     const closeToTrayDescription = (() => {
         switch (closeToTray) {
             case 'always':
                 return 'Closing the window always leaves StreamNook running in the system tray. Quit it from the tray icon.';
             case 'never':
-                return 'Closing the window always quits StreamNook, even while MultiChat popouts are open.';
+                return `Closing the window quits StreamNook, even while MultiChat popouts are open.${keepsForBadges}`;
             default:
-                return 'Closing the window quits StreamNook, unless MultiChat popouts are still open, in which case it minimizes to the system tray so they keep working.';
+                return `Closing the window quits StreamNook, unless MultiChat popouts are still open, in which case it minimizes to the system tray so they keep working.${keepsForBadges}`;
         }
     })();
 

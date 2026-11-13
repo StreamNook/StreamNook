@@ -55,6 +55,7 @@ import { sevenTvIdForStream } from '../services/sevenTvPictures';
 import { useVisibleAvatarKeys } from '../hooks/useVisibleAvatarKeys';
 import { useTitleBarNavDensity } from '../hooks/useTitleBarNavDensity';
 import { Logger } from '../utils/logger';
+import { stopArgs, stopToast } from '../utils/dropsStop';
 import { useVisibleInterval } from '../utils/useVisibleInterval';
 import { gameBoxArt } from '../utils/boxArt';
 import { CardChip } from './ui/CardChip';
@@ -861,10 +862,13 @@ const Home = () => {
         if (isCurrentlyAutomating) {
             // Stop automation
             try {
-                await invoke('plugins_invoke_action', { action: 'drops.stop', args: {} });
+                await invoke('plugins_invoke_action', { action: 'drops.stop', args: stopArgs(campaign.id) });
                 Logger.debug(`[Home] Stopped automation drops for ${campaign.name}`);
                 setActiveAutomationIds(new Set()); // Clear all automation IDs
-                useAppStore.getState().addToast(`Stopped automation drops for ${campaign.game_name}`, 'info');
+                useAppStore.getState().addToast(
+                    stopToast(useAppStore.getState().settings?.drops, `Stopped automation drops for ${campaign.game_name}`),
+                    'info',
+                );
             } catch (error) {
                 Logger.error('Failed to stop automation:', error);
                 useAppStore.getState().addToast('Failed to stop automation drops', 'error');
