@@ -179,6 +179,10 @@ export interface DropsSettings {
   prefer_favorites?: boolean; // Collect your live favorited channels instead of the priority list (default: false)
   prefer_missing_badges?: boolean; // Work first on campaigns that award a badge you're missing (default: true)
   auto_pick_evolution?: boolean; // Equip a Pokémon line to evolve when none is equipped (default: true)
+  collect_missing_badges?: boolean; // Collect every watch-based badge you're missing (default: false)
+  keep_running_when_closed?: boolean; // With Missing badges on, closing keeps StreamNook in the tray (default: true)
+  start_at_login?: boolean; // With both on, start in the tray at sign-in (default: false; this machine only)
+  told_keep_running?: boolean; // Rust-owned: the one-time tray notice was shown
   // Recovery settings
   recovery_settings?: RecoverySettings;
 }

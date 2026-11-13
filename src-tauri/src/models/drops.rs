@@ -467,6 +467,23 @@ pub struct DropsSettings {
     /// A line the viewer picked is always followed.
     #[serde(default = "default_true")]
     pub auto_pick_evolution: bool,
+    /// The Missing badges switch: drops automation works through every
+    /// watch-based badge the account is missing, with or without a run the
+    /// viewer started. Off until the viewer turns it on.
+    #[serde(default)]
+    pub collect_missing_badges: bool,
+    /// With Missing badges on, closing StreamNook keeps it running in the
+    /// tray so badges are still collected. On by default.
+    #[serde(default = "default_true")]
+    pub keep_running_when_closed: bool,
+    /// With both of the above on, start in the tray when the viewer signs in
+    /// to the computer. This machine's choice: a settings import keeps it.
+    #[serde(default)]
+    pub start_at_login: bool,
+    /// The one-time "still running in the tray" notice was shown. Written by
+    /// Rust only; a settings import keeps this machine's value.
+    #[serde(default)]
+    pub told_keep_running: bool,
     // Recovery settings
     #[serde(default)]
     pub recovery_settings: RecoverySettings,
@@ -511,6 +528,11 @@ impl Default for DropsSettings {
             prefer_missing_badges: true,
             // Pick an evolution line when none is equipped, on by default
             auto_pick_evolution: true,
+            // Missing badges is opt-in; when on, it keeps running in the tray
+            collect_missing_badges: false,
+            keep_running_when_closed: true,
+            start_at_login: false,
+            told_keep_running: false,
             // Recovery defaults
             recovery_settings: RecoverySettings::default(),
         }
@@ -1023,5 +1045,32 @@ mod tests {
         let c = campaign("1", "Pokemon", false, &[], &["5", "6"]);
         assert!(c.counts_in("6", "Some Other Game"));
         assert!(!c.counts_in("7", "Some Other Game"));
+    }
+}
+
+#[cfg(test)]
+mod missing_badges_settings_tests {
+    use super::*;
+
+    /// A settings file from before these fields: each takes its own default.
+    #[test]
+    fn drops_settings_new_fields_default() {
+        let old: DropsSettings = serde_json::from_value(serde_json::json!({
+            "auto_claim_drops": true, "auto_claim_channel_points": true,
+            "notify_on_drop_available": true, "notify_on_drop_claimed": true,
+            "notify_on_points_claimed": false, "check_interval_seconds": 60,
+            "automation_enabled": false, "priority_games": [], "excluded_games": [],
+            "priority_mode": "PriorityOnly", "watch_interval_seconds": 20
+        }))
+        .unwrap();
+        assert!(!old.collect_missing_badges);
+        assert!(old.keep_running_when_closed);
+        assert!(!old.start_at_login);
+        assert!(!old.told_keep_running);
+        let fresh = DropsSettings::default();
+        assert!(!fresh.collect_missing_badges);
+        assert!(fresh.keep_running_when_closed);
+        assert!(!fresh.start_at_login);
+        assert!(!fresh.told_keep_running);
     }
 }
