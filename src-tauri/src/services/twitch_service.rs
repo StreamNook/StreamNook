@@ -1037,13 +1037,14 @@ impl TwitchService {
         app_handle: &crate::rt::AppHandle,
         storable_token: StorableToken,
     ) {
+        // The generation this sign-in moved to, read while the slot is held.
         let store_result = {
             let slot = Self::primary_slot().await;
             let stored = Self::persist_primary_token(&slot, &storable_token).await;
             if stored.is_ok() {
                 Self::bump_account_generation();
             }
-            stored
+            stored.map(|()| Self::account_generation())
         };
 
         // The web-session reads (stream resolver, follow/unfollow, entitlement
@@ -1062,11 +1063,18 @@ impl TwitchService {
         }
 
         match store_result {
-            Ok(()) => {
+            Ok(generation) => {
                 debug!("[LOGIN] Token stored");
                 // This token was granted every scope in SCOPES, so a sign-in
                 // StreamNook asked for is no longer owed.
                 crate::services::twitch_signin::clear();
+                // Record who signed in before announcing it, so every reader
+                // of the main account sees this one, not the one before.
+                crate::services::account_store::AccountStore::reconcile_after_sign_in(
+                    &storable_token,
+                    generation,
+                )
+                .await;
                 // A phone's go-live pushes register under the account
                 // that just signed in.
                 #[cfg(mobile)]
@@ -1190,12 +1198,15 @@ impl TwitchService {
             expires_at: expires_at.timestamp(),
         };
 
-        {
+        let generation = {
             let slot = Self::primary_slot().await;
             Self::persist_primary_token(&slot, &storable_token).await?;
             Self::bump_account_generation();
-        }
+            Self::account_generation()
+        };
         crate::services::twitch_signin::clear();
+        crate::services::account_store::AccountStore::reconcile_after_sign_in(&storable_token, generation)
+            .await;
         // A phone's go-live pushes register under the account that signed in.
         #[cfg(mobile)]
         crate::services::push_alerts::server::schedule();
@@ -1358,6 +1369,8 @@ impl TwitchService {
             let slot = Self::primary_slot().await;
             let _ = Self::delete_token_file(&slot);
         }
+        // The registry stops naming the account that left as the main one.
+        crate::services::account_store::AccountStore::forget_primary();
         #[cfg(mobile)]
         drop(runner);
 
@@ -8486,6 +8499,37 @@ mod slot_tests {
         let store = include_str!("account_store.rs").replace("\r\n", "\n");
         for door in ["pub async fn set_active(", "pub async fn sign_out_active("] {
             assert!(body(&store, door).contains("bump_account_generation"), "{door} changes the account");
+        }
+    }
+
+    /// Every door that moves the account also tells the account registry, so
+    /// `AccountStore::primary()` names the signed-in account (or nobody after
+    /// a sign-out) from that moment on, not from the next launch. A sign-in
+    /// that skipped this left the previous account as main for the rest of
+    /// the session; a sign-out left the departed account as main.
+    #[test]
+    fn every_account_door_leaves_the_registry_agreeing() {
+        let service = include_str!("twitch_service.rs").replace("\r\n", "\n");
+        let service = service.as_str();
+        for door in [
+            "pub(crate) async fn complete_primary_login(",
+            "pub async fn complete_device_login(",
+        ] {
+            assert!(
+                body(service, door).contains("AccountStore::reconcile_after_sign_in("),
+                "{door} records who signed in"
+            );
+        }
+        let logout = body(service, "pub async fn logout()");
+        assert!(logout.contains("AccountStore::forget_primary()"), "logout drops the main account");
+        assert!(
+            logout.find("delete_token_file(").unwrap() < logout.find("forget_primary()").unwrap(),
+            "the slot empties before the registry forgets"
+        );
+        // The registry's own doors write the registry themselves.
+        let store = include_str!("account_store.rs").replace("\r\n", "\n");
+        for door in ["pub async fn set_active(", "pub async fn sign_out_active("] {
+            assert!(body(&store, door).contains("Self::save("), "{door} records the new main");
         }
     }
 

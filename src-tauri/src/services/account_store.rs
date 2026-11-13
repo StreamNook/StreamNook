@@ -17,6 +17,11 @@
 //!     refresh-aware per-account token accessor, and a cheap startup reconcile
 //!     that records the current login as the primary. Add / remove / set-primary
 //!     flows land in later phases.
+//!
+//!   - Every door that moves the account generation keeps this registry in
+//!     step: `set_active` and `sign_out_active` write it themselves, a primary
+//!     sign-in records its account (`reconcile_after_sign_in`), and
+//!     `TwitchService::logout` drops the departed main (`forget_primary`).
 
 use anyhow::Result;
 use crate::services::token_vault;
@@ -25,6 +30,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
+use crate::models::user::UserInfo;
 use crate::services::twitch_service::{get_app_data_dir, StorableToken, TwitchService};
 
 /// Plain-JSON registry of every known account (primary + secondaries). The
@@ -69,6 +75,41 @@ pub struct AccountStore;
 /// lowercase on Twitch, so a case difference alone is not a rename.
 fn login_changed(stored: &str, validated: &str) -> bool {
     !validated.is_empty() && !stored.eq_ignore_ascii_case(validated)
+}
+
+/// The registry with `info` as the main account: every other account demoted
+/// and kept, `info`'s own entry refreshed in place, or added first.
+fn with_primary(mut accounts: Vec<StoredAccount>, info: UserInfo) -> Vec<StoredAccount> {
+    for a in accounts.iter_mut() {
+        a.is_primary = false;
+    }
+    if let Some(existing) = accounts.iter_mut().find(|a| a.user_id == info.id) {
+        existing.is_primary = true;
+        existing.login = info.login;
+        existing.display_name = info.display_name;
+        existing.avatar_url = info.profile_image_url;
+    } else {
+        accounts.insert(
+            0,
+            StoredAccount {
+                user_id: info.id,
+                login: info.login,
+                display_name: info.display_name,
+                avatar_url: info.profile_image_url,
+                is_primary: true,
+                added_at: 0,
+            },
+        );
+    }
+    accounts
+}
+
+/// The registry without its main account, and that account's id (None when
+/// there was no main, which leaves the registry as it was).
+fn without_primary(accounts: Vec<StoredAccount>) -> (Vec<StoredAccount>, Option<String>) {
+    let leaving = accounts.iter().find(|a| a.is_primary).map(|a| a.user_id.clone());
+    let rest = accounts.into_iter().filter(|a| !a.is_primary).collect();
+    (rest, leaving)
 }
 
 impl AccountStore {
@@ -251,28 +292,12 @@ impl AccountStore {
     /// logged and swallowed so login is never broken.
     pub async fn reconcile_primary(validated_user_id: &str, validated_login: Option<&str>) {
         let accounts = Self::list();
-        let current_primary = accounts.iter().find(|a| a.is_primary).cloned();
-
-        // Fast path: the registry already agrees with the signed-in account.
-        // Mirror the live slot token into this account's own store as a backup,
-        // so if a different account later takes the slot, this one can be demoted
-        // to a usable linked account without losing its token.
-        if let Some(p) = &current_primary {
-            if p.user_id == validated_user_id {
-                if let Some(login) = validated_login.filter(|l| login_changed(&p.login, l)) {
-                    Self::record_rename(accounts, validated_user_id, login).await;
-                }
-                if let Ok(token) = TwitchService::load_primary_token().await {
-                    let _ = Self::store_secondary_token(validated_user_id, &token);
-                }
-                return;
-            }
+        if accounts.iter().any(|a| a.is_primary && a.user_id == validated_user_id) {
+            Self::keep_primary(accounts, validated_user_id, validated_login).await;
+            return;
         }
 
-        // A different account now occupies the primary slot. Record it as the new
-        // main WITHOUT deleting the previous one: the old main is demoted to a
-        // linked account (its token was mirrored on a prior clean startup, so it
-        // usually survives intact; worst case it just needs a re-link).
+        // A different account now occupies the primary slot.
         let info = match TwitchService::get_user_info().await {
             Ok(i) => i,
             Err(e) => {
@@ -280,38 +305,81 @@ impl AccountStore {
                 return;
             }
         };
+        Self::record_primary(accounts, info);
+    }
 
-        let mut next = accounts;
-        // Demote everyone; the new main is re-marked below.
-        for a in next.iter_mut() {
-            a.is_primary = false;
+    /// A sign-in door just put `token` in the primary slot and moved the account
+    /// generation to `generation`. Records that token's account as the main one,
+    /// as the startup reconcile would, so `primary()` names it from now on
+    /// instead of from the next launch. Skipped when another door moved the
+    /// account while Twitch was being asked who this is. Best-effort, like
+    /// `reconcile_primary`: a failure is logged and the sign-in still stands.
+    pub async fn reconcile_after_sign_in(token: &StorableToken, generation: u64) {
+        let info = match TwitchService::get_user_info_with_token(&token.access_token).await {
+            Ok(i) => i,
+            Err(e) => {
+                warn!("[accounts] could not identify the account that signed in: {}", e);
+                return;
+            }
+        };
+        if TwitchService::account_generation() != generation {
+            debug!("[accounts] the account moved again during sign-in; not recording it");
+            return;
         }
+        let accounts = Self::list();
+        if accounts.iter().any(|a| a.is_primary && a.user_id == info.id) {
+            Self::keep_primary(accounts, &info.id, Some(&info.login)).await;
+        } else {
+            Self::record_primary(accounts, info);
+        }
+    }
+
+    /// The registry already names the signed-in account as main. Record a
+    /// rename if Twitch reports one, and mirror the live slot token into this
+    /// account's own store as a backup, so if a different account later takes
+    /// the slot, this one can be demoted to a usable linked account without
+    /// losing its token.
+    async fn keep_primary(accounts: Vec<StoredAccount>, user_id: &str, validated_login: Option<&str>) {
+        let stored_login = accounts.iter().find(|a| a.user_id == user_id).map(|a| a.login.clone());
+        if let (Some(stored), Some(login)) = (stored_login, validated_login) {
+            if login_changed(&stored, login) {
+                Self::record_rename(accounts, user_id, login).await;
+            }
+        }
+        if let Ok(token) = TwitchService::load_primary_token().await {
+            let _ = Self::store_secondary_token(user_id, &token);
+        }
+    }
+
+    /// A different account occupies the primary slot. Record it as the new main
+    /// WITHOUT deleting the previous one: the old main is demoted to a linked
+    /// account (its token was mirrored on a prior clean startup, so it usually
+    /// survives intact; worst case it just needs a re-link).
+    fn record_primary(accounts: Vec<StoredAccount>, info: UserInfo) {
         // The new main's token lives in the primary slot now, so a stale
         // secondary copy (if it was previously a linked account) is redundant.
         let _ = Self::delete_secondary_token(&info.id);
-
-        if let Some(existing) = next.iter_mut().find(|a| a.user_id == info.id) {
-            existing.is_primary = true;
-            existing.login = info.login;
-            existing.display_name = info.display_name;
-            existing.avatar_url = info.profile_image_url;
-        } else {
-            next.insert(
-                0,
-                StoredAccount {
-                    user_id: info.id,
-                    login: info.login,
-                    display_name: info.display_name,
-                    avatar_url: info.profile_image_url,
-                    is_primary: true,
-                    added_at: 0,
-                },
-            );
-        }
-
-        match Self::save(&next) {
+        match Self::save(&with_primary(accounts, info)) {
             Ok(_) => debug!("[accounts] primary reconciled (non-destructive)"),
             Err(e) => warn!("[accounts] failed to record primary: {}", e),
+        }
+    }
+
+    /// The main account signed out of the primary slot: drop it from the
+    /// registry along with its backup token, so `primary()` names nobody until
+    /// the next sign-in records one, and the next sign-in opens in the staging
+    /// web profile instead of the departed account's. Linked accounts stay
+    /// linked. `TwitchService::logout`, the one sign-out door, calls this;
+    /// best-effort.
+    pub fn forget_primary() {
+        let (rest, leaving) = without_primary(Self::list());
+        let Some(leaving) = leaving else {
+            return;
+        };
+        let _ = Self::delete_secondary_token(&leaving);
+        match Self::save(&rest) {
+            Ok(_) => debug!("[accounts] main account signed out; registry has no main"),
+            Err(e) => warn!("[accounts] failed to drop the signed-out main: {}", e),
         }
     }
 
@@ -624,12 +692,67 @@ fn wipe_default_webview_store() {
 
 #[cfg(test)]
 mod tests {
-    use super::login_changed;
+    use super::{login_changed, with_primary, without_primary, StoredAccount};
+    use crate::models::user::UserInfo;
 
     #[test]
     fn a_new_login_for_the_same_id_is_a_rename() {
         assert!(login_changed("shaiza__", "1shaiza"));
         assert!(!login_changed("BR_Winters", "br_winters"));
         assert!(!login_changed("shaiza__", ""));
+    }
+
+    fn account(id: &str, primary: bool) -> StoredAccount {
+        StoredAccount {
+            user_id: id.into(),
+            login: format!("login{id}"),
+            display_name: format!("Name{id}"),
+            avatar_url: None,
+            is_primary: primary,
+            added_at: 5,
+        }
+    }
+
+    fn info(id: &str, login: &str) -> UserInfo {
+        UserInfo {
+            id: id.into(),
+            login: login.into(),
+            display_name: login.into(),
+            email: None,
+            profile_image_url: Some("pic".into()),
+            broadcaster_type: None,
+        }
+    }
+
+    fn primaries(accounts: &[StoredAccount]) -> Vec<&str> {
+        accounts.iter().filter(|a| a.is_primary).map(|a| a.user_id.as_str()).collect()
+    }
+
+    #[test]
+    fn signing_in_as_someone_new_makes_them_main_and_keeps_the_old_main_linked() {
+        let next = with_primary(vec![account("1", true), account("2", false)], info("3", "three"));
+        assert_eq!(primaries(&next), ["3"]);
+        assert_eq!(next.len(), 3);
+        assert_eq!(next[0].user_id, "3", "a new main is listed first");
+        assert!(next.iter().any(|a| a.user_id == "1" && !a.is_primary));
+    }
+
+    #[test]
+    fn signing_in_as_a_linked_account_promotes_it_in_place() {
+        let next = with_primary(vec![account("1", true), account("2", false)], info("2", "renamed"));
+        assert_eq!(primaries(&next), ["2"]);
+        assert_eq!(next.len(), 2);
+        let two = next.iter().find(|a| a.user_id == "2").unwrap();
+        assert_eq!((two.login.as_str(), two.added_at), ("renamed", 5));
+    }
+
+    #[test]
+    fn signing_out_leaves_no_main_and_keeps_the_linked_accounts() {
+        let (rest, leaving) = without_primary(vec![account("1", false), account("2", true)]);
+        assert_eq!(leaving.as_deref(), Some("2"));
+        assert!(primaries(&rest).is_empty());
+        assert_eq!(rest.len(), 1);
+        let (same, none) = without_primary(rest.clone());
+        assert_eq!((same.len(), none), (1, None));
     }
 }
