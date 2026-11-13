@@ -10,6 +10,7 @@ pub mod hls_master;
 pub mod key;
 pub mod kick;
 pub mod kick_account;
+pub mod kick_door;
 pub mod kick_emotes;
 pub mod kick_media;
 pub mod kick_profile;
@@ -148,6 +149,12 @@ pub trait ChatProvider: Send + Sync {
         -> Result<SendOutcome>;
     /// Whether sending to `channel` is currently possible.
     async fn send_capability(&self, channel: &str) -> SendCapability;
+    /// The channels `window` holds a claim on, as this adapter stores them
+    /// (lowercase), sorted. The automation engine adopts the chats a closing
+    /// window held, per platform.
+    async fn channels_held_by(&self, window: &str) -> Vec<String>;
+    /// Whether a window other than `label` holds `channel`.
+    async fn held_by_other_than(&self, channel: &str, label: &str) -> bool;
 }
 
 /// Registry of available platform adapters, keyed by provider id.
@@ -187,6 +194,32 @@ impl ProviderRegistry {
     /// window-destroy release.
     pub fn providers(&self) -> impl Iterator<Item = Arc<dyn ChatProvider>> + '_ {
         self.providers.values().cloned()
+    }
+}
+
+/// The channels in an adapter's table (channel to consumer labels) that
+/// `label` holds, sorted. The three adapters share it so they agree.
+pub(crate) fn held_by_label<'a>(
+    held: impl Iterator<Item = (&'a String, &'a std::collections::HashSet<String>)>,
+    label: &str,
+) -> Vec<String> {
+    let mut out: Vec<String> =
+        held.filter(|(_, labels)| labels.contains(label)).map(|(channel, _)| channel.clone()).collect();
+    out.sort();
+    out
+}
+
+/// Whether a consumer other than `label` is in `labels`.
+pub(crate) fn held_by_another(labels: Option<&std::collections::HashSet<String>>, label: &str) -> bool {
+    labels.is_some_and(|labels| labels.iter().any(|l| l != label))
+}
+
+/// Date a live row by the wall clock when it arrives, as the IRC lane dates
+/// Twitch's (the engine answers only rows read in the last 30 s). A row that
+/// already has a time, or that its adapter marked as backlog, is left alone.
+pub(crate) fn stamp_arrival(msg: &mut ChatMessage, now_ms: i64) {
+    if msg.received_at_ms.is_none() && !msg.metadata.from_backfill {
+        msg.received_at_ms = Some(now_ms);
     }
 }
 
@@ -239,6 +272,7 @@ pub fn emit_platform_account_changed(providers: &[&str]) {
         let _ = app.emit("platform-account-changed", payload);
     }
     crate::services::account_roster::notify();
+    crate::services::account_automations::request_refresh();
 }
 
 /// Tell every window that a platform SESSION died on its own (expired or revoked),
@@ -250,6 +284,7 @@ pub fn emit_platform_session_expired(provider: &str) {
     if let Some(app) = app_handle() {
         let _ = app.emit("platform-session-expired", provider.to_string());
     }
+    crate::services::account_automations::request_refresh();
 }
 
 /// Drop every provider claim held by `window`, across all adapters.
@@ -272,6 +307,7 @@ pub async fn publish_chat_message(msg: &ChatMessage) {
     // saved filters, history ring. Ignored rows skip the bus but still hit
     // the side-effect lane below (logs are the record).
     let mut evaluated = msg.clone();
+    stamp_arrival(&mut evaluated, chrono::Utc::now().timestamp_millis());
     let rules = crate::services::chat_rules::ChatRules::snapshot();
     let verdict = crate::services::chat_rules::ChatRules::evaluate(&mut evaluated, &rules);
     if verdict.drop {
@@ -330,5 +366,69 @@ pub async fn publish_frame(json: String) {
         // Every window: the frame's channel is inside the JSON, and the rule is
         // to deliver when the route cannot tell.
         let _ = tx.send(crate::services::chat_bridge_route::BridgeFrame::all(json));
+    }
+}
+
+#[cfg(test)]
+mod automation_hook_tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    fn set(items: &[&str]) -> HashSet<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn row() -> ChatMessage {
+        serde_json::from_value(serde_json::json!({
+            "id": "m1", "user_id": "7", "username": "fan", "display_name": "fan", "color": null,
+            "badges": [], "timestamp": "", "content": "hi", "provider": "kick", "channel": "kick:alpha",
+            "tags": {}, "metadata": {},
+        }))
+        .expect("a test row")
+    }
+
+    #[test]
+    fn held_by_label_lists_the_channels_a_label_holds_sorted() {
+        let table: std::collections::HashMap<String, HashSet<String>> = [
+            ("zed".to_string(), set(&["automations", "main"])),
+            ("alpha".to_string(), set(&["automations"])),
+            ("beta".to_string(), set(&["main"])),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(held_by_label(table.iter(), "automations"), vec!["alpha".to_string(), "zed".to_string()]);
+        assert_eq!(held_by_label(table.iter(), "main"), vec!["beta".to_string(), "zed".to_string()]);
+        assert!(held_by_label(table.iter(), "nobody").is_empty());
+    }
+
+    #[test]
+    fn held_by_another_is_false_for_nobody_and_for_only_the_label() {
+        assert!(!held_by_another(None, "automations"));
+        assert!(!held_by_another(Some(&set(&["automations"])), "automations"));
+        assert!(held_by_another(Some(&set(&["automations", "main"])), "automations"));
+        assert!(held_by_another(Some(&set(&["main"])), "automations"));
+    }
+
+    #[test]
+    fn the_provider_lane_passes_the_verdict_and_stamps_arrival() {
+        // The verdict reaches the side-effect lane (S7.1 E28), so an ignored Kick row arrives at the engine as dropped.
+        let src = include_str!("mod.rs");
+        let publish = src.split("pub async fn publish_chat_message").nth(1).and_then(|t| t.split("pub async fn publish_frame").next()).unwrap();
+        assert!(publish.contains("run_message_side_effects(evaluated, verdict.drop)"));
+        assert!(publish.contains("run_message_side_effects(msg.clone(), verdict.drop)"));
+        assert!(publish.contains("stamp_arrival(&mut evaluated"));
+    }
+
+    #[test]
+    fn a_live_row_is_dated_on_arrival_and_backlog_is_not() {
+        let mut live = row();
+        stamp_arrival(&mut live, 1_700_000_000_123);
+        assert_eq!(live.received_at_ms, Some(1_700_000_000_123));
+        stamp_arrival(&mut live, 1_800_000_000_000);
+        assert_eq!(live.received_at_ms, Some(1_700_000_000_123), "never restamped");
+        let mut backlog = row();
+        backlog.metadata.from_backfill = true;
+        stamp_arrival(&mut backlog, 1_700_000_000_123);
+        assert_eq!(backlog.received_at_ms, None);
     }
 }

@@ -1066,6 +1066,7 @@ impl ChatRules {
     pub fn set_platform_identity(provider: &str, user_id: &str, login: &str, display_name: &str) {
         let provider = provider.to_lowercase();
         let mut next = Identity::new(user_id.trim(), login, display_name);
+        let mut changed = false;
         if let Ok(mut g) = platform_own_cell().write() {
             // A refetch that lost the name keeps the names already known for
             // the same account, so its mentions keep counting.
@@ -1075,10 +1076,14 @@ impl ChatRules {
                 }
             }
             if next.user_id.is_empty() && next.target.login.is_empty() {
-                g.remove(&provider);
+                changed = g.remove(&provider).is_some();
             } else if g.get(&provider) != Some(&next) {
                 g.insert(provider, next);
+                changed = true;
             }
+        }
+        if changed {
+            crate::services::account_automations::request_refresh();
         }
     }
 
@@ -1088,7 +1093,7 @@ impl ChatRules {
         }
     }
 
-    fn platform_identity(provider: &str) -> Option<Identity> {
+    pub(crate) fn platform_identity(provider: &str) -> Option<Identity> {
         platform_own_cell().read().ok().and_then(|g| g.get(provider).cloned())
     }
 

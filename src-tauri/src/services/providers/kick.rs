@@ -12,6 +12,7 @@
 //! `App\Events\ChatMessageEvent` payload.
 
 use super::kick_emotes;
+pub use super::kick_door::{moderate_classified, send_classified, KickModeration, KickOutcome};
 use super::{
     app_handle, dec_bridge_users, inc_bridge_users, key, publish_chat_message, publish_frame,
     ChatProvider, SendCapability, SendOutcome,
@@ -118,6 +119,16 @@ impl ChatProvider for KickProvider {
 
     fn open_channel_count(&self) -> Option<usize> {
         self.conns.try_lock().ok().map(|c| c.len())
+    }
+
+    async fn channels_held_by(&self, window: &str) -> Vec<String> {
+        let conns = self.conns.lock().await;
+        super::held_by_label(conns.iter().map(|(slug, conn)| (slug, &conn.consumers)), window)
+    }
+
+    async fn held_by_other_than(&self, channel: &str, label: &str) -> bool {
+        let conns = self.conns.lock().await;
+        super::held_by_another(conns.get(&channel.to_lowercase()).map(|conn| &conn.consumers), label)
     }
 
     async fn connect(&self, channel: &str, window: &str) -> Result<()> {
@@ -286,6 +297,15 @@ impl ChatProvider for KickProvider {
             log::warn!("[Kick] send failed (HTTP {}): {}", status, body);
             return Ok(drop(&format!("Kick send failed (HTTP {status})")));
         }
+        // A typed send counts toward Kick's pace for automated posts and is
+        // never refused by it; the result below is exactly what it was.
+        if let Some(account) = crate::services::kick_auth_service::account_id() {
+            crate::services::provider_pace::provider_record_typed(
+                &format!("kick:{account}"),
+                &key::make_key("kick", &slug),
+                text,
+            );
+        }
         let v: Value = resp.json().await.unwrap_or(Value::Null);
         let message_id = v
             .pointer("/data/message_id")
@@ -304,6 +324,31 @@ impl ChatProvider for KickProvider {
         } else {
             SendCapability::NeedsLogin
         }
+    }
+}
+
+#[cfg(test)]
+mod held_claims_tests {
+    use super::*;
+
+    fn connection(labels: &[&str]) -> Connection {
+        Connection { consumers: labels.iter().map(|s| s.to_string()).collect(), task: None }
+    }
+
+    #[tokio::test]
+    async fn the_adapter_reports_what_a_label_holds_and_whether_another_holds_it() {
+        let provider = KickProvider::new();
+        {
+            let mut conns = provider.conns.lock().await;
+            conns.insert("alpha".into(), connection(&["automations"]));
+            conns.insert("beta".into(), connection(&["automations", "main"]));
+            conns.insert("gamma".into(), connection(&["main"]));
+        }
+        assert_eq!(provider.channels_held_by("automations").await, vec!["alpha".to_string(), "beta".to_string()]);
+        assert!(!provider.held_by_other_than("Alpha", "automations").await, "the name folds to lowercase");
+        assert!(provider.held_by_other_than("beta", "automations").await);
+        assert!(provider.held_by_other_than("gamma", "automations").await);
+        assert!(!provider.held_by_other_than("nothing", "automations").await);
     }
 }
 
@@ -1519,6 +1564,20 @@ fn parse_chat_message(frame: &Value, channel_key: &str) -> Option<ChatMessage> {
     })
 }
 
+/// The tag a Kick event row carries so every device keys the same event the
+/// same way (Kick gives these events no id of their own).
+pub(crate) const EVENT_PAYLOAD_TAG: &str = "sn-event-payload";
+
+/// The normalized payload of a Kick event: its kind, then its own fields
+/// (months, or the recipients) lowercase and in a fixed order. No ids and no
+/// counters, so two devices reading one frame make the same text and a real
+/// second gift by the same gifter (other recipients) makes another.
+pub(crate) fn event_payload(kind: &str, fields: &[String]) -> String {
+    let mut parts: Vec<String> = fields.iter().map(|f| f.trim().to_lowercase()).collect();
+    parts.sort();
+    format!("{kind}|{}", parts.join(","))
+}
+
 /// Build a synthetic ChatMessage for a Kick room event (sub, gift sub) that
 /// reuses Twitch's subscription-card decoration. The card is driven entirely by
 /// the `msg-id` + `system-msg` tags (mirrored into `metadata`), so no frontend
@@ -1634,6 +1693,10 @@ fn parse_subscription(frame: &Value, channel_key: &str) -> Option<ChatMessage> {
     // generic producer surfaces the resub duration (like Twitch), not just "resubbed".
     msg.tags
         .insert("msg-param-cumulative-months".to_string(), months.to_string());
+    msg.tags.insert(
+        EVENT_PAYLOAD_TAG.to_string(),
+        event_payload(msg_id, &[months.to_string()]),
+    );
     Some(msg)
 }
 
@@ -1671,13 +1734,15 @@ fn parse_gifted_subs(frame: &Value, channel_key: &str) -> Option<ChatMessage> {
     // The gifter is the actor on this row, so their id (when the payload carries
     // one) is what the activity feed keys cosmetics on.
     let gifter_id = id_from(data.get("gifter")).unwrap_or_default();
-    Some(build_event_message(
-        channel_key,
-        &gifter,
-        msg_id,
-        &system_msg,
-        &gifter_id,
-    ))
+    let mut msg = build_event_message(channel_key, &gifter, msg_id, &system_msg, &gifter_id);
+    msg.tags
+        .insert(EVENT_PAYLOAD_TAG.to_string(), event_payload(msg_id, &recipients));
+    if msg_id == "submysterygift" {
+        // Twitch's own tag, so the engine reads a Kick gift bomb as Twitch's.
+        msg.tags
+            .insert("msg-param-mass-gift-count".to_string(), recipients.len().to_string());
+    }
+    Some(msg)
 }
 
 /// Decode `App\Events\MessageDeletedEvent` into a `CLEARMSG` control frame (a

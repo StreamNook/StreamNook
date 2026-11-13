@@ -88,6 +88,29 @@ impl TikTokProvider {
     }
 }
 
+#[cfg(test)]
+mod held_claims_tests {
+    use super::*;
+
+    fn connection(labels: &[&str]) -> Connection {
+        Connection { consumers: labels.iter().map(|s| s.to_string()).collect(), task: None }
+    }
+
+    #[tokio::test]
+    async fn the_adapter_reports_what_a_label_holds_and_whether_another_holds_it() {
+        let provider = TikTokProvider::new();
+        {
+            let mut conns = provider.conns.lock().await;
+            conns.insert("alpha".into(), connection(&["automations"]));
+            conns.insert("beta".into(), connection(&["automations", "main"]));
+        }
+        assert_eq!(provider.channels_held_by("automations").await, vec!["alpha".to_string(), "beta".to_string()]);
+        assert!(!provider.held_by_other_than("Alpha", "automations").await);
+        assert!(provider.held_by_other_than("beta", "automations").await);
+        assert!(!provider.held_by_other_than("nothing", "automations").await);
+    }
+}
+
 #[async_trait]
 impl ChatProvider for TikTokProvider {
     fn id(&self) -> &'static str {
@@ -96,6 +119,16 @@ impl ChatProvider for TikTokProvider {
 
     fn open_channel_count(&self) -> Option<usize> {
         self.conns.try_lock().ok().map(|c| c.len())
+    }
+
+    async fn channels_held_by(&self, window: &str) -> Vec<String> {
+        let conns = self.conns.lock().await;
+        super::held_by_label(conns.iter().map(|(handle, conn)| (handle, &conn.consumers)), window)
+    }
+
+    async fn held_by_other_than(&self, channel: &str, label: &str) -> bool {
+        let conns = self.conns.lock().await;
+        super::held_by_another(conns.get(&channel.to_lowercase()).map(|conn| &conn.consumers), label)
     }
 
     async fn connect(&self, channel: &str, window: &str) -> Result<()> {

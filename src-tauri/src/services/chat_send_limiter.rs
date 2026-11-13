@@ -1428,6 +1428,12 @@ pub fn chat_send_budget(channel: String) -> Budget {
     budget(&channel)
 }
 
+/// Kick's pace for automated posts is kept in `provider_pace` (it has no
+/// Twitch-shaped limiter); the engine books it from here, beside Twitch's.
+pub use crate::services::provider_pace::{
+    provider_acquire_within, provider_cancel, provider_record_typed, PaceRefusal, PaceTicket,
+};
+
 /// How a paced send went: Twitch's verdict on the line.
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct PacedSend {

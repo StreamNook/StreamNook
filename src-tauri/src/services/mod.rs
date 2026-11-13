@@ -180,6 +180,7 @@ pub mod membership_gifts;
 pub mod membership_status;
 pub mod provider_categories;
 pub mod provider_live_service;
+pub mod provider_pace;
 pub mod link_adapt;
 pub mod ll_origin;
 pub mod page_watchdog;
