@@ -933,6 +933,117 @@ mod tests {
         assert!(!apply_run(&mut a, RunState::Off));
     }
 
+    /// A stored rule in the shape "Make it a rule" leaves: Watching scope, its first Send's chat,
+    /// and a `claim_as` that describes exactly that, with the two backend-owned conditions set.
+    fn add_converted(a: &mut Automations) -> Rule {
+        let mut rule = typed(a, "r-1");
+        rule.id = "r-2".into();
+        rule.only_if.channels = ChannelScope::Watching {};
+        rule.origin = Some("reminder:rem".into());
+        let (trigger_kind, scope_kind, scope_key, send_to) = automations::ClaimAs::shape_of(&rule);
+        rule.claim_as = Some(automations::ClaimAs {
+            account_id: "1".into(),
+            kind: "keyword".into(),
+            family_hash: "0123456789abcdef".into(),
+            seconds: 0,
+            cooldown_s: 180,
+            trigger_kind,
+            scope_kind,
+            scope_key,
+            send_to,
+        });
+        rule.only_if.lead_moderator_excluded = true;
+        rule.only_if.only_while_watching = true;
+        a.rules.push(rule.to_value());
+        rule
+    }
+
+    #[test]
+    fn a_save_keeps_claim_as_only_while_it_applies_and_never_takes_the_backend_owned_fields_from_a_client() {
+        let mut a = group();
+        let stored = add_converted(&mut a);
+        // A text edit keeps claim_as; a client that sends none of the backend-owned fields loses nothing.
+        let mut edit = typed(&a, "r-2");
+        edit.name = "Renamed".into();
+        edit.claim_as = None;
+        edit.only_if.lead_moderator_excluded = false;
+        edit.only_if.only_while_watching = false;
+        let saved = save_rule_in(&mut a, edit, Some(stored.updated_ms), 2_000).unwrap();
+        assert!(saved.saved, "{:?}", saved.errors);
+        let kept = typed(&a, "r-2");
+        assert!(kept.claim_as.is_some() && kept.only_if.lead_moderator_excluded && kept.only_if.only_while_watching);
+        // A client that invents them gets nothing either (a stored rule without them stays without).
+        let mut plain = typed(&a, "r-1");
+        plain.claim_as = kept.claim_as.clone();
+        plain.only_if.lead_moderator_excluded = true;
+        let saved = save_rule_in(&mut a, plain, Some(10), 2_500).unwrap();
+        assert!(saved.saved, "{:?}", saved.errors);
+        let plain = typed(&a, "r-1");
+        assert!(plain.claim_as.is_none() && !plain.only_if.lead_moderator_excluded);
+        // A change of chat scope clears it; so does a change of the owner and of the Send's chat.
+        let mut scope = typed(&a, "r-2");
+        scope.only_if.channels = ChannelScope::Own {};
+        assert!(save_rule_in(&mut a, scope, Some(kept.updated_ms), 3_000).unwrap().saved);
+        assert!(typed(&a, "r-2").claim_as.is_none());
+        for (n, change) in [
+            (|r: &mut Rule| r.owner.id = "2".into()) as fn(&mut Rule),
+            |r: &mut Rule| {
+                if let Action::Send { to, .. } = &mut r.actions[1] {
+                    *to = None;
+                }
+            },
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut b = group();
+            let stored = add_converted(&mut b);
+            let mut edit = typed(&b, "r-2");
+            change(&mut edit);
+            assert!(save_rule_in(&mut b, edit, Some(stored.updated_ms), 4_000).unwrap().saved, "change {n}");
+            assert!(typed(&b, "r-2").claim_as.is_none(), "change {n} clears claim_as");
+        }
+    }
+
+    #[test]
+    fn a_new_rule_never_carries_the_backend_owned_fields() {
+        let mut a = Automations::default();
+        let mut rule = typed(&group(), "r-1");
+        rule.id = String::new();
+        rule.claim_as = Some(automations::ClaimAs { account_id: "1".into(), ..automations::ClaimAs::default() });
+        rule.only_if.lead_moderator_excluded = true;
+        rule.only_if.only_while_watching = true;
+        let saved = save_rule_in(&mut a, rule, None, 1_000).unwrap();
+        assert!(saved.saved, "{:?}", saved.errors);
+        let stored = typed(&a, &saved.rule.id);
+        assert!(stored.claim_as.is_none() && !stored.only_if.lead_moderator_excluded && !stored.only_if.only_while_watching);
+    }
+
+    #[test]
+    fn live_waits_for_the_field_errors_of_a_converted_rule() {
+        let mut a = group();
+        // A rule stored with an error, as a convert leaves one: an empty message line.
+        let mut bad = typed(&a, "r-1");
+        bad.id = "r-bad".into();
+        bad.live = false;
+        if let Action::Reply { texts, .. } = &mut bad.actions[0] {
+            texts[0].text = String::new();
+        }
+        a.rules.push(bad.to_value());
+        let refused = set_flags_in(&mut a, "r-bad", None, Some(true)).unwrap_err();
+        assert_eq!(refused, "Fix the marked fields before turning this rule on");
+        assert!(set_flags_in(&mut a, "r-bad", Some(false), None).is_ok(), "the switch still works");
+        assert_eq!(typed(&a, "r-bad").live, false);
+        // Fixed, Live goes through; a rule that was always valid is never refused.
+        if let Action::Reply { texts, .. } = &mut bad.actions[0] {
+            texts[0].text = "hi {user}".into();
+        }
+        a.rules.retain(|r| id_of(r) != "r-bad");
+        a.rules.push(bad.to_value());
+        assert!(set_flags_in(&mut a, "r-bad", None, Some(true)).unwrap());
+        assert!(set_flags_in(&mut a, "r-1", None, Some(true)).is_ok());
+    }
+
     #[test]
     fn every_command_here_is_registered_and_allowed() {
         let lib = include_str!("../lib.rs").replace("\r\n", "\n");
@@ -947,7 +1058,7 @@ mod tests {
             found += 1;
         }
         // The 19 of 7.3a plus P3's reward list.
-        assert_eq!(found, 20);
+        assert_eq!(found, 23, "the 19 of 7.3a, P3's reward list and the three P5 commands");
     }
 
     #[test]
