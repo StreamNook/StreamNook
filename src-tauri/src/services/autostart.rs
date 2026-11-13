@@ -70,11 +70,60 @@ impl AutostartState {
         }
     }
 
+    /// The problem in the viewer's words; the technical reason stays in the log
+    /// (`run_sync` logs it).
     pub fn error(&self) -> Option<String> {
         match self {
-            AutostartState::Error(reason) => Some(reason.clone()),
+            AutostartState::Error(reason) => Some(viewer_reason(reason).to_string()),
             _ => None,
         }
+    }
+}
+
+/// Pure: a stored failure as one plain sentence for the page, which shows it
+/// after "Could not set this up: ". Windows reasons name the registry call;
+/// macOS and Linux reasons carry a file path and an io error.
+pub fn viewer_reason(raw: &str) -> &'static str {
+    let windows = raw.starts_with("Reg") || raw.contains("WIN32_ERROR");
+    let denied = raw.contains("WIN32_ERROR(5)")
+        || raw.contains("(os error 5)")
+        || raw.contains("Access is denied");
+    if windows && denied {
+        "Windows refused to change its startup list."
+    } else if windows {
+        "Windows could not save the startup entry."
+    } else {
+        "the login entry in your home folder could not be saved."
+    }
+}
+
+#[cfg(test)]
+mod viewer_reason_tests {
+    use super::*;
+
+    #[test]
+    fn autostart_errors_reach_the_page_in_plain_words() {
+        assert_eq!(
+            viewer_reason("RegSetValueExW StreamNook: WIN32_ERROR(5)"),
+            "Windows refused to change its startup list."
+        );
+        assert_eq!(
+            viewer_reason("RegOpenKeyExW Run: WIN32_ERROR(2)"),
+            "Windows could not save the startup entry."
+        );
+        let mac = viewer_reason(
+            "/Users/someone/Library/LaunchAgents/app.plist: Permission denied (os error 13)",
+        );
+        assert_eq!(
+            mac,
+            "the login entry in your home folder could not be saved."
+        );
+        assert!(!mac.contains("/Users/"));
+        assert_eq!(
+            AutostartState::Error("RegSetValueExW StreamNook: WIN32_ERROR(5)".into()).error(),
+            Some("Windows refused to change its startup list.".to_string())
+        );
+        assert_eq!(AutostartState::On.error(), None);
     }
 }
 
