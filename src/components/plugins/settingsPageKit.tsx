@@ -24,6 +24,7 @@ import { ChevronDown, Plus, TriangleAlert, X } from 'lucide-react';
 import SectionNav from '../settings/SectionNav';
 import { ResetArrow, SegmentedSelect } from '../settings/_primitives';
 import { IS_MOBILE } from '../../utils/platform';
+import { Tooltip } from '../ui/Tooltip';
 import { progressPercent, readDisclosureOpen, writeDisclosureOpen } from './settingsKitPure';
 
 // The pure helper lives beside the other plain functions so a test can import
@@ -393,10 +394,10 @@ export function StatusCard({
   /** A KitButton, or any control, on the right. */
   action?: ReactNode;
 }) {
-  // The last bar stays drawn while its row closes.
-  const [lastProgress, setLastProgress] = useState(progress);
-  if (progress && progress !== lastProgress) setLastProgress(progress);
-  const bar = progress ?? lastProgress;
+  // The card keeps one height in every state, so nothing below it ever moves:
+  // the bar row is always laid out (hidden when there is no progress), the
+  // title holds one line and the subtitle two.
+  const bar = progress ?? { value: 0, max: 1, left: String.fromCharCode(0xa0) };
   return (
     <div
       className="rounded-2xl px-5 pb-5 pt-6 [html[data-theme-tone=light]_&]:!bg-[color-mix(in_oklab,var(--color-background)_40%,white)]"
@@ -418,38 +419,31 @@ export function StatusCard({
             )}
             {action && <div className="-my-[7px] ml-auto shrink-0 pl-4">{action}</div>}
           </div>
-          <div className="mt-2 line-clamp-2 break-words text-[19px] font-semibold leading-snug text-textPrimary">
-            {title}
+          <Tooltip content={title} describe>
+            <div className="mt-2 truncate text-[19px] font-semibold leading-snug text-textPrimary">{title}</div>
+          </Tooltip>
+          <div className="mt-1 line-clamp-2 min-h-[2lh] break-words text-[13.5px] leading-snug text-textSecondary">
+            {subtitle}
           </div>
-          {subtitle && <div className="mt-1 break-words text-[13.5px] leading-snug text-textSecondary">{subtitle}</div>}
         </div>
       </div>
-      <div
-        className="grid transition-[grid-template-rows] duration-[220ms] motion-reduce:transition-none"
-        style={{ gridTemplateRows: progress ? '1fr' : '0fr' }}
-      >
-        <div className="min-h-0 overflow-hidden">
-          {bar && (
-            <div className="mt-4">
-              <div
-                role="progressbar"
-                aria-label={bar.left}
-                aria-valuemin={0}
-                aria-valuemax={bar.max > 0 ? bar.max : 1}
-                aria-valuenow={Math.min(Math.max(bar.value, 0), bar.max > 0 ? bar.max : 1)}
-                className="h-2 rounded-full p-[1.5px] bg-black/40 shadow-[inset_0_1px_2px_rgba(0,0,0,0.5)] [html[data-theme-tone=light]_&]:bg-black/10 [html[data-theme-tone=light]_&]:shadow-[inset_0_1px_1.5px_rgba(0,0,0,0.18)]"
-              >
-                <div
-                  className="h-full rounded-full bg-accent transition-[width] duration-500 ease-out motion-reduce:transition-none"
-                  style={{ width: `${progressPercent(bar.value, bar.max)}%` }}
-                />
-              </div>
-              <div className="mt-2 flex flex-wrap justify-between gap-x-4 gap-y-0.5 text-[12.5px] text-textSecondary">
-                <span className="tabular-nums">{bar.left}</span>
-                {bar.right && <span>{bar.right}</span>}
-              </div>
-            </div>
-          )}
+      <div className={progress ? 'mt-4' : 'invisible mt-4'} aria-hidden={progress ? undefined : true}>
+        <div
+          role={progress ? 'progressbar' : undefined}
+          aria-label={progress ? bar.left : undefined}
+          aria-valuemin={progress ? 0 : undefined}
+          aria-valuemax={progress ? (bar.max > 0 ? bar.max : 1) : undefined}
+          aria-valuenow={progress ? Math.min(Math.max(bar.value, 0), bar.max > 0 ? bar.max : 1) : undefined}
+          className="h-2 rounded-full p-[1.5px] bg-black/40 shadow-[inset_0_1px_2px_rgba(0,0,0,0.5)] [html[data-theme-tone=light]_&]:bg-black/10 [html[data-theme-tone=light]_&]:shadow-[inset_0_1px_1.5px_rgba(0,0,0,0.18)]"
+        >
+          <div
+            className="h-full rounded-full bg-accent transition-[width] duration-500 ease-out motion-reduce:transition-none"
+            style={{ width: `${progressPercent(bar.value, bar.max)}%` }}
+          />
+        </div>
+        <div className="mt-2 flex flex-wrap justify-between gap-x-4 gap-y-0.5 text-[12.5px] text-textSecondary">
+          <span className="tabular-nums">{bar.left}</span>
+          {bar.right && <span>{bar.right}</span>}
         </div>
       </div>
     </div>

@@ -49,17 +49,37 @@ export function settingsDiff(before: Settings, after: Settings): SettingsPatch {
   return patch as SettingsPatch;
 }
 
-// Subscribe a callback to settings-updated events from OTHER windows. Returns
-// an unlisten function — call it on component unmount to detach.
+/** Drops settings are saved through their own command, which announces them
+ *  with this event instead of SETTINGS_UPDATED_EVENT (Rust: commands/drops.rs). */
+export const DROPS_SETTINGS_UPDATED_EVENT = 'drops-settings-updated';
+
+// Subscribe a callback to settings-updated events from OTHER windows, and to
+// every drops settings save, so a window's settings copy (and anything that
+// reads its drops part, like the Stop toast) never goes stale. Returns an
+// unlisten function; call it on component unmount to detach.
 export async function listenForSettingsUpdates(
   onUpdate: () => void,
 ): Promise<UnlistenFn> {
-  return listen<SettingsUpdatedPayload>(SETTINGS_UPDATED_EVENT, (event) => {
-    if (event.payload?.source === SENDER_ID) return;
+  const run = () => {
     try {
       onUpdate();
     } catch (err) {
       Logger.warn('[SettingsBroadcast] onUpdate handler threw:', err);
     }
+  };
+  const unlistenSettings = await listen<SettingsUpdatedPayload>(SETTINGS_UPDATED_EVENT, (event) => {
+    if (event.payload?.source === SENDER_ID) return;
+    run();
   });
+  let unlistenDrops: UnlistenFn;
+  try {
+    unlistenDrops = await listen(DROPS_SETTINGS_UPDATED_EVENT, run);
+  } catch (err) {
+    unlistenSettings();
+    throw err;
+  }
+  return () => {
+    unlistenSettings();
+    unlistenDrops();
+  };
 }
