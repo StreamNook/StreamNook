@@ -14,6 +14,14 @@
   ; (services/system_notify.rs). Meaningless once the app is gone.
   DeleteRegKey HKCU "Software\Classes\AppUserModelId\${BUNDLEID}"
 
+  ; The "Start with Windows" entry and Task Manager's mark for it
+  ; (services/autostart.rs). An update keeps both; an uninstall leaves nothing
+  ; that would launch a deleted exe at the next sign-in.
+  ${If} $UpdateMode <> 1
+    DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "StreamNook"
+    DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run" "StreamNook"
+  ${EndIf}
+
   ${If} $DeleteAppDataCheckboxState = 1
   ${AndIf} $UpdateMode <> 1
     SetShellVarContext current

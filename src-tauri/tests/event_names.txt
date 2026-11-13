@@ -10,6 +10,7 @@ app-foregrounded
 app-presence
 asset-cache://cached
 asset-cache://cleared
+background-state-changed
 badge-available
 badge-metadata-amended
 badge-notification

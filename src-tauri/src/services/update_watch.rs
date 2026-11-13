@@ -24,6 +24,7 @@ use once_cell::sync::Lazy;
 use serde::Serialize;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 use crate::rt::AppHandle;
@@ -34,6 +35,16 @@ pub const STATUS_EVENT: &str = "update://status";
 const FIRST_CHECK: Duration = Duration::from_secs(5);
 const INTERVAL: Duration = Duration::from_secs(30 * 60);
 const ANNOUNCED_FILE: &str = "announced_updates.json";
+
+/// The last periodic check found an update. The tray's windowless menu says
+/// "Update ready" from this; Open then shows main, whose announce-on-open path
+/// offers the update.
+static UPDATE_READY: AtomicBool = AtomicBool::new(false);
+
+/// Whether the last periodic check found an update.
+pub fn update_ready() -> bool {
+    UPDATE_READY.load(Ordering::Acquire)
+}
 
 /// The last periodic check's answer. None until the first one finishes.
 static LAST: Lazy<Mutex<Option<BundleUpdateStatus>>> = Lazy::new(|| Mutex::new(None));
@@ -118,10 +129,13 @@ pub fn start(app: AppHandle) {
         loop {
             match crate::commands::components::check_for_bundle_update(app.clone()).await {
                 Ok(status) => {
+                    UPDATE_READY.store(status.update_available, Ordering::Release);
                     if let Ok(mut last) = LAST.lock() {
                         *last = Some(status.clone());
                     }
                     let _ = app.emit(STATUS_EVENT, StatusEvent { status });
+                    #[cfg(desktop)]
+                    crate::services::background_mode::refresh_tray(&app);
                 }
                 Err(e) => log::warn!("[UpdateWatch] update check failed: {e}"),
             }

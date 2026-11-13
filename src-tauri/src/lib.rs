@@ -225,6 +225,9 @@ fn main_window_chrome(
 /// re-shows if the window was hidden to the tray on close.
 #[cfg(desktop)]
 pub(crate) fn show_main_window(app: &crate::rt::AppHandle) {
+    // A show is a new main lifetime: a teardown or fallback destroy that was
+    // armed for the window before it stands down.
+    services::background_mode::note_main_window_shown();
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
         let _ = window.show();
@@ -232,6 +235,7 @@ pub(crate) fn show_main_window(app: &crate::rt::AppHandle) {
         services::app_exit::note_main_shown();
         #[cfg(target_os = "linux")]
         commands::twitch::linux_overlays::show_with_main(app);
+        services::background_mode::refresh_tray(app);
         return;
     }
     // Main was fully closed (the streamer went live, which destroys it to free its
@@ -294,6 +298,7 @@ pub(crate) fn show_main_window(app: &crate::rt::AppHandle) {
             // skipping this here would silently leave the lock off for the rest
             // of the session on that platform.
             services::window_aspect::install(&win);
+            services::background_mode::refresh_tray(app);
         }
         Err(e) => error!("[Main] Failed to recreate main window: {e}"),
     }
@@ -947,7 +952,11 @@ pub fn run() {
     // existing instance (via the deep-link feature) instead of spawning a
     // duplicate window. No multi-process/duplicate-window concept on mobile.
     #[cfg(all(desktop, not(target_os = "linux")))]
-    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+        // The login entry fired while StreamNook already runs: nothing to show.
+        if services::background_mode::argv_is_background(&argv) {
+            return;
+        }
         show_main_window(app);
     }));
     // Linux: the plugin speaks D-Bus and panics at setup when the session bus
@@ -955,7 +964,10 @@ pub fn run() {
     // launch over anyway (linux_cef logged why).
     #[cfg(target_os = "linux")]
     let builder = if linux_cef::session_bus_available() {
-        builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+        builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            if services::background_mode::argv_is_background(&argv) {
+                return;
+            }
             show_main_window(app);
         }))
     } else {
@@ -1097,8 +1109,14 @@ pub fn run() {
             // runtime cannot paint a transparent window (linux_window_frame).
             // Every property comes from the same config entry, and it happens
             // before anything below looks the window up.
+            // Linux: the tray host's owner is read once before main is built, so no
+            // close can see the unread value; a thread then follows it.
             #[cfg(target_os = "linux")]
-            {
+            services::background_mode::start_tray_host_watch();
+            // A `--background` launch builds no window here: the launch decision
+            // (after the registry load) shows one, or keeps the app in the tray.
+            #[cfg(target_os = "linux")]
+            if !services::background_mode::background_launch() {
                 let frame = linux_window_frame::frame();
                 info!("[LinuxFrame] frame={} transparent=false", frame.as_str());
                 let config = app
@@ -1551,6 +1569,33 @@ pub fn run() {
             // Manage AppState directly, not wrapped in Arc
             app.manage(app_state);
 
+            // The plugin registry, loaded once and synchronously (seeded and
+            // migrated; its save path tells background mode), so the background
+            // launch below knows whether a plugin can run Missing badges before
+            // any window is shown. `startup` takes this value as it is. The phones
+            // have no background mode: `startup(None)` loads its own.
+            #[cfg(desktop)]
+            let loaded_registry = match plugin_host::load_prepared() {
+                Ok(registry) => Some(registry),
+                Err(e) => {
+                    error!("[PluginHost] registry load failed: {e}");
+                    None
+                }
+            };
+            #[cfg(not(desktop))]
+            let loaded_registry: Option<plugin_host::registry::Registry> = None;
+            #[cfg(desktop)]
+            {
+                services::background_mode::init(&app_handle);
+                // Again, now that the handle is stored: runs the login-entry
+                // worker and the first re-evaluation (a load error leaves the
+                // provider unknown, which never removes an entry or exits).
+                if let Some(registry) = &loaded_registry {
+                    services::background_mode::note_registry(registry);
+                }
+                services::background_mode::decide_launch(&app_handle);
+            }
+
             // Drops progress for the channel being earned on: one model for
             // every surface, and the app's one inventory reader.
             services::watch_drops::start(app_handle.clone());
@@ -1627,7 +1672,7 @@ pub fn run() {
             // Start the plugin host: loads the registry and starts plugins
             // the user previously enabled. No-op with none installed.
             tauri::async_runtime::spawn(async move {
-                plugin_host.startup().await;
+                plugin_host.startup(loaded_registry).await;
             });
 
             // Start background service, then bring the user-global points socket
@@ -1785,7 +1830,7 @@ pub fn run() {
                 &[&show_item, &open_multichat_item, &overlay_clickable_item, &sep, &quit_item],
             )?;
 
-            let tray_builder = TrayIconBuilder::new()
+            let tray_builder = TrayIconBuilder::with_id(services::background_mode::TRAY_ID)
                 .menu(&tray_menu)
                 .show_menu_on_left_click(false)
                 .tooltip("StreamNook");
@@ -1816,7 +1861,7 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             let tray_builder = tray_builder.icon_as_template(true);
 
-            let _tray = tray_builder
+            let tray_icon = tray_builder
                 .on_menu_event(|app_handle, event| match event.id.as_ref() {
                     "show" => show_main_window(app_handle),
                     "overlay_clickable" => {
@@ -1833,7 +1878,8 @@ pub fn run() {
                             let _ = main_win.emit("tray-open-multichat", ());
                         }
                     }
-                    "quit" => {
+                    "bg_open" => show_main_window(app_handle),
+                    "quit" | "bg_quit" => {
                         services::app_exit::exit(app_handle, 0, "tray menu Quit");
                     }
                     _ => {}
@@ -1849,6 +1895,7 @@ pub fn run() {
                     }
                 })
                 .build(app)?;
+            services::background_mode::install_tray(app.handle(), tray_icon, tray_menu)?;
             }
 
             Ok(())
@@ -1985,6 +2032,8 @@ pub fn run() {
             open_plugin_window,
             #[cfg(desktop)]
             close_main_window,
+            #[cfg(desktop)]
+            services::background_mode::get_background_state,
             calculate_aspect_ratio_size,
             calculate_aspect_ratio_size_preserve_video,
             set_window_aspect_constraint,
@@ -3002,7 +3051,25 @@ pub fn run() {
                     let _ = app_handle.emit("main-closed", ());
                     #[cfg(target_os = "linux")]
                     commands::twitch::linux_overlays::close_with_main(&app_handle);
+                    // Always: the teardown stops the stream and the grid and, for a
+                    // keep-alive close, ends the watch session.
+                    services::background_mode::note_main_destroyed(&app_handle);
+                    // Then one decision when no user window remains. It is never made
+                    // twice: a stay the popout arm already recorded (main was hidden
+                    // in the tray, and this is the JS hide path or the 5 s fallback
+                    // destroying it) stands.
+                    let others = {
+                        let windows = app_handle.webview_windows();
+                        services::app_exit::other_user_windows(windows.keys().map(String::as_str), "main")
+                    };
+                    if others == 0 && !services::background_mode::staying_for_keep_alive() {
+                        if !services::background_mode::on_user_windows_gone(&app_handle, "main") {
+                            services::app_exit::exit(&app_handle, 0, "last window closed");
+                        }
+                    }
                 }
+                // The tray's menu and line follow the windows that are left.
+                services::background_mode::refresh_tray(&app_handle);
             }
 
             if label == "main" {
@@ -3028,16 +3095,18 @@ pub fn run() {
                         .try_state::<AppState>()
                         .and_then(|s| s.settings.lock().ok().map(|g| g.close_to_tray))
                         .unwrap_or_default();
-                    let hide_to_tray = match mode {
-                        CloseToTrayMode::Always => true,
-                        CloseToTrayMode::Never => false,
-                        CloseToTrayMode::WithPopouts => popouts_open,
-                    };
+                    // Missing badges: while keep-alive holds, a close always hides to
+                    // the tray (the JS hide path stops the stream and destroys main).
+                    let keep_alive = services::background_mode::keep_alive(&app_handle);
+                    let hide_to_tray = services::background_mode::close_hides(mode, popouts_open, keep_alive);
                     if hide_to_tray {
                         debug!(
                             "[Main] Close requested (mode {:?}, popouts_open {}) — hiding main to tray",
                             mode, popouts_open
                         );
+                        if keep_alive {
+                            services::background_mode::note_keep_alive_close(&app_handle);
+                        }
                         api.prevent_close();
                         if let Some(main_win) = app_handle.get_webview_window("main") {
                             // Tell the JS side it's about to go background so
@@ -3053,25 +3122,32 @@ pub fn run() {
                             commands::twitch::linux_overlays::hide_with_main(&app_handle);
                             let _ = main_win.hide();
                             services::app_exit::note_main_hidden_to_tray();
+                            services::background_mode::refresh_tray(&app_handle);
                         }
                     }
                 }
 
-            } else if label.starts_with("multichat-") || label.starts_with("overlay-") {
+            } else if services::app_exit::is_user_window(&label) && label != "main" {
                 if let WindowEvent::Destroyed = event {
                     // Tell the main window this popout is gone so it can
                     // drop the popout's channel set from its tracking and
                     // re-show its own ChatWidget if it was hiding because of
                     // those channels.
-                    if let Some(main_win) = app_handle.get_webview_window("main") {
-                        let _ = main_win.emit("multichat-popout-closed", &label);
+                    // Only a MultiChat or overlay popout has a channel set main
+                    // tracks: a profile card or plugin window closing must not
+                    // re-render those consumers.
+                    if label.starts_with("multichat-") || label.starts_with("overlay-") {
+                        if let Some(main_win) = app_handle.get_webview_window("main") {
+                            let _ = main_win.emit("multichat-popout-closed", &label);
+                        }
                     }
 
-                    let still_open = app_handle
-                        .webview_windows()
-                        .iter()
-                        .filter(|(l, _)| (l.starts_with("multichat-") || l.starts_with("overlay-")) && **l != label)
-                        .count();
+                    // Every other user window counts; main is judged below by
+                    // `exit_when_last_popout_closes` (a hidden main counts as gone).
+                    let still_open = {
+                        let windows = app_handle.webview_windows();
+                        services::app_exit::other_user_windows(windows.keys().map(String::as_str), &label)
+                    };
                     if still_open == 0 {
                         // Exit when the last popout closes and main is unavailable —
                         // either hidden to tray OR fully destroyed (going live closes
@@ -3113,13 +3189,17 @@ pub fn run() {
                             in_tray,
                             always_tray,
                         ) {
-                            services::app_exit::exit(
-                                &app_handle,
-                                0,
-                                &format!(
-                                    "last popout '{label}' closed while main was put away (main {main:?}, revealed={revealed}, in_tray={in_tray}, close_to_tray={close_mode:?})"
-                                ),
-                            );
+                            // One shared decision: keep-alive keeps the app with main
+                            // hidden in the tray and whatever helper is still open.
+                            if !services::background_mode::on_user_windows_gone(&app_handle, &label) {
+                                services::app_exit::exit(
+                                    &app_handle,
+                                    0,
+                                    &format!(
+                                        "last popout '{label}' closed while main was put away (main {main:?}, revealed={revealed}, in_tray={in_tray}, close_to_tray={close_mode:?})"
+                                    ),
+                                );
+                            }
                         } else if main != MainWindow::Visible {
                             info!(
                                 "[Main] last popout '{label}' closed; staying open (main {main:?}, revealed={revealed}, in_tray={in_tray}, close_to_tray={close_mode:?})"
@@ -3148,15 +3228,51 @@ pub fn run() {
                     .try_state::<AppState>()
                     .and_then(|s| s.settings.lock().ok().map(|g| g.close_to_tray))
                     .unwrap_or_default();
-                let prevented =
-                    cfg!(desktop) && code.is_none() && close_mode == CloseToTrayMode::Always;
+                #[cfg(desktop)]
+                let (prevented, reevaluate_now) = {
+                    use services::background_mode::{
+                        exit_requested_decision, keep_alive, stays_alive, staying_for_keep_alive, ExitVerdict,
+                    };
+                    let verdict = exit_requested_decision(
+                        *code,
+                        staying_for_keep_alive(),
+                        services::app_exit::take_close_decision,
+                        || stays_alive(close_mode, None, keep_alive(app_handle)),
+                    );
+                    (verdict != ExitVerdict::Proceed, verdict == ExitVerdict::StayAndReevaluate)
+                };
+                #[cfg(not(desktop))]
+                let (prevented, reevaluate_now) = (false, false);
                 if prevented {
-                    debug!("[Main] Last window closed under Always close mode — staying in the tray");
+                    debug!("[Main] Last window closed with the app kept running — staying in the tray");
                     api.prevent_exit();
+                } else {
+                    services::app_exit::begin_shutdown();
                 }
+                #[cfg(desktop)]
+                if prevented {
+                    if reevaluate_now {
+                        services::background_mode::reevaluate(app_handle);
+                    } else {
+                        // Decided from a recorded decision or computed here: store
+                        // the stay (flag, tray, one re-check).
+                        services::background_mode::record_stay(app_handle, close_mode != CloseToTrayMode::Always);
+                    }
+                }
+                #[cfg(not(desktop))]
+                let _ = reevaluate_now;
                 services::app_exit::on_exit_requested(*code, prevented, &format!("{close_mode:?}"));
             }
+            // macOS: a Dock click with no window on screen brings main back.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { has_visible_windows, .. } = &event {
+                if !*has_visible_windows {
+                    show_main_window(app_handle);
+                }
+            }
             if let tauri::RunEvent::Exit = event {
+                // First: from here a late teardown or exit task does nothing.
+                services::app_exit::begin_shutdown();
                 services::app_exit::on_run_exit();
                 let shutdown_started = std::time::Instant::now();
                 // Quitting mid-stream is a close too: file where the viewer

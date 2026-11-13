@@ -31,6 +31,13 @@ pub mod activity_history_service;
 pub mod ad_bypass;
 pub mod ad_detect;
 pub mod app_paths;
+// Desktop-only: Autopilot's Missing badges mode keeps StreamNook running in
+// the tray (background_mode) and owns the login entry that starts it there
+// (autostart).
+#[cfg(desktop)]
+pub mod autostart;
+#[cfg(desktop)]
+pub mod background_mode;
 pub mod asset_scope;
 #[cfg(target_os = "ios")]
 pub mod ios_sheet;

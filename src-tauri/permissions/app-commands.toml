@@ -830,4 +830,5 @@ allow = [
   "get_unban_requests",
   "resolve_unban_request",
   "save_stream_screenshot",
+  "get_background_state",
 ]
