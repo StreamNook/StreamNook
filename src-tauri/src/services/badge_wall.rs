@@ -592,11 +592,13 @@ fn tile(v: &Version, runs: Option<&Vec<WindowRun>>, now: i64) -> (BadgeTile, u32
     (tile, v.meta.and_then(|m| m.position).unwrap_or(u32::MAX))
 }
 
-/// Newest first by date added; the metadata rank breaks ties within a day; a
-/// badge with no date sorts last, and the key keeps the order stable.
+/// Newest first by date added; the metadata rank breaks ties within a day, and
+/// the key keeps the order stable. A badge no source has dated yet is one
+/// Twitch just added (every older badge has a date), so it leads.
 pub fn order(mut tiles: Vec<(BadgeTile, u32)>, sort: Sort) -> Vec<BadgeTile> {
+    let added = |t: &BadgeTile| if t.added_ms > 0 { t.added_ms } else { i64::MAX };
     tiles.sort_by(|(a, pa), (b, pb)| {
-        b.added_ms.cmp(&a.added_ms).then(pa.cmp(pb)).then_with(|| a.key.cmp(&b.key))
+        added(b).cmp(&added(a)).then(pa.cmp(pb)).then_with(|| a.key.cmp(&b.key))
     });
     let newest: Vec<BadgeTile> = tiles.into_iter().map(|(t, _)| t).collect();
     let lead = |status: &str, list: Vec<BadgeTile>| {
@@ -806,10 +808,11 @@ mod tests {
                 tile_at("d", 200, 5, Some("available")),
             ]
         };
-        assert_eq!(keys(order(set(), Sort::Newest)), ["b", "d", "a", "c"]);
-        assert_eq!(keys(order(set(), Sort::Oldest)), ["c", "a", "d", "b"]);
-        assert_eq!(keys(order(set(), Sort::Available)), ["d", "c", "b", "a"]);
-        assert_eq!(keys(order(set(), Sort::Soon)), ["b", "d", "a", "c"]);
+        // "c" has no date yet: a badge Twitch just added, so it is the newest.
+        assert_eq!(keys(order(set(), Sort::Newest)), ["c", "b", "d", "a"]);
+        assert_eq!(keys(order(set(), Sort::Oldest)), ["a", "d", "b", "c"]);
+        assert_eq!(keys(order(set(), Sort::Available)), ["c", "d", "b", "a"]);
+        assert_eq!(keys(order(set(), Sort::Soon)), ["b", "c", "d", "a"]);
         assert_eq!(keys(order(set(), Sort::Usage)), ["c", "d", "a", "b"]);
     }
 

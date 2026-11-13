@@ -1173,6 +1173,14 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
     }
   };
 
+  // When a badge was added, for the date sorts. A badge no source has dated
+  // yet is one Twitch just added (every older badge has a date), so it counts
+  // as the newest instead of sinking to the bottom.
+  const addedAt = (badge: BadgeWithMetadata): number => {
+    const time = parseDate(badge.badgebase_info?.date_added);
+    return time > 0 ? time : Number.MAX_SAFE_INTEGER;
+  };
+
   // Read against the clock at render time from the window Rust resolved, so a
   // badge whose earn period opens while the gallery is open reclassifies itself.
   const getBadgeStatus = (badge: BadgeWithMetadata) =>
@@ -1210,7 +1218,7 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
         return typeof pos === 'number' ? pos : Number.MAX_SAFE_INTEGER;
       };
       return [...badgesWithMetadata].sort((a, b) => {
-        const dateCompare = parseDate(b.badgebase_info?.date_added) - parseDate(a.badgebase_info?.date_added);
+        const dateCompare = addedAt(b) - addedAt(a);
         if (dateCompare !== 0) return dateCompare;
         const rankCompare = rankOf(a) - rankOf(b);
         if (rankCompare !== 0) return rankCompare;
@@ -1241,7 +1249,7 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
             return bAvailable - aAvailable;
           }
           // Secondary sort by date
-          const dateCompare = parseDate(b.badgebase_info?.date_added) - parseDate(a.badgebase_info?.date_added);
+          const dateCompare = addedAt(b) - addedAt(a);
           if (dateCompare !== 0) return dateCompare;
           // Tertiary sort by set_id and id for stability
           return `${a.set_id}-${a.id}`.localeCompare(`${b.set_id}-${b.id}`);
@@ -1254,19 +1262,19 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
             return bComingSoon - aComingSoon;
           }
           // Secondary sort by date
-          const dateCompare = parseDate(b.badgebase_info?.date_added) - parseDate(a.badgebase_info?.date_added);
+          const dateCompare = addedAt(b) - addedAt(a);
           if (dateCompare !== 0) return dateCompare;
           // Tertiary sort by set_id and id for stability
           return `${a.set_id}-${a.id}`.localeCompare(`${b.set_id}-${b.id}`);
         }
         case 'date-newest': {
-          const dateCompare = parseDate(b.badgebase_info?.date_added) - parseDate(a.badgebase_info?.date_added);
+          const dateCompare = addedAt(b) - addedAt(a);
           if (dateCompare !== 0) return dateCompare;
           // Fallback to stable sort
           return `${a.set_id}-${a.id}`.localeCompare(`${b.set_id}-${b.id}`);
         }
         case 'date-oldest': {
-          const dateCompare = parseDate(a.badgebase_info?.date_added) - parseDate(b.badgebase_info?.date_added);
+          const dateCompare = addedAt(a) - addedAt(b);
           if (dateCompare !== 0) return dateCompare;
           // Fallback to stable sort
           return `${a.set_id}-${a.id}`.localeCompare(`${b.set_id}-${b.id}`);
