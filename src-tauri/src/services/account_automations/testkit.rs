@@ -27,6 +27,9 @@ use super::badges::{BadgeInfo, BadgePhase, BadgeSeen, Presence, Probe};
 use super::claim_client::ClaimTimings;
 use super::claims::{self, Element, KeyMode};
 use super::executor::Job;
+use super::facts::Facts;
+use super::own_topics::{OwnState, TopicKind, TopicRefusal};
+use super::speak::SpeakPayload;
 use super::guards;
 use super::local::{AccountChange, AccountChanges, Local};
 use super::notify::{NotifyPayload, NotifyRequest};
@@ -254,7 +257,7 @@ pub fn rail_el(key: &str, window_s: u32) -> Element {
 
 // ---- rules ----------------------------------------------------------------------
 
-fn account(id: &str, login: &str) -> Value {
+pub fn account(id: &str, login: &str) -> Value {
     json!({ "provider": "twitch", "id": id, "login": login, "name": login })
 }
 
@@ -305,6 +308,56 @@ fn this_chat() -> Value {
 /// Mention in this test's chat, Reply "@{user} thanks (<id>)".
 pub fn mention_rule(id: &str, live: bool) -> Value {
     rule(id, live, mention(), this_chat(), vec![reply("a-1", &format!("@{{user}} thanks ({id})"))])
+}
+
+/// A rule of the main account in its own channel on a P3 trigger (`when` is
+/// the trigger's JSON), Live or Test, with these actions.
+pub fn own_rule(id: &str, live: bool, when: Value, actions: Vec<Value>) -> Value {
+    rule(id, live, when, json!({ "kind": "own" }), actions)
+}
+
+/// A Live rule that watches one channel for it going live or offline.
+pub fn live_change_rule(id: &str, online: bool, friend: &str, room: &str, actions: Vec<Value>) -> Value {
+    rule(
+        id,
+        true,
+        json!({ "kind": "live_change", "online": online }),
+        json!({ "kind": "these", "list": [chat_ref(friend, room)] }),
+        actions,
+    )
+}
+
+/// A Message rule in your own channel whose only action is a Highlight.
+pub fn highlight_rule(id: &str, pattern: &str, color: &str) -> Value {
+    rule(
+        id,
+        true,
+        json!({ "kind": "message", "text": { "mode": "contains", "pattern": pattern, "case_sensitive": false } }),
+        json!({ "kind": "own" }),
+        vec![json!({ "kind": "highlight", "id": "a-h", "color": color })],
+    )
+}
+
+pub fn notify_titled(title: &str) -> Value {
+    json!({ "kind": "notify", "id": "a-n", "title": title, "body": "", "toast": true, "system": false, "sound": null, "volume": 1.0 })
+}
+
+pub fn send_action(id: &str, text: &str) -> Value {
+    send(id, None, text)
+}
+
+pub fn speak_action(text: &str, on_stream: bool) -> Value {
+    json!({ "kind": "speak", "id": "a-s", "text": text, "on_stream": on_stream })
+}
+
+/// A `channel.follow` event's `event` object.
+pub fn follow_event(user_id: &str, name: &str) -> Value {
+    json!({ "user_id": user_id, "user_login": name.to_lowercase(), "user_name": name, "followed_at": "2026-11-13T05:00:00Z" })
+}
+
+/// The facts of that follow in the main account's channel.
+pub fn follow_facts(user_id: &str) -> Facts {
+    facts::from_own(TopicKind::Follow, &follow_event(user_id, "Fan"), &main_id(), "me", now_ms()).expect("follow facts")
 }
 
 /// The same rule sending as another account.
@@ -1467,6 +1520,19 @@ pub struct FakeLocal {
     statuses: AtomicUsize,
     change_gate: Gate,
     changes_held: Arc<AtomicUsize>,
+    /// P3: the bodies of the system notices (their titles are in `system`).
+    system_bodies: Mutex<Vec<String>>,
+    speaks: Mutex<Vec<SpeakPayload>>,
+    own: Mutex<OwnFake>,
+    twitch_offset_ms: AtomicI64,
+}
+
+/// What the fake whisper session was asked for, and what it says it holds.
+#[derive(Default)]
+struct OwnFake {
+    holds: Vec<(String, BTreeSet<TopicKind>)>,
+    releases: usize,
+    state: OwnState,
 }
 
 /// The fake account-change guard: counted while held.
@@ -1492,6 +1558,10 @@ impl FakeLocal {
             statuses: AtomicUsize::new(0),
             change_gate: Gate::open(),
             changes_held: Arc::new(AtomicUsize::new(0)),
+            system_bodies: Mutex::new(Vec::new()),
+            speaks: Mutex::new(Vec::new()),
+            own: Mutex::new(OwnFake::default()),
+            twitch_offset_ms: AtomicI64::new(0),
         }
     }
 
@@ -1573,6 +1643,28 @@ impl FakeLocal {
     }
     pub fn account_changes_held(&self) -> usize {
         self.changes_held.load(Ordering::SeqCst)
+    }
+    pub fn speaks(&self) -> Vec<SpeakPayload> {
+        lock(&self.speaks).clone()
+    }
+    pub fn system_bodies(&self) -> Vec<String> {
+        lock(&self.system_bodies).clone()
+    }
+    /// Twitch's clock runs this far ahead of the test's wall clock.
+    pub fn set_twitch_offset_ms(&self, ms: i64) {
+        self.twitch_offset_ms.store(ms, Ordering::SeqCst);
+    }
+    /// Every `hold_own_topics` call, in order.
+    pub fn own_holds(&self) -> Vec<(String, BTreeSet<TopicKind>)> {
+        lock(&self.own).holds.clone()
+    }
+    pub fn own_releases(&self) -> usize {
+        lock(&self.own).releases
+    }
+    /// What the fake whisper session holds and refused.
+    pub fn set_own_state(&self, session_up: bool, held: &[TopicKind], refused: &[(TopicKind, TopicRefusal)]) {
+        let mut own = lock(&self.own);
+        own.state = OwnState { session_up, held: held.iter().copied().collect(), refused: refused.iter().copied().collect() };
     }
 }
 
@@ -1664,6 +1756,7 @@ impl Local for FakeLocal {
     }
     fn system_notice(&self, request: &NotifyRequest, _id: u64) {
         lock(&self.system).push(request.title.clone());
+        lock(&self.system_bodies).push(request.body.clone());
     }
     fn emit_activity(&self, _watchers: &[String], _entries: &[Entry]) {}
     fn emit_status(&self, _snapshot: &StatusSnapshot) {
@@ -1678,6 +1771,21 @@ impl Local for FakeLocal {
     async fn turn_off(&self) {
         lock(&self.settings).0.run = RunState::Off;
         self.turned_off.store(true, Ordering::SeqCst);
+    }
+    async fn hold_own_topics(&self, owner_id: &str, kinds: &BTreeSet<TopicKind>) {
+        lock(&self.own).holds.push((owner_id.to_string(), kinds.clone()));
+    }
+    async fn release_own_topics(&self, _owner_id: &str) {
+        lock(&self.own).releases += 1;
+    }
+    fn own_topic_state(&self) -> OwnState {
+        lock(&self.own).state.clone()
+    }
+    fn twitch_now(&self, wall_ms: i64) -> i64 {
+        wall_ms + self.twitch_offset_ms.load(Ordering::SeqCst)
+    }
+    fn emit_speak(&self, _targets: &[String], payload: &SpeakPayload) {
+        lock(&self.speaks).push(payload.clone());
     }
 }
 
@@ -2260,6 +2368,30 @@ impl Kit {
     pub fn job_for(&self, msg_id: &str, rule_id: &str) -> Job {
         let compiled = self.engine.compiled();
         let facts = facts::from_chat(&chat_row(msg_id, "viewer", "hey @me")).expect("facts");
+        let index = compiled.rules.iter().position(|r| r.rule.id == rule_id).expect("rule");
+        let rule = &compiled.rules[index].rule;
+        let room = claims::event_room(rule, &facts).to_string();
+        let (plans, unready) = claims::classes_for(rule, &room);
+        let lanes = guards::lanes_for(rule, &plans);
+        Job::new(
+            &self.engine,
+            compiled.clone(),
+            index,
+            Arc::new(facts),
+            Vec::new(),
+            HashMap::new(),
+            true,
+            plans,
+            unready,
+            lanes,
+            room,
+            self.engine.now(),
+        )
+    }
+
+    /// A job for `rule_id` on these facts (an edge event's, say), as admission would build it.
+    pub fn job_with_facts(&self, facts: Facts, rule_id: &str) -> Job {
+        let compiled = self.engine.compiled();
         let index = compiled.rules.iter().position(|r| r.rule.id == rule_id).expect("rule");
         let rule = &compiled.rules[index].rule;
         let room = claims::event_room(rule, &facts).to_string();

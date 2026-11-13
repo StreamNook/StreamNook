@@ -1595,6 +1595,7 @@ pub fn chats_kept() -> Vec<String> {
 mod tests {
     use super::testkit::*;
     use super::*;
+    use serde_json::json;
 
     #[tokio::test]
     async fn on_chat_off_does_no_work() {

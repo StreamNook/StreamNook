@@ -32,6 +32,7 @@ use crate::services::account_roster;
 use crate::services::account_store::AccountStore;
 use crate::services::chat_send_limiter::Ticket;
 use crate::services::chat_service::SendOutcome;
+use crate::services::twitch_service::{OwnReward, RewardsError};
 use crate::services::twitch_service::{self, TokenError, TwitchService};
 
 pub use super::verify::{TokenRefusal, VerifiedToken};
@@ -97,6 +98,13 @@ pub trait Outward: Send + Sync {
     /// itself). `Err` is a request that never completed; any HTTP answer is
     /// `Ok`.
     async fn claim_post(&self, bearer: &str, owner_id: &str, body: &Value) -> Result<ApiResponse, String>;
+    /// P3: the channel's channel point rewards for the editor's picker (Helix
+    /// `GET /channel_points/custom_rewards` with `token`, the verified
+    /// owner's). Helix, not GQL, so no watchdog manifest entry. The default
+    /// answers an error, so a fake that lists no rewards never reaches Twitch.
+    async fn custom_rewards(&self, _token: &str, _broadcaster_id: &str) -> Result<Vec<OwnReward>, RewardsError> {
+        Err(RewardsError::Transport("not available".into()))
+    }
 }
 
 /// The Command action's typed Helix doors (D282, D290, D291). Exactly four
@@ -460,6 +468,17 @@ impl Outward for RealOutward {
         real_only();
         crate::commands::streamnook_api::post_json_with_bearer(CLAIM_PATH, body, bearer, Some(owner_id)).await
     }
+
+    async fn custom_rewards(&self, token: &str, broadcaster_id: &str) -> Result<Vec<OwnReward>, RewardsError> {
+        real_only();
+        crate::services::twitch_service::custom_rewards_engine(
+            crate::services::http::client(),
+            crate::services::twitch_service::HELIX_BASE,
+            token,
+            broadcaster_id,
+        )
+        .await
+    }
 }
 
 #[cfg(test)]
@@ -703,5 +722,17 @@ mod tests {
         for status in [429, 500, 503] {
             assert!(matches!(validation_of_status(status), Validation::Unreachable(_)), "{status}");
         }
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "tests use a fake")]
+    async fn the_real_reward_list_panics_in_tests() {
+        let _ = real().custom_rewards("token", "1").await;
+    }
+
+    #[tokio::test]
+    async fn a_fake_that_lists_no_rewards_never_reaches_twitch() {
+        let door: Arc<dyn Outward> = Arc::new(Fake::new());
+        assert!(matches!(door.custom_rewards("t", "1").await, Err(RewardsError::Transport(_))));
     }
 }

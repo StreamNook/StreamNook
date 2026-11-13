@@ -27,7 +27,8 @@ use super::badges::{self, BadgeSeen, PostShape};
 use super::claim_client::{CallKind, ClaimRequest, ClaimResult, ElementAnswer};
 use super::claims::{self, CallInput, ClassPlan, Element};
 use super::compile::{Compiled, CompiledRule, Mode};
-use super::facts::Facts;
+use super::facts::{Facts, RowKind};
+use super::speak::{self, SpeakRequest};
 use super::guards::{self, SendCheck};
 use super::notify::{self, NotifyRequest};
 use super::outward::ChatSend;
@@ -39,6 +40,10 @@ use super::{lock, now_ms, sign_in, token_words, Engine};
 pub const JOB_SLOTS: usize = 8;
 /// A chat job may still act this long past its rule's longest wait.
 const CHAT_ALLOWANCE: Duration = Duration::from_secs(5);
+/// An edge job (follow, reward, poll, prediction, live; P3) may act this long
+/// after the event arrived (admission is the arrival), so a slow socket or a
+/// short queue never drops it. Its claim keeps the normal budget (at most 3 s).
+pub const EDGE_ALLOWANCE: Duration = Duration::from_secs(120);
 /// A post-claim re-book happens at most this many times.
 const MAX_REBOOKS: u32 = 2;
 /// A claim waits at most this long for its answer, and at least the floor.
@@ -95,7 +100,9 @@ impl Job {
         now_steady: i64,
     ) -> Job {
         let rule = &compiled.rules[index].rule;
-        let age_bound = if drops.is_empty() {
+        let age_bound = if facts.kind == RowKind::Own {
+            EDGE_ALLOWANCE
+        } else if drops.is_empty() {
             Duration::from_secs(u64::from(rule.limits.max_wait_seconds)) + CHAT_ALLOWANCE
         } else {
             let oldest = drops.iter().map(|d| d.arrived_ms).min().unwrap_or_else(now_ms);
@@ -135,6 +142,11 @@ impl Job {
         !self.drops.is_empty()
     }
 
+    /// A P3 event: not a chat row. It posts in the owner's own channel.
+    fn edge(&self) -> bool {
+        self.facts.kind == RowKind::Own
+    }
+
     /// The person the event came from (none for a badge drop).
     pub(crate) fn person(&self) -> Option<&str> {
         (!self.badge() && !self.facts.user_id.is_empty()).then_some(self.facts.user_id.as_str())
@@ -142,10 +154,33 @@ impl Job {
 
     /// The chat the event is in: the owner's for a badge drop.
     pub(crate) fn login(&self) -> String {
+        if self.badge() || self.edge() {
+            self.rule().owner_login.clone()
+        } else {
+            self.facts.channel_login.clone()
+        }
+    }
+
+    /// The channel the event is about, for `{title}`, `{game}` and `{uptime}`
+    /// (a live change names a channel that is not the owner's).
+    fn info_login(&self) -> String {
         if self.badge() {
             self.rule().owner_login.clone()
         } else {
             self.facts.channel_login.clone()
+        }
+    }
+
+    /// Time left for a slot wait. An edge job's 120 s age bound would let a
+    /// booking wait that long; its wait stays the rule's own (`max_wait` plus
+    /// 5 s), inside the age bound.
+    fn slot_left(&self) -> Option<Duration> {
+        let left = self.left()?;
+        if self.edge() {
+            let own = Duration::from_secs(u64::from(self.rule().rule.limits.max_wait_seconds)) + CHAT_ALLOWANCE;
+            Some(left.min(own))
+        } else {
+            Some(left)
         }
     }
 
@@ -408,6 +443,13 @@ pub(crate) async fn run_job(engine: &Arc<Engine>, job: &Job) {
                     notify_action(engine, job, action).await;
                 }
             }
+            Action::Speak { .. } => {
+                if job.open_lanes.iter().any(|l| l == guards::LOCAL_LANE) {
+                    speak_action(engine, job, action).await;
+                }
+            }
+            // A Highlight is not run per event: compile hands it to chat_rules.
+            Action::Highlight { .. } => {}
             Action::Announce { .. } => {
                 // Ticketed `post:` booking and the full chat path; the door is the
                 // engine's Announce door at step 10 (`outward_action` branches on the action).
@@ -559,7 +601,7 @@ async fn finish(engine: &Arc<Engine>, job: &Job, run: JobRun) {
 
 /// Where an outward action posts: (login, room id, reply parent).
 fn target(job: &Job, action: &Action) -> (String, String, Option<String>) {
-    let event_room = if job.badge() { job.rule().rule.owner.id.clone() } else { job.facts.room_id.clone() };
+    let event_room = if job.badge() || job.edge() { job.rule().rule.owner.id.clone() } else { job.facts.room_id.clone() };
     match action {
         Action::Reply { thread, .. } => {
             let parent = (*thread && !job.facts.message_id.is_empty()).then(|| job.facts.message_id.clone());
@@ -585,7 +627,7 @@ async fn vars(engine: &Arc<Engine>, job: &Job, drops: &[&BadgeSeen]) -> Vars {
     vars.count = lock(&engine.counts).count(&cr.rule.id);
     vars.set_away(engine.away().as_ref(), now_ms());
     vars.set_local(chrono::Local::now().naive_local());
-    if let Some(info) = engine.local.channel_info(&job.login()).await {
+    if let Some(info) = engine.local.channel_info(&job.info_login()).await {
         vars.title = info.title.unwrap_or_default();
         vars.game = info.game_name.unwrap_or_default();
         let started = info
@@ -680,6 +722,27 @@ async fn notify_action(engine: &Arc<Engine>, job: &Job, action: &Action) {
     lock(&engine.guards).stamp(&job.rule().rule, guards::LOCAL_LANE, &job.room, job.person(), engine.now());
 }
 
+/// A Speak action: local, no claim, runs in Test and Live. The chatter-text
+/// rule applies to what is read aloud; the line is expanded, cleaned and read
+/// by one claimed player (`speak::deliver`). It never posts.
+async fn speak_action(engine: &Arc<Engine>, job: &Job, action: &Action) {
+    let Action::Speak { text, on_stream, .. } = action else { return };
+    if let Err(why) = template::outward_text_ok(&job.rule().rule, &job.facts, text) {
+        return skip(engine, job, why);
+    }
+    let vars = vars(engine, job, &[]).await;
+    let line = template::clean_speech(&template::expand(text, &vars));
+    if line.is_empty() {
+        return skip(engine, job, "Skipped: nothing to say once the variables were filled in");
+    }
+    speak::deliver(
+        engine,
+        SpeakRequest { rule_id: Some(job.rule().rule.id.clone()), text: line, on_stream: *on_stream, channel: job.info_login() },
+    )
+    .await;
+    lock(&engine.guards).stamp(&job.rule().rule, guards::LOCAL_LANE, &job.room, job.person(), engine.now());
+}
+
 async fn test_action(engine: &Arc<Engine>, job: &Job, action: &Action, plan: &ClassPlan) {
     let all: Vec<usize> = (0..job.drops.len()).collect();
     let text = match render(engine, job, action, &all).await {
@@ -755,7 +818,7 @@ async fn announce_send(engine: &Arc<Engine>, job: &Job, ticket: &mut Ticket, sen
 fn book(engine: &Engine, job: &Job, login: &str, text: &str) -> Result<(Duration, Ticket, String), String> {
     let rule = &job.rule().rule;
     let main = engine.main_id();
-    let max_wait = job.left().ok_or("Skipped: too late to answer")?;
+    let max_wait = job.slot_left().ok_or("Skipped: too late to answer")?;
     match chat_send_limiter::acquire_within_as(&rule.send_as.id, main.as_deref(), login, text, max_wait) {
         Ok((wait, ticket)) => Ok((wait, ticket, text.to_string())),
         Err(Refusal::Duplicate) if rule.vary => {
@@ -875,7 +938,7 @@ async fn settle_slot(
             return Ok(());
         }
         chat_send_limiter::cancel_booking(ticket);
-        let left = job.left().ok_or("Skipped: too late to answer")?;
+        let left = job.slot_left().ok_or("Skipped: too late to answer")?;
         let main = engine.main_id();
         let (fresh_wait, fresh) =
             chat_send_limiter::acquire_within_as(&job.rule().rule.send_as.id, main.as_deref(), login, text, left)
@@ -895,7 +958,7 @@ async fn rebook(
     booked_away: &Option<Away>,
 ) -> Result<(), String> {
     chat_send_limiter::cancel_booking(ticket);
-    let left = job.left().ok_or("Skipped: too late to answer")?;
+    let left = job.slot_left().ok_or("Skipped: too late to answer")?;
     let main = engine.main_id();
     let (wait, fresh) =
         chat_send_limiter::acquire_within_as(&job.rule().rule.send_as.id, main.as_deref(), login, text, left)
@@ -1357,9 +1420,11 @@ async fn sent(engine: &Arc<Engine>, job: &Job, action: &Action, login: &str, cha
 #[cfg(test)]
 mod tests {
     use super::super::outward::Outward;
+    use super::super::own_topics::TopicKind;
     use super::super::testkit::*;
     use super::*;
     use crate::models::automations::RunState;
+    use serde_json::json;
 
     #[tokio::test]
     async fn test_mode_logs_and_never_claims_or_sends() {
@@ -1917,5 +1982,130 @@ mod tests {
                 assert!(!code.contains(banned), "{name} names {banned}");
             }
         }
+    }
+
+    #[tokio::test]
+    async fn an_edge_job_that_waited_60_s_still_sends_and_one_that_waited_130_s_is_dropped() {
+        let kit = Kit::new();
+        kit.settings(RunState::On, vec![own_rule("f", true, json!({ "kind": "follow" }), vec![send_action("a-1", "Thanks {user}!")])]).await;
+        let mut waited = kit.job_with_facts(follow_facts("7"), "f");
+        waited.admitted_at -= Duration::from_secs(60);
+        kit.engine.executor.submit(&kit.engine, waited);
+        kit.idle().await;
+        assert_eq!(kit.outward.sends().len(), 1, "inside the 120 s edge allowance, with the normal claim budget");
+        assert_eq!(kit.outward.claim_calls(), 1);
+        let mut late = kit.job_with_facts(follow_facts("8"), "f");
+        late.admitted_at -= Duration::from_secs(130);
+        kit.engine.executor.submit(&kit.engine, late);
+        kit.idle().await;
+        assert_eq!(kit.outward.sends().len(), 1, "130 s is past it");
+        assert_eq!(kit.outward.claim_calls(), 1, "dropped before any claim");
+        assert!(kit.activity_texts().iter().any(|t| t.contains("too late")));
+    }
+
+    #[tokio::test]
+    async fn an_edge_post_goes_to_the_owners_own_channel_and_names_the_follower() {
+        let kit = Kit::new();
+        kit.settings(RunState::On, vec![own_rule("f", true, json!({ "kind": "follow" }), vec![send_action("a-1", "Thanks {user}!")])]).await;
+        kit.engine.on_own_topic(TopicKind::Follow, &follow_event("7", "Fan"));
+        kit.idle().await;
+        let sends = kit.outward.sends();
+        assert_eq!(sends.len(), 1);
+        assert_eq!((sends[0].text.as_str(), sends[0].login.as_str()), ("Thanks Fan!", "me"));
+    }
+
+    #[tokio::test]
+    async fn an_edge_job_keeps_its_claim_after_an_unknown_send_and_gives_it_back_after_a_refused_one() {
+        let kit = Kit::new();
+        kit.settings(RunState::On, vec![own_rule("f", true, json!({ "kind": "follow" }), vec![send_action("a-1", "Thanks {user}!")])]).await;
+        kit.outward.lose_sends_with(SendResult::Unknown);
+        kit.engine.on_own_topic(TopicKind::Follow, &follow_event("7", "Fan"));
+        kit.idle().await;
+        assert!(kit.outward.releases().is_empty(), "an Unknown may have posted");
+        kit.outward.lose_sends_with(SendResult::Refused("not sent".into()));
+        kit.engine.on_own_topic(TopicKind::Follow, &follow_event("8", "Fan2"));
+        kit.idle().await;
+        assert_eq!(kit.outward.releases().len(), 1, "a Refused send gives its class back");
+    }
+
+    #[tokio::test]
+    async fn two_devices_answer_one_follow_once() {
+        let kit = Kit::new();
+        let other = kit.second_device();
+        for k in [&kit, &other] {
+            k.settings(RunState::On, vec![own_rule("f", true, json!({ "kind": "follow" }), vec![send_action("a-1", "Thanks {user}!")])]).await;
+            k.engine.on_own_topic(TopicKind::Follow, &follow_event("7", "Fan"));
+            k.idle().await;
+        }
+        assert_eq!(kit.outward.sends().len() + other.outward.sends().len(), 1, "each device hears the event; the claim picks one");
+    }
+
+    #[tokio::test]
+    async fn a_test_rule_on_an_own_event_logs_what_it_would_post_and_claims_nothing() {
+        let kit = Kit::new();
+        kit.settings(RunState::On, vec![own_rule("f", false, json!({ "kind": "follow" }), vec![send_action("a-1", "Thanks {user}!")])]).await;
+        kit.engine.on_own_topic(TopicKind::Follow, &follow_event("7", "Fan"));
+        kit.idle().await;
+        assert!(kit.activity_texts().iter().any(|t| t == "Would post: Thanks Fan!"));
+        assert_eq!(kit.outward.claim_calls(), 0);
+        assert!(kit.outward.sends().is_empty());
+    }
+
+    #[tokio::test]
+    async fn speak_runs_in_test_and_live_claims_nothing_and_never_posts() {
+        for live in [false, true] {
+            let kit = Kit::new();
+            kit.settings(RunState::On, vec![own_rule("f", live, json!({ "kind": "follow" }), vec![speak_action("Thanks {user}", false)])]).await;
+            kit.engine.on_own_topic(TopicKind::Follow, &follow_event("7", "Fan"));
+            kit.idle().await;
+            let said: Vec<String> = kit.local.speaks().into_iter().map(|s| s.text).collect();
+            assert_eq!(said, vec!["Thanks Fan".to_string()], "live={live}");
+            assert_eq!(kit.outward.claim_calls(), 0, "a local action never claims");
+            assert!(kit.outward.sends().is_empty(), "nothing is ever posted to chat");
+        }
+    }
+
+    #[tokio::test]
+    async fn speak_skips_in_streamer_mode_unless_it_says_otherwise() {
+        let kit = Kit::new();
+        kit.local.set_streamer(true);
+        kit.settings(RunState::On, vec![own_rule("a", true, json!({ "kind": "follow" }), vec![speak_action("quiet", false)]), own_rule("b", true, json!({ "kind": "follow" }), vec![speak_action("loud", true)])]).await;
+        kit.engine.on_own_topic(TopicKind::Follow, &follow_event("7", "Fan"));
+        kit.idle().await;
+        let said: Vec<String> = kit.local.speaks().into_iter().map(|s| s.text).collect();
+        assert_eq!(said, vec!["loud".to_string()]);
+        assert!(kit.activity_texts().iter().any(|t| t == "Skipped: streamer mode"));
+    }
+
+    #[tokio::test]
+    async fn speak_with_no_player_shows_a_system_notice_with_the_text() {
+        let kit = Kit::new();
+        kit.local.set_targets(vec![]);
+        kit.settings(RunState::On, vec![own_rule("f", true, json!({ "kind": "follow" }), vec![speak_action("Thanks {user}", false)])]).await;
+        kit.engine.on_own_topic(TopicKind::Follow, &follow_event("7", "Fan"));
+        kit.idle().await;
+        assert!(kit.local.speaks().is_empty());
+        assert_eq!(kit.local.system_bodies(), vec!["Thanks Fan".to_string()], "a system notification only when no window can speak");
+    }
+
+    #[tokio::test]
+    async fn speak_refuses_the_viewers_words_at_fire_time_too() {
+        let kit = Kit::new();
+        kit.settings(RunState::On, vec![own_rule("r", true, json!({ "kind": "reward_redeemed", "reward_id": null }), vec![speak_action("{input}", false)])]).await;
+        kit.engine.on_own_topic(
+            TopicKind::Redemption,
+            &json!({ "id": "red-1", "user_id": "8", "user_login": "viewer", "user_name": "Viewer", "user_input": "say this", "reward": { "id": "rw", "title": "Voice" } }),
+        );
+        kit.idle().await;
+        assert!(kit.local.speaks().is_empty());
+        assert!(kit.activity_texts().iter().any(|t| t.starts_with("Skipped: the chatter's words")));
+    }
+
+    #[tokio::test]
+    async fn a_highlight_action_runs_nothing_per_event() {
+        let kit = Kit::new();
+        kit.settings(RunState::On, vec![highlight_rule("h", "gg", "#ff8800")]).await;
+        kit.fire_from("m1", "viewer").await;
+        assert!(kit.local.notifications().is_empty() && kit.outward.sends().is_empty());
     }
 }

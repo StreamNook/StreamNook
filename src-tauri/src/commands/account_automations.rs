@@ -18,6 +18,7 @@ use crate::models::automations::{
 use crate::rt::{AppHandle, Window};
 use crate::services::account_automations::compile::{compile, CompileInput, Compiled};
 use crate::services::account_automations::{self as engine, activity, badges, facts, matcher, now_ms, template, templates};
+use crate::services::twitch_service::{rewards_error_words, OwnReward, RewardsError};
 
 /// While the engine has not started yet (the first moments after launch).
 const STARTING: &str = "Automations are still starting";
@@ -372,9 +373,15 @@ fn action_text(action: &Action, vars: &template::Vars, vary: bool) -> Option<Try
         Action::Reply { id, texts, .. } => (id, "reply", texts.first()?.text.clone()),
         Action::Send { id, texts, .. } => (id, "send", texts.first()?.text.clone()),
         Action::Notify { id, title, body, .. } => (id, "notify", if body.trim().is_empty() { title.clone() } else { body.clone() }),
+        Action::Speak { id, text, .. } => (id, "speak", text.clone()),
+        Action::Highlight { .. } => return None,
     };
     let filled = template::expand(&raw, vars);
-    let text = if kind == "notify" { filled } else { template::clean(&filled, vary).unwrap_or_else(|e| e.words().to_string()) };
+    let text = match kind {
+        "notify" => filled,
+        "speak" => template::clean_speech(&filled),
+        _ => template::clean(&filled, vary).unwrap_or_else(|e| e.words().to_string()),
+    };
     Some(TryText { action_id: id.clone(), kind, text })
 }
 
@@ -526,6 +533,34 @@ pub async fn automations_add_template(app: AppHandle, id: String) -> Result<Save
 #[tauri::command]
 pub fn automations_variables() -> Vec<template::VariableRow> {
     template::variable_table()
+}
+
+/// The channel point rewards of `owner_id`'s channel (the main account's when
+/// none is given), for the Reward trigger's picker: Helix `GET
+/// /channel_points/custom_rewards` with the owner's verified token and the
+/// verified user id as the broadcaster (D276). Helix, not GQL, so no entry in
+/// the private watchdog manifest. A failure is a plain sentence for the picker.
+#[tauri::command]
+pub async fn automations_own_rewards(owner_id: Option<String>) -> Result<Vec<OwnReward>, String> {
+    let engine = engine::engine().ok_or(STARTING)?;
+    let owner = match owner_id.map(|o| o.trim().to_string()).filter(|o| !o.is_empty()) {
+        Some(owner) => owner,
+        None => engine.main_id().ok_or("Sign in to Twitch to see your rewards")?,
+    };
+    let login = engine.compiled().login(&owner).map(str::to_string).unwrap_or_default();
+    let token = engine
+        .verified(&owner, std::time::Duration::from_secs(5))
+        .await
+        .map_err(|why| engine::token_words(&why, &login))?;
+    match engine.outward.custom_rewards(&token.token, &token.user_id).await {
+        Ok(rewards) => Ok(rewards),
+        Err(e) => {
+            if matches!(e, RewardsError::Status(401, _)) {
+                engine.token_unauthorized(&owner, &token.token);
+            }
+            Err(rewards_error_words(&e))
+        }
+    }
 }
 
 #[tauri::command]
@@ -791,6 +826,21 @@ mod tests {
             assert!(acl.contains(&format!("\"{name}\",")), "{name} missing from app-commands.toml");
             found += 1;
         }
-        assert_eq!(found, 19);
+        // The 19 of 7.3a plus P3's reward list.
+        assert_eq!(found, 20);
+    }
+
+    #[test]
+    fn try_it_reads_a_speak_line_and_skips_a_highlight() {
+        use crate::models::automations::Trigger;
+        use crate::services::account_automations::compile::fixtures::{compiled_with, rule};
+        let compiled = compiled_with(
+            &[rule("s", Trigger::Follow {}, vec![Action::Speak { id: "a-s".into(), text: "Thanks   {user}\n!".into(), on_stream: false }, Action::Highlight { id: "a-h".into(), color: "#ff8800".into() }])],
+            RunState::On,
+        );
+        let vars = template::Vars { user: "Fan".into(), ..template::Vars::default() };
+        let texts: Vec<TryText> = compiled.rules[0].rule.actions.iter().filter_map(|a| action_text(a, &vars, false)).collect();
+        assert_eq!(texts.len(), 1, "a Highlight has no text");
+        assert_eq!((texts[0].kind, texts[0].text.as_str()), ("speak", "Thanks Fan !"));
     }
 }
