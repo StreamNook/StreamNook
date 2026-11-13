@@ -355,7 +355,8 @@ impl TokenVerifier {
                     drop(guard);
                     let _ = send.send(answer);
                 }));
-                return shared.await;
+                // Awaited after the block, so no lock guard is alive across it.
+                shared
             }
         };
         running.await

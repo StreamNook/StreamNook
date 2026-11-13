@@ -774,7 +774,8 @@ mod tests {
         let b = kit.engine.claims.claim(request("t", 500)).await;
         assert!(matches!(b, ClaimResult::Unknown { why: Unknown::NotReached(404), .. }));
         kit.settle_claims().await;
-        assert_eq!(kit.outward.releases().len(), 1, "only the unreadable 2xx may have written");
+        // One release for the unreadable 2xx, repeated once on `released: 0` (D93); the 404 sends none.
+        assert_eq!(kit.outward.releases().len(), 2, "only the unreadable 2xx may have written");
     }
 
     #[tokio::test]
@@ -828,7 +829,8 @@ mod tests {
             kit.outward.claim_answers(vec![http]);
             let _ = kit.engine.claims.claim(request("t", 500)).await;
             kit.settle_claims().await;
-            assert_eq!(kit.outward.releases().len(), 1);
+            // The release, repeated once on `released: 0` (D93).
+            assert_eq!(kit.outward.releases().len(), 2);
         }
     }
 
@@ -980,8 +982,8 @@ mod tests {
         let kit = Kit::new();
         // The owner's fetch answers T1, then T3 (a refreshed token): both are the owner's.
         kit.outward.script_tokens(&main_id(), vec!["T1", "T3"]);
-        kit.outward.validates("T1", &main_id(), "me");
-        kit.outward.validates("T3", &main_id(), "me");
+        kit.outward.validates("T1", &main_id(), &me());
+        kit.outward.validates("T3", &main_id(), &me());
         kit.outward.release_answers(vec![FakeHttp::Network, FakeHttp::Network]);
         let rx = kit.engine.claims.release(&main_id(), "00000000000000ac", Instant::now(), 15_000);
         let _ = tokio::time::timeout(Duration::from_secs(2), rx).await;

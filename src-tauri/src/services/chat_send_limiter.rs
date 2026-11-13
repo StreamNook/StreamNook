@@ -1208,6 +1208,12 @@ pub fn note_alt_badges(account_id: &str, channel: &str, badges: &str) -> bool {
     with_limiter(&LimiterKey::Alt(account_id.to_string()), |l| l.own_badges(channel, badges))
 }
 
+/// The main account's limiter emptied, for engine tests that take turns on it.
+#[cfg(test)]
+pub(crate) fn reset_primary_for_test() {
+    *limiter() = Limiter::default();
+}
+
 /// A linked account's limiter entries and booked slots, for tests elsewhere.
 #[cfg(test)]
 pub(crate) fn alt_entries(id: &str) -> (usize, usize) {

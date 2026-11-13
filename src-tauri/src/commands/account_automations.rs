@@ -133,7 +133,8 @@ pub fn save_rule_in(a: &mut Automations, mut rule: Rule, expected_updated_ms: Op
             rule.live = stored.live;
             rule.created_ms = stored.created_ms;
             rule.updated_ms = now.max(stored.updated_ms + 1);
-            let errors = validate(&mut rule, &context(a, &rule.id));
+            let id = rule.id.clone();
+            let errors = validate(&mut rule, &context(a, &id));
             if !errors.is_empty() {
                 return Ok(SaveAnswer { rule, errors, saved: false });
             }
@@ -458,7 +459,8 @@ pub fn automations_test(sample: TryRequest) -> Result<TryAnswer, String> {
                 rule.id = "draft".into();
             }
             rule.enabled = true;
-            let errors = validate(&mut rule, &context(&group, &rule.id));
+            let id = rule.id.clone();
+            let errors = validate(&mut rule, &context(&group, &id));
             group.rules = vec![rule.to_value()];
             group.run = RunState::Test;
             let own = engine.outward.own_accounts();

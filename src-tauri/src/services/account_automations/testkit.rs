@@ -44,7 +44,7 @@ thread_local! {
     };
 }
 
-/// This test's main account id (login "me").
+/// This test's main account id (its login is `me()`, the test's own channel).
 pub fn main_id() -> String {
     IDS.with(|ids| ids.0.clone())
 }
@@ -57,6 +57,18 @@ pub fn alt_id() -> String {
 /// This test's chat (login), room id 4242.
 pub fn chan() -> String {
     IDS.with(|ids| ids.2.clone())
+}
+
+/// The login of this test's main account: the test's own chat, so a rule on
+/// that chat acts in its owner's own channel (no "other channels" rail).
+pub fn me() -> String {
+    chan()
+}
+
+/// The same login from the main account's id alone (the fakes run off-thread).
+fn main_login(main: &str) -> String {
+    let n: u64 = main.get(1..6).and_then(|n| n.parse().ok()).unwrap_or(0);
+    format!("testchan{n}")
 }
 
 /// The fake token of an account.
@@ -169,6 +181,10 @@ pub fn shared_row(id: &str, source_id: &str, room: &str, source_room: Option<&st
 }
 
 fn row(tags: Value, id: &str, user: &str, text: &str, metadata: Value) -> ChatMessage {
+    // "me" in a row is this test's main account, whose login is its own chat.
+    let user = if user == "me" { me() } else { user.to_string() };
+    let user = user.as_str();
+    let text = text.replace("@me", &format!("@{}", me()));
     serde_json::from_value(json!({
         "id": id,
         "user_id": format!("u-{user}"),
@@ -258,8 +274,8 @@ fn rule(id: &str, live: bool, when: Value, channels: Value, actions: Vec<Value>)
         "name": format!("Rule {id}"),
         "enabled": true,
         "live": live,
-        "owner": account(&main_id(), "me"),
-        "send_as": account(&main_id(), "me"),
+        "owner": account(&main_id(), &me()),
+        "send_as": account(&main_id(), &me()),
         "when": when,
         "only_if": { "channels": channels, "roles": [], "skip_users": [], "only_users": [], "only_live": false,
                      "only_away": false, "shared_chat": false, "hours": null },
@@ -473,7 +489,35 @@ impl FakeServer {
         for (i, e) in elements.iter().enumerate().filter(|(_, e)| e["kind"] == "event") {
             let key = (account.to_string(), e["key"].as_str().unwrap_or("").to_string(), e["family"].as_str().unwrap_or("").to_string());
             let settle = e["settle_ms"].as_i64().unwrap_or(0);
-            let won = match s.exact.get_mut(&key) {
+            let windowed = e["mode"] == "windowed";
+            let win_ms = e["window_s"].as_i64().unwrap_or(0) * 1000;
+            let won = if windowed {
+                // Once per window: a row another session wrote inside the window holds it
+                // until the window ends (the answer says when).
+                let key_text = key.1.clone();
+                if let Some((_, holder)) = s.held_prefixes.iter().find(|(p, _)| key_text.starts_with(p.as_str())).cloned() {
+                    answers[i] = json!({ "index": i, "kind": "event", "won": false, "holder_name": holder,
+                        "same_device": false, "holder_age_ms": 0, "holder_settle_ms": null, "free_at_ms": now + 60_000,
+                        "retry_after_ms": null, "reason": "held" });
+                    false
+                } else {
+                    let prior = s.windows.get(&key).cloned();
+                    match &prior {
+                        Some(row) if row.session != session && row.last_at >= now - win_ms => {
+                            answers[i] = json!({ "index": i, "kind": "event", "won": false, "holder_name": row.name,
+                                "same_device": row.device_hash == device_hash, "holder_age_ms": now - row.last_at,
+                                "holder_settle_ms": null, "free_at_ms": row.last_at + win_ms, "retry_after_ms": null, "reason": "held" });
+                            false
+                        }
+                        _ => {
+                            s.saved.entry(call.clone()).or_default().push((key.clone(), prior));
+                            s.windows.insert(key, WinRow { session: session.clone(), device_hash: device_hash.clone(), name: name.clone(), last_at: now, calls: vec![call.clone()] });
+                            true
+                        }
+                    }
+                }
+            } else {
+              match s.exact.get_mut(&key) {
                 None => {
                     s.exact.insert(key, Holder { session: session.clone(), device_hash: device_hash.clone(), name: name.clone(), calls: vec![(call.clone(), now, settle)] });
                     true
@@ -489,6 +533,7 @@ impl FakeServer {
                         "holder_settle_ms": newest.2, "free_at_ms": null, "retry_after_ms": null, "reason": "held" });
                     false
                 }
+              }
             };
             if won {
                 any_won = true;
@@ -658,8 +703,8 @@ struct OutState {
     fail_after: HashMap<String, usize>,
     fetch_calls: HashMap<String, usize>,
     fetch_total: usize,
-    /// The second fetch of the test takes this long.
-    slow_fetch: Option<Duration>,
+    /// The nth fetch of the test (1-based) takes this long.
+    slow_fetch: Option<(usize, Duration)>,
     verify_calls: usize,
     validations: HashMap<String, Validation>,
     validate_calls: HashMap<String, usize>,
@@ -689,7 +734,7 @@ struct OutState {
 /// The login the fake gives a test account.
 fn login_for(id: &str, main: &str, alt: &str) -> String {
     if id == main {
-        "me".into()
+        main_login(main)
     } else if id == alt {
         "alt".into()
     } else {
@@ -732,7 +777,7 @@ fn fake_io(
                     } else {
                         Fetch::Token(s.last_token.get(&id).cloned().unwrap_or_else(|| token_of(&id)))
                     };
-                    (answer, if s.fetch_total == 2 { s.slow_fetch } else { None })
+                    (answer, s.slow_fetch.filter(|(n, _)| s.fetch_total == *n).map(|(_, d)| d))
                 };
                 if let Some(d) = slow {
                     tokio::time::sleep(d).await;
@@ -879,7 +924,11 @@ impl FakeOutward {
     }
     /// The second fetch of the test (the first send's step 9) takes `d`.
     pub fn slow_verify_after_first(&self, d: Duration) {
-        lock(&self.state).slow_fetch = Some(d);
+        self.slow_verify_at(2, d);
+    }
+    /// The `n`th token fetch of the test (1-based) takes `d`.
+    pub fn slow_verify_at(&self, n: usize, d: Duration) {
+        lock(&self.state).slow_fetch = Some((n, d));
     }
     pub fn set_own_accounts(&self, list: Vec<(String, String)>) {
         lock(&self.state).own_accounts = Some(list);
@@ -1006,7 +1055,7 @@ impl Outward for FakeOutward {
         lock(&self.state)
             .own_accounts
             .clone()
-            .unwrap_or_else(|| vec![(self.main.clone(), "me".into()), (self.alt.clone(), "alt".into())])
+            .unwrap_or_else(|| vec![(self.main.clone(), main_login(&self.main)), (self.alt.clone(), "alt".into())])
     }
 
     fn profile_user_id(&self) -> Option<String> {
@@ -1359,6 +1408,44 @@ impl AccountChanges for FakeLocal {
 
 // ---- the kit ---------------------------------------------------------------------------------
 
+/// The main account's send limiter is one per process, so engine tests that
+/// send as the main account take turns on it: the first kit of a test waits
+/// for the earlier test's last kit to drop, then empties the limiter.
+static PRIMARY_TURN: Mutex<()> = Mutex::new(());
+
+thread_local! {
+    static TURN: std::cell::RefCell<(usize, Option<std::sync::MutexGuard<'static, ()>>)> =
+        const { std::cell::RefCell::new((0, None)) };
+}
+
+struct PrimaryLease;
+
+impl PrimaryLease {
+    fn take() -> PrimaryLease {
+        TURN.with(|t| {
+            let mut t = t.borrow_mut();
+            if t.0 == 0 {
+                t.1 = Some(PRIMARY_TURN.lock().unwrap_or_else(|e| e.into_inner()));
+                chat_send_limiter::reset_primary_for_test();
+            }
+            t.0 += 1;
+        });
+        PrimaryLease
+    }
+}
+
+impl Drop for PrimaryLease {
+    fn drop(&mut self) {
+        TURN.with(|t| {
+            let mut t = t.borrow_mut();
+            t.0 -= 1;
+            if t.0 == 0 {
+                t.1 = None;
+            }
+        });
+    }
+}
+
 /// One engine on fakes; `second_device` makes another on the same claim server.
 pub struct Kit {
     pub engine: Arc<Engine>,
@@ -1368,6 +1455,8 @@ pub struct Kit {
     /// The token verifier's clock.
     pub clock: TestClock,
     rx: Mutex<Option<watch::Receiver<u64>>>,
+    /// Dropped last: the main limiter is this test's until the kit is gone.
+    _turn: PrimaryLease,
 }
 
 impl Kit {
@@ -1381,6 +1470,7 @@ impl Kit {
     }
 
     fn on(server: Arc<FakeServer>) -> Kit {
+        let turn = PrimaryLease::take();
         let local = Arc::new(FakeLocal::new());
         let clock = TestClock::new();
         let outward = Arc::new(FakeOutward::new(server.clone(), clock.as_clock()));
@@ -1395,7 +1485,7 @@ impl Kit {
             spawn: test_spawner(),
         });
         engine.presence.store(true, Ordering::SeqCst);
-        Kit { engine, outward, local, server, clock, rx: Mutex::new(Some(rx)) }
+        Kit { engine, outward, local, server, clock, rx: Mutex::new(Some(rx)), _turn: turn }
     }
 
     /// Another device signed in to the same accounts, on the same claim server.
@@ -1507,7 +1597,13 @@ impl Kit {
 
     /// A message you typed in `login` just now (the typed path's record).
     pub fn typed_now(&self, account: &str, login: &str) {
-        chat_send_limiter::record_sent_as(account, login, "typed by hand");
+        // The main account is the engine's primary here, but `record_sent_as` asks the
+        // machine's own account registry, so the main account's typed line goes in directly.
+        if account == main_id() {
+            chat_send_limiter::record_sent(login, "typed by hand");
+        } else {
+            chat_send_limiter::record_sent_as(account, login, "typed by hand");
+        }
     }
 
     pub fn activity_texts(&self) -> Vec<String> {

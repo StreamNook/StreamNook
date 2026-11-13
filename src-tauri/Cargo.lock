@@ -29,6 +29,7 @@ dependencies = [
  "futures-util",
  "getrandom 0.3.4",
  "gtk",
+ "icu_normalizer",
  "image",
  "imagesize",
  "jni 0.21.1",

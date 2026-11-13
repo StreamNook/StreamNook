@@ -1145,6 +1145,7 @@ async fn sent(engine: &Arc<Engine>, job: &Job, action: &Action, login: &str, cha
 
 #[cfg(test)]
 mod tests {
+    use super::super::outward::Outward;
     use super::super::testkit::*;
     use super::*;
     use crate::models::automations::RunState;
@@ -1189,7 +1190,7 @@ mod tests {
         let kit = Kit::new();
         // The owner's fetch answers T1 (the owner) first and T2 (another user) after.
         kit.outward.script_tokens(&main_id(), vec!["T1", "T2"]);
-        kit.outward.validates("T1", &main_id(), "me");
+        kit.outward.validates("T1", &main_id(), &me());
         kit.outward.validates("T2", "4444", "someone");
         kit.settings(RunState::On, vec![mention_rule("r1", true)]).await;
         kit.fire("m1").await;
@@ -1201,16 +1202,31 @@ mod tests {
     #[tokio::test]
     async fn a_release_takes_a_freshly_verified_owner_token_never_another_accounts() {
         let kit = Kit::new();
-        kit.outward.script_tokens(&main_id(), vec!["T1", "T2"]);
-        kit.outward.validates("T1", &main_id(), "me");
+        // The fetches: step 2 (T1), step 9 (T1), then the release's own check (T3, the owner's
+        // refreshed token). The release goes out with T3, never T1 or T2.
+        kit.outward.script_tokens(&main_id(), vec!["T1", "T1", "T3"]);
+        kit.outward.validates("T1", &main_id(), &me());
+        kit.outward.validates("T3", &main_id(), &me());
         kit.outward.validates("T2", "4444", "someone");
         kit.outward.lose_sends_with(SendResult::Refused("not sent".into()));
         kit.settings(RunState::On, vec![mention_rule("r1", true)]).await;
         kit.fire("m1").await;
+        kit.settle_claims().await;
         let bearers = kit.outward.release_bearers();
         assert!(!bearers.is_empty());
-        assert!(!bearers.iter().any(|b| b == "T2"), "{bearers:?}");
-        assert!(bearers.iter().all(|b| *b == "T1" || *b == token_of(&main_id())), "{bearers:?}");
+        assert!(bearers.iter().all(|b| b == "T3"), "{bearers:?}");
+
+        // The release's check answers T2, which validates as another user: the release is dropped.
+        let kit = Kit::new();
+        kit.outward.script_tokens(&main_id(), vec!["T1", "T1", "T2"]);
+        kit.outward.validates("T1", &main_id(), &me());
+        kit.outward.validates("T2", "4444", "someone");
+        kit.outward.lose_sends_with(SendResult::Refused("not sent".into()));
+        kit.settings(RunState::On, vec![mention_rule("r1", true)]).await;
+        kit.fire("m1").await;
+        kit.settle_claims().await;
+        assert!(kit.outward.release_bearers().is_empty(), "never posted as another account");
+        assert!(kit.outward.releases().is_empty());
     }
 
     #[tokio::test]
@@ -1261,7 +1277,7 @@ mod tests {
         kit.settings(RunState::On, vec![as_sender(mention_rule("r1", true), &alt_id(), "alt")]).await;
         kit.fire("m1").await;
         assert_eq!(kit.outward.claim_calls(), 0);
-        assert!(kit.activity_texts().iter().any(|t| t == "Sign in as @me to run this rule"));
+        assert!(kit.activity_texts().iter().any(|t| *t == format!("Sign in as @{} to run this rule", me())));
     }
 
     #[tokio::test]
@@ -1270,7 +1286,7 @@ mod tests {
         kit.outward.set_token(&main_id(), FakeToken::Unreachable);
         kit.settings(RunState::On, vec![mention_rule("r1", true)]).await;
         kit.fire("m1").await;
-        assert!(kit.activity_texts().iter().any(|t| t == "Couldn't reach Twitch to check @me; skipped"));
+        assert!(kit.activity_texts().iter().any(|t| *t == format!("Couldn't reach Twitch to check @{}; skipped", me())));
         kit.outward.set_token(&main_id(), FakeToken::Good);
         kit.fire_from("m2", "viewer2").await;
         assert_eq!(kit.outward.sends().len(), 1, "an unreachable check is not remembered");
@@ -1519,9 +1535,10 @@ mod tests {
     async fn an_off_during_a_slow_room_lookup_stops_the_class_and_releases() {
         let kit = Kit::new();
         kit.settings(RunState::On, vec![mention_rule("r1", true)]).await;
-        kit.outward.slow_rooms(Duration::from_millis(200));
-        kit.fire_row_no_wait(untagged_row("m1", "viewer", "hey @me"));
-        kit.outward.wait_for_room_started().await;
+        // The step 9 await (the send's token check) is slow; the Off lands inside it.
+        kit.outward.slow_verify_at(2, Duration::from_millis(500));
+        kit.fire_no_wait("m1");
+        tokio::time::sleep(Duration::from_millis(150)).await;
         kit.engine.set_run_now(RunState::Off);
         kit.idle().await;
         assert!(kit.outward.sends().is_empty());
@@ -1562,11 +1579,11 @@ mod tests {
     async fn the_hook_alone_stops_a_waiting_job_and_its_release_goes_out() {
         let kit = Kit::new();
         kit.settings(RunState::On, vec![as_sender(mention_rule("r1", true), &alt_id(), "alt")]).await;
-        kit.outward.park_rooms();
-        kit.fire_row_no_wait(untagged_row("m1", "viewer", "hey @me"));
-        kit.outward.wait_for_room_started().await;
+        // The send's token check (the third fetch: sender, owner, then step 9) is slow.
+        kit.outward.slow_verify_at(3, Duration::from_millis(600));
+        kit.fire_no_wait("m1");
+        tokio::time::sleep(Duration::from_millis(150)).await;
         let guard = super::super::before_accounts_removed_on(Some(&kit.engine), &[alt_id()]).await;
-        kit.outward.release_rooms();
         kit.idle().await;
         assert!(kit.outward.sends().is_empty());
         assert_eq!(kit.outward.releases().len(), 1);
@@ -1577,12 +1594,12 @@ mod tests {
     async fn a_removed_account_stops_the_send_without_a_hook() {
         let kit = Kit::new();
         kit.settings(RunState::On, vec![as_sender(mention_rule("r1", true), &alt_id(), "alt")]).await;
-        kit.outward.park_rooms();
-        kit.fire_row_no_wait(untagged_row("m1", "viewer", "hey @me"));
-        kit.outward.wait_for_room_started().await;
-        kit.outward.set_own_accounts(vec![(main_id(), "me".into())]);
+        // The send's token check (the third fetch: sender, owner, then step 9) is slow.
+        kit.outward.slow_verify_at(3, Duration::from_millis(500));
+        kit.fire_no_wait("m1");
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        kit.outward.set_own_accounts(vec![(main_id(), me())]);
         kit.engine.recompile().await;
-        kit.outward.release_rooms();
         kit.idle().await;
         assert!(kit.outward.sends().is_empty());
         assert_eq!(kit.outward.releases().len(), 1);

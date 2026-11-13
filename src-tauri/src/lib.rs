@@ -3144,9 +3144,9 @@ pub fn run() {
                 services::app_exit::note_window_destroyed(&label);
                 services::performance_mode::note_window_destroyed(&label);
                 services::whisper_claims::forget_window(&label);
+                services::stream_manager::clear_label(&label);
                 // It stops hearing Activity and Notify claims.
                 services::account_automations::forget_window(&label);
-                services::stream_manager::clear_label(&label);
                 // A destroyed webview never runs its React cleanup, so any
                 // chat consumer claims it still holds would pin those channels
                 // JOINed (and their IRC traffic flowing) forever. Sweep them;
