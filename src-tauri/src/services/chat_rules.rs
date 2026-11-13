@@ -30,6 +30,8 @@ use regex::{Regex, RegexSet};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
+
+use crate::services::account_automations::compile::AutoHighlight;
 use std::sync::{Arc, OnceLock, RwLock};
 
 // ---------------------------------------------------------------------------
@@ -879,6 +881,28 @@ static OWN_TARGET: OnceLock<RwLock<MentionTarget>> = OnceLock::new();
 /// `tiktok`), compared only against that platform's rows.
 static PLATFORM_OWN: OnceLock<RwLock<HashMap<String, Identity>>> = OnceLock::new();
 
+/// P3: the Highlight actions of the running automation rules. Its own cell,
+/// read by `evaluate` directly: `refresh` swaps only `CompiledRules`, so a
+/// settings save can never wipe it, in either write order (interface
+/// question 4). Empty while automations are Off or the app is in the background.
+static AUTOMATION_HIGHLIGHTS: OnceLock<RwLock<Arc<Vec<AutoHighlight>>>> = OnceLock::new();
+
+fn automation_cell() -> &'static RwLock<Arc<Vec<AutoHighlight>>> {
+    AUTOMATION_HIGHLIGHTS.get_or_init(|| RwLock::new(Arc::new(Vec::new())))
+}
+
+/// Replace the automation highlights (reconcile calls this every pass).
+pub fn set_automation_highlights(list: Vec<AutoHighlight>) {
+    if let Ok(mut g) = automation_cell().write() {
+        *g = Arc::new(list);
+    }
+}
+
+/// How many automation highlights are published (the tests read it).
+pub fn automation_highlight_count() -> usize {
+    automation_cell().read().map(|g| g.len()).unwrap_or(0)
+}
+
 fn rules_cell() -> &'static RwLock<Arc<CompiledRules>> {
     RULES.get_or_init(|| RwLock::new(Arc::new(CompiledRules::default())))
 }
@@ -1371,6 +1395,13 @@ impl ChatRules {
             }
         }
 
+        // 3b. Automation highlights (P3): after the badge highlights, only for
+        //     a row nothing else highlighted, never your own message and never
+        //     a mention or a reply to you (those suppress highlights above).
+        if highlight.is_none() && !mentioned && !reply_to_me && !is_own {
+            highlight = automation_highlight(facts);
+        }
+
         // 4. Built-in event tint: raid > returning > first-time > self.
         let built_in = if facts.flags & F_RAID != 0 && rules.raider.enabled {
             Some(BuiltInStamp {
@@ -1527,6 +1558,76 @@ fn announcement_color(name: &str) -> Option<&'static str> {
         "PURPLE" => Some("#a855f7"),
         _ => None,
     }
+}
+
+/// The first running automation highlight this message satisfies, stamped
+/// kind `automation`: `phrase_hit` stays false (the Inbox never files it and
+/// it never pings), no sound, not held. The conditions are the ones one
+/// message can answer: channel, roles, skip and only users, shared chat and
+/// the text.
+fn automation_highlight(facts: &MessageFacts<'_>) -> Option<HighlightStamp> {
+    if !facts.twitch {
+        return None;
+    }
+    let list = automation_cell().read().ok()?.clone();
+    if list.is_empty() {
+        return None;
+    }
+    let nfc = crate::services::account_automations::facts::nfc(facts.content).into_owned();
+    let folded = nfc.to_lowercase();
+    let roles = highlight_roles(&facts.badge_names);
+    for h in list.iter() {
+        if !h.channels.is_empty() && !h.channels.iter().any(|c| *c == facts.filter_channel_key) {
+            continue;
+        }
+        if facts.flags & F_SHARED != 0 && !h.shared_chat {
+            continue;
+        }
+        if !h.roles.is_empty() && !roles.iter().any(|r| h.roles.contains(r)) {
+            continue;
+        }
+        if h.skip_users.iter().any(|u| *u == facts.login) {
+            continue;
+        }
+        if !h.only_users.is_empty() && !h.only_users.iter().any(|u| *u == facts.login) {
+            continue;
+        }
+        if !h.test.matches_text(facts.content, &nfc, &folded) {
+            continue;
+        }
+        return Some(HighlightStamp {
+            rule_id: h.rule_id.clone(),
+            kind: "automation".to_string(),
+            color: h.color.clone(),
+            sound_id: None,
+            cooldown_ms: 0,
+            hold: false,
+        });
+    }
+    None
+}
+
+/// The roles a message's badges give: broadcaster, moderator (and lead
+/// moderator), VIP, subscriber (and founder); Viewer when none.
+fn highlight_roles(badge_names: &[String]) -> Vec<crate::models::automations::SenderRole> {
+    use crate::models::automations::SenderRole;
+    let mut roles = Vec::new();
+    for name in badge_names {
+        let role = match name.as_str() {
+            "broadcaster" => SenderRole::Broadcaster,
+            "moderator" | "lead_moderator" => SenderRole::Moderator,
+            "vip" => SenderRole::Vip,
+            "subscriber" | "founder" => SenderRole::Subscriber,
+            _ => continue,
+        };
+        if !roles.contains(&role) {
+            roles.push(role);
+        }
+    }
+    if roles.is_empty() {
+        roles.push(SenderRole::Viewer);
+    }
+    roles
 }
 
 fn stamp(kind: &str, m: &RuleMeta) -> HighlightStamp {
@@ -2973,5 +3074,135 @@ mod tests {
         let mut m = on("youtube", "@me", "UCsntester", "@brandon test");
         eval_with(&rules, &mut m);
         assert!(!m.metadata.is_mentioned && m.metadata.is_own);
+    }
+
+    static AUTO_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn auto(rule_id: &str, color: &str, channels: &[&str], pattern: &str) -> AutoHighlight {
+        use crate::models::automations::{MatchMode, TextMatch};
+        AutoHighlight {
+            rule_id: rule_id.into(),
+            color: color.into(),
+            channels: channels.iter().map(|c| c.to_string()).collect(),
+            roles: vec![],
+            skip_users: vec![],
+            only_users: vec![],
+            shared_chat: false,
+            test: crate::services::account_automations::compile::TextTest::build(&TextMatch {
+                mode: MatchMode::Contains,
+                pattern: pattern.into(),
+                case_sensitive: false,
+            })
+            .unwrap(),
+        }
+    }
+
+    fn swap_rules(hl: &str) {
+        // What `refresh` does with a changed hash: it replaces `CompiledRules` and nothing else.
+        *rules_cell().write().unwrap() = Arc::new(rules_from(hl, "{}", "{}"));
+    }
+
+    #[test]
+    fn an_automation_highlight_survives_a_refresh_in_both_write_orders() {
+        let _lock = AUTO_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        set_automation_highlights(vec![]);
+        // Highlights written first, then the rules swap.
+        set_automation_highlights(vec![auto("h", "#ff8800", &[], "gg")]);
+        swap_rules(r##"{"phrases":[{"id":"x","pattern":"zzz","enabled":true,"color":"#000000"}]}"##);
+        let mut m = msg("bob", "gg wp");
+        eval_with(&ChatRules::snapshot(), &mut m);
+        assert_eq!(m.metadata.highlight.as_ref().map(|h| h.kind.as_str()), Some("automation"));
+        // The rules swap first, then the highlights are written.
+        set_automation_highlights(vec![]);
+        swap_rules("{}");
+        set_automation_highlights(vec![auto("h", "#ff8800", &[], "gg")]);
+        let mut m = msg("bob", "gg wp");
+        eval_with(&ChatRules::snapshot(), &mut m);
+        assert_eq!(m.metadata.highlight.as_ref().map(|h| h.rule_id.as_str()), Some("h"));
+        set_automation_highlights(vec![]);
+        swap_rules("{}");
+    }
+
+    #[test]
+    fn the_stamp_is_automation_with_no_ping_no_sound_and_no_hold() {
+        let _lock = AUTO_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        set_automation_highlights(vec![auto("h", "#ff8800", &[], "gg")]);
+        let rules = rules_from("{}", "{}", "{}");
+        let mut m = msg("bob", "GG well played");
+        let verdict = eval_with(&rules, &mut m);
+        let stamp = m.metadata.highlight.clone().unwrap();
+        assert_eq!((stamp.kind.as_str(), stamp.color.as_str(), stamp.hold, stamp.cooldown_ms), ("automation", "#ff8800", false, 0));
+        assert!(stamp.sound_id.is_none());
+        assert!(!verdict.phrase_hit, "the Inbox files phrase hits; an automation highlight is not one");
+        assert!(!verdict.mentioned);
+        set_automation_highlights(vec![]);
+    }
+
+    #[test]
+    fn nothing_is_stamped_when_the_list_is_empty_which_is_what_off_publishes() {
+        let _lock = AUTO_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        set_automation_highlights(vec![]);
+        let mut m = msg("bob", "gg");
+        eval_with(&rules_from("{}", "{}", "{}"), &mut m);
+        assert!(m.metadata.highlight.is_none());
+    }
+
+    #[test]
+    fn it_comes_after_the_other_highlights_and_never_over_a_mention() {
+        let _lock = AUTO_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _own = ChatRules::own_identity_test_lock();
+        set_automation_highlights(vec![auto("h", "#ff8800", &[], "gg")]);
+        let rules = rules_from(r##"{"phrases":[{"id":"p","pattern":"gg","enabled":true,"color":"#00ff88"}]}"##, "{}", "{}");
+        let mut m = msg("bob", "gg");
+        eval_with(&rules, &mut m);
+        assert_eq!(m.metadata.highlight.as_ref().map(|h| h.kind.as_str()), Some("phrase"), "the user's own highlights come first");
+        ChatRules::set_own_identity("brandon", "999");
+        let plain = rules_from("{}", "{}", "{}");
+        let mut ping = msg("bob", "gg @brandon");
+        eval_with(&plain, &mut ping);
+        assert!(ping.metadata.highlight.is_none(), "a mention suppresses it like every highlight");
+        let mut mine = msg("brandon", "gg");
+        mine.user_id = "999".into();
+        eval_with(&plain, &mut mine);
+        assert!(mine.metadata.highlight.is_none(), "never your own message");
+        set_automation_highlights(vec![]);
+    }
+
+    #[test]
+    fn the_conditions_one_message_can_answer_are_judged() {
+        use crate::models::automations::SenderRole;
+        let _lock = AUTO_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let rules = rules_from("{}", "{}", "{}");
+        let stamped = |list: Vec<AutoHighlight>, m: &mut ChatMessage| {
+            set_automation_highlights(list);
+            eval_with(&rules, m);
+            m.metadata.highlight.is_some()
+        };
+        // The message is in #Forsen, from a subscriber named bob.
+        assert!(stamped(vec![auto("h", "#fff", &["twitch:forsen"], "gg")], &mut msg("bob", "gg")), "its channel");
+        assert!(!stamped(vec![auto("h", "#fff", &["twitch:other"], "gg")], &mut msg("bob", "gg")), "another channel");
+        let mut mods = auto("h", "#fff", &[], "gg");
+        mods.roles = vec![SenderRole::Moderator];
+        assert!(!stamped(vec![mods], &mut msg("bob", "gg")), "a role the sender does not have");
+        let mut subs = auto("h", "#fff", &[], "gg");
+        subs.roles = vec![SenderRole::Subscriber];
+        assert!(stamped(vec![subs], &mut msg("bob", "gg")));
+        let mut skip = auto("h", "#fff", &[], "gg");
+        skip.skip_users = vec!["bob".into()];
+        assert!(!stamped(vec![skip], &mut msg("bob", "gg")));
+        let mut only = auto("h", "#fff", &[], "gg");
+        only.only_users = vec!["alice".into()];
+        assert!(!stamped(vec![only], &mut msg("bob", "gg")));
+        assert!(!stamped(vec![auto("h", "#fff", &[], "gg")], &mut msg("bob", "hello")), "the text");
+        // A Shared Chat copy only when the rule asks for them.
+        let mut partner = msg("bob", "gg");
+        partner.metadata.is_from_shared_chat = true;
+        assert!(!stamped(vec![auto("h", "#fff", &[], "gg")], &mut partner));
+        let mut partner = msg("bob", "gg");
+        partner.metadata.is_from_shared_chat = true;
+        let mut shared = auto("h", "#fff", &[], "gg");
+        shared.shared_chat = true;
+        assert!(stamped(vec![shared], &mut partner));
+        set_automation_highlights(vec![]);
     }
 }

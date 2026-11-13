@@ -7536,6 +7536,87 @@ pub(crate) fn helix_chat_color(typed: &str) -> String {
         .unwrap_or_else(|| typed.to_string())
 }
 
+/// Helix's base URL (the engine's helpers take it as a parameter so a test
+/// can point them at a fake server).
+pub const HELIX_BASE: &str = "https://api.twitch.tv/helix";
+
+/// One of a channel's channel point rewards, as the rule editor's picker lists it.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct OwnReward {
+    pub id: String,
+    pub title: String,
+    pub cost: u64,
+    pub enabled: bool,
+    /// The reward asks the viewer for text.
+    pub needs_input: bool,
+}
+
+/// Why the reward list could not be read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RewardsError {
+    /// Twitch answered this status (and body).
+    Status(u16, String),
+    /// The request never completed, or the answer could not be read.
+    Transport(String),
+}
+
+/// Helix `GET /channel_points/custom_rewards?broadcaster_id=<id>` with the
+/// broadcaster's own token (`channel:read:redemptions` or
+/// `channel:manage:redemptions`, both in `SCOPES`): every reward of the
+/// channel, enabled or not, by title. Helix, not GQL. `client` and `base` are
+/// parameters so a test serves it from a fake server.
+pub async fn custom_rewards_engine(client: &Client, base: &str, token: &str, broadcaster_id: &str) -> Result<Vec<OwnReward>, RewardsError> {
+    let response = client
+        .get(format!("{base}/channel_points/custom_rewards?broadcaster_id={}", urlencoding::encode(broadcaster_id)))
+        .header(AUTHORIZATION, format!("Bearer {token}"))
+        .header("Client-Id", CLIENT_ID)
+        .send()
+        .await
+        .map_err(|e| RewardsError::Transport(e.to_string()))?;
+    let status = response.status().as_u16();
+    let body = response.text().await.map_err(|e| RewardsError::Transport(e.to_string()))?;
+    if !(200..300).contains(&status) {
+        return Err(RewardsError::Status(status, body));
+    }
+    parse_custom_rewards(&body).ok_or_else(|| RewardsError::Transport("Twitch's answer could not be read".into()))
+}
+
+/// The rewards of a Helix answer, sorted by title (case-insensitive).
+fn parse_custom_rewards(body: &str) -> Option<Vec<OwnReward>> {
+    let v: serde_json::Value = serde_json::from_str(body).ok()?;
+    let mut rewards: Vec<OwnReward> = v["data"]
+        .as_array()?
+        .iter()
+        .filter_map(|r| {
+            Some(OwnReward {
+                id: r["id"].as_str()?.to_string(),
+                title: r["title"].as_str().unwrap_or("").to_string(),
+                cost: r["cost"].as_u64().unwrap_or(0),
+                enabled: r["is_enabled"].as_bool().unwrap_or(true),
+                needs_input: r["is_user_input_required"].as_bool().unwrap_or(false),
+            })
+        })
+        .collect();
+    rewards.sort_by_key(|r| r.title.to_lowercase());
+    Some(rewards)
+}
+
+/// A reward-list failure in the words the picker shows.
+pub fn rewards_error_words(e: &RewardsError) -> String {
+    match e {
+        RewardsError::Status(401, _) => "Sign in to Twitch again to see your rewards".into(),
+        RewardsError::Status(403 | 404, body) => {
+            let lower = body.to_ascii_lowercase();
+            if lower.contains("partner") || lower.contains("affiliate") {
+                "Channel point rewards need a Twitch affiliate or partner channel".into()
+            } else {
+                "StreamNook needs permission to read your rewards: sign out and back in to Twitch".into()
+            }
+        }
+        _ => "Twitch could not list your rewards right now".into(),
+    }
+}
+
 /// What a viewer reads when a role list could not be loaded.
 fn role_error_text(what: &str, error: &str, signed_in: bool) -> String {
     if !signed_in && error.eq_ignore_ascii_case("unauthenticated") {
@@ -9026,5 +9107,66 @@ mod tag_stream_tests {
     fn category_info_without_data_is_an_error() {
         assert!(category_info_from(200, serde_json::json!({})).is_err());
         assert!(category_info_from(200, serde_json::json!({ "data": null })).is_err());
+    }
+
+    #[test]
+    fn rewards_are_read_and_sorted_by_title() {
+        let body = r#"{"data":[{"id":"b","title":"zebra","cost":50,"is_enabled":true,"is_user_input_required":true},{"id":"a","title":"Apple","cost":100,"is_enabled":false,"is_user_input_required":false},{"title":"no id"}]}"#;
+        let rewards = parse_custom_rewards(body).unwrap();
+        assert_eq!(rewards.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), vec!["a", "b"]);
+        assert_eq!((rewards[0].cost, rewards[0].enabled, rewards[0].needs_input), (100, false, false));
+        assert!(rewards[1].needs_input);
+        assert!(parse_custom_rewards("nope").is_none());
+        assert_eq!(parse_custom_rewards(r#"{"data":[]}"#), Some(vec![]));
+    }
+
+    #[test]
+    fn a_reward_list_failure_reads_in_plain_words() {
+        assert_eq!(rewards_error_words(&RewardsError::Status(401, String::new())), "Sign in to Twitch again to see your rewards");
+        assert!(rewards_error_words(&RewardsError::Status(403, r#"{"message":"channel is not a partner or affiliate"}"#.into())).contains("affiliate or partner"));
+        assert!(rewards_error_words(&RewardsError::Status(403, "{}".into())).contains("permission"));
+        assert!(rewards_error_words(&RewardsError::Status(500, String::new())).contains("could not list"));
+        assert!(rewards_error_words(&RewardsError::Transport("x".into())).contains("could not list"));
+    }
+
+    #[tokio::test]
+    async fn the_reward_list_is_one_get_with_the_owners_token_and_broadcaster_id() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        let log = seen.clone();
+        tokio::spawn(async move {
+            let Ok((mut sock, _)) = listener.accept().await else { return };
+            let mut buf = vec![0u8; 8192];
+            let n = sock.read(&mut buf).await.unwrap_or(0);
+            *log.lock().unwrap() = String::from_utf8_lossy(&buf[..n]).to_string();
+            let body = r#"{"data":[{"id":"rw-1","title":"Hydrate","cost":100,"is_enabled":true,"is_user_input_required":false}]}"#;
+            let head = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+            let _ = sock.write_all(head.as_bytes()).await;
+            let _ = sock.shutdown().await;
+        });
+        let rewards = custom_rewards_engine(&Client::new(), &base, "owner-token", "100").await.unwrap();
+        assert_eq!(rewards.len(), 1);
+        assert_eq!(rewards[0].title, "Hydrate");
+        let request = seen.lock().unwrap().clone();
+        assert!(request.starts_with("GET /channel_points/custom_rewards?broadcaster_id=100 "), "{request}");
+        assert!(request.to_ascii_lowercase().contains("authorization: bearer owner-token"));
+    }
+
+    #[tokio::test]
+    async fn a_refused_reward_list_carries_its_status() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            let Ok((mut sock, _)) = listener.accept().await else { return };
+            let mut buf = vec![0u8; 4096];
+            let _ = sock.read(&mut buf).await;
+            let _ = sock.write_all(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}").await;
+            let _ = sock.shutdown().await;
+        });
+        let err = custom_rewards_engine(&Client::new(), &base, "stale", "100").await.unwrap_err();
+        assert!(matches!(err, RewardsError::Status(401, _)));
     }
 }

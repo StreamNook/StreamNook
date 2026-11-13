@@ -319,7 +319,7 @@ pub struct ScrollbarMark {
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct HighlightStamp {
     pub rule_id: String,
-    /// "phrase" | "user" | "badge"
+    /// "phrase" | "user" | "badge" | "automation"
     pub kind: String,
     pub color: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
