@@ -1,3 +1,4 @@
+pub mod account_automations;
 pub mod accounts;
 pub mod activity_history;
 pub mod announcements;

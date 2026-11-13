@@ -36,7 +36,7 @@
 //! - `own_follow_wanted` / `note_own_follow` / `own_follow_tick`: the account's
 //!   own follow of a followers-only room, looked up once per channel, so the
 //!   message box can say whether it holds the account back.
-//! - `acquire_within_as(account, channel, text, max_wait)`: an automation's
+//! - `acquire_within_as(account, main, channel, text, max_wait)`: an automation's
 //!   booking. It never waits: it books a slot and returns a [`Ticket`] that
 //!   ends through `record_ticket` or `cancel_booking` (or its `Drop`). An
 //!   automation's entry counts for [`ENGINE_WINDOW`] (Twitch's 30 s plus how
@@ -977,7 +977,13 @@ fn with_limiter<R>(account: &LimiterKey, f: impl FnOnce(&mut Limiter) -> R) -> R
 
 fn limiter_key_for(account_id: &str) -> LimiterKey {
     let primary = crate::services::account_store::AccountStore::primary().map(|p| p.user_id);
-    if primary.as_deref() == Some(account_id) {
+    limiter_key_of(account_id, primary.as_deref())
+}
+
+/// The limiter `account_id` books on, given the main account's id: the main
+/// limiter for the main account, else that account's own.
+fn limiter_key_of(account_id: &str, main_id: Option<&str>) -> LimiterKey {
+    if main_id == Some(account_id) {
         LimiterKey::Primary
     } else {
         LimiterKey::Alt(account_id.to_string())
@@ -1089,9 +1095,16 @@ impl Drop for Ticket {
 /// the slot and its ticket, or the refusal (and nothing booked). A linked
 /// account books on its own limiter, with the room modes the main
 /// connection saw. Over `max_wait` it refuses with `ShareFull` when this
-/// device's 12 held it, else `TooLong`.
-pub fn acquire_within_as(account_id: &str, channel: &str, text: &str, max_wait: Duration) -> Result<(Duration, Ticket), Refusal> {
-    let account = limiter_key_for(account_id);
+/// device's 12 held it, else `TooLong`. `main_id` is the main account's id as
+/// the caller knows it, so choosing the limiter reads no registry.
+pub fn acquire_within_as(
+    account_id: &str,
+    main_id: Option<&str>,
+    channel: &str,
+    text: &str,
+    max_wait: Duration,
+) -> Result<(Duration, Ticket), Refusal> {
+    let account = limiter_key_of(account_id, main_id);
     if let LimiterKey::Alt(id) = &account {
         note_alt_login(id);
     }

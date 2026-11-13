@@ -255,6 +255,32 @@ pub(crate) fn commit_vertical_view(
     Ok(true)
 }
 
+/// The one writer of `Settings.automations` (`commands::account_automations::edit`).
+/// `change` runs on a copy of the group under the settings lock; the copy is
+/// written back only when it answers true. Every other save keeps the group
+/// (`Settings::adopt_backend_owned`). Answers what `change` answered.
+pub(crate) fn commit_automations(
+    app: &AppHandle,
+    state: &AppState,
+    change: impl FnOnce(&mut crate::models::automations::Automations) -> Result<bool, String>,
+) -> Result<bool, String> {
+    let settings = {
+        let mut state_settings = state.settings.lock().map_err(|e| e.to_string())?;
+        let mut group = state_settings.automations.clone();
+        if !change(&mut group)? {
+            return Ok(false);
+        }
+        state_settings.automations = group;
+        state_settings.clone()
+    };
+    after_settings_change(&settings, false, None);
+    write_settings_to_disk(&settings)?;
+    flush_now_if_phone_idle();
+    let keys = vec!["automations".to_string()];
+    let _ = app.emit(SETTINGS_UPDATED_EVENT, SettingsUpdated { source: None, keys });
+    Ok(true)
+}
+
 /// A backup or import that names `video_player` without `vertical_view` (one
 /// written before it existed) keeps the pick this install has (Z4): the field
 /// is portable, but its absence is not a choice.
@@ -910,6 +936,9 @@ fn after_settings_change(
     // Spawns or aborts the gifted-membership poll with the master switch.
     crate::services::membership_gifts::refresh(settings);
     crate::services::reminder_service::refresh(settings);
+    // Rules, run state, away and the preferences recompile (a no-op before
+    // the engine starts).
+    crate::services::account_automations::request_refresh();
     #[cfg(target_os = "ios")]
     crate::services::twitch_resolver::refresh_device_codecs(settings);
     // The phone's go-live push registration follows the switches and the mute list.
