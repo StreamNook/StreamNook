@@ -227,7 +227,7 @@ export function SubControl({
     return (
       <div className={`space-y-2 ${disabled ? 'pointer-events-none' : ''}`} data-setting-row={title}>
         {name}
-        <div className={disabled ? 'opacity-40' : ''}>{control}</div>
+        <div className={disabled ? 'opacity-40 grayscale' : ''}>{control}</div>
       </div>
     );
   }
@@ -250,7 +250,7 @@ export function SubControl({
       data-setting-row={title}
     >
       {name}
-      <div className={`shrink-0 ${disabled ? 'opacity-40' : ''}`}>{control}</div>
+      <div className={`shrink-0 ${disabled ? 'opacity-40 grayscale' : ''}`}>{control}</div>
     </div>
   );
 }
@@ -259,7 +259,7 @@ export function SubControl({
 function SubDescription({ tone, children }: { tone?: 'warning'; children: ReactNode }) {
   if (tone === 'warning') {
     return (
-      <p className="mt-0.5 flex items-start gap-1.5 text-[12px] font-normal leading-relaxed text-warning">
+      <p className="mt-0.5 flex items-start gap-1.5 text-[12px] font-normal leading-relaxed text-warning [html[data-theme-tone=light]_&]:text-[color-mix(in_srgb,var(--color-warning)_58%,black)]">
         <TriangleAlert size={12} className="mt-[3px] shrink-0" />
         <span>{children}</span>
       </p>
@@ -346,7 +346,7 @@ function PhoneSubControl({
           <span className={disabled ? 'opacity-50' : ''}>{title}</span>
           {onReset && <ResetArrow onReset={onReset} />}
         </div>
-        <div className={`${stack ? 'flex w-full' : 'flex min-w-0 flex-1 justify-end'} ${disabled ? 'opacity-40' : ''}`}>
+        <div className={`${stack ? 'flex w-full' : 'flex min-w-0 flex-1 justify-end'} ${disabled ? 'opacity-40 grayscale' : ''}`}>
           <span ref={partRef} className={stack ? 'flex w-full' : 'inline-flex'}>
             {shown}
           </span>
@@ -399,7 +399,7 @@ export function StatusCard({
   const bar = progress ?? lastProgress;
   return (
     <div
-      className="rounded-2xl p-5 [html[data-theme-tone=light]_&]:!bg-[color-mix(in_oklab,var(--color-background)_40%,white)]"
+      className="rounded-2xl px-5 pb-5 pt-6 [html[data-theme-tone=light]_&]:!bg-[color-mix(in_oklab,var(--color-background)_40%,white)]"
       style={CARD_STYLE}
       data-status-card
     >
