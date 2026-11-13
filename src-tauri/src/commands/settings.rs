@@ -281,6 +281,37 @@ pub(crate) fn commit_automations(
     Ok(true)
 }
 
+/// A write that spans more than one settings group (the reminders' convert and restore touch
+/// `automations` and `reminders` together; the Reminders writer touches `reminders`). `change`
+/// runs on a copy of the whole settings under the lock; the copy replaces the canonical one only
+/// when it answers `Ok(true)`, so a refusal leaves everything as it was. Then every save's side
+/// effects run (a reminder refresh reads the new `converted_reminders`, then the engine
+/// recompiles), the file is written, and every window hears the settings-updated event naming
+/// `keys`. Answers what `change` answered.
+pub(crate) fn commit_settings(
+    app: &AppHandle,
+    state: &AppState,
+    keys: &[&str],
+    change: impl FnOnce(&mut Settings) -> Result<bool, String>,
+) -> Result<bool, String> {
+    let settings = {
+        let mut state_settings = state.settings.lock().map_err(|e| e.to_string())?;
+        let mut copy = state_settings.clone();
+        if !change(&mut copy)? {
+            return Ok(false);
+        }
+        let written = copy.clone();
+        *state_settings = copy;
+        written
+    };
+    after_settings_change(&settings, false, None);
+    write_settings_to_disk(&settings)?;
+    flush_now_if_phone_idle();
+    let keys: Vec<String> = keys.iter().map(|k| k.to_string()).collect();
+    let _ = app.emit(SETTINGS_UPDATED_EVENT, SettingsUpdated { source: None, keys });
+    Ok(true)
+}
+
 /// A backup or import that names `video_player` without `vertical_view` (one
 /// written before it existed) keeps the pick this install has (Z4): the field
 /// is portable, but its absence is not a choice.

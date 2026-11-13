@@ -1553,6 +1553,9 @@ fn ensured() -> std::sync::MutexGuard<'static, HashSet<String>> {
 
 fn ensured_set(key: &str) {
     ensured().insert(key.to_string());
+    // Every place `ensured` is set (both `start` paths) lands here: a keyword reminder's refused
+    // answer for this chat, cached up to a second, is forgotten, so the chat is never gated.
+    crate::services::reminder_service::gate_forget(key);
 }
 
 fn ensured_has(key: &str) -> bool {

@@ -530,6 +530,11 @@ pub fn compile_with(input: &CompileInput, platforms: &[PlatformId]) -> Compiled 
                 }
             }
             for key in &listened {
+                // A rule that posts only in chats a window holds (a converted reminder)
+                // listens there but never makes reconcile join a chat for it.
+                if rule.only_if.only_while_open {
+                    continue;
+                }
                 if key.starts_with("twitch:") {
                     push_unique(&mut needed, login_of_key(key));
                     if rule.only_if.only_live {

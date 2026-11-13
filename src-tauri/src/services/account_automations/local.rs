@@ -48,6 +48,16 @@ impl AccountChanges for StoreChanges {
 pub trait Local: AccountChanges {
     /// The automations group and the preferences, as the live settings hold them.
     fn settings(&self) -> (Automations, AutomationPrefs);
+    /// The Reminders list the status carries (P5). Empty by default.
+    fn reminders(&self) -> Vec<crate::services::reminder_service::convert::ReminderSummary> {
+        Vec::new()
+    }
+    /// A reminder (or a rule with `only_while_open`) may post in `login`'s chat: some label other
+    /// than the engine's holds it, or the stream warm-up joined it. The default is the first half
+    /// (what a fake has); the real one adds the warm-up.
+    async fn open_for_reminders(&self, login: &str) -> bool {
+        self.holders(login).await.iter().any(|h| h != super::AUTOMATIONS_LABEL)
+    }
     /// The Twitch rooms `label` holds.
     async fn chats_held_by(&self, label: &str) -> Vec<String>;
     /// Every label holding `channel`.
@@ -159,6 +169,17 @@ impl Local for RealLocal {
         let state = self.app.state::<crate::models::settings::AppState>();
         let s = state.settings.lock().unwrap_or_else(|e| e.into_inner());
         (s.automations.clone(), s.automation_prefs.clone())
+    }
+
+    fn reminders(&self) -> Vec<crate::services::reminder_service::convert::ReminderSummary> {
+        use tauri::Manager;
+        let state = self.app.state::<crate::models::settings::AppState>();
+        let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        crate::services::reminder_service::convert::summaries(&settings)
+    }
+
+    async fn open_for_reminders(&self, login: &str) -> bool {
+        crate::services::irc_service::IrcService::open_for_reminders(login).await
     }
 
     async fn chats_held_by(&self, label: &str) -> Vec<String> {

@@ -60,7 +60,11 @@ pub(crate) fn any_open(compiled: &Compiled) -> bool {
 
 /// A running rule listens in the chat of this device's current watch.
 pub(crate) fn watching(compiled: &Compiled) -> bool {
-    compiled.running().any(|r| matches!(r.rule.only_if.channels, ChannelScope::Watching {}))
+    // A rule with `only_while_open` (every converted "current channel" reminder) never joins the
+    // watched chat: it posts only where a window already holds it (§ 4.2, D281).
+    compiled
+        .running()
+        .any(|r| matches!(r.rule.only_if.channels, ChannelScope::Watching {}) && !r.rule.only_if.only_while_open)
 }
 
 /// What the loop keeps between passes.

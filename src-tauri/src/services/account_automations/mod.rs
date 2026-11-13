@@ -15,6 +15,7 @@
 pub mod activity;
 pub mod badges;
 pub mod claim_client;
+pub mod reminder_claim;
 pub mod claims;
 pub mod command;
 pub mod compile;
@@ -386,6 +387,8 @@ pub struct StatusSnapshot {
     pub platform_accounts: Vec<PlatformAccount>,
     /// This device runs rules right now.
     pub foreground: bool,
+    /// The Reminders group (P5): every reminder, in the order the settings hold them.
+    pub reminders: Vec<crate::services::reminder_service::convert::ReminderSummary>,
 }
 
 /// A watched channel went live or offline, as `channel_state` saw it. The
@@ -1072,6 +1075,7 @@ impl Engine {
         let now = self.now();
         // Read before the engine's locks are taken (the settings lock is never held under them).
         let (group, _) = self.local.settings();
+        let reminders = self.local.reminders();
         let guards = lock(&self.guards);
         let counts = lock(&self.counts);
         let log = lock(&self.log);
@@ -1146,6 +1150,7 @@ impl Engine {
             accounts,
             platform_accounts: self.platform_accounts(),
             foreground: self.foreground(),
+            reminders,
         }
     }
 
@@ -1513,6 +1518,8 @@ fn presence_changed(engine: &Arc<Engine>) {
 /// IrcService cleared every claim. Ignored while reconcile's own chat start
 /// runs (that start is what cleared them).
 pub fn on_claims_reset() {
+    // The fresh-start seed and every stop re-hold chats: no chat stays "refused" for a reminder.
+    crate::services::reminder_service::gate_forget_all();
     if let Some(engine) = ENGINE.get() {
         on_claims_reset_on(engine);
     }
@@ -1551,6 +1558,8 @@ pub(crate) async fn adopt_window_chats_on(engine: &Arc<Engine>, label: &str) {
 /// A window (any label but the engine's) claimed `channel`. Only a room the
 /// engine adopted cares, and only about claims after the adoption.
 pub fn note_window_claim(channel: &str) {
+    // A chat you just opened is never gated for a reminder (works with no engine too).
+    crate::services::reminder_service::gate_forget(&channel.trim_start_matches('#').to_lowercase());
     let Some(engine) = ENGINE.get() else { return };
     note_window_claim_on(engine, channel);
 }

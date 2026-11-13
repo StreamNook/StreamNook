@@ -3027,8 +3027,7 @@
    "nested": false,
    "detail": "Post a message into a chat on a timer or a keyword.",
    "logo": null,
-   "aliases": [],
-   "hidden_on_ios": true
+   "aliases": []
   },
   {
    "page": "moderation",

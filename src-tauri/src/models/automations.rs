@@ -586,6 +586,19 @@ pub struct Conditions {
     pub hours: Option<Hours>,
     /// The saved-filter language (`ChatRules::validate_filter`), chat rows only.
     pub expression: Option<String>,
+    /// Post only in a chat a window holds, or that the stream warm-up joined
+    /// (`IrcService::open_for_reminders`, no adopted set), and never join a
+    /// chat for the rule. Offered for every rule; "Make it a rule" sets it.
+    pub only_while_open: bool,
+    /// Set only by "Make it a rule" for a "mods" keyword reminder: a lead
+    /// moderator does not pass the From check, as the reminder reads it.
+    /// Backend-owned: a save keeps the stored value.
+    pub lead_moderator_excluded: bool,
+    /// Set only by "Make it a rule" for an uptime reminder pinned to a chat:
+    /// the chat must also be the one being watched, as the reminder requires
+    /// (D293: a converted-rule-only condition; the editor never offers it).
+    /// Backend-owned: a save keeps the stored value.
+    pub only_while_watching: bool,
 }
 
 impl Default for Conditions {
@@ -601,6 +614,9 @@ impl Default for Conditions {
             shared_chat: false,
             hours: None,
             expression: None,
+            only_while_open: false,
+            lead_moderator_excluded: false,
+            only_while_watching: false,
         }
     }
 }
@@ -893,6 +909,76 @@ impl Default for Limits {
     }
 }
 
+/// What "Make it a rule" stores on a rule so it claims exactly as the
+/// reminder it came from, and collides with that reminder still running on
+/// another device (PLAN § 4.8, D281). The elements themselves are rebuilt at
+/// claim time from these parts by `reminder_claim::converted_elements`, the
+/// same builder the reminder uses, so the two can never drift.
+///
+/// It applies only while the rule still has the shape it was converted with:
+/// the same trigger kind, chat scope, Send target and owner. A text edit keeps
+/// it; any of those changing clears it (a save drops it, and the claim path
+/// re-checks, so a hand-edited file cannot keep it either).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+#[serde(default)]
+pub struct ClaimAs {
+    /// The claim account at convert time (`ChatRules::own_identity()`'s id).
+    pub account_id: String,
+    /// `interval`, `delay`, `clock`, `uptime` or `keyword`.
+    pub kind: String,
+    /// 16 hex over the reminder's message and target.
+    pub family_hash: String,
+    /// The interval or delay in seconds the window derives from; 0 otherwise.
+    pub seconds: u64,
+    /// A keyword reminder's cooldown in seconds (its rail); 0 = none.
+    pub cooldown_s: u32,
+    /// The rule's trigger `kind` and chat scope at convert time.
+    pub trigger_kind: String,
+    pub scope_kind: String,
+    /// `These`: the chats' keys joined by `,`; empty otherwise.
+    pub scope_key: String,
+    /// The first Send's chat key; None = the chat the rule fired in.
+    pub send_to: Option<String>,
+}
+
+impl ClaimAs {
+    /// The words `applies_to` compares: (trigger kind, scope kind, scope key,
+    /// the first Send's chat key). The trigger kind is read through the rule's
+    /// JSON so this compiles with whatever triggers a phase has added.
+    pub fn shape_of(rule: &Rule) -> (String, String, String, Option<String>) {
+        let trigger = serde_json::to_value(&rule.when)
+            .ok()
+            .and_then(|v| v.get("kind").and_then(Value::as_str).map(str::to_string))
+            .unwrap_or_default();
+        let (scope, key) = match &rule.only_if.channels {
+            ChannelScope::Own {} => ("own", String::new()),
+            ChannelScope::These { list } => ("these", list.iter().map(|c| c.key.as_str()).collect::<Vec<_>>().join(",")),
+            ChannelScope::AnyOpen {} => ("any_open", String::new()),
+            ChannelScope::Watching {} => ("watching", String::new()),
+        };
+        let send_to = rule
+            .actions
+            .iter()
+            .find_map(|a| match a {
+                Action::Send { to, .. } => Some(to.as_ref().map(|c| c.key.clone())),
+                _ => None,
+            })
+            .flatten();
+        (trigger, scope.to_string(), key, send_to)
+    }
+
+    /// Whether the rule still has the shape it was converted with.
+    pub fn applies_to(&self, rule: &Rule) -> bool {
+        let (trigger, scope, key, send_to) = ClaimAs::shape_of(rule);
+        !self.account_id.is_empty()
+            && self.account_id == rule.owner.id
+            && self.trigger_kind == trigger
+            && self.scope_kind == scope
+            && self.scope_key == key
+            && self.send_to == send_to
+    }
+}
+
 /// The typed reading of one raw rule.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(default)]
@@ -915,6 +1001,9 @@ pub struct Rule {
     pub vary: bool,
     /// "template:<id>", or "reminder:<id>" for a converted reminder.
     pub origin: Option<String>,
+    /// Backend-owned: set only by "Make it a rule" (see [`ClaimAs`]); a client
+    /// never writes it.
+    pub claim_as: Option<ClaimAs>,
     pub created_ms: i64,
     pub updated_ms: i64,
 }
@@ -934,6 +1023,7 @@ impl Default for Rule {
             limits: Limits::default(),
             vary: false,
             origin: None,
+            claim_as: None,
             created_ms: 0,
             updated_ms: 0,
         }

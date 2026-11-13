@@ -118,6 +118,10 @@ pub fn save_rule_in(a: &mut Automations, mut rule: Rule, expected_updated_ms: Op
             rule.live = false;
             rule.created_ms = now;
             rule.updated_ms = now;
+            // Only "Make it a rule" sets these; a client, a duplicate or a template never does.
+            rule.claim_as = None;
+            rule.only_if.lead_moderator_excluded = false;
+            rule.only_if.only_while_watching = false;
             let errors = validate(&mut rule, &context(a, ""));
             if !errors.is_empty() {
                 return Ok(SaveAnswer { rule, errors, saved: false });
@@ -134,6 +138,11 @@ pub fn save_rule_in(a: &mut Automations, mut rule: Rule, expected_updated_ms: Op
             rule.live = stored.live;
             rule.created_ms = stored.created_ms;
             rule.updated_ms = now.max(stored.updated_ms + 1);
+            // Backend-owned, kept from the stored rule whatever the editor sent. `claim_as` goes
+            // when the trigger kind, chat scope, Send target or owner changed (a text edit keeps it).
+            rule.only_if.lead_moderator_excluded = stored.only_if.lead_moderator_excluded;
+            rule.only_if.only_while_watching = stored.only_if.only_while_watching;
+            rule.claim_as = stored.claim_as.clone().filter(|claim| claim.applies_to(&rule));
             let id = rule.id.clone();
             let errors = validate(&mut rule, &context(a, &id));
             if !errors.is_empty() {
@@ -163,6 +172,16 @@ pub fn move_rule_in(a: &mut Automations, id: &str, before_id: Option<&str>) -> b
 /// The switch and Test/Live. `updated_ms` stays, so an open editor's save
 /// is not refused because of a flip.
 pub fn set_flags_in(a: &mut Automations, id: &str, enabled: Option<bool>, live: Option<bool>) -> Result<bool, String> {
+    // A rule made from a reminder is saved in Test with its field errors (§ 11.4); Live waits
+    // until they are fixed. Every other rule passed `validate` when it was saved.
+    if live == Some(true) {
+        let stored = a.rules.iter().find(|r| id_of(r) == id).and_then(|r| Rule::from_value(r).ok());
+        if let Some(mut typed) = stored {
+            if !validate(&mut typed, &context(a, id)).is_empty() {
+                return Err("Fix the marked fields before turning this rule on".into());
+            }
+        }
+    }
     let raw = a.rules.iter_mut().find(|r| id_of(r) == id).ok_or("That rule is gone")?;
     if Rule::from_value(raw).is_err() {
         return Err("Made in a newer StreamNook; it can't be changed here".into());
@@ -234,6 +253,81 @@ async fn complete(rule: &mut Rule) {
             chat.room_id = id;
         }
     }
+}
+
+// ---- P5: reminders join Automations ---------------------------------------------------------
+
+/// The Reminders list as the settings hold it now.
+fn reminder_list(app: &AppHandle) -> Vec<crate::services::reminder_service::convert::ReminderSummary> {
+    use tauri::Manager;
+    let state = app.state::<crate::models::settings::AppState>();
+    let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    crate::services::reminder_service::convert::summaries(&settings)
+}
+
+/// The Reminders writer: one op on `extra["reminders"]`, field by field, answering the list.
+/// On the wire the argument is `op`, itself `{ "op": "upsert" | "remove" | "set_enabled" | "move", .. }` (`move` is `{ id, to }`, D294).
+#[tauri::command]
+pub fn automations_set_reminders(
+    app: AppHandle,
+    op: crate::services::reminder_service::convert::ReminderOp,
+) -> Result<Vec<crate::services::reminder_service::convert::ReminderSummary>, String> {
+    use tauri::Manager;
+    let state = app.state::<crate::models::settings::AppState>();
+    crate::commands::settings::commit_settings(&app, &state, &["reminders"], |settings| {
+        crate::services::reminder_service::convert::apply_op(settings, op)
+    })?;
+    Ok(reminder_list(&app))
+}
+
+/// "Make it a rule": builds the rule in Test, lists the reminder as converted and switches it off,
+/// in one settings write that names both groups. Answers the new rule's id, "What changes" and the
+/// rule's field errors; a refusal ("Already a rule", a missing sign-in) is the error string.
+#[tauri::command]
+pub async fn automations_convert_reminder(
+    app: AppHandle,
+    id: String,
+) -> Result<crate::services::reminder_service::convert::Conversion, String> {
+    use crate::services::reminder_service::convert as reminder_convert;
+    use tauri::Manager;
+    let Some((login, owner_id)) = crate::services::chat_rules::ChatRules::own_identity() else {
+        return Err("Sign in to Twitch first".to_string());
+    };
+    let owner = AccountRef { provider: "twitch".into(), id: owner_id, login: login.clone(), name: login };
+    let state = app.state::<crate::models::settings::AppState>();
+    let snapshot = state.settings.lock().map_err(|e| e.to_string())?.clone();
+    // A pinned reminder that only knows its login gets its room id looked up before the lock.
+    let room_id = match reminder_convert::room_lookup_needed(&snapshot, &id) {
+        Some(login) => match engine::engine() {
+            Some(running) => running.outward.room_id(&login).await.ok(),
+            None => None,
+        },
+        None => None,
+    };
+    let env = reminder_convert::ConvertEnv {
+        owner,
+        now_ms: now_ms(),
+        room_id,
+        other_channels_on: snapshot.automation_prefs.other_channels,
+    };
+    let mut answer = None;
+    crate::commands::settings::commit_settings(&app, &state, &["automations", "reminders"], |settings| {
+        answer = Some(reminder_convert::convert_in(settings, &id, &env, &context)?);
+        Ok(true)
+    })?;
+    answer.ok_or_else(|| "Nothing was converted".to_string())
+}
+
+/// "Turn back on": the only way a reminder leaves `converted_reminders`. In one settings write:
+/// the id leaves the list, the reminder is on again and its rule (when it still exists) is off.
+#[tauri::command]
+pub fn automations_restore_reminder(app: AppHandle, id: String) -> Result<(), String> {
+    use tauri::Manager;
+    let state = app.state::<crate::models::settings::AppState>();
+    crate::commands::settings::commit_settings(&app, &state, &["automations", "reminders"], |settings| {
+        crate::services::reminder_service::convert::restore_in(settings, &id)
+    })?;
+    Ok(())
 }
 
 #[tauri::command]

@@ -22,6 +22,9 @@ pub const FOLD_MS: i64 = 10 * 60_000;
 /// The least time between two updates to one watcher.
 pub const EMIT_GAP_MS: i64 = 250;
 pub const ACTIVITY_VERSION: u32 = 1;
+/// A reminder's rows carry `rule_id` = this prefix + the reminder's id: never
+/// a rule id, so a rule's last outcome never reads one.
+pub const REMINDER_ID_PREFIX: &str = "reminder:";
 
 /// What an entry says happened.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -113,9 +116,37 @@ impl Log {
         self.next_id
     }
 
+    /// A reminder's row folds into its twin wherever it sits in the ring and
+    /// however old it is, so a 10 s reminder never pushes rule entries out:
+    /// its fires (`acted`) become one row with a count and the last time, and
+    /// a repeated skip (same chat, same words) becomes one row too. The folded
+    /// row moves to the top with a new id, as a folded skip does.
+    fn fold_reminder(&mut self, new: &NewEntry, now_ms: i64) -> Option<Entry> {
+        let twin = self.entries.iter().rposition(|e| {
+            e.rule_id == new.rule_id
+                && e.kind == new.kind
+                && (new.kind == EntryKind::Acted || (e.channel == new.channel && e.text == new.text))
+        })?;
+        let mut entry = self.entries.remove(twin)?;
+        entry.count = entry.count.saturating_add(1);
+        entry.at_ms = now_ms;
+        entry.replaces = entry.id;
+        entry.id = self.take_id();
+        entry.rule_name = new.rule_name.clone();
+        entry.channel = new.channel.clone();
+        entry.text = new.text.clone();
+        self.entries.push_back(entry.clone());
+        Some(entry)
+    }
+
     /// Log an entry at `now_ms` and return it as stored (a folded skip comes
     /// back with its count). A folded entry moves to the top with a new id.
     pub fn push(&mut self, new: NewEntry, now_ms: i64) -> Entry {
+        if new.rule_id.starts_with(REMINDER_ID_PREFIX) && matches!(new.kind, EntryKind::Acted | EntryKind::Skipped) {
+            if let Some(entry) = self.fold_reminder(&new, now_ms) {
+                return entry;
+            }
+        }
         if new.kind == EntryKind::Skipped {
             let start = self.entries.len().saturating_sub(FOLD_LOOKBACK);
             let twin = (start..self.entries.len()).rev().find(|&i| {

@@ -26,6 +26,7 @@ use super::activity::{EntryKind, NewEntry};
 use super::badges::{self, BadgeSeen, PostShape};
 use super::claim_client::{CallKind, ClaimRequest, ClaimResult, ElementAnswer};
 use super::claims::{self, CallInput, ClassPlan, Element};
+use super::reminder_claim::{self, ReminderSlot};
 use super::compile::{Compiled, CompiledRule, Mode};
 use super::facts::{Facts, RowKind};
 use super::speak::{self, SpeakRequest};
@@ -911,6 +912,16 @@ pub(crate) fn local_checks(engine: &Arc<Engine>, job: &Job, chat_key: &str, book
 /// first, then the local reads.
 pub(crate) async fn final_checks(engine: &Arc<Engine>, job: &Job, login: &str, booked_away: &Option<Away>) -> Result<(), String> {
     let chat_key = key_for(job, login);
+    let only = &job.rule().rule.only_if;
+    // A rule made from a reminder posts only where a reminder would: a window holds the chat,
+    // or the stream warm-up joined it. No adopted set (unlike AnyOpen), the same check as the
+    // reminder's own `tick`.
+    if only.only_while_open && !engine.local.open_for_reminders(login).await {
+        return Err("Skipped: not open in a window".into());
+    }
+    if only.only_while_watching && engine.local.current_watch().as_deref() != Some(login) {
+        return Err("Skipped: not watching a stream".into());
+    }
     match &job.rule().rule.only_if.channels {
         ChannelScope::AnyOpen {} => {
             let provider = chat_key.split_once(':').map_or("twitch", |(p, _)| p);
@@ -998,6 +1009,83 @@ async fn rebook(
             .map_err(|r| r.text())?;
     *ticket = fresh;
     settle_slot(engine, job, login, text, ticket, wait, booked_away).await
+}
+
+/// The reminder slot a job is for, when it can be one. A chat message is a keyword fire (its
+/// claim id is the part after `chat:`). A timed job (P2, `RowKind::Timed`) reads its slot from
+/// the event key P2's `timed.rs` built with `claims::{timer,clock,uptime,delay}_key` (S11.1-P2
+/// E16b) and the rule's trigger. The chat key holds a colon, so the key is never split on `:`:
+/// the prefix `<kind>:<facts.channel_key>` is stripped and only the tail is read (Uptime
+/// `<started_at epoch s>:<seconds>`, Clock `<date>T<HH:MM><+HH:MM>`, the offset P2 already put in
+/// the key). `converted_elements` replaces an Interval's and a Delay's seconds with `claim_as.seconds`.
+fn reminder_slot_of(job: &Job) -> Option<ReminderSlot> {
+    use crate::models::automations::Trigger;
+    let key = job.facts.event_key.as_str();
+    if let Some(id) = key.strip_prefix("chat:") {
+        return Some(ReminderSlot::Keyword { msg_id: id.to_string() });
+    }
+    if job.facts.kind != super::facts::RowKind::Timed {
+        return None;
+    }
+    // The chat key itself holds a colon (`twitch:<login>`), so the key is never split on `:`: the
+    // known prefix `<kind>:<facts.channel_key>` is stripped and only the tail is read.
+    let tail = |kind: &str| key.strip_prefix(kind)?.strip_prefix(':')?.strip_prefix(job.facts.channel_key.as_str());
+    match &job.rule().rule.when {
+        Trigger::Timer { every_seconds, .. } => {
+            tail("timer").filter(|t| t.is_empty())?;
+            Some(ReminderSlot::Interval { secs: u64::from(*every_seconds) })
+        }
+        Trigger::Delay { seconds } => {
+            tail("delay").filter(|t| t.is_empty())?;
+            Some(ReminderSlot::Delay { secs: u64::from(*seconds) })
+        }
+        Trigger::Uptime { seconds, .. } => {
+            // Tail `:<started_at epoch s>:<seconds>`: epoch digits hold no colon.
+            let (started, _threshold) = tail("uptime")?.strip_prefix(':')?.split_once(':')?;
+            Some(ReminderSlot::Uptime { started_s: started.parse().ok()?, secs: u64::from(*seconds) })
+        }
+        Trigger::Clock { .. } => {
+            // Tail `:<date>T<HH:MM><+HH:MM>`: the scheduled minute and the offset P2 already put in
+            // the key, so the slot has exactly P2's date, time and offset.
+            let (date, clock) = tail("clock")?.strip_prefix(':')?.split_once('T')?;
+            let (time, offset) = (clock.get(..5)?, clock.get(5..)?);
+            chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").ok()?;
+            Some(ReminderSlot::Clock { date: date.to_string(), time: time.to_string(), offset_s: parse_offset_text(offset)? })
+        }
+        _ => None,
+    }
+}
+
+/// `+HH:MM` or `-HH:MM` back to seconds (the inverse of `reminder_claim::offset_text`, which is
+/// P2's `claims::offset_words`).
+fn parse_offset_text(text: &str) -> Option<i32> {
+    let sign = match text.chars().next()? {
+        '+' => 1,
+        '-' => -1,
+        _ => return None,
+    };
+    let (h, m) = text.get(1..)?.split_once(':')?;
+    Some(sign * (h.parse::<i32>().ok()? * 3600 + m.parse::<i32>().ok()? * 60))
+}
+
+#[cfg(test)]
+mod reminder_slot_tests {
+    use super::*;
+    use crate::services::account_automations::claims;
+
+    #[test]
+    fn the_offset_text_round_trips_and_a_converted_clock_key_is_p2s_slot() {
+        for s in [-18_000, -14_400, 0, 19_800, 3600] {
+            assert_eq!(parse_offset_text(&claims::offset_words(s)), Some(s));
+        }
+        assert_eq!(parse_offset_text("x"), None);
+        // P2's own Clock key, with a chat key that holds a colon, parses back to its date, time and offset.
+        let key = claims::clock_key("twitch:streamer", "2026-11-01", "01:30", -14_400);
+        let chat = "twitch:streamer";
+        let rest = key.strip_prefix("clock:").and_then(|k| k.strip_prefix(chat)).and_then(|k| k.strip_prefix(':')).unwrap();
+        let (date, clock) = rest.split_once('T').unwrap();
+        assert_eq!((date, clock.get(..5), parse_offset_text(clock.get(5..).unwrap())), ("2026-11-01", Some("01:30"), Some(-14_400)));
+    }
 }
 
 /// What a claim decided for the class.
@@ -1114,7 +1202,12 @@ pub(crate) async fn claim_class(
         vec![job.facts.event_key.clone()]
     };
     let input = CallInput { rule, prefs: &prefs, plan, family: &family, event_keys: &keys, event_room: &job.room, person };
-    let elements = match claims::class_elements(&input) {
+    // A rule made from a reminder claims under the reminder's keys, family and window while its
+    // `claim_as` still applies (so the rule here and the reminder on another device post once).
+    let converted = reminder_slot_of(job).and_then(|slot| {
+        reminder_claim::converted_elements(rule, plan.class.room_id().unwrap_or_default(), &chat_key_of(login), &slot)
+    });
+    let elements = match converted.unwrap_or_else(|| claims::class_elements(&input)) {
         Ok(elements) => elements,
         Err(words) => return Claimed::Skip(words.into()),
     };

@@ -167,7 +167,9 @@ fn check_rule(cr: &CompiledRule, facts: &Facts, ctx: &Ctx, run: &mut Run) {
             return;
         }
         let roles = &rule.only_if.roles;
-        let role_ok = roles.is_empty() || facts.roles.iter().any(|r| roles.contains(r));
+        // A rule made from a "mods" reminder keeps the reminder's reading: a lead
+        // moderator (badged lead_moderator only) does not pass.
+        let role_ok = super::facts::role_passes(&rule.only_if, facts);
         if !run.check(
             "From",
             role_ok,

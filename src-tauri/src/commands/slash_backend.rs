@@ -335,7 +335,8 @@ impl TauriBackend {
             }
             "post_reminder" => {
                 let copies = crate::services::reminder_service::clamp_repeat(a["repeat"].as_f64());
-                let posted =
+                // `/remind now` is a direct user send: it claims nothing and answers only whether it posted.
+                let (posted, _copies) =
                     crate::services::reminder_service::post_text(&s(&a, "channel"), os(&a, "channelId").as_deref(), &s(&a, "message"), copies).await;
                 Ok(json!(posted))
             }

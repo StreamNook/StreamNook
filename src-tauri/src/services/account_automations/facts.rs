@@ -80,6 +80,10 @@ pub struct Facts {
     pub user_name: String,
     /// Never empty: Viewer when the chatter has no other role.
     pub roles: Vec<SenderRole>,
+    /// The chatter is a lead moderator (the `lead_moderator` badge) and holds
+    /// neither the `moderator` nor the `broadcaster` badge: the one reading a
+    /// "mods" reminder does not pass (`lead_moderator_excluded`).
+    pub lead_moderator_only: bool,
     /// The chatter's text as written.
     pub text: String,
     /// The text in NFC (case-sensitive matching).
@@ -294,6 +298,54 @@ pub fn roles_of(badges: &[Badge]) -> Vec<SenderRole> {
     roles
 }
 
+/// A lead moderator who is not also badged moderator or broadcaster.
+pub fn lead_moderator_only(badges: &[Badge]) -> bool {
+    let has = |name: &str| badges.iter().any(|b| b.name.eq_ignore_ascii_case(name));
+    has("lead_moderator") && !has("moderator") && !has("broadcaster")
+}
+
+/// The From check: one of the rule's roles (any, when it names none), and, for a rule made from a
+/// "mods" reminder, not a lead moderator (the reminder's own reading).
+pub fn role_passes(only_if: &crate::models::automations::Conditions, facts: &Facts) -> bool {
+    (only_if.roles.is_empty() || facts.roles.iter().any(|r| only_if.roles.contains(r)))
+        && !(only_if.lead_moderator_excluded && facts.lead_moderator_only)
+}
+
+#[cfg(test)]
+mod lead_moderator_tests {
+    use super::*;
+    use crate::models::automations::Conditions;
+
+    fn facts(roles: Vec<SenderRole>, lead_only: bool) -> Facts {
+        Facts { roles, lead_moderator_only: lead_only, ..Facts::default() }
+    }
+
+    #[test]
+    fn a_lead_moderator_is_only_a_lead_moderator_without_the_other_two_badges() {
+        let badges = |names: &[&str]| names.iter().map(|n| rows::badge(n)).collect::<Vec<_>>();
+        assert!(lead_moderator_only(&badges(&["lead_moderator"])));
+        assert!(lead_moderator_only(&badges(&["lead_moderator", "subscriber"])));
+        assert!(!lead_moderator_only(&badges(&["lead_moderator", "moderator"])));
+        assert!(!lead_moderator_only(&badges(&["lead_moderator", "broadcaster"])));
+        assert!(!lead_moderator_only(&badges(&["moderator"])));
+    }
+
+    #[test]
+    fn a_mods_rule_made_from_a_reminder_skips_a_lead_moderator_but_a_plain_one_does_not() {
+        let mods = |excluded: bool| Conditions {
+            roles: vec![SenderRole::Moderator, SenderRole::Broadcaster],
+            lead_moderator_excluded: excluded,
+            ..Conditions::default()
+        };
+        let lead = facts(vec![SenderRole::Moderator], true);
+        let moderator = facts(vec![SenderRole::Moderator], false);
+        assert!(!role_passes(&mods(true), &lead), "as the reminder reads it");
+        assert!(role_passes(&mods(true), &moderator));
+        assert!(role_passes(&mods(false), &lead), "an ordinary rule counts a lead moderator as a moderator");
+        assert!(role_passes(&Conditions::default(), &lead), "anyone");
+    }
+}
+
 /// The facts of a live Twitch chat row or notice. None for another
 /// platform's row, or a row with no room or no id (it could not be claimed).
 pub fn from_chat(msg: &ChatMessage) -> Option<Facts> {
@@ -359,6 +411,7 @@ pub fn from_chat(msg: &ChatMessage) -> Option<Facts> {
         user_login,
         user_name,
         roles: roles_of(&msg.badges),
+        lead_moderator_only: lead_moderator_only(&msg.badges),
         text: msg.content.clone(),
         text_folded: text_nfc.to_lowercase(),
         text_nfc,
@@ -502,6 +555,7 @@ pub fn from_sample(sample: &TrySample) -> Facts {
         },
         user_login,
         roles,
+        lead_moderator_only: false,
         text: sample.text.clone(),
         text_folded: text_nfc.to_lowercase(),
         text_nfc,

@@ -287,6 +287,8 @@ pub struct ClaimClient {
     outage: AtomicBool,
     busy: AtomicBool,
     cache: Mutex<HashMap<(String, String, String), Cached>>,
+    /// A 429's `retry_after_s`, by the call id that got it; a reminder takes its own.
+    retry_hints: Mutex<HashMap<String, Duration>>,
     #[cfg(test)]
     pub(crate) most_releases_in_flight: AtomicUsize,
     #[cfg(test)]
@@ -312,6 +314,7 @@ impl ClaimClient {
             outage: AtomicBool::new(false),
             busy: AtomicBool::new(false),
             cache: Mutex::new(HashMap::new()),
+            retry_hints: Mutex::new(HashMap::new()),
             #[cfg(test)]
             most_releases_in_flight: AtomicUsize::new(0),
             #[cfg(test)]
@@ -458,7 +461,9 @@ impl ClaimClient {
         let call_id = claims::new_call_id();
         let started = Instant::now();
         let reminder = request.kind == CallKind::Reminder;
-        let budget = if reminder { self.timings.reminder_bound } else { request.budget };
+        // A reminder waits for a pool slot and the answer inside its own bound, and
+        // never past what its shared deadline (verify plus claim) has left.
+        let budget = if reminder { self.timings.reminder_bound.min(request.budget) } else { request.budget };
         let permit = if reminder {
             match tokio::time::timeout(budget, self.reminder_pool.clone().acquire_owned()).await {
                 Ok(Ok(permit)) => permit,
@@ -505,6 +510,22 @@ impl ClaimClient {
         }
     }
 
+    /// Keep the wait a 429's body named (`retry_after_s`), by the request's call id.
+    fn note_retry_hint(&self, request: &Value, answer: &str) {
+        let Some(call_id) = request["call_id"].as_str() else { return };
+        let Some(secs) = serde_json::from_str::<Value>(answer).ok().and_then(|v| v["retry_after_s"].as_u64()) else { return };
+        let mut hints = lock(&self.retry_hints);
+        if hints.len() >= 64 {
+            hints.clear();
+        }
+        hints.insert(call_id.to_string(), Duration::from_secs(secs));
+    }
+
+    /// The wait the 429 for `call_id` named, once.
+    pub fn take_retry_hint(&self, call_id: &str) -> Option<Duration> {
+        lock(&self.retry_hints).remove(call_id)
+    }
+
     fn unknown(&self, call_id: Option<String>, why: Unknown) -> ClaimResult {
         self.note_unknown(&why);
         ClaimResult::Unknown { call_id, why }
@@ -518,7 +539,12 @@ impl ClaimClient {
                 Err(_) => Reply::Unreadable,
             },
             Ok(resp) if (200..300).contains(&resp.status) => Reply::Unreadable,
-            Ok(resp) => Reply::Status(resp.status),
+            Ok(resp) => {
+                if resp.status == 429 {
+                    self.note_retry_hint(body, &resp.body);
+                }
+                Reply::Status(resp.status)
+            }
         }
     }
 
