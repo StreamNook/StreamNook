@@ -2814,14 +2814,20 @@ body {
   box-shadow: 0 6px 18px -8px color-mix(in srgb, var(--stream-glow, var(--color-accent)) 58%, transparent);
 }
 
-/* Settings card — a flat grouped slab, not a raised panel. Dropping the bevel,
-   drop shadow, border, and gradient stops a tab full of sections from reading as
-   a stack of competing floating boxes. The faint fill alone keeps each section
-   legible as its own group; spacing between sections does the rest. */
+/* Settings card: a grouped slab, not a raised panel (no bevel, drop shadow or
+   gradient, so a tab full of sections never reads as a stack of competing
+   floating boxes, and no ring, which read as an outline drawn around each
+   section). The fill is the theme's own ink, so each section steps above the
+   page on light themes as well as dark ones (a white fill vanished on light
+   themes and every section ran together). Light themes take a little more,
+   since dark ink on a light page steps less for the same mix. */
 .settings-card {
-  background: rgba(255, 255, 255, 0.02);
+  background: color-mix(in srgb, var(--color-text-primary) 6%, transparent);
   border-radius: 10px;
   overflow: hidden;
+}
+html[data-theme-tone='light'] .settings-card {
+  background-color: color-mix(in srgb, var(--color-text-primary) 7%, transparent);
 }
 
 .settings-row {
@@ -2829,9 +2835,9 @@ body {
   transition: background-color 100ms;
 }
 
-/* Bright enough to register against the slab fill above. */
+/* A step above the slab fill, in the theme's ink so it shows on light themes. */
 .settings-row:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: color-mix(in srgb, var(--color-text-primary) 5%, transparent);
 }
 
 /* The row a settings search result landed on: an accent wash that fades in and
@@ -2861,7 +2867,13 @@ body {
    enable-dependent sub-controls — rendered as children inside the same row — stay
    grouped with no internal line. */
 .settings-card .settings-row + .settings-row {
-  border-top: 1px solid color-mix(in srgb, var(--color-border-subtle) 55%, transparent);
+  border-top: 1px solid var(--settings-hairline, color-mix(in srgb, var(--color-border-subtle) 55%, transparent));
+}
+/* The subtle border fades into a light theme's card fill: draw the hairline
+   in the theme's ink there. A variable, so the two-column builder's rule that
+   hides the line below still wins. */
+html[data-theme-tone='light'] .settings-card {
+  --settings-hairline: color-mix(in srgb, var(--color-text-primary) 10%, transparent);
 }
 
 /* The tabbed overlay builder: once its settings column is wide enough for two
