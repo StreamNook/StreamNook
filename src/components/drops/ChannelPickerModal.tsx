@@ -9,6 +9,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { canEarnHere } from './channelEarnable';
 import { X, Radio, Loader2, Users } from 'lucide-react';
 import { Tooltip } from '../ui/Tooltip';
 import { Logger } from '../../utils/logger';
@@ -173,25 +174,12 @@ export default function ChannelPickerModal({
 
   if (!isOpen) return null;
 
-  // Live channels that can earn this drop right now.
-  //  - Open campaigns already fetched only channels live in the campaign's game.
-  //  - ACL campaigns: the allow-list is the FIRST gate, and being on it is not
-  //    always enough — an allow-listed streamer live in some other category
-  //    usually earns nothing for THIS drop, so listing the whole live roster
-  //    offered channels that can't credit. But "same category" is not the rule
-  //    either: a creator campaign like Ironmouse's subathon is filed under
-  //    Special Events and credits on her channel whatever she is playing, so
-  //    the category test hid the ONLY channel that could earn it. Twitch answers
-  //    this per channel (`viewerDropCampaigns`), so that answer decides.
-  //  - Category match is the fallback for when that lookup fails, since a stale
-  //    heuristic beats an empty picker.
-  const isEarnable = (c: PickableChannel): boolean => {
-    if (!isAclBased) return true; // open campaign list is already category-correct
-    if (eligibleIds) return eligibleIds.has(c.userId);
-    if (gameId && c.currentGameId) return c.currentGameId === gameId;
-    return !!c.currentGame && !!gameName && c.currentGame.toLowerCase() === gameName.toLowerCase();
-  };
-  const earnable = channels.filter(c => c.isLive && isEarnable(c));
+  // Live channels that can earn this drop right now: the allow-list is the
+  // first gate, then Twitch's per-channel answer or the campaign's category
+  // (`canEarnHere` says why either is enough).
+  const earnable = channels.filter(
+    c => c.isLive && canEarnHere(c, { isAclBased, eligibleIds, gameId, gameName, categoryIds }),
+  );
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 sm:p-6">
