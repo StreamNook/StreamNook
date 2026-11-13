@@ -342,6 +342,7 @@ pub mod app_links;
 pub mod earning_gate;
 pub mod whisper_inbox;
 pub mod whisper_live;
+pub mod whisper_recipients;
 pub mod whisper_service;
 pub mod whisper_store;
 pub mod whisper_sync;

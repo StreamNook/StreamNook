@@ -370,6 +370,7 @@ pub async fn record_incoming(app: AppHandle, owner_id: String, ev: WhisperEvent,
         failure: None,
         cut_to: None,
         migrated: false,
+        by_automation: false,
     };
     let reading = crate::services::whisper_claims::reading(&scope.owner, &key);
     let create = new_meta(&key, &ev.from_user_id, &ev.from_user_login, &ev.from_user_name, avatar.clone());
@@ -835,6 +836,7 @@ mod tests {
             failure: None,
             cut_to: None,
             migrated: false,
+            by_automation: false,
         }
     }
 

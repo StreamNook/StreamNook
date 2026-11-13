@@ -649,6 +649,19 @@ pub fn local_view_ids(facts: &MessageFacts<'_>) -> Vec<String> {
     ids
 }
 
+/// A compiled saved-filter expression (see `ChatRules::compile_expression`).
+#[derive(Debug)]
+pub(crate) struct FilterProgram(Expr);
+
+impl FilterProgram {
+    /// Whether the expression holds for this chat row.
+    pub(crate) fn matches(&self, msg: &ChatMessage, mentioned: bool) -> bool {
+        let facts = MessageFacts::from_message(msg);
+        let ctx = EvalCtx { facts: &facts, mentioned, highlighted: false };
+        eval(&self.0, &ctx).truthy()
+    }
+}
+
 pub struct MessageFacts<'a> {
     pub login: String,
     pub display_lower: String,
@@ -1427,6 +1440,17 @@ impl ChatRules {
         Ok(unsupported)
     }
 
+    /// The saved-filter language compiled once for an automation rule's
+    /// expression. A parse error or an unsupported variable is a save error
+    /// (the caller refuses warnings too).
+    pub(crate) fn compile_expression(expr: &str) -> Result<FilterProgram, String> {
+        let warnings = Self::validate_filter(expr)?;
+        if !warnings.is_empty() {
+            return Err(format!("StreamNook can't check: {}", warnings.join(", ")));
+        }
+        Ok(FilterProgram(parse_filter(expr)?))
+    }
+
     /// Rust-side regex validation for highlight and ignore phrases, so the
     /// settings UI reports the dialect that actually runs.
     pub fn validate_phrase(
@@ -2143,6 +2167,13 @@ impl Drop for PlatformReset {
 mod tests {
     use super::*;
     use crate::models::chat_layout::{Badge, ChatMessage};
+
+    #[test]
+    fn compile_expression_accepts_the_language_and_refuses_the_rest() {
+        assert!(ChatRules::compile_expression("author.subbed").is_ok());
+        assert!(ChatRules::compile_expression("author.subbed &&").is_err());
+        assert!(ChatRules::compile_expression("channel.watching").is_err());
+    }
 
     fn msg(login: &str, content: &str) -> ChatMessage {
         let mut m = ChatMessage {

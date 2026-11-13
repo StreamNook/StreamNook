@@ -1569,3 +1569,30 @@ async fn mods_and_vips_read_the_signed_in_role_list() {
     run(&fake, "/vips").await;
     assert_eq!(fake.calls("slash_role_list")[1]["role"], json!("vips"));
 }
+
+#[test]
+fn the_extracted_parsers_give_what_the_arms_always_gave() {
+    // /slow: bare = 30, "60" = 60, "abc" = 30, "-5" = -5 (Twitch refuses it), "7s" = 7.
+    assert_eq!(slow_seconds(None), 30);
+    assert_eq!(slow_seconds(Some("60")), 60);
+    assert_eq!(slow_seconds(Some("abc")), 30);
+    assert_eq!(slow_seconds(Some("7s")), 7);
+    // /followers: bare = 0, "10m" = 10, "2h" = 120, "1d" = 1440, "1w", "1mo", "m" = None (null duration).
+    assert_eq!(followers_setting(""), Some(0));
+    assert_eq!(followers_setting("10m"), Some(10));
+    assert_eq!(followers_setting("2h"), Some(120));
+    assert_eq!(followers_setting("1d"), Some(1440));
+    assert_eq!(followers_setting("1w"), Some(10080));
+    assert_eq!(followers_setting("1mo"), Some(43200));
+    assert_eq!(followers_setting("m"), None);
+    assert_eq!(marker_description(""), None);
+    assert_eq!(marker_description("great play"), Some("great play".into()));
+    assert_eq!(title_or_query("  Chill  "), "Chill");
+}
+
+#[test]
+fn the_engines_title_limit_is_the_stream_managers() {
+    // The engine modules may not name stream_manager (source pin), so the
+    // equality is asserted here, where both are in reach.
+    assert_eq!(crate::services::account_automations::command::TITLE_MAX, crate::services::stream_manager::TITLE_MAX);
+}

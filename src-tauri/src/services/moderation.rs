@@ -676,6 +676,39 @@ pub async fn moderate(mut req: ModRequest) -> Result<ModOutcome> {
     Ok(outcome_for(platform, &req.action, &name_of(&req)))
 }
 
+/// `moderate`'s token-bound twin for the automation engine: Twitch Timeout and
+/// Delete only, with the verified token and moderator id the caller holds, on
+/// the engine's client and an injected base. It reads no stored token and no
+/// setting (no saved reason, no ban confirmation), and a timeout is bounded
+/// (`1..=TWITCH_MAX_TIMEOUT_SECS`; a permanent ban is not reachable here).
+pub(crate) async fn moderate_token_bound(
+    client: &reqwest::Client,
+    base: &str,
+    token: &str,
+    moderator_id: &str,
+    req: &ModRequest,
+) -> Result<()> {
+    match &req.action {
+        ModAction::Timeout { seconds } if (1..=TWITCH_MAX_TIMEOUT_SECS).contains(seconds) => {
+            TwitchService::timeout_user_engine(
+                client,
+                base,
+                token,
+                moderator_id,
+                need(&req.broadcaster_id, "channel")?,
+                need(&req.target_user_id, "chatter")?,
+                *seconds,
+                req.reason.as_deref(),
+            )
+            .await
+        }
+        ModAction::Delete { message_id } if !message_id.trim().is_empty() => {
+            TwitchService::delete_chat_message_engine(client, base, token, moderator_id, need(&req.broadcaster_id, "channel")?, message_id).await
+        }
+        _ => Err(anyhow!("That moderation step is not available to automations")),
+    }
+}
+
 /// What the viewer may do to one chat message, by Twitch's own rules. Helix
 /// "Delete Chat Messages" refuses the broadcaster's messages and another
 /// moderator's ("You may not delete the broadcaster's messages", "... another

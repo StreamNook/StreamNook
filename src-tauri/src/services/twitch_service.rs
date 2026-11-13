@@ -834,6 +834,103 @@ impl std::fmt::Display for HelixSendRefused {
 
 impl std::error::Error for HelixSendRefused {}
 
+/// A Helix answer that was not a success, carried inside the `anyhow::Error`
+/// by the engine doors (`*_engine`) so `door_outcome` can read the status.
+/// `Display` is `words`, the text the same call has always shown.
+#[derive(Debug)]
+pub struct HelixStatus {
+    pub status: u16,
+    pub body: String,
+    pub words: String,
+}
+
+impl HelixStatus {
+    /// A moderation or settings refusal, worded by `helix_refusal_text`.
+    pub(crate) fn plain(status: u16, body: String) -> HelixStatus {
+        let words = helix_refusal_text(status, &body);
+        HelixStatus { status, body, words }
+    }
+
+    /// `PATCH /channels` says the same thing for a 401 and a 403, as the
+    /// stream manager does.
+    pub(crate) fn channel(status: u16, body: String) -> HelixStatus {
+        let words = if status == 401 || status == 403 {
+            "Only the broadcaster can change the title or category".to_string()
+        } else {
+            helix_refusal_text(status, &body)
+        };
+        HelixStatus { status, body, words }
+    }
+}
+
+impl std::fmt::Display for HelixStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.words)
+    }
+}
+
+impl std::error::Error for HelixStatus {}
+
+/// How a typed door ended, read from its `anyhow::Result` (D290, D291).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DoorOutcome {
+    Sent,
+    /// Nothing happened: an answered 4xx or 429, or nothing left the device.
+    /// Carries the error text (`e.to_string()`), which Activity shows as
+    /// "Twitch refused it: <text>".
+    Refused(String),
+    /// Twitch refused the token itself (a 401): the caller drops the cached
+    /// token and remembers the account's failure, then treats it as Refused.
+    RefusedUnauthorized(String),
+    /// It may have happened: a 5xx, a 3xx, a failure after the request left,
+    /// any error that cannot be downcast.
+    Unknown,
+}
+
+/// The one mapping every Command, moderation and Announce door uses. Pure.
+pub fn door_outcome<T>(result: &anyhow::Result<T>) -> DoorOutcome {
+    let Err(e) = result else { return DoorOutcome::Sent };
+    for cause in e.chain() {
+        if let Some(h) = cause.downcast_ref::<HelixStatus>() {
+            return match h.status {
+                401 => DoorOutcome::RefusedUnauthorized(e.to_string()),
+                400..=499 => DoorOutcome::Refused(e.to_string()),
+                _ => DoorOutcome::Unknown,
+            };
+        }
+        if let Some(r) = cause.downcast_ref::<reqwest::Error>() {
+            return if r.is_connect() || r.is_builder() { DoorOutcome::Refused(e.to_string()) } else { DoorOutcome::Unknown };
+        }
+    }
+    DoorOutcome::Unknown
+}
+
+/// Why the `SetGame` category read failed (it is a read, never a write).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SearchFail {
+    /// A 401: drop the token and remember the failure, then skip.
+    Unauthorized,
+    Other(String),
+}
+
+/// A category read's result in the engine's terms. Pure.
+pub fn search_outcome(result: anyhow::Result<Vec<serde_json::Value>>) -> Result<Vec<serde_json::Value>, SearchFail> {
+    match result {
+        Ok(rows) => Ok(rows),
+        Err(e) => {
+            if e.chain().any(|c| c.downcast_ref::<HelixStatus>().is_some_and(|h| h.status == 401)) {
+                Err(SearchFail::Unauthorized)
+            } else {
+                Err(SearchFail::Other(e.to_string()))
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "twitch_doors_tests.rs"]
+mod door_tests;
+
 /// Twitch's own reason from a refused Helix moderation call, in plain words
 /// where Twitch's are cryptic, so a command can say why it failed.
 pub fn helix_refusal_text(status: u16, body: &str) -> String {
@@ -5127,6 +5224,7 @@ impl TwitchService {
     }
 
     /// `update_chat_settings` as the account `token` belongs to (`moderator_id`).
+    /// Delegates to the engine twin with the shared client and the real base.
     pub(crate) async fn update_chat_settings_as(
         token: &str,
         moderator_id: &str,
@@ -5134,32 +5232,228 @@ impl TwitchService {
         settings: serde_json::Value,
     ) -> Result<()> {
         let client = crate::services::http::client().clone();
+        Self::update_chat_settings_engine(&client, "https://api.twitch.tv", token, moderator_id, broadcaster_id, &settings).await
+    }
 
-        let url = format!(
-            "https://api.twitch.tv/helix/chat/settings?broadcaster_id={}&moderator_id={}",
-            broadcaster_id, moderator_id
-        );
-
-        let response = client
-            .patch(&url)
-            .header("Client-Id", CLIENT_ID)
-            .header(AUTHORIZATION, format!("Bearer {}", token))
-            .header("Content-Type", "application/json")
-            .json(&settings)
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            let status = response.status().as_u16();
-            let error_text = response.text().await.unwrap_or_default();
-            error!(
-                "[TwitchService] Failed to update chat settings: {}",
-                error_text
-            );
-            return Err(anyhow::anyhow!(helix_refusal_text(status, &error_text)));
+    /// Run one engine request and turn a non-success answer into a typed
+    /// `HelixStatus`. The only fallible step before `.send()` is reqwest's own
+    /// request building (CHECK-S11-R4 minor 7); a 3xx is not followed (the
+    /// engine client has no redirects) and reads as an answered non-success.
+    async fn engine_send(request: reqwest::RequestBuilder, make: fn(u16, String) -> HelixStatus) -> Result<reqwest::Response> {
+        let response = request.send().await?;
+        if response.status().is_success() {
+            return Ok(response);
         }
+        let status = response.status().as_u16();
+        let body = response.text().await.unwrap_or_default();
+        Err(anyhow::Error::new(make(status, body)))
+    }
 
-        Ok(())
+    /// `PATCH /helix/chat/settings` on an injected client and base.
+    pub(crate) async fn update_chat_settings_engine(
+        client: &Client,
+        base: &str,
+        token: &str,
+        moderator_id: &str,
+        broadcaster_id: &str,
+        settings: &serde_json::Value,
+    ) -> Result<()> {
+        let request = client
+            .patch(format!("{base}/helix/chat/settings"))
+            .query(&[("broadcaster_id", broadcaster_id), ("moderator_id", moderator_id)])
+            .header("Client-Id", CLIENT_ID)
+            .header(AUTHORIZATION, format!("Bearer {token}"))
+            .json(settings);
+        Self::engine_send(request, HelixStatus::plain).await.map(|_| ())
+    }
+
+    /// `POST /helix/streams/markers`. `description` None or empty sends no
+    /// `description` key; the broadcaster is the room's.
+    pub(crate) async fn create_stream_marker_engine(
+        client: &Client,
+        base: &str,
+        token: &str,
+        broadcaster_id: &str,
+        description: Option<&str>,
+    ) -> Result<()> {
+        let mut body = serde_json::json!({ "user_id": broadcaster_id });
+        if let Some(d) = description.filter(|d| !d.is_empty()) {
+            body["description"] = serde_json::json!(d);
+        }
+        let request = client
+            .post(format!("{base}/helix/streams/markers"))
+            .header("Client-Id", CLIENT_ID)
+            .header(AUTHORIZATION, format!("Bearer {token}"))
+            .json(&body);
+        Self::engine_send(request, HelixStatus::plain).await.map(|_| ())
+    }
+
+    /// `PATCH /helix/channels?broadcaster_id=`: exactly the keys given (the
+    /// caller gives one, `title` or `game_id`).
+    pub(crate) async fn modify_channel_info_engine(
+        client: &Client,
+        base: &str,
+        token: &str,
+        broadcaster_id: &str,
+        title: Option<&str>,
+        game_id: Option<&str>,
+    ) -> Result<()> {
+        let mut body = serde_json::Map::new();
+        if let Some(t) = title {
+            body.insert("title".into(), serde_json::json!(t));
+        }
+        if let Some(g) = game_id {
+            body.insert("game_id".into(), serde_json::json!(g));
+        }
+        let request = client
+            .patch(format!("{base}/helix/channels"))
+            .query(&[("broadcaster_id", broadcaster_id)])
+            .header("Client-Id", CLIENT_ID)
+            .header(AUTHORIZATION, format!("Bearer {token}"))
+            .json(&serde_json::Value::Object(body));
+        Self::engine_send(request, HelixStatus::channel).await.map(|_| ())
+    }
+
+    /// The category read for `SetGame`: `GET /helix/games?name=<query>` (exact
+    /// name, any case Twitch accepts); `GET /helix/search/categories` runs only
+    /// when no exact row's name equals `query` ignoring case (CHECK-S11-R4 MJ3).
+    /// Both reads carry the verified token and check the status; either
+    /// failing, when it was needed, fails the search. Rows come exact first.
+    pub(crate) async fn search_categories_engine(
+        client: &Client,
+        base: &str,
+        token: &str,
+        query: &str,
+    ) -> Result<Vec<serde_json::Value>> {
+        async fn rows(response: reqwest::Response) -> Result<Vec<serde_json::Value>> {
+            let v = response.json::<serde_json::Value>().await?;
+            Ok(v.get("data").and_then(|d| d.as_array()).cloned().unwrap_or_default())
+        }
+        let exact_request = client
+            .get(format!("{base}/helix/games"))
+            .query(&[("name", query)])
+            .header("Client-Id", CLIENT_ID)
+            .header(AUTHORIZATION, format!("Bearer {token}"));
+        let mut found = rows(Self::engine_send(exact_request, HelixStatus::plain).await?).await?;
+        let wanted = query.trim();
+        if found.iter().any(|r| r["name"].as_str().is_some_and(|n| n.trim().eq_ignore_ascii_case(wanted))) {
+            return Ok(found);
+        }
+        let fuzzy_request = client
+            .get(format!("{base}/helix/search/categories"))
+            .query(&[("query", query), ("first", "10")])
+            .header("Client-Id", CLIENT_ID)
+            .header(AUTHORIZATION, format!("Bearer {token}"));
+        found.extend(rows(Self::engine_send(fuzzy_request, HelixStatus::plain).await?).await?);
+        Ok(found)
+    }
+
+    /// `POST /helix/chat/announcements` on the engine client (D270); 204 is
+    /// accepted (Twitch may still drop it).
+    pub(crate) async fn send_chat_announcement_engine(
+        client: &Client,
+        base: &str,
+        token: &str,
+        moderator_id: &str,
+        broadcaster_id: &str,
+        message: &str,
+        color: Option<&str>,
+    ) -> Result<()> {
+        let mut body = serde_json::json!({ "message": message });
+        if let Some(c) = color {
+            body["color"] = serde_json::json!(c);
+        }
+        let request = client
+            .post(format!("{base}/helix/chat/announcements"))
+            .query(&[("broadcaster_id", broadcaster_id), ("moderator_id", moderator_id)])
+            .header("Client-Id", CLIENT_ID)
+            .header(AUTHORIZATION, format!("Bearer {token}"))
+            .json(&body);
+        Self::engine_send(request, HelixStatus::plain).await.map(|_| ())
+    }
+
+    /// `POST /helix/chat/shoutouts` from the room's broadcaster to `target_id`.
+    pub(crate) async fn send_shoutout_engine(
+        client: &Client,
+        base: &str,
+        token: &str,
+        moderator_id: &str,
+        from_broadcaster_id: &str,
+        target_id: &str,
+    ) -> Result<()> {
+        let request = client
+            .post(format!("{base}/helix/chat/shoutouts"))
+            .query(&[("from_broadcaster_id", from_broadcaster_id), ("to_broadcaster_id", target_id), ("moderator_id", moderator_id)])
+            .header("Client-Id", CLIENT_ID)
+            .header(AUTHORIZATION, format!("Bearer {token}"));
+        Self::engine_send(request, HelixStatus::plain).await.map(|_| ())
+    }
+
+    /// `PUT /helix/chat/pins`; `duration_seconds` None pins until the stream ends.
+    pub(crate) async fn pin_chat_message_engine(
+        client: &Client,
+        base: &str,
+        token: &str,
+        moderator_id: &str,
+        broadcaster_id: &str,
+        message_id: &str,
+        duration_seconds: Option<u32>,
+    ) -> Result<()> {
+        let mut query = vec![
+            ("broadcaster_id", broadcaster_id.to_string()),
+            ("moderator_id", moderator_id.to_string()),
+            ("message_id", message_id.to_string()),
+        ];
+        if let Some(d) = duration_seconds {
+            query.push(("duration_seconds", d.to_string()));
+        }
+        let request = client
+            .put(format!("{base}/helix/chat/pins"))
+            .query(&query)
+            .header("Client-Id", CLIENT_ID)
+            .header(AUTHORIZATION, format!("Bearer {token}"));
+        Self::engine_send(request, HelixStatus::plain).await.map(|_| ())
+    }
+
+    /// `POST /helix/moderation/bans`: a timeout of `seconds` (never a permanent ban).
+    pub(crate) async fn timeout_user_engine(
+        client: &Client,
+        base: &str,
+        token: &str,
+        moderator_id: &str,
+        broadcaster_id: &str,
+        target_user_id: &str,
+        seconds: u32,
+        reason: Option<&str>,
+    ) -> Result<()> {
+        let mut data = serde_json::json!({ "user_id": target_user_id, "duration": seconds });
+        if let Some(r) = reason.filter(|r| !r.is_empty()) {
+            data["reason"] = serde_json::json!(r);
+        }
+        let request = client
+            .post(format!("{base}/helix/moderation/bans"))
+            .query(&[("broadcaster_id", broadcaster_id), ("moderator_id", moderator_id)])
+            .header("Client-Id", CLIENT_ID)
+            .header(AUTHORIZATION, format!("Bearer {token}"))
+            .json(&serde_json::json!({ "data": data }));
+        Self::engine_send(request, HelixStatus::plain).await.map(|_| ())
+    }
+
+    /// `DELETE /helix/moderation/chat?message_id=`.
+    pub(crate) async fn delete_chat_message_engine(
+        client: &Client,
+        base: &str,
+        token: &str,
+        moderator_id: &str,
+        broadcaster_id: &str,
+        message_id: &str,
+    ) -> Result<()> {
+        let request = client
+            .delete(format!("{base}/helix/moderation/chat"))
+            .query(&[("broadcaster_id", broadcaster_id), ("moderator_id", moderator_id), ("message_id", message_id)])
+            .header("Client-Id", CLIENT_ID)
+            .header(AUTHORIZATION, format!("Bearer {token}"));
+        Self::engine_send(request, HelixStatus::plain).await.map(|_| ())
     }
 
     /// Clear all messages from chat

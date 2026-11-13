@@ -97,6 +97,10 @@ pub struct StoredWhisper {
     /// A copy of one of our sends from the old store, adoptable once.
     #[serde(default)]
     pub migrated: bool,
+    /// Sent by an automation rule (P2). `adopt` writes onto this same message,
+    /// so the mark survives Twitch's copy.
+    #[serde(default)]
+    pub by_automation: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -184,6 +188,11 @@ pub struct ConversationMeta {
     /// gap only once it reaches this message or an older one.
     #[serde(default)]
     pub gap_floor: Option<Marker>,
+    /// You wrote to this person yourself (not an automation): monotonic, None
+    /// until known (every conversation right after the P2 update, and after a
+    /// downgrade dropped the field). `knows` fills it from the messages.
+    #[serde(default)]
+    pub you_wrote: Option<bool>,
     #[serde(default)]
     pub file_stamp: Option<FileStamp>,
     /// Some message is one of our sends still waiting on Twitch (Sending,
@@ -225,6 +234,7 @@ impl ConversationMeta {
             deep: Deep::Unknown,
             gap: None,
             gap_floor: None,
+            you_wrote: None,
             file_stamp: None,
             delivery_pending: false,
             archived_seq: 0,
@@ -514,6 +524,64 @@ fn newest_incoming(messages: &[StoredWhisper]) -> Option<Marker> {
         .rev()
         .find(|m| !m.is_sent)
         .map(|m| Marker { id: m.id.clone(), at_ms: m.timestamp })
+}
+
+/// Whether the stored messages show you wrote to this person: a send that is
+/// not an automation's, or a Twitch-origin message from the owner.
+pub fn messages_show_you_wrote(messages: &[StoredWhisper], owner: &str) -> bool {
+    messages.iter().any(|m| {
+        (m.is_sent && !m.by_automation && m.origin == Origin::LocalSent)
+            || (m.origin == Origin::Twitch && !m.by_automation && m.from_user_id == owner)
+    })
+}
+
+/// Whether an automation may whisper `user_id`: you have written to them
+/// yourself. True only when `you_wrote == Some(true)`, filled when `None` from
+/// the stored messages (a send that is not an automation's, or an owner
+/// Twitch-origin message) and written back. A stranger who merely has a
+/// conversation, and a stranger an automation alone whispered, never become
+/// known (`by_automation` sends do not count). The deep sync decides only the
+/// words of a "no": see `history_complete`.
+pub fn knows(scope: &Scope, user_id: &str) -> bool {
+    let Ok(Some((wrote, key))) = read_index(scope, |idx| {
+        let meta = idx.conversations.iter().find(|c| c.user_id == user_id || c.key == user_id)?;
+        Some((meta.you_wrote, meta.key.clone()))
+    }) else {
+        return false;
+    };
+    if wrote == Some(true) {
+        return true;
+    }
+    let filled = read(scope, &key, |c| messages_show_you_wrote(&c.messages, &scope.owner)).ok().flatten().unwrap_or(false);
+    let _ = update_index(scope, |idx| {
+        match idx.conversations.iter_mut().find(|c| c.key == key) {
+            Some(meta) if meta.you_wrote != Some(true) && (filled || meta.you_wrote.is_none()) => {
+                meta.you_wrote = Some(filled);
+                ((), true)
+            }
+            _ => ((), false),
+        }
+    });
+    filled
+}
+
+/// The account's whole conversation list has been read (`list_deep` Complete):
+/// a "no" from `knows` is then final; before it, the rule's status reads
+/// "Waiting for your whisper history".
+pub fn history_complete(scope: &Scope) -> bool {
+    read_index(scope, |idx| idx.list_deep == Deep::Complete).unwrap_or(false)
+}
+
+/// Record that you wrote to this person (a non-automation send, or a synced
+/// page that holds one of your messages).
+pub fn note_you_wrote(scope: &Scope, key: &str) {
+    let _ = update_index(scope, |idx| match idx.conversations.iter_mut().find(|c| c.key == key) {
+        Some(meta) if meta.you_wrote != Some(true) => {
+            meta.you_wrote = Some(true);
+            ((), true)
+        }
+        _ => ((), false),
+    });
 }
 
 /// A meta for a conversation known only from its messages.
@@ -1369,6 +1437,7 @@ mod tests {
             failure: None,
             cut_to: None,
             migrated: false,
+            by_automation: false,
         }
     }
 

@@ -428,6 +428,32 @@ pub fn followers_minutes(raw: &str) -> Option<i64> {
     }
 }
 
+/// `/slow [seconds]`: 30 with no argument or an unreadable one.
+pub fn slow_seconds(first_arg: Option<&str>) -> i64 {
+    match first_arg {
+        None => 30,
+        Some(arg) => js_parse_int(arg).unwrap_or(30),
+    }
+}
+
+/// `/followers [duration]` in minutes: no argument is 0 (anyone who follows);
+/// None where a unit came with no number (`/followers m`), which the manual
+/// command sends as a null duration and an automation refuses.
+pub fn followers_setting(first_arg: &str) -> Option<i64> {
+    followers_minutes(if first_arg.is_empty() { "0" } else { first_arg })
+}
+
+/// `/marker [description]`: None for none, as the manual command sends it.
+pub fn marker_description(text: &str) -> Option<String> {
+    (!text.is_empty()).then(|| text.to_string())
+}
+
+/// `/settitle` and `/setgame`: the text after the command, trimmed. Empty is
+/// the usage line.
+pub fn title_or_query(text: &str) -> String {
+    text.trim().to_string()
+}
+
 /// A `/setting set` value: JSON when it reads as JSON, text otherwise.
 pub fn parse_setting_value(raw: &str) -> Value {
     let t = raw.trim();
@@ -1428,7 +1454,7 @@ async fn core(c: &Call<'_>, o: &mut Outcome) -> Result<Flow, String> {
             o.ok("Chat cleared");
         }
         "slow" => {
-            let secs = (if c.args.is_empty() { Some(30) } else { js_parse_int(c.arg(0)) }).unwrap_or(30);
+            let secs = slow_seconds(if c.args.is_empty() { None } else { Some(c.arg(0)) });
             b.invoke("update_chat_settings", modes(json!({ "slow_mode": true, "slow_mode_wait_time": secs }))).await?;
             o.ok(format!("Slow mode enabled ({secs}s)"));
             manager_changed(c).await;
@@ -1439,8 +1465,7 @@ async fn core(c: &Call<'_>, o: &mut Outcome) -> Result<Flow, String> {
             manager_changed(c).await;
         }
         "followers" => {
-            let raw = if c.arg(0).is_empty() { "0" } else { c.arg(0) };
-            let minutes = followers_minutes(raw).map(Value::from).unwrap_or(Value::Null);
+            let minutes = followers_setting(c.arg(0)).map(Value::from).unwrap_or(Value::Null);
             b.invoke("update_chat_settings", modes(json!({ "follower_mode": true, "follower_mode_duration": minutes }))).await?;
             o.ok("Followers-only mode enabled");
             manager_changed(c).await;
@@ -1531,7 +1556,7 @@ async fn core(c: &Call<'_>, o: &mut Outcome) -> Result<Flow, String> {
             manager_act(c, o, json!({ "kind": "cancel_raid" })).await?;
         }
         "marker" => {
-            b.invoke("create_stream_marker", json!({ "userId": id, "description": opt(&c.from(0)) })).await?;
+            b.invoke("create_stream_marker", json!({ "userId": id, "description": marker_description(&c.from(0)) })).await?;
             o.ok("Stream marker created");
         }
         "color" => {
@@ -1721,7 +1746,7 @@ async fn core(c: &Call<'_>, o: &mut Outcome) -> Result<Flow, String> {
             o.say(format!("Hiding {target} everywhere. Undo in Settings > Chat > Hidden Messages."));
         }
         "settitle" | "setgame" => {
-            let value = c.from(0).trim().to_string();
+            let value = title_or_query(&c.from(0));
             let title = c.command == "settitle";
             if value.is_empty() || id.is_empty() {
                 o.info(if title { "Usage: /settitle <title>" } else { "Usage: /setgame <category>" });

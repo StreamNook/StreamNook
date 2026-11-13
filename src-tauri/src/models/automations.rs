@@ -51,6 +51,22 @@ pub const MAX_PER_HOUR: u32 = 120;
 pub const MAX_WAIT_SECONDS: u32 = 130;
 /// The tray's "Set away" text when no away message was ever written.
 pub const DEFAULT_AWAY_MESSAGE: &str = "Back soon";
+/// A Timer's interval, in seconds (5 minutes to 12 hours).
+pub const TIMER_MIN_SECONDS: u32 = 300;
+pub const TIMER_MAX_SECONDS: u32 = 43_200;
+/// Uptime and Delay seconds.
+pub const TIMED_MAX_SECONDS: u32 = 172_800;
+/// A Timeout's length (never a permanent ban).
+pub const TIMEOUT_MAX_SECONDS: u32 = 1_209_600;
+/// A Pin's length when it has one (Twitch's range).
+pub const PIN_MIN_SECONDS: u32 = 30;
+pub const PIN_MAX_SECONDS: u32 = 1800;
+/// A Wait's length.
+pub const WAIT_MAX_SECONDS: u32 = 300;
+/// Characters in a Timeout reason and an Announce.
+pub const MAX_REASON_CHARS: usize = 500;
+/// Chats a rule may keep joined with JoinChat, counted in the 50 cap.
+pub const MAX_ANNOUNCE_CHARS: usize = 500;
 
 /// Whether rules run: Off, Test (they log what they would do) or On.
 #[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -199,7 +215,7 @@ pub struct AutomationPrefs {
     pub other_channel_gap_seconds: u32,
     /// A line only you see in chat when a rule acts or would act.
     pub chat_notes: bool,
-    /// People a rule may whisper in a day (1 to 40).
+    /// People a rule may whisper in a day (1 to 30, so your own whispers keep room under Twitch's 40).
     pub whisper_people_per_day: u32,
     /// Keys the frontend adds to this group before this struct names them.
     #[serde(flatten)]
@@ -226,7 +242,7 @@ impl AutomationPrefs {
         AutomationPrefs {
             sends_per_minute: self.sends_per_minute.clamp(1, 20),
             other_channel_gap_seconds: self.other_channel_gap_seconds.clamp(10, 600),
-            whisper_people_per_day: self.whisper_people_per_day.clamp(1, 40),
+            whisper_people_per_day: self.whisper_people_per_day.clamp(1, 30),
             ..self.clone()
         }
     }
@@ -282,6 +298,43 @@ pub enum Trigger {
         #[serde(default)]
         batch_text: String,
     },
+    /// A whisper to the owner from someone you have whispered with before.
+    Whisper {
+        #[serde(default)]
+        text: Option<TextMatch>,
+    },
+    /// Every `every_seconds` (300 to 43,200) per chat, skipped below
+    /// `min_messages` other people's lines since its last run.
+    Timer {
+        #[serde(default = "default_timer_seconds")]
+        every_seconds: u32,
+        #[serde(default)]
+        min_messages: u32,
+    },
+    /// Local time `at` ("HH:MM") on `days` (empty = every day), once per date.
+    Clock {
+        #[serde(default)]
+        at: String,
+        #[serde(default)]
+        days: Vec<Weekday>,
+    },
+    /// Once per broadcast at `seconds` of uptime; `late_ok` (set by the
+    /// reminder convert) also fires any time after it, once per broadcast.
+    Uptime {
+        #[serde(default)]
+        seconds: u32,
+        #[serde(default)]
+        late_ok: bool,
+    },
+    /// Once, `seconds` after a window joined the chat.
+    Delay {
+        #[serde(default)]
+        seconds: u32,
+    },
+}
+
+fn default_timer_seconds() -> u32 {
+    900
 }
 
 impl Default for Trigger {
@@ -430,6 +483,8 @@ pub struct Conditions {
     /// Include Shared Chat partner chat lines (never events).
     pub shared_chat: bool,
     pub hours: Option<Hours>,
+    /// The saved-filter language (`ChatRules::validate_filter`), chat rows only.
+    pub expression: Option<String>,
 }
 
 /// A chat a rule names. `id` is the element id; `key` is built in Rust
@@ -510,38 +565,162 @@ pub enum Action {
         #[serde(default = "full_volume")]
         volume: f32,
     },
+    /// One typed Helix command (`command::parse_command`); the stored line
+    /// is canonical (alias resolved).
+    Command {
+        #[serde(default)]
+        id: String,
+        #[serde(default)]
+        line: String,
+    },
+    /// A whisper to `to` (a person you have whispered with, by id); on a
+    /// Whisper trigger an empty `to` is the sender (the Reply form).
+    Whisper {
+        #[serde(default)]
+        id: String,
+        #[serde(default)]
+        to: Option<WhisperTarget>,
+        #[serde(default)]
+        texts: Vec<Line>,
+        #[serde(default)]
+        pick: Pick,
+    },
+    Timeout {
+        #[serde(default)]
+        id: String,
+        #[serde(default)]
+        seconds: u32,
+        #[serde(default)]
+        reason: String,
+    },
+    Delete {
+        #[serde(default)]
+        id: String,
+    },
+    Pin {
+        #[serde(default)]
+        id: String,
+        /// None pins until the stream ends.
+        #[serde(default)]
+        seconds: Option<u32>,
+    },
+    Announce {
+        #[serde(default)]
+        id: String,
+        #[serde(default)]
+        text: String,
+        /// "primary", "blue", "green", "orange" or "purple".
+        #[serde(default = "primary_color")]
+        color: String,
+    },
+    Shoutout {
+        #[serde(default)]
+        id: String,
+    },
+    JoinChat {
+        #[serde(default)]
+        id: String,
+        #[serde(default)]
+        channel: ChannelRef,
+    },
+    LeaveChat {
+        #[serde(default)]
+        id: String,
+        #[serde(default)]
+        channel: ChannelRef,
+    },
+    Wait {
+        #[serde(default)]
+        id: String,
+        #[serde(default)]
+        seconds: u32,
+    },
+    Log {
+        #[serde(default)]
+        id: String,
+        #[serde(default)]
+        to_file: bool,
+    },
+}
+
+fn primary_color() -> String {
+    "primary".to_string()
+}
+
+/// A person a Whisper action writes to.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+#[serde(default)]
+pub struct WhisperTarget {
+    pub user_id: String,
+    pub login: String,
+    pub name: String,
 }
 
 impl Action {
     pub fn id(&self) -> &str {
         match self {
-            Action::Reply { id, .. } | Action::Send { id, .. } | Action::Notify { id, .. } => id,
+            Action::Reply { id, .. }
+            | Action::Send { id, .. }
+            | Action::Notify { id, .. }
+            | Action::Command { id, .. }
+            | Action::Whisper { id, .. }
+            | Action::Timeout { id, .. }
+            | Action::Delete { id }
+            | Action::Pin { id, .. }
+            | Action::Announce { id, .. }
+            | Action::Shoutout { id }
+            | Action::JoinChat { id, .. }
+            | Action::LeaveChat { id, .. }
+            | Action::Wait { id, .. }
+            | Action::Log { id, .. } => id,
         }
     }
 
     fn id_mut(&mut self) -> &mut String {
         match self {
-            Action::Reply { id, .. } | Action::Send { id, .. } | Action::Notify { id, .. } => id,
+            Action::Reply { id, .. }
+            | Action::Send { id, .. }
+            | Action::Notify { id, .. }
+            | Action::Command { id, .. }
+            | Action::Whisper { id, .. }
+            | Action::Timeout { id, .. }
+            | Action::Delete { id }
+            | Action::Pin { id, .. }
+            | Action::Announce { id, .. }
+            | Action::Shoutout { id }
+            | Action::JoinChat { id, .. }
+            | Action::LeaveChat { id, .. }
+            | Action::Wait { id, .. }
+            | Action::Log { id, .. } => id,
         }
     }
 
-    /// Whether the action posts outside this device (and so claims).
+    /// Whether the action acts outside this device (and so claims). Notify,
+    /// Log, JoinChat, LeaveChat and Wait are local or control.
     pub fn is_outward(&self) -> bool {
-        matches!(self, Action::Reply { .. } | Action::Send { .. })
+        !matches!(
+            self,
+            Action::Notify { .. } | Action::Log { .. } | Action::JoinChat { .. } | Action::LeaveChat { .. } | Action::Wait { .. }
+        )
     }
 
-    /// The lines a Reply or Send picks from; none for a Notify.
+    /// Whether the action is a control or local step that never claims.
+    pub fn is_control(&self) -> bool {
+        !self.is_outward()
+    }
+
+    /// The lines a Reply, Send or Whisper picks from; none otherwise.
     pub fn lines(&self) -> &[Line] {
         match self {
-            Action::Reply { texts, .. } | Action::Send { texts, .. } => texts,
-            Action::Notify { .. } => &[],
+            Action::Reply { texts, .. } | Action::Send { texts, .. } | Action::Whisper { texts, .. } => texts,
+            _ => &[],
         }
     }
 
     fn lines_mut(&mut self) -> Option<&mut Vec<Line>> {
         match self {
-            Action::Reply { texts, .. } | Action::Send { texts, .. } => Some(texts),
-            Action::Notify { .. } => None,
+            Action::Reply { texts, .. } | Action::Send { texts, .. } | Action::Whisper { texts, .. } => Some(texts),
+            _ => None,
         }
     }
 }
@@ -624,6 +803,20 @@ impl Rule {
 
     pub fn is_badge_rule(&self) -> bool {
         matches!(self.when, Trigger::BadgeDrop { .. })
+    }
+
+    /// Timer, Clock, Uptime and Delay: fired by time, not by a row.
+    pub fn is_timed(&self) -> bool {
+        matches!(self.when, Trigger::Timer { .. } | Trigger::Clock { .. } | Trigger::Uptime { .. } | Trigger::Delay { .. })
+    }
+
+    pub fn is_whisper_rule(&self) -> bool {
+        matches!(self.when, Trigger::Whisper { .. })
+    }
+
+    /// A chat row starts it (Message, Mention, FirstMessage, ChannelEvent).
+    pub fn is_chat_rule(&self) -> bool {
+        !self.is_badge_rule() && !self.is_timed() && !self.is_whisper_rule()
     }
 }
 
@@ -894,6 +1087,41 @@ fn normalize(rule: &mut Rule) {
         rule.only_if.only_live = true;
         rule.limits.rule_cooldown_seconds = 0;
     }
+    // A Whisper rule has no chat: its scope reads as your channel (the
+    // owner's), and its expression is cleared.
+    if rule.is_whisper_rule() {
+        rule.only_if.channels = ChannelScope::Own {};
+    }
+    if !rule.is_chat_rule() {
+        rule.only_if.expression = None;
+    }
+    // Shoutout is forced only-live (Twitch needs the channel live).
+    if rule.actions.iter().any(|a| matches!(a, Action::Shoutout { .. })) {
+        rule.only_if.only_live = true;
+    }
+    if let Some(e) = &rule.only_if.expression {
+        if e.trim().is_empty() {
+            rule.only_if.expression = None;
+        }
+    }
+    for action in rule.actions.iter_mut() {
+        match action {
+            Action::Command { line, .. } => {
+                if let Ok(canonical) = crate::services::account_automations::command::canonical_line(line) {
+                    *line = canonical;
+                }
+            }
+            Action::Announce { color, .. } => {
+                *color = color.trim().to_ascii_lowercase();
+                if color.is_empty() {
+                    *color = "primary".into();
+                }
+            }
+            Action::JoinChat { channel, .. } | Action::LeaveChat { channel, .. } => normalize_chat(channel),
+            Action::Whisper { to: Some(target), .. } => target.login = target.login.trim().trim_start_matches('@').to_ascii_lowercase(),
+            _ => {}
+        }
+    }
     fill_ids(rule);
 }
 
@@ -965,6 +1193,204 @@ fn check_pattern(text: &TextMatch, errors: &mut Errors) {
     }
 }
 
+const TIMER_WORDS: &str = "A timed rule needs a chat: pick your channel, these channels or the stream you're watching";
+const NO_USER_WORDS: &str = "A timed rule has no {user}: nobody started it";
+const WHISPER_RULE_WORDS: &str = "A whisper rule can reply, whisper, post to a chat you pick, notify you, log or wait";
+const CHAT_ONLY_WORDS: &str = "This works only on a chat message";
+
+/// P2 trigger checks (called from `validate` after the Message check).
+fn check_p2_trigger(rule: &Rule, errors: &mut Errors) {
+    match &rule.when {
+        Trigger::Whisper { text } => {
+            if let Some(text) = text {
+                if !text.pattern.trim().is_empty() {
+                    let mut probe = text.clone();
+                    probe.pattern = probe.pattern.trim().to_string();
+                    let mut inner = Errors(Vec::new());
+                    check_pattern(&probe, &mut inner);
+                    for e in inner.0 {
+                        errors.push("when.text.pattern", &e.message);
+                    }
+                }
+            }
+        }
+        Trigger::Timer { every_seconds, min_messages } => {
+            if !(TIMER_MIN_SECONDS..=TIMER_MAX_SECONDS).contains(every_seconds) {
+                errors.push("when.every_seconds", "Pick 5 minutes to 12 hours");
+            }
+            if *min_messages > 1000 {
+                errors.push("when.min_messages", "Keep it to 1000 messages or fewer");
+            }
+            // Chats x rate is not a save error: `validate` has no `sends_per_minute` (S7.1's
+            // `ValidateCtx` carries none) and the preference is per device. The pace rail
+            // refuses what the rules may not send, per device and across devices, at fire;
+            // a timed rule in many chats also spreads its posts by a per-chat offset.
+        }
+        Trigger::Clock { at, .. } => {
+            if parse_hhmm(at).is_none() {
+                errors.push("when.at", "Use a time like 19:30");
+            }
+        }
+        Trigger::Uptime { seconds, .. } | Trigger::Delay { seconds } => {
+            if !(1..=TIMED_MAX_SECONDS).contains(seconds) {
+                errors.push("when.seconds", "Pick 1 second to 48 hours");
+            }
+        }
+        _ => {}
+    }
+    if rule.is_timed() {
+        match rule.only_if.channels {
+            ChannelScope::Own {} | ChannelScope::These { .. } | ChannelScope::Watching {} => {}
+            ChannelScope::AnyOpen {} => errors.push("only_if.channels", TIMER_WORDS),
+        }
+        if !matches!(rule.when, Trigger::Delay { .. }) && !rule.only_if.only_live && rule.origin.as_deref().map_or(true, |o| !o.starts_with("reminder:")) {
+            // Timer-family rules are only-live by default; a converted reminder may turn it off.
+        }
+    }
+    if let Some(expression) = &rule.only_if.expression {
+        if !rule.is_chat_rule() {
+            errors.push("only_if.expression", CHAT_ONLY_WORDS);
+        } else if expression.chars().count() > 500 {
+            errors.push("only_if.expression", "Keep the expression to 500 characters");
+        } else if let Err(e) = crate::services::chat_rules::ChatRules::compile_expression(expression) {
+            errors.push("only_if.expression", &e);
+        }
+    }
+}
+
+/// P2 action checks (called from the action loop for every kind but Reply,
+/// Send and Notify).
+fn check_p2_action(rule: &Rule, action: &Action, at: &str, scope: &TextScope, errors: &mut Errors) {
+    let chat_msg = matches!(rule.when, Trigger::Message { .. } | Trigger::Mention { .. } | Trigger::FirstMessage {});
+    let raid = matches!(&rule.when, Trigger::ChannelEvent { events, .. } if events.contains(&EventKind::Raid));
+    let whisper_rule = rule.is_whisper_rule();
+    let send_as = rule.send_as.id.trim();
+    let own_is_actor = !send_as.is_empty() && rule.owner.id.trim() == send_as;
+    let staff_only = |errors: &mut Errors, name: &str| {
+        if whisper_rule {
+            errors.push(at, WHISPER_RULE_WORDS);
+        } else if !chat_msg {
+            errors.push(at, &format!("{name} works on a chat message"));
+        }
+    };
+    match action {
+        Action::Command { line, .. } => {
+            if whisper_rule {
+                errors.push(at, WHISPER_RULE_WORDS);
+            }
+            let timed_own = matches!(rule.when, Trigger::Timer { .. } | Trigger::Clock { .. })
+                && matches!(rule.only_if.channels, ChannelScope::Own {});
+            match crate::services::account_automations::command::check_line(line, &crate::services::account_automations::command::SaveCtx {
+                timed_own,
+                owner_is_send_as: own_is_actor,
+                chatter_text_ok: scope.chatter_ok,
+            }) {
+                Ok(()) => {}
+                Err(words) => errors.push(format!("{at}.line"), &words),
+            }
+        }
+        Action::Whisper { to, texts, .. } => {
+            if texts.is_empty() {
+                errors.push(format!("{at}.texts"), "Add at least one line");
+            }
+            if texts.len() > MAX_LINES {
+                errors.push(format!("{at}.texts"), "Pick from up to 20 lines");
+            }
+            for (j, line) in texts.iter().enumerate() {
+                let path = format!("{at}.texts[{j}].text");
+                let text = line.text.trim();
+                if text.is_empty() {
+                    errors.push(path.clone(), "Write the message");
+                } else if line.text.chars().count() > MAX_LINE_CHARS {
+                    errors.push(path.clone(), "Keep each line to 500 characters");
+                }
+                check_outward_text(&path, &line.text, scope, errors);
+            }
+            if !whisper_rule && to.as_ref().map_or(true, |t| t.user_id.trim().is_empty()) {
+                errors.push(format!("{at}.to"), "Pick a person you have whispered with");
+            }
+            if rule.is_timed() {
+                if let Some(t) = to {
+                    if t.user_id.trim().is_empty() {
+                        errors.push(format!("{at}.to"), "Pick a person you have whispered with");
+                    }
+                }
+            }
+        }
+        Action::Timeout { seconds, reason, .. } => {
+            staff_only(errors, "Timeout");
+            if !(1..=TIMEOUT_MAX_SECONDS).contains(seconds) {
+                errors.push(format!("{at}.seconds"), "Pick 1 second to 14 days");
+            }
+            if is_kick_sender(rule) && *seconds > 604_800 {
+                errors.push(format!("{at}.seconds"), "Kick timeouts last up to 7 days");
+            }
+            if reason.chars().count() > MAX_REASON_CHARS {
+                errors.push(format!("{at}.reason"), "Keep the reason to 500 characters");
+            }
+            check_outward_text(&format!("{at}.reason"), reason, scope, errors);
+        }
+        Action::Delete { .. } => staff_only(errors, "Delete"),
+        Action::Pin { seconds, .. } => {
+            staff_only(errors, "Pin");
+            if let Some(s) = seconds {
+                if !(PIN_MIN_SECONDS..=PIN_MAX_SECONDS).contains(s) {
+                    errors.push(format!("{at}.seconds"), "A pin lasts 30 seconds to 30 minutes");
+                }
+            }
+        }
+        Action::Announce { text, color, .. } => {
+            staff_only(errors, "Announce");
+            let t = text.trim();
+            if t.is_empty() {
+                errors.push(format!("{at}.text"), "Write the announcement");
+            } else if text.chars().count() > MAX_ANNOUNCE_CHARS {
+                errors.push(format!("{at}.text"), "Keep it to 500 characters");
+            }
+            if !matches!(color.as_str(), "primary" | "blue" | "green" | "orange" | "purple") {
+                errors.push(format!("{at}.color"), "Pick one of the announcement colors");
+            }
+            check_outward_text(&format!("{at}.text"), text, scope, errors);
+        }
+        Action::Shoutout { .. } => {
+            if whisper_rule {
+                errors.push(at, WHISPER_RULE_WORDS);
+            } else if !(chat_msg || raid) {
+                errors.push(at, "Shoutout works on a chat message or a raid");
+            }
+        }
+        Action::JoinChat { channel, .. } | Action::LeaveChat { channel, .. } => {
+            if login_of(&channel.key).is_empty() {
+                errors.push(format!("{at}.channel"), "Pick a channel");
+            }
+        }
+        Action::Wait { seconds, .. } => {
+            if !(1..=WAIT_MAX_SECONDS).contains(seconds) {
+                errors.push(format!("{at}.seconds"), "Wait 1 to 300 seconds");
+            }
+        }
+        Action::Log { .. } | Action::Reply { .. } | Action::Send { .. } | Action::Notify { .. } => {}
+    }
+    // `{user}` has no meaning when nothing a person did started the rule.
+    if rule.is_timed() {
+        let mut texts: Vec<&str> = action.lines().iter().map(|l| l.text.as_str()).collect();
+        match action {
+            Action::Announce { text, .. } => texts.push(text),
+            Action::Command { line, .. } => texts.push(line),
+            _ => {}
+        }
+        if texts.iter().any(|t| placeholders(t).iter().any(|n| matches!(n.to_ascii_lowercase().as_str(), "user" | "user.name" | "user.login"))) {
+            errors.push(at, NO_USER_WORDS);
+        }
+    }
+    // A Whisper rule's Send needs an explicit chat.
+    if whisper_rule {
+        if let Action::Send { to: None, .. } = action {
+            errors.push(format!("{at}.to"), "Pick the chat to post in");
+        }
+    }
+}
+
 /// Tidy and check a rule before it is saved. Forces what a rule kind
 /// requires (a badge rule runs in your own channel, only while live, with no
 /// rule cooldown), fills missing ids, and answers every field error; an
@@ -1015,6 +1441,7 @@ pub fn validate(rule: &mut Rule, ctx: &ValidateCtx) -> Vec<FieldError> {
         }
         _ => {}
     }
+    check_p2_trigger(rule, &mut errors);
 
     if let ChannelScope::These { list } = &rule.only_if.channels {
         if list.is_empty() {
@@ -1079,7 +1506,13 @@ pub fn validate(rule: &mut Rule, ctx: &ValidateCtx) -> Vec<FieldError> {
                 check_local_text(&format!("{at}.title"), title, &scope, &mut errors);
                 check_local_text(&format!("{at}.body"), body, &scope, &mut errors);
             }
+            other => check_p2_action(rule, other, &at, &scope, &mut errors),
         }
+    }
+    if rule.actions.iter().any(|a| matches!(a, Action::Command { .. } | Action::Whisper { .. } | Action::Timeout { .. } | Action::Delete { .. } | Action::Pin { .. } | Action::Announce { .. } | Action::Shoutout { .. }))
+        && rule.send_as.id.trim().is_empty()
+    {
+        errors.push("send_as", "Pick who acts");
     }
 
     let limits = rule.limits;
@@ -1181,9 +1614,9 @@ mod tests {
 
     #[test]
     fn a_rule_from_a_newer_build_is_held_and_kept_as_it_is() {
-        let newer = json!({ "id": "r-000000000001", "name": "Timed", "when": { "kind": "timer", "every_seconds": 900 }, "actions": [] });
+        let newer = json!({ "id": "r-000000000001", "name": "Polled", "when": { "kind": "stream_poll", "every_seconds": 900 }, "actions": [] });
         assert!(Rule::from_value(&newer).is_err());
-        let newer_action = json!({ "id": "r-000000000002", "actions": [{ "kind": "timeout", "id": "a-00000001" }] });
+        let newer_action = json!({ "id": "r-000000000002", "actions": [{ "kind": "skywrite", "id": "a-00000001" }] });
         assert!(Rule::from_value(&newer_action).is_err());
         let group = Automations { rules: vec![newer.clone(), newer_action.clone()], ..Automations::default() };
         let back: Automations = serde_json::from_value(serde_json::to_value(&group).unwrap()).unwrap();
@@ -1222,7 +1655,7 @@ mod tests {
         let p = AutomationPrefs::default();
         assert_eq!((p.sends_per_minute, p.other_channels, p.other_channel_gap_seconds, p.chat_notes, p.whisper_people_per_day), (10, false, 30, true, 20));
         let wild = AutomationPrefs { sends_per_minute: 0, other_channel_gap_seconds: 5000, whisper_people_per_day: 99, ..AutomationPrefs::default() }.clamped();
-        assert_eq!((wild.sends_per_minute, wild.other_channel_gap_seconds, wild.whisper_people_per_day), (1, 600, 40));
+        assert_eq!((wild.sends_per_minute, wild.other_channel_gap_seconds, wild.whisper_people_per_day), (1, 600, 30));
         let read: AutomationPrefs = serde_json::from_value(json!({ "sends_per_minute": 4, "later_pref": true })).unwrap();
         assert_eq!(read.sends_per_minute, 4);
         assert!(read.chat_notes);

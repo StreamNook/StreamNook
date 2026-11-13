@@ -152,6 +152,9 @@ pub(crate) fn classify(r: &Result<(), SendFail>) -> Outcome {
         Err(SendFail::NoAnswer(_)) => Outcome::Unknown,
         Err(SendFail::BeforeConnect(_)) => Outcome::Refused(send_failure_reason(None, "")),
         Err(SendFail::Status(429, _)) => Outcome::RateLimited,
+        // A 5xx may have been delivered (the whisper check reads Twitch's thread); so may a
+        // 3xx (D291 reads any status that is not an answered 4xx or 429 as Unknown).
+        Err(SendFail::Status(300..=399 | 500..=599, _)) => Outcome::Unknown,
         Err(SendFail::Status(code, body)) => Outcome::Refused(send_failure_reason(Some(*code), body)),
         Err(SendFail::SignedOut) => Outcome::Refused(NOT_SIGNED_IN.into()),
     }
@@ -472,17 +475,38 @@ async fn run_queued(
     expect_owner_name: Option<&str>,
     schedule: bool,
 ) -> Result<WhisperUpdate, String> {
+    run_queued_classified(scope, helix, clock, sleeper, current, key, id, expect_owner, expect_owner_name, schedule, false).await.0
+}
+
+/// `run_queued` with the Helix `Outcome` beside the result, so the automation
+/// engine can apply the door table (a 5xx is `Unknown`: it keeps the claim;
+/// `RateLimited`, a failed token and signed out are Refused). `Outcome::Refused`
+/// with a text is also returned for the before-connect and signed-out paths.
+#[allow(clippy::too_many_arguments)]
+async fn run_queued_classified(
+    scope: &Scope,
+    helix: &dyn Helix,
+    clock: &dyn Clock,
+    sleeper: &dyn Sleeper,
+    current: &IsCurrent,
+    key: &str,
+    id: &str,
+    expect_owner: Option<&str>,
+    expect_owner_name: Option<&str>,
+    schedule: bool,
+    automated: bool,
+) -> (Result<WhisperUpdate, String>, Outcome) {
     set_stage(id, &scope.owner, key, Stage::Queued);
     let _ = whisper_store::pin(scope, key, true);
     let _turn = SEND_LOCK.lock().await;
     if !current(scope) {
         // Teardown files the words for it.
-        return Err(SIGNED_OUT_BEFORE.into());
+        return (Err(SIGNED_OUT_BEFORE.into()), Outcome::Refused(SIGNED_OUT_BEFORE.into()));
     }
     let Some(message) = find_message(scope, key, id) else {
         clear_stage(id);
         unpin_if_idle(scope, key);
-        return Err("This whisper was discarded.".into());
+        return (Err("This whisper was discarded.".into()), Outcome::Refused("This whisper was discarded.".into()));
     };
     set_stage(id, &scope.owner, key, Stage::InFlight);
 
@@ -495,17 +519,22 @@ async fn run_queued(
     }
     *LAST_START_MS.lock().unwrap_or_else(|e| e.into_inner()) = Some(clock.now_ms());
 
+    if let Err(reason) = crate::services::whisper_recipients::check_recipient(&scope.owner, &message.to_user_id, clock.now_ms(), automated) {
+        finish(scope, key, id, &Outcome::Refused(reason.clone()));
+        return (Err(reason.clone()), Outcome::Refused(reason));
+    }
+
     let (mut token, me) = match bound_identity(helix, &scope.owner).await {
         Ok(v) => v,
         Err(reason) => {
             finish(scope, key, id, &Outcome::Refused(reason.clone()));
-            return Err(reason);
+            return (Err(reason.clone()), Outcome::Refused(reason));
         }
     };
     if let Some(expected) = expect_owner {
         if let Err(reason) = reply_owner_check(expected, expect_owner_name, &me) {
             finish(scope, key, id, &Outcome::Refused(reason.clone()));
-            return Err(reason);
+            return (Err(reason.clone()), Outcome::Refused(reason));
         }
     }
 
@@ -534,8 +563,11 @@ async fn run_queued(
         }
         break o;
     };
+    if matches!(outcome, Outcome::Sent | Outcome::Unknown) {
+        crate::services::whisper_recipients::book_recipient(&scope.owner, &message.to_user_id, clock.now_ms());
+    }
     let update = finish(scope, key, id, &outcome);
-    match outcome {
+    let result = match &outcome {
         Outcome::Sent | Outcome::Unknown => {
             if schedule {
                 schedule_checks(scope.clone(), key.to_string());
@@ -543,8 +575,9 @@ async fn run_queued(
             update.ok_or_else(|| SIGNED_OUT_BEFORE.to_string())
         }
         Outcome::RateLimited => Err(send_failure_reason(Some(429), "")),
-        Outcome::Refused(reason) => Err(reason),
-    }
+        Outcome::Refused(reason) => Err(reason.clone()),
+    };
+    (result, outcome)
 }
 
 /// The whole send, with the seams passed in.
@@ -554,27 +587,51 @@ pub(crate) async fn send_in(
     helix: &dyn Helix,
     clock: &dyn Clock,
     sleeper: &dyn Sleeper,
-    mut target: SendTarget,
+    target: SendTarget,
     text: String,
     expect_owner: Option<String>,
     expect_owner_name: Option<String>,
     schedule: bool,
 ) -> Result<WhisperUpdate, String> {
+    send_in_classified(scope, helix, clock, sleeper, target, text, expect_owner, expect_owner_name, schedule, false).await.0
+}
+
+/// `send_in` for the automation engine: `by_automation` files the message
+/// with the mark, `expect_owner` is `Some(send_as.id)` (so `reply_owner_check`
+/// passes when the owner is another account), and the Helix `Outcome` is
+/// returned beside the result.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn send_in_classified(
+    scope: &Scope,
+    helix: &dyn Helix,
+    clock: &dyn Clock,
+    sleeper: &dyn Sleeper,
+    mut target: SendTarget,
+    text: String,
+    expect_owner: Option<String>,
+    expect_owner_name: Option<String>,
+    schedule: bool,
+    by_automation: bool,
+) -> (Result<WhisperUpdate, String>, Outcome) {
+    let before = |reason: String| (Err(reason.clone()), Outcome::Refused(reason));
     let text = text.trim().to_string();
     if text.is_empty() {
-        return Err("Type a message to send.".into());
+        return before("Type a message to send.".into());
     }
     let len = text_len(&text);
     if len > MAX_LEN {
-        return Err(too_long(len));
+        return before(too_long(len));
     }
     if let Some(expected) = expect_owner.as_deref() {
-        reply_owner_check(expected, expect_owner_name.as_deref(), &scope.owner)?;
+        if let Err(reason) = reply_owner_check(expected, expect_owner_name.as_deref(), &scope.owner) {
+            return before(reason);
+        }
     }
     if !is_numeric_id(&target.user_id) {
-        let user = TwitchService::get_user_by_login(&target.user_login)
-            .await
-            .map_err(|_| "Cannot send: User not found on Twitch.".to_string())?;
+        let user = match TwitchService::get_user_by_login(&target.user_login).await {
+            Ok(user) => user,
+            Err(_) => return before("Cannot send: User not found on Twitch.".to_string()),
+        };
         target.user_id = user.id;
         if target.profile_image_url.is_none() {
             target.profile_image_url = user.profile_image_url;
@@ -603,14 +660,20 @@ pub(crate) async fn send_in(
         failure: None,
         cut_to: None,
         migrated: false,
+        by_automation,
     };
-    let key = file_send(scope, &target, message.clone())?;
+    let key = match file_send(scope, &target, message.clone()) {
+        Ok(key) => key,
+        Err(e) => return before(e),
+    };
     // In memory until the send ends, and on disk before Twitch hears of it, so
     // a crash leaves it to be checked.
     let _ = whisper_store::pin(scope, &key, true);
-    whisper_store::write_now(scope, &key)?;
+    if let Err(e) = whisper_store::write_now(scope, &key) {
+        return before(e);
+    }
     whisper_inbox::emit_update(scope, &key, Some(message.clone()), None);
-    run_queued(
+    run_queued_classified(
         scope,
         helix,
         clock,
@@ -621,6 +684,7 @@ pub(crate) async fn send_in(
         expect_owner.as_deref(),
         expect_owner_name.as_deref(),
         schedule,
+        by_automation,
     )
     .await
 }
@@ -821,6 +885,7 @@ pub async fn cold_reply(
         failure: None,
         cut_to: None,
         migrated: false,
+        by_automation: false,
     };
     let target =
         SendTarget { key: user_id.to_string(), user_id: user_id.to_string(), user_login: login.to_string(), user_name: name.to_string(), profile_image_url: None };
@@ -828,6 +893,9 @@ pub async fn cold_reply(
     whisper_store::write_now(&scope, &key)?;
     whisper_store::flush_now()?;
     let outcome = classify(&helix.send(&token, &me, user_id, &text).await);
+    if matches!(outcome, Outcome::Sent | Outcome::Unknown) {
+        crate::services::whisper_recipients::book_recipient(&me, user_id, SystemClock.now_ms());
+    }
     let (stored, result) = match outcome {
         Outcome::Sent => (Outcome::Unknown, Ok(())),
         Outcome::Unknown => (Outcome::Unknown, Ok(())),
@@ -954,6 +1022,7 @@ mod tests {
             failure: None,
             cut_to: None,
             migrated: false,
+            by_automation: false,
         }
     }
 

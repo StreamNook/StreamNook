@@ -382,6 +382,7 @@ fn stored_of(gm: &GqlMessage, viewer: &str, me: &Who, other: &Who) -> StoredWhis
         failure: None,
         cut_to: None,
         migrated: false,
+        by_automation: false,
     }
 }
 
@@ -2235,6 +2236,7 @@ mod tests {
             failure: None,
             cut_to: None,
             migrated: false,
+            by_automation: false,
         }
     }
 

@@ -2069,7 +2069,7 @@ mod automation_settings_tests {
         json!({
             "id": "r-000000000001",
             "name": "From a newer build",
-            "when": { "kind": "timer", "every_seconds": 900 },
+            "when": { "kind": "stream_poll", "every_seconds": 900 },
             "limits": { "max_per_hour": 30, "burst_guard": 3 },
             "actions": [{ "kind": "reply", "id": "a-00000001", "texts": [], "future_flag": 7 }]
         })
