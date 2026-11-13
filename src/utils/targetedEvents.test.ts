@@ -14,6 +14,7 @@ const LITERALS = [
   // Account automations: Activity to the windows watching it, a Notify to its players.
   'automations://activity',
   'automations://notify',
+  'automations://speak',
   'window-visibility',
   'emote-palette://target',
   'emote-palette://insert',

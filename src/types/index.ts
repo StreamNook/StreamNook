@@ -778,7 +778,12 @@ export type AutomationTrigger =
   | { kind: 'timer'; every_seconds: number; min_messages: number }
   | { kind: 'clock'; at: string; days: AutomationWeekday[] }
   | { kind: 'uptime'; seconds: number; late_ok: boolean }
-  | { kind: 'delay'; seconds: number };
+  | { kind: 'delay'; seconds: number }
+  | { kind: 'follow' }
+  | { kind: 'reward_redeemed'; reward_id: string | null }
+  | { kind: 'poll_started' }
+  | { kind: 'prediction_started' }
+  | { kind: 'live_change'; online: boolean };
 
 export interface AutomationChannelRef {
   id: string;
@@ -858,7 +863,9 @@ export type AutomationAction =
   | { kind: 'join_chat'; id: string; channel: AutomationChannelRef }
   | { kind: 'leave_chat'; id: string; channel: AutomationChannelRef }
   | { kind: 'wait'; id: string; seconds: number }
-  | { kind: 'log'; id: string; to_file: boolean };
+  | { kind: 'log'; id: string; to_file: boolean }
+  | { kind: 'speak'; id: string; text: string; on_stream: boolean }
+  | { kind: 'highlight'; id: string; color: string };
 
 export interface AutomationLimits {
   rule_cooldown_seconds: number;

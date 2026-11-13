@@ -32,6 +32,8 @@ import {
   previewSample,
   saveRuleChecked,
   sameRuleBody,
+  isEdgeKind,
+  isOwnEventKind,
   withTrigger,
   type AutomationAccount,
   type AutomationTestRule,
@@ -39,6 +41,7 @@ import {
   type TriggerKind,
 } from '../../../utils/automations';
 import { ActionEditor } from './ActionEditor';
+import { EdgeIf, LiveChangeFields, OwnEventFields } from './OwnEventFields';
 import { BadgeDropFields } from './BadgeDropFields';
 import { EVENT_ITEMS, P2_TRIGGERS, ROLE_ITEMS } from './labels';
 import { ExpressionField, P2AddActions, P2TriggerFields, isP2Trigger } from './P2Fields';
@@ -68,6 +71,11 @@ const TRIGGERS: { value: TriggerKind; label: string }[] = [
   { value: 'first_message', label: 'Someone chats for the first time' },
   { value: 'channel_event', label: 'Someone subs, gifts, raids or cheers' },
   { value: 'badge_drop', label: 'A new Twitch badge drops' },
+  { value: 'follow', label: 'Someone follows you' },
+  { value: 'reward_redeemed', label: 'Someone redeems a reward' },
+  { value: 'poll_started', label: 'You start a poll' },
+  { value: 'prediction_started', label: 'You start a prediction' },
+  { value: 'live_change', label: 'A channel goes live or offline' },
   ...P2_TRIGGERS,
 ];
 
@@ -198,6 +206,8 @@ export function RuleEditor({ initial, isNew, accounts, otherChannelsOn, onClose,
   const when = draft.when;
   const badge = when.kind === 'badge_drop';
   const chatTrigger = when.kind === 'message' || when.kind === 'mention';
+  const ownEvent = isOwnEventKind(when.kind);
+  const edge = isEdgeKind(when.kind);
   const scope = draft.only_if.channels;
   const hours = draft.only_if.hours;
   const hasOutward = draft.actions.some(isOutward);
@@ -428,11 +438,26 @@ export function RuleEditor({ initial, isNew, accounts, otherChannelsOn, onClose,
             onChange={(next) => update((r) => ({ ...r, when: next }))}
           />
         )}
+
+        {ownEvent && (
+          <OwnEventFields
+            trigger={when}
+            ownerId={draft.owner.id}
+            errors={errors}
+            onChange={(next) => update((r) => ({ ...r, when: next }))}
+          />
+        )}
+
+        {when.kind === 'live_change' && (
+          <LiveChangeFields trigger={when} onChange={(next) => update((r) => ({ ...r, when: next }))} />
+        )}
       </Block>
 
       <Block title="If">
         {badge ? (
           <p className={HINT}>In your channel, only while you're live. Badge rules always work this way.</p>
+        ) : edge ? (
+          <EdgeIf ownEvent={ownEvent} draft={draft} errors={errors} addChannel={addChannel} setIf={setIf} />
         ) : (
           <>
             <Field label="Where" hint={scopeHint} error={errorAt(errors, 'only_if.channels')}>
@@ -663,7 +688,7 @@ export function RuleEditor({ initial, isNew, accounts, otherChannelsOn, onClose,
         ))}
         {draft.actions.length < MAX_ACTIONS && (
           <div className="flex flex-wrap items-center gap-1.5">
-            {!badge && (
+            {!badge && !edge && (
               <button type="button" onClick={() => update((r) => ({ ...r, actions: [...r.actions, actionOf('reply')] }))} className={QUIET_BUTTON}>
                 <Plus size={13} />
                 Reply
@@ -677,6 +702,16 @@ export function RuleEditor({ initial, isNew, accounts, otherChannelsOn, onClose,
               <Plus size={13} />
               Notify me
             </button>
+            <button type="button" onClick={() => update((r) => ({ ...r, actions: [...r.actions, actionOf('speak')] }))} className={QUIET_BUTTON}>
+              <Plus size={13} />
+              Say it out loud
+            </button>
+            {when.kind === 'message' && (
+              <button type="button" onClick={() => update((r) => ({ ...r, actions: [...r.actions, actionOf('highlight')] }))} className={QUIET_BUTTON}>
+                <Plus size={13} />
+                Highlight
+              </button>
+            )}
             {!badge && (
               <P2AddActions
                 rule={draft}

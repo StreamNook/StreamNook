@@ -125,7 +125,7 @@ export interface ScrollbarMarkStamp {
 /** A matched highlight rule, stamped by the Rust rule engine. */
 export interface HighlightStamp {
   rule_id: string;
-  kind: 'phrase' | 'user' | 'badge';
+  kind: 'phrase' | 'user' | 'badge' | 'automation';
   color: string;
   sound_id?: string | null;
   cooldown_ms: number;

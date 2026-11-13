@@ -1452,6 +1452,8 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   // and don't need title flash to attract attention).
   useEffect(() => {
     if (!phraseMatch) return;
+    // An automation highlight tints the row and nothing else: no title flash.
+    if (parsed.metadata?.highlight?.kind === 'automation') return;
     if (!chatHighlights?.appearance?.flash_title_when_unfocused) return;
     const sentTsRaw = parsed.tags.get('tmi-sent-ts');
     const sentTs = sentTsRaw ? parseInt(sentTsRaw, 10) : NaN;
@@ -1460,7 +1462,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     flashTitle(`${who}: highlight`);
     // Toggling the setting can re-run this for a row under five seconds old;
     // the backfill guard above bounds that to one flash.
-  }, [phraseMatch, parsed.tags, chatHighlights?.appearance?.flash_title_when_unfocused]);
+  }, [phraseMatch, parsed.tags, parsed.metadata?.highlight?.kind, chatHighlights?.appearance?.flash_title_when_unfocused]);
 
   // All cosmetic resolution (paint, 7TV badge, third-party badges) lives in
   // chatUserStore.addUser. ChatMessage just subscribes via the selectors

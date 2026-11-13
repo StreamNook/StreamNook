@@ -25,6 +25,8 @@ export const AUTOMATION_ACTIVITY_EVENT = 'automations://activity';
 export const AUTOMATION_NOTIFY_EVENT = 'automations://notify';
 /** The status, announced to every window when it changes. */
 export const AUTOMATION_STATUS_EVENT = 'automations://status';
+/** A Speak action's line, sent to the windows that could speak it (`emit_to`); the first to claim it speaks. */
+export const AUTOMATION_SPEAK_EVENT = 'automations://speak';
 
 /** Activity entries read per page. */
 export const ACTIVITY_PAGE = 100;
@@ -210,6 +212,30 @@ export interface AutomationNotice {
   channel: string;
 }
 
+/** The `automations://speak` payload. */
+export interface AutomationSpeak {
+  id: number;
+  text: string;
+  /** Composite key of the chat, or empty. */
+  channel: string;
+}
+
+/** One of your channel point rewards, for the Reward trigger's picker (`automations_own_rewards`). */
+export interface OwnReward {
+  id: string;
+  title: string;
+  cost: number;
+  enabled: boolean;
+  /** The reward asks the viewer for text. */
+  needs_input: boolean;
+}
+
+/** A reward as the picker lists it: "Hydrate (100 points)", ", off" while it is switched off. */
+export function rewardLabel(r: OwnReward): string {
+  const title = r.title.trim() || 'Untitled reward';
+  return `${title} (${r.cost.toLocaleString('en-US')} points${r.enabled ? '' : ', off'})`;
+}
+
 /** The automations commands, one wrapper each. */
 export const automationsApi = {
   status: () => invoke<AutomationStatus>('automations_status'),
@@ -233,6 +259,8 @@ export const automationsApi = {
   setDeviceName: (name: string) => invoke<string>('automations_set_device_name', { name }),
   /** True when the link answers; the words under Check it are the clients' own (`LINK_READY`, `LINK_NOT_READY`). */
   checkLink: (url: string) => invoke<boolean>('automations_check_link', { url }),
+  /** The owner's channel point rewards (null: the main account's). Rust answers a plain sentence on failure. */
+  ownRewards: (ownerId: string | null) => invoke<OwnReward[]>('automations_own_rewards', { ownerId }),
 };
 
 /** What Check it says; the iPhone says the same two lines. */
@@ -363,6 +391,13 @@ export const DEFAULT_LIMITS = {
 
 export type TriggerKind = AutomationTrigger['kind'];
 
+/** A trigger that fires from your own channel's events (no chat line, always your channel). */
+export const isOwnEventKind = (kind: TriggerKind): boolean =>
+  kind === 'follow' || kind === 'reward_redeemed' || kind === 'poll_started' || kind === 'prediction_started';
+
+/** A trigger that is not a chat line: your channel's events or a live change. A Reply has no message to answer there. */
+export const isEdgeKind = (kind: TriggerKind): boolean => isOwnEventKind(kind) || kind === 'live_change';
+
 export const newLine = (text = ''): AutomationLine => ({ id: newElementId('l'), text });
 
 export function actionOf(kind: AutomationAction['kind']): AutomationAction {
@@ -373,6 +408,10 @@ export function actionOf(kind: AutomationAction['kind']): AutomationAction {
       return { kind, id: newElementId('a'), to: null, texts: [newLine()], pick: 'random' };
     case 'notify':
       return { kind, id: newElementId('a'), title: '', body: '', toast: true, system: false, sound: null, volume: 1 };
+    case 'speak':
+      return { kind, id: newElementId('a'), text: '', on_stream: false };
+    case 'highlight':
+      return { kind, id: newElementId('a'), color: '#f97316' };
     case 'command':
       return { kind, id: newElementId('a'), line: '/slow 30' };
     case 'whisper':
@@ -484,7 +523,7 @@ export type P2ActionKind = 'command' | 'whisper' | 'timeout' | 'delete' | 'pin' 
 export type P2Action = Extract<AutomationAction, { kind: P2ActionKind }>;
 
 export const isP2Action = (a: AutomationAction): a is P2Action =>
-  !(a.kind === 'reply' || a.kind === 'send' || a.kind === 'notify');
+  !(a.kind === 'reply' || a.kind === 'send' || a.kind === 'notify' || a.kind === 'speak' || a.kind === 'highlight');
 
 /** Chat-message triggers: the moderation actions work on one. */
 export const isChatMessageTrigger = (t: AutomationTrigger): boolean => t.kind === 'message' || t.kind === 'mention' || t.kind === 'first_message';
@@ -515,6 +554,14 @@ export function triggerOf(kind: TriggerKind): AutomationTrigger {
       return { kind, events: ['sub'], min_months: 0, min_gifts: 0, min_viewers: 0, min_bits: 0 };
     case 'badge_drop':
       return { kind, on: 'both', link: { preset: 'streamnook', custom: '', if_not_ready: 'streamnook' }, batch_text: '' };
+    case 'follow':
+    case 'poll_started':
+    case 'prediction_started':
+      return { kind };
+    case 'reward_redeemed':
+      return { kind, reward_id: null };
+    case 'live_change':
+      return { kind, online: true };
     case 'whisper':
       return { kind, text: null };
     case 'timer':
@@ -534,6 +581,29 @@ export function triggerOf(kind: TriggerKind): AutomationTrigger {
 export function withTrigger(rule: AutomationRule, kind: TriggerKind): AutomationRule {
   if (rule.when.kind === kind) return rule;
   const when = triggerOf(kind);
+  if (isEdgeKind(kind)) {
+    // A P3 rule runs from an event that is not a chat line: there is nothing to
+    // reply to, the channel is yours (a live change names the channels), and
+    // roles mean nothing. Rust forces the same at save.
+    const live = kind === 'live_change';
+    const scope = rule.only_if.channels;
+    return {
+      ...rule,
+      when,
+      only_if: {
+        ...rule.only_if,
+        channels: live ? { kind: 'these', list: scope.kind === 'these' ? scope.list : [] } : { kind: 'own' },
+        roles: [],
+        shared_chat: false,
+        only_live: live ? false : rule.only_if.only_live,
+        skip_users: live ? [] : rule.only_if.skip_users,
+        only_users: live ? [] : rule.only_if.only_users,
+      },
+      actions: rule.actions.map(
+        (a): AutomationAction => (a.kind === 'reply' ? { kind: 'send', id: a.id, to: null, texts: a.texts, pick: a.pick } : a),
+      ),
+    };
+  }
   if (kind !== 'badge_drop') {
     const cooldown =
       rule.when.kind === 'badge_drop' && rule.limits.rule_cooldown_seconds === 0
@@ -645,7 +715,15 @@ export function splitNames(text: string): string[] {
 }
 
 export const isOutward = (a: AutomationAction): boolean =>
-  !(a.kind === 'notify' || a.kind === 'log' || a.kind === 'join_chat' || a.kind === 'leave_chat' || a.kind === 'wait');
+  !(
+    a.kind === 'notify' ||
+    a.kind === 'speak' ||
+    a.kind === 'highlight' ||
+    a.kind === 'log' ||
+    a.kind === 'join_chat' ||
+    a.kind === 'leave_chat' ||
+    a.kind === 'wait'
+  );
 
 /** Where a rule lands when it moves one place: before the returned id, or at
  *  the end for null. Null overall when it is already at that end. */
@@ -691,6 +769,11 @@ export function previewSample(draft: AutomationRule): AutomationTestSample {
         },
       };
     case 'badge_drop':
+    case 'follow':
+    case 'reward_redeemed':
+    case 'poll_started':
+    case 'prediction_started':
+    case 'live_change':
     case 'timer':
     case 'clock':
     case 'uptime':

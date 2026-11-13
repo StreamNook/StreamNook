@@ -235,9 +235,10 @@ export async function applySlashUi(ui: SlashUi, channel: string, channelId: stri
         return;
       }
       case 'speak': {
-        const synth = typeof window !== 'undefined' ? window.speechSynthesis : undefined;
-        if (!synth) toast('Text to speech is not available on this system', 'error');
-        else synth.speak(new SpeechSynthesisUtterance(ui.text));
+        // Android speaks through its own plugin (`speak_android`); every
+        // platform says the same words when it cannot.
+        const { speakText } = await import('./speech');
+        if (!(await speakText(ui.text))) toast('Text to speech is not available on this system', 'error');
         return;
       }
       case 'window_effect':

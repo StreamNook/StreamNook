@@ -250,6 +250,89 @@ function NotifyFields({
   );
 }
 
+type SpeakAction = Extract<AutomationAction, { kind: 'speak' }>;
+type HighlightAction = Extract<AutomationAction, { kind: 'highlight' }>;
+
+const MAX_SPEAK = 300;
+
+/** The swatches the Highlight picker offers; the color input takes any other. */
+const HIGHLIGHT_SWATCHES = ['#f97316', '#eab308', '#22c55e', '#06b6d4', '#3b82f6', '#a855f7', '#ec4899', '#ef4444'];
+
+function SpeakFields({
+  action,
+  at,
+  errors,
+  onChange,
+}: {
+  action: SpeakAction;
+  at: string;
+  errors: readonly AutomationFieldError[];
+  onChange: (next: AutomationAction) => void;
+}) {
+  return (
+    <>
+      <Field label="Say" hint="Read out loud on this device. It is never posted to chat." error={errorAt(errors, `${at}.text`)}>
+        <textarea
+          value={action.text}
+          rows={2}
+          maxLength={MAX_SPEAK}
+          aria-label="Say"
+          onChange={(e) => onChange({ ...action, text: e.target.value })}
+          placeholder="{user} just followed"
+          className={`${INPUT} resize-y`}
+        />
+      </Field>
+      <SwitchLine
+        label="Also while streamer mode is on"
+        description="Streamer mode keeps it quiet unless you turn this on."
+        on={action.on_stream}
+        onChange={() => onChange({ ...action, on_stream: !action.on_stream })}
+      />
+    </>
+  );
+}
+
+function HighlightFields({
+  action,
+  at,
+  errors,
+  onChange,
+}: {
+  action: HighlightAction;
+  at: string;
+  errors: readonly AutomationFieldError[];
+  onChange: (next: AutomationAction) => void;
+}) {
+  const color = action.color.toLowerCase();
+  const valid = /^#[0-9a-f]{6}$/.test(color);
+  return (
+    <Field label="Color" hint="Tints the messages this rule matches." error={errorAt(errors, `${at}.color`)}>
+      <div className="flex flex-wrap items-center gap-2">
+        {HIGHLIGHT_SWATCHES.map((swatch) => (
+          <button
+            key={swatch}
+            type="button"
+            aria-label={`Color ${swatch}`}
+            aria-pressed={color === swatch}
+            onClick={() => onChange({ ...action, color: swatch })}
+            className={`h-6 w-6 rounded-full border transition-shadow ${
+              color === swatch ? 'border-textPrimary ring-2 ring-inset ring-background' : 'border-borderSubtle'
+            }`}
+            style={{ backgroundColor: swatch }}
+          />
+        ))}
+        <input
+          type="color"
+          value={valid ? color : '#f97316'}
+          aria-label="Custom color"
+          onChange={(e) => onChange({ ...action, color: e.target.value.toLowerCase() })}
+          className="h-6 w-8 cursor-pointer rounded border border-borderSubtle bg-transparent p-0"
+        />
+      </div>
+    </Field>
+  );
+}
+
 interface ActionEditorProps {
   action: AutomationAction;
   index: number;
@@ -296,6 +379,11 @@ export function ActionEditor({
       onChange({ ...action, body: `${action.body}${token}` });
       return;
     }
+    if (action.kind === 'speak') {
+      onChange({ ...action, text: `${action.text}${token}` });
+      return;
+    }
+    if (action.kind === 'highlight') return;
     const lineId = focusLine && action.texts.some((l) => l.id === focusLine) ? focusLine : action.texts[0]?.id;
     const line = action.texts.find((l) => l.id === lineId);
     if (!line) return;
@@ -344,6 +432,10 @@ export function ActionEditor({
 
       {action.kind === 'notify' ? (
         <NotifyFields action={action} at={at} errors={errors} onChange={onChange} />
+      ) : action.kind === 'speak' ? (
+        <SpeakFields action={action} at={at} errors={errors} onChange={onChange} />
+      ) : action.kind === 'highlight' ? (
+        <HighlightFields action={action} at={at} errors={errors} onChange={onChange} />
       ) : isP2Action(action) ? (
         <P2ActionFields
           action={action}
@@ -390,7 +482,7 @@ export function ActionEditor({
         </>
       )}
 
-      {shown.length > 0 && (
+      {shown.length > 0 && action.kind !== 'highlight' && (
         <Disclosure label="Insert a variable">
           <div className="flex flex-wrap gap-1.5">
             {shown.map((v) => (
