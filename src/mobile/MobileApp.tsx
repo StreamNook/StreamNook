@@ -55,6 +55,8 @@ import ToastManager from '../components/ToastManager';
 import { usePlatformAccountSync } from '../hooks/usePlatformAccountSync';
 import { useTwitchSignInPrompt } from '../hooks/useTwitchSignInPrompt';
 import { useMentionPing } from '../hooks/useMentionPing';
+import { useAutomationStatus } from '../hooks/useAutomationStatus';
+import { useAutomationNotify } from '../hooks/useAutomationNotify';
 
 const TAB_ORDER = ['following', 'browse', 'chats', 'rewards', 'you'] as const;
 
@@ -77,6 +79,10 @@ const MobileApp: React.FC = () => {
   // Plays the mention and reply sounds Rust picks (Chat > Mentions & Replies),
   // as the desktop's main window does.
   useMentionPing();
+  // Automations: the dot on the room tab and the channel line, and the Notify
+  // actions' toasts and sounds.
+  useAutomationStatus();
+  useAutomationNotify();
 
   const isBooting = useAppStore((s) => s.isBooting);
   const isAuthenticated = useAppStore((s) => s.isAuthenticated);

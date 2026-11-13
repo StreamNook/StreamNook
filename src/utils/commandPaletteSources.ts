@@ -35,6 +35,7 @@ import { usePluginUiRegistry } from '../plugins-ui/registry';
 import { Logger } from './logger';
 import { isApprovalClosed } from './twitchApproval';
 import { requestChangelog } from './changelogEvents';
+import { automationsApi, errorText, resumeAutomations, setAwayNow } from './automations';
 import { getBuiltInSnippets, type Snippet } from './commandPaletteCopypastas';
 import type { TwitchStream, TwitchVideo, TwitchClip } from '../types';
 import type { ChannelAboutData, SocialMediaLink } from '../types/panels';
@@ -220,6 +221,16 @@ const YOUR_SONGS_ITEM: PaletteItem = {
   keywords: 'songs your songs song history identified music shazam what song track name remember',
   run: () => openSongs(),
 };
+
+/** Runs one of the tray's automation actions and says how it went. */
+function automationAction(work: Promise<unknown>, done: string): void {
+  work
+    .then(() => useAppStore.getState().addToast(done, 'success'))
+    .catch((err) => {
+      Logger.warn('[CommandPalette] automations action failed:', err);
+      useAppStore.getState().addToast(errorText(err), 'error');
+    });
+}
 
 function buildQuickActions(): PaletteItem[] {
   const items: PaletteItem[] = [];
@@ -774,6 +785,42 @@ function buildQuickActions(): PaletteItem[] {
     },
   );
 
+  // ---- Automations: the tray's four actions
+  items.push(
+    {
+      id: 'qa.automationsPause',
+      section: 'Quick Actions',
+      title: 'Pause automations',
+      subtitle: 'Rules stop until you resume them',
+      keywords: 'automations pause stop off rules auto reply bot',
+      run: () => automationAction(automationsApi.setRun('off'), 'Automations paused'),
+    },
+    {
+      id: 'qa.automationsResume',
+      section: 'Quick Actions',
+      title: 'Resume automations',
+      subtitle: 'Rules go back to Test or On, as you left them',
+      keywords: 'automations resume start on test rules auto reply bot',
+      run: () => automationAction(resumeAutomations(), 'Automations resumed'),
+    },
+    {
+      id: 'qa.automationsAway',
+      section: 'Quick Actions',
+      title: 'Set away',
+      subtitle: 'Away on this device, with your last away message',
+      keywords: 'away afk brb set away automations',
+      run: () => automationAction(setAwayNow(), 'Away is set on this device'),
+    },
+    {
+      id: 'qa.automationsBack',
+      section: 'Quick Actions',
+      title: "I'm back",
+      subtitle: 'Clears away on this device',
+      keywords: 'back afk clear away automations',
+      run: () => automationAction(automationsApi.setAway(null), 'Away is cleared'),
+    },
+  );
+
   // ---- Help / feedback links
   items.push(
     {
@@ -972,6 +1019,13 @@ const SETTINGS_CATALOG: SettingsEntry[] = [
   { tab: 'Notifications', section: 'Notify me about', keywords: 'notify me about notification types live channels followed channels favorite channels live mentions and replies whispers app updates drops claimed drops new drops channel points predictions new badges gift subs earned rewards going live whisper dm update available badge favorite favorites watchlist category' },
   { tab: 'Notifications', section: 'Mentions', keywords: 'mentions counts as a mention name without @ display name highlight words muted chats mute unmute ping replies dynamic island notification history' },
   { tab: 'Notifications', section: 'Sound', keywords: 'sound play a sound tone which sound to play volume test notification send a test notification sound style ping audio' },
+
+  // Automations
+  { tab: 'Automations', keywords: 'automations rules auto reply autoresponder bot away reply welcome raid thanks sub thanks badge news test live activity' },
+  { tab: 'Automations', section: 'Automations', keywords: 'automations status off test on pause resume away afk back pace messages per minute other channels gap chat notes device name' },
+  { tab: 'Automations', section: 'Rules', keywords: 'rules add rule template away reply welcome first-timers raid thanks sub and gift thanks badge news editor when if do send as' },
+  { tab: 'Automations', section: 'Try It', keywords: 'try it test sample message sender event preview' },
+  { tab: 'Automations', section: 'Activity', keywords: 'activity log history acted test skipped today earlier clear' },
 
   // Cache
   { tab: 'Cache', keywords: 'cache disk cache load emotes and badges from disk refresh after refresh stored data clear storage expiry emote badge size maintenance prefetch' },

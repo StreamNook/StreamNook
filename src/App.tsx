@@ -56,6 +56,8 @@ import ErrorBoundary from './components/ErrorBoundary';
 import InputContextMenuHost from './components/InputContextMenuHost';
 import { listen } from '@tauri-apps/api/event';
 import { useMentionPing } from './hooks/useMentionPing';
+import { useAutomationStatus } from './hooks/useAutomationStatus';
+import { useAutomationNotify } from './hooks/useAutomationNotify';
 import { useTwitchSignInPrompt } from './hooks/useTwitchSignInPrompt';
 import { applyModerateEvent } from './utils/applyModerateEvent';
 import { handleSeventvEmoteSetUpdate, handleSeventvCosmeticUpdate, type EmoteSetUpdatePayload, type CosmeticUpdatePayload } from './services/seventvEventApi';
@@ -215,6 +217,10 @@ function App() {
   useChatDockHold();
   // Plays the mention sound when Rust says a live message mentioned you.
   useMentionPing();
+  // Automations: the status every chat dot reads, and the toasts and sounds of
+  // the Notify actions this window wins.
+  useAutomationStatus();
+  useAutomationNotify();
   // Main window only: asks you to sign in to Twitch again, until you do, when
   // Rust signed you out itself (one prompt per app, not per window).
   useTwitchSignInPrompt();

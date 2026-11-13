@@ -7,6 +7,10 @@ import { useChatTabsStore } from './chatTabsStore';
 import { ProviderMark } from '../../components/ProviderLogo';
 import { NAME_STUB, pickFolding, TAB_GAP, TAB_GAP_TIGHT, type FoldTab, type Folding } from './tabFolding';
 import { SevenTvAvatar } from '../../components/SevenTvAvatar';
+import { AutomationDot } from '../../components/chat/AutomationDot';
+import { useAutomationDot } from '../../hooks/useAutomationStatus';
+import { makeKey } from '../../utils/providerKey';
+import type { AutomationDotState } from '../../utils/automations';
 
 /** Fixed so the chat header, which is absolutely positioned over the top of the
  *  chat column, can offset itself by exactly this much and stop covering the
@@ -74,6 +78,9 @@ const ChatTabStripImpl: React.FC<{
   const activeChannel = useChatTabsStore((s) => s.activeChannel);
   const setActive = useChatTabsStore((s) => s.setActive);
   const removeTab = useChatTabsStore((s) => s.removeTab);
+  // The automations dot rides the room on screen.
+  const activeTab = tabs.find((t) => t.channel === activeChannel);
+  const autoDot = useAutomationDot(activeTab ? [makeKey(activeTab.provider, activeTab.login)] : []);
 
   // The iPhone strip's layout (tabFolding.ts): the rooms and what sits beside
   // them are centered as one group, and when they outgrow the bar the row
@@ -143,6 +150,7 @@ const ChatTabStripImpl: React.FC<{
       tab={tab}
       active={tab.channel === activeChannel}
       mark={mixedPlatforms && tab.provider !== 'twitch'}
+      auto={tab.channel === activeChannel ? autoDot : null}
       {...form}
       onSelect={live ? () => setActive(tab.channel) : undefined}
       onClose={live ? () => removeTab(tab.channel) : undefined}
@@ -239,9 +247,11 @@ const RoomPill: React.FC<{
   /** A cap on the name (the measure's stub form). */
   nameMax?: number;
   mark: boolean;
+  /** The automations dot, on the room on screen. */
+  auto?: AutomationDotState | null;
   onSelect?: () => void;
   onClose?: () => void;
-}> = ({ tab, active, folded, crowded, tight, bare = false, nameMax, mark, onSelect, onClose }) => {
+}> = ({ tab, active, folded, crowded, tight, bare = false, nameMax, mark, auto = null, onSelect, onClose }) => {
   // The room on screen keeps the full face, so folded to its face its backing
   // is a circle.
   const small = folded && tight && !active;
@@ -300,6 +310,7 @@ const RoomPill: React.FC<{
             {tab.label}
           </span>
         )}
+        {auto && !folded && <AutomationDot state={auto} />}
         {/* Mentions of you here, until you read them. */}
         {tab.mentions > 0 && !active && (
           <span className="shrink-0 min-w-[16px] h-4 px-1 rounded-full bg-error text-white text-[10.5px] font-semibold leading-4 text-center tabular-nums">

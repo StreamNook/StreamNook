@@ -7,7 +7,7 @@ import { Logger } from '../../utils/logger';
 
 /** Mirrors Rust `settings_catalog::CatalogRow`. */
 export interface CatalogRow {
-  /** `player`, `adFree`, `chat`, `moderation`, `theme`, `notifications`, `cache`, `support`. */
+  /** `player`, `adFree`, `chat`, `moderation`, `theme`, `notifications`, `automations`, `cache`, `support`. */
   page: string;
   section: string;
   title: string;
@@ -29,6 +29,7 @@ const PAGE_VIEW: Record<string, string> = {
   moderation: 'Moderation',
   theme: 'Theme',
   notifications: 'Notifications',
+  automations: 'Automations',
   cache: 'Cache',
   support: 'Support',
 };

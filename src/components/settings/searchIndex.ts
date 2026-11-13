@@ -2968,6 +2968,74 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     title: 'About',
     description: 'About notifications and how to use them.'
   },
+  // === Automations ===
+  {
+    tab: 'Automations',
+    section: 'Automations',
+    title: 'Automations',
+    description: 'Rules that reply, alert and moderate for you through your own accounts: away replies, welcomes, raid and sub thanks, badge news. Auto reply, autoresponder, bot.'
+  },
+  {
+    tab: 'Automations',
+    section: 'Automations',
+    title: 'Status',
+    description: 'Off, Test or On. Test writes what rules would do to Activity and sends nothing. Pause, resume, turn off every rule at once.'
+  },
+  {
+    tab: 'Automations',
+    section: 'Automations',
+    title: 'Away',
+    description: 'Set or clear away on this device, the same as /afk and /back. Rules set to answer only while you are away use it.'
+  },
+  {
+    tab: 'Automations',
+    section: 'Automations',
+    title: 'Pace',
+    description: 'The most messages your rules send in a minute, across all your devices. Rate, messages per minute, limit.'
+  },
+  {
+    tab: 'Automations',
+    section: 'Automations',
+    title: 'Other channels',
+    description: "Rules may post in chats that aren't yours, at most once per chat in each gap."
+  },
+  {
+    tab: 'Automations',
+    section: 'Automations',
+    title: 'Gap',
+    parent: 'Other channels',
+    description: "How long rules wait between messages in one chat that isn't yours."
+  },
+  {
+    tab: 'Automations',
+    section: 'Automations',
+    title: 'Chat notes',
+    description: 'A line only you see in chat when a rule acts, or would act in Test.'
+  },
+  {
+    tab: 'Automations',
+    section: 'Automations',
+    title: 'Device name',
+    description: 'The name your other devices show when this one answers first.'
+  },
+  {
+    tab: 'Automations',
+    section: 'Rules',
+    title: 'Rules',
+    description: 'Your rules: when something happens in chat, check the conditions, then reply, post or notify you. Add a rule, or start from a template: away reply, welcome first-timers, raid thanks, sub and gift thanks, badge news.'
+  },
+  {
+    tab: 'Automations',
+    section: 'Try It',
+    title: 'Try It',
+    description: 'Try a sample message, sender or event against your rules and see which would act and what they would post. Test, preview.'
+  },
+  {
+    tab: 'Automations',
+    section: 'Activity',
+    title: 'Activity',
+    description: 'What your rules did, would have done in Test, and skipped, today and earlier. Log, history.'
+  },
   // === Cache ===
   {
     tab: 'Cache',

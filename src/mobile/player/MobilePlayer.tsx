@@ -17,6 +17,9 @@ import { useMobileHlsEngine, type MobilePlayerFailure } from './useMobileHlsEngi
 import { useVodProgressReporter } from '../../hooks/useVodProgressReporter';
 import { listenSleepTimer, sleepTimerRunning, useSleepTimer } from './sleepTimer';
 import { makeKey } from '../../utils/providerKey';
+import { useChatTabsVisible } from '../chat/ChatTabStrip';
+import { useAutomationDot } from '../../hooks/useAutomationStatus';
+import { AutomationDot } from '../../components/chat/AutomationDot';
 import { setLiveVideo, toggleLiveMute } from './liveVideo';
 import { attachLockScreenAudio, releaseLockScreenAudio, updateNowPlaying } from './lockScreenAudio';
 import { QualitySheet } from './QualitySheet';
@@ -240,6 +243,10 @@ export const MobilePlayer: React.FC<{
   // channel of the same name.
   const streamIsTwitch = isTwitchStream(currentStream);
   const streamProv = streamProvider(currentStream);
+  // The automations dot sits on the channel line while the room tabs, which
+  // wear it otherwise, are hidden.
+  const chatTabsShown = useChatTabsVisible();
+  const watchDot = useAutomationDot(currentStream ? [makeKey(streamProv, currentStream.user_login)] : []);
   // Subscribe sits beside who it is, like the live-alert bell. The shared hook
   // opens the platform's own checkout in the login overlay and reports whether
   // you already subscribe, so the pill can offer a gift instead.
@@ -681,6 +688,7 @@ export const MobilePlayer: React.FC<{
             ></path>
           </svg>
         )}
+        {watchDot && !chatTabsShown && <AutomationDot state={watchDot} onVideo />}
         {/* Live-alert opt-out for this channel, next to who it is rather than
             down in the playback controls: it is a fact about the channel, not
             about this session's playback. Quiet, a step below the name. */}

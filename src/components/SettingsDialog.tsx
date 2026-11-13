@@ -10,6 +10,7 @@ import {
   Palette,
   Plug,
   Bell,
+  Workflow,
   Database,
   Command,
   Keyboard,
@@ -39,6 +40,7 @@ const ThemeSettings = lazy(() => import('./settings/ThemeSettings'));
 const IntegrationsSettings = lazy(() => import('./settings/IntegrationsSettings'));
 const CacheSettings = lazy(() => import('./settings/CacheSettings'));
 const NotificationsSettings = lazy(() => import('./settings/NotificationsSettings'));
+const AutomationsSettings = lazy(() => import('./settings/AutomationsSettings'));
 const SupportSettings = lazy(() => import('./settings/SupportSettings'));
 const CommandPaletteSettings = lazy(() => import('./settings/CommandPaletteSettings'));
 const KeybindingsSettings = lazy(() => import('./settings/KeybindingsSettings'));
@@ -71,6 +73,7 @@ const TABS: TabMeta[] = [
   { id: 'Theme',           label: 'Theme',           icon: Palette,       tint: 'rgba(220, 145, 175, 0.20)', description: 'Color theme and theme editor' },
   { id: 'Integrations',    label: 'Integrations',    icon: Plug,          tint: 'rgba(180, 150, 210, 0.22)', description: 'Connected apps and services' },
   { id: 'Notifications',   label: 'Notifications',   icon: Bell,          tint: 'rgba(220, 180, 120, 0.20)', description: 'Toasts, sounds, and update prompts' },
+  { id: 'Automations',     label: 'Automations',     icon: Workflow,      tint: 'rgba(150, 195, 150, 0.22)', description: 'Rules that reply, alert and moderate for you' },
   { id: 'Cache',           label: 'Cache',           icon: Database,      tint: 'rgba(150, 170, 185, 0.22)', description: 'Emote, badge, and metadata caches' },
   { id: 'Command Palette', label: 'Command Palette', icon: Command,       tint: 'rgba(140, 200, 180, 0.22)', description: 'The Ctrl+K palette and snippets' },
   { id: 'Keybindings',     label: 'Keybindings',     icon: Keyboard,      tint: 'rgba(190, 160, 205, 0.22)', description: 'Customizable keyboard shortcuts' },
@@ -643,6 +646,7 @@ const SettingsDialog = () => {
                     {activeTab === 'Theme' && <ThemeSettings />}
                     {activeTab === 'Integrations' && <IntegrationsSettings />}
                     {activeTab === 'Notifications' && <NotificationsSettings />}
+                    {activeTab === 'Automations' && <AutomationsSettings />}
                     {activeTab === 'Cache' && <CacheSettings />}
                     {activeTab === 'Command Palette' && <CommandPaletteSettings />}
                     {activeTab === 'Keybindings' && <KeybindingsSettings />}

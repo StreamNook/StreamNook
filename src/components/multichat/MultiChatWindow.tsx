@@ -78,6 +78,8 @@ import VodModal from './VodModal';
 import { useCommandPaletteHotkey } from '../../hooks/useCommandPaletteHotkey';
 import { usePlatformAccountSync } from '../../hooks/usePlatformAccountSync';
 import { useMentionPing } from '../../hooks/useMentionPing';
+import { useAutomationStatus } from '../../hooks/useAutomationStatus';
+import { useAutomationNotify } from '../../hooks/useAutomationNotify';
 import { useKeybindings } from '../../keybindings';
 import { startSnippetSync } from '../../stores/snippetStore';
 import PluginUiHost from '../../plugins-ui/PluginUiHost';
@@ -426,6 +428,9 @@ export default function MultiChatWindow() {
   useKeybindings();
   // Hears every mention ping and plays the ones this window claims first.
   useMentionPing();
+  // Automations: the dot on each pane, and the Notify actions this window wins.
+  useAutomationStatus();
+  useAutomationNotify();
   useEffect(() => {
     startSnippetSync();
   }, []);

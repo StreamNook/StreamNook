@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   ChevronDown,
   ChevronUp,
@@ -6,17 +6,11 @@ import {
   Trash2,
   Minus,
   BookOpen,
-  Search,
-  X,
 } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
 import { SettingsSection, SegmentedSelect } from './_primitives';
 import { IS_MOBILE } from '../../utils/platform';
-import {
-  useChannelSearch,
-  type ChannelItem,
-} from '../multi-nook/channelSearch';
-import { ChannelResultRow } from '../multi-nook/ChannelResultRow';
+import { ChannelPicker } from './ChannelPicker';
 import type {
   Reminder,
   ReminderTriggerType,
@@ -24,7 +18,6 @@ import type {
   ReminderKeywordFrom,
   ReminderChannelScope,
 } from '../../types';
-import type { ProviderId } from '../../types/providers';
 
 const MAX_REPEAT = 10;
 
@@ -150,119 +143,6 @@ const RepeatStepper: React.FC<{ value: number; onChange: (v: number) => void }> 
       >
         <Plus size={13} />
       </button>
-    </div>
-  );
-};
-
-/** Pinned at module scope so the array identity is stable across renders. */
-const TWITCH_ONLY: ProviderId[] = ['twitch'];
-
-// Inline channel search, reusing the same finder + row that back the MultiChat
-// pickers (live follows first, then Twitch search, with avatars and live dots).
-const ChannelPicker: React.FC<{
-  login?: string;
-  onPick: (login: string, id: string) => void;
-}> = ({ login, onPick }) => {
-  const [open, setOpen] = useState(false);
-  const exclude = useMemo(() => new Set<string>(), []);
-  // Twitch ONLY, deliberately. A reminder is stored as a bare channel_login and
-  // fired through Twitch IRC, so a Kick row picked here would set a reminder that
-  // silently never fires, or fires at a same-named Twitch channel instead.
-  const {
-    searchInput,
-    setSearchInput,
-    visibleItems,
-    highlightIndex,
-    setHighlightIndex,
-    listRef,
-    refreshFollowing,
-    reset,
-  } = useChannelSearch({ excludeKeys: exclude, providers: TWITCH_ONLY });
-
-  useEffect(() => {
-    if (open) void refreshFollowing();
-  }, [open, refreshFollowing]);
-
-  const select = (item: ChannelItem) => {
-    // Search hits without a resolved id fall back to login==id; don't persist
-    // that as a real channel id.
-    onPick(item.login, item.source === 'search' && item.id === item.login ? '' : item.id);
-    reset();
-    setOpen(false);
-  };
-
-  const onKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      setHighlightIndex((i) => Math.min(i + 1, Math.max(visibleItems.length - 1, 0)));
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      setHighlightIndex((i) => Math.max(i - 1, 0));
-    } else if (e.key === 'Enter') {
-      e.preventDefault();
-      const target = visibleItems[highlightIndex];
-      if (target) select(target);
-    } else if (e.key === 'Escape') {
-      setOpen(false);
-    }
-  };
-
-  if (!open) {
-    return (
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        className="inline-flex items-center gap-2 glass-input text-textPrimary text-sm px-2.5 py-1.5 hover:bg-white/[0.05] transition-colors"
-      >
-        <Search size={13} className="text-textMuted" />
-        {login ? `#${login}` : 'Choose a channel'}
-      </button>
-    );
-  }
-
-  return (
-    <div className="rounded-lg border border-borderSubtle bg-background/40 p-2">
-      <div className="relative mb-1.5">
-        <Search size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-textMuted" />
-        <input
-          autoFocus
-          type="text"
-          value={searchInput}
-          onChange={(e) => setSearchInput(e.target.value)}
-          onKeyDown={onKeyDown}
-          placeholder="Search channels"
-          className="w-full glass-input text-textPrimary text-sm pl-7 pr-7 py-1.5"
-          spellCheck={false}
-        />
-        <button
-          type="button"
-          onClick={() => {
-            reset();
-            setOpen(false);
-          }}
-          className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-textMuted hover:bg-white/[0.06] hover:text-textPrimary"
-          aria-label="Close"
-        >
-          <X size={12} />
-        </button>
-      </div>
-      <div ref={listRef} className="max-h-52 overflow-y-auto scrollbar-thin space-y-0.5">
-        {visibleItems.map((item, i) => (
-          <ChannelResultRow
-            key={`${item.login}-${i}`}
-            item={item}
-            index={i}
-            highlighted={highlightIndex === i}
-            onSelect={select}
-            onHover={setHighlightIndex}
-          />
-        ))}
-        {visibleItems.length === 0 && (
-          <div className="px-3 py-3 text-center text-[11px] text-textMuted">
-            {searchInput.trim() ? 'No channels found.' : 'Type to search, or pick a live follow.'}
-          </div>
-        )}
-      </div>
     </div>
   );
 };

@@ -149,7 +149,7 @@ export interface Toast {
   createdAt: number;
 }
 
-export type SettingsTab = 'Profile' | 'Interface' | 'Player' | 'Chat' | 'Moderation' | 'Overlay' | 'Theme' | 'Integrations' | 'Plugins' | 'Notifications' | 'Cache' | 'Command Palette' | 'Keybindings' | 'Backup' | 'Support' | 'Analytics';
+export type SettingsTab = 'Profile' | 'Interface' | 'Player' | 'Chat' | 'Moderation' | 'Overlay' | 'Theme' | 'Integrations' | 'Plugins' | 'Notifications' | 'Automations' | 'Cache' | 'Command Palette' | 'Keybindings' | 'Backup' | 'Support' | 'Analytics';
 
 export type HomeTab = 'following' | 'recommended' | 'browse' | 'search' | 'category';
 

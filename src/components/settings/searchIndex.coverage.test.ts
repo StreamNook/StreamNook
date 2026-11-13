@@ -31,6 +31,7 @@ const TAB_FILES: Record<string, string[]> = {
   ],
   Moderation: ['ModerationSettings', 'ModerationCardSettings'],
   Notifications: ['NotificationsSettings'],
+  Automations: ['AutomationsSettings'],
   Cache: ['CacheSettings', 'EmotePrefetchSection'],
   Backup: ['BackupSettings'],
   Support: ['SupportSettings'],

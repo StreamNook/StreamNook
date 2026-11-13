@@ -132,6 +132,8 @@ import { getRemindFlowSuggestions, tokenizeRemindOverlay } from '../utils/remind
 import { BackendChatMessage } from '../services/twitchChat';
 import { registerChatModController, getChatModController, type ChatModController } from '../keybindings';
 import { Tooltip } from './ui/Tooltip';
+import { AutomationDot } from './chat/AutomationDot';
+import { useAutomationDot } from '../hooks/useAutomationStatus';
 import { RoomModeIndicator } from './chat/RoomModeIndicator';
 import {
   composerInputLook,
@@ -2013,6 +2015,22 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     .join('|');
   const blendSuggestionsUnseen = !!blendSuggestionsKey && blendSuggestionsKey !== seenBlendSuggestions;
   const blendActive = blendEnabled && blendOn && blendAttached.length > 0 && !!homeChannel;
+  // The rooms this panel shows, as composite keys, for the automations dot: a
+  // pane's own room, MultiNook's active tile, or the stream's chat (the dock
+  // swaps that one), plus every platform a combined chat draws in.
+  const automationKeys = useMemo(() => {
+    const own = channelOverride
+      ? makeKey(provider, channelOverride.user_login)
+      : isMultiNookActive && activeChatChannelId
+        ? activeChatChannelId
+        : currentStream?.user_login
+          ? makeKey('twitch', currentStream.user_login)
+          : null;
+    const keys = own ? [own] : [];
+    if (blendActive) for (const c of blendAttached) keys.push(makeKey(c.provider, c.channel));
+    return keys;
+  }, [channelOverride, provider, isMultiNookActive, activeChatChannelId, currentStream?.user_login, blendActive, blendAttached]);
+  const automationDot = useAutomationDot(automationKeys);
   const blendSources = useMemo<BlendCompanion[]>(
     () =>
       blendActive && homeChannel
@@ -5077,6 +5095,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                     </motion.p>
                   )}
                 </AnimatePresence>
+                {automationDot && activeView !== 'modroom' && <AutomationDot state={automationDot} />}
                 {/* Which platforms this feed is drawing from, as one control: their
                     marks overlap in a fixed-size capsule (separate buttons cost
                     about 22px each and truncated the title at three), and its

@@ -15,6 +15,7 @@ import {
   ShieldHalf,
   SlidersHorizontal,
   Sparkles,
+  Workflow,
 } from 'lucide-react';
 import { useMobileNavStore } from '../navStore';
 import { DrillInScreen } from '../ui/DrillInScreen';
@@ -39,6 +40,9 @@ const PANELS: Record<string, React.LazyExoticComponent<React.ComponentType>> = {
   // Mobile gets its own notifications panel: the desktop one configures
   // toasts and the Dynamic Island, which do not exist here.
   Notifications: lazy(() => import('./MobileNotificationsSettings')),
+  // The desktop page, trimmed by IS_MOBILE (no system notification switch, no
+  // tray words).
+  Automations: lazy(() => import('../../components/settings/AutomationsSettings')),
   Cache: lazy(() => import('../../components/settings/CacheSettings')),
   Support: lazy(() => import('../../components/settings/SupportSettings')),
   'Changed settings': lazy(() => import('./ChangedSettings')),
@@ -77,6 +81,12 @@ export const SETTINGS_ROWS: {
     label: 'Notifications',
     icon: Bell,
     description: 'System alerts for live channels and drops',
+  },
+  {
+    id: 'Automations',
+    label: 'Automations',
+    icon: Workflow,
+    description: 'Rules that reply, alert and moderate for you',
   },
   { id: 'Cache', label: 'Cache', icon: Database, description: 'Emote, badge, and metadata caches' },
   { id: 'Support', label: 'Support', icon: HelpCircle, description: 'Logs, diagnostics, and feedback' },
