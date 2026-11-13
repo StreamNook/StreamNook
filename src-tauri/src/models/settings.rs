@@ -3,6 +3,7 @@ use crate::services::drops_service::DropsService;
 use crate::services::emote_service::EmoteService;
 use crate::services::layout_service::LayoutService;
 use crate::services::twitch_auth_service::TwitchAuthService;
+use crate::models::automations::{AutomationPrefs, Automations};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -1410,6 +1411,15 @@ pub struct Settings {
     /// on their first frame. Typed beside `performance_mode` for the same reason.
     #[serde(default)]
     pub performance_still_chat: bool,
+    /// Account automations: run state, this device's away and the rules (raw
+    /// JSON values). Backend-owned: only the automations commands write it,
+    /// and a window's save never carries it back (`adopt_backend_owned`).
+    #[serde(default)]
+    pub automations: Automations,
+    /// Automation preferences (pace, other channels, chat notes), written
+    /// field by field like any preference.
+    #[serde(default)]
+    pub automation_prefs: AutomationPrefs,
     /// Catch-all for preference groups the frontend manages but this struct does
     /// not model field-by-field: highlight phrases, custom chat commands,
     /// moderation prefs, custom themes, the OLED accent, and any future ones.
@@ -1984,6 +1994,8 @@ impl Default for Settings {
             close_to_tray: CloseToTrayMode::default(),
             performance_mode: PerformanceMode::default(),
             performance_still_chat: false,
+            automations: Automations::default(),
+            automation_prefs: AutomationPrefs::default(),
             extra: HashMap::new(),
         }
     }
@@ -2044,6 +2056,94 @@ impl<'de> Deserialize<'de> for PerformanceMode {
             Some("always") => Self::Always,
             _ => Self::Off,
         })
+    }
+}
+
+#[cfg(test)]
+mod automation_settings_tests {
+    use super::*;
+    use crate::models::automations::RunState;
+    use serde_json::json;
+
+    fn newer_rule() -> serde_json::Value {
+        json!({
+            "id": "r-000000000001",
+            "name": "From a newer build",
+            "when": { "kind": "timer", "every_seconds": 900 },
+            "limits": { "max_per_hour": 30, "burst_guard": 3 },
+            "actions": [{ "kind": "reply", "id": "a-00000001", "texts": [], "future_flag": 7 }]
+        })
+    }
+
+    #[test]
+    fn a_stale_window_cannot_wipe_the_rules() {
+        let mut authoritative = Settings::default();
+        authoritative.automations.rules = vec![newer_rule()];
+        authoritative.automations.run = RunState::On;
+        // A window that loaded before the rule existed saves its copy.
+        let mut incoming = Settings::default();
+        incoming.adopt_backend_owned(&authoritative);
+        assert_eq!(incoming.automations, authoritative.automations);
+    }
+
+    #[test]
+    fn raw_rules_survive_a_theme_save_unchanged() {
+        let mut authoritative = Settings::default();
+        authoritative.automations.rules = vec![newer_rule()];
+        let mut sent = serde_json::to_value(&authoritative).unwrap();
+        sent["theme"] = "dracula".into();
+        sent["automations"]["rules"] = json!([]);
+        let mut saved: Settings = serde_json::from_value(sent).unwrap();
+        saved.adopt_backend_owned(&authoritative);
+        let written = serde_json::to_value(&saved).unwrap();
+        assert_eq!(written["theme"], "dracula");
+        assert_eq!(written["automations"]["rules"], json!([newer_rule()]));
+    }
+
+    #[test]
+    fn both_groups_are_typed_with_their_defaults() {
+        let v = serde_json::to_value(Settings::default()).unwrap();
+        assert_eq!(v["automations"]["run"], "off");
+        assert_eq!(v["automations"]["last_active"], "test");
+        assert!(v["automations"].get("away").is_some_and(serde_json::Value::is_null), "an explicit null");
+        assert_eq!(v["automation_prefs"]["sends_per_minute"], 10);
+        assert_eq!(v["automation_prefs"]["other_channels"], false);
+        assert_eq!(v["automation_prefs"]["other_channel_gap_seconds"], 30);
+        assert_eq!(v["automation_prefs"]["chat_notes"], true);
+        assert_eq!(v["automation_prefs"]["whisper_people_per_day"], 20);
+        let s: Settings = serde_json::from_value(v).unwrap();
+        assert!(!s.extra.contains_key("automations"), "typed, not riding extra");
+        assert!(!s.extra.contains_key("automation_prefs"));
+    }
+
+    #[test]
+    fn an_older_file_and_a_damaged_group_still_load() {
+        let mut v = serde_json::to_value(Settings::default()).unwrap();
+        let obj = v.as_object_mut().unwrap();
+        obj.remove("automations");
+        obj.remove("automation_prefs");
+        let older: Settings = serde_json::from_value(v.clone()).expect("an older file parses");
+        assert_eq!(older.automations.run, RunState::Off);
+        assert_eq!(older.automation_prefs.sends_per_minute, 10);
+        v["automations"] = json!("garbage");
+        let damaged: Settings = serde_json::from_value(v.clone()).expect("a damaged group never fails the file");
+        assert!(damaged.automations.rules.is_empty());
+        v["automations"] = json!({ "run": "paused", "rules": [newer_rule()] });
+        let unknown: Settings = serde_json::from_value(v).unwrap();
+        assert_eq!(unknown.automations.run, RunState::Off);
+        assert_eq!(unknown.automations.rules, vec![newer_rule()]);
+    }
+
+    #[test]
+    fn a_field_write_to_the_prefs_persists() {
+        let mut v = serde_json::to_value(Settings::default()).unwrap();
+        v["automation_prefs"]["sends_per_minute"] = 5.into();
+        v["automation_prefs"]["other_channels"] = true.into();
+        let s: Settings = serde_json::from_value(v).unwrap();
+        assert_eq!(s.automation_prefs.sends_per_minute, 5);
+        assert!(s.automation_prefs.other_channels);
+        let saved = serde_json::to_value(&s).unwrap();
+        assert_eq!(saved["automation_prefs"]["sends_per_minute"], 5);
     }
 }
 
@@ -2196,6 +2296,9 @@ impl Settings {
         // The vertical view pick changes only through `commit_vertical_view`
         // (SN-40): a window's `video_player` group never carries it back.
         self.video_player.vertical_view = authoritative.video_player.vertical_view;
+        // Rules, run state and away change only through the automations
+        // commands: a window's stale copy never wipes or rewinds them.
+        self.automations = authoritative.automations.clone();
     }
 
     /// One-time move of an existing install onto the first-run chat look,

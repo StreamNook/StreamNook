@@ -699,6 +699,171 @@ export interface CosmeticsSettings {
   profile_picture_animation?: 'always' | 'hover' | 'never';
 }
 
+// Account automations. Mirrored in models/automations.rs. Rust owns every
+// write through the automations commands; a settings page never patches
+// `automations` (it is backend-owned), and writes `automation_prefs` field by
+// field.
+export type AutomationRunState = 'off' | 'test' | 'on';
+
+export interface AutomationAway {
+  message: string;
+  since_ms: number;
+}
+
+export interface Automations {
+  version: number;
+  run: AutomationRunState;
+  /** What Resume returns to; never 'off'. */
+  last_active: AutomationRunState;
+  /** This device's away; null when clear. */
+  away: AutomationAway | null;
+  last_away_message: string;
+  /** Stored rules, raw. Read them typed (AutomationRule) through the automations commands. */
+  rules: unknown[];
+  converted_reminders: string[];
+}
+
+export interface AutomationPrefs {
+  /** 1 to 20. Default 10. */
+  sends_per_minute: number;
+  /** Default false. */
+  other_channels: boolean;
+  /** 10 to 600. Default 30. */
+  other_channel_gap_seconds: number;
+  /** Default true. */
+  chat_notes: boolean;
+  /** 1 to 40. Default 20. */
+  whisper_people_per_day: number;
+}
+
+export interface AutomationAccountRef {
+  provider: string;
+  id: string;
+  login: string;
+  name: string;
+}
+
+export type AutomationMatchMode = 'any_word' | 'all_words' | 'phrase' | 'contains' | 'starts_with' | 'exact' | 'regex';
+
+export interface AutomationTextMatch {
+  mode: AutomationMatchMode;
+  pattern: string;
+  case_sensitive: boolean;
+}
+
+export type AutomationEventKind = 'sub' | 'resub' | 'gift' | 'gift_bomb' | 'raid' | 'cheer' | 'announcement';
+
+export type AutomationBadgeLeg = 'announced' | 'earnable' | 'both';
+
+export interface AutomationBadgeLink {
+  preset: 'streamnook' | 'streamdatabase' | 'custom' | 'none';
+  custom: string;
+  if_not_ready: 'streamnook' | 'no_link';
+}
+
+export type AutomationTrigger =
+  | { kind: 'message'; text: AutomationTextMatch }
+  | { kind: 'mention'; replies_too: boolean }
+  | { kind: 'first_message' }
+  | {
+      kind: 'channel_event';
+      events: AutomationEventKind[];
+      min_months: number;
+      min_gifts: number;
+      min_viewers: number;
+      min_bits: number;
+    }
+  | { kind: 'badge_drop'; on: AutomationBadgeLeg; link: AutomationBadgeLink; batch_text: string };
+
+export interface AutomationChannelRef {
+  id: string;
+  /** Built in Rust: `twitch:login`. */
+  key: string;
+  room_id: string;
+  name: string;
+}
+
+export type AutomationChannelScope =
+  | { kind: 'own' }
+  | { kind: 'these'; list: AutomationChannelRef[] }
+  | { kind: 'any_open' }
+  | { kind: 'watching' };
+
+export type AutomationSenderRole = 'broadcaster' | 'moderator' | 'vip' | 'subscriber' | 'viewer';
+
+export type AutomationWeekday = 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun';
+
+export interface AutomationHours {
+  /** "HH:MM", local. */
+  from: string;
+  to: string;
+  /** Empty means every day. */
+  days: AutomationWeekday[];
+}
+
+export interface AutomationConditions {
+  channels: AutomationChannelScope;
+  roles: AutomationSenderRole[];
+  skip_users: string[];
+  only_users: string[];
+  only_live: boolean;
+  only_away: boolean;
+  shared_chat: boolean;
+  hours: AutomationHours | null;
+}
+
+export interface AutomationLine {
+  id: string;
+  text: string;
+}
+
+export type AutomationPick = 'random' | 'shuffle' | 'in_order';
+
+export type AutomationAction =
+  | { kind: 'reply'; id: string; texts: AutomationLine[]; pick: AutomationPick; thread: boolean }
+  | { kind: 'send'; id: string; to: AutomationChannelRef | null; texts: AutomationLine[]; pick: AutomationPick }
+  | {
+      kind: 'notify';
+      id: string;
+      title: string;
+      body: string;
+      toast: boolean;
+      system: boolean;
+      sound: string | null;
+      /** 0 to 1. */
+      volume: number;
+    };
+
+export interface AutomationLimits {
+  rule_cooldown_seconds: number;
+  user_cooldown_seconds: number;
+  max_per_hour: number;
+  max_wait_seconds: number;
+}
+
+export interface AutomationRule {
+  id: string;
+  name: string;
+  enabled: boolean;
+  /** false = Test. */
+  live: boolean;
+  owner: AutomationAccountRef;
+  send_as: AutomationAccountRef;
+  when: AutomationTrigger;
+  only_if: AutomationConditions;
+  actions: AutomationAction[];
+  limits: AutomationLimits;
+  vary: boolean;
+  origin: string | null;
+  created_ms: number;
+  updated_ms: number;
+}
+
+export interface AutomationFieldError {
+  path: string;
+  message: string;
+}
+
 // /spam and /pyramid. Mirrored in models/settings.rs (ChatBurstSettings).
 export interface ChatBurstSettings {
   // Milliseconds between two lines, 10 to 5000. Default 1000.
@@ -1525,6 +1690,10 @@ export interface Settings {
   cosmetics?: CosmeticsSettings;
   chat_burst?: ChatBurstSettings;
   mentions?: MentionSettings;
+  /** Account automations. Backend-owned (models/automations.rs): changed only through the automations commands, never a settings patch. */
+  automations?: Automations;
+  /** Automation preferences, written field by field. */
+  automation_prefs?: AutomationPrefs;
   /** The phones' Chats screen keeps the screen on while in front, until 30 min pass with no touch. Default on. */
   chats_keep_screen_on?: boolean;
   live_notifications?: LiveNotificationSettings;

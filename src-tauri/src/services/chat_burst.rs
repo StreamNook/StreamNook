@@ -382,8 +382,18 @@ impl Job {
     }
 }
 
+/// The NOTICE codes that mean this account cannot post in the chat at all.
+pub(crate) const CANNOT_POST_NOTICES: &[&str] = &[
+    "msg_banned",
+    "msg_timedout",
+    "msg_suspended",
+    "msg_channel_suspended",
+    "msg_requires_verified_phone_number",
+    "msg_verified_email",
+];
+
 /// A drop that means no further line can land: timed out, banned, suspended.
-fn is_cannot_post(reason: &str) -> bool {
+pub(crate) fn is_cannot_post(reason: &str) -> bool {
     let r = reason.to_ascii_lowercase();
     ["banned", "timed out", "timedout", "timeout", "suspended"]
         .iter()
@@ -529,8 +539,7 @@ pub fn note_notice(channel: &str, msg_id: &str) {
         return;
     };
     match msg_id {
-        "msg_banned" | "msg_timedout" | "msg_suspended" | "msg_channel_suspended"
-        | "msg_requires_verified_phone_number" | "msg_verified_email" => {
+        code if CANNOT_POST_NOTICES.contains(&code) => {
             job.force_stop(format!("Stopped: Twitch says you can't post here ({msg_id})"));
         }
         "msg_ratelimit" | "msg_duplicate" | "msg_slowmode" | "msg_followersonly"
@@ -570,6 +579,24 @@ pub fn stopped_message(job: &Job) -> String {
 mod tests {
     use super::*;
     use std::sync::Mutex as StdMutex;
+
+    #[test]
+    fn cannot_post_notices_and_reasons_are_shared() {
+        for code in [
+            "msg_banned",
+            "msg_timedout",
+            "msg_suspended",
+            "msg_channel_suspended",
+            "msg_requires_verified_phone_number",
+            "msg_verified_email",
+        ] {
+            assert!(CANNOT_POST_NOTICES.contains(&code), "{code}");
+        }
+        assert_eq!(CANNOT_POST_NOTICES.len(), 6);
+        assert!(!CANNOT_POST_NOTICES.contains(&"msg_ratelimit"));
+        assert!(is_cannot_post("You are timed out for 60 more seconds"));
+        assert!(!is_cannot_post("Your message is identical to the previous one"));
+    }
 
     #[test]
     fn labels_read_like_the_progress_line() {

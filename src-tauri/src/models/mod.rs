@@ -1,3 +1,4 @@
+pub mod automations;
 pub mod chat_layout;
 pub mod components;
 pub mod drops;

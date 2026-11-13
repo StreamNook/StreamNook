@@ -380,6 +380,7 @@ const BY_TITLE: Record<string, LucideIcon> = {
 /** Short names that mean different things in different sections ("Style",
  *  "Spacing", "Color"): the section's own entry wins over the title table. */
 const BY_SECTION: Record<string, Record<string, LucideIcon>> = {
+  Automations: { Pace: Gauge, 'Other channels': Globe, 'Chat notes': NotebookPen },
   'Chat Placement': { Position: PanelLeft },
   'Chat Events': { Style: Brush, Platforms: Layers },
   'Pinned Messages': { Collapsed: Pin },

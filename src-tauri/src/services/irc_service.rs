@@ -405,6 +405,9 @@ fn parse_join_channel(line: &str) -> Option<String> {
 struct MessageSideEffects {
     msg: ChatMessage,
     add_history: bool,
+    /// The chat rules dropped the message (an ignore, a filter): it reaches
+    /// the log and plugins but never a window, and no automation answers it.
+    dropped: bool,
     /// Key the persisted history is stored under. Twitch uses the bare user id
     /// (so existing entries keep resolving); other platforms are namespaced
     /// `provider:id`, because platform id spaces overlap — Kick user 676 and
@@ -516,13 +519,14 @@ fn enqueue_side_effect(se: MessageSideEffects) {
 /// Provider adapters publish straight onto the broadcast, so they must go
 /// through here to be logged and recorded. Using the lane keeps chat-log
 /// line order intact and the file IO off the caller's task.
-pub fn run_message_side_effects(msg: ChatMessage) {
+pub fn run_message_side_effects(msg: ChatMessage, dropped: bool) {
     let add_history = !msg.user_id.is_empty();
     let history_key = history_key_for(&msg);
     enqueue_side_effect(MessageSideEffects {
         msg,
         add_history,
         history_key,
+        dropped,
     });
 }
 
@@ -2837,6 +2841,7 @@ impl IrcService {
                     history_key: history_key_for(&chat_msg),
                     msg: chat_msg,
                     add_history: true,
+                    dropped: verdict.drop,
                 });
             } else {
                 // Fallback to sending raw string if parsing fails
@@ -2928,6 +2933,7 @@ impl IrcService {
                     history_key: history_key_for(&chat_msg),
                     msg: chat_msg,
                     add_history: false,
+                    dropped: verdict.drop,
                 });
             } else {
                 // Fallback to raw string if parsing fails

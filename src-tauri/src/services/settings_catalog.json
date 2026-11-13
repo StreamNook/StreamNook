@@ -2772,6 +2772,65 @@
    "hidden_on_ios": true
   },
   {
+   "page": "automations",
+   "section": "Automations",
+   "title": "Pace",
+   "paths": [
+    "automation_prefs.sends_per_minute"
+   ],
+   "nested": false,
+   "logo": null,
+   "detail": "The most messages your rules send in a minute, across all your devices.",
+   "aliases": [
+    "automations",
+    "rules",
+    "messages per minute",
+    "rate"
+   ]
+  },
+  {
+   "page": "automations",
+   "section": "Automations",
+   "title": "Other channels",
+   "paths": [
+    "automation_prefs.other_channels"
+   ],
+   "nested": false,
+   "logo": null,
+   "detail": "Rules may post in chats that aren't yours, at most once per chat in each gap.",
+   "aliases": [
+    "other chats",
+    "automations"
+   ]
+  },
+  {
+   "page": "automations",
+   "section": "Automations",
+   "title": "Gap",
+   "paths": [
+    "automation_prefs.other_channel_gap_seconds"
+   ],
+   "nested": true,
+   "logo": null,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "automations",
+   "section": "Automations",
+   "title": "Chat notes",
+   "paths": [
+    "automation_prefs.chat_notes"
+   ],
+   "nested": false,
+   "logo": null,
+   "detail": "A line only you see in chat when a rule acts, or would act in Test.",
+   "aliases": [
+    "automations",
+    "notes"
+   ]
+  },
+  {
    "page": "chat",
    "section": "Event Highlights",
    "title": "First-time chatters",

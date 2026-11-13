@@ -1014,6 +1014,21 @@ fn templates_expand_in_one_pass() {
 }
 
 #[test]
+fn expand_with_reads_names_through_the_lookup() {
+    let args = vec!["a".to_string(), "b".to_string()];
+    let lookup = |name: &str| match name {
+        "user" => Some("Me".to_string()),
+        "away" => Some(String::new()),
+        _ => None,
+    };
+    let ex = expand_with("{user} said {1}, {away} {missing} {{x}}", &args, lookup);
+    assert_eq!(ex.text, "Me said a, {missing} {x}");
+    assert_eq!(expand_with("{3} {2+}", &args, lookup).missing_args, vec![3]);
+    // A value is never read again as a placeholder.
+    assert_eq!(expand_with("{user}", &[], |_| Some("{1}".to_string())).text, "{1}");
+}
+
+#[test]
 fn uptime_reads_hours_and_minutes() {
     let start = "2001-09-09T01:46:40Z"; // 1_000_000_000_000 ms
     assert_eq!(format_uptime(Some(start), 1_000_000_000_000 + 2 * 3_600_000 + 14 * 60_000), "2h 14m");

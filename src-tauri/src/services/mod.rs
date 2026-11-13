@@ -20,6 +20,7 @@ pub mod own_accolades;
 pub mod watch_places;
 pub mod chat_preview;
 
+pub mod account_automations;
 pub mod account_store;
 pub mod activity_history_service;
 // Phones only: ad-free live playback. Desktop keeps the ad-neutral core and

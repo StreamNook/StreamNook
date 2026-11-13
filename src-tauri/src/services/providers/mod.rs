@@ -275,7 +275,7 @@ pub async fn publish_chat_message(msg: &ChatMessage) {
     let rules = crate::services::chat_rules::ChatRules::snapshot();
     let verdict = crate::services::chat_rules::ChatRules::evaluate(&mut evaluated, &rules);
     if verdict.drop {
-        crate::services::irc_service::run_message_side_effects(evaluated);
+        crate::services::irc_service::run_message_side_effects(evaluated, verdict.drop);
         return;
     }
     // Inbox, mention sound and notification, as on the Twitch lane.
@@ -318,7 +318,7 @@ pub async fn publish_chat_message(msg: &ChatMessage) {
     // and persisted user history. Without this a provider's chat was live-only —
     // absent from the log files and from the profile card's message history after
     // a restart. Ordered lane, so this never blocks the adapter's read loop.
-    crate::services::irc_service::run_message_side_effects(msg.clone());
+    crate::services::irc_service::run_message_side_effects(msg.clone(), verdict.drop);
 }
 
 /// Publish a pre-built JSON control frame (e.g. a `CLEARCHAT`/`CLEARMSG`

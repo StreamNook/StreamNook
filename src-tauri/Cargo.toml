@@ -388,6 +388,9 @@ objc2-web-kit = { version = "0.3", default-features = false, features = [
     "WKHTTPCookieStore",
 ] }
 
+[dev-dependencies]
+tokio = { version = "1.48.0", features = ["test-util"] }
+
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol", "sn-tauri-headless/custom-protocol"]

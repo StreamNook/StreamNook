@@ -616,6 +616,16 @@ fn dotted(key: &str, ctx: &TemplateContext) -> Option<String> {
 /// An unknown `{name}` stays as typed. Runs of spaces left by empty values
 /// collapse to one and the ends are trimmed.
 pub fn expand_user_command(template: &str, ctx: &TemplateContext) -> Expansion {
+    expand_with(template, &ctx.args, |name| dotted(name, ctx))
+}
+
+/// The custom-command grammar over any set of names: `{N}`, `{N+}` and
+/// `{*}` read `args`, `{{` and `}}` are literal braces, and `{name}` reads
+/// `lookup(name)` (the name as typed); a name `lookup` does not know stays
+/// as typed. One pass, so an inserted value is never read as a placeholder.
+/// Runs of spaces left by empty values collapse to one and the ends are
+/// trimmed. Automations expand their variables through this.
+pub fn expand_with(template: &str, args: &[String], lookup: impl Fn(&str) -> Option<String>) -> Expansion {
     let mut out = String::with_capacity(template.len());
     let mut missing: Vec<u64> = Vec::new();
     let b = template.as_bytes();
@@ -640,10 +650,10 @@ pub fn expand_user_command(template: &str, ctx: &TemplateContext) -> Expansion {
                 // {N+}
                 if digits_end > 0 && &inner[digits_end..] == "+" {
                     let start: u64 = inner[..digits_end].parse().unwrap_or(u64::MAX);
-                    if start < 1 || start > ctx.args.len() as u64 {
+                    if start < 1 || start > args.len() as u64 {
                         missing.push(start);
                     } else {
-                        out.push_str(&ctx.args[(start - 1) as usize..].join(" "));
+                        out.push_str(&args[(start - 1) as usize..].join(" "));
                     }
                     i += close + 1;
                     continue;
@@ -651,7 +661,7 @@ pub fn expand_user_command(template: &str, ctx: &TemplateContext) -> Expansion {
                 // {N}
                 if digits_end > 0 && digits_end == inner.len() {
                     let n: u64 = inner.parse().unwrap_or(u64::MAX);
-                    match n.checked_sub(1).and_then(|k| ctx.args.get(k as usize)).filter(|v| !v.is_empty()) {
+                    match n.checked_sub(1).and_then(|k| args.get(k as usize)).filter(|v| !v.is_empty()) {
                         Some(v) => out.push_str(v),
                         None => missing.push(n),
                     }
@@ -659,14 +669,14 @@ pub fn expand_user_command(template: &str, ctx: &TemplateContext) -> Expansion {
                     continue;
                 }
                 if inner == "*" {
-                    out.push_str(&ctx.args.join(" "));
+                    out.push_str(&args.join(" "));
                     i += close + 1;
                     continue;
                 }
                 let is_name = inner.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
                     && inner.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.');
                 if is_name {
-                    match dotted(inner, ctx) {
+                    match lookup(inner) {
                         Some(v) => out.push_str(&v),
                         None => out.push_str(&rest[..=close]),
                     }
@@ -2600,7 +2610,7 @@ async fn extended(c: &Call<'_>, o: &mut Outcome) -> Result<bool, String> {
             let bud = b.invoke("chat_send_budget", json!({ "channel": login })).await?;
             let slow = bud["slow_seconds"].as_u64().unwrap_or(0);
             o.say(format!(
-                "You are a {} here: {} messages per {}s ({} used), at least {} ms apart{}.",
+                "You are a {} here: {} messages per {}s ({} used; automation sends counted for 35 s), at least {} ms apart{}.",
                 bud["role"].as_str().unwrap_or("viewer"),
                 bud["per_window"],
                 bud["window_seconds"],
