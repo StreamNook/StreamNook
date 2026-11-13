@@ -228,7 +228,7 @@ export function SubControl({
     return (
       <div className={`space-y-2 ${disabled ? 'pointer-events-none' : ''}`} data-setting-row={title}>
         {name}
-        <div className={disabled ? 'opacity-40 grayscale' : ''}>{control}</div>
+        <div className={disabled ? 'opacity-60 [&_[role=switch]]:!bg-textPrimary/25' : ''}>{control}</div>
       </div>
     );
   }
@@ -251,7 +251,7 @@ export function SubControl({
       data-setting-row={title}
     >
       {name}
-      <div className={`shrink-0 ${disabled ? 'opacity-40 grayscale' : ''}`}>{control}</div>
+      <div className={`shrink-0 ${disabled ? 'opacity-60 [&_[role=switch]]:!bg-textPrimary/25' : ''}`}>{control}</div>
     </div>
   );
 }
@@ -347,7 +347,7 @@ function PhoneSubControl({
           <span className={disabled ? 'opacity-50' : ''}>{title}</span>
           {onReset && <ResetArrow onReset={onReset} />}
         </div>
-        <div className={`${stack ? 'flex w-full' : 'flex min-w-0 flex-1 justify-end'} ${disabled ? 'opacity-40 grayscale' : ''}`}>
+        <div className={`${stack ? 'flex w-full' : 'flex min-w-0 flex-1 justify-end'} ${disabled ? 'opacity-60 [&_[role=switch]]:!bg-textPrimary/25' : ''}`}>
           <span ref={partRef} className={stack ? 'flex w-full' : 'inline-flex'}>
             {shown}
           </span>
@@ -373,8 +373,9 @@ const TAG_STYLE = { background: 'color-mix(in srgb, var(--color-accent) 12%, tra
 
 /** What the plugin is doing right now, on a raised card at the top of its
  *  page: a small label (and an optional tag), a title, a line under it, an
- *  optional progress bar, and an action. Wraps on a narrow window: the action
- *  drops under the words, and a long title takes two lines. */
+ *  optional progress bar, and an action on the label row. One height in every
+ *  state: a long title ends in an ellipsis (the full text in a tooltip) and
+ *  the subtitle takes at most two lines. */
 export function StatusCard({
   label,
   tag,
@@ -395,55 +396,87 @@ export function StatusCard({
   action?: ReactNode;
 }) {
   // The card keeps one height in every state, so nothing below it ever moves:
-  // the bar row is always laid out (hidden when there is no progress), the
-  // title holds one line and the subtitle two.
-  const bar = progress ?? { value: 0, max: 1, left: String.fromCharCode(0xa0) };
+  // a hidden sizer lays out the tallest shape (label row, one title line, two
+  // subtitle lines, the bar row), and the real content sits centered over it,
+  // so an idle card reads calm instead of holding an empty band. A state
+  // change fades the content in (opacity only: nothing slides).
+  const nbsp = String.fromCharCode(0xa0);
+  const titleRef = useRef<HTMLDivElement>(null);
+  const [titleClipped, setTitleClipped] = useState(false);
+  // The content layer remounts between its bar and idle forms, so the check
+  // follows the title node that is mounted now.
+  const hasBar = !!progress;
+  useLayoutEffect(() => {
+    const el = titleRef.current;
+    if (!el) return;
+    const measure = () => setTitleClipped(el.scrollWidth > el.clientWidth);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [title, hasBar]);
   return (
     <div
-      className="rounded-2xl px-5 pb-5 pt-6 [html[data-theme-tone=light]_&]:!bg-[color-mix(in_oklab,var(--color-background)_40%,white)]"
+      className="grid rounded-2xl px-5 pb-5 pt-6 [html[data-theme-tone=light]_&]:!bg-[color-mix(in_oklab,var(--color-background)_40%,white)]"
       style={CARD_STYLE}
       data-status-card
     >
-      <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
-        <div className="min-w-0 flex-1 basis-[330px]">
-          <div className="flex min-h-[22px] flex-wrap items-center gap-2">
-            <span className="text-[12px] font-semibold uppercase tracking-[0.12em] text-textMuted">{label}</span>
-            {tag && (
-              <span
-                className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[12px] font-semibold text-textPrimary"
-                style={TAG_STYLE}
-              >
-                {tag.icon && <span className="text-accent-on-surface">{tag.icon}</span>}
-                {tag.text}
-              </span>
-            )}
-            {action && <div className="-my-[7px] ml-auto shrink-0 pl-4">{action}</div>}
-          </div>
-          <Tooltip content={title} describe>
-            <div className="mt-2 truncate text-[19px] font-semibold leading-snug text-textPrimary">{title}</div>
-          </Tooltip>
-          <div className="mt-1 line-clamp-2 min-h-[2lh] break-words text-[13.5px] leading-snug text-textSecondary">
-            {subtitle}
-          </div>
+      <div className="invisible [grid-area:1/1]" aria-hidden>
+        <div className="min-h-[22px]" />
+        <div className="mt-2 text-[19px] font-semibold leading-snug">{nbsp}</div>
+        <div className="mt-1 min-h-[2lh] text-[13.5px] leading-snug" />
+        <div className="mt-4">
+          <div className="h-2" />
+          <div className="mt-2 text-[12.5px]">{nbsp}</div>
         </div>
       </div>
-      <div className={progress ? 'mt-4' : 'invisible mt-4'} aria-hidden={progress ? undefined : true}>
-        <div
-          role={progress ? 'progressbar' : undefined}
-          aria-label={progress ? bar.left : undefined}
-          aria-valuemin={progress ? 0 : undefined}
-          aria-valuemax={progress ? (bar.max > 0 ? bar.max : 1) : undefined}
-          aria-valuenow={progress ? Math.min(Math.max(bar.value, 0), bar.max > 0 ? bar.max : 1) : undefined}
-          className="h-2 rounded-full p-[1.5px] bg-black/40 shadow-[inset_0_1px_2px_rgba(0,0,0,0.5)] [html[data-theme-tone=light]_&]:bg-black/10 [html[data-theme-tone=light]_&]:shadow-[inset_0_1px_1.5px_rgba(0,0,0,0.18)]"
-        >
-          <div
-            className="h-full rounded-full bg-accent transition-[width] duration-500 ease-out motion-reduce:transition-none"
-            style={{ width: `${progressPercent(bar.value, bar.max)}%` }}
-          />
+      <div
+        key={hasBar ? 'bar' : 'idle'}
+        className="min-w-0 -translate-y-1 self-center [grid-area:1/1]"
+      >
+        <div className="animate-enter-fade motion-reduce:animate-none">
+        <div className="flex min-h-[22px] flex-wrap items-center gap-2">
+          <span className="text-[12px] font-semibold uppercase tracking-[0.12em] text-textMuted">{label}</span>
+          {tag && (
+            <span
+              className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[12px] font-semibold text-textPrimary"
+              style={TAG_STYLE}
+            >
+              {tag.icon && <span className="text-accent-on-surface">{tag.icon}</span>}
+              {tag.text}
+            </span>
+          )}
+          {action && <div className="-my-[7px] ml-auto shrink-0 pl-4">{action}</div>}
         </div>
-        <div className="mt-2 flex flex-wrap justify-between gap-x-4 gap-y-0.5 text-[12.5px] text-textSecondary">
-          <span className="tabular-nums">{bar.left}</span>
-          {bar.right && <span>{bar.right}</span>}
+        <Tooltip content={title} describe disabled={!titleClipped}>
+          <div ref={titleRef} className="mt-2 truncate text-[19px] font-semibold leading-snug text-textPrimary">
+            {title}
+          </div>
+        </Tooltip>
+        {subtitle && (
+          <div className="mt-1 line-clamp-2 break-words text-[13.5px] leading-snug text-textSecondary">{subtitle}</div>
+        )}
+        {progress && (
+          <div className="mt-4">
+            <div
+              role="progressbar"
+              aria-label={progress.left}
+              aria-valuemin={0}
+              aria-valuemax={progress.max > 0 ? progress.max : 1}
+              aria-valuenow={Math.min(Math.max(progress.value, 0), progress.max > 0 ? progress.max : 1)}
+              className="h-2 rounded-full p-[1.5px] bg-black/40 shadow-[inset_0_1px_2px_rgba(0,0,0,0.5)] [html[data-theme-tone=light]_&]:bg-black/10 [html[data-theme-tone=light]_&]:shadow-[inset_0_1px_1.5px_rgba(0,0,0,0.18)]"
+            >
+              <div
+                className="h-full rounded-full bg-accent transition-[width] duration-500 ease-out motion-reduce:transition-none"
+                style={{ width: `${progressPercent(progress.value, progress.max)}%` }}
+              />
+            </div>
+            <div className="mt-2 flex flex-wrap justify-between gap-x-4 gap-y-0.5 text-[12.5px] text-textSecondary">
+              <span className="tabular-nums">{progress.left}</span>
+              {progress.right && <span>{progress.right}</span>}
+            </div>
+          </div>
+        )}
         </div>
       </div>
     </div>

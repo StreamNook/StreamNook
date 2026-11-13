@@ -201,6 +201,8 @@ module.exports = {
       },
       animation: {
         'fade-in': 'fade-in 0.3s ease-out forwards',
+        // Opacity only (keyframe in globals.css): a swap that must not slide.
+        'enter-fade': 'sn-enter-fade 0.2s ease-out',
         'scale-in': 'scale-in 0.2s cubic-bezier(0.2, 0.8, 0.2, 1) forwards',
         shimmer: 'shimmer 2s ease-in-out infinite',
         droplet: 'droplet 2.5s ease-in-out infinite',

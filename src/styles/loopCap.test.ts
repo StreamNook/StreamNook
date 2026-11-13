@@ -215,6 +215,7 @@ const CSS_ROWS: Record<string, Row> = {
 // tailwind.config.js `theme.extend.animation`.
 const TAILWIND_ROWS: Record<string, Row> = {
   'fade-in': { d: 'instant-ok' },
+  'enter-fade': { d: 'instant-ok' },
   'scale-in': { d: 'instant-ok' },
   shimmer: { d: 'rests-ok' },
   droplet: { d: 'rests-ok' },
