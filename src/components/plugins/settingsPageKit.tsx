@@ -573,8 +573,8 @@ export function Disclosure({
         <div style={{ minHeight: 0, overflow: settled && open ? 'visible' : 'hidden' }}>
           {mounted && (
             <div
-              className="motion-reduce:transition-none"
-              style={{ paddingTop: 12, opacity: shown ? 1 : 0, transition: 'opacity 220ms ease' }}
+              className="transition-opacity duration-[220ms] ease-out motion-reduce:transition-none"
+              style={{ paddingTop: 8, opacity: shown ? 1 : 0 }}
             >
               <div className="settings-card px-4">{children}</div>
             </div>
