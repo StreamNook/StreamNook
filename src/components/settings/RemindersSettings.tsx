@@ -11,6 +11,8 @@ import { useAppStore } from '../../stores/AppStore';
 import { SettingsSection, SegmentedSelect } from './_primitives';
 import { IS_MOBILE } from '../../utils/platform';
 import { ChannelPicker } from './ChannelPicker';
+import { ConvertedNote, MakeRuleButton } from './automations/ReminderRuleActions';
+import { automationsApi, errorText, type ReminderOp } from '../../utils/automations';
 import type {
   Reminder,
   ReminderTriggerType,
@@ -148,39 +150,71 @@ const RepeatStepper: React.FC<{ value: number; onChange: (v: number) => void }> 
 };
 
 const RemindersSettings = () => {
-  const { settings, updateSettings } = useAppStore();
+  const { settings, loadSettings, addToast } = useAppStore();
   const currentStream = useAppStore((s) => s.currentStream);
+  const openSettings = useAppStore((s) => s.openSettings);
   const [showDocs, setShowDocs] = useState(false);
-
-  const reminders = useMemo(
-    () => settings.reminders?.reminders ?? [],
-    [settings.reminders],
+  // Reminders turned into rules (backend-owned list); each shows as "Now a rule".
+  const convertedIds = useMemo(
+    () => new Set(settings.automations?.converted_reminders ?? []),
+    [settings.automations],
   );
 
-  const writeReminders = (next: Reminder[]) => {
-    updateSettings({ ...settings, reminders: { reminders: next } });
+  // What was typed, by reminder id, shown over the stored value until its write has landed.
+  const [drafts, setDrafts] = useState<Record<string, Record<string, unknown>>>({});
+
+  const reminders = useMemo(
+    () =>
+      (settings.reminders?.reminders ?? []).map((r) =>
+        drafts[r.id] ? ({ ...r, ...drafts[r.id] } as Reminder) : r,
+      ),
+    [settings.reminders, drafts],
+  );
+
+  // The write landed (or failed): forget the typed values the store now holds or never will.
+  const settleDraft = (id: string, written: Record<string, unknown>) => {
+    setDrafts((prev) => {
+      const held = prev[id];
+      if (!held) return prev;
+      const rest = { ...held };
+      for (const key of Object.keys(written)) {
+        if (rest[key] === written[key]) delete rest[key];
+      }
+      const others = { ...prev };
+      delete others[id];
+      return Object.keys(rest).length === 0 ? others : { ...others, [id]: rest };
+    });
+  };
+
+  const saveReminder = (op: ReminderOp, id: string, written: Record<string, unknown> = {}) => {
+    automationsApi
+      .setReminders(op)
+      .then(() => loadSettings())
+      .catch((e: unknown) => addToast(errorText(e), 'error'))
+      .finally(() => settleDraft(id, written));
   };
 
   const updateReminder = (id: string, patch: Partial<Reminder>) => {
-    writeReminders(reminders.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+    setDrafts((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
+    // The writer merges key by key and a null removes the key, so a cleared field goes as null.
+    const fields = Object.fromEntries(Object.entries(patch).map(([key, value]) => [key, value ?? null]));
+    saveReminder({ op: 'upsert', reminder: { id, ...fields } }, id, patch);
   };
 
   const removeReminder = (id: string) => {
-    writeReminders(reminders.filter((r) => r.id !== id));
+    saveReminder({ op: 'remove', id }, id);
   };
 
+  // Move up and Move down: the writer takes the new 0-based place and clamps it, so no copy of the list is sent.
   const moveReminder = (id: string, direction: -1 | 1) => {
-    const idx = reminders.findIndex((r) => r.id === id);
-    if (idx === -1) return;
-    const target = idx + direction;
-    if (target < 0 || target >= reminders.length) return;
-    const next = reminders.slice();
-    [next[idx], next[target]] = [next[target], next[idx]];
-    writeReminders(next);
+    const index = reminders.findIndex((r) => r.id === id);
+    if (index === -1) return;
+    saveReminder({ op: 'move', id, to: index + direction }, id);
   };
 
   const addReminder = () => {
-    writeReminders([...reminders, makeDefaultReminder()]);
+    const made = makeDefaultReminder();
+    saveReminder({ op: 'upsert', reminder: { ...made } }, made.id);
   };
 
   const setScope = (reminder: Reminder, scope: ReminderChannelScope) => {
@@ -219,6 +253,17 @@ const RemindersSettings = () => {
           in chat. You can also fire one off instantly with <Tag>/remind now &lt;message&gt;</Tag>.
         </p>
         {!IS_MOBILE && referenceToggle}
+      </div>
+      <div className={IS_MOBILE ? 'px-4' : ''}>
+        <button
+          type="button"
+          onClick={() => openSettings('Automations', 'automation-reminders')}
+          className={`inline-flex items-center px-2 text-xs text-textSecondary hover:text-textPrimary transition-colors ${
+            IS_MOBILE ? 'min-h-8' : 'py-1'
+          }`}
+        >
+          Open in Automations
+        </button>
       </div>
 
       {showDocs && (
@@ -304,11 +349,15 @@ const RemindersSettings = () => {
         )}
 
         {reminders.map((reminder, idx) => (
-          <div key={reminder.id} className="bg-glass/30 rounded-lg p-3 space-y-3">
+          <div
+            key={reminder.id}
+            className={`bg-glass/30 rounded-lg p-3 space-y-3 ${convertedIds.has(reminder.id) ? 'opacity-70' : ''}`}
+          >
+            {convertedIds.has(reminder.id) && <ConvertedNote reminderId={reminder.id} />}
             {/* Header: enable · name · reorder · delete */}
             <div className="flex items-center gap-2">
               <button
-                onClick={() => updateReminder(reminder.id, { enabled: !reminder.enabled })}
+                onClick={() => saveReminder({ op: 'set_enabled', id: reminder.id, enabled: !reminder.enabled }, reminder.id)}
                 className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors flex-shrink-0 ${
                   reminder.enabled ? 'bg-accent' : 'bg-gray-600'
                 }`}
@@ -493,6 +542,12 @@ const RemindersSettings = () => {
                   updateReminder(reminder.id, { channel_login: login, channel_id: id || undefined })
                 }
               />
+            )}
+
+            {!convertedIds.has(reminder.id) && (
+              <div className="flex justify-end border-t border-borderSubtle/40 pt-2">
+                <MakeRuleButton reminderId={reminder.id} />
+              </div>
             )}
           </div>
         ))}

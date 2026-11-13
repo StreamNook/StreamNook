@@ -72,6 +72,43 @@ export interface AutomationRuleStatus {
   last_outcome: string | null;
 }
 
+/** One reminder as the Reminders group lists it (`automations_status().reminders`, and what the Reminders writer answers). */
+export interface ReminderSummary {
+  id: string;
+  /** The label, else the message. */
+  name: string;
+  /** "Every 10 minutes", "Daily at 21:00". */
+  schedule: string;
+  /** "#channel" or "Current channel". */
+  chat: string;
+  /** On, and not turned into a rule. */
+  enabled: boolean;
+  /** Now a rule: its id is in `converted_reminders`. */
+  converted: boolean;
+  /** Since the app started; null before its first post. */
+  last_fired_ms: number | null;
+}
+
+/** One line of "What changes" for a rule made from a reminder. */
+export interface ReminderChange {
+  field: string;
+  words: string;
+}
+
+/** `automations_convert_reminder`. A refusal ("Already a rule") is the command's error. */
+export interface ReminderConversion {
+  rule_id: string;
+  changes: ReminderChange[];
+  errors: AutomationFieldError[];
+}
+
+/** The Reminders writer's four ops (Rust: `#[serde(tag = "op", rename_all = "snake_case")]`). */
+export type ReminderOp =
+  | { op: 'upsert'; reminder: Record<string, unknown> }
+  | { op: 'remove'; id: string }
+  | { op: 'set_enabled'; id: string; enabled: boolean }
+  | { op: 'move'; id: string; to: number };
+
 /** `automations_status`, and the `automations://status` event. */
 export interface AutomationStatus {
   run: AutomationRunState;
@@ -96,6 +133,8 @@ export interface AutomationStatus {
   platform_accounts: AutomationPlatformAccount[];
   /** This device runs rules right now. */
   foreground: boolean;
+  /** The Reminders group (P5), in the order the settings hold them. */
+  reminders?: ReminderSummary[];
 }
 
 /** `automations_save_rule` and `automations_add_template` (7.3a `SaveAnswer`). */
@@ -269,6 +308,12 @@ export const automationsApi = {
   setDeviceName: (name: string) => invoke<string>('automations_set_device_name', { name }),
   /** True when the link answers; the words under Check it are the clients' own (`LINK_READY`, `LINK_NOT_READY`). */
   checkLink: (url: string) => invoke<boolean>('automations_check_link', { url }),
+  /** The Reminders writer: one op, answering the list. The argument is `op`, itself tagged by its own `op`. */
+  setReminders: (op: ReminderOp) => invoke<ReminderSummary[]>('automations_set_reminders', { op }),
+  /** "Make it a rule": the new rule is saved in Test, the reminder is switched off and listed as converted. */
+  convertReminder: (id: string) => invoke<ReminderConversion>('automations_convert_reminder', { id }),
+  /** "Turn back on": the reminder runs again and its rule is switched off. */
+  restoreReminder: (id: string) => invoke<void>('automations_restore_reminder', { id }),
   /** The owner's channel point rewards (null: the main account's). Rust answers a plain sentence on failure. */
   ownRewards: (ownerId: string | null) => invoke<OwnReward[]>('automations_own_rewards', { ownerId }),
 };
@@ -794,10 +839,13 @@ export function duplicateRule(rule: AutomationRule): AutomationRule {
     enabled: true,
     live: false,
     origin: null,
+    claim_as: null,
     created_ms: 0,
     updated_ms: 0,
     only_if: {
       ...copy.only_if,
+      lead_moderator_excluded: false,
+      only_while_watching: false,
       channels:
         scope.kind === 'these' ? { kind: 'these', list: scope.list.map((c) => ({ ...c, id: newElementId('c') })) } : scope,
     },

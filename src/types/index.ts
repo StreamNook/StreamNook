@@ -839,6 +839,12 @@ export interface AutomationConditions {
   only_away: boolean;
   shared_chat: boolean;
   hours: AutomationHours | null;
+  /** Post only in a chat a window holds; offered for every rule, set by "Make it a rule". Optional here: Rust always writes it. */
+  only_while_open?: boolean;
+  /** Set by "Make it a rule" for a "mods" keyword; backend-owned, kept by every save. */
+  lead_moderator_excluded?: boolean;
+  /** Set by "Make it a rule" for a pinned uptime reminder; backend-owned, kept by every save. */
+  only_while_watching?: boolean;
   /** The saved-filter language, chat rows only. */
   expression: string | null;
 }
@@ -893,6 +899,19 @@ export interface AutomationLimits {
   max_wait_seconds: number;
 }
 
+/** What "Make it a rule" stores so the rule claims as its reminder does. Backend-owned: no editor writes it. */
+export interface AutomationClaimAs {
+  account_id: string;
+  kind: 'interval' | 'delay' | 'clock' | 'uptime' | 'keyword';
+  family_hash: string;
+  seconds: number;
+  cooldown_s: number;
+  trigger_kind: string;
+  scope_kind: string;
+  scope_key: string;
+  send_to: string | null;
+}
+
 export interface AutomationRule {
   id: string;
   name: string;
@@ -907,6 +926,8 @@ export interface AutomationRule {
   limits: AutomationLimits;
   vary: boolean;
   origin: string | null;
+  /** Set only by "Make it a rule"; Rust keeps it across saves while it still applies. Optional here: no client writes it. */
+  claim_as?: AutomationClaimAs | null;
   created_ms: number;
   updated_ms: number;
 }

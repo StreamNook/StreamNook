@@ -3032,6 +3032,12 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   },
   {
     tab: 'Automations',
+    section: 'Reminders',
+    title: 'Reminders',
+    description: 'Your reminders in one list, each with its own switch. Make a reminder into a rule to give it conditions, Test and Activity, and turn it back on later. Timer, repeat, keyword.'
+  },
+  {
+    tab: 'Automations',
     section: 'Try It',
     title: 'Try It',
     description: 'Try a sample message, sender or event against your rules and see which would act and what they would post. Test, preview.'

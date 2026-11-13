@@ -25,6 +25,7 @@ import type { AutomationRunState, CloseToTrayMode } from '../../types';
 import RuleList from './automations/RuleList';
 import TryIt from './automations/TryIt';
 import ActivityLog from './automations/ActivityLog';
+import { RemindersGroup } from './automations/RemindersGroup';
 import { FIELD, INPUT, PRIMARY_BUTTON, QUIET_BUTTON, RunDot } from './automations/parts';
 
 const RUN_OPTIONS: { value: AutomationRunState; label: string }[] = [
@@ -267,6 +268,15 @@ const AutomationsSettings = () => {
           initialOpen={linkedRule}
           otherChannelsOn={other}
         />
+      </SettingsSection>
+
+      <SettingsSection
+        label="Reminders"
+        id="automation-reminders"
+        description="Reminders follow their own switches, not the status above. Make one into a rule to give it conditions, Test and Activity."
+        bare
+      >
+        <RemindersGroup status={status} now={now} />
       </SettingsSection>
 
       <SettingsSection

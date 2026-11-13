@@ -53,6 +53,7 @@ import {
 import { ActionEditor } from './ActionEditor';
 import { EdgeIf, LiveChangeFields, OwnEventFields } from './OwnEventFields';
 import { BadgeDropFields } from './BadgeDropFields';
+import { WhatChanges } from './WhatChanges';
 import { EVENT_ITEMS, P2_TRIGGERS, PLATFORM_ITEMS, ROLE_ITEMS } from './labels';
 import { ExpressionField, P2AddActions, P2TriggerFields, isP2Trigger } from './P2Fields';
 import {
@@ -354,6 +355,8 @@ export function RuleEditor({ initial, isNew, accounts, platformAccounts, otherCh
         </div>
       )}
 
+      <WhatChanges ruleId={draft.id} />
+
       <Field label="Name" error={errorAt(errors, 'name')}>
         <input
           value={draft.name}
@@ -581,6 +584,12 @@ export function RuleEditor({ initial, isNew, accounts, platformAccounts, otherCh
               description={IS_MOBILE ? 'Set away on this page or with /afk.' : 'Set away on this page, with /afk, or from the tray.'}
               on={draft.only_if.only_away}
               onChange={() => setIf({ only_away: !draft.only_if.only_away })}
+            />
+            <SwitchLine
+              label="Only in chats you have open"
+              description="Skips chats that only StreamNook is keeping open for rules. Reminders work this way too."
+              on={draft.only_if.only_while_open ?? false}
+              onChange={() => setIf({ only_while_open: !(draft.only_if.only_while_open ?? false) })}
             />
             <Disclosure label="More conditions">
               <Field label="Skip these people" hint="Names separated by commas.">

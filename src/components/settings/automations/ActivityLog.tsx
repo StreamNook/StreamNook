@@ -46,7 +46,8 @@ const KIND_DOT: Record<AutomationActivityKind, string> = {
 };
 
 function EntryRow({ entry, earlier }: { entry: AutomationActivityEntry; earlier: boolean }) {
-  const where = [entry.rule_name, entry.channel ? chatLabel(entry.channel) : null].filter(Boolean).join(' · ');
+  const tag = entry.rule_id.startsWith('reminder:') ? 'Reminder' : null;
+  const where = [tag, entry.rule_name, entry.channel ? chatLabel(entry.channel) : null].filter(Boolean).join(' · ');
   return (
     <div className="flex items-start gap-3 px-3.5 py-2.5">
       <span aria-hidden className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${KIND_DOT[entry.kind]}`} />
