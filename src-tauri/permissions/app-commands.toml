@@ -628,6 +628,7 @@ allow = [
   "automations_check_link",
   "automations_notify_claim",
   "automations_pip",
+  "automations_own_rewards",
   "automations_open_log_folder",
   "automations_whisper_people",
   "get_ivr_user_summary",

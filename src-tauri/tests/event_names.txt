@@ -12,6 +12,7 @@ asset-cache://cached
 asset-cache://cleared
 automations://activity
 automations://notify
+automations://speak
 automations://status
 background-state-changed
 badge-available

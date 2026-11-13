@@ -39,6 +39,7 @@ allow = [
   "tv_get_state",
   "tv_set_enabled",
   "tv_control",
+  "speak_android",
   "open_drops_sheet",
   "sheet_redirected",
   "sheet_closed",

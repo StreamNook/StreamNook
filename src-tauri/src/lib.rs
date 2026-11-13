@@ -392,6 +392,8 @@ mod plugin_host;
 pub mod rt;
 mod services;
 #[cfg(target_os = "android")]
+mod speech_plugin;
+#[cfg(target_os = "android")]
 mod twitch_login_plugin;
 mod utils;
 
@@ -1093,6 +1095,10 @@ pub fn run() {
     // services::cast_session.
     #[cfg(target_os = "android")]
     let builder = builder.plugin(cast_plugin::init());
+    // Android text to speech for automations' Speak action and /tts
+    // (`SpeechPlugin.kt`: no audio focus, queued until the engine is ready).
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(speech_plugin::init());
     // Android mention notifications, posted from Rust while the page sleeps.
     #[cfg(target_os = "android")]
     let builder = builder.plugin(android_notify::mention_plugin());
@@ -2069,6 +2075,8 @@ pub fn run() {
             cast_plugin::tv_set_enabled,
             #[cfg(target_os = "android")]
             cast_plugin::tv_control,
+            #[cfg(target_os = "android")]
+            speech_plugin::speak_android,
             #[cfg(mobile)]
             flush_persistent_stores,
             #[cfg(mobile)]
@@ -2786,6 +2794,7 @@ pub fn run() {
             commands::account_automations::automations_check_link,
             commands::account_automations::automations_notify_claim,
             commands::account_automations::automations_pip,
+            commands::account_automations::automations_own_rewards,
             commands::account_automations_p2::automations_open_log_folder,
             commands::account_automations_p2::automations_whisper_people,
             #[cfg(mobile)]
