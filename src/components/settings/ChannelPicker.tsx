@@ -18,20 +18,26 @@ const TWITCH_ONLY: ProviderId[] = ['twitch'];
 export function ChannelPicker({
   login,
   label = 'Choose a channel',
+  providers,
   onPick,
 }: {
   /** The chosen channel, shown on the closed button. */
   login?: string;
   /** The closed button's words while nothing is chosen. */
   label?: string;
-  onPick: (login: string, id: string) => void;
+  /** The platforms to search; Twitch alone when omitted. */
+  providers?: readonly ProviderId[];
+  /** `id` is the Twitch room id, empty for a search hit and for every other platform (Rust finds the room at save). */
+  onPick: (login: string, id: string, provider: ProviderId) => void;
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const exclude = useMemo(() => new Set<string>(), []);
-  // Twitch ONLY, deliberately. A reminder or a rule names a Twitch channel and
-  // posts through Twitch chat, so a Kick row picked here would never fire, or
-  // fire at a same-named Twitch channel instead.
+  // Twitch only unless the caller names more: a reminder names a Twitch channel
+  // and posts through Twitch chat, so a Kick row picked there would never fire.
+  // A rule names the platforms it works on, and its pick says which one it is.
+  const providerKey = (providers ?? TWITCH_ONLY).join(',');
+  const searched = useMemo(() => providerKey.split(',') as ProviderId[], [providerKey]);
   const {
     searchInput,
     setSearchInput,
@@ -41,7 +47,7 @@ export function ChannelPicker({
     listRef,
     refreshFollowing,
     reset,
-  } = useChannelSearch({ excludeKeys: exclude, providers: TWITCH_ONLY });
+  } = useChannelSearch({ excludeKeys: exclude, providers: searched });
 
   useEffect(() => {
     if (open) void refreshFollowing();
@@ -56,7 +62,10 @@ export function ChannelPicker({
   const select = (item: ChannelItem) => {
     // Search hits without a resolved id fall back to login==id; don't persist
     // that as a real channel id.
-    onPick(item.login, item.source === 'search' && item.id === item.login ? '' : item.id);
+    const provider = (item.provider ?? 'twitch') as ProviderId;
+    // Another platform's rows carry no Twitch room id.
+    const id = provider !== 'twitch' || (item.source === 'search' && item.id === item.login) ? '' : item.id;
+    onPick(item.login, id, provider);
     close();
   };
 

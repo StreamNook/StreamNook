@@ -12,6 +12,7 @@ import type {
   AutomationEventKind,
   AutomationFieldError,
   AutomationLine,
+  AutomationPlatform,
   AutomationRule,
   AutomationRunState,
   AutomationSenderRole,
@@ -41,6 +42,13 @@ export interface AutomationAccount {
   login: string;
   /** The account the slot token was last verified as (shown as "main account"). */
   main: boolean;
+}
+
+/** An account on another platform a rule can send as: the connected Kick account (7.3a `PlatformAccount`). */
+export interface AutomationPlatformAccount {
+  provider: AutomationPlatform;
+  id: string;
+  login: string;
 }
 
 /** One stored rule, with what this device knows about it (7.3a `RuleStatus`). */
@@ -84,6 +92,8 @@ export interface AutomationStatus {
   /** StreamNook asked rules to wait a moment. */
   busy: boolean;
   accounts: AutomationAccount[];
+  /** The connected Kick account, for a Kick rule's Send as. */
+  platform_accounts: AutomationPlatformAccount[];
   /** This device runs rules right now. */
   foreground: boolean;
 }
@@ -633,6 +643,102 @@ export const accountRef = (a: AutomationAccount): AutomationAccountRef => ({
   name: a.login,
 });
 
+/** The connected Kick account as a rule's `send_as`. */
+export const platformAccountRef = (a: AutomationPlatformAccount): AutomationAccountRef => ({
+  provider: a.provider,
+  id: a.id,
+  login: a.login,
+  name: a.login,
+});
+
+/** A rule's platform: the first it names (Twitch when it names none). */
+export function rulePlatform(rule: AutomationRule): AutomationPlatform {
+  return rule.only_if.platforms[0] ?? 'twitch';
+}
+
+/** Whether rules can post on a platform (YouTube and TikTok rules notify, log or speak). */
+export const canPost = (platform: AutomationPlatform): boolean => platform === 'twitch' || platform === 'kick';
+
+/** The actions a Kick rule may hold, and the only ones a YouTube or TikTok rule may (mirrors Rust's `action_fits`; a test compares them). */
+export const KICK_ACTION_KINDS: readonly string[] = ['reply', 'send', 'notify', 'log', 'speak', 'wait', 'highlight', 'timeout', 'delete'];
+export const NOTIFY_ACTION_KINDS: readonly string[] = ['notify', 'log', 'speak'];
+
+export function actionFits(platform: AutomationPlatform, kind: string): boolean {
+  if (platform === 'twitch') return true;
+  return (platform === 'kick' ? KICK_ACTION_KINDS : NOTIFY_ACTION_KINDS).includes(kind);
+}
+
+/** The events each platform has (mirrors Rust's `EventKind::allowed_on`; a test compares them). */
+export const PLATFORM_EVENT_KINDS: Record<AutomationPlatform, readonly AutomationEventKind[]> = {
+  twitch: ['sub', 'resub', 'gift', 'gift_bomb', 'raid', 'cheer', 'announcement'],
+  kick: ['sub', 'resub', 'gift', 'gift_bomb'],
+  youtube: ['super_chat', 'super_sticker', 'membership', 'member_gift'],
+  tiktok: ['tiktok_gift', 'tiktok_follow', 'tiktok_share'],
+};
+
+/** Every event the named platforms have, without repeats. */
+export function eventsOn(platforms: readonly AutomationPlatform[]): AutomationEventKind[] {
+  const out: AutomationEventKind[] = [];
+  for (const platform of platforms) {
+    for (const kind of PLATFORM_EVENT_KINDS[platform]) if (!out.includes(kind)) out.push(kind);
+  }
+  return out;
+}
+
+/** The platform a chat key names: the part before the colon, Twitch for a bare name. */
+export function providerOfKey(key: string): AutomationPlatform {
+  const head = key.includes(':') ? key.split(':', 1)[0].toLowerCase() : '';
+  return head === 'kick' || head === 'youtube' || head === 'tiktok' ? head : 'twitch';
+}
+
+/**
+ * The rule on these platforms, with what they cannot hold taken out, as Rust's
+ * check requires: a rule that posts runs on one platform (the newest choice),
+ * sends as that platform's account, keeps only the actions, events and chats
+ * the platforms have, and loses Only while live (no other platform tells when
+ * a stream is live), Watching and the badge trigger (Twitch's).
+ */
+export function withPlatforms(
+  rule: AutomationRule,
+  next: readonly AutomationPlatform[],
+  kick?: AutomationPlatformAccount,
+): AutomationRule {
+  let platforms: AutomationPlatform[] = next.length > 0 ? [...next] : ['twitch'];
+  const posts = rule.actions.some(isOutward);
+  if (posts && platforms.length > 1) platforms = [platforms[platforms.length - 1]];
+  const other = platforms.some((p) => p !== 'twitch');
+  let sendAs = rule.send_as;
+  if (posts) {
+    if (platforms[0] === 'kick') {
+      if (kick) sendAs = platformAccountRef(kick);
+    } else if (rule.send_as.provider !== 'twitch') {
+      sendAs = rule.owner;
+    }
+  }
+  let actions = rule.actions.filter((a) => platforms.every((p) => actionFits(p, a.kind)));
+  if (actions.length === 0) actions = [actionOf('notify')];
+  actions = actions.map((a) => (a.kind === 'send' && a.to && !platforms.includes(providerOfKey(a.to.key)) ? { ...a, to: null } : a));
+  let channels = rule.only_if.channels;
+  if (channels.kind === 'watching' && !platforms.includes('twitch')) channels = { kind: 'own' };
+  if (channels.kind === 'these') {
+    channels = { kind: 'these', list: channels.list.filter((c) => platforms.includes(providerOfKey(c.key))) };
+  }
+  let when = rule.when;
+  if (when.kind === 'badge_drop' && other) when = triggerOf('mention');
+  if (when.kind === 'channel_event') {
+    const allowed = eventsOn(platforms);
+    const events = when.events.filter((e) => allowed.includes(e));
+    when = { ...when, events: events.length > 0 ? events : allowed.slice(0, 1) };
+  }
+  return {
+    ...rule,
+    send_as: sendAs,
+    actions,
+    when,
+    only_if: { ...rule.only_if, platforms, channels, only_live: other ? false : rule.only_if.only_live },
+  };
+}
+
 /** A new rule's start: answers mentions of the owner with a reply. */
 export function blankRule(owner: AutomationAccountRef): AutomationRule {
   return {
@@ -644,6 +750,7 @@ export function blankRule(owner: AutomationAccountRef): AutomationRule {
     send_as: owner,
     when: triggerOf('mention'),
     only_if: {
+      platforms: ['twitch'],
       channels: { kind: 'own' },
       roles: [],
       skip_users: [],

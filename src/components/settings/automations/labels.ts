@@ -1,6 +1,6 @@
 // The words the automations page uses for roles, events and actions, shared by
 // the editor and Try it.
-import type { AutomationAction, AutomationEventKind, AutomationSenderRole } from '../../../types';
+import type { AutomationAction, AutomationEventKind, AutomationPlatform, AutomationSenderRole } from '../../../types';
 
 export const ROLE_ITEMS: { id: AutomationSenderRole; label: string }[] = [
   { id: 'broadcaster', label: 'The streamer' },
@@ -18,6 +18,21 @@ export const EVENT_ITEMS: { id: AutomationEventKind; label: string }[] = [
   { id: 'raid', label: 'Raids' },
   { id: 'cheer', label: 'Cheers' },
   { id: 'announcement', label: 'Announcements' },
+  { id: 'super_chat', label: 'Super Chats' },
+  { id: 'super_sticker', label: 'Super Stickers' },
+  { id: 'membership', label: 'New members' },
+  { id: 'member_gift', label: 'Gifted memberships' },
+  { id: 'tiktok_gift', label: 'Gifts' },
+  { id: 'tiktok_follow', label: 'Follows' },
+  { id: 'tiktok_share', label: 'Shares' },
+];
+
+/** The platforms, in the order the editor shows them (a plain switch beside the platform's own logo). */
+export const PLATFORM_ITEMS: { id: AutomationPlatform; label: string }[] = [
+  { id: 'twitch', label: 'Twitch' },
+  { id: 'kick', label: 'Kick' },
+  { id: 'youtube', label: 'YouTube' },
+  { id: 'tiktok', label: 'TikTok' },
 ];
 
 /** An action's name in the editor. */

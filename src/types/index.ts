@@ -751,7 +751,24 @@ export interface AutomationTextMatch {
   case_sensitive: boolean;
 }
 
-export type AutomationEventKind = 'sub' | 'resub' | 'gift' | 'gift_bomb' | 'raid' | 'cheer' | 'announcement';
+/** A chat platform a rule listens on (Rust `Platform`). A rule that posts names exactly one, and only Twitch and Kick can be posted to. */
+export type AutomationPlatform = 'twitch' | 'kick' | 'youtube' | 'tiktok';
+
+export type AutomationEventKind =
+  | 'sub'
+  | 'resub'
+  | 'gift'
+  | 'gift_bomb'
+  | 'raid'
+  | 'cheer'
+  | 'announcement'
+  | 'super_chat'
+  | 'super_sticker'
+  | 'membership'
+  | 'member_gift'
+  | 'tiktok_gift'
+  | 'tiktok_follow'
+  | 'tiktok_share';
 
 export type AutomationBadgeLeg = 'announced' | 'earnable' | 'both';
 
@@ -812,6 +829,8 @@ export interface AutomationHours {
 }
 
 export interface AutomationConditions {
+  /** The platforms the rule listens on; `['twitch']` by default. */
+  platforms: AutomationPlatform[];
   channels: AutomationChannelScope;
   roles: AutomationSenderRole[];
   skip_users: string[];

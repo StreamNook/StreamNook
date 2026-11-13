@@ -244,6 +244,7 @@ export default function RuleList({ status, now, initialOpen, otherChannelsOn }: 
                 initial={r.rule}
                 isNew={false}
                 accounts={status.accounts}
+                platformAccounts={status.platform_accounts}
                 otherChannelsOn={otherChannelsOn}
                 onClose={() => setOpenId(null)}
                 onSaved={saved}
@@ -263,6 +264,7 @@ export default function RuleList({ status, now, initialOpen, otherChannelsOn }: 
               initial={fresh.rule}
               isNew
               accounts={status.accounts}
+              platformAccounts={status.platform_accounts}
               otherChannelsOn={otherChannelsOn}
               onClose={() => setOpenId(null)}
               onSaved={saved}

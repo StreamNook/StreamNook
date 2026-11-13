@@ -11,6 +11,7 @@ import type {
   AutomationFieldError,
   AutomationLimits,
   AutomationMatchMode,
+  AutomationPlatform,
   AutomationRule,
   AutomationSenderRole,
   AutomationTrigger,
@@ -19,23 +20,32 @@ import type {
 import { SegmentedSelect, SwitchList } from '../_primitives';
 import { ChannelPicker } from '../ChannelPicker';
 import { IS_MOBILE } from '../../../utils/platform';
+import { ProviderMark } from '../../ProviderLogo';
+import { makeKey } from '../../../utils/providerKey';
 import { refreshAutomationStatus } from '../../../hooks/useAutomationStatus';
 import {
   accountRef,
   actionOf,
   automationsApi,
+  canPost,
   errorAt,
   errorText,
+  eventsOn,
   isOutward,
   loadAutomationVariables,
   newElementId,
+  platformAccountRef,
   previewSample,
+  providerOfKey,
   saveRuleChecked,
+  rulePlatform,
   sameRuleBody,
   isEdgeKind,
   isOwnEventKind,
+  withPlatforms,
   withTrigger,
   type AutomationAccount,
+  type AutomationPlatformAccount,
   type AutomationTestRule,
   type AutomationVariable,
   type TriggerKind,
@@ -43,7 +53,7 @@ import {
 import { ActionEditor } from './ActionEditor';
 import { EdgeIf, LiveChangeFields, OwnEventFields } from './OwnEventFields';
 import { BadgeDropFields } from './BadgeDropFields';
-import { EVENT_ITEMS, P2_TRIGGERS, ROLE_ITEMS } from './labels';
+import { EVENT_ITEMS, P2_TRIGGERS, PLATFORM_ITEMS, ROLE_ITEMS } from './labels';
 import { ExpressionField, P2AddActions, P2TriggerFields, isP2Trigger } from './P2Fields';
 import {
   Block,
@@ -185,6 +195,8 @@ interface RuleEditorProps {
   initial: AutomationRule;
   isNew: boolean;
   accounts: readonly AutomationAccount[];
+  /** The connected Kick account, for a Kick rule's Send as. */
+  platformAccounts: readonly AutomationPlatformAccount[];
   /** Whether rules may post in chats that aren't yours. */
   otherChannelsOn: boolean;
   onClose: () => void;
@@ -192,8 +204,15 @@ interface RuleEditorProps {
   onDuplicate: (copy: AutomationRule) => void;
 }
 
-export function RuleEditor({ initial, isNew, accounts, otherChannelsOn, onClose, onSaved, onDuplicate }: RuleEditorProps) {
-  const [draft, setDraft] = useState<AutomationRule>(initial);
+export function RuleEditor({ initial, isNew, accounts, platformAccounts, otherChannelsOn, onClose, onSaved, onDuplicate }: RuleEditorProps) {
+  const [stored, setDraft] = useState<AutomationRule>(initial);
+  const kickAccount = platformAccounts.find((a) => a.provider === 'kick');
+  // A Kick rule that posts sends as the connected Kick account, so its sender follows a connect or a
+  // switch; derived here and sent with the save, never set in an effect.
+  const draft =
+    kickAccount && rulePlatform(stored) === 'kick' && stored.actions.some(isOutward) && stored.send_as.id !== kickAccount.id
+      ? { ...stored, send_as: platformAccountRef(kickAccount) }
+      : stored;
   const [errors, setErrors] = useState<AutomationFieldError[]>([]);
   const [message, setMessage] = useState<string | null>(null);
   const [stale, setStale] = useState(false);
@@ -211,6 +230,15 @@ export function RuleEditor({ initial, isNew, accounts, otherChannelsOn, onClose,
   const scope = draft.only_if.channels;
   const hours = draft.only_if.hours;
   const hasOutward = draft.actions.some(isOutward);
+  const platforms = draft.only_if.platforms;
+  const platform = rulePlatform(draft);
+  const twitchOnly = platforms.every((p) => p === 'twitch');
+  const eventItems = EVENT_ITEMS.filter((item) => eventsOn(platforms).includes(item.id));
+  const platformHint = platforms.some((p) => p === 'youtube' || p === 'tiktok')
+    ? 'YouTube and TikTok rules can notify you, log or speak.'
+    : hasOutward
+      ? 'A rule that posts runs on one platform.'
+      : 'Choose every platform it should watch.';
 
   const update = (fn: (r: AutomationRule) => AutomationRule) => {
     setDraft(fn);
@@ -234,10 +262,20 @@ export function RuleEditor({ initial, isNew, accounts, otherChannelsOn, onClose,
         ? draft.only_if.roles.filter((r) => r !== role)
         : [...draft.only_if.roles, role],
     });
-  const addChannel = (login: string, roomId: string) => {
-    if (scope.kind !== 'these' || scope.list.some((c) => c.name === login)) return;
-    setIf({ channels: { kind: 'these', list: [...scope.list, { id: newElementId('c'), key: '', room_id: roomId, name: login }] } });
+  const addChannel = (login: string, roomId: string, provider: AutomationPlatform) => {
+    // Twitch's key is built in Rust; another platform's names it here.
+    const key = provider === 'twitch' ? '' : makeKey(provider, login);
+    if (scope.kind !== 'these' || scope.list.some((c) => providerOfKey(c.key) === provider && c.name === login)) return;
+    setIf({ channels: { kind: 'these', list: [...scope.list, { id: newElementId('c'), key, room_id: roomId, name: login }] } });
   };
+  const togglePlatform = (id: AutomationPlatform) => {
+    const has = platforms.includes(id);
+    // A rule that posts runs on one platform, so a choice replaces; one that only notifies may watch several.
+    const next = hasOutward ? [id] : has ? platforms.filter((p) => p !== id) : [...platforms, id];
+    update((r) => withPlatforms(r, next, kickAccount));
+  };
+  const addOutward = (kind: 'reply' | 'send') =>
+    update((r) => withPlatforms({ ...r, actions: [...r.actions, actionOf(kind)] }, [rulePlatform(r)], kickAccount));
 
   const save = () => {
     setSaving(true);
@@ -334,7 +372,7 @@ export function RuleEditor({ initial, isNew, accounts, otherChannelsOn, onClose,
           onChange={(e) => update((r) => withTrigger(r, e.target.value as TriggerKind))}
           className={SELECT}
         >
-          {TRIGGERS.map((t) => (
+          {TRIGGERS.filter((t) => twitchOnly || t.value !== 'badge_drop').map((t) => (
             <option key={t.value} value={t.value}>
               {t.label}
             </option>
@@ -398,7 +436,7 @@ export function RuleEditor({ initial, isNew, accounts, otherChannelsOn, onClose,
           <>
             <Field label="Events" error={errorAt(errors, 'when.events')}>
               <SwitchList
-                items={EVENT_ITEMS}
+                items={eventItems}
                 isOn={(id) => when.events.some((e) => e === id)}
                 onToggle={(id) =>
                   update((r) => ({
@@ -457,9 +495,21 @@ export function RuleEditor({ initial, isNew, accounts, otherChannelsOn, onClose,
         {badge ? (
           <p className={HINT}>In your channel, only while you're live. Badge rules always work this way.</p>
         ) : edge ? (
-          <EdgeIf ownEvent={ownEvent} draft={draft} errors={errors} addChannel={addChannel} setIf={setIf} />
+          <EdgeIf ownEvent={ownEvent} draft={draft} errors={errors} addChannel={(login, roomId) => addChannel(login, roomId, 'twitch')} setIf={setIf} />
         ) : (
           <>
+            <Field label="Platforms" hint={platformHint} error={errorAt(errors, 'only_if.platforms')}>
+              <div role="group" aria-label="Platforms">
+                {PLATFORM_ITEMS.map((item) => (
+                  <div key={item.id} className="flex items-center gap-2.5">
+                    <ProviderMark provider={item.id} size={16} />
+                    <div className="min-w-0 flex-1">
+                      <SwitchLine label={item.label} on={platforms.includes(item.id)} onChange={() => togglePlatform(item.id)} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Field>
             <Field label="Where" hint={scopeHint} error={errorAt(errors, 'only_if.channels')}>
               <select
                 value={scope.kind}
@@ -467,7 +517,7 @@ export function RuleEditor({ initial, isNew, accounts, otherChannelsOn, onClose,
                 onChange={(e) => setIf({ channels: scopeOf(e.target.value as AutomationChannelScope['kind'], scope) })}
                 className={SELECT}
               >
-                {SCOPES.map((s) => (
+                {SCOPES.filter((s) => s.value !== 'watching' || platforms.includes('twitch')).map((s) => (
                   <option key={s.value} value={s.value}>
                     {s.label}
                   </option>
@@ -481,7 +531,10 @@ export function RuleEditor({ initial, isNew, accounts, otherChannelsOn, onClose,
                   return (
                     <div key={c.id} className="space-y-1">
                       <div className="flex items-center justify-between gap-2 rounded-md bg-background/40 px-2.5 py-1.5">
-                        <span className="truncate text-[13px] text-textPrimary">#{c.name || c.key}</span>
+                        <span className="flex min-w-0 items-center gap-1.5">
+                          {!twitchOnly && <ProviderMark provider={providerOfKey(c.key)} size={13} />}
+                          <span className="truncate text-[13px] text-textPrimary">#{c.name || c.key}</span>
+                        </span>
                         <button
                           type="button"
                           onClick={() => setIf({ channels: { kind: 'these', list: scope.list.filter((x) => x.id !== c.id) } })}
@@ -495,7 +548,14 @@ export function RuleEditor({ initial, isNew, accounts, otherChannelsOn, onClose,
                     </div>
                   );
                 })}
-                {scope.list.length < MAX_CHATS && <ChannelPicker label="Add a channel" onPick={addChannel} />}
+                {scope.list.length < MAX_CHATS && (
+                  <ChannelPicker
+                    label="Add a channel"
+                    providers={platforms}
+                    // The picker searches only the platforms named here, so the pick is one of them.
+                    onPick={(login, id, provider) => addChannel(login, id, provider as AutomationPlatform)}
+                  />
+                )}
               </div>
             )}
             <Field label="From" hint="Leave them all off to answer anyone.">
@@ -508,12 +568,14 @@ export function RuleEditor({ initial, isNew, accounts, otherChannelsOn, onClose,
                 }}
               />
             </Field>
-            <SwitchLine
-              label="Only while live"
-              description="Only while the stream in that chat is live."
-              on={draft.only_if.only_live}
-              onChange={() => setIf({ only_live: !draft.only_if.only_live })}
-            />
+            {twitchOnly && (
+              <SwitchLine
+                label="Only while live"
+                description="Only while the stream in that chat is live."
+                on={draft.only_if.only_live}
+                onChange={() => setIf({ only_live: !draft.only_if.only_live })}
+              />
+            )}
             <SwitchLine
               label="Only while you're away"
               description={IS_MOBILE ? 'Set away on this page or with /afk.' : 'Set away on this page, with /afk, or from the tray.'}
@@ -678,6 +740,7 @@ export function RuleEditor({ initial, isNew, accounts, otherChannelsOn, onClose,
             count={draft.actions.length}
             badgeRule={badge}
             timedOwn={(draft.when.kind === 'timer' || draft.when.kind === 'clock') && draft.only_if.channels.kind === 'own'}
+            platform={platform}
             errors={errors}
             variables={variables}
             preview={preview?.texts.find((t) => t.action_id === a.id)?.text ?? null}
@@ -688,16 +751,18 @@ export function RuleEditor({ initial, isNew, accounts, otherChannelsOn, onClose,
         ))}
         {draft.actions.length < MAX_ACTIONS && (
           <div className="flex flex-wrap items-center gap-1.5">
-            {!badge && !edge && (
-              <button type="button" onClick={() => update((r) => ({ ...r, actions: [...r.actions, actionOf('reply')] }))} className={QUIET_BUTTON}>
+            {!badge && !edge && platforms.every(canPost) && (
+              <button type="button" onClick={() => addOutward('reply')} className={QUIET_BUTTON}>
                 <Plus size={13} />
                 Reply
               </button>
             )}
-            <button type="button" onClick={() => update((r) => ({ ...r, actions: [...r.actions, actionOf('send')] }))} className={QUIET_BUTTON}>
-              <Plus size={13} />
-              Post a message
-            </button>
+            {platforms.every(canPost) && (
+              <button type="button" onClick={() => addOutward('send')} className={QUIET_BUTTON}>
+                <Plus size={13} />
+                Post a message
+              </button>
+            )}
             <button type="button" onClick={() => update((r) => ({ ...r, actions: [...r.actions, actionOf('notify')] }))} className={QUIET_BUTTON}>
               <Plus size={13} />
               Notify me
@@ -733,7 +798,21 @@ export function RuleEditor({ initial, isNew, accounts, otherChannelsOn, onClose,
         </Block>
       )}
 
-      {hasOutward && (
+      {hasOutward && platform === 'kick' && (
+        <Block title="Send as">
+          <div className="flex items-center gap-2 rounded-md bg-background/40 px-2.5 py-2">
+            <ProviderMark provider="kick" size={14} />
+            <span className="text-[13px] text-textPrimary">{kickAccount?.login || draft.send_as.login || 'Kick'}</span>
+          </div>
+          <p className={HINT}>
+            {kickAccount
+              ? 'Your connected Kick account. Its pace and cooldowns count on it.'
+              : 'Connect your Kick account in Settings to run this rule.'}
+          </p>
+        </Block>
+      )}
+
+      {hasOutward && platform !== 'kick' && (
         <Block title="Send as">
           <select
             value={draft.send_as.id}

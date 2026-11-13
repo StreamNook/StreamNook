@@ -2,8 +2,9 @@
 // title, text and sound, plus the variables to insert and the live preview.
 import { useRef, useState, type RefObject } from 'react';
 import { ArrowDown, ArrowUp, ExternalLink, Plus, Trash2, Volume2, X } from 'lucide-react';
-import type { AutomationAction, AutomationFieldError, AutomationLine, AutomationPick } from '../../../types';
+import type { AutomationAction, AutomationFieldError, AutomationLine, AutomationPick, AutomationPlatform } from '../../../types';
 import { errorAt, newElementId, newLine, type AutomationVariable } from '../../../utils/automations';
+import { makeKey } from '../../../utils/providerKey';
 import { useAppStore } from '../../../stores/AppStore';
 import { BUILT_IN_SOUNDS, SOUND_LABELS, playSound } from '../../../utils/notificationSound';
 import { openSystemNotifySettings, useSystemNotifyPermission } from '../../../utils/systemNotifyPermission';
@@ -99,7 +100,16 @@ function LinesField({
   );
 }
 
-function SendWhere({ action, onChange }: { action: SendAction; onChange: (next: AutomationAction) => void }) {
+function SendWhere({
+  action,
+  platform,
+  onChange,
+}: {
+  action: SendAction;
+  /** The platform the rule posts on: the other chat is on it. */
+  platform: AutomationPlatform;
+  onChange: (next: AutomationAction) => void;
+}) {
   const to = action.to;
   return (
     <Field label="Where">
@@ -122,7 +132,19 @@ function SendWhere({ action, onChange }: { action: SendAction; onChange: (next: 
           <ChannelPicker
             login={to.name || undefined}
             label="Choose the chat"
-            onPick={(login, id) => onChange({ ...action, to: { id: to.id || newElementId('c'), key: '', room_id: id, name: login } })}
+            providers={[platform]}
+            onPick={(login, id, provider) =>
+              onChange({
+                ...action,
+                to: {
+                  id: to.id || newElementId('c'),
+                  // Twitch's key is built in Rust; another platform's names it here.
+                  key: provider === 'twitch' ? '' : makeKey(provider, login),
+                  room_id: id,
+                  name: login,
+                },
+              })
+            }
           />
         </div>
       )}
@@ -339,6 +361,8 @@ interface ActionEditorProps {
   count: number;
   /** Badge rules post in your channel and never reply. */
   badgeRule: boolean;
+  /** The platform the rule posts on (a Send's other chat is on it). */
+  platform: AutomationPlatform;
   /** A Timer or Clock rule in your own channel: the command forms that need it are offered. */
   timedOwn: boolean;
   /** Every error of the rule; this picks its own by path. */
@@ -357,6 +381,7 @@ export function ActionEditor({
   count,
   badgeRule,
   timedOwn,
+  platform,
   errors,
   variables,
   preview,
@@ -446,7 +471,7 @@ export function ActionEditor({
         />
       ) : (
         <>
-          {action.kind === 'send' && !badgeRule && <SendWhere action={action} onChange={onChange} />}
+          {action.kind === 'send' && !badgeRule && <SendWhere action={action} platform={platform} onChange={onChange} />}
           <LinesField
             action={action}
             at={at}
