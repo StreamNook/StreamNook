@@ -36,6 +36,7 @@ use tokio::sync::RwLock;
 
 use crate::models::settings::AppState;
 use crate::models::stream::TwitchStream;
+use crate::services::account_automations::{self, LiveEdge};
 use crate::services::channel_relationship::{self, Relationship};
 use crate::services::collaboration::{self, Collaboration};
 use crate::services::shared_chat::{self, SharedChat};
@@ -51,6 +52,10 @@ const RELATIONSHIP_PERIOD: Duration = Duration::from_secs(10 * 60);
 /// How long a live answer from the watch session holds while Helix, which
 /// lists a new stream a minute or more late, still leaves the channel out.
 const LIVE_HINT_GRACE: Duration = Duration::from_secs(5 * 60);
+/// An offline edge needs the answer before it to be this recent: two viewer
+/// polls and some slack. After a longer silence (the app slept) the first
+/// answer that finds a channel offline is no edge, since when it ended is unknown.
+const LIVE_EDGE_GAP: Duration = Duration::from_secs(2 * 60 + 15);
 
 /// A rise in one of the viewer's balances here, for the wallet's "+N".
 #[derive(Serialize, Clone, PartialEq, Debug)]
@@ -179,6 +184,10 @@ pub struct ChannelState {
     /// Helix has not listed the stream yet. 0 when none.
     #[serde(skip)]
     live_hint_until: u64,
+    /// A viewer poll (not only the watch session's hint) has seen this
+    /// broadcast live. Only then can its end be an offline edge for rules.
+    #[serde(skip)]
+    live_confirmed: bool,
 }
 
 #[derive(Serialize, Clone)]
@@ -468,15 +477,29 @@ pub async fn note_live(row: &TwitchStream) {
         hints.retain(|_, (_, u)| *u > at);
         hints.insert(login.clone(), (live.clone(), until));
     }
-    let applied = match inner.state.write().await.get_mut(&login) {
-        Some(s) => apply_live_hint(s, &live, until, at),
-        None => false,
+    let (applied, was_answered, channel_id) = match inner.state.write().await.get_mut(&login) {
+        Some(s) => {
+            let was_answered = s.answered;
+            (apply_live_hint(s, &live, until, at), was_answered, s.channel_id.clone())
+        }
+        None => (false, false, String::new()),
     };
     if !applied {
         return;
     }
     crate::services::channel_rewards::note_live_changed(&login);
     crate::services::channel_rewards::note_stream_seen(&login, &row.started_at);
+    // An online edge for automations: only when the channel already had an
+    // answer (the hint applies only to a channel that read offline; a first
+    // answer is no edge). The poll that follows sees it live and adds none.
+    if was_answered {
+        account_automations::on_live_edge(LiveEdge {
+            login: login.clone(),
+            channel_id,
+            online: true,
+            started_at: row.started_at.clone(),
+        });
+    }
     publish_viewers(&inner.app, login, live, at);
 }
 
@@ -562,6 +585,29 @@ fn publish_viewers(app: &AppHandle, login: String, l: Live, at: u64) {
     );
 }
 
+/// A live edge for automations from one answer: `Some(true)` the channel
+/// went live, `Some(false)` it went offline. The first answer for a channel
+/// is none. An offline edge needs a poll to have confirmed the broadcast live
+/// (a watch-session hint alone does not) and the answer before this one to
+/// be at most two polls old (`before_at`, unix secs), so a long gap makes no edge.
+fn live_edge(
+    was_answered: bool,
+    was_live: bool,
+    was_confirmed: bool,
+    before_at: Option<u64>,
+    now_live: bool,
+    at: u64,
+) -> Option<bool> {
+    if !was_answered || was_live == now_live {
+        return None;
+    }
+    if now_live {
+        return Some(true);
+    }
+    let recent = before_at.is_some_and(|b| at.saturating_sub(b) <= LIVE_EDGE_GAP.as_secs());
+    (was_confirmed && recent).then_some(false)
+}
+
 /// Whether to keep showing a channel as live although this poll missed it,
 /// and the miss count to carry. A live channel reads offline only after two
 /// polls in a row leave it out.
@@ -612,6 +658,8 @@ async fn refresh_viewers(inner: &Inner) {
     let mut live_flipped: Vec<String> = Vec::new();
     // Live channels and the start of the stream they are in.
     let mut streams_seen: Vec<(String, String)> = Vec::new();
+    // Live edges for automations, sent once the state lock is released.
+    let mut edges: Vec<LiveEdge> = Vec::new();
     {
         let mut state = inner.state.write().await;
         for (login, id) in &by_login {
@@ -636,6 +684,8 @@ async fn refresh_viewers(inner: &Inner) {
                     title: s.title.clone(),
                     game_name: s.game_name.clone(),
                 };
+                // The answer before this one (a hold or a hint also wrote it).
+                let before_at = s.viewers_at;
                 if before != now || !s.answered {
                     changed.push((login.clone(), now.clone()));
                 }
@@ -661,7 +711,22 @@ async fn refresh_viewers(inner: &Inner) {
                         retitled.push(row.clone());
                     }
                 }
+                if let Some(online) = live_edge(
+                    s.answered,
+                    before.viewer_count.is_some(),
+                    s.live_confirmed,
+                    before_at,
+                    now.viewer_count.is_some(),
+                    at,
+                ) {
+                    // Online: this broadcast's start; offline: the one that ended.
+                    let started = if online { now.started_at.clone() } else { before.started_at.clone() };
+                    if let Some(started_at) = started {
+                        edges.push(LiveEdge { login: login.clone(), channel_id: id.clone(), online, started_at });
+                    }
+                }
                 s.answered = true;
+                s.live_confirmed = now.viewer_count.is_some();
                 s.viewer_count = now.viewer_count;
                 s.started_at = now.started_at;
                 s.title = now.title;
@@ -678,6 +743,9 @@ async fn refresh_viewers(inner: &Inner) {
     // A new stream starts every per-stream reward count again.
     for (login, start) in streams_seen {
         crate::services::channel_rewards::note_stream_seen(&login, &start);
+    }
+    for edge in edges {
+        account_automations::on_live_edge(edge);
     }
     for (login, l) in changed {
         publish_viewers(&inner.app, login, l, at);
@@ -1339,5 +1407,48 @@ mod tests {
         assert!(!p.enabled);
         assert_eq!(p.balance, None);
         assert!(parse_points(&json!({"data": {}})).is_none());
+    }
+
+    #[test]
+    fn a_live_edge_needs_a_first_answer_and_a_confirmed_poll_to_end() {
+        // (was answered, was live, was confirmed, the answer before, live now, now)
+        assert_eq!(live_edge(false, false, false, None, true, 100), None, "the first answer is no edge");
+        assert_eq!(live_edge(false, true, true, None, false, 100), None);
+        assert_eq!(live_edge(true, false, false, Some(70), true, 100), Some(true), "offline to live");
+        assert_eq!(live_edge(true, true, true, Some(70), true, 100), None, "still live");
+        assert_eq!(live_edge(true, false, false, Some(70), false, 100), None, "still offline");
+        assert_eq!(live_edge(true, true, true, Some(70), false, 100), Some(false), "live to offline");
+        assert_eq!(
+            live_edge(true, true, false, Some(70), false, 100),
+            None,
+            "an unconfirmed hint gives no offline edge"
+        );
+        assert_eq!(
+            live_edge(true, true, false, Some(70), true, 100),
+            None,
+            "a hint, then the poll that confirms it: the one edge was the hint's"
+        );
+    }
+
+    #[test]
+    fn an_offline_edge_needs_the_answer_before_it_within_two_polls() {
+        assert_eq!(live_edge(true, true, true, Some(1_000), false, 1_135), Some(false), "135 s is two polls and slack");
+        assert_eq!(live_edge(true, true, true, Some(1_000), false, 1_136), None, "after a longer silence it is no edge");
+        assert_eq!(live_edge(true, true, true, None, false, 1_100), None, "no answer before, no edge");
+        assert_eq!(live_edge(true, false, false, Some(0), true, 100_000), Some(true), "an online edge has no gap rule here (the engine's 10 minute rule judges it)");
+    }
+
+    #[test]
+    fn both_writers_send_their_edges_and_the_hint_never_confirms() {
+        // Source pin: the poll and the hint each call the hook; the hint's write does not set `live_confirmed`.
+        let src = include_str!("channel_state.rs");
+        assert!(src.matches("account_automations::on_live_edge(").count() >= 2);
+        let hint = &src[src.find("fn apply_live_hint(").unwrap()..];
+        let hint = &hint[..hint.find("\n}\n").unwrap()];
+        assert!(!hint.contains("live_confirmed"), "only a poll confirms a broadcast");
+        let poll = &src[src.find("async fn refresh_viewers(").unwrap()..];
+        assert!(poll.contains("s.live_confirmed = now.viewer_count.is_some();"));
+        // The two-miss hold runs first, so an offline edge arrives only after the second miss.
+        assert!(poll.find("hold_live(").unwrap() < poll.find("live_edge(").unwrap());
     }
 }
