@@ -87,6 +87,18 @@ pub trait Local: AccountChanges {
     async fn refresh_gallery(&self) -> Result<(), String>;
     /// Store run = Off (the breaker).
     async fn turn_off(&self);
+    /// What USERSTATE last said `as_login` is in `channel` (`chat_send_limiter::known_role`).
+    fn own_role(&self, as_login: &str, channel: &str) -> Option<crate::services::chat_send_limiter::Role>;
+    /// People the whisper store says `owner` has whispered with (`whisper_store::knows`), for the To picker.
+    fn whisper_people(&self, owner_id: &str) -> Vec<WhisperPerson>;
+}
+
+/// One person the Whisper action's picker lists.
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct WhisperPerson {
+    pub user_id: String,
+    pub login: String,
+    pub name: String,
 }
 
 #[derive(Serialize)]
@@ -292,6 +304,22 @@ impl Local for RealLocal {
         if let Err(e) = result {
             log::warn!("[Automations] could not store Off after the breaker: {e}");
         }
+    }
+
+    fn own_role(&self, as_login: &str, channel: &str) -> Option<crate::services::chat_send_limiter::Role> {
+        crate::services::chat_send_limiter::known_role(as_login, channel)
+    }
+
+    fn whisper_people(&self, owner_id: &str) -> Vec<WhisperPerson> {
+        let Some(scope) = crate::services::whisper_sync::current_scope().filter(|s| s.owner == owner_id) else { return Vec::new() };
+        let rows = crate::services::whisper_store::read_index(&scope, |idx| {
+            idx.conversations.iter().map(|c| (c.user_id.clone(), c.user_login.clone(), c.user_name.clone())).collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+        rows.into_iter()
+            .filter(|(id, _, _)| !id.is_empty() && crate::services::whisper_store::knows(&scope, id))
+            .map(|(user_id, login, name)| WhisperPerson { user_id, login, name })
+            .collect()
     }
 }
 
