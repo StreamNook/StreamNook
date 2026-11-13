@@ -106,7 +106,7 @@ impl Notifier {
         Notifier { next: AtomicU64::new(1), unclaimed: Mutex::new(VecDeque::new()) }
     }
 
-    fn issue(&self, now: Instant, window: Duration) -> u64 {
+    pub(crate) fn issue(&self, now: Instant, window: Duration) -> u64 {
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         let mut unclaimed = lock(&self.unclaimed);
         unclaimed.retain(|(_, at)| now.duration_since(*at) < window);
