@@ -135,8 +135,29 @@ pub fn needs_light_content(background: &str) -> bool {
     (0.2126 * r as f64 + 0.7152 * g as f64 + 0.0722 * b as f64) / 255.0 < 0.5
 }
 
-/// The least contrast muted text keeps against its theme's background: WCAG AA for body text.
+/// The least contrast muted text keeps where it sits at its quietest (see `muted_ground`): WCAG
+/// AA for body text.
 pub const MUTED_CONTRAST_FLOOR: f64 = 4.5;
+
+/// The share of the theme's own ink a settings card mixes into the background: 6% on a dark
+/// theme, 7% on a light one (`.settings-card` in the desktop's globals.css).
+const CARD_INK_DARK: f64 = 0.06;
+const CARD_INK_LIGHT: f64 = 0.07;
+
+/// The ground muted text is measured on: a settings card, the opaque background with the theme's
+/// primary text mixed in (`CARD_INK_*`). Helper text sits on cards, and a card is always a step
+/// toward the text colour, so muted text that reaches the floor there reaches it on the bare
+/// background too. A palette without primary text measures on the background.
+fn muted_ground(palette: &Value) -> Option<(f64, f64, f64, f64)> {
+    let background = palette.get("background").and_then(Value::as_str)?;
+    let bg = css_rgba(background)?;
+    let Some(ink) = palette.get("textPrimary").and_then(Value::as_str).and_then(css_rgba) else {
+        return Some(bg);
+    };
+    let share = if needs_light_content(background) { CARD_INK_DARK } else { CARD_INK_LIGHT };
+    let (r, g, b) = over((ink.0, ink.1, ink.2, ink.3 * share), (bg.0, bg.1, bg.2));
+    Some((r, g, b, 1.0))
+}
 
 /// A CSS colour (`#rgb`, `#rrggbb`, `#rrggbbaa`, `rgb()`, `rgba()`) as red, green and blue from 0
 /// to 255 and alpha from 0 to 1.
@@ -181,9 +202,9 @@ fn contrast_at(fg: (f64, f64, f64), bg: (f64, f64, f64), alpha: f64) -> f64 {
     (l1.max(l2) + 0.05) / (l1.min(l2) + 0.05)
 }
 
-/// The contrast of a palette's muted text against its background, when both read.
+/// The contrast of a palette's muted text on its card (`muted_ground`), when the colours read.
 pub fn muted_contrast(palette: &Value) -> Option<f64> {
-    let bg = css_rgba(palette.get("background")?.as_str()?)?;
+    let bg = muted_ground(palette)?;
     let fg = css_rgba(palette.get("textMuted")?.as_str()?)?;
     Some(contrast_at((fg.0, fg.1, fg.2), (bg.0, bg.1, bg.2), fg.3))
 }
@@ -201,7 +222,7 @@ fn floor_hundredths(fg: (f64, f64, f64, f64), bg: (f64, f64, f64, f64)) -> Optio
 }
 
 /// Lifts each saved custom theme's text to both floors, in place: muted text's opacity
-/// (`palette.textMuted.opacity`, 0 to 100) against the background, then secondary text's color
+/// (`palette.textMuted.opacity`, 0 to 100) on its card (`muted_ground`), then secondary text's color
 /// (and, only if it must, its opacity) on the raised surface. Every shell that paints the theme
 /// from settings then shows the lifted values without a contrast rule of its own. Returns
 /// whether any theme changed.
@@ -210,7 +231,7 @@ pub fn lift_custom_themes(custom_themes: &mut Value) -> bool {
     for theme in custom_themes.as_array_mut().into_iter().flatten() {
         let palette = custom_palette(theme);
         if let (Some(bg), Some(fg)) = (
-            palette.get("background").and_then(Value::as_str).and_then(css_rgba),
+            muted_ground(&palette),
             palette.get("textMuted").and_then(Value::as_str).and_then(css_rgba),
         ) {
             if let Some(hundredths) = floor_hundredths(fg, bg) {
@@ -243,12 +264,13 @@ pub fn lift_custom_themes(custom_themes: &mut Value) -> bool {
 }
 
 /// Lifts the palette's muted text to the floor: the same colour at the least alpha (in hundredths)
-/// that reaches `MUTED_CONTRAST_FLOOR` against the background. Muted text already at or above it
-/// is left exactly as written; one that cannot reach it even opaque goes opaque. The built-in
-/// palettes ship at the floor already (a test pins it), so this only ever changes custom themes.
+/// that reaches `MUTED_CONTRAST_FLOOR` on its card (`muted_ground`). Muted text already at or
+/// above it is left exactly as written; one that cannot reach it even opaque goes opaque. The
+/// built-in palettes ship at the floor already (a test pins it), so this only ever changes custom
+/// themes.
 pub fn lift_muted(palette: &mut Value) {
     let (Some(bg), Some(fg)) = (
-        palette.get("background").and_then(Value::as_str).and_then(css_rgba),
+        muted_ground(palette),
         palette.get("textMuted").and_then(Value::as_str).and_then(css_rgba),
     ) else {
         return;
@@ -428,7 +450,7 @@ pub fn lift_accent(palette: &mut Value) {
     }
 }
 
-/// Both text floors: muted against the background, then secondary on the raised surface (which
+/// Both text floors: muted on its card, then secondary on the raised surface (which
 /// reads the lifted muted text). The accent's floor on that surface rides along.
 pub fn lift_text(palette: &mut Value) {
     lift_muted(palette);
@@ -612,7 +634,9 @@ mod tests {
     fn the_four_inverted_themes_were_baked_to_the_floor() {
         let secondary = |id: &str| resolve(id, &[], None).palette["textSecondary"].clone();
         assert_eq!(secondary("solarized-dark"), "#4aa1de");
-        assert_eq!(secondary("monokai"), "#f3698d");
+        // Monokai's muted text rose to its floor on the settings card (2026-11-13), and secondary
+        // is never quieter than muted on the surface, so it rose with it.
+        assert_eq!(secondary("monokai"), "#f36e91");
         assert_eq!(secondary("solarized-sand"), "#584a37");
         assert_eq!(secondary("catppuccin-latte"), "#545667");
         assert_eq!(secondary(DEFAULT_THEME_ID), "#97b1b9");
@@ -638,6 +662,20 @@ mod tests {
         let mut bright = json!({ "background": "#0c0c0d", "textMuted": "#ffffff" });
         lift_muted(&mut bright);
         assert_eq!(bright["textMuted"], "#ffffff");
+    }
+
+    #[test]
+    fn muted_text_is_floored_on_the_settings_card() {
+        // Latte shipped at 0.89: 4.58:1 on the bare page, but 4.24:1 on a settings card.
+        let palette = json!({ "background": "#d8dce4", "textPrimary": "#4c4f69", "textMuted": "rgba(76, 79, 105, 0.89)" });
+        let mut lifted = palette.clone();
+        lift_muted(&mut lifted);
+        assert_eq!(lifted["textMuted"], "rgba(76, 79, 105, 0.93)");
+        assert!(muted_contrast(&lifted).unwrap_or(0.0) >= MUTED_CONTRAST_FLOOR);
+        // Without its primary text a palette is measured on the bare background, where 0.89 holds.
+        let mut bare = json!({ "background": "#d8dce4", "textMuted": "rgba(76, 79, 105, 0.89)" });
+        lift_muted(&mut bare);
+        assert_eq!(bare["textMuted"], "rgba(76, 79, 105, 0.89)");
     }
 
     #[test]
