@@ -1,0 +1,586 @@
+//! What one chat row or badge sighting says, read once and shared by every
+//! rule the row reaches.
+//!
+//! Pure: a row in, plain values out. The event key is the same on every
+//! device that sees the event (Twitch message and notice ids and badge feed
+//! ids are the same everywhere), which is what lets one device answer it. A
+//! Shared Chat copy carries the origin's id in `source-id`, and the origin row
+//! carries its own id there, so the row in its own room and every partner
+//! copy give one key with no lookup.
+
+use std::borrow::Cow;
+
+use serde::Deserialize;
+
+use super::badges::BadgeSeen;
+use super::claims;
+use crate::models::automations::{EventKind, SenderRole};
+use crate::models::chat_layout::{Badge, ChatMessage};
+use crate::services::chat_rules::channel_filter_key;
+
+/// A row read off the socket longer ago than this never fires a rule.
+pub const MAX_ROW_AGE_MS: i64 = 30_000;
+/// Characters of the chatter's message `{message}` carries.
+pub const MESSAGE_VAR_CHARS: usize = 200;
+
+/// What kind of row the facts come from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum RowKind {
+    /// A chat message; a cheer is one too.
+    #[default]
+    Message,
+    /// A Twitch notice: subs, gifts, raids, announcements.
+    Notice,
+    /// A new badge from the badge feed.
+    Badge,
+}
+
+/// The numbers of a sub, gift, raid, cheer or announcement.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EventFacts {
+    pub kind: EventKind,
+    /// Months subscribed (1 for a new sub).
+    pub months: u32,
+    /// Subs gifted.
+    pub gifts: u32,
+    /// Viewers a raid brought.
+    pub viewers: u32,
+    /// Bits cheered.
+    pub bits: u32,
+    /// "1", "2", "3" or "Prime"; empty when the event has none.
+    pub tier: String,
+}
+
+/// One row as every rule reads it.
+#[derive(Clone, Debug, Default)]
+pub struct Facts {
+    pub kind: RowKind,
+    /// The event's claim key: `chat:<id>`, `notice:<id>` or `badge:<feed id>:<phase>`.
+    pub event_key: String,
+    /// `twitch:<login>` of the chat the row is in.
+    pub channel_key: String,
+    pub channel_login: String,
+    /// The room the row is in (where a reply goes).
+    pub room_id: String,
+    /// The room the event belongs to: a Shared Chat copy's source room, else
+    /// the row's own room. Post classes key on it.
+    pub event_room_id: String,
+    /// The row's own message id (a reply's parent).
+    pub message_id: String,
+    pub user_id: String,
+    pub user_login: String,
+    pub user_name: String,
+    /// Never empty: Viewer when the chatter has no other role.
+    pub roles: Vec<SenderRole>,
+    /// The chatter's text as written.
+    pub text: String,
+    /// The text in NFC (case-sensitive matching).
+    pub text_nfc: String,
+    /// The text in NFC and lowercased (every other matching).
+    pub text_folded: String,
+    pub first_message: bool,
+    /// A Shared Chat copy from a partner's chat.
+    pub shared_partner: bool,
+    /// The id of the person a reply answers; empty when it is no reply.
+    pub reply_parent_user_id: String,
+    pub event: Option<EventFacts>,
+    pub badge: Option<BadgeSeen>,
+    /// When the row was read off the socket (wall clock, ms); None for a row
+    /// that did not arrive live.
+    pub received_at_ms: Option<i64>,
+    pub from_backfill: bool,
+}
+
+/// `text` in Unicode NFC.
+pub fn nfc(text: &str) -> Cow<'_, str> {
+    icu_normalizer::ComposingNormalizerBorrowed::new_nfc().normalize(text)
+}
+
+/// `text` in NFC and lowercased: how patterns and messages compare when a
+/// rule is not case-sensitive.
+pub fn fold(text: &str) -> String {
+    nfc(text).to_lowercase()
+}
+
+fn tag<'a>(msg: &'a ChatMessage, key: &str) -> &'a str {
+    msg.tags.get(key).map(String::as_str).unwrap_or("").trim()
+}
+
+/// The chatter's roles from their badges: broadcaster, moderator (and lead
+/// moderator), VIP, subscriber (and founder); Viewer when none.
+pub fn roles_of(badges: &[Badge]) -> Vec<SenderRole> {
+    let mut roles = Vec::new();
+    for badge in badges {
+        let role = match badge.name.to_ascii_lowercase().as_str() {
+            "broadcaster" => SenderRole::Broadcaster,
+            "moderator" | "lead_moderator" => SenderRole::Moderator,
+            "vip" => SenderRole::Vip,
+            "subscriber" | "founder" => SenderRole::Subscriber,
+            _ => continue,
+        };
+        if !roles.contains(&role) {
+            roles.push(role);
+        }
+    }
+    if roles.is_empty() {
+        roles.push(SenderRole::Viewer);
+    }
+    roles
+}
+
+/// The facts of a live Twitch chat row or notice. None for another
+/// platform's row, or a row with no room or no id (it could not be claimed).
+pub fn from_chat(msg: &ChatMessage) -> Option<Facts> {
+    let provider = msg.provider.trim();
+    if !(provider.is_empty() || provider.eq_ignore_ascii_case("twitch")) {
+        return None;
+    }
+    let room_id = tag(msg, "room-id");
+    let own_id = match tag(msg, "id") {
+        "" => msg.id.trim(),
+        id => id,
+    };
+    let channel_login = msg.channel.trim().trim_start_matches('#').to_lowercase();
+    if room_id.is_empty() || own_id.is_empty() || channel_login.is_empty() {
+        return None;
+    }
+    let source_room = msg
+        .metadata
+        .source_room_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| tag(msg, "source-room-id"));
+    let event_room_id = if source_room.is_empty() { room_id } else { source_room };
+    let key_id = match tag(msg, "source-id") {
+        "" => own_id,
+        id => id,
+    };
+    // Every notice carries `system-msg`; a chat message never does.
+    let notice = msg.tags.contains_key("system-msg") || msg.metadata.system_message.is_some();
+    let user_login = match msg.username.trim() {
+        "" => tag(msg, "login"),
+        name => name,
+    }
+    .to_lowercase();
+    let user_id = match msg.user_id.trim() {
+        "" => tag(msg, "user-id"),
+        id => id,
+    }
+    .to_string();
+    let user_name = match msg.display_name.trim() {
+        "" => user_login.clone(),
+        name => name.to_string(),
+    };
+    let reply_parent_user_id = msg
+        .metadata
+        .reply_info
+        .as_ref()
+        .map(|r| r.parent_user_id.trim())
+        .filter(|id| !id.is_empty())
+        .unwrap_or_else(|| tag(msg, "reply-parent-user-id"))
+        .to_string();
+    let text_nfc = nfc(&msg.content).into_owned();
+    Some(Facts {
+        kind: if notice { RowKind::Notice } else { RowKind::Message },
+        event_key: if notice { claims::notice_key(key_id) } else { claims::chat_key(key_id) },
+        channel_key: channel_filter_key("twitch", &channel_login),
+        channel_login,
+        room_id: room_id.to_string(),
+        event_room_id: event_room_id.to_string(),
+        message_id: own_id.to_string(),
+        user_id,
+        user_login,
+        user_name,
+        roles: roles_of(&msg.badges),
+        text: msg.content.clone(),
+        text_folded: text_nfc.to_lowercase(),
+        text_nfc,
+        first_message: msg.metadata.is_first_message || tag(msg, "first-msg") == "1",
+        shared_partner: msg.metadata.is_from_shared_chat,
+        reply_parent_user_id,
+        event: if notice { notice_event(msg) } else { cheer_event(msg) },
+        badge: None,
+        received_at_ms: msg.received_at_ms,
+        from_backfill: msg.metadata.from_backfill,
+    })
+}
+
+fn number(msg: &ChatMessage, key: &str) -> u32 {
+    tag(msg, key).parse().unwrap_or(0)
+}
+
+fn tier(msg: &ChatMessage) -> String {
+    match tag(msg, "msg-param-sub-plan") {
+        "1000" => "1",
+        "2000" => "2",
+        "3000" => "3",
+        plan if plan.eq_ignore_ascii_case("prime") => "Prime",
+        _ => "",
+    }
+    .to_string()
+}
+
+/// A notice's event. One gift out of a gift bomb is no event of its own:
+/// the bomb is thanked once.
+fn notice_event(msg: &ChatMessage) -> Option<EventFacts> {
+    let kind = msg
+        .metadata
+        .msg_type
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| tag(msg, "msg-id"));
+    let (kind, months, gifts, viewers) = match kind {
+        "sub" => (EventKind::Sub, number(msg, "msg-param-cumulative-months").max(1), 0, 0),
+        "resub" => (EventKind::Resub, number(msg, "msg-param-cumulative-months").max(1), 0, 0),
+        "subgift" | "anonsubgift" => {
+            if !tag(msg, "msg-param-community-gift-id").is_empty() {
+                return None;
+            }
+            (EventKind::Gift, 0, 1, 0)
+        }
+        "submysterygift" | "anonsubmysterygift" => {
+            (EventKind::GiftBomb, 0, number(msg, "msg-param-mass-gift-count").max(1), 0)
+        }
+        "raid" => (EventKind::Raid, 0, 0, number(msg, "msg-param-viewerCount")),
+        "announcement" => (EventKind::Announcement, 0, 0, 0),
+        _ => return None,
+    };
+    Some(EventFacts { kind, months, gifts, viewers, bits: 0, tier: tier(msg) })
+}
+
+/// A chat message with bits is a cheer.
+fn cheer_event(msg: &ChatMessage) -> Option<EventFacts> {
+    let bits = msg.metadata.bits_amount.unwrap_or_else(|| tag(msg, "bits").parse().unwrap_or(0));
+    (bits > 0).then(|| EventFacts { kind: EventKind::Cheer, months: 0, gifts: 0, viewers: 0, bits, tier: String::new() })
+}
+
+/// The facts of one badge sighting.
+pub fn from_badge(seen: &BadgeSeen) -> Facts {
+    Facts {
+        kind: RowKind::Badge,
+        event_key: claims::badge_key(&seen.feed_id, seen.phase),
+        roles: vec![SenderRole::Viewer],
+        badge: Some(seen.clone()),
+        received_at_ms: Some(seen.arrived_ms),
+        ..Facts::default()
+    }
+}
+
+/// A made-up row for Try it.
+#[derive(Deserialize, Clone, Debug, Default)]
+#[serde(default)]
+pub struct TrySample {
+    pub text: String,
+    /// The chat's login.
+    pub channel: String,
+    /// The chat's room id, when the editor knows it.
+    pub room_id: String,
+    pub user_login: String,
+    pub user_name: String,
+    /// Empty = a plain viewer.
+    pub roles: Vec<SenderRole>,
+    pub first_message: bool,
+    /// The account id the sample replies to, if any.
+    pub reply_to: Option<String>,
+    pub event: Option<EventKind>,
+    /// Months, gifts, viewers or bits, for the event.
+    pub amount: u32,
+    /// The sample comes from a Shared Chat partner.
+    pub shared_chat: bool,
+}
+
+/// The facts of a Try it sample. Its key is never claimed.
+pub fn from_sample(sample: &TrySample) -> Facts {
+    let channel_login = sample.channel.trim().trim_start_matches('#').to_lowercase();
+    let user_login = sample.user_login.trim().trim_start_matches('@').to_lowercase();
+    let room_id = match sample.room_id.trim() {
+        "" => "try".to_string(),
+        id => id.to_string(),
+    };
+    let event = sample.event.map(|kind| {
+        let n = sample.amount;
+        EventFacts {
+            kind,
+            months: if matches!(kind, EventKind::Sub | EventKind::Resub) { n.max(1) } else { 0 },
+            gifts: if matches!(kind, EventKind::Gift | EventKind::GiftBomb) { n.max(1) } else { 0 },
+            viewers: if kind == EventKind::Raid { n } else { 0 },
+            bits: if kind == EventKind::Cheer { n } else { 0 },
+            tier: String::new(),
+        }
+    });
+    let kind = match sample.event {
+        Some(kind) if kind != EventKind::Cheer => RowKind::Notice,
+        _ => RowKind::Message,
+    };
+    let mut roles = sample.roles.clone();
+    if roles.is_empty() {
+        roles.push(SenderRole::Viewer);
+    }
+    let text_nfc = nfc(&sample.text).into_owned();
+    Facts {
+        kind,
+        event_key: "chat:try".to_string(),
+        channel_key: channel_filter_key("twitch", &channel_login),
+        channel_login,
+        room_id: room_id.clone(),
+        event_room_id: room_id,
+        message_id: "try".to_string(),
+        user_id: format!("try-{user_login}"),
+        user_name: match sample.user_name.trim() {
+            "" => user_login.clone(),
+            name => name.to_string(),
+        },
+        user_login,
+        roles,
+        text: sample.text.clone(),
+        text_folded: text_nfc.to_lowercase(),
+        text_nfc,
+        first_message: sample.first_message,
+        shared_partner: sample.shared_chat,
+        reply_parent_user_id: sample.reply_to.clone().unwrap_or_default(),
+        event,
+        badge: None,
+        received_at_ms: None,
+        from_backfill: false,
+    }
+}
+
+/// Chat rows for the engine's tests.
+#[cfg(test)]
+pub(crate) mod rows {
+    use std::collections::HashMap;
+
+    use crate::models::chat_layout::{Badge, ChatMessage, MessageMetadata};
+
+    pub(crate) fn badge(name: &str) -> Badge {
+        Badge {
+            name: name.to_string(),
+            version: "1".to_string(),
+            image_url_1x: None,
+            image_url_2x: None,
+            image_url_4x: None,
+            title: None,
+            description: None,
+        }
+    }
+
+    /// A live chat row: `login` (user id `user_id`) says `text` in `channel`
+    /// (room `room`), read at 1 s on the wall clock.
+    pub(crate) fn privmsg(id: &str, channel: &str, room: &str, login: &str, user_id: &str, text: &str) -> ChatMessage {
+        let tags: HashMap<String, String> = [("id", id), ("room-id", room), ("user-id", user_id), ("login", login)]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        ChatMessage {
+            id: id.to_string(),
+            user_id: user_id.to_string(),
+            username: login.to_string(),
+            display_name: login.to_string(),
+            color: None,
+            badges: Vec::new(),
+            timestamp: "0".to_string(),
+            content: text.to_string(),
+            provider: "twitch".to_string(),
+            channel: channel.to_string(),
+            emotes: Vec::new(),
+            tags,
+            layout: Default::default(),
+            segments: Vec::new(),
+            metadata: MessageMetadata::default(),
+            received_at_ms: Some(1_000),
+        }
+    }
+
+    /// A notice of type `msg_id` with its `msg-param-*` tags.
+    pub(crate) fn usernotice(
+        id: &str,
+        channel: &str,
+        room: &str,
+        login: &str,
+        user_id: &str,
+        msg_id: &str,
+        params: &[(&str, &str)],
+    ) -> ChatMessage {
+        let mut m = privmsg(id, channel, room, login, user_id, "");
+        m.metadata.msg_type = Some(msg_id.to_string());
+        m.metadata.system_message = Some(String::new());
+        m.tags.insert("msg-id".to_string(), msg_id.to_string());
+        m.tags.insert("system-msg".to_string(), String::new());
+        for (k, v) in params {
+            m.tags.insert(k.to_string(), v.to_string());
+        }
+        m
+    }
+
+    /// `m` as a Shared Chat row whose origin is `source_id` in `source_room`.
+    pub(crate) fn shared(mut m: ChatMessage, source_id: &str, source_room: &str) -> ChatMessage {
+        let room = m.tags.get("room-id").cloned().unwrap_or_default();
+        m.tags.insert("source-id".to_string(), source_id.to_string());
+        m.tags.insert("source-room-id".to_string(), source_room.to_string());
+        m.metadata.source_room_id = Some(source_room.to_string());
+        m.metadata.is_from_shared_chat = room != source_room;
+        m
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rows::{badge, privmsg, shared, usernotice};
+    use super::*;
+    use crate::services::account_automations::badges::{BadgeInfo, BadgePhase, Presence};
+
+    const ID: &str = "9b4c2f1e-0d3a-4c55-8f6e-2b7a1c9d0e11";
+
+    #[test]
+    fn a_chat_row_reads_its_facts() {
+        let mut row = privmsg(ID, "#Me", "100", "Viewer", "300", "Hello @me");
+        row.badges = vec![badge("moderator"), badge("subscriber")];
+        let f = from_chat(&row).unwrap();
+        assert_eq!(f.kind, RowKind::Message);
+        assert_eq!(f.event_key, format!("chat:{ID}"));
+        assert_eq!(f.channel_key, "twitch:me");
+        assert_eq!(f.channel_login, "me");
+        assert_eq!((f.room_id.as_str(), f.event_room_id.as_str()), ("100", "100"));
+        assert_eq!(f.message_id, ID);
+        assert_eq!((f.user_login.as_str(), f.user_name.as_str(), f.user_id.as_str()), ("viewer", "Viewer", "300"));
+        assert_eq!(f.roles, vec![SenderRole::Moderator, SenderRole::Subscriber]);
+        assert_eq!(f.text, "Hello @me");
+        assert_eq!(f.text_folded, "hello @me");
+        assert_eq!(f.received_at_ms, Some(1_000));
+        assert!(f.event.is_none());
+        assert!(!f.first_message && !f.shared_partner && !f.from_backfill);
+    }
+
+    #[test]
+    fn roles_come_from_badges() {
+        let roles = |names: &[&str]| roles_of(&names.iter().map(|n| badge(n)).collect::<Vec<_>>());
+        assert_eq!(roles(&[]), vec![SenderRole::Viewer]);
+        assert_eq!(roles(&["glhf-pledge"]), vec![SenderRole::Viewer]);
+        assert_eq!(roles(&["broadcaster"]), vec![SenderRole::Broadcaster]);
+        assert_eq!(roles(&["lead_moderator"]), vec![SenderRole::Moderator]);
+        assert_eq!(roles(&["vip", "founder"]), vec![SenderRole::Vip, SenderRole::Subscriber]);
+        assert_eq!(roles(&["subscriber", "founder"]), vec![SenderRole::Subscriber]);
+    }
+
+    #[test]
+    fn first_messages_replies_and_backfill_are_read() {
+        let mut row = privmsg(ID, "me", "100", "new", "300", "hi");
+        row.tags.insert("first-msg".to_string(), "1".to_string());
+        row.tags.insert("reply-parent-user-id".to_string(), "100".to_string());
+        row.metadata.from_backfill = true;
+        let f = from_chat(&row).unwrap();
+        assert!(f.first_message);
+        assert_eq!(f.reply_parent_user_id, "100");
+        assert!(f.from_backfill);
+    }
+
+    #[test]
+    fn notices_read_their_numbers() {
+        let notice = |msg_id: &str, params: &[(&str, &str)]| from_chat(&usernotice(ID, "me", "100", "fan", "300", msg_id, params)).unwrap();
+        let resub = notice("resub", &[("msg-param-cumulative-months", "12"), ("msg-param-sub-plan", "2000")]);
+        assert_eq!(resub.kind, RowKind::Notice);
+        assert_eq!(resub.event_key, format!("notice:{ID}"));
+        assert_eq!(
+            resub.event,
+            Some(EventFacts { kind: EventKind::Resub, months: 12, gifts: 0, viewers: 0, bits: 0, tier: "2".into() })
+        );
+        let prime = notice("sub", &[("msg-param-sub-plan", "Prime")]).event.unwrap();
+        assert_eq!((prime.kind, prime.months, prime.tier.as_str()), (EventKind::Sub, 1, "Prime"));
+        let bomb = notice("submysterygift", &[("msg-param-mass-gift-count", "5"), ("msg-param-sub-plan", "1000")]).event.unwrap();
+        assert_eq!((bomb.kind, bomb.gifts, bomb.tier.as_str()), (EventKind::GiftBomb, 5, "1"));
+        let gift = notice("subgift", &[]).event.unwrap();
+        assert_eq!((gift.kind, gift.gifts), (EventKind::Gift, 1));
+        let raid = notice("raid", &[("msg-param-viewerCount", "120")]).event.unwrap();
+        assert_eq!((raid.kind, raid.viewers), (EventKind::Raid, 120));
+        assert_eq!(notice("announcement", &[]).event.unwrap().kind, EventKind::Announcement);
+        assert!(notice("ritual", &[]).event.is_none());
+        // One gift out of a gift bomb is thanked by the bomb, never on its own.
+        assert!(notice("subgift", &[("msg-param-community-gift-id", "777")]).event.is_none());
+    }
+
+    #[test]
+    fn a_cheer_is_a_chat_message_with_bits() {
+        let mut row = privmsg(ID, "me", "100", "fan", "300", "Cheer500 hi");
+        row.metadata.bits_amount = Some(500);
+        let f = from_chat(&row).unwrap();
+        assert_eq!(f.kind, RowKind::Message);
+        assert_eq!(f.event_key, format!("chat:{ID}"));
+        assert_eq!(f.event.unwrap().bits, 500);
+        let mut tagged = privmsg(ID, "me", "100", "fan", "300", "Cheer100");
+        tagged.tags.insert("bits".to_string(), "100".to_string());
+        assert_eq!(from_chat(&tagged).unwrap().event.unwrap().kind, EventKind::Cheer);
+    }
+
+    #[test]
+    fn shared_chat_rows_key_on_the_origin() {
+        let origin = "11111111-2222-3333-4444-555555555555";
+        let native = from_chat(&shared(privmsg(origin, "host", "500", "fan", "300", "hi"), origin, "500")).unwrap();
+        let copy = from_chat(&shared(privmsg("other-copy-id", "partner", "600", "fan", "300", "hi"), origin, "500")).unwrap();
+        assert_eq!(native.event_key, copy.event_key);
+        assert_eq!(copy.room_id, "600");
+        assert_eq!(copy.event_room_id, "500");
+        assert_eq!(copy.message_id, "other-copy-id");
+        assert!(copy.shared_partner && !native.shared_partner);
+        // A shared notice copy keys on the origin too.
+        let notice = from_chat(&shared(usernotice("n-copy", "partner", "600", "fan", "300", "raid", &[]), "n-origin", "500")).unwrap();
+        assert_eq!(notice.event_key, "notice:n-origin");
+    }
+
+    #[test]
+    fn rows_that_cannot_be_claimed_have_no_facts() {
+        let mut kick = privmsg(ID, "me", "100", "fan", "300", "hi");
+        kick.provider = "kick".to_string();
+        assert!(from_chat(&kick).is_none());
+        let mut no_room = privmsg(ID, "me", "100", "fan", "300", "hi");
+        no_room.tags.remove("room-id");
+        assert!(from_chat(&no_room).is_none());
+        let mut no_id = privmsg("", "me", "100", "fan", "300", "hi");
+        no_id.tags.remove("id");
+        assert!(from_chat(&no_id).is_none());
+    }
+
+    #[test]
+    fn folding_is_nfc_and_lowercase() {
+        assert_eq!(fold("Caf\u{e9}"), fold("CAFE\u{301}"));
+        assert_eq!(fold("Caf\u{e9}"), "caf\u{e9}");
+        assert_eq!(nfc("e\u{301}"), "\u{e9}");
+    }
+
+    #[test]
+    fn badge_and_sample_facts() {
+        let seen = BadgeSeen {
+            badge: BadgeInfo { set_id: "x".into(), version: "1".into(), ..BadgeInfo::default() },
+            feed_id: "x-v1".into(),
+            phase: BadgePhase::Earnable,
+            announced: true,
+            earnable: true,
+            ts_ms: 5,
+            arrived_ms: 9,
+            push: true,
+            in_gallery: Presence::Unknown,
+        };
+        let f = from_badge(&seen);
+        assert_eq!(f.kind, RowKind::Badge);
+        assert_eq!(f.event_key, "badge:x-v1:earnable");
+        assert_eq!(f.received_at_ms, Some(9));
+
+        let sample = TrySample {
+            text: "hi @me".into(),
+            channel: "#Me".into(),
+            user_login: "@Fan".into(),
+            event: Some(EventKind::Raid),
+            amount: 50,
+            ..TrySample::default()
+        };
+        let f = from_sample(&sample);
+        assert_eq!(f.kind, RowKind::Notice);
+        assert_eq!(f.channel_key, "twitch:me");
+        assert_eq!(f.user_login, "fan");
+        assert_eq!(f.roles, vec![SenderRole::Viewer]);
+        assert_eq!(f.event.unwrap().viewers, 50);
+        let cheer = from_sample(&TrySample { event: Some(EventKind::Cheer), amount: 100, ..TrySample::default() });
+        assert_eq!(cheer.kind, RowKind::Message);
+    }
+}

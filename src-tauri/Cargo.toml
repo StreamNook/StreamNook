@@ -59,6 +59,9 @@ regex = "1.12.2"
 # Cutting a notification's quoted line between characters as people count
 # them, never through an emoji; already in the lock.
 unicode-segmentation = "1.13.2"
+# NFC for automation claim families, so one pattern typed two ways makes one
+# family on every device; already in the lock via url (idna_adapter).
+icu_normalizer = { version = "2.1", default-features = false, features = ["compiled_data"] }
 uuid = { version = "1.19.0", features = ["v4"] }
 urlencoding = "2.1.3"
 chrono = { version = "0.4.42", features = ["serde"] }
