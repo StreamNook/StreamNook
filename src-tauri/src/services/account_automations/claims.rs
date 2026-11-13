@@ -101,6 +101,47 @@ pub fn badge_key(feed_id: &str, phase: BadgePhase) -> String {
     format!("badge:{feed_id}:{}", phase.as_str())
 }
 
+/// A follow: `follow:<user id>:<followed_at epoch s>`. The time is epoch
+/// seconds (`facts::started_epoch`), so every spelling of it gives one key.
+pub fn follow_key(user_id: &str, followed_at_s: i64) -> String {
+    format!("follow:{user_id}:{followed_at_s}")
+}
+
+/// A redemption: `reward:<redemption id>` (a UUID Twitch gives every device).
+pub fn reward_key(redemption_id: &str) -> String {
+    format!("reward:{redemption_id}")
+}
+
+/// A poll: `poll:<id>`.
+pub fn poll_key(id: &str) -> String {
+    format!("poll:{id}")
+}
+
+/// A prediction: `prediction:<id>`.
+pub fn prediction_key(id: &str) -> String {
+    format!("prediction:{id}")
+}
+
+/// A channel going live: `live:<login>:<started_at epoch s>`.
+pub fn live_key(login: &str, started_at_s: i64) -> String {
+    format!("live:{}:{started_at_s}", login.trim().to_ascii_lowercase())
+}
+
+/// A channel going offline: `offline:<login>:<started_at epoch s of the
+/// broadcast that ended>`.
+pub fn offline_key(login: &str, started_at_s: i64) -> String {
+    format!("offline:{}:{started_at_s}", login.trim().to_ascii_lowercase())
+}
+
+/// A reward trigger's part of the family: the first 16 hex of the SHA-256 of
+/// the reward id (a UUID never enters a family as text), or `any`.
+pub fn reward_part(reward_id: Option<&str>) -> String {
+    match reward_id.map(str::trim).filter(|id| !id.is_empty()) {
+        Some(id) => hash16(id),
+        None => "any".to_string(),
+    }
+}
+
 /// A whisper's key: `whisper:<whisper id>` (exact, per whisper).
 pub fn whisper_key(whisper_id: &str) -> String {
     format!("whisper:{whisper_id}")
@@ -231,7 +272,10 @@ pub struct ClassPlan {
 /// drop, else the event's room (a Shared Chat copy's source room), so a row
 /// in its own room and its partner copy are one class.
 pub fn event_room<'a>(rule: &'a Rule, facts: &'a Facts) -> &'a str {
-    if matches!(facts.kind, RowKind::Badge | RowKind::Whisper) {
+    // A live change names a channel that is not the owner's: the rule posts
+    // in the owner's own room, like a badge drop.
+    let live = facts.own.as_ref().is_some_and(|o| matches!(o.kind, super::facts::OwnKind::Live { .. }));
+    if matches!(facts.kind, RowKind::Badge | RowKind::Whisper) || live {
         &rule.owner.id
     } else {
         &facts.event_room_id
@@ -262,7 +306,13 @@ pub fn classes_for(rule: &Rule, event_room: &str) -> (Vec<ClassPlan>, Vec<(usize
                 }
                 (room.to_string(), room == event_room && names_person(texts))
             }
-            Action::Notify { .. } | Action::Log { .. } | Action::JoinChat { .. } | Action::LeaveChat { .. } | Action::Wait { .. } => continue,
+            Action::Notify { .. }
+            | Action::Log { .. }
+            | Action::JoinChat { .. }
+            | Action::LeaveChat { .. }
+            | Action::Wait { .. }
+            | Action::Speak { .. }
+            | Action::Highlight { .. } => continue,
             Action::Announce { .. } => (event_room.to_string(), false),
             Action::Command { line, .. } => {
                 let word = super::command::word_of(line);
@@ -388,6 +438,11 @@ pub fn trigger_family(when: &Trigger, facts: &Facts) -> Option<String> {
         Trigger::Clock { .. } => "clock:".to_string(),
         Trigger::Uptime { .. } => "uptime:".to_string(),
         Trigger::Delay { .. } => "delay:".to_string(),
+        Trigger::Follow {} => "follow:".to_string(),
+        Trigger::RewardRedeemed { reward_id } => format!("reward:{}", reward_part(reward_id.as_deref())),
+        Trigger::PollStarted {} => "poll:".to_string(),
+        Trigger::PredictionStarted {} => "prediction:".to_string(),
+        Trigger::LiveChange { online } => format!("live:{}", if *online { "on" } else { "off" }),
     })
 }
 
@@ -1119,5 +1174,45 @@ mod tests {
         assert_eq!(class_elements(&input), Err(BUILD_FAILED));
         let no_keys: Vec<String> = Vec::new();
         assert_eq!(class_elements(&CallInput { event_keys: &no_keys, ..input }), Err(BUILD_FAILED));
+    }
+
+    #[test]
+    fn p3_keys_are_the_plain_shape_and_spell_a_time_one_way() {
+        for key in [
+            follow_key("42", 1_794_546_000),
+            reward_key("2c3b8a64-5f0e-4a39-9a62-0d3a8a5d1f11"),
+            poll_key("p-1"),
+            prediction_key("pr-1"),
+            live_key("SomeStreamer", 1_794_546_000),
+            offline_key("somestreamer", 1_794_546_000),
+        ] {
+            assert!(plain_ok(&key), "{key}");
+        }
+        assert_eq!(live_key("SomeStreamer", 7), live_key("somestreamer", 7), "a login is lowercased");
+        assert_ne!(live_key("a", 7), offline_key("a", 7));
+        assert_eq!(follow_key("42", 9), "follow:42:9");
+        let uuid = "2c3b8a64-5f0e-4a39-9a62-0d3a8a5d1f11";
+        let part = reward_part(Some(uuid));
+        assert_eq!(part.len(), 16);
+        assert!(!part.contains(uuid), "a UUID never enters a family as text");
+        assert_eq!(reward_part(None), "any");
+        assert_eq!(reward_part(Some("  ")), "any");
+    }
+
+    #[test]
+    fn p3_families_name_their_trigger_and_class() {
+        let facts = Facts::default();
+        let class = ActionClass::Post { room_id: "100".into() };
+        let fam = |t: &Trigger| event_family(&trigger_family(t, &facts).unwrap(), &class);
+        assert_eq!(fam(&Trigger::Follow {}), "follow:|post:100");
+        assert_eq!(fam(&Trigger::PollStarted {}), "poll:|post:100");
+        assert_eq!(fam(&Trigger::PredictionStarted {}), "prediction:|post:100");
+        assert_eq!(fam(&Trigger::LiveChange { online: true }), "live:on|post:100");
+        assert_eq!(fam(&Trigger::LiveChange { online: false }), "live:off|post:100");
+        assert_eq!(fam(&Trigger::RewardRedeemed { reward_id: None }), "reward:any|post:100");
+        let one = fam(&Trigger::RewardRedeemed { reward_id: Some("r1".into()) });
+        let other = fam(&Trigger::RewardRedeemed { reward_id: Some("r2".into()) });
+        assert_ne!(one, other, "two rewards are two families");
+        assert!(plain_ok(&one));
     }
 }

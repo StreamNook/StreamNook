@@ -62,6 +62,12 @@ pub struct Vars {
     pub badge_count: usize,
     /// The batch's badge names ("A, B and C").
     pub badges: String,
+    /// P3: the redeemed reward's title, what the viewer typed, the poll's and
+    /// the prediction's title.
+    pub reward: String,
+    pub input: String,
+    pub poll: String,
+    pub prediction: String,
 }
 
 impl Vars {
@@ -90,6 +96,12 @@ impl Vars {
                 EventKind::Cheer => vars.bits = Some(event.bits),
                 EventKind::Announcement => {}
             }
+        }
+        if let Some(own) = &facts.own {
+            vars.reward = own.reward.clone();
+            vars.input = own.input.clone();
+            vars.poll = own.poll.clone();
+            vars.prediction = own.prediction.clone();
         }
         vars
     }
@@ -151,6 +163,10 @@ impl Vars {
             "time" => self.time.clone(),
             "date" => self.date.clone(),
             "message" => self.message.clone(),
+            "reward" => self.reward.clone(),
+            "input" => self.input.clone(),
+            "poll" => self.poll.clone(),
+            "prediction" => self.prediction.clone(),
             "badge.link" => self.badge_link.clone(),
             "badge.count" => self.badge_count.to_string(),
             "badges" => self.badges.clone(),
@@ -162,6 +178,14 @@ impl Vars {
 /// `text` with its variables filled in.
 pub fn expand(text: &str, vars: &Vars) -> String {
     expand_with(text, &vars.args, |name| vars.lookup(name)).text
+}
+
+/// A Speak text as it is read aloud: one line, trimmed, at most 300
+/// characters. Never refused for starting with `/` (nothing is posted).
+pub fn clean_speech(text: &str) -> String {
+    let one_line: String = text.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    let squeezed = one_line.split_whitespace().collect::<Vec<_>>().join(" ");
+    squeezed.chars().take(crate::models::automations::MAX_SPEAK_CHARS).collect()
 }
 
 /// Why a text cannot go out.
@@ -352,6 +376,14 @@ pub fn variable_table() -> Vec<VariableRow> {
             allowed: ANYWHERE,
         },
         VariableRow { names: &["time", "date"], value: "The time and date on this device", scope: Any, allowed: ANYWHERE },
+        VariableRow { names: &["reward"], value: "The reward that was redeemed", scope: Any, allowed: ANYWHERE },
+        VariableRow { names: &["poll", "prediction"], value: "The title of the poll or prediction you started", scope: Any, allowed: ANYWHERE },
+        VariableRow {
+            names: &["input"],
+            value: "What the viewer typed when they redeemed a reward (up to 200 characters)",
+            scope: Chatter,
+            allowed: CHATTER_ONLY,
+        },
         VariableRow {
             names: &["message", "1", "2", "2+", "*"],
             value: "What the chatter wrote (up to 200 characters), one word of it, the words from one on, or all of it",
@@ -578,5 +610,35 @@ mod tests {
         ] {
             assert!(table.iter().any(|r| r.names.contains(&name)), "{name}");
         }
+    }
+
+    #[test]
+    fn p3_variables_fill_from_own_facts() {
+        use crate::services::account_automations::facts::{OwnFacts, OwnKind};
+        let facts = Facts {
+            own: Some(OwnFacts {
+                kind: OwnKind::Reward,
+                owner_id: "100".into(),
+                reward_id: "rw".into(),
+                reward: "Hydrate".into(),
+                input: "drink up".into(),
+                poll: String::new(),
+                prediction: String::new(),
+                started_s: 0,
+            }),
+            user_name: "Viewer".into(),
+            ..Facts::default()
+        };
+        let vars = Vars::from_facts(&facts);
+        assert_eq!(expand("{user} redeemed {reward}: {input}", &vars), "Viewer redeemed Hydrate: drink up");
+        assert_eq!(expand("{poll}{prediction}", &vars), "");
+    }
+
+    #[test]
+    fn speech_is_one_clean_line_of_at_most_300_characters() {
+        assert_eq!(clean_speech("  hello\r\n   world \t!  "), "hello world !");
+        assert_eq!(clean_speech("/me waves"), "/me waves", "nothing is posted, so a slash is fine");
+        assert_eq!(clean_speech(&"a".repeat(400)).chars().count(), 300);
+        assert_eq!(clean_speech("  \n "), "");
     }
 }

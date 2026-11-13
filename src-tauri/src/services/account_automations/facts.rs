@@ -37,6 +37,10 @@ pub enum RowKind {
     Whisper,
     /// A timer, clock, uptime or delay fire (P2): no person started it.
     Timed,
+    /// A P3 event that is not a chat row: your own channel's follow,
+    /// redemption, poll or prediction, or a watched channel going live or
+    /// offline. `Facts.own` says which.
+    Own,
 }
 
 /// The numbers of a sub, gift, raid, cheer or announcement.
@@ -89,6 +93,9 @@ pub struct Facts {
     pub reply_parent_user_id: String,
     pub event: Option<EventFacts>,
     pub badge: Option<BadgeSeen>,
+    /// P3: what an own-channel event or a live change says; None for a chat
+    /// row and a badge drop.
+    pub own: Option<OwnFacts>,
     /// When the row was read off the socket (wall clock, ms); None for a row
     /// that did not arrive live.
     pub received_at_ms: Option<i64>,
@@ -107,6 +114,158 @@ pub fn nfc(text: &str) -> Cow<'_, str> {
 /// rule is not case-sensitive.
 pub fn fold(text: &str) -> String {
     nfc(text).to_lowercase()
+}
+
+/// An online edge whose broadcast started longer ago than this (by Twitch's
+/// clock) never fires: the answer came late, or the app slept.
+pub const MAX_ONLINE_AGE_MS: i64 = 10 * 60 * 1000;
+
+/// A `started_at` or `followed_at` as epoch seconds: RFC 3339, the parse
+/// `reminder_service.rs:758` uses, so Helix `started_at`, GQL `createdAt` and
+/// the watch seed spell one instant one way (PLAN § 4.3).
+pub fn started_epoch(text: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(text.trim()).ok().map(|d| d.timestamp())
+}
+
+/// Whether an online edge is fresh: its broadcast started at most 10 minutes
+/// ago by Twitch's clock (`twitch_now_ms`).
+pub fn online_edge_fresh(started_s: i64, twitch_now_ms: i64) -> bool {
+    twitch_now_ms - started_s * 1000 <= MAX_ONLINE_AGE_MS
+}
+
+/// Which P3 source an own-event row came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OwnKind {
+    Follow,
+    Reward,
+    Poll,
+    Prediction,
+    /// A watched channel went live (`online`) or offline.
+    Live { online: bool },
+}
+
+/// What a follow, redemption, poll, prediction or live change says.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OwnFacts {
+    pub kind: OwnKind,
+    /// Whose channel the event happened in (empty for a live change).
+    pub owner_id: String,
+    pub reward_id: String,
+    /// The reward's title.
+    pub reward: String,
+    /// What the viewer typed on a redemption, at most 200 characters.
+    pub input: String,
+    pub poll: String,
+    pub prediction: String,
+    /// A live change: the broadcast's start, epoch seconds.
+    pub started_s: i64,
+}
+
+fn own_blank(kind: OwnKind, owner_id: &str) -> OwnFacts {
+    OwnFacts {
+        kind,
+        owner_id: owner_id.to_string(),
+        reward_id: String::new(),
+        reward: String::new(),
+        input: String::new(),
+        poll: String::new(),
+        prediction: String::new(),
+        started_s: 0,
+    }
+}
+
+fn field(event: &serde_json::Value, key: &str) -> String {
+    event[key].as_str().unwrap_or("").trim().to_string()
+}
+
+/// The facts of one own-channel EventSub notification (`event` is the
+/// payload's `event`). None when the event lacks what its claim key needs: a
+/// follow with no readable `followed_at`, or any event with no id. The row is
+/// in the owner's channel and room.
+pub fn from_own(topic: super::own_topics::TopicKind, event: &serde_json::Value, owner_id: &str, owner_login: &str, now_ms: i64) -> Option<Facts> {
+    use super::own_topics::TopicKind;
+    let login = owner_login.trim().to_ascii_lowercase();
+    let mut own;
+    let event_key;
+    let mut user = (String::new(), String::new(), String::new());
+    match topic {
+        TopicKind::Follow => {
+            let user_id = field(event, "user_id");
+            let followed = started_epoch(&field(event, "followed_at"))?;
+            if user_id.is_empty() {
+                return None;
+            }
+            event_key = claims::follow_key(&user_id, followed);
+            user = (user_id, field(event, "user_login").to_ascii_lowercase(), field(event, "user_name"));
+            own = own_blank(OwnKind::Follow, owner_id);
+        }
+        TopicKind::Redemption => {
+            let id = field(event, "id");
+            if id.is_empty() {
+                return None;
+            }
+            event_key = claims::reward_key(&id);
+            user = (field(event, "user_id"), field(event, "user_login").to_ascii_lowercase(), field(event, "user_name"));
+            own = own_blank(OwnKind::Reward, owner_id);
+            own.reward_id = field(&event["reward"], "id");
+            own.reward = field(&event["reward"], "title");
+            own.input = field(event, "user_input").chars().take(MESSAGE_VAR_CHARS).collect();
+        }
+        TopicKind::PollBegin => {
+            let id = field(event, "id");
+            if id.is_empty() {
+                return None;
+            }
+            event_key = claims::poll_key(&id);
+            own = own_blank(OwnKind::Poll, owner_id);
+            own.poll = field(event, "title");
+        }
+        TopicKind::PredictionBegin => {
+            let id = field(event, "id");
+            if id.is_empty() {
+                return None;
+            }
+            event_key = claims::prediction_key(&id);
+            own = own_blank(OwnKind::Prediction, owner_id);
+            own.prediction = field(event, "title");
+        }
+    }
+    let user_name = if user.2.is_empty() { user.1.clone() } else { user.2.clone() };
+    Some(Facts {
+        kind: RowKind::Own,
+        event_key,
+        channel_key: channel_filter_key("twitch", &login),
+        channel_login: login,
+        room_id: owner_id.to_string(),
+        event_room_id: owner_id.to_string(),
+        user_id: user.0,
+        user_login: user.1,
+        user_name,
+        roles: vec![SenderRole::Viewer],
+        own: Some(own),
+        received_at_ms: Some(now_ms),
+        ..Facts::default()
+    })
+}
+
+/// The facts of a watched channel going live or offline. `started_s` is the
+/// broadcast's start (for an offline edge, the broadcast that ended).
+pub fn from_live(login: &str, room_id: &str, online: bool, started_s: i64, now_ms: i64) -> Facts {
+    let login = login.trim().to_ascii_lowercase();
+    let mut own = own_blank(OwnKind::Live { online }, "");
+    own.started_s = started_s;
+    Facts {
+        kind: RowKind::Own,
+        event_key: if online { claims::live_key(&login, started_s) } else { claims::offline_key(&login, started_s) },
+        channel_key: channel_filter_key("twitch", &login),
+        channel_login: login,
+        room_id: room_id.to_string(),
+        event_room_id: room_id.to_string(),
+        roles: vec![SenderRole::Viewer],
+        own: Some(own),
+        received_at_ms: Some(now_ms),
+        ..Facts::default()
+    }
 }
 
 fn tag<'a>(msg: &'a ChatMessage, key: &str) -> &'a str {
@@ -208,6 +367,7 @@ pub fn from_chat(msg: &ChatMessage) -> Option<Facts> {
         reply_parent_user_id,
         event: if notice { notice_event(msg) } else { cheer_event(msg) },
         badge: None,
+        own: None,
         received_at_ms: msg.received_at_ms,
         from_backfill: msg.metadata.from_backfill,
         message: None,
@@ -350,6 +510,7 @@ pub fn from_sample(sample: &TrySample) -> Facts {
         reply_parent_user_id: sample.reply_to.clone().unwrap_or_default(),
         event,
         badge: None,
+        own: None,
         received_at_ms: None,
         from_backfill: false,
         message: None,
@@ -631,5 +792,52 @@ mod tests {
         assert_eq!(f.event.unwrap().viewers, 50);
         let cheer = from_sample(&TrySample { event: Some(EventKind::Cheer), amount: 100, ..TrySample::default() });
         assert_eq!(cheer.kind, RowKind::Message);
+    }
+
+    #[test]
+    fn started_at_spells_one_instant_one_way() {
+        let a = started_epoch("2026-11-13T05:00:00Z").unwrap();
+        assert_eq!(started_epoch("2026-11-13T05:00:00.000Z"), Some(a));
+        assert_eq!(started_epoch("2026-11-13T07:00:00+02:00"), Some(a));
+        assert_eq!(started_epoch(" 2026-11-13T05:00:00Z "), Some(a));
+        assert_eq!(started_epoch(""), None);
+        assert_eq!(started_epoch("yesterday"), None);
+    }
+
+    #[test]
+    fn an_online_edge_is_fresh_for_ten_minutes_by_twitch_time() {
+        let started = started_epoch("2026-11-13T05:00:00Z").unwrap();
+        assert!(online_edge_fresh(started, started * 1000 + MAX_ONLINE_AGE_MS));
+        assert!(!online_edge_fresh(started, started * 1000 + MAX_ONLINE_AGE_MS + 1));
+        assert!(online_edge_fresh(started, started * 1000 - 5_000), "a start a little ahead of our clock is fine");
+    }
+
+    #[test]
+    fn own_events_read_their_payloads() {
+        use crate::services::account_automations::own_topics::TopicKind;
+        let follow = serde_json::json!({ "user_id": "7", "user_login": "Fan", "user_name": "Fan", "followed_at": "2026-11-13T05:00:00Z" });
+        let f = from_own(TopicKind::Follow, &follow, "100", "Me", 5).unwrap();
+        assert_eq!(f.event_key, format!("follow:7:{}", started_epoch("2026-11-13T05:00:00Z").unwrap()));
+        assert_eq!((f.channel_key.as_str(), f.room_id.as_str(), f.user_login.as_str()), ("twitch:me", "100", "fan"));
+        assert_eq!(f.kind, RowKind::Own);
+        assert!(from_own(TopicKind::Follow, &serde_json::json!({ "user_id": "7" }), "100", "me", 5).is_none(), "no readable followed_at, no key");
+
+        let redeem = serde_json::json!({ "id": "red-1", "user_id": "8", "user_login": "viewer", "user_name": "Viewer",
+            "user_input": "hello", "reward": { "id": "rw-1", "title": "Hydrate" } });
+        let r = from_own(TopicKind::Redemption, &redeem, "100", "me", 5).unwrap();
+        assert_eq!(r.event_key, "reward:red-1");
+        let own = r.own.unwrap();
+        assert_eq!((own.reward_id.as_str(), own.reward.as_str(), own.input.as_str()), ("rw-1", "Hydrate", "hello"));
+        let long = serde_json::json!({ "id": "red-2", "user_input": "x".repeat(500), "reward": {} });
+        assert_eq!(from_own(TopicKind::Redemption, &long, "100", "me", 5).unwrap().own.unwrap().input.chars().count(), MESSAGE_VAR_CHARS);
+
+        let poll = serde_json::json!({ "id": "p1", "title": "Pizza?" });
+        assert_eq!(from_own(TopicKind::PollBegin, &poll, "100", "me", 5).unwrap().event_key, "poll:p1");
+        assert_eq!(from_own(TopicKind::PredictionBegin, &poll, "100", "me", 5).unwrap().event_key, "prediction:p1");
+        assert!(from_own(TopicKind::PollBegin, &serde_json::json!({}), "100", "me", 5).is_none());
+
+        let up = from_live("Friend", "555", true, 1_794_546_000, 5);
+        assert_eq!((up.event_key.as_str(), up.channel_key.as_str(), up.room_id.as_str()), ("live:friend:1794546000", "twitch:friend", "555"));
+        assert_eq!(from_live("Friend", "555", false, 1_794_546_000, 5).event_key, "offline:friend:1794546000");
     }
 }
