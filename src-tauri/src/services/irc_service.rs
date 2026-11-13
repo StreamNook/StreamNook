@@ -5684,6 +5684,9 @@ impl IrcService {
 
                 // Same rules as live rows: a hidden user's backfill is hidden
                 // too, and highlights are stamped so the row needs no matcher.
+                // Marked as history first, so what counts "right now" (the
+                // composer's emote of the moment) leaves it out.
+                chat_msg.metadata.from_backfill = true;
                 let verdict = ChatRules::evaluate(&mut chat_msg, &rules);
                 if verdict.drop {
                     continue;
@@ -5691,7 +5694,6 @@ impl IrcService {
                 // A mention from before you opened the chat still reaches the
                 // inbox (once: it dedupes by id), with no sound or notice.
                 crate::services::mention_inbox::on_backfill(&chat_msg, &verdict);
-                chat_msg.metadata.from_backfill = true;
                 crate::services::chat_row_view::stamp(&mut chat_msg);
                 results.push(chat_msg);
             }

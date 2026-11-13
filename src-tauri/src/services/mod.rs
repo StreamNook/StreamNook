@@ -124,6 +124,7 @@ pub mod spellcheck;
 pub mod asset_cache_queue;
 pub mod emote_credit;
 pub mod emote_match;
+pub mod emote_moment;
 pub mod emote_picker;
 pub mod emote_prefetch_service;
 #[cfg(test)]

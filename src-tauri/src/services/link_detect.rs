@@ -143,9 +143,44 @@ pub fn link_url(link: &str) -> String {
     }
 }
 
+/// Hosts whose links are GIFs (GIPHY and Tenor, and GIPHY's short links).
+const GIF_HOSTS: &[&str] = &["giphy.com", "gph.is", "tenor.com"];
+
+/// The first link to a GIF in `text`: a GIPHY or Tenor link, or any link
+/// whose path ends in `.gif`. The composer's emote button turns to its GIF chip
+/// while the box holds one, pointing at the menu's GIF search.
+pub fn find_gif_link(text: &str) -> Option<&str> {
+    text.split_whitespace().filter_map(split_link).map(|(link, _)| link).find(|&link| {
+        let rest = link.split_once("://").map(|(_, r)| r).unwrap_or(link);
+        let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+        let host = rest[..end].rsplit('@').next().unwrap_or("").split(':').next().unwrap_or("").to_ascii_lowercase();
+        if GIF_HOSTS.iter().any(|h| host == *h || host.ends_with(&format!(".{h}"))) {
+            return true;
+        }
+        let path = &rest[end..];
+        let path = &path[..path.find(['?', '#']).unwrap_or(path.len())];
+        path.to_ascii_lowercase().ends_with(".gif")
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gif_links() {
+        assert_eq!(find_gif_link("https://giphy.com/gifs/cat-dance-abc123"), Some("https://giphy.com/gifs/cat-dance-abc123"));
+        assert!(find_gif_link("https://media4.giphy.com/media/x/giphy.gif?cid=1").is_some());
+        assert_eq!(find_gif_link("look gph.is/g/abc, nice"), Some("gph.is/g/abc"));
+        assert!(find_gif_link("https://tenor.com/view/happy-gif-123").is_some());
+        assert!(find_gif_link("https://example.com/funny.GIF?x=1").is_some());
+        assert_eq!(find_gif_link("a.com/x b https://tenor.com/v/1"), Some("https://tenor.com/v/1"));
+        assert_eq!(find_gif_link("https://example.com/funny.png"), None);
+        assert_eq!(find_gif_link("https://notgiphy.com/x"), None);
+        assert_eq!(find_gif_link("https://example.com/?file=a.gif"), None);
+        assert_eq!(find_gif_link("just words about a gif"), None);
+        assert_eq!(find_gif_link(""), None);
+    }
 
     fn link_of(word: &str) -> Option<(&str, &str)> {
         split_link(word)

@@ -1210,6 +1210,8 @@ impl ChatRules {
                 );
                 // A running `/nuke` window sees every recorded message here.
                 crate::services::nuke::observe(&facts.channel_key, msg, facts.ts_ms);
+                // The composer's emote button wears the room's most used emote.
+                crate::services::emote_moment::observe(&facts.channel_key, msg, facts.flags);
             }
             ev
         };
@@ -2340,6 +2342,51 @@ mod tests {
         kick.user_id = "999".into();
         eval_with(&rules, &mut kick);
         assert!(kick.metadata.is_mentioned);
+    }
+
+    #[test]
+    fn recorded_rows_feed_the_emote_of_the_moment() {
+        let rules = rules_from(
+            "{}",
+            r##"{"ignored_phrases":[{"id":"p","pattern":"hidden","enabled":true}]}"##,
+            "{}",
+        );
+        let row = |user: &str, content: &str| {
+            let mut m = msg(user, content);
+            m.id = format!("moment-{user}");
+            m.user_id = format!("u-{user}");
+            m.channel = "#MomentRoom".into();
+            m.segments = vec![crate::models::chat_layout::MessageSegment::Emote {
+                content: "Moment".into(),
+                emote_id: Some("1".into()),
+                emote_url: "https://cdn/Moment.webp".into(),
+                is_zero_width: None,
+                modifier_flags: None,
+                is_personal: None,
+                local_path: None,
+            }];
+            m
+        };
+        let moment = || crate::services::emote_moment::get("twitch", "momentroom").emote.map(|e| e.name);
+        // Your own copy before its echo, and rows the rules drop, count nothing.
+        for u in ["a", "b", "c"] {
+            ChatRules::evaluate_unrecorded(&mut row(u, "Moment"), &rules);
+        }
+        for u in ["d", "e", "f"] {
+            assert!(ChatRules::evaluate(&mut row(u, "hidden Moment"), &rules).drop);
+        }
+        assert_eq!(moment(), None);
+        // History replayed into the chat counts nothing either.
+        for u in ["g", "h", "i"] {
+            let mut m = row(u, "Moment");
+            m.metadata.from_backfill = true;
+            ChatRules::evaluate(&mut m, &rules);
+        }
+        assert_eq!(moment(), None);
+        for u in ["j", "k", "l"] {
+            ChatRules::evaluate(&mut row(u, "Moment"), &rules);
+        }
+        assert_eq!(moment().as_deref(), Some("Moment"));
     }
 
     #[test]

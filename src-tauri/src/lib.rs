@@ -2671,6 +2671,7 @@ pub fn run() {
             get_emote_by_name,
             match_emote_tokens,
             mention_suggestions,
+            get_emote_moment,
             emote_credit,
             personal_emote_overrides,
             parse_text_segments,
@@ -2679,6 +2680,7 @@ pub fn run() {
             get_gif_picker_status,
             search_gifs,
             send_gif_message,
+            find_gif_link,
             // Bits: the insert menu's Bits section and a confirmed cheer
             get_bits_state,
             check_cheer,

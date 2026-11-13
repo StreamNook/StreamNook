@@ -285,6 +285,14 @@ const SEND_MUTATION: &str = r#"mutation sendGifMessage($input: SendGifMessageInp
   }
 }"#;
 
+/// The first GIF link (GIPHY, Tenor, or a `.gif` file) in the message box's
+/// text, so the composer's emote button can point at the menu's GIF search
+/// while the box holds one.
+#[tauri::command]
+pub async fn find_gif_link(text: String) -> Option<String> {
+    crate::services::link_detect::find_gif_link(&text).map(str::to_string)
+}
+
 /// Post a GIF to a channel's chat.
 ///
 /// `gif_url` goes out exactly as GIPHY gave it: Twitch requires the full URL

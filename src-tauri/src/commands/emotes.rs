@@ -519,6 +519,14 @@ fn room_owner(
     Some((login, id, display))
 }
 
+/// The chat's emote of the moment (the emote button's face), for the chat the
+/// page names as it names it to `mention_suggestions`. The answer carries the
+/// room key that `emote-moment` events for this chat will carry.
+#[tauri::command]
+pub async fn get_emote_moment(provider: Option<String>, channel: String) -> crate::services::emote_moment::MomentAnswer {
+    crate::services::emote_moment::get(provider.as_deref().unwrap_or("twitch"), &channel)
+}
+
 /// The composer's `@` list for a room: its streamer first, then its recent
 /// chatters, newest first, whose login, shown name or nickname starts with
 /// `query`. A command's username argument (`command_arg`, as in /ban or

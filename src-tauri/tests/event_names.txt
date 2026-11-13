@@ -43,6 +43,7 @@ drop-ready
 drops-login-complete
 drops-login-error
 drops-settings-updated
+emote-moment
 emote-palette://insert
 emote-palette://target
 emote-prefetch-complete
