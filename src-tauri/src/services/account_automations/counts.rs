@@ -40,8 +40,22 @@ pub struct RuleCounts {
     /// Per action: the line picked last.
     pub last_line: HashMap<String, usize>,
     pub posted: Vec<PostedBadge>,
+    /// Per chat key: what each timed trigger last fired for.
+    pub timed: HashMap<String, TimedFired>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
+}
+
+/// What a timed rule last fired for in one chat.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(default)]
+pub struct TimedFired {
+    /// Timer: the wall ms of its last fire.
+    pub last_fire_ms: i64,
+    /// Clock: the last local date (`YYYY-MM-DD`) it fired for.
+    pub last_date: String,
+    /// Uptime and Delay: the `started_at` epoch seconds or the join stamp it fired for.
+    pub fired_for: i64,
 }
 
 /// Every rule's memory on this device.
@@ -50,9 +64,15 @@ pub struct RuleCounts {
 pub struct Counts {
     pub version: u32,
     pub rules: HashMap<String, RuleCounts>,
+    /// The last whisper ids the engine saw (a ring of `WHISPER_IDS_MAX`), so a
+    /// whisper the history sync filed first, or a re-delivery, fires once.
+    pub whisper_ids: Vec<String>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
+
+/// The whisper-id ring's size.
+pub const WHISPER_IDS_MAX: usize = 200;
 
 fn next_random(state: &mut u64) -> u64 {
     let mut x = *state;
@@ -135,6 +155,25 @@ impl Counts {
         };
         rule.last_line.insert(action_id.to_string(), index);
         index
+    }
+
+    /// Remember a whisper id; false when it was already seen.
+    pub fn note_whisper(&mut self, whisper_id: &str) -> bool {
+        if self.whisper_ids.iter().any(|w| w == whisper_id) {
+            return false;
+        }
+        self.whisper_ids.push(whisper_id.to_string());
+        let extra = self.whisper_ids.len().saturating_sub(WHISPER_IDS_MAX);
+        self.whisper_ids.drain(..extra);
+        true
+    }
+
+    pub fn timed(&self, rule_id: &str, chat_key: &str) -> TimedFired {
+        self.rules.get(rule_id).and_then(|r| r.timed.get(chat_key)).cloned().unwrap_or_default()
+    }
+
+    pub fn set_timed(&mut self, rule_id: &str, chat_key: &str, fired: TimedFired) {
+        self.rule_mut(rule_id).timed.insert(chat_key.to_string(), fired);
     }
 
     /// This rule posted this drop's phase on this device before.

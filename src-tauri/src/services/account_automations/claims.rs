@@ -101,6 +101,77 @@ pub fn badge_key(feed_id: &str, phase: BadgePhase) -> String {
     format!("badge:{feed_id}:{}", phase.as_str())
 }
 
+/// A whisper's key: `whisper:<whisper id>` (exact, per whisper).
+pub fn whisper_key(whisper_id: &str) -> String {
+    format!("whisper:{whisper_id}")
+}
+
+/// A Timer fire in one chat: `timer:<chat key>` (PLAN § 4.8), claimed per
+/// window (`timed::timed_window_s`: `ceil(0.9 x every)`, the reminders' own).
+pub fn timer_key(chat_key: &str) -> String {
+    format!("timer:{chat_key}")
+}
+
+/// A Clock fire: `clock:<chat key>:<local date>T<HH:MM><UTC offset>` of the
+/// scheduled time (not the minute a late tick ran), the offset in force at that
+/// time (`+HH:MM`), so devices in different time zones give two events.
+pub fn clock_key(chat_key: &str, date: &str, hhmm: &str, offset_s: i32) -> String {
+    format!("clock:{chat_key}:{date}T{hhmm}{}", offset_words(offset_s))
+}
+
+/// `+HH:MM` or `-HH:MM` (the reminders' `offset_text`, one spelling for both).
+pub fn offset_words(offset_s: i32) -> String {
+    let sign = if offset_s < 0 { '-' } else { '+' };
+    let a = offset_s.unsigned_abs();
+    format!("{sign}{:02}:{:02}", a / 3600, (a % 3600) / 60)
+}
+
+/// An Uptime fire: `uptime:<chat key>:<started_at epoch s>:<seconds>`, once per
+/// broadcast per threshold (the threshold in seconds everywhere).
+pub fn uptime_key(chat_key: &str, started_epoch_s: i64, seconds: u32) -> String {
+    format!("uptime:{chat_key}:{started_epoch_s}:{seconds}")
+}
+
+/// A Delay fire in one chat: `delay:<chat key>`, claimed per window
+/// (`max(seconds, 600)`, the reminders' own).
+pub fn delay_key(chat_key: &str) -> String {
+    format!("delay:{chat_key}")
+}
+
+/// A timed rule's family: its kind and 16 hex of the SHA-256 over the
+/// normalized texts of its actions, so two devices with the same timed message
+/// collide whatever else differs and two different messages never starve each
+/// other (wording the family names; filters, accounts and thresholds never).
+pub fn timed_family(kind: &str, rule: &Rule) -> String {
+    let mut texts = String::new();
+    for action in &rule.actions {
+        match action {
+            Action::Reply { texts: t, .. } | Action::Send { texts: t, .. } | Action::Whisper { texts: t, .. } => {
+                for line in t {
+                    texts.push_str(&fold(&line.text));
+                    texts.push('\u{1f}');
+                }
+            }
+            Action::Announce { text, color, .. } => texts.push_str(&format!("a:{}:{color}\u{1f}", fold(text))),
+            Action::Command { line, .. } => texts.push_str(&format!("c:{}\u{1f}", fold(line))),
+            _ => {}
+        }
+    }
+    format!("{kind}:{}", hash16(&texts))
+}
+
+/// The trigger family of a rule for an event: the P1 families, and for a timed
+/// rule `timed_family`. `claim_class` calls this in place of `trigger_family`.
+pub fn rule_trigger_family(rule: &Rule, facts: &Facts) -> Option<String> {
+    match &rule.when {
+        Trigger::Timer { .. } => Some(timed_family("timer", rule)),
+        Trigger::Clock { .. } => Some(timed_family("clock", rule)),
+        Trigger::Uptime { .. } => Some(timed_family("uptime", rule)),
+        Trigger::Delay { .. } => Some(timed_family("delay", rule)),
+        other => trigger_family(other, facts),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Action classes
 // ---------------------------------------------------------------------------
@@ -108,24 +179,40 @@ pub fn badge_key(feed_id: &str, phase: BadgePhase) -> String {
 /// Where an outward action answers. One claim per class per event.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ActionClass {
-    /// A message in one chat, named by its room id: Reply, and Send to the
-    /// event's chat or to another chat. Whisper, moderation and command
-    /// classes join with the actions that need them.
+    /// A message in one chat, named by its room id: Reply, Send to the
+    /// event's chat or to another chat, and Announce.
     Post { room_id: String },
+    /// A whisper to one person (the full D273 subset, no chat slot).
+    Whisper { to: String },
+    /// One of Timeout, Delete, Pin and Shoutout in one room, by kind (PLAN § 4.8:
+    /// `timeout:<room>`, `delete:<room>`, `pin:<room>`, `shoutout:<room>`).
+    Mod { kind: &'static str, room_id: String },
+    /// A Command in one room, by command word (`command:<word>:<room>`).
+    Command { word: String, room_id: String },
 }
 
 impl ActionClass {
     pub fn key(&self) -> String {
         match self {
             ActionClass::Post { room_id } => format!("post:{room_id}"),
+            // PLAN § 4.8: one `whisper` class (the recipient rides in the variant for the cap element, not in the key).
+            ActionClass::Whisper { .. } => "whisper".to_string(),
+            ActionClass::Mod { kind, room_id } => format!("{kind}:{room_id}"),
+            ActionClass::Command { word, room_id } => format!("command:{word}:{room_id}"),
         }
     }
 
-    /// The chat the class posts in.
+    /// The chat the class acts in (none for a whisper).
     pub fn room_id(&self) -> Option<&str> {
         match self {
-            ActionClass::Post { room_id } => Some(room_id),
+            ActionClass::Post { room_id } | ActionClass::Mod { room_id, .. } | ActionClass::Command { room_id, .. } => Some(room_id),
+            ActionClass::Whisper { .. } => None,
         }
+    }
+
+    /// Whether the class books a chat slot and runs steps 3, 6 and 8 (D273).
+    pub fn books_slot(&self) -> bool {
+        matches!(self, ActionClass::Post { .. })
     }
 }
 
@@ -144,7 +231,7 @@ pub struct ClassPlan {
 /// drop, else the event's room (a Shared Chat copy's source room), so a row
 /// in its own room and its partner copy are one class.
 pub fn event_room<'a>(rule: &'a Rule, facts: &'a Facts) -> &'a str {
-    if facts.kind == RowKind::Badge {
+    if matches!(facts.kind, RowKind::Badge | RowKind::Whisper) {
         &rule.owner.id
     } else {
         &facts.event_room_id
@@ -159,6 +246,12 @@ pub fn classes_for(rule: &Rule, event_room: &str) -> (Vec<ClassPlan>, Vec<(usize
     let mut skipped = Vec::new();
     for (index, action) in rule.actions.iter().enumerate() {
         let (room, to_person) = match action {
+            Action::Reply { .. } if rule.is_whisper_rule() => {
+                // The sender of the whisper: the class keys on "sender" and counts as
+                // answering the person; the executor routes it to the door path.
+                push_whisper_plan(&mut plans, "sender".to_string(), index);
+                continue;
+            }
             Action::Reply { .. } => (event_room.to_string(), true),
             Action::Send { to: None, texts, .. } => (event_room.to_string(), names_person(texts)),
             Action::Send { to: Some(chat), texts, .. } => {
@@ -169,7 +262,30 @@ pub fn classes_for(rule: &Rule, event_room: &str) -> (Vec<ClassPlan>, Vec<(usize
                 }
                 (room.to_string(), room == event_room && names_person(texts))
             }
-            Action::Notify { .. } => continue,
+            Action::Notify { .. } | Action::Log { .. } | Action::JoinChat { .. } | Action::LeaveChat { .. } | Action::Wait { .. } => continue,
+            Action::Announce { .. } => (event_room.to_string(), false),
+            Action::Command { line, .. } => {
+                let word = super::command::word_of(line);
+                push_plan(&mut plans, ActionClass::Command { word, room_id: event_room.to_string() }, index, false);
+                continue;
+            }
+            Action::Timeout { .. } | Action::Delete { .. } | Action::Pin { .. } | Action::Shoutout { .. } => {
+                let kind = match action {
+                    Action::Timeout { .. } => "timeout",
+                    Action::Delete { .. } => "delete",
+                    Action::Pin { .. } => "pin",
+                    _ => "shoutout",
+                };
+                push_plan(&mut plans, ActionClass::Mod { kind, room_id: event_room.to_string() }, index, false);
+                continue;
+            }
+            Action::Whisper { to, .. } => {
+                // On a Whisper rule an empty `to` is the sender; the executor
+                // resolves it, so the class keys on the stored id or "sender".
+                let who = to.as_ref().map(|t| t.user_id.trim()).filter(|s| !s.is_empty()).unwrap_or("sender").to_string();
+                push_whisper_plan(&mut plans, who, index);
+                continue;
+            }
         };
         let class = ActionClass::Post { room_id: room };
         match plans.iter_mut().find(|p| p.class == class) {
@@ -181,6 +297,25 @@ pub fn classes_for(rule: &Rule, event_room: &str) -> (Vec<ClassPlan>, Vec<(usize
         }
     }
     (plans, skipped)
+}
+
+fn push_plan(plans: &mut Vec<ClassPlan>, class: ActionClass, index: usize, to_person: bool) {
+    match plans.iter_mut().find(|p| p.class == class) {
+        Some(plan) => {
+            plan.actions.push(index);
+            plan.to_person |= to_person;
+        }
+        None => plans.push(ClassPlan { class, actions: vec![index], to_person }),
+    }
+}
+
+/// Every Whisper (and a Whisper rule's Reply) of a job is one `whisper` class
+/// (PLAN § 4.8): the first action's recipient rides in the variant for the cap element.
+fn push_whisper_plan(plans: &mut Vec<ClassPlan>, to: String, index: usize) {
+    match plans.iter_mut().find(|p| matches!(p.class, ActionClass::Whisper { .. })) {
+        Some(plan) => plan.actions.push(index),
+        None => plans.push(ClassPlan { class: ActionClass::Whisper { to }, actions: vec![index], to_person: true }),
+    }
 }
 
 fn names_person(lines: &[Line]) -> bool {
@@ -248,6 +383,11 @@ pub fn trigger_family(when: &Trigger, facts: &Facts) -> Option<String> {
         Trigger::FirstMessage {} => "first_message:".to_string(),
         Trigger::ChannelEvent { .. } => format!("channel_event:{}", event_word(facts.event.as_ref()?.kind)),
         Trigger::BadgeDrop { .. } => "badge:".to_string(),
+        Trigger::Whisper { .. } => "whisper:".to_string(),
+        Trigger::Timer { .. } => "timer:".to_string(),
+        Trigger::Clock { .. } => "clock:".to_string(),
+        Trigger::Uptime { .. } => "uptime:".to_string(),
+        Trigger::Delay { .. } => "delay:".to_string(),
     })
 }
 
@@ -353,6 +493,10 @@ pub enum Element {
         period_s: u32,
         counts: CountWho,
     },
+    /// The whisper cap, evaluated last in the same transaction (the site
+    /// HMACs `recipient`): at most one per person per hour and `cap` people
+    /// in a rolling 24 hours, per owner.
+    WhisperCap { recipient: String, cap: u32 },
 }
 
 impl Element {
@@ -367,6 +511,7 @@ impl Element {
                 plain_ok(key) && plain_ok(family)
             }
             Element::Batch { .. } => true,
+            Element::WhisperCap { recipient, cap } => !recipient.is_empty() && recipient.chars().count() <= 600 && (1..=30).contains(cap),
         }
     }
 }
@@ -400,6 +545,16 @@ pub struct CallInput<'a> {
     pub person: Option<&'a str>,
 }
 
+/// How a trigger's event element wins: a Timer and a Delay once per window,
+/// everything else exactly once.
+pub fn event_mode(when: &Trigger) -> (KeyMode, Option<u32>) {
+    match when {
+        Trigger::Timer { every_seconds, .. } => (KeyMode::Windowed, Some(super::reminder_claim::interval_window_s(u64::from(*every_seconds)))),
+        Trigger::Delay { seconds } => (KeyMode::Windowed, Some(super::reminder_claim::delay_window_s(u64::from(*seconds)))),
+        _ => (KeyMode::Exact, None),
+    }
+}
+
 /// The elements of one class's claim call: its event element (one per drop
 /// for a badge batch, plus the batch element), then its rails: the other-chat
 /// gap, the rule and person cooldowns, the conversation limit and the pace.
@@ -414,15 +569,20 @@ pub fn class_elements(input: &CallInput) -> Result<Vec<Element>, &'static str> {
     }
     let prefs = input.prefs.clamped();
     let settle = settle_ms(rule);
-    let person = input.person.map(str::trim).filter(|p| !p.is_empty() && !badge);
+    let rail_person = match &input.plan.class {
+        ActionClass::Whisper { to } if to != "sender" => Some(to.as_str()),
+        _ => input.person,
+    };
+    let person = rail_person.map(str::trim).filter(|p| !p.is_empty() && !badge);
     let to_person = input.plan.to_person && person.is_some();
     let mut out = Vec::new();
+    let (mode, window_s) = event_mode(&input.rule.when);
     for key in input.event_keys {
         out.push(Element::Event {
             key: key.clone(),
             family: input.family.to_string(),
-            mode: KeyMode::Exact,
-            window_s: None,
+            mode,
+            window_s,
             sends: if badge { 0 } else { sends },
             to_person,
             settle_ms: settle,
@@ -474,6 +634,14 @@ pub fn class_elements(input: &CallInput) -> Result<Vec<Element>, &'static str> {
         period_s: PACE_PERIOD_S,
         counts: CountWho::All,
     });
+    // A Whisper class's cap element names the recipient: the stored id, or the
+    // sender (`to == "sender"`, the event's person) for the Reply form.
+    if let ActionClass::Whisper { to } = &input.plan.class {
+        let recipient = if to == "sender" { person } else { Some(to.as_str()) };
+        if let Some(recipient) = recipient {
+            out.push(Element::WhisperCap { recipient: recipient.to_string(), cap: prefs.whisper_people_per_day });
+        }
+    }
     if out.iter().all(Element::plain_ok) {
         Ok(out)
     } else {

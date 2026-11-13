@@ -1,0 +1,15 @@
+[
+  { "word": "slow", "label": "Slow mode on", "arg": "seconds", "own_timed_only": false },
+  { "word": "slowoff", "label": "Slow mode off", "arg": "none", "own_timed_only": false },
+  { "word": "followers", "label": "Followers-only on", "arg": "duration", "own_timed_only": false },
+  { "word": "followersoff", "label": "Followers-only off", "arg": "none", "own_timed_only": false },
+  { "word": "subscribers", "label": "Subscribers-only on", "arg": "none", "own_timed_only": false },
+  { "word": "subscribersoff", "label": "Subscribers-only off", "arg": "none", "own_timed_only": false },
+  { "word": "uniquechat", "label": "Unique chat on", "arg": "none", "own_timed_only": false },
+  { "word": "uniquechatoff", "label": "Unique chat off", "arg": "none", "own_timed_only": false },
+  { "word": "emoteonly", "label": "Emote-only on", "arg": "none", "own_timed_only": false },
+  { "word": "emoteonlyoff", "label": "Emote-only off", "arg": "none", "own_timed_only": false },
+  { "word": "marker", "label": "Add a stream marker", "arg": "text", "own_timed_only": false },
+  { "word": "settitle", "label": "Set the stream title", "arg": "required_text", "own_timed_only": true },
+  { "word": "setgame", "label": "Set the category", "arg": "required_text", "own_timed_only": true }
+]

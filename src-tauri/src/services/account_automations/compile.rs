@@ -32,6 +32,10 @@ use crate::services::chat_rules::channel_filter_key;
 pub const FAMILY_CHAT: u32 = 1;
 /// Badge drops.
 pub const FAMILY_BADGE: u32 = 1 << 1;
+/// A running Whisper rule exists.
+pub const FAMILY_WHISPER: u32 = 1 << 2;
+/// A running Timer, Clock, Uptime or Delay rule exists.
+pub const FAMILY_TIMED: u32 = 1 << 3;
 /// The `my_ids` key of Twitch ids.
 pub const TWITCH: &str = "twitch";
 
@@ -168,6 +172,8 @@ pub struct CompiledRule {
     pub summary: String,
     /// It has an action that posts.
     pub outward: bool,
+    /// The compiled expression condition, if the rule has one.
+    pub filter: Option<std::sync::Arc<crate::services::chat_rules::FilterProgram>>,
 }
 
 /// A stored rule this build cannot read; kept as it is and shown read-only.
@@ -192,6 +198,12 @@ pub struct Compiled {
     /// Running chat rules for any open chat or the watched one.
     pub chat_any: Vec<usize>,
     pub badge_rules: Vec<usize>,
+    /// Running Whisper rules.
+    pub whisper_rules: Vec<usize>,
+    /// Running Timer, Clock, Uptime and Delay rules.
+    pub timed_rules: Vec<usize>,
+    /// A running chat rule has an expression: `on_chat` keeps the row.
+    pub expressions: bool,
     /// [`FAMILY_CHAT`] and [`FAMILY_BADGE`] bits with a running rule.
     pub families: u32,
     /// Your own ids per provider (`twitch`, `kick`, ...). The Twitch set is
@@ -273,6 +285,8 @@ pub struct CompileInput<'a> {
     pub own_accounts: &'a [(String, String)],
     /// The id the profile read names, verified or not.
     pub profile_user_id: Option<&'a str>,
+    /// The registry's primary account id, for the main-account hold.
+    pub primary_id: Option<&'a str>,
 }
 
 fn clean_login(login: &str) -> String {
@@ -336,8 +350,33 @@ pub fn compile(input: &CompileInput) -> Compiled {
         } else {
             None
         };
+        // The P2 actions and the Whisper trigger belong to the main account.
+        if held.is_none() {
+            held = main_account_hold(&rule, input.primary_id, &out);
+        }
+        let filter = match rule.only_if.expression.as_deref().filter(|e| !e.trim().is_empty()) {
+            Some(expression) => match crate::services::chat_rules::ChatRules::compile_expression(expression) {
+                Ok(program) => Some(std::sync::Arc::new(program)),
+                Err(why) => {
+                    if held.is_none() {
+                        held = Some(why);
+                    }
+                    None
+                }
+            },
+            None => None,
+        };
         let test = match &rule.when {
             Trigger::Message { text } => match TextTest::build(text) {
+                Ok(test) => test,
+                Err(why) => {
+                    if held.is_none() {
+                        held = Some(why.to_string());
+                    }
+                    TextTest::Never
+                }
+            },
+            Trigger::Whisper { text: Some(text) } if !text.pattern.trim().is_empty() => match TextTest::build(text) {
                 Ok(test) => test,
                 Err(why) => {
                     if held.is_none() {
@@ -361,8 +400,15 @@ pub fn compile(input: &CompileInput) -> Compiled {
                 out.badge_rules.push(index);
                 out.families |= FAMILY_BADGE;
                 out.badge_room_len = out.badge_room_len.max(rule.owner.id.trim().len());
+            } else if rule.is_whisper_rule() {
+                out.whisper_rules.push(index);
+                out.families |= FAMILY_WHISPER;
+            } else if rule.is_timed() {
+                out.timed_rules.push(index);
+                out.families |= FAMILY_TIMED;
             } else {
                 out.families |= FAMILY_CHAT;
+                out.expressions |= filter.is_some();
                 if listened.is_empty() {
                     out.chat_any.push(index);
                 } else {
@@ -401,6 +447,7 @@ pub fn compile(input: &CompileInput) -> Compiled {
             test,
             summary,
             outward,
+            filter,
         });
     }
     // Every account a rule names is yours: its messages never trigger a rule,
@@ -421,6 +468,36 @@ pub fn compile(input: &CompileInput) -> Compiled {
     out.needed_chats = needed;
     out.only_live_chats = only_live;
     out
+}
+
+const NOT_MAIN: &str = "Waiting for @{login} to be your main account";
+
+/// "Waiting for @x to be your main account" for a Whisper trigger or a
+/// Command, Whisper or moderation action whose acting account is not the
+/// registry's primary (D268). `None` when no such feature is used.
+fn main_account_hold(rule: &Rule, primary: Option<&str>, out: &Compiled) -> Option<String> {
+    use crate::models::automations::Action;
+    let needs_main = rule.is_whisper_rule()
+        || rule.actions.iter().any(|a| {
+            matches!(
+                a,
+                Action::Command { .. } | Action::Whisper { .. } | Action::Timeout { .. } | Action::Delete { .. } | Action::Pin { .. } | Action::Announce { .. } | Action::Shoutout { .. }
+            )
+        });
+    if !needs_main {
+        return None;
+    }
+    // The Whisper trigger reads the owner; the actions read the account that acts.
+    let actor = if rule.is_whisper_rule() { &rule.owner } else { &rule.send_as };
+    // A Kick actor is never the Twitch primary: its Timeout and Delete check the
+    // connected Kick account at fire (C6, D277), so no "main account" hold applies.
+    if actor.provider.eq_ignore_ascii_case("kick") {
+        return None;
+    }
+    match primary {
+        Some(p) if p == actor.id => None,
+        _ => Some(NOT_MAIN.replace("{login}", &known_login(out, &actor.id, &actor.login))),
+    }
 }
 
 /// The values every rule runs with, whatever was stored: a badge rule posts
@@ -547,6 +624,11 @@ fn when_words(when: &Trigger) -> String {
                 format!("On {}", list_words(&names, "or"))
             }
         }
+        Trigger::Whisper { .. } => "When someone you've whispered with whispers you".to_string(),
+        Trigger::Timer { every_seconds, .. } => format!("Every {}", crate::services::account_automations::timers::every_words(*every_seconds)),
+        Trigger::Clock { at, .. } => format!("At {}", at.trim()),
+        Trigger::Uptime { seconds, .. } => format!("When the stream reaches {}", crate::services::account_automations::timers::every_words(*seconds)),
+        Trigger::Delay { seconds } => format!("{} after the chat opens", crate::services::account_automations::timers::every_words(*seconds)),
         Trigger::BadgeDrop { on, .. } => match on {
             BadgeLeg::Announced => "When a new Twitch badge is announced",
             BadgeLeg::Earnable => "When a new Twitch badge can be earned",
@@ -592,6 +674,17 @@ fn action_words(actions: &[Action]) -> String {
             Action::Send { to: None, .. } => "send a message".to_string(),
             Action::Send { to: Some(chat), .. } => format!("send a message in #{}", chat_name(chat)),
             Action::Notify { .. } => "notify you".to_string(),
+            Action::Command { line, .. } => format!("run {}", line.trim()),
+            Action::Whisper { .. } => "whisper".to_string(),
+            Action::Timeout { seconds, .. } => format!("time them out for {}", crate::services::account_automations::timers::every_words(*seconds)),
+            Action::Delete { .. } => "delete the message".to_string(),
+            Action::Pin { .. } => "pin the message".to_string(),
+            Action::Announce { .. } => "announce".to_string(),
+            Action::Shoutout { .. } => "shout them out".to_string(),
+            Action::JoinChat { .. } => "keep a chat joined".to_string(),
+            Action::LeaveChat { .. } => "stop keeping a chat joined".to_string(),
+            Action::Wait { seconds, .. } => format!("wait {seconds} seconds"),
+            Action::Log { .. } => "log it".to_string(),
         })
         .collect();
     if words.is_empty() {
@@ -691,14 +784,14 @@ pub(crate) mod fixtures {
         accounts: &[(String, String)],
     ) -> Compiled {
         let automations = Automations { run, rules: rules.iter().map(Rule::to_value).collect(), ..Automations::default() };
-        compile(&CompileInput { automations: &automations, prefs, own_accounts: accounts, profile_user_id: None })
+        compile(&CompileInput { automations: &automations, prefs, own_accounts: accounts, profile_user_id: None, primary_id: None })
     }
 
     /// A compile of these rules from these account reads.
     pub(crate) fn compiled_accounts(rules: &[Rule], own_accounts: &[(String, String)], profile_user_id: Option<&str>) -> Compiled {
         let automations =
             Automations { run: RunState::On, rules: rules.iter().map(Rule::to_value).collect(), ..Automations::default() };
-        compile(&CompileInput { automations: &automations, prefs: &AutomationPrefs::default(), own_accounts, profile_user_id })
+        compile(&CompileInput { automations: &automations, prefs: &AutomationPrefs::default(), own_accounts, profile_user_id, primary_id: None })
     }
 
     pub(crate) fn compiled_with(rules: &[Rule], run: RunState) -> Compiled {
@@ -864,6 +957,7 @@ mod tests {
             prefs: &AutomationPrefs::default(),
             own_accounts: &accounts(),
             profile_user_id: None,
+            primary_id: None,
         });
         assert_eq!(
             c.unreadable,

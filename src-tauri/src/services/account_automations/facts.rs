@@ -33,6 +33,10 @@ pub enum RowKind {
     Notice,
     /// A new badge from the badge feed.
     Badge,
+    /// A whisper to the owner (P2).
+    Whisper,
+    /// A timer, clock, uptime or delay fire (P2): no person started it.
+    Timed,
 }
 
 /// The numbers of a sub, gift, raid, cheer or announcement.
@@ -89,6 +93,9 @@ pub struct Facts {
     /// that did not arrive live.
     pub received_at_ms: Option<i64>,
     pub from_backfill: bool,
+    /// The chat row, kept only while a running rule has an expression
+    /// (`Compiled.expressions`); the saved-filter language reads it.
+    pub message: Option<std::sync::Arc<ChatMessage>>,
 }
 
 /// `text` in Unicode NFC.
@@ -203,6 +210,7 @@ pub fn from_chat(msg: &ChatMessage) -> Option<Facts> {
         badge: None,
         received_at_ms: msg.received_at_ms,
         from_backfill: msg.metadata.from_backfill,
+        message: None,
     })
 }
 
@@ -344,6 +352,47 @@ pub fn from_sample(sample: &TrySample) -> Facts {
         badge: None,
         received_at_ms: None,
         from_backfill: false,
+        message: None,
+    }
+}
+
+/// The facts of a whisper to the owner. `user_*` is the sender; the event key
+/// is the whisper's id, the same on every device.
+pub fn from_whisper(owner_id: &str, whisper_id: &str, from_id: &str, from_login: &str, from_name: &str, text: &str, now_ms: i64) -> Facts {
+    let text_nfc = nfc(text).into_owned();
+    Facts {
+        kind: RowKind::Whisper,
+        event_key: claims::whisper_key(whisper_id),
+        channel_key: String::new(),
+        channel_login: String::new(),
+        room_id: owner_id.to_string(),
+        event_room_id: owner_id.to_string(),
+        message_id: whisper_id.to_string(),
+        user_id: from_id.to_string(),
+        user_login: from_login.to_lowercase(),
+        user_name: if from_name.is_empty() { from_login.to_lowercase() } else { from_name.to_string() },
+        roles: vec![SenderRole::Viewer],
+        text: text.to_string(),
+        text_folded: text_nfc.to_lowercase(),
+        text_nfc,
+        received_at_ms: Some(now_ms),
+        ..Facts::default()
+    }
+}
+
+/// The facts of a timed fire in one chat; `event_key` is built by the caller
+/// (`claims::timer_key`, `clock_key`, `uptime_key`, `delay_key`).
+pub fn from_timed(event_key: String, channel_login: &str, room_id: &str, now_ms: i64) -> Facts {
+    Facts {
+        kind: RowKind::Timed,
+        event_key,
+        channel_key: channel_filter_key("twitch", channel_login),
+        channel_login: channel_login.to_lowercase(),
+        room_id: room_id.to_string(),
+        event_room_id: room_id.to_string(),
+        roles: vec![SenderRole::Viewer],
+        received_at_ms: Some(now_ms),
+        ..Facts::default()
     }
 }
 

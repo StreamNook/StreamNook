@@ -16,12 +16,15 @@ pub mod activity;
 pub mod badges;
 pub mod claim_client;
 pub mod claims;
+pub mod command;
 pub mod compile;
 pub mod counts;
+pub mod doors;
 pub mod executor;
 pub mod facts;
 pub mod guards;
 pub mod local;
+pub mod logfile;
 pub mod matcher;
 pub mod notify;
 pub mod outward;
@@ -29,6 +32,8 @@ pub mod reconcile;
 pub mod store;
 pub mod template;
 pub mod templates;
+pub mod timed;
+pub mod timers;
 #[cfg(test)]
 pub(crate) mod testkit;
 pub mod verify;
@@ -245,6 +250,18 @@ pub struct Engine {
     spawner: Spawn,
     pending: Mutex<Pending>,
     recent_drops: Mutex<VecDeque<BadgeSeen>>,
+    /// Other people's lines per chat key, and each Timer's last-seen value
+    /// (D271): outside `Compiled`, so a recompile resets nothing.
+    pub(crate) counters: timed::Counters,
+    /// The timed machine's per-(rule, chat) phase, carried across compiles.
+    pub(crate) timed: Mutex<timers::Machine>,
+    /// Chats `JoinChat` keeps joined until `LeaveChat`, Off or restart.
+    pub(crate) action_joins: Mutex<BTreeSet<String>>,
+    /// When a window joined each chat (steady ms, wall ms): the Delay trigger's start. Engine-owned, never drained by reconcile.
+    pub(crate) chat_joins: timed::ChatJoins,
+    /// Door holds: a kind in a chat after a 429 (D273's own budgets).
+    pub(crate) door_holds: Mutex<doors::Holds>,
+    pub(crate) logfile: logfile::LogFile,
     pub(crate) rec: Mutex<RecShared>,
     pub(crate) starting: AtomicBool,
     kept: Mutex<Vec<String>>,
@@ -364,6 +381,7 @@ impl Engine {
     pub fn new(deps: Deps) -> (Arc<Engine>, watch::Receiver<u64>) {
         let (refresh_tx, refresh_rx) = watch::channel(0u64);
         let (compiles, _) = watch::channel(0u64);
+        let log_file = if deps.files.is_some() { logfile::LogFile::real() } else { logfile::LogFile::none() };
         let claims = Arc::new(ClaimClient::new(deps.outward.clone(), &deps.device, deps.timings.claims, deps.spawn.clone()));
         let engine = Arc::new(Engine {
             outward: deps.outward,
@@ -392,6 +410,12 @@ impl Engine {
             spawner: deps.spawn,
             pending: Mutex::new(Pending::default()),
             recent_drops: Mutex::new(VecDeque::new()),
+            counters: timed::Counters::default(),
+            timed: Mutex::new(timers::Machine::default()),
+            action_joins: Mutex::new(BTreeSet::new()),
+            chat_joins: timed::ChatJoins::default(),
+            door_holds: Mutex::new(doors::Holds::default()),
+            logfile: log_file,
             rec: Mutex::new(RecShared::default()),
             starting: AtomicBool::new(false),
             kept: Mutex::new(Vec::new()),
@@ -486,12 +510,14 @@ impl Engine {
         let own = self.outward.own_accounts();
         let profile = self.outward.profile_user_id();
         write(&self.main, self.outward.primary_id());
+        let primary = read(&self.main);
         let (automations, prefs) = self.local.settings();
         let compiled = Arc::new(compile::compile(&CompileInput {
             automations: &automations,
             prefs: &prefs,
             own_accounts: &own,
             profile_user_id: profile.as_deref(),
+            primary_id: primary.as_deref(),
         }));
         write(&self.away, automations.away.clone());
         self.run.store(run_code(automations.run), Ordering::SeqCst);
@@ -519,6 +545,7 @@ impl Engine {
         }
         if run == RunState::Off {
             self.families.store(0, Ordering::Relaxed);
+            lock(&self.action_joins).clear();
         }
         self.request_refresh();
     }
@@ -531,7 +558,7 @@ impl Engine {
 
     /// A live chat row (PRIVMSG or USERNOTICE) after the chat rules judged it.
     pub fn on_chat(self: &Arc<Self>, msg: &ChatMessage, dropped: bool) {
-        if self.families.load(Ordering::Relaxed) & compile::FAMILY_CHAT == 0 {
+        if self.families.load(Ordering::Relaxed) & (compile::FAMILY_CHAT | compile::FAMILY_TIMED) == 0 {
             return;
         }
         self.note_work();
@@ -546,15 +573,53 @@ impl Engine {
             }
             return;
         }
-        let Some(facts) = facts::from_chat(msg) else { return };
+        let Some(mut facts) = facts::from_chat(msg) else { return };
         if !guards::row_fresh(&facts, dropped, now_ms()) {
             return;
+        }
+        // "Messages since" counts other people's live lines (not yours, alts,
+        // known bots or backfill; `row_fresh` removed backfill, `is_mine`
+        // returned above).
+        if self.families.load(Ordering::Relaxed) & compile::FAMILY_TIMED != 0 && !facts.shared_partner && !sn_mention_rule::judge::is_known_bot(&facts.user_login, &facts.user_name.to_lowercase()) {
+            self.counters.bump(&facts.channel_key);
+        }
+        if compiled.expressions {
+            facts.message = Some(Arc::new(msg.clone()));
         }
         let now = self.now();
         if lock(&self.guards).is_echo(&facts.channel_key, &facts.text, now) {
             return;
         }
         self.admit(&compiled, Arc::new(facts), now);
+    }
+
+    /// A whisper to `owner_id` (called by `whisper_inbox::record_incoming`,
+    /// the only caller of the socket's whisper handler; never blocks filing):
+    /// the gates and the admission run on the engine's spawner (`Engine::spawn`,
+    /// S7.3a: Tauri's runtime in the app, the test's own in tests).
+    pub fn on_whisper(self: &Arc<Self>, owner_id: &str, ev: &crate::services::whisper_service::WhisperEvent, twitch_ms: i64) {
+        let Some((compiled, facts, wall)) = self.whisper_inputs(owner_id, ev) else { return };
+        let engine = self.clone();
+        self.spawn(async move { timed::admit_whisper_now(&engine, &compiled, facts, twitch_ms, wall).await });
+    }
+
+    /// The same, awaited (tests drive whisper admission without a sleep).
+    pub async fn on_whisper_now(self: &Arc<Self>, owner_id: &str, ev: &crate::services::whisper_service::WhisperEvent, twitch_ms: i64) {
+        let Some((compiled, facts, wall)) = self.whisper_inputs(owner_id, ev) else { return };
+        timed::admit_whisper_now(self, &compiled, facts, twitch_ms, wall).await;
+    }
+
+    fn whisper_inputs(&self, owner_id: &str, ev: &crate::services::whisper_service::WhisperEvent) -> Option<(Arc<Compiled>, Arc<Facts>, i64)> {
+        if self.families.load(Ordering::Relaxed) & compile::FAMILY_WHISPER == 0 {
+            return None;
+        }
+        self.note_work();
+        if !self.foreground() {
+            return None;
+        }
+        let facts = Arc::new(facts::from_whisper(owner_id, &ev.whisper_id, &ev.from_user_id, &ev.from_user_login, &ev.from_user_name, &ev.text, now_ms()));
+        let wall = crate::services::whisper_sync::twitch_now(chrono::Utc::now().timestamp_millis());
+        Some((self.compiled(), facts, wall))
     }
 
     /// Match one row against every rule it can reach and admit each that fired.
@@ -1110,6 +1175,8 @@ impl Engine {
             files.write(ACTIVITY_FILE, &text);
         }
         self.save_pending();
+        crate::services::whisper_recipients::flush();
+        self.logfile.flush();
     }
 
     /// Rename this device; other devices see it when they lose a claim.
@@ -1186,9 +1253,11 @@ pub fn init(app: &AppHandle) {
         spawn,
     });
     engine.restore_files();
+    crate::services::whisper_recipients::ensure_loaded();
     if ENGINE.set(engine.clone()).is_err() {
         return;
     }
+    timed::start(&engine);
     // Runs for the app's life; its stop handle is not needed.
     let _ = reconcile::spawn(engine, refresh_rx);
 }
@@ -1308,6 +1377,10 @@ pub fn note_window_claim(channel: &str) {
 
 pub(crate) fn note_window_claim_on(engine: &Engine, channel: &str) {
     let key = channel.trim_start_matches('#').to_lowercase();
+    // A window opened this chat: the Delay trigger counts from now (steady `engine.now()`
+    // for the deadline, wall ms for the id `fired_for` keeps). Kept until the tick finds
+    // no window holding the chat; never drained by reconcile.
+    engine.chat_joins.note(&key, engine.now(), now_ms());
     let mut rec = lock(&engine.rec);
     if !rec.adopted.contains_key(&key) {
         return;
@@ -1315,6 +1388,18 @@ pub(crate) fn note_window_claim_on(engine: &Engine, channel: &str) {
     rec.window_claims.insert(key, now_ms());
     drop(rec);
     engine.request_refresh();
+}
+
+/// The last window let go of `channel`: its Delay join is gone (a window that opens it
+/// again is a new join).
+pub fn note_window_release(channel: &str) {
+    if let Some(engine) = ENGINE.get() {
+        note_window_release_on(engine, channel);
+    }
+}
+
+pub(crate) fn note_window_release_on(engine: &Engine, channel: &str) {
+    engine.chat_joins.forget(channel);
 }
 
 /// Before the account door removes `id`: stop its jobs and hold its rules

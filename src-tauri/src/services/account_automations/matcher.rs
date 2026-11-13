@@ -147,7 +147,7 @@ fn check_rule(cr: &CompiledRule, facts: &Facts, ctx: &Ctx, run: &mut Run) {
     ) {
         return;
     }
-    if facts.kind != RowKind::Badge {
+    if matches!(facts.kind, RowKind::Message | RowKind::Notice) {
         let partner_ok = !facts.shared_partner || rule.only_if.shared_chat;
         if !run.check(
             "Shared Chat",
@@ -191,6 +191,19 @@ fn check_rule(cr: &CompiledRule, facts: &Facts, ctx: &Ctx, run: &mut Run) {
         ) {
             return;
         }
+    }
+    if let (Some(program), Some(message)) = (&cr.filter, &facts.message) {
+        let mentioned = cr.owner_login.is_empty() == false && mentions_login(&facts.text, &cr.owner_login);
+        if !run.check(
+            "Expression",
+            program.matches(message, mentioned),
+            || "The expression holds".to_string(),
+            || "The expression doesn't hold".to_string(),
+        ) {
+            return;
+        }
+    } else if cr.filter.is_some() && run.trace {
+        run.v.trace.push(Trace { step: "Expression", ok: true, detail: "Checked on a real chat row".to_string() });
     }
     if rule.only_if.only_away
         && !run.check(
@@ -290,6 +303,23 @@ fn trigger_fit(cr: &CompiledRule, facts: &Facts) -> Result<&'static str, String>
             Some(_) => Err("Not the badge news this rule posts".to_string()),
             None => Err("Not a badge drop".to_string()),
         },
+        Trigger::Whisper { text } => {
+            if facts.kind != RowKind::Whisper {
+                return Err("Not a whisper".to_string());
+            }
+            match text.as_ref().filter(|t| !t.pattern.trim().is_empty()) {
+                None => Ok("A whisper"),
+                Some(_) if cr.test.matches(facts) => Ok("The whisper matches"),
+                Some(_) => Err("The whisper doesn't match".to_string()),
+            }
+        }
+        Trigger::Timer { .. } | Trigger::Clock { .. } | Trigger::Uptime { .. } | Trigger::Delay { .. } => {
+            if facts.kind == RowKind::Timed {
+                Ok("Its time")
+            } else {
+                Err("Not a timed fire".to_string())
+            }
+        }
     }
 }
 

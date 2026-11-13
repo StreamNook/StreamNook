@@ -36,6 +36,11 @@ use crate::services::twitch_service::{self, TokenError, TwitchService};
 
 pub use super::verify::{TokenRefusal, VerifiedToken};
 use super::verify::{BoxFuture, Fetch, Identity, TokenVerifier, Validation, VerifyIo};
+use crate::services::twitch_service::{door_outcome, search_outcome, DoorOutcome, SearchFail};
+use crate::services::whisper_send::Outcome as WhisperOutcome;
+
+/// The Helix origin the real doors use (tests pass a fake server's).
+pub const HELIX_BASE: &str = "https://api.twitch.tv";
 
 /// The streamnook.app path every claim and release goes to.
 pub const CLAIM_PATH: &str = "/api/v1/automations/claim";
@@ -74,6 +79,14 @@ pub trait Outward: Send + Sync {
     fn primary_id(&self) -> Option<String>;
     /// The account generation (moves on every sign-in, switch and sign-out).
     fn account_generation(&self) -> u64;
+    fn command_doors(&self) -> &dyn CommandDoors;
+    fn mod_doors(&self) -> &dyn ModDoors;
+    fn whisper_door(&self) -> &dyn WhisperDoor;
+    /// Twitch refused a token (a 401 from a door or a read): its cached owner
+    /// goes (hashed through the verifier's own `token_hash`).
+    fn drop_token(&self, token: &VerifiedToken);
+    /// The account's failure is remembered for a minute.
+    fn record_send_401(&self, account_id: &str);
     /// The Twitch user id of the channel `login`.
     async fn room_id(&self, login: &str) -> Result<String, String>;
     /// Send one chat message on its booked ticket. The ticket is settled
@@ -86,16 +99,182 @@ pub trait Outward: Send + Sync {
     async fn claim_post(&self, bearer: &str, owner_id: &str, body: &Value) -> Result<ApiResponse, String>;
 }
 
+/// The Command action's typed Helix doors (D282, D290, D291). Exactly four
+/// methods: a fake implements these and nothing else, so a new door is a
+/// compile error in the test. The real implementation panics under
+/// `cfg(test)`; each of its methods is one line, `door_outcome(&twin(..).await)`
+/// or `search_outcome(twin(..).await)`.
+#[async_trait]
+pub trait CommandDoors: Send + Sync {
+    /// `PATCH /chat/settings` as `moderator_id`.
+    async fn chat_settings(&self, token: &str, moderator_id: &str, room: &str, settings: &Value) -> DoorOutcome;
+    /// `POST /streams/markers` (`broadcaster_id` is the room).
+    async fn marker(&self, token: &str, broadcaster_id: &str, description: Option<&str>) -> DoorOutcome;
+    /// `PATCH /channels` with one of `title` or `game_id`.
+    async fn channel_info(&self, token: &str, broadcaster_id: &str, title: Option<&str>, game_id: Option<&str>) -> DoorOutcome;
+    /// The `SetGame` read (exact name first, fuzzy only when needed).
+    async fn search_categories(&self, token: &str, query: &str) -> Result<Vec<Value>, SearchFail>;
+}
+
+/// The moderation, Pin, Announce and Shoutout doors, with the verified token
+/// and `moderator_id = VerifiedToken.user_id`. Real impl panics under `cfg(test)`.
+#[async_trait]
+pub trait ModDoors: Send + Sync {
+    async fn timeout(&self, token: &str, moderator_id: &str, room: &str, target: &str, seconds: u32, reason: Option<&str>) -> DoorOutcome;
+    async fn delete(&self, token: &str, moderator_id: &str, room: &str, message_id: &str) -> DoorOutcome;
+    async fn pin(&self, token: &str, moderator_id: &str, room: &str, message_id: &str, seconds: Option<u32>) -> DoorOutcome;
+    /// On the engine client; Announce keeps its ticketed `post:` booking.
+    async fn announce(&self, token: &str, moderator_id: &str, room: &str, text: &str, color: &str) -> DoorOutcome;
+    async fn shoutout(&self, token: &str, moderator_id: &str, room: &str, target: &str) -> DoorOutcome;
+}
+
+/// The whisper door: `whisper_send::send_in_classified` for the owner's
+/// scope. `Err(text)` is a refusal before any Helix call.
+#[async_trait]
+pub trait WhisperDoor: Send + Sync {
+    /// Whether this account's whisper store knows `user_id` (`whisper_store::knows`).
+    async fn knows(&self, owner_id: &str, user_id: &str) -> bool;
+    /// Send as `send_as` to `to` (`expect_owner: Some(send_as)`, `by_automation: true`).
+    async fn send(&self, send_as: &str, to: &WhisperTo, text: &str) -> (Result<(), String>, WhisperOutcome);
+    /// The account's whole whisper list is read (`whisper_store::history_complete`): a "no"
+    /// from `knows` is then final; before it the rule reads "Waiting for your whisper history".
+    async fn history_complete(&self, owner_id: &str) -> bool;
+}
+
+/// A whisper's addressee.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WhisperTo {
+    pub user_id: String,
+    pub login: String,
+    pub name: String,
+}
+
 /// The door the running app uses. It holds the engine's token verifier;
 /// every other read goes to the service that owns it.
 pub struct RealOutward {
     verifier: TokenVerifier,
+    commands: RealCommandDoors,
+    mods: RealModDoors,
+    whispers: RealWhisperDoor,
 }
 
 impl RealOutward {
     /// `runtime` is where each validate runs as its own task.
     pub fn new(runtime: tokio::runtime::Handle) -> RealOutward {
-        RealOutward { verifier: TokenVerifier::new(real_verify_io(runtime)) }
+        RealOutward {
+            verifier: TokenVerifier::new(real_verify_io(runtime)),
+            commands: RealCommandDoors,
+            mods: RealModDoors,
+            whispers: RealWhisperDoor,
+        }
+    }
+}
+
+/// The real doors: one line each, behind `real_only()` (they panic under `cfg(test)`).
+pub struct RealCommandDoors;
+pub struct RealModDoors;
+pub struct RealWhisperDoor;
+
+fn engine_http() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| crate::services::chat_service::engine_client(crate::services::chat_service::ENGINE_CONNECT_TIMEOUT, crate::services::chat_send_limiter::ENGINE_SEND_TIMEOUT))
+}
+
+#[async_trait]
+impl CommandDoors for RealCommandDoors {
+    async fn chat_settings(&self, token: &str, moderator_id: &str, room: &str, settings: &Value) -> DoorOutcome {
+        real_only();
+        door_outcome(&TwitchService::update_chat_settings_engine(engine_http(), HELIX_BASE, token, moderator_id, room, settings).await)
+    }
+    async fn marker(&self, token: &str, broadcaster_id: &str, description: Option<&str>) -> DoorOutcome {
+        real_only();
+        door_outcome(&TwitchService::create_stream_marker_engine(engine_http(), HELIX_BASE, token, broadcaster_id, description).await)
+    }
+    async fn channel_info(&self, token: &str, broadcaster_id: &str, title: Option<&str>, game_id: Option<&str>) -> DoorOutcome {
+        real_only();
+        door_outcome(&TwitchService::modify_channel_info_engine(engine_http(), HELIX_BASE, token, broadcaster_id, title, game_id).await)
+    }
+    async fn search_categories(&self, token: &str, query: &str) -> Result<Vec<Value>, SearchFail> {
+        real_only();
+        search_outcome(TwitchService::search_categories_engine(engine_http(), HELIX_BASE, token, query).await)
+    }
+}
+
+#[async_trait]
+impl ModDoors for RealModDoors {
+    async fn timeout(&self, token: &str, moderator_id: &str, room: &str, target: &str, seconds: u32, reason: Option<&str>) -> DoorOutcome {
+        real_only();
+        let req = crate::services::moderation::ModRequest {
+            provider: None,
+            broadcaster_id: Some(room.to_string()),
+            channel: None,
+            target_user_id: Some(target.to_string()),
+            target_name: None,
+            action: crate::services::moderation::ModAction::Timeout { seconds },
+            reason: reason.map(str::to_string),
+            use_saved_reason: false,
+            typed: None,
+            one_press: false,
+        };
+        door_outcome(&crate::services::moderation::moderate_token_bound(engine_http(), HELIX_BASE, token, moderator_id, &req).await)
+    }
+    async fn delete(&self, token: &str, moderator_id: &str, room: &str, message_id: &str) -> DoorOutcome {
+        real_only();
+        let req = crate::services::moderation::ModRequest {
+            provider: None,
+            broadcaster_id: Some(room.to_string()),
+            channel: None,
+            target_user_id: None,
+            target_name: None,
+            action: crate::services::moderation::ModAction::Delete { message_id: message_id.to_string() },
+            reason: None,
+            use_saved_reason: false,
+            typed: None,
+            one_press: false,
+        };
+        door_outcome(&crate::services::moderation::moderate_token_bound(engine_http(), HELIX_BASE, token, moderator_id, &req).await)
+    }
+    async fn pin(&self, token: &str, moderator_id: &str, room: &str, message_id: &str, seconds: Option<u32>) -> DoorOutcome {
+        real_only();
+        door_outcome(&TwitchService::pin_chat_message_engine(engine_http(), HELIX_BASE, token, moderator_id, room, message_id, seconds).await)
+    }
+    async fn announce(&self, token: &str, moderator_id: &str, room: &str, text: &str, color: &str) -> DoorOutcome {
+        real_only();
+        door_outcome(&TwitchService::send_chat_announcement_engine(engine_http(), HELIX_BASE, token, moderator_id, room, text, Some(color)).await)
+    }
+    async fn shoutout(&self, token: &str, moderator_id: &str, room: &str, target: &str) -> DoorOutcome {
+        real_only();
+        door_outcome(&TwitchService::send_shoutout_engine(engine_http(), HELIX_BASE, token, moderator_id, room, target).await)
+    }
+}
+
+#[async_trait]
+impl WhisperDoor for RealWhisperDoor {
+    async fn knows(&self, owner_id: &str, user_id: &str) -> bool {
+        real_only();
+        match crate::services::whisper_sync::current_scope() {
+            Some(scope) if scope.owner == owner_id => crate::services::whisper_store::knows(&scope, user_id),
+            _ => false,
+        }
+    }
+    async fn send(&self, send_as: &str, to: &WhisperTo, text: &str) -> (Result<(), String>, WhisperOutcome) {
+        real_only();
+        use crate::services::whisper_send::{send_in_classified, HelixWhispers, SendTarget};
+        use crate::services::whisper_sync::{SystemClock, TokioSleeper};
+        let Some(scope) = crate::services::whisper_sync::current_scope() else {
+            return (Err("You are not signed in to Twitch.".into()), WhisperOutcome::Refused("You are not signed in to Twitch.".into()));
+        };
+        let target = SendTarget { key: to.user_id.clone(), user_id: to.user_id.clone(), user_login: to.login.clone(), user_name: to.name.clone(), profile_image_url: None };
+        let (result, outcome) =
+            send_in_classified(&scope, &HelixWhispers, &SystemClock, &TokioSleeper, target, text.to_string(), Some(send_as.to_string()), None, true, true).await;
+        (result.map(|_| ()), outcome)
+    }
+    async fn history_complete(&self, owner_id: &str) -> bool {
+        real_only();
+        match crate::services::whisper_sync::current_scope() {
+            Some(scope) if scope.owner == owner_id => crate::services::whisper_store::history_complete(&scope),
+            _ => false,
+        }
     }
 }
 
@@ -232,6 +411,26 @@ impl Outward for RealOutward {
         TwitchService::account_generation()
     }
 
+    fn command_doors(&self) -> &dyn CommandDoors {
+        &self.commands
+    }
+
+    fn mod_doors(&self) -> &dyn ModDoors {
+        &self.mods
+    }
+
+    fn whisper_door(&self) -> &dyn WhisperDoor {
+        &self.whispers
+    }
+
+    fn drop_token(&self, token: &VerifiedToken) {
+        self.verifier.drop_token_of(&token.token);
+    }
+
+    fn record_send_401(&self, account_id: &str) {
+        self.verifier.record_send_401(account_id);
+    }
+
     async fn room_id(&self, login: &str) -> Result<String, String> {
         real_only();
         if let Some(id) = crate::services::chat_send_limiter::room_id_of(login) {
@@ -283,6 +482,57 @@ mod tests {
         }
     }
 
+    /// The doors the module's own fake hands out: none of them is ever called.
+    struct NoDoors;
+
+    #[async_trait]
+    impl CommandDoors for NoDoors {
+        async fn chat_settings(&self, _token: &str, _moderator_id: &str, _room: &str, _settings: &Value) -> DoorOutcome {
+            unreachable!("tests use a fake")
+        }
+        async fn marker(&self, _token: &str, _broadcaster_id: &str, _description: Option<&str>) -> DoorOutcome {
+            unreachable!("tests use a fake")
+        }
+        async fn channel_info(&self, _token: &str, _broadcaster_id: &str, _title: Option<&str>, _game_id: Option<&str>) -> DoorOutcome {
+            unreachable!("tests use a fake")
+        }
+        async fn search_categories(&self, _token: &str, _query: &str) -> Result<Vec<Value>, SearchFail> {
+            unreachable!("tests use a fake")
+        }
+    }
+
+    #[async_trait]
+    impl ModDoors for NoDoors {
+        async fn timeout(&self, _token: &str, _moderator_id: &str, _room: &str, _target: &str, _seconds: u32, _reason: Option<&str>) -> DoorOutcome {
+            unreachable!("tests use a fake")
+        }
+        async fn delete(&self, _token: &str, _moderator_id: &str, _room: &str, _message_id: &str) -> DoorOutcome {
+            unreachable!("tests use a fake")
+        }
+        async fn pin(&self, _token: &str, _moderator_id: &str, _room: &str, _message_id: &str, _seconds: Option<u32>) -> DoorOutcome {
+            unreachable!("tests use a fake")
+        }
+        async fn announce(&self, _token: &str, _moderator_id: &str, _room: &str, _text: &str, _color: &str) -> DoorOutcome {
+            unreachable!("tests use a fake")
+        }
+        async fn shoutout(&self, _token: &str, _moderator_id: &str, _room: &str, _target: &str) -> DoorOutcome {
+            unreachable!("tests use a fake")
+        }
+    }
+
+    #[async_trait]
+    impl WhisperDoor for NoDoors {
+        async fn knows(&self, _owner_id: &str, _user_id: &str) -> bool {
+            unreachable!("tests use a fake")
+        }
+        async fn send(&self, _send_as: &str, _to: &WhisperTo, _text: &str) -> (Result<(), String>, WhisperOutcome) {
+            unreachable!("tests use a fake")
+        }
+        async fn history_complete(&self, _owner_id: &str) -> bool {
+            unreachable!("tests use a fake")
+        }
+    }
+
     struct Fake {
         verifier: TokenVerifier,
     }
@@ -312,6 +562,21 @@ mod tests {
         }
         fn account_generation(&self) -> u64 {
             1
+        }
+        fn command_doors(&self) -> &dyn CommandDoors {
+            &NoDoors
+        }
+        fn mod_doors(&self) -> &dyn ModDoors {
+            &NoDoors
+        }
+        fn whisper_door(&self) -> &dyn WhisperDoor {
+            &NoDoors
+        }
+        fn drop_token(&self, token: &VerifiedToken) {
+            self.verifier.drop_token_of(&token.token);
+        }
+        fn record_send_401(&self, account_id: &str) {
+            self.verifier.record_send_401(account_id);
         }
         async fn room_id(&self, _login: &str) -> Result<String, String> {
             Ok("42".into())
@@ -353,6 +618,61 @@ mod tests {
     #[should_panic(expected = "tests use a fake")]
     async fn the_real_token_read_panics_in_tests() {
         let _ = real().verified_token("1", Duration::from_secs(1)).await;
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "tests use a fake")]
+    async fn the_real_command_door_panics_in_tests() {
+        let _ = RealCommandDoors.search_categories("token", "art").await;
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "tests use a fake")]
+    async fn the_real_mod_door_panics_in_tests() {
+        let _ = RealModDoors.shoutout("token", "1", "2", "3").await;
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "tests use a fake")]
+    async fn the_real_whisper_door_panics_in_tests() {
+        let _ = RealWhisperDoor.knows("1", "2").await;
+    }
+
+    /// The body of `fn name` in `impl` text starting at `from`: up to the next `fn ` or `}` at the impl's indent.
+    fn body_of<'a>(src: &'a str, from: &str, name: &str) -> &'a str {
+        let start = src.find(from).expect("the impl exists");
+        let rest = &src[start..];
+        let at = rest.find(&format!("fn {name}(")).expect("the method exists");
+        let rest = &rest[at..];
+        let end = rest.find("\n    }\n").expect("the method ends");
+        &rest[..end]
+    }
+
+    #[test]
+    fn each_real_door_is_one_line() {
+        let src = include_str!("outward.rs");
+        for (from, names) in [
+            ("impl CommandDoors for RealCommandDoors", vec!["chat_settings", "marker", "channel_info", "search_categories"]),
+            ("impl ModDoors for RealModDoors", vec!["timeout", "delete", "pin", "announce", "shoutout"]),
+        ] {
+            for name in names {
+                let body = body_of(src, from, name);
+                let calls = body.matches("door_outcome(").count() + body.matches("search_outcome(").count();
+                assert_eq!(calls, 1, "{name}: one outcome mapping");
+                assert_eq!(body.matches(".await").count(), 1, "{name}: one request and no other await");
+            }
+        }
+    }
+
+    #[test]
+    fn real_401_upkeep_is_one_line() {
+        let src = include_str!("outward.rs");
+        let drop = body_of(src, "impl Outward for RealOutward", "drop_token");
+        assert_eq!(drop.matches("self.verifier.").count(), 1, "{drop}");
+        assert_eq!(drop.lines().count(), 2, "signature and one delegation, nothing else");
+        let seen = body_of(src, "impl Outward for RealOutward", "record_send_401");
+        assert_eq!(seen.matches("self.verifier.").count(), 1, "{seen}");
+        assert_eq!(seen.lines().count(), 2);
     }
 
     #[test]
