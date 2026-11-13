@@ -23,7 +23,8 @@ use sha2::{Digest, Sha256};
 use super::badges::BadgePhase;
 use super::facts::{fold, nfc, Facts, RowKind};
 use crate::models::automations::{
-    placeholders, Action, AutomationPrefs, EventKind, Line, MatchMode, Rule, TextMatch, Trigger,
+    placeholders, provider_of_key, AccountRef, Action, AutomationPrefs, EventKind, Line, MatchMode, Rule, TextMatch,
+    Trigger,
 };
 
 /// Every plain key and family: a kind of 1 to 16 lowercase letters or `_`, a
@@ -38,6 +39,8 @@ pub const CONV_LIMIT: u32 = 3;
 pub const CONV_PERIOD_S: u32 = 300;
 /// The pace rail's period.
 pub const PACE_PERIOD_S: u32 = 60;
+/// The window of a Kick event's claim (the event has no id another device shares).
+pub const KICK_EVENT_WINDOW_S: u32 = 60;
 /// The longest a winner may take to send: the longest rule wait plus 5 s.
 pub const MAX_SETTLE_MS: u32 = 135_000;
 /// The longest window a windowed element carries (30 days).
@@ -80,6 +83,36 @@ pub fn new_session() -> String {
 /// the device id.
 pub fn device_hash(device_id: &str) -> String {
     hash16(device_id)
+}
+
+/// A platform's id as a key part: a Twitch id stays bare (so P1's keys do not
+/// change), every other platform's carries its name, so a Kick id equal to a
+/// Twitch id never shares a class or a rail (D278, D289).
+pub fn pfx(provider: &str, id: &str) -> String {
+    match provider.trim().to_ascii_lowercase().as_str() {
+        "" | "twitch" => id.to_string(),
+        other => format!("{other}:{id}"),
+    }
+}
+
+/// An account as a key part: `pfx` of its provider and id.
+pub fn account_key(account: &AccountRef) -> String {
+    pfx(&account.provider, &account.id)
+}
+
+/// The chatter on the rule's platform, as a key part.
+fn person_of(rule: &Rule, person: &str) -> String {
+    pfx(&rule.send_as.provider, person)
+}
+
+/// The room of the sending account's own channel: the owner's room id on
+/// Twitch, `kick:<the Kick account's id>` on Kick (a Kick channel's broadcaster
+/// id is the account's id).
+fn own_room(rule: &Rule) -> String {
+    match rule.send_as.provider.trim().to_ascii_lowercase().as_str() {
+        "" | "twitch" => rule.owner.id.clone(),
+        _ => account_key(&rule.send_as),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -304,7 +337,9 @@ pub fn classes_for(rule: &Rule, event_room: &str) -> (Vec<ClassPlan>, Vec<(usize
                     skipped.push((index, NO_ROOM));
                     continue;
                 }
-                (room.to_string(), room == event_room && names_person(texts))
+                let room = pfx(provider_of_key(&chat.key), room);
+                let same = room == event_room;
+                (room, same && names_person(texts))
             }
             Action::Notify { .. }
             | Action::Log { .. }
@@ -403,6 +438,13 @@ pub fn event_word(kind: EventKind) -> &'static str {
         EventKind::Raid => "raid",
         EventKind::Cheer => "cheer",
         EventKind::Announcement => "announcement",
+        EventKind::SuperChat => "super_chat",
+        EventKind::SuperSticker => "super_sticker",
+        EventKind::Membership => "membership",
+        EventKind::MemberGift => "member_gift",
+        EventKind::TikTokGift => "tiktok_gift",
+        EventKind::TikTokFollow => "tiktok_follow",
+        EventKind::TikTokShare => "tiktok_share",
     }
 }
 
@@ -431,7 +473,14 @@ pub fn trigger_family(when: &Trigger, facts: &Facts) -> Option<String> {
         Trigger::Message { text } => format!("message:{}", message_part(text)),
         Trigger::Mention { .. } => "mention:".to_string(),
         Trigger::FirstMessage {} => "first_message:".to_string(),
-        Trigger::ChannelEvent { .. } => format!("channel_event:{}", event_word(facts.event.as_ref()?.kind)),
+        Trigger::ChannelEvent { .. } => {
+            let word = event_word(facts.event.as_ref()?.kind);
+            if facts.event_key.starts_with("kick_evt:") {
+                format!("kick_evt:{word}")
+            } else {
+                format!("channel_event:{word}")
+            }
+        }
         Trigger::BadgeDrop { .. } => "badge:".to_string(),
         Trigger::Whisper { .. } => "whisper:".to_string(),
         Trigger::Timer { .. } => "timer:".to_string(),
@@ -576,11 +625,11 @@ pub fn settle_ms(rule: &Rule) -> u32 {
     ((rule.limits.max_wait_seconds.min(130) + 5) * 1000).min(MAX_SETTLE_MS)
 }
 
-fn send_as_id(rule: &Rule) -> &str {
+fn account_of(rule: &Rule) -> String {
     if rule.send_as.id.trim().is_empty() {
-        &rule.owner.id
+        account_key(&rule.owner)
     } else {
-        &rule.send_as.id
+        account_key(&rule.send_as)
     }
 }
 
@@ -633,11 +682,14 @@ pub fn class_elements(input: &CallInput) -> Result<Vec<Element>, &'static str> {
     let mut out = Vec::new();
     let (mode, window_s) = event_mode(&input.rule.when);
     for key in input.event_keys {
+        // A Kick event has no id another device shares: its key names the
+        // event's own words and is claimed once a window.
+        let windowed = key.starts_with("kick_evt:");
         out.push(Element::Event {
             key: key.clone(),
             family: input.family.to_string(),
-            mode,
-            window_s,
+            mode: if windowed { KeyMode::Windowed } else { mode },
+            window_s: if windowed { Some(KICK_EVENT_WINDOW_S) } else { window_s },
             sends: if badge { 0 } else { sends },
             to_person,
             settle_ms: settle,
@@ -647,7 +699,7 @@ pub fn class_elements(input: &CallInput) -> Result<Vec<Element>, &'static str> {
         out.push(Element::Batch { sends: 1 });
     }
     if let Some(room) = input.plan.class.room_id() {
-        if room != rule.owner.id {
+        if room != own_room(rule).as_str() {
             out.push(Element::Windowed {
                 key: gap_key(room),
                 family: rail_family("gap"),
@@ -667,14 +719,14 @@ pub fn class_elements(input: &CallInput) -> Result<Vec<Element>, &'static str> {
     if let Some(person) = person {
         if user_cd > 0 {
             out.push(Element::Windowed {
-                key: person_key(input.family, send_as_id(rule), person),
+                key: person_key(input.family, &account_of(rule), &person_of(rule, person)),
                 family: rail_family("person"),
                 window_s: user_cd,
             });
         }
         if to_person {
             out.push(Element::Counted {
-                key: conv_key(send_as_id(rule), person),
+                key: conv_key(&account_of(rule), &person_of(rule, person)),
                 family: rail_family("conv"),
                 limit: CONV_LIMIT,
                 period_s: CONV_PERIOD_S,
@@ -833,6 +885,134 @@ mod tests {
             assert_plain(&event_family(&trigger, &class));
             assert_plain(&facts.event_key);
         }
+    }
+
+    fn platform_rule(provider: &str, send_as_id: &str) -> Rule {
+        Rule::from_value(&serde_json::json!({
+            "id": "r-000000000001", "name": "Kick", "enabled": true, "live": true,
+            "owner": { "provider": "twitch", "id": "100", "login": "me", "name": "Me" },
+            "send_as": { "provider": provider, "id": send_as_id, "login": "mykick", "name": "MyKick" },
+            "when": { "kind": "message", "text": { "mode": "contains", "pattern": "hello", "case_sensitive": false } },
+            "only_if": { "platforms": [provider], "channels": { "kind": "any_open" } },
+            "actions": [{ "kind": "reply", "id": "a-1", "texts": [{ "id": "l-1", "text": "hi" }], "pick": "random", "thread": false }],
+            "limits": { "rule_cooldown_seconds": 30, "user_cooldown_seconds": 300, "max_per_hour": 30, "max_wait_seconds": 10 }
+        }))
+        .unwrap()
+    }
+
+    fn windowed_keys(els: &[Element]) -> Vec<String> {
+        els.iter()
+            .filter_map(|e| match e {
+                Element::Windowed { key, .. } | Element::Counted { key, .. } => Some(key.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn call_for(rule: &Rule, event_room: &str, event_key: &str, person: &str) -> Vec<Element> {
+        let (plans, skipped) = classes_for(rule, event_room);
+        assert!(skipped.is_empty());
+        let prefs = AutomationPrefs::default();
+        let family = event_family("message:contains|0|5:hello", &plans[0].class);
+        let keys = vec![event_key.to_string()];
+        class_elements(&CallInput {
+            rule,
+            prefs: &prefs,
+            plan: &plans[0],
+            family: &family,
+            event_keys: &keys,
+            event_room,
+            person: Some(person),
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn a_kick_rule_prefixes_every_non_twitch_id_in_every_class_and_rail_key() {
+        let rule = platform_rule("kick", "5001");
+        assert_eq!(classes_for(&rule, "kick:5002").0[0].class.key(), "post:kick:5002");
+        let els = call_for(&rule, "kick:5002", "chat:kick:alpha:9b4c2f1e", "77");
+        let fh = hash16(&event_family("message:contains|0|5:hello", &ActionClass::Post { room_id: "kick:5002".into() }));
+        let keys = windowed_keys(&els);
+        assert!(keys.contains(&"gap:kick:5002".to_string()), "another channel's gap rail: {keys:?}");
+        assert!(keys.contains(&format!("rulecd:f:{fh}:kick:5002")), "{keys:?}");
+        assert!(keys.contains(&format!("person:f:{fh}:kick:5001:kick:77")), "{keys:?}");
+        assert!(keys.contains(&"conv:kick:5001:kick:77".to_string()), "{keys:?}");
+        assert!(keys.contains(&"pace:100".to_string()), "the pace is the owner's, a Twitch id");
+        assert!(els.iter().all(Element::plain_ok));
+        // The account's own channel (broadcaster id = account id) has no gap rail.
+        let own = call_for(&rule, "kick:5001", "chat:kick:mykick:9b4c2f1e", "77");
+        assert!(!windowed_keys(&own).iter().any(|k| k.starts_with("gap:")));
+    }
+
+    #[test]
+    fn a_kick_id_equal_to_a_twitch_id_shares_no_class_and_no_rail() {
+        let twitch = platform_rule("twitch", "5001");
+        let kick = platform_rule("kick", "5001");
+        assert_ne!(classes_for(&twitch, "5001").0[0].class.key(), classes_for(&kick, "kick:5001").0[0].class.key());
+        let a = windowed_keys(&call_for(&twitch, "5002", "chat:9b4c2f1e", "77"));
+        let b = windowed_keys(&call_for(&kick, "kick:5002", "chat:kick:alpha:9b4c2f1e", "77"));
+        for key in &a {
+            if !key.starts_with("pace:") {
+                assert!(!b.contains(key), "shared key {key}");
+            }
+        }
+        // Twitch's keys are what P1 made: bare ids.
+        assert!(a.iter().any(|k| k.ends_with(":5001:77")), "{a:?}");
+        assert!(a.contains(&"conv:5001:77".to_string()), "{a:?}");
+    }
+
+    #[test]
+    fn a_send_to_another_kick_chat_classes_by_that_chats_prefixed_room() {
+        let mut rule = platform_rule("kick", "5001");
+        rule.actions = vec![Action::Send {
+            id: "a-1".into(),
+            to: Some(crate::models::automations::ChannelRef {
+                id: "c-1".into(),
+                key: "kick:other".into(),
+                room_id: "6006".into(),
+                name: "other".into(),
+            }),
+            texts: vec![Line { id: "l-1".into(), text: "hi".into() }],
+            pick: crate::models::automations::Pick::Random,
+        }];
+        let (plans, skipped) = classes_for(&rule, "kick:5002");
+        assert!(skipped.is_empty());
+        assert_eq!(plans[0].class.key(), "post:kick:6006");
+    }
+
+    #[test]
+    fn a_kick_event_claims_a_windowed_key_and_a_twitch_event_stays_exact() {
+        let rule = platform_rule("kick", "5001");
+        let els = call_for(&rule, "kick:5002", "kick_evt:kick:alpha:sub:77:0123456789abcdef", "77");
+        assert!(matches!(
+            &els[0],
+            Element::Event { mode: KeyMode::Windowed, window_s: Some(KICK_EVENT_WINDOW_S), .. }
+        ));
+        assert!(els[0].plain_ok());
+        let chat = call_for(&rule, "kick:5002", "chat:kick:alpha:9b4c2f1e", "77");
+        assert!(matches!(&chat[0], Element::Event { mode: KeyMode::Exact, window_s: None, .. }));
+        assert_eq!(KICK_EVENT_WINDOW_S, 60);
+    }
+
+    #[test]
+    fn the_new_event_kinds_have_family_words_and_pfx_keeps_twitch_bare() {
+        for (kind, word) in [
+            (EventKind::SuperChat, "super_chat"),
+            (EventKind::SuperSticker, "super_sticker"),
+            (EventKind::Membership, "membership"),
+            (EventKind::MemberGift, "member_gift"),
+            (EventKind::TikTokGift, "tiktok_gift"),
+            (EventKind::TikTokFollow, "tiktok_follow"),
+            (EventKind::TikTokShare, "tiktok_share"),
+        ] {
+            assert_eq!(event_word(kind), word);
+            assert!(plain_ok(&format!("channel_event:{word}")));
+        }
+        assert_eq!(pfx("twitch", "100"), "100");
+        assert_eq!(pfx("", "100"), "100");
+        assert_eq!(pfx("Kick", "100"), "kick:100");
+        assert_eq!(pfx("youtube", "UCabc"), "youtube:UCabc");
     }
 
     #[test]

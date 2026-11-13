@@ -164,6 +164,8 @@ pub struct Guards {
     echo: VecDeque<(String, i64)>,
     holds: HashMap<(String, String), HoldUntil>,
     notes: HashMap<(String, String), i64>,
+    /// Kick event keys seen on this device, by when.
+    kick_events: HashMap<String, i64>,
 }
 
 impl Guards {
@@ -335,6 +337,20 @@ impl Guards {
     pub fn note_event_lost(&mut self, live: bool, admitted_at: i64) {
         let windows = if live { &mut self.live } else { &mut self.test };
         windows.add(admitted_at, -1);
+    }
+
+    /// Whether this device sees this Kick event key for the first time in 60
+    /// s. The key already holds the kind, the actor and the payload's hash, so
+    /// one frame parsed twice is one event, a real second gift is not, and
+    /// events with an empty actor and different payloads stay separate.
+    pub fn first_kick_event(&mut self, key: &str, now: i64) -> bool {
+        const WINDOW_MS: i64 = 60_000;
+        self.kick_events.retain(|_, at| now - *at < WINDOW_MS);
+        if self.kick_events.contains_key(key) {
+            return false;
+        }
+        self.kick_events.insert(key.to_string(), now);
+        true
     }
 
     /// Remember an automated send, so the same text coming back into the chat
@@ -703,6 +719,22 @@ mod tests {
             trip = trip.or(g.note_admitted(true, 10, i * 4_000));
         }
         assert_eq!(trip, Some(Trip::TurnOff));
+    }
+
+    #[test]
+    fn one_kick_event_read_twice_counts_once_and_a_second_gift_counts_again() {
+        let mut g = Guards::new();
+        let sub = "kick_evt:kick:alpha:sub:77:0123456789abcdef";
+        let gift_a = "kick_evt:kick:alpha:subgift:77:aaaaaaaaaaaaaaaa";
+        let gift_b = "kick_evt:kick:alpha:subgift:77:bbbbbbbbbbbbbbbb";
+        assert!(g.first_kick_event(sub, 1_000));
+        assert!(!g.first_kick_event(sub, 30_000), "the same frame parsed twice");
+        assert!(g.first_kick_event(gift_a, 31_000));
+        assert!(g.first_kick_event(gift_b, 32_000), "a real second gift by the same gifter has its own payload");
+        assert!(g.first_kick_event(sub, 61_001), "after 60 s the same words are a new event");
+        let nobody_a = "kick_evt:kick:alpha:subgift:-:aaaaaaaaaaaaaaaa";
+        let nobody_b = "kick_evt:kick:alpha:subgift:-:bbbbbbbbbbbbbbbb";
+        assert!(g.first_kick_event(nobody_a, 70_000) && g.first_kick_event(nobody_b, 70_001), "empty actors do not collapse");
     }
 
     #[test]

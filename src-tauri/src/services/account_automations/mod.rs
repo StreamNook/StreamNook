@@ -29,6 +29,7 @@ pub mod matcher;
 pub mod notify;
 pub mod outward;
 pub mod own_topics;
+pub mod provider_facts;
 pub mod reconcile;
 pub mod speak;
 pub mod store;
@@ -58,6 +59,7 @@ use self::activity::{Entry, EntryKind, Filter, Log, NewEntry};
 use self::badges::{BadgeSeen, Batch, LinkStep, LinkWait, Pending};
 use self::claim_client::{ClaimClient, ClaimTimings};
 use self::compile::{CompileInput, Compiled, Mode};
+use self::provider_facts::PlatformId;
 use self::counts::Counts;
 use self::executor::{Executor, Job};
 use self::facts::Facts;
@@ -339,6 +341,15 @@ pub struct RuleStatus {
     pub last_outcome: Option<String>,
 }
 
+/// An account on another platform the editor offers to send as: the
+/// connected Kick account (YouTube and TikTok rules do not post).
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct PlatformAccount {
+    pub provider: String,
+    pub id: String,
+    pub login: String,
+}
+
 /// An account the pickers offer.
 #[derive(Serialize, Clone, Debug, PartialEq)]
 pub struct AccountChoice {
@@ -371,6 +382,8 @@ pub struct StatusSnapshot {
     /// streamnook.app asked the app to slow down.
     pub busy: bool,
     pub accounts: Vec<AccountChoice>,
+    /// The connected Kick account, for a Kick rule's Send as.
+    pub platform_accounts: Vec<PlatformAccount>,
     /// This device runs rules right now.
     pub foreground: bool,
 }
@@ -523,6 +536,27 @@ impl Engine {
         read(&self.main)
     }
 
+    /// Who you are on each other platform (Kick, YouTube, TikTok): local
+    /// reads, so a compile never waits on a network.
+    pub(crate) fn platform_ids(&self) -> Vec<PlatformId> {
+        [provider_facts::KICK, provider_facts::YOUTUBE, provider_facts::TIKTOK]
+            .into_iter()
+            .filter_map(|provider| {
+                self.outward
+                    .platform_identity(provider)
+                    .map(|(id, login)| PlatformId { provider: provider.to_string(), id, login })
+            })
+            .collect()
+    }
+
+    /// The accounts the editor offers to send as on another platform: the
+    /// connected Kick account.
+    pub(crate) fn platform_accounts(&self) -> Vec<PlatformAccount> {
+        let Some(id) = self.outward.kick_account_id() else { return Vec::new() };
+        let login = self.outward.platform_identity(provider_facts::KICK).map(|(_, login)| login).unwrap_or_default();
+        vec![PlatformAccount { provider: provider_facts::KICK.to_string(), id, login }]
+    }
+
     /// Compile the rules from the live settings and your accounts, publish
     /// them, and answer them. Reconcile is the only caller in the app. The
     /// accounts are the registry's and the profile's, both local reads: a
@@ -533,13 +567,16 @@ impl Engine {
         write(&self.main, self.outward.primary_id());
         let primary = read(&self.main);
         let (automations, prefs) = self.local.settings();
-        let compiled = Arc::new(compile::compile(&CompileInput {
-            automations: &automations,
-            prefs: &prefs,
-            own_accounts: &own,
-            profile_user_id: profile.as_deref(),
-            primary_id: primary.as_deref(),
-        }));
+        let compiled = Arc::new(compile::compile_with(
+            &CompileInput {
+                automations: &automations,
+                prefs: &prefs,
+                own_accounts: &own,
+                profile_user_id: profile.as_deref(),
+                primary_id: primary.as_deref(),
+            },
+            &self.platform_ids(),
+        ));
         write(&self.away, automations.away.clone());
         self.run.store(run_code(automations.run), Ordering::SeqCst);
         write(&self.compiled, compiled.clone());
@@ -583,19 +620,27 @@ impl Engine {
             return;
         }
         self.note_work();
-        if !self.foreground() || msg.provider != "twitch" {
+        if !self.foreground() {
             return;
         }
         let compiled = self.compiled();
-        if compiled.is_mine(&msg.user_id) {
-            if self.main_id().as_deref() != Some(msg.user_id.as_str()) {
-                let badges = msg.tags.get("badges").map(String::as_str).unwrap_or("");
-                crate::services::chat_send_limiter::note_alt_badges(&msg.user_id, &msg.channel, badges);
+        if msg.provider == "twitch" {
+            if compiled.is_mine(&msg.user_id) {
+                if self.main_id().as_deref() != Some(msg.user_id.as_str()) {
+                    let badges = msg.tags.get("badges").map(String::as_str).unwrap_or("");
+                    crate::services::chat_send_limiter::note_alt_badges(&msg.user_id, &msg.channel, badges);
+                }
+                return;
             }
+        } else if !self.provider_row_ok(&compiled, msg) {
             return;
         }
         let Some(mut facts) = facts::from_chat(msg) else { return };
         if !guards::row_fresh(&facts, dropped, now_ms()) {
+            return;
+        }
+        // A Kick event has no shared id: one device that reads one frame twice answers once.
+        if facts.event_key.starts_with("kick_evt:") && !lock(&self.guards).first_kick_event(&facts.event_key, self.now()) {
             return;
         }
         // "Messages since" counts other people's live lines (not yours, alts,
@@ -641,6 +686,17 @@ impl Engine {
         let facts = Arc::new(facts::from_whisper(owner_id, &ev.whisper_id, &ev.from_user_id, &ev.from_user_login, &ev.from_user_name, &ev.text, now_ms()));
         let wall = crate::services::whisper_sync::twitch_now(chrono::Utc::now().timestamp_millis());
         Some((self.compiled(), facts, wall))
+    }
+
+    /// A row of another platform may fire rules only when it is a platform
+    /// the engine reads, you are signed in there (without it your own
+    /// messages cannot be told from anyone's), and it is not yours. Your
+    /// ids on that platform are the per-provider set, never the Twitch one.
+    fn provider_row_ok(&self, compiled: &Compiled, msg: &ChatMessage) -> bool {
+        let Some(provider) = provider_facts::provider_of(msg) else { return false };
+        let Some((id, login)) = self.outward.platform_identity(provider) else { return false };
+        let me = PlatformId { provider: provider.to_string(), id, login };
+        !provider_facts::is_own_row(compiled, provider, msg, &me)
     }
 
     /// Match one row against every rule it can reach and admit each that fired.
@@ -699,20 +755,28 @@ impl Engine {
 
     /// Why a rule may not act for its accounts right now, if it may not.
     fn refusal(&self, compiled: &Compiled, rule: &Rule) -> Option<String> {
-        let ids = [rule.send_as.id.as_str(), rule.owner.id.as_str()];
+        // Only a Twitch account is in the registry, the removal counter and
+        // the verifier; a Kick id equal to one of them must not match it.
+        let twitch: Vec<&crate::models::automations::AccountRef> =
+            [&rule.send_as, &rule.owner].into_iter().filter(|a| provider_facts::is_twitch_account(a)).collect();
         if self.any_leaving.load(Ordering::SeqCst) {
             let map = lock(&self.leaving);
-            if ids.iter().any(|id| map.contains_key(*id)) {
+            if twitch.iter().any(|a| map.contains_key(a.id.as_str())) {
                 return Some("Account being removed".into());
             }
         }
-        for account in [&rule.send_as, &rule.owner] {
+        for account in twitch {
             if compiled.login(&account.id).is_none() {
                 return Some(sign_in(&account.login));
             }
             if let Some(why) = self.outward.verifier().remembered_failure(&account.id) {
                 return Some(token_words(&why, &account.login));
             }
+        }
+        if crate::models::automations::is_kick_sender(rule)
+            && self.outward.kick_account_id().as_deref() != Some(rule.send_as.id.as_str())
+        {
+            return Some(executor::CONNECT_KICK.into());
         }
         None
     }
@@ -1080,6 +1144,7 @@ impl Engine {
             outage: self.claims.outage(),
             busy: self.claims.busy(),
             accounts,
+            platform_accounts: self.platform_accounts(),
             foreground: self.foreground(),
         }
     }

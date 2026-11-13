@@ -299,7 +299,7 @@ pub fn roles_of(badges: &[Badge]) -> Vec<SenderRole> {
 pub fn from_chat(msg: &ChatMessage) -> Option<Facts> {
     let provider = msg.provider.trim();
     if !(provider.is_empty() || provider.eq_ignore_ascii_case("twitch")) {
-        return None;
+        return super::provider_facts::from_provider(msg);
     }
     let room_id = tag(msg, "room-id");
     let own_id = match tag(msg, "id") {
@@ -391,7 +391,7 @@ fn tier(msg: &ChatMessage) -> String {
 
 /// A notice's event. One gift out of a gift bomb is no event of its own:
 /// the bomb is thanked once.
-fn notice_event(msg: &ChatMessage) -> Option<EventFacts> {
+pub(super) fn notice_event(msg: &ChatMessage) -> Option<EventFacts> {
     let kind = msg
         .metadata
         .msg_type

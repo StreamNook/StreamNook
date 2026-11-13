@@ -27,6 +27,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use serde_json::Value;
 
+use crate::services::providers::kick_door::{KickModeration, KickOutcome};
+
 use crate::commands::streamnook_api::ApiResponse;
 use crate::services::account_roster;
 use crate::services::account_store::AccountStore;
@@ -89,6 +91,26 @@ pub trait Outward: Send + Sync {
     /// The account's failure is remembered for a minute.
     fn record_send_401(&self, account_id: &str);
     /// The Twitch user id of the channel `login`.
+    /// The connected Kick account's numeric id (P4, D277). A synchronous
+    /// local read: the engine reads it at step 9 and calls `kick_send` with
+    /// no await between.
+    fn kick_account_id(&self) -> Option<String>;
+    /// Who you are on a platform's chat (`kick`, `youtube`, `tiktok`): its
+    /// chat user id (empty while only the name is known) and login; None when
+    /// nothing is signed in there. A local read.
+    fn platform_identity(&self, provider: &str) -> Option<(String, String)>;
+    /// Post one message to a Kick chat as `expected_account`, the Kick id the
+    /// rule sends as. The door checks that id again before it sends.
+    async fn kick_send(&self, expected_account: &str, slug: &str, text: &str, reply_to: Option<&str>) -> KickOutcome;
+    /// Time a Kick chatter out or delete one message as `expected_account`.
+    async fn kick_moderate(&self, expected_account: &str, op: &KickModeration) -> KickOutcome;
+    /// A Kick channel's room id (its broadcaster's user id), resolving the
+    /// channel when it is not yet.
+    async fn kick_room_id(&self, slug: &str) -> Result<String, String>;
+    /// Kick's pace (`provider_pace`): the app's door hands out the process-wide
+    /// one, where a typed send is counted too; a test door holds its own, so
+    /// no two tests (or two "devices") share a count.
+    fn kick_pace(&self) -> &std::sync::Mutex<crate::services::provider_pace::Pace>;
     async fn room_id(&self, login: &str) -> Result<String, String>;
     /// Send one chat message on its booked ticket. The ticket is settled
     /// (recorded or cancelled) when this returns.
@@ -439,6 +461,36 @@ impl Outward for RealOutward {
         self.verifier.record_send_401(account_id);
     }
 
+    fn kick_account_id(&self) -> Option<String> {
+        real_only();
+        crate::services::kick_auth_service::account_id()
+    }
+
+    fn platform_identity(&self, provider: &str) -> Option<(String, String)> {
+        real_only();
+        crate::services::chat_rules::ChatRules::platform_identity(provider).map(|me| (me.user_id, me.target.login))
+    }
+
+    async fn kick_send(&self, expected_account: &str, slug: &str, text: &str, reply_to: Option<&str>) -> KickOutcome {
+        real_only();
+        crate::services::providers::kick::send_classified(expected_account, slug, text, reply_to).await
+    }
+
+    async fn kick_moderate(&self, expected_account: &str, op: &KickModeration) -> KickOutcome {
+        real_only();
+        crate::services::providers::kick::moderate_classified(expected_account, op).await
+    }
+
+    async fn kick_room_id(&self, slug: &str) -> Result<String, String> {
+        real_only();
+        let meta = crate::services::providers::kick::ensure_resolved(slug, false).await.map_err(|e| e.to_string())?;
+        meta.user_id.map(|id| id.to_string()).ok_or_else(|| format!("There is no Kick channel named {slug}"))
+    }
+
+    fn kick_pace(&self) -> &std::sync::Mutex<crate::services::provider_pace::Pace> {
+        crate::services::provider_pace::global()
+    }
+
     async fn room_id(&self, login: &str) -> Result<String, String> {
         real_only();
         if let Some(id) = crate::services::chat_send_limiter::room_id_of(login) {
@@ -597,6 +649,24 @@ mod tests {
         fn record_send_401(&self, account_id: &str) {
             self.verifier.record_send_401(account_id);
         }
+        fn kick_account_id(&self) -> Option<String> {
+            Some("5001".into())
+        }
+        fn platform_identity(&self, provider: &str) -> Option<(String, String)> {
+            (provider == "kick").then(|| ("5001".to_string(), "mykick".to_string()))
+        }
+        async fn kick_send(&self, _expected: &str, _slug: &str, _text: &str, _reply_to: Option<&str>) -> KickOutcome {
+            KickOutcome::Unknown
+        }
+        async fn kick_moderate(&self, _expected: &str, _op: &KickModeration) -> KickOutcome {
+            KickOutcome::Unknown
+        }
+        async fn kick_room_id(&self, _slug: &str) -> Result<String, String> {
+            Ok("5002".into())
+        }
+        fn kick_pace(&self) -> &std::sync::Mutex<crate::services::provider_pace::Pace> {
+            crate::services::provider_pace::global()
+        }
         async fn room_id(&self, _login: &str) -> Result<String, String> {
             Ok("42".into())
         }
@@ -625,6 +695,18 @@ mod tests {
     #[should_panic(expected = "tests use a fake")]
     async fn the_real_room_lookup_panics_in_tests() {
         let _ = real().room_id("anyone").await;
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "tests use a fake")]
+    async fn the_real_kick_send_panics_in_tests() {
+        let _ = real().kick_send("5001", "alpha", "hi", None).await;
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "tests use a fake")]
+    async fn the_real_kick_identity_read_panics_in_tests() {
+        let _ = real().kick_account_id();
     }
 
     #[tokio::test]

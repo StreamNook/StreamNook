@@ -377,6 +377,80 @@ pub enum EventKind {
     Raid,
     Cheer,
     Announcement,
+    /// YouTube.
+    SuperChat,
+    SuperSticker,
+    Membership,
+    MemberGift,
+    /// TikTok.
+    #[serde(rename = "tiktok_gift")]
+    TikTokGift,
+    #[serde(rename = "tiktok_follow")]
+    TikTokFollow,
+    #[serde(rename = "tiktok_share")]
+    TikTokShare,
+}
+
+impl EventKind {
+    /// Whether this event happens on `platform` (Kick: subs and gifts).
+    pub fn allowed_on(self, platform: Platform) -> bool {
+        use EventKind::*;
+        match platform {
+            Platform::Twitch => matches!(self, Sub | Resub | Gift | GiftBomb | Raid | Cheer | Announcement),
+            Platform::Kick => matches!(self, Sub | Resub | Gift | GiftBomb),
+            Platform::Youtube => matches!(self, SuperChat | SuperSticker | Membership | MemberGift),
+            Platform::Tiktok => matches!(self, TikTokGift | TikTokFollow | TikTokShare),
+        }
+    }
+}
+
+/// A chat platform a rule listens on. A rule that posts names exactly one,
+/// and only Twitch and Kick can be posted to (YouTube and TikTok rules
+/// notify, log or speak).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum Platform {
+    Twitch,
+    Kick,
+    Youtube,
+    Tiktok,
+}
+
+impl Platform {
+    /// The provider id the rest of the app uses.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Platform::Twitch => "twitch",
+            Platform::Kick => "kick",
+            Platform::Youtube => "youtube",
+            Platform::Tiktok => "tiktok",
+        }
+    }
+
+    /// The name in the app's words.
+    pub fn label(self) -> &'static str {
+        match self {
+            Platform::Twitch => "Twitch",
+            Platform::Kick => "Kick",
+            Platform::Youtube => "YouTube",
+            Platform::Tiktok => "TikTok",
+        }
+    }
+
+    pub fn parse(provider: &str) -> Option<Platform> {
+        match provider.trim().to_ascii_lowercase().as_str() {
+            "" | "twitch" => Some(Platform::Twitch),
+            "kick" => Some(Platform::Kick),
+            "youtube" => Some(Platform::Youtube),
+            "tiktok" => Some(Platform::Tiktok),
+            _ => None,
+        }
+    }
+
+    /// Whether a rule can post there.
+    pub fn can_post(self) -> bool {
+        matches!(self, Platform::Twitch | Platform::Kick)
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -494,9 +568,12 @@ pub struct Hours {
     pub days: Vec<Weekday>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(default)]
 pub struct Conditions {
+    /// The platforms the rule listens on; Twitch alone by default. A rule
+    /// with a posting action names exactly one.
+    pub platforms: Vec<Platform>,
     pub channels: ChannelScope,
     /// Empty = anyone.
     pub roles: Vec<SenderRole>,
@@ -509,6 +586,23 @@ pub struct Conditions {
     pub hours: Option<Hours>,
     /// The saved-filter language (`ChatRules::validate_filter`), chat rows only.
     pub expression: Option<String>,
+}
+
+impl Default for Conditions {
+    fn default() -> Self {
+        Conditions {
+            platforms: vec![Platform::Twitch],
+            channels: ChannelScope::default(),
+            roles: Vec::new(),
+            skip_users: Vec::new(),
+            only_users: Vec::new(),
+            only_live: false,
+            only_away: false,
+            shared_chat: false,
+            hours: None,
+            expression: None,
+        }
+    }
 }
 
 /// A chat a rule names. `id` is the element id; `key` is built in Rust
@@ -1083,6 +1177,9 @@ pub fn listened_chats(rule: &Rule) -> Vec<String> {
         return Vec::new();
     }
     match &rule.only_if.channels {
+        ChannelScope::Own {} if is_kick_sender(rule) && !rule.send_as.login.trim().is_empty() => {
+            vec![composite_key(&format!("kick:{}", rule.send_as.login.trim()))]
+        }
         ChannelScope::Own {} if !rule.owner.login.trim().is_empty() => {
             vec![crate::services::chat_rules::channel_filter_key("twitch", rule.owner.login.trim())]
         }
@@ -1093,6 +1190,159 @@ pub fn listened_chats(rule: &Rule) -> Vec<String> {
 
 fn login_of(key: &str) -> &str {
     key.split_once(':').map_or(key, |(_, login)| login).trim()
+}
+
+/// `provider:channel` for a chat, a bare name being Twitch. A YouTube id keeps
+/// its case (it names one channel), every other name is lowercase: the same
+/// key `providers::key::make_key` gives the chat bus.
+pub fn composite_key(raw: &str) -> String {
+    let parsed = crate::services::providers::key::parse_key(raw.trim().trim_start_matches('#'));
+    crate::services::providers::key::make_key(&parsed.provider, &parsed.channel)
+}
+
+/// The provider part of a normalized chat key.
+pub fn provider_of_key(key: &str) -> &str {
+    key.split_once(':').map_or("twitch", |(provider, _)| provider)
+}
+
+/// The rule posts as a Kick account.
+pub fn is_kick_sender(rule: &Rule) -> bool {
+    rule.send_as.provider.trim().eq_ignore_ascii_case("kick")
+}
+
+fn kind_of(value: &impl Serialize) -> String {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|v| v.get("kind").and_then(Value::as_str).map(str::to_string))
+        .unwrap_or_default()
+}
+
+/// An action's `kind` word (`reply`, `send`, `notify`, and later phases'),
+/// read from its serialized form so a platform check never names a variant
+/// another phase owns.
+pub fn action_kind(action: &Action) -> String {
+    kind_of(action)
+}
+
+/// A trigger's `kind` word, as above.
+pub fn trigger_kind(when: &Trigger) -> String {
+    kind_of(when)
+}
+
+/// The timers: no stream state exists off Twitch for them to read.
+pub fn timer_family(kind: &str) -> bool {
+    matches!(kind, "timer" | "clock" | "uptime" | "delay")
+}
+
+/// What an action of `kind` may do on `platform`: Twitch everything; Kick
+/// posts, notifies, logs, speaks, waits, highlights, times out and deletes;
+/// YouTube and TikTok only notify, log and speak.
+pub fn action_fits(platform: Platform, kind: &str) -> bool {
+    match platform {
+        Platform::Twitch => true,
+        Platform::Kick => {
+            matches!(kind, "reply" | "send" | "notify" | "log" | "speak" | "wait" | "highlight" | "timeout" | "delete")
+        }
+        Platform::Youtube | Platform::Tiktok => matches!(kind, "notify" | "log" | "speak"),
+    }
+}
+
+const POST_ONE_PLATFORM: &str = "A rule that posts runs on one platform";
+const NOTIFY_ONLY_WORDS: &str = "YouTube and TikTok rules can notify you, log or speak, not post";
+const TWITCH_ONLY_ACTION: &str = "This action works on Twitch only";
+const TWITCH_ONLY_TRIGGER: &str = "This trigger works on Twitch only";
+const NO_TIMERS_WORDS: &str = "Timers need a Twitch stream, so they can't be used with other platforms";
+const NO_LIVE_WORDS: &str = "Only Twitch tells StreamNook when a stream is live, so this can't be used with other platforms";
+const NO_CHANNEL_WORDS: &str = "{title}, {game} and {uptime} come from Twitch, so they can't be used with other platforms";
+const WATCHING_WORDS: &str = "The stream you're watching is a Twitch stream";
+const OWNER_WORDS: &str = "Sign in with Twitch to use automations";
+const WRONG_EVENT_WORDS: &str = "That event doesn't happen on the platforms you picked";
+const WRONG_CHAT_WORDS: &str = "That channel is on a platform this rule doesn't use";
+const WRONG_SENDER_WORDS: &str = "Send as the account on this platform";
+
+fn platform_text(path: &str, text: &str, errors: &mut Errors) {
+    if placeholders(text).iter().any(|n| is_channel_state(n) || n.eq_ignore_ascii_case("uptime")) {
+        errors.push(path, NO_CHANNEL_WORDS);
+    }
+}
+
+/// The checks the platforms add: one platform when the rule posts, who it
+/// sends as, what each platform can do, and the Twitch-only fields.
+fn check_platforms(rule: &Rule, errors: &mut Errors) {
+    let platforms = &rule.only_if.platforms;
+    let other = platforms.iter().any(|p| *p != Platform::Twitch);
+    let posts = rule.actions.iter().any(Action::is_outward);
+    if !rule.owner.provider.trim().eq_ignore_ascii_case("twitch") {
+        errors.push("owner", OWNER_WORDS);
+    }
+    if posts && platforms.len() > 1 {
+        errors.push("only_if.platforms", POST_ONE_PLATFORM);
+    }
+    if let (true, [platform]) = (posts, platforms.as_slice()) {
+        if !rule.send_as.provider.trim().eq_ignore_ascii_case(platform.as_str()) {
+            errors.push("send_as", WRONG_SENDER_WORDS);
+        }
+    }
+    for (i, action) in rule.actions.iter().enumerate() {
+        let kind = action_kind(action);
+        if let Some(bad) = platforms.iter().find(|p| !action_fits(**p, &kind)) {
+            let words = if matches!(bad, Platform::Youtube | Platform::Tiktok) { NOTIFY_ONLY_WORDS } else { TWITCH_ONLY_ACTION };
+            errors.push(format!("actions[{i}]"), words);
+        }
+        if let Action::Send { to: Some(chat), .. } = action {
+            if !chat.key.trim().is_empty() && !platforms.iter().any(|p| p.as_str() == provider_of_key(&chat.key)) {
+                errors.push(format!("actions[{i}].to"), WRONG_CHAT_WORDS);
+            }
+        }
+    }
+    if let Trigger::ChannelEvent { events, .. } = &rule.when {
+        if events.iter().any(|kind| !platforms.iter().any(|p| kind.allowed_on(*p))) {
+            errors.push("when.events", WRONG_EVENT_WORDS);
+        }
+    }
+    if let ChannelScope::These { list } = &rule.only_if.channels {
+        for (i, chat) in list.iter().enumerate() {
+            if !chat.key.trim().is_empty() && !platforms.iter().any(|p| p.as_str() == provider_of_key(&chat.key)) {
+                errors.push(format!("only_if.channels.list[{i}]"), WRONG_CHAT_WORDS);
+            }
+        }
+    }
+    if !other {
+        return;
+    }
+    let when = trigger_kind(&rule.when);
+    if timer_family(&when) {
+        errors.push("when", NO_TIMERS_WORDS);
+    } else if !matches!(when.as_str(), "message" | "mention" | "first_message" | "channel_event") {
+        errors.push("when", TWITCH_ONLY_TRIGGER);
+    }
+    if rule.only_if.only_live {
+        errors.push("only_if.only_live", NO_LIVE_WORDS);
+    }
+    if matches!(rule.only_if.channels, ChannelScope::Watching {}) && !platforms.contains(&Platform::Twitch) {
+        errors.push("only_if.channels", WATCHING_WORDS);
+    }
+    for (i, action) in rule.actions.iter().enumerate() {
+        match action {
+            Action::Notify { title, body, .. } => {
+                platform_text(&format!("actions[{i}].title"), title, errors);
+                platform_text(&format!("actions[{i}].body"), body, errors);
+            }
+            other => {
+                for (j, line) in other.lines().iter().enumerate() {
+                    platform_text(&format!("actions[{i}].texts[{j}].text"), &line.text, errors);
+                }
+            }
+        }
+    }
+}
+
+fn normalize_platforms(platforms: &mut Vec<Platform>) {
+    let mut seen = HashSet::new();
+    platforms.retain(|p| seen.insert(*p));
+    if platforms.is_empty() {
+        platforms.push(Platform::Twitch);
+    }
 }
 
 fn clip(text: &str, chars: usize) -> String {
@@ -1121,11 +1371,7 @@ fn normalize_users(list: &mut Vec<String>) {
 
 fn normalize_chat(chat: &mut ChannelRef) {
     let raw = if chat.key.trim().is_empty() { chat.name.trim() } else { chat.key.trim() };
-    chat.key = if raw.is_empty() {
-        String::new()
-    } else {
-        crate::services::chat_rules::channel_filter_key("twitch", raw)
-    };
+    chat.key = if raw.is_empty() { String::new() } else { composite_key(raw) };
 }
 
 /// The forced and tidied values every saved rule carries.
@@ -1140,6 +1386,7 @@ fn normalize(rule: &mut Rule) {
     if rule.send_as.provider.trim().is_empty() {
         rule.send_as.provider = "twitch".into();
     }
+    normalize_platforms(&mut rule.only_if.platforms);
     normalize_users(&mut rule.only_if.skip_users);
     normalize_users(&mut rule.only_if.only_users);
     if let ChannelScope::These { list } = &mut rule.only_if.channels {
@@ -1572,6 +1819,7 @@ pub fn validate(rule: &mut Rule, ctx: &ValidateCtx) -> Vec<FieldError> {
         }
     }
 
+    check_platforms(rule, &mut errors);
     if rule.actions.is_empty() {
         errors.push("actions", "Add at least one action");
     }
@@ -2084,6 +2332,131 @@ mod tests {
         assert_eq!(parse_hhmm("09:30"), Some(570));
         assert_eq!(parse_hhmm("23:59"), Some(1439));
         assert_eq!(parse_hhmm("24:00"), None);
+    }
+
+    fn kick_me() -> AccountRef {
+        AccountRef { provider: "kick".into(), id: "5001".into(), login: "mykick".into(), name: "MyKick".into() }
+    }
+
+    fn on(platforms: &[Platform], mut rule: Rule) -> Rule {
+        rule.only_if.platforms = platforms.to_vec();
+        rule
+    }
+
+    fn kick_rule(action: Action) -> Rule {
+        let mut r = on(&[Platform::Kick], rule_with(action));
+        r.send_as = kick_me();
+        r
+    }
+
+    #[test]
+    fn platforms_default_to_twitch_and_an_empty_list_reads_as_twitch() {
+        assert_eq!(Rule::from_value(&json!({})).unwrap().only_if.platforms, vec![Platform::Twitch]);
+        assert_eq!(Conditions::default().platforms, vec![Platform::Twitch]);
+        let stored: Conditions = serde_json::from_value(json!({ "platforms": [] })).unwrap();
+        assert!(stored.platforms.is_empty(), "a stored empty list stays empty until it is saved");
+        let mut r = rule_with(reply("hi"));
+        r.only_if.platforms = Vec::new();
+        assert!(validate(&mut r, &ValidateCtx::default()).is_empty());
+        assert_eq!(r.only_if.platforms, vec![Platform::Twitch]);
+        let mut twice = on(&[Platform::Twitch, Platform::Twitch], rule_with(reply("hi")));
+        validate(&mut twice, &ValidateCtx::default());
+        assert_eq!(twice.only_if.platforms, vec![Platform::Twitch]);
+        assert_eq!(serde_json::to_value(Platform::Youtube).unwrap(), json!("youtube"));
+        assert_eq!(serde_json::to_value(EventKind::TikTokGift).unwrap(), json!("tiktok_gift"));
+        assert_eq!(serde_json::to_value(EventKind::SuperChat).unwrap(), json!("super_chat"));
+    }
+
+    #[test]
+    fn a_rule_that_posts_names_one_platform() {
+        let mut both = on(&[Platform::Twitch, Platform::Kick], rule_with(reply("hi")));
+        assert!(has(&validate(&mut both, &ValidateCtx::default()), "only_if.platforms"));
+        let mut quiet = on(&[Platform::Twitch, Platform::Kick], rule_with(notify("hi")));
+        assert!(validate(&mut quiet, &ValidateCtx::default()).is_empty(), "a notify-only rule may watch both");
+    }
+
+    #[test]
+    fn youtube_and_tiktok_rules_cannot_post() {
+        for platform in [Platform::Youtube, Platform::Tiktok] {
+            let mut posting = on(&[platform], rule_with(reply("hi")));
+            posting.send_as.provider = platform.as_str().into();
+            let errors = validate(&mut posting, &ValidateCtx::default());
+            assert!(has(&errors, "actions[0]"), "{platform:?}");
+            let mut quiet = on(&[platform], rule_with(notify("hi")));
+            assert!(validate(&mut quiet, &ValidateCtx::default()).is_empty(), "{platform:?}");
+        }
+        for kind in ["reply", "send"] {
+            assert!(!action_fits(Platform::Youtube, kind) && !action_fits(Platform::Tiktok, kind));
+        }
+        assert!(action_fits(Platform::Youtube, "log") && action_fits(Platform::Tiktok, "speak"));
+    }
+
+    #[test]
+    fn a_kick_rule_sends_as_the_kick_account_and_owns_a_twitch_one() {
+        let mut ok = kick_rule(reply("hi"));
+        assert!(validate(&mut ok, &ValidateCtx::default()).is_empty());
+        let mut as_twitch = on(&[Platform::Kick], rule_with(reply("hi")));
+        assert!(has(&validate(&mut as_twitch, &ValidateCtx::default()), "send_as"));
+        let mut kick_owner = kick_rule(reply("hi"));
+        kick_owner.owner = kick_me();
+        assert!(has(&validate(&mut kick_owner, &ValidateCtx::default()), "owner"), "the claim account is a Twitch account");
+        assert_eq!(listened_chats(&kick_rule(reply("hi"))), vec!["kick:mykick".to_string()]);
+    }
+
+    #[test]
+    fn kick_has_no_live_source_so_these_fields_are_errors() {
+        let mut live = kick_rule(reply("hi"));
+        live.only_if.only_live = true;
+        assert!(has(&validate(&mut live, &ValidateCtx::default()), "only_if.only_live"));
+        let mut title = kick_rule(reply("now playing {game}, up {uptime}"));
+        let errors = validate(&mut title, &ValidateCtx::default());
+        assert!(has(&errors, "actions[0].texts[0].text"));
+        let mut quiet = kick_rule(notify("{title}"));
+        assert!(has(&validate(&mut quiet, &ValidateCtx::default()), "actions[0].title"));
+        assert!(timer_family("timer") && timer_family("clock") && timer_family("uptime") && timer_family("delay"));
+        assert!(!timer_family("message"));
+        let mut watching = kick_rule(reply("hi"));
+        watching.only_if.channels = ChannelScope::Watching {};
+        assert!(has(&validate(&mut watching, &ValidateCtx::default()), "only_if.channels"));
+    }
+
+    #[test]
+    fn events_belong_to_their_platform() {
+        let event = |platform: Platform, kind: EventKind| {
+            let mut r = on(&[platform], rule_with(notify("x")));
+            r.when = Trigger::ChannelEvent { events: vec![kind], min_months: 0, min_gifts: 0, min_viewers: 0, min_bits: 0 };
+            has(&validate(&mut r, &ValidateCtx::default()), "when.events")
+        };
+        assert!(!event(Platform::Kick, EventKind::Sub) && !event(Platform::Kick, EventKind::GiftBomb));
+        assert!(event(Platform::Kick, EventKind::Raid) && event(Platform::Kick, EventKind::Cheer));
+        assert!(!event(Platform::Youtube, EventKind::SuperChat) && !event(Platform::Youtube, EventKind::MemberGift));
+        assert!(event(Platform::Youtube, EventKind::Sub));
+        assert!(!event(Platform::Tiktok, EventKind::TikTokFollow) && event(Platform::Tiktok, EventKind::SuperChat));
+        assert!(event(Platform::Twitch, EventKind::SuperChat) && !event(Platform::Twitch, EventKind::Raid));
+    }
+
+    #[test]
+    fn chat_keys_keep_their_platform_and_a_youtube_id_its_case() {
+        assert_eq!(composite_key("kick:Alpha"), "kick:alpha");
+        assert_eq!(composite_key("youtube:UCabcDEF"), "youtube:UCabcDEF");
+        assert_eq!(composite_key("#XQC"), "twitch:xqc");
+        assert_eq!(composite_key("tiktok:Some.Name"), "tiktok:some.name");
+        assert_eq!(provider_of_key("kick:alpha"), "kick");
+        assert_eq!(provider_of_key("lirik"), "twitch");
+        let mut r = kick_rule(reply("hi"));
+        r.only_if.channels = ChannelScope::These { list: vec![chat("kick:Alpha"), chat("twitch:lirik")] };
+        let errors = validate(&mut r, &ValidateCtx::default());
+        let ChannelScope::These { list } = &r.only_if.channels else { unreachable!() };
+        assert_eq!(list[0].key, "kick:alpha");
+        assert!(!has(&errors, "only_if.channels.list[0]"));
+        assert!(has(&errors, "only_if.channels.list[1]"), "a Twitch chat in a Kick rule");
+        let mut send = kick_rule(Action::Send {
+            id: String::new(),
+            to: Some(chat("twitch:lirik")),
+            texts: vec![line("hi")],
+            pick: Pick::Random,
+        });
+        assert!(has(&validate(&mut send, &ValidateCtx::default()), "actions[0].to"));
     }
 
     fn p3_rule(when: Trigger, action: Action) -> Rule {

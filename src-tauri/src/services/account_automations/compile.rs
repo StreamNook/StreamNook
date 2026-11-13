@@ -20,9 +20,10 @@ use regex::{Regex, RegexBuilder};
 use serde_json::Value;
 
 use super::facts::{fold, nfc, Facts, RowKind};
+use super::provider_facts::{is_twitch_account, PlatformId};
 use crate::models::automations::{
-    Action, Automations, AutomationPrefs, BadgeLeg, ChannelRef, ChannelScope, EventKind, MatchMode, Rule, RunState,
-    TextMatch, Trigger, MAX_ENGINE_CHATS, REGEX_SIZE_LIMIT,
+    composite_key, Action, Automations, AutomationPrefs, BadgeLeg, ChannelRef, ChannelScope, EventKind, MatchMode,
+    Platform, Rule, RunState, TextMatch, Trigger, MAX_ENGINE_CHATS, REGEX_SIZE_LIMIT,
 };
 use crate::services::chat_rules::channel_filter_key;
 
@@ -174,8 +175,15 @@ pub struct CompiledRule {
     pub send_as_login: String,
     /// `{me}`: the sending account's display name.
     pub send_as_name: String,
-    /// `twitch:<owner login>`: the chat "your channel" means.
+    /// `twitch:<owner login>`: the chat "your channel" means (the first of
+    /// `own_keys`; empty when no platform's own chat is known).
     pub own_key: String,
+    /// "Your channel" on every platform the rule names: the owner's Twitch
+    /// chat, the connected account's chat elsewhere.
+    pub own_keys: Vec<String>,
+    /// Who you are on each non-Twitch platform the rule names (a Mention
+    /// there uses this identity, not the Twitch owner's).
+    pub identities: Vec<PlatformId>,
     /// The chats a These rule listens in, as `twitch:<login>`.
     pub these_keys: Vec<String>,
     pub test: TextTest,
@@ -227,6 +235,9 @@ pub struct Compiled {
     pub logins: HashMap<String, String>,
     /// Logins of the chats running rules listen in (at most 50).
     pub needed_chats: Vec<String>,
+    /// The other platforms' chat keys (`kick:alpha`) running rules listen in;
+    /// with `needed_chats` at most 50 in all, Twitch's first.
+    pub needed_provider_chats: Vec<String>,
     /// Logins of the chats of running only-live rules.
     pub only_live_chats: Vec<String>,
     /// `twitch:<login>` keys where a Live rule with an outward action listens.
@@ -341,6 +352,13 @@ fn provider_of(provider: &str) -> String {
 }
 
 pub fn compile(input: &CompileInput) -> Compiled {
+    compile_with(input, &[])
+}
+
+/// [`compile`] with who you are on each other platform (Kick, YouTube,
+/// TikTok), as `Outward::platform_identity` answers: a local read the caller
+/// made just before. A rule on a platform with no identity here is held.
+pub fn compile_with(input: &CompileInput, platforms: &[PlatformId]) -> Compiled {
     let mut out = Compiled { run: input.automations.run, prefs: input.prefs.clamped(), ..Compiled::default() };
     for (id, login) in input.own_accounts {
         let id = id.trim();
@@ -355,6 +373,7 @@ pub fn compile(input: &CompileInput) -> Compiled {
     out.my_ids.insert(TWITCH.to_string(), twitch);
     let mut needed: Vec<String> = Vec::new();
     let mut only_live: Vec<String> = Vec::new();
+    let mut needed_provider: Vec<String> = Vec::new();
     for (position, raw) in input.automations.rules.iter().enumerate() {
         let mut rule = match Rule::from_value(raw) {
             Ok(rule) => rule,
@@ -370,25 +389,59 @@ pub fn compile(input: &CompileInput) -> Compiled {
         };
         force(&mut rule);
         let owner_login = known_login(&out, &rule.owner.id, &rule.owner.login);
-        let send_as_login = known_login(&out, &rule.send_as.id, &rule.send_as.login);
+        let other_sender = !is_twitch_account(&rule.send_as);
+        let send_as_login = if other_sender {
+            rule.send_as.login.trim().trim_start_matches('@').to_lowercase()
+        } else {
+            known_login(&out, &rule.send_as.id, &rule.send_as.login)
+        };
         let send_as_name = match rule.send_as.name.trim() {
             "" => send_as_login.clone(),
             name => name.to_string(),
         };
-        let own_key = if owner_login.is_empty() { String::new() } else { channel_filter_key("twitch", &owner_login) };
+        // "Your channel" on each platform the rule names.
+        let mut own_keys: Vec<String> = Vec::new();
+        for platform in &rule.only_if.platforms {
+            match platform {
+                Platform::Twitch => {
+                    if !owner_login.is_empty() {
+                        own_keys.push(channel_filter_key("twitch", &owner_login));
+                    }
+                }
+                other => {
+                    if let Some(key) = platform_id(platforms, other.as_str()).and_then(PlatformId::own_chat_key) {
+                        own_keys.push(key);
+                    }
+                }
+            }
+        }
+        let own_key = own_keys.first().cloned().unwrap_or_default();
+        let identities: Vec<PlatformId> = rule
+            .only_if
+            .platforms
+            .iter()
+            .filter(|p| **p != Platform::Twitch)
+            .filter_map(|p| platform_id(platforms, p.as_str()).cloned())
+            .collect();
         let these_keys: Vec<String> = match &rule.only_if.channels {
             ChannelScope::These { list } => list.iter().filter_map(chat_key_of).collect(),
             _ => Vec::new(),
         };
         // Signed in means the registry names the account; the profile's id
-        // alone never runs a rule.
+        // alone never runs a rule. A Kick sender is the connected Kick
+        // account; the owner is always a Twitch account.
         let mut held = if !out.logins.contains_key(&rule.owner.id) || owner_login.is_empty() {
             Some(sign_in(&owner_login))
+        } else if other_sender {
+            sender_held(platforms, &rule)
         } else if !out.logins.contains_key(&rule.send_as.id) {
             Some(sign_in(&send_as_login))
         } else {
             None
         };
+        if held.is_none() {
+            held = platforms_held(&rule, platforms);
+        }
         // The P2 actions and the Whisper trigger belong to the main account.
         if held.is_none() {
             held = main_account_hold(&rule, input.primary_id, &out);
@@ -434,7 +487,7 @@ pub fn compile(input: &CompileInput) -> Compiled {
         let index = out.rules.len();
         if let Some(mode) = mode {
             let listened: Vec<String> = match &rule.only_if.channels {
-                ChannelScope::Own {} => vec![own_key.clone()],
+                ChannelScope::Own {} => own_keys.clone(),
                 ChannelScope::These { .. } => these_keys.clone(),
                 ChannelScope::AnyOpen {} | ChannelScope::Watching {} => Vec::new(),
             };
@@ -477,9 +530,13 @@ pub fn compile(input: &CompileInput) -> Compiled {
                 }
             }
             for key in &listened {
-                push_unique(&mut needed, login_of_key(key));
-                if rule.only_if.only_live {
-                    push_unique(&mut only_live, login_of_key(key));
+                if key.starts_with("twitch:") {
+                    push_unique(&mut needed, login_of_key(key));
+                    if rule.only_if.only_live {
+                        push_unique(&mut only_live, login_of_key(key));
+                    }
+                } else {
+                    push_unique(&mut needed_provider, key);
                 }
             }
             if mode == Mode::Live && outward && !rule.is_edge_rule() {
@@ -522,6 +579,8 @@ pub fn compile(input: &CompileInput) -> Compiled {
             send_as_login,
             send_as_name,
             own_key,
+            own_keys,
+            identities,
             these_keys,
             test,
             summary,
@@ -544,7 +603,9 @@ pub fn compile(input: &CompileInput) -> Compiled {
         out.my_ids.entry(provider).or_default().insert(id);
     }
     needed.truncate(MAX_ENGINE_CHATS);
+    needed_provider.truncate(MAX_ENGINE_CHATS.saturating_sub(needed.len()));
     out.needed_chats = needed;
+    out.needed_provider_chats = needed_provider;
     out.only_live_chats = only_live;
     out
 }
@@ -583,6 +644,9 @@ fn main_account_hold(rule: &Rule, primary: Option<&str>, out: &Compiled) -> Opti
 /// in your own channel, only while live, with no rule cooldown; a rule sends
 /// as its owner unless it names another account; people lists are logins.
 fn force(rule: &mut Rule) {
+    if rule.only_if.platforms.is_empty() {
+        rule.only_if.platforms.push(Platform::Twitch);
+    }
     if rule.send_as.id.trim().is_empty() {
         rule.send_as = rule.owner.clone();
     }
@@ -631,6 +695,39 @@ fn sign_in(login: &str) -> String {
     }
 }
 
+/// Words when Only while live is on for a rule that names another platform.
+const NO_LIVE_ELSEWHERE: &str = "Only Twitch tells StreamNook when a stream is live; turn Only while live off";
+
+fn platform_id<'a>(platforms: &'a [PlatformId], provider: &str) -> Option<&'a PlatformId> {
+    platforms.iter().find(|p| p.provider == provider)
+}
+
+/// Why a rule that posts as a non-Twitch account cannot run: no such account
+/// is connected, or another one is (D277: the id must be the rule's).
+fn sender_held(platforms: &[PlatformId], rule: &Rule) -> Option<String> {
+    let provider = rule.send_as.provider.trim().to_ascii_lowercase();
+    let label = Platform::parse(&provider).map_or("that platform", |p| p.label());
+    match platform_id(platforms, &provider) {
+        None => Some(format!("Connect {label} to run this rule")),
+        Some(me) if me.id == rule.send_as.id => None,
+        Some(_) => Some(format!("{label} is signed in as another account")),
+    }
+}
+
+/// Why a rule that listens on another platform cannot run yet: without your
+/// identity there its own messages cannot be told from anyone's.
+fn platforms_held(rule: &Rule, platforms: &[PlatformId]) -> Option<String> {
+    for platform in &rule.only_if.platforms {
+        if *platform != Platform::Twitch && platform_id(platforms, platform.as_str()).is_none() {
+            return Some(format!("Waiting for your {} account", platform.label()));
+        }
+    }
+    if rule.only_if.only_live && rule.only_if.platforms.iter().any(|p| *p != Platform::Twitch) {
+        return Some(NO_LIVE_ELSEWHERE.to_string());
+    }
+    None
+}
+
 fn text_field(raw: &Value, key: &str) -> String {
     raw.get(key).and_then(Value::as_str).unwrap_or("").to_string()
 }
@@ -640,7 +737,7 @@ fn chat_key_of(chat: &ChannelRef) -> Option<String> {
         "" => chat.name.trim(),
         key => key,
     };
-    let key = channel_filter_key("twitch", raw);
+    let key = composite_key(raw);
     (!login_of_key(&key).is_empty()).then_some(key)
 }
 
@@ -702,6 +799,13 @@ fn event_name(kind: EventKind) -> &'static str {
         EventKind::Raid => "a raid",
         EventKind::Cheer => "a cheer",
         EventKind::Announcement => "an announcement",
+        EventKind::SuperChat => "a Super Chat",
+        EventKind::SuperSticker => "a Super Sticker",
+        EventKind::Membership => "a new member",
+        EventKind::MemberGift => "gifted memberships",
+        EventKind::TikTokGift => "a TikTok gift",
+        EventKind::TikTokFollow => "a TikTok follow",
+        EventKind::TikTokShare => "a TikTok share",
     }
 }
 

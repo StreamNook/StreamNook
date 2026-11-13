@@ -63,6 +63,16 @@ pub trait Local: AccountChanges {
     async fn chat_join(&self, channel: &str) -> Result<(), String>;
     /// Let go of the engine's claim on `channel`.
     async fn chat_leave(&self, channel: &str);
+    /// Claim and open `channel` of another platform (`kick`, `youtube`,
+    /// `tiktok`) under the engine's label.
+    async fn provider_join(&self, provider: &str, channel: &str) -> Result<(), String>;
+    /// Let go of the engine's claim on a channel of another platform.
+    async fn provider_leave(&self, provider: &str, channel: &str);
+    /// The channels `label` holds on another platform, as its adapter
+    /// stores them (lowercase).
+    async fn provider_held_by(&self, provider: &str, label: &str) -> Vec<String>;
+    /// Whether a label other than `label` holds `channel` on that platform.
+    async fn provider_held_by_other_than(&self, provider: &str, channel: &str, label: &str) -> bool;
     /// Hold a live-only liveness watch on `login`.
     async fn watch_live(&self, login: &str, room_id: &str);
     async fn unwatch_live(&self, login: &str);
@@ -187,6 +197,35 @@ impl Local for RealLocal {
     async fn chat_leave(&self, channel: &str) {
         if let Err(e) = crate::services::chat_service::ChatService::leave_channel(channel, LABEL).await {
             log::debug!("[Automations] leave {channel}: {e}");
+        }
+    }
+
+    async fn provider_join(&self, provider: &str, channel: &str) -> Result<(), String> {
+        let registry = crate::services::providers::registry().await;
+        let Some(adapter) = registry.get(provider) else { return Err(format!("No {provider} chat on this device")) };
+        adapter.connect(channel, LABEL).await.map_err(|e| e.to_string())
+    }
+
+    async fn provider_leave(&self, provider: &str, channel: &str) {
+        let registry = crate::services::providers::registry().await;
+        if let Some(adapter) = registry.get(provider) {
+            if let Err(e) = adapter.disconnect(channel, LABEL).await {
+                log::debug!("[Automations] leave {provider}:{channel}: {e}");
+            }
+        }
+    }
+
+    async fn provider_held_by(&self, provider: &str, label: &str) -> Vec<String> {
+        match crate::services::providers::registry().await.get(provider) {
+            Some(adapter) => adapter.channels_held_by(label).await,
+            None => Vec::new(),
+        }
+    }
+
+    async fn provider_held_by_other_than(&self, provider: &str, channel: &str, label: &str) -> bool {
+        match crate::services::providers::registry().await.get(provider) {
+            Some(adapter) => adapter.held_by_other_than(channel, label).await,
+            None => false,
         }
     }
 

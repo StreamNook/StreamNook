@@ -94,7 +94,14 @@ impl Vars {
                 EventKind::Gift | EventKind::GiftBomb => vars.gifts = Some(event.gifts),
                 EventKind::Raid => vars.viewers = Some(event.viewers),
                 EventKind::Cheer => vars.bits = Some(event.bits),
-                EventKind::Announcement => {}
+                EventKind::Announcement
+                | EventKind::SuperChat
+                | EventKind::SuperSticker
+                | EventKind::Membership
+                | EventKind::MemberGift
+                | EventKind::TikTokGift
+                | EventKind::TikTokFollow
+                | EventKind::TikTokShare => {}
             }
         }
         if let Some(own) = &facts.own {
@@ -276,6 +283,13 @@ pub fn event_words(event: &EventFacts) -> String {
         EventKind::Raid => format!("raided with {}", count_words(event.viewers, "viewer")),
         EventKind::Cheer => format!("cheered {}", count_words(event.bits, "bit")),
         EventKind::Announcement => "made an announcement".to_string(),
+        EventKind::SuperChat => "sent a Super Chat".to_string(),
+        EventKind::SuperSticker => "sent a Super Sticker".to_string(),
+        EventKind::Membership => "became a member".to_string(),
+        EventKind::MemberGift => "gifted memberships".to_string(),
+        EventKind::TikTokGift => "sent a gift".to_string(),
+        EventKind::TikTokFollow => "followed".to_string(),
+        EventKind::TikTokShare => "shared the stream".to_string(),
     }
 }
 

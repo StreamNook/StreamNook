@@ -248,16 +248,17 @@ fn trigger_fit(cr: &CompiledRule, facts: &Facts) -> Result<&'static str, String>
             if !chat_row {
                 return Err(NOT_A_MESSAGE.to_string());
             }
-            if cr.owner_login.is_empty() {
+            let (login, id) = mention_identity(cr, facts);
+            if login.is_empty() {
                 return Err("Doesn't mention you".to_string());
             }
-            if mentions_login(&facts.text, &cr.owner_login) {
+            if mentions_login(&facts.text, &login) {
                 return Ok("Mentions you");
             }
-            if *replies_too && !facts.reply_parent_user_id.is_empty() && facts.reply_parent_user_id == rule.owner.id {
+            if *replies_too && !facts.reply_parent_user_id.is_empty() && facts.reply_parent_user_id == id {
                 return Ok("Replies to you");
             }
-            Err(format!("Doesn't mention @{}", cr.owner_login))
+            Err(format!("Doesn't mention @{login}"))
         }
         Trigger::FirstMessage {} => {
             if !chat_row {
@@ -291,6 +292,14 @@ fn trigger_fit(cr: &CompiledRule, facts: &Facts) -> Result<&'static str, String>
                 EventKind::Raid => (event.viewers, *min_viewers, "viewers"),
                 EventKind::Cheer => (event.bits, *min_bits, "bits"),
                 EventKind::Announcement => (0, 0, ""),
+                // No amount to reach: a kind in the rule's list fires.
+                EventKind::SuperChat
+                | EventKind::SuperSticker
+                | EventKind::Membership
+                | EventKind::MemberGift
+                | EventKind::TikTokGift
+                | EventKind::TikTokFollow
+                | EventKind::TikTokShare => (0, 0, ""),
             };
             if have >= need {
                 Ok("One of this rule's events")
@@ -360,10 +369,33 @@ fn own_fit(
     Ok(ok)
 }
 
+/// The platform of a row: the part of its chat key before the colon.
+fn row_platform(facts: &Facts) -> &str {
+    facts.channel_key.split_once(':').map_or("twitch", |(provider, _)| provider)
+}
+
+/// Who a Mention means on this row's platform: the Twitch owner on Twitch,
+/// the identity you hold there elsewhere (its chat id and its login).
+fn mention_identity(cr: &CompiledRule, facts: &Facts) -> (String, String) {
+    let provider = row_platform(facts);
+    if provider == "twitch" {
+        return (cr.owner_login.clone(), cr.rule.owner.id.clone());
+    }
+    cr.identities
+        .iter()
+        .find(|i| i.provider == provider)
+        .map(|i| (i.login.trim().trim_start_matches('@').to_lowercase(), i.id.clone()))
+        .unwrap_or_default()
+}
+
 fn channel_fit(cr: &CompiledRule, facts: &Facts) -> Result<&'static str, &'static str> {
+    let platform = row_platform(facts);
+    if !cr.rule.only_if.platforms.iter().any(|p| p.as_str() == platform) {
+        return Err("Not a platform this rule works on");
+    }
     match &cr.rule.only_if.channels {
         ChannelScope::Own {} => {
-            if !cr.own_key.is_empty() && facts.channel_key == cr.own_key {
+            if cr.own_keys.contains(&facts.channel_key) || (!cr.own_key.is_empty() && facts.channel_key == cr.own_key) {
                 Ok("Your channel")
             } else {
                 Err("Not your channel")
