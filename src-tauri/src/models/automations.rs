@@ -43,6 +43,13 @@ pub const REGEX_SIZE_LIMIT: usize = 64 * 1024;
 pub const MAX_COOLDOWN_SECONDS: u32 = 2_592_000;
 /// Characters in an away message.
 pub const MAX_AWAY_CHARS: usize = 200;
+/// The longest text a Speak action reads aloud.
+pub const MAX_SPEAK_CHARS: usize = 300;
+
+/// "#rrggbb" (what the color swatches write).
+pub fn is_hex_color(text: &str) -> bool {
+    text.len() == 7 && text.starts_with('#') && text[1..].chars().all(|c| c.is_ascii_hexdigit())
+}
 /// The fewest actions an hour a rule may be held to.
 pub const MIN_PER_HOUR: u32 = 1;
 /// The most actions an hour a rule may take.
@@ -330,6 +337,23 @@ pub enum Trigger {
     Delay {
         #[serde(default)]
         seconds: u32,
+    },
+    /// P3: someone follows the owner's channel (`channel.follow` v2).
+    Follow {},
+    /// P3: a channel point reward is redeemed in the owner's channel;
+    /// `reward_id` None means any reward.
+    RewardRedeemed {
+        #[serde(default)]
+        reward_id: Option<String>,
+    },
+    /// P3: the owner starts a poll (`channel.poll.begin`).
+    PollStarted {},
+    /// P3: the owner starts a prediction (`channel.prediction.begin`).
+    PredictionStarted {},
+    /// P3: a channel in the rule's `These` list goes live (`online`) or offline.
+    LiveChange {
+        #[serde(default = "yes")]
+        online: bool,
     },
 }
 
@@ -641,6 +665,26 @@ pub enum Action {
         #[serde(default)]
         to_file: bool,
     },
+    /// P3: read `text` aloud on this device (one player speaks). A local
+    /// action: no claim, runs in Test and Live, never posts.
+    Speak {
+        #[serde(default)]
+        id: String,
+        #[serde(default)]
+        text: String,
+        /// Also while streamer mode is on.
+        #[serde(default)]
+        on_stream: bool,
+    },
+    /// P3: tint the matches of a Message rule in chat. Not run per event:
+    /// compile hands it to `chat_rules` (`AutoHighlight`).
+    Highlight {
+        #[serde(default)]
+        id: String,
+        /// "#rrggbb".
+        #[serde(default)]
+        color: String,
+    },
 }
 
 fn primary_color() -> String {
@@ -672,7 +716,9 @@ impl Action {
             | Action::JoinChat { id, .. }
             | Action::LeaveChat { id, .. }
             | Action::Wait { id, .. }
-            | Action::Log { id, .. } => id,
+            | Action::Log { id, .. }
+            | Action::Speak { id, .. }
+            | Action::Highlight { id, .. } => id,
         }
     }
 
@@ -691,16 +737,25 @@ impl Action {
             | Action::JoinChat { id, .. }
             | Action::LeaveChat { id, .. }
             | Action::Wait { id, .. }
-            | Action::Log { id, .. } => id,
+            | Action::Log { id, .. }
+            | Action::Speak { id, .. }
+            | Action::Highlight { id, .. } => id,
         }
     }
 
     /// Whether the action acts outside this device (and so claims). Notify,
-    /// Log, JoinChat, LeaveChat and Wait are local or control.
+    /// Log, JoinChat, LeaveChat, Wait, Speak and Highlight are local or
+    /// control.
     pub fn is_outward(&self) -> bool {
         !matches!(
             self,
-            Action::Notify { .. } | Action::Log { .. } | Action::JoinChat { .. } | Action::LeaveChat { .. } | Action::Wait { .. }
+            Action::Notify { .. }
+                | Action::Log { .. }
+                | Action::JoinChat { .. }
+                | Action::LeaveChat { .. }
+                | Action::Wait { .. }
+                | Action::Speak { .. }
+                | Action::Highlight { .. }
         )
     }
 
@@ -805,6 +860,24 @@ impl Rule {
         matches!(self.when, Trigger::BadgeDrop { .. })
     }
 
+    /// P3: fires from the owner's own-channel EventSub topics.
+    pub fn is_own_event_rule(&self) -> bool {
+        matches!(
+            self.when,
+            Trigger::Follow {} | Trigger::RewardRedeemed { .. } | Trigger::PollStarted {} | Trigger::PredictionStarted {}
+        )
+    }
+
+    /// P3: fires when a watched channel goes live or offline.
+    pub fn is_live_rule(&self) -> bool {
+        matches!(self.when, Trigger::LiveChange { .. })
+    }
+
+    /// P3: fires from a source that is not a chat row. It joins no chat.
+    pub fn is_edge_rule(&self) -> bool {
+        self.is_own_event_rule() || self.is_live_rule()
+    }
+
     /// Timer, Clock, Uptime and Delay: fired by time, not by a row.
     pub fn is_timed(&self) -> bool {
         matches!(self.when, Trigger::Timer { .. } | Trigger::Clock { .. } | Trigger::Uptime { .. } | Trigger::Delay { .. })
@@ -816,7 +889,7 @@ impl Rule {
 
     /// A chat row starts it (Message, Mention, FirstMessage, ChannelEvent).
     pub fn is_chat_rule(&self) -> bool {
-        !self.is_badge_rule() && !self.is_timed() && !self.is_whisper_rule()
+        !self.is_badge_rule() && !self.is_timed() && !self.is_whisper_rule() && !self.is_edge_rule()
     }
 }
 
@@ -969,7 +1042,7 @@ fn is_placeholder(inner: &str) -> bool {
 /// Text the chatter wrote: `{message}`, `{N}`, `{N+}`, `{*}`.
 pub fn is_chatter_text(name: &str) -> bool {
     let n = name.to_ascii_lowercase();
-    if n == "message" || n == "*" {
+    if n == "message" || n == "input" || n == "*" {
         return true;
     }
     let digits = n.strip_suffix('+').unwrap_or(&n);
@@ -1006,6 +1079,9 @@ pub struct ValidateCtx {
 /// The chats a rule keeps joined to listen: the owner's for Own, the named
 /// ones for These, none for AnyOpen and Watching.
 pub fn listened_chats(rule: &Rule) -> Vec<String> {
+    if rule.is_edge_rule() {
+        return Vec::new();
+    }
     match &rule.only_if.channels {
         ChannelScope::Own {} if !rule.owner.login.trim().is_empty() => {
             vec![crate::services::chat_rules::channel_filter_key("twitch", rule.owner.login.trim())]
@@ -1119,8 +1195,27 @@ fn normalize(rule: &mut Rule) {
             }
             Action::JoinChat { channel, .. } | Action::LeaveChat { channel, .. } => normalize_chat(channel),
             Action::Whisper { to: Some(target), .. } => target.login = target.login.trim().trim_start_matches('@').to_ascii_lowercase(),
+            Action::Speak { text, .. } => *text = text.trim().to_string(),
+            Action::Highlight { color, .. } => *color = color.trim().to_ascii_lowercase(),
             _ => {}
         }
+    }
+    // P3: an own-channel event happens in your channel, to nobody with a role.
+    if rule.is_own_event_rule() {
+        rule.only_if.channels = ChannelScope::Own {};
+        rule.only_if.roles.clear();
+        rule.only_if.shared_chat = false;
+    }
+    // P3: a live change watches the channels the rule names, and nothing about people.
+    if rule.is_live_rule() {
+        if !matches!(rule.only_if.channels, ChannelScope::These { .. }) {
+            rule.only_if.channels = ChannelScope::These { list: Vec::new() };
+        }
+        rule.only_if.roles.clear();
+        rule.only_if.skip_users.clear();
+        rule.only_if.only_users.clear();
+        rule.only_if.only_live = false;
+        rule.only_if.shared_chat = false;
     }
     fill_ids(rule);
 }
@@ -1439,12 +1534,19 @@ pub fn validate(rule: &mut Rule, ctx: &ValidateCtx) -> Vec<FieldError> {
             }
             check_outward_text("when.batch_text", batch_text, &scope, &mut errors);
         }
+        Trigger::RewardRedeemed { reward_id: Some(id) }
+            if id.trim().is_empty() || id.chars().count() > 64 || id.chars().any(char::is_control) =>
+        {
+            errors.push("when.reward_id", "Pick a reward");
+        }
         _ => {}
     }
     check_p2_trigger(rule, &mut errors);
 
     if let ChannelScope::These { list } = &rule.only_if.channels {
-        if list.is_empty() {
+        let unfinished_template =
+            !rule.enabled && rule.origin.as_deref() == Some("template:friend-live") && rule.is_live_rule();
+        if list.is_empty() && !unfinished_template {
             errors.push("only_if.channels", "Pick at least one channel");
         }
         if list.len() > MAX_RULE_CHANNELS {
@@ -1481,6 +1583,9 @@ pub fn validate(rule: &mut Rule, ctx: &ValidateCtx) -> Vec<FieldError> {
         if scope.badge_rule && matches!(action, Action::Reply { .. }) {
             errors.push(at.clone(), "Badge rules can post a message or notify you, not reply");
         }
+        if rule.is_edge_rule() && matches!(action, Action::Reply { .. }) {
+            errors.push(at.clone(), "There is no message to reply to here; post a message instead");
+        }
         match action {
             Action::Reply { texts, .. } | Action::Send { texts, .. } => {
                 if texts.is_empty() {
@@ -1505,6 +1610,38 @@ pub fn validate(rule: &mut Rule, ctx: &ValidateCtx) -> Vec<FieldError> {
             Action::Notify { title, body, .. } => {
                 check_local_text(&format!("{at}.title"), title, &scope, &mut errors);
                 check_local_text(&format!("{at}.body"), body, &scope, &mut errors);
+            }
+            Action::Speak { text, .. } => {
+                let path = format!("{at}.text");
+                if text.trim().is_empty() {
+                    errors.push(path.clone(), "Write what to say");
+                } else if text.chars().count() > MAX_SPEAK_CHARS {
+                    errors.push(path.clone(), "Keep it to 300 characters");
+                }
+                // The chatter-text rule applies to what is read aloud (PLAN § 11.2).
+                check_outward_text(&path, text, &scope, &mut errors);
+            }
+            Action::Highlight { color, .. } => {
+                if !is_hex_color(color) {
+                    errors.push(format!("{at}.color"), "Pick a color");
+                }
+                if !matches!(rule.when, Trigger::Message { .. }) {
+                    errors.push(at.clone(), "A highlight works only when someone says certain words");
+                } else {
+                    // Only what the read loop can judge for one message.
+                    if matches!(rule.only_if.channels, ChannelScope::Watching {}) {
+                        errors.push("only_if.channels", "A highlight can't follow the stream you're watching");
+                    }
+                    if rule.only_if.only_live {
+                        errors.push("only_if.only_live", "A highlight can't wait for the stream to be live");
+                    }
+                    if rule.only_if.only_away {
+                        errors.push("only_if.only_away", "A highlight can't wait for you to be away");
+                    }
+                    if rule.only_if.hours.is_some() {
+                        errors.push("only_if.hours", "A highlight can't use hours");
+                    }
+                }
             }
             other => check_p2_action(rule, other, &at, &scope, &mut errors),
         }
@@ -1947,5 +2084,123 @@ mod tests {
         assert_eq!(parse_hhmm("09:30"), Some(570));
         assert_eq!(parse_hhmm("23:59"), Some(1439));
         assert_eq!(parse_hhmm("24:00"), None);
+    }
+
+    fn p3_rule(when: Trigger, action: Action) -> Rule {
+        Rule { name: "P3".into(), owner: me(), send_as: me(), when, actions: vec![action], ..Rule::default() }
+    }
+
+    fn speak(text: &str) -> Action {
+        Action::Speak { id: String::new(), text: text.into(), on_stream: false }
+    }
+
+    #[test]
+    fn p3_triggers_and_actions_round_trip_with_explicit_nulls() {
+        for (when, kind) in [
+            (Trigger::Follow {}, "follow"),
+            (Trigger::RewardRedeemed { reward_id: None }, "reward_redeemed"),
+            (Trigger::PollStarted {}, "poll_started"),
+            (Trigger::PredictionStarted {}, "prediction_started"),
+            (Trigger::LiveChange { online: false }, "live_change"),
+        ] {
+            let v = serde_json::to_value(&when).unwrap();
+            assert_eq!(v["kind"], kind);
+            assert_eq!(serde_json::from_value::<Trigger>(v.clone()).unwrap(), when);
+            if kind == "reward_redeemed" {
+                assert!(v.get("reward_id").is_some_and(Value::is_null), "an explicit null clears the reward");
+            }
+        }
+        assert_eq!(serde_json::from_value::<Trigger>(json!({ "kind": "live_change" })).unwrap(), Trigger::LiveChange { online: true });
+        let s = serde_json::to_value(speak("hi")).unwrap();
+        assert_eq!((s["kind"].as_str(), s["on_stream"].as_bool()), (Some("speak"), Some(false)));
+        let h: Action = serde_json::from_value(json!({ "kind": "highlight", "color": "#ff8800" })).unwrap();
+        assert_eq!(h.id(), "");
+        assert!(!speak("x").is_outward() && !h.is_outward());
+    }
+
+    #[test]
+    fn a_p3_rule_is_forced_into_its_shape() {
+        let mut follow = p3_rule(Trigger::Follow {}, notify("x"));
+        follow.only_if.channels = ChannelScope::AnyOpen {};
+        follow.only_if.roles = vec![SenderRole::Moderator];
+        assert!(validate(&mut follow, &ValidateCtx::default()).is_empty());
+        assert_eq!(follow.only_if.channels, ChannelScope::Own {});
+        assert!(follow.only_if.roles.is_empty());
+        assert!(listened_chats(&follow).is_empty(), "an own-channel event joins no chat");
+
+        let mut live = p3_rule(Trigger::LiveChange { online: true }, notify("x"));
+        live.only_if.only_live = true;
+        let errors = validate(&mut live, &ValidateCtx::default());
+        assert!(has(&errors, "only_if.channels"), "a live change needs a channel");
+        assert!(!live.only_if.only_live && listened_chats(&live).is_empty());
+        live.only_if.channels = ChannelScope::These { list: vec![chat("friend")] };
+        assert!(validate(&mut live, &ValidateCtx::default()).is_empty());
+    }
+
+    #[test]
+    fn p3_actions_are_checked() {
+        let ctx = ValidateCtx::default();
+        let mut reply = p3_rule(Trigger::Follow {}, reply("hi"));
+        assert!(has(&validate(&mut reply, &ctx), "actions[0]"), "no message to reply to");
+        let mut send = p3_rule(Trigger::Follow {}, Action::Send { id: String::new(), to: None, texts: vec![line("Welcome {user}")], pick: Pick::Random });
+        assert!(validate(&mut send, &ctx).is_empty(), "a Send posts in your own channel");
+
+        let mut empty = p3_rule(Trigger::Follow {}, speak("  "));
+        assert!(has(&validate(&mut empty, &ctx), "actions[0].text"));
+        let mut long = p3_rule(Trigger::Follow {}, speak(&"a".repeat(MAX_SPEAK_CHARS + 1)));
+        assert!(has(&validate(&mut long, &ctx), "actions[0].text"));
+        let mut exact = p3_rule(Trigger::Follow {}, speak(&"a".repeat(MAX_SPEAK_CHARS)));
+        assert!(validate(&mut exact, &ctx).is_empty());
+        let mut input = p3_rule(Trigger::RewardRedeemed { reward_id: None }, speak("{input}"));
+        assert!(has(&validate(&mut input, &ctx), "actions[0].text"), "{{input}} is chatter text");
+        let mut input_note = p3_rule(Trigger::RewardRedeemed { reward_id: None }, Action::Notify { id: String::new(), title: "{reward}".into(), body: "{input}".into(), toast: true, system: false, sound: None, volume: 1.0 });
+        assert!(validate(&mut input_note, &ctx).is_empty(), "a Notify may show it");
+
+        let mut bad_reward = p3_rule(Trigger::RewardRedeemed { reward_id: Some("  ".into()) }, notify("x"));
+        assert!(has(&validate(&mut bad_reward, &ctx), "when.reward_id"));
+    }
+
+    #[test]
+    fn a_highlight_is_for_message_rules_with_conditions_the_read_loop_can_judge() {
+        let ctx = ValidateCtx::default();
+        let hl = |color: &str| Action::Highlight { id: String::new(), color: color.into() };
+        let message = |text: &str| Trigger::Message { text: TextMatch { mode: MatchMode::Contains, pattern: text.into(), case_sensitive: false } };
+        let mut ok = p3_rule(message("hi"), hl("#FF8800"));
+        assert!(validate(&mut ok, &ctx).is_empty());
+        assert!(matches!(&ok.actions[0], Action::Highlight { color, .. } if color == "#ff8800"), "stored lowercase");
+        for bad in ["", "ff8800", "#ff88", "#gg0000", "red"] {
+            let mut r = p3_rule(message("hi"), hl(bad));
+            assert!(has(&validate(&mut r, &ctx), "actions[0].color"), "{bad}");
+        }
+        let mut mention = p3_rule(Trigger::Mention { replies_too: false }, hl("#ff8800"));
+        assert!(has(&validate(&mut mention, &ctx), "actions[0]"));
+        let mut watching = p3_rule(message("hi"), hl("#ff8800"));
+        watching.only_if.channels = ChannelScope::Watching {};
+        watching.only_if.only_live = true;
+        watching.only_if.only_away = true;
+        watching.only_if.hours = Some(Hours { from: "09:00".into(), to: "17:00".into(), days: vec![] });
+        let errors = validate(&mut watching, &ctx);
+        for path in ["only_if.channels", "only_if.only_live", "only_if.only_away", "only_if.hours"] {
+            assert!(has(&errors, path), "{path}");
+        }
+    }
+
+    #[test]
+    fn the_friend_template_may_be_saved_unfinished_and_nothing_else_may() {
+        let mut template = p3_rule(Trigger::LiveChange { online: true }, notify("{channel} is live"));
+        template.enabled = false;
+        template.origin = Some("template:friend-live".into());
+        assert!(validate(&mut template, &ValidateCtx::default()).is_empty());
+        template.enabled = true;
+        assert!(has(&validate(&mut template, &ValidateCtx::default()), "only_if.channels"));
+        let mut other = p3_rule(Trigger::LiveChange { online: true }, notify("x"));
+        other.enabled = false;
+        assert!(has(&validate(&mut other, &ValidateCtx::default()), "only_if.channels"));
+    }
+
+    #[test]
+    fn input_is_chatter_text_and_reward_is_not() {
+        assert!(is_chatter_text("input") && is_chatter_text("INPUT"));
+        assert!(!is_chatter_text("reward") && !is_chatter_text("poll") && !is_chatter_text("prediction"));
     }
 }
