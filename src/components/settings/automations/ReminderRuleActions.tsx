@@ -6,6 +6,7 @@ import { useAppStore } from '../../../stores/AppStore';
 import { useAutomationStatusStore } from '../../../hooks/useAutomationStatus';
 import { errorText } from '../../../utils/automations';
 import { convertReminder, restoreReminder, ruleMadeFrom } from '../../../utils/reminderRules';
+import { Tooltip } from '../../ui/Tooltip';
 import { QUIET_BUTTON } from './parts';
 
 const PROBLEM = 'max-w-xs text-right text-[11.5px] leading-snug text-error';
@@ -27,15 +28,17 @@ export function MakeRuleButton({ reminderId }: { reminderId: string }) {
 
   return (
     <div className="flex flex-col items-end gap-1">
-      <button
-        type="button"
-        onClick={run}
-        disabled={busy}
-        title="Build a rule from this reminder, in Test. The reminder switches off, and you can turn it back on."
-        className={QUIET_BUTTON}
+      <Tooltip
+        content={
+          <span className="block max-w-[32ch] text-left leading-relaxed">
+            Build a rule from this reminder, in Test. The reminder switches off, and you can turn it back on.
+          </span>
+        }
       >
-        Make it a rule
-      </button>
+        <button type="button" onClick={run} disabled={busy} className={QUIET_BUTTON}>
+          Make it a rule
+        </button>
+      </Tooltip>
       {problem && (
         <p role="alert" className={PROBLEM}>
           {problem}
