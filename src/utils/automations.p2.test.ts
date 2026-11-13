@@ -10,16 +10,17 @@ import {
   blankRule,
   isOutward,
   joinCommand,
+  nextTimeout,
   offeredP2Actions,
   pickCategory,
   resolveSetGames,
   saveRuleChecked,
   shownArgument,
   splitCommand,
+  timeoutWords,
   triggerOf,
   withTrigger,
 } from './automations';
-import { nextTimeout, timeoutWords } from '../components/settings/automations/P2Fields';
 
 const owner = { provider: 'twitch', id: '1', login: 'me', name: 'me' };
 
@@ -67,7 +68,7 @@ describe('P2 editor helpers', () => {
     });
 
     it('says it could not look the categories up, with the reason, when the lookup fails', async () => {
-      invoke.mockRejectedValue('Sign in to Twitch first');
+      invoke.mockRejectedValueOnce('Sign in to Twitch first');
       const { problems } = await resolveSetGames([actionOf('notify'), setgame('/setgame art')]);
       expect(problems).toEqual([{ path: 'actions[1].line', message: "Couldn't look up categories: Sign in to Twitch first" }]);
     });

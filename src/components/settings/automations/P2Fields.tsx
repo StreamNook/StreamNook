@@ -20,9 +20,11 @@ import {
   errorAt,
   errorText,
   joinCommand,
+  nextTimeout,
   offeredP2Actions,
   shownArgument,
   splitCommand,
+  timeoutWords,
   type P2Action,
 } from '../../../utils/automations';
 import { ChannelPicker } from '../ChannelPicker';
@@ -460,21 +462,6 @@ export function P2ActionFields({
         </div>
       );
   }
-}
-
-const TIMEOUT_STEPS = [1, 10, 60, 300, 600, 1800, 3600, 21600, 86400, 259200, 604800, 1209600];
-
-/** The next preset step from `seconds`, up or down. */
-export function nextTimeout(seconds: number, dir: -1 | 1): number {
-  if (dir > 0) return TIMEOUT_STEPS.find((s) => s > seconds) ?? 1_209_600;
-  return [...TIMEOUT_STEPS].reverse().find((s) => s < seconds) ?? 1;
-}
-
-export function timeoutWords(seconds: number): string {
-  if (seconds % 86400 === 0) return `${seconds / 86400} day${seconds === 86400 ? '' : 's'}`;
-  if (seconds % 3600 === 0) return `${seconds / 3600} hour${seconds === 3600 ? '' : 's'}`;
-  if (seconds % 60 === 0) return `${seconds / 60} min`;
-  return `${seconds} s`;
 }
 
 /** Open folder on the desktop, Share on a phone. */

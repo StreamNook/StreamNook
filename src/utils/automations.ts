@@ -772,3 +772,19 @@ export const clockText = (ms: number): string =>
 
 export const dayText = (ms: number): string =>
   new Date(ms).toLocaleDateString([], { month: 'short', day: 'numeric' });
+
+const TIMEOUT_STEPS = [1, 10, 60, 300, 600, 1800, 3600, 21600, 86400, 259200, 604800, 1209600];
+
+/** The next preset Timeout step from `seconds`, up or down. */
+export function nextTimeout(seconds: number, dir: -1 | 1): number {
+  if (dir > 0) return TIMEOUT_STEPS.find((s) => s > seconds) ?? 1_209_600;
+  return [...TIMEOUT_STEPS].reverse().find((s) => s < seconds) ?? 1;
+}
+
+/** A Timeout length in words: "1 day", "2 hours", "10 min", "30 s". */
+export function timeoutWords(seconds: number): string {
+  if (seconds % 86400 === 0) return `${seconds / 86400} day${seconds === 86400 ? '' : 's'}`;
+  if (seconds % 3600 === 0) return `${seconds / 3600} hour${seconds === 3600 ? '' : 's'}`;
+  if (seconds % 60 === 0) return `${seconds / 60} min`;
+  return `${seconds} s`;
+}
