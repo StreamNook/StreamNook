@@ -1,0 +1,65 @@
+{
+  "about": "The cheer row's rules, read by vitest (src/utils/cheerRow.test.ts) and SNKit (ios/Tests/SNKitTests/CheerRowTests.swift). In a message, a number is a cheermote carrying that many bits and a string is text.",
+  "gem": "https://d3aqoihi2n8ty8.cloudfront.net/actions/cheer/dark/animated/{tier}/2.gif",
+  "tiers": [
+    { "bits": 1, "tier": "1", "color": "#979797" },
+    { "bits": 99, "tier": "1", "color": "#979797" },
+    { "bits": 100, "tier": "100", "color": "#9c3ee8" },
+    { "bits": 999, "tier": "100", "color": "#9c3ee8" },
+    { "bits": 1000, "tier": "1000", "color": "#1db2a6" },
+    { "bits": 4999, "tier": "1000", "color": "#1db2a6" },
+    { "bits": 5000, "tier": "5000", "color": "#0099fe" },
+    { "bits": 9999, "tier": "5000", "color": "#0099fe" },
+    { "bits": 10000, "tier": "10000", "color": "#ff1f1f" },
+    { "bits": 250000, "tier": "10000", "color": "#ff1f1f" }
+  ],
+  "units": [
+    { "bits": 1, "unit": "bit" },
+    { "bits": 2, "unit": "bits" },
+    { "bits": 100, "unit": "bits" }
+  ],
+  "messages": [
+    {
+      "name": "one cheer before the words",
+      "message": [100, " streamer awards are pike political voting, vote for funnzies"],
+      "lead": 0,
+      "body": ["streamer awards are pike political voting, vote for funnzies"],
+      "hasContent": true
+    },
+    {
+      "name": "the cheer after the words",
+      "message": ["gg ", 500],
+      "lead": 1,
+      "body": ["gg "],
+      "hasContent": true
+    },
+    {
+      "name": "the biggest of several leads, the rest stay in the message",
+      "message": [1, " and ", 1000, " and ", 100],
+      "lead": 2,
+      "body": [1, " and ", " and ", 100],
+      "hasContent": true
+    },
+    {
+      "name": "the first of equals leads",
+      "message": ["hi ", 100, " ", 100],
+      "lead": 1,
+      "body": ["hi ", " ", 100],
+      "hasContent": true
+    },
+    {
+      "name": "a bare cheer leaves no message",
+      "message": [100, "  "],
+      "lead": 0,
+      "body": [""],
+      "hasContent": false
+    },
+    {
+      "name": "no cheermote: the row leads with the gem and keeps every word",
+      "message": ["  thanks"],
+      "lead": -1,
+      "body": ["thanks"],
+      "hasContent": true
+    }
+  ]
+}

@@ -8,6 +8,7 @@ import { queueEmoteForDisplayCaching, getCachedEmoteUrl, getEmoteLookup, inlineE
 import { isDiskCopyUrl } from '../utils/cacheFileUrl';
 import { getCachedEmojiUrl, parseEmojisSync } from '../services/emojiService';
 import { calculateHalfPadding } from '../utils/chatLayoutUtils';
+import { cheerBody, cheerTier, cheerUnit, leadCheerIndex } from '../utils/cheerRow';
 import { mentionHoldBackground } from './chat/mentionHold';
 import { withEmoteWord } from './chat/emoteWords';
 import { deletedBodyStyle, deletedRowDimmed, DEFAULT_DELETED_STYLE } from './chat/deletedMessage';
@@ -2586,16 +2587,10 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     // most bits), so it comes out of the message below; any others stay
     // inline. No cheermote segment (an odd payload) falls back to Twitch's
     // own gem for the amount.
-    const leadIdx = contentWithEmotes.reduce(
-      (best, seg, i) =>
-        seg.type === 'cheermote' && (best < 0 || (seg.bits ?? 0) > (contentWithEmotes[best].bits ?? 0)) ? i : best,
-      -1,
-    );
+    // (src/utils/cheerRow.ts: the rules the iPhone's row follows too.)
+    const leadIdx = leadCheerIndex(contentWithEmotes);
     const leadCheermote = leadIdx >= 0 ? contentWithEmotes[leadIdx] : null;
-    const bodySegments = (leadIdx >= 0 ? contentWithEmotes.filter((_, i) => i !== leadIdx) : contentWithEmotes).map(
-      (seg, i) => (i === 0 && seg.type === 'text' ? { ...seg, content: seg.content.trimStart() } : seg),
-    );
-    const bodyHasContent = bodySegments.some((seg) => seg.type !== 'text' || seg.content.trim() !== '');
+    const { body: bodySegments, hasContent: bodyHasContent } = cheerBody(contentWithEmotes, leadIdx);
 
     // Defensive: EventSub shows gigantified messages arrive with cheer:null,
     // but `bits` is a plain IRC tag; if both ever co-occur, the giant must
@@ -2605,22 +2600,9 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
         ? pluckGiantEmote(bodySegments)
         : null;
 
-    // Determine bits tier color based on amount (matching Twitch's color scheme)
-    const getBitsTierColor = (bits: number): string => {
-      if (bits >= 10000) return '#ff1f1f'; // Red
-      if (bits >= 5000) return '#0099fe'; // Blue
-      if (bits >= 1000) return '#1db2a6'; // Teal
-      if (bits >= 100) return '#9c3ee8'; // Purple
-      return '#979797'; // Gray (1-99)
-    };
-
-    const bitsTierColor = getBitsTierColor(bitsCount);
-
-    // Twitch's own animated bits gem for this tier (same CDN pattern the Rust
-    // cheermote parser builds); tier thresholds mirror getBitsTierColor.
-    const bitsTier =
-      bitsCount >= 10000 ? '10000' : bitsCount >= 5000 ? '5000' : bitsCount >= 1000 ? '1000' : bitsCount >= 100 ? '100' : '1';
-    const bitsAnimUrl = `https://d3aqoihi2n8ty8.cloudfront.net/actions/cheer/dark/animated/${bitsTier}/2.gif`;
+    // Twitch's tier color for the amount, and its own animated gem for the
+    // tier (the CDN pattern the Rust cheermote parser builds).
+    const { color: bitsTierColor, gemUrl: bitsAnimUrl } = cheerTier(bitsCount);
 
     // Helper function to render username as clickable. Render path uses the
     // effective display name (so nicknames apply); the click payload keeps
@@ -2722,7 +2704,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
                     className="inline-flex items-center rounded-full px-1.5 align-[1px] text-[0.86em] font-bold leading-[1.45] tabular-nums"
                     style={{ color: bitsTierColor, boxShadow: `inset 0 0 0 1px color-mix(in srgb, ${bitsTierColor} 45%, transparent)` }}
                   >
-                    {formattedBits} {bitsCount === 1 ? 'bit' : 'bits'}
+                    {formattedBits} {cheerUnit(bitsCount)}
                   </span>
                 </>
               )}
