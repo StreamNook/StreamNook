@@ -465,11 +465,13 @@ pub fn automations_test(sample: TryRequest) -> Result<TryAnswer, String> {
             group.run = RunState::Test;
             let own = engine.outward.own_accounts();
             let profile = engine.outward.profile_user_id();
+            let primary = engine.outward.primary_id();
             let compiled = compile(&CompileInput {
                 automations: &group,
                 prefs: &prefs,
                 own_accounts: &own,
                 profile_user_id: profile.as_deref(),
+                primary_id: primary.as_deref(),
             });
             (std::sync::Arc::new(compiled), Some(errors))
         }

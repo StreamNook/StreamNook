@@ -3952,6 +3952,7 @@ impl IrcService {
         // the engine's claim keeps it joined.
         if window != ENGINE_LABEL && non_engine_holders(&*get_channel_consumers().lock().await, &key) == 0 {
             ensured_clear(&key);
+            crate::services::account_automations::note_window_release(&key);
         }
         // The engine never PARTs a room the warm-up joined.
         if remaining == 0 && engine_leave_keeps_room(window, ensured_has(&key)) {
@@ -3995,6 +3996,7 @@ impl IrcService {
                 for room in held {
                     if non_engine_holders(&claims, &room) == 0 {
                         ensured_clear(&room);
+                        crate::services::account_automations::note_window_release(&room);
                     }
                 }
             }
