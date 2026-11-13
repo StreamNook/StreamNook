@@ -13,7 +13,7 @@ use serde::Serialize;
 
 use super::badges;
 use super::compile::{Compiled, CompiledRule};
-use super::facts::{Facts, RowKind};
+use super::facts::{Facts, OwnKind, RowKind};
 use crate::models::automations::{parse_hhmm, Away, ChannelScope, EventKind, Hours, Trigger, Weekday};
 use crate::services::chat_rules::mentions_login;
 
@@ -320,7 +320,44 @@ fn trigger_fit(cr: &CompiledRule, facts: &Facts) -> Result<&'static str, String>
                 Err("Not a timed fire".to_string())
             }
         }
+        Trigger::Follow {} => own_fit(cr, facts, |k| matches!(k, OwnKind::Follow), "Someone followed you"),
+        Trigger::RewardRedeemed { reward_id } => {
+            let ok = own_fit(cr, facts, |k| matches!(k, OwnKind::Reward), "A reward was redeemed")?;
+            let wanted = reward_id.as_deref().map(str::trim).filter(|r| !r.is_empty());
+            match (wanted, &facts.own) {
+                (Some(want), Some(own)) if own.reward_id != want => Err("Not the reward this rule watches".to_string()),
+                _ => Ok(ok),
+            }
+        }
+        Trigger::PollStarted {} => own_fit(cr, facts, |k| matches!(k, OwnKind::Poll), "You started a poll"),
+        Trigger::PredictionStarted {} => own_fit(cr, facts, |k| matches!(k, OwnKind::Prediction), "You started a prediction"),
+        Trigger::LiveChange { online } => match facts.own.as_ref().map(|o| o.kind) {
+            Some(OwnKind::Live { online: seen }) if seen == *online => {
+                Ok(if *online { "A watched channel went live" } else { "A watched channel went offline" })
+            }
+            Some(OwnKind::Live { .. }) => Err("The other kind of change".to_string()),
+            _ => Err("Not a live change".to_string()),
+        },
     }
+}
+
+/// An own-channel event of the kind `want` in this rule's owner's channel.
+fn own_fit(
+    cr: &CompiledRule,
+    facts: &Facts,
+    want: impl Fn(&OwnKind) -> bool,
+    ok: &'static str,
+) -> Result<&'static str, String> {
+    let Some(own) = &facts.own else {
+        return Err("Not an event from your channel".to_string());
+    };
+    if !want(&own.kind) {
+        return Err("Not this kind of event".to_string());
+    }
+    if own.owner_id != cr.rule.owner.id {
+        return Err("Not this account's channel".to_string());
+    }
+    Ok(ok)
 }
 
 fn channel_fit(cr: &CompiledRule, facts: &Facts) -> Result<&'static str, &'static str> {
@@ -376,7 +413,7 @@ mod tests {
     use super::*;
     use crate::models::automations::{BadgeLeg, BadgeLink, ChannelScope, MatchMode, Rule, RunState, SenderRole, TextMatch};
     use crate::services::account_automations::badges::{BadgeInfo, BadgePhase, BadgeSeen, Presence};
-    use crate::services::account_automations::compile::fixtures::{chat, compiled_with, reply, rule, send, ME};
+    use crate::services::account_automations::compile::fixtures::{chat, compiled_with, notify, reply, rule, send, ME};
     use crate::services::account_automations::facts::{from_badge, from_chat, rows};
 
     fn noon() -> LocalTime {
@@ -673,5 +710,72 @@ mod tests {
         let off = compiled_with(&[mention(false)], RunState::Off);
         assert!(evaluate(&off, &row("@me hi"), &ctx()).is_empty());
         assert!(try_all(&off, &row("@me hi"), &ctx())[0].fired);
+    }
+
+    fn plain_ctx() -> Ctx<'static> {
+        Ctx {
+            away: None,
+            local: LocalTime::from_naive(chrono::NaiveDate::from_ymd_opt(2026, 11, 13).unwrap().and_hms_opt(12, 0, 0).unwrap()),
+            trace: false,
+        }
+    }
+
+    fn fired(c: &Compiled, facts: &Facts) -> Vec<String> {
+        evaluate(c, facts, &plain_ctx()).into_iter().filter(|v| v.fired).map(|v| v.rule_id).collect()
+    }
+
+    #[test]
+    fn own_events_fire_the_rules_of_their_kind_owner_and_reward() {
+        use crate::services::account_automations::facts::from_own;
+        use crate::services::account_automations::own_topics::TopicKind;
+        let c = compiled_with(
+            &[
+                rule("f", Trigger::Follow {}, vec![notify("x")]),
+                rule("p", Trigger::PollStarted {}, vec![notify("x")]),
+                rule("r1", Trigger::RewardRedeemed { reward_id: Some("rw-1".into()) }, vec![notify("x")]),
+                rule("r2", Trigger::RewardRedeemed { reward_id: Some("rw-2".into()) }, vec![notify("x")]),
+                rule("any", Trigger::RewardRedeemed { reward_id: None }, vec![notify("x")]),
+            ],
+            RunState::On,
+        );
+        let redeem = serde_json::json!({ "id": "red-1", "user_id": "8", "user_login": "viewer", "reward": { "id": "rw-1", "title": "Hydrate" } });
+        let facts = from_own(TopicKind::Redemption, &redeem, ME, "me", 0).unwrap();
+        assert_eq!(fired(&c, &facts), vec!["r1", "any"], "only the reward it names, and the any rule");
+        let follow = from_own(TopicKind::Follow, &serde_json::json!({ "user_id": "7", "followed_at": "2026-11-13T05:00:00Z" }), ME, "me", 0).unwrap();
+        assert_eq!(fired(&c, &follow), vec!["f"]);
+        let other = from_own(TopicKind::Follow, &serde_json::json!({ "user_id": "7", "followed_at": "2026-11-13T05:00:00Z" }), "999", "someoneelse", 0).unwrap();
+        assert!(fired(&c, &other).is_empty(), "another account's channel fires none of these rules");
+        let poll = from_own(TopicKind::PollBegin, &serde_json::json!({ "id": "p1", "title": "Pizza?" }), ME, "me", 0).unwrap();
+        assert_eq!(fired(&c, &poll), vec!["p"]);
+    }
+
+    #[test]
+    fn a_live_change_fires_for_its_channel_and_direction() {
+        use crate::services::account_automations::facts::from_live;
+        let mut up = rule("up", Trigger::LiveChange { online: true }, vec![notify("x")]);
+        up.only_if.channels = ChannelScope::These { list: vec![chat("friend", "555")] };
+        let mut down = rule("down", Trigger::LiveChange { online: false }, vec![notify("x")]);
+        down.only_if.channels = ChannelScope::These { list: vec![chat("friend", "555")] };
+        let c = compiled_with(&[up, down], RunState::On);
+        assert_eq!(fired(&c, &from_live("friend", "555", true, 9, 0)), vec!["up"]);
+        assert_eq!(fired(&c, &from_live("friend", "555", false, 9, 0)), vec!["down"]);
+        assert!(fired(&c, &from_live("stranger", "9", true, 9, 0)).is_empty());
+    }
+
+    #[test]
+    fn a_chat_rule_never_fires_on_an_own_event() {
+        use crate::services::account_automations::facts::from_own;
+        use crate::services::account_automations::own_topics::TopicKind;
+        let c = compiled_with(
+            &[
+                rule("m", Trigger::Mention { replies_too: true }, vec![notify("x")]),
+                rule("first", Trigger::FirstMessage {}, vec![notify("x")]),
+                rule("ev", Trigger::ChannelEvent { events: vec![EventKind::Sub], min_months: 0, min_gifts: 0, min_viewers: 0, min_bits: 0 }, vec![notify("x")]),
+            ],
+            RunState::On,
+        );
+        let follow = from_own(TopicKind::Follow, &serde_json::json!({ "user_id": "7", "followed_at": "2026-11-13T05:00:00Z" }), ME, "me", 0).unwrap();
+        let verdicts = try_all(&c, &follow, &plain_ctx());
+        assert!(verdicts.iter().all(|v| !v.fired), "{:?}", verdicts.iter().map(|v| &v.reason).collect::<Vec<_>>());
     }
 }

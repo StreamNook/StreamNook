@@ -18,6 +18,11 @@ const TEMPLATES: &[(&str, &str, &str)] = &[
     ("raid-thanks", "Raid thanks", "Thanks a raider and welcomes their viewers"),
     ("sub-thanks", "Sub and gift thanks", "Thanks new subs, resubs and gifted subs"),
     ("badge-news", "Badge news", "Posts each new Twitch badge in your chat while you're live"),
+    (
+        "friend-live",
+        "Friend goes live",
+        "Shows you a card when a channel you pick goes live. Your go-live alerts still show as before",
+    ),
 ];
 
 /// One template as the page lists it.
@@ -107,6 +112,23 @@ pub fn template_rule(id: &str, primary: &AccountRef, now_ms: i64) -> Option<Rule
             rule.limits.rule_cooldown_seconds = 0;
             rule.actions = vec![send("New Twitch badge just dropped: {badge}! {badge.how} {badge.link}")];
         }
+        "friend-live" => {
+            // Added switched off: it needs a channel, and the page opens the
+            // editor on it (`validate` allows this one unfinished shape).
+            rule.enabled = false;
+            rule.when = Trigger::LiveChange { online: true };
+            rule.only_if.channels = ChannelScope::These { list: Vec::new() };
+            rule.limits = Limits { rule_cooldown_seconds: 0, user_cooldown_seconds: 0, ..Limits::default() };
+            rule.actions = vec![Action::Notify {
+                id: String::new(),
+                title: "{channel} is live".to_string(),
+                body: "{title}".to_string(),
+                toast: true,
+                system: false,
+                sound: Some("boop".to_string()),
+                volume: 1.0,
+            }];
+        }
         _ => return None,
     }
     Some(rule)
@@ -122,7 +144,7 @@ mod tests {
     fn every_template_saves_as_a_test_rule_of_the_main_account() {
         for view in templates() {
             let mut rule = template_rule(view.id, &me(), 42).unwrap();
-            assert!(!rule.live && rule.enabled, "{}", view.id);
+            assert!(!rule.live && (rule.enabled || view.id == "friend-live"), "{}", view.id);
             assert_eq!(rule.owner, me());
             assert_eq!(rule.send_as, me());
             assert_eq!(rule.origin.as_deref(), Some(format!("template:{}", view.id).as_str()));
@@ -133,7 +155,7 @@ mod tests {
         }
         assert_eq!(
             templates().iter().map(|t| t.id).collect::<Vec<_>>(),
-            vec!["away-reply", "welcome", "raid-thanks", "sub-thanks", "badge-news"]
+            vec!["away-reply", "welcome", "raid-thanks", "sub-thanks", "badge-news", "friend-live"]
         );
         assert!(template_rule("nope", &me(), 0).is_none());
     }
@@ -162,5 +184,17 @@ mod tests {
             templates()[4].summary,
             "When a new Twitch badge is announced or can be earned in your channel while you're live: send a message"
         );
+    }
+
+    #[test]
+    fn friend_goes_live_waits_for_a_channel_and_a_switch() {
+        let rule = template_rule("friend-live", &me(), 0).unwrap();
+        assert!(!rule.enabled && !rule.live);
+        assert_eq!(rule.when, Trigger::LiveChange { online: true });
+        assert!(matches!(&rule.only_if.channels, ChannelScope::These { list } if list.is_empty()));
+        assert!(matches!(&rule.actions[0], Action::Notify { toast: true, system: false, sound: Some(_), .. }));
+        let view = templates().into_iter().find(|t| t.id == "friend-live").unwrap();
+        assert!(view.description.contains("go-live alerts still show as before"));
+        assert!(view.summary.starts_with("When a channel you pick goes live"));
     }
 }

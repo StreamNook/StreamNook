@@ -58,6 +58,20 @@ pub struct TimedFired {
     pub fired_for: i64,
 }
 
+/// Channels remembered for live edges, at most (the least recent is not
+/// tracked: a stamp dropped over this only risks one repeat edge, which the
+/// claim then answers once across devices).
+pub const LIVE_EDGES_MAX: usize = 200;
+
+/// The last live edges this device answered for one channel, as the
+/// broadcast's start in epoch seconds (0: none yet).
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(default)]
+pub struct LiveStamp {
+    pub online_started_s: i64,
+    pub offline_started_s: i64,
+}
+
 /// Every rule's memory on this device.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[serde(default)]
@@ -67,6 +81,9 @@ pub struct Counts {
     /// The last whisper ids the engine saw (a ring of `WHISPER_IDS_MAX`), so a
     /// whisper the history sync filed first, or a re-delivery, fires once.
     pub whisper_ids: Vec<String>,
+    /// P3: per channel, the broadcasts whose live and offline edges this
+    /// device already answered (once per `started_at`, across restarts).
+    pub live_edges: HashMap<String, LiveStamp>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -116,6 +133,24 @@ impl Counts {
     /// `{count}`: times the rule acted.
     pub fn count(&self, rule_id: &str) -> u64 {
         self.rules.get(rule_id).map_or(0, |r| r.count)
+    }
+
+    /// Note a live edge. False when this broadcast's edge of this kind was
+    /// already answered here (so a restart or a second source never repeats it).
+    pub fn note_live_edge(&mut self, login: &str, online: bool, started_s: i64) -> bool {
+        let key = login.trim().to_ascii_lowercase();
+        let stamp = self.live_edges.entry(key.clone()).or_default();
+        let slot = if online { &mut stamp.online_started_s } else { &mut stamp.offline_started_s };
+        if *slot == started_s {
+            return false;
+        }
+        *slot = started_s;
+        if self.live_edges.len() > LIVE_EDGES_MAX {
+            if let Some(other) = self.live_edges.keys().find(|k| **k != key).cloned() {
+                self.live_edges.remove(&other);
+            }
+        }
+        true
     }
 
     fn rule_mut(&mut self, rule_id: &str) -> &mut RuleCounts {
@@ -286,5 +321,33 @@ mod tests {
         assert_eq!(Counts::from_json(&c.to_json()).unwrap(), c);
         assert!(Counts::from_json("[").is_err());
         assert_eq!(Counts::from_json("{}").unwrap(), Counts::default());
+    }
+
+    #[test]
+    fn a_live_edge_is_answered_once_per_broadcast_and_survives_a_restart() {
+        let mut counts = Counts::default();
+        assert!(counts.note_live_edge("Friend", true, 100));
+        assert!(!counts.note_live_edge("friend", true, 100), "the same broadcast again");
+        assert!(counts.note_live_edge("friend", false, 100), "its end is its own edge");
+        assert!(!counts.note_live_edge("friend", false, 100));
+        assert!(counts.note_live_edge("friend", true, 200), "a new broadcast");
+        let back = Counts::from_json(&counts.to_json()).unwrap();
+        assert_eq!(back.live_edges["friend"], LiveStamp { online_started_s: 200, offline_started_s: 100 });
+        let mut back = back;
+        assert!(!back.note_live_edge("friend", true, 200), "still answered after the file was read back");
+    }
+
+    #[test]
+    fn live_stamps_are_capped_and_an_older_file_reads() {
+        let mut counts = Counts::default();
+        for i in 0..(LIVE_EDGES_MAX + 20) {
+            counts.note_live_edge(&format!("c{i}"), true, 1);
+        }
+        assert!(counts.live_edges.len() <= LIVE_EDGES_MAX + 1);
+        let old = Counts::from_json(r#"{"version":1,"rules":{}}"#).unwrap();
+        assert!(old.live_edges.is_empty(), "a P1 file has no live_edges");
+        let newer = Counts::from_json(r#"{"version":1,"live_edges":{"a":{"online_started_s":5,"future":1}},"x":2}"#).unwrap();
+        assert_eq!(newer.live_edges["a"].online_started_s, 5);
+        assert_eq!(newer.extra["x"], 2);
     }
 }

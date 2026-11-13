@@ -36,6 +36,10 @@ pub const FAMILY_BADGE: u32 = 1 << 1;
 pub const FAMILY_WHISPER: u32 = 1 << 2;
 /// A running Timer, Clock, Uptime or Delay rule exists.
 pub const FAMILY_TIMED: u32 = 1 << 3;
+/// P3: own-channel events (follow, reward, poll, prediction).
+pub const FAMILY_OWN: u32 = 1 << 4;
+/// P3: live changes.
+pub const FAMILY_LIVE: u32 = 1 << 5;
 /// The `my_ids` key of Twitch ids.
 pub const TWITCH: &str = "twitch";
 
@@ -106,7 +110,13 @@ impl TextTest {
     }
 
     pub fn matches(&self, facts: &Facts) -> bool {
-        let hay = |cs: bool| if cs { facts.text_nfc.as_str() } else { facts.text_folded.as_str() };
+        self.matches_text(&facts.text, &facts.text_nfc, &facts.text_folded)
+    }
+
+    /// The same test over a text already read three ways (as written, in NFC,
+    /// in NFC lowercased); `chat_rules` judges a Highlight with it.
+    pub fn matches_text(&self, raw: &str, nfc: &str, folded: &str) -> bool {
+        let hay = |cs: bool| if cs { nfc } else { folded };
         match self {
             TextTest::Never => false,
             TextTest::AnyWord { words, cs } => words.iter().any(|w| bounded(hay(*cs), w)),
@@ -115,7 +125,7 @@ impl TextTest {
             TextTest::Contains { needle, cs } => hay(*cs).contains(needle.as_str()),
             TextTest::StartsWith { prefix, cs } => hay(*cs).trim_start().starts_with(prefix.as_str()),
             TextTest::Exact { text, cs } => hay(*cs).trim() == text.as_str(),
-            TextTest::Regex(re) => re.is_match(&facts.text),
+            TextTest::Regex(re) => re.is_match(raw),
         }
     }
 }
@@ -225,6 +235,29 @@ pub struct Compiled {
     pub live_any: bool,
     /// The longest owner room id among running badge rules.
     pub badge_room_len: usize,
+    /// P3: running own-channel rules (follow, reward, poll, prediction).
+    pub own_rules: Vec<usize>,
+    /// P3: running live-change rules by the `twitch:<login>` they watch.
+    pub live_index: HashMap<String, Vec<usize>>,
+    /// P3: logins of every channel a running live-change rule watches.
+    pub live_watch: Vec<String>,
+    /// P3: the Highlight actions of running Message rules.
+    pub highlights: Vec<AutoHighlight>,
+}
+
+/// One Highlight action as the chat rules judge it for one message: a
+/// Message rule's text and the conditions the read loop can check.
+#[derive(Clone, Debug)]
+pub struct AutoHighlight {
+    pub rule_id: String,
+    pub color: String,
+    /// `twitch:<login>` keys it applies in; empty means any chat.
+    pub channels: Vec<String>,
+    pub roles: Vec<crate::models::automations::SenderRole>,
+    pub skip_users: Vec<String>,
+    pub only_users: Vec<String>,
+    pub shared_chat: bool,
+    pub test: TextTest,
 }
 
 impl Compiled {
@@ -266,6 +299,12 @@ impl Compiled {
     pub fn candidates(&self, facts: &Facts) -> Vec<usize> {
         if facts.kind == RowKind::Badge {
             return self.badge_rules.clone();
+        }
+        if facts.kind == RowKind::Own {
+            return match facts.own.as_ref().map(|o| o.kind) {
+                Some(super::facts::OwnKind::Live { .. }) => self.live_index.get(&facts.channel_key).cloned().unwrap_or_default(),
+                _ => self.own_rules.clone(),
+            };
         }
         let mut out = self.chat_index.get(&facts.channel_key).cloned().unwrap_or_default();
         out.extend(self.chat_any.iter().copied());
@@ -387,6 +426,9 @@ pub fn compile(input: &CompileInput) -> Compiled {
             },
             _ => TextTest::Never,
         };
+        if held.is_none() && rule.is_live_rule() && these_keys.is_empty() {
+            held = Some("Pick a channel to watch".to_string());
+        }
         let mode = if rule.enabled && held.is_none() { mode_for(out.run, rule.live) } else { None };
         let outward = rule.actions.iter().any(Action::is_outward);
         let index = out.rules.len();
@@ -396,6 +438,8 @@ pub fn compile(input: &CompileInput) -> Compiled {
                 ChannelScope::These { .. } => these_keys.clone(),
                 ChannelScope::AnyOpen {} | ChannelScope::Watching {} => Vec::new(),
             };
+            // P3: an edge rule listens to no chat and keeps none joined.
+            let listened: Vec<String> = if rule.is_edge_rule() { Vec::new() } else { listened };
             if rule.is_badge_rule() {
                 out.badge_rules.push(index);
                 out.families |= FAMILY_BADGE;
@@ -406,6 +450,21 @@ pub fn compile(input: &CompileInput) -> Compiled {
             } else if rule.is_timed() {
                 out.timed_rules.push(index);
                 out.families |= FAMILY_TIMED;
+            } else if rule.is_own_event_rule() {
+                out.own_rules.push(index);
+                out.families |= FAMILY_OWN;
+                if rule.only_if.only_live {
+                    push_unique(&mut only_live, &owner_login);
+                }
+                if mode == Mode::Live && outward {
+                    push_unique(&mut out.live_chats, &own_key);
+                }
+            } else if rule.is_live_rule() {
+                out.families |= FAMILY_LIVE;
+                for key in &these_keys {
+                    out.live_index.entry(key.clone()).or_default().push(index);
+                    push_unique(&mut out.live_watch, login_of_key(key));
+                }
             } else {
                 out.families |= FAMILY_CHAT;
                 out.expressions |= filter.is_some();
@@ -423,13 +482,33 @@ pub fn compile(input: &CompileInput) -> Compiled {
                     push_unique(&mut only_live, login_of_key(key));
                 }
             }
-            if mode == Mode::Live && outward {
+            if mode == Mode::Live && outward && !rule.is_edge_rule() {
                 if listened.is_empty() {
                     out.live_any = true;
                 } else {
                     for key in &listened {
                         push_unique(&mut out.live_chats, key);
                     }
+                }
+            }
+        }
+        if mode.is_some() && matches!(rule.when, Trigger::Message { .. }) {
+            for action in &rule.actions {
+                if let Action::Highlight { color, .. } = action {
+                    out.highlights.push(AutoHighlight {
+                        rule_id: rule.id.clone(),
+                        color: color.clone(),
+                        channels: match &rule.only_if.channels {
+                            ChannelScope::Own {} => vec![own_key.clone()],
+                            ChannelScope::These { .. } => these_keys.clone(),
+                            _ => Vec::new(),
+                        },
+                        roles: rule.only_if.roles.clone(),
+                        skip_users: rule.only_if.skip_users.clone(),
+                        only_users: rule.only_if.only_users.clone(),
+                        shared_chat: rule.only_if.shared_chat,
+                        test: test.clone(),
+                    });
                 }
             }
         }
@@ -512,6 +591,21 @@ fn force(rule: &mut Rule) {
         rule.only_if.only_live = true;
         rule.limits.rule_cooldown_seconds = 0;
     }
+    if rule.is_own_event_rule() {
+        rule.only_if.channels = ChannelScope::Own {};
+        rule.only_if.roles.clear();
+        rule.only_if.shared_chat = false;
+    }
+    if rule.is_live_rule() {
+        if !matches!(rule.only_if.channels, ChannelScope::These { .. }) {
+            rule.only_if.channels = ChannelScope::These { list: Vec::new() };
+        }
+        rule.only_if.roles.clear();
+        rule.only_if.skip_users.clear();
+        rule.only_if.only_users.clear();
+        rule.only_if.only_live = false;
+        rule.only_if.shared_chat = false;
+    }
     for list in [&mut rule.only_if.skip_users, &mut rule.only_if.only_users] {
         for user in list.iter_mut() {
             *user = user.trim().trim_start_matches('@').to_ascii_lowercase();
@@ -569,6 +663,10 @@ pub fn summarize(rule: &Rule) -> String {
     let mut out = when_words(&rule.when);
     if rule.is_badge_rule() {
         out.push_str(" in your channel");
+    } else if rule.is_own_event_rule() {
+        // The words already say whose channel.
+    } else if let Trigger::LiveChange { online } = &rule.when {
+        out = live_words(*online, &rule.only_if.channels);
     } else {
         out.push_str(&where_words(&rule.only_if.channels));
     }
@@ -629,6 +727,13 @@ fn when_words(when: &Trigger) -> String {
         Trigger::Clock { at, .. } => format!("At {}", at.trim()),
         Trigger::Uptime { seconds, .. } => format!("When the stream reaches {}", crate::services::account_automations::timers::every_words(*seconds)),
         Trigger::Delay { seconds } => format!("{} after the chat opens", crate::services::account_automations::timers::every_words(*seconds)),
+        Trigger::Follow {} => "When someone follows you".to_string(),
+        Trigger::RewardRedeemed { reward_id: Some(_) } => "When someone redeems one of your rewards".to_string(),
+        Trigger::RewardRedeemed { reward_id: None } => "When someone redeems any of your rewards".to_string(),
+        Trigger::PollStarted {} => "When you start a poll".to_string(),
+        Trigger::PredictionStarted {} => "When you start a prediction".to_string(),
+        Trigger::LiveChange { online: true } => "When a channel goes live".to_string(),
+        Trigger::LiveChange { online: false } => "When a channel goes offline".to_string(),
         Trigger::BadgeDrop { on, .. } => match on {
             BadgeLeg::Announced => "When a new Twitch badge is announced",
             BadgeLeg::Earnable => "When a new Twitch badge can be earned",
@@ -666,6 +771,20 @@ fn where_words(scope: &ChannelScope) -> String {
     }
 }
 
+/// "When #a goes live", "When #a or #b go offline".
+fn live_words(online: bool, scope: &ChannelScope) -> String {
+    let names: Vec<String> = match scope {
+        ChannelScope::These { list } => list.iter().take(3).map(|c| format!("#{}", chat_name(c))).collect(),
+        _ => Vec::new(),
+    };
+    let what = if online { "live" } else { "offline" };
+    match names.len() {
+        0 => format!("When a channel you pick goes {what}"),
+        1 => format!("When {} goes {what}", names[0]),
+        _ => format!("When {} go {what}", list_words(&names, "or")),
+    }
+}
+
 fn action_words(actions: &[Action]) -> String {
     let words: Vec<String> = actions
         .iter()
@@ -674,6 +793,8 @@ fn action_words(actions: &[Action]) -> String {
             Action::Send { to: None, .. } => "send a message".to_string(),
             Action::Send { to: Some(chat), .. } => format!("send a message in #{}", chat_name(chat)),
             Action::Notify { .. } => "notify you".to_string(),
+            Action::Speak { .. } => "say it out loud".to_string(),
+            Action::Highlight { .. } => "highlight the message".to_string(),
             Action::Command { line, .. } => format!("run {}", line.trim()),
             Action::Whisper { .. } => "whisper".to_string(),
             Action::Timeout { seconds, .. } => format!("time them out for {}", crate::services::account_automations::timers::every_words(*seconds)),
@@ -1154,5 +1275,93 @@ mod tests {
                 assert!(!text.contains(needle.as_str()), "{name} names {needle}");
             }
         }
+    }
+
+    fn live_rule(id: &str, online: bool, friends: &[(&str, &str)]) -> Rule {
+        let mut r = rule(id, Trigger::LiveChange { online }, vec![notify("x")]);
+        r.only_if.channels = ChannelScope::These { list: friends.iter().map(|(l, room)| chat(l, room)).collect() };
+        r
+    }
+
+    #[test]
+    fn p3_rules_index_apart_from_chat_rules_and_join_no_chat() {
+        let follow = rule("f", Trigger::Follow {}, vec![notify("x")]);
+        let c = compiled_with(&[follow, live_rule("l", true, &[("friend", "555")])], RunState::On);
+        assert_eq!(c.families, FAMILY_OWN | FAMILY_LIVE);
+        assert_eq!(c.own_rules, vec![0]);
+        assert_eq!(c.live_index.get("twitch:friend"), Some(&vec![1]));
+        assert_eq!(c.live_watch, vec!["friend".to_string()]);
+        assert!(c.needed_chats.is_empty() && c.chat_any.is_empty() && c.chat_index.is_empty(), "no P3 rule joins or listens in a chat");
+        assert!(!c.live_any && c.live_chats.is_empty());
+        let off = compiled_with(&[rule("f", Trigger::Follow {}, vec![notify("x")])], RunState::Off);
+        assert_eq!(off.families, 0, "Off runs nothing");
+        assert!(off.own_rules.is_empty());
+    }
+
+    #[test]
+    fn an_own_event_rule_that_posts_marks_your_chat_and_an_only_live_one_watches_it() {
+        let mut follow = rule("f", Trigger::Follow {}, vec![send("Thanks {user}")]);
+        follow.only_if.only_live = true;
+        let c = compiled_with(&[follow], RunState::On);
+        assert_eq!(c.live_chats, vec!["twitch:me"]);
+        assert!(!c.live_any, "a follow rule never says any chat");
+        assert_eq!(c.only_live_chats, vec!["me"]);
+    }
+
+    #[test]
+    fn a_live_change_with_no_channel_is_held() {
+        let c = compiled_with(&[live_rule("l", true, &[])], RunState::On);
+        assert_eq!(c.rules[0].held.as_deref(), Some("Pick a channel to watch"));
+        assert_eq!(c.rules[0].mode, None);
+        assert_eq!(c.families, 0);
+    }
+
+    #[test]
+    fn own_events_and_live_changes_are_candidates_for_their_own_rules_only() {
+        use crate::services::account_automations::facts::{from_live, from_own};
+        use crate::services::account_automations::own_topics::TopicKind;
+        let c = compiled_with(
+            &[
+                rule("m", mention(), vec![notify("x")]),
+                rule("f", Trigger::Follow {}, vec![notify("x")]),
+                live_rule("l", true, &[("friend", "555")]),
+            ],
+            RunState::On,
+        );
+        let follow = from_own(TopicKind::Follow, &serde_json::json!({ "user_id": "7", "followed_at": "2026-11-13T05:00:00Z" }), ME, "me", 0).unwrap();
+        assert_eq!(c.candidates(&follow), vec![1]);
+        assert_eq!(c.candidates(&from_live("friend", "555", true, 9, 0)), vec![2]);
+        assert!(c.candidates(&from_live("stranger", "9", true, 9, 0)).is_empty());
+    }
+
+    #[test]
+    fn a_message_rules_highlight_is_collected_with_its_conditions() {
+        let hl = Action::Highlight { id: "a-hl".into(), color: "#ff8800".into() };
+        let mut r = rule("h", Trigger::Message { text: TextMatch { mode: MatchMode::Contains, pattern: "gg".into(), case_sensitive: false } }, vec![hl.clone()]);
+        r.only_if.skip_users = vec!["nightbot".into()];
+        let c = compiled_with(&[r.clone()], RunState::On);
+        assert_eq!(c.highlights.len(), 1);
+        let h = &c.highlights[0];
+        assert_eq!((h.rule_id.as_str(), h.color.as_str(), h.channels.as_slice()), ("h", "#ff8800", ["twitch:me".to_string()].as_slice()));
+        assert!(h.test.matches_text("well played gg", "well played gg", "well played gg"));
+        assert!(!h.test.matches_text("hello", "hello", "hello"));
+        assert_eq!(h.skip_users, vec!["nightbot".to_string()]);
+        assert!(compiled_with(&[r.clone()], RunState::Off).highlights.is_empty(), "Off clears them");
+        r.enabled = false;
+        assert!(compiled_with(&[r], RunState::On).highlights.is_empty());
+        let on_mention = rule("m", mention(), vec![hl]);
+        assert!(compiled_with(&[on_mention], RunState::On).highlights.is_empty(), "only a Message rule highlights");
+    }
+
+    #[test]
+    fn p3_summaries_read_in_plain_words() {
+        assert_eq!(summarize(&rule("f", Trigger::Follow {}, vec![notify("x")])), "When someone follows you: notify you");
+        assert_eq!(
+            summarize(&live_rule("l", false, &[("a", "1"), ("b", "2")])),
+            "When #a or #b go offline: notify you"
+        );
+        assert_eq!(summarize(&live_rule("l", true, &[])), "When a channel you pick goes live: notify you");
+        let speak = Action::Speak { id: "a".into(), text: "hi".into(), on_stream: false };
+        assert_eq!(summarize(&rule("p", Trigger::PollStarted {}, vec![speak])), "When you start a poll: say it out loud");
     }
 }
