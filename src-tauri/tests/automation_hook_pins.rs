@@ -217,3 +217,77 @@ fn claims_and_releases_send_the_verified_bearer_not_post_json() {
 fn account_files_carry_the_engine_hooks_and_no_door_changed() {
     assert!(norm(APP_STORE).contains("account_automations::on_accounts_changed();"));
 }
+
+#[test]
+fn engine_modules_name_no_p2_door_outside_outward() {
+    const FORBIDDEN: &[&str] = &[
+        "update_chat_settings_as",
+        "update_chat_settings_engine",
+        "create_stream_marker_engine",
+        "modify_channel_info_engine",
+        "search_categories_engine",
+        "send_chat_announcement_engine",
+        "send_shoutout_engine",
+        "pin_chat_message_engine",
+        "timeout_user_engine",
+        "delete_chat_message_engine",
+        "moderate_token_bound",
+        "stream_manager",
+        "slash_dispatch::dispatch",
+        "AutomationBackend",
+        "slash_backend",
+        "AccountStore::primary(",
+        "get_token",
+    ];
+    let count = |line: &str, c: char| line.chars().filter(|x| *x == c).count() as i32;
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/services/account_automations");
+    let (mut files, mut total) = (0, 0);
+    for entry in std::fs::read_dir(&dir).expect("the engine folder").flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.ends_with(".rs") || name == "outward.rs" || name == "testkit.rs" {
+            continue;
+        }
+        let text = std::fs::read_to_string(entry.path()).expect("a source file");
+        let (mut skip_depth, mut after_cfg_test, mut scanned) = (0i32, false, 0usize);
+        for (n, line) in text.lines().enumerate() {
+            let code = line.trim_start();
+            // Inside a `#[cfg(test)] mod x { .. }` block: skip it by brace depth, then go on
+            // scanning (mod.rs declares `testkit` at line 41 and the engine code goes on after).
+            if skip_depth > 0 {
+                skip_depth += count(line, '{') - count(line, '}');
+                continue;
+            }
+            if code.starts_with("#[cfg(test)]") {
+                after_cfg_test = true;
+                continue;
+            }
+            if after_cfg_test {
+                after_cfg_test = false;
+                if code.starts_with("mod ") || code.starts_with("pub mod ") || code.starts_with("pub(crate) mod ") {
+                    skip_depth = (count(line, '{') - count(line, '}')).max(0);
+                }
+                continue; // a test-only item: its first line is not engine code
+            }
+            if code.starts_with("//") {
+                continue;
+            }
+            scanned += 1;
+            for word in FORBIDDEN {
+                assert!(!line.contains(word), "{name}:{}: `{word}` belongs in outward.rs only", n + 1);
+            }
+        }
+        assert!(scanned >= 8, "{name}: the pin scanned only {scanned} lines (a test module swallowed it?)");
+        files += 1;
+        total += scanned;
+    }
+    assert!(files >= 12 && total >= 3000, "the walk saw {files} files and {total} lines");
+}
+
+#[test]
+fn p2_hooks_stay_in_place() {
+    let inbox = include_str!("../src/services/whisper_inbox.rs");
+    assert!(inbox.contains("account_automations::engine()") && inbox.contains("on_whisper("), "record_incoming hands every whisper to the engine");
+    let send = include_str!("../src/services/whisper_send.rs");
+    assert!(send.matches("book_recipient(").count() >= 2, "run_queued_classified and cold_reply both book");
+    assert!(send.contains("fn send_in_classified") && send.contains("fn run_queued_classified"));
+}

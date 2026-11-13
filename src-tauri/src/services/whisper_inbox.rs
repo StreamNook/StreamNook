@@ -326,6 +326,11 @@ pub async fn record_incoming(app: AppHandle, owner_id: String, ev: WhisperEvent,
         return;
     }
     whisper_sync::note_twitch_time(twitch_ms);
+    // The engine hears every whisper (it dedupes by id and judges `knows` and
+    // age itself); it never blocks filing.
+    if let Some(engine) = crate::services::account_automations::engine() {
+        engine.on_whisper(&owner_id, &ev, twitch_ms);
+    }
 
     // An old login-keyed conversation moves under the id now that it is known.
     let found = key_for(&scope, &ev.from_user_id, &ev.from_user_login);

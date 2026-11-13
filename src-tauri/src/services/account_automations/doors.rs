@@ -1411,4 +1411,384 @@ mod tests {
         assert!(whisper_recipient(&reply, &facts, false).is_none());
         assert!(is_door_action(&reply, true) && !is_door_action(&reply, false));
     }
+
+    use super::super::testkit::*;
+    use crate::models::automations::RunState;
+    use crate::services::twitch_service::{DoorOutcome, SearchFail};
+    use crate::services::whisper_send::Outcome as WhisperOutcome;
+    use serde_json::{json, Value};
+    use std::time::Duration;
+
+    /// A mention rule whose one action is this Command line.
+    fn command_rule(id: &str, line: &str) -> Value {
+        let mut rule = mention_rule(id, true);
+        rule["actions"] = json!([{ "kind": "command", "id": "a-1", "line": line }]);
+        rule
+    }
+
+    /// A mention rule whose actions are these.
+    fn with_actions(id: &str, actions: Value) -> Value {
+        let mut rule = mention_rule(id, true);
+        rule["actions"] = actions;
+        rule
+    }
+
+    /// An own-channel mention rule (the room is the owner's, so no other-chat gap) with these actions, varied.
+    fn own_rule(id: &str, actions: Value) -> Value {
+        let mut rule = rule_value(id, json!({ "kind": "mention", "replies_too": true }), json!({ "kind": "own" }), vec![]);
+        rule["actions"] = actions;
+        rule["vary"] = json!(true);
+        rule
+    }
+
+    #[tokio::test]
+    async fn the_step_nine_reverify_is_what_binds_the_token_not_the_first_check() {
+        let kit = Kit::new();
+        kit.settings(RunState::On, vec![command_rule("r1", "/slow 30")]).await;
+        // Step 2's verify and the claim's owner verify answer Ok; the first verify after the
+        // claim call (step 9) answers another account.
+        kit.outward.script_verify_after_claim(&main_id(), FakeToken::WrongAccount("99".into()));
+        kit.fire("m1").await;
+        assert_eq!(kit.outward.claim_calls(), 1, "step 2 passed and the claim was made");
+        assert!(kit.command_doors.log.lock().unwrap().is_empty(), "the fake door records no call");
+        assert!(kit.activity_texts().iter().any(|t| t.starts_with("Sign in as @")));
+        assert!(!kit.outward.releases().is_empty(), "nothing was sent, so the claim is given back");
+    }
+
+    #[tokio::test]
+    async fn a_wrong_account_at_step_two_makes_no_claim_at_all() {
+        let kit = Kit::new();
+        kit.settings(RunState::On, vec![command_rule("r1", "/slow 30")]).await;
+        kit.outward.set_token(&main_id(), FakeToken::WrongAccount("99".into()));
+        kit.fire("m1").await;
+        assert_eq!(kit.outward.claim_calls(), 0);
+        assert!(kit.command_doors.log.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_door_sees_the_verified_token_and_moderator_id() {
+        let kit = Kit::new();
+        kit.settings(RunState::On, vec![command_rule("r1", "/slow 45")]).await;
+        kit.fire("m1").await;
+        let calls = kit.command_doors.settings.lock().unwrap().clone();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, token_of(&main_id()), "the verified token");
+        assert_eq!(calls[0].1, main_id(), "moderator_id = VerifiedToken.user_id");
+        assert_eq!(calls[0].3, json!({ "slow_mode": true, "slow_mode_wait_time": 45 }));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn setgame_reads_then_claims_then_writes_and_a_failed_read_makes_no_claim() {
+        let kit = Kit::new_timed_own();
+        kit.settings(RunState::On, vec![kit.timed_rule("r1", "/setgame art")]).await;
+        *kit.command_doors.search_answer.lock().unwrap() = Some(Ok(vec![json!({ "id": "509660", "name": "Art" })]));
+        kit.fire_timed("r1").await;
+        let log = kit.outward.calls();
+        let search = log.iter().position(|c| c == "command:search_categories").unwrap();
+        let claim = log.iter().position(|c| c == "claim").unwrap();
+        let write = log.iter().position(|c| c == "command:channel_info").unwrap();
+        assert!(search < claim && claim < write, "{log:?}");
+        assert_eq!(kit.command_doors.infos.lock().unwrap()[0].3.as_deref(), Some("509660"));
+        // A 503, a no-match, an empty id and a 401 each skip with zero claims and zero writes.
+        for answer in [
+            Err(SearchFail::Other("503".into())),
+            Ok(vec![]),
+            Ok(vec![json!({ "name": "Art", "id": "" })]),
+            Err(SearchFail::Unauthorized),
+        ] {
+            let kit = Kit::new_timed_own();
+            kit.settings(RunState::On, vec![kit.timed_rule("r1", "/setgame art")]).await;
+            *kit.command_doors.search_answer.lock().unwrap() = Some(answer.clone());
+            kit.fire_timed("r1").await;
+            assert_eq!(kit.outward.claim_calls(), 0);
+            assert!(kit.command_doors.infos.lock().unwrap().is_empty());
+            if answer == Err(SearchFail::Unauthorized) {
+                assert_eq!(kit.outward.dropped_tokens().len(), 1);
+                assert_eq!(kit.outward.send_401s(), vec![main_id()]);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_door_401_drops_the_token_remembers_the_failure_and_holds_the_next_fire() {
+        let kit = Kit::new();
+        kit.settings(RunState::On, vec![command_rule("r1", "/slowoff")]).await;
+        kit.command_doors.answers.lock().unwrap().push_back(DoorOutcome::RefusedUnauthorized("Twitch rejected the sign-in".into()));
+        kit.fire("m1").await;
+        assert_eq!(kit.outward.dropped_tokens().len(), 1);
+        assert!(kit.activity_texts().iter().any(|t| t == "Twitch refused it: Twitch rejected the sign-in"));
+        let validates = kit.outward.validate_calls(&token_of(&main_id()));
+        kit.fire_from("m2", "viewer2").await;
+        assert_eq!(kit.outward.validate_calls(&token_of(&main_id())), validates, "within 60 s: no validate");
+        assert_eq!(kit.command_doors.log.lock().unwrap().len(), 1, "and no door call");
+        kit.clock.advance(Duration::from_secs(61));
+        kit.fire_from("m3", "viewer3").await;
+        assert!(kit.outward.validate_calls(&token_of(&main_id())) > validates, "after 60 s it validates again");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_title_that_expands_past_140_skips_before_search_claim_and_write() {
+        let kit = Kit::new_timed_own();
+        let mut rule = kit.timed_rule("r1", "/settitle {away}");
+        rule["only_if"]["only_away"] = json!(true);
+        kit.settings(RunState::On, vec![rule]).await;
+        kit.set_away(Some(&"x".repeat(141))).await;
+        kit.fire_timed("r1").await;
+        assert_eq!(kit.outward.claim_calls(), 0);
+        assert!(kit.command_doors.searches.lock().unwrap().is_empty() && kit.command_doors.infos.lock().unwrap().is_empty());
+        kit.set_away(Some(&"x".repeat(140))).await;
+        kit.fire_timed("r1").await;
+        assert_eq!(kit.command_doors.infos.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn settitle_for_a_room_that_is_not_the_token_user_skips_with_zero_requests() {
+        let kit = Kit::new_timed_own();
+        let mut rule = kit.timed_rule("r1", "/settitle hello");
+        rule["owner"] = json!({ "provider": "twitch", "id": alt_id(), "login": "alt", "name": "alt" });
+        kit.settings(RunState::On, vec![rule]).await;
+        kit.fire_timed("r1").await;
+        assert!(kit.command_doors.log.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_unconfirmed_door_keeps_the_claim_and_a_refused_one_releases() {
+        let kit = Kit::new();
+        kit.settings(RunState::On, vec![command_rule("r1", "/slowoff")]).await;
+        kit.command_doors.answers.lock().unwrap().push_back(DoorOutcome::Unknown);
+        kit.fire("m1").await;
+        assert!(kit.outward.releases().is_empty(), "an Unknown may have happened: the claim stays");
+        let kit = Kit::new();
+        kit.settings(RunState::On, vec![command_rule("r1", "/slowoff")]).await;
+        kit.command_doors.answers.lock().unwrap().push_back(DoorOutcome::Refused("no".into()));
+        kit.fire("m1").await;
+        assert!(!kit.outward.releases().is_empty(), "a Refused one frees the event for another device");
+    }
+
+    #[tokio::test]
+    async fn moderation_rails_and_targets() {
+        let kit = Kit::new();
+        let rule = with_actions("r1", json!([{ "kind": "timeout", "id": "a-1", "seconds": 600, "reason": "" }]));
+        kit.settings(RunState::On, vec![rule]).await;
+        kit.local.set_role("me", &chan(), crate::services::chat_send_limiter::Role::Moderator);
+        kit.fire_with_roles("m1", &["moderator"]).await;
+        assert!(kit.mod_doors.timeouts.lock().unwrap().is_empty(), "a moderator target is skipped with a reason");
+        kit.fire_with_roles("m2", &[]).await;
+        assert_eq!(kit.mod_doors.timeouts.lock().unwrap().len(), 1);
+        let t = kit.mod_doors.timeouts.lock().unwrap()[0].clone();
+        assert_eq!((t.1.as_str(), t.4), (main_id().as_str(), 600), "moderator_id from the verified token, never 0 or None");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn twelve_moderation_actions_in_twelve_chats_reach_the_check_together_and_send_at_most_ten() {
+        let kit = Kit::new();
+        kit.prefs(|p| p.sends_per_minute = 20).await; // the pace rail is not the limit under test
+        let chats = many_chats(12);
+        kit.settings(RunState::On, vec![timeout_rule_in("r1", &chats)]).await;
+        for (login, _) in &chats {
+            kit.local.set_role("me", login, crate::services::chat_send_limiter::Role::Moderator);
+        }
+        // Park the door: every job that has reserved a slot waits there. Eight jobs run at once
+        // (the executor's slots), so the budget is reserved at the check, before any send.
+        kit.mod_doors.park_timeouts();
+        kit.fire_rows_in_no_wait(&chats, &[]);
+        kit.wait_until(|| kit.mod_doors.log.lock().unwrap().len() == 8).await;
+        kit.mod_doors.release_timeouts();
+        kit.idle().await;
+        assert_eq!(kit.mod_doors.timeouts.lock().unwrap().len(), 10, "the 11th and 12th found the ten slots reserved");
+        assert_eq!(kit.activity_texts().iter().filter(|t| *t == "Moderation is limited to 10 actions a minute").count(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_refused_moderation_gives_its_slot_back() {
+        let kit = Kit::new();
+        kit.prefs(|p| p.sends_per_minute = 20).await;
+        let mut rule = with_actions("r1", json!([{ "kind": "timeout", "id": "a-1", "seconds": 600, "reason": "" }]));
+        rule["limits"] = json!({ "rule_cooldown_seconds": 0, "user_cooldown_seconds": 0, "max_per_hour": 120, "max_wait_seconds": 10 });
+        kit.settings(RunState::On, vec![rule]).await;
+        kit.local.set_role("me", &chan(), crate::services::chat_send_limiter::Role::Moderator);
+        for _ in 0..10 {
+            kit.mod_doors.answers.lock().unwrap().push_back(DoorOutcome::Refused("no".into()));
+        }
+        for i in 0..10 {
+            kit.fire_from(&format!("r{i}"), &format!("viewer{i}")).await;
+        }
+        kit.fire_from("again", "viewer-again").await;
+        assert_eq!(kit.mod_doors.timeouts.lock().unwrap().len(), 11, "ten Refused gave their slots back, so the 11th still goes");
+    }
+
+    #[tokio::test]
+    async fn a_shoutout_forces_live_only_and_skips_an_offline_channel() {
+        let kit = Kit::new();
+        let rule = with_actions("r1", json!([{ "kind": "shoutout", "id": "a-1" }]));
+        kit.settings(RunState::On, vec![rule]).await;
+        kit.local.set_role("me", &chan(), crate::services::chat_send_limiter::Role::Moderator);
+        kit.local.set_live(&chan(), Some(false));
+        kit.fire_with_roles("m1", &[]).await;
+        assert!(kit.mod_doors.shoutouts.lock().unwrap().is_empty(), "offline: skipped");
+        kit.local.set_live(&chan(), Some(true));
+        kit.fire_with_roles("m2", &[]).await;
+        assert_eq!(kit.mod_doors.shoutouts.lock().unwrap().len(), 1);
+        assert!(kit.stored_rule("r1")["only_if"]["only_live"] == json!(true), "normalize forced it");
+    }
+
+    #[tokio::test]
+    async fn doors_book_no_ticket_and_never_re_book_after_a_slow_claim() {
+        let kit = Kit::new();
+        kit.settings(RunState::On, vec![command_rule("r1", "/slowoff")]).await;
+        kit.outward.slow_claims(Duration::from_secs(2));
+        let before = kit.engine_bookings();
+        kit.fire("m1").await;
+        assert_eq!(kit.command_doors.log.lock().unwrap().len(), 1, "a 2 s claim still sends");
+        assert_eq!(kit.engine_bookings(), before, "the engine booked no chat slot for any account");
+        assert!(kit.outward.sends().is_empty(), "no chat message went out either");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn wait_re_queues_the_rest_without_a_second_admission_and_lets_another_job_run() {
+        let kit = Kit::new();
+        let mut waiting = with_actions("r1", json!([{ "kind": "wait", "id": "a-1", "seconds": 60 }, { "kind": "log", "id": "a-2", "to_file": false }]));
+        // One fire an hour: a second `admit` after the Wait would be refused as a second fire.
+        waiting["limits"] = json!({ "rule_cooldown_seconds": 0, "user_cooldown_seconds": 0, "max_per_hour": 1, "max_wait_seconds": 10 });
+        kit.settings(RunState::On, vec![waiting, mention_rule("r2", true)]).await;
+        kit.fire_no_wait("m1");
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert!(kit.activity_texts().iter().any(|t| t.starts_with("Replied")), "another rule's job ran while r1 waited");
+        assert!(!kit.activity_texts().iter().any(|t| t.starts_with("Logged")));
+        tokio::time::advance(Duration::from_secs(61)).await;
+        kit.idle().await;
+        assert!(kit.activity_texts().iter().any(|t| t.starts_with("Logged")), "the rest ran after the wait");
+        assert!(!kit.activity_texts().iter().any(|t| t.starts_with("Held for 10 minutes")), "no second admission");
+        assert!(!kit.activity_texts().iter().any(|t| t == "Cooling down"), "its own stamps never cool it down");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_wait_resume_checks_the_rule_as_it_is_now() {
+        let kit = Kit::new();
+        let waiting = with_actions("r1", json!([{ "kind": "wait", "id": "a-1", "seconds": 60 }, { "kind": "log", "id": "a-2", "to_file": false }]));
+        kit.settings(RunState::On, vec![waiting.clone()]).await;
+        kit.fire_no_wait("m1");
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let mut off = waiting;
+        off["enabled"] = json!(false);
+        kit.settings(RunState::On, vec![off]).await; // switched off during the wait
+        tokio::time::advance(Duration::from_secs(61)).await;
+        kit.idle().await;
+        assert!(!kit.activity_texts().iter().any(|t| t.starts_with("Logged")), "the pre-Wait snapshot never revives it");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn announce_reserves_two_second_slots_waits_before_booking_and_only_in_its_room() {
+        let kit = Kit::new();
+        kit.settings(RunState::On, vec![own_rule("r1", json!([{ "kind": "announce", "id": "a-1", "text": "hello", "color": "primary" }]))]).await;
+        for i in 0..3 {
+            kit.fire_own_room_no_wait(&format!("a{i}"), &format!("viewer{i}"));
+        }
+        kit.idle().await;
+        let times = kit.mod_doors.announce_times();
+        assert_eq!(times.len(), 3);
+        assert!(
+            times[1].duration_since(times[0]) >= Duration::from_secs(2) && times[2].duration_since(times[1]) >= Duration::from_secs(2),
+            "{times:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn announce_needs_the_primary_as_a_moderator_or_broadcaster() {
+        let kit = Kit::new();
+        // In another streamer's chat (the test's chat) with no USERSTATE role known.
+        let rule = with_actions("r1", json!([{ "kind": "announce", "id": "a-1", "text": "hello", "color": "primary" }]));
+        kit.settings(RunState::On, vec![rule]).await;
+        kit.fire_with_roles("m1", &[]).await;
+        assert!(kit.mod_doors.announces.lock().unwrap().is_empty());
+        kit.local.set_role("me", &chan(), crate::services::chat_send_limiter::Role::Moderator);
+        kit.fire_with_roles("m2", &[]).await;
+        assert_eq!(kit.mod_doors.announces.lock().unwrap().len(), 1);
+        kit.outward.set_primary(Some(&alt_id()));
+        kit.fire_with_roles("m3", &[]).await;
+        assert_eq!(kit.mod_doors.announces.lock().unwrap().len(), 1, "send_as is no longer the primary");
+    }
+
+    #[tokio::test]
+    async fn whisper_door_stores_by_automation_and_refuses_strangers() {
+        let kit = Kit::new();
+        let rule = with_actions(
+            "r1",
+            json!([{
+                "kind": "whisper", "id": "a-1",
+                "to": { "user_id": "1000", "login": "pal", "name": "Pal" },
+                "texts": [{ "id": "l-1", "text": "hi" }], "pick": "in_order"
+            }]),
+        );
+        kit.settings(RunState::On, vec![rule]).await;
+        kit.fire("m1").await;
+        assert!(kit.whisper_door.sent.lock().unwrap().is_empty(), "a stranger is refused");
+        kit.whisper_door.known.lock().unwrap().insert("1000".into());
+        kit.fire_from("m2", "viewer2").await;
+        let sent = kit.whisper_door.sent.lock().unwrap().clone();
+        assert_eq!((sent.len(), sent[0].0.as_str()), (1, main_id().as_str()), "send_as is expect_owner");
+    }
+
+    #[tokio::test]
+    async fn a_rate_limited_whisper_holds_whispers_a_minute_whatever_its_words() {
+        let kit = Kit::new();
+        let rule = with_actions(
+            "r1",
+            json!([{ "kind": "whisper", "id": "a-1", "to": { "user_id": "1000", "login": "pal", "name": "Pal" }, "texts": [{ "id": "l-1", "text": "hi" }], "pick": "in_order" }]),
+        );
+        kit.settings(RunState::On, vec![rule]).await;
+        kit.whisper_door.known.lock().unwrap().insert("1000".into());
+        // Twitch's own words carry neither "429" nor "too many".
+        *kit.whisper_door.outcome.lock().unwrap() =
+            Some((Err("Sending too fast. Please wait a moment before trying again.".into()), WhisperOutcome::RateLimited));
+        kit.fire("m1").await;
+        *kit.whisper_door.outcome.lock().unwrap() = None;
+        kit.fire_from("m2", "viewer2").await;
+        assert_eq!(kit.whisper_door.sent.lock().unwrap().len(), 1, "the second whisper never reached the door");
+        assert!(kit.activity_texts().iter().any(|t| t == "Held for a minute: Twitch asked for a pause"));
+        kit.clock.advance(Duration::from_secs(61));
+        kit.fire_from("m3", "viewer3").await;
+        assert_eq!(kit.whisper_door.sent.lock().unwrap().len(), 2, "after the minute it goes");
+    }
+
+    #[tokio::test]
+    async fn a_reply_on_a_whisper_rule_whispers_back_and_never_posts_in_chat() {
+        let kit = Kit::new();
+        let rules = vec![rule_value(
+            "w1",
+            json!({ "kind": "whisper", "text": null }),
+            json!({ "kind": "own" }),
+            vec![json!({ "kind": "reply", "id": "a-1", "texts": [{ "id": "l-1", "text": "got it" }], "pick": "in_order", "thread": false })],
+        )];
+        kit.settings(RunState::On, rules).await;
+        kit.whisper_door.known.lock().unwrap().insert("1000".into());
+        kit.whisper_in("w1", "1000", 0).await;
+        let sent = kit.whisper_door.sent.lock().unwrap().clone();
+        assert_eq!(sent.len(), 1, "one whisper back");
+        assert_eq!((sent[0].1.user_id.as_str(), sent[0].2.as_str()), ("1000", "got it"));
+        assert!(kit.outward.sends().is_empty(), "and zero chat sends");
+    }
+
+    #[tokio::test]
+    async fn a_kick_actors_timeout_runs_the_kick_branch_and_never_verifies_the_kick_id_with_twitch() {
+        let kit = Kit::new_kick_actor();
+        let rule = kit.kick_rule_with("r1", json!([{ "kind": "timeout", "id": "a-1", "seconds": 600, "reason": "spam" }]));
+        kit.settings(RunState::On, vec![rule]).await;
+        kit.fire_kick_row("m1", &[]).await;
+        assert_eq!(kit.outward.verifies_of(KICK_ME), 0, "the fake verified_token is never asked for the Kick id (D277)");
+        assert!(kit.outward.verifies_of(&main_id()) > 0, "the owner's Twitch token is the claim's bearer");
+        assert_eq!(kit.outward.kick_mods().len(), 1, "one kick_moderate call");
+        assert!(kit.compiled_rule_held("r1").is_none(), "no 'main account' hold for a Kick actor");
+        // A moderator target is refused by the Kick rail.
+        kit.fire_kick_row("m2", &["moderator"]).await;
+        assert_eq!(kit.outward.kick_mods().len(), 1);
+        // The connected account switches after the claim: step 9's identity check is what skips it.
+        kit.outward.switch_kick_after_claim(Some("someone-else"));
+        kit.fire_kick_row("m3", &[]).await;
+        assert_eq!(kit.outward.kick_mods().len(), 1, "step 9's Kick identity check skipped it");
+        assert!(!kit.outward.releases().is_empty(), "and its claim was given back");
+        // Over 7 days is a field error for a Kick actor.
+        let bad = kit.kick_rule_with("r2", json!([{ "kind": "timeout", "id": "a-1", "seconds": 604_801, "reason": "" }]));
+        assert!(kit.save_errors(bad).iter().any(|e| e.path == "actions[0].seconds"));
+    }
 }

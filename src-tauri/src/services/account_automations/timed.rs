@@ -477,4 +477,117 @@ mod tests {
             None
         );
     }
+
+    use super::super::testkit::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn a_whisper_fires_once_and_only_from_a_known_fresh_sender() {
+        let kit = Kit::new_whisper_rule().await;
+        kit.whisper_door.known.lock().unwrap().insert("1000".into());
+        kit.whisper_in("w1", "1000", 0).await;
+        kit.whisper_in("w1", "1000", 0).await; // a duplicate whisper_id
+        kit.whisper_in("w2", "2000", 0).await; // unknown sender, list not read: "Waiting for your whisper history"
+        kit.whisper_in("w3", "1000", 31_000).await; // older than 30 s by Twitch time
+        kit.whisper_in("w4", &main_id(), 0).await; // your own account
+        assert_eq!(kit.whisper_door.sent.lock().unwrap().len(), 1);
+        assert!(kit.activity_texts().iter().any(|t| t == "Waiting for your whisper history"));
+        // Once the list is read, a stranger simply does not fire and says nothing more.
+        *kit.whisper_door.history.lock().unwrap() = true;
+        let before = kit.activity_texts().len();
+        kit.whisper_in("w5", "3000", 0).await;
+        assert_eq!(kit.activity_texts().len(), before);
+        assert_eq!(kit.whisper_door.sent.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_whisper_cap_losses_read_their_own_words_and_a_day_loss_holds_new_recipients() {
+        let kit = Kit::new_whisper_rule().await;
+        for id in ["1000", "3000"] {
+            kit.whisper_door.known.lock().unwrap().insert(id.into());
+        }
+        // The fake whisper's login is "u<id>" (`Kit::whisper_in`), so the words name @u1000.
+        kit.outward.script_claim_loss("hour");
+        kit.whisper_in("w1", "1000", 0).await;
+        assert!(kit.activity_texts().iter().any(|t| t == "Already whispered @u1000 in the last hour"));
+        kit.outward.script_claim_loss_with_retry("day", 3_600_000);
+        kit.whisper_in("w2", "1000", 0).await;
+        assert!(kit.activity_texts().iter().any(|t| t == "Whisper people a day reached across your devices"));
+        let claims = kit.outward.claim_calls();
+        // A different recipient `knows` says yes to, inside the hold: no claim is made for it.
+        kit.whisper_in("w3", "3000", 0).await;
+        assert_eq!(kit.outward.claim_calls(), claims, "the hold stands until retry_after_ms is over");
+        assert!(kit.activity_texts().iter().filter(|t| *t == "Whisper people a day reached across your devices").count() >= 2);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn counters_survive_a_recompile_and_timers_post_after_enough_lines() {
+        let kit = Kit::new_timer_rule(900, 10).await;
+        for _ in 0..4 {
+            kit.chat_line_from_other().await;
+        }
+        kit.recompile().await; // an edit or an account change
+        for _ in 0..6 {
+            kit.chat_line_from_other().await;
+        }
+        kit.advance_timers(901 + 900).await;
+        assert_eq!(kit.outward.sends().len(), 1, "10 lines in all (4 before, 6 after the recompile)");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn two_truly_out_of_phase_devices_post_a_timer_exactly_once_per_interval() {
+        let (a, b) = Kit::pair_with_timer(900, 0).await;
+        let key = a.chat_key();
+        // B has been ticking 450 s longer than A: the two phases differ by half an interval.
+        Kit::advance_all(&[&b], 450).await;
+        Kit::advance_all(&[&a, &b], 3600).await;
+        // B's Timer arms on its first tick and fires on tick 1 + offset, then every 900 ticks
+        // (the offset is whole seconds, so no tick lands on a boundary by luck). The key's
+        // offset is read from the key itself, so the count holds whichever ids the test got.
+        let off = (crate::services::account_automations::timers::offset_ms(&key, 900) / 1000) as u32;
+        let ticks = 450 + 3600;
+        let expected = ((ticks - 1 - off) / 900 + 1) as usize;
+        assert_eq!(b.outward.sends().len(), expected, "B posts once per interval");
+        assert_eq!(a.outward.sends().len(), 0, "A's fires lose the 810 s window each time");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn when_the_first_device_stops_the_second_takes_over_after_one_window() {
+        let (a, b) = Kit::pair_with_timer(900, 0).await;
+        Kit::advance_all(&[&b], 450).await;
+        Kit::advance_all(&[&a, &b], 1800).await;
+        let b_before = b.outward.sends().len();
+        let a_before = a.outward.sends().len();
+        assert_eq!(a_before, 0);
+        Kit::advance_all(&[&a], 2700).await; // B stops (no more ticks); the server clock goes on
+        assert!(a.outward.sends().len() >= 2, "A posts again once B's window passed: {}", a.outward.sends().len());
+        assert_eq!(b.outward.sends().len(), b_before);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_delay_counts_from_the_window_that_opened_the_chat_and_fires_once() {
+        let kit = Kit::new_delay_rule(60).await;
+        kit.open_window_chat(&chan()).await; // note_window_claim: the join is stamped on the engine's steady clock
+        kit.advance_timers(59).await;
+        assert!(kit.outward.sends().is_empty());
+        kit.advance_timers(3).await;
+        assert_eq!(kit.outward.sends().len(), 1, "exactly one send N seconds after the window joined");
+        kit.open_window_chat(&chan()).await; // a second window on the same chat never restarts it
+        kit.advance_timers(300).await;
+        assert_eq!(kit.outward.sends().len(), 1);
+        kit.close_window_chat(&chan()).await;
+        kit.advance_timers(5).await;
+        kit.open_window_chat(&chan()).await; // a new join is a new id
+        kit.advance_timers(62).await;
+        assert_eq!(kit.outward.sends().len(), 2);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_900_second_delay_posts_once_across_two_devices() {
+        let (a, b) = Kit::pair_with_delay(900).await;
+        a.open_window_chat(&chan()).await;
+        Kit::advance_all(&[&b], 200).await;
+        b.open_window_chat(&chan()).await;
+        Kit::advance_all(&[&a, &b], 1200).await;
+        assert_eq!(a.outward.sends().len() + b.outward.sends().len(), 1, "the 900 s window (max(seconds, 600)) holds the second device off");
+    }
 }
