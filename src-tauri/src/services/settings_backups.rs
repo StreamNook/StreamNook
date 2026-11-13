@@ -136,7 +136,9 @@ pub fn recover(settings_path: &Path, error: &str) -> Option<Settings> {
     for name in list_names(&dir).into_iter().rev() {
         let Ok(text) = std::fs::read_to_string(dir.join(&name)) else { continue };
         let Ok(backup) = serde_json::from_str::<Value>(&text) else { continue };
-        let Some(settings) = settings_from(&backup) else { continue };
+        let Some(mut settings) = settings_from(&backup) else { continue };
+        // A rebuilt file never brings rules back live or an old away.
+        crate::commands::account_automations::pause_restored(&mut settings.automations);
         let aside = settings_path.with_file_name(format!("settings.unreadable-{}.json", chrono::Local::now().format("%Y%m%d-%H%M%S")));
         let _ = std::fs::copy(settings_path, &aside);
         log::warn!("[Settings] settings.json did not load ({error}); restored from {name}, the unreadable file is kept as {}", aside.display());

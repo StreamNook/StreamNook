@@ -226,6 +226,72 @@ async fn chatters_emoteinfo_and_openurl_show_the_real_failure() {
 }
 
 #[tokio::test]
+async fn afk_sets_away_here_and_back_clears_it() {
+    let fake = Fake::new();
+    fake.answer(|cmd, args| match cmd {
+        "automations_set_away" if !args["message"].is_null() => Ok(json!({ "message": "brb", "since_ms": 1 })),
+        _ => Ok(Value::Null),
+    });
+    let o = run(&fake, "/afk brb").await;
+    assert_eq!(toast(&o, ToastKind::Success), ["You're away: brb"]);
+    assert_eq!(fake.calls("automations_set_away"), vec![json!({ "message": "brb" })]);
+    let o = run(&fake, "/back").await;
+    assert_eq!(toast(&o, ToastKind::Success), ["You're back"]);
+    assert_eq!(fake.calls("automations_set_away")[1], json!({ "message": null }));
+    // In a Kick room too: away needs no Twitch API.
+    let o = run_in(&fake, "kick:somebody", "/back").await;
+    assert!(o.handled);
+}
+
+#[tokio::test]
+async fn automations_sets_the_run_state_or_says_it() {
+    let fake = Fake::new();
+    run(&fake, "/automations on").await;
+    run(&fake, "/automations test").await;
+    run(&fake, "/automations off").await;
+    assert_eq!(
+        fake.calls("automations_set_run"),
+        vec![json!({ "state": "on" }), json!({ "state": "test" }), json!({ "state": "off" })]
+    );
+    fake.answer(|cmd, _| match cmd {
+        "automations_status" => Ok(json!({ "run": "test", "away": { "message": "lunch", "since_ms": 1 }, "chats_kept": ["a", "b"] })),
+        _ => Ok(Value::Null),
+    });
+    let o = run(&fake, "/automations").await;
+    assert_eq!(o.notices, ["Automations are in Test: rules show what they would do. You're away: lunch. They keep 2 chats open"]);
+    let o = run(&fake, "/automations sideways").await;
+    assert!(o.handled && toast(&o, ToastKind::Info)[0].starts_with("Usage:"));
+}
+
+#[tokio::test]
+async fn disconnect_says_how_many_chats_the_automations_keep() {
+    let fake = Fake::new();
+    fake.answer(|cmd, _| match cmd {
+        "stop_chat" => Ok(json!(true)),
+        "automations_status" => Ok(json!({ "run": "on", "away": null, "chats_kept": ["a", "b", "c"] })),
+        _ => Ok(Value::Null),
+    });
+    assert_eq!(toast(&run(&fake, "/disconnect").await, ToastKind::Info), ["Disconnected from chat. Automations keep 3 chats open"]);
+    fake.answer(|cmd, _| if cmd == "stop_chat" { Ok(json!(true)) } else { Ok(Value::Null) });
+    assert_eq!(toast(&run(&fake, "/disconnect").await, ToastKind::Info), ["Disconnected from chat"]);
+}
+
+#[tokio::test]
+async fn a_saved_custom_afk_sets_away_then_posts_its_text() {
+    let fake = Fake::new();
+    *fake.settings.lock().unwrap() = json!({ "chat_commands": { "user_commands": [
+        { "trigger": "afk", "expansion": "I'm off for a bit", "enabled": true }
+    ] } });
+    let o = run(&fake, "/afk").await;
+    assert_eq!(o.send.as_deref(), Some("I'm off for a bit"));
+    assert_eq!(fake.calls("automations_set_away"), vec![json!({ "message": "" })]);
+    // Without a custom command the built-in arm answers.
+    let fake = Fake::new();
+    let o = run(&fake, "/afk").await;
+    assert!(o.send.is_none() && o.handled);
+}
+
+#[tokio::test]
 async fn a_failed_disconnect_is_shown() {
     let fake = Fake::new();
     fake.answer(|cmd, _| if cmd == "stop_chat" { Err("socket busy".into()) } else { Ok(Value::Null) });

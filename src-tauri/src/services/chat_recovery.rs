@@ -87,7 +87,15 @@ impl Drop for Flight {
     fn drop(&mut self) {
         *during() = None;
         CYCLING.store(false, Ordering::SeqCst);
+        // The automations wait out a rebuild; this runs whether it worked or
+        // failed, so they never stay deaf after a failed one.
+        crate::services::account_automations::request_refresh();
     }
+}
+
+/// Whether a rebuild is running now.
+pub fn is_cycling() -> bool {
+    CYCLING.load(Ordering::SeqCst)
 }
 
 /// Tears the Twitch chat down and brings it back with every room `window`
@@ -147,6 +155,19 @@ pub async fn rebuild(state: &AppState, window: &str, force: bool, reason: &str) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_flight_lowers_the_flag_and_asks_for_a_refresh_as_it_ends() {
+        CYCLING.store(true, Ordering::SeqCst);
+        assert!(is_cycling());
+        drop(Flight);
+        assert!(!is_cycling());
+        let src = include_str!("chat_recovery.rs").replace("\r\n", "\n");
+        let body = &src[src.find("impl Drop for Flight").unwrap()..];
+        let store = body.find("CYCLING.store(false").unwrap();
+        let request = body.find("account_automations::request_refresh()").unwrap();
+        assert!(store < request);
+    }
 
     #[test]
     fn automatic_cycles_wait_a_minute() {

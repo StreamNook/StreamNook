@@ -558,13 +558,20 @@ async fn live_badge_campaign(
 pub(crate) fn is_window_open(
     badge: &crate::services::badge_polling_service::BadgeNotification,
 ) -> bool {
+    is_window_open_at(badge, chrono::Utc::now().timestamp_millis())
+}
+
+/// `is_window_open` judged at `now_ms` (the engine path passes server time,
+/// so every device names the same phase).
+pub(crate) fn is_window_open_at(
+    badge: &crate::services::badge_polling_service::BadgeNotification,
+    now_ms: i64,
+) -> bool {
     use crate::services::badge_polling_service::BadgeNotificationStatus;
     use crate::services::badge_window::{campaign_runs, status_at, WindowStatus};
 
     match campaign_runs(badge.enrichment.as_ref()) {
-        Some(runs) => {
-            status_at(&runs, chrono::Utc::now().timestamp_millis()) == WindowStatus::Available
-        }
+        Some(runs) => status_at(&runs, now_ms) == WindowStatus::Available,
         None => matches!(badge.status, BadgeNotificationStatus::Available),
     }
 }
@@ -682,12 +689,74 @@ pub async fn ingest_badge_drops(
     app_handle: crate::rt::AppHandle,
     badges: Vec<crate::services::badge_polling_service::BadgeNotification>,
 ) -> Result<(), String> {
+    // A caller that names no source is never "live" for the rules.
+    let drops = badges
+        .into_iter()
+        .map(|badge| crate::services::badge_feed::FeedDrop { id: badge.feed_id(), ts_ms: 0, badge })
+        .collect();
+    ingest_badges(&app_handle, drops, crate::services::account_automations::badges::Origin::CatchUp, false).await
+}
+
+/// The sighting rules hear for one stored drop: `first` when it is new,
+/// `available` when its window just opened, `window_open_at_server_time` for
+/// a new one that arrived already earnable. `None` when rules hear nothing.
+fn seen_from(
+    drop: &crate::services::badge_feed::FeedDrop,
+    action: &crate::services::badge_polling_service::FeedAction,
+    window_open_at_server_time: bool,
+    in_gallery: crate::services::account_automations::badges::Presence,
+    arrived_ms: i64,
+    push: bool,
+) -> Option<crate::services::account_automations::badges::BadgeSeen> {
+    use crate::services::account_automations::badges::{sighting, BadgeInfo, BadgeSeen};
+    use crate::services::badge_polling_service::FeedAction;
+
+    let first = matches!(action, FeedAction::NotifyNew);
+    let available = matches!(action, FeedAction::NotifyAvailable);
+    let (phase, announced, earnable) = sighting(first, available, window_open_at_server_time)?;
+    Some(BadgeSeen {
+        badge: BadgeInfo::from_notification(&drop.badge),
+        feed_id: drop.id.clone(),
+        phase,
+        announced,
+        earnable,
+        ts_ms: drop.ts_ms,
+        arrived_ms,
+        push,
+        in_gallery,
+    })
+}
+
+/// The gallery's (set, version) pairs and when it was read (local ms), as this
+/// ingest finds them; `None` with no gallery cached.
+async fn gallery_snapshot(now_ms: i64) -> Option<(std::collections::HashSet<(String, String)>, i64)> {
+    let gallery = crate::commands::badges::get_cached_global_badges().await.ok()??;
+    let age_secs = crate::commands::badges::global_badges_age_secs().await?;
+    let pairs = gallery
+        .data
+        .iter()
+        .flat_map(|s| s.versions.iter().map(move |v| (s.set_id.clone(), v.id.clone())))
+        .collect();
+    Some((pairs, now_ms - (age_secs as i64) * 1000))
+}
+
+/// Ingest drops from the badge feed. `origin` says whether rules may hear a
+/// sighting (`Live`) or it is the start-up catch-up; `push` is a `drop` frame.
+pub(crate) async fn ingest_badges(
+    app_handle: &crate::rt::AppHandle,
+    drops: Vec<crate::services::badge_feed::FeedDrop>,
+    origin: crate::services::account_automations::badges::Origin,
+    push: bool,
+) -> Result<(), String> {
+    use crate::services::account_automations::badges::{presence, Origin, Presence};
     use crate::services::badge_polling_service::{self as feed, FeedAction};
     use tauri::Emitter;
 
-    if badges.is_empty() {
+    if drops.is_empty() {
         return Ok(());
     }
+    let badges: Vec<crate::services::badge_polling_service::BadgeNotification> =
+        drops.iter().map(|d| d.badge.clone()).collect();
 
     // Startup fires the poll fallback and the socket's history frame at once,
     // both carrying the same drops. Serialized so a badge is classified against
@@ -701,8 +770,14 @@ pub async fn ingest_badge_drops(
 
     let _ = crate::commands::badges::prune_invalid_global_badges().await;
 
+    // What the gallery held before this batch, taken after the prune and
+    // before `heal_gallery` merges the batch into it.
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let gallery = gallery_snapshot(now_ms).await;
+    let server_now_ms = now_ms + crate::services::badge_feed::server_offset_ms();
+
     let mut stored_any = if seeding { false } else { heal_gallery(&badges).await };
-    for badge in &badges {
+    for (drop, badge) in drops.iter().zip(&badges) {
         let feed_id = badge.feed_id();
         let hash = badge.content_hash();
         let available = is_window_open(badge);
@@ -749,6 +824,23 @@ pub async fn ingest_badge_drops(
 
         // After the store, so a failed store retries on the next frame.
         feed::record(&feed_id, &hash, action, available).await;
+
+        // Rules hear only live sightings: a first sighting or an opening window.
+        if origin == Origin::Live {
+            let in_gallery = match &gallery {
+                Some((pairs, cached_at_ms)) => presence(
+                    *cached_at_ms,
+                    now_ms,
+                    pairs.contains(&(badge.badge_set_id.clone(), badge.badge_version.clone())),
+                    crate::services::account_automations::is_recent_arrival(&badge.badge_set_id, &badge.badge_version),
+                ),
+                None => Presence::Unknown,
+            };
+            let open_at_server_time = is_window_open_at(badge, server_now_ms);
+            if let Some(seen) = seen_from(drop, &action, open_at_server_time, in_gallery, now_ms, push) {
+                crate::services::account_automations::on_badges(seen);
+            }
+        }
     }
 
     feed::persist().await;
@@ -833,6 +925,52 @@ mod window_tests {
             let bare = drop_with(status, None, None);
             assert_eq!(is_window_open(&bare), legacy_is_window_open(&bare));
         }
+    }
+
+    #[test]
+    fn the_phase_follows_first_and_the_window_at_server_time() {
+        use super::seen_from;
+        use crate::services::account_automations::badges::{BadgePhase, Presence};
+        use crate::services::badge_feed::FeedDrop;
+        use crate::services::badge_polling_service::FeedAction;
+        let badge = drop_with(BadgeNotificationStatus::New, None, None);
+        let feed = FeedDrop { id: "cake-v1".into(), ts_ms: 5, badge };
+        let seen = |action: FeedAction, open: bool| seen_from(&feed, &action, open, Presence::No, 9, true);
+        let announced = seen(FeedAction::NotifyNew, false).unwrap();
+        assert_eq!((announced.phase, announced.announced, announced.earnable), (BadgePhase::Announced, true, false));
+        let both = seen(FeedAction::NotifyNew, true).unwrap();
+        assert_eq!((both.phase, both.announced, both.earnable), (BadgePhase::Earnable, true, true));
+        let opened = seen(FeedAction::NotifyAvailable, false).unwrap();
+        assert_eq!((opened.phase, opened.announced, opened.earnable), (BadgePhase::Earnable, false, true));
+        assert!(seen(FeedAction::SilentStore, true).is_none());
+        assert!(seen(FeedAction::Skip, true).is_none());
+        assert_eq!((announced.feed_id.as_str(), announced.ts_ms, announced.arrived_ms, announced.push), ("cake-v1", 5, 9, true));
+    }
+
+    #[test]
+    fn the_window_is_judged_at_the_time_it_is_given() {
+        use super::is_window_open_at;
+        let at = |text: &str| DateTime::parse_from_rfc3339(text).unwrap().timestamp_millis();
+        let window = json!({ "starts_utc": "2026-03-01T00:00:00Z", "ends_utc": "2026-03-02T00:00:00Z" });
+        let badge = drop_with(BadgeNotificationStatus::New, None, Some(window));
+        assert!(is_window_open_at(&badge, at("2026-03-01T12:00:00Z")), "inside the window");
+        assert!(!is_window_open_at(&badge, at("2026-02-28T12:00:00Z")), "before it opens");
+        assert!(!is_window_open_at(&badge, at("2026-03-03T12:00:00Z")), "after it closes");
+        // The one-argument form is the same judgment at the device's now.
+        assert_eq!(is_window_open(&badge), is_window_open_at(&badge, chrono::Utc::now().timestamp_millis()));
+    }
+
+    #[test]
+    fn rules_hear_only_live_sightings_taken_after_the_store() {
+        let src = include_str!("badge_service.rs").replace("\r\n", "\n");
+        let start = src.find("pub(crate) async fn ingest_badges(").unwrap();
+        let body = &src[start..start + src[start..].find("\n}\n").unwrap()];
+        let prune = body.find("prune_invalid_global_badges()").unwrap();
+        let snapshot = body.find("gallery_snapshot(now_ms)").unwrap();
+        let heal = body.find("heal_gallery(&badges)").unwrap();
+        assert!(prune < snapshot && snapshot < heal);
+        assert!(body.find("feed::record(").unwrap() < body.find("on_badges(seen)").unwrap());
+        assert!(body.contains("if origin == Origin::Live"));
     }
 
     #[test]

@@ -1055,6 +1055,12 @@ fn dispatch_with(ctx: Ctx, text: String, depth: u32, allow_custom: bool) -> BoxF
         // Saved custom commands, where they win the name.
         if allow_custom && custom_command_wins(&typed) {
             if let Some(uc) = find_user_command(&typed, &user_commands(&settings), true) {
+                // A saved custom /afk or /back still does what the built-in
+                // does: the away change first, then the custom expansion.
+                if typed == "afk" || typed == "back" {
+                    let message = (typed == "afk").then(|| args.join(" "));
+                    let _ = ctx.b.invoke("automations_set_away", json!({ "message": message })).await;
+                }
                 let a: Vec<String> = args.iter().map(|s| s.to_string()).collect();
                 let tctx = template_context(&*ctx.b, &ctx.channel, &ctx.broadcaster_id, a, &uc.expansion).await;
                 let ex = expand_user_command(&uc.expansion, &tctx);
@@ -1564,11 +1570,17 @@ async fn core(c: &Call<'_>, o: &mut Outcome) -> Result<Flow, String> {
             }
         }
         "disconnect" => match b.invoke("stop_chat", json!({})).await {
-            Ok(v) => o.info(if v.as_bool().unwrap_or(false) {
-                "Disconnected from chat"
-            } else {
-                "Chat stayed connected because another chat window is still using it"
-            }),
+            Ok(v) => {
+                let mut text = String::from(if v.as_bool().unwrap_or(false) {
+                    "Disconnected from chat"
+                } else {
+                    "Chat stayed connected because another chat window is still using it"
+                });
+                if let Some(kept) = automations_kept(b).await {
+                    text.push_str(&format!(". Automations keep {kept} chat{} open", if kept == 1 { "" } else { "s" }));
+                }
+                o.info(text);
+            }
             Err(e) => {
                 log::warn!("[Command Handler] Disconnect failed: {e}");
                 o.err(format!("Couldn't disconnect from chat: {e}"));
@@ -2095,10 +2107,57 @@ pub const PLATFORM_NEUTRAL: &[&str] = &[
     "help", "copy", "echo", "say", "tts", "shrug", "lurk", "squishy", "barrelroll", "party", "exporttext", "openfile",
     "proc", "screenshot", "setting", "timer", "chain", "foreach", "debug-env", "debug-chat", "debug-eventsub",
     "debug-logs", "debug-logging", "openstreamhighlights", "song", "songs", "favorite", "unfavorite",
+    "automations", "afk", "back",
 ];
 
 const SQUISHY: &str =
     "notsquishY WHEN YOU NEED HIM notsquishY IN A JIFFY notsquishY USE THIS EMOTE notsquishY TO SUMMON SQUISHY notsquishY";
+
+/// How many chats the automations keep joined, when any (None otherwise or
+/// when the status cannot be read).
+async fn automations_kept(b: &dyn Backend) -> Option<usize> {
+    let status = b.invoke("automations_status", json!({})).await.ok()?;
+    let kept = status["chats_kept"].as_array()?.len();
+    (kept > 0).then_some(kept)
+}
+
+/// The words for `/automations` with no argument.
+fn automations_status_line(status: &Value) -> String {
+    let run = match status["run"].as_str() {
+        Some("on") => "Automations are on",
+        Some("test") => "Automations are in Test: rules show what they would do",
+        _ => "Automations are off",
+    };
+    let mut line = run.to_string();
+    if let Some(message) = status["away"]["message"].as_str() {
+        line.push_str(&format!(". You're away: {message}"));
+    }
+    if let Some(kept) = status["chats_kept"].as_array().filter(|k| !k.is_empty()) {
+        line.push_str(&format!(". They keep {} chat{} open", kept.len(), if kept.len() == 1 { "" } else { "s" }));
+    }
+    line
+}
+
+/// `/automations [off|test|on]`.
+async fn automations_command(c: &Call<'_>, o: &mut Outcome) -> Result<(), String> {
+    let b = c.b();
+    match c.arg(0).to_lowercase().as_str() {
+        "" => {
+            let status = b.invoke("automations_status", json!({})).await?;
+            o.say(automations_status_line(&status));
+        }
+        word @ ("off" | "test" | "on") => {
+            b.invoke("automations_set_run", json!({ "state": word })).await?;
+            o.ok(match word {
+                "off" => "Automations are off",
+                "test" => "Automations are in Test: rules show what they would do",
+                _ => "Automations are on",
+            });
+        }
+        _ => ext_usage(o, "automations", "/automations [off|test|on]"),
+    }
+    Ok(())
+}
 
 /// The table's usage line for an extended command.
 fn ext_usage(o: &mut Outcome, command: &str, fallback: &str) {
@@ -2641,6 +2700,18 @@ async fn extended(c: &Call<'_>, o: &mut Outcome) -> Result<bool, String> {
             b.invoke("slash_open_export", json!({ "file": opt(c.arg(0)) })).await?;
         }
         "timer" => timer(c, o),
+        "automations" => automations_command(c, o).await?,
+        "afk" => {
+            let away = b.invoke("automations_set_away", json!({ "message": c.rest })).await?;
+            o.ok(match away["message"].as_str().filter(|m| !m.is_empty()) {
+                Some(m) => format!("You're away: {m}"),
+                None => "You're away".to_string(),
+            });
+        }
+        "back" => {
+            b.invoke("automations_set_away", json!({ "message": Value::Null })).await?;
+            o.ok("You're back");
+        }
         "runin" => {
             let who = clean_login(c.arg(0));
             let line = c.from(1).trim().to_string();

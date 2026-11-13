@@ -942,6 +942,52 @@ impl TwitchService {
         Ok(())
     }
 
+    /// The slot's answer from one file read: a token, nothing (no file, or a
+    /// damaged one), or an error when the credential store did not answer.
+    /// Pure over the load, so it is table-tested.
+    pub(crate) fn slot_read(load: Result<Option<StorableToken>>) -> std::result::Result<Option<StorableToken>, TokenError> {
+        match Self::token_error_for(&load) {
+            None => Ok(load.ok().flatten()),
+            Some(TokenError::NoToken) => Ok(None),
+            Some(other) => Err(other),
+        }
+    }
+
+    /// The token in the primary slot, for a comparison only, read under the
+    /// slot's own lock (D296): `load_token_from_file` can rewrite the file it
+    /// reads, and a read during a door's rename sees no file, which would read
+    /// as "the slot holds nothing". No refresh, no write of the caller's. The
+    /// guard is gone when this returns. Lock order for callers: an alt's
+    /// single-flight guard first, then this.
+    pub(crate) async fn read_slot_token() -> std::result::Result<Option<StorableToken>, TokenError> {
+        let _slot = Self::primary_slot().await;
+        Self::slot_read(Self::load_token_from_file())
+    }
+
+    /// The error a refresh gives when it was not attempted (the slot owns the
+    /// credential or could not be checked, an account change is running) or
+    /// its task failed: `TokenError::Unreachable` under today's network words,
+    /// so the sign-in is kept and the caller tries again.
+    pub(crate) fn refresh_unavailable(cause: &str) -> anyhow::Error {
+        TokenError::Unreachable.into_error(refresh_failure_message(RefreshFailure::Unreachable, cause))
+    }
+
+    /// What a failed token fetch means (D250): a `TokenError` anywhere in the
+    /// chain first; then a refresh Twitch answered, by status (5xx and 429 are
+    /// `Unreachable`, the rest `Refused`); any `reqwest` or `std::io` error is
+    /// `Unreachable`; and anything else is `Unreachable` too, so an unknown
+    /// failure never shows a false "sign in".
+    pub(crate) fn fetch_failure(e: &anyhow::Error) -> TokenError {
+        if let Some(kind) = e.chain().find_map(|c| c.downcast_ref::<TokenError>()) {
+            return *kind;
+        }
+        if let Some(refused) = e.chain().find_map(|c| c.downcast_ref::<RefreshRefused>()) {
+            return if refusal_is_transient(refused.status) { TokenError::Unreachable } else { TokenError::Refused };
+        }
+        // `reqwest::Error`, `std::io::Error` and everything unrecognized.
+        TokenError::Unreachable
+    }
+
     /// Read whatever token currently occupies the primary slot. The account
     /// registry uses this to capture the outgoing main's token before a switch so
     /// the old main can be preserved as a linked secondary instead of being lost.
@@ -1626,6 +1672,13 @@ impl TwitchService {
             // web-session cookie would be invisible to the stream resolver — the
             // "non-proxy mode requires a twitch login" dead-end even though the
             // user just logged in.
+            // One hook for every registered account, one shared wait, one
+            // guard held across the reset. A no-op guard when the engine is not
+            // running (the launch-time forced re-auth runs before it).
+            let _leaving = crate::services::account_automations::before_accounts_removed(
+                &crate::commands::accounts::reauth_hook_ids(),
+            )
+            .await;
             crate::services::account_store::AccountStore::reset_all().await;
 
             // Say why, to every window and across a relaunch, until the user
@@ -8259,7 +8312,10 @@ mod role_list_tests {
 
 #[cfg(test)]
 mod refresh_failure_tests {
-    use super::{refresh_failure_kind, refresh_failure_message, refusal_is_transient, RefreshFailure, RefreshRefused};
+    use super::{
+        refresh_failure_kind, refresh_failure_message, refusal_is_transient, RefreshFailure, RefreshRefused, StorableToken, TokenError,
+        TwitchService,
+    };
     use std::time::Duration;
 
     /// The words the pages read a failure as the network by: `isNetworkAuthError`
@@ -8284,6 +8340,58 @@ mod refresh_failure_tests {
 
     fn refused(status: u16, body: &str) -> anyhow::Error {
         anyhow::anyhow!(RefreshRefused { status, body: body.to_string() })
+    }
+
+    #[test]
+    fn slot_read_table() {
+        let token = || StorableToken { access_token: "a".into(), refresh_token: "r".into(), expires_at: 0 };
+        assert!(matches!(TwitchService::slot_read(Ok(Some(token()))), Ok(Some(t)) if t.refresh_token == "r"));
+        assert!(matches!(TwitchService::slot_read(Ok(None)), Ok(None)));
+        let damaged = serde_json::from_str::<StorableToken>("{").unwrap_err();
+        assert!(matches!(TwitchService::slot_read(Err(damaged.into())), Ok(None)), "a damaged file is no token");
+        assert!(matches!(TwitchService::slot_read(Err(anyhow::anyhow!("keyring locked"))), Err(TokenError::VaultUnavailable)));
+    }
+
+    #[test]
+    fn a_refresh_that_was_not_attempted_reads_as_unreachable() {
+        let e = TwitchService::refresh_unavailable("slot unreadable");
+        assert_eq!(TwitchService::fetch_failure(&e), TokenError::Unreachable);
+        assert!(e.to_string().contains("network error"), "today's network wording: {e}");
+    }
+
+    #[test]
+    fn fetch_failure_table_built_with_real_constructors() {
+        // A TokenError anywhere in the chain wins, under any text.
+        for kind in [TokenError::NoToken, TokenError::VaultUnavailable, TokenError::Refused, TokenError::Unreachable] {
+            assert_eq!(TwitchService::fetch_failure(&kind.into_error("words")), kind);
+            assert_eq!(TwitchService::fetch_failure(&kind.into_error("inner").context("outer")), kind);
+        }
+        // A refresh Twitch answered: by status.
+        assert_eq!(TwitchService::fetch_failure(&refused(401, "x")), TokenError::Refused);
+        assert_eq!(TwitchService::fetch_failure(&refused(400, "x")), TokenError::Refused);
+        assert_eq!(TwitchService::fetch_failure(&refused(503, "x")), TokenError::Unreachable);
+        assert_eq!(TwitchService::fetch_failure(&refused(429, "x")), TokenError::Unreachable);
+        // Transport and io errors, and anything unknown, are Unreachable.
+        let builder = reqwest::Client::new().get("not a url").build().unwrap_err();
+        assert_eq!(TwitchService::fetch_failure(&builder.into()), TokenError::Unreachable);
+        let io = std::io::Error::new(std::io::ErrorKind::TimedOut, "slow");
+        assert_eq!(TwitchService::fetch_failure(&io.into()), TokenError::Unreachable);
+        assert_eq!(TwitchService::fetch_failure(&anyhow::anyhow!("something else")), TokenError::Unreachable);
+    }
+
+    #[test]
+    fn read_slot_token_is_a_pinned_delegation() {
+        let src = include_str!("twitch_service.rs").replace("\r\n", "\n");
+        let start = src.find("pub(crate) async fn read_slot_token()").unwrap();
+        let body = &src[start..start + src[start..].find("\n    }\n").unwrap()];
+        assert_eq!(body.matches("Self::primary_slot().await").count(), 1);
+        assert_eq!(body.matches("Self::slot_read(Self::load_token_from_file())").count(), 1);
+        assert!(body.find("Self::primary_slot().await").unwrap() < body.find("Self::slot_read(").unwrap());
+        for banned in ["refresh_token", "persist_primary_token", "tokio::spawn", "async_runtime::spawn", "token_vault::store", "token_vault::remove"] {
+            assert!(!body.contains(banned), "read_slot_token names {banned}");
+        }
+        // No lock but the slot's own.
+        assert_eq!(body.matches(".lock(").count(), 0);
     }
 
     #[test]

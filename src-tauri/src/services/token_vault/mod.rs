@@ -540,6 +540,73 @@ fn write_private(path: &Path, data: &[u8]) -> Result<()> {
     written
 }
 
+/// Write `data` to `path` so a reader never sees it half written: a per-write
+/// temp file, `sync_all`, then `rename` over the old file (`write_private`).
+/// The account registry is saved through this; it is plain JSON, not a sealed
+/// credential, and the private mode on its temp file is harmless.
+pub(crate) fn write_file_atomic(path: &Path, data: &[u8]) -> Result<()> {
+    write_private(path, data)
+}
+
+/// A temp file a crashed registry write left behind
+/// (`accounts.json.<pid>.<n>.tmp`, the name `write_private` gives it).
+fn is_registry_temp(name: &str) -> bool {
+    name.starts_with("accounts.json.") && name.ends_with(".tmp")
+}
+
+/// Whether a registry temp file is old enough to be a crash's, not a write in
+/// progress (the same age as the token temp files).
+fn registry_temp_is_stale(name: &str, age: Option<Duration>) -> bool {
+    is_registry_temp(name) && age.is_some_and(|a| a > STALE_TEMP_AGE)
+}
+
+#[cfg(test)]
+mod atomic_write_tests {
+    use super::{is_registry_temp, registry_temp_is_stale, write_file_atomic, STALE_TEMP_AGE};
+    use std::time::Duration;
+
+    fn scratch() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("sn-atomic-write-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn it_replaces_an_existing_file_and_leaves_no_temp_sibling() {
+        let dir = scratch();
+        let path = dir.join("accounts.json");
+        std::fs::write(&path, "[1]").unwrap();
+        write_file_atomic(&path, b"[2,3]").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "[2,3]");
+        let names: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        assert_eq!(names, vec!["accounts.json".to_string()], "no .tmp sibling is left");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn only_registry_temp_files_that_are_old_are_swept() {
+        // The name `write_private` gives a temp file for `accounts.json`.
+        assert!(is_registry_temp("accounts.json.4242.7.tmp"));
+        assert!(!is_registry_temp("accounts.json"));
+        assert!(!is_registry_temp(".twitch_token.4242.7.tmp"), "token temps have their own rule");
+        let old = Some(STALE_TEMP_AGE + Duration::from_secs(1));
+        assert!(registry_temp_is_stale("accounts.json.1.2.tmp", old));
+        assert!(!registry_temp_is_stale("accounts.json.1.2.tmp", Some(Duration::from_secs(5))), "a write in progress");
+        assert!(!registry_temp_is_stale("accounts.json.1.2.tmp", None));
+        assert!(!registry_temp_is_stale("accounts.json", old));
+    }
+
+    #[test]
+    fn the_boot_pass_sweeps_registry_temps_beside_the_token_temps() {
+        let src = include_str!("mod.rs").replace("\r\n", "\n");
+        let start = src.find("fn migrate_dir(").unwrap();
+        let body = &src[start..start + src[start..].find("\n}\n").unwrap()];
+        assert!(body.contains("registry_temp_is_stale(name,"));
+        assert!(body.find("registry_temp_is_stale(name,").unwrap() < body.find("legacy::xor_key(name).is_none()").unwrap());
+    }
+}
+
 /// Keeps a credential out of iCloud and computer backups: the attribute the
 /// system's own exclude-from-backup flag sets. A sealed sign-in restored onto
 /// another iPhone can never open there (the Keychain key stays on this one), so
@@ -682,6 +749,14 @@ fn migrate_dir(keys: &dyn Keys, dir: &Path) {
         let Some(name) = name.to_str() else {
             continue;
         };
+        // A registry write a crash cut short leaves `accounts.json.*.tmp`.
+        if is_registry_temp(name) {
+            let age = entry.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok());
+            if registry_temp_is_stale(name, age) {
+                let _ = fs::remove_file(entry.path());
+            }
+            continue;
+        }
         if legacy::xor_key(name).is_none() {
             continue;
         }
@@ -813,6 +888,53 @@ mod tests {
             TAG_OS => Ok(KEY),
             _ => Err(anyhow!("no key for tag {tag}")),
         }
+    }
+
+    // ----- a linked account's file, damaged
+
+    /// What `load_json` does after `load`: parse the plain bytes.
+    fn parse_like_load_json(keys: &TestKeys, path: &Path) -> Result<Option<crate::services::twitch_service::StorableToken>> {
+        load(keys, path)?
+            .map(|plain| {
+                serde_json::from_slice(&plain)
+                    .with_context(|| format!("{} does not hold the expected JSON", path.display()))
+            })
+            .transpose()
+    }
+
+    #[test]
+    fn an_empty_or_bare_object_account_file_fails_with_a_json_error() {
+        let dir = TempDir::new("damaged_account");
+        let keys = TestKeys::new(true);
+        for (name, body) in [("empty", ""), ("braces", "{}")] {
+            let path = dir.0.join(format!(".twitch_account_1_{name}"));
+            fs::write(&path, body).unwrap();
+            let e = parse_like_load_json(&keys, &path).unwrap_err();
+            assert!(e.chain().any(|c| c.is::<serde_json::Error>()), "{name}: {e:#}");
+        }
+    }
+
+    #[test]
+    fn a_sealed_account_file_cut_short_reads_as_no_token_unless_it_is_cut_to_the_header() {
+        let dir = TempDir::new("truncated_account");
+        let keys = TestKeys::new(true);
+        let path = dir.0.join(".twitch_account_1");
+        let seal_valid = || {
+            store(&keys, &path, b"{\"access_token\":\"a\",\"refresh_token\":\"r\",\"expires_at\":1}").unwrap();
+            fs::read(&path).unwrap()
+        };
+        // Only the last byte gone: still sealed (longer than header plus nonce),
+        // fails decryption, is `Lost`, is deleted, and reads as signed out.
+        let sealed = seal_valid();
+        assert!(is_sealed(&sealed) && sealed.len() > HEADER_LEN + NONCE_LEN);
+        fs::write(&path, &sealed[..sealed.len() - 1]).unwrap();
+        assert!(matches!(load(&keys, &path), Ok(None)));
+        assert!(!path.exists(), "the file no key can open is deleted");
+        // Cut to exactly header plus nonce: no longer read as sealed, so the
+        // legacy branch runs and errors.
+        let sealed = seal_valid();
+        fs::write(&path, &sealed[..HEADER_LEN + NONCE_LEN]).unwrap();
+        assert!(load(&keys, &path).is_err());
     }
 
     // ----- format

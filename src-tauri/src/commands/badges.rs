@@ -41,6 +41,31 @@ pub struct CachedBadgesData {
 
 // --- TAURI COMMANDS ---
 
+/// The (set, version) pairs of a gallery read.
+fn gallery_pairs(badges: &HelixBadgesResponse) -> std::collections::HashSet<(String, String)> {
+    badges
+        .data
+        .iter()
+        .flat_map(|s| s.versions.iter().map(move |v| (s.set_id.clone(), v.id.clone())))
+        .collect()
+}
+
+/// The pairs the cache held before this read. `peek_cached_entry` still
+/// answers once the entry expired; `None` when there was no cache.
+fn previous_gallery_pairs() -> Option<std::collections::HashSet<(String, String)>> {
+    let entry = crate::services::universal_cache_service::peek_cached_entry("global_badges").ok().flatten()?;
+    let data = serde_json::from_value::<CachedBadgesData>(entry.data).ok()?;
+    Some(gallery_pairs(&data.badges))
+}
+
+/// Tell the rules which (set, version) pairs a read added.
+fn note_arrivals(previous: Option<&std::collections::HashSet<(String, String)>>, badges: &HelixBadgesResponse) {
+    let added = crate::services::account_automations::badges::new_pairs(previous, &gallery_pairs(badges));
+    if !added.is_empty() {
+        crate::services::account_automations::note_arrivals(added);
+    }
+}
+
 /// Get current timestamp in seconds
 fn get_current_timestamp() -> u64 {
     SystemTime::now()
@@ -137,6 +162,7 @@ pub async fn fetch_global_badges() -> Result<HelixBadgesResponse, String> {
     }
 
     // Fetch from API
+    let before = previous_gallery_pairs();
     let badges = fetch_badges_from_api(client_id, token).await?;
 
     // Cache the result for 7 days
@@ -157,6 +183,7 @@ pub async fn fetch_global_badges() -> Result<HelixBadgesResponse, String> {
         debug!("[Badges] Cached global badges for 7 days");
     }
 
+    note_arrivals(before.as_ref(), &badges);
     note_row_view_badges(None, &badges);
     Ok(badges)
 }
@@ -177,6 +204,7 @@ pub async fn refresh_global_badges() -> Result<HelixBadgesResponse, String> {
         _ => None,
     };
 
+    let before = previous_gallery_pairs();
     let mut badges = fetch_badges_from_api(client_id, token).await?;
     if let Some(previous) = previous {
         for old in previous.badges.data {
@@ -200,6 +228,7 @@ pub async fn refresh_global_badges() -> Result<HelixBadgesResponse, String> {
     if let Ok(json_value) = serde_json::to_value(&cached_data) {
         let _ = cache_item(CacheType::Badge, cache_key.to_string(), json_value, "twitch".to_string(), 7).await;
     }
+    note_arrivals(before.as_ref(), &badges);
     note_row_view_badges(None, &badges);
     Ok(badges)
 }
@@ -295,6 +324,7 @@ pub async fn force_refresh_global_badges() -> Result<HelixBadgesResponse, String
         .map_err(|e| format!("Failed to get token: {}", e))?;
 
     // Fetch directly from API (bypassing cache check)
+    let before = previous_gallery_pairs();
     let badges = fetch_badges_from_api(client_id.clone(), token.clone()).await?;
 
     // Cache the result for 7 days
@@ -319,6 +349,7 @@ pub async fn force_refresh_global_badges() -> Result<HelixBadgesResponse, String
         );
     }
 
+    note_arrivals(before.as_ref(), &badges);
     Ok(badges)
 }
 
@@ -855,4 +886,54 @@ pub async fn get_user_badges(
     }
 
     Ok(badges.join(","))
+}
+
+#[cfg(test)]
+mod arrival_tests {
+    use super::*;
+
+    fn gallery(sets: &[(&str, &[&str])]) -> HelixBadgesResponse {
+        HelixBadgesResponse {
+            data: sets
+                .iter()
+                .map(|(s, vs)| HelixBadgeSet {
+                    set_id: s.to_string(),
+                    versions: vs
+                        .iter()
+                        .map(|v| HelixBadgeVersion {
+                            id: v.to_string(),
+                            image_url_1x: String::new(),
+                            image_url_2x: String::new(),
+                            image_url_4x: String::new(),
+                            title: String::new(),
+                            description: String::new(),
+                            click_action: None,
+                            click_url: None,
+                        })
+                        .collect(),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn a_read_names_the_pairs_its_previous_cache_lacked() {
+        let before = gallery_pairs(&gallery(&[("a", &["1"])]));
+        let now = gallery_pairs(&gallery(&[("a", &["1", "2"]), ("b", &["1"])]));
+        use crate::services::account_automations::badges::new_pairs;
+        assert_eq!(new_pairs(Some(&before), &now), vec![("a".to_string(), "2".to_string()), ("b".to_string(), "1".to_string())]);
+        assert!(new_pairs(None, &now).is_empty(), "no previous cache: nothing is new");
+    }
+
+    #[test]
+    fn every_twitch_list_writer_reads_the_cache_before_it_writes() {
+        let src = include_str!("badges.rs").replace("\r\n", "\n");
+        for sig in ["pub async fn fetch_global_badges()", "pub async fn refresh_global_badges()", "pub async fn force_refresh_global_badges()"] {
+            let start = src.find(sig).unwrap_or_else(|| panic!("{sig}"));
+            let body = &src[start..start + src[start..].find("\n}\n").unwrap()];
+            let read = body.find("previous_gallery_pairs()").unwrap_or_else(|| panic!("{sig} reads the old cache"));
+            assert!(read < body.find("fetch_badges_from_api(").unwrap(), "{sig}");
+            assert!(body.contains("note_arrivals(before.as_ref(), &badges)"), "{sig}");
+        }
+    }
 }

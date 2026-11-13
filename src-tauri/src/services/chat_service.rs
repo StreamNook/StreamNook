@@ -527,6 +527,16 @@ impl ChatService {
             ));
             return Ok(false);
         }
+        // Nothing but the engine keeps the connection: it stays up for the
+        // engine's rooms, the caller's claims go and every other room PARTs.
+        // Providers need no special case: with them on the bridge
+        // `stop_kept_for` already kept the connection for a caller that held a
+        // Twitch room, so only a caller that held none gets here and sockets
+        // stay as they are.
+        if IrcService::held_by_window(crate::services::account_automations::AUTOMATIONS_LABEL).await {
+            IrcService::stop_keeping_engine_rooms(window).await;
+            return Ok(true);
+        }
         if providers {
             crate::services::irc_service::record_lifecycle(&format!(
                 "stop_chat from {}: Twitch side stopped, the bridge stays for other platforms",
@@ -609,6 +619,25 @@ fn kept_rooms() -> Vec<String> {
             .map(|c| c.login.trim().to_lowercase()),
     );
     rooms
+}
+
+#[cfg(test)]
+mod engine_stop_tests {
+    fn stop_body() -> String {
+        let src = include_str!("chat_service.rs").replace("\r\n", "\n");
+        let start = src.find("pub async fn stop(window: &str)").expect("stop");
+        src[start..start + src[start..].find("\n    }\n").expect("end")].to_string()
+    }
+
+    #[test]
+    fn the_kept_decision_runs_before_the_engine_only_branch() {
+        let b = stop_body();
+        let kept = b.find("stop_kept_for(").expect("kept decision");
+        let engine = b.find("stop_keeping_engine_rooms(").expect("engine branch");
+        let providers = b.find("if providers {").expect("provider branch");
+        assert!(kept < engine && engine < providers);
+        assert!(b.contains("held_by_other_windows(window)"));
+    }
 }
 
 #[cfg(test)]

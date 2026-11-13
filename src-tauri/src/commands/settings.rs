@@ -1133,6 +1133,10 @@ pub(crate) fn apply_imported_settings(
     let favorites_changed = favorite_channels::favorites_changed(&current, &imported);
     {
         let mut state_settings = state.settings.lock().map_err(|e| e.to_string())?;
+        // A restored file never brings rules back live, turns automations on
+        // or brings back an old away (reminders are untouched). Inside the
+        // settings lock, so no save sees the unpaused copy.
+        crate::commands::account_automations::pause_restored(&mut imported.automations);
         *state_settings = imported.clone();
     }
     // The backup's recent polls and predictions go in front of the ones kept

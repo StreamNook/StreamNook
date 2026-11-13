@@ -132,6 +132,12 @@ pub fn twitch_user_id() -> Option<String> {
     TWITCH_IDENTITY.lock().ok().and_then(|c| c.as_ref().map(|u| u.id.clone()))
 }
 
+/// Whether the account id the identity names changed: Some to None, None to
+/// Some and a different id are changes; the same id (or none both times) is not.
+fn identity_id_changed(old: Option<&str>, new: Option<&str>) -> bool {
+    old != new
+}
+
 /// Record (or clear) who the primary Twitch account is, for the account as it is now.
 pub fn set_twitch_identity(info: Option<UserInfo>) {
     set_twitch_identity_at(info, crate::services::twitch_service::TwitchService::account_generation());
@@ -146,8 +152,9 @@ pub fn set_twitch_identity_at(info: Option<UserInfo>, generation: u64) -> bool {
         return false;
     }
     let account_id = info.as_ref().map(|u| u.id.clone());
-    let changed = match TWITCH_IDENTITY.lock() {
+    let (changed, id_changed) = match TWITCH_IDENTITY.lock() {
         Ok(mut cell) => {
+            let id_changed = identity_id_changed(cell.as_ref().map(|u| u.id.as_str()), info.as_ref().map(|u| u.id.as_str()));
             // Another member (or none): their linked-account claims start over.
             if cell.as_ref().map(|u| u.id.as_str()) != info.as_ref().map(|u| u.id.as_str()) {
                 crate::services::linked_accounts::reset();
@@ -162,13 +169,19 @@ pub fn set_twitch_identity_at(info: Option<UserInfo>, generation: u64) -> bool {
                 _ => false,
             };
             *cell = info;
-            !same
+            (!same, id_changed)
         }
-        Err(_) => false,
+        Err(_) => (false, false),
     };
     // The identity lock is released: the smiley style follows the account.
     if let Some(id) = account_id {
         crate::services::twitch_smiley_style::on_identity(&id, generation);
+    }
+    // A slot identity that became known or changed: the rules recompile their
+    // account ids and forget remembered failed fetches (a no-op before the
+    // engine starts; compile never sets the identity, so there is no loop).
+    if id_changed {
+        crate::services::account_automations::on_accounts_changed();
     }
     if changed {
         notify();
@@ -648,5 +661,30 @@ mod tests {
         assert!(!take_if_newer(&mut followed, 2));
         assert!(take_if_newer(&mut followed, 3));
         assert_eq!(followed, 3);
+    }
+}
+
+#[cfg(test)]
+mod identity_hook_tests {
+    use super::identity_id_changed;
+
+    #[test]
+    fn identity_id_changed_table() {
+        assert!(!identity_id_changed(Some("1"), Some("1")));
+        assert!(identity_id_changed(Some("1"), Some("2")));
+        assert!(identity_id_changed(Some("1"), None));
+        assert!(identity_id_changed(None, Some("1")));
+        assert!(!identity_id_changed(None, None));
+    }
+
+    #[test]
+    fn the_hook_sits_after_the_lock_and_only_on_an_id_change() {
+        let src = include_str!("account_roster.rs").replace("\r\n", "\n");
+        let start = src.find("pub fn set_twitch_identity_at").unwrap();
+        let body = &src[start..start + src[start..].find("\n}\n").unwrap()];
+        let lock_end = body.find("(!same, id_changed)").unwrap();
+        let hook = body.find("crate::services::account_automations::on_accounts_changed()").unwrap();
+        assert!(lock_end < hook);
+        assert!(body[..hook].trim_end().ends_with("if id_changed {"));
     }
 }

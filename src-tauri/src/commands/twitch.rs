@@ -843,6 +843,9 @@ pub async fn twitch_complete_device_login(
 
 #[tauri::command]
 pub async fn twitch_logout(state: State<'_, AppState>) -> Result<(), String> {
+    // Rules sending as the signed-out accounts stop first and stay held until
+    // this door returns (the push unregister inside `logout` takes seconds).
+    let _leaving = crate::services::account_automations::before_accounts_removed(&crate::commands::accounts::sign_out_hook_ids()).await;
     let result = TwitchService::logout().await.map_err(|e| e.to_string());
     // Reads stay logged-out (no fallback to the default store's lingering
     // cookie) until the next login, and cached entitlement is dropped.

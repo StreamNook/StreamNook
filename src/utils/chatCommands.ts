@@ -187,6 +187,9 @@ export const COMMAND_DEFINITIONS: CommandDefinition[] = [
   { name: 'debug-logs', usage: '/debug-logs', description: 'Open the log folder', category: 'Everyone' , local: true, desktopOnly: true },
   { name: 'debug-logging', usage: '/debug-logging <on|off>', description: 'Turn detailed logging on or off', category: 'Everyone' , local: true },
   { name: 'debug-limits', usage: '/debug-limits', description: 'Show your message limits in this chat', category: 'Everyone' , local: true },
+  { name: 'automations', usage: '/automations [off|test|on]', description: 'Turn your automation rules off, on, or to Test, or say how they stand', category: 'Everyone' , local: true, examples: ['/automations', '/automations test', '/automations on'], details: 'Off stops every rule, Test shows what each would do without sending, On lets rules reply, alert and moderate for you. With no word it says the current state.' },
+  { name: 'afk', usage: '/afk [message]', description: 'Set yourself away on this device', category: 'Everyone' , local: true, examples: ['/afk', '/afk back in 20 minutes'], details: 'Away rules answer mentions with your message while you are away. Away is set on this device only. /back clears it.' },
+  { name: 'back', usage: '/back', description: 'Clear your away on this device', category: 'Everyone' , local: true },
 
   // Moderation
   { name: 'purge', aliases: ['p'], usage: '/purge <username> [reason]', description: "Clear someone's messages with a one-second timeout", category: 'Moderator' , examples: ['/purge someuser'] },

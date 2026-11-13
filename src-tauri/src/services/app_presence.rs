@@ -56,6 +56,10 @@ pub fn phone_quiet(app: &AppHandle) -> bool {
 pub fn set_foreground(foreground: bool) {
     let changed = window_visibility::all_hidden() == foreground;
     window_visibility::set_app_foreground(foreground);
+    // Every call reports, outside the `changed` test, so the first front
+    // report (equal to the default) still arms the rules. The engine stores
+    // the value synchronously and works on a spawned task.
+    crate::services::account_automations::on_foreground(foreground);
     if !foreground {
         // The last reliable moment before either OS may end the process.
         crate::flush_debounced_stores();
@@ -95,6 +99,16 @@ fn announce() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_engine_hears_every_report_outside_the_changed_test() {
+        let src = include_str!("app_presence.rs").replace("\r\n", "\n");
+        let start = src.find("pub fn set_foreground").unwrap();
+        let body = &src[start..start + src[start..].find("\n}\n").unwrap()];
+        let hook = body.find("account_automations::on_foreground(foreground)").unwrap();
+        assert!(body.find("window_visibility::set_app_foreground(foreground)").unwrap() < hook);
+        assert!(hook < body.find("if changed {").unwrap());
+    }
 
     #[test]
     fn the_snapshot_keeps_the_field_names_the_shells_read() {

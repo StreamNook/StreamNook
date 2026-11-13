@@ -27,8 +27,11 @@ use anyhow::Result;
 use crate::services::token_vault;
 use log::{debug, warn};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
 
 use crate::models::user::UserInfo;
 use crate::services::twitch_service::{get_app_data_dir, StorableToken, TwitchService};
@@ -70,6 +73,194 @@ pub struct StoredAccount {
 }
 
 pub struct AccountStore;
+
+/// Seconds before expiry a token is renewed.
+const REFRESH_BUFFER: i64 = 300;
+
+/// The registry file's reader-writer lock (D248): `list()` reads under it
+/// shared, `save` writes under it exclusively, so a reader sees the old file
+/// or the new one, never a truncated, missing or locked one. A poisoned lock
+/// is recovered with `into_inner` (the data is a file, not memory).
+static REGISTRY_IO: RwLock<()> = RwLock::new(());
+
+/// Today's registry read, as a seam over a path: an empty list for a missing
+/// file, and an empty list (with a warning) for one that does not parse.
+/// Callers hold `REGISTRY_IO` shared.
+fn read_registry(path: &std::path::Path) -> Vec<StoredAccount> {
+    if !path.exists() {
+        return Vec::new();
+    }
+    match fs::read_to_string(path).map(|s| serde_json::from_str::<Vec<StoredAccount>>(&s)) {
+        Ok(Ok(mut accounts)) => {
+            accounts.sort_by(|a, b| b.is_primary.cmp(&a.is_primary));
+            accounts
+        }
+        _ => {
+            warn!("[accounts] registry unreadable or malformed; treating as empty");
+            Vec::new()
+        }
+    }
+}
+
+/// A linked account's file read, typed (D250, D258): the load is sorted
+/// through `token_error_for`. No file, or a file that does not parse (a
+/// 0-byte file, `{}`), is `NoToken` under today's words; any other failure is
+/// `VaultUnavailable`.
+fn secondary_load(load: Result<Option<StorableToken>>, user_id: &str) -> Result<StorableToken> {
+    use crate::services::twitch_service::TokenError;
+    let kind = match TwitchService::token_error_for(&load) {
+        None => return load.map(|t| t.expect("token_error_for says a token was read")),
+        Some(kind) => kind,
+    };
+    let words = match (&load, kind) {
+        (Err(e), TokenError::VaultUnavailable) => format!("{e:#}"),
+        _ => format!("No stored token for secondary account {}", user_id),
+    };
+    Err(kind.into_error(words))
+}
+
+type SlotRead = std::result::Result<Option<StorableToken>, crate::services::twitch_service::TokenError>;
+
+/// Whether an expiring file may be refreshed, given what the slot read
+/// answered. Never when the slot cannot be read (the file may hold the slot's
+/// own credential) or holds the same refresh token (the slot owns it); yes
+/// when the slot is empty or holds a different one.
+fn may_refresh_file(file: &StorableToken, slot: &SlotRead) -> bool {
+    match slot {
+        Err(_) => false,
+        Ok(Some(slot)) => file.refresh_token.is_empty() || file.refresh_token != slot.refresh_token,
+        Ok(None) => true,
+    }
+}
+
+/// Held across an account door; lowers its `AltRefresh`'s change counter when
+/// dropped.
+#[must_use]
+pub(crate) struct AccountChangeGuard {
+    change: Arc<AtomicUsize>,
+}
+
+impl Drop for AccountChangeGuard {
+    fn drop(&mut self) {
+        self.change.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Everything the alt-account refresh shares, in one value (D256): the
+/// per-account single-flight locks (one per linked account, so two refreshes
+/// of one single-use refresh token never run at once; entries stay, bounded
+/// by accounts ever linked; the std mutex is never held across an await), the
+/// and the account-change counter. The app keeps
+/// one (`ALT_REFRESH`) behind one-line delegations; every test builds its own.
+pub(crate) struct AltRefresh {
+    map: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    change: Arc<AtomicUsize>,
+}
+
+impl AltRefresh {
+    pub(crate) fn new() -> AltRefresh {
+        AltRefresh { map: Mutex::new(HashMap::new()), change: Arc::new(AtomicUsize::new(0)) }
+    }
+
+    fn guard(&self, id: &str) -> Arc<tokio::sync::Mutex<()>> {
+        self.map.lock().unwrap_or_else(|e| e.into_inner()).entry(id.to_string()).or_default().clone()
+    }
+
+    /// An account door is about to run. Raises the counter (so no refresh
+    /// starts) and waits out the refreshes in flight by taking and dropping
+    /// every per-account lock. The guard exists before the first await, so a
+    /// dropped caller still lowers the counter.
+    pub(crate) async fn begin_account_change(&self) -> AccountChangeGuard {
+        self.change.fetch_add(1, Ordering::SeqCst);
+        let guard = AccountChangeGuard { change: self.change.clone() };
+        let locks: Vec<Arc<tokio::sync::Mutex<()>>> =
+            self.map.lock().unwrap_or_else(|e| e.into_inner()).values().cloned().collect();
+        for lock in locks {
+            drop(lock.lock_owned().await);
+        }
+        guard
+    }
+
+    /// A linked account's token: today's `TwitchService::refresh_token` (the
+    /// shared client, unchanged) does the renewing (D264).
+    pub(crate) async fn refresh_alt<L, S>(&self, id: &str, load: L, store: S) -> Result<String>
+    where
+        L: FnOnce() -> Result<StorableToken>,
+        S: FnOnce(&StorableToken) -> Result<()> + Send + 'static,
+    {
+        self.single_flight_refresh(
+            id,
+            load,
+            TwitchService::read_slot_token,
+            move |rt| async move { TwitchService::refresh_token(&rt).await },
+            store,
+        )
+        .await
+    }
+
+    /// Load `id`'s token, and renew it when it is near expiry, under the
+    /// account's own lock. A fresh token is returned whatever else is going
+    /// on. Before it spends the refresh token, on the value it loaded under
+    /// that lock, it refuses (an `Unreachable` "try again" error under today's
+    /// network words) while an account door is running, and when
+    /// `may_refresh_file` says the slot holds the same credential or cannot be
+    /// read. The renewal and the store run on a spawned task that owns the
+    /// guard, so a caller that goes away never cancels a refresh between
+    /// Twitch's answer and the store (a dropped Tauri `JoinHandle` detaches,
+    /// never aborts). Steps are closures so tests use fakes. Keeps today's
+    /// rules: `expires_at == 0` never renews; the errors carry their kind
+    /// (D250) under today's words.
+    pub(crate) async fn single_flight_refresh<L, SR, SRF, R, RF, S>(
+        &self,
+        id: &str,
+        load: L,
+        slot_read: SR,
+        refresh: R,
+        store: S,
+    ) -> Result<String>
+    where
+        L: FnOnce() -> Result<StorableToken>,
+        SR: FnOnce() -> SRF,
+        SRF: std::future::Future<Output = SlotRead>,
+        R: FnOnce(String) -> RF + Send + 'static,
+        RF: std::future::Future<Output = Result<StorableToken>> + Send + 'static,
+        S: FnOnce(&StorableToken) -> Result<()> + Send + 'static,
+    {
+        let guard = self.guard(id).lock_owned().await;
+        let token = load()?;
+        if !(token.expires_at > 0 && chrono::Utc::now().timestamp() >= token.expires_at - REFRESH_BUFFER) {
+            return Ok(token.access_token);
+        }
+        if token.refresh_token.is_empty() {
+            return Err(crate::services::twitch_service::TokenError::Refused
+                .into_error(format!("Account {} token expired and has no refresh token; re-link it.", id)));
+        }
+        // An account door is running: it may be moving this very token, so
+        // nothing starts a refresh now.
+        if self.change.load(Ordering::SeqCst) > 0 {
+            return Err(TwitchService::refresh_unavailable("an account change is in progress"));
+        }
+        // Under the alt's guard (lock order: alt guard, then the slot), on the
+        // value just loaded, before the refresh task is spawned.
+        if !may_refresh_file(&token, &slot_read().await) {
+            return Err(TwitchService::refresh_unavailable(
+                "the sign-in is shared with your main account or could not be checked",
+            ));
+        }
+        let refresh_token = token.refresh_token;
+        let task = tauri::async_runtime::spawn(async move {
+            let _guard = guard;
+            let refreshed = refresh(refresh_token).await?;
+            store(&refreshed)?;
+            Ok::<String, anyhow::Error>(refreshed.access_token)
+        });
+        task.await.map_err(|e| TwitchService::refresh_unavailable(&format!("the refresh task failed: {e}")))?
+    }
+}
+
+/// The app's one alt-refresh state. Named only by `AccountStore::get_token_for`
+/// and `AccountStore::begin_account_change` (a pin checks it).
+static ALT_REFRESH: std::sync::LazyLock<AltRefresh> = std::sync::LazyLock::new(AltRefresh::new);
 
 /// Whether Twitch reports a different login than the one on file. Logins are
 /// lowercase on Twitch, so a case difference alone is not a rename.
@@ -131,25 +322,26 @@ impl AccountStore {
             Ok(p) => p,
             Err(_) => return Vec::new(),
         };
-        if !path.exists() {
-            return Vec::new();
+        // Shared with every other reader; a save holds it exclusively (D248).
+        let _registry = REGISTRY_IO.read().unwrap_or_else(|e| e.into_inner());
+        read_registry(&path)
+    }
+
+    /// The registry write: pretty JSON, atomic (temp file, `sync_all`, rename),
+    /// and exclusive against every reader for just that write. The lock is
+    /// released before any invalidation runs.
+    fn save_at(path: &std::path::Path, accounts: &[StoredAccount]) -> Result<()> {
+        let json = serde_json::to_string_pretty(accounts)?;
+        {
+            let _registry = REGISTRY_IO.write().unwrap_or_else(|e| e.into_inner());
+            crate::services::token_vault::write_file_atomic(path, json.as_bytes())?;
         }
-        match fs::read_to_string(&path).map(|s| serde_json::from_str::<Vec<StoredAccount>>(&s)) {
-            Ok(Ok(mut accounts)) => {
-                accounts.sort_by(|a, b| b.is_primary.cmp(&a.is_primary));
-                accounts
-            }
-            _ => {
-                warn!("[accounts] registry unreadable or malformed; treating as empty");
-                Vec::new()
-            }
-        }
+        Ok(())
     }
 
     fn save(accounts: &[StoredAccount]) -> Result<()> {
         let path = Self::accounts_file_path()?;
-        let json = serde_json::to_string_pretty(accounts)?;
-        fs::write(&path, json)?;
+        Self::save_at(&path, accounts)?;
         // Per-account stores cache "who is primary" and would keep writing to
         // the departing account's file for the length of their TTL. This is the
         // one chokepoint every registry mutation passes through (set_active,
@@ -159,6 +351,9 @@ impl AccountStore {
         crate::services::vod_sync::reset();
         // Chat rows leave out the viewer's own StreamNook badge by these ids.
         crate::services::chat_row_view::set_own_accounts(accounts.iter().map(|a| a.user_id.clone()).collect());
+        // Remembered failed token fetches are forgotten and the rules recompile
+        // (a no-op before the engine starts; only reached after a good write).
+        crate::services::account_automations::on_accounts_changed();
         Ok(())
     }
 
@@ -192,8 +387,7 @@ impl AccountStore {
     }
 
     fn load_secondary_token(user_id: &str) -> Result<StorableToken> {
-        token_vault::load_json(&Self::secondary_token_file_path(user_id)?)?
-            .ok_or_else(|| anyhow::anyhow!("No stored token for secondary account {}", user_id))
+        secondary_load(token_vault::load_json(&Self::secondary_token_file_path(user_id)?), user_id)
     }
 
     fn delete_secondary_token(user_id: &str) -> Result<()> {
@@ -213,20 +407,17 @@ impl AccountStore {
             }
         }
 
-        let mut token = Self::load_secondary_token(user_id)?;
-        let buffer = 300; // 5-minute pre-expiry refresh window, matching the primary.
-        if token.expires_at > 0 && chrono::Utc::now().timestamp() >= token.expires_at - buffer {
-            if token.refresh_token.is_empty() {
-                return Err(anyhow::anyhow!(
-                    "Account {} token expired and has no refresh token; re-link it.",
-                    user_id
-                ));
-            }
-            let refreshed = TwitchService::refresh_token(&token.refresh_token).await?;
-            Self::store_secondary_token(user_id, &refreshed)?;
-            token = refreshed;
-        }
-        Ok(token.access_token)
+        // One lock per account, a refresh no caller can cancel, no refresh of a
+        // token the slot also holds or while an account door runs (D241 to D256).
+        let id = user_id.to_string();
+        ALT_REFRESH.refresh_alt(user_id, || Self::load_secondary_token(user_id), move |t| Self::store_secondary_token(&id, t)).await
+    }
+
+    /// An account door is about to run: no alt refresh starts, and the ones in
+    /// flight finish, until the guard drops. A one-line delegation (a pin
+    /// checks it).
+    pub(crate) async fn begin_account_change() -> AccountChangeGuard {
+        ALT_REFRESH.begin_account_change().await
     }
 
     /// Link a new secondary account from a freshly obtained token. Identifies the
@@ -692,8 +883,395 @@ fn wipe_default_webview_store() {
 
 #[cfg(test)]
 mod tests {
-    use super::{login_changed, with_primary, without_primary, StoredAccount};
+    use super::{
+        login_changed, may_refresh_file, read_registry, secondary_load, with_primary, without_primary, AccountStore, AltRefresh,
+        SlotRead, StoredAccount, REGISTRY_IO,
+    };
     use crate::models::user::UserInfo;
+    use crate::services::twitch_service::{StorableToken, TokenError, TwitchService};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    fn stored(access: &str, refresh: &str, expires_in: i64) -> StorableToken {
+        StorableToken {
+            access_token: access.into(),
+            refresh_token: refresh.into(),
+            expires_at: if expires_in == 0 { 0 } else { chrono::Utc::now().timestamp() + expires_in },
+        }
+    }
+
+    async fn no_slot() -> SlotRead {
+        Ok(None)
+    }
+
+    async fn within<T>(f: impl std::future::Future<Output = T>) -> T {
+        tokio::time::timeout(Duration::from_secs(5), f).await.expect("a missing lock must fail, not hang")
+    }
+
+    // Every test builds its own `AltRefresh`: no process-wide state is shared.
+
+    #[tokio::test]
+    async fn two_callers_spend_one_refresh_and_both_get_the_new_token() {
+        let alt = Arc::new(AltRefresh::new());
+        let loads = Arc::new(AtomicUsize::new(0));
+        let refreshes = Arc::new(AtomicUsize::new(0));
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let call = |alt: Arc<AltRefresh>, loads: Arc<AtomicUsize>, refreshes: Arc<AtomicUsize>, gate: Arc<tokio::sync::Notify>, first: bool| async move {
+            alt.single_flight_refresh(
+                "sf-concurrency",
+                move || {
+                    loads.fetch_add(1, Ordering::SeqCst);
+                    // After the first caller refreshed, the file holds the new token.
+                    Ok(if first { stored("old", "r1", 10) } else { stored("new", "r2", 3600) })
+                },
+                no_slot,
+                move |_| async move {
+                    refreshes.fetch_add(1, Ordering::SeqCst);
+                    gate.notified().await;
+                    Ok(stored("new", "r2", 3600))
+                },
+                |_| Ok(()),
+            )
+            .await
+        };
+        let a = tokio::spawn(call(alt.clone(), loads.clone(), refreshes.clone(), gate.clone(), true));
+        while refreshes.load(Ordering::SeqCst) == 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let mut b = Box::pin(call(alt.clone(), loads.clone(), refreshes.clone(), gate.clone(), false));
+        assert!(futures::poll!(b.as_mut()).is_pending(), "B waits on the guard");
+        assert_eq!(loads.load(Ordering::SeqCst), 1, "B has not loaded yet");
+        gate.notify_one();
+        assert_eq!(within(a).await.unwrap().unwrap(), "new");
+        assert_eq!(within(b).await.unwrap(), "new");
+        assert_eq!(refreshes.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_dropped_caller_never_cancels_the_refresh_before_the_store() {
+        let alt = Arc::new(AltRefresh::new());
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
+        let (go_tx, go_rx) = tokio::sync::oneshot::channel::<()>();
+        let (stored_tx, stored_rx) = tokio::sync::oneshot::channel::<String>();
+        let caller = tokio::spawn({
+            let alt = alt.clone();
+            async move {
+                alt.single_flight_refresh(
+                    "sf-detach",
+                    || Ok(stored("old", "r1", 10)),
+                    no_slot,
+                    move |_| async move {
+                        let _ = started_tx.send(());
+                        let _ = go_rx.await;
+                        Ok(stored("fresh", "r2", 3600))
+                    },
+                    move |t| {
+                        let _ = stored_tx.send(t.access_token.clone());
+                        Ok(())
+                    },
+                )
+                .await
+            }
+        });
+        within(started_rx).await.unwrap();
+        caller.abort();
+        let _ = go_tx.send(());
+        assert_eq!(within(stored_rx).await.unwrap(), "fresh");
+    }
+
+    #[tokio::test]
+    async fn the_helper_keeps_todays_rules() {
+        let alt = AltRefresh::new();
+        let refreshes = Arc::new(AtomicUsize::new(0));
+        let count = |r: Arc<AtomicUsize>| move |_: String| async move {
+            r.fetch_add(1, Ordering::SeqCst);
+            Ok(stored("x", "y", 3600))
+        };
+        // Outside the five-minute window: no refresh, and the slot is never read.
+        let slot_reads = Arc::new(AtomicUsize::new(0));
+        let reads = slot_reads.clone();
+        let counting_slot = move || async move {
+            reads.fetch_add(1, Ordering::SeqCst);
+            let none: SlotRead = Ok(None);
+            none
+        };
+        assert_eq!(within(alt.single_flight_refresh("sf-fresh", || Ok(stored("ok", "r", 3600)), counting_slot, count(refreshes.clone()), |_| Ok(()))).await.unwrap(), "ok");
+        assert_eq!(slot_reads.load(Ordering::SeqCst), 0);
+        // expires_at == 0 never renews.
+        assert_eq!(within(alt.single_flight_refresh("sf-zero", || Ok(stored("zero", "r", 0)), no_slot, count(refreshes.clone()), |_| Ok(()))).await.unwrap(), "zero");
+        // An empty refresh token is a refusal, with today's words.
+        let err = within(alt.single_flight_refresh("sf-empty", || Ok(stored("old", "", 10)), no_slot, count(refreshes.clone()), |_| Ok(()))).await.unwrap_err();
+        assert!(err.to_string().contains("no refresh token"));
+        assert_eq!(TwitchService::fetch_failure(&err), TokenError::Refused);
+        assert_eq!(refreshes.load(Ordering::SeqCst), 0);
+        // Two ids refresh independently, and the map keeps its entry.
+        assert!(!Arc::ptr_eq(&alt.guard("sf-a"), &alt.guard("sf-b")));
+        assert!(Arc::ptr_eq(&alt.guard("sf-a"), &alt.guard("sf-a")));
+    }
+
+    #[test]
+    fn a_linked_accounts_file_read_is_typed() {
+        let words = |e: &anyhow::Error| e.to_string();
+        assert_eq!(secondary_load(Ok(Some(stored("a", "r", 3600))), "7").unwrap().access_token, "a");
+        let missing = secondary_load(Ok(None), "7").unwrap_err();
+        assert_eq!(TwitchService::fetch_failure(&missing), TokenError::NoToken);
+        assert!(words(&missing).contains("No stored token for secondary account 7"), "today's words: {missing}");
+        // A 0-byte file and `{}` do not parse: no usable token, never a store outage.
+        for text in ["", "{}"] {
+            let parse = serde_json::from_str::<StorableToken>(text).unwrap_err();
+            let load = Err(anyhow::Error::new(parse).context("does not hold the expected JSON"));
+            let e = secondary_load(load, "7").unwrap_err();
+            assert_eq!(TwitchService::fetch_failure(&e), TokenError::NoToken, "{text:?}");
+            assert!(words(&e).contains("No stored token for secondary account 7"));
+        }
+        let vault = secondary_load(Err(anyhow::anyhow!("keyring locked")), "7").unwrap_err();
+        assert_eq!(TwitchService::fetch_failure(&vault), TokenError::VaultUnavailable);
+    }
+
+    #[test]
+    fn may_refresh_file_table() {
+        let file = stored("a", "r1", 10);
+        assert!(may_refresh_file(&file, &Ok(None)), "empty slot");
+        assert!(may_refresh_file(&file, &Ok(Some(stored("s", "r2", 3600)))), "a different credential");
+        assert!(!may_refresh_file(&file, &Ok(Some(stored("s", "r1", 3600)))), "the slot owns it");
+        assert!(!may_refresh_file(&file, &Err(TokenError::VaultUnavailable)), "slot unreadable");
+    }
+
+    #[tokio::test]
+    async fn an_expiring_token_the_slot_holds_or_cannot_show_is_never_refreshed() {
+        let alt = AltRefresh::new();
+        for (name, slot) in [
+            ("sf-slot-same", Ok(Some(stored("s", "r1", 3600)))),
+            ("sf-slot-vault", Err(TokenError::VaultUnavailable)),
+        ] {
+            let spent = Arc::new(AtomicUsize::new(0));
+            let counter = spent.clone();
+            let err = within(alt.single_flight_refresh(
+                name,
+                || Ok(stored("old", "r1", 10)),
+                move || async move { slot },
+                move |_| async move {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    Ok(stored("x", "y", 3600))
+                },
+                |_| Ok(()),
+            ))
+            .await
+            .unwrap_err();
+            assert_eq!(TwitchService::fetch_failure(&err), TokenError::Unreachable, "{name}");
+            assert!(err.to_string().contains("network error"), "{name}: {err}");
+            assert_eq!(spent.load(Ordering::SeqCst), 0, "{name}");
+        }
+        // A different slot credential refreshes; the slot is read after the load, inside the guard.
+        let order = Arc::new(std::sync::Mutex::new(Vec::<&'static str>::new()));
+        let (o1, o2) = (order.clone(), order.clone());
+        let ok = within(alt.single_flight_refresh(
+            "sf-slot-other",
+            move || {
+                o1.lock().unwrap().push("file");
+                Ok(stored("old", "r1", 10))
+            },
+            move || async move {
+                o2.lock().unwrap().push("slot");
+                Ok(Some(stored("s", "r2", 3600)))
+            },
+            |_| async { Ok(stored("renewed", "r3", 3600)) },
+            |_| Ok(()),
+        ))
+        .await;
+        assert_eq!(ok.unwrap(), "renewed");
+        assert_eq!(*order.lock().unwrap(), vec!["file", "slot"]);
+    }
+
+    #[tokio::test]
+    async fn during_an_account_change_an_expiring_token_makes_no_refresh_and_a_fresh_one_is_returned() {
+        let alt = AltRefresh::new();
+        let change = alt.begin_account_change().await;
+        assert_eq!(alt.change.load(Ordering::SeqCst), 1);
+        let spent = Arc::new(AtomicUsize::new(0));
+        let counter = spent.clone();
+        let err = within(alt.single_flight_refresh(
+            "ac-expiring",
+            || Ok(stored("old", "r1", 10)),
+            no_slot,
+            move |_| async move {
+                counter.fetch_add(1, Ordering::SeqCst);
+                Ok(stored("x", "y", 3600))
+            },
+            |_| Ok(()),
+        ))
+        .await
+        .unwrap_err();
+        assert_eq!(TwitchService::fetch_failure(&err), TokenError::Unreachable);
+        assert!(err.to_string().contains("network error"), "today's network words: {err}");
+        assert_eq!(spent.load(Ordering::SeqCst), 0);
+        let fresh = within(alt.single_flight_refresh("ac-fresh", || Ok(stored("fine", "r1", 3600)), no_slot, |_| async { panic!("no refresh") }, |_| Ok(()))).await;
+        assert_eq!(fresh.unwrap(), "fine");
+        drop(change);
+        assert_eq!(alt.change.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn begin_account_change_waits_for_a_refresh_in_flight_and_guards_overlap() {
+        let alt = Arc::new(AltRefresh::new());
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
+        let (go_tx, go_rx) = tokio::sync::oneshot::channel::<()>();
+        let (stored_tx, stored_rx) = tokio::sync::oneshot::channel::<()>();
+        let refresh = tokio::spawn({
+            let alt = alt.clone();
+            async move {
+                alt.single_flight_refresh(
+                    "ac-drain",
+                    || Ok(stored("old", "r1", 10)),
+                    no_slot,
+                    move |_| async move {
+                        let _ = started_tx.send(());
+                        let _ = go_rx.await;
+                        Ok(stored("fresh", "r2", 3600))
+                    },
+                    move |_| {
+                        let _ = stored_tx.send(());
+                        Ok(())
+                    },
+                )
+                .await
+            }
+        });
+        within(started_rx).await.unwrap();
+        let mut begin = Box::pin(alt.begin_account_change());
+        assert!(futures::poll!(begin.as_mut()).is_pending(), "it waits while a refresh holds its account's lock");
+        assert_eq!(alt.change.load(Ordering::SeqCst), 1, "the counter is raised before the wait");
+        let _ = go_tx.send(());
+        within(stored_rx).await.unwrap();
+        let first = within(begin).await;
+        let second = within(alt.begin_account_change()).await;
+        assert_eq!(alt.change.load(Ordering::SeqCst), 2);
+        drop(first);
+        assert_eq!(alt.change.load(Ordering::SeqCst), 1);
+        drop(second);
+        assert_eq!(alt.change.load(Ordering::SeqCst), 0);
+        let _ = within(refresh).await;
+        // A caller dropped mid-wait still lowers the counter.
+        let dropped = Box::pin(alt.begin_account_change());
+        drop(dropped);
+        assert_eq!(alt.change.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn a_reader_never_sees_an_empty_list_during_200_locked_saves() {
+        let dir = std::env::temp_dir().join(format!("sn-registry-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("accounts.json");
+        let two = |n: u32| vec![account(&format!("a{n}"), true), account(&format!("b{n}"), false)];
+        AccountStore::save_at(&path, &two(0)).unwrap();
+        let done = Arc::new(AtomicBool::new(false));
+        let reader = {
+            let (path, done) = (path.clone(), done.clone());
+            std::thread::spawn(move || {
+                let (mut empty, mut reads) = (0u32, 0u32);
+                while !done.load(Ordering::SeqCst) {
+                    // The discipline `list()` has: the shared lock around the read.
+                    let _registry = REGISTRY_IO.read().unwrap_or_else(|e| e.into_inner());
+                    reads += 1;
+                    if read_registry(&path).is_empty() {
+                        empty += 1;
+                    }
+                }
+                (empty, reads)
+            })
+        };
+        for n in 1..=200 {
+            AccountStore::save_at(&path, &two(n)).unwrap();
+        }
+        done.store(true, Ordering::SeqCst);
+        let (empty, reads) = reader.join().unwrap();
+        assert!(reads > 0);
+        assert_eq!(empty, 0, "{empty} of {reads} reads came back empty");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The text of the `fn` whose signature starts with `sig`, to its closing brace line.
+    fn body_of(src: &str, sig: &str, end: &str) -> String {
+        let src = src.replace("\r\n", "\n");
+        let start = src.find(sig).unwrap_or_else(|| panic!("{sig}"));
+        src[start..start + src[start..].find(end).expect("end")].to_string()
+    }
+
+    #[test]
+    fn whole_statement_pins_for_the_registry_lock() {
+        let src = include_str!("account_store.rs");
+        let list = body_of(src, "pub fn list() -> Vec<StoredAccount>", "\n    }\n");
+        let lock = list.find("let _registry = REGISTRY_IO.read()").expect("list takes the shared lock");
+        assert!(lock < list.find("read_registry(").expect("list reads"), "the lock is held before the read");
+        let save_at = body_of(src, "fn save_at(", "\n    }\n");
+        let open = save_at.find("{\n            let _registry = REGISTRY_IO.write()").expect("a block opening with the exclusive lock");
+        let write = save_at.find("write_file_atomic(").expect("the write");
+        let close = save_at.find("\n        }\n").expect("the block closes");
+        assert!(open < write && write < close, "the write sits inside the block");
+        assert!(!save_at.contains("fs::write("));
+        let save = body_of(src, "fn save(accounts: &[StoredAccount])", "\n    }\n");
+        assert!(save.find("Self::save_at(&path, accounts)?").unwrap() < save.find("invalidate_owner(").unwrap(), "the lock is gone before any invalidation");
+        assert!(!save.contains("fs::write(") && !save.contains("REGISTRY_IO"));
+        assert!(save.find("set_own_accounts").unwrap() < save.find("on_accounts_changed()").unwrap());
+        let read = body_of(src, "fn read_registry(", "\n}\n");
+        assert!(read.contains("path.exists()") && !read.contains("REGISTRY_IO"));
+    }
+
+    #[test]
+    fn source_pins_for_the_alt_refresh() {
+        let full = include_str!("account_store.rs").replace("\r\n", "\n");
+        let src = full.clone();
+        // ALT_REFRESH is named only by the static, get_token_for and begin_account_change
+        // (counted before the test module, whose own lines name it too).
+        let before_tests = &full[..full.find("#[cfg(test)]\nmod tests {").expect("the test module")];
+        let uses: Vec<&str> = before_tests
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//") && l.contains("ALT_REFRESH"))
+            .collect();
+        assert_eq!(uses.len(), 3, "{uses:?}");
+        assert!(body_of(&src, "pub async fn get_token_for(", "\n    }\n").contains("ALT_REFRESH.refresh_alt("));
+        assert_eq!(
+            body_of(&src, "pub(crate) async fn begin_account_change()", "\n    }\n").matches("ALT_REFRESH.begin_account_change().await").count(),
+            1
+        );
+        // The helper: guard, load, change check, slot check, then the spawn.
+        let helper = body_of(&src, "pub(crate) async fn single_flight_refresh<", "\n    }\n");
+        assert!(helper.find("lock_owned()").unwrap() < helper.find("load()?").unwrap());
+        assert!(helper.find("load()?").unwrap() < helper.find("self.change.load(").unwrap());
+        assert!(helper.find("self.change.load(").unwrap() < helper.find("may_refresh_file(&token, &slot_read().await)").unwrap());
+        assert!(helper.find("may_refresh_file(").unwrap() < helper.find("async_runtime::spawn").unwrap());
+        // The refresh runs on Tauri's runtime (the Android worker drops its own), never tokio::spawn or the engine's spawner.
+        assert!(helper.contains("tauri::async_runtime::spawn(") && !helper.contains("tokio::spawn") && !helper.contains("spawner"));
+        assert!(helper.contains("TokenError::Refused") && helper.contains("refresh_unavailable("));
+        assert!(!helper.contains("TwitchService::get_token"));
+        // The state is just the map and the counter; the refresh is today's `refresh_token` on the shared client.
+        // (The names are built in two parts so this test does not find itself.)
+        assert!(!src.contains(&format!("{}{}", "alt_refresh_", "client")) && !src.contains(&format!("{}{}", "refresh_token_", "with")));
+        assert!(body_of(&src, "pub(crate) async fn refresh_alt<", "\n    }\n").contains("TwitchService::refresh_token(&rt)"));
+        // The launch-time forced re-auth binds no guard (nothing can be refreshing yet).
+        let reauth = body_of(&src, "pub async fn run_force_reauth_if_needed()", "\n    }\n");
+        assert!(!reauth.contains("begin_account_change"));
+    }
+
+    #[test]
+    fn source_pins_for_the_account_store() {
+        let src = include_str!("account_store.rs");
+        // No account door changed: signatures as today.
+        for sig in [
+            "pub async fn set_active(user_id: &str) -> Result<StoredAccount>",
+            "pub async fn sign_out_active() -> Result<Option<StoredAccount>>",
+            "pub fn remove_secondary(user_id: &str) -> Result<()>",
+            "pub async fn reset_all()",
+            "pub async fn add_secondary(token: StorableToken) -> Result<StoredAccount>",
+            "fn record_primary(accounts: Vec<StoredAccount>, info: UserInfo)",
+            "async fn keep_primary(accounts: Vec<StoredAccount>, user_id: &str, validated_login: Option<&str>)",
+            "pub fn forget_primary()",
+        ] {
+            assert!(src.contains(sig), "{sig}");
+        }
+    }
 
     #[test]
     fn a_new_login_for_the_same_id_is_a_rename() {

@@ -23,6 +23,7 @@ const SETTINGS_TABS: &[&str] = &[
     "Integrations",
     "Plugins",
     "Notifications",
+    "Automations",
     "Cache",
     "Command Palette",
     "Keybindings",
@@ -77,17 +78,28 @@ pub enum AppLink {
 /// forms above.
 pub fn parse(link: &str) -> Option<AppLink> {
     let url = url::Url::parse(link.trim()).ok()?;
-    if url.scheme() != "streamnook" || url.query().is_some() || url.fragment().is_some() {
+    if url.scheme() != "streamnook" || url.fragment().is_some() {
         return None;
     }
+    // Only `settings/Automations?rule=<id>` carries a query; it lands on that
+    // rule as the row `rule:<id>`.
+    let query = url.query();
     let segments: Vec<String> = url
         .path_segments()
         .map(|s| s.filter(|p| !p.is_empty()).map(decode).collect::<Option<Vec<_>>>())
         .unwrap_or(Some(Vec::new()))?;
     match (url.host_str()?, segments.as_slice()) {
-        ("open", [page]) => AppPage::from_slug(page).map(|page| AppLink::Open { page }),
-        ("settings", [tab]) => settings_tab(tab).map(|tab| AppLink::Settings { tab, row: None }),
-        ("settings", [tab, row]) => {
+        ("open", [page]) if query.is_none() => AppPage::from_slug(page).map(|page| AppLink::Open { page }),
+        ("settings", [tab]) => {
+            let tab = settings_tab(tab)?;
+            let row = match query {
+                None => None,
+                Some(q) if tab == "Automations" => Some(rule_link_row(q)?),
+                Some(_) => return None,
+            };
+            Some(AppLink::Settings { tab, row })
+        }
+        ("settings", [tab, row]) if query.is_none() => {
             let row = row.trim();
             if row.is_empty() || row.chars().count() > MAX_ROW_LEN || row.chars().any(char::is_control) {
                 return None;
@@ -96,6 +108,14 @@ pub fn parse(link: &str) -> Option<AppLink> {
         }
         _ => None,
     }
+}
+
+/// `rule=<id>` (one pair, an id of 1 to 64 letters, digits, `_` or `-`) as the
+/// row `rule:<id>`.
+fn rule_link_row(query: &str) -> Option<String> {
+    let id = query.strip_prefix("rule=")?;
+    let ok = !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    ok.then(|| format!("rule:{id}"))
 }
 
 fn decode(segment: &str) -> Option<String> {
@@ -120,6 +140,25 @@ mod tests {
             parse("streamnook://settings/command%20palette"),
             Some(AppLink::Settings { tab: "Command Palette".into(), row: None })
         );
+    }
+
+    #[test]
+    fn a_rule_link_lands_on_its_row() {
+        assert_eq!(
+            parse("streamnook://settings/Automations?rule=ab12-cd_3"),
+            Some(AppLink::Settings { tab: "Automations".into(), row: Some("rule:ab12-cd_3".into()) })
+        );
+        assert_eq!(parse("streamnook://settings/automations"), Some(AppLink::Settings { tab: "Automations".into(), row: None }));
+        for bad in [
+            "streamnook://settings/Chat?rule=x",
+            "streamnook://settings/Automations?rule=",
+            "streamnook://settings/Automations?rule=a%20b",
+            "streamnook://settings/Automations?rule=a&x=1",
+            "streamnook://settings/Automations?x=1",
+            "streamnook://settings/Automations/Row?rule=x",
+        ] {
+            assert_eq!(parse(bad), None, "{bad}");
+        }
     }
 
     #[test]

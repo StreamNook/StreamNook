@@ -566,6 +566,12 @@ pub fn note_main_window_shown() {
     MAIN_LIFETIME.fetch_add(1, Ordering::AcqRel);
 }
 
+/// The current main-window lifetime. A task that waited reads it before and
+/// after, and stands down when it moved (main was reopened meanwhile).
+pub fn main_lifetime() -> u64 {
+    MAIN_LIFETIME.load(Ordering::Acquire)
+}
+
 /// A show cleared the staying flag (called through `app_exit::note_main_shown`).
 pub fn note_shown() {
     if STAYING_FOR_KEEP_ALIVE.swap(false, Ordering::AcqRel) {
@@ -1747,9 +1753,15 @@ mod pins {
             &close,
             &[
                 "let keep_alive = services::background_mode::keep_alive(&app_handle);",
+                "api.prevent_close();",
+                "let lifetime = services::background_mode::main_lifetime();",
+                "services::account_automations::adopt_main_chats().await;",
+                "if services::background_mode::main_lifetime() != lifetime {",
                 "if keep_alive {",
                 "services::background_mode::note_keep_alive_close(&app_handle);",
-                "api.prevent_close();",
+                "emit(\"main-hiding-to-tray\", ())",
+                "services::app_exit::note_main_hidden_to_tray();",
+                "services::background_mode::refresh_tray(&app_handle);",
             ],
         );
         let destroyed = fn_text(THIS_RS, "pub fn note_main_destroyed(");

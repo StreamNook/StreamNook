@@ -691,6 +691,76 @@ mod webview_args_tests {
     }
 }
 
+/// This device's run state and whether it is away, as saved.
+#[cfg(desktop)]
+fn automations_state(app: &crate::rt::AppHandle) -> (models::automations::RunState, bool) {
+    app.try_state::<AppState>()
+        .and_then(|s| s.settings.lock().ok().map(|g| (g.automations.run, g.automations.away.is_some())))
+        .unwrap_or_default()
+}
+
+/// The tray's two automation rows, worded for what a click does now.
+#[cfg(desktop)]
+fn automations_tray_labels((run, away): (models::automations::RunState, bool)) -> (&'static str, &'static str) {
+    (
+        if run == models::automations::RunState::Off { "Resume automations" } else { "Pause automations" },
+        if away { "I'm back" } else { "Set away" },
+    )
+}
+
+/// What "Pause" or "Resume" sets: Off when running, else what it last ran as
+/// (never Off).
+#[cfg(desktop)]
+fn automations_next_run(run: models::automations::RunState, last_active: models::automations::RunState) -> models::automations::RunState {
+    use models::automations::RunState;
+    match run {
+        RunState::Off if last_active == RunState::Off => RunState::Test,
+        RunState::Off => last_active,
+        _ => RunState::Off,
+    }
+}
+
+/// A tray click on an automation row.
+#[cfg(desktop)]
+fn automations_tray_click(app: &crate::rt::AppHandle, id: &str) {
+    let Some((run, last_active, away)) = app
+        .try_state::<AppState>()
+        .and_then(|s| s.settings.lock().ok().map(|g| (g.automations.run, g.automations.last_active, g.automations.away.is_some())))
+    else {
+        return;
+    };
+    let answer = if id == "automations_run" {
+        commands::account_automations::automations_set_run(app.clone(), automations_next_run(run, last_active))
+    } else {
+        // Set uses the last message (else "Back soon"); clearing is "I'm back".
+        commands::account_automations::automations_set_away(app.clone(), if away { None } else { Some(String::new()) }).map(|_| ())
+    };
+    if let Err(e) = answer {
+        warn!("[Tray] automations click failed: {e}");
+    }
+}
+
+#[cfg(all(test, desktop))]
+mod automations_tray_tests {
+    use super::*;
+    use models::automations::RunState::{Off, On, Test};
+
+    #[test]
+    fn the_rows_say_what_a_click_does() {
+        assert_eq!(automations_tray_labels((Off, false)), ("Resume automations", "Set away"));
+        assert_eq!(automations_tray_labels((On, true)), ("Pause automations", "I'm back"));
+        assert_eq!(automations_tray_labels((Test, false)).0, "Pause automations");
+    }
+
+    #[test]
+    fn pause_and_resume_return_to_what_ran_before() {
+        assert_eq!(automations_next_run(On, Test), Off);
+        assert_eq!(automations_next_run(Test, On), Off);
+        assert_eq!(automations_next_run(Off, On), On);
+        assert_eq!(automations_next_run(Off, Off), Test, "last_active is never Off, but a damaged file must not stay off");
+    }
+}
+
 /// Flush every debounced store before the process dies; each is a no-op when
 /// nothing is dirty. The run loop's `Exit` arm calls it, and on iOS so does
 /// the move to the background, after which the app may be ended unseen.
@@ -706,6 +776,7 @@ pub(crate) fn flush_debounced_stores() {
     let _ = services::activity_history_service::flush_now();
     let _ = services::song_id::history::flush_now();
     let _ = services::chat_logger_service::ChatLoggerService::flush_all();
+    services::account_automations::flush();
 }
 
 /// Shared app entry point. Desktop's `main.rs` calls this directly; on mobile
@@ -1200,6 +1271,9 @@ pub fn run() {
                 // transfer) run the setup again rather than skip it.
                 if let Ok(data) = services::cache_service::get_app_data_dir() {
                     if services::install_marker::reconcile(&data, &mut loaded) {
+                        // A restored file never brings rules back live, turns
+                        // automations on or brings back an old away.
+                        commands::account_automations::pause_restored(&mut loaded.automations);
                         if let Err(e) = commands::settings::write_settings_to_disk_sync(&loaded) {
                             log::warn!("[Setup] could not save the install's setup state: {e}");
                         }
@@ -1227,6 +1301,9 @@ pub fn run() {
                 if let Ok(mut s) = settings_arc.lock() {
                     *s = loaded;
                 }
+                // The real file is read now: rules recompile from it (a no-op
+                // until the engine starts; init then reads these settings).
+                services::account_automations::request_refresh();
                 let drops_service_reload = drops_service.clone();
                 tauri::async_runtime::spawn(async move {
                     drops_service_reload
@@ -1732,6 +1809,10 @@ pub fn run() {
             // Badge-drop feed socket, owned here so drops still arrive while the
             // main window is destroyed (live mode, tray). See services::badge_feed.
             services::badge_feed::start(app_handle.clone());
+            // Account automations: the watch channel and the engine exist
+            // before reconcile starts, and the feed's first network call is
+            // two seconds away, so nothing it reports is missed.
+            services::account_automations::init(&app_handle);
 
             // Badge-drop detection now lives server-side on the Penrose bot and
             // is delivered to the app over the badge WebSocket feed
@@ -1823,11 +1904,26 @@ pub fn run() {
                 true,
                 None::<&str>,
             )?;
+            // Automations: pause or resume the rules, set or clear this
+            // device's away. The labels follow the state (see below).
+            let (run_label, away_label) = automations_tray_labels(
+                app.state::<AppState>().settings.lock().map(|s| (s.automations.run, s.automations.away.is_some())).unwrap_or_default(),
+            );
+            let automations_run_item = MenuItem::with_id(app, "automations_run", run_label, true, None::<&str>)?;
+            let automations_away_item = MenuItem::with_id(app, "automations_away", away_label, true, None::<&str>)?;
             let sep = PredefinedMenuItem::separator(app)?;
             let quit_item = MenuItem::with_id(app, "quit", "Quit StreamNook", true, None::<&str>)?;
             let tray_menu = Menu::with_items(
                 app,
-                &[&show_item, &open_multichat_item, &overlay_clickable_item, &sep, &quit_item],
+                &[
+                    &show_item,
+                    &open_multichat_item,
+                    &overlay_clickable_item,
+                    &automations_run_item,
+                    &automations_away_item,
+                    &sep,
+                    &quit_item,
+                ],
             )?;
 
             let tray_builder = TrayIconBuilder::with_id(services::background_mode::TRAY_ID)
@@ -1867,6 +1963,7 @@ pub fn run() {
                     "overlay_clickable" => {
                         commands::popout_window::make_chat_overlays_clickable(app_handle);
                     }
+                    id @ ("automations_run" | "automations_away") => automations_tray_click(app_handle, id),
                     "open_multichat" => {
                         // Recreate/show main first (going live may have CLOSED it),
                         // then defer to its JS helper, which owns popout spawning
@@ -1896,6 +1993,21 @@ pub fn run() {
                 })
                 .build(app)?;
             services::background_mode::install_tray(app.handle(), tray_icon, tray_menu)?;
+            // The rows' words follow the run state and away (each change emits
+            // the status event). Updated on a spawned task, never under an
+            // engine lock.
+            {
+                let (run_item, away_item) = (automations_run_item.clone(), automations_away_item.clone());
+                let label_app = app_handle.clone();
+                tauri::Listener::listen(&app_handle, "automations://status", move |_| {
+                    let (run_item, away_item, label_app) = (run_item.clone(), away_item.clone(), label_app.clone());
+                    tauri::async_runtime::spawn(async move {
+                        let (run_label, away_label) = automations_tray_labels(automations_state(&label_app));
+                        let _ = run_item.set_text(run_label);
+                        let _ = away_item.set_text(away_label);
+                    });
+                });
+            }
             }
 
             Ok(())
@@ -3032,6 +3144,8 @@ pub fn run() {
                 services::app_exit::note_window_destroyed(&label);
                 services::performance_mode::note_window_destroyed(&label);
                 services::whisper_claims::forget_window(&label);
+                // It stops hearing Activity and Notify claims.
+                services::account_automations::forget_window(&label);
                 services::stream_manager::clear_label(&label);
                 // A destroyed webview never runs its React cleanup, so any
                 // chat consumer claims it still holds would pin those channels
@@ -3039,6 +3153,9 @@ pub fn run() {
                 // channels with no remaining consumers PART.
                 let gone = label.clone();
                 tauri::async_runtime::spawn(async move {
+                    // The engine keeps the rooms no other window holds first,
+                    // so a room never PARTs and joins again.
+                    services::account_automations::adopt_window_chats(&gone).await;
                     services::irc_service::IrcService::release_window_claims(&gone, None).await;
                     // Same sweep for the non-Twitch adapters. Their consumers are
                     // window labels too, so without this a closed popout leaves
@@ -3124,25 +3241,38 @@ pub fn run() {
                             "[Main] Close requested (mode {:?}, popouts_open {}) — hiding main to tray",
                             mode, popouts_open
                         );
-                        if keep_alive {
-                            services::background_mode::note_keep_alive_close(&app_handle);
-                        }
                         api.prevent_close();
                         if let Some(main_win) = app_handle.get_webview_window("main") {
-                            // Tell the JS side it's about to go background so
-                            // it can stop the active stream (Streamlink + video
-                            // + drops monitoring) before we hide. Chat stays
-                            // alive because the popouts still need it — the JS
-                            // handler is intentionally NOT a full stopStream
-                            // (which would tear down the IRC connection too).
-                            let _ = main_win.emit("main-hiding-to-tray", ());
-                            // A hidden owner does not hide its owned windows.
-                            commands::emote_palette::on_window_gone(&app_handle, "main");
-                            #[cfg(target_os = "linux")]
-                            commands::twitch::linux_overlays::hide_with_main(&app_handle);
-                            let _ = main_win.hide();
-                            services::app_exit::note_main_hidden_to_tray();
-                            services::background_mode::refresh_tray(&app_handle);
+                            // The page releases main's chats when it hears the
+                            // event below, so the engine adopts them first
+                            // (bounded at 3 s). Reopening main from the tray
+                            // meanwhile starts a new lifetime: this close then
+                            // stands down and touches nothing.
+                            let lifetime = services::background_mode::main_lifetime();
+                            let app_handle = app_handle.clone();
+                            tauri::async_runtime::spawn(async move {
+                                services::account_automations::adopt_main_chats().await;
+                                if services::background_mode::main_lifetime() != lifetime {
+                                    return;
+                                }
+                                if keep_alive {
+                                    services::background_mode::note_keep_alive_close(&app_handle);
+                                }
+                                // Tell the JS side it's about to go background so
+                                // it can stop the active stream (Streamlink + video
+                                // + drops monitoring) before we hide. Chat stays
+                                // alive because the popouts still need it — the JS
+                                // handler is intentionally NOT a full stopStream
+                                // (which would tear down the IRC connection too).
+                                let _ = main_win.emit("main-hiding-to-tray", ());
+                                // A hidden owner does not hide its owned windows.
+                                commands::emote_palette::on_window_gone(&app_handle, "main");
+                                #[cfg(target_os = "linux")]
+                                commands::twitch::linux_overlays::hide_with_main(&app_handle);
+                                let _ = main_win.hide();
+                                services::app_exit::note_main_hidden_to_tray();
+                                services::background_mode::refresh_tray(&app_handle);
+                            });
                         }
                     }
                 }

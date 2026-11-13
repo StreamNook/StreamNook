@@ -67,7 +67,19 @@ const ALLOWED_PATHS: &[&str] = &[
     // Continue Watching across the member's StreamNook installs, synced by the
     // Rust services::vod_sync. The member comes from the token.
     "/api/v1/vod/sync",
+    // Account automations: one claim per event, so two devices never answer
+    // the same one. Rust only (`RUST_ONLY_PATHS`): its bearer is the owner's
+    // verified token, which no page may choose.
+    "/api/v1/automations/claim",
 ];
+
+/// Allowed paths only Rust may call. `streamnook_api_post` refuses them.
+const RUST_ONLY_PATHS: &[&str] = &["/api/v1/automations/claim"];
+
+/// Whether a page may post to `path` through `streamnook_api_post`.
+fn page_may_post(path: &str) -> bool {
+    ALLOWED_PATHS.contains(&path) && !RUST_ONLY_PATHS.contains(&path)
+}
 
 /// Writes that change what a member's profile sheets show: their profile
 /// preferences, their cosmetics (theme, equipped badge, ...) and the Twitch Recap
@@ -183,19 +195,34 @@ pub(crate) async fn post_json(
             .await
             .map_err(|e| format!("no_token: {}", e))?,
     };
+    post_json_with_bearer(path, body, &token, acting.as_deref()).await
+}
+
+/// `post_json` with the bearer chosen by the caller: the account automations'
+/// claims and releases send the owner's verified token, never one fetched
+/// here. `acting` is the member the write is for (sheet epochs).
+pub(crate) async fn post_json_with_bearer(
+    path: &str,
+    body: &serde_json::Value,
+    bearer: &str,
+    acting: Option<&str>,
+) -> Result<ApiResponse, String> {
+    if !ALLOWED_PATHS.contains(&path) {
+        return Err(format!("path_not_allowed: {}", path));
+    }
 
     // Through the StreamNook transport, so a network that drops the site's
     // addresses still delivers watch minutes, the version report and every
     // other write here by the relay.
     let request = crate::services::http::client()
         .post(format!("{}{}", API_BASE, path))
-        .bearer_auth(&token)
+        .bearer_auth(bearer)
         .json(body);
     let sent = crate::services::sn_transport::send(request).await;
     // A write that reached the server (or may have) changes what the member's
     // sheets show, whatever the answer was.
     if bumps_sheets(path) {
-        if let Some(member) = acting.as_deref() {
+        if let Some(member) = acting {
             crate::services::profile_view::bump_member_epoch(member);
         }
     }
@@ -217,6 +244,9 @@ pub async fn streamnook_api_post(
     body: serde_json::Value,
     account_id: Option<String>,
 ) -> Result<ApiResponse, String> {
+    if !page_may_post(&path) {
+        return Err(format!("path_not_allowed: {}", path));
+    }
     post_json(&path, &body, account_id.as_deref()).await
 }
 
@@ -243,6 +273,27 @@ mod tests {
             assert!(!p.contains("://"), "{p} must not carry a scheme");
             assert!(!p.contains('*'), "{p} must be exact, not a pattern");
         }
+    }
+
+    #[test]
+    fn the_claim_path_is_allowed_for_rust_and_refused_to_pages() {
+        use super::{page_may_post, RUST_ONLY_PATHS};
+        assert!(ALLOWED_PATHS.contains(&"/api/v1/automations/claim"));
+        assert!(RUST_ONLY_PATHS.contains(&"/api/v1/automations/claim"));
+        assert!(!page_may_post("/api/v1/automations/claim"));
+        assert!(page_may_post("/api/v1/watch/minute"));
+        assert!(RUST_ONLY_PATHS.iter().all(|p| ALLOWED_PATHS.contains(p)));
+    }
+
+    #[test]
+    fn post_json_delegates_after_its_own_token_fetch() {
+        let src = include_str!("streamnook_api.rs").replace("\r\n", "\n");
+        let start = src.find("pub(crate) async fn post_json(").unwrap();
+        let body = &src[start..start + src[start..].find("\n}\n").unwrap()];
+        assert!(body.contains("get_token_for(id)") && body.contains("post_json_with_bearer(path, body, &token, acting.as_deref())"));
+        let start = src.find("pub(crate) async fn post_json_with_bearer(").unwrap();
+        let body = &src[start..start + src[start..].find("\n}\n").unwrap()];
+        assert!(!body.contains("get_token") && body.contains(".bearer_auth(bearer)"));
     }
 
     #[test]
