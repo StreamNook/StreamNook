@@ -355,7 +355,7 @@ const InterfaceSettings = () => {
                                 >
                                     <Icon size={24} />
                                     <span className="text-xs font-medium">{label}</span>
-                                    <span className="text-[10px] text-textMuted text-center">{hint}</span>
+                                    <span className="text-[10px] text-textSecondary text-center">{hint}</span>
                                 </button>
                             );
                         })}
@@ -484,7 +484,7 @@ const InterfaceSettings = () => {
                                 >
                                     <Icon size={24} />
                                     <span className="text-xs font-medium">{label}</span>
-                                    <span className="text-[10px] text-textMuted text-center">{hint}</span>
+                                    <span className="text-[10px] text-textSecondary text-center">{hint}</span>
                                 </button>
                             );
                         })}

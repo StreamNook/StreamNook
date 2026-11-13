@@ -3095,7 +3095,11 @@ html[data-theme-tone='light'] .settings-card {
      an opaque tertiary base that fades in as the slider drops, so at 0% the modal
      is a fully solid panel rather than a see-through sheet. */
   background-color: color-mix(in srgb, var(--color-background-tertiary) calc((1 - var(--glass-strength)) * 100%), transparent);
-  background-image: linear-gradient(rgba(16, 16, 20, 0.35), rgba(16, 16, 20, 0.35));
+  /* The tint is dark on dark themes. A light theme tints with its own tertiary
+     instead: the fixed dark tint turned Latte's dialog mid-gray under dark text
+     (section descriptions under 3:1), at every Glassiness. */
+  --glass-panel-tint: rgba(16, 16, 20, 0.35);
+  background-image: linear-gradient(var(--glass-panel-tint), var(--glass-panel-tint));
   /* Top-lit with a bounce along the bottom inside edge, the way a lens sits
      on what is under it. The dual diagonal bevel this replaces put its
      brightest line down the LEFT side, which on the widest panel in the
@@ -3117,6 +3121,12 @@ html[data-theme-tone='light'] .settings-card {
     border-color 0.3s cubic-bezier(0.2, 0.8, 0.2, 1),
     transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1),
     opacity 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+/* Nearly the whole tertiary: a light dialog blurs a page its own black scrim has
+   already darkened, so anything less leaves dark text on a mid-gray sheet at
+   full glass (measured on Latte and Solarized Sand). */
+html[data-theme-tone='light'] .liquid-glass-panel {
+  --glass-panel-tint: color-mix(in srgb, var(--color-background-tertiary) 92%, transparent);
 }
 
 /* The chat drops bar wears the chat column's glaze (the streak and resub
@@ -3220,6 +3230,11 @@ html[data-theme-tone='light'] .settings-card {
    near-opaque base under the liquid tint and the bar's glaze takes a heavy
    frost, so a bright stream never reads through their text. */
 .chat-fullscreen-overlay .liquid-glass-panel.drops-drawer {
+  background-color: color-mix(in srgb, var(--color-background-tertiary) calc(92% + (1 - var(--glass-strength, 1)) * 8%), transparent);
+}
+/* The volume readout sits straight on the picture: the same near-opaque base,
+   so its numbers read on a bright or a dark frame in every theme. */
+.player-volume-osd .liquid-glass-panel {
   background-color: color-mix(in srgb, var(--color-background-tertiary) calc(92% + (1 - var(--glass-strength, 1)) * 8%), transparent);
 }
 .chat-fullscreen-overlay .chrome-glaze.drops-bar {
