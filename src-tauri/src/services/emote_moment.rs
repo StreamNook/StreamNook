@@ -26,9 +26,9 @@
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use serde::Serialize;
 
@@ -94,11 +94,19 @@ fn rooms() -> MutexGuard<'static, HashMap<String, Room>> {
         .unwrap_or_else(|e| e.into_inner())
 }
 
-/// Milliseconds on this process's monotonic clock.
+/// Milliseconds since this process started, never going back. The monotonic
+/// clock stops while macOS, Linux and Android sleep, so the wall clock's
+/// elapsed time is taken when it is ahead (a laptop or phone that slept for
+/// an hour must not count the minute before it slept as "right now").
 fn now_ms() -> i64 {
-    static START: OnceLock<Instant> = OnceLock::new();
+    static START: OnceLock<(Instant, SystemTime)> = OnceLock::new();
+    static LAST: AtomicI64 = AtomicI64::new(0);
+    let (mono, wall) = *START.get_or_init(|| (Instant::now(), SystemTime::now()));
+    let mono_ms = mono.elapsed().as_millis() as i64;
+    let wall_ms = SystemTime::now().duration_since(wall).map(|d| d.as_millis() as i64).unwrap_or(0);
     // Offset by a window so a fresh process never reads a negative cutoff.
-    START.get_or_init(Instant::now).elapsed().as_millis() as i64 + WINDOW_MS
+    let now = mono_ms.max(wall_ms) + WINDOW_MS;
+    LAST.fetch_max(now, Ordering::AcqRel).max(now)
 }
 
 /// The room key for a chat the page names by `(provider, channel)`, as its
@@ -165,7 +173,11 @@ fn observe_at(channel_key: &str, msg: &ChatMessage, flags: u32, now: i64) -> Opt
     }
     let chatter = chatter_of(msg);
     let mut map = rooms();
-    let room = map.entry(channel_key.to_string()).or_default();
+    // The key is copied only for a room's first row.
+    if !map.contains_key(channel_key) {
+        map.insert(channel_key.to_string(), Room::default());
+    }
+    let room = map.get_mut(channel_key)?;
     for (name, url, id) in emotes {
         let key: Arc<str> = match room.info.get_key_value(name) {
             Some((k, info)) => {
@@ -282,16 +294,32 @@ fn sweep_map(map: &mut HashMap<String, Room>, now: i64, out: &mut Vec<MomentAnsw
     !map.is_empty()
 }
 
-/// Lowers the sweep flag when the sweep task ends, however it ends (a panic
-/// or an abort included), under the rooms lock, so the next row starts a new
-/// sweep instead of trusting a dead one.
-struct SweepGuard;
+/// Lowers the sweep flag if the sweep task ends any other way than its own
+/// decision (a panic or an abort), under the rooms lock, so the next row
+/// starts a new sweep instead of trusting a dead one.
+struct SweepGuard {
+    armed: bool,
+}
 
 impl Drop for SweepGuard {
     fn drop(&mut self) {
-        let _map = rooms();
+        if self.armed {
+            let _map = rooms();
+            SWEEPING.store(false, Ordering::Release);
+        }
+    }
+}
+
+/// One sweep step: rank and forget under the lock, and lower the flag in the
+/// same hold when nothing is left, so a row arriving right after sees it down
+/// and starts the next sweep. `true` while rooms remain.
+fn sweep_step(now: i64, out: &mut Vec<MomentAnswer>) -> bool {
+    let mut map = rooms();
+    let more = sweep_map(&mut map, now, out);
+    if !more {
         SWEEPING.store(false, Ordering::Release);
     }
+    more
 }
 
 /// Start the sweep; `false` where there is no app to run it on (unit tests).
@@ -300,11 +328,14 @@ fn start_sweep() -> bool {
         return false;
     }
     tauri::async_runtime::spawn(async {
-        let _guard = SweepGuard;
+        let mut guard = SweepGuard { armed: true };
         loop {
             tokio::time::sleep(SWEEP_EVERY).await;
             let mut changes = Vec::new();
-            let more = sweep_map(&mut rooms(), now_ms(), &mut changes);
+            let more = sweep_step(now_ms(), &mut changes);
+            if !more {
+                guard.armed = false;
+            }
             for update in changes {
                 emit(update);
             }
@@ -606,7 +637,15 @@ mod tests {
     #[test]
     fn the_sweep_flag_comes_down_however_the_sweep_ends() {
         SWEEPING.store(true, Ordering::Release);
-        drop(SweepGuard);
+        drop(SweepGuard { armed: true });
         assert!(!SWEEPING.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn the_clock_never_goes_back() {
+        let a = now_ms();
+        let b = now_ms();
+        assert!(b >= a);
+        assert!(a >= WINDOW_MS);
     }
 }

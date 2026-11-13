@@ -7776,6 +7776,31 @@ mod history_usernotice_tests {
     }
 
     #[tokio::test]
+    async fn history_rows_never_make_the_emote_of_the_moment() {
+        // No `historical` tag: the mark set before the rules run is what
+        // keeps a busy chat's backlog from counting as "right now".
+        let lines: Vec<String> = ["a", "b", "c"]
+            .iter()
+            .enumerate()
+            .map(|(i, u)| {
+                format!(
+                    "@badge-info=;badges=;color=;display-name={u};emotes=25:0-4;id=hist-moment-{i};room-id=12;tmi-sent-ts=1700000004000;user-id=9{i} :{u}!{u}@{u}.tmi.twitch.tv PRIVMSG #momenthist :Kappa"
+                )
+            })
+            .collect();
+        let rows = IrcService::parse_historical_messages(lines).await;
+        assert_eq!(rows.len(), 3);
+        for row in &rows {
+            assert!(
+                row.segments.iter().any(|s| matches!(s, MessageSegment::Emote { content, .. } if content == "Kappa")),
+                "the row carries the emote it would count: {:?}",
+                row.segments
+            );
+        }
+        assert_eq!(crate::services::emote_moment::get("twitch", "momenthist").emote, None);
+    }
+
+    #[tokio::test]
     async fn history_usernotices_keep_their_text_like_live_ones() {
         let rows = IrcService::parse_historical_messages(
             [ANNOUNCEMENT, RESUB, RAID, BLANK, PRIVMSG].iter().map(|s| s.to_string()).collect(),
