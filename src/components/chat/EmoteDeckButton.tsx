@@ -31,7 +31,9 @@ type ArtSize = 'inset' | 'phone' | 'card';
 function useStillFace(): boolean {
   const still = useStillChat();
   const animate = useAppStore((s) => s.settings.chat_design?.animate_emotes ?? 'always');
-  return still || animate !== 'always';
+  const motion = useAppStore((s) => s.settings.motion_mode ?? 'full');
+  // A loop in the composer is decoration: reduced or no motion stills it too.
+  return still || animate !== 'always' || motion !== 'full';
 }
 
 /** The smiley, as chat draws it there: Apple art on desktop, the system glyph
@@ -142,7 +144,9 @@ export function EmoteDeckButton({
   onMouseLeave,
   onPointerOver,
   onFocusChange,
-  className = 'absolute left-1 top-1/2 -translate-y-1/2 z-10 w-7 h-7',
+  // Hovered or focused, it rises over the send-as picker beside it, so the
+  // fanned cards are never painted under it.
+  className = 'absolute left-1 top-1/2 -translate-y-1/2 z-10 hover:z-20 focus-visible:z-20 w-7 h-7',
 }: {
   open: boolean;
   face: DeckCard;

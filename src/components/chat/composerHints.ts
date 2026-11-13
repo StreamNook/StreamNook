@@ -151,9 +151,20 @@ export function nextHintRun(run: HintRun, key: string | null, step: number): Hin
   return run.key === key ? run : { key, start: step };
 }
 
-/** The hint a run shows at `step`; the prompt when no run is going. */
+/** The hint a run shows at `step`; the prompt when no run is going. The
+ *  window's clock may tick a moment after a run starts (another composer
+ *  keeps it going), so the run's first tick is skipped: the prompt stays at
+ *  least one full hint-length before the first hint, never a flash. */
 export function hintOfRun(run: HintRun, cycle: readonly HintKind[], step: number): HintKind {
-  return run.key === null ? 'message' : hintAt(cycle, step - run.start);
+  return run.key === null ? 'message' : hintAt(cycle, step - run.start - 1);
+}
+
+/** Whether the box has been written in since the composer was last left:
+ *  anything in it (typed, picked, Tab, history) sets it; only leaving the
+ *  composer row clears it (`left`). */
+export function nextHintEngaged(prev: boolean, text: string, left = false): boolean {
+  if (text !== '') return true;
+  return left ? false : prev;
 }
 
 /**
@@ -202,8 +213,9 @@ export function fanCards(face: DeckCard, o: { slash: boolean; gifs: boolean }): 
 // ── facts from Rust ──────────────────────────────────────────────────────────
 
 /** A box that could hold a link. Only such text is sent to Rust to classify,
- *  so plain typing costs no IPC per keystroke. */
-const LINKISH = /https?:\/\/|www\.|gph\.is|giphy\.|tenor\.|\.gif\b/i;
+ *  so plain typing costs no IPC per keystroke. It must let through every
+ *  host in Rust's `GIF_HOSTS` (a test reads that list). */
+export const LINKISH = /https?:\/\/|www\.|gph\.is|giphy\.|tenor\.|\.gif\b/i;
 export function mayHoldGifLink(text: string): boolean {
   return LINKISH.test(text);
 }
@@ -224,7 +236,9 @@ export function useGifLinkInBox(text: string, enabled: boolean): boolean {
     const id = window.setTimeout(() => {
       void invoke<string | null>('find_gif_link', { text: probe })
         .then((link) => {
-          if (alive && link) setFound(link);
+          // A text that no longer holds one clears it (`cat.gif` typed on
+          // into `cat.gifv` still contains the old link).
+          if (alive) setFound(link ?? null);
         })
         .catch(() => {});
     }, 120);

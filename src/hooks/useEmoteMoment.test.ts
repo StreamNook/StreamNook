@@ -65,8 +65,10 @@ describe('createMomentHolder', () => {
   it('the hook listens before it asks, and drops answers after its chat changed', () => {
     const s = readFileSync(resolve(__dirname, 'useEmoteMoment.ts'), 'utf8');
     const body = s.slice(s.indexOf('export function useEmoteMoment('));
-    expect(body.indexOf('listen<MomentAnswer>(')).toBeGreaterThan(0);
-    expect(body.indexOf("invoke<MomentAnswer>('get_emote_moment'")).toBeGreaterThan(body.indexOf('listen<MomentAnswer>('));
+    // The ask is made from the listener's own resolution, never beside it.
+    expect(body).toMatch(
+      /void listen<MomentAnswer>\(EMOTE_MOMENT_EVENT,[\s\S]*?\)\s*\.then\(\(u\) => \{[\s\S]*?unlisten = u;\s*return invoke<MomentAnswer>\('get_emote_moment', \{ provider, channel \}\);/,
+    );
     expect(body).toContain('if (!alive) {');
     expect(body).toContain('return shown.asked === asked ? shown.emote : null;');
   });

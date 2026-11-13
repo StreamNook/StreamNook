@@ -19,7 +19,9 @@ import {
   hintCycle,
   hintOfRun,
   hintsMayMove,
+  LINKISH,
   mayHoldGifLink,
+  nextHintEngaged,
   nextHintRun,
   phoneHints,
   type HintRun,
@@ -42,26 +44,90 @@ describe('hint cycle', () => {
     expect(hintAt(c, -3)).toBe('message');
   });
 
-  it('a run starts from the prompt at the step it began, and again for a new chat or cycle', () => {
+  it('a run starts from the prompt and holds it past the first tick (which may come at once)', () => {
     const c = hintCycle({ slash: true, gifs: true });
     let run: HintRun = { key: null, start: 0 };
     expect(hintOfRun(run, c, 41)).toBe('message');
     run = nextHintRun(run, 'twitch:a|message,slash,gif', 41);
     expect(hintOfRun(run, c, 41)).toBe('message');
-    expect(hintOfRun(run, c, 42)).toBe('slash');
-    expect(hintOfRun(run, c, 43)).toBe('gif');
+    expect(hintOfRun(run, c, 42)).toBe('message');
+    expect(hintOfRun(run, c, 43)).toBe('slash');
+    expect(hintOfRun(run, c, 44)).toBe('gif');
+    expect(hintOfRun(run, c, 45)).toBe('message');
     // Same key: the run goes on.
-    expect(nextHintRun(run, 'twitch:a|message,slash,gif', 43)).toBe(run);
+    expect(nextHintRun(run, 'twitch:a|message,slash,gif', 44)).toBe(run);
     // A Kick chat in the same composer starts over: no GIF hint carried in.
     const kick = hintCycle({ slash: true, gifs: false });
-    run = nextHintRun(run, 'kick:a|message,slash', 43);
-    expect(hintOfRun(run, kick, 43)).toBe('message');
-    // Resting (no key) shows the prompt, and the next run starts fresh.
-    run = nextHintRun(run, null, 44);
+    run = nextHintRun(run, 'kick:a|message,slash', 44);
     expect(hintOfRun(run, kick, 44)).toBe('message');
+    expect(hintOfRun(run, kick, 45)).toBe('message');
+    // Resting (no key) shows the prompt, and the next run starts fresh.
+    run = nextHintRun(run, null, 46);
+    expect(hintOfRun(run, kick, 46)).toBe('message');
     run = nextHintRun(run, 'kick:a|message,slash', 50);
-    expect(hintOfRun(run, kick, 50)).toBe('message');
-    expect(hintOfRun(run, kick, 51)).toBe('slash');
+    expect(hintOfRun(run, kick, 51)).toBe('message');
+    expect(hintOfRun(run, kick, 52)).toBe('slash');
+  });
+
+  it('the box counts as written in from anything in it until the composer is left', () => {
+    expect(nextHintEngaged(false, '')).toBe(false);
+    expect(nextHintEngaged(false, 'h')).toBe(true);
+    // Sent: the box empties, the hints keep resting.
+    expect(nextHintEngaged(true, '')).toBe(true);
+    // Left the composer with an empty box: they may teach again.
+    expect(nextHintEngaged(true, '', true)).toBe(false);
+    // Left with text in the box: still written in.
+    expect(nextHintEngaged(true, 'draft', true)).toBe(true);
+  });
+});
+
+describe('the window clock', () => {
+  it('ticks every hint-length while a box listens and the window shows, and stops after', async () => {
+    vi.resetModules();
+    vi.useFakeTimers();
+    const vis = { hidden: false, cb: null as null | (() => void) };
+    vi.doMock('../../utils/windowVisibility', () => ({
+      isWindowHidden: () => vis.hidden,
+      onWindowVisibility: (cb: () => void) => {
+        vis.cb = cb;
+        return () => {
+          vis.cb = null;
+        };
+      },
+    }));
+    const g = globalThis as unknown as { window?: unknown };
+    const hadWindow = 'window' in g;
+    if (!hadWindow) g.window = globalThis;
+    try {
+      const clock = await import('./composerHints');
+      const ticks: number[] = [];
+      const off = clock.subscribeHintClock(() => ticks.push(clock.hintClockStep()));
+      const start = clock.hintClockStep();
+      vi.advanceTimersByTime(clock.HINT_MS - 1);
+      expect(ticks).toEqual([]);
+      vi.advanceTimersByTime(1);
+      expect(ticks).toEqual([start + 1]);
+      // Hidden: no ticks.
+      vis.hidden = true;
+      vis.cb?.();
+      vi.advanceTimersByTime(clock.HINT_MS * 3);
+      expect(ticks).toEqual([start + 1]);
+      // Shown again: ticking again.
+      vis.hidden = false;
+      vis.cb?.();
+      vi.advanceTimersByTime(clock.HINT_MS);
+      expect(ticks).toEqual([start + 1, start + 2]);
+      // The last listener gone: the interval is cleared.
+      off();
+      expect(vis.cb).toBeNull();
+      vi.advanceTimersByTime(clock.HINT_MS * 3);
+      expect(ticks).toEqual([start + 1, start + 2]);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      if (!hadWindow) delete g.window;
+      vi.doUnmock('../../utils/windowVisibility');
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -173,6 +239,25 @@ describe('face and fan', () => {
     expect(gifLinkInBox('https://tenor.com/v/1', 'see ')).toBe(false);
     expect(gifLinkInBox(null, 'https://tenor.com/v/1')).toBe(false);
   });
+
+  it('the cheap gate lets every GIF host Rust knows through, with or without a scheme', () => {
+    const rust = src('../src-tauri/src/services/link_detect.rs');
+    const list = rust.match(/const GIF_HOSTS: &\[&str\] = &\[([^\]]*)\]/);
+    expect(list).not.toBeNull();
+    const hosts = [...list![1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+    expect(hosts.length).toBeGreaterThan(0);
+    for (const h of hosts) {
+      expect(LINKISH.test(`${h}/x`), h).toBe(true);
+      expect(LINKISH.test(`media.${h}/x`), h).toBe(true);
+    }
+  });
+
+  it('a null answer clears a found link, and the probe runs only with the button', () => {
+    const h = src('components/chat/composerHints.ts');
+    expect(h).toContain('if (alive) setFound(link ?? null);');
+    const d = src('components/chat/ComposerDeck.tsx');
+    expect(d).toContain('useGifLinkInBox(text, gifs && showButton)');
+  });
 });
 
 describe('composerLook teaches', () => {
@@ -226,6 +311,12 @@ describe('call sites', () => {
     expect(w).toContain('gate={hintGate}');
     expect(w).toContain("data-hint-layer={hintGate.layer ? '' : undefined}");
     expect(w).toContain('gifs={gifsOffered && !emoteOnlyRoom}');
+    expect(w).toContain('engaged: hintEngaged,');
+    expect(w).toContain('const engagedNow = nextHintEngaged(hintEngaged, messageInput);');
+    expect(w).toContain('if (engagedNow !== hintEngaged) setHintEngaged(engagedNow);');
+    // Leaving the composer row, not the field alone, lets the box teach again.
+    expect(w).toContain('if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {');
+    expect(w).toContain('setHintEngaged((prev) => nextHintEngaged(prev, messageInput, true));');
     // The clock never lives in the big component.
     expect(w).not.toContain('useComposerHint(');
     expect(w).not.toContain('useEmoteMoment(');
@@ -247,6 +338,14 @@ describe('call sites', () => {
     const deck = d.slice(d.indexOf('export function ComposerDeck('), d.indexOf('export function RoomDeckFace('));
     expect(deck).not.toContain('useEmoteMoment(');
     expect(deck).toContain('{showButton && (');
+  });
+
+  it('the face stills an animated emote wherever motion or chat\'s emote setting asks', () => {
+    const b = src('components/chat/EmoteDeckButton.tsx');
+    expect(b).toContain("return still || animate !== 'always' || motion !== 'full';");
+    const d = src('components/chat/ComposerDeck.tsx');
+    // Hovering or focusing the deck holds the hint it arrived on.
+    expect(d).toContain("const hint: HintKind = !gate.active ? 'message' : holding ? (held ?? running) : running;");
   });
 
   it('hides the field\'s own placeholder under the layer, beating the placeholder ink classes', () => {

@@ -140,7 +140,7 @@ import {
   sendButtonClass,
 } from './chat/composerParts';
 import { ComposerDeck } from './chat/ComposerDeck';
-import { desktopHints, useGifsOffered } from './chat/composerHints';
+import { desktopHints, nextHintEngaged, useGifsOffered } from './chat/composerHints';
 import { useLowPower } from '../utils/lowPower';
 
 interface ParsedMessage {
@@ -1884,7 +1884,8 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   // it move under the caret after a send. Derived while rendering, so every
   // writer counts.
   const [hintEngaged, setHintEngaged] = useState(false);
-  if (messageInput !== '' && !hintEngaged) setHintEngaged(true);
+  const engagedNow = nextHintEngaged(hintEngaged, messageInput);
+  if (engagedNow !== hintEngaged) setHintEngaged(engagedNow);
   const lowPower = useLowPower();
   // The menu's GIFs section shows on the same answer (Rust caches it).
   const gifsOffered = useGifsOffered(isTwitch, currentStream?.user_id);
@@ -5791,7 +5792,17 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
               {/* In a narrow chat column the tools compress in place so the
                   field keeps a usable width (utils/composerNarrow.ts). */}
               {!composerHidden && (
-              <div ref={trackComposerWidth} className="sn-composer-row flex items-center gap-2 min-w-0">
+              <div
+                ref={trackComposerWidth}
+                className="sn-composer-row flex items-center gap-2 min-w-0"
+                // The empty box may teach again once focus leaves the
+                // composer row (Send, the deck and the tools are part of it).
+                onBlur={(e) => {
+                  if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+                    setHintEngaged((prev) => nextHintEngaged(prev, messageInput, true));
+                  }
+                }}
+              >
                 {/* The channel wallet: points and bits, balances on the
                     button or on hover. While the watched channel has a bonus
                     chest ready and auto-collect is off, it becomes the claim
@@ -6001,10 +6012,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                     })}
                     rows={1}
                     disabled={isInputDisabled}
-                    onBlur={(e) => {
-                      // The empty box may teach again once you have left the
-                      // composer (Send, the deck and the tools are part of it).
-                      if (!(e.relatedTarget as HTMLElement | null)?.closest?.('.sn-composer-row')) setHintEngaged(false);
+                    onBlur={() => {
                       // Delay hiding to allow click on autocomplete
                       setTimeout(() => setShowMentionAutocomplete(false), 150);
                       setTimeout(() => setShowCommandAutocomplete(false), 150);

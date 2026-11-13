@@ -16,6 +16,7 @@ import {
   useGifLinkInBox,
   type DeckCard,
   type HintGate,
+  type HintKind,
 } from './composerHints';
 import { DeckFace, EmoteDeckButton } from './EmoteDeckButton';
 
@@ -84,15 +85,22 @@ export function ComposerDeck({
   onClick?: () => void;
   onMouseLeave?: () => void;
 }) {
-  // The hints hold still while the pointer or focus is on the deck, so its
-  // cards never reshuffle under the pointer.
+  // The hints hold still while the pointer or focus is on the deck: the hint
+  // showing when it arrived stays, so neither the face nor its cards change
+  // under the pointer. The clock runs on underneath.
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
   // The GIF hint points at the button's menu: without the button it is only
   // the prompt and commands.
   const cycle = hintCycle({ slash, gifs: gifs && showButton });
-  const hint = useComposerHint(gate.active && !hovered && !focused, cycle, roomKeyOf(room));
-  const gifLink = useGifLinkInBox(text, gifs);
+  const running = useComposerHint(gate.active, cycle, roomKeyOf(room));
+  const [held, setHeld] = useState<HintKind | null>(null);
+  const holding = hovered || focused;
+  if (holding && held === null) setHeld(running);
+  if (!holding && held !== null) setHeld(null);
+  const hint: HintKind = !gate.active ? 'message' : holding ? (held ?? running) : running;
+  // Only a shown button can show a GIF chip.
+  const gifLink = useGifLinkInBox(text, gifs && showButton);
   const face = deckFace({ text, gifLink, hint, slash, gifs });
   return (
     <>
