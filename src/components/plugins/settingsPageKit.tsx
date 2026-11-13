@@ -20,7 +20,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { ChevronDown, Plus, X } from 'lucide-react';
+import { ChevronDown, Plus, TriangleAlert, X } from 'lucide-react';
 import SectionNav from '../settings/SectionNav';
 import { ResetArrow, SegmentedSelect } from '../settings/_primitives';
 import { IS_MOBILE } from '../../utils/platform';
@@ -201,6 +201,7 @@ export function SubControl({
   disabled = false,
   stacked = false,
   onReset,
+  tone,
 }: {
   title: string;
   /** One plain sentence under the name, saying what the line does. */
@@ -211,25 +212,22 @@ export function SubControl({
   /** Restores this line's setting. Pass it only while the setting differs
    *  from its default, as on SettingsRow. */
   onReset?: () => void;
+  /** `'warning'` draws the description as a warning, with a small triangle. */
+  tone?: 'warning';
 }) {
   const name = (
     // A step under its row's name, as every nested line on both phones.
     <div className="min-w-0 text-[12.5px] font-medium text-textPrimary">
-      {title}
+      <span className={disabled ? 'opacity-50' : ''}>{title}</span>
       {onReset && <ResetArrow onReset={onReset} />}
-      {description && (
-        <p className="mt-0.5 text-[12px] font-normal leading-relaxed text-textSecondary">{description}</p>
-      )}
+      {description && <SubDescription tone={tone}>{description}</SubDescription>}
     </div>
   );
   if (stacked) {
     return (
-      <div
-        className={`space-y-2 ${disabled ? 'pointer-events-none opacity-50' : ''}`}
-        data-setting-row={title}
-      >
+      <div className={`space-y-2 ${disabled ? 'pointer-events-none' : ''}`} data-setting-row={title}>
         {name}
-        {control}
+        <div className={disabled ? 'opacity-40' : ''}>{control}</div>
       </div>
     );
   }
@@ -241,19 +239,33 @@ export function SubControl({
         control={control}
         disabled={disabled}
         onReset={onReset}
+        tone={tone}
       />
     );
   }
   return (
     <div
-      className={`flex items-center justify-between gap-4 ${disabled ? 'pointer-events-none opacity-50' : ''}`}
+      className={`flex items-center justify-between gap-4 ${disabled ? 'pointer-events-none' : ''}`}
       // A settings search result can land on a nested line, as on a row.
       data-setting-row={title}
     >
       {name}
-      <div className="shrink-0">{control}</div>
+      <div className={`shrink-0 ${disabled ? 'opacity-40' : ''}`}>{control}</div>
     </div>
   );
+}
+
+/** The sentence under a sub-line's name: plain, or a warning with a triangle. */
+function SubDescription({ tone, children }: { tone?: 'warning'; children: ReactNode }) {
+  if (tone === 'warning') {
+    return (
+      <p className="mt-0.5 flex items-start gap-1.5 text-[12px] font-normal leading-relaxed text-warning">
+        <TriangleAlert size={12} className="mt-[3px] shrink-0" />
+        <span>{children}</span>
+      </p>
+    );
+  }
+  return <p className="mt-0.5 text-[12px] font-normal leading-relaxed text-textSecondary">{children}</p>;
 }
 
 /** A sub-line on the phone: its name never shrinks or wraps, and a control
@@ -266,12 +278,14 @@ function PhoneSubControl({
   control,
   disabled,
   onReset,
+  tone,
 }: {
   title: string;
   description?: string;
   control: ReactNode;
   disabled: boolean;
   onReset?: () => void;
+  tone?: 'warning';
 }) {
   const rowRef = useRef<HTMLDivElement>(null);
   const nameRef = useRef<HTMLDivElement>(null);
@@ -323,44 +337,38 @@ function PhoneSubControl({
       : control;
   return (
     <div
-      className={disabled ? 'pointer-events-none opacity-50' : ''}
+      className={disabled ? 'pointer-events-none' : ''}
       // A settings search result can land on a nested line, as on a row.
       data-setting-row={title}
     >
       <div ref={rowRef} className={stack ? 'space-y-2' : 'flex items-center gap-4'}>
         <div ref={nameRef} className="w-fit shrink-0 whitespace-nowrap text-[12.5px] font-medium text-textPrimary">
-          {title}
+          <span className={disabled ? 'opacity-50' : ''}>{title}</span>
           {onReset && <ResetArrow onReset={onReset} />}
         </div>
-        <div className={stack ? 'flex w-full' : 'flex min-w-0 flex-1 justify-end'}>
+        <div className={`${stack ? 'flex w-full' : 'flex min-w-0 flex-1 justify-end'} ${disabled ? 'opacity-40' : ''}`}>
           <span ref={partRef} className={stack ? 'flex w-full' : 'inline-flex'}>
             {shown}
           </span>
         </div>
       </div>
       {/* Under the whole line, so the name keeps its single line above. */}
-      {description && <p className="mt-0.5 text-[12px] leading-relaxed text-textSecondary">{description}</p>}
+      {description && <SubDescription tone={tone}>{description}</SubDescription>}
     </div>
   );
 }
 
-// A visible step above the page on every theme: the surface nudged toward the
-// text color (lighter on a dark theme, darker on a light one), a soft edge on
-// its top-left, and a shadow under it. Opaque, so Glassiness 0% leaves it solid.
+// A visible step above the page on every theme: the page color nudged toward
+// the text color (lighter on a dark theme), a soft edge on its top-left, and a
+// shadow under it. Opaque, so Glassiness 0% leaves it solid; on a light theme
+// the card's class swaps in a color lifted toward white.
 const CARD_STYLE = {
-  background: 'color-mix(in oklab, var(--color-surface) 94%, var(--color-text-primary) 6%)',
+  background: 'color-mix(in oklab, var(--color-background) 86%, var(--color-text-primary) 14%)',
   boxShadow:
     'inset 1px 1px 0 color-mix(in srgb, var(--color-text-primary) 10%, transparent), 0 6px 20px rgba(0, 0, 0, 0.18)',
 } as const;
 
-// The bar's groove: the card's own color pressed a step darker, with the fill
-// inset inside it so the two read as one part.
-const TRACK_STYLE = {
-  background: 'color-mix(in oklab, var(--color-surface) 78%, black)',
-  boxShadow: 'inset 0 1px 2px rgba(0, 0, 0, 0.35)',
-} as const;
-
-const TAG_STYLE = { background: 'color-mix(in srgb, var(--color-accent) 16%, transparent)' } as const;
+const TAG_STYLE = { background: 'color-mix(in srgb, var(--color-accent) 12%, transparent)' } as const;
 
 /** What the plugin is doing right now, on a raised card at the top of its
  *  page: a small label (and an optional tag), a title, a line under it, an
@@ -385,51 +393,65 @@ export function StatusCard({
   /** A KitButton, or any control, on the right. */
   action?: ReactNode;
 }) {
+  // The last bar stays drawn while its row closes.
+  const [lastProgress, setLastProgress] = useState(progress);
+  if (progress && progress !== lastProgress) setLastProgress(progress);
+  const bar = progress ?? lastProgress;
   return (
-    <div className="rounded-2xl p-5" style={CARD_STYLE} data-status-card>
+    <div
+      className="rounded-2xl p-5 [html[data-theme-tone=light]_&]:!bg-[color-mix(in_oklab,var(--color-background)_40%,white)]"
+      style={CARD_STYLE}
+      data-status-card
+    >
       <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
         <div className="min-w-0 flex-1 basis-[330px]">
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex min-h-[22px] flex-wrap items-center gap-2">
             <span className="text-[12px] font-semibold uppercase tracking-[0.12em] text-textMuted">{label}</span>
             {tag && (
               <span
-                className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[12px] font-semibold text-accent-on-surface"
+                className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[12px] font-semibold text-textPrimary"
                 style={TAG_STYLE}
               >
-                {tag.icon}
+                {tag.icon && <span className="text-accent-on-surface">{tag.icon}</span>}
                 {tag.text}
               </span>
             )}
+            {action && <div className="-my-[7px] ml-auto shrink-0 pl-4">{action}</div>}
           </div>
           <div className="mt-2 line-clamp-2 break-words text-[19px] font-semibold leading-snug text-textPrimary">
             {title}
           </div>
           {subtitle && <div className="mt-1 break-words text-[13.5px] leading-snug text-textSecondary">{subtitle}</div>}
         </div>
-        {action && <div className="shrink-0">{action}</div>}
       </div>
-      {progress && (
-        <div className="mt-4">
-          <div
-            role="progressbar"
-            aria-label={progress.left}
-            aria-valuemin={0}
-            aria-valuemax={progress.max > 0 ? progress.max : 1}
-            aria-valuenow={Math.min(Math.max(progress.value, 0), progress.max > 0 ? progress.max : 1)}
-            className="h-2 rounded-full p-[1.5px]"
-            style={TRACK_STYLE}
-          >
-            <div
-              className="h-full rounded-full bg-accent transition-[width] duration-500 ease-out"
-              style={{ width: `${progressPercent(progress.value, progress.max)}%` }}
-            />
-          </div>
-          <div className="mt-2 flex flex-wrap justify-between gap-x-4 gap-y-0.5 text-[12.5px] text-textSecondary">
-            <span className="tabular-nums">{progress.left}</span>
-            {progress.right && <span>{progress.right}</span>}
-          </div>
+      <div
+        className="grid transition-[grid-template-rows] duration-[220ms] motion-reduce:transition-none"
+        style={{ gridTemplateRows: progress ? '1fr' : '0fr' }}
+      >
+        <div className="min-h-0 overflow-hidden">
+          {bar && (
+            <div className="mt-4">
+              <div
+                role="progressbar"
+                aria-label={bar.left}
+                aria-valuemin={0}
+                aria-valuemax={bar.max > 0 ? bar.max : 1}
+                aria-valuenow={Math.min(Math.max(bar.value, 0), bar.max > 0 ? bar.max : 1)}
+                className="h-2 rounded-full p-[1.5px] bg-black/40 shadow-[inset_0_1px_2px_rgba(0,0,0,0.5)] [html[data-theme-tone=light]_&]:bg-black/10 [html[data-theme-tone=light]_&]:shadow-[inset_0_1px_1.5px_rgba(0,0,0,0.18)]"
+              >
+                <div
+                  className="h-full rounded-full bg-accent transition-[width] duration-500 ease-out motion-reduce:transition-none"
+                  style={{ width: `${progressPercent(bar.value, bar.max)}%` }}
+                />
+              </div>
+              <div className="mt-2 flex flex-wrap justify-between gap-x-4 gap-y-0.5 text-[12.5px] text-textSecondary">
+                <span className="tabular-nums">{bar.left}</span>
+                {bar.right && <span>{bar.right}</span>}
+              </div>
+            </div>
+          )}
         </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -451,14 +473,14 @@ export function KitButton({
 }) {
   const look =
     variant === 'primary'
-      ? 'bg-accent text-background hover:bg-accent-hover'
+      ? 'bg-accent text-background hover:bg-accent-hover [html[data-theme-tone=light]_&]:text-white'
       : 'bg-[color-mix(in_srgb,var(--color-text-primary)_9%,transparent)] text-textPrimary ring-1 ring-inset ring-[color-mix(in_srgb,var(--color-text-primary)_12%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-text-primary)_15%,transparent)]';
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className={`inline-flex min-h-9 items-center gap-2 rounded-[10px] px-3.5 py-2 text-[13px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 active:translate-y-px disabled:pointer-events-none disabled:opacity-50 ${look}`}
+      className={`inline-flex min-h-9 items-center gap-2 rounded-[10px] px-3.5 py-2 text-[13px] font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--color-text-primary)] active:translate-y-px disabled:pointer-events-none disabled:opacity-50 ${look}`}
     >
       {icon}
       {children}
@@ -527,7 +549,7 @@ export function Disclosure({
         aria-expanded={open}
         aria-controls={bodyId}
         onClick={toggle}
-        className="flex w-full items-center justify-between gap-4 rounded-xl bg-[color-mix(in_srgb,var(--color-text-primary)_4%,transparent)] px-4 py-3.5 text-left ring-1 ring-inset ring-[color-mix(in_srgb,var(--color-text-primary)_8%,transparent)] transition-colors hover:bg-[color-mix(in_srgb,var(--color-text-primary)_7%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+        className="flex w-full items-center justify-between gap-4 rounded-xl bg-[color-mix(in_srgb,var(--color-text-primary)_4%,transparent)] px-4 py-3.5 text-left ring-1 ring-inset ring-[color-mix(in_srgb,var(--color-text-primary)_8%,transparent)] transition-colors hover:bg-[color-mix(in_srgb,var(--color-text-primary)_7%,transparent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--color-text-primary)]"
       >
         <span className="min-w-0">
           <span className="block text-[14px] font-semibold text-textPrimary">{title}</span>
@@ -535,22 +557,25 @@ export function Disclosure({
         </span>
         <ChevronDown
           size={18}
-          className="shrink-0 text-textMuted"
-          style={{ transform: open ? 'rotate(180deg)' : 'none', transition: `transform ${DISCLOSURE_MS}ms ease` }}
+          className="shrink-0 text-textMuted transition-transform duration-[220ms] motion-reduce:transition-none"
+          style={{ transform: open ? 'rotate(180deg)' : 'none' }}
         />
       </button>
       <div
         id={bodyId}
         aria-hidden={!open}
+        className="transition-[grid-template-rows] duration-[220ms] ease-[ease] motion-reduce:transition-none"
         style={{
           display: 'grid',
           gridTemplateRows: shown ? '1fr' : '0fr',
-          transition: `grid-template-rows ${DISCLOSURE_MS}ms ease`,
         }}
       >
         <div style={{ minHeight: 0, overflow: settled && open ? 'visible' : 'hidden' }}>
           {mounted && (
-            <div style={{ paddingTop: 12 }}>
+            <div
+              className="motion-reduce:transition-none"
+              style={{ paddingTop: 12, opacity: shown ? 1 : 0, transition: 'opacity 220ms ease' }}
+            >
               <div className="settings-card px-4">{children}</div>
             </div>
           )}
