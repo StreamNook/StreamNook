@@ -12,6 +12,7 @@ import {
   isValidElement,
   useCallback,
   useContext,
+  useEffect,
   useId,
   useLayoutEffect,
   useMemo,
@@ -19,10 +20,16 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { Plus, X } from 'lucide-react';
+import { ChevronDown, Plus, X } from 'lucide-react';
 import SectionNav from '../settings/SectionNav';
 import { ResetArrow, SegmentedSelect } from '../settings/_primitives';
 import { IS_MOBILE } from '../../utils/platform';
+import { progressPercent, readDisclosureOpen, writeDisclosureOpen } from './settingsKitPure';
+
+// The pure helper lives beside the other plain functions so a test can import
+// it without the components; it is exported here too, as the kit's own name for it.
+// eslint-disable-next-line react-refresh/only-export-components
+export { progressPercent };
 
 /** A long settings page that scrolls on its own, with the section rail beside
  *  it on wide windows. Fill it with PageSections; `railKey` names the page. */
@@ -189,12 +196,15 @@ const SubControlGroup = createContext<{
  *  share the line (a wrapping set of chips). */
 export function SubControl({
   title,
+  description,
   control,
   disabled = false,
   stacked = false,
   onReset,
 }: {
   title: string;
+  /** One plain sentence under the name, saying what the line does. */
+  description?: string;
   control: ReactNode;
   disabled?: boolean;
   stacked?: boolean;
@@ -207,6 +217,9 @@ export function SubControl({
     <div className="min-w-0 text-[12.5px] font-medium text-textPrimary">
       {title}
       {onReset && <ResetArrow onReset={onReset} />}
+      {description && (
+        <p className="mt-0.5 text-[12px] font-normal leading-relaxed text-textSecondary">{description}</p>
+      )}
     </div>
   );
   if (stacked) {
@@ -221,7 +234,15 @@ export function SubControl({
     );
   }
   if (IS_MOBILE) {
-    return <PhoneSubControl title={title} control={control} disabled={disabled} onReset={onReset} />;
+    return (
+      <PhoneSubControl
+        title={title}
+        description={description}
+        control={control}
+        disabled={disabled}
+        onReset={onReset}
+      />
+    );
   }
   return (
     <div
@@ -241,11 +262,13 @@ export function SubControl({
  *  the name and remembered, so the layout cannot flip back and forth. */
 function PhoneSubControl({
   title,
+  description,
   control,
   disabled,
   onReset,
 }: {
   title: string;
+  description?: string;
   control: ReactNode;
   disabled: boolean;
   onReset?: () => void;
@@ -300,19 +323,238 @@ function PhoneSubControl({
       : control;
   return (
     <div
-      ref={rowRef}
-      className={`${stack ? 'space-y-2' : 'flex items-center gap-4'} ${disabled ? 'pointer-events-none opacity-50' : ''}`}
+      className={disabled ? 'pointer-events-none opacity-50' : ''}
       // A settings search result can land on a nested line, as on a row.
       data-setting-row={title}
     >
-      <div ref={nameRef} className="w-fit shrink-0 whitespace-nowrap text-[12.5px] font-medium text-textPrimary">
-        {title}
-        {onReset && <ResetArrow onReset={onReset} />}
+      <div ref={rowRef} className={stack ? 'space-y-2' : 'flex items-center gap-4'}>
+        <div ref={nameRef} className="w-fit shrink-0 whitespace-nowrap text-[12.5px] font-medium text-textPrimary">
+          {title}
+          {onReset && <ResetArrow onReset={onReset} />}
+        </div>
+        <div className={stack ? 'flex w-full' : 'flex min-w-0 flex-1 justify-end'}>
+          <span ref={partRef} className={stack ? 'flex w-full' : 'inline-flex'}>
+            {shown}
+          </span>
+        </div>
       </div>
-      <div className={stack ? 'flex w-full' : 'flex min-w-0 flex-1 justify-end'}>
-        <span ref={partRef} className={stack ? 'flex w-full' : 'inline-flex'}>
-          {shown}
+      {/* Under the whole line, so the name keeps its single line above. */}
+      {description && <p className="mt-0.5 text-[12px] leading-relaxed text-textSecondary">{description}</p>}
+    </div>
+  );
+}
+
+// A visible step above the page on every theme: the surface nudged toward the
+// text color (lighter on a dark theme, darker on a light one), a soft edge on
+// its top-left, and a shadow under it. Opaque, so Glassiness 0% leaves it solid.
+const CARD_STYLE = {
+  background: 'color-mix(in oklab, var(--color-surface) 94%, var(--color-text-primary) 6%)',
+  boxShadow:
+    'inset 1px 1px 0 color-mix(in srgb, var(--color-text-primary) 10%, transparent), 0 6px 20px rgba(0, 0, 0, 0.18)',
+} as const;
+
+// The bar's groove: the card's own color pressed a step darker, with the fill
+// inset inside it so the two read as one part.
+const TRACK_STYLE = {
+  background: 'color-mix(in oklab, var(--color-surface) 78%, black)',
+  boxShadow: 'inset 0 1px 2px rgba(0, 0, 0, 0.35)',
+} as const;
+
+const TAG_STYLE = { background: 'color-mix(in srgb, var(--color-accent) 16%, transparent)' } as const;
+
+/** What the plugin is doing right now, on a raised card at the top of its
+ *  page: a small label (and an optional tag), a title, a line under it, an
+ *  optional progress bar, and an action. Wraps on a narrow window: the action
+ *  drops under the words, and a long title takes two lines. */
+export function StatusCard({
+  label,
+  tag,
+  title,
+  subtitle,
+  progress,
+  action,
+}: {
+  /** The small caps line ("Right now"). */
+  label: string;
+  /** A pill beside the label. */
+  tag?: { icon?: ReactNode; text: string };
+  title: string;
+  subtitle?: string;
+  /** The inset bar: `left` and `right` are the words under its two ends. */
+  progress?: { value: number; max: number; left: string; right?: string };
+  /** A KitButton, or any control, on the right. */
+  action?: ReactNode;
+}) {
+  return (
+    <div className="rounded-2xl p-5" style={CARD_STYLE} data-status-card>
+      <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
+        <div className="min-w-0 flex-1 basis-[330px]">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[12px] font-semibold uppercase tracking-[0.12em] text-textMuted">{label}</span>
+            {tag && (
+              <span
+                className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[12px] font-semibold text-accent-on-surface"
+                style={TAG_STYLE}
+              >
+                {tag.icon}
+                {tag.text}
+              </span>
+            )}
+          </div>
+          <div className="mt-2 line-clamp-2 break-words text-[19px] font-semibold leading-snug text-textPrimary">
+            {title}
+          </div>
+          {subtitle && <div className="mt-1 break-words text-[13.5px] leading-snug text-textSecondary">{subtitle}</div>}
+        </div>
+        {action && <div className="shrink-0">{action}</div>}
+      </div>
+      {progress && (
+        <div className="mt-4">
+          <div
+            role="progressbar"
+            aria-label={progress.left}
+            aria-valuemin={0}
+            aria-valuemax={progress.max > 0 ? progress.max : 1}
+            aria-valuenow={Math.min(Math.max(progress.value, 0), progress.max > 0 ? progress.max : 1)}
+            className="h-2 rounded-full p-[1.5px]"
+            style={TRACK_STYLE}
+          >
+            <div
+              className="h-full rounded-full bg-accent transition-[width] duration-500 ease-out"
+              style={{ width: `${progressPercent(progress.value, progress.max)}%` }}
+            />
+          </div>
+          <div className="mt-2 flex flex-wrap justify-between gap-x-4 gap-y-0.5 text-[12.5px] text-textSecondary">
+            <span className="tabular-nums">{progress.left}</span>
+            {progress.right && <span>{progress.right}</span>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A button in the page's own look: filled with the accent for the one thing
+ *  the page wants you to do, or a quiet raised one for the rest. */
+export function KitButton({
+  children,
+  onClick,
+  icon,
+  variant = 'quiet',
+  disabled = false,
+}: {
+  children: ReactNode;
+  onClick: () => void;
+  icon?: ReactNode;
+  variant?: 'primary' | 'quiet';
+  disabled?: boolean;
+}) {
+  const look =
+    variant === 'primary'
+      ? 'bg-accent text-background hover:bg-accent-hover'
+      : 'bg-[color-mix(in_srgb,var(--color-text-primary)_9%,transparent)] text-textPrimary ring-1 ring-inset ring-[color-mix(in_srgb,var(--color-text-primary)_12%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-text-primary)_15%,transparent)]';
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={`inline-flex min-h-9 items-center gap-2 rounded-[10px] px-3.5 py-2 text-[13px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 active:translate-y-px disabled:pointer-events-none disabled:opacity-50 ${look}`}
+    >
+      {icon}
+      {children}
+    </button>
+  );
+}
+
+const DISCLOSURE_MS = 220;
+
+/** A fold on a page: its title and a one-line summary stay visible, and it
+ *  opens in place with a height animation. Whether it is open is remembered
+ *  per `id` for the visit. What it holds sits on a settings card, so put page
+ *  rows (PageRow) straight inside. Shut, its content is not mounted. */
+export function Disclosure({
+  id,
+  title,
+  summary,
+  children,
+}: {
+  id: string;
+  title: string;
+  /** What is set inside, in one line, shown while shut. */
+  summary: string;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(() => readDisclosureOpen(id));
+  // `mounted` keeps the content in the tree through the closing animation;
+  // `shown` is the animated height; `settled` lets a fully open fold stop
+  // clipping, so a focus ring or popover at its edge is not cut off.
+  const [mounted, setMounted] = useState(open);
+  const [shown, setShown] = useState(open);
+  const [settled, setSettled] = useState(open);
+  const bodyId = useId();
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const frame = useRef(0);
+  useEffect(
+    () => () => {
+      clearTimeout(timer.current);
+      cancelAnimationFrame(frame.current);
+    },
+    [],
+  );
+  const toggle = () => {
+    const next = !open;
+    setOpen(next);
+    writeDisclosureOpen(id, next);
+    clearTimeout(timer.current);
+    cancelAnimationFrame(frame.current);
+    setSettled(false);
+    if (next) {
+      setMounted(true);
+      // Two frames: the content must be laid out at height 0 before it grows.
+      frame.current = requestAnimationFrame(() => {
+        frame.current = requestAnimationFrame(() => setShown(true));
+      });
+      timer.current = setTimeout(() => setSettled(true), DISCLOSURE_MS + 80);
+    } else {
+      setShown(false);
+      timer.current = setTimeout(() => setMounted(false), DISCLOSURE_MS + 60);
+    }
+  };
+  return (
+    <div data-disclosure={id}>
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={bodyId}
+        onClick={toggle}
+        className="flex w-full items-center justify-between gap-4 rounded-xl bg-[color-mix(in_srgb,var(--color-text-primary)_4%,transparent)] px-4 py-3.5 text-left ring-1 ring-inset ring-[color-mix(in_srgb,var(--color-text-primary)_8%,transparent)] transition-colors hover:bg-[color-mix(in_srgb,var(--color-text-primary)_7%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+      >
+        <span className="min-w-0">
+          <span className="block text-[14px] font-semibold text-textPrimary">{title}</span>
+          <span className="mt-0.5 block text-[12px] leading-snug text-textSecondary">{summary}</span>
         </span>
+        <ChevronDown
+          size={18}
+          className="shrink-0 text-textMuted"
+          style={{ transform: open ? 'rotate(180deg)' : 'none', transition: `transform ${DISCLOSURE_MS}ms ease` }}
+        />
+      </button>
+      <div
+        id={bodyId}
+        aria-hidden={!open}
+        style={{
+          display: 'grid',
+          gridTemplateRows: shown ? '1fr' : '0fr',
+          transition: `grid-template-rows ${DISCLOSURE_MS}ms ease`,
+        }}
+      >
+        <div style={{ minHeight: 0, overflow: settled && open ? 'visible' : 'hidden' }}>
+          {mounted && (
+            <div style={{ paddingTop: 12 }}>
+              <div className="settings-card px-4">{children}</div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

@@ -93,7 +93,12 @@ Native components plugins should reuse instead of rebuilding:
   - `PillList` (`items`, `numbered`, `placeholder`, `onChange`): a short list of names edited in place.
   - `GamePicker` (`items`, `numbered`, `placeholder`, `onChange`): a list of games added by search, never typed free-hand. Each pick is Twitch's exact game name. Saved games show as rows with box art and whether drops run for them now; `numbered` rows can move up and down. Games running drops now are suggested first. Older apps lack it, so fall back to `PillList`.
   - `InlineSlider` (`value`, `min`, `max`, `step`, `label`, `format`, `disabled`, `onChange`).
-  - `SubControls` wrapping `SubControl` (`title`, `control`, `disabled`): the settings under a choice such as Custom.
+  - `SubControls` wrapping `SubControl` (`title`, `description`, `control`, `disabled`, `stacked`): the settings under a choice such as Custom, or under a switch. `description` is one plain sentence under the name; `stacked` puts a wide control under the name.
+  - `StatusCard` (`label`, `tag`, `title`, `subtitle`, `progress`, `action`): a raised card for what the plugin is doing right now, placed first on the page. `label` is the small caps line, `tag` is `{ icon?, text }` (a pill beside it), `progress` is `{ value, max, left, right? }` (an inset bar with a word under each end), and `action` is a `KitButton` or any control. On a narrow window the action drops under the words and a long title takes two lines. `progressPercent(value, max)` is exported beside it: the bar's width as a percent, held between 0 and 100.
+  - `KitButton` (`children`, `onClick`, `icon`, `variant`, `disabled`): `variant` is `'primary'` (filled with the accent, for the one thing the page wants you to do) or `'quiet'` (the default).
+  - `Disclosure` (`id`, `title`, `summary`, `children`): a fold that shows its title and a one-line summary and opens in place with a height animation. Whether it is open is remembered per `id` for the visit (`sessionStorage`; a browser that blocks it just opens shut). `children` sit on a settings card, so put `PageRow`s straight inside; shut, they are not mounted.
+
+  Apps from before these three parts lack `StatusCard`, `KitButton` and `Disclosure`. A plugin that wants to run on them checks each part (`components.StatusCard ?? null`, `components.Disclosure ?? PageSection`) and falls back, and raises its `host_min` to the app version that carries them.
 
 Build a page's markup from these rather than your own classes: the host stylesheet only contains the classes the host itself uses, so a plugin's own Tailwind classes may not exist in it.
 

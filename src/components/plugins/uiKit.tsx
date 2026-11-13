@@ -16,6 +16,9 @@ import {
   InlineSlider,
   SubControls,
   SubControl,
+  StatusCard,
+  KitButton,
+  Disclosure,
   DropsSettingsTab,
 } from './settingsPageKit';
 import { GamePicker } from './GamePicker';
@@ -277,7 +280,9 @@ export const SettingsBlock = ({
 // The bundle of controls shared with plugins via `api.components`. The
 // SettingsSection/Row/Block trio is the compact panel layout; SettingsPage and
 // the Page* parts are the Settings window's own look, for a plugin that ships
-// a full page (see settingsPageKit.tsx). DropsSettingsTab only answers
+// a full page (see settingsPageKit.tsx), with StatusCard, KitButton and
+// Disclosure for its status header and folds. A plugin that runs on an older
+// app finds these three missing and falls back. DropsSettingsTab only answers
 // Autopilot 0.4.x, which drew the app's page by that name.
 export const UI_KIT = {
   Toggle,
@@ -298,6 +303,9 @@ export const UI_KIT = {
   InlineSlider,
   SubControls,
   SubControl,
+  StatusCard,
+  KitButton,
+  Disclosure,
   DropsSettingsTab,
 };
 
