@@ -20,6 +20,7 @@ use crate::models::automations::{ChannelScope, RunState, MAX_ENGINE_CHATS};
 
 use super::compile::Compiled;
 use super::own_topics::{self, TopicKind};
+use super::provider_facts::{KICK, TIKTOK, YOUTUBE};
 use super::{lock, now_ms, Engine};
 
 /// Chat start attempts: 5 s, doubling to 5 min, reset on success and on an
@@ -68,6 +69,9 @@ pub(crate) struct State {
     pub(crate) joined: BTreeSet<String>,
     /// Live-only watches held, by login.
     refs: BTreeSet<String>,
+    /// Chats of other platforms this task holds under the engine's label, by
+    /// chat key (`kick:alpha`).
+    pub(crate) provider_joined: BTreeSet<String>,
     /// P3: the own-channel topics last handed to the whisper session.
     own: Option<(String, BTreeSet<TopicKind>)>,
     pub(crate) backoff: Backoff,
@@ -82,6 +86,7 @@ impl State {
         State {
             joined: BTreeSet::new(),
             refs: BTreeSet::new(),
+            provider_joined: BTreeSet::new(),
             own: None,
             backoff: Backoff::new(t.chat_start_first, t.chat_start_cap),
             last_run: RunState::Off,
@@ -199,7 +204,8 @@ pub(crate) async fn pass(engine: &Arc<Engine>, st: &mut State) {
     }
     let missing: Vec<String> = wanted.iter().filter(|r| !st.joined.contains(*r)).cloned().collect();
     join_rooms(engine, st, &missing, now).await;
-    engine.set_kept(st.joined.iter().cloned().collect());
+    provider_pass(engine, st, &compiled, active).await;
+    engine.set_kept(st.joined.iter().chain(st.provider_joined.iter()).cloned().collect());
 
     // Liveness watches for only-live rules (their room ids looked up once).
     let wanted_refs: BTreeSet<String> = if active {
@@ -270,6 +276,52 @@ pub(crate) async fn pass(engine: &Arc<Engine>, st: &mut State) {
     engine.announce_status();
 }
 
+/// Keep the other platforms' chats the running rules listen in (and the ones
+/// a closing window left to the engine): open the missing, let go of the
+/// surplus. Twitch's rooms count first against the 50; a chat that fails to
+/// open is tried again on the next pass (passes follow events, not a timer).
+async fn provider_pass(engine: &Arc<Engine>, st: &mut State, compiled: &Compiled, active: bool) {
+    let mut wanted: BTreeSet<String> = BTreeSet::new();
+    if active {
+        wanted.extend(compiled.needed_provider_chats.iter().cloned());
+        wanted.extend(lock(&engine.rec).adopted.keys().filter(|room| room.contains(':')).cloned());
+    }
+    let room = MAX_ENGINE_CHATS.saturating_sub(st.joined.len());
+    let wanted: BTreeSet<String> = wanted.into_iter().take(room).collect();
+    for key in st.provider_joined.difference(&wanted).cloned().collect::<Vec<_>>() {
+        if let Some((provider, channel)) = key.split_once(':') {
+            engine.local.provider_leave(provider, channel).await;
+        }
+        st.provider_joined.remove(&key);
+    }
+    for key in wanted.difference(&st.provider_joined).cloned().collect::<Vec<_>>() {
+        let Some((provider, channel)) = key.split_once(':') else { continue };
+        match engine.local.provider_join(provider, channel).await {
+            Ok(()) => {
+                st.provider_joined.insert(key);
+            }
+            Err(e) => log::debug!("[Automations] join {key} failed: {e}"),
+        }
+    }
+}
+
+/// Adopt every chat of another platform that `label` holds and no other label
+/// holds, as `adopt_rooms` does for Twitch's rooms.
+async fn adopt_provider_rooms(engine: &Arc<Engine>, st: &mut State, label: &str) {
+    for provider in [KICK, YOUTUBE, TIKTOK] {
+        for channel in engine.local.provider_held_by(provider, label).await {
+            if engine.local.provider_held_by_other_than(provider, &channel, label).await {
+                continue;
+            }
+            let key = crate::services::providers::key::make_key(provider, &channel);
+            if st.provider_joined.contains(&key) || engine.local.provider_join(provider, &channel).await.is_ok() {
+                st.provider_joined.insert(key.clone());
+                lock(&engine.rec).adopted.insert(key, now_ms());
+            }
+        }
+    }
+}
+
 fn push_unique(list: &mut Vec<String>, room: &str) {
     let key = room.trim_start_matches('#').to_lowercase();
     if !key.is_empty() && !list.contains(&key) {
@@ -314,6 +366,7 @@ async fn join_rooms(engine: &Arc<Engine>, st: &mut State, rooms: &[String], now:
 /// Adopt every room `label` holds that no other label (besides the engine)
 /// holds, stamping the adoption time.
 async fn adopt_rooms(engine: &Arc<Engine>, st: &mut State, label: &str) {
+    adopt_provider_rooms(engine, st, label).await;
     for room in engine.local.chats_held_by(label).await {
         let holders = engine.local.holders(&room).await;
         if holders.iter().any(|h| h != label && h != super::AUTOMATIONS_LABEL) {
@@ -453,6 +506,107 @@ mod tests {
         kit.local.set_cycling(false);
         pass(&kit.engine, &mut st).await;
         assert_eq!(kit.local.start_calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn kick_chats_are_joined_on_their_platform_and_left_when_no_longer_wanted() {
+        let kit = Kit::new();
+        kit.connect_kick().await;
+        let mut st = State::new(&kit.engine);
+        kit.settings(RunState::On, vec![kick_these_rule("rk", &["alpha"])]).await;
+        pass(&kit.engine, &mut st).await;
+        assert!(kit.local.joined().contains("kick:alpha"));
+        assert_eq!(kit.local.join_calls("kick:alpha"), 1);
+        assert_eq!(kit.local.start_calls(), 0, "no Twitch connection is started for a Kick chat");
+        assert!(st.provider_joined.contains("kick:alpha") && st.joined.is_empty());
+        pass(&kit.engine, &mut st).await;
+        assert_eq!(kit.local.join_calls("kick:alpha"), 1, "a second pass joins nothing again");
+        kit.settings(RunState::On, vec![]).await;
+        pass(&kit.engine, &mut st).await;
+        assert!(kit.local.joined().is_empty());
+        assert_eq!(kit.local.leave_calls("kick:alpha"), 1);
+        assert!(st.provider_joined.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_kick_rule_with_no_connected_account_joins_nothing() {
+        let kit = Kit::new();
+        let mut st = State::new(&kit.engine);
+        kit.settings(RunState::On, vec![kick_these_rule("rk", &["alpha"])]).await;
+        pass(&kit.engine, &mut st).await;
+        assert!(kit.local.joined().is_empty(), "a held rule listens nowhere");
+        kit.connect_kick().await;
+        pass(&kit.engine, &mut st).await;
+        assert!(kit.local.joined().contains("kick:alpha"));
+    }
+
+    #[tokio::test]
+    async fn off_and_the_background_let_go_of_the_kick_chats_too() {
+        let kit = Kit::new();
+        kit.connect_kick().await;
+        let mut st = State::new(&kit.engine);
+        kit.settings(RunState::On, vec![kick_these_rule("rk", &["alpha"])]).await;
+        pass(&kit.engine, &mut st).await;
+        assert!(kit.local.joined().contains("kick:alpha"));
+        kit.engine.presence.store(false, Ordering::SeqCst);
+        pass(&kit.engine, &mut st).await;
+        assert!(kit.local.joined().is_empty());
+        kit.engine.presence.store(true, Ordering::SeqCst);
+        pass(&kit.engine, &mut st).await;
+        assert!(kit.local.joined().contains("kick:alpha"));
+        kit.settings(RunState::Off, vec![kick_these_rule("rk", &["alpha"])]).await;
+        pass(&kit.engine, &mut st).await;
+        assert!(kit.local.joined().is_empty());
+    }
+
+    #[tokio::test]
+    async fn twitch_rooms_and_other_platform_chats_share_the_fifty() {
+        let kit = Kit::new();
+        kit.connect_kick().await;
+        let mut st = State::new(&kit.engine);
+        let twitch: Vec<String> = (0..25).map(|i| format!("room{i}")).collect();
+        let twitch_refs: Vec<&str> = twitch.iter().map(String::as_str).collect();
+        let kick: Vec<String> = (0..30).map(|i| format!("chan{i}")).collect();
+        let kick_refs: Vec<&str> = kick.iter().map(String::as_str).collect();
+        kit.settings(RunState::On, vec![these_rule("rt", &twitch_refs, false), kick_these_rule("rk", &kick_refs)]).await;
+        pass(&kit.engine, &mut st).await;
+        assert_eq!(st.joined.len(), 25);
+        assert_eq!(st.provider_joined.len(), 25, "the rest of the 50");
+        assert_eq!(kit.local.joined().len(), 50);
+    }
+
+    #[tokio::test]
+    async fn a_notify_rule_on_youtube_joins_its_chat_on_that_platform() {
+        let kit = Kit::new();
+        kit.outward.set_platform_identity("youtube", "UCme", "me");
+        let mut rule = kick_these_rule("ry", &["alpha"]);
+        rule["send_as"] = serde_json::json!({ "provider": "twitch", "id": main_id(), "login": "me", "name": "Me" });
+        rule["only_if"]["platforms"] = serde_json::json!(["youtube"]);
+        rule["only_if"]["channels"] =
+            serde_json::json!({ "kind": "these", "list": [{ "id": "c-1", "key": "youtube:UCchannel", "room_id": "", "name": "UCchannel" }] });
+        rule["actions"] = serde_json::json!([{ "kind": "notify", "id": "a-1", "title": "T", "body": "B", "toast": true, "system": false, "sound": null, "volume": 1.0 }]);
+        let mut st = State::new(&kit.engine);
+        kit.settings(RunState::On, vec![rule]).await;
+        pass(&kit.engine, &mut st).await;
+        assert_eq!(kit.local.join_calls("youtube:uchannel"), 1, "joined through the YouTube adapter (it keys lowercase)");
+        assert!(st.provider_joined.contains("youtube:UCchannel"));
+        assert_eq!(kit.local.start_calls(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_closing_window_hands_over_a_kick_chat_nobody_else_holds() {
+        let kit = Kit::new();
+        kit.connect_kick().await;
+        kit.settings(RunState::On, vec![kick_any_open_rule("rk")]).await;
+        kit.local.hold("main", "kick:solo");
+        kit.local.hold("main", "kick:shared");
+        kit.local.hold("multichat-1", "kick:shared");
+        let rec = kit.spawn_reconcile();
+        super::super::adopt_window_chats_on(&kit.engine, "main").await;
+        assert!(kit.local.joined().contains("kick:solo"));
+        assert!(!kit.local.joined().contains("kick:shared"), "another window holds it");
+        assert!(lock(&kit.engine.rec).adopted.contains_key("kick:solo"));
+        rec.abort();
     }
 
     #[test]

@@ -392,6 +392,45 @@ pub fn two_replies_rule(id: &str, live: bool) -> Value {
     rule(id, live, mention(), this_chat(), vec![reply("a-1", "@{user} first"), reply("a-2", "@{user} second")])
 }
 
+/// The Kick account id the fake door and the Kick rules use.
+pub const KICK_ME: &str = "5001";
+
+fn kick_rule(id: &str, channels: Value) -> Value {
+    let when = json!({ "kind": "message", "text": { "mode": "contains", "pattern": "hello", "case_sensitive": false } });
+    let mut r = rule(id, true, when, channels, vec![reply("a-1", "hi {user}")]);
+    r["send_as"] = json!({ "provider": "kick", "id": KICK_ME, "login": "mykick", "name": "MyKick" });
+    r["only_if"]["platforms"] = json!(["kick"]);
+    r
+}
+
+/// A Kick rule listening in these Kick chats (room id 5002 each).
+pub fn kick_these_rule(id: &str, chats: &[&str]) -> Value {
+    let list: Vec<Value> = chats
+        .iter()
+        .map(|c| json!({ "id": format!("c-{c}"), "key": format!("kick:{c}"), "room_id": "5002", "name": c }))
+        .collect();
+    kick_rule(id, json!({ "kind": "these", "list": list }))
+}
+
+/// A Kick rule listening in any open chat.
+pub fn kick_any_open_rule(id: &str) -> Value {
+    kick_rule(id, json!({ "kind": "any_open" }))
+}
+
+/// A Kick chat row from `fan` in `kick:alpha` (room 5002), read now.
+pub fn kick_row(id: &str, user_id: &str, text: &str) -> ChatMessage {
+    kick_row_from(id, user_id, "fan", text)
+}
+
+pub fn kick_row_from(id: &str, user_id: &str, login: &str, text: &str) -> ChatMessage {
+    serde_json::from_value(json!({
+        "id": id, "user_id": user_id, "username": login, "display_name": login, "color": null,
+        "badges": [], "timestamp": "", "content": text, "provider": "kick", "channel": "kick:alpha",
+        "tags": { "id": id, "room-id": "5002" }, "metadata": {}, "received_at_ms": now_ms(),
+    }))
+    .expect("a Kick test row")
+}
+
 pub fn these_rule(id: &str, chats: &[&str], only_live: bool) -> Value {
     let list: Vec<Value> = chats.iter().map(|c| chat_ref(c, "4242")).collect();
     let mut r = rule(id, true, mention(), json!({ "kind": "these", "list": list }), vec![reply("a-1", "@{user} hi")]);
@@ -940,6 +979,31 @@ pub struct SentMsg {
 
 const FETCH_REFUSED: &str = "Twitch refused the token refresh";
 
+/// One message the fake Kick was asked to send.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KickSent {
+    /// The Kick account id the rule sends as (what the door checks).
+    pub expected: String,
+    pub slug: String,
+    pub text: String,
+    pub reply_to: Option<String>,
+}
+
+#[derive(Default)]
+struct KickFake {
+    /// The connected Kick account's id.
+    account: Option<String>,
+    /// Once the first claim has been made, the account reads as this one
+    /// (the outer `Some` says it is scripted; the inner is the new account).
+    switch_after_claim: Option<Option<String>>,
+    /// Who the chat rules say you are, by provider: (chat id, login).
+    identities: HashMap<String, (String, String)>,
+    sends: Vec<KickSent>,
+    mods: Vec<crate::services::providers::kick_door::KickModeration>,
+    result: Option<crate::services::providers::kick_door::KickOutcome>,
+    delay: Duration,
+}
+
 #[derive(Default)]
 struct OutState {
     /// What an account's fetch answers, in order; the last one repeats.
@@ -977,6 +1041,7 @@ struct OutState {
     releases: Vec<String>,
     drop_releases: bool,
     room_delay: Duration,
+    kick: KickFake,
 }
 
 /// The login the fake gives a test account.
@@ -1097,6 +1162,7 @@ pub struct FakeOutward {
     claim_started: Started,
     release_started: Started,
     room_started: Started,
+    kick_pace: Mutex<crate::services::provider_pace::Pace>,
 }
 
 impl FakeOutward {
@@ -1134,6 +1200,7 @@ impl FakeOutward {
             claim_started: Started::default(),
             release_started: Started::default(),
             room_started: Started::default(),
+            kick_pace: Mutex::new(crate::services::provider_pace::Pace::default()),
         }
     }
 
@@ -1316,6 +1383,57 @@ impl FakeOutward {
     }
 }
 
+impl FakeOutward {
+    /// Kick is connected as `id` (`login`): the account the door reads, and
+    /// who the chat rules say you are there.
+    pub fn connect_kick(&self, id: &str, login: &str) {
+        let mut s = lock(&self.state);
+        s.kick.account = Some(id.into());
+        s.kick.switch_after_claim = None;
+        s.kick.identities.insert("kick".into(), (id.into(), login.into()));
+    }
+
+    /// The Kick account is gone (its chat identity stays: the chat rules still know the name).
+    pub fn disconnect_kick(&self) {
+        lock(&self.state).kick.account = None;
+    }
+
+    /// Who the chat rules say you are on `provider` (YouTube, TikTok tests).
+    pub fn set_platform_identity(&self, provider: &str, id: &str, login: &str) {
+        lock(&self.state).kick.identities.insert(provider.into(), (id.into(), login.into()));
+    }
+
+    /// From the first claim on, the connected account reads as `other`.
+    pub fn switch_kick_after_claim(&self, other: Option<&str>) {
+        lock(&self.state).kick.switch_after_claim = Some(other.map(str::to_string));
+    }
+
+    /// The next Kick sends end like this (the last repeats).
+    pub fn script_kick(&self, outcome: crate::services::providers::kick_door::KickOutcome) {
+        lock(&self.state).kick.result = Some(outcome);
+    }
+
+    pub fn delay_kick(&self, d: Duration) {
+        lock(&self.state).kick.delay = d;
+    }
+
+    /// Every Kick send attempt that reached the door.
+    pub fn kick_sends(&self) -> Vec<KickSent> {
+        lock(&self.state).kick.sends.clone()
+    }
+
+    pub fn kick_mods(&self) -> Vec<crate::services::providers::kick_door::KickModeration> {
+        lock(&self.state).kick.mods.clone()
+    }
+
+    fn kick_current(s: &OutState) -> Option<String> {
+        match &s.kick.switch_after_claim {
+            Some(other) if s.claim_calls > 0 => other.clone(),
+            _ => s.kick.account.clone(),
+        }
+    }
+}
+
 #[async_trait]
 impl Outward for FakeOutward {
     async fn verified_token(&self, account_id: &str, budget: Duration) -> Result<VerifiedToken, TokenRefusal> {
@@ -1434,6 +1552,52 @@ impl Outward for FakeOutward {
                 }
             }
         }
+    }
+
+    fn kick_account_id(&self) -> Option<String> {
+        let mut s = lock(&self.state);
+        s.calls.push("kick_id".into());
+        FakeOutward::kick_current(&s)
+    }
+
+    fn platform_identity(&self, provider: &str) -> Option<(String, String)> {
+        lock(&self.state).kick.identities.get(provider).cloned()
+    }
+
+    async fn kick_send(&self, expected_account: &str, slug: &str, text: &str, reply_to: Option<&str>) -> crate::services::providers::kick_door::KickOutcome {
+        use crate::services::providers::kick_door::{KickOutcome, OTHER_ACCOUNT_WORDS};
+        let (result, delay) = {
+            let mut s = lock(&self.state);
+            s.calls.push("kick_send".into());
+            // The real door checks the account again before it sends.
+            if FakeOutward::kick_current(&s).as_deref() != Some(expected_account) {
+                return KickOutcome::Refused { reason: OTHER_ACCOUNT_WORDS.into(), status: None };
+            }
+            s.kick.sends.push(KickSent {
+                expected: expected_account.into(),
+                slug: slug.into(),
+                text: text.into(),
+                reply_to: reply_to.map(str::to_string),
+            });
+            (s.kick.result.clone().unwrap_or(KickOutcome::Sent { message_id: Some("kick-1".into()) }), s.kick.delay)
+        };
+        tokio::time::sleep(delay).await;
+        result
+    }
+
+    async fn kick_moderate(&self, _expected_account: &str, op: &crate::services::providers::kick_door::KickModeration) -> crate::services::providers::kick_door::KickOutcome {
+        let mut s = lock(&self.state);
+        s.calls.push("kick_moderate".into());
+        s.kick.mods.push(op.clone());
+        s.kick.result.clone().unwrap_or(crate::services::providers::kick_door::KickOutcome::Sent { message_id: None })
+    }
+
+    async fn kick_room_id(&self, _slug: &str) -> Result<String, String> {
+        Ok("5002".into())
+    }
+
+    fn kick_pace(&self) -> &Mutex<crate::services::provider_pace::Pace> {
+        &self.kick_pace
     }
 
     async fn claim_post(&self, bearer: &str, _owner_id: &str, body: &Value) -> Result<ApiResponse, String> {
@@ -1723,6 +1887,39 @@ impl Local for FakeLocal {
                 c.holders.remove(channel);
             }
         }
+    }
+    async fn provider_join(&self, provider: &str, channel: &str) -> Result<(), String> {
+        let key = format!("{provider}:{}", channel.to_lowercase());
+        let mut c = lock(&self.chat);
+        *c.joins.entry(key.clone()).or_insert(0) += 1;
+        c.holders.entry(key).or_default().insert(super::AUTOMATIONS_LABEL.into());
+        Ok(())
+    }
+    async fn provider_leave(&self, provider: &str, channel: &str) {
+        let key = format!("{provider}:{}", channel.to_lowercase());
+        let mut c = lock(&self.chat);
+        *c.leaves.entry(key.clone()).or_insert(0) += 1;
+        if let Some(h) = c.holders.get_mut(&key) {
+            h.remove(super::AUTOMATIONS_LABEL);
+            if h.is_empty() {
+                c.holders.remove(&key);
+            }
+        }
+    }
+    async fn provider_held_by(&self, provider: &str, label: &str) -> Vec<String> {
+        let prefix = format!("{provider}:");
+        let mut out: Vec<String> = lock(&self.chat)
+            .holders
+            .iter()
+            .filter(|(key, holders)| key.starts_with(&prefix) && holders.contains(label))
+            .map(|(key, _)| key[prefix.len()..].to_string())
+            .collect();
+        out.sort();
+        out
+    }
+    async fn provider_held_by_other_than(&self, provider: &str, channel: &str, label: &str) -> bool {
+        let key = format!("{provider}:{}", channel.to_lowercase());
+        lock(&self.chat).holders.get(&key).is_some_and(|holders| holders.iter().any(|l| l != label))
     }
     async fn watch_live(&self, login: &str, _room_id: &str) {
         lock(&self.chat).watched.insert(login.into());
@@ -2392,6 +2589,38 @@ impl Kit {
     /// A job for `rule_id` on these facts (an edge event's, say), as admission would build it.
     pub fn job_with_facts(&self, facts: Facts, rule_id: &str) -> Job {
         let compiled = self.engine.compiled();
+        let index = compiled.rules.iter().position(|r| r.rule.id == rule_id).expect("rule");
+        let rule = &compiled.rules[index].rule;
+        let room = claims::event_room(rule, &facts).to_string();
+        let (plans, unready) = claims::classes_for(rule, &room);
+        let lanes = guards::lanes_for(rule, &plans);
+        Job::new(
+            &self.engine,
+            compiled.clone(),
+            index,
+            Arc::new(facts),
+            Vec::new(),
+            HashMap::new(),
+            true,
+            plans,
+            unready,
+            lanes,
+            room,
+            self.engine.now(),
+        )
+    }
+
+    /// Kick is connected as the test's account (the door's id and the chat
+    /// identity), then the rules compile again.
+    pub async fn connect_kick(&self) {
+        self.outward.connect_kick(KICK_ME, "mykick");
+        self.engine.recompile().await;
+    }
+
+    /// A job for a row of another platform, as admission would build it.
+    pub fn job_for_row(&self, row: ChatMessage, rule_id: &str) -> Job {
+        let compiled = self.engine.compiled();
+        let facts = facts::from_chat(&row).expect("facts");
         let index = compiled.rules.iter().position(|r| r.rule.id == rule_id).expect("rule");
         let rule = &compiled.rules[index].rule;
         let room = claims::event_room(rule, &facts).to_string();

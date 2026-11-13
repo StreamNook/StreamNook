@@ -184,6 +184,18 @@ async fn complete(rule: &mut Rule) {
     let Some(engine) = engine::engine() else { return };
     let accounts = engine.outward.own_accounts();
     for account in [&mut rule.owner, &mut rule.send_as] {
+        // The Kick sender's login is the chat identity's (the registry holds Twitch accounts only).
+        if account.provider.trim().eq_ignore_ascii_case("kick") {
+            if let Some((id, login)) = engine.outward.platform_identity("kick") {
+                if id == account.id && !login.is_empty() {
+                    account.login = login.clone();
+                    if account.name.trim().is_empty() {
+                        account.name = login;
+                    }
+                }
+            }
+            continue;
+        }
         if let Some((_, login)) = accounts.iter().find(|(id, _)| *id == account.id) {
             if account.login != *login {
                 account.login = login.clone();
@@ -207,11 +219,18 @@ async fn complete(rule: &mut Rule) {
             continue;
         }
         let key = if chat.key.trim().is_empty() { chat.name.clone() } else { chat.key.clone() };
+        let provider = crate::models::automations::provider_of_key(&crate::models::automations::composite_key(&key)).to_string();
         let login = key.split_once(':').map_or(key.as_str(), |(_, l)| l).trim().trim_start_matches('#').to_lowercase();
         if login.is_empty() {
             continue;
         }
-        if let Ok(id) = engine.outward.room_id(&login).await {
+        let looked_up = match provider.as_str() {
+            "twitch" => engine.outward.room_id(&login).await,
+            "kick" => engine.outward.kick_room_id(&login).await,
+            // YouTube and TikTok rules never post: no room id is needed.
+            _ => continue,
+        };
+        if let Ok(id) = looked_up {
             chat.room_id = id;
         }
     }
@@ -351,7 +370,14 @@ pub fn try_sample(request: &TryRequest) -> facts::TrySample {
                 EventKind::Gift | EventKind::GiftBomb => e.gifts,
                 EventKind::Raid => e.viewers,
                 EventKind::Cheer => e.bits,
-                EventKind::Announcement => 0,
+                EventKind::Announcement
+                | EventKind::SuperChat
+                | EventKind::SuperSticker
+                | EventKind::Membership
+                | EventKind::MemberGift
+                | EventKind::TikTokGift
+                | EventKind::TikTokFollow
+                | EventKind::TikTokShare => 0,
             },
         ),
         None => (None, 0),

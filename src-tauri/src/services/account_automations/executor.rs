@@ -32,8 +32,11 @@ use super::speak::{self, SpeakRequest};
 use super::guards::{self, SendCheck};
 use super::notify::{self, NotifyRequest};
 use super::outward::ChatSend;
+use super::provider_facts;
 use super::template::{self, Vars};
 use super::verify::VerifiedToken;
+use crate::services::provider_pace::{self, PaceRefusal, PaceTicket};
+use crate::services::providers::kick_door::{KickModeration, KickOutcome};
 use super::{lock, now_ms, sign_in, token_words, Engine};
 
 /// Jobs that run at once.
@@ -619,6 +622,15 @@ pub(crate) fn chat_key_of(login: &str) -> String {
     crate::services::chat_rules::channel_filter_key("twitch", login)
 }
 
+/// The chat key of `login` on this job's platform: Kick's rows are `kick:`.
+fn key_for(job: &Job, login: &str) -> String {
+    if is_kick(job) {
+        crate::services::providers::key::make_key("kick", login)
+    } else {
+        chat_key_of(login)
+    }
+}
+
 /// The values a rule's text can name for this job.
 async fn vars(engine: &Arc<Engine>, job: &Job, drops: &[&BadgeSeen]) -> Vars {
     let cr = job.rule();
@@ -627,7 +639,12 @@ async fn vars(engine: &Arc<Engine>, job: &Job, drops: &[&BadgeSeen]) -> Vars {
     vars.count = lock(&engine.counts).count(&cr.rule.id);
     vars.set_away(engine.away().as_ref(), now_ms());
     vars.set_local(chrono::Local::now().naive_local());
-    if let Some(info) = engine.local.channel_info(&job.info_login()).await {
+    // The channel's title, game and uptime are Twitch's: a Kick or YouTube
+    // channel with the same name is another channel (saving refuses the
+    // variables there; this keeps a stored rule from reading Twitch's).
+    let twitch_job = provider_facts::is_twitch_account(&cr.rule.send_as)
+        && job.facts.channel_key.split_once(':').map_or(true, |(p, _)| p == "twitch");
+    if let Some(info) = if twitch_job { engine.local.channel_info(&job.info_login()).await } else { None } {
         vars.title = info.title.unwrap_or_default();
         vars.game = info.game_name.unwrap_or_default();
         let started = info
@@ -697,7 +714,8 @@ pub(crate) fn entry(job: &Job, kind: EntryKind, channel: &str, text: String) -> 
 }
 
 pub(crate) fn skip(engine: &Arc<Engine>, job: &Job, reason: &str) {
-    engine.log(entry(job, EntryKind::Skipped, &chat_key_of(&job.login()), reason.to_string()));
+    let chat = if job.badge() { chat_key_of(&job.login()) } else { job.facts.channel_key.clone() };
+    engine.log(entry(job, EntryKind::Skipped, &chat, reason.to_string()));
 }
 
 // ---- local and test actions ---------------------------------------------------------
@@ -754,9 +772,12 @@ async fn test_action(engine: &Arc<Engine>, job: &Job, action: &Action, plan: &Cl
         Action::Reply { .. } => format!("Would reply: {text}"),
         _ => format!("Would post: {text}"),
     };
-    engine.log(entry(job, EntryKind::Test, &chat_key_of(&login), line.clone()));
+    engine.log(entry(job, EntryKind::Test, &key_for(job, &login), line.clone()));
     lock(&engine.guards).stamp(&job.rule().rule, &plan.class.key(), &job.room, job.person(), engine.now());
-    engine.chat_note(&job.rule().rule.id, &login, &line).await;
+    // The in-chat note is a Twitch room's line; another platform's chat has no such door.
+    if !is_kick(job) {
+        engine.chat_note(&job.rule().rule.id, &login, &line).await;
+    }
 }
 
 // ---- the outward path -------------------------------------------------------------------
@@ -853,7 +874,7 @@ pub(crate) fn local_checks(engine: &Arc<Engine>, job: &Job, chat_key: &str, book
     if job.left().is_none() {
         return Err("Skipped: too late to answer".into());
     }
-    if lock(&engine.guards).held(&rule.send_as.id, chat_key, engine.now()) {
+    if lock(&engine.guards).held(&claims::account_key(&rule.send_as), chat_key, engine.now()) {
         return Err(guards::HELD_HERE.into());
     }
     if !live_now {
@@ -871,6 +892,11 @@ pub(crate) fn local_checks(engine: &Arc<Engine>, job: &Job, chat_key: &str, book
         }
     }
     for account in [&rule.send_as, &rule.owner] {
+        // Only a Twitch account is in the registry and the removal counter;
+        // a Kick sender is the connected Kick account, checked at step 9.
+        if !provider_facts::is_twitch_account(account) {
+            continue;
+        }
         if engine.is_leaving(&account.id) {
             return Err("Skipped: Account being removed".into());
         }
@@ -884,10 +910,17 @@ pub(crate) fn local_checks(engine: &Arc<Engine>, job: &Job, chat_key: &str, book
 /// Every final check (step 5): the awaits (where the chat is open, liveness)
 /// first, then the local reads.
 pub(crate) async fn final_checks(engine: &Arc<Engine>, job: &Job, login: &str, booked_away: &Option<Away>) -> Result<(), String> {
+    let chat_key = key_for(job, login);
     match &job.rule().rule.only_if.channels {
         ChannelScope::AnyOpen {} => {
-            let adopted = lock(&engine.rec).adopted.contains_key(login);
-            let open = adopted || engine.local.holders(login).await.iter().any(|h| h != super::AUTOMATIONS_LABEL);
+            let provider = chat_key.split_once(':').map_or("twitch", |(p, _)| p);
+            let adopted = lock(&engine.rec).adopted.contains_key(if provider == "twitch" { login } else { chat_key.as_str() });
+            let open = adopted
+                || if provider == "twitch" {
+                    engine.local.holders(login).await.iter().any(|h| h != super::AUTOMATIONS_LABEL)
+                } else {
+                    engine.local.provider_held_by_other_than(provider, login, super::AUTOMATIONS_LABEL).await
+                };
             if !open {
                 return Err("Skipped: not open in a window".into());
             }
@@ -900,7 +933,7 @@ pub(crate) async fn final_checks(engine: &Arc<Engine>, job: &Job, login: &str, b
         _ => {}
     }
     let live_now = !job.rule().rule.only_if.only_live || engine.local.is_live(login).await == Some(true);
-    local_checks(engine, job, &chat_key_of(login), booked_away, live_now)
+    local_checks(engine, job, &chat_key, booked_away, live_now)
 }
 
 /// The verified tokens for the job's sender and owner. A token is used for an
@@ -1170,6 +1203,16 @@ pub(crate) async fn claim_class(
 
 /// One outward action through steps 2 to 10.
 async fn outward_action(engine: &Arc<Engine>, job: &Job, action: &Action, plan: &ClassPlan, run: &mut JobRun) {
+    if is_kick(job) {
+        return kick_action(engine, job, action, plan, run).await;
+    }
+    if !provider_facts::is_twitch_account(&job.rule().rule.send_as) {
+        // YouTube and TikTok rules only notify, log and speak: the sender
+        // refuses a post for any platform that is not Twitch or Kick, whatever
+        // a stored rule says.
+        run.stopped = true;
+        return skip(engine, job, NOTIFY_ONLY);
+    }
     let cr = job.rule();
     let rule = &cr.rule;
     let class = plan.class.key();
@@ -1414,7 +1457,242 @@ async fn sent(engine: &Arc<Engine>, job: &Job, action: &Action, login: &str, cha
             _ => "Automations posted here".to_string(),
         }
     };
-    engine.chat_note(&rule.id, login, &note).await;
+    if !is_kick(job) {
+        engine.chat_note(&rule.id, login, &note).await;
+    }
+}
+
+// ---- Kick (P4, D277, D278) ---------------------------------------------------------------
+
+/// Words when no Kick account is connected.
+pub(crate) const CONNECT_KICK: &str = "Connect Kick to run this rule";
+/// Words when Kick is signed in as another account than the rule's.
+pub(crate) const KICK_OTHER_ACCOUNT: &str = "Kick is signed in as another account";
+/// Words for a row Kick made up on this device: no other device can share its id.
+pub(crate) const NO_SHARED_ID: &str = "Skipped: no shared message id";
+/// Words when a stored rule tries to post on YouTube or TikTok.
+pub(crate) const NOTIFY_ONLY: &str = "YouTube and TikTok rules can notify you, log or speak, not post";
+
+/// The rule posts as a Kick account.
+fn is_kick(job: &Job) -> bool {
+    crate::models::automations::is_kick_sender(&job.rule().rule)
+}
+
+/// The connected Kick account is the one `send_as` names, read now (a local
+/// read: nothing awaits).
+fn kick_is_sender(engine: &Arc<Engine>, send_as: &str) -> bool {
+    engine.outward.kick_account_id().as_deref() == Some(send_as)
+}
+
+/// Book Kick's pace for `text` in `chat_key` (the Kick class's own budget,
+/// kept by the door: the app's is the process-wide one where typed sends are
+/// counted too); a duplicate books once more with the invisible variation when
+/// the rule varies.
+fn book_kick(
+    engine: &Arc<Engine>,
+    job: &Job,
+    account: &str,
+    chat_key: &str,
+    text: &str,
+) -> Result<(Duration, PaceTicket, String), String> {
+    let rule = &job.rule().rule;
+    let max_wait = job.left().ok_or("Skipped: too late to answer")?;
+    let book = |text: &str| {
+        engine
+            .outward
+            .kick_pace()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .book(account, chat_key, text, max_wait, Instant::now())
+    };
+    match book(text) {
+        Ok((wait, ticket)) => Ok((wait, ticket, text.to_string())),
+        Err(PaceRefusal::Duplicate) if rule.vary => {
+            let varied = template::varied(text);
+            book(&varied).map(|(wait, ticket)| (wait, ticket, varied)).map_err(|r| r.text())
+        }
+        Err(r) => Err(r.text()),
+    }
+}
+
+/// Give a booked Kick slot back (nothing was sent).
+fn cancel_kick(engine: &Arc<Engine>, ticket: &PaceTicket) {
+    engine.outward.kick_pace().lock().unwrap_or_else(|e| e.into_inner()).cancel(ticket);
+}
+
+/// One Kick Reply or Send through the non-chat subset (D273): verify (the
+/// owner's Twitch token for the claim; no Twitch verify of a Kick sender,
+/// D277), Kick's own pace, the final checks, the claim, then step 9 (the
+/// connected Kick account read with no await before the send) and the send.
+/// No ticket, no window check, no re-book after a slow claim: a claim that
+/// answers in 2 s still sends.
+async fn kick_action(engine: &Arc<Engine>, job: &Job, action: &Action, plan: &ClassPlan, run: &mut JobRun) {
+    let cr = job.rule();
+    let rule = &cr.rule;
+    let class = plan.class.key();
+    let (login, _room, parent) = target(job, action);
+    let chat_key = key_for(job, &login);
+    let account = claims::account_key(&rule.send_as);
+    let first_of_class = !run.classes.get(&class).is_some_and(|c| c.won);
+    // A row Kick made up here has no id another device shares: nothing outward.
+    if job.facts.message_id.starts_with(crate::services::providers::kick::KICK_LOCAL_ID) {
+        run.stopped = true;
+        return skip(engine, job, NO_SHARED_ID);
+    }
+    let check = SendCheck {
+        owner: &rule.owner.id,
+        send_as: &account,
+        chat_key: &chat_key,
+        room_id: &job.room,
+        other_channel: !cr.own_keys.contains(&chat_key),
+        sends: 1,
+        to_person: plan.to_person,
+        person: job.person(),
+    };
+
+    // Step 2: the text, this device's rails, the owner's token (the claim's
+    // bearer) and the Kick account.
+    let text = match render(engine, job, action, &[]).await {
+        Ok(text) => text,
+        Err(reason) => return skip(engine, job, &reason),
+    };
+    if let Err(reason) = lock(&engine.guards).outward_ok(&check, &engine.compiled().prefs, engine.now()) {
+        return skip(engine, job, &reason);
+    }
+    let Some(budget) = job.left() else { return skip(engine, job, "Skipped: too late to answer") };
+    let owner = match engine.verified(&rule.owner.id, budget).await {
+        Ok(token) => token,
+        Err(why) => return skip(engine, job, &token_words(&why, &rule.owner.login)),
+    };
+    if !kick_is_sender(engine, &rule.send_as.id) {
+        return skip(engine, job, CONNECT_KICK);
+    }
+    let booked_away = engine.away();
+
+    // Steps 3 to 5: Kick's pace, the wait, the final checks.
+    let (wait, ticket, text) = match book_kick(engine, job, &account, &chat_key, &text) {
+        Ok(booked) => booked,
+        Err(reason) => return skip(engine, job, &reason),
+    };
+    if !engine.executor.pause(job, wait).await {
+        cancel_kick(engine, &ticket);
+        return skip(engine, job, "Stopped");
+    }
+    if let Err(reason) = final_checks(engine, job, &login, &booked_away).await {
+        cancel_kick(engine, &ticket);
+        return skip(engine, job, &reason);
+    }
+
+    // Step 7: the claim.
+    if first_of_class {
+        match claim_class(engine, job, plan, &login, &booked_away, None, &owner).await {
+            Claimed::Skip(reason) => {
+                cancel_kick(engine, &ticket);
+                return skip(engine, job, &reason);
+            }
+            Claimed::Won { call, .. } => {
+                let entry = run.classes.entry(class.clone()).or_default();
+                entry.won = true;
+                entry.calls.extend(call);
+            }
+        }
+    }
+
+    // Step 9: the connected Kick account, then every local check, then the
+    // send: nothing awaits between the account read and the call. The door
+    // checks the same id again after its own token read.
+    // STEP9-BEGIN
+    let connected = engine.outward.kick_account_id();
+    if connected.as_deref() != Some(rule.send_as.id.as_str()) {
+        cancel_kick(engine, &ticket);
+        let words = if connected.is_none() { CONNECT_KICK } else { KICK_OTHER_ACCOUNT };
+        return skip(engine, job, words);
+    }
+    if let Err(reason) = local_checks(engine, job, &chat_key, &booked_away, true) {
+        cancel_kick(engine, &ticket);
+        return skip(engine, job, &reason);
+    }
+    let outcome = engine.outward.kick_send(&rule.send_as.id, &login, &text, parent.as_deref()).await;
+    // STEP9-END
+    let now = engine.now();
+    match outcome {
+        KickOutcome::Sent { .. } => {
+            run.classes.entry(class.clone()).or_default().sent_or_unknown = true;
+            {
+                let mut guards = lock(&engine.guards);
+                guards.note_sent(&check, now);
+                guards.note_echo(&chat_key, &text, now);
+                guards.stamp(rule, &class, &job.room, job.person(), now);
+            }
+            sent(engine, job, action, &login, &chat_key, &[]).await;
+        }
+        KickOutcome::Unknown => {
+            // It may have posted: the claim and the pace slot are kept.
+            run.classes.entry(class.clone()).or_default().sent_or_unknown = true;
+            run.stopped = true;
+            {
+                let mut guards = lock(&engine.guards);
+                guards.note_sent(&check, now);
+                guards.stamp(rule, &class, &job.room, job.person(), now);
+            }
+            lock(&engine.counts).note_fired(&rule.id, now_ms());
+            engine.note_counts_changed();
+            skip(engine, job, "Could not confirm the send");
+        }
+        KickOutcome::Refused { reason, status } => {
+            run.stopped = true;
+            cancel_kick(engine, &ticket);
+            if let Some(hold) = provider_pace::hold_for_status(status) {
+                lock(&engine.guards).hold(&account, &chat_key, guards::HoldUntil::At(now + hold.as_millis() as i64));
+            }
+            skip(engine, job, &reason);
+        }
+    }
+}
+
+/// The door call for a Kick Timeout or Delete the P2 moderation class makes
+/// after its own verify, budget and final checks and a `kick_is_sender` read
+/// (question 2): the action's arguments, the Kick id the rule sends as, and
+/// the outcome. `Err` is a skip with its words and nothing was sent.
+pub(crate) async fn kick_moderation_call(engine: &Arc<Engine>, job: &Job, action: &Action) -> Result<KickOutcome, String> {
+    let value = serde_json::to_value(action).map_err(|_| "Skipped: the action can't be read".to_string())?;
+    let op = kick_moderation_op(&value, &job.facts)?;
+    Ok(engine.outward.kick_moderate(&job.rule().rule.send_as.id, &op).await)
+}
+
+/// The Kick call for a Timeout or Delete action (its serialized form, so no
+/// P2 variant is named here) and the row it answers: the timeout's seconds
+/// 1 to 1,209,600 become Kick's whole minutes (at least one, so a short one
+/// never lifts or bans), the broadcaster is the channel's Kick user id and
+/// the target the chatter's. A made-up row id is never deleted.
+pub(crate) fn kick_moderation_op(action: &serde_json::Value, facts: &Facts) -> Result<KickModeration, String> {
+    match action["kind"].as_str() {
+        Some("timeout") => {
+            let seconds = action["seconds"].as_u64().unwrap_or(0);
+            if seconds == 0 || seconds > 1_209_600 {
+                return Err("Skipped: the timeout length is out of range".into());
+            }
+            let broadcaster = facts
+                .room_id
+                .parse::<u64>()
+                .map_err(|_| "Skipped: Kick hasn't resolved this channel yet".to_string())?;
+            let target = facts.user_id.parse::<u64>().map_err(|_| "Skipped: that chatter has no Kick id".to_string())?;
+            Ok(KickModeration::Timeout {
+                broadcaster_user_id: broadcaster,
+                target_user_id: target,
+                minutes: crate::services::moderation::kick_minutes(seconds as u32),
+                reason: None,
+            })
+        }
+        Some("delete") => {
+            let id = facts.message_id.as_str();
+            if id.is_empty() || id.starts_with(crate::services::providers::kick::KICK_LOCAL_ID) {
+                return Err(NO_SHARED_ID.into());
+            }
+            Ok(KickModeration::Delete { message_id: id.to_string() })
+        }
+        _ => Err("Skipped: Kick has no such action".into()),
+    }
 }
 
 #[cfg(test)]
@@ -2107,5 +2385,258 @@ mod tests {
         kit.settings(RunState::On, vec![highlight_rule("h", "gg", "#ff8800")]).await;
         kit.fire_from("m1", "viewer").await;
         assert!(kit.local.notifications().is_empty() && kit.outward.sends().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod kick_tests {
+    use super::super::testkit::*;
+    use super::*;
+    use crate::models::automations::RunState;
+
+    async fn kick_kit() -> Kit {
+        let kit = Kit::new();
+        kit.connect_kick().await;
+        kit.settings(RunState::On, vec![kick_these_rule("rk", &["alpha"])]).await;
+        kit
+    }
+
+    #[tokio::test]
+    async fn a_kick_rule_verifies_the_owner_not_the_kick_account_claims_then_sends_as_kick() {
+        let kit = kick_kit().await;
+        kit.fire_row(kick_row("u-1", "77", "hello there")).await;
+        let log = kit.outward.calls();
+        let verify = log.iter().position(|c| c == "verify").expect("the owner is verified");
+        let claim = log.iter().position(|c| c == "claim").expect("the event is claimed");
+        let send = log.iter().position(|c| c == "kick_send").expect("the message is sent");
+        assert!(verify < claim && claim < send, "{log:?}");
+        assert_eq!(kit.outward.fetch_calls(KICK_ME), 0, "no Twitch token is fetched for a Kick id");
+        assert_eq!(kit.outward.fetch_calls(&main_id()), 1, "the owner's token is the claim's bearer");
+        assert_eq!(kit.outward.claim_bearers().len(), 1);
+        let sent = kit.outward.kick_sends();
+        assert_eq!(sent.len(), 1);
+        assert_eq!((sent[0].expected.as_str(), sent[0].slug.as_str()), (KICK_ME, "alpha"));
+        assert_eq!(sent[0].text, "hi fan");
+        assert!(kit.activity_texts().iter().any(|t| t.starts_with("Replied to @fan in #alpha")), "{:?}", kit.activity_texts());
+        assert!(kit.outward.releases().is_empty());
+        assert!(kit.local.notes().is_empty(), "no in-chat note for a Kick chat");
+    }
+
+    #[tokio::test]
+    async fn the_kick_identity_is_read_right_before_the_send_with_nothing_between() {
+        let kit = kick_kit().await;
+        kit.fire_row(kick_row("u-2", "77", "hello")).await;
+        let log = kit.outward.calls();
+        let send = log.iter().position(|c| c == "kick_send").expect("the message is sent");
+        assert_eq!(log.get(send.wrapping_sub(1)).map(String::as_str), Some("kick_id"), "{log:?}");
+        // And in the source: no await between the read and the call.
+        let src = include_str!("executor.rs");
+        let step9 = src.split("// STEP9-BEGIN").nth(1).and_then(|t| t.split("// STEP9-END").next()).expect("step 9");
+        let before_send = step9.split("kick_send(").next().unwrap();
+        assert!(!before_send.contains(".await"), "no await before the send in step 9");
+        assert!(before_send.contains("kick_account_id()"));
+    }
+
+    #[tokio::test]
+    async fn a_kick_account_switch_before_step_nine_cancels_the_send_and_gives_the_claim_back() {
+        let kit = kick_kit().await;
+        // The account changes while the claim is in flight: step 9 reads the other one.
+        kit.outward.switch_kick_after_claim(Some("9999"));
+        kit.fire_row(kick_row("u-3", "77", "hello")).await;
+        assert!(kit.outward.kick_sends().is_empty(), "nothing posted as the other account");
+        assert!(kit.activity_texts().iter().any(|t| t == KICK_OTHER_ACCOUNT), "{:?}", kit.activity_texts());
+        kit.settle_claims().await;
+        assert_eq!(kit.outward.releases().len(), 1, "no send was Sent or Unknown, so the claim is given back");
+    }
+
+    #[tokio::test]
+    async fn a_disconnected_kick_account_skips_with_connect_kick_and_never_claims() {
+        let kit = kick_kit().await;
+        kit.outward.disconnect_kick();
+        kit.fire_row(kick_row("u-4", "77", "hello")).await;
+        assert_eq!(kit.outward.claim_calls(), 0);
+        assert!(kit.outward.kick_sends().is_empty());
+        assert!(kit.activity_texts().iter().any(|t| t == CONNECT_KICK), "{:?}", kit.activity_texts());
+    }
+
+    #[tokio::test]
+    async fn a_kick_refusal_releases_and_a_403_holds_that_chat_for_five_minutes() {
+        let kit = kick_kit().await;
+        kit.outward.script_kick(KickOutcome::Refused { reason: "Kick refused it (403): banned".into(), status: Some(403) });
+        kit.fire_row(kick_row("u-5", "77", "hello")).await;
+        assert!(kit.activity_texts().iter().any(|t| t == "Kick refused it (403): banned"));
+        kit.settle_claims().await;
+        assert_eq!(kit.outward.releases().len(), 1, "a refusal posted nothing: the claim is released");
+        // The account is held in that chat: the next row is skipped before any claim.
+        let claims_before = kit.outward.claim_calls();
+        kit.fire_row(kick_row("u-6", "78", "hello again")).await;
+        assert_eq!(kit.outward.claim_calls(), claims_before);
+        assert!(kit.outward.kick_sends().is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_unknown_kick_send_keeps_the_claim_and_stops_the_rule() {
+        let kit = kick_kit().await;
+        kit.outward.script_kick(KickOutcome::Unknown);
+        kit.fire_row(kick_row("u-7", "77", "hello")).await;
+        kit.settle_claims().await;
+        assert!(kit.outward.releases().is_empty(), "an Unknown may have posted: the claim stays");
+        assert!(kit.activity_texts().iter().any(|t| t == "Could not confirm the send"));
+    }
+
+    #[tokio::test]
+    async fn a_row_with_a_made_up_kick_id_never_runs_an_outward_action() {
+        let kit = kick_kit().await;
+        kit.fire_row(kick_row("kick-local-9", "77", "hello")).await;
+        assert_eq!(kit.outward.claim_calls(), 0);
+        assert!(kit.outward.kick_sends().is_empty());
+        assert!(kit.activity_texts().iter().any(|t| t == NO_SHARED_ID), "{:?}", kit.activity_texts());
+    }
+
+    #[tokio::test]
+    async fn the_kick_class_books_no_twitch_ticket_and_never_calls_the_twitch_limiter() {
+        let kit = kick_kit().await;
+        kit.fire_row(kick_row("u-8", "77", "hello")).await;
+        // A Twitch send was never booked: the Twitch limiter has no entry for the chat.
+        assert_eq!(kit.outward.send_attempts(), 0);
+        assert_eq!(kit.outward.kick_sends().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn two_devices_answer_one_kick_message_once() {
+        let a = kick_kit().await;
+        let b = a.second_device();
+        b.connect_kick().await;
+        b.settings(RunState::On, vec![kick_these_rule("rk", &["alpha"])]).await;
+        a.fire_row_no_wait(kick_row("u-9", "77", "hello"));
+        b.fire_row_no_wait(kick_row("u-9", "77", "hello"));
+        a.idle().await;
+        b.idle().await;
+        assert_eq!(a.outward.kick_sends().len() + b.outward.kick_sends().len(), 1, "one device answers");
+    }
+
+    #[tokio::test]
+    async fn a_slow_claim_does_not_rebook_a_kick_send() {
+        let kit = kick_kit().await;
+        // Past the chat limiter's 250 ms tolerance: a Twitch send would re-book, a Kick send goes out.
+        kit.outward.delay_claims(Duration::from_millis(600));
+        kit.fire_row(kick_row("u-13", "77", "hello")).await;
+        assert_eq!(kit.outward.kick_sends().len(), 1);
+        assert_eq!(kit.outward.send_attempts(), 0);
+        assert!(!kit.outward.calls().iter().any(|c| c == "room_id"), "no Twitch room lookup for a Kick chat");
+    }
+
+    #[tokio::test]
+    async fn a_stored_rule_that_posts_on_youtube_is_refused_by_the_sender() {
+        let kit = Kit::new();
+        kit.outward.set_platform_identity("youtube", "UCme", "me");
+        let mut rule = kick_these_rule("ry", &["alpha"]);
+        rule["send_as"] = serde_json::json!({ "provider": "youtube", "id": "UCme", "login": "me", "name": "Me" });
+        rule["only_if"]["platforms"] = serde_json::json!(["youtube"]);
+        rule["only_if"]["channels"] = serde_json::json!({ "kind": "any_open" });
+        kit.settings(RunState::On, vec![rule]).await;
+        let row = serde_json::from_value(serde_json::json!({
+            "id": "y-1", "user_id": "UCfan", "username": "fan", "display_name": "fan", "color": null, "badges": [],
+            "timestamp": "", "content": "hello", "provider": "youtube", "channel": "youtube:alpha",
+            "tags": { "id": "y-1" }, "metadata": {}, "received_at_ms": super::now_ms(),
+        }))
+        .unwrap();
+        kit.fire_row(row).await;
+        assert_eq!(kit.outward.claim_calls(), 0);
+        assert!(kit.outward.kick_sends().is_empty() && kit.outward.sends().is_empty());
+        assert!(kit.activity_texts().iter().any(|t| t == NOTIFY_ONLY), "{:?}", kit.activity_texts());
+    }
+
+    #[tokio::test]
+    async fn an_unknown_kick_identity_and_an_ignored_kick_row_run_no_rules() {
+        let kit = Kit::new();
+        kit.settings(RunState::On, vec![kick_these_rule("rk", &["alpha"])]).await;
+        kit.fire_row(kick_row("u-14", "77", "hello")).await;
+        assert_eq!(kit.engine.executor.submitted(), 0, "no Kick identity: no rule runs");
+        kit.connect_kick().await;
+        // A row the chat rules dropped (an ignored user) reaches the engine as dropped and fires nothing.
+        kit.engine.on_chat(&kick_row("u-15", "77", "hello"), true);
+        kit.idle().await;
+        assert_eq!(kit.engine.executor.submitted(), 0);
+        kit.fire_row(kick_row("u-16", "77", "hello")).await;
+        assert_eq!(kit.engine.executor.submitted(), 1, "the same row, not dropped, runs");
+    }
+
+    #[tokio::test]
+    async fn test_mode_logs_what_a_kick_rule_would_post_and_sends_nothing() {
+        let kit = Kit::new();
+        kit.connect_kick().await;
+        let mut rule = kick_these_rule("rk", &["alpha"]);
+        rule["live"] = serde_json::json!(false);
+        kit.settings(RunState::On, vec![rule]).await;
+        kit.fire_row(kick_row("u-10", "77", "hello")).await;
+        assert!(kit.activity_texts().iter().any(|t| t.starts_with("Would reply: ")), "{:?}", kit.activity_texts());
+        assert_eq!(kit.outward.claim_calls(), 0);
+        assert!(kit.outward.kick_sends().is_empty());
+    }
+
+    #[tokio::test]
+    async fn your_own_kick_message_never_fires_a_rule() {
+        let kit = kick_kit().await;
+        kit.fire_row(kick_row_from("u-11", KICK_ME, "mykick", "hello")).await;
+        assert_eq!(kit.outward.claim_calls(), 0);
+        assert_eq!(kit.engine.executor.submitted(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_twitch_chatter_with_your_kick_id_still_fires_a_twitch_rule_and_is_no_alt() {
+        let kit = Kit::new();
+        kit.connect_kick().await;
+        kit.settings(RunState::On, vec![mention_rule("rt", true), kick_these_rule("rk", &["alpha"])]).await;
+        // A Twitch chatter whose id equals the Kick account's id.
+        let mut row = chat_row("t-1", "viewer", "hey @me");
+        row.user_id = KICK_ME.into();
+        kit.fire_row(row).await;
+        assert_eq!(kit.outward.sends().len(), 1, "the Twitch rule answers; the per-provider sets keep a Kick id out of Twitch's");
+    }
+
+    fn facts_for(room: &str, user: &str, message: &str) -> Facts {
+        Facts { room_id: room.into(), user_id: user.into(), message_id: message.into(), ..Facts::default() }
+    }
+
+    #[test]
+    fn a_timeout_maps_seconds_to_whole_minutes_and_a_delete_to_the_message() {
+        let timeout = |seconds: u64| serde_json::json!({ "kind": "timeout", "id": "a-1", "seconds": seconds });
+        let facts = facts_for("5002", "77", "9b4c2f1e");
+        assert_eq!(
+            kick_moderation_op(&timeout(600), &facts),
+            Ok(KickModeration::Timeout { broadcaster_user_id: 5002, target_user_id: 77, minutes: 10, reason: None })
+        );
+        assert!(matches!(kick_moderation_op(&timeout(30), &facts), Ok(KickModeration::Timeout { minutes: 1, .. })), "never zero");
+        assert!(matches!(kick_moderation_op(&timeout(61), &facts), Ok(KickModeration::Timeout { minutes: 2, .. })));
+        assert!(matches!(kick_moderation_op(&timeout(1_209_600), &facts), Ok(KickModeration::Timeout { minutes: 10_080, .. })));
+        assert!(kick_moderation_op(&timeout(0), &facts).is_err());
+        assert!(kick_moderation_op(&timeout(1_209_601), &facts).is_err());
+        assert_eq!(
+            kick_moderation_op(&serde_json::json!({ "kind": "delete", "id": "a-2" }), &facts),
+            Ok(KickModeration::Delete { message_id: "9b4c2f1e".into() })
+        );
+    }
+
+    #[test]
+    fn the_moderation_door_refuses_what_it_cannot_address() {
+        let timeout = serde_json::json!({ "kind": "timeout", "id": "a-1", "seconds": 60 });
+        assert!(kick_moderation_op(&timeout, &facts_for("", "77", "m")).is_err(), "no resolved channel");
+        assert!(kick_moderation_op(&timeout, &facts_for("5002", "not-a-number", "m")).is_err(), "no Kick id for the chatter");
+        let delete = serde_json::json!({ "kind": "delete", "id": "a-2" });
+        assert_eq!(kick_moderation_op(&delete, &facts_for("5002", "77", "kick-local-4")), Err(NO_SHARED_ID.to_string()));
+        assert!(kick_moderation_op(&delete, &facts_for("5002", "77", "")).is_err());
+        assert!(kick_moderation_op(&serde_json::json!({ "kind": "whisper" }), &facts_for("5002", "77", "m")).is_err());
+    }
+
+    #[tokio::test]
+    async fn the_moderation_call_reaches_the_kick_door_with_the_rules_account_only_for_a_kick_action() {
+        let kit = kick_kit().await;
+        let job = kit.job_for_row(kick_row("u-12", "77", "hello"), "rk");
+        // A kind Kick has no door for is refused before the door is touched.
+        let notify: Action =
+            serde_json::from_value(serde_json::json!({ "kind": "notify", "id": "a-t", "title": "", "body": "" })).unwrap();
+        assert!(kick_moderation_call(&kit.engine, &job, &notify).await.is_err());
+        assert!(kit.outward.kick_mods().is_empty());
     }
 }
