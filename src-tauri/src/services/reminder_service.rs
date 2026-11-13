@@ -472,7 +472,9 @@ fn restore_stamp_in(rt: &mut Runtime, stamp: Option<(i64, i64)>) {
 /// The id a keyword message claims under (`chat:<id>`): the Shared Chat `source-id` when the row
 /// has one, else its own `id` tag, else the row's id; the same choice `facts::from_chat` makes.
 pub(crate) fn message_key_id(source_id: Option<&str>, own_tag_id: Option<&str>, msg_id: &str) -> String {
-    let pick = |v: Option<&str>| v.map(str::trim).filter(|s| !s.is_empty());
+    fn pick(v: Option<&str>) -> Option<&str> {
+        v.map(str::trim).filter(|s| !s.is_empty())
+    }
     pick(source_id).or(pick(own_tag_id)).unwrap_or_else(|| msg_id.trim()).to_string()
 }
 

@@ -1801,7 +1801,13 @@ fn check_p2_action(rule: &Rule, action: &Action, at: &str, scope: &TextScope, er
                 errors.push(format!("{at}.seconds"), "Wait 1 to 300 seconds");
             }
         }
-        Action::Log { .. } | Action::Reply { .. } | Action::Send { .. } | Action::Notify { .. } => {}
+        // Speak and Highlight are checked by the P3 rules below.
+        Action::Log { .. }
+        | Action::Reply { .. }
+        | Action::Send { .. }
+        | Action::Notify { .. }
+        | Action::Speak { .. }
+        | Action::Highlight { .. } => {}
     }
     // `{user}` has no meaning when nothing a person did started the rule.
     if rule.is_timed() {

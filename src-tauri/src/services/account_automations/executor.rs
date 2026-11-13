@@ -1793,6 +1793,8 @@ mod tests {
     use super::super::outward::Outward;
     use super::super::own_topics::TopicKind;
     use super::super::testkit::*;
+    // The executor has its own private `speak_action`; the tests mean the kit's builder.
+    use super::super::testkit::speak_action;
     use super::*;
     use crate::models::automations::RunState;
     use serde_json::json;

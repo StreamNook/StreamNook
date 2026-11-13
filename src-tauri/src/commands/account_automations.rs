@@ -494,7 +494,8 @@ fn action_text(action: &Action, vars: &template::Vars, vary: bool) -> Option<Try
         Action::Send { id, texts, .. } => (id, "send", texts.first()?.text.clone()),
         Action::Notify { id, title, body, .. } => (id, "notify", if body.trim().is_empty() { title.clone() } else { body.clone() }),
         Action::Speak { id, text, .. } => (id, "speak", text.clone()),
-        Action::Highlight { .. } => return None,
+        // Try it previews the message actions; the P2 actions and Highlight show no text.
+        _ => return None,
     };
     let filled = template::expand(&raw, vars);
     let text = match kind {

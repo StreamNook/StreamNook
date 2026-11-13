@@ -1709,7 +1709,7 @@ impl Drop for HeldChange {
 }
 
 impl FakeLocal {
-    fn new() -> FakeLocal {
+    pub(crate) fn new() -> FakeLocal {
         FakeLocal {
             settings: Mutex::new((Automations::default(), AutomationPrefs::default())),
             chat: Mutex::new(ChatState { connected: true, ..ChatState::default() }),
