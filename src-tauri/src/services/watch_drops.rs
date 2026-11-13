@@ -48,6 +48,10 @@ const PUSH_FRESH: Duration = Duration::from_secs(150);
 const SECOND_LIST_MAX_AGE: u64 = 60;
 /// The cached campaign list is fetched again past this age.
 const CAMPAIGNS_MAX_AGE_SECS: i64 = 900;
+/// The list is fetched again past this age while nothing in it counts on the
+/// watched channel. Just over the drops monitor's 2-minute read, which primes
+/// the cache, so watching shares that read instead of adding one.
+const UNCOVERED_MAX_AGE_SECS: i64 = 150;
 /// The campaign clock flat this long while playing is a stall.
 const STALL_AFTER: Duration = Duration::from_secs(240);
 /// A stall still flat this long after its episode began starts the next one.
@@ -1683,14 +1687,27 @@ pub async fn answer_for(
 
 // ---- The watcher -------------------------------------------------------------
 
-/// The cached campaign list, fetched again when missing or older than
-/// `CAMPAIGNS_MAX_AGE_SECS`. Priming the cache never touches the live progress map.
-async fn campaigns(h: &Handles) -> Vec<DropCampaign> {
+/// Whether the cached campaign list is read again before the watched place
+/// is judged: when missing, past `CAMPAIGNS_MAX_AGE_SECS`, or past
+/// `UNCOVERED_MAX_AGE_SECS` while nothing in it counts on that channel. A
+/// campaign that opened after the list was read (a new badge for one
+/// streamer) is missing from it, and with only the long age the lip and the
+/// inventory reads stayed off for up to 15 minutes of watching it, which a
+/// short campaign does not outlast.
+fn list_stale(age_secs: Option<i64>, covers_place: bool) -> bool {
+    match age_secs {
+        None => true,
+        Some(age) => age >= CAMPAIGNS_MAX_AGE_SECS || (!covers_place && age >= UNCOVERED_MAX_AGE_SECS),
+    }
+}
+
+/// The cached campaign list, fetched again when `list_stale` says so.
+/// Priming the cache never touches the live progress map.
+async fn campaigns(h: &Handles, place: &Place, second: &[DropCampaign]) -> Vec<DropCampaign> {
     let cached = h.cached_campaigns.read().await.clone();
-    let young = cached
-        .as_ref()
-        .is_some_and(|(_, at)| (Utc::now() - *at).num_seconds() < CAMPAIGNS_MAX_AGE_SECS);
-    if young {
+    let age = cached.as_ref().map(|(_, at)| (Utc::now() - *at).num_seconds());
+    let covers = cached.as_ref().is_some_and(|(list, _)| gate_open(place, list, second));
+    if !list_stale(age, covers) {
         return cached.map(|(c, _)| c).unwrap_or_default();
     }
     match DropsService::fetch_active_campaigns(&h.client, &h.device_id, &h.session_id).await {
@@ -1753,8 +1770,8 @@ async fn step(app: &AppHandle, h: &Handles) -> Option<Duration> {
     let playing =
         state.watch_heartbeat.is_playing() && !crate::services::app_presence::phone_quiet(app);
     let solo = crate::services::watch_session::solo_earning(&place.channel_id);
-    let list = campaigns(h).await;
     let second = crate::services::reward_drops::cached();
+    let list = campaigns(h, &place, &second).await;
     let gate = gate_open(&place, &list, &second);
     let locked = crate::services::evolution::locked_stages(app).await;
     let (out, due, locked_changed) = with_state(|s| {
@@ -1822,9 +1839,10 @@ async fn step(app: &AppHandle, h: &Handles) -> Option<Duration> {
         rebuild(s)
     });
     send(out);
-    // While a stream plays here the stall clock needs a look each minute.
+    // While a stream plays here the stall clock needs a look each minute, and
+    // with nothing to earn here yet, a campaign that just opened for it does.
     Some(with_state(|s| {
-        if s.gate_open && s.playing {
+        if s.playing {
             FAST
         } else {
             SLOW
@@ -2272,6 +2290,31 @@ mod tests {
             t0 + chrono::Duration::minutes(9),
         );
         assert!(!gate_open(&place, &[], &flat));
+    }
+
+    /// Brandon 2026-11-13: the Jordan x Space Jam badge opened for one
+    /// streamer; watching samham earned (Twitch had minutes in by 2 minutes
+    /// in), but the lip showed nothing to earn until a restart, because it
+    /// judged the channel by a list read before the campaign opened and kept
+    /// that list for 15 minutes.
+    #[test]
+    fn a_list_with_nothing_for_the_watched_channel_is_read_again_within_minutes() {
+        let place = golden::place();
+        let covering = golden::cases()
+            .into_iter()
+            .find(|c| c.name == "a_campaign_in_list_and_inventory_is_listed_once")
+            .expect("golden case")
+            .list;
+        assert!(gate_open(&place, &covering, &[]));
+        assert!(!gate_open(&place, &[], &[]));
+        // Three minutes old, nothing in it for this channel: read again.
+        assert!(list_stale(Some(180), false));
+        // Inside the monitor's 2-minute read: that read primes it, so no extra.
+        assert!(!list_stale(Some(100), false));
+        // A list that already covers the channel keeps the long age.
+        assert!(!list_stale(Some(180), true));
+        assert!(list_stale(Some(CAMPAIGNS_MAX_AGE_SECS), true));
+        assert!(list_stale(None, true));
     }
 
     fn one_tier(have: i32) -> (Vec<DropCampaign>, InventoryResponse) {
