@@ -105,6 +105,10 @@ export interface CatchUp {
 
 /** The last standing Rust answered this run. A surface opened later starts from it instead of an empty one. */
 let lastStanding: BadgeStanding | null = null;
+// Requests are numbered so an older answer that lands after a newer one never
+// replaces it: the next surface would otherwise open on the older order.
+let requestSeq = 0;
+let storedSeq = 0;
 
 export function getLastStanding(): BadgeStanding | null {
   return lastStanding;
@@ -112,8 +116,12 @@ export function getLastStanding(): BadgeStanding | null {
 
 /** Rust answers from its cache at once; a due refresh follows as `badge-standing-changed`. */
 export function getBadgeStanding(force = false): Promise<BadgeStanding> {
+  const seq = ++requestSeq;
   return invoke<BadgeStanding>('get_badge_standing', { force }).then((standing) => {
-    lastStanding = standing;
+    if (seq > storedSeq) {
+      storedSeq = seq;
+      lastStanding = standing;
+    }
     return standing;
   });
 }

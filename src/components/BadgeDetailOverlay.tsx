@@ -1086,8 +1086,10 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
 
             {/* Quiet footer: stats + collapsible technical details */}
             <div className="space-y-3 pt-4 border-t border-white/[0.06]">
-              {(badgeBaseInfo?.usage_stats || addedLabel || isDrops) && (
-                <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-[12px] text-textMuted">
+              {/* While the date map is still loading the row keeps its height, so a
+                  label that lands late never pushes the details below it down. */}
+              {(badgeBaseInfo?.usage_stats || addedLabel || isDrops || added === null) && (
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-[12px] text-textMuted min-h-[18px]">
                   {badgeBaseInfo?.usage_stats && (
                     <span className="inline-flex items-center gap-1.5">
                       <Users size={13} className="shrink-0" />

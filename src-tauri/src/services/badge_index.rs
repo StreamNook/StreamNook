@@ -277,6 +277,11 @@ struct State {
     /// read at the time. Saved as soon as the file can be read and written, so a
     /// held copy never stays unsaved for good.
     unsaved: Option<Vec<u8>>,
+    /// The temp sweep ran (once per process, even while the file stays unreadable).
+    swept: bool,
+    /// The unreadable-file warning was logged; cleared by the next good read, so
+    /// a file that stays unreadable is reported once, not on every date read.
+    warned_unreadable: bool,
 }
 
 static STATE: Lazy<Mutex<State>> = Lazy::new(|| Mutex::new(State::default()));
@@ -324,7 +329,18 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         std::process::id(),
         TMP_SEQ.fetch_add(1, Relaxed)
     ));
-    std::fs::write(&tmp, bytes)?;
+    // Flushed before the rename, so a power loss cannot leave an empty file
+    // under the real name (it would be set aside as corrupt and its dates lost).
+    let written = (|| {
+        use std::io::Write;
+        let mut file = std::fs::File::create(&tmp)?;
+        file.write_all(bytes)?;
+        file.sync_all()
+    })();
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
     match std::fs::rename(&tmp, path) {
         Ok(()) => Ok(()),
         Err(e) => {
@@ -374,7 +390,10 @@ fn load_index(state: &mut State, files: &Files) {
     if state.loaded {
         return;
     }
-    sweep_temps(files);
+    if !state.swept {
+        sweep_temps(files);
+        state.swept = true;
+    }
     match read_file(&files.index) {
         Ok(None) => state.disk_at = None,
         Ok(Some(bytes)) => match parse_index(&bytes) {
@@ -393,10 +412,14 @@ fn load_index(state: &mut State, files: &Files) {
             }
         },
         Err(e) => {
-            warn!("[BadgeIndex] Could not read the saved badge index: {e}");
+            if !state.warned_unreadable {
+                warn!("[BadgeIndex] Could not read the saved badge index: {e}");
+                state.warned_unreadable = true;
+            }
             return;
         }
     }
+    state.warned_unreadable = false;
     state.loaded = true;
     save_unsaved(state, files);
 }

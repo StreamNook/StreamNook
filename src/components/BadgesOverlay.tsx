@@ -207,6 +207,10 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
     const me = useAppStore.getState().currentUser;
     return seedStanding(getLastStanding(), me?.login ?? me?.username);
   });
+  // The order and the windows are the same for every account, so the sorts read the
+  // last standing of any account: an account switch keeps the grid in place instead
+  // of blanking it back to the loading state while the new account's standing loads.
+  const [orderStanding, setOrderStanding] = useState<BadgeStanding | null>(() => getLastStanding());
   // True when a read failed and there is nothing to show: the date sorts then fall back
   // to key order instead of waiting for an answer that is not coming.
   const [standingFailed, setStandingFailed] = useState(false);
@@ -216,6 +220,7 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
     () =>
       latestOnly<BadgeStanding>((next) => {
         setStanding(next);
+        setOrderStanding(next);
         setStandingFailed(false);
       }),
     [],
@@ -1187,7 +1192,7 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
   // Read against the clock at render time from the window Rust resolved, so a
   // badge whose earn period opens while the gallery is open reclassifies itself.
   const getBadgeStatus = (badge: BadgeWithMetadata) =>
-    windowStatusAt(standing?.windows[`${badge.set_id}/${badge.id}`]);
+    windowStatusAt(orderStanding?.windows[`${badge.set_id}/${badge.id}`]);
 
   const isBadgeAvailable = (badge: BadgeWithMetadata): boolean => {
     return getBadgeStatus(badge) === 'available';
@@ -1204,7 +1209,7 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
   const sortedBadges = useMemo(() => {
     Logger.debug(`[BadgesOverlay] Sorting ${badgesWithMetadata.length} badges by ${sortBy}`);
 
-    const newest = (a: BadgeWithMetadata, b: BadgeWithMetadata) => compareNewest(standing?.added, a, b);
+    const newest = (a: BadgeWithMetadata, b: BadgeWithMetadata) => compareNewest(orderStanding?.added, a, b);
 
     return [...badgesWithMetadata].sort((a, b) => {
       switch (sortBy) {
@@ -1246,7 +1251,7 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
           return `${a.set_id}-${a.id}`.localeCompare(`${b.set_id}-${b.id}`);
       }
     });
-  }, [badgesWithMetadata, sortBy, standing]);
+  }, [badgesWithMetadata, sortBy, orderStanding]);
 
   // Search filter for the Twitch tab (the search box previously did nothing
   // here). Also lets a profile badge click deep-link to a specific Twitch badge
@@ -1265,13 +1270,13 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
       list = list.filter(b => (b.title || '').toLowerCase().includes(q));
     }
     return list;
-  }, [sortedBadges, sortBy, searchQuery, standing]);
+  }, [sortedBadges, sortBy, searchQuery, orderStanding]);
 
   // The date, Available and Coming Soon sorts all read Rust's order. Until the first
   // standing answers (and unless the read failed) show the grid's loading state, never a
   // key-order grid that would jump when the order arrives.
   const waitingForDates =
-    standing === null &&
+    orderStanding === null &&
     !standingFailed &&
     (sortBy === 'date-newest' || sortBy === 'date-oldest' || sortBy === 'available' || sortBy === 'coming-soon');
 
@@ -1490,7 +1495,7 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
           {/* ========== TWITCH BADGES TAB ========== */}
           {activeTab === 'twitch-badges' && (
             <>
-              {(loading || waitingForDates) && (
+              {(loading || waitingForDates) && !error && (
                 <div className="flex items-center justify-center h-full">
                   <div className="text-center">
                     <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-accent mx-auto mb-4"></div>

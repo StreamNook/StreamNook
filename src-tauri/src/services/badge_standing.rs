@@ -1106,7 +1106,23 @@ async fn active_campaigns(app: &crate::rt::AppHandle) -> Vec<crate::models::drop
     let Some(state) = app.try_state::<crate::models::settings::AppState>() else {
         return Vec::new();
     };
-    let snapshot = state.drops_service.lock().await.cached_campaigns_snapshot().await;
+    // The Drops lock is held across Twitch reads elsewhere (home refresh, the
+    // Drops overview), and the gallery waits on this standing for its order, so
+    // a busy lock answers from the last list read here instead of queuing.
+    static LAST: std::sync::Mutex<Option<Vec<crate::models::drops::DropCampaign>>> =
+        std::sync::Mutex::new(None);
+    let snapshot = match state.drops_service.try_lock() {
+        Ok(service) => {
+            let read = service.cached_campaigns_snapshot().await;
+            if let Some(list) = &read {
+                if let Ok(mut last) = LAST.lock() {
+                    *last = Some(list.clone());
+                }
+            }
+            read
+        }
+        Err(_) => LAST.lock().ok().and_then(|last| last.clone()),
+    };
     let Some(mut campaigns) = snapshot else {
         return Vec::new();
     };
@@ -1664,6 +1680,19 @@ mod tests {
         // Both the success and the fallback standing carry the dates built apart.
         assert!(get.contains("let added = added_or_empty(added_task.await);"));
         assert_eq!(get.matches("s.added = added;").count(), 2);
+    }
+
+    #[test]
+    fn the_campaign_read_never_queues_behind_the_drops_lock() {
+        // The gallery waits on the standing for its order, and the Drops lock is
+        // held across Twitch reads elsewhere, so a busy lock answers from the last
+        // list instead of awaiting it.
+        let src = include_str!("badge_standing.rs").replace("\r\n", "\n");
+        let start = src.find("async fn active_campaigns(").unwrap();
+        let body = &src[start..start + src[start..].find("\n}\n").unwrap()];
+        assert!(body.contains("state.drops_service.try_lock()"));
+        assert!(!body.contains(concat!("drops_service.lock()", ".await")));
+        assert!(body.contains("Err(_) => LAST.lock().ok().and_then(|last| last.clone()),"));
     }
 
     #[tokio::test]
