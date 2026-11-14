@@ -1395,4 +1395,234 @@ mod tests {
         assert_ne!(one, other, "two rewards are two families");
         assert!(plain_ok(&one));
     }
+
+    // ---- P2 (S11.1-P2 E16h) ----------------------------------------------------------------
+
+    fn text_line(text: &str) -> crate::models::automations::Line {
+        crate::services::account_automations::compile::fixtures::line(text)
+    }
+
+    fn timer_rule(text: &str) -> Rule {
+        rule("t", Trigger::Timer { every_seconds: 900, min_messages: 0 }, vec![send(text)])
+    }
+
+    fn whisper_rule(actions: Vec<Action>) -> Rule {
+        rule("rw", Trigger::Whisper { text: None }, actions)
+    }
+
+    fn whisper_to(user_id: &str, text: &str) -> Action {
+        Action::Whisper {
+            id: "a-w".into(),
+            to: Some(crate::models::automations::WhisperTarget { user_id: user_id.into(), login: "pal".into(), name: "Pal".into() }),
+            texts: vec![text_line(text)],
+            pick: crate::models::automations::Pick::Random,
+        }
+    }
+
+    fn mod_action(kind: &str, id: &str) -> Action {
+        match kind {
+            "timeout" => Action::Timeout { id: id.into(), seconds: 600, reason: String::new() },
+            "delete" => Action::Delete { id: id.into() },
+            "pin" => Action::Pin { id: id.into(), seconds: None },
+            _ => Action::Shoutout { id: id.into() },
+        }
+    }
+
+    #[test]
+    fn p2_keys_match_the_plain_shape() {
+        let family = timed_family("timer", &timer_rule("hello"));
+        assert_plain(&family);
+        for value in [
+            timer_key("somechat"),
+            timer_key(&format!("kick:{TWENTY}")),
+            clock_key("somechat", "2026-11-13", "19:30", -18_000),
+            clock_key("somechat", "2026-11-13", "19:30", 19_800),
+            uptime_key("somechat", 1_794_546_000, 3600),
+            delay_key("somechat"),
+            whisper_key("w-1"),
+            gap_key(TWENTY),
+            rulecd_key(&family, TWENTY),
+            person_key(&family, ME, TWENTY),
+            conv_key(ME, TWENTY),
+            event_family(&family, &ActionClass::Mod { kind: "timeout", room_id: TWENTY.into() }),
+            event_family(&family, &ActionClass::Command { word: "slowoff".into(), room_id: format!("kick:{TWENTY}") }),
+            event_family("whisper:", &ActionClass::Whisper { to: TWENTY.into() }),
+        ] {
+            assert_plain(&value);
+        }
+    }
+
+    #[test]
+    fn timed_windows_are_the_reminders() {
+        assert_eq!(event_mode(&Trigger::Timer { every_seconds: 900, min_messages: 0 }), (KeyMode::Windowed, Some(810)));
+        assert_eq!(event_mode(&Trigger::Delay { seconds: 60 }), (KeyMode::Windowed, Some(600)));
+        assert_eq!(event_mode(&Trigger::Delay { seconds: 900 }), (KeyMode::Windowed, Some(900)));
+    }
+
+    #[test]
+    fn timed_family_hashes_the_normalized_texts() {
+        let one = timer_rule("Hello World");
+        let mut same_words = timer_rule("hello world");
+        same_words.limits.max_per_hour = 99;
+        same_words.only_if.only_live = !one.only_if.only_live;
+        assert_eq!(timed_family("timer", &one), timed_family("timer", &same_words), "case and every other field fold away");
+        assert_ne!(timed_family("timer", &one), timed_family("timer", &timer_rule("something else")), "two messages never starve each other");
+        assert_ne!(timed_family("timer", &one), timed_family("clock", &one), "the kind is part of it");
+        assert_eq!(
+            timed_family("timer", &timer_rule("Caf\u{e9}")),
+            timed_family("timer", &timer_rule("CAFE\u{301}")),
+            "precomposed and decomposed letters are one text"
+        );
+        assert!(timed_family("timer", &one).starts_with("timer:"));
+        assert_eq!(rule_trigger_family(&one, &Facts::default()), Some(timed_family("timer", &one)));
+    }
+
+    #[test]
+    fn clock_key_carries_the_offset() {
+        let utc = clock_key("c", "2026-11-13", "19:30", 0);
+        let west = clock_key("c", "2026-11-13", "19:30", -18_000);
+        assert_eq!((utc.as_str(), west.as_str()), ("clock:c:2026-11-13T19:30+00:00", "clock:c:2026-11-13T19:30-05:00"));
+        assert_ne!(utc, west, "the same local time in two time zones is two events");
+        for seconds in [0, -18_000, 19_800, 3600, -34_200] {
+            assert_eq!(offset_words(seconds), crate::services::account_automations::reminder_claim::offset_text(seconds), "{seconds}");
+        }
+    }
+
+    #[test]
+    fn class_keys_and_books_slot() {
+        let post = ActionClass::Post { room_id: "100".into() };
+        assert_eq!((post.key().as_str(), post.books_slot()), ("post:100", true));
+        for (class, key, room) in [
+            (ActionClass::Whisper { to: "1".into() }, "whisper", None),
+            (ActionClass::Mod { kind: "timeout", room_id: "100".into() }, "timeout:100", Some("100")),
+            (ActionClass::Command { word: "slow".into(), room_id: "100".into() }, "command:slow:100", Some("100")),
+        ] {
+            assert_eq!(class.key(), key);
+            assert_eq!(class.room_id(), room);
+            assert!(!class.books_slot(), "{key} books no chat slot");
+        }
+    }
+
+    #[test]
+    fn classes_for_groups_p2_actions() {
+        let staff = |room: &str| {
+            let r = rule(
+                "m",
+                Trigger::Message { text: TextMatch::default() },
+                vec![
+                    mod_action("timeout", "a1"),
+                    mod_action("timeout", "a2"),
+                    mod_action("delete", "a3"),
+                    mod_action("pin", "a4"),
+                    mod_action("shoutout", "a5"),
+                    Action::Command { id: "a6".into(), line: "/slow 30".into() },
+                    Action::Command { id: "a7".into(), line: "/slowoff".into() },
+                    Action::Announce { id: "a8".into(), text: "hi".into(), color: "primary".into() },
+                    reply("x"),
+                ],
+            );
+            classes_for(&r, room).0
+        };
+        let plans = staff("100");
+        let keys: Vec<String> = plans.iter().map(|p| p.class.key()).collect();
+        assert_eq!(keys, ["timeout:100", "delete:100", "pin:100", "shoutout:100", "command:slow:100", "command:slowoff:100", "post:100"]);
+        assert_eq!(plans[0].actions, vec![0, 1], "two Timeouts in one room are one class");
+        assert_eq!(plans[6].actions, vec![7, 8], "an Announce joins the room's post class");
+        // A Kick room keeps its prefix in every class.
+        let kick: Vec<String> = staff("kick:5002").iter().map(|p| p.class.key()).collect();
+        assert_eq!(
+            kick,
+            ["timeout:kick:5002", "delete:kick:5002", "pin:kick:5002", "shoutout:kick:5002", "command:slow:kick:5002", "command:slowoff:kick:5002", "post:kick:5002"]
+        );
+        // Every Whisper of a job is one class, the first recipient riding along.
+        let (plans, _) = classes_for(&whisper_rule(vec![whisper_to("1000", "a"), whisper_to("2000", "b"), reply("c")]), ME);
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].class, ActionClass::Whisper { to: "1000".into() });
+        assert_eq!((plans[0].class.key().as_str(), plans[0].actions.clone()), ("whisper", vec![0, 1, 2]));
+        // A Whisper rule's Reply whispers the sender back and answers the person.
+        let (plans, _) = classes_for(&whisper_rule(vec![reply("got it")]), ME);
+        assert_eq!(plans[0].class, ActionClass::Whisper { to: "sender".into() });
+        assert!(plans[0].to_person);
+    }
+
+    #[test]
+    fn event_mode_table() {
+        for (when, want) in [
+            (Trigger::Message { text: TextMatch::default() }, (KeyMode::Exact, None)),
+            (mention(), (KeyMode::Exact, None)),
+            (Trigger::Whisper { text: None }, (KeyMode::Exact, None)),
+            (Trigger::Clock { at: "19:30".into(), days: vec![] }, (KeyMode::Exact, None)),
+            (Trigger::Uptime { seconds: 60, late_ok: false }, (KeyMode::Exact, None)),
+            (Trigger::Follow {}, (KeyMode::Exact, None)),
+            (Trigger::Timer { every_seconds: 300, min_messages: 0 }, (KeyMode::Windowed, Some(270))),
+            (Trigger::Timer { every_seconds: 43_200, min_messages: 0 }, (KeyMode::Windowed, Some(38_880))),
+            (Trigger::Delay { seconds: 1 }, (KeyMode::Windowed, Some(600))),
+            (Trigger::Delay { seconds: 172_800 }, (KeyMode::Windowed, Some(172_800))),
+        ] {
+            assert_eq!(event_mode(&when), want, "{when:?}");
+        }
+    }
+
+    fn whisper_call(r: &Rule, prefs: &AutomationPrefs, person: Option<&str>) -> (Vec<Element>, String) {
+        let (plans, _) = classes_for(r, ME);
+        let family = event_family("whisper:", &plans[0].class);
+        let keys = vec![whisper_key("w-1")];
+        let els = class_elements(&CallInput { rule: r, prefs, plan: &plans[0], family: &family, event_keys: &keys, event_room: ME, person }).unwrap();
+        (els, family)
+    }
+
+    #[test]
+    fn whisper_class_adds_the_cap_element_last() {
+        let prefs = AutomationPrefs { whisper_people_per_day: 12, ..AutomationPrefs::default() };
+        let (els, _) = whisper_call(&whisper_rule(vec![whisper_to("1000", "hi")]), &prefs, Some("999"));
+        assert_eq!(els.last(), Some(&Element::WhisperCap { recipient: "1000".into(), cap: 12 }), "the cap is the pref");
+        let before = &els[els.len() - 2];
+        assert!(matches!(before, Element::Counted { family, .. } if *family == rail_family("pace")), "after pace: {before:?}");
+        // The Reply form names the person who whispered.
+        let (els, _) = whisper_call(&whisper_rule(vec![reply("got it")]), &prefs, Some("999"));
+        assert_eq!(els.last(), Some(&Element::WhisperCap { recipient: "999".into(), cap: 12 }));
+    }
+
+    #[test]
+    fn a_timer_event_element_is_windowed_and_a_clock_exact() {
+        let event_of = |r: &Rule, key: &str| {
+            let (plans, _) = classes_for(r, ME);
+            let family = event_family(&rule_trigger_family(r, &Facts::default()).unwrap(), &plans[0].class);
+            let keys = vec![key.to_string()];
+            let prefs = AutomationPrefs::default();
+            class_elements(&CallInput { rule: r, prefs: &prefs, plan: &plans[0], family: &family, event_keys: &keys, event_room: ME, person: None })
+                .unwrap()
+                .remove(0)
+        };
+        let timer = event_of(&timer_rule("hi"), &timer_key("me"));
+        assert!(
+            matches!(&timer, Element::Event { key, mode: KeyMode::Windowed, window_s: Some(810), .. } if key == "timer:me"),
+            "{timer:?}"
+        );
+        let clock_rule = rule("c", Trigger::Clock { at: "19:30".into(), days: vec![] }, vec![send("hi")]);
+        let clock = event_of(&clock_rule, &clock_key("me", "2026-11-13", "19:30", 0));
+        assert!(matches!(&clock, Element::Event { mode: KeyMode::Exact, window_s: None, .. }), "{clock:?}");
+    }
+
+    #[test]
+    fn whisper_trigger_family_has_an_empty_part_whatever_its_text() {
+        let facts = Facts::default();
+        let any = trigger_family(&Trigger::Whisper { text: None }, &facts);
+        let worded = trigger_family(
+            &Trigger::Whisper { text: Some(TextMatch { mode: MatchMode::Contains, pattern: "hello".into(), case_sensitive: false }) },
+            &facts,
+        );
+        assert_eq!(any.as_deref(), Some("whisper:"));
+        assert_eq!(worded, any, "the words never split a whisper family");
+    }
+
+    #[test]
+    fn whisper_person_rails_key_on_the_recipient_not_the_author() {
+        let r = whisper_rule(vec![whisper_to("1000", "hi")]);
+        let (els, family) = whisper_call(&r, &AutomationPrefs::default(), Some("999"));
+        let account = account_key(&r.send_as);
+        assert!(matches!(rail(&els, "person"), Some(Element::Windowed { key, .. }) if *key == person_key(&family, &account, "1000")));
+        assert!(matches!(rail(&els, "conv"), Some(Element::Counted { key, .. }) if *key == conv_key(&account, "1000")));
+        assert!(!els.iter().any(|e| matches!(e, Element::Windowed { key, .. } | Element::Counted { key, .. } if key.ends_with(":999"))), "{els:?}");
+    }
 }

@@ -1948,4 +1948,73 @@ mod tests {
         assert!(!lasting_runtime(Some(RuntimeFlavor::CurrentThread)), "a one-off block_on ends and takes the loop with it");
         assert!(!lasting_runtime(None));
     }
+
+    // ---- P2: whom an automation may whisper (S11.1-P2 E11) ----------------------------------
+
+    fn own_send(id: &str, at: i64, by_automation: bool) -> StoredWhisper {
+        let mut m = outgoing(id, at);
+        m.origin = Origin::LocalSent;
+        m.by_automation = by_automation;
+        m
+    }
+
+    fn list_read(scope: &Scope) {
+        update_index(scope, |idx| {
+            idx.list_deep = Deep::Complete;
+            ((), true)
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn an_automations_whisper_alone_never_makes_a_stranger_known() {
+        let o = owner();
+        let s = open(&o, 1);
+        add(&s, THEM, own_send("sent-1-aaaa", 1000, true));
+        assert!(!history_complete(&s), "the list is not read yet");
+        assert!(!knows(&s, THEM), "a rule's own whisper does not count, list unread");
+        list_read(&s);
+        assert!(history_complete(&s), "history_complete is true only for Complete");
+        assert!(!knows(&s, THEM), "a stranger with a conversation is never known, list read");
+        assert!(!knows(&s, "no-such-person"), "no conversation at all is not known");
+        // One send of your own makes them known, and the mark stays.
+        add(&s, THEM, own_send("sent-2-bbbb", 2000, false));
+        assert!(knows(&s, THEM));
+        assert_eq!(meta_of(&s, THEM).you_wrote, Some(true));
+        assert!(knows(&s, THEM), "monotonic");
+    }
+
+    #[test]
+    fn a_none_meta_is_filled_from_the_messages_and_written_back() {
+        let o = owner();
+        let s = open(&o, 1);
+        add(&s, THEM, own_send("sent-1-aaaa", 1000, false));
+        assert_eq!(meta_of(&s, THEM).you_wrote, None, "unknown right after the update");
+        assert!(knows(&s, THEM));
+        assert_eq!(meta_of(&s, THEM).you_wrote, Some(true), "written back");
+        // A stranger who only wrote to you reads back a settled no.
+        let other = "1000000007";
+        add(&s, other, incoming("a-1", 1000));
+        assert!(!knows(&s, other));
+        assert_eq!(meta_of(&s, other).you_wrote, Some(false));
+        // note_you_wrote (a synced page holding your message) flips it to known.
+        note_you_wrote(&s, other);
+        assert!(knows(&s, other));
+        assert_eq!(meta_of(&s, other).you_wrote, Some(true));
+    }
+
+    #[test]
+    fn a_twitch_origin_message_from_the_owner_counts_as_writing() {
+        let o = owner();
+        let s = open(&o, 1);
+        let mut from_me = incoming("m-1", 1000);
+        from_me.from_user_id = o.clone();
+        add(&s, THEM, from_me);
+        assert!(knows(&s, THEM));
+        assert!(!messages_show_you_wrote(&[incoming("m-2", 1)], &o), "their message is not yours");
+        let mut by_rule = incoming("m-3", 1);
+        by_rule.from_user_id = o.clone();
+        by_rule.by_automation = true;
+        assert!(!messages_show_you_wrote(&[by_rule], &o), "an automation's copy never counts");
+    }
 }

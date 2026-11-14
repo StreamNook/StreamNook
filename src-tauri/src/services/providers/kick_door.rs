@@ -637,7 +637,8 @@ mod tests {
         let closed = format!("http://{}", listener.local_addr().unwrap());
         drop(listener);
         let out = send_with(
-            &io(&closed, Duration::from_secs(2)),
+            // Windows takes about 2 s to refuse a closed port: the injected timeout must outlast it.
+            &io(&closed, Duration::from_secs(10)),
             &FakeSource::signed_in(ME),
             ME,
             "alpha",
@@ -916,7 +917,7 @@ mod tests {
         let closed = format!("http://{}", listener.local_addr().unwrap());
         drop(listener);
         let out = moderate_with(
-            &io(&closed, Duration::from_secs(2)),
+            &io(&closed, Duration::from_secs(10)),
             &FakeSource::signed_in(ME),
             ME,
             &timeout_op(),
@@ -1027,7 +1028,13 @@ mod tests {
     #[test]
     fn every_engine_request_carries_a_timeout_and_the_manual_calls_are_not_used() {
         let src = include_str!("kick_door.rs");
-        let live = src.split("#[cfg(test)]").next().unwrap();
+        let all = src.split("#[cfg(test)]").next().unwrap();
+        // Code only: the module's own doc comment names the call too.
+        let live: String = all
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
         assert_eq!(
             live.matches(".timeout(io.timeout)").count(),
             2,
@@ -1040,7 +1047,7 @@ mod tests {
         );
         assert!(!live.contains("ban_user(") && !live.contains("delete_message("));
         // The second account check sits right before the request, with no await after it.
-        let tail = live
+        let tail = all
             .split("// SECOND-CHECK")
             .nth(1)
             .and_then(|t| t.split(".send().await").next())

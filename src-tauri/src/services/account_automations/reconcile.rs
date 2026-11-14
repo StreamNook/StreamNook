@@ -198,6 +198,11 @@ pub(crate) async fn pass(engine: &Arc<Engine>, st: &mut State) {
         for room in adopted {
             push_unique(&mut wanted, &room);
         }
+        // A JoinChat action's chats (until LeaveChat, Off or restart), counted in the 50 cap.
+        let kept_by_actions: Vec<String> = lock(&engine.action_joins).iter().cloned().collect();
+        for room in kept_by_actions {
+            push_unique(&mut wanted, &room);
+        }
     }
     wanted.truncate(MAX_ENGINE_CHATS);
     let wanted_set: BTreeSet<String> = wanted.iter().cloned().collect();
@@ -584,7 +589,7 @@ mod tests {
         let kit = Kit::new();
         kit.outward.set_platform_identity("youtube", "UCme", "me");
         let mut rule = kick_these_rule("ry", &["alpha"]);
-        rule["send_as"] = serde_json::json!({ "provider": "twitch", "id": main_id(), "login": "me", "name": "Me" });
+        rule["send_as"] = serde_json::json!({ "provider": "twitch", "id": main_id(), "login": me(), "name": "Me" });
         rule["only_if"]["platforms"] = serde_json::json!(["youtube"]);
         rule["only_if"]["channels"] =
             serde_json::json!({ "kind": "these", "list": [{ "id": "c-1", "key": "youtube:UCchannel", "room_id": "", "name": "UCchannel" }] });
@@ -592,7 +597,8 @@ mod tests {
         let mut st = State::new(&kit.engine);
         kit.settings(RunState::On, vec![rule]).await;
         pass(&kit.engine, &mut st).await;
-        assert_eq!(kit.local.join_calls("youtube:uchannel"), 1, "joined through the YouTube adapter (it keys lowercase)");
+        let calls = kit.local.join_calls("youtube:ucchannel");
+        assert_eq!(calls, 1, "joined through the YouTube adapter (it keys lowercase): {:?} {:?}", st.provider_joined, kit.local.joined());
         assert!(st.provider_joined.contains("youtube:UCchannel"));
         assert_eq!(kit.local.start_calls(), 0);
     }
@@ -628,5 +634,107 @@ mod tests {
         assert_eq!(*waits.last().unwrap(), Duration::from_secs(300));
         b.reset();
         assert!(b.ready(t0));
+    }
+
+    // ---- P3: own topics, live watches and highlights (S11.2-P3 E19) ---------------------------
+
+    fn set_of(kinds: &[TopicKind]) -> BTreeSet<TopicKind> {
+        kinds.iter().copied().collect()
+    }
+
+    #[tokio::test]
+    async fn the_own_topics_follow_the_rules_the_background_and_off() {
+        let kit = Kit::new();
+        let mut st = State::new(&kit.engine);
+        kit.settings(
+            RunState::On,
+            vec![
+                own_rule("f", true, serde_json::json!({ "kind": "follow" }), vec![notify_titled("x")]),
+                own_rule("r", true, serde_json::json!({ "kind": "reward_redeemed", "reward_id": null }), vec![notify_titled("x")]),
+                own_rule("r2", true, serde_json::json!({ "kind": "reward_redeemed", "reward_id": "rw-1" }), vec![notify_titled("x")]),
+            ],
+        )
+        .await;
+        pass(&kit.engine, &mut st).await;
+        assert_eq!(
+            kit.local.own_holds().last().cloned(),
+            Some((main_id(), set_of(&[TopicKind::Follow, TopicKind::Redemption]))),
+            "two reward rules share one unfiltered subscription"
+        );
+        let calls = kit.local.own_holds().len();
+        pass(&kit.engine, &mut st).await;
+        assert_eq!(kit.local.own_holds().len(), calls, "an unchanged set is not handed over again");
+        kit.engine.presence.store(false, Ordering::SeqCst);
+        pass(&kit.engine, &mut st).await;
+        assert_eq!(kit.local.own_releases(), 1, "the phone's background releases them");
+        kit.engine.presence.store(true, Ordering::SeqCst);
+        pass(&kit.engine, &mut st).await;
+        assert_eq!(kit.local.own_holds().len(), calls + 1, "and the next foreground holds them again");
+        kit.settings(RunState::Off, vec![own_rule("f", true, serde_json::json!({ "kind": "follow" }), vec![notify_titled("x")])]).await;
+        pass(&kit.engine, &mut st).await;
+        assert_eq!(kit.local.own_releases(), 2, "Off releases them");
+    }
+
+    #[tokio::test]
+    async fn a_rule_of_another_account_waits_for_it_to_be_the_main_account() {
+        let kit = Kit::new();
+        let mut st = State::new(&kit.engine);
+        let mut alts = own_rule("alts", true, serde_json::json!({ "kind": "follow" }), vec![notify_titled("x")]);
+        alts["owner"] = account(&alt_id(), "alt");
+        alts["send_as"] = account(&alt_id(), "alt");
+        kit.settings(RunState::On, vec![alts]).await;
+        pass(&kit.engine, &mut st).await;
+        assert!(kit.local.own_holds().is_empty(), "nothing is held for an account that is not the main one");
+        assert_eq!(kit.engine.status().rules[0].held.as_deref(), Some("Waiting for @alt to be your main account"));
+    }
+
+    #[tokio::test]
+    async fn the_held_text_follows_the_sessions_state() {
+        let kit = Kit::new();
+        let mut st = State::new(&kit.engine);
+        kit.settings(RunState::On, vec![own_rule("f", true, serde_json::json!({ "kind": "follow" }), vec![notify_titled("x")])]).await;
+        pass(&kit.engine, &mut st).await;
+        assert_eq!(kit.engine.status().rules[0].held.as_deref(), Some("Waiting for a Twitch connection"), "no socket");
+        kit.local.set_own_state(true, &[TopicKind::Follow], &[]);
+        pass(&kit.engine, &mut st).await;
+        assert_eq!(kit.engine.status().rules[0].held, None);
+        kit.local.set_own_state(true, &[], &[(TopicKind::Follow, own_topics::TopicRefusal::NeedsAffiliate)]);
+        pass(&kit.engine, &mut st).await;
+        assert_eq!(kit.engine.status().rules[0].held.as_deref(), Some("Needs affiliate"));
+    }
+
+    #[tokio::test]
+    async fn live_change_rules_keep_a_liveness_watch_on_every_named_channel() {
+        let kit = Kit::new();
+        let mut st = State::new(&kit.engine);
+        kit.settings(RunState::On, vec![live_change_rule("l", true, "friend", "555", vec![notify_titled("x")])]).await;
+        pass(&kit.engine, &mut st).await;
+        assert!(kit.local.watched().contains("friend"));
+        assert!(kit.local.joined().is_empty(), "a live change joins no chat");
+        kit.settings(RunState::Off, vec![]).await;
+        pass(&kit.engine, &mut st).await;
+        assert!(kit.local.watched().is_empty());
+    }
+
+    #[tokio::test]
+    async fn highlights_reach_the_chat_rules_while_on_and_leave_with_off() {
+        let _own = crate::services::chat_rules::ChatRules::own_identity_test_lock();
+        let kit = Kit::new();
+        let mut st = State::new(&kit.engine);
+        kit.settings(RunState::On, vec![highlight_rule("h", "gg", "#ff8800")]).await;
+        // The published list is one cell for the whole process and every other reconcile test
+        // writes it too, so look again if one of them wrote between our pass and our read.
+        let mut seen = 0;
+        for _ in 0..200 {
+            pass(&kit.engine, &mut st).await;
+            seen = crate::services::chat_rules::automation_highlight_count();
+            if seen == 1 {
+                break;
+            }
+        }
+        assert_eq!(seen, 1);
+        kit.settings(RunState::Off, vec![highlight_rule("h", "gg", "#ff8800")]).await;
+        pass(&kit.engine, &mut st).await;
+        assert_eq!(crate::services::chat_rules::automation_highlight_count(), 0);
     }
 }

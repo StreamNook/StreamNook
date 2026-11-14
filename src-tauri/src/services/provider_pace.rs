@@ -291,7 +291,7 @@ mod tests {
             assert_eq!(wait, Duration::ZERO, "send {n}");
             first.get_or_insert(ticket);
         }
-        let (wait, _) = p.book("kick:1", "kick:chat15", "hi", MAX, now).unwrap();
+        let (wait, sixteenth) = p.book("kick:1", "kick:chat15", "hi", MAX, now).unwrap();
         assert_eq!(
             wait,
             sec(60),
@@ -301,7 +301,10 @@ mod tests {
             .book("kick:1", "kick:chat16", "hi", sec(10), now)
             .unwrap_err();
         assert_eq!(refused, PaceRefusal::TooLong { wait_s: 60 });
+        // The booked 16th holds a slot too (at +60 s), so a freed slot opens the window only
+        // once both it and the first are given back.
         p.cancel(&first.unwrap());
+        p.cancel(&sixteenth);
         let (wait, _) = p.book("kick:1", "kick:chat17", "hi", sec(10), now).unwrap();
         assert!(wait < sec(60), "a freed slot opens the window again");
         // Another account is not counted.

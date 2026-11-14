@@ -864,14 +864,17 @@ mod tests {
 
     #[test]
     fn a_notify_rule_on_another_platform_waits_for_that_platform_identity() {
-        let rule = platform_rule(
+        // A Notify posts nothing, so the rule is sent as the owner's Twitch account and only
+        // listens on YouTube: what it waits for is that platform's identity.
+        let mut rule = platform_rule(
             "r1",
-            "youtube",
+            "twitch",
             "100",
             json!({ "kind": "channel_event", "events": ["super_chat"] }),
             json!({ "kind": "any_open" }),
             notify_action(),
         );
+        rule["only_if"]["platforms"] = json!(["youtube"]);
         let waiting = compiled(vec![rule.clone()], &[]);
         assert_eq!(
             waiting.rules[0].held.as_deref(),

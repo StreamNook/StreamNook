@@ -1476,4 +1476,132 @@ mod tests {
     fn normalize_folds_spacing_and_padding() {
         assert_eq!(normalize("  ok \u{E0000}  then "), "ok then");
     }
+
+    // ---- P2: the classified send for the automation engine (S11.1-P2 E13) -----------------
+
+    #[test]
+    fn a_5xx_or_3xx_is_unknown_and_a_before_connect_failure_is_refused() {
+        for code in [500u16, 502, 503, 599, 301, 302, 399] {
+            assert_eq!(classify(&Err(SendFail::Status(code, String::new()))), Outcome::Unknown, "{code}");
+        }
+        assert!(matches!(classify(&Err(SendFail::Status(400, String::new()))), Outcome::Refused(_)));
+        assert!(matches!(classify(&Err(SendFail::Status(403, String::new()))), Outcome::Refused(_)));
+        assert_eq!(classify(&Err(SendFail::Status(429, String::new()))), Outcome::RateLimited);
+        assert!(matches!(classify(&Err(SendFail::BeforeConnect("dns".into()))), Outcome::Refused(_)));
+        assert!(matches!(classify(&Err(SendFail::SignedOut)), Outcome::Refused(_)));
+    }
+
+    #[tokio::test]
+    async fn send_in_classified_files_an_automations_whisper_with_the_mark() {
+        let owner = "99999957";
+        let scope = whisper_store::open(owner, 1);
+        let helix = ScriptHelix::new(owner, Vec::new());
+        // No account is followed in a test, so the queue answers signed out after filing: what
+        // is checked here is what was filed before Twitch would hear of it.
+        let (result, outcome) =
+            send_in_classified(&scope, &helix, &FixedClock(QUEUE_NOW), &NoSleep, target(), "hello there".into(), None, None, false, true).await;
+        assert!(result.is_err());
+        assert!(matches!(outcome, Outcome::Refused(_)));
+        assert_eq!(helix.sends.load(Ordering::SeqCst), 0);
+        let filed = whisper_store::read(&scope, THEM, |c| c.messages.clone()).unwrap().unwrap();
+        assert_eq!(filed.len(), 1);
+        assert!(filed[0].by_automation, "the mark rides the message");
+        assert_eq!((filed[0].origin, filed[0].is_sent), (Origin::LocalSent, true));
+        // A typed whisper is not marked.
+        let _ = send_in_classified(&scope, &helix, &FixedClock(QUEUE_NOW), &NoSleep, target(), "typed by hand".into(), None, None, false, false).await;
+        let all = whisper_store::read(&scope, THEM, |c| c.messages.clone()).unwrap().unwrap();
+        assert_eq!(all.iter().filter(|m| m.by_automation).count(), 1);
+        assert_eq!(all.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_503_is_unknown_with_an_update_and_the_unknown_delivery() {
+        let owner = "99999958";
+        let scope = whisper_store::open(owner, 1);
+        file(&scope, THEM, vec![local("u1", "maybe", QUEUE_NOW, Some(Delivery::Sending))]);
+        let helix = ScriptHelix::new(owner, vec![Err(SendFail::Status(503, String::new()))]);
+        let (result, outcome) =
+            run_queued_classified(&scope, &helix, &FixedClock(QUEUE_NOW), &NoSleep, &always, THEM, "u1", None, None, false, true).await;
+        assert_eq!(outcome, Outcome::Unknown);
+        assert!(result.is_ok(), "an Unknown still answers the update the message was filed under");
+        assert_eq!(stored(&scope, THEM, "u1").unwrap().delivery, Some(Delivery::Unknown));
+        assert_eq!(helix.sends.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn expect_owner_for_another_account_is_refused_before_anything_is_filed() {
+        let owner = "99999959";
+        let scope = whisper_store::open(owner, 1);
+        let helix = ScriptHelix::new(owner, Vec::new());
+        let (result, outcome) = send_in_classified(
+            &scope,
+            &helix,
+            &FixedClock(QUEUE_NOW),
+            &NoSleep,
+            target(),
+            "hi".into(),
+            Some("1234567".into()),
+            Some("Otter".into()),
+            false,
+            true,
+        )
+        .await;
+        let words = "This whisper came to Otter. Switch to that account to reply.".to_string();
+        assert_eq!(result.unwrap_err(), words);
+        assert_eq!(outcome, Outcome::Refused(words));
+        assert_eq!(helix.sends.load(Ordering::SeqCst), 0);
+        assert!(whisper_store::read(&scope, THEM, |c| c.messages.len()).ok().flatten().is_none(), "nothing was filed");
+    }
+
+    #[tokio::test]
+    async fn send_in_keeps_returning_the_plain_result_for_its_callers() {
+        let owner = "99999960";
+        let scope = whisper_store::open(owner, 1);
+        let helix = ScriptHelix::new(owner, Vec::new());
+        let r = send_in(&scope, &helix, &FixedClock(QUEUE_NOW), &NoSleep, target(), "  ".into(), None, None, false).await;
+        assert_eq!(r.unwrap_err(), "Type a message to send.");
+        let r = send_in(&scope, &helix, &FixedClock(QUEUE_NOW), &NoSleep, target(), "x".repeat(MAX_LEN + 1), None, None, false).await;
+        assert!(r.unwrap_err().contains("(501 now)"));
+    }
+
+    #[tokio::test]
+    async fn a_refused_or_rate_limited_whisper_books_no_recipient_and_a_sent_or_unknown_one_does() {
+        let cases: [(&str, &str, Vec<Result<(), SendFail>>, bool); 4] = [
+            ("99999961", "refused", vec![Err(SendFail::Status(400, String::new()))], false),
+            ("99999962", "limited", (0..4).map(|_| Err(SendFail::Status(429, String::new()))).collect(), false),
+            ("99999963", "sent", Vec::new(), true),
+            ("99999964", "unknown", vec![Err(SendFail::Status(503, String::new()))], true),
+        ];
+        for (owner, name, script, booked) in cases {
+            let scope = whisper_store::open(owner, 1);
+            let id = format!("book-{name}");
+            file(&scope, THEM, vec![local(&id, "hello", QUEUE_NOW, Some(Delivery::Sending))]);
+            let helix = ScriptHelix::new(owner, script);
+            let sleeper = RecordingSleeper::default();
+            let _ = run_queued_classified(&scope, &helix, &FixedClock(QUEUE_NOW), &sleeper, &always, THEM, &id, None, None, false, true).await;
+            let has = crate::services::whisper_recipients::snapshot().has(owner, THEM, QUEUE_NOW);
+            assert_eq!(has, booked, "{name}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_41st_new_automated_recipient_is_refused_before_the_send() {
+        let owner = "99999965";
+        let scope = whisper_store::open(owner, 1);
+        for i in 0..crate::services::whisper_recipients::TWITCH_PER_DAY {
+            crate::services::whisper_recipients::book_recipient(owner, &format!("{}", 2_000_000_000u64 + i as u64), QUEUE_NOW);
+        }
+        file(&scope, THEM, vec![local("cap-1", "hello", QUEUE_NOW, Some(Delivery::Sending)), local("cap-2", "again", QUEUE_NOW, Some(Delivery::Sending))]);
+        let helix = ScriptHelix::new(owner, Vec::new());
+        let (result, outcome) =
+            run_queued_classified(&scope, &helix, &FixedClock(QUEUE_NOW), &NoSleep, &always, THEM, "cap-1", None, None, false, true).await;
+        assert_eq!(result.unwrap_err(), "Twitch allows whispering 40 new people a day");
+        assert!(matches!(outcome, Outcome::Refused(_)));
+        assert_eq!(helix.sends.load(Ordering::SeqCst), 0, "refused before bound_identity and the send");
+        assert_eq!(stored(&scope, THEM, "cap-1").unwrap().delivery, Some(Delivery::NotDelivered));
+        // Your own whisper to the same new person is never refused.
+        let (typed, _) = run_queued_classified(&scope, &helix, &FixedClock(QUEUE_NOW), &NoSleep, &always, THEM, "cap-2", None, None, false, false).await;
+        assert!(typed.is_ok());
+        assert_eq!(helix.sends.load(Ordering::SeqCst), 1);
+    }
 }

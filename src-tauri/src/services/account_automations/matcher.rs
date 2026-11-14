@@ -812,4 +812,81 @@ mod tests {
         let verdicts = try_all(&c, &follow, &plain_ctx());
         assert!(verdicts.iter().all(|v| !v.fired), "{:?}", verdicts.iter().map(|v| &v.reason).collect::<Vec<_>>());
     }
+
+    // ---- P2 (S11.1-P2 E20) -----------------------------------------------------------------
+
+    fn whisper_row(text: &str) -> Facts {
+        crate::services::account_automations::facts::from_whisper(ME, "w1", "1000", "Pal", "Pal", text, 0)
+    }
+
+    fn whisper_rule(text: Option<&str>) -> Rule {
+        let text = text.map(|pattern| TextMatch { mode: MatchMode::Contains, pattern: pattern.into(), case_sensitive: false });
+        rule("w", Trigger::Whisper { text }, vec![reply("got it")])
+    }
+
+    #[test]
+    fn a_whisper_rule_matches_only_a_whisper_row_with_its_text() {
+        assert!(fires(whisper_rule(None), &whisper_row("anything at all")));
+        assert!(!fires(whisper_rule(None), &row("hello")), "a chat message is not a whisper");
+        let worded = whisper_rule(Some("hello"));
+        assert!(fires(worded.clone(), &whisper_row("Oh HELLO there")));
+        assert!(!fires(worded.clone(), &whisper_row("goodbye")));
+        assert!(!fires(worded, &row("hello")), "the words never pull a chat message in");
+        // A blank pattern is no text test.
+        assert!(fires(whisper_rule(Some("   ")), &whisper_row("anything")));
+    }
+
+    #[test]
+    fn a_timed_rule_ignores_chat_rows() {
+        let timer = rule("t", Trigger::Timer { every_seconds: 900, min_messages: 0 }, vec![send("hi")]);
+        let timed = crate::services::account_automations::facts::from_timed(
+            crate::services::account_automations::claims::timer_key("me"),
+            "me",
+            ME,
+            0,
+        );
+        assert!(fires(timer.clone(), &timed), "its own fire");
+        assert!(!fires(timer.clone(), &row("hello")), "a chat row");
+        assert!(!fires(timer, &whisper_row("hello")), "a whisper");
+        // And a chat rule never fires on a timed fire.
+        assert!(!fires(mention(false), &timed));
+    }
+
+    fn with_message(msg: crate::models::chat_layout::ChatMessage) -> Facts {
+        // `on_chat` attaches the row's message while the compile says a rule has an expression.
+        let mut facts = from_chat(&msg).unwrap();
+        facts.message = Some(std::sync::Arc::new(msg));
+        facts
+    }
+
+    #[test]
+    fn an_expression_gates_a_chat_rule() {
+        let mut gated = mention(false);
+        gated.only_if.expression = Some("author.subbed".into());
+        let mut sub = rows::privmsg("m3", "me", ME, "asub", "301", "@me hi");
+        sub.badges = vec![rows::badge("subscriber")];
+        let sub = with_message(sub);
+        let plain = with_message(rows::privmsg("m4", "me", ME, "fan", "300", "@me hi"));
+        assert!(fires(gated.clone(), &sub), "a subscriber passes author.subbed");
+        assert!(!fires(gated.clone(), &plain), "a non-subscriber fails it");
+        // The reason names the expression, after the trigger fit.
+        let c = compiled_with(&[gated], RunState::On);
+        let verdict = evaluate_rule(&c, 0, &plain, &ctx());
+        assert_eq!(verdict.reason.as_deref(), Some("The expression doesn't hold"));
+    }
+
+    #[test]
+    fn a_whisper_row_skips_the_channel_checks() {
+        let mut r = whisper_rule(None);
+        r.only_if.channels = ChannelScope::These { list: vec![chat("friend", "700")] };
+        r.only_if.roles = vec![SenderRole::Moderator];
+        r.only_if.skip_users = vec!["pal".into()];
+        r.only_if.only_users = vec!["somebody-else".into()];
+        r.only_if.shared_chat = false;
+        let c = compiled_with(&[r], RunState::On);
+        let verdict = evaluate_rule(&c, 0, &whisper_row("hi"), &Ctx { away: None, local: noon(), trace: true });
+        assert!(verdict.fired, "{:?}", verdict.reason);
+        let steps: Vec<&str> = verdict.trace.iter().map(|t| t.step).collect();
+        assert_eq!(steps, vec!["When"], "no Shared Chat, Channels, From, Skip or Only step for a whisper");
+    }
 }

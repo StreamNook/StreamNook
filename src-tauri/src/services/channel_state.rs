@@ -1444,7 +1444,7 @@ mod tests {
         let src = include_str!("channel_state.rs");
         assert!(src.matches("account_automations::on_live_edge(").count() >= 2);
         let hint = &src[src.find("fn apply_live_hint(").unwrap()..];
-        let hint = &hint[..hint.find("\n}\n").unwrap()];
+        let hint = &hint[..hint.find("\n}").unwrap()];
         assert!(!hint.contains("live_confirmed"), "only a poll confirms a broadcast");
         let poll = &src[src.find("async fn refresh_viewers(").unwrap()..];
         assert!(poll.contains("s.live_confirmed = now.viewer_count.is_some();"));

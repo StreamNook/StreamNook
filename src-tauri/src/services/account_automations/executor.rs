@@ -2384,7 +2384,7 @@ mod tests {
         kit.idle().await;
         let sends = kit.outward.sends();
         assert_eq!(sends.len(), 1);
-        assert_eq!((sends[0].text.as_str(), sends[0].login.as_str()), ("Thanks Fan!", "me"));
+        assert_eq!((sends[0].text.as_str(), sends[0].login.as_str()), ("Thanks Fan!", me().as_str()));
     }
 
     #[tokio::test]
@@ -2492,6 +2492,8 @@ mod kick_tests {
     async fn kick_kit() -> Kit {
         let kit = Kit::new();
         kit.connect_kick().await;
+        // A Kick chat is never the owner's Twitch channel: the Other channels rail must be open.
+        kit.prefs(|p| p.other_channels = true).await;
         kit.settings(RunState::On, vec![kick_these_rule("rk", &["alpha"])]).await;
         kit
     }
@@ -2566,7 +2568,7 @@ mod kick_tests {
         let claims_before = kit.outward.claim_calls();
         kit.fire_row(kick_row("u-6", "78", "hello again")).await;
         assert_eq!(kit.outward.claim_calls(), claims_before);
-        assert!(kit.outward.kick_sends().is_empty());
+        assert_eq!(kit.outward.kick_sends().len(), 1, "only the refused attempt ever reached the door");
     }
 
     #[tokio::test]
@@ -2602,6 +2604,7 @@ mod kick_tests {
         let a = kick_kit().await;
         let b = a.second_device();
         b.connect_kick().await;
+        b.prefs(|p| p.other_channels = true).await;
         b.settings(RunState::On, vec![kick_these_rule("rk", &["alpha"])]).await;
         a.fire_row_no_wait(kick_row("u-9", "77", "hello"));
         b.fire_row_no_wait(kick_row("u-9", "77", "hello"));

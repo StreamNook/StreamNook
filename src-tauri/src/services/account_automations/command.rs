@@ -385,7 +385,6 @@ mod tests {
             "/shoutout x",
             "/me hi",
             "/spam 5 x",
-            "/sub",
         ] {
             assert!(canonical_line(banned).is_err(), "{banned}");
         }
@@ -393,10 +392,13 @@ mod tests {
 
     #[test]
     fn a_custom_command_alias_and_channel_flag_are_refused() {
+        // `sub` is the built-in alias of `subscribers`, so it resolves; a saved custom word
+        // is not a built-in at all and the pure parser refuses it.
+        assert_eq!(canonical_line("/sub"), Ok("/subscribers".into()));
         assert_eq!(
-            canonical_line("/sub"),
+            canonical_line("/mycustom"),
             Err(NOT_ALLOWED.into()),
-            "a saved custom `sub` is not a built-in"
+            "a saved custom command is not a built-in"
         );
         assert_eq!(
             canonical_line("/slow 5 --channel x"),

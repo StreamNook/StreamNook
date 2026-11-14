@@ -1570,7 +1570,7 @@ mod tests {
         let kit = Kit::new();
         let rule = with_actions("r1", json!([{ "kind": "timeout", "id": "a-1", "seconds": 600, "reason": "" }]));
         kit.settings(RunState::On, vec![rule]).await;
-        kit.local.set_role("me", &chan(), crate::services::chat_send_limiter::Role::Moderator);
+        kit.local.set_role(&me(), &chan(), crate::services::chat_send_limiter::Role::Moderator);
         kit.fire_with_roles("m1", &["moderator"]).await;
         assert!(kit.mod_doors.timeouts.lock().unwrap().is_empty(), "a moderator target is skipped with a reason");
         kit.fire_with_roles("m2", &[]).await;
@@ -1584,9 +1584,14 @@ mod tests {
         let kit = Kit::new();
         kit.prefs(|p| p.sends_per_minute = 20).await; // the pace rail is not the limit under test
         let chats = many_chats(12);
-        kit.settings(RunState::On, vec![timeout_rule_in("r1", &chats)]).await;
+        // A rule's sixth fire inside a minute holds it, so three rules share the twelve chats.
+        kit.settings(
+            RunState::On,
+            vec![timeout_rule_in("r1", &chats[0..5]), timeout_rule_in("r2", &chats[5..10]), timeout_rule_in("r3", &chats[10..12])],
+        )
+        .await;
         for (login, _) in &chats {
-            kit.local.set_role("me", login, crate::services::chat_send_limiter::Role::Moderator);
+            kit.local.set_role(&me(), login, crate::services::chat_send_limiter::Role::Moderator);
         }
         // Park the door: every job that has reserved a slot waits there. Eight jobs run at once
         // (the executor's slots), so the budget is reserved at the check, before any send.
@@ -1606,15 +1611,18 @@ mod tests {
         let mut rule = with_actions("r1", json!([{ "kind": "timeout", "id": "a-1", "seconds": 600, "reason": "" }]));
         rule["limits"] = json!({ "rule_cooldown_seconds": 0, "user_cooldown_seconds": 0, "max_per_hour": 120, "max_wait_seconds": 10 });
         kit.settings(RunState::On, vec![rule]).await;
-        kit.local.set_role("me", &chan(), crate::services::chat_send_limiter::Role::Moderator);
+        kit.local.set_role(&me(), &chan(), crate::services::chat_send_limiter::Role::Moderator);
         for _ in 0..10 {
             kit.mod_doors.answers.lock().unwrap().push_back(DoorOutcome::Refused("no".into()));
         }
         for i in 0..10 {
+            // A rule's sixth fire inside a minute holds it, so the fires are spread out.
+            kit.clock.advance(Duration::from_secs(13));
             kit.fire_from(&format!("r{i}"), &format!("viewer{i}")).await;
         }
+        kit.clock.advance(Duration::from_secs(13));
         kit.fire_from("again", "viewer-again").await;
-        assert_eq!(kit.mod_doors.timeouts.lock().unwrap().len(), 11, "ten Refused gave their slots back, so the 11th still goes");
+        assert_eq!(kit.mod_doors.timeouts.lock().unwrap().len(), 11, "ten Refused gave their slots back, so the 11th still goes: {:?}", kit.activity_texts());
     }
 
     #[tokio::test]
@@ -1622,10 +1630,10 @@ mod tests {
         let kit = Kit::new();
         let rule = with_actions("r1", json!([{ "kind": "shoutout", "id": "a-1" }]));
         kit.settings(RunState::On, vec![rule]).await;
-        kit.local.set_role("me", &chan(), crate::services::chat_send_limiter::Role::Moderator);
+        kit.local.set_role(&me(), &chan(), crate::services::chat_send_limiter::Role::Moderator);
         kit.local.set_live(&chan(), Some(false));
         kit.fire_with_roles("m1", &[]).await;
-        assert!(kit.mod_doors.shoutouts.lock().unwrap().is_empty(), "offline: skipped");
+        assert!(kit.mod_doors.shoutouts.lock().unwrap().is_empty(), "offline: skipped: {:?}", kit.activity_texts());
         kit.local.set_live(&chan(), Some(true));
         kit.fire_with_roles("m2", &[]).await;
         assert_eq!(kit.mod_doors.shoutouts.lock().unwrap().len(), 1);
@@ -1701,7 +1709,7 @@ mod tests {
         kit.settings(RunState::On, vec![rule]).await;
         kit.fire_with_roles("m1", &[]).await;
         assert!(kit.mod_doors.announces.lock().unwrap().is_empty());
-        kit.local.set_role("me", &chan(), crate::services::chat_send_limiter::Role::Moderator);
+        kit.local.set_role(&me(), &chan(), crate::services::chat_send_limiter::Role::Moderator);
         kit.fire_with_roles("m2", &[]).await;
         assert_eq!(kit.mod_doors.announces.lock().unwrap().len(), 1);
         kit.outward.set_primary(Some(&alt_id()));
@@ -1782,13 +1790,71 @@ mod tests {
         // A moderator target is refused by the Kick rail.
         kit.fire_kick_row("m2", &["moderator"]).await;
         assert_eq!(kit.outward.kick_mods().len(), 1);
-        // The connected account switches after the claim: step 9's identity check is what skips it.
-        kit.outward.switch_kick_after_claim(Some("someone-else"));
-        kit.fire_kick_row("m3", &[]).await;
-        assert_eq!(kit.outward.kick_mods().len(), 1, "step 9's Kick identity check skipped it");
-        assert!(!kit.outward.releases().is_empty(), "and its claim was given back");
+        // The connected account switches after the claim (the fake switches from the first claim
+        // on, so a fresh kit): step 9's identity check is what skips it.
+        let other = Kit::new_kick_actor();
+        let rule = other.kick_rule_with("r1", json!([{ "kind": "timeout", "id": "a-1", "seconds": 600, "reason": "spam" }]));
+        other.settings(RunState::On, vec![rule]).await;
+        other.outward.switch_kick_after_claim(Some("someone-else"));
+        other.fire_kick_row("m3", &[]).await;
+        assert!(other.outward.kick_mods().is_empty(), "step 9's Kick identity check skipped it");
+        other.settle_claims().await;
+        assert!(!other.outward.releases().is_empty(), "and its claim was given back");
         // Over 7 days is a field error for a Kick actor.
         let bad = kit.kick_rule_with("r2", json!([{ "kind": "timeout", "id": "a-1", "seconds": 604_801, "reason": "" }]));
         assert!(kit.save_errors(bad).iter().any(|e| e.path == "actions[0].seconds"));
+    }
+
+    #[tokio::test]
+    async fn script_primary_after_claim() {
+        // The registry's primary changes between step 2's read and step 9's: the door is never
+        // called, and the claim made in between is given back.
+        let kit = Kit::new();
+        kit.settings(RunState::On, vec![command_rule("r1", "/slow 30")]).await;
+        kit.outward.script_primary_after_claim(Some(&alt_id()));
+        kit.fire("m1").await;
+        assert_eq!(kit.outward.claim_calls(), 1, "step 2 saw the main account as the primary and claimed");
+        assert!(kit.command_doors.log.lock().unwrap().is_empty(), "step 9 skipped before the door");
+        assert!(kit.activity_texts().iter().any(|t| t.starts_with("Waiting for @") && t.ends_with("to be your main account")), "{:?}", kit.activity_texts());
+        kit.settle_claims().await;
+        assert!(!kit.outward.releases().is_empty(), "nothing was sent, so the claim is given back");
+        // Without the change, the same rule goes through.
+        let steady = Kit::new();
+        steady.settings(RunState::On, vec![command_rule("r1", "/slow 30")]).await;
+        steady.fire("m1").await;
+        assert_eq!(steady.command_doors.log.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn join_and_leave_write_the_engine_set() {
+        use super::super::reconcile::{pass, State};
+        let chat_ref = json!({ "id": "c-1", "key": "twitch:friend", "room_id": "", "name": "friend" });
+        let join = own_rule("rj", json!([{ "kind": "join_chat", "id": "a-1", "channel": chat_ref }]));
+        let leave = own_rule("rl", json!([{ "kind": "leave_chat", "id": "a-1", "channel": chat_ref }]));
+        let kit = Kit::new();
+        let mut st = State::new(&kit.engine);
+        kit.settings(RunState::On, vec![join]).await;
+        kit.fire_own_room_no_wait("j1", "viewer1");
+        kit.idle().await;
+        assert!(lock(&kit.engine.action_joins).contains("friend"), "JoinChat wrote the engine's set");
+        assert!(kit.local.joined().is_empty(), "the action never joins by itself: reconcile alone does");
+        pass(&kit.engine, &mut st).await;
+        assert!(kit.local.joined().contains("friend"), "reconcile keeps the chat joined");
+        // Another chat in the set, and a window holding "friend" too.
+        lock(&kit.engine.action_joins).insert("other".into());
+        kit.local.hold("main", "friend");
+        pass(&kit.engine, &mut st).await;
+        assert_eq!(kit.local.joined(), set(&["friend", "other", &me()]));
+        // LeaveChat removes only that chat from the set and releases only the engine's claim.
+        kit.settings(RunState::On, vec![leave]).await;
+        kit.fire_own_room_no_wait("l1", "viewer2");
+        kit.idle().await;
+        assert_eq!(lock(&kit.engine.action_joins).iter().cloned().collect::<Vec<_>>(), vec!["other".to_string()]);
+        pass(&kit.engine, &mut st).await;
+        assert_eq!(kit.local.joined(), set(&["other", &me()]), "only the engine's claim on friend went");
+        assert!(kit.local.holders_now("friend").iter().any(|h| h == "main"), "a window's claim is never parted");
+        // Off clears the set.
+        kit.engine.set_run_now(RunState::Off);
+        assert!(lock(&kit.engine.action_joins).is_empty());
     }
 }

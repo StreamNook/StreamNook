@@ -357,7 +357,7 @@ pub fn follow_event(user_id: &str, name: &str) -> Value {
 
 /// The facts of that follow in the main account's channel.
 pub fn follow_facts(user_id: &str) -> Facts {
-    facts::from_own(TopicKind::Follow, &follow_event(user_id, "Fan"), &main_id(), "me", now_ms()).expect("follow facts")
+    facts::from_own(TopicKind::Follow, &follow_event(user_id, "Fan"), &main_id(), &me(), now_ms()).expect("follow facts")
 }
 
 /// The same rule sending as another account.
@@ -1153,6 +1153,8 @@ pub struct FakeOutward {
     second_verify: Mutex<HashMap<String, FakeToken>>,
     /// The first verify after a claim call (step 9's) answers this instead.
     after_claim: Mutex<HashMap<String, FakeToken>>,
+    /// From the first claim call on, the registry's primary reads as this (step 9's read).
+    primary_after_claim: Mutex<Option<Option<String>>>,
     verifies: Mutex<HashMap<String, usize>>,
     send_gate: Gate,
     claim_gate: Gate,
@@ -1191,6 +1193,7 @@ impl FakeOutward {
             loss: Mutex::new(None),
             second_verify: Mutex::new(HashMap::new()),
             after_claim: Mutex::new(HashMap::new()),
+            primary_after_claim: Mutex::new(None),
             verifies: Mutex::new(HashMap::new()),
             send_gate: Gate::open(),
             claim_gate: Gate::open(),
@@ -1475,7 +1478,13 @@ impl Outward for FakeOutward {
     }
 
     fn primary_id(&self) -> Option<String> {
-        lock(&self.state).primary.clone().unwrap_or_else(|| Some(self.main.clone()))
+        let state = lock(&self.state);
+        if state.claim_calls > 0 {
+            if let Some(after) = lock(&self.primary_after_claim).clone() {
+                return after;
+            }
+        }
+        state.primary.clone().unwrap_or_else(|| Some(self.main.clone()))
     }
 
     fn account_generation(&self) -> u64 {
@@ -1513,7 +1522,7 @@ impl Outward for FakeOutward {
         self.room_started.hit();
         self.room_gate.pass().await;
         tokio::time::sleep(delay).await;
-        if login == "me" && self.own_room_is_main.load(Ordering::SeqCst) {
+        if login == main_login(&self.main) && self.own_room_is_main.load(Ordering::SeqCst) {
             return Ok(self.main.clone());
         }
         Ok("4242".into())
@@ -2174,8 +2183,8 @@ impl Kit {
             from_user_login: format!("u{from}"),
             from_user_name: format!("U{from}"),
             to_user_id: main_id(),
-            to_user_login: "me".into(),
-            to_user_name: "me".into(),
+            to_user_login: me(),
+            to_user_name: me(),
             whisper_id: whisper_id.into(),
             text: "hello".into(),
         };
@@ -2234,6 +2243,12 @@ impl FakeOutward {
     /// The first `verified_token` of `id` that happens after a claim call has gone out answers `how` (step 9's re-verify).
     pub fn script_verify_after_claim(&self, id: &str, how: FakeToken) {
         lock(&self.after_claim).insert(id.into(), how);
+    }
+
+    /// From the first claim call on, the registry's primary reads as `other` (the account changes
+    /// between step 2 and step 9).
+    pub fn script_primary_after_claim(&self, other: Option<&str>) {
+        *lock(&self.primary_after_claim) = Some(other.map(str::to_string));
     }
 
     /// How many times `verified_token` was asked for `id` (a Kick id must stay 0, D277).
@@ -2299,7 +2314,7 @@ impl Kit {
     /// A mention from `user` in the owner's own room (login "me", room id = the main account's id), no wait.
     pub fn fire_own_room_no_wait(&self, id: &str, user: &str) {
         let mut row = chat_row(id, user, "hey @me");
-        row.channel = "me".into();
+        row.channel = me();
         row.tags.insert("room-id".into(), main_id());
         self.engine.on_chat(&row, false);
     }
@@ -2556,7 +2571,7 @@ impl Kit {
     pub async fn wait_until(&self, done: impl Fn() -> bool) {
         let started = Instant::now();
         while !done() {
-            assert!(started.elapsed() < Duration::from_secs(5), "never happened");
+            assert!(started.elapsed() < Duration::from_secs(5), "never happened: {:?}", self.activity_texts());
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
     }

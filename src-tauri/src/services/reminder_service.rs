@@ -36,7 +36,7 @@ const CLOCK_CATCH_UP_MINUTES: u32 = 2;
 const DEFAULT_KEYWORD_COOLDOWN_MINUTES: f64 = 5.0;
 
 #[derive(Debug, Clone, Deserialize, Default)]
-struct Reminder {
+pub(crate) struct Reminder {
     id: String,
     #[serde(default)]
     enabled: bool,
@@ -1955,7 +1955,7 @@ mod tests {
     // ---- source pins ----------------------------------------------------------------------------
 
     fn this_file() -> String {
-        include_str!("reminder_service.rs").split("#[cfg(test)]").next().unwrap_or_default().to_string()
+        include_str!("reminder_service.rs").split("#[cfg(test)]").next().unwrap_or_default().replace("\r\n", "\n")
     }
 
     fn body_of<'a>(src: &'a str, start: &str) -> &'a str {

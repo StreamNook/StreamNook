@@ -1665,8 +1665,8 @@ mod patch_tests {
     #[test]
     fn every_commit_path_flushes_a_background_phone_and_the_import_repairs() {
         let src = this_file();
-        // commit_settings_patch, commit_favorite_patch, commit_vertical_view, commit_automations.
-        assert_eq!(src.matches("    flush_now_if_phone_idle();\n").count(), 4);
+        // commit_settings_patch, commit_favorite_patch, commit_vertical_view, commit_automations, commit_settings (P5 reminders).
+        assert_eq!(src.matches("    flush_now_if_phone_idle();\n").count(), 5);
         let import = &src[src.find("pub(crate) fn apply_imported_settings(").unwrap()..];
         let import = &import[..import.find("\n}\n").unwrap()];
         assert!(import.contains("favorite_channels::repair(&mut imported);"));

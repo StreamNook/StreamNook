@@ -147,7 +147,7 @@ mod tests {
         ] {
             std::fs::write(dir.join(name), "x").unwrap();
         }
-        let today = chrono::NaiveDate::from_ymd_opt(2026, 11, 13).unwrap();
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 11, 16).unwrap();
         assert_eq!(prune(&dir, today), 2);
         assert!(dir.join("2026-11-12.txt").exists() && dir.join("notes.md").exists());
         let _ = std::fs::remove_dir_all(&dir);

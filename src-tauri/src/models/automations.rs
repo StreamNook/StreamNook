@@ -1809,6 +1809,13 @@ fn check_p2_action(rule: &Rule, action: &Action, at: &str, scope: &TextScope, er
         | Action::Speak { .. }
         | Action::Highlight { .. } => {}
     }
+    check_p2_tail(rule, action, at, errors);
+}
+
+/// The checks every action gets, Reply, Send and Notify included: no `{user}` on a timed
+/// rule, and a Whisper rule's Send names its chat.
+fn check_p2_tail(rule: &Rule, action: &Action, at: &str, errors: &mut Errors) {
+    let whisper_rule = rule.is_whisper_rule();
     // `{user}` has no meaning when nothing a person did started the rule.
     if rule.is_timed() {
         let mut texts: Vec<&str> = action.lines().iter().map(|l| l.text.as_str()).collect();
@@ -1950,6 +1957,7 @@ pub fn validate(rule: &mut Rule, ctx: &ValidateCtx) -> Vec<FieldError> {
                     }
                     check_outward_text(&path, &line.text, &scope, &mut errors);
                 }
+                check_p2_tail(rule, action, &at, &mut errors);
             }
             Action::Notify { title, body, .. } => {
                 check_local_text(&format!("{at}.title"), title, &scope, &mut errors);
@@ -2671,5 +2679,261 @@ mod tests {
     fn input_is_chatter_text_and_reward_is_not() {
         assert!(is_chatter_text("input") && is_chatter_text("INPUT"));
         assert!(!is_chatter_text("reward") && !is_chatter_text("poll") && !is_chatter_text("prediction"));
+    }
+
+    // ---- P2 (S11.1-P2 E1k) ---------------------------------------------------------------------
+
+    fn errors_of(mut rule: Rule) -> Vec<FieldError> {
+        validate(&mut rule, &ValidateCtx::default())
+    }
+
+    fn timer(every_seconds: u32) -> Trigger {
+        Trigger::Timer { every_seconds, min_messages: 0 }
+    }
+
+    fn said(text: &str) -> Trigger {
+        Trigger::Message { text: TextMatch { mode: MatchMode::Contains, pattern: text.into(), case_sensitive: false } }
+    }
+
+    fn timeout_of(seconds: u32) -> Action {
+        Action::Timeout { id: String::new(), seconds, reason: String::new() }
+    }
+
+    fn announce_of(text: &str, color: &str) -> Action {
+        Action::Announce { id: String::new(), text: text.into(), color: color.into() }
+    }
+
+    fn send_of(text: &str) -> Action {
+        Action::Send { id: String::new(), to: None, texts: vec![line(text)], pick: Pick::Random }
+    }
+
+    #[test]
+    fn p2_triggers_and_actions_round_trip_with_defaults() {
+        let read_trigger = |v: Value| serde_json::from_value::<Trigger>(v).unwrap();
+        assert_eq!(read_trigger(json!({ "kind": "timer" })), Trigger::Timer { every_seconds: 900, min_messages: 0 });
+        assert_eq!(read_trigger(json!({ "kind": "clock" })), Trigger::Clock { at: String::new(), days: vec![] });
+        assert_eq!(read_trigger(json!({ "kind": "whisper" })), Trigger::Whisper { text: None });
+        assert_eq!(read_trigger(json!({ "kind": "uptime" })), Trigger::Uptime { seconds: 0, late_ok: false });
+        assert_eq!(read_trigger(json!({ "kind": "delay" })), Trigger::Delay { seconds: 0 });
+        let read_action = |v: Value| serde_json::from_value::<Action>(v).unwrap();
+        assert_eq!(read_action(json!({ "kind": "announce" })), announce_of("", "primary"));
+        assert_eq!(read_action(json!({ "kind": "timeout" })), timeout_of(0));
+        assert_eq!(read_action(json!({ "kind": "pin" })), Action::Pin { id: String::new(), seconds: None });
+        assert_eq!(read_action(json!({ "kind": "delete" })), Action::Delete { id: String::new() });
+        assert_eq!(read_action(json!({ "kind": "shoutout" })), Action::Shoutout { id: String::new() });
+        assert_eq!(read_action(json!({ "kind": "wait" })), Action::Wait { id: String::new(), seconds: 0 });
+        assert_eq!(read_action(json!({ "kind": "log" })), Action::Log { id: String::new(), to_file: false });
+        assert_eq!(read_action(json!({ "kind": "command" })), Action::Command { id: String::new(), line: String::new() });
+        assert_eq!(
+            read_action(json!({ "kind": "whisper" })),
+            Action::Whisper { id: String::new(), to: None, texts: vec![], pick: Pick::Random }
+        );
+        // Written out and read back, every new variant is itself.
+        for when in [timer(1800), Trigger::Clock { at: "19:30".into(), days: vec![] }, Trigger::Whisper { text: None }, Trigger::Uptime { seconds: 60, late_ok: true }, Trigger::Delay { seconds: 5 }] {
+            assert_eq!(read_trigger(serde_json::to_value(&when).unwrap()), when);
+        }
+        for action in [announce_of("hi", "blue"), timeout_of(600), Action::Pin { id: "a-1".into(), seconds: Some(60) }, Action::Wait { id: "a-2".into(), seconds: 3 }] {
+            assert_eq!(read_action(serde_json::to_value(&action).unwrap()), action);
+        }
+    }
+
+    #[test]
+    fn timer_bounds_save_errors() {
+        for (every, bad) in [(299, true), (300, false), (43_200, false), (43_201, true)] {
+            assert_eq!(has(&errors_of(p3_rule(timer(every), notify("x"))), "when.every_seconds"), bad, "{every} s");
+        }
+        for (min, bad) in [(1000, false), (1001, true)] {
+            let when = Trigger::Timer { every_seconds: 900, min_messages: min };
+            assert_eq!(has(&errors_of(p3_rule(when, notify("x"))), "when.min_messages"), bad, "{min} lines");
+        }
+    }
+
+    #[test]
+    fn clock_needs_hhmm() {
+        for (at, bad) in [("", true), ("25:00", true), ("19:60", true), ("7:30", true), ("abc", true), ("19:30", false), ("00:00", false), ("23:59", false)] {
+            let when = Trigger::Clock { at: at.into(), days: vec![] };
+            assert_eq!(has(&errors_of(p3_rule(when, notify("x"))), "when.at"), bad, "{at:?}");
+        }
+    }
+
+    #[test]
+    fn uptime_and_delay_need_seconds() {
+        for (seconds, bad) in [(0, true), (1, false), (TIMED_MAX_SECONDS, false), (TIMED_MAX_SECONDS + 1, true)] {
+            let uptime = Trigger::Uptime { seconds, late_ok: false };
+            assert_eq!(has(&errors_of(p3_rule(uptime, notify("x"))), "when.seconds"), bad, "uptime {seconds}");
+            let delay = Trigger::Delay { seconds };
+            assert_eq!(has(&errors_of(p3_rule(delay, notify("x"))), "when.seconds"), bad, "delay {seconds}");
+        }
+    }
+
+    #[test]
+    fn a_timed_rule_refuses_any_open_and_user_variables() {
+        let mut any_open = p3_rule(timer(900), notify("x"));
+        any_open.only_if.channels = ChannelScope::AnyOpen {};
+        assert!(has(&errors_of(any_open), "only_if.channels"));
+        for channels in [ChannelScope::Own {}, ChannelScope::These { list: vec![chat("xqc")] }, ChannelScope::Watching {}] {
+            let mut ok = p3_rule(timer(900), notify("x"));
+            ok.only_if.channels = channels;
+            assert!(!has(&errors_of(ok), "only_if.channels"));
+        }
+        for text in ["hi {user}", "hi {user.name}", "hi {USER.login}"] {
+            assert!(has(&errors_of(p3_rule(timer(900), send_of(text))), "actions[0]"), "{text}");
+        }
+        assert!(!has(&errors_of(p3_rule(timer(900), send_of("hello chat"))), "actions[0]"));
+        // A chat rule may use {user}.
+        assert!(!has(&errors_of(rule_with(send_of("hi {user}"))), "actions[0]"));
+    }
+
+    #[test]
+    fn an_expression_is_chat_only_and_compiled() {
+        let mut timed = p3_rule(timer(900), notify("x"));
+        timed.only_if.expression = Some("author.subbed".into());
+        let mut timed_saved = timed.clone();
+        let errors = validate(&mut timed_saved, &ValidateCtx::default());
+        assert!(!has(&errors, "only_if.expression"));
+        assert_eq!(timed_saved.only_if.expression, None, "a Timer rule has no author to judge: the expression is cleared on save");
+        for (expression, bad) in [("author.subbed", false), ("channel.watching", true), ("author.subbed &&", true)] {
+            let mut chat_rule = rule_with(reply("hi"));
+            chat_rule.only_if.expression = Some(expression.into());
+            assert_eq!(has(&errors_of(chat_rule), "only_if.expression"), bad, "{expression}");
+        }
+    }
+
+    #[test]
+    fn timeout_bounds() {
+        for (seconds, bad) in [(0, true), (1, false), (1_209_600, false), (1_209_601, true)] {
+            let errors = errors_of(p3_rule(said("hi"), timeout_of(seconds)));
+            assert_eq!(has(&errors, "actions[0].seconds"), bad, "{seconds} s");
+        }
+    }
+
+    #[test]
+    fn moderation_needs_a_chat_message() {
+        let staff = || {
+            vec![
+                Action::Delete { id: String::new() },
+                timeout_of(600),
+                Action::Pin { id: String::new(), seconds: None },
+                announce_of("hello", "primary"),
+            ]
+        };
+        for action in staff() {
+            assert!(has(&errors_of(p3_rule(timer(900), action.clone())), "actions[0]"), "{action:?} on a Timer");
+            assert!(!has(&errors_of(p3_rule(said("hi"), action.clone())), "actions[0]"), "{action:?} on a Message");
+        }
+    }
+
+    #[test]
+    fn shoutout_also_on_a_raid() {
+        let shout = || Action::Shoutout { id: String::new() };
+        let raid = Trigger::ChannelEvent { events: vec![EventKind::Raid], min_months: 0, min_gifts: 0, min_viewers: 0, min_bits: 0 };
+        assert!(!has(&errors_of(p3_rule(raid, shout())), "actions[0]"));
+        assert!(!has(&errors_of(p3_rule(said("hi"), shout())), "actions[0]"));
+        assert!(has(&errors_of(p3_rule(Trigger::Follow {}, shout())), "actions[0]"));
+        assert!(has(&errors_of(p3_rule(timer(900), shout())), "actions[0]"));
+    }
+
+    #[test]
+    fn whisper_rule_refuses_commands_and_moderation() {
+        let whisper = || Trigger::Whisper { text: None };
+        for action in [
+            Action::Command { id: String::new(), line: "/slowoff".into() },
+            timeout_of(600),
+            Action::Delete { id: String::new() },
+            Action::Pin { id: String::new(), seconds: None },
+            announce_of("hello", "primary"),
+            Action::Shoutout { id: String::new() },
+        ] {
+            assert!(has(&errors_of(p3_rule(whisper(), action.clone())), "actions[0]"), "{action:?}");
+        }
+        let back = Action::Whisper { id: String::new(), to: None, texts: vec![line("got it")], pick: Pick::Random };
+        let errors = errors_of(p3_rule(whisper(), back));
+        for path in ["actions[0]", "actions[0].to", "actions[0].texts"] {
+            assert!(!has(&errors, path), "a whisper back is the Reply form: {path}");
+        }
+        assert!(!has(&errors_of(p3_rule(whisper(), notify("x"))), "actions[0]"), "a whisper rule may notify");
+    }
+
+    #[test]
+    fn a_whisper_rule_send_needs_a_chat() {
+        let whisper = || Trigger::Whisper { text: None };
+        assert!(has(&errors_of(p3_rule(whisper(), send_of("hi"))), "actions[0].to"));
+        let to = Action::Send { id: String::new(), to: Some(chat("xqc")), texts: vec![line("hi")], pick: Pick::Random };
+        assert!(!has(&errors_of(p3_rule(whisper(), to)), "actions[0].to"));
+    }
+
+    #[test]
+    fn pin_seconds_range() {
+        for (seconds, bad) in [(None, false), (Some(29), true), (Some(30), false), (Some(1800), false), (Some(1801), true)] {
+            let errors = errors_of(p3_rule(said("hi"), Action::Pin { id: String::new(), seconds }));
+            assert_eq!(has(&errors, "actions[0].seconds"), bad, "{seconds:?}");
+        }
+    }
+
+    #[test]
+    fn announce_colors() {
+        for color in ["primary", "blue", "green", "orange", "purple"] {
+            assert!(!has(&errors_of(p3_rule(said("hi"), announce_of("hello", color))), "actions[0].color"), "{color}");
+        }
+        // An empty color is tidied to primary on save.
+        let mut blank = p3_rule(said("hi"), announce_of("hello", "  "));
+        assert!(!has(&validate(&mut blank, &ValidateCtx::default()), "actions[0].color"));
+        assert!(matches!(&blank.actions[0], Action::Announce { color, .. } if color == "primary"));
+        for color in ["red", "Primary-ish"] {
+            assert!(has(&errors_of(p3_rule(said("hi"), announce_of("hello", color))), "actions[0].color"), "{color:?}");
+        }
+        assert!(has(&errors_of(p3_rule(said("hi"), announce_of("  ", "blue"))), "actions[0].text"));
+        assert!(has(&errors_of(p3_rule(said("hi"), announce_of(&"a".repeat(MAX_ANNOUNCE_CHARS + 1), "blue"))), "actions[0].text"));
+        assert!(!has(&errors_of(p3_rule(said("hi"), announce_of(&"a".repeat(MAX_ANNOUNCE_CHARS), "blue"))), "actions[0].text"));
+    }
+
+    #[test]
+    fn wait_and_log_checks() {
+        for (seconds, bad) in [(0, true), (1, false), (300, false), (301, true)] {
+            let errors = errors_of(p3_rule(said("hi"), Action::Wait { id: String::new(), seconds }));
+            assert_eq!(has(&errors, "actions[0].seconds"), bad, "wait {seconds}");
+        }
+        for to_file in [false, true] {
+            assert!(!has(&errors_of(p3_rule(said("hi"), Action::Log { id: String::new(), to_file })), "actions[0]"));
+        }
+        let empty = Action::JoinChat { id: String::new(), channel: ChannelRef::default() };
+        assert!(has(&errors_of(p3_rule(said("hi"), empty)), "actions[0].channel"), "Join needs a channel");
+        let named = Action::LeaveChat { id: String::new(), channel: chat("xqc") };
+        assert!(!has(&errors_of(p3_rule(said("hi"), named)), "actions[0].channel"));
+    }
+
+    #[test]
+    fn whisper_people_clamps_at_30() {
+        let clamp = |n: u32| AutomationPrefs { whisper_people_per_day: n, ..AutomationPrefs::default() }.clamped().whisper_people_per_day;
+        assert_eq!((clamp(0), clamp(1), clamp(20), clamp(30), clamp(31), clamp(99)), (1, 1, 20, 30, 30, 30));
+    }
+
+    #[test]
+    fn is_outward_table() {
+        let line_a = || vec![line("hi")];
+        let local = [
+            notify("x"),
+            Action::Log { id: String::new(), to_file: false },
+            Action::JoinChat { id: String::new(), channel: chat("xqc") },
+            Action::LeaveChat { id: String::new(), channel: chat("xqc") },
+            Action::Wait { id: String::new(), seconds: 1 },
+        ];
+        for action in &local {
+            assert!(!action.is_outward() && action.is_control(), "{action:?}");
+        }
+        let outward = [
+            reply("hi"),
+            send_of("hi"),
+            Action::Command { id: String::new(), line: "/slowoff".into() },
+            Action::Whisper { id: String::new(), to: None, texts: line_a(), pick: Pick::Random },
+            timeout_of(600),
+            Action::Delete { id: String::new() },
+            Action::Pin { id: String::new(), seconds: None },
+            announce_of("hi", "primary"),
+            Action::Shoutout { id: String::new() },
+        ];
+        for action in &outward {
+            assert!(action.is_outward() && !action.is_control(), "{action:?}");
+        }
     }
 }

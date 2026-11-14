@@ -516,7 +516,15 @@ mod tests {
         // A different recipient `knows` says yes to, inside the hold: no claim is made for it.
         kit.whisper_in("w3", "3000", 0).await;
         assert_eq!(kit.outward.claim_calls(), claims, "the hold stands until retry_after_ms is over");
-        assert!(kit.activity_texts().iter().filter(|t| *t == "Whisper people a day reached across your devices").count() >= 2);
+        // Activity folds a repeated skip (same rule, chat and words) into one row with a count:
+        // the held recipient is the second occurrence.
+        let day_rows: Vec<_> = kit
+            .engine
+            .activity_list(super::super::activity::Filter::All, 500, None)
+            .into_iter()
+            .filter(|e| e.text == "Whisper people a day reached across your devices")
+            .collect();
+        assert_eq!(day_rows.iter().map(|e| e.count).sum::<u32>(), 2, "the held recipient's skip names the same words");
     }
 
     #[tokio::test(start_paused = true)]

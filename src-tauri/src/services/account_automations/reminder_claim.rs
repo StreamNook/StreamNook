@@ -1286,7 +1286,7 @@ mod tests {
     #[test]
     fn the_status_carries_the_reminders_list_from_the_local_seam() {
         let status = include_str!("mod.rs")
-            .split("#[cfg(test)]")
+            .split("#[cfg(test)]\nmod tests")
             .next()
             .unwrap_or_default();
         assert!(
@@ -1300,7 +1300,7 @@ mod tests {
     #[test]
     fn the_executor_checks_open_chats_before_it_claims_and_claims_as_the_reminder() {
         let code = include_str!("executor.rs")
-            .split("#[cfg(test)]")
+            .split("#[cfg(test)]\nmod tests")
             .next()
             .unwrap_or_default();
         let from = code
@@ -1308,6 +1308,9 @@ mod tests {
             .expect("final_checks exists");
         let checks = &code[from..];
         let checks = &checks[..checks.find("\n}\n").unwrap_or(checks.len())];
+        // The reminder checks come before the channel match; AnyOpen's own adopted read is
+        // inside the match and is not part of them.
+        let reminder_checks = &checks[..checks.find("match &job.rule().rule.only_if.channels").unwrap_or(checks.len())];
         let at = |needle: &str| {
             checks
                 .find(needle)
@@ -1318,7 +1321,7 @@ mod tests {
             "the new checks come first"
         );
         assert!(
-            checks.contains("open_for_reminders(login)") && !checks.contains("adopted"),
+            checks.contains("open_for_reminders(login)") && !reminder_checks.contains(".adopted"),
             "no adopted set, unlike AnyOpen"
         );
         assert!(at("only.only_while_watching") < at("match &job.rule().rule.only_if.channels"));

@@ -660,6 +660,10 @@ fn force(rule: &mut Rule) {
         rule.only_if.only_live = true;
         rule.limits.rule_cooldown_seconds = 0;
     }
+    // Twitch shouts out only a channel that is live, whatever was stored.
+    if rule.actions.iter().any(|a| matches!(a, Action::Shoutout { .. })) && !rule.is_live_rule() {
+        rule.only_if.only_live = true;
+    }
     if rule.is_own_event_rule() {
         rule.only_if.channels = ChannelScope::Own {};
         rule.only_if.roles.clear();
@@ -1472,5 +1476,150 @@ mod tests {
         assert_eq!(summarize(&live_rule("l", true, &[])), "When a channel you pick goes live: notify you");
         let speak = Action::Speak { id: "a".into(), text: "hi".into(), on_stream: false };
         assert_eq!(summarize(&rule("p", Trigger::PollStarted {}, vec![speak])), "When you start a poll: say it out loud");
+    }
+
+    // ---- P2 (S11.1-P2 E18e) ----------------------------------------------------------------
+
+    fn compiled_main(rules: &[Rule], primary: Option<&str>) -> Compiled {
+        compiled_main_with(rules, primary, &[])
+    }
+
+    fn compiled_main_with(rules: &[Rule], primary: Option<&str>, platforms: &[PlatformId]) -> Compiled {
+        let automations = Automations { run: RunState::On, rules: rules.iter().map(Rule::to_value).collect(), ..Automations::default() };
+        let input = CompileInput {
+            automations: &automations,
+            prefs: &AutomationPrefs::default(),
+            own_accounts: &accounts(),
+            profile_user_id: None,
+            primary_id: primary,
+        };
+        compile_with(&input, platforms)
+    }
+
+    fn timeout_action() -> Action {
+        Action::Timeout { id: "a-t".into(), seconds: 600, reason: String::new() }
+    }
+
+    fn whisper_reply_rule(id: &str) -> Rule {
+        rule(id, Trigger::Whisper { text: None }, vec![reply("got it")])
+    }
+
+    #[test]
+    fn whisper_and_timed_rules_stay_out_of_the_chat_index() {
+        let timer = rule("t", Trigger::Timer { every_seconds: 900, min_messages: 0 }, vec![send("hello chat")]);
+        let c = compiled_main(&[timer, whisper_reply_rule("w")], Some(ME));
+        assert_eq!(c.timed_rules, vec![0]);
+        assert_eq!(c.whisper_rules, vec![1]);
+        assert!(c.chat_index.is_empty() && c.chat_any.is_empty(), "neither listens to a chat row");
+        let facts = from_chat(&rows::privmsg("m1", "me", ME, "fan", "300", "hello")).unwrap();
+        assert!(c.candidates(&facts).is_empty(), "a Timer rule is never a candidate of a chat row");
+    }
+
+    #[test]
+    fn a_command_rule_whose_send_as_is_not_the_primary_is_held_with_the_text() {
+        let mut command = rule("c", mention(), vec![Action::Command { id: "a-c".into(), line: "/slowoff".into() }]);
+        command.send_as = alt();
+        let held = compiled_main(&[command.clone()], Some(ME));
+        assert_eq!(held.rules[0].held.as_deref(), Some("Waiting for @myalt to be your main account"));
+        assert!(held.rules[0].mode.is_none());
+        let fine = compiled_main(&[command], Some(ALT));
+        assert_eq!(fine.rules[0].held, None, "the same rule with its account as the primary runs");
+        // A Reply-only rule never needs the main account.
+        let mut reply_only = rule("r", mention(), vec![reply("hi")]);
+        reply_only.send_as = alt();
+        assert_eq!(compiled_main(&[reply_only.clone()], Some(ME)).rules[0].held, None);
+        assert_eq!(compiled_main(&[reply_only], None).rules[0].held, None);
+        // With no primary known, the main-account features wait.
+        let mut timeout = rule("t", mention(), vec![timeout_action()]);
+        timeout.send_as = me();
+        assert!(compiled_main(&[timeout], None).rules[0].held.as_deref().is_some_and(|w| w.ends_with("to be your main account")));
+    }
+
+    #[test]
+    fn a_whisper_trigger_reads_the_owner() {
+        let mut w = whisper_reply_rule("w");
+        w.owner = alt();
+        w.send_as = me();
+        let held = compiled_main(&[w.clone()], Some(ME));
+        assert_eq!(held.rules[0].held.as_deref(), Some("Waiting for @myalt to be your main account"), "the owner reads the whispers, not send_as");
+        assert_eq!(compiled_main(&[w], Some(ALT)).rules[0].held, None);
+    }
+
+    #[test]
+    fn a_bad_expression_holds_the_rule() {
+        let mut r = rule("e", mention(), vec![reply("hi")]);
+        r.only_if.expression = Some("author.subbed &&".into());
+        let c = compiled_main(&[r], Some(ME));
+        assert!(c.rules[0].held.is_some(), "an expression that does not compile holds its rule");
+        assert!(c.rules[0].mode.is_none() && c.rules[0].filter.is_none());
+        let mut good = rule("g", mention(), vec![reply("hi")]);
+        good.only_if.expression = Some("author.subbed".into());
+        let c = compiled_main(&[good], Some(ME));
+        assert_eq!(c.rules[0].held, None);
+        assert!(c.rules[0].filter.is_some());
+    }
+
+    #[test]
+    fn expressions_flag_is_set_only_for_running_chat_rules() {
+        let with = |mut r: Rule| {
+            r.only_if.expression = Some("author.subbed".into());
+            r
+        };
+        assert!(compiled_main(&[with(rule("a", mention(), vec![reply("hi")]))], Some(ME)).expressions);
+        let mut off = with(rule("b", mention(), vec![reply("hi")]));
+        off.enabled = false;
+        assert!(!compiled_main(&[off], Some(ME)).expressions, "a switched-off rule keeps no row");
+        let timer = with(rule("c", Trigger::Timer { every_seconds: 900, min_messages: 0 }, vec![send("hi")]));
+        assert!(!compiled_main(&[timer], Some(ME)).expressions, "a Timer rule judges no chat row");
+        assert!(!compiled_main(&[with(whisper_reply_rule("d"))], Some(ME)).expressions);
+        assert!(!compiled_main(&[rule("e", mention(), vec![reply("hi")])], Some(ME)).expressions, "no expression, no flag");
+    }
+
+    #[test]
+    fn summaries_name_the_p2_kinds() {
+        let whisper = summarize(&whisper_reply_rule("w"));
+        assert!(whisper.starts_with("When someone you've whispered with whispers you") && whisper.ends_with(": reply"), "{whisper}");
+        let timer = summarize(&rule("t", Trigger::Timer { every_seconds: 900, min_messages: 0 }, vec![send("x")]));
+        assert_eq!(timer, "Every 15 minutes in your channel: send a message");
+        let clock = summarize(&rule("c", Trigger::Clock { at: " 19:30 ".into(), days: vec![] }, vec![send("x")]));
+        assert_eq!(clock, "At 19:30 in your channel: send a message");
+        let uptime = summarize(&rule("u", Trigger::Uptime { seconds: 3600, late_ok: false }, vec![send("x")]));
+        assert_eq!(uptime, "When the stream reaches 1 hour in your channel: send a message");
+        let delay = summarize(&rule("d", Trigger::Delay { seconds: 60 }, vec![send("x")]));
+        assert_eq!(delay, "1 minute after the chat opens in your channel: send a message");
+        let actions = vec![
+            Action::Command { id: "a1".into(), line: " /slowoff ".into() },
+            Action::Delete { id: "a2".into() },
+            Action::Pin { id: "a3".into(), seconds: None },
+            Action::Announce { id: "a4".into(), text: "hi".into(), color: "primary".into() },
+            Action::Shoutout { id: "a5".into() },
+            Action::Wait { id: "a6".into(), seconds: 5 },
+            Action::Log { id: "a7".into(), to_file: false },
+        ];
+        assert_eq!(
+            summarize(&rule("m", mention(), actions)),
+            "When someone mentions you or replies to you in your channel: run /slowoff, delete the message, pin the message, announce, shout them out, wait 5 seconds and log it"
+        );
+        assert_eq!(
+            summarize(&rule("o", mention(), vec![timeout_action()])),
+            "When someone mentions you or replies to you in your channel: time them out for 10 minutes"
+        );
+    }
+
+    #[test]
+    fn main_account_hold_skips_a_kick_actor() {
+        let kick = AccountRef { provider: "kick".into(), id: "5001".into(), login: "mykick".into(), name: "MyKick".into() };
+        let mut r = rule("k", mention(), vec![timeout_action()]);
+        r.send_as = kick.clone();
+        r.only_if.platforms = vec![crate::models::automations::Platform::Kick];
+        let connected = [PlatformId { provider: "kick".into(), id: "5001".into(), login: "mykick".into() }];
+        for primary in [None, Some(ME), Some(ALT)] {
+            let c = compiled_main_with(&[r.clone()], primary, &connected);
+            assert_eq!(c.rules[0].held, None, "a Kick actor never asks the Twitch primary ({primary:?})");
+            assert!(c.rules[0].mode.is_some());
+        }
+        // With no Kick account connected the only hold is the Kick account's own words.
+        let none = compiled_main_with(&[r], Some(ME), &[]);
+        assert_eq!(none.rules[0].held.as_deref(), Some("Connect Kick to run this rule"));
     }
 }
