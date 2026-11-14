@@ -153,6 +153,14 @@ pub fn pick_category<'a>(name: &str, rows: &'a [CategoryRow]) -> Option<&'a Cate
     if let Some(exact) = rows.iter().find(|r| fold_search(&r.name) == want) {
         return Some(exact);
     }
+    // Badge text often names a game by its short form ("GTAVI", "GTA V"), and
+    // Twitch's own best guess for "GTAVI" is Grand Theft Auto V, not VI.
+    let compact: String = want.chars().filter(|c| c.is_alphanumeric()).collect();
+    if compact.chars().count() >= 3 {
+        if let Some(short) = rows.iter().find(|r| short_form(&r.name) == compact) {
+            return Some(short);
+        }
+    }
     rows.iter()
         .filter(|r| {
             let have = fold_search(&r.name);
@@ -160,6 +168,24 @@ pub fn pick_category<'a>(name: &str, rows: &'a [CategoryRow]) -> Option<&'a Cate
         })
         .max_by_key(|r| r.name.chars().count())
         .or_else(|| rows.first())
+}
+
+/// A category name as people abbreviate it: each word's first letter, with
+/// numbers and Roman numerals kept whole ("Grand Theft Auto VI" is "gtavi",
+/// "Grand Theft Auto V" is "gtav"). Folded like `fold_search`.
+fn short_form(name: &str) -> String {
+    name.split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(|w| {
+            let numeral = w.chars().all(|c| c.is_ascii_digit())
+                || w.chars().all(|c| matches!(c, 'I' | 'V' | 'X' | 'L' | 'C' | 'D' | 'M'));
+            if numeral {
+                fold_search(w)
+            } else {
+                w.chars().next().map(|c| fold_search(&c.to_string())).unwrap_or_default()
+            }
+        })
+        .collect()
 }
 
 /// The name minus one trailing word at a time, down to two words.
@@ -319,6 +345,33 @@ mod tests {
         assert_eq!(
             pick_category("Rainbow Six Siege", &rows).map(|r| r.id.as_str()),
             Some("2")
+        );
+    }
+
+    #[test]
+    fn a_short_form_names_its_game_not_twitchs_first_guess() {
+        // Twitch's search for "GTAVI" lists Grand Theft Auto V first.
+        let rows = [
+            row("32982", "Grand Theft Auto V"),
+            row("1867279146", "Grand Theft Auto VI"),
+        ];
+        assert_eq!(
+            pick_category("GTAVI", &rows).map(|r| r.id.as_str()),
+            Some("1867279146")
+        );
+        assert_eq!(
+            pick_category("GTA VI", &rows).map(|r| r.id.as_str()),
+            Some("1867279146")
+        );
+        assert_eq!(
+            pick_category("GTA V", &rows).map(|r| r.id.as_str()),
+            Some("32982")
+        );
+        // A full name still matches itself exactly, before any short form.
+        assert_eq!(short_form("Dead by Daylight"), "dbd");
+        assert_eq!(
+            pick_category("Dead by Daylight", &[row("1", "Dead by Daylight")]).map(|r| r.id.as_str()),
+            Some("1")
         );
     }
 
