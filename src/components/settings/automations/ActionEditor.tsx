@@ -348,7 +348,7 @@ function HighlightFields({
           value={valid ? color : '#f97316'}
           aria-label="Custom color"
           onChange={(e) => onChange({ ...action, color: e.target.value.toLowerCase() })}
-          className="h-6 w-6 cursor-pointer rounded-full border border-borderSubtle bg-transparent p-0"
+          className="h-6 w-6 cursor-pointer overflow-hidden rounded-full border border-borderSubtle bg-transparent p-0 [&::-webkit-color-swatch-wrapper]:p-0 [&::-webkit-color-swatch]:rounded-full [&::-webkit-color-swatch]:border-0"
         />
       </div>
     </Field>

@@ -16,7 +16,9 @@ export function AutomationDot({ state, onVideo = false }: { state: AutomationDot
       ? onVideo
         ? 'bg-white shadow-[0_0_0_1px_rgba(0,0,0,0.4)]'
         : 'bg-accent'
-      : 'bg-warning [html[data-theme-tone=light]_&]:bg-[color-mix(in_srgb,var(--color-warning)_58%,black)]';
+      : onVideo
+        ? 'bg-[#fbbf24] shadow-[0_0_0_1px_rgba(0,0,0,0.4)]'
+        : 'bg-warning [html[data-theme-tone=light]_&]:bg-[color-mix(in_srgb,var(--color-warning)_72%,black)]';
   return (
     <Tooltip content={words}>
       <span role="img" aria-label={words} className="inline-flex h-4 w-3.5 shrink-0 items-center justify-center">

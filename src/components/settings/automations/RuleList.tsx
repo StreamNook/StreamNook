@@ -25,6 +25,8 @@ import { AccountFace, DANGER_BUTTON, HINT, LIGHT_WARN, LiveWord, PRIMARY_BUTTON,
 
 /** The open editor of a rule not saved yet. */
 const NEW = 'new';
+/** On the phone the arrows keep their size and reach further for a finger, so the text column keeps its width. */
+const MOVE_TAP = IS_MOBILE ? "relative after:absolute after:-inset-2.5 after:content-['']" : '';
 
 function RuleRow({
   r,
@@ -79,13 +81,16 @@ function RuleRow({
           {speaker && <AccountFace account={speaker} />}
         </span>
         {r.summary && <span className="mt-0.5 block text-[12px] leading-relaxed text-textSecondary">{r.summary}</span>}
-        <span className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11.5px] text-textMuted">
+        <span
+          className={`mt-1.5 flex flex-wrap items-center ${IS_MOBILE ? 'gap-x-3' : 'gap-x-1.5'} gap-y-1 text-[11.5px] text-textMuted`}
+        >
           <LiveWord live={r.live} />
-          <span aria-hidden="true">·</span>
+          {/* The phone's narrow column wraps the line, and a dot would lead a row. */}
+          {!IS_MOBILE && <span aria-hidden="true">·</span>}
           <span>{actedText(r.count, r.last_fire_ms, now)}</span>
           {r.last_outcome && (
             <>
-              <span aria-hidden="true">·</span>
+              {!IS_MOBILE && <span aria-hidden="true">·</span>}
               <span>{r.last_outcome}</span>
             </>
           )}
@@ -100,7 +105,7 @@ function RuleRow({
             type="button"
             onClick={() => onMove(-1)}
             disabled={index === 0}
-            className={`rounded ${IS_MOBILE ? 'p-2.5' : 'p-1'} text-textSecondary transition-colors hover:text-textPrimary disabled:cursor-not-allowed disabled:opacity-30`}
+            className={`rounded p-1 ${MOVE_TAP} text-textSecondary transition-colors hover:text-textPrimary disabled:cursor-not-allowed disabled:opacity-30`}
             aria-label="Move up"
           >
             <ArrowUp size={14} />
@@ -111,7 +116,7 @@ function RuleRow({
             type="button"
             onClick={() => onMove(1)}
             disabled={index === total - 1}
-            className={`rounded ${IS_MOBILE ? 'p-2.5' : 'p-1'} text-textSecondary transition-colors hover:text-textPrimary disabled:cursor-not-allowed disabled:opacity-30`}
+            className={`rounded p-1 ${MOVE_TAP} text-textSecondary transition-colors hover:text-textPrimary disabled:cursor-not-allowed disabled:opacity-30`}
             aria-label="Move down"
           >
             <ArrowDown size={14} />
@@ -258,7 +263,7 @@ export default function RuleList({ status, now, initialOpen, otherChannelsOn }: 
             onKeep={() => setConfirmId(null)}
           />
           {problem?.ruleId === r.id && (
-            <p role="alert" className="-mt-1.5 px-3.5 pb-2.5 text-[12px] text-error">
+            <p role="alert" className="-mt-1.5 pb-2.5 pl-[70px] pr-3.5 text-[12px] text-error">
               {problem.text}
             </p>
           )}

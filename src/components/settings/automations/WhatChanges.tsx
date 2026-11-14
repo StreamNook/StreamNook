@@ -13,7 +13,7 @@ export function WhatChanges({ ruleId }: { ruleId: string }) {
         <Info size={14} className="text-accent" />
         <h4 className="text-[13px] font-semibold text-textPrimary">What changes</h4>
       </div>
-      <p className="text-[12px] leading-relaxed text-textMuted">
+      <p className="text-[12px] leading-relaxed text-textSecondary">
         This rule was made from a reminder and starts in Test. These work differently now.
       </p>
       <ul className="space-y-1.5">

@@ -18,7 +18,7 @@ export const QUIET_BUTTON =
   'inline-flex items-center gap-1.5 rounded-lg bg-textPrimary/[0.06] px-2.5 py-1.5 text-[13px] text-textSecondary transition-colors hover:bg-textPrimary/[0.10] hover:text-textPrimary disabled:opacity-50';
 /** Warning text darkened enough to read on a light theme. */
 export const LIGHT_WARN =
-  '[html[data-theme-tone=light]_&]:text-[color-mix(in_srgb,var(--color-warning)_58%,black)]';
+  '[html[data-theme-tone=light]_&]:text-[color-mix(in_srgb,var(--color-warning)_52%,black)]';
 export const PRIMARY_BUTTON =
   'glass-button inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[13px] font-medium text-textPrimary disabled:opacity-50';
 export const DANGER_BUTTON =
