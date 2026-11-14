@@ -1,0 +1,10 @@
+{
+  "about": "How a date reads, always in UTC. `long` is the badge page, the desktop detail line and the phone sheet ('Added ' + long); `short` is a /badges tile. Months: January..December long, Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec short. Site copy in functions/utils/, app copy in src-tauri/tests/fixtures/ (same parity rule as badgeOrder).",
+  "cases": [
+    { "ms": 1794538089000, "p": "minute", "long": "13 November 2026", "short": "13 Nov 2026" },
+    { "ms": 1794614340000, "p": "minute", "long": "13 November 2026", "short": "13 Nov 2026" },
+    { "ms": 1794528000000, "p": "day", "long": "13 November 2026", "short": "13 Nov 2026" },
+    { "ms": 1790726400000, "p": "day", "long": "30 September 2026", "short": "30 Sep 2026" },
+    { "ms": 1488326400000, "p": "month", "long": "March 2017", "short": "Mar 2017" }
+  ]
+}

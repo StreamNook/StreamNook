@@ -75,6 +75,21 @@ async fn collect_badges() -> Vec<OutItem> {
         return Vec::new();
     }
 
+    // Feed dates before the classifier: an unchanged re-push is skipped by
+    // everything after it, and this worker may be the only one that ever sees a
+    // badge's first push. One merge per batch, written only when a key gains a
+    // date, on the blocking pool like the app's own ingest. No handle here, so
+    // `notify` uses the running app's when this process has one.
+    let batch = drops.clone();
+    let gained = tokio::task::spawn_blocking(move || {
+        crate::services::badge_index::record_feed_dates(&batch)
+    })
+    .await
+    .unwrap_or(false);
+    if gained {
+        crate::services::badge_index::notify(None);
+    }
+
     // Same reasoning as the live seed: a fresh install must absorb the relay's
     // whole backlog silently rather than announce every badge ever dropped.
     let seeding = feed::is_empty().await;

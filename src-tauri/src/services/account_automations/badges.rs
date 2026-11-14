@@ -1047,6 +1047,8 @@ mod tests {
                 "event": "TwitchCon"
             })),
             window: None,
+            first_seen_ms: None,
+            first_seen_p: None,
         };
         let info = BadgeInfo::from_notification(&drop);
         assert_eq!(info.name, "Rotterdam");

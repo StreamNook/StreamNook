@@ -14,13 +14,17 @@ import { BadgeChannelCard } from './badge/BadgeChannelCard';
 import { BadgeCategoryCard } from './badge/BadgeCategoryCard';
 import { BadgeSiblingChips } from './badge/BadgeSiblingChips';
 import { BadgeEligibleCategories } from './badge/BadgeEligibleCategories';
+import { addedLabelFor, latestOnly, type AddedMap } from './badge/badgeAddedOrder';
 
 import { Logger } from '../utils/logger';
 import { decodeHtmlEntities } from '../utils/badgeWindow';
 import {
   getBadgeEarnGuide,
+  getBadgeStanding,
   getBadgeWindow,
+  getLastStanding,
   windowStatusAt,
+  type BadgeStanding,
   type EarnGuide,
   type WindowRun,
 } from '../services/badgeStanding';
@@ -376,6 +380,30 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
       unlisten.then((fn) => fn());
     };
   }, [setId, badge.id]);
+
+  // When the badge was added: the one date Rust resolves, the same as the site and the phone
+  // wall show. The standing's map is kept in state, loaded once on mount (from the last
+  // standing this run answered when there is one) and again when a new index copy lands; the
+  // label is read from it at render, so switching to a sibling badge never blanks and refetches.
+  // A badge opened from chat has no gallery, and so no standing, around it. The BadgeBase date
+  // in the metadata is never shown.
+  const [added, setAdded] = useState<AddedMap>(() => getLastStanding()?.added ?? null);
+  useEffect(() => {
+    let live = true;
+    const apply = latestOnly<BadgeStanding>((standing) => {
+      if (live) setAdded(standing.added);
+    });
+    const read = () => {
+      apply(getBadgeStanding(false)).catch(() => {});
+    };
+    read();
+    const unlisten = listen('badge-standing-changed', read);
+    return () => {
+      live = false;
+      unlisten.then((fn) => fn());
+    };
+  }, []);
+  const addedLabel = addedLabelFor(added, setId, badge.id);
 
   // Read against the clock from the window Rust resolved, rather than off the
   // payload, so a badge whose earn period opens while the app is running stops
@@ -1058,7 +1086,7 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
 
             {/* Quiet footer: stats + collapsible technical details */}
             <div className="space-y-3 pt-4 border-t border-white/[0.06]">
-              {(badgeBaseInfo?.usage_stats || badgeBaseInfo?.date_added || isDrops) && (
+              {(badgeBaseInfo?.usage_stats || addedLabel || isDrops) && (
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-[12px] text-textMuted">
                   {badgeBaseInfo?.usage_stats && (
                     <span className="inline-flex items-center gap-1.5">
@@ -1066,10 +1094,10 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
                       {badgeBaseInfo.usage_stats}
                     </span>
                   )}
-                  {badgeBaseInfo?.date_added && (
+                  {addedLabel && (
                     <span className="inline-flex items-center gap-1.5">
                       <Clock size={13} className="shrink-0" />
-                      Added {badgeBaseInfo.date_added}
+                      Added {addedLabel}
                     </span>
                   )}
                   {isDrops && (

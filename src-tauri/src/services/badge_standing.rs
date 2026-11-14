@@ -22,6 +22,7 @@
 //!   a different badge you can earn, so it is listed.
 
 use crate::services::account_store::AccountStore;
+use crate::services::badge_index::{self, OrderInput};
 use crate::services::badge_window::{self, WindowRun, WindowStatus};
 use crate::services::universal_cache_service::{self, CacheType};
 use log::{debug, warn};
@@ -91,6 +92,20 @@ pub struct CatchUp {
     pub estimated: bool,
 }
 
+/// When a badge was added and where it sits in Newest First (see
+/// `badge_index`). `order` is 0-based over the WHOLE catalogue, undated badges
+/// included (they lead), so every surface sorts by it and none parses a date.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct AddedDate {
+    pub ms: Option<i64>,
+    /// `minute`, `day` or `month`.
+    pub precision: Option<String>,
+    /// "13 November 2026" or "March 2017", in UTC. A surface writes "Added "
+    /// before it.
+    pub label: Option<String>,
+    pub order: u32,
+}
+
 #[derive(Serialize, Clone, Debug)]
 pub struct BadgeStanding {
     pub login: Option<String>,
@@ -109,6 +124,10 @@ pub struct BadgeStanding {
     pub owned: Vec<String>,
     /// Every badge with a known earn window, keyed `set_id/version`.
     pub windows: HashMap<String, Vec<WindowRun>>,
+    /// Every catalogue badge's date and place in Newest First, keyed
+    /// `set_id/version`. Built in every collection state, signed out included,
+    /// and empty only if the task that builds it failed.
+    pub added: HashMap<String, AddedDate>,
     pub missing_now: Vec<MissingBadge>,
     /// The next instant any window opens or closes; ask again then.
     pub next_change_ms: Option<i64>,
@@ -769,12 +788,109 @@ fn build_standing_with(
         catalogue_ready,
         owned,
         windows,
+        // Built in its own task by `get_standing`, from the index copy.
+        added: HashMap::new(),
         next_change_ms,
         earn_icons: earn_icons(catalogue),
         catch_up: catch_up(&missing_now),
         missing_now,
         generated_ms: now,
     }
+}
+
+/// Every catalogue badge's date and its place in Newest First, keyed
+/// `set_id/version`. Pure: the index copy, the feed dates and the positions are
+/// passed in. While an index copy is held the order is the shared one; while
+/// none is (a first run, or an invalid copy set aside) it is `fallback_order`,
+/// and no badge shows a date the index or the feed did not give it.
+pub(crate) fn build_added(
+    catalogue: &[CatalogueBadge],
+    index: &badge_index::Snapshot,
+    positions: &HashMap<String, u32>,
+) -> HashMap<String, AddedDate> {
+    // The index's keys are lowercased `<set>-v<version>`; the standing's are
+    // `set/version` in Twitch's own case.
+    let keyed: Vec<(String, String)> = catalogue
+        .iter()
+        .map(|b| (b.key(), badge_index::index_key(&b.set_id, &b.version)))
+        .collect();
+    let mut unique: Vec<String> = keyed.iter().map(|(_, lower)| lower.clone()).collect();
+    unique.sort();
+    unique.dedup();
+    let ranked: Vec<String> = if index.index_loaded() {
+        badge_index::order_keys(
+            unique
+                .iter()
+                .map(|key| OrderInput {
+                    key: key.clone(),
+                    date: index.resolve(key),
+                    hr: index.hr(key),
+                })
+                .collect(),
+        )
+    } else {
+        badge_index::fallback_order(&unique, index.feed_dates(), positions)
+    };
+    let place: HashMap<&str, u32> = ranked
+        .iter()
+        .enumerate()
+        .map(|(i, key)| (key.as_str(), i as u32))
+        .collect();
+    keyed
+        .into_iter()
+        .map(|(key, lower)| {
+            let date = index.resolve(&lower);
+            let added = AddedDate {
+                ms: date.map(|d| d.ms),
+                precision: date.map(|d| d.precision.as_str().to_string()),
+                label: date.map(|d| d.label()),
+                order: place.get(lower.as_str()).copied().unwrap_or(u32::MAX),
+            };
+            (key, added)
+        })
+        .collect()
+}
+
+/// Universal-cache positions by lowercased key. Only badges the daily job ranks
+/// have one, and a fresh Android install has none yet.
+fn load_positions(catalogue: &[CatalogueBadge]) -> HashMap<String, u32> {
+    let keys: Vec<String> = catalogue
+        .iter()
+        .map(|b| metadata_key(&b.set_id, &b.version))
+        .collect();
+    let entries = universal_cache_service::get_cached_items_batch(CacheType::Badge, &keys)
+        .unwrap_or_default();
+    catalogue
+        .iter()
+        .filter_map(|b| {
+            let position = entries.get(&metadata_key(&b.set_id, &b.version))?.position?;
+            Some((badge_index::index_key(&b.set_id, &b.version), position))
+        })
+        .collect()
+}
+
+/// The `added` task: reads the index copy (disk IO, so on the blocking pool)
+/// and, only while no index copy is held, one batch of positions for the
+/// fallback order.
+fn added_dates(catalogue: &[CatalogueBadge]) -> HashMap<String, AddedDate> {
+    let index = badge_index::snapshot();
+    let positions = if index.index_loaded() {
+        HashMap::new()
+    } else {
+        load_positions(catalogue)
+    };
+    build_added(catalogue, &index, &positions)
+}
+
+/// A failed `added` task (a panic, a cancelled runtime) leaves an empty map; the
+/// rest of the standing is built apart from it and is unaffected.
+fn added_or_empty(
+    joined: Result<HashMap<String, AddedDate>, tokio::task::JoinError>,
+) -> HashMap<String, AddedDate> {
+    joined.unwrap_or_else(|e| {
+        warn!("[BadgeStanding] Building the added dates failed: {}", e);
+        HashMap::new()
+    })
 }
 
 /// Totals for `CatchUp`. Badges are grouped by category (a badge with none is
@@ -920,17 +1036,24 @@ pub async fn get_standing(app: &crate::rt::AppHandle, force: bool) -> BadgeStand
     }
     let refreshing = REFRESHING.load(Ordering::Acquire);
 
-    if cached.as_ref().map(|c| c.state) == Some(CollectionState::Unavailable) {
-        return build_standing(None, cached.as_ref(), refreshing, &[], &HashMap::new(), now);
-    }
-
-    let catalogue = load_catalogue().await;
+    // Signed out too: the dates and their order need no account, and the missing
+    // list is empty for one anyway. The windows come along with them, which a
+    // signed-out gallery now shows as a signed-in one does.
+    let catalogue = std::sync::Arc::new(load_catalogue().await);
     let campaigns = active_campaigns(app).await;
     let login = primary
         .map(|a| a.login)
         .or_else(|| cached.as_ref().map(|c| c.login.clone()))
         .filter(|l| !l.is_empty());
     let fallback_login = login.clone();
+    // A copy of the index older than six hours is renewed in the background; a
+    // new one re-sorts open surfaces through `badge-standing-changed`.
+    badge_index::refresh_if_due(app);
+    // The dates read the catalogue and the index copy and nothing the standing
+    // builds, so they get their own blocking task: a failure there leaves
+    // `added` empty and the owned list and the windows untouched.
+    let for_added = std::sync::Arc::clone(&catalogue);
+    let added_task = tokio::task::spawn_blocking(move || added_dates(&for_added));
     let started = std::time::Instant::now();
     let standing = tokio::task::spawn_blocking(move || {
         let metadata = load_metadata(&catalogue);
@@ -950,19 +1073,26 @@ pub async fn get_standing(app: &crate::rt::AppHandle, force: bool) -> BadgeStand
     })
     .await;
 
+    let added = added_or_empty(added_task.await);
+
     match standing {
-        Ok(s) => {
+        Ok(mut s) => {
             debug!(
-                "[BadgeStanding] {} windows, {} missing now, built in {} ms",
+                "[BadgeStanding] {} windows, {} badges ordered, {} missing now, built in {} ms",
                 s.windows.len(),
+                added.len(),
                 s.missing_now.len(),
                 started.elapsed().as_millis()
             );
+            s.added = added;
             s
         }
         Err(e) => {
             warn!("[BadgeStanding] Building the standing failed: {}", e);
-            build_standing(fallback_login, None, refreshing, &[], &HashMap::new(), now)
+            // The dates were built apart and are still good.
+            let mut s = build_standing(fallback_login, None, refreshing, &[], &HashMap::new(), now);
+            s.added = added;
+            s
         }
     }
 }
@@ -1384,5 +1514,189 @@ mod tests {
         let steps = |key: &str| s.missing_now.iter().find(|m| m.key == key).unwrap().earn.steps.clone();
         assert_eq!(steps("witch-hat/1"), vec![EarnStep::Other]);
         assert!(matches!(steps("ultramarine/1").as_slice(), [EarnStep::Watch { .. }]));
+    }
+
+    // ---- the dates and their order ----
+
+    use crate::services::badge_index::{Precision, Snapshot};
+
+    const DAY: i64 = 24 * HOUR;
+    /// 13 November 2026, 00:00 UTC.
+    const T_DAY: i64 = 1_794_528_000_000;
+    /// 1 March 2017.
+    const T_OLD: i64 = 1_488_326_400_000;
+
+    fn index_of(badges: serde_json::Value) -> String {
+        json!({ "v": 1, "at": T_DAY, "badges": badges }).to_string()
+    }
+
+    /// The standing's keys in `order`, newest first.
+    fn by_order(added: &HashMap<String, AddedDate>) -> Vec<&str> {
+        let mut list: Vec<(&String, u32)> = added.iter().map(|(k, a)| (k, a.order)).collect();
+        list.sort_by_key(|(_, order)| *order);
+        list.into_iter().map(|(k, _)| k.as_str()).collect()
+    }
+
+    fn dated_fixture_index() -> String {
+        index_of(json!({
+            "wolf-v1": { "t": T_DAY, "p": "minute" },
+            "chains-v1": { "t": T_DAY - DAY, "p": "day" },
+            "old-v1": { "t": T_OLD, "p": "month" }
+        }))
+    }
+
+    #[test]
+    fn every_catalogue_key_has_an_order_dated_or_not() {
+        let (catalogue, _) = fixture();
+        let snapshot = Snapshot::for_test(Some(&dated_fixture_index()), &[]);
+        let added = build_added(&catalogue, &snapshot, &HashMap::new());
+        assert_eq!(added.len(), catalogue.len());
+        // Undated first (by key), then newest first.
+        assert_eq!(
+            by_order(&added),
+            ["permanent/1", "soon/1", "wolf/1", "chains/1", "old/1"]
+        );
+        let mut orders: Vec<u32> = added.values().map(|a| a.order).collect();
+        orders.sort();
+        assert_eq!(orders, [0, 1, 2, 3, 4]);
+        // An undated badge shows no date at all.
+        let permanent = &added["permanent/1"];
+        assert_eq!((permanent.ms, permanent.precision.as_deref(), permanent.label.as_deref()), (None, None, None));
+        assert_eq!(added["wolf/1"].label.as_deref(), Some("13 November 2026"));
+        assert_eq!(added["wolf/1"].precision.as_deref(), Some("minute"));
+        assert_eq!(added["chains/1"].label.as_deref(), Some("12 November 2026"));
+        assert_eq!(added["old/1"].label.as_deref(), Some("March 2017"));
+        assert_eq!(added["old/1"].ms, Some(T_OLD));
+    }
+
+    #[test]
+    fn a_signed_out_standing_carries_added_and_windows() {
+        let (catalogue, meta) = fixture();
+        let signed_out = Cached {
+            user_id: String::new(),
+            login: String::new(),
+            ids: Vec::new(),
+            state: CollectionState::Unavailable,
+            reason: Some("not_signed_in".into()),
+            fetched_at_ms: NOW,
+            stale: false,
+        };
+        // The same inputs `get_standing` now builds for a signed-out reader.
+        let s = build_standing(None, Some(&signed_out), false, &catalogue, &meta, NOW);
+        assert_eq!(s.collection, CollectionState::Unavailable);
+        assert!(s.catalogue_ready);
+        assert!(s.windows.contains_key("wolf/1"));
+        assert!(s.missing_now.is_empty());
+        let snapshot = Snapshot::for_test(Some(&dated_fixture_index()), &[]);
+        let added = build_added(&catalogue, &snapshot, &HashMap::new());
+        assert_eq!(added.len(), catalogue.len());
+    }
+
+    #[test]
+    fn a_mixed_case_set_gets_its_date_and_the_feed_dates_a_key_the_index_lacks() {
+        let catalogue = vec![badge("H1Z1_1", "1", "H1Z1"), badge("fresh", "1", "Fresh")];
+        let index = index_of(json!({ "h1z1_1-v1": { "t": T_OLD, "p": "month" } }));
+        let snapshot = Snapshot::for_test(Some(&index), &[("fresh-v1", T_DAY, Precision::Minute)]);
+        let added = build_added(&catalogue, &snapshot, &HashMap::new());
+        // Keyed in Twitch's own case, found by the lowercased index key.
+        assert_eq!(added["H1Z1_1/1"].label.as_deref(), Some("March 2017"));
+        assert_eq!(added["fresh/1"].label.as_deref(), Some("13 November 2026"));
+        assert_eq!(by_order(&added), ["fresh/1", "H1Z1_1/1"]);
+    }
+
+    #[test]
+    fn while_no_index_is_held_feed_dates_lead_and_no_date_is_invented() {
+        let (catalogue, _) = fixture();
+        let snapshot = Snapshot::for_test(None, &[("soon-v1", T_DAY, Precision::Minute)]);
+        let positions = HashMap::from([("wolf-v1".to_string(), 0u32), ("chains-v1".to_string(), 1u32)]);
+        let added = build_added(&catalogue, &snapshot, &positions);
+        assert_eq!(
+            by_order(&added),
+            ["soon/1", "wolf/1", "chains/1", "old/1", "permanent/1"]
+        );
+        // A position ranks a badge; it never dates it.
+        assert_eq!(added["wolf/1"].ms, None);
+        assert_eq!(added["wolf/1"].label, None);
+        assert_eq!(added["soon/1"].label.as_deref(), Some("13 November 2026"));
+        // An empty positions map (a fresh Android install) still leads with the feed.
+        let bare = build_added(&catalogue, &snapshot, &HashMap::new());
+        assert_eq!(by_order(&bare)[0], "soon/1");
+    }
+
+    #[test]
+    fn the_first_index_to_land_reorders_once() {
+        let (catalogue, _) = fixture();
+        let positions = HashMap::from([("wolf-v1".to_string(), 0u32), ("chains-v1".to_string(), 1u32)]);
+        let before = build_added(&catalogue, &Snapshot::for_test(None, &[]), &positions);
+        let after = build_added(
+            &catalogue,
+            &Snapshot::for_test(Some(&dated_fixture_index()), &[]),
+            &HashMap::new(),
+        );
+        assert_eq!(by_order(&before), ["wolf/1", "chains/1", "old/1", "permanent/1", "soon/1"]);
+        assert_eq!(by_order(&after), ["permanent/1", "soon/1", "wolf/1", "chains/1", "old/1"]);
+        // From then on the same inputs give the same order.
+        let again = build_added(
+            &catalogue,
+            &Snapshot::for_test(Some(&dated_fixture_index()), &[]),
+            &HashMap::new(),
+        );
+        assert_eq!(after, again);
+    }
+
+    #[test]
+    fn the_added_builder_reads_no_metadata_and_get_standing_has_no_signed_out_shortcut() {
+        let src = include_str!("badge_standing.rs").replace("\r\n", "\n");
+        let body_of = |head: &str| {
+            let start = src.find(head).unwrap();
+            src[start..start + src[start..].find("\n}\n").unwrap()].to_string()
+        };
+        let build = body_of("pub(crate) fn build_added(");
+        assert!(!build.contains(concat!("date_", "added")));
+        assert!(!build.contains("metadata"));
+        let get = body_of("pub async fn get_standing(");
+        assert!(!get.contains("CollectionState::Unavailable"));
+        assert!(get.contains("added_dates("));
+        assert!(get.contains("refresh_if_due("));
+        // The dates are built in their own blocking task, never inside the
+        // standing's own closure.
+        assert!(get.contains("let added_task = tokio::task::spawn_blocking("));
+        // Both the success and the fallback standing carry the dates built apart.
+        assert!(get.contains("let added = added_or_empty(added_task.await);"));
+        assert_eq!(get.matches("s.added = added;").count(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_failed_added_task_leaves_an_empty_map_and_the_rest_of_the_standing_whole() {
+        let joined = tokio::task::spawn_blocking(|| -> HashMap<String, AddedDate> {
+            panic!("injected for the test")
+        })
+        .await;
+        assert!(joined.is_err());
+        let added = added_or_empty(joined);
+        assert!(added.is_empty());
+        let (catalogue, meta) = fixture();
+        let c = collection(&["wolf/1"], CollectionState::Complete);
+        let mut s = build_standing(None, Some(&c), false, &catalogue, &meta, NOW);
+        s.added = added;
+        assert_eq!(s.owned, vec!["wolf/1".to_string()]);
+        assert!(s.windows.contains_key("wolf/1"));
+        assert!(s.added.is_empty());
+    }
+
+    #[test]
+    fn the_standing_serializes_added_with_the_names_the_surfaces_read() {
+        let (catalogue, meta) = fixture();
+        let snapshot = Snapshot::for_test(Some(&dated_fixture_index()), &[]);
+        let mut s = build_standing(None, None, false, &catalogue, &meta, NOW);
+        assert!(s.added.is_empty(), "the pure builder leaves it to the added task");
+        s.added = build_added(&catalogue, &snapshot, &HashMap::new());
+        let wire = serde_json::to_value(&s).unwrap();
+        let wolf = &wire["added"]["wolf/1"];
+        assert_eq!(wolf["ms"], T_DAY);
+        assert_eq!(wolf["precision"], "minute");
+        assert_eq!(wolf["label"], "13 November 2026");
+        assert_eq!(wolf["order"], 2);
+        assert!(wire["added"]["permanent/1"]["label"].is_null());
     }
 }

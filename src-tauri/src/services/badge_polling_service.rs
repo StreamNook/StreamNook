@@ -45,6 +45,14 @@ pub struct BadgeNotification {
     /// `content_hash` (which serializes this struct).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window: Option<Vec<crate::services::badge_window::WindowRun>>,
+    /// When Penrose first saw the badge, in ms, as the relay's drop carries it.
+    /// Never part of `content_hash`: a date arriving must not re-store or
+    /// re-toast a drop the app already handled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_seen_ms: Option<i64>,
+    /// How exactly `first_seen_ms` is known: `minute`, `day` or `month`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_seen_p: Option<String>,
 }
 
 impl BadgeNotification {
@@ -56,7 +64,12 @@ impl BadgeNotification {
     /// Content fingerprint, for telling a corrected re-push from a redundant one.
     /// Deterministic: `serde_json` maps are `BTreeMap` here, so keys are sorted.
     pub fn content_hash(&self) -> String {
-        let text = serde_json::to_string(self).unwrap_or_default();
+        // The copy has no feed date, so a payload from before the date existed
+        // hashes exactly as it did and an upgrade never re-stores the stored ring.
+        let mut bare = self.clone();
+        bare.first_seen_ms = None;
+        bare.first_seen_p = None;
+        let text = serde_json::to_string(&bare).unwrap_or_default();
         // FNV-1a. Detects change; collision resistance is not needed here.
         let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
         for byte in text.as_bytes() {
@@ -280,6 +293,8 @@ mod tests {
             date_info: None,
             enrichment: None,
             window: None,
+            first_seen_ms: None,
+            first_seen_p: None,
         }
     }
 
@@ -319,6 +334,42 @@ mod tests {
             state.content_hashes.is_empty(),
             "but the new logic has never recorded, so this is a first run"
         );
+    }
+
+    /// The hash this file computed before the feed date existed, for comparison.
+    fn fnv(text: &str) -> String {
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        for byte in text.as_bytes() {
+            hash ^= *byte as u64;
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        format!("{hash:016x}")
+    }
+
+    #[test]
+    fn a_payload_from_before_the_feed_date_still_reads_and_hashes_as_it_did() {
+        let text = r#"{"badge_name":"Spider-Man","badge_set_id":"spiderman","badge_version":"1","badge_image_url":"https://static-cdn.jtvnw.net/badges/v1/abc/3","status":"new"}"#;
+        let badge: BadgeNotification = serde_json::from_str(text).unwrap();
+        assert_eq!(badge.first_seen_ms, None);
+        assert_eq!(badge.first_seen_p, None);
+        // Nothing new is written for an undated badge, so the wire form and the
+        // hash are byte for byte what an older build produced.
+        assert_eq!(serde_json::to_string(&badge).unwrap(), text);
+        assert_eq!(badge.content_hash(), fnv(text));
+    }
+
+    #[test]
+    fn a_date_arriving_never_changes_the_content_hash() {
+        let plain = badge("Spider-Man");
+        let mut dated = badge("Spider-Man");
+        dated.first_seen_ms = Some(1_794_538_089_000);
+        dated.first_seen_p = Some("minute".into());
+        assert_eq!(plain.content_hash(), dated.content_hash());
+        // It still rides the wire both ways.
+        let wire = serde_json::to_value(&dated).unwrap();
+        assert_eq!(wire["first_seen_ms"], 1_794_538_089_000i64);
+        let back: BadgeNotification = serde_json::from_value(wire).unwrap();
+        assert_eq!(back.first_seen_p.as_deref(), Some("minute"));
     }
 
     #[test]

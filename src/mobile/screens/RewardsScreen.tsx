@@ -689,9 +689,12 @@ export const RewardsScreen: React.FC = () => {
           <div className="flex flex-col items-center text-center pb-1">
             <img src={badgeDetail.image} alt="" className="w-20 h-20 object-contain mb-2.5" draggable={false} />
             <div className="text-[16px] font-semibold text-textPrimary">{badgeDetail.title}</div>
-            <div className="mt-1 mb-2.5">
+            <div className="mt-1 mb-2.5 flex flex-col items-center gap-1">
               {badgeDetail.sheet_word && (
                 <span className={`text-[11px] font-semibold ${wordColor(badgeDetail)}`}>{badgeDetail.sheet_word}</span>
+              )}
+              {badgeDetail.added_label && (
+                <span className="text-[12px] text-textMuted tabular-nums">Added {badgeDetail.added_label}</span>
               )}
             </div>
             {(() => {

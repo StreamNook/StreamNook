@@ -91,6 +91,8 @@ export interface BadgeTile {
   caveat: string | null;
   usage_label: string | null;
   info_url: string | null;
+  /** "13 November 2026" or "March 2017" in UTC; the sheet writes "Added " before it. Null when undated. */
+  added_label: string | null;
 }
 
 export interface EarnChip {

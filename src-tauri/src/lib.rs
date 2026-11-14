@@ -1847,6 +1847,10 @@ pub fn run() {
             #[cfg(desktop)]
             services::performance_mode::start(app_handle.clone());
             services::user_message_history_service::UserMessageHistoryService::set_app_handle(app_handle.clone());
+            // The badge date index: fetched after start and every six hours, so
+            // the gallery, the wall and the detail line order and date badges
+            // from the one copy.
+            services::badge_index::start(app_handle.clone());
             // Badge-drop feed socket, owned here so drops still arrive while the
             // main window is destroyed (live mode, tray). See services::badge_feed.
             services::badge_feed::start(app_handle.clone());

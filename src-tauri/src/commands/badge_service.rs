@@ -765,6 +765,17 @@ pub(crate) async fn ingest_badges(
         once_cell::sync::Lazy::new(|| tokio::sync::Mutex::new(()));
     let _guard = INGEST_LOCK.lock().await;
 
+    // Feed dates first, before anything is classified: an unchanged re-push is
+    // skipped by everything after the classifier, and a badge Twitch added while
+    // this app was closed gets its date only from such a push. One merge for the
+    // whole batch, and a file write only when some key gained a date.
+    let dates_batch = badges.clone();
+    let dates_gained = tokio::task::spawn_blocking(move || {
+        crate::services::badge_index::record_feed_dates(&dates_batch)
+    })
+    .await
+    .unwrap_or(false);
+
     // Fresh install: record the relay's backlog as already-seen, no toasts.
     let seeding = feed::is_empty().await;
 
@@ -847,7 +858,7 @@ pub(crate) async fn ingest_badges(
 
     // One event per stored batch, so an open gallery rebuilds once rather than
     // once per drop (a startup batch carries up to fifty).
-    if stored_any {
+    if stored_any || dates_gained {
         let _ = app_handle.emit("badge-standing-changed", ());
     }
     Ok(())
@@ -896,6 +907,8 @@ mod window_tests {
             date_info: date_info.map(String::from),
             enrichment,
             window: None,
+            first_seen_ms: None,
+            first_seen_p: None,
         }
     }
 
@@ -971,6 +984,23 @@ mod window_tests {
         assert!(prune < snapshot && snapshot < heal);
         assert!(body.find("feed::record(").unwrap() < body.find("on_badges(seen)").unwrap());
         assert!(body.contains("if origin == Origin::Live"));
+    }
+
+    #[test]
+    fn feed_dates_are_collected_before_the_classifier_sees_the_batch() {
+        let src = include_str!("badge_service.rs").replace("\r\n", "\n");
+        let start = src.find("pub(crate) async fn ingest_badges(").unwrap();
+        let body = &src[start..start + src[start..].find("\n}\n").unwrap()];
+        let dates = body.find("badge_index::record_feed_dates(").unwrap();
+        assert!(dates < body.find("feed::classify(").unwrap());
+        assert_eq!(body.matches("badge_index::record_feed_dates(").count(), 1);
+        // The Android worker mirrors this function and takes them in the same place.
+        let android = include_str!("../android_notify.rs").replace("\r\n", "\n");
+        let start = android.find("async fn collect_badges()").unwrap();
+        let body = &android[start..start + android[start..].find("\n}\n").unwrap()];
+        let dates = body.find("badge_index::record_feed_dates(").unwrap();
+        assert!(dates < body.find("feed::classify(").unwrap());
+        assert_eq!(body.matches("badge_index::record_feed_dates(").count(), 1);
     }
 
     #[test]

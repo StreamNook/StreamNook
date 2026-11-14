@@ -1,0 +1,51 @@
+{
+  "about": "Newest First everywhere: undated first; then t descending; then precision (minute, day, month); then hr ascending (missing last); then the lowercased <set>-v<version> key by code unit. Plus run status. The site keeps the canonical copy (functions/utils/); the app commits a byte-identical copy (src-tauri/tests/fixtures/) read with include_str! by a unit test, and a parity test compares it with the site file when that checkout is present.",
+  "order": [
+    {
+      "name": "undated sorts first",
+      "entries": [{ "key": "a-v1", "t": 1794528000000, "p": "day" }, { "key": "b-v1" }],
+      "expected": ["b-v1", "a-v1"]
+    },
+    {
+      "name": "newer t first",
+      "entries": [{ "key": "old-v1", "t": 1488326400000, "p": "month" }, { "key": "new-v1", "t": 1794538089000, "p": "minute" }],
+      "expected": ["new-v1", "old-v1"]
+    },
+    {
+      "name": "same t: minute, then day, then month",
+      "entries": [{ "key": "m-v1", "t": 1488326400000, "p": "month" }, { "key": "d-v1", "t": 1488326400000, "p": "day" }, { "key": "n-v1", "t": 1488326400000, "p": "minute" }],
+      "expected": ["n-v1", "d-v1", "m-v1"]
+    },
+    {
+      "name": "same t and p: lower hr first, missing hr last",
+      "entries": [{ "key": "x-v1", "t": 1794528000000, "p": "day" }, { "key": "y-v1", "t": 1794528000000, "p": "day", "hr": 5 }, { "key": "z-v1", "t": 1794528000000, "p": "day", "hr": 2 }],
+      "expected": ["z-v1", "y-v1", "x-v1"]
+    },
+    {
+      "name": "same-tick tier group orders by hr",
+      "entries": [{ "key": "tier-10-v1", "t": 1794592885000, "p": "minute", "hr": 12 }, { "key": "tier-2-v1", "t": 1794592885000, "p": "minute", "hr": 10 }, { "key": "tier-3-v1", "t": 1794592885000, "p": "minute", "hr": 11 }],
+      "expected": ["tier-2-v1", "tier-3-v1", "tier-10-v1"]
+    },
+    {
+      "name": "full tie: code-unit key order, '-' before '_'",
+      "entries": [{ "key": "a_b-v1", "t": 1794528000000, "p": "day" }, { "key": "a-b-v1", "t": 1794528000000, "p": "day" }],
+      "expected": ["a-b-v1", "a_b-v1"]
+    },
+    {
+      "name": "the -v form, not the set/version form, breaks ties",
+      "entries": [{ "key": "abc-x-v1" }, { "key": "abc-v1" }],
+      "expected": ["abc-v1", "abc-x-v1"]
+    }
+  ],
+  "status": [
+    { "name": "inside a run", "runs": [[1794999600000, 1796111999000]], "now": 1795000000000, "expected": "available" },
+    { "name": "before a run", "runs": [[1794999600000, 1796111999000]], "now": 1794600000000, "expected": "coming_soon" },
+    { "name": "after a run", "runs": [[1794999600000, 1796111999000]], "now": 1796200000000, "expected": "none" },
+    { "name": "no runs", "runs": [], "now": 1795000000000, "expected": "none" },
+    { "name": "no start, before the end", "runs": [[null, 1795161599000]], "now": 1795000000000, "expected": "available" },
+    { "name": "no end, after the start", "runs": [[1794999600000, null]], "now": 1795000000000, "expected": "available" },
+    { "name": "one run over, one later", "runs": [[1790726400000, 1792022400000], [1794999600000, 1796111999000]], "now": 1794600000000, "expected": "coming_soon" },
+    { "name": "end is exclusive", "runs": [[1794999600000, 1796111999000]], "now": 1796111999000, "expected": "none" },
+    { "name": "start is inclusive", "runs": [[1794999600000, 1796111999000]], "now": 1794999600000, "expected": "available" }
+  ]
+}

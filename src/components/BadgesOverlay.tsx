@@ -5,7 +5,7 @@ import { X, ArrowUpDown, RefreshCw, Check, Search, ExternalLink, Lock } from 'lu
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useAppStore } from '../stores/AppStore';
-import { getBadgeStanding, refetchDelay, windowStatusAt, type BadgeStanding } from '../services/badgeStanding';
+import { getBadgeStanding, getLastStanding, refetchDelay, windowStatusAt, type BadgeStanding } from '../services/badgeStanding';
 import { MissingNowStrip } from './badge/MissingNowStrip';
 import { EvolutionPicker } from './badge/EvolutionPicker';
 import { getProfileFromMemoryCache, getFullProfileWithFallback } from '../services/cosmeticsCache';
@@ -37,6 +37,7 @@ import chatterinoLogo from '../assets/chatterino-logo.svg';
 import betterttvLogo from '../assets/betterttv-logo.png';
 import { ChatClientsGallery } from './ChatClientsGallery';
 import { BreakableName } from './badge/BreakableName';
+import { compareNewest, latestOnly, seedStanding } from './badge/badgeAddedOrder';
 import type { ChatClientBadge } from './ChatClientsGallery';
 
 import { Logger } from '../utils/logger';
@@ -199,12 +200,45 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
   // badge's earn window, and what it is missing that is earnable now. Rust
   // answers from its cache (persisted across launches) and announces a
   // background refresh with `badge-standing-changed`.
-  const [standing, setStanding] = useState<BadgeStanding | null>(null);
+  // Starts from the last standing this run answered for THIS account, so a reopened
+  // gallery paints in Rust's order at once instead of in key order and then jumping.
+  // A standing is per account, so another login's is never used.
+  const [standing, setStanding] = useState<BadgeStanding | null>(() => {
+    const me = useAppStore.getState().currentUser;
+    return seedStanding(getLastStanding(), me?.login ?? me?.username);
+  });
+  // True when a read failed and there is nothing to show: the date sorts then fall back
+  // to key order instead of waiting for an answer that is not coming.
+  const [standingFailed, setStandingFailed] = useState(false);
+  // Only the newest answer applies: a slower, older read must not put an older
+  // order back on screen after a newer one landed.
+  const applyStanding = useMemo(
+    () =>
+      latestOnly<BadgeStanding>((next) => {
+        setStanding(next);
+        setStandingFailed(false);
+      }),
+    [],
+  );
   const loadStanding = (force = false) => {
-    getBadgeStanding(force)
-      .then(setStanding)
-      .catch((err) => Logger.warn('[BadgesOverlay] Badge standing unavailable:', err));
+    applyStanding(getBadgeStanding(force)).catch((err) => {
+      setStandingFailed(true);
+      Logger.warn('[BadgesOverlay] Badge standing unavailable:', err);
+    });
   };
+  // An account switch while the gallery is open: nothing in Rust announces it, so drop
+  // the previous account's standing here and read again (the pre-switch answer, if still
+  // in flight, is dropped by `applyStanding`). The first run is the mount, which already
+  // reads, so it is skipped. `currentUser` comes from the selector at the top.
+  const accountKey = (currentUser?.login ?? currentUser?.username ?? null)?.toLowerCase() ?? null;
+  const accountSeen = useRef(accountKey);
+  useEffect(() => {
+    if (accountSeen.current === accountKey) return;
+    accountSeen.current = accountKey;
+    setStanding((s) => seedStanding(s, accountKey));
+    loadStanding(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accountKey]);
   const ownedKeys = useMemo(() => new Set(standing?.owned ?? []), [standing]);
   const loadingUserBadges = standing === null;
   
@@ -1150,101 +1184,6 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
     return 0;
   };
 
-  // Parse date for sorting - handles multiple formats
-  const parseDate = (dateStr: string | null | undefined): number => {
-    if (!dateStr) return 0;
-    try {
-      // Month name mappings (full and abbreviated)
-      const months: Record<string, number> = {
-        'January': 0, 'February': 1, 'March': 2, 'April': 3,
-        'May': 4, 'June': 5, 'July': 6, 'August': 7,
-        'September': 8, 'October': 9, 'November': 10, 'December': 11,
-        'Jan': 0, 'Feb': 1, 'Mar': 2, 'Apr': 3,
-        'Jun': 5, 'Jul': 6, 'Aug': 7,
-        'Sep': 8, 'Oct': 9, 'Nov': 10, 'Dec': 11
-      };
-
-      // Try to match "DD Month YYYY" format (e.g., "12 November 2025")
-      const fullMatch = dateStr.match(/(\d{1,2})\s+(\w+)\s+(\d{4})/);
-      if (fullMatch) {
-        const day = parseInt(fullMatch[1], 10);
-        const monthName = fullMatch[2];
-        const year = parseInt(fullMatch[3], 10);
-
-        if (Object.hasOwn(months, monthName)) {
-          const date = new Date(year, months[monthName], day);
-          if (!isNaN(date.getTime())) {
-            return date.getTime();
-          }
-        }
-      }
-
-      // Try to match abbreviated format "Mon D-D" or "Mon D - D" (e.g., "Dec 1-12" or "Dec 1 - 12")
-      const abbrevMatch = dateStr.match(/(\w{3})\s+(\d{1,2})\s*-\s*(\d{1,2})/);
-      if (abbrevMatch) {
-        const monthAbbrev = abbrevMatch[1];
-        const startDay = parseInt(abbrevMatch[2], 10);
-        // Use current year since it's not provided
-        const currentYear = new Date().getFullYear();
-
-        if (Object.hasOwn(months, monthAbbrev)) {
-          const date = new Date(currentYear, months[monthAbbrev], startDay);
-          if (!isNaN(date.getTime())) {
-            return date.getTime();
-          }
-        }
-      }
-
-      // Try to match "Month YYYY" format (e.g., "May 2016", "November 2025")
-      // IMPORTANT: Must come BEFORE "Mon D" to prevent "2016" being parsed as day 20
-      const monthYearMatch = dateStr.match(/^(\w+)\s+(\d{4})$/);
-      if (monthYearMatch) {
-        const monthName = monthYearMatch[1];
-        const year = parseInt(monthYearMatch[2], 10);
-
-        if (Object.hasOwn(months, monthName)) {
-          // Use the 1st day of the month for sorting (earliest possible date in that month)
-          const date = new Date(year, months[monthName], 1);
-          if (!isNaN(date.getTime())) {
-            return date.getTime();
-          }
-        }
-      }
-
-      // Try to match "Mon D" format (e.g., "Dec 1")
-      const singleDayMatch = dateStr.match(/(\w{3})\s+(\d{1,2})(?!\s*-)/);
-      if (singleDayMatch) {
-        const monthAbbrev = singleDayMatch[1];
-        const day = parseInt(singleDayMatch[2], 10);
-        const currentYear = new Date().getFullYear();
-
-        if (Object.hasOwn(months, monthAbbrev)) {
-          const date = new Date(currentYear, months[monthAbbrev], day);
-          if (!isNaN(date.getTime())) {
-            return date.getTime();
-          }
-        }
-      }
-
-      // Fallback: try parsing the date string directly
-      const parsed = new Date(dateStr);
-      if (!isNaN(parsed.getTime())) {
-        return parsed.getTime();
-      }
-      return 0;
-    } catch {
-      return 0;
-    }
-  };
-
-  // When a badge was added, for the date sorts. A badge no source has dated
-  // yet is one Twitch just added (every older badge has a date), so it counts
-  // as the newest instead of sinking to the bottom.
-  const addedAt = (badge: BadgeWithMetadata): number => {
-    const time = parseDate(badge.badgebase_info?.date_added);
-    return time > 0 ? time : Number.MAX_SAFE_INTEGER;
-  };
-
   // Read against the clock at render time from the window Rust resolved, so a
   // badge whose earn period opens while the gallery is open reclassifies itself.
   const getBadgeStatus = (badge: BadgeWithMetadata) =>
@@ -1258,50 +1197,14 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
     return getBadgeStatus(badge) === 'coming-soon';
   };
 
-  // Sort badges based on selected option - use useMemo to prevent re-sorting on every render
+  // Sort badges based on selected option - use useMemo to prevent re-sorting on every render.
+  // The date orders are Rust's: standing.added[key].order is each badge's place in the one
+  // Newest First order the phone wall and the site share, so this only looks it up. While the
+  // standing is still loading no badge has a place and they settle by key.
   const sortedBadges = useMemo(() => {
     Logger.debug(`[BadgesOverlay] Sorting ${badgesWithMetadata.length} badges by ${sortBy}`);
 
-    // Check if we can use pre-computed positions for date-newest sort
-    // Only use positions if at least 90% of badges have them (to handle edge cases)
-    const badgesWithPositions = badgesWithMetadata.filter(b =>
-      b.badgebase_info && typeof (b.badgebase_info as any).position === 'number'
-    ).length;
-
-    const canUsePositions = sortBy === 'date-newest' &&
-      badgesWithMetadata.length > 0 &&
-      badgesWithPositions >= badgesWithMetadata.length * 0.9;
-
-    if (canUsePositions) {
-      Logger.debug(`[BadgesOverlay] Using pre-computed positions for sorting (${badgesWithPositions}/${badgesWithMetadata.length} badges have positions)`);
-      // Date always leads and the rank only breaks same-day ties (it orders
-      // those by usage). Using the rank for some pairs and the date for others
-      // is not a consistent order, and the sort scrambled under it.
-      const rankOf = (x: BadgeWithMetadata) => {
-        const pos = (x.badgebase_info as any)?.position;
-        return typeof pos === 'number' ? pos : Number.MAX_SAFE_INTEGER;
-      };
-      return [...badgesWithMetadata].sort((a, b) => {
-        const dateCompare = addedAt(b) - addedAt(a);
-        if (dateCompare !== 0) return dateCompare;
-        const rankCompare = rankOf(a) - rankOf(b);
-        if (rankCompare !== 0) return rankCompare;
-        return `${a.set_id}-${a.id}`.localeCompare(`${b.set_id}-${b.id}`);
-      });
-    }
-
-    // Log sample badge data for debugging
-    if (badgesWithMetadata.length > 0) {
-      const sample = badgesWithMetadata[0];
-      Logger.debug('[BadgesOverlay] Sample badge:', {
-        set_id: sample.set_id,
-        id: sample.id,
-        title: sample.title,
-        date_added: sample.badgebase_info?.date_added,
-        usage_stats: sample.badgebase_info?.usage_stats,
-        more_info: sample.badgebase_info?.more_info
-      });
-    }
+    const newest = (a: BadgeWithMetadata, b: BadgeWithMetadata) => compareNewest(standing?.added, a, b);
 
     return [...badgesWithMetadata].sort((a, b) => {
       switch (sortBy) {
@@ -1312,11 +1215,7 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
           if (aAvailable !== bAvailable) {
             return bAvailable - aAvailable;
           }
-          // Secondary sort by date
-          const dateCompare = addedAt(b) - addedAt(a);
-          if (dateCompare !== 0) return dateCompare;
-          // Tertiary sort by set_id and id for stability
-          return `${a.set_id}-${a.id}`.localeCompare(`${b.set_id}-${b.id}`);
+          return newest(a, b);
         }
         case 'coming-soon': {
           // Coming soon badges first, then by newest
@@ -1325,24 +1224,12 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
           if (aComingSoon !== bComingSoon) {
             return bComingSoon - aComingSoon;
           }
-          // Secondary sort by date
-          const dateCompare = addedAt(b) - addedAt(a);
-          if (dateCompare !== 0) return dateCompare;
-          // Tertiary sort by set_id and id for stability
-          return `${a.set_id}-${a.id}`.localeCompare(`${b.set_id}-${b.id}`);
+          return newest(a, b);
         }
-        case 'date-newest': {
-          const dateCompare = addedAt(b) - addedAt(a);
-          if (dateCompare !== 0) return dateCompare;
-          // Fallback to stable sort
-          return `${a.set_id}-${a.id}`.localeCompare(`${b.set_id}-${b.id}`);
-        }
-        case 'date-oldest': {
-          const dateCompare = addedAt(a) - addedAt(b);
-          if (dateCompare !== 0) return dateCompare;
-          // Fallback to stable sort
-          return `${a.set_id}-${a.id}`.localeCompare(`${b.set_id}-${b.id}`);
-        }
+        case 'date-newest':
+          return newest(a, b);
+        case 'date-oldest':
+          return newest(b, a);
         case 'usage-high': {
           const usageCompare = parseUsageStats(b.badgebase_info?.usage_stats) - parseUsageStats(a.badgebase_info?.usage_stats);
           if (usageCompare !== 0) return usageCompare;
@@ -1379,6 +1266,14 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
     }
     return list;
   }, [sortedBadges, sortBy, searchQuery, standing]);
+
+  // The date, Available and Coming Soon sorts all read Rust's order. Until the first
+  // standing answers (and unless the read failed) show the grid's loading state, never a
+  // key-order grid that would jump when the order arrives.
+  const waitingForDates =
+    standing === null &&
+    !standingFailed &&
+    (sortBy === 'date-newest' || sortBy === 'date-oldest' || sortBy === 'available' || sortBy === 'coming-soon');
 
   // Message for the Twitch tab when the active view has no badges. The
   // status filters can legitimately match nothing (e.g. no badge is currently
@@ -1595,7 +1490,7 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
           {/* ========== TWITCH BADGES TAB ========== */}
           {activeTab === 'twitch-badges' && (
             <>
-              {loading && (
+              {(loading || waitingForDates) && (
                 <div className="flex items-center justify-center h-full">
                   <div className="text-center">
                     <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-accent mx-auto mb-4"></div>
@@ -1618,7 +1513,7 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
                 </div>
               )}
 
-          {!loading && !error && (
+          {!loading && !waitingForDates && !error && (
             <>
               {isAuthenticated && !searchQuery && <EvolutionPicker />}
               {isAuthenticated && !searchQuery && (
