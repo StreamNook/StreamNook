@@ -42,6 +42,8 @@ import {
 } from '../notifications';
 import { consumePendingChannel, consumePendingMention, consumePendingWhisper } from '../nativeBridge';
 import { openWhisperByKey } from '../whispers/whisperInbox';
+import { useMobileNavStore } from '../navStore';
+import { readBadgeLink } from '../../utils/badgeLinkOpen';
 import { alertOn, loadAlertTypes } from '../alertTypes';
 import { noticeHidden } from '../../utils/notices';
 import { openMentionById } from '../mentions/mentionInbox';
@@ -358,6 +360,21 @@ export function useMobileBoot(): void {
       await addListener<string>('streamnook:watch', () => {
         void drainWatchLink();
       });
+      // A streamnook:///badge/... link opens that badge's sheet in Rewards.
+      // Rust stashes it and emits `streamnook:badge` (no payload); the event
+      // and the mount both drain `take_pending_badge_link`, and whichever
+      // takes it opens it, once.
+      const drainBadgeLink = () =>
+        invoke<unknown>('take_pending_badge_link')
+          .then((raw) => {
+            const link = readBadgeLink(raw);
+            if (link) useMobileNavStore.getState().openBadgeLink(`${link.setId}/${link.version}`);
+          })
+          .catch(() => {});
+      await addListener<null>('streamnook:badge', () => {
+        void drainBadgeLink();
+      });
+      void drainBadgeLink();
       // A tapped mention notification (posted from Rust, android_notify.rs)
       // opens that mention: its chat, then the jump to the message. A warm tap
       // is pushed in; it clears the native copy too, so a later remount does

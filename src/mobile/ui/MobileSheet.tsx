@@ -197,12 +197,19 @@ export const MobileSheet: React.FC<MobileSheetProps> = ({ open, onClose, onBack,
     const onBackClose = (e: Event) => {
       if ((e as CustomEvent<string>).detail === sheetId) back();
     };
+    // A badge link closes every sheet whole (never one step back), so a sheet
+    // with its own back step (the Inbox's whisper) goes out entirely.
+    const onDismiss = (e: Event) => {
+      if ((e as CustomEvent<string>).detail === sheetId) onClose();
+    };
     window.addEventListener('sn:close-sheet', onBackClose);
+    window.addEventListener('sn:dismiss-sheet', onDismiss);
     return () => {
       window.removeEventListener('sn:close-sheet', onBackClose);
+      window.removeEventListener('sn:dismiss-sheet', onDismiss);
       popSheet(sheetId);
     };
-  }, [open, sheetId, pushSheet, popSheet, back]);
+  }, [open, sheetId, pushSheet, popSheet, back, onClose]);
 
   // The portal stays mounted so AnimatePresence has somewhere to play the exit.
   // An empty portal container costs nothing.

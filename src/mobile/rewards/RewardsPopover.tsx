@@ -113,9 +113,15 @@ export const RewardsPopover: React.FC<RewardsPopoverProps> = ({ open, onClose, .
     const onBackClose = (e: Event) => {
       if ((e as CustomEvent<string>).detail === popoverId) onClose();
     };
+    // A badge link closes sheets whole (`sn:dismiss-sheet`, navStore.openBadgeLink).
+    const onDismiss = (e: Event) => {
+      if ((e as CustomEvent<string>).detail === popoverId) onClose();
+    };
     window.addEventListener('sn:close-sheet', onBackClose);
+    window.addEventListener('sn:dismiss-sheet', onDismiss);
     return () => {
       window.removeEventListener('sn:close-sheet', onBackClose);
+      window.removeEventListener('sn:dismiss-sheet', onDismiss);
       popSheet(popoverId);
     };
   }, [open, popoverId, pushSheet, popSheet, onClose]);

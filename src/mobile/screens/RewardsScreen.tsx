@@ -27,11 +27,15 @@ import { BadgeSortMenu } from '../rewards/BadgeSortMenu';
 import { ScreenHeader } from '../ui/ScreenHeader';
 import { TitleSegments } from '../ui/TitleControls';
 import { ProviderMark } from '../../components/ProviderLogo';
+import { badgeLinkOutcome } from '../rewards/badgeLinkTile';
+import { BADGE_NOT_FOUND_TOAST } from '../../utils/badgeLinkOpen';
 import {
   blurbText,
+  getBadgeWall,
   getRewardsDrops,
   type BadgeSort,
   type BadgeTile,
+  type BadgeWall,
   type CampaignCard,
   type RewardsDrops,
 } from '../rewards/rewardsModel';
@@ -340,6 +344,49 @@ export const RewardsScreen: React.FC = () => {
   // Twitch's approval in the in-app login sheet, driven from Rust
   // (connect_twitch_approval): the sheet opens on the authorize page, Rust
   // collects and stores the grant, and closes the sheet. The page never sees
+  // A streamnook:///badge/... link (navStore.openBadgeLink) sets `badgeLinkKey`.
+  // The link reads Rust directly with a fresh Twitch list (never through the
+  // gallery store, whose newest-request-wins rule it must not disturb), then
+  // opens the tile's sheet. `linkGen` makes only the newest link open: it is
+  // bumped when a link starts and when this screen unmounts. The link effect
+  // has NO cleanup (its own clearBadgeLink changes its dependency, so a
+  // cleanup would cancel its own read) and uses the key from this render, not
+  // the store: StrictMode's second setup would find the store already cleared.
+  const badgeLinkKey = useMobileNavStore((s) => s.badgeLinkKey);
+  const linkGen = useRef(0);
+  const badgeSortRef = useRef(badgeSort);
+  // Mirrored after every commit, so an answer reads the sort current NOW.
+  useEffect(() => {
+    badgeSortRef.current = badgeSort;
+  });
+  useEffect(() => () => {
+    linkGen.current += 1;
+  }, []);
+  useEffect(() => {
+    if (!badgeLinkKey) return;
+    const key = badgeLinkKey;
+    const gen = ++linkGen.current;
+    useMobileNavStore.getState().clearBadgeLink(key);
+    setTab('badges');
+    void (async () => {
+      let linked: BadgeWall;
+      try {
+        linked = await getBadgeWall(badgeSortRef.current, true);
+      } catch (err) {
+        Logger.warn('[Rewards] badge link read failed:', err);
+        return;
+      }
+      if (linkGen.current !== gen) return;
+      const outcome = badgeLinkOutcome(linked, key);
+      if (outcome.kind === 'none') return;
+      if (outcome.kind === 'open') setBadgeDetail(outcome.tile);
+      else addToast(BADGE_NOT_FOUND_TOAST, 'info');
+      // The forced read filled Rust's cache; the shown wall picks it up with
+      // the sort current now, not the one the link started with.
+      void loadBadgeGallery(badgeSortRef.current, false);
+    })();
+  }, [badgeLinkKey, addToast]);
+
   // the token. Follow asks for the same approval, so it may already be done.
   const connect = async () => {
     setConnecting(true);

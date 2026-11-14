@@ -11,7 +11,8 @@ import { EvolutionPicker } from './badge/EvolutionPicker';
 import { getProfileFromMemoryCache, getFullProfileWithFallback } from '../services/cosmeticsCache';
 import { getUlidTimestamp, getFormattedCreationDate } from '../utils/ulid';
 import { Tooltip } from './ui/Tooltip';
-import { motion } from 'framer-motion';
+import { motion, useIsPresent } from 'framer-motion';
+import { findTwitchBadge, BADGE_NOT_FOUND_TOAST } from '../utils/badgeLinkOpen';
 import {
   getStreamNookUserNumber,
   subscribeStreamNookRegistryVersion,
@@ -358,6 +359,69 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
     setActiveTab(initialTarget.tab as AttainableTab);
     setSearchQuery(initialTarget.query ?? '');
   }, [initialTarget]);
+
+  // A streamnook:///badge/... link: once the Twitch list has loaded, open the
+  // linked badge's detail. The store value is consumed FIRST, so Back (which
+  // remounts this overlay) shows the list instead of reopening the detail.
+  // A miss gets one forced list refresh (straight from Rust, not
+  // forceRefreshBadges, which also refetches every badge's metadata); a second
+  // miss leaves the Twitch tab with an empty search and a neutral toast. The
+  // refresh's answer is dropped when this overlay unmounted, is exiting, or a
+  // newer link was consumed meanwhile (linkGen).
+  const linkGen = useRef(0);
+  const linkMountedRef = useRef(false);
+  const isPresent = useIsPresent();
+  const presentRef = useRef(isPresent);
+  // Mirrored after every commit: a hook value captured by the async answer
+  // below would be stale by the time it lands.
+  useEffect(() => {
+    presentRef.current = isPresent;
+  });
+  useEffect(() => {
+    linkMountedRef.current = true;
+    return () => {
+      linkMountedRef.current = false;
+    };
+  }, []);
+  // Subscribed, so a link that lands while the overlay is already open (the
+  // store field set while mounted) runs this effect too; it is still taken
+  // through consumeInitialTwitchBadge so it opens once.
+  const pendingTwitchBadge = useAppStore((s) => s.badgesOverlayInitialTwitchBadge);
+  useEffect(() => {
+    if (loading || error || !pendingTwitchBadge) return;
+    const link = useAppStore.getState().consumeInitialTwitchBadge();
+    if (!link) return;
+    const gen = ++linkGen.current;
+    const loaded = badgesWithMetadata.map((b) => ({ set_id: b.set_id, versions: [b] }));
+    const hit = findTwitchBadge(loaded, link.setId, link.version);
+    if (hit) {
+      onBadgeClick(hit, hit.set_id);
+      return;
+    }
+    void (async () => {
+      let hitAfterRefresh: (BadgeVersion & { set_id: string }) | undefined;
+      try {
+        const refreshed = await invoke<{ data: BadgeSet[] }>('force_refresh_global_badges');
+        hitAfterRefresh = findTwitchBadge(refreshed.data, link.setId, link.version);
+      } catch (err) {
+        Logger.warn('[BadgesOverlay] Badge link refresh failed:', err);
+      }
+      if (
+        linkGen.current !== gen ||
+        !linkMountedRef.current ||
+        !useAppStore.getState().showBadgesOverlay ||
+        !presentRef.current
+      ) {
+        return;
+      }
+      if (hitAfterRefresh) {
+        onBadgeClick(hitAfterRefresh, hitAfterRefresh.set_id);
+      } else {
+        setSearchQuery('');
+        useAppStore.getState().addToast(BADGE_NOT_FOUND_TOAST, 'info');
+      }
+    })();
+  }, [loading, error, badgesWithMetadata, pendingTwitchBadge]);
 
   // Resolve the signed-in user's own BTTV Pro badge for the BetterTTV tab.
   useEffect(() => {

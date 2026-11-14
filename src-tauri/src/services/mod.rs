@@ -317,6 +317,8 @@ pub mod shared_chat_source;
 // The Custom interface font's files on the phones.
 pub mod custom_font;
 pub mod share_link;
+// streamnook:///badge/<set>[/<version>] deep links to a badge's detail.
+pub mod badge_link;
 pub mod slash_commands;
 pub mod chat_top_stack;
 pub mod poll_view;

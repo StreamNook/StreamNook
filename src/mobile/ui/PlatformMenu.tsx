@@ -100,10 +100,16 @@ export function TitleMenu<T extends string>({
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') close();
     };
+    // A badge link closes sheets whole (`sn:dismiss-sheet`, navStore.openBadgeLink).
+    const onDismiss = (e: Event) => {
+      if ((e as CustomEvent<string>).detail === menuId) close();
+    };
     window.addEventListener('sn:close-sheet', onBack);
+    window.addEventListener('sn:dismiss-sheet', onDismiss);
     window.addEventListener('keydown', onKey);
     return () => {
       window.removeEventListener('sn:close-sheet', onBack);
+      window.removeEventListener('sn:dismiss-sheet', onDismiss);
       window.removeEventListener('keydown', onKey);
       popSheet(menuId);
     };

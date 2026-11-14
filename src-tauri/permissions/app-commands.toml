@@ -28,6 +28,7 @@ allow = [
   "fetch_exchange_rates",
   "get_window_size",
   "take_pending_watch_link",
+  "take_pending_badge_link",
   "watch_link_key",
   "app_link_target",
   "share_link",

@@ -65,6 +65,8 @@ import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow, LogicalSize } from '@tauri-apps/api/window';
 import { useThemeBoot } from './boot/useThemeBoot';
 import { getLogicalInnerSize, clampToWorkArea } from './utils/windowSizing';
+import { openBadgeLink, readBadgeLink, type BadgeLinkTarget } from './utils/badgeLinkOpen';
+import { exitPlayerFullscreen } from './utils/windowFullscreen';
 import { isTitlebarDragActive } from './utils/titleBarDrag';
 import { getSelectedCompactViewPreset } from './constants/compactViewPresets';
 import { compactChatSlot } from './utils/compactView';
@@ -501,6 +503,8 @@ function App() {
   // A streamnook:// deep link that landed while the app was still booting. Played
   // once boot finishes (see the deep-link effects below).
   const pendingWatchChannelRef = useRef<string | null>(null);
+  // The same for a streamnook:///badge/... link (flushed after boot).
+  const pendingBadgeLinkRef = useRef<BadgeLinkTarget | null>(null);
   const revealChat = () => {
     if (chatRevealTimer.current) { window.clearTimeout(chatRevealTimer.current); chatRevealTimer.current = null; }
     setChatRevealed(true);
@@ -873,6 +877,54 @@ function App() {
       const channel = pendingWatchChannelRef.current;
       pendingWatchChannelRef.current = null;
       void useAppStore.getState().startStream(channel);
+    }
+  }, [isBooting]);
+
+  // streamnook:///badge/<set>[/<version>] links open that badge's detail. Rust
+  // emits `streamnook:badge` (no payload) for a link opened while we run and
+  // keeps the link for take_pending_badge_link, which also serves a cold start.
+  // A link that lands mid-boot is held and opened once boot finishes.
+  useEffect(() => {
+    const openLink = (link: BadgeLinkTarget) => {
+      if (useAppStore.getState().isBooting) {
+        pendingBadgeLinkRef.current = link;
+        return;
+      }
+      openBadgeLink(link, {
+        isPlayerFullscreen: () => useAppStore.getState().isPlayerFullscreen,
+        exitPlayerFullscreen,
+        closeBadgeDetail: () => setSelectedBadge(null),
+        openTwitchBadge: (setId, version) => useAppStore.getState().openTwitchBadge(setId, version),
+      });
+    };
+    const drain = () => {
+      invoke<unknown>('take_pending_badge_link')
+        .then((raw) => {
+          const link = readBadgeLink(raw);
+          if (link) openLink(link);
+        })
+        .catch(() => { /* older backend without the command; safe to ignore */ });
+    };
+
+    const unlistenPromise = listen('streamnook:badge', drain);
+    drain();
+
+    return () => {
+      unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, []);
+
+  // Open a badge link that arrived mid-boot, once the app is ready.
+  useEffect(() => {
+    if (!isBooting && pendingBadgeLinkRef.current) {
+      const link = pendingBadgeLinkRef.current;
+      pendingBadgeLinkRef.current = null;
+      openBadgeLink(link, {
+        isPlayerFullscreen: () => useAppStore.getState().isPlayerFullscreen,
+        exitPlayerFullscreen,
+        closeBadgeDetail: () => setSelectedBadge(null),
+        openTwitchBadge: (setId, version) => useAppStore.getState().openTwitchBadge(setId, version),
+      });
     }
   }, [isBooting]);
 

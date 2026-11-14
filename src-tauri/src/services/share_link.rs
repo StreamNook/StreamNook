@@ -304,6 +304,15 @@ mod tests {
     }
 
     #[test]
+    fn a_bare_badge_host_is_still_a_watch_link() {
+        // Released apps read it as channel "badge"; the badge router only
+        // takes it when a set follows (`badge_link`).
+        assert_eq!(parse_str("streamnook://badge"), link("twitch", "badge"));
+        // The host-less badge link names no channel.
+        assert_eq!(parse_str("streamnook:///badge/clover"), None);
+    }
+
+    #[test]
     fn junk_links_open_nothing() {
         for junk in [
             "streamnook://",

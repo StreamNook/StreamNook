@@ -90,6 +90,12 @@ use tokio::sync::Mutex as TokioMutex;
 #[derive(Default)]
 struct PendingWatchLink(Mutex<Option<String>>);
 
+/// A `streamnook:///badge/<set>[/<version>]` link waiting for the frontend to
+/// take it (`take_pending_badge_link`). Both platforms store it, last link wins;
+/// the `streamnook:badge` event only tells a mounted shell to drain it.
+#[derive(Default)]
+struct PendingBadgeLink(Mutex<Option<services::badge_link::BadgeLink>>);
+
 /// Read a `streamnook://` (or streamnook.app) share link into the stream key the
 /// frontend's `startStream` takes: a bare login for Twitch, `provider:channel`
 /// otherwise. Building and parsing both live in `services::share_link`, which
@@ -130,6 +136,14 @@ fn share_link(provider: Option<String>, channel: String, stream_id: Option<Strin
 /// opens the channel. Returns None when the app wasn't launched from a link.
 #[tauri::command]
 fn take_pending_watch_link(state: tauri::State<'_, PendingWatchLink>) -> Option<String> {
+    state.0.lock().ok().and_then(|mut guard| guard.take())
+}
+
+/// Drain the badge link the app was opened with, if any (returns and clears it).
+#[tauri::command]
+fn take_pending_badge_link(
+    state: tauri::State<'_, PendingBadgeLink>,
+) -> Option<services::badge_link::BadgeLink> {
     state.0.lock().ok().and_then(|mut guard| guard.take())
 }
 
@@ -1550,6 +1564,7 @@ pub fn run() {
             //
             // iOS has no deep-link plugin; the Swift app receives the links.
             app.manage(PendingWatchLink::default());
+            app.manage(PendingBadgeLink::default());
             #[cfg(not(target_os = "ios"))]
             {
                 use tauri_plugin_deep_link::DeepLinkExt;
@@ -1561,6 +1576,17 @@ pub fn run() {
                         #[cfg(desktop)]
                         if commands::notification_mirror::is_notice_url(&url) {
                             commands::notification_mirror::on_notice_url(&watch_handle, &url);
+                            continue;
+                        }
+                        if let Some(badge) = services::badge_link::parse(&url) {
+                            #[cfg(desktop)]
+                            show_main_window(&watch_handle);
+                            if let Some(pending) = watch_handle.try_state::<PendingBadgeLink>() {
+                                if let Ok(mut guard) = pending.0.lock() {
+                                    *guard = Some(badge);
+                                }
+                            }
+                            let _ = watch_handle.emit("streamnook:badge", ());
                             continue;
                         }
                         if let Some(channel) = parse_watch_link(&url) {
@@ -1584,6 +1610,15 @@ pub fn run() {
                         #[cfg(desktop)]
                         if commands::notification_mirror::is_notice_url(&url) {
                             commands::notification_mirror::on_notice_url(&app_handle, &url);
+                            continue;
+                        }
+                        if let Some(badge) = services::badge_link::parse(&url) {
+                            if let Some(pending) = app.try_state::<PendingBadgeLink>() {
+                                if let Ok(mut guard) = pending.0.lock() {
+                                    *guard = Some(badge);
+                                }
+                            }
+                            let _ = app_handle.emit("streamnook:badge", ());
                             continue;
                         }
                         if let Some(channel) = parse_watch_link(&url) {
@@ -2033,6 +2068,7 @@ pub fn run() {
             share_link,
             #[cfg(target_os = "android")]
             twitch_login_plugin::open_mobile_login,
+            take_pending_badge_link,
             #[cfg(target_os = "android")]
             twitch_login_plugin::close_mobile_login,
             #[cfg(target_os = "android")]

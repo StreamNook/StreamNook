@@ -5,6 +5,7 @@
 // (background, never kill).
 import { create } from 'zustand';
 import { useAppStore } from '../stores/AppStore';
+import { useBadgeSpotlightStore } from '../stores/badgeSpotlightStore';
 import { startTab } from './phonePrefs';
 import { nextChat, type VerticalChatState } from './watch/verticalView';
 import type { TwitchCategory } from '../types';
@@ -60,6 +61,8 @@ interface MobileNavState {
   /** Campaign the Activity screen should scroll to and flash, set when you
    *  tap the live drop progress while watching. Cleared once consumed. */
   focusDropCampaignId: string | null;
+  /** The badge a link asked Rewards to open, `<set>/<version>`; null otherwise. */
+  badgeLinkKey: string | null;
   /** The tab Chats was opened from: Chats is a full-screen surface with no
    *  tab bar, and leaving it (the grabber, a slide down, back) returns here. */
   chatsReturnTab: MobileTab;
@@ -75,6 +78,12 @@ interface MobileNavState {
    *  the drop you are earning) keeps running, then land on that campaign. */
   openDropCampaign: (campaignId: string) => void;
   clearDropFocus: () => void;
+  /** A streamnook:///badge/... link (`<set>/<version>`): shrink the player,
+   *  close every layer and sheet, and land on Rewards with the key set for
+   *  RewardsScreen to open. */
+  openBadgeLink: (key: string) => void;
+  /** Nulls the link key, only while it still equals `key` (a newer link keeps its own). */
+  clearBadgeLink: (key: string) => void;
   pushSheet: (id: string) => void;
   popSheet: (id?: string) => void;
   openSettings: (tab: string, target?: SettingsTarget) => void;
@@ -135,6 +144,7 @@ export const useMobileNavStore = create<MobileNavState>((set, get) => ({
   setVerticalTall: (tall) => set((s) => (s.verticalTall === tall ? s : { verticalTall: tall })),
   setVerticalChat: (state) => set((s) => (s.verticalChat === state ? s : { verticalChat: state })),
   focusDropCampaignId: null,
+  badgeLinkKey: null,
   chatsReturnTab: startTab() === 'chats' ? 'following' : startTab(),
   chatsFloor: null,
   setChatsFloor: (px) => set((s) => (s.chatsFloor === px ? s : { chatsFloor: px })),
@@ -156,6 +166,33 @@ export const useMobileNavStore = create<MobileNavState>((set, get) => ({
       focusDropCampaignId: campaignId,
     }),
   clearDropFocus: () => set({ focusDropCampaignId: null }),
+
+  openBadgeLink: (key) => {
+    // Pushed sheets close the way they close themselves: each id in a snapshot
+    // gets `sn:dismiss-sheet` (each pops itself in its effect cleanup, so the
+    // live stack is never iterated). `sheetStack: []` would leave them on screen.
+    for (const id of [...get().sheetStack].reverse()) {
+      window.dispatchEvent(new CustomEvent('sn:dismiss-sheet', { detail: id }));
+    }
+    // A chat badge sheet still waiting on Rust is not on the stack yet; close
+    // its request so it never pops up over the linked badge later.
+    useBadgeSpotlightStore.getState().close();
+    set({
+      playerMode: 'mini',
+      settingsView: null,
+      settingsTarget: null,
+      settingsReturn: null,
+      cosmeticsOpen: false,
+      mentionsOpen: false,
+      whisperKey: null,
+      songsOpen: false,
+      songsFocus: null,
+      activeTab: 'rewards',
+      badgeLinkKey: key,
+    });
+  },
+  clearBadgeLink: (key) =>
+    set((s) => (s.badgeLinkKey === key ? { badgeLinkKey: null } : s)),
 
   pushSheet: (id) =>
     set((s) => (s.sheetStack.includes(id) ? s : { sheetStack: [...s.sheetStack, id] })),

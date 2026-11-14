@@ -476,6 +476,9 @@ export interface AppState {
   // BetterTTV, Chat Clients): open the overlay on `tab` and filter to `query`
   // (a badge title) so the clicked badge surfaces. Set by openBadgesWithTarget.
   badgesOverlayInitialTarget: { tab: string; query?: string } | null;
+  // A badge a streamnook:///badge/<set>/<version> link names: the overlay opens
+  // on the Twitch tab and shows that badge's detail, once (consumeInitialTwitchBadge).
+  badgesOverlayInitialTwitchBadge: { setId: string; version: string } | null;
   // 7TV "Emote Sets" editor dashboard. Optional initial channel (by Twitch id)
   // and tab so a contextual launch (e.g. from the moderator menu) can open it
   // pre-selected.
@@ -714,6 +717,9 @@ export interface AppState {
   openBadgesWithBadge: (badgeId: string) => void;
   openBadgesOnStreamNook: (slug?: string) => void;
   openBadgesWithTarget: (target: { tab: string; query?: string }) => void;
+  openTwitchBadge: (setId: string, version: string) => void;
+  /** Returns the pending badge link target and clears it (once per link). */
+  consumeInitialTwitchBadge: () => { setId: string; version: string } | null;
   setShowEmoteSetsOverlay: (show: boolean) => void;
   openEmoteSets: (opts?: { twitchId?: string; tab?: 'emotes' | 'sets' | 'editors' }) => void;
   openEmoteSpotlight: (emoteId: string, name: string) => void;
@@ -1915,6 +1921,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   badgesOverlayInitialBadgeId: null,
   badgesOverlayInitialStreamNook: false,
   badgesOverlayInitialTarget: null,
+  badgesOverlayInitialTwitchBadge: null,
   showEmoteSetsOverlay: false,
   emoteSetsOverlayInitialTwitchId: null,
   emoteSetsOverlayInitialTab: null,
@@ -3792,23 +3799,40 @@ export const useAppStore = create<AppState>((set, get) => ({
       badgesOverlayInitialBadgeId: show ? get().badgesOverlayInitialBadgeId : null,
       badgesOverlayInitialStreamNook: show ? get().badgesOverlayInitialStreamNook : false,
       badgesOverlayInitialTarget: show ? get().badgesOverlayInitialTarget : null,
+      badgesOverlayInitialTwitchBadge: show ? get().badgesOverlayInitialTwitchBadge : null,
     });
   },
   openBadgesWithPaint: (paintId: string) => {
     trackActivity('Opened Badges with Paint');
-    set({ showBadgesOverlay: true, badgesOverlayInitialPaintId: paintId, badgesOverlayInitialBadgeId: null, badgesOverlayInitialStreamNook: false, badgesOverlayInitialTarget: null });
+    set({ showBadgesOverlay: true, badgesOverlayInitialPaintId: paintId, badgesOverlayInitialBadgeId: null, badgesOverlayInitialStreamNook: false, badgesOverlayInitialTarget: null, badgesOverlayInitialTwitchBadge: null });
   },
   openBadgesWithBadge: (badgeId: string) => {
     trackActivity('Opened Badges with Badge');
-    set({ showBadgesOverlay: true, badgesOverlayInitialBadgeId: badgeId, badgesOverlayInitialPaintId: null, badgesOverlayInitialStreamNook: false, badgesOverlayInitialTarget: null });
+    set({ showBadgesOverlay: true, badgesOverlayInitialBadgeId: badgeId, badgesOverlayInitialPaintId: null, badgesOverlayInitialStreamNook: false, badgesOverlayInitialTarget: null, badgesOverlayInitialTwitchBadge: null });
   },
   openBadgesOnStreamNook: (slug?: string) => {
     trackActivity('Opened Badges on StreamNook');
-    set({ showBadgesOverlay: true, badgesOverlayInitialStreamNook: slug || true, badgesOverlayInitialPaintId: null, badgesOverlayInitialBadgeId: null, badgesOverlayInitialTarget: null });
+    set({ showBadgesOverlay: true, badgesOverlayInitialStreamNook: slug || true, badgesOverlayInitialPaintId: null, badgesOverlayInitialBadgeId: null, badgesOverlayInitialTarget: null, badgesOverlayInitialTwitchBadge: null });
   },
   openBadgesWithTarget: (target: { tab: string; query?: string }) => {
     trackActivity('Opened Badges with Target');
-    set({ showBadgesOverlay: true, badgesOverlayInitialTarget: target, badgesOverlayInitialPaintId: null, badgesOverlayInitialBadgeId: null, badgesOverlayInitialStreamNook: false });
+    set({ showBadgesOverlay: true, badgesOverlayInitialTarget: target, badgesOverlayInitialPaintId: null, badgesOverlayInitialBadgeId: null, badgesOverlayInitialStreamNook: false, badgesOverlayInitialTwitchBadge: null });
+  },
+  openTwitchBadge: (setId: string, version: string) => {
+    trackActivity('Opened Badges with Twitch Badge');
+    set({
+      showBadgesOverlay: true,
+      badgesOverlayInitialTarget: { tab: 'twitch-badges' },
+      badgesOverlayInitialTwitchBadge: { setId, version },
+      badgesOverlayInitialPaintId: null,
+      badgesOverlayInitialBadgeId: null,
+      badgesOverlayInitialStreamNook: false,
+    });
+  },
+  consumeInitialTwitchBadge: () => {
+    const target = get().badgesOverlayInitialTwitchBadge;
+    if (target) set({ badgesOverlayInitialTwitchBadge: null });
+    return target;
   },
   setShowEmoteSetsOverlay: (show: boolean) => {
     if (show) trackActivity('Opened Emote Sets');
