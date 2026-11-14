@@ -8,7 +8,10 @@ fn root() -> PathBuf {
 }
 
 fn read(path: &str) -> String {
-    fs::read_to_string(root().join(path)).unwrap_or_else(|e| panic!("{path}: {e}"))
+    // Fold CRLF so `\n}\n` and line patterns match on an autocrlf checkout.
+    fs::read_to_string(root().join(path))
+        .unwrap_or_else(|e| panic!("{path}: {e}"))
+        .replace("\r\n", "\n")
 }
 
 /// The body of `name` up to the next top-level item, from a source text.
