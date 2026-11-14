@@ -5,6 +5,7 @@
 import { useId, useState, type ReactNode } from 'react';
 import { ChevronRight } from 'lucide-react';
 import { Toggle } from '../../ui/Toggle';
+import { Tooltip } from '../../ui/Tooltip';
 import { IS_MOBILE } from '../../../utils/platform';
 import { splitNames } from '../../../utils/automations';
 import type { AutomationRunState } from '../../../types';
@@ -199,12 +200,14 @@ export function AccountFace({
   // The core knows no account pictures: the first letter stands in.
   const label = account.name || account.login;
   return (
-    <span
-      aria-label={label}
-      className="flex shrink-0 items-center justify-center rounded-full bg-surface text-[9px] font-semibold text-textMuted"
-      style={{ width: size, height: size }}
-    >
-      {label.charAt(0).toUpperCase()}
-    </span>
+    <Tooltip content={label}>
+      <span
+        aria-label={label}
+        className="flex shrink-0 items-center justify-center rounded-full bg-surface text-[9px] font-semibold text-textMuted"
+        style={{ width: size, height: size }}
+      >
+        {label.charAt(0).toUpperCase()}
+      </span>
+    </Tooltip>
   );
 }
