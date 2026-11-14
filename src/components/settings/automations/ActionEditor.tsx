@@ -348,7 +348,7 @@ function HighlightFields({
           value={valid ? color : '#f97316'}
           aria-label="Custom color"
           onChange={(e) => onChange({ ...action, color: e.target.value.toLowerCase() })}
-          className="h-6 w-8 cursor-pointer rounded border border-borderSubtle bg-transparent p-0"
+          className="h-6 w-6 cursor-pointer rounded-full border border-borderSubtle bg-transparent p-0"
         />
       </div>
     </Field>
@@ -420,7 +420,13 @@ export function ActionEditor({
   };
 
   return (
-    <div className="space-y-3 rounded-md border border-borderSubtle/60 bg-background/30 p-3">
+    <div
+      className={
+        IS_MOBILE
+          ? 'space-y-3 border-t border-borderSubtle/60 pt-3'
+          : 'space-y-3 rounded-md bg-textPrimary/[0.04] p-3'
+      }
+    >
       <div className="flex items-center justify-between gap-2">
         <span className="text-[13px] font-medium text-textPrimary">{ACTION_NAMES[action.kind]}</span>
         <div className="flex items-center gap-0.5">
@@ -428,7 +434,7 @@ export function ActionEditor({
             type="button"
             onClick={() => onMove(-1)}
             disabled={index === 0}
-            className="rounded p-1 text-textSecondary transition-colors hover:text-textPrimary disabled:cursor-not-allowed disabled:opacity-30"
+            className={`rounded ${IS_MOBILE ? 'p-2.5' : 'p-1'} text-textSecondary transition-colors hover:text-textPrimary disabled:cursor-not-allowed disabled:opacity-30`}
             aria-label="Move up"
           >
             <ArrowUp size={13} />
@@ -437,7 +443,7 @@ export function ActionEditor({
             type="button"
             onClick={() => onMove(1)}
             disabled={index === count - 1}
-            className="rounded p-1 text-textSecondary transition-colors hover:text-textPrimary disabled:cursor-not-allowed disabled:opacity-30"
+            className={`rounded ${IS_MOBILE ? 'p-2.5' : 'p-1'} text-textSecondary transition-colors hover:text-textPrimary disabled:cursor-not-allowed disabled:opacity-30`}
             aria-label="Move down"
           >
             <ArrowDown size={13} />
@@ -507,7 +513,7 @@ export function ActionEditor({
         </>
       )}
 
-      {shown.length > 0 && action.kind !== 'highlight' && (
+      {shown.length > 0 && !isP2Action(action) && action.kind !== 'highlight' && (
         <Disclosure label="Insert a variable">
           <div className="flex flex-wrap gap-1.5">
             {shown.map((v) => (

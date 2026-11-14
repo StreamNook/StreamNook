@@ -2,6 +2,7 @@
 // Reminders section and in the Automations group. Rust does the work; these call
 // it and say what came back. A refusal ("Already a rule") shows under the button.
 import { useState } from 'react';
+import { Check } from 'lucide-react';
 import { useAppStore } from '../../../stores/AppStore';
 import { useAutomationStatusStore } from '../../../hooks/useAutomationStatus';
 import { errorText } from '../../../utils/automations';
@@ -68,7 +69,10 @@ export function ConvertedNote({ reminderId, compact = false }: { reminderId: str
             : 'flex w-full flex-wrap items-center justify-between gap-2 rounded-md bg-background/40 px-2.5 py-1.5'
         }
       >
-        <span className="text-[12px] text-textSecondary">Now a rule</span>
+        <span className="inline-flex items-center gap-1 text-[12px] text-textMuted">
+          <Check size={12} className="text-accent" />
+          Now a rule
+        </span>
         <span className="flex items-center gap-2">
           {ruleId && (
             <button

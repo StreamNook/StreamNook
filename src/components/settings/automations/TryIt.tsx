@@ -1,7 +1,7 @@
 // Try it: a sample message, chat, sender, roles, event or recent badge drop,
 // run against every rule. Nothing is sent, counted or claimed.
 import { useEffect, useState } from 'react';
-import { FlaskConical } from 'lucide-react';
+import { Check, FlaskConical } from 'lucide-react';
 import type { AutomationEventKind, AutomationSenderRole } from '../../../types';
 import { SwitchList } from '../_primitives';
 import {
@@ -76,7 +76,7 @@ export default function TryIt({ status }: { status: AutomationStatus | null }) {
   const label = eventKind ? amountLabel(eventKind) : null;
 
   return (
-    <div className="space-y-4 rounded-lg bg-glass/30 p-4">
+    <div className="settings-card space-y-4 rounded-lg p-4">
       <Field label="Message">
         <textarea
           value={text}
@@ -178,7 +178,10 @@ export default function TryIt({ status }: { status: AutomationStatus | null }) {
             <div key={r.rule_id} className="rounded-md bg-background/40 px-3 py-2.5">
               <div className="flex items-center justify-between gap-3">
                 <span className="truncate text-[13px] font-medium text-textPrimary">{r.name}</span>
-                <span className={`shrink-0 text-[12px] ${r.fired ? 'text-accent' : 'text-textMuted'}`}>
+                <span
+                  className={`inline-flex shrink-0 items-center gap-1 text-[12px] ${r.fired ? 'font-medium text-textPrimary' : 'text-textMuted'}`}
+                >
+                  {r.fired && <Check size={13} className="text-accent" />}
                   {r.fired ? 'Would act' : "Wouldn't act"}
                 </span>
               </div>

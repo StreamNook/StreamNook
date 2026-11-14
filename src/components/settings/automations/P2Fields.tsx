@@ -31,6 +31,11 @@ import { ChannelPicker } from '../ChannelPicker';
 import { ACTION_NAMES, ANNOUNCE_COLORS } from './labels';
 import { Field, HINT, INPUT, NumberField, QUIET_BUTTON, SELECT, SwitchLine } from './parts';
 
+/** A stepper end inside the joined timeout control. */
+const STEP_BUTTON = `inline-flex items-center justify-center text-textSecondary transition-colors hover:text-textPrimary ${
+  IS_MOBILE ? 'p-2.5' : 'h-8 w-8 p-0'
+}`;
+
 const DAYS: { id: AutomationWeekday; label: string }[] = [
   { id: 'mon', label: 'Monday' },
   { id: 'tue', label: 'Tuesday' },
@@ -308,7 +313,10 @@ export function P2ActionFields({
       const to = action.to;
       return (
         <div className="space-y-3">
-          <Field label="To" hint="People you have whispered with. Leave it on the sender to answer a whisper." error={errorAt(errors, `${at}.to`)}>
+          <Field
+            label="To"
+            hint={`People you have whispered with. Leave it on the sender to answer a whisper.${people !== null && people.length === 0 ? ' No one yet. Whisper someone once yourself and they show up here.' : ''}`}
+            error={errorAt(errors, `${at}.to`)}>
             <select
               value={to?.user_id ?? ''}
               aria-label="To"
@@ -327,7 +335,6 @@ export function P2ActionFields({
               ))}
             </select>
           </Field>
-          {people !== null && people.length === 0 && <p className={HINT}>No one yet. Whisper someone once yourself and they show up here.</p>}
           <Field label="Message" error={errorAt(errors, `${at}.texts`) ?? errorAt(errors, `${at}.texts[0].text`)}>
             <textarea
               value={action.texts[0]?.text ?? ''}
@@ -347,20 +354,20 @@ export function P2ActionFields({
       return (
         <div className="space-y-3">
           <Field label="For" hint="1 second to 14 days. Never a permanent ban." error={errorAt(errors, `${at}.seconds`)}>
-            <div className="flex items-center gap-2">
+            <div className="glass-input inline-flex h-8 items-center">
               <button
                 type="button"
                 aria-label="Shorter"
-                className={QUIET_BUTTON}
+                className={STEP_BUTTON}
                 onClick={() => onChange({ ...action, seconds: Math.max(1, nextTimeout(action.seconds, -1)) })}
               >
                 <Minus size={13} />
               </button>
-              <span className="min-w-[8ch] text-center text-[13px] text-textPrimary">{timeoutWords(action.seconds)}</span>
+              <span className="min-w-[8ch] text-center text-[13px] tabular-nums text-textPrimary">{timeoutWords(action.seconds)}</span>
               <button
                 type="button"
                 aria-label="Longer"
-                className={QUIET_BUTTON}
+                className={STEP_BUTTON}
                 onClick={() => onChange({ ...action, seconds: Math.min(1_209_600, nextTimeout(action.seconds, 1)) })}
               >
                 <Plus size={13} />

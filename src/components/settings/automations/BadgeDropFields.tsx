@@ -5,7 +5,7 @@ import type { AutomationBadgeLeg, AutomationBadgeLink, AutomationFieldError, Aut
 import { automationsApi, errorAt, errorText, LINK_NOT_READY, LINK_READY } from '../../../utils/automations';
 import { IS_MOBILE } from '../../../utils/platform';
 import { SegmentedSelect } from '../_primitives';
-import { Field, HINT, INPUT, QUIET_BUTTON, SELECT } from './parts';
+import { Field, HINT, INPUT, LIGHT_WARN, QUIET_BUTTON, SELECT } from './parts';
 
 type BadgeTrigger = Extract<AutomationTrigger, { kind: 'badge_drop' }>;
 
@@ -104,7 +104,7 @@ export function BadgeDropFields({
             </button>
           </div>
           {answer && (
-            <p className={`text-[12px] leading-relaxed ${answer.ready ? 'text-textSecondary' : 'text-warning'}`}>
+            <p className={`text-[12px] leading-relaxed ${answer.ready ? 'text-textSecondary' : `text-warning ${LIGHT_WARN}`}`}>
               {answer.message}
             </p>
           )}

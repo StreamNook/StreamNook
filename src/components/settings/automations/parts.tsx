@@ -15,7 +15,10 @@ export const INPUT = `w-full ${FIELD}`;
 export const SELECT = 'glass-input max-w-full px-2 py-1.5 text-sm text-textPrimary';
 export const HINT = 'text-[11.5px] leading-relaxed text-textMuted';
 export const QUIET_BUTTON =
-  'inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[13px] text-textSecondary transition-colors hover:bg-white/[0.06] hover:text-textPrimary disabled:opacity-50';
+  'inline-flex items-center gap-1.5 rounded-lg bg-textPrimary/[0.06] px-2.5 py-1.5 text-[13px] text-textSecondary transition-colors hover:bg-textPrimary/[0.10] hover:text-textPrimary disabled:opacity-50';
+/** Warning text darkened enough to read on a light theme. */
+export const LIGHT_WARN =
+  '[html[data-theme-tone=light]_&]:text-[color-mix(in_srgb,var(--color-warning)_58%,black)]';
 export const PRIMARY_BUTTON =
   'glass-button inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[13px] font-medium text-textPrimary disabled:opacity-50';
 export const DANGER_BUTTON =
@@ -25,9 +28,9 @@ export const DANGER_BUTTON =
  *  above the rule's card, with a quiet heading. */
 export function Block({ title, aside, children }: { title: string; aside?: ReactNode; children: ReactNode }) {
   return (
-    <section className="space-y-3 rounded-lg border border-borderSubtle/70 bg-white/[0.03] p-3.5">
+    <section className="space-y-3 rounded-lg bg-textPrimary/[0.05] p-3.5">
       <div className="flex min-h-6 items-center justify-between gap-3">
-        <h4 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-textSecondary">{title}</h4>
+        <h4 className="text-[13px] font-semibold text-textPrimary">{title}</h4>
         {aside}
       </div>
       {children}
@@ -51,7 +54,7 @@ export function Field({
     <div className="space-y-1.5">
       <div className="text-[12px] font-medium text-textPrimary">{label}</div>
       {children}
-      {hint && <p className={HINT}>{hint}</p>}
+      {hint && !error && <p className={HINT}>{hint}</p>}
       {error && (
         <p role="alert" className="text-[12px] leading-relaxed text-error">
           {error}
@@ -155,8 +158,16 @@ export function NamesInput({
 }
 
 /** The less common choices, behind their name. */
-export function Disclosure({ label, children }: { label: string; children: ReactNode }) {
-  const [open, setOpen] = useState(false);
+export function Disclosure({
+  label,
+  defaultOpen,
+  children,
+}: {
+  label: string;
+  defaultOpen?: boolean;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen ?? false);
   return (
     <div className="space-y-3">
       <button
@@ -203,7 +214,7 @@ export function AccountFace({
     <Tooltip content={label}>
       <span
         aria-label={label}
-        className="flex shrink-0 items-center justify-center rounded-full bg-surface text-[9px] font-semibold text-textMuted"
+        className="flex shrink-0 items-center justify-center rounded-full bg-surface text-[9px] font-semibold text-textSecondary"
         style={{ width: size, height: size }}
       >
         {label.charAt(0).toUpperCase()}

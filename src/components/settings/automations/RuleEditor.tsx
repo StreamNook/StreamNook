@@ -730,6 +730,15 @@ export function RuleEditor({ initial, isNew, accounts, platformAccounts, otherCh
             />
           )}
         </Disclosure>
+        {(draft.when.kind === 'message' || draft.when.kind === 'mention' || draft.when.kind === 'first_message' || draft.when.kind === 'channel_event') && (
+          <Disclosure label="Filter expression" defaultOpen={!!draft.only_if.expression}>
+            <ExpressionField
+              value={draft.only_if.expression}
+              errors={errors}
+              onChange={(expression) => setIf({ expression })}
+            />
+          </Disclosure>
+        )}
       </Block>
 
       <Block
@@ -797,16 +806,6 @@ export function RuleEditor({ initial, isNew, accounts, platformAccounts, otherCh
         )}
       </Block>
 
-      {(draft.when.kind === 'message' || draft.when.kind === 'mention' || draft.when.kind === 'first_message' || draft.when.kind === 'channel_event') && (
-        <Block title="Advanced">
-          <ExpressionField
-            value={draft.only_if.expression}
-            errors={errors}
-            onChange={(expression) => setIf({ expression })}
-          />
-        </Block>
-      )}
-
       {hasOutward && platform === 'kick' && (
         <Block title="Send as">
           <div className="flex items-center gap-2 rounded-md bg-background/40 px-2.5 py-2">
@@ -863,7 +862,7 @@ export function RuleEditor({ initial, isNew, accounts, platformAccounts, otherCh
             />
           )}
         </div>
-        <div className="flex flex-wrap items-center justify-end gap-1.5">
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
           {!isNew && (
             <button type="button" onClick={() => onDuplicate(draft)} className={QUIET_BUTTON}>
               <Copy size={13} />

@@ -69,7 +69,7 @@ function Day({ title, entries, earlier }: { title: string; entries: AutomationAc
   return (
     <div className="space-y-1.5">
       <h4 className="px-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-textSecondary">{title}</h4>
-      <div className="divide-y divide-borderSubtle/50 rounded-lg bg-glass/30">
+      <div className="divide-y divide-borderSubtle/50 rounded-lg settings-card">
         {entries.map((e) => (
           <EntryRow key={e.id} entry={e} earlier={earlier} />
         ))}
@@ -185,7 +185,7 @@ export default function ActivityLog({ now }: { now: number }) {
         </p>
       )}
       {loaded && entries.length === 0 && !problem && (
-        <div className="rounded-lg bg-glass/30 px-4 py-6 text-center text-sm text-textSecondary">{EMPTY[filter]}</div>
+        <div className="settings-card rounded-lg px-4 py-6 text-center text-sm text-textSecondary">{EMPTY[filter]}</div>
       )}
       {today.length > 0 && <Day title="Today" entries={today} earlier={false} />}
       {earlier.length > 0 && <Day title="Earlier" entries={earlier} earlier />}

@@ -1,13 +1,18 @@
 // "What changes" at the top of a rule made from a reminder: every field whose
 // behavior differs now, in Rust's words, until the person says they have read it.
+import { Info } from 'lucide-react';
 import { dismissWhatChanges, useWhatChangesStore } from '../../../utils/reminderRules';
-import { Block, QUIET_BUTTON } from './parts';
+import { QUIET_BUTTON } from './parts';
 
 export function WhatChanges({ ruleId }: { ruleId: string }) {
   const changes = useWhatChangesStore((s) => s.byRule[ruleId]);
   if (!ruleId || !changes || changes.length === 0) return null;
   return (
-    <Block title="What changes">
+    <section className="space-y-2 rounded-lg bg-accent/[0.08] p-3.5">
+      <div className="flex items-center gap-2">
+        <Info size={14} className="text-accent" />
+        <h4 className="text-[13px] font-semibold text-textPrimary">What changes</h4>
+      </div>
       <p className="text-[12px] leading-relaxed text-textMuted">
         This rule was made from a reminder and starts in Test. These work differently now.
       </p>
@@ -23,6 +28,6 @@ export function WhatChanges({ ruleId }: { ruleId: string }) {
           Got it
         </button>
       </div>
-    </Block>
+    </section>
   );
 }

@@ -21,7 +21,7 @@ import {
   type AutomationTemplate,
 } from '../../../utils/automations';
 import { RuleEditor } from './RuleEditor';
-import { AccountFace, DANGER_BUTTON, HINT, LiveWord, PRIMARY_BUTTON, QUIET_BUTTON } from './parts';
+import { AccountFace, DANGER_BUTTON, HINT, LIGHT_WARN, LiveWord, PRIMARY_BUTTON, QUIET_BUTTON } from './parts';
 
 /** The open editor of a rule not saved yet. */
 const NEW = 'new';
@@ -62,8 +62,10 @@ function RuleRow({
       ? (accounts.find((a) => a.id === rule.send_as.id) ?? rule.send_as)
       : null;
   return (
-    <div className={`flex items-start gap-3 px-3.5 py-3 ${r.enabled ? '' : 'opacity-70'}`}>
-      <div className="pt-0.5">
+    <div
+      className={`flex items-start gap-3 px-3.5 py-3 ${r.enabled ? '' : 'opacity-70'} ${rule ? '' : '[&_[role=switch]]:!bg-textPrimary/25'}`}
+    >
+      <div className="-mt-0.5">
         <Toggle
           enabled={r.enabled}
           onChange={onFlip}
@@ -79,30 +81,42 @@ function RuleRow({
         {r.summary && <span className="mt-0.5 block text-[12px] leading-relaxed text-textSecondary">{r.summary}</span>}
         <span className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11.5px] text-textMuted">
           <LiveWord live={r.live} />
+          <span aria-hidden="true">·</span>
           <span>{actedText(r.count, r.last_fire_ms, now)}</span>
-          {r.last_outcome && <span>{r.last_outcome}</span>}
+          {r.last_outcome && (
+            <>
+              <span aria-hidden="true">·</span>
+              <span>{r.last_outcome}</span>
+            </>
+          )}
         </span>
-        {r.held && <span className="mt-1.5 block text-[12px] leading-relaxed text-warning">{r.held}</span>}
+        {r.held && (
+          <span className={`mt-1.5 block text-[12px] leading-relaxed text-warning ${LIGHT_WARN}`}>{r.held}</span>
+        )}
       </button>
       <div className="flex shrink-0 items-center gap-0.5">
-        <button
-          type="button"
-          onClick={() => onMove(-1)}
-          disabled={index === 0}
-          className="rounded p-1 text-textSecondary transition-colors hover:text-textPrimary disabled:cursor-not-allowed disabled:opacity-30"
-          aria-label="Move up"
-        >
-          <ArrowUp size={14} />
-        </button>
-        <button
-          type="button"
-          onClick={() => onMove(1)}
-          disabled={index === total - 1}
-          className="rounded p-1 text-textSecondary transition-colors hover:text-textPrimary disabled:cursor-not-allowed disabled:opacity-30"
-          aria-label="Move down"
-        >
-          <ArrowDown size={14} />
-        </button>
+        {!confirming && (
+          <button
+            type="button"
+            onClick={() => onMove(-1)}
+            disabled={index === 0}
+            className={`rounded ${IS_MOBILE ? 'p-2.5' : 'p-1'} text-textSecondary transition-colors hover:text-textPrimary disabled:cursor-not-allowed disabled:opacity-30`}
+            aria-label="Move up"
+          >
+            <ArrowUp size={14} />
+          </button>
+        )}
+        {!confirming && (
+          <button
+            type="button"
+            onClick={() => onMove(1)}
+            disabled={index === total - 1}
+            className={`rounded ${IS_MOBILE ? 'p-2.5' : 'p-1'} text-textSecondary transition-colors hover:text-textPrimary disabled:cursor-not-allowed disabled:opacity-30`}
+            aria-label="Move down"
+          >
+            <ArrowDown size={14} />
+          </button>
+        )}
         {rule ? (
           <button
             type="button"
@@ -151,14 +165,14 @@ export default function RuleList({ status, now, initialOpen, otherChannelsOn }: 
   const [templates, setTemplates] = useState<AutomationTemplate[] | null>(null);
   const [adding, setAdding] = useState<string | null>(null);
   const [confirmId, setConfirmId] = useState<string | null>(null);
-  const [problem, setProblem] = useState<string | null>(null);
+  const [problem, setProblem] = useState<{ ruleId: string | null; text: string } | null>(null);
 
   if (!status) return <p className={`${HINT} ${IS_MOBILE ? 'px-4' : 'px-1'}`}>Loading your rules</p>;
 
   const rules = status.rules;
   const ids = rules.map((r) => r.id);
   const main = status.accounts.find((a) => a.main) ?? null;
-  const fail = (e: unknown) => setProblem(errorText(e));
+  const fail = (e: unknown, ruleId: string | null = null) => setProblem({ ruleId, text: errorText(e) });
   const done = () => {
     setProblem(null);
     void refreshAutomationStatus();
@@ -190,14 +204,20 @@ export default function RuleList({ status, now, initialOpen, otherChannelsOn }: 
   };
   const move = (index: number, dir: -1 | 1) => {
     const to = moveBeforeId(ids, index, dir);
-    if (to) automationsApi.moveRule(ids[index], to.beforeId).then(done).catch(fail);
+    if (to) automationsApi.moveRule(ids[index], to.beforeId).then(done).catch((e) => fail(e, ids[index]));
   };
   const flip = (r: AutomationRuleStatus) => {
-    automationsApi.setRuleFlags(r.id, { enabled: !r.enabled }).then(done).catch(fail);
+    automationsApi
+      .setRuleFlags(r.id, { enabled: !r.enabled })
+      .then(done)
+      .catch((e) => fail(e, r.id));
   };
   const remove = (id: string) => {
     setConfirmId(null);
-    automationsApi.deleteRule(id).then(done).catch(fail);
+    automationsApi
+      .deleteRule(id)
+      .then(done)
+      .catch((e) => fail(e, id));
   };
   const saved = () => {
     setOpenId(null);
@@ -206,14 +226,14 @@ export default function RuleList({ status, now, initialOpen, otherChannelsOn }: 
 
   return (
     <div className="space-y-2.5">
-      {problem && (
+      {problem && problem.ruleId === null && (
         <p role="alert" className={`text-[12px] text-error ${IS_MOBILE ? 'px-4' : 'px-1'}`}>
-          {problem}
+          {problem.text}
         </p>
       )}
 
       {rules.length === 0 && openId !== NEW && (
-        <div className="rounded-lg bg-glass/30 px-4 py-6 text-center">
+        <div className="settings-card rounded-lg px-4 py-6 text-center">
           <p className="text-sm text-textSecondary">
             {main ? 'No rules yet. Start from a template, or make your own.' : 'Sign in with Twitch to make rules.'}
           </p>
@@ -221,7 +241,7 @@ export default function RuleList({ status, now, initialOpen, otherChannelsOn }: 
       )}
 
       {rules.map((r, index) => (
-        <div key={r.id} className={`rounded-lg bg-glass/30 ${openId === r.id ? 'ring-1 ring-borderSubtle' : ''}`}>
+        <div key={r.id} className={`rounded-lg settings-card ${openId === r.id ? 'ring-1 ring-borderSubtle' : ''}`}>
           <RuleRow
             r={r}
             index={index}
@@ -237,6 +257,11 @@ export default function RuleList({ status, now, initialOpen, otherChannelsOn }: 
             onDelete={() => remove(r.id)}
             onKeep={() => setConfirmId(null)}
           />
+          {problem?.ruleId === r.id && (
+            <p role="alert" className="-mt-1.5 px-3.5 pb-2.5 text-[12px] text-error">
+              {problem.text}
+            </p>
+          )}
           {openId === r.id && r.rule && (
             <div className="border-t border-borderSubtle/60 px-3.5 pb-3.5 pt-3">
               <RuleEditor
@@ -256,7 +281,7 @@ export default function RuleList({ status, now, initialOpen, otherChannelsOn }: 
       ))}
 
       {openId === NEW && fresh && (
-        <div className="rounded-lg bg-glass/30 ring-1 ring-borderSubtle">
+        <div className="settings-card rounded-lg ring-1 ring-borderSubtle">
           <div className="px-3.5 pt-3 text-[13.5px] font-medium text-textPrimary">New rule</div>
           <div className="px-3.5 pb-3.5 pt-2.5">
             <RuleEditor
@@ -289,7 +314,7 @@ export default function RuleList({ status, now, initialOpen, otherChannelsOn }: 
       )}
 
       {showTemplates && (
-        <div className="space-y-1 rounded-lg border border-borderSubtle/70 bg-white/[0.03] p-3">
+        <div className="space-y-3 rounded-lg bg-textPrimary/[0.05] p-3.5">
           {templates === null ? (
             <p className={HINT}>Loading templates</p>
           ) : (

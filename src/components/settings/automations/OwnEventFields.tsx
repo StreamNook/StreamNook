@@ -2,7 +2,7 @@
 // the live or offline choice for "A channel goes live or offline", and the If
 // block of every P3 rule (their channel is yours, or the ones a live change names).
 import { useEffect, useState } from 'react';
-import { X } from 'lucide-react';
+import { AlertCircle, X } from 'lucide-react';
 import type { AutomationConditions, AutomationFieldError, AutomationRule, AutomationTrigger } from '../../../types';
 import { ChannelPicker } from '../ChannelPicker';
 import { automationsApi, errorAt, errorText, rewardLabel, type OwnReward } from '../../../utils/automations';
@@ -60,9 +60,11 @@ function RewardPicker({
     <Field
       label="Reward"
       hint={
-        state.status === 'ready' && rewards.length === 0
-          ? 'You have no rewards yet. Any reward still works.'
-          : 'One reward, or any reward.'
+        state.status === 'error'
+          ? undefined
+          : state.status === 'ready' && rewards.length === 0
+            ? 'You have no rewards yet. Any reward still works.'
+            : 'One reward, or any reward.'
       }
       error={errorAt(errors, 'when.reward_id')}
     >
@@ -95,7 +97,12 @@ function RewardPicker({
           </button>
         )}
       </div>
-      {state.status === 'error' && <p className="text-[12px] leading-relaxed text-textSecondary">{state.message}</p>}
+      {state.status === 'error' && (
+        <p className="flex items-start gap-1.5 text-[12px] leading-relaxed text-error">
+          <AlertCircle size={13} className="mt-0.5 shrink-0" />
+          <span>{state.message}</span>
+        </p>
+      )}
     </Field>
   );
 }

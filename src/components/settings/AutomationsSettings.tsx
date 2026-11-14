@@ -26,7 +26,7 @@ import RuleList from './automations/RuleList';
 import TryIt from './automations/TryIt';
 import ActivityLog from './automations/ActivityLog';
 import { RemindersGroup } from './automations/RemindersGroup';
-import { FIELD, INPUT, PRIMARY_BUTTON, QUIET_BUTTON, RunDot } from './automations/parts';
+import { FIELD, INPUT, LIGHT_WARN, PRIMARY_BUTTON, QUIET_BUTTON, RunDot } from './automations/parts';
 
 const RUN_OPTIONS: { value: AutomationRunState; label: string }[] = [
   { value: 'off', label: 'Off' },
@@ -126,7 +126,7 @@ const AutomationsSettings = () => {
         >
           {(waiting || kept > 0 || problem) && (
             <div className="space-y-1">
-              {waiting && <p className="text-[12px] leading-relaxed text-warning">{waiting}</p>}
+              {waiting && <p className={`text-[12px] leading-relaxed text-warning ${LIGHT_WARN}`}>{waiting}</p>}
               {kept > 0 && (
                 <p className="text-[12px] leading-relaxed text-textMuted">
                   Rules keep {kept} {kept === 1 ? 'chat' : 'chats'} open to listen in.

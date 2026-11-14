@@ -29,11 +29,11 @@ export function RemindersGroup({ status, now }: { status: AutomationStatus | nul
   return (
     <div className="space-y-2">
       {reminders.length === 0 ? (
-        <p className="rounded-lg bg-glass/30 px-3.5 py-3 text-[12.5px] leading-relaxed text-textSecondary">
+        <p className="settings-card rounded-lg px-4 py-6 text-center text-sm text-textSecondary">
           No reminders yet. Add one in Reminders, or type /remind in chat.
         </p>
       ) : (
-        <div className="divide-y divide-borderSubtle/50 rounded-lg bg-glass/30">
+        <div className="settings-card divide-y divide-borderSubtle/50 rounded-lg">
           {reminders.map((r) => (
             <div key={r.id} className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3.5 py-2.5">
               <div className="min-w-0 flex-1">
