@@ -1,6 +1,106 @@
-// The words the automations page uses for roles, events and actions, shared by
-// the editor and Try it.
-import type { AutomationAction, AutomationEventKind, AutomationPlatform, AutomationSenderRole } from '../../../types';
+// The words (and marks) the automations page uses for roles, events, triggers
+// and actions, shared by the list, the editor and Try it.
+import {
+  AlarmClock,
+  AtSign,
+  Award,
+  Bell,
+  ChartBar,
+  Clock,
+  Eraser,
+  Gift,
+  Hand,
+  Highlighter,
+  Hourglass,
+  LogIn,
+  LogOut,
+  Mail,
+  Megaphone,
+  MessageSquare,
+  MessageSquarePlus,
+  MessageSquareText,
+  NotebookPen,
+  Pin,
+  Radio,
+  Reply,
+  ShieldBan,
+  Sparkles,
+  Terminal,
+  Timer,
+  Trophy,
+  UserPlus,
+  Volume2,
+  type LucideIcon,
+} from 'lucide-react';
+import type {
+  AutomationAction,
+  AutomationEventKind,
+  AutomationPlatform,
+  AutomationSenderRole,
+  AutomationTrigger,
+} from '../../../types';
+
+/** The mark leading a rule's row: what it waits for. */
+export const TRIGGER_ICONS: Record<AutomationTrigger['kind'], LucideIcon> = {
+  mention: AtSign,
+  message: MessageSquareText,
+  first_message: MessageSquarePlus,
+  channel_event: Gift,
+  badge_drop: Award,
+  follow: UserPlus,
+  reward_redeemed: Sparkles,
+  poll_started: ChartBar,
+  prediction_started: Trophy,
+  live_change: Radio,
+  whisper: Mail,
+  timer: Timer,
+  clock: AlarmClock,
+  uptime: Hourglass,
+  delay: Clock,
+};
+
+/** The mark of each step in the Add a step menu. */
+export const ACTION_ICONS: Record<AutomationAction['kind'], LucideIcon> = {
+  reply: Reply,
+  send: MessageSquare,
+  whisper: Mail,
+  announce: Megaphone,
+  command: Terminal,
+  shoutout: Hand,
+  pin: Pin,
+  timeout: ShieldBan,
+  delete: Eraser,
+  notify: Bell,
+  speak: Volume2,
+  highlight: Highlighter,
+  log: NotebookPen,
+  wait: Hourglass,
+  join_chat: LogIn,
+  leave_chat: LogOut,
+};
+
+/** Where each step sits in the Add a step menu, and the line under its name. */
+export const ACTION_MENU: Record<AutomationAction['kind'], { section: string; help: string }> = {
+  reply: { section: 'In chat', help: 'Answer the message that set it off' },
+  send: { section: 'In chat', help: 'A line in this chat or another' },
+  whisper: { section: 'In chat', help: 'A private message' },
+  announce: { section: 'In chat', help: 'A colored announcement' },
+  command: { section: 'In chat', help: 'Title, category, marker and more' },
+  shoutout: { section: 'In chat', help: 'Shout out who set it off' },
+  pin: { section: 'Moderate', help: 'Pin the message' },
+  timeout: { section: 'Moderate', help: 'Time out who sent it' },
+  delete: { section: 'Moderate', help: 'Delete the message' },
+  notify: { section: 'Just for you', help: 'A card here, or a system notification' },
+  speak: { section: 'Just for you', help: 'Read out loud on this device' },
+  highlight: { section: 'Just for you', help: 'Tint the message in your chat' },
+  log: { section: 'Just for you', help: 'Write it to Activity, or a file' },
+  wait: { section: 'More', help: 'Pause before the next step' },
+  join_chat: { section: 'More', help: 'Keep a chat joined for rules' },
+  leave_chat: { section: 'More', help: 'Stop keeping a chat joined' },
+};
+
+/** The order of the menu's groups. */
+export const ACTION_MENU_SECTIONS = ['In chat', 'Moderate', 'Just for you', 'More'];
 
 export const ROLE_ITEMS: { id: AutomationSenderRole; label: string }[] = [
   { id: 'broadcaster', label: 'The streamer' },

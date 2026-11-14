@@ -1022,10 +1022,11 @@ const SETTINGS_CATALOG: SettingsEntry[] = [
 
   // Automations
   { tab: 'Automations', keywords: 'automations rules auto reply autoresponder bot away reply welcome raid thanks sub thanks badge news test live activity' },
-  { tab: 'Automations', section: 'Automations', keywords: 'automations status off test on pause resume away afk back pace messages per minute other channels gap chat notes device name' },
-  { tab: 'Automations', section: 'Rules', keywords: 'rules add rule template away reply welcome first-timers raid thanks sub and gift thanks badge news editor when if do send as' },
-  { tab: 'Automations', section: 'Try It', keywords: 'try it test sample message sender event preview' },
-  { tab: 'Automations', section: 'Activity', keywords: 'activity log history acted test skipped today earlier clear' },
+  { tab: 'Automations', section: 'Status', keywords: 'automations status off test on pause resume away afk back' },
+  { tab: 'Automations', section: 'Reminders', keywords: 'reminders timer repeat keyword make it a rule' },
+  { tab: 'Automations', section: 'Rules', keywords: 'rules new rule templates away reply welcome first-timers raid thanks sub and gift thanks badge news editor when only if do send as' },
+  { tab: 'Automations', section: 'Activity', keywords: 'activity log history acted test skipped today earlier clear try a message sample sender event preview' },
+  { tab: 'Automations', section: 'Limits', keywords: 'limits pace messages a minute other channels gap chat notes whisper people a day device name' },
 
   // Cache
   { tab: 'Cache', keywords: 'cache disk cache load emotes and badges from disk refresh after refresh stored data clear storage expiry emote badge size maintenance prefetch' },

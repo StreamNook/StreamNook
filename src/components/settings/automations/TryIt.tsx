@@ -14,7 +14,7 @@ import {
   type AutomationTestResult,
 } from '../../../utils/automations';
 import { ACTION_WORDS, ROLE_ITEMS } from './labels';
-import { Field, HINT, INPUT, NumberField, PRIMARY_BUTTON, SELECT, SwitchLine } from './parts';
+import { ErrorLine, Field, HINT, INPUT, LIGHT_OK, Note, NumberField, PRIMARY_BUTTON, SELECT, SwitchLine } from './parts';
 
 const EVENT_CHOICES: { value: AutomationEventKind; label: string; amount: number }[] = [
   { value: 'sub', label: 'A new sub', amount: 0 },
@@ -76,7 +76,7 @@ export default function TryIt({ status }: { status: AutomationStatus | null }) {
   const label = eventKind ? amountLabel(eventKind) : null;
 
   return (
-    <div className="settings-card space-y-4 rounded-lg p-4">
+    <div className="space-y-4 p-4">
       <Field label="Message">
         <textarea
           value={text}
@@ -164,24 +164,20 @@ export default function TryIt({ status }: { status: AutomationStatus | null }) {
           <FlaskConical size={14} />
           {busy ? 'Trying' : 'Try it'}
         </button>
-        <span className={HINT}>Nothing is sent.</span>
+        <Note>Nothing is sent, counted or claimed.</Note>
       </div>
-      {problem && (
-        <p role="alert" className="text-[12px] text-error">
-          {problem}
-        </p>
-      )}
+      {problem && <ErrorLine>{problem}</ErrorLine>}
       {result && (
         <div className="space-y-2 border-t border-borderSubtle/60 pt-3">
           {result.rules.length === 0 && <p className={HINT}>You have no rules to try yet.</p>}
           {result.rules.map((r) => (
-            <div key={r.rule_id} className="rounded-md bg-background/40 px-3 py-2.5">
+            <div key={r.rule_id} className="rounded-lg bg-textPrimary/[0.045] px-3 py-2.5">
               <div className="flex items-center justify-between gap-3">
                 <span className="truncate text-[13px] font-medium text-textPrimary">{r.name}</span>
                 <span
                   className={`inline-flex shrink-0 items-center gap-1 text-[12px] ${r.fired ? 'font-medium text-textPrimary' : 'text-textMuted'}`}
                 >
-                  {r.fired && <Check size={13} className="text-accent" />}
+                  {r.fired && <Check size={13} className={`text-success ${LIGHT_OK}`} />}
                   {r.fired ? 'Would act' : "Wouldn't act"}
                 </span>
               </div>

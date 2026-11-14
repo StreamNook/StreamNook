@@ -2876,6 +2876,18 @@ html[data-theme-tone='light'] .settings-card {
   --settings-hairline: color-mix(in srgb, var(--color-text-primary) 10%, transparent);
 }
 
+/* A card whose children are rows (the automation rule editor's groups): each
+   child is padded like a settings row and split from the next by the same
+   hairline, so a group reads as one card of rows without each field drawing
+   its own frame. */
+.automation-rows > * {
+  padding: 12px 16px;
+}
+.automation-rows > * + *,
+.automation-hairlines > * + * {
+  border-top: 1px solid var(--settings-hairline, color-mix(in srgb, var(--color-border-subtle) 55%, transparent));
+}
+
 /* The tabbed overlay builder: once its settings column is wide enough for two
    comfortable rows side by side, a section's rows flow into two columns, so a
    long section like Events is half as tall. A row never splits; a group of

@@ -2773,8 +2773,8 @@
   },
   {
    "page": "automations",
-   "section": "Automations",
-   "title": "Pace",
+   "section": "Limits",
+   "title": "Messages a minute",
    "paths": [
     "automation_prefs.sends_per_minute"
    ],
@@ -2784,14 +2784,15 @@
    "aliases": [
     "automations",
     "rules",
+    "pace",
     "messages per minute",
     "rate"
    ]
   },
   {
    "page": "automations",
-   "section": "Automations",
-   "title": "Other channels",
+   "section": "Limits",
+   "title": "Post in other channels",
    "paths": [
     "automation_prefs.other_channels"
    ],
@@ -2800,12 +2801,13 @@
    "detail": "Rules may post in chats that aren't yours, at most once per chat in each gap.",
    "aliases": [
     "other chats",
+    "other channels",
     "automations"
    ]
   },
   {
    "page": "automations",
-   "section": "Automations",
+   "section": "Limits",
    "title": "Gap",
    "paths": [
     "automation_prefs.other_channel_gap_seconds"
@@ -2817,7 +2819,7 @@
   },
   {
    "page": "automations",
-   "section": "Automations",
+   "section": "Limits",
    "title": "Chat notes",
    "paths": [
     "automation_prefs.chat_notes"
@@ -2832,8 +2834,8 @@
   },
   {
    "page": "automations",
-   "section": "Automations",
-   "title": "Whisper people a day",
+   "section": "Limits",
+   "title": "New people to whisper a day",
    "paths": [
     "automation_prefs.whisper_people_per_day"
    ],
@@ -2841,6 +2843,7 @@
    "logo": null,
    "detail": "The most new people your rules may whisper in a day, across all your devices.",
    "aliases": [
+    "whisper people a day",
     "whispers",
     "automations",
     "dms"

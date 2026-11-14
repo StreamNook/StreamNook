@@ -1,7 +1,7 @@
 // One action of a rule: a Reply or a Post with its lines, or a Notify with its
 // title, text and sound, plus the variables to insert and the live preview.
 import { useRef, useState, type RefObject } from 'react';
-import { ArrowDown, ArrowUp, ExternalLink, Plus, Trash2, Volume2, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, ExternalLink, Eye, Plus, Trash2, Volume2, X } from 'lucide-react';
 import type { AutomationAction, AutomationFieldError, AutomationLine, AutomationPick, AutomationPlatform } from '../../../types';
 import { errorAt, newElementId, newLine, type AutomationVariable } from '../../../utils/automations';
 import { makeKey } from '../../../utils/providerKey';
@@ -15,9 +15,12 @@ import { ChannelPicker } from '../ChannelPicker';
 import { isP2Action } from '../../../utils/automations';
 import { ACTION_NAMES, ACTION_WORDS } from './labels';
 import { P2ActionFields } from './P2Fields';
-import { Disclosure, Field, HINT, INPUT, QUIET_BUTTON, SELECT, SwitchLine } from './parts';
+import { Disclosure, ErrorLine, Field, HINT, INPUT, MenuButton, QUIET_BUTTON, SELECT, SwitchLine, type MenuItem } from './parts';
 
 const MAX_LINES = 20;
+/** A small action that reads as a link, under a field. */
+const LINK_BUTTON =
+  'inline-flex items-center gap-1.5 rounded-md px-0.5 text-[12.5px] font-medium text-accent-on-surface transition-opacity hover:opacity-80';
 
 const PICKS: { value: AutomationPick; label: string }[] = [
   { value: 'random', label: 'A random line' },
@@ -90,9 +93,9 @@ function LinesField({
           );
         })}
         {action.texts.length < MAX_LINES && (
-          <button type="button" onClick={() => setLines([...action.texts, newLine()])} className={QUIET_BUTTON}>
-            <Plus size={13} />
-            Add another line
+          <button type="button" onClick={() => setLines([...action.texts, newLine()])} className={LINK_BUTTON}>
+            <Plus size={14} />
+            Another line to pick from
           </button>
         )}
       </div>
@@ -419,47 +422,22 @@ export function ActionEditor({
     onChange({ ...action, texts: action.texts.map((l) => (l.id === line.id ? { ...l, text } : l)) });
   };
 
+  const menu: MenuItem[] = [
+    { id: 'up', label: 'Move up', icon: ArrowUp, disabled: index === 0, onSelect: () => onMove(-1) },
+    { id: 'down', label: 'Move down', icon: ArrowDown, disabled: index === count - 1, onSelect: () => onMove(1) },
+    { id: 'remove', label: 'Remove this step', icon: Trash2, danger: true, disabled: count === 1, onSelect: onRemove },
+  ];
+
   return (
-    <div
-      className={
-        IS_MOBILE
-          ? 'space-y-3 border-t border-borderSubtle/60 pt-3'
-          : 'space-y-3 rounded-md bg-textPrimary/[0.04] p-3'
-      }
-    >
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-[13px] font-medium text-textPrimary">{ACTION_NAMES[action.kind]}</span>
-        <div className="flex items-center gap-0.5">
-          <button
-            type="button"
-            onClick={() => onMove(-1)}
-            disabled={index === 0}
-            className={`rounded ${IS_MOBILE ? 'p-2.5' : 'p-1'} text-textSecondary transition-colors hover:text-textPrimary disabled:cursor-not-allowed disabled:opacity-30`}
-            aria-label="Move up"
-          >
-            <ArrowUp size={13} />
-          </button>
-          <button
-            type="button"
-            onClick={() => onMove(1)}
-            disabled={index === count - 1}
-            className={`rounded ${IS_MOBILE ? 'p-2.5' : 'p-1'} text-textSecondary transition-colors hover:text-textPrimary disabled:cursor-not-allowed disabled:opacity-30`}
-            aria-label="Move down"
-          >
-            <ArrowDown size={13} />
-          </button>
-          <button
-            type="button"
-            onClick={onRemove}
-            disabled={count === 1}
-            className="rounded p-1 text-textSecondary transition-colors hover:text-error disabled:cursor-not-allowed disabled:opacity-30"
-            aria-label="Remove this action"
-          >
-            <Trash2 size={13} />
-          </button>
-        </div>
+    <div className="space-y-3.5 rounded-lg bg-textPrimary/[0.045] p-3.5 shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--color-text-primary)_6%,transparent)]">
+      <div className="flex items-center gap-2.5">
+        <span className="inline-flex h-[22px] min-w-[22px] items-center justify-center rounded-full bg-textPrimary/[0.08] text-[11.5px] font-semibold tabular-nums text-textSecondary">
+          {index + 1}
+        </span>
+        <span className="min-w-0 flex-1 truncate text-[13.5px] font-semibold text-textPrimary">{ACTION_NAMES[action.kind]}</span>
+        <MenuButton label={`Step ${index + 1} options`} items={menu} />
       </div>
-      {ownError && <p className="text-[12px] text-error">{ownError}</p>}
+      {ownError && <ErrorLine>{ownError}</ErrorLine>}
 
       {action.kind === 'notify' ? (
         <NotifyFields action={action} at={at} errors={errors} onChange={onChange} />
@@ -543,9 +521,12 @@ export function ActionEditor({
       )}
 
       {preview && (
-        <p className="rounded-md bg-background/50 px-2.5 py-2 text-[12px] leading-relaxed text-textSecondary">
-          <span className="mr-1.5 text-textMuted">{ACTION_WORDS[action.kind]}</span>
-          {preview}
+        <p className="flex items-start gap-2 border-t border-textPrimary/[0.07] pt-3 text-[12.5px] leading-relaxed text-textSecondary">
+          <Eye size={14} className="mt-[3px] shrink-0 text-textMuted" aria-hidden />
+          <span className="min-w-0">
+            <span className="mr-1.5">{ACTION_WORDS[action.kind]}</span>
+            <span className="text-textPrimary">{preview}</span>
+          </span>
         </p>
       )}
     </div>

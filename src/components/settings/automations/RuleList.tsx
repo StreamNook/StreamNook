@@ -1,18 +1,16 @@
-// The rules: one row each (name, what it does, its switch, Test or Live, who
-// it sends as, its record), one editor open at a time, reorder, Add rule and
-// the starter templates.
-import { useState } from 'react';
-import { ArrowDown, ArrowUp, ChevronDown, LayoutTemplate, Plus, Trash2 } from 'lucide-react';
+// The rules: one card, one row each (what it waits for, its name with Live or
+// Test, what it does, its record, anything holding it back), its ⋯ menu and its
+// switch at the right edge. A row opens the rule's editor, which the page shows
+// in place of the list. The heading's Templates and New rule live here too.
+import { useEffect, useState } from 'react';
+import { ArrowDown, ArrowUp, CircleHelp, Copy, LayoutTemplate, Plus, Trash2 } from 'lucide-react';
 import type { AutomationRule } from '../../../types';
 import { Toggle } from '../../ui/Toggle';
 import { IS_MOBILE } from '../../../utils/platform';
 import { refreshAutomationStatus } from '../../../hooks/useAutomationStatus';
 import {
-  accountRef,
   actedText,
   automationsApi,
-  blankRule,
-  duplicateRule,
   errorText,
   moveBeforeId,
   type AutomationAccount,
@@ -20,25 +18,39 @@ import {
   type AutomationStatus,
   type AutomationTemplate,
 } from '../../../utils/automations';
-import { RuleEditor } from './RuleEditor';
-import { AccountFace, DANGER_BUTTON, HINT, LIGHT_WARN, LiveWord, PRIMARY_BUTTON, QUIET_BUTTON } from './parts';
+import { TRIGGER_ICONS } from './labels';
+import {
+  AccountFace,
+  CARD,
+  DANGER_BUTTON,
+  ErrorLine,
+  GHOST_BUTTON,
+  HINT,
+  META,
+  MenuButton,
+  Note,
+  PRIMARY_BUTTON,
+  QUIET_BUTTON,
+  RuleTag,
+  WarnLine,
+  type MenuItem,
+} from './parts';
 
-/** The open editor of a rule not saved yet. */
-const NEW = 'new';
-/** On the phone the arrows keep their size and reach further for a finger, so the text column keeps its width. */
-const MOVE_TAP = IS_MOBILE ? "relative after:absolute after:-inset-2.5 after:content-['']" : '';
+/** The column the row's mark sits in; the hairlines and helper lines keep to the text after it. */
+const LEAD = IS_MOBILE ? 'w-6' : 'w-[18px]';
 
 function RuleRow({
   r,
   index,
   total,
-  open,
   now,
   accounts,
   confirming,
+  problem,
   onOpen,
   onFlip,
   onMove,
+  onDuplicate,
   onAskDelete,
   onDelete,
   onKeep,
@@ -46,13 +58,14 @@ function RuleRow({
   r: AutomationRuleStatus;
   index: number;
   total: number;
-  open: boolean;
   now: number;
   accounts: readonly AutomationAccount[];
   confirming: boolean;
+  problem: string | null;
   onOpen: () => void;
   onFlip: () => void;
   onMove: (dir: -1 | 1) => void;
+  onDuplicate: () => void;
   onAskDelete: () => void;
   onDelete: () => void;
   onKeep: () => void;
@@ -63,94 +76,64 @@ function RuleRow({
     rule && rule.send_as.id !== rule.owner.id
       ? (accounts.find((a) => a.id === rule.send_as.id) ?? rule.send_as)
       : null;
+  const Mark = rule ? TRIGGER_ICONS[rule.when.kind] : CircleHelp;
+  const menu: MenuItem[] = [
+    { id: 'up', label: 'Move up', icon: ArrowUp, disabled: index === 0, onSelect: () => onMove(-1) },
+    { id: 'down', label: 'Move down', icon: ArrowDown, disabled: index === total - 1, onSelect: () => onMove(1) },
+    ...(rule ? [{ id: 'dup', label: 'Duplicate', icon: Copy, onSelect: onDuplicate }] : []),
+    { id: 'delete', label: 'Delete', icon: Trash2, danger: true, onSelect: onAskDelete },
+  ];
   return (
-    <div
-      className={`flex items-start gap-3 px-3.5 py-3 ${r.enabled ? '' : 'opacity-70'} ${rule ? '' : '[&_[role=switch]]:!bg-textPrimary/25'}`}
-    >
-      <div className="-mt-0.5">
-        <Toggle
-          enabled={r.enabled}
-          onChange={onFlip}
-          disabled={!rule}
-          ariaLabel={r.enabled ? `Turn off ${r.name}` : `Turn on ${r.name}`}
-        />
-      </div>
-      <button type="button" onClick={onOpen} disabled={!rule} aria-expanded={open} className="min-w-0 flex-1 text-left">
-        <span className="flex items-center gap-2">
-          <span className="truncate text-[13.5px] font-medium text-textPrimary">{r.name || 'Untitled rule'}</span>
+    <div className="flex items-start gap-3">
+      <span className={`${LEAD} flex shrink-0 justify-center pt-[2px] ${r.enabled ? 'text-accent-on-surface' : 'text-textMuted'}`}>
+        <Mark size={IS_MOBILE ? 20 : 17} aria-hidden />
+      </span>
+      <button
+        type="button"
+        onClick={onOpen}
+        disabled={!rule}
+        aria-label={rule ? `Edit ${r.name || 'this rule'}` : undefined}
+        className="min-w-0 flex-1 text-left disabled:cursor-default"
+      >
+        <span className="flex min-w-0 items-center gap-2">
+          <span
+            className={`truncate ${IS_MOBILE ? 'text-[15px]' : 'text-[14px]'} font-medium ${r.enabled ? 'text-textPrimary' : 'text-textSecondary'}`}
+          >
+            {r.name || 'Untitled rule'}
+          </span>
+          <RuleTag live={r.live} />
           {speaker && <AccountFace account={speaker} />}
         </span>
-        {r.summary && <span className="mt-0.5 block text-[12px] leading-relaxed text-textSecondary">{r.summary}</span>}
-        <span
-          className={`mt-1.5 flex flex-wrap items-center ${IS_MOBILE ? 'gap-x-3' : 'gap-x-1.5'} gap-y-1 text-[11.5px] text-textMuted`}
-        >
-          <LiveWord live={r.live} />
-          {/* The phone's narrow column wraps the line, and a dot would lead a row. */}
-          {!IS_MOBILE && <span aria-hidden="true">·</span>}
+        {r.summary && <span className={`mt-0.5 block ${HINT}`}>{r.summary}</span>}
+        <span className={`mt-1 flex flex-wrap gap-x-3 gap-y-0.5 ${META}`}>
+          {!r.enabled && <span>Off</span>}
+          {!rule && <span>Made by a newer StreamNook. Update to edit it.</span>}
           <span>{actedText(r.count, r.last_fire_ms, now)}</span>
-          {r.last_outcome && (
-            <>
-              {!IS_MOBILE && <span aria-hidden="true">·</span>}
-              <span>{r.last_outcome}</span>
-            </>
-          )}
+          {r.last_outcome && <span>{r.last_outcome}</span>}
         </span>
-        {r.held && (
-          <span className={`mt-1.5 block text-[12px] leading-relaxed text-warning ${LIGHT_WARN}`}>{r.held}</span>
-        )}
+        {r.held && <WarnLine className="mt-1.5">{r.held}</WarnLine>}
+        {problem && <ErrorLine className="mt-1.5">{problem}</ErrorLine>}
       </button>
-      <div className="flex shrink-0 items-center gap-0.5">
-        {!confirming && (
-          <button
-            type="button"
-            onClick={() => onMove(-1)}
-            disabled={index === 0}
-            className={`rounded p-1 ${MOVE_TAP} text-textSecondary transition-colors hover:text-textPrimary disabled:cursor-not-allowed disabled:opacity-30`}
-            aria-label="Move up"
-          >
-            <ArrowUp size={14} />
+      {confirming ? (
+        <span className="flex shrink-0 items-center gap-1.5">
+          <button type="button" onClick={onDelete} className={DANGER_BUTTON}>
+            Delete
           </button>
-        )}
-        {!confirming && (
-          <button
-            type="button"
-            onClick={() => onMove(1)}
-            disabled={index === total - 1}
-            className={`rounded p-1 ${MOVE_TAP} text-textSecondary transition-colors hover:text-textPrimary disabled:cursor-not-allowed disabled:opacity-30`}
-            aria-label="Move down"
-          >
-            <ArrowDown size={14} />
+          <button type="button" onClick={onKeep} className={QUIET_BUTTON}>
+            Keep
           </button>
-        )}
-        {rule ? (
-          <button
-            type="button"
-            onClick={onOpen}
-            className="rounded p-1 text-textSecondary transition-colors hover:text-textPrimary"
-            aria-label={open ? 'Close the editor' : 'Edit this rule'}
-          >
-            <ChevronDown size={14} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
-          </button>
-        ) : confirming ? (
-          <span className="flex items-center gap-1 pl-1">
-            <button type="button" onClick={onDelete} className={DANGER_BUTTON}>
-              Delete
-            </button>
-            <button type="button" onClick={onKeep} className={QUIET_BUTTON}>
-              Keep
-            </button>
-          </span>
-        ) : (
-          <button
-            type="button"
-            onClick={onAskDelete}
-            className="rounded p-1 text-textSecondary transition-colors hover:text-error"
-            aria-label="Delete this rule"
-          >
-            <Trash2 size={14} />
-          </button>
-        )}
-      </div>
+        </span>
+      ) : (
+        <span className="flex shrink-0 items-center gap-1.5">
+          <MenuButton label={`${r.name || 'Rule'} options`} items={menu} />
+          <Toggle
+            enabled={r.enabled}
+            onChange={onFlip}
+            disabled={!rule}
+            ariaLabel={r.enabled ? `Turn off ${r.name}` : `Turn on ${r.name}`}
+          />
+        </span>
+      )}
     </div>
   );
 }
@@ -158,191 +141,146 @@ function RuleRow({
 interface RuleListProps {
   status: AutomationStatus | null;
   now: number;
-  /** A rule to open first (a settings link named it). */
-  initialOpen: string | null;
-  otherChannelsOn: boolean;
+  onOpen: (id: string) => void;
+  onDuplicate: (rule: AutomationRule) => void;
 }
 
-export default function RuleList({ status, now, initialOpen, otherChannelsOn }: RuleListProps) {
-  const [openId, setOpenId] = useState<string | null>(initialOpen);
-  const [fresh, setFresh] = useState<{ rule: AutomationRule; n: number } | null>(null);
-  const [showTemplates, setShowTemplates] = useState(false);
-  const [templates, setTemplates] = useState<AutomationTemplate[] | null>(null);
-  const [adding, setAdding] = useState<string | null>(null);
+export default function RuleList({ status, now, onOpen, onDuplicate }: RuleListProps) {
   const [confirmId, setConfirmId] = useState<string | null>(null);
-  const [problem, setProblem] = useState<{ ruleId: string | null; text: string } | null>(null);
+  const [problem, setProblem] = useState<{ ruleId: string; text: string } | null>(null);
 
   if (!status) return <p className={`${HINT} ${IS_MOBILE ? 'px-4' : 'px-1'}`}>Loading your rules</p>;
 
   const rules = status.rules;
   const ids = rules.map((r) => r.id);
   const main = status.accounts.find((a) => a.main) ?? null;
-  const fail = (e: unknown, ruleId: string | null = null) => setProblem({ ruleId, text: errorText(e) });
+  const fail = (ruleId: string) => (e: unknown) => setProblem({ ruleId, text: errorText(e) });
   const done = () => {
     setProblem(null);
     void refreshAutomationStatus();
   };
 
-  const openNew = (rule: AutomationRule) => {
-    setFresh((f) => ({ rule, n: (f?.n ?? 0) + 1 }));
-    setOpenId(NEW);
-    setShowTemplates(false);
+  const move = (index: number, dir: -1 | 1) => {
+    const to = moveBeforeId(ids, index, dir);
+    if (to) automationsApi.moveRule(ids[index], to.beforeId).then(done).catch(fail(ids[index]));
   };
-  const startBlank = () => {
-    if (main) openNew(blankRule(accountRef(main)));
+  const flip = (r: AutomationRuleStatus) => {
+    automationsApi.setRuleFlags(r.id, { enabled: !r.enabled }).then(done).catch(fail(r.id));
   };
-  const toggleTemplates = () => {
-    setShowTemplates((v) => !v);
-    if (templates === null) automationsApi.templates().then(setTemplates).catch(fail);
+  const remove = (id: string) => {
+    setConfirmId(null);
+    automationsApi.deleteRule(id).then(done).catch(fail(id));
   };
-  const addTemplate = (id: string) => {
+
+  if (rules.length === 0) {
+    return (
+      <div className={`${CARD} px-4 py-6 text-center`}>
+        <p className="text-[13px] text-textSecondary">
+          {main ? 'No rules yet. Start from a template, or make your own with New rule.' : 'Sign in with Twitch to make rules.'}
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`${CARD} automation-rows`}>
+      {rules.map((r, index) => (
+        <RuleRow
+          key={r.id}
+          r={r}
+          index={index}
+          total={rules.length}
+          now={now}
+          accounts={status.accounts}
+          confirming={confirmId === r.id}
+          problem={problem?.ruleId === r.id ? problem.text : null}
+          onOpen={() => onOpen(r.id)}
+          onFlip={() => flip(r)}
+          onMove={(dir) => move(index, dir)}
+          onDuplicate={() => r.rule && onDuplicate(r.rule)}
+          onAskDelete={() => setConfirmId(r.id)}
+          onDelete={() => remove(r.id)}
+          onKeep={() => setConfirmId(null)}
+        />
+      ))}
+    </div>
+  );
+}
+
+/** Templates and New rule, on the Rules heading's line. */
+export function RuleHeaderActions({
+  canAdd,
+  templatesOpen,
+  onTemplates,
+  onNew,
+}: {
+  canAdd: boolean;
+  templatesOpen: boolean;
+  onTemplates: () => void;
+  onNew: () => void;
+}) {
+  if (!canAdd) return null;
+  return (
+    <>
+      <button type="button" onClick={onTemplates} aria-expanded={templatesOpen} className={GHOST_BUTTON}>
+        <LayoutTemplate size={14} />
+        Templates
+      </button>
+      <button type="button" onClick={onNew} className={PRIMARY_BUTTON}>
+        <Plus size={14} />
+        New rule
+      </button>
+    </>
+  );
+}
+
+/** The starter rules, one row each with Add. */
+export function TemplatePicker({ onAdded }: { onAdded: (ruleId: string) => void }) {
+  const [templates, setTemplates] = useState<AutomationTemplate[] | null>(null);
+  const [adding, setAdding] = useState<string | null>(null);
+  const [problem, setProblem] = useState<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    automationsApi
+      .templates()
+      .then((list) => live && setTemplates(list))
+      .catch((e: unknown) => live && setProblem(errorText(e)));
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  const add = (id: string) => {
     setAdding(id);
     automationsApi
       .addTemplate(id)
       .then((answer) => {
-        setShowTemplates(false);
-        setOpenId(answer.rule.id);
-        done();
+        void refreshAutomationStatus();
+        onAdded(answer.rule.id);
       })
-      .catch(fail)
+      .catch((e: unknown) => setProblem(errorText(e)))
       .finally(() => setAdding(null));
-  };
-  const move = (index: number, dir: -1 | 1) => {
-    const to = moveBeforeId(ids, index, dir);
-    if (to) automationsApi.moveRule(ids[index], to.beforeId).then(done).catch((e) => fail(e, ids[index]));
-  };
-  const flip = (r: AutomationRuleStatus) => {
-    automationsApi
-      .setRuleFlags(r.id, { enabled: !r.enabled })
-      .then(done)
-      .catch((e) => fail(e, r.id));
-  };
-  const remove = (id: string) => {
-    setConfirmId(null);
-    automationsApi
-      .deleteRule(id)
-      .then(done)
-      .catch((e) => fail(e, id));
-  };
-  const saved = () => {
-    setOpenId(null);
-    done();
   };
 
   return (
-    <div className="space-y-2.5">
-      {problem && problem.ruleId === null && (
-        <p role="alert" className={`text-[12px] text-error ${IS_MOBILE ? 'px-4' : 'px-1'}`}>
-          {problem.text}
-        </p>
-      )}
-
-      {rules.length === 0 && openId !== NEW && (
-        <div className="settings-card rounded-lg px-4 py-6 text-center">
-          <p className="text-sm text-textSecondary">
-            {main ? 'No rules yet. Start from a template, or make your own.' : 'Sign in with Twitch to make rules.'}
-          </p>
-        </div>
-      )}
-
-      {rules.map((r, index) => (
-        <div key={r.id} className={`rounded-lg settings-card ${openId === r.id ? 'ring-1 ring-borderSubtle' : ''}`}>
-          <RuleRow
-            r={r}
-            index={index}
-            total={rules.length}
-            open={openId === r.id}
-            now={now}
-            accounts={status.accounts}
-            confirming={confirmId === r.id}
-            onOpen={() => setOpenId((id) => (id === r.id ? null : r.id))}
-            onFlip={() => flip(r)}
-            onMove={(dir) => move(index, dir)}
-            onAskDelete={() => setConfirmId(r.id)}
-            onDelete={() => remove(r.id)}
-            onKeep={() => setConfirmId(null)}
-          />
-          {problem?.ruleId === r.id && (
-            <p role="alert" className="-mt-1.5 pb-2.5 pl-[70px] pr-3.5 text-[12px] text-error">
-              {problem.text}
-            </p>
-          )}
-          {openId === r.id && r.rule && (
-            <div className="border-t border-borderSubtle/60 px-3.5 pb-3.5 pt-3">
-              <RuleEditor
-                key={r.id}
-                initial={r.rule}
-                isNew={false}
-                accounts={status.accounts}
-                platformAccounts={status.platform_accounts}
-                otherChannelsOn={otherChannelsOn}
-                onClose={() => setOpenId(null)}
-                onSaved={saved}
-                onDuplicate={(rule) => openNew(duplicateRule(rule))}
-              />
+    <div className="space-y-2">
+      <div className={`${CARD} automation-rows`}>
+        {templates === null && !problem && <p className={HINT}>Loading templates</p>}
+        {(templates ?? []).map((t) => (
+          <div key={t.id} className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-[13.5px] font-medium text-textPrimary">{t.name}</div>
+              <div className={`mt-0.5 ${HINT}`}>{t.description}</div>
             </div>
-          )}
-        </div>
-      ))}
-
-      {openId === NEW && fresh && (
-        <div className="settings-card rounded-lg ring-1 ring-borderSubtle">
-          <div className="px-3.5 pt-3 text-[13.5px] font-medium text-textPrimary">New rule</div>
-          <div className="px-3.5 pb-3.5 pt-2.5">
-            <RuleEditor
-              key={`new-${fresh.n}`}
-              initial={fresh.rule}
-              isNew
-              accounts={status.accounts}
-              platformAccounts={status.platform_accounts}
-              otherChannelsOn={otherChannelsOn}
-              onClose={() => setOpenId(null)}
-              onSaved={saved}
-              onDuplicate={(rule) => openNew(duplicateRule(rule))}
-            />
+            <button type="button" onClick={() => add(t.id)} disabled={adding !== null} className={QUIET_BUTTON}>
+              {adding === t.id ? 'Adding' : 'Add'}
+            </button>
           </div>
-        </div>
-      )}
-
-      {main && (
-        <div className={`flex flex-wrap items-center gap-2 ${IS_MOBILE ? 'px-1' : ''}`}>
-          <button type="button" onClick={startBlank} className={PRIMARY_BUTTON}>
-            <Plus size={14} />
-            Add rule
-          </button>
-          <button type="button" onClick={toggleTemplates} aria-expanded={showTemplates} className={QUIET_BUTTON}>
-            <LayoutTemplate size={14} />
-            From a template
-            <ChevronDown size={13} className={`transition-transform ${showTemplates ? 'rotate-180' : ''}`} />
-          </button>
-        </div>
-      )}
-
-      {showTemplates && (
-        <div className="space-y-3 rounded-lg bg-textPrimary/[0.05] p-3.5">
-          {templates === null ? (
-            <p className={HINT}>Loading templates</p>
-          ) : (
-            templates.map((t) => (
-              <div key={t.id} className="flex items-center justify-between gap-3 rounded-md px-1 py-2">
-                <div className="min-w-0">
-                  <div className="text-[13px] font-medium text-textPrimary">{t.name}</div>
-                  <div className="mt-0.5 text-[12px] leading-relaxed text-textSecondary">{t.description}</div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => addTemplate(t.id)}
-                  disabled={adding !== null}
-                  className={PRIMARY_BUTTON}
-                >
-                  {adding === t.id ? 'Adding' : 'Add'}
-                </button>
-              </div>
-            ))
-          )}
-          <p className={`${HINT} px-1 pt-1`}>Templates start in Test, so you can see what they would do first.</p>
-        </div>
-      )}
+        ))}
+        {problem && <ErrorLine>{problem}</ErrorLine>}
+      </div>
+      <Note className={IS_MOBILE ? 'px-4' : 'px-1'}>Templates start in Test, so you can see what they would do first.</Note>
     </div>
   );
 }

@@ -1,9 +1,12 @@
-// One rule, opened for editing: its name, When, If, Do and Send as, a live
-// preview of what it would post, and Test or Live, Duplicate and Delete. The
-// draft is the editor's own until Save; Rust checks it, merges it over the
-// stored rule and refuses a save made from an older copy.
+// One rule, opened in place of the Automations page: a way back, its name with
+// Test or Live, then When, Only if, Do and Send as, each a card of rows, the
+// less common choices folded behind their summaries, the steps numbered with
+// one Add a step menu, a live preview of what it would post, and Delete,
+// Duplicate, Cancel and Save. The draft is the editor's own until Save; Rust
+// checks it, merges it over the stored rule and refuses a save made from an
+// older copy.
 import { useEffect, useState } from 'react';
-import { Copy, Plus, Trash2, X } from 'lucide-react';
+import { ChevronDown, ChevronLeft, CircleAlert, Copy, Plus, Trash2, X } from 'lucide-react';
 import type {
   AutomationAction,
   AutomationChannelScope,
@@ -34,12 +37,14 @@ import {
   isOutward,
   loadAutomationVariables,
   newElementId,
+  offeredP2Actions,
   platformAccountRef,
   previewSample,
   providerOfKey,
   saveRuleChecked,
   rulePlatform,
   sameRuleBody,
+  secondsText,
   isEdgeKind,
   isOwnEventKind,
   withPlatforms,
@@ -54,21 +59,29 @@ import { ActionEditor } from './ActionEditor';
 import { EdgeIf, LiveChangeFields, OwnEventFields } from './OwnEventFields';
 import { BadgeDropFields } from './BadgeDropFields';
 import { WhatChanges } from './WhatChanges';
-import { EVENT_ITEMS, P2_TRIGGERS, PLATFORM_ITEMS, ROLE_ITEMS } from './labels';
-import { ExpressionField, P2AddActions, P2TriggerFields, isP2Trigger } from './P2Fields';
+import { ACTION_ICONS, ACTION_MENU, ACTION_MENU_SECTIONS, ACTION_NAMES, EVENT_ITEMS, P2_TRIGGERS, PLATFORM_ITEMS, ROLE_ITEMS } from './labels';
+import { ExpressionField, P2TriggerFields, isP2Trigger } from './P2Fields';
 import {
+  AccountFace,
   Block,
+  CountChip,
   DANGER_BUTTON,
   Disclosure,
+  ErrorLine,
   Field,
+  GHOST_BUTTON,
   HINT,
   INPUT,
+  MenuButton,
   NamesInput,
   NumberField,
   PRIMARY_BUTTON,
   QUIET_BUTTON,
+  RowField,
+  RuleTag,
   SELECT,
   SwitchLine,
+  type MenuItem,
 } from './parts';
 
 const MAX_ACTIONS = 5;
@@ -195,6 +208,8 @@ interface RuleEditorProps {
   /** The rule as stored, or a new rule's start. */
   initial: AutomationRule;
   isNew: boolean;
+  /** Rust's one line about what the stored rule does. */
+  summary: string;
   accounts: readonly AutomationAccount[];
   /** The connected Kick account, for a Kick rule's Send as. */
   platformAccounts: readonly AutomationPlatformAccount[];
@@ -205,7 +220,17 @@ interface RuleEditorProps {
   onDuplicate: (copy: AutomationRule) => void;
 }
 
-export function RuleEditor({ initial, isNew, accounts, platformAccounts, otherChannelsOn, onClose, onSaved, onDuplicate }: RuleEditorProps) {
+export function RuleEditor({
+  initial,
+  isNew,
+  summary,
+  accounts,
+  platformAccounts,
+  otherChannelsOn,
+  onClose,
+  onSaved,
+  onDuplicate,
+}: RuleEditorProps) {
   const [stored, setDraft] = useState<AutomationRule>(initial);
   const kickAccount = platformAccounts.find((a) => a.provider === 'kick');
   // A Kick rule that posts sends as the connected Kick account, so its sender follows a connect or a
@@ -275,8 +300,32 @@ export function RuleEditor({ initial, isNew, accounts, platformAccounts, otherCh
     const next = hasOutward ? [id] : has ? platforms.filter((p) => p !== id) : [...platforms, id];
     update((r) => withPlatforms(r, next, kickAccount));
   };
-  const addOutward = (kind: 'reply' | 'send') =>
-    update((r) => withPlatforms({ ...r, actions: [...r.actions, actionOf(kind)] }, [rulePlatform(r)], kickAccount));
+  const addAction = (kind: AutomationAction['kind']) =>
+    kind === 'reply' || kind === 'send'
+      ? update((r) => withPlatforms({ ...r, actions: [...r.actions, actionOf(kind)] }, [rulePlatform(r)], kickAccount))
+      : update((r) => ({ ...r, actions: [...r.actions, actionOf(kind)] }));
+
+  // The steps this rule may add, in the menu's groups.
+  const addable: AutomationAction['kind'][] = [
+    ...(!badge && !edge && platforms.every(canPost) ? (['reply'] as const) : []),
+    ...(platforms.every(canPost) ? (['send'] as const) : []),
+    'notify',
+    'speak',
+    ...(when.kind === 'message' ? (['highlight'] as const) : []),
+    ...(!badge ? offeredP2Actions(draft.when, accounts.some((a) => a.id === draft.send_as.id && a.main)) : []),
+  ];
+  const addItems: MenuItem[] = ACTION_MENU_SECTIONS.flatMap((section) =>
+    addable
+      .filter((kind) => ACTION_MENU[kind].section === section)
+      .map((kind) => ({
+        id: kind,
+        label: ACTION_NAMES[kind],
+        help: ACTION_MENU[kind].help,
+        icon: ACTION_ICONS[kind],
+        section,
+        onSelect: () => addAction(kind),
+      })),
+  );
 
   const save = () => {
     setSaving(true);
@@ -325,19 +374,82 @@ export function RuleEditor({ initial, isNew, accounts, platformAccounts, otherCh
 
   const scopeHint =
     scope.kind !== 'own' && !otherChannelsOn
-      ? "Rules post in chats that aren't yours only while Other channels is on."
+      ? "Rules post in chats that aren't yours only while Post in other channels is on."
       : scope.kind === 'any_open'
         ? 'Keeps answering in chats you had open when a window closes to the tray.'
         : undefined;
 
   const signedIn = accounts.some((a) => a.id === draft.send_as.id);
   const ruleError = errorAt(errors, 'rules') ?? errorAt(errors, 'owner');
+  const nameError = errorAt(errors, 'name');
+
+  const moreSummary =
+    [
+      draft.only_if.skip_users.length > 0 ? `Skips ${draft.only_if.skip_users.length}` : null,
+      draft.only_if.only_users.length > 0 ? `Only ${draft.only_if.only_users.length} people` : null,
+      chatTrigger && draft.only_if.shared_chat ? 'Shared Chat' : null,
+      hours ? `${hours.from} to ${hours.to}` : null,
+    ]
+      .filter(Boolean)
+      .join(', ') || (chatTrigger ? 'People to skip or answer, Shared Chat, hours' : 'People to skip or answer, hours');
+  const limits = draft.limits;
+  const paceSummary = [
+    !badge ? `${secondsText(limits.rule_cooldown_seconds)} per chat` : null,
+    !badge ? `${secondsText(limits.user_cooldown_seconds)} per person` : null,
+    `at most ${limits.max_per_hour} an hour`,
+  ]
+    .filter(Boolean)
+    .join(', ');
+  const sendAs = accounts.find((a) => a.id === draft.send_as.id) ?? draft.send_as;
 
   return (
-    <div className="space-y-3">
+    <div className={IS_MOBILE ? 'space-y-6' : 'space-y-7'}>
+      <div className={IS_MOBILE ? 'px-4' : ''}>
+        <button
+          type="button"
+          onClick={onClose}
+          className="-ml-1.5 inline-flex items-center gap-0.5 rounded-md px-1 py-0.5 text-[13px] font-medium text-textSecondary transition-colors hover:text-textPrimary"
+        >
+          <ChevronLeft size={16} />
+          Automations
+        </button>
+        <div className="mt-3 flex flex-wrap items-start gap-x-4 gap-y-3">
+          <div className="min-w-0 flex-1">
+            <input
+              value={draft.name}
+              maxLength={60}
+              aria-label="Name"
+              onChange={(e) => update((r) => ({ ...r, name: e.target.value }))}
+              placeholder={isNew ? 'Name this rule' : 'Untitled rule'}
+              className="-mx-2 w-[calc(100%+1rem)] rounded-md bg-transparent px-2 py-0.5 text-[18px] font-semibold text-textPrimary outline-none transition-colors placeholder:text-textMuted hover:bg-textPrimary/[0.05] focus:bg-textPrimary/[0.06] focus:ring-1 focus:ring-accent/40"
+            />
+            {nameError ? (
+              <ErrorLine className="mt-1">{nameError}</ErrorLine>
+            ) : (
+              <p className={`mt-0.5 ${HINT}`}>{isNew ? 'New rules start in Test, so you can see what they would do first.' : summary}</p>
+            )}
+          </div>
+          {isNew ? (
+            <RuleTag live={false} />
+          ) : (
+            <SegmentedSelect
+              value={initial.live ? 'live' : 'test'}
+              options={[
+                { value: 'test', label: 'Test' },
+                { value: 'live', label: 'Live' },
+              ]}
+              onChange={(v) => setLive(v === 'live')}
+            />
+          )}
+        </div>
+      </div>
+
       {(message || ruleError) && (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-error/30 bg-error/5 px-3 py-2">
-          <p className="text-[12px] leading-relaxed text-textSecondary">{message ?? ruleError}</p>
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-error/30 bg-error/5 px-3.5 py-2.5">
+          <p className="flex items-start gap-2 text-[12.5px] leading-relaxed text-textPrimary">
+            <CircleAlert size={14} className="mt-[3px] shrink-0 text-error" aria-hidden />
+            {message ?? ruleError}
+          </p>
           {stale && (
             <button
               type="button"
@@ -357,34 +469,25 @@ export function RuleEditor({ initial, isNew, accounts, platformAccounts, otherCh
 
       <WhatChanges ruleId={draft.id} />
 
-      <Field label="Name" error={errorAt(errors, 'name')}>
-        <input
-          value={draft.name}
-          maxLength={60}
-          aria-label="Name"
-          onChange={(e) => update((r) => ({ ...r, name: e.target.value }))}
-          placeholder="Away reply"
-          className={INPUT}
-        />
-      </Field>
-
       <Block title="When">
-        <select
-          value={when.kind}
-          aria-label="When"
-          onChange={(e) => update((r) => withTrigger(r, e.target.value as TriggerKind))}
-          className={SELECT}
-        >
-          {TRIGGERS.filter((t) => twitchOnly || t.value !== 'badge_drop').map((t) => (
-            <option key={t.value} value={t.value}>
-              {t.label}
-            </option>
-          ))}
-        </select>
+        <RowField label="Trigger">
+          <select
+            value={when.kind}
+            aria-label="Trigger"
+            onChange={(e) => update((r) => withTrigger(r, e.target.value as TriggerKind))}
+            className={SELECT}
+          >
+            {TRIGGERS.filter((t) => twitchOnly || t.value !== 'badge_drop').map((t) => (
+              <option key={t.value} value={t.value}>
+                {t.label}
+              </option>
+            ))}
+          </select>
+        </RowField>
 
         {when.kind === 'message' && (
           <>
-            <Field label="Match">
+            <RowField label="Match">
               <select
                 value={when.text.mode}
                 aria-label="Match"
@@ -399,7 +502,7 @@ export function RuleEditor({ initial, isNew, accounts, platformAccounts, otherCh
                   </option>
                 ))}
               </select>
-            </Field>
+            </RowField>
             <Field label="Words" error={errorAt(errors, 'when.text.pattern')}>
               <input
                 value={when.text.pattern}
@@ -431,9 +534,7 @@ export function RuleEditor({ initial, isNew, accounts, platformAccounts, otherCh
           />
         )}
 
-        {when.kind === 'first_message' && (
-          <p className={HINT}>Acts on each person's first message in a chat.</p>
-        )}
+        {when.kind === 'first_message' && <p className={HINT}>Acts on each person's first message in a chat.</p>}
 
         {when.kind === 'channel_event' && (
           <>
@@ -455,7 +556,7 @@ export function RuleEditor({ initial, isNew, accounts, platformAccounts, otherCh
               />
             </Field>
             {MINIMUMS.filter((m) => when.events.includes(m.event)).map((m) => (
-              <Field key={m.field} label={m.label}>
+              <RowField key={m.field} label={m.label}>
                 <NumberField
                   value={when[m.field]}
                   min={0}
@@ -464,7 +565,7 @@ export function RuleEditor({ initial, isNew, accounts, platformAccounts, otherCh
                   suffix={m.suffix}
                   onChange={(v) => update((r) => ({ ...r, when: withMinimum(when, m.field, v) }))}
                 />
-              </Field>
+              </RowField>
             ))}
           </>
         )}
@@ -494,7 +595,7 @@ export function RuleEditor({ initial, isNew, accounts, platformAccounts, otherCh
         )}
       </Block>
 
-      <Block title="If">
+      <Block title="Only if">
         {badge ? (
           <p className={HINT}>In your channel, only while you're live. Badge rules always work this way.</p>
         ) : edge ? (
@@ -503,64 +604,66 @@ export function RuleEditor({ initial, isNew, accounts, platformAccounts, otherCh
           <>
             <Field label="Platforms" hint={platformHint} error={errorAt(errors, 'only_if.platforms')}>
               <div role="group" aria-label="Platforms">
-                {PLATFORM_ITEMS.map((item) => (
-                  <div key={item.id} className="flex items-center gap-2.5">
-                    <ProviderMark provider={item.id} size={16} />
-                    <div className="min-w-0 flex-1">
-                      <SwitchLine label={item.label} on={platforms.includes(item.id)} onChange={() => togglePlatform(item.id)} />
-                    </div>
-                  </div>
-                ))}
+                <SwitchList
+                  items={PLATFORM_ITEMS.map((item) => ({ ...item, mark: <ProviderMark provider={item.id} size={16} /> }))}
+                  isOn={(id) => platforms.some((p) => p === id)}
+                  onToggle={(id) => {
+                    const item = PLATFORM_ITEMS.find((p) => p.id === id);
+                    if (item) togglePlatform(item.id);
+                  }}
+                />
               </div>
             </Field>
-            <Field label="Where" hint={scopeHint} error={errorAt(errors, 'only_if.channels')}>
-              <select
-                value={scope.kind}
-                aria-label="Where"
-                onChange={(e) => setIf({ channels: scopeOf(e.target.value as AutomationChannelScope['kind'], scope) })}
-                className={SELECT}
-              >
-                {SCOPES.filter((s) => s.value !== 'watching' || platforms.includes('twitch')).map((s) => (
-                  <option key={s.value} value={s.value}>
-                    {s.label}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            {scope.kind === 'these' && (
-              <div className="space-y-1.5">
-                {scope.list.map((c, i) => {
-                  const chatError = errorAt(errors, `only_if.channels.list[${i}]`);
-                  return (
-                    <div key={c.id} className="space-y-1">
-                      <div className="flex items-center justify-between gap-2 rounded-md bg-background/40 px-2.5 py-1.5">
-                        <span className="flex min-w-0 items-center gap-1.5">
-                          {!twitchOnly && <ProviderMark provider={providerOfKey(c.key)} size={13} />}
-                          <span className="truncate text-[13px] text-textPrimary">#{c.name || c.key}</span>
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => setIf({ channels: { kind: 'these', list: scope.list.filter((x) => x.id !== c.id) } })}
-                          className="rounded p-0.5 text-textMuted transition-colors hover:text-textPrimary"
-                          aria-label={`Remove ${c.name || c.key}`}
-                        >
-                          <X size={13} />
-                        </button>
+            <div className="space-y-2.5">
+              <RowField label="Where" hint={scopeHint} error={errorAt(errors, 'only_if.channels')}>
+                <select
+                  value={scope.kind}
+                  aria-label="Where"
+                  onChange={(e) => setIf({ channels: scopeOf(e.target.value as AutomationChannelScope['kind'], scope) })}
+                  className={SELECT}
+                >
+                  {SCOPES.filter((s) => s.value !== 'watching' || platforms.includes('twitch')).map((s) => (
+                    <option key={s.value} value={s.value}>
+                      {s.label}
+                    </option>
+                  ))}
+                </select>
+              </RowField>
+              {scope.kind === 'these' && (
+                <div className="space-y-1.5">
+                  {scope.list.map((c, i) => {
+                    const chatError = errorAt(errors, `only_if.channels.list[${i}]`);
+                    return (
+                      <div key={c.id} className="space-y-1">
+                        <div className="flex items-center justify-between gap-2 rounded-lg bg-textPrimary/[0.045] px-2.5 py-1.5">
+                          <span className="flex min-w-0 items-center gap-1.5">
+                            {!twitchOnly && <ProviderMark provider={providerOfKey(c.key)} size={13} />}
+                            <span className="truncate text-[13px] text-textPrimary">#{c.name || c.key}</span>
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setIf({ channels: { kind: 'these', list: scope.list.filter((x) => x.id !== c.id) } })}
+                            className="rounded p-0.5 text-textMuted transition-colors hover:text-textPrimary"
+                            aria-label={`Remove ${c.name || c.key}`}
+                          >
+                            <X size={13} />
+                          </button>
+                        </div>
+                        {chatError && <ErrorLine>{chatError}</ErrorLine>}
                       </div>
-                      {chatError && <p className="text-[12px] text-error">{chatError}</p>}
-                    </div>
-                  );
-                })}
-                {scope.list.length < MAX_CHATS && (
-                  <ChannelPicker
-                    label="Add a channel"
-                    providers={platforms}
-                    // The picker searches only the platforms named here, so the pick is one of them.
-                    onPick={(login, id, provider) => addChannel(login, id, provider as AutomationPlatform)}
-                  />
-                )}
-              </div>
-            )}
+                    );
+                  })}
+                  {scope.list.length < MAX_CHATS && (
+                    <ChannelPicker
+                      label="Add a channel"
+                      providers={platforms}
+                      // The picker searches only the platforms named here, so the pick is one of them.
+                      onPick={(login, id, provider) => addChannel(login, id, provider as AutomationPlatform)}
+                    />
+                  )}
+                </div>
+              )}
+            </div>
             <Field label="From" hint="Leave them all off to answer anyone.">
               <SwitchList
                 items={ROLE_ITEMS}
@@ -581,7 +684,7 @@ export function RuleEditor({ initial, isNew, accounts, platformAccounts, otherCh
             )}
             <SwitchLine
               label="Only while you're away"
-              description={IS_MOBILE ? 'Set away on this page or with /afk.' : 'Set away on this page, with /afk, or from the tray.'}
+              description={IS_MOBILE ? 'Set away on the Automations page or with /afk.' : 'Set away on the Automations page, with /afk, or from the tray.'}
               on={draft.only_if.only_away}
               onChange={() => setIf({ only_away: !draft.only_if.only_away })}
             />
@@ -591,7 +694,7 @@ export function RuleEditor({ initial, isNew, accounts, platformAccounts, otherCh
               on={draft.only_if.only_while_open ?? false}
               onChange={() => setIf({ only_while_open: !(draft.only_if.only_while_open ?? false) })}
             />
-            <Disclosure label="More conditions">
+            <Disclosure label="More conditions" summary={moreSummary}>
               <Field label="Skip these people" hint="Names separated by commas.">
                 <NamesInput
                   values={draft.only_if.skip_users}
@@ -664,7 +767,7 @@ export function RuleEditor({ initial, isNew, accounts, platformAccounts, otherCh
             </Disclosure>
           </>
         )}
-        <Disclosure label="Pace and cooldowns">
+        <Disclosure label="Pace and cooldowns" summary={paceSummary}>
           {!badge && (
             <Field
               label="Chat cooldown"
@@ -672,7 +775,7 @@ export function RuleEditor({ initial, isNew, accounts, platformAccounts, otherCh
               error={errorAt(errors, 'limits.rule_cooldown_seconds')}
             >
               <NumberField
-                value={draft.limits.rule_cooldown_seconds}
+                value={limits.rule_cooldown_seconds}
                 min={0}
                 max={2_592_000}
                 label="Chat cooldown"
@@ -688,7 +791,7 @@ export function RuleEditor({ initial, isNew, accounts, platformAccounts, otherCh
               error={errorAt(errors, 'limits.user_cooldown_seconds')}
             >
               <NumberField
-                value={draft.limits.user_cooldown_seconds}
+                value={limits.user_cooldown_seconds}
                 min={0}
                 max={2_592_000}
                 label="Person cooldown"
@@ -699,7 +802,7 @@ export function RuleEditor({ initial, isNew, accounts, platformAccounts, otherCh
           )}
           <Field label="Most an hour" error={errorAt(errors, 'limits.max_per_hour')}>
             <NumberField
-              value={draft.limits.max_per_hour}
+              value={limits.max_per_hour}
               min={1}
               max={120}
               label="Most an hour"
@@ -713,7 +816,7 @@ export function RuleEditor({ initial, isNew, accounts, platformAccounts, otherCh
             error={errorAt(errors, 'limits.max_wait_seconds')}
           >
             <NumberField
-              value={draft.limits.max_wait_seconds}
+              value={limits.max_wait_seconds}
               min={0}
               max={130}
               label="Longest wait"
@@ -730,26 +833,27 @@ export function RuleEditor({ initial, isNew, accounts, platformAccounts, otherCh
             />
           )}
         </Disclosure>
-        {(draft.when.kind === 'message' || draft.when.kind === 'mention' || draft.when.kind === 'first_message' || draft.when.kind === 'channel_event') && (
-          <Disclosure label="Filter expression" defaultOpen={!!draft.only_if.expression}>
-            <ExpressionField
-              value={draft.only_if.expression}
-              errors={errors}
-              onChange={(expression) => setIf({ expression })}
-            />
+        {(when.kind === 'message' || when.kind === 'mention' || when.kind === 'first_message' || when.kind === 'channel_event') && (
+          <Disclosure
+            label="Filter expression"
+            summary={draft.only_if.expression || 'The language of your saved chat filters'}
+            defaultOpen={!!draft.only_if.expression}
+          >
+            <ExpressionField value={draft.only_if.expression} errors={errors} onChange={(expression) => setIf({ expression })} />
           </Disclosure>
         )}
       </Block>
 
       <Block
         title="Do"
+        rows={false}
         aside={
-          <span className="text-[11.5px] text-textMuted">
+          <CountChip>
             {draft.actions.length} of {MAX_ACTIONS}
-          </span>
+          </CountChip>
         }
       >
-        {errorAt(errors, 'actions') && <p className="text-[12px] text-error">{errorAt(errors, 'actions')}</p>}
+        {errorAt(errors, 'actions') && <ErrorLine className="px-1.5">{errorAt(errors, 'actions')}</ErrorLine>}
         {draft.actions.map((a, i) => (
           <ActionEditor
             key={a.id}
@@ -757,7 +861,7 @@ export function RuleEditor({ initial, isNew, accounts, platformAccounts, otherCh
             index={i}
             count={draft.actions.length}
             badgeRule={badge}
-            timedOwn={(draft.when.kind === 'timer' || draft.when.kind === 'clock') && draft.only_if.channels.kind === 'own'}
+            timedOwn={(when.kind === 'timer' || when.kind === 'clock') && draft.only_if.channels.kind === 'own'}
             platform={platform}
             errors={errors}
             variables={variables}
@@ -768,130 +872,99 @@ export function RuleEditor({ initial, isNew, accounts, platformAccounts, otherCh
           />
         ))}
         {draft.actions.length < MAX_ACTIONS && (
-          <div className="flex flex-wrap items-center gap-1.5">
-            {!badge && !edge && platforms.every(canPost) && (
-              <button type="button" onClick={() => addOutward('reply')} className={QUIET_BUTTON}>
-                <Plus size={13} />
-                Reply
-              </button>
-            )}
-            {platforms.every(canPost) && (
-              <button type="button" onClick={() => addOutward('send')} className={QUIET_BUTTON}>
-                <Plus size={13} />
-                Post a message
-              </button>
-            )}
-            <button type="button" onClick={() => update((r) => ({ ...r, actions: [...r.actions, actionOf('notify')] }))} className={QUIET_BUTTON}>
-              <Plus size={13} />
-              Notify me
-            </button>
-            <button type="button" onClick={() => update((r) => ({ ...r, actions: [...r.actions, actionOf('speak')] }))} className={QUIET_BUTTON}>
-              <Plus size={13} />
-              Say it out loud
-            </button>
-            {when.kind === 'message' && (
-              <button type="button" onClick={() => update((r) => ({ ...r, actions: [...r.actions, actionOf('highlight')] }))} className={QUIET_BUTTON}>
-                <Plus size={13} />
-                Highlight
-              </button>
-            )}
-            {!badge && (
-              <P2AddActions
-                rule={draft}
-                sendAsIsMain={accounts.some((a) => a.id === draft.send_as.id && a.main)}
-                onAdd={(next) => update((r) => ({ ...r, actions: [...r.actions, next] }))}
-              />
-            )}
+          <div className="px-1 pb-0.5">
+            <MenuButton label="Add a step" items={addItems} align="left" className={QUIET_BUTTON}>
+              <Plus size={14} />
+              Add a step
+              <ChevronDown size={13} />
+            </MenuButton>
           </div>
         )}
       </Block>
 
-      {hasOutward && platform === 'kick' && (
+      {hasOutward && (
         <Block title="Send as">
-          <div className="flex items-center gap-2 rounded-md bg-background/40 px-2.5 py-2">
-            <ProviderMark provider="kick" size={14} />
-            <span className="text-[13px] text-textPrimary">{kickAccount?.login || draft.send_as.login || 'Kick'}</span>
-          </div>
-          <p className={HINT}>
-            {kickAccount
-              ? 'Your connected Kick account. Its pace and cooldowns count on it.'
-              : 'Connect your Kick account in Settings to run this rule.'}
-          </p>
-        </Block>
-      )}
-
-      {hasOutward && platform !== 'kick' && (
-        <Block title="Send as">
-          <select
-            value={draft.send_as.id}
-            aria-label="Send as"
-            onChange={(e) => {
-              const account = accounts.find((a) => a.id === e.target.value);
-              if (account) update((r) => ({ ...r, send_as: accountRef(account) }));
-            }}
-            className={SELECT}
-          >
-            {accounts.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.login}
-                {a.main ? ' (main account)' : ''}
-              </option>
-            ))}
-            {!signedIn && (
-              <option value={draft.send_as.id}>
-                {draft.send_as.name || draft.send_as.login} (signed out)
-              </option>
-            )}
-          </select>
-          <p className={HINT}>Its pace and cooldowns count on the account that speaks.</p>
-        </Block>
-      )}
-
-      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-borderSubtle/60 pt-3">
-        <div className="flex items-center gap-2">
-          {isNew ? (
-            <span className={HINT}>New rules start in Test.</span>
+          {platform === 'kick' ? (
+            <div className="space-y-1">
+              <div className="flex items-center gap-2.5">
+                <ProviderMark provider="kick" size={18} />
+                <span className="text-[13.5px] font-medium text-textPrimary">{kickAccount?.login || draft.send_as.login || 'Kick'}</span>
+              </div>
+              <p className={HINT}>
+                {kickAccount
+                  ? 'Your connected Kick account. Its pace and cooldowns count on it.'
+                  : 'Connect your Kick account in Settings to run this rule.'}
+              </p>
+            </div>
           ) : (
-            <SegmentedSelect
-              value={initial.live ? 'live' : 'test'}
-              options={[
-                { value: 'test', label: 'Test' },
-                { value: 'live', label: 'Live' },
-              ]}
-              onChange={(v) => setLive(v === 'live')}
-            />
+            <div className={IS_MOBILE ? 'space-y-2.5' : 'flex items-center justify-between gap-4'}>
+              <div className="flex min-w-0 items-center gap-2.5">
+                <AccountFace account={sendAs} size={26} />
+                <div className="min-w-0">
+                  <div className="truncate text-[13.5px] font-medium text-textPrimary">{sendAs.login}</div>
+                  <p className={HINT}>Its pace and cooldowns count on the account that speaks.</p>
+                </div>
+              </div>
+              <select
+                value={draft.send_as.id}
+                aria-label="Send as"
+                onChange={(e) => {
+                  const account = accounts.find((a) => a.id === e.target.value);
+                  if (account) update((r) => ({ ...r, send_as: accountRef(account) }));
+                }}
+                className={SELECT}
+              >
+                {accounts.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.login}
+                    {a.main ? ' (main account)' : ''}
+                  </option>
+                ))}
+                {!signedIn && (
+                  <option value={draft.send_as.id}>
+                    {draft.send_as.name || draft.send_as.login} (signed out)
+                  </option>
+                )}
+              </select>
+            </div>
           )}
-        </div>
-        <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
-          {!isNew && (
-            <button type="button" onClick={() => onDuplicate(draft)} className={QUIET_BUTTON}>
-              <Copy size={13} />
-              Duplicate
-            </button>
-          )}
-          {!isNew &&
-            (confirmDelete ? (
-              <>
-                <button type="button" onClick={remove} className={DANGER_BUTTON}>
-                  Delete rule
-                </button>
-                <button type="button" onClick={() => setConfirmDelete(false)} className={QUIET_BUTTON}>
-                  Keep it
-                </button>
-              </>
-            ) : (
-              <button type="button" onClick={() => setConfirmDelete(true)} className={QUIET_BUTTON}>
-                <Trash2 size={13} />
-                Delete
+        </Block>
+      )}
+
+      <div className={`flex flex-wrap items-center gap-2 ${IS_MOBILE ? 'px-4' : ''}`}>
+        {!isNew &&
+          (confirmDelete ? (
+            <>
+              <button type="button" onClick={remove} className={DANGER_BUTTON}>
+                Delete rule
               </button>
-            ))}
-          <button type="button" onClick={onClose} className={QUIET_BUTTON}>
-            {dirty ? 'Discard changes' : 'Close'}
+              <button type="button" onClick={() => setConfirmDelete(false)} className={QUIET_BUTTON}>
+                Keep it
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setConfirmDelete(true)}
+              className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-[13px] text-error transition-colors hover:bg-error/10"
+            >
+              <Trash2 size={14} />
+              Delete
+            </button>
+          ))}
+        {!isNew && !confirmDelete && (
+          <button type="button" onClick={() => onDuplicate(draft)} className={GHOST_BUTTON}>
+            <Copy size={14} />
+            Duplicate
           </button>
-          <button type="button" onClick={save} disabled={saving || !dirty} className={PRIMARY_BUTTON}>
-            {saving ? 'Saving' : 'Save'}
-          </button>
-        </div>
+        )}
+        <span className="flex-1" />
+        <button type="button" onClick={onClose} className={QUIET_BUTTON}>
+          {dirty ? 'Cancel' : 'Close'}
+        </button>
+        <button type="button" onClick={save} disabled={saving || !dirty} className={PRIMARY_BUTTON}>
+          {saving ? 'Saving' : 'Save'}
+        </button>
       </div>
     </div>
   );

@@ -1,13 +1,13 @@
 // The P2 editor surfaces: the whisper, timer, clock, uptime and delay
-// triggers, the expression, the Add row's P2 actions and each P2 action's
-// fields. Rust checks every field; this only asks and shows its errors.
+// triggers, the expression and each P2 action's fields (the Add a step menu
+// offers them, from `offeredP2Actions`). Rust checks every field; this only
+// asks and shows its errors.
 import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Minus, Plus } from 'lucide-react';
 import type {
   AutomationAction,
   AutomationFieldError,
-  AutomationRule,
   AutomationTrigger,
   AutomationWeekday,
   AutomationWhisperTarget,
@@ -16,20 +16,18 @@ import { SwitchList } from '../_primitives';
 import { IS_MOBILE } from '../../../utils/platform';
 import {
   COMMAND_FORMS,
-  actionOf,
   errorAt,
   errorText,
   joinCommand,
   nextTimeout,
-  offeredP2Actions,
   shownArgument,
   splitCommand,
   timeoutWords,
   type P2Action,
 } from '../../../utils/automations';
 import { ChannelPicker } from '../ChannelPicker';
-import { ACTION_NAMES, ANNOUNCE_COLORS } from './labels';
-import { Field, HINT, INPUT, NumberField, QUIET_BUTTON, SELECT, SwitchLine } from './parts';
+import { ANNOUNCE_COLORS } from './labels';
+import { Field, HINT, INPUT, NumberField, QUIET_BUTTON, RowField, SELECT, SwitchLine } from './parts';
 
 /** A stepper end inside the joined timeout control. */
 const STEP_BUTTON = `inline-flex items-center justify-center text-textSecondary transition-colors hover:text-textPrimary ${
@@ -86,7 +84,7 @@ export function P2TriggerFields({
     case 'timer':
       return (
         <>
-          <Field label="Every" error={errorAt(errors, 'when.every_seconds')}>
+          <RowField label="Every" error={errorAt(errors, 'when.every_seconds')}>
             <NumberField
               value={Math.round(when.every_seconds / 60)}
               min={5}
@@ -95,8 +93,8 @@ export function P2TriggerFields({
               suffix="minutes"
               onChange={(v) => onChange({ ...when, every_seconds: v * 60 })}
             />
-          </Field>
-          <Field label="Only after" hint="Skipped until this many other people's messages came since it last ran." error={errorAt(errors, 'when.min_messages')}>
+          </RowField>
+          <RowField label="Only after" hint="Skipped until this many other people's messages came since it last ran." error={errorAt(errors, 'when.min_messages')}>
             <NumberField
               value={when.min_messages}
               min={0}
@@ -105,15 +103,15 @@ export function P2TriggerFields({
               suffix="messages"
               onChange={(v) => onChange({ ...when, min_messages: v })}
             />
-          </Field>
+          </RowField>
         </>
       );
     case 'clock':
       return (
         <>
-          <Field label="At" error={errorAt(errors, 'when.at')}>
-            <input type="time" value={when.at} aria-label="At" onChange={(e) => onChange({ ...when, at: e.target.value })} className={INPUT} />
-          </Field>
+          <RowField label="At" error={errorAt(errors, 'when.at')}>
+            <input type="time" value={when.at} aria-label="At" onChange={(e) => onChange({ ...when, at: e.target.value })} className={SELECT} />
+          </RowField>
           <Field label="Days" hint="Leave them all off for every day.">
             <SwitchList
               items={DAYS}
@@ -129,7 +127,7 @@ export function P2TriggerFields({
     case 'uptime':
       return (
         <>
-          <Field label="Stream reaches" error={errorAt(errors, 'when.seconds')}>
+          <RowField label="Stream reaches" error={errorAt(errors, 'when.seconds')}>
             <NumberField
               value={Math.round(when.seconds / 60)}
               min={1}
@@ -138,13 +136,13 @@ export function P2TriggerFields({
               suffix="minutes"
               onChange={(v) => onChange({ ...when, seconds: v * 60 })}
             />
-          </Field>
+          </RowField>
           <p className={HINT}>Runs once per broadcast, within 2 minutes of that moment.</p>
         </>
       );
     case 'delay':
       return (
-        <Field label="After the chat opens" error={errorAt(errors, 'when.seconds')}>
+        <RowField label="After the chat opens" error={errorAt(errors, 'when.seconds')}>
           <NumberField
             value={when.seconds}
             min={1}
@@ -153,7 +151,7 @@ export function P2TriggerFields({
             suffix="seconds"
             onChange={(v) => onChange({ ...when, seconds: v })}
           />
-        </Field>
+        </RowField>
       );
   }
 }
@@ -183,28 +181,6 @@ export function ExpressionField({
         className={INPUT}
       />
     </Field>
-  );
-}
-
-/** The P2 buttons of the Add row. */
-export function P2AddActions({
-  rule,
-  sendAsIsMain,
-  onAdd,
-}: {
-  rule: AutomationRule;
-  sendAsIsMain: boolean;
-  onAdd: (action: AutomationAction) => void;
-}) {
-  return (
-    <>
-      {offeredP2Actions(rule.when, sendAsIsMain).map((kind) => (
-        <button key={kind} type="button" onClick={() => onAdd(actionOf(kind))} className={QUIET_BUTTON}>
-          <Plus size={13} />
-          {ACTION_NAMES[kind]}
-        </button>
-      ))}
-    </>
   );
 }
 

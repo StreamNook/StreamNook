@@ -526,10 +526,10 @@ mod tests {
     fn automation_rows_sit_on_their_own_page() {
         for ios in [false, true] {
             let hit = search_on("pace", 3, ios, &nothing);
-            assert_eq!((hit[0].page.as_str(), hit[0].title.as_str()), ("automations", "Pace"), "ios {ios}");
+            assert_eq!((hit[0].page.as_str(), hit[0].title.as_str()), ("automations", "Messages a minute"), "ios {ios}");
         }
         let gap = rows().iter().find(|r| r.paths.iter().any(|p| p == "automation_prefs.other_channel_gap_seconds")).unwrap();
-        assert_eq!(gap.under.as_deref(), Some("Other channels"));
+        assert_eq!(gap.under.as_deref(), Some("Post in other channels"));
         let changed = [
             "automation_prefs.sends_per_minute".to_string(),
             "chat_design.font_size".to_string(),
