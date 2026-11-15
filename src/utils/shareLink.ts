@@ -18,3 +18,25 @@ export function shareLinkFor(
     streamId: stream.id || null,
   });
 }
+
+/** The share link for a category. Only its id and name are sent. */
+export function categoryShareLinkFor({ id, name }: { id: string; name: string }): Promise<string> {
+  return invoke<string>('category_share_link', { id, name });
+}
+
+/**
+ * Build a category's share link and hand it to `writeText`. True only when both
+ * steps worked; any failure (a refused id, a blocked clipboard) is `false`, and
+ * nothing here ever rejects, so a button needs no catch of its own.
+ */
+export async function copyCategoryShareLink(
+  category: { id: string; name: string },
+  writeText: (text: string) => Promise<void>,
+): Promise<boolean> {
+  try {
+    await writeText(await categoryShareLinkFor(category));
+    return true;
+  } catch {
+    return false;
+  }
+}

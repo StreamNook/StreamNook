@@ -6,7 +6,15 @@
 import { test } from 'vitest';
 import assert from 'node:assert/strict';
 
-import { categoryNavigation, currentCategoryTarget, streamCategoryTarget } from './streamCategory.ts';
+import {
+  categoryFillOnly,
+  categoryNavigation,
+  categoryNeedsReload,
+  categoryNote,
+  categorySelectionKey,
+  currentCategoryTarget,
+  streamCategoryTarget,
+} from './streamCategory.ts';
 
 test('twitch opens by id when it has one', () => {
   assert.deepEqual(streamCategoryTarget({ game_id: '509658', game_name: 'Just Chatting' }), {
@@ -73,4 +81,75 @@ test("a kick category opens on Kick's Categories tab", () => {
       homeLastExitedProviderCategory: null,
     },
   });
+});
+
+test('a selection is keyed by its id, or by its lowercased name when it has none', () => {
+  assert.equal(categorySelectionKey({ id: '509658', name: 'Just Chatting' }), '509658');
+  assert.equal(categorySelectionKey({ id: '', name: 'ASMR' }), 'asmr');
+  assert.equal(categorySelectionKey({ id: '', name: '' }), '');
+});
+
+test('Home reloads only when a different category replaces a loaded one', () => {
+  const a = { id: '1', name: 'A' };
+  const b = { id: '2', name: 'B' };
+  // A to B reloads, A to A does not.
+  assert.equal(categoryNeedsReload('1', b), true);
+  assert.equal(categoryNeedsReload('1', a), false);
+  // Nothing loaded yet adopts the selection instead of reloading.
+  assert.equal(categoryNeedsReload(null, a), false);
+  assert.equal(categoryNeedsReload('', a), false);
+  // A name-only selection reloads by name.
+  assert.equal(categoryNeedsReload('1', { id: '', name: 'ASMR' }), true);
+  assert.equal(categoryNeedsReload('asmr', { id: '', name: 'ASMR' }), false);
+  // No selection never reloads.
+  assert.equal(categoryNeedsReload('1', null), false);
+});
+
+test('the pass sequence: empty, adopt A, reload for B', () => {
+  const a = { id: '1', name: 'A' };
+  const b = { id: '2', name: 'B' };
+  let loaded: string | null = null;
+  const pass = (selected: { id: string; name: string }) => {
+    const reload = categoryNeedsReload(loaded, selected);
+    loaded = categorySelectionKey(selected);
+    return reload;
+  };
+  assert.equal(pass(a), false);
+  assert.equal(pass(a), false);
+  assert.equal(pass(b), true);
+});
+
+test('a fill-only pass is the one that follows a name arriving for the same key', () => {
+  const named = { id: '509658', name: 'Just Chatting' };
+  assert.equal(categoryFillOnly({ key: '509658', name: '' }, named), true);
+  // The name was already there.
+  assert.equal(categoryFillOnly({ key: '509658', name: 'Just Chatting' }, named), false);
+  // Another category.
+  assert.equal(categoryFillOnly({ key: '1', name: '' }, named), false);
+  // Nothing loaded, an empty key, no selection, or a name that has not arrived.
+  assert.equal(categoryFillOnly(null, named), false);
+  assert.equal(categoryFillOnly({ key: '', name: '' }, { id: '', name: 'x' }), false);
+  assert.equal(categoryFillOnly({ key: '509658', name: '' }, null), false);
+  assert.equal(categoryFillOnly({ key: '509658', name: '' }, { id: '509658', name: '' }), false);
+});
+
+test('a named category keeps the words Home shows today', () => {
+  assert.equal(categoryNote('live', 'Rust'), 'No one is streaming Rust.');
+  assert.equal(categoryNote('clips', 'Rust'), 'No clips have been generated for Rust yet.');
+  assert.equal(categoryNote('videos', 'Rust'), 'No videos exist for Rust.');
+  assert.equal(categoryNote('tags', 'Rust', 1), 'No live streams in Rust match that tag.');
+  assert.equal(categoryNote('tags', 'Rust', 2), 'No live streams in Rust match those tags.');
+  assert.equal(categoryNote('tags', 'Rust'), 'No live streams in Rust match those tags.');
+});
+
+test('a nameless category never reads the empty name', () => {
+  assert.equal(categoryNote('live', ''), 'No one is live in this category right now.');
+  assert.equal(categoryNote('tags', ''), 'No one is live in this category right now.');
+  assert.equal(categoryNote('clips', ''), 'No clips have been generated for this category yet.');
+  assert.equal(categoryNote('videos', ''), 'No videos exist for this category.');
+  for (const kind of ['live', 'tags', 'clips', 'videos'] as const) {
+    const text = categoryNote(kind, '');
+    assert.ok(!text.includes('  '), text);
+    assert.ok(!text.includes(' .'), text);
+  }
 });

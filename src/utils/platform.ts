@@ -85,6 +85,21 @@ const THIS_WINDOW_FRAME: WindowFrame = (() => {
 export const DRAWS_OWN_FRAME = THIS_WINDOW_FRAME === 'rounded';
 
 /**
+ * True when this page is the main window. Read synchronously from the same
+ * injected metadata as THIS_WINDOW_FRAME, so it is right before any effect
+ * runs. A page with no Tauri metadata (a plain browser, a unit test) is not
+ * the main window, which keeps window-only calls out of it.
+ */
+export const IS_MAIN_WINDOW: boolean =
+  typeof window !== 'undefined' &&
+  (window as TauriWindowGlobals).__TAURI_INTERNALS__?.metadata?.currentWindow?.label === 'main';
+
+/** `IS_MAIN_WINDOW` as a call, so a test can replace the answer. */
+export function isMainWindow(): boolean {
+  return IS_MAIN_WINDOW;
+}
+
+/**
  * Publish the platform to CSS, for the handful of rules that genuinely differ
  * rather than merely looking different. Set at module load, which runs during
  * the initial import graph and therefore before the first paint, for the same

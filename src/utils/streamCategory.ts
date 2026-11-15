@@ -96,3 +96,57 @@ export function categoryNavigation(
     },
   };
 }
+
+/** What Home keys a category selection by: its id, or its lowercased name when it has none. */
+export function categorySelectionKey(c: { id: string; name: string }): string {
+  return c.id || c.name.toLowerCase();
+}
+
+/**
+ * True when a different category is now selected than the one Home loaded for.
+ * An empty or missing loaded key is not a reload: the first pass adopts the
+ * selection and the remount fetch runs.
+ */
+export function categoryNeedsReload(
+  loadedKey: string | null,
+  selected: { id: string; name: string } | null,
+): boolean {
+  if (!loadedKey || !selected) return false;
+  return categorySelectionKey(selected) !== loadedKey;
+}
+
+/**
+ * True for the pass that follows an answer filling a nameless selection: same
+ * key, the name was empty and now is not. That pass fetches only what needs the
+ * name; the streams are already loading or landed.
+ */
+export function categoryFillOnly(
+  prev: { key: string; name: string } | null,
+  selected: { id: string; name: string } | null,
+): boolean {
+  if (!prev || !selected || prev.key === '') return false;
+  return prev.key === categorySelectionKey(selected) && prev.name === '' && selected.name !== '';
+}
+
+/**
+ * The note an empty category tab shows. A nameless category (a link before its
+ * answer) must not read the empty name, so it gets the wording without one.
+ * `tagCount` only chooses "that tag" or "those tags" for the tag-filter note.
+ */
+export function categoryNote(
+  kind: 'live' | 'tags' | 'clips' | 'videos',
+  name: string,
+  tagCount = 2,
+): string {
+  if (!name) {
+    if (kind === 'clips') return 'No clips have been generated for this category yet.';
+    if (kind === 'videos') return 'No videos exist for this category.';
+    return 'No one is live in this category right now.';
+  }
+  if (kind === 'clips') return `No clips have been generated for ${name} yet.`;
+  if (kind === 'videos') return `No videos exist for ${name}.`;
+  if (kind === 'tags') {
+    return `No live streams in ${name} match ${tagCount === 1 ? 'that tag' : 'those tags'}.`;
+  }
+  return `No one is streaming ${name}.`;
+}
