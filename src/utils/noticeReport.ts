@@ -250,3 +250,100 @@ export function resetNoticeReportForTest(): void {
   pendingPeek = null;
   automatic = false;
 }
+
+/** Reads `take_notice_action`'s answer, `{ action, seq }` or null. Anything else
+ *  (no answer, a malformed one) is null, so a bad payload runs nothing. */
+export function readTaken(raw: unknown): { action: NoticeAction; seq: number } | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const { action, seq } = raw as { action?: unknown; seq?: unknown };
+  if (typeof seq !== 'number' || !Number.isFinite(seq)) return null;
+  if (!action || typeof action !== 'object') return null;
+  if (typeof (action as { type?: unknown }).type !== 'string') return null;
+  return { action: action as NoticeAction, seq };
+}
+
+/** Everything a notice action touches, injected so a test can drive every case. */
+export interface NoticeDeps {
+  /** Runs `fn` now when boot is over, else once when it ends. */
+  afterBoot: (fn: () => void) => void;
+  /** The login of the stream playing now, in whatever case the store holds it. */
+  currentStreamLogin: () => string | undefined;
+  startStream: (channel: string) => void;
+  openWhisper: (user: { id: string; login: string; display_name: string; profile_image_url?: string }) => void;
+  openDrops: () => void;
+  openBadges: () => void;
+  requestChangelog: (version?: string) => void;
+  requestWallet: (channel: string) => void;
+  /** True for a settings tab a notification may open (a notification link can come from anywhere). */
+  settingsTabAllowed: (tab: string) => boolean;
+  openSettings: (tab: string) => void;
+  /** Opens a mention's chat; it calls `opened` before its first await. */
+  openMention: (id: string, channel: string, opened: () => void) => Promise<void>;
+}
+
+/**
+ * Runs a notice action. Each case that really opens something calls `opened`
+ * right where it opens, so the page reports to Rust only what happened: a
+ * settings tab that is not allowed never calls it, a deferred start calls it
+ * only when boot ends and the start runs, and a mention hands back its own
+ * promise (it calls `opened` before its first await) so the caller can track it.
+ */
+export function openNoticeAction(
+  action: NoticeAction,
+  opened: () => void,
+  deps: NoticeDeps,
+): void | Promise<void> {
+  switch (action.type) {
+    case 'watch':
+      deps.afterBoot(() => {
+        deps.startStream(action.channel);
+        opened();
+      });
+      return;
+    case 'whisper':
+      deps.openWhisper({
+        id: action.userId,
+        login: action.login,
+        display_name: action.name,
+        profile_image_url: action.avatar ?? undefined,
+      });
+      opened();
+      return;
+    case 'drops':
+      deps.openDrops();
+      opened();
+      return;
+    case 'badges':
+      deps.openBadges();
+      opened();
+      return;
+    case 'changelog':
+      deps.requestChangelog(action.version ?? undefined);
+      opened();
+      return;
+    case 'rewards': {
+      // The chat showing that channel opens its wallet once it is up.
+      deps.requestWallet(action.channel);
+      const current = deps.currentStreamLogin()?.toLowerCase();
+      if (current === action.channel.toLowerCase()) {
+        opened();
+        return;
+      }
+      deps.afterBoot(() => {
+        deps.startStream(action.channel);
+        opened();
+      });
+      return;
+    }
+    case 'settings':
+      if (deps.settingsTabAllowed(action.tab)) {
+        deps.openSettings(action.tab);
+        opened();
+      }
+      return;
+    case 'mention':
+      // Marks it read, opens its chat (after boot when the click started the
+      // app) and leaves the jump for that chat.
+      return deps.openMention(action.id, action.channel, opened);
+  }
+}

@@ -57,8 +57,12 @@ export function onMentionJump(fn: () => void): () => void {
 
 /** Main window: open a mention in the main chat. Marks it read in Rust, starts
  *  its channel unless that is already the one playing, and leaves the jump for
- *  the chat. */
-export async function openMentionInMain(id: string, room: string): Promise<void> {
+ *  the chat. `opened` is called once, at the entry and before the first await:
+ *  every path below opens something (the chat showing that room takes the jump,
+ *  or its channel starts), and a notice click reports that to Rust at once, so
+ *  an older link is dropped even while `open_mention` is still pending. */
+export async function openMentionInMain(id: string, room: string, opened?: () => void): Promise<void> {
+  opened?.();
   let entry: MentionEntry | null = null;
   try {
     entry = await invoke<MentionEntry | null>('open_mention', { id });

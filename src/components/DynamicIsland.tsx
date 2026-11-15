@@ -11,6 +11,14 @@ import { exitPlayerFullscreenForBarAction } from '../utils/windowFullscreen';
 import { requestChangelog } from '../utils/changelogEvents';
 import { requestWallet } from '../utils/walletRequest';
 import { openMentionInMain } from '../stores/mentionJumpStore';
+import {
+    openNoticeAction,
+    readTaken,
+    reportActivated,
+    reportTaken,
+    trackNoticeWork,
+    type NoticeDeps,
+} from '../utils/noticeReport';
 import { MENTION_NOTIFY_EVENT, toggleMentionChatMuted, useInboxCounts } from '../stores/mentionInboxStore';
 import { useInboxView } from './inbox/useInboxView';
 import {
@@ -272,6 +280,34 @@ interface ChannelPointsSummary {
 /** Settings tabs a notification may open (a notification link can come from
  *  anywhere, so only these). */
 const SETTINGS_TABS_FROM_NOTICES: SettingsTab[] = ['Notifications'];
+
+/** What a notice action touches in this window: the store, the wallet and
+ *  changelog requests and the mention jump. Plain functions that read the store
+ *  when called, so the one object serves every click. */
+const NOTICE_DEPS: NoticeDeps = {
+    afterBoot: (fn) => {
+        if (!useAppStore.getState().isBooting) { fn(); return; }
+        const stop = useAppStore.subscribe((s) => {
+            if (!s.isBooting) { stop(); fn(); }
+        });
+    },
+    currentStreamLogin: () => useAppStore.getState().currentStream?.user_login,
+    startStream: (channel) => { void useAppStore.getState().startStream(channel); },
+    openWhisper: (user) => useAppStore.getState().openWhisperWithUser(user),
+    openDrops: () => useAppStore.getState().setShowDropsOverlay(true),
+    openBadges: () => useAppStore.getState().setShowBadgesOverlay(true),
+    requestChangelog,
+    requestWallet,
+    settingsTabAllowed: (tab) => SETTINGS_TABS_FROM_NOTICES.includes(tab as SettingsTab),
+    openSettings: (tab) => useAppStore.getState().openSettings(tab as SettingsTab),
+    openMention: (id, channel, opened) => openMentionInMain(id, channel, opened),
+};
+
+/** Tells Rust a notice click really opened something, so a link stored before
+ *  that click is dropped. Tracked, so the link take after boot waits for it. */
+const reportOpened = (seq: number) => {
+    trackNoticeWork(invoke('notice_opened', { seq }).catch(() => {}));
+};
 
 // Cache helpers
 const loadCachedNotifications = (): DynamicIslandNotification[] => {
@@ -826,65 +862,17 @@ const DynamicIsland = () => {
 
     // A notification used after a restart (or one Rust raised itself, like a
     // chat mention) leaves its action in Rust. It is taken once, on the event
-    // or on mount when the click started the app, and run here.
+    // or on mount when the click started the app, and run here. An action that
+    // really opens something tells Rust (`notice_opened`), so a link that
+    // arrived before the click is dropped and a click that opens nothing
+    // leaves it.
     useEffect(() => {
         if (IS_MOBILE) return;
-        const run = (action: NoticeAction) => {
-            const store = useAppStore.getState();
-            switch (action.type) {
-                case 'watch': {
-                    const go = () => { void useAppStore.getState().startStream(action.channel); };
-                    if (!store.isBooting) { go(); return; }
-                    const stop = useAppStore.subscribe((s) => {
-                        if (!s.isBooting) { stop(); go(); }
-                    });
-                    return;
-                }
-                case 'whisper':
-                    store.openWhisperWithUser({
-                        id: action.userId,
-                        login: action.login,
-                        display_name: action.name,
-                        profile_image_url: action.avatar ?? undefined,
-                    });
-                    return;
-                case 'drops':
-                    store.setShowDropsOverlay(true);
-                    return;
-                case 'badges':
-                    store.setShowBadgesOverlay(true);
-                    return;
-                case 'changelog':
-                    requestChangelog(action.version ?? undefined);
-                    return;
-                case 'rewards': {
-                    // The chat showing that channel opens its wallet once it is up.
-                    requestWallet(action.channel);
-                    const current = store.currentStream?.user_login?.toLowerCase();
-                    if (current === action.channel.toLowerCase()) return;
-                    const go = () => { void useAppStore.getState().startStream(action.channel); };
-                    if (!store.isBooting) { go(); return; }
-                    const stop = useAppStore.subscribe((s) => {
-                        if (!s.isBooting) { stop(); go(); }
-                    });
-                    return;
-                }
-                case 'settings':
-                    if (SETTINGS_TABS_FROM_NOTICES.includes(action.tab as SettingsTab)) {
-                        store.openSettings(action.tab as SettingsTab);
-                    }
-                    return;
-                case 'mention':
-                    // Marks it read, opens its chat (after boot when the click
-                    // started the app) and leaves the jump for that chat.
-                    void openMentionInMain(action.id, action.channel);
-                    return;
-            }
-        };
+        const run = (action: NoticeAction, opened: () => void) => openNoticeAction(action, opened, NOTICE_DEPS);
         const take = () => {
-            invoke<NoticeAction | null>('take_notice_action')
-                .then((action) => { if (action) run(action); })
-                .catch((e) => Logger.debug('[DynamicIsland] take_notice_action failed:', e));
+            trackNoticeWork(
+                invoke<unknown>('take_notice_action').then((taken) => reportTaken(readTaken(taken), run, reportOpened)),
+            ).catch((e) => Logger.debug('[DynamicIsland] take_notice_action failed:', e));
         };
         take();
         const unlisten = listen(NOTICE_ACTION_PENDING_EVENT, take);
@@ -892,11 +880,8 @@ const DynamicIsland = () => {
     }, []);
 
     useEffect(() => {
-        const unlisten = listen<string>(MIRRORED_NOTIFICATION_ACTIVATE_EVENT, (event) => {
-            const actions = mirroredActionsRef.current;
-            const run = actions.get(event.payload);
-            actions.delete(event.payload);
-            run?.();
+        const unlisten = listen<{ id: string; seq: number }>(MIRRORED_NOTIFICATION_ACTIVATE_EVENT, (event) => {
+            reportActivated(event.payload, mirroredActionsRef.current, reportOpened);
         });
         return () => { unlisten.then((fn) => fn()); };
     }, []);
