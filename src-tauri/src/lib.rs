@@ -2674,6 +2674,7 @@ pub fn run() {
             asset_cache_enqueue,
             cache_file_server,
             asset_cache_set_burst,
+            forget_streamnook_art_copy,
             get_cached_file,
             get_cached_files,
             get_all_universal_cached_items,

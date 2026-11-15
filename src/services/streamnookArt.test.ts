@@ -24,7 +24,9 @@ vi.mock('./assetCacheQueue', () => ({
   },
 }));
 
+import { invoke } from '@tauri-apps/api/core';
 import {
+  forgetStreamnookArtCopy,
   getStreamnookArtVersion,
   requestStreamnookArt,
   streamnookArtSrc,
@@ -117,5 +119,17 @@ describe('atmosphere art in CSS', () => {
     hoisted.sink!.arrived({ [MIDNIGHT]: 'C:/cache/streamnook-art/midnight-9f8e7d6c.webp' });
     requestStreamnookArt(MIDNIGHT);
     expect(hoisted.requests).toHaveLength(1);
+  });
+});
+
+// A disk copy that would not decode is forgotten by Rust, so the next session
+// downloads it again; only StreamNook art is ever sent.
+describe('forgetStreamnookArtCopy', () => {
+  it('asks Rust to forget the copy of that art, and of nothing else', () => {
+    const calls = vi.mocked(invoke);
+    calls.mockClear();
+    forgetStreamnookArtCopy(KINDRED);
+    forgetStreamnookArtCopy('https://static-cdn.jtvnw.net/badges/v1/x/3');
+    expect(calls.mock.calls).toEqual([['forget_streamnook_art_copy', { url: KINDRED }]]);
   });
 });

@@ -12,17 +12,30 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-const art = vi.hoisted(() => ({ copies: new Map<string, string>(), requested: [] as string[] }));
+const art = vi.hoisted(() => ({
+  copies: new Map<string, string>(),
+  requested: [] as string[],
+  forgotten: [] as string[],
+}));
 vi.mock('../../services/streamnookArt', () => ({
   streamnookArtCopyOf: (url: string) => art.copies.get(url) ?? null,
   requestStreamnookArt: (url: string) => {
     art.requested.push(url);
   },
+  forgetStreamnookArtCopy: (url: string) => {
+    art.forgotten.push(url);
+  },
   subscribeStreamnookArt: () => () => {},
-  getStreamnookArtVersion: () => 0,
 }));
 
-import { SharpBadgeImg, _failedSharpCopies, sharpSrc } from './SharpBadgeImg';
+import {
+  SharpBadgeImg,
+  _failedSharpCopies,
+  failedKey,
+  sharpCopyFailed,
+  sharpRequestFor,
+  sharpSrc,
+} from './SharpBadgeImg';
 
 const L = '34d2d3cad154dbffb1ce314ce9cbbaf767dccbfdce7c9acc739edb19eac42401';
 const S = '9801d687fca7d8744e77290e289a35535eeea91bac87bf28e3039d580ea7d605';
@@ -38,8 +51,53 @@ const render = (props: Partial<Parameters<typeof SharpBadgeImg>[0]> = {}) =>
 afterEach(() => {
   art.copies.clear();
   art.requested.length = 0;
+  art.forgotten.length = 0;
   _failedSharpCopies.clear();
   vi.unstubAllGlobals();
+});
+
+describe('failedKey', () => {
+  it('remembers a failed copy by the exact src that failed', () => {
+    expect(failedKey(COPY)).toBe(COPY);
+    expect(failedKey(TWITCH)).toBe(TWITCH);
+  });
+});
+
+// The sharp file is asked for from the Twitch image's own load or error, so a
+// lazy tile the browser never loads asks for nothing.
+describe('sharpRequestFor', () => {
+  it('asks for the picked file while Twitch is drawn and there is no copy', () => {
+    const ask = sharpRequestFor(TWITCH, TWITCH, LARGE, null);
+    expect(ask).toBeTypeOf('function');
+    expect(art.requested).toEqual([]);
+    ask!();
+    expect(art.requested).toEqual([LARGE]);
+  });
+
+  it('asks for nothing with nothing picked', () => {
+    expect(sharpRequestFor(TWITCH, TWITCH, null, null)).toBeUndefined();
+  });
+
+  it('asks for nothing while the copy is drawn', () => {
+    expect(sharpRequestFor(COPY, TWITCH, LARGE, COPY)).toBeUndefined();
+  });
+
+  it('asks for nothing again after the copy failed and Twitch is back', () => {
+    expect(sharpRequestFor(TWITCH, TWITCH, LARGE, COPY)).toBeUndefined();
+  });
+});
+
+// A disk copy that will not decode is forgotten by Rust once, however many
+// tiles drew it, and never drawn again this session.
+describe('sharpCopyFailed', () => {
+  it('asks Rust to forget the copy once and stops drawing it', () => {
+    art.copies.set(LARGE, COPY);
+    sharpCopyFailed(COPY, LARGE);
+    sharpCopyFailed(COPY, LARGE);
+    expect(art.forgotten).toEqual([LARGE]);
+    expect(_failedSharpCopies.has(failedKey(COPY))).toBe(true);
+    expect(render()).toContain(`src="${TWITCH}"`);
+  });
 });
 
 describe('sharpSrc', () => {
@@ -106,6 +164,31 @@ describe('SharpBadgeImg', () => {
 
   it('renders on the server, so the art store has a server snapshot', () => {
     expect(() => render()).not.toThrow();
+  });
+
+  it('asks for nothing while rendering', () => {
+    render();
+    expect(art.requested).toEqual([]);
+  });
+});
+
+// Each tile follows only its own copy and asks for art only from its image's own
+// events; the source shows both, since a server render runs neither.
+describe('SharpBadgeImg source', () => {
+  const text = readFileSync(resolve(__dirname, 'SharpBadgeImg.tsx'), 'utf8').replace(/\s+/g, ' ');
+
+  it('takes its copy from the art store as its snapshot', () => {
+    expect(text).toContain('const read = () => (picked ? streamnookArtCopyOf(picked) : null);');
+    expect(text).toContain('const copy = useSyncExternalStore(subscribeStreamnookArt, read, read);');
+    expect(text).not.toContain('getStreamnookArtVersion');
+  });
+
+  it('asks for the sharp file from the image, never from an effect', () => {
+    expect(text).toContain('const ask = sharpRequestFor(drawn, src, picked, copy);');
+    expect(text).toContain('onLoad={ask}');
+    expect(text).toContain('onError={onError}');
+    expect(text).toContain('sharpCopyFailed(drawn, picked);');
+    expect(text).not.toContain('useEffect');
   });
 });
 

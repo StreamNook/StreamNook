@@ -3029,6 +3029,38 @@ pub async fn cache_streamnook_art(url: String) -> Result<String> {
     Ok(path_str)
 }
 
+/// Forgets the disk copy of one piece of StreamNook art, for a copy a window
+/// could not decode: its manifest entry goes now and its file once the manifest
+/// without it is on disk, so the next session downloads the art again. Only
+/// StreamNook art is accepted, by the rule `cache_streamnook_art` fetches by.
+/// Returns whether there was a copy to forget.
+pub fn forget_streamnook_art(url: &str) -> Result<bool> {
+    if !is_streamnook_art_url(url) {
+        return Err(anyhow::anyhow!("not StreamNook art: {url}"));
+    }
+    let cache_root = get_universal_cache_dir()?;
+    let forgot = forget_streamnook_art_in(&MANIFEST_MEMORY, &PENDING_DELETES, &cache_root, url)?;
+    if forgot {
+        MANIFEST_DIRTY.store(true, Ordering::Release);
+        ensure_flush_task();
+    }
+    Ok(forgot)
+}
+
+/// `forget_streamnook_art` of `memory`, queueing the file in `pending` for
+/// deletion from its type folder under `cache_root`.
+fn forget_streamnook_art_in(
+    memory: &StdRwLock<UniversalCacheManifest>,
+    pending: &StdMutex<Vec<PendingDelete>>,
+    cache_root: &Path,
+    url: &str,
+) -> Result<bool> {
+    let key = format!("file:{url}");
+    let removed = take_entries_where(memory, |k, entry| k == key && entry.cache_type == CacheType::StreamNookArt)?;
+    queue_entry_files(pending, cache_root, &removed);
+    Ok(!removed.is_empty())
+}
+
 /// Download a file to disk and RETURN its manifest entry WITHOUT writing the
 /// manifest. Lets a bulk caller (the AFK emote prefetch) collect many entries
 /// and persist them in one `save_cached_items_batch` call, sidestepping the
@@ -5473,7 +5505,12 @@ mod tests {
 
 #[cfg(test)]
 mod streamnook_art_tests {
-    use super::{content_range_start, fetch_resumable, is_streamnook_art_url, streamnook_art_file_name};
+    use super::{
+        content_range_start, fetch_resumable, forget_streamnook_art, forget_streamnook_art_in, is_streamnook_art_url,
+        streamnook_art_file_name, CacheMetadata, CacheType, UniversalCacheEntry, UniversalCacheManifest,
+    };
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::time::Duration;
@@ -5621,6 +5658,75 @@ mod streamnook_art_tests {
         assert!(body_of(&transport, "pub async fn send_download(").contains("send_on(&DOWNLOAD_CLIENT, builder).await"));
         let send_on = body_of(&transport, "async fn send_on(");
         assert!(send_on.contains("builder.build_split()"));
+    }
+
+    fn art_entry(url: &str, cache_type: CacheType, path: &str) -> UniversalCacheEntry {
+        UniversalCacheEntry {
+            id: format!("file:{url}"),
+            cache_type,
+            data: serde_json::json!({ "local_path": path, "url": url }),
+            metadata: CacheMetadata {
+                timestamp: super::get_current_timestamp(),
+                expiry_days: 0,
+                source: "universal_file".into(),
+                version: 1,
+            },
+            position: None,
+        }
+    }
+
+    #[test]
+    fn forgetting_refuses_anything_but_streamnook_art() {
+        for url in [
+            "https://static-cdn.jtvnw.net/badges/v1/x/3",
+            "http://cdn.streamnook.app/twitch-badges/a.png",
+            "https://cdn.streamnook.app.evil.test/twitch-badges/a.png",
+            "https://cdn.streamnook.app/",
+            "",
+        ] {
+            let refused = forget_streamnook_art(url).unwrap_err().to_string();
+            assert!(refused.contains("not StreamNook art"), "{url}: {refused}");
+        }
+    }
+
+    #[test]
+    fn forgetting_takes_out_only_that_art_copy_and_queues_its_file() {
+        let art = "https://cdn.streamnook.app/twitch-badges/large.png";
+        let other = "https://cdn.streamnook.app/twitch-badges/small.webp";
+        let mut entries = HashMap::new();
+        for (url, cache_type, path) in [
+            (art, CacheType::StreamNookArt, "C:/cache/streamnook-art/large-0123abcd.png"),
+            (other, CacheType::StreamNookArt, "C:/cache/streamnook-art/small-89abcdef.webp"),
+        ] {
+            entries.insert(format!("file:{url}"), art_entry(url, cache_type, path));
+        }
+        let memory = std::sync::RwLock::new(UniversalCacheManifest { version: 1, last_sync: None, entries });
+        let pending = std::sync::Mutex::new(Vec::new());
+        let root = Path::new("C:/cache");
+
+        assert!(forget_streamnook_art_in(&memory, &pending, root, art).unwrap());
+        let left: Vec<String> = memory.read().unwrap().entries.keys().cloned().collect();
+        assert_eq!(left, [format!("file:{other}")]);
+        assert_eq!(
+            *pending.lock().unwrap(),
+            [(root.join("streamnook-art"), PathBuf::from("C:/cache/streamnook-art/large-0123abcd.png"))]
+        );
+
+        // A second failure of the same copy finds nothing left to forget.
+        assert!(!forget_streamnook_art_in(&memory, &pending, root, art).unwrap());
+        assert_eq!(pending.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn forgetting_leaves_an_entry_of_another_type_under_the_same_key() {
+        let url = "https://cdn.streamnook.app/badges/kindred.webp";
+        let mut entries = HashMap::new();
+        entries.insert(format!("file:{url}"), art_entry(url, CacheType::Cosmetic, "C:/cache/cosmetics/k.webp"));
+        let memory = std::sync::RwLock::new(UniversalCacheManifest { version: 1, last_sync: None, entries });
+        let pending = std::sync::Mutex::new(Vec::new());
+        assert!(!forget_streamnook_art_in(&memory, &pending, Path::new("C:/cache"), url).unwrap());
+        assert_eq!(memory.read().unwrap().entries.len(), 1);
+        assert!(pending.lock().unwrap().is_empty());
     }
 
     #[test]

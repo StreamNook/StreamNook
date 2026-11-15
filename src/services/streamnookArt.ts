@@ -85,6 +85,18 @@ export function requestStreamnookArt(url: string): void {
 }
 
 /**
+ * Tell Rust a disk copy would not decode, so it forgets that copy and the next
+ * session downloads the art again. This window's map is left as it is: the
+ * caller stops drawing that copy for the session on its own.
+ */
+export function forgetStreamnookArtCopy(url: string): void {
+  if (!isStreamnookArtUrl(url)) return;
+  invoke<boolean>('forget_streamnook_art_copy', { url }).catch((e) =>
+    Logger.debug('[StreamNookArt] could not forget a broken copy:', e),
+  );
+}
+
+/**
  * Where to load a piece of art from: its disk copy when Rust has one, else
  * the CDN URL itself, with Rust asked to fetch a copy. Any other URL comes
  * back unchanged. Cheap to call on every render.

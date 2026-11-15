@@ -242,6 +242,17 @@ pub async fn asset_cache_enqueue(
         .map_err(|e| e.to_string())
 }
 
+/// Forget the disk copy of one piece of StreamNook art that the window could not
+/// decode, so the next session downloads it again. On the blocking pool: it
+/// resolves the cache folder and edits the manifest under its lock.
+#[command]
+pub async fn forget_streamnook_art_copy(url: String) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::services::universal_cache_service::forget_streamnook_art(&url))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
 /// An emote picker opened or closed in the calling window.
 #[command]
 pub fn asset_cache_set_burst(app: crate::rt::AppHandle, window: crate::rt::WebviewWindow, active: bool) {
