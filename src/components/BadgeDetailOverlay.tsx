@@ -15,6 +15,7 @@ import { BadgeCategoryCard } from './badge/BadgeCategoryCard';
 import { BadgeSiblingChips } from './badge/BadgeSiblingChips';
 import { BadgeEligibleCategories } from './badge/BadgeEligibleCategories';
 import { addedLabelFor, latestOnly, type AddedMap } from './badge/badgeAddedOrder';
+import { SharpBadgeImg } from './badge/SharpBadgeImg';
 
 import { Logger } from '../utils/logger';
 import { decodeHtmlEntities } from '../utils/badgeWindow';
@@ -24,6 +25,7 @@ import {
   getBadgeWindow,
   getLastStanding,
   windowStatusAt,
+  type BadgeArt,
   type BadgeStanding,
   type EarnGuide,
   type WindowRun,
@@ -388,10 +390,14 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
   // A badge opened from chat has no gallery, and so no standing, around it. The BadgeBase date
   // in the metadata is never shown.
   const [added, setAdded] = useState<AddedMap>(() => getLastStanding()?.added ?? null);
+  // The sharp art map comes from the same standing, kept the same way.
+  const [artMap, setArtMap] = useState<Record<string, BadgeArt> | null>(() => getLastStanding()?.art ?? null);
   useEffect(() => {
     let live = true;
     const apply = latestOnly<BadgeStanding>((standing) => {
-      if (live) setAdded(standing.added);
+      if (!live) return;
+      setAdded(standing.added);
+      setArtMap(standing.art ?? null);
     });
     const read = () => {
       apply(getBadgeStanding(false)).catch(() => {});
@@ -912,8 +918,10 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
                   href={badge.image_url_4x}
                   className="flex items-center justify-center bg-glass rounded-lg p-4 hover:bg-glass/80 transition-colors cursor-pointer"
                 >
-                  <img
+                  <SharpBadgeImg
                     src={badge.image_url_4x}
+                    art={artMap?.[`${setId}/${badge.id}`]}
+                    cssPx={72}
                     alt={badge.title}
                     className="w-18 h-18 object-contain"
                   />

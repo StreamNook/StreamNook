@@ -3,6 +3,7 @@
 // badge wall (services/badge_wall.rs, `get_badge_wall`). Every line the screen
 // prints is worked out there; the screen only lays it out.
 import { invoke } from '@tauri-apps/api/core';
+import type { BadgeArt } from '../../services/badgeStanding';
 
 export interface CampaignChannel {
   /** The broadcaster's Twitch user id. */
@@ -93,6 +94,8 @@ export interface BadgeTile {
   info_url: string | null;
   /** "13 November 2026" or "March 2017" in UTC; the sheet writes "Added " before it. Null when undated. */
   added_label: string | null;
+  /** The sharp art for this row's `image` (Rust `BadgeArt`); absent when there is none. */
+  art?: BadgeArt;
 }
 
 export interface EarnChip {
@@ -115,6 +118,8 @@ export interface MissingRow {
   time_left: string;
   /** It closes within a day: the time left is drawn as a warning. */
   urgent: boolean;
+  /** The sharp art for this row's `image` (Rust `BadgeArt`); absent when there is none. */
+  art?: BadgeArt;
 }
 
 export interface CatchUp {

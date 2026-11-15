@@ -5,10 +5,12 @@ import { useAppStore } from '../../stores/AppStore';
 import {
   closesInLabel,
   timeLeftLabel,
+  type BadgeArt,
   type BadgeStanding,
   type MissingBadge,
 } from '../../services/badgeStanding';
 import { CatchUpPanel } from './CatchUpPanel';
+import { SharpBadgeImg } from './SharpBadgeImg';
 import { ChannelsOnlyNote, EarnChips, RandomDrawNote } from './EarnChips';
 import { Tooltip } from '../ui/Tooltip';
 
@@ -111,6 +113,7 @@ export const MissingNowStrip = ({
               <MissingCard
                 key={badge.key}
                 badge={badge}
+                art={standing?.art?.[badge.key]}
                 icons={standing?.earn_icons}
                 onOpen={() => onOpenBadge(badge.key)}
               />
@@ -170,10 +173,13 @@ function useCompactPill() {
 
 const MissingCard = ({
   badge,
+  art,
   icons,
   onOpen,
 }: {
   badge: MissingBadge;
+  /** The standing's sharp art for this badge (`standing.art[badge.key]`). */
+  art?: BadgeArt;
   icons?: Record<string, string>;
   onOpen: () => void;
 }) => {
@@ -194,8 +200,10 @@ const MissingCard = ({
         className="group min-w-0 h-full flex items-center gap-3 rounded-xl bg-white/[0.04] hover:bg-white/[0.07] border border-white/[0.06] px-3 transition-colors"
       >
         <button onClick={onOpen} className="shrink-0" aria-label={`${badge.title} details`}>
-          <img
+          <SharpBadgeImg
             src={badge.image_url}
+            art={art}
+            cssPx={40}
             alt=""
             className="w-10 h-10 object-contain drop-shadow-[0_0_10px_color-mix(in_srgb,var(--color-success)_35%,transparent)]"
             loading="lazy"

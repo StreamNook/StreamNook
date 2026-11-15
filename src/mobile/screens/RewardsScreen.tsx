@@ -27,6 +27,7 @@ import { BadgeSortMenu } from '../rewards/BadgeSortMenu';
 import { ScreenHeader } from '../ui/ScreenHeader';
 import { TitleSegments } from '../ui/TitleControls';
 import { ProviderMark } from '../../components/ProviderLogo';
+import { SharpBadgeImg } from '../../components/badge/SharpBadgeImg';
 import { badgeLinkOutcome } from '../rewards/badgeLinkTile';
 import { BADGE_NOT_FOUND_TOAST } from '../../utils/badgeLinkOpen';
 import {
@@ -486,8 +487,10 @@ export const RewardsScreen: React.FC = () => {
                           tile.status === 'available' && !tile.owned ? 'ring-1 ring-success/70' : ''
                         } ${tile.owned ? 'ring-1 ring-accent/60' : ''}`}
                       >
-                        <img
+                        <SharpBadgeImg
                           src={tile.image}
+                          art={tile.art}
+                          cssPx={44}
                           alt=""
                           loading="lazy"
                           decoding="async"
@@ -687,7 +690,14 @@ export const RewardsScreen: React.FC = () => {
       <MobileSheet open={!!badgeDetail} onClose={() => setBadgeDetail(null)} maxHeightFraction={0.8}>
         {badgeDetail && (
           <div className="flex flex-col items-center text-center pb-1">
-            <img src={badgeDetail.image} alt="" className="w-20 h-20 object-contain mb-2.5" draggable={false} />
+            <SharpBadgeImg
+              src={badgeDetail.image}
+              art={badgeDetail.art}
+              cssPx={80}
+              alt=""
+              className="w-20 h-20 object-contain mb-2.5"
+              draggable={false}
+            />
             <div className="text-[16px] font-semibold text-textPrimary">{badgeDetail.title}</div>
             <div className="mt-1 mb-2.5 flex flex-col items-center gap-1">
               {badgeDetail.sheet_word && (

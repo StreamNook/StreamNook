@@ -37,6 +37,7 @@ import chatterinoLogo from '../assets/chatterino-logo.svg';
 import betterttvLogo from '../assets/betterttv-logo.png';
 import { ChatClientsGallery } from './ChatClientsGallery';
 import { BreakableName } from './badge/BreakableName';
+import { SharpBadgeImg } from './badge/SharpBadgeImg';
 import { compareNewest, latestOnly, seedStanding } from './badge/badgeAddedOrder';
 import type { ChatClientBadge } from './ChatClientsGallery';
 
@@ -1656,8 +1657,10 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
                         isAvailable ? 'drop-shadow-[0_0_15px_rgba(34,197,94,0.4)]' :
                         isComingSoon ? 'drop-shadow-[0_0_15px_rgba(59,130,246,0.4)]' : ''
                       }`}>
-                        <img
+                        <SharpBadgeImg
                           src={badge.image_url_4x}
+                          art={standing?.art?.[`${badge.set_id}/${badge.id}`]}
+                          cssPx={64}
                           alt={badge.title}
                           className="w-16 h-16 object-contain"
                           loading="lazy"

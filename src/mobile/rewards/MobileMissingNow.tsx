@@ -5,6 +5,7 @@
 import { Fragment, useLayoutEffect, useRef, useState } from 'react';
 import { Clapperboard, Coins, Dices, Eye, Info, MapPin, Radio, Sparkles, Ticket, type LucideIcon } from 'lucide-react';
 import { CardChip } from '../../components/ui/CardChip';
+import { SharpBadgeImg } from '../../components/badge/SharpBadgeImg';
 import { RewardsPopover } from './RewardsPopover';
 import type { CatchUp, EarnChip, MissingNow, MissingRow } from './rewardsModel';
 
@@ -187,7 +188,14 @@ const MissingRowItem = ({ row, onOpen }: { row: MissingRow; onOpen: (key: string
       className="sn-missing-open absolute inset-0 w-full rounded-[inherit]"
     />
     <div className="relative pointer-events-none flex items-center gap-3 px-3 py-2">
-      <img src={row.image} alt="" className="w-9 h-9 object-contain shrink-0" draggable={false} />
+      <SharpBadgeImg
+        src={row.image}
+        art={row.art}
+        cssPx={36}
+        alt=""
+        className="w-9 h-9 object-contain shrink-0"
+        draggable={false}
+      />
       {/* One height for every row: two title lines, or one over its note. */}
       <div className="flex-1 min-w-0 h-9 flex flex-col justify-center">
         {/* The chip and the time ride the title line as one group, so they

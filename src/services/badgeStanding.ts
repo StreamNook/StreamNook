@@ -68,6 +68,13 @@ export interface AddedDate {
   order: number;
 }
 
+/** A badge's sharp art from the index (Rust `BadgeArt`): `a` names Penrose's two
+ *  files made from the Twitch image `i`, and is drawn only beside that image. */
+export interface BadgeArt {
+  i: string;
+  a: string;
+}
+
 export interface BadgeStanding {
   login: string | null;
   collection: CollectionState;
@@ -79,6 +86,8 @@ export interface BadgeStanding {
   windows: Record<string, WindowRun[]>;
   /** Every catalogue badge's date and place in Newest First, keyed `set_id/version`. */
   added: Record<string, AddedDate>;
+  /** The sharp art of every catalogue badge the index carries one for, keyed `set_id/version`. */
+  art: Record<string, BadgeArt>;
   missing_now: MissingBadge[];
   next_change_ms: number | null;
   /** Twitch's own art for earn chips, by step kind (`subscribe`: the gift, `cheer`: the gem). */
