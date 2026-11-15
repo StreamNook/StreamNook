@@ -528,7 +528,8 @@ mod tests {
 
     #[test]
     fn two_stores_at_once_leave_the_higher_stamp() {
-        // Fails if a store takes its stamp before the lock: the lower stamp could then be written last.
+        // A smoke test: concurrent stores never panic and leave the higher stamp. The ordering itself
+        // is proved by the source pin on the lock and by the step-by-step tests above.
         let _guard = lock();
         for _ in 0..200 {
             let slot = Arc::new(PendingLink::default());
@@ -549,7 +550,8 @@ mod tests {
 
     #[test]
     fn a_drop_racing_a_store_never_clears_a_newer_link() {
-        // Fails if the compare reads the stamp outside the lock or is reversed: this link is stamped after `seq`.
+        // A smoke test: a drop running beside a store never panics or clears the newer link. The
+        // compare's order is proved by the source pin on the lock and by the step-by-step tests.
         let _guard = lock();
         for _ in 0..200 {
             let slot = Arc::new(PendingLink::default());
