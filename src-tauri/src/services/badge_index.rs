@@ -164,6 +164,35 @@ struct Entry {
 struct IndexCopy {
     at: i64,
     entries: HashMap<String, Entry>,
+    /// The sharp art of the entries that carry a valid one, by the same key.
+    /// Apart from `entries` so `Entry` stays `Copy`.
+    art: HashMap<String, ArtRef>,
+}
+
+/// An entry's sharp art: `a` names the two files Penrose made from the image
+/// `i`, so it is only drawn next to that exact image. Rust builds no URL from
+/// it; the TypeScript and Swift readers do.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtRef {
+    pub i: Box<str>,
+    pub a: Box<str>,
+}
+
+/// True for two 64-hex lowercase names joined by one dot, and nothing else (no
+/// trailing newline, no uppercase).
+pub fn is_sharp_base(a: &str) -> bool {
+    let bytes = a.as_bytes();
+    bytes.len() == 129
+        && bytes.iter().enumerate().all(|(n, b)| match n {
+            64 => *b == b'.',
+            _ => b.is_ascii_digit() || (b'a'..=b'f').contains(b),
+        })
+}
+
+fn art_of(value: &serde_json::Value) -> Option<ArtRef> {
+    let a = value.get("a").and_then(|v| v.as_str()).filter(|a| is_sharp_base(a))?;
+    let i = value.get("i").and_then(|v| v.as_str()).filter(|i| !i.is_empty())?;
+    Some(ArtRef { i: i.into(), a: a.into() })
 }
 
 fn entry_of(value: &serde_json::Value) -> Entry {
@@ -206,7 +235,11 @@ fn parse_index(bytes: &[u8]) -> Result<IndexCopy, String> {
         .iter()
         .map(|(key, entry)| (key.to_lowercase(), entry_of(entry)))
         .collect();
-    Ok(IndexCopy { at, entries })
+    let art = badges
+        .iter()
+        .filter_map(|(key, entry)| Some((key.to_lowercase(), art_of(entry)?)))
+        .collect();
+    Ok(IndexCopy { at, entries, art })
 }
 
 // ---- Feed dates file ------------------------------------------------------------
@@ -572,6 +605,12 @@ impl Snapshot {
             .and_then(|entry| entry.hr)
     }
 
+    /// The badge's sharp art and the image it was made from, when the index
+    /// copy carries a valid one. `key` is `index_key`.
+    pub fn art(&self, key: &str) -> Option<&ArtRef> {
+        self.index.as_ref().and_then(|copy| copy.art.get(key))
+    }
+
     pub fn feed_dates(&self) -> &HashMap<String, Dated> {
         &self.feed
     }
@@ -879,6 +918,7 @@ mod tests {
 
     const ORDER_FIXTURE: &str = include_str!("../../tests/fixtures/badgeOrder.fixture.json");
     const LABEL_FIXTURE: &str = include_str!("../../tests/fixtures/badgeLabels.fixture.json");
+    const SHARP_FIXTURE: &str = include_str!("../../tests/fixtures/badgeSharpArt.fixture.json");
 
     const AT: i64 = 1_794_600_000_000;
     /// 13 November 2026, 02:48:09 UTC.
@@ -1038,6 +1078,7 @@ mod tests {
         for (name, committed) in [
             ("badgeOrder.fixture.json", ORDER_FIXTURE),
             ("badgeLabels.fixture.json", LABEL_FIXTURE),
+            ("badgeSharpArt.fixture.json", SHARP_FIXTURE),
         ] {
             let site = std::fs::read_to_string(dir.join("functions/utils").join(name))
                 .unwrap_or_else(|e| panic!("the site's functions/utils/{name}: {e}"))
@@ -1097,6 +1138,75 @@ mod tests {
         assert_eq!(date("neg-hr-v1"), Dated::new(T_DAY, Precision::Day));
         // Keys are compared lowercased.
         assert!(copy.entries.contains_key("mixed-v1"));
+    }
+
+    // ---- the sharp art ----
+
+    const GOOD_A: &str = "34d2d3cad154dbffb1ce314ce9cbbaf767dccbfdce7c9acc739edb19eac42401.9801d687fca7d8744e77290e289a35535eeea91bac87bf28e3039d580ea7d605";
+
+    #[derive(Deserialize)]
+    struct SharpCase {
+        a: String,
+        large: Option<String>,
+    }
+
+    #[derive(Deserialize)]
+    struct SharpFixture {
+        cases: Vec<SharpCase>,
+    }
+
+    #[test]
+    fn the_sharp_base_rule_matches_the_shared_fixture() {
+        let fixture: SharpFixture = serde_json::from_str(SHARP_FIXTURE).unwrap();
+        let good = fixture.cases.iter().filter(|c| c.large.is_some()).count();
+        let bad = fixture.cases.len() - good;
+        assert!(good >= 2 && bad >= 8, "the fixture lost cases");
+        for case in &fixture.cases {
+            assert_eq!(is_sharp_base(&case.a), case.large.is_some(), "{:?}", case.a);
+        }
+        // The trailing-newline case is in the fixture and refused.
+        assert!(fixture.cases.iter().any(|c| c.a == format!("{GOOD_A}\n")));
+        assert!(!is_sharp_base(&format!("{GOOD_A}\n")));
+    }
+
+    #[test]
+    fn an_entry_carries_its_sharp_art_only_with_a_valid_a_and_its_image() {
+        let copy = parse_index(
+            index_text(
+                AT,
+                json!({
+                    "sharp-v1": { "t": T_DAY, "p": "day", "hr": 1, "i": "https://static-cdn.jtvnw.net/badges/v1/x/3", "a": GOOD_A },
+                    "Mixed-V1": { "i": "https://static-cdn.jtvnw.net/badges/v1/y/3", "a": GOOD_A },
+                    "upper-v1": { "i": "https://static-cdn.jtvnw.net/badges/v1/z/3", "a": GOOD_A.to_uppercase() },
+                    "no-i-v1": { "a": GOOD_A },
+                    "empty-i-v1": { "i": "", "a": GOOD_A },
+                    "number-a-v1": { "i": "https://static-cdn.jtvnw.net/badges/v1/w/3", "a": 5 },
+                    "plain-v1": { "t": T_DAY, "p": "day" }
+                }),
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        let art = &copy.art["sharp-v1"];
+        assert_eq!((&*art.i, &*art.a), ("https://static-cdn.jtvnw.net/badges/v1/x/3", GOOD_A));
+        // The date beside it is read as before.
+        assert_eq!(copy.entries["sharp-v1"].date, Dated::new(T_DAY, Precision::Day));
+        assert!(copy.art.contains_key("mixed-v1"), "keys are lowercased");
+        for key in ["upper-v1", "no-i-v1", "empty-i-v1", "number-a-v1", "plain-v1"] {
+            assert!(!copy.art.contains_key(key), "{key}");
+            assert!(copy.entries.contains_key(key), "a bad `a` never drops the entry: {key}");
+        }
+        let text = index_text(AT, json!({ "sharp-v1": { "i": "https://static-cdn.jtvnw.net/badges/v1/x/3", "a": GOOD_A } }));
+        let snapshot = Snapshot::for_test(Some(&text), &[]);
+        assert_eq!(snapshot.art("sharp-v1").map(|r| &*r.a), Some(GOOD_A));
+        assert_eq!(snapshot.art("other-v1"), None);
+        assert_eq!(Snapshot::for_test(None, &[]).art("sharp-v1"), None);
+    }
+
+    #[test]
+    fn an_index_entry_stays_copy() {
+        fn copy_only<T: Copy>() {}
+        copy_only::<Entry>();
     }
 
     #[test]

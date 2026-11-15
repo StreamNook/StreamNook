@@ -2866,19 +2866,6 @@ const STREAMNOOK_ART_MAX_BYTES: usize = 24 * 1024 * 1024;
 /// Connections a resumable fetch may use for one file before it gives up.
 const RESUMABLE_ATTEMPTS: u32 = 8;
 
-// StreamNook's own art is a few large animated files, so it gets a client with
-// no total cap: at a slow link's speed the 20 s cap above never finishes one.
-// The read timeout still frees a stalled transfer, and the fetch resumes from
-// the bytes it already has.
-static LARGE_DOWNLOAD_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
-    reqwest::Client::builder()
-        .user_agent("StreamNook/1.0")
-        .connect_timeout(std::time::Duration::from_secs(10))
-        .read_timeout(std::time::Duration::from_secs(20))
-        .build()
-        .expect("failed to build large-download HTTP client")
-});
-
 /// Whether `url` is StreamNook art this cache will fetch.
 pub fn is_streamnook_art_url(url: &str) -> bool {
     url.starts_with(STREAMNOOK_ART_ORIGIN) && url.len() > STREAMNOOK_ART_ORIGIN.len()
@@ -2916,6 +2903,13 @@ fn content_range_start(value: &str) -> Option<(u64, Option<u64>)> {
 /// Some networks cut a long transfer to a host part way through, so a plain GET
 /// of a multi-MB file can fail every time while a resumed one gets there.
 /// Returns the body and its Content-Type.
+///
+/// `client` only builds each request. Every request goes out through
+/// `sn_transport::send_download`, so StreamNook's own hosts get the relay route
+/// when the direct one is blocked, on a client with no total cap (a large
+/// animated file on a slow link is never cut off while it moves) and a read
+/// timeout that frees a stalled transfer, which then resumes from the bytes it
+/// already has. Any other host (the tests' local server) is sent as it is.
 async fn fetch_resumable(
     client: &reqwest::Client,
     url: &str,
@@ -2936,7 +2930,7 @@ async fn fetch_resumable(
         if !body.is_empty() {
             request = request.header(header::RANGE, format!("bytes={}-", body.len()));
         }
-        let mut response = match request.send().await {
+        let mut response = match crate::services::sn_transport::send_download(request).await {
             Ok(response) => response,
             Err(e) => {
                 last_error = e.into();
@@ -3006,7 +3000,7 @@ pub async fn cache_streamnook_art(url: String) -> Result<String> {
         return Err(anyhow::anyhow!("not StreamNook art: {url}"));
     }
     let (bytes, content_type) = fetch_resumable(
-        &LARGE_DOWNLOAD_CLIENT,
+        crate::services::http::client(),
         &url,
         STREAMNOOK_ART_MAX_BYTES,
         RESUMABLE_ATTEMPTS,
@@ -5607,6 +5601,26 @@ mod streamnook_art_tests {
         assert_ne!(v2, v3, "a re-upload under a new version gets its own file");
         let odd = streamnook_art_file_name("https://cdn.streamnook.app/badges/M%C3%B6bius:%20x.webp", "webp");
         assert!(odd.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c)), "{odd}");
+    }
+
+    #[test]
+    fn art_fetches_go_through_the_streamnook_download_route() {
+        let src = include_str!("universal_cache_service.rs").replace("\r\n", "\n");
+        let body_of = |src: &str, head: &str| {
+            let start = src.find(head).unwrap();
+            src[start..start + src[start..].find("\n}\n").unwrap()].to_string()
+        };
+        let fetch = body_of(&src, "async fn fetch_resumable(");
+        assert_eq!(fetch.matches("crate::services::sn_transport::send_download(request).await").count(), 1);
+        assert!(!fetch.contains(".send()"), "every request goes through the relay-aware route");
+        assert!(body_of(&src, "pub async fn cache_streamnook_art(").contains("fetch_resumable("));
+        // The art's own client is gone; nothing names it any more.
+        assert!(!src.contains(concat!("LARGE_", "DOWNLOAD_CLIENT")));
+        // The download route executes on the transport's download client.
+        let transport = include_str!("sn_transport.rs").replace("\r\n", "\n");
+        assert!(body_of(&transport, "pub async fn send_download(").contains("send_on(&DOWNLOAD_CLIENT, builder).await"));
+        let send_on = body_of(&transport, "async fn send_on(");
+        assert!(send_on.contains("builder.build_split()"));
     }
 
     #[test]

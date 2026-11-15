@@ -19,3 +19,4 @@
 # modified.
 src/utils/*.json text eol=lf
 src/mobile/profile/fixtures/*.json text eol=lf
+src-tauri/tests/fixtures/*.json text eol=lf

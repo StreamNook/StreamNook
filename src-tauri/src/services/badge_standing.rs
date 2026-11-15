@@ -106,6 +106,14 @@ pub struct AddedDate {
     pub order: u32,
 }
 
+/// A badge's sharp art from the index: `a` names Penrose's two files made from
+/// the image `i`. A surface draws it only when the image it shows is `i`.
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct BadgeArt {
+    pub i: String,
+    pub a: String,
+}
+
 #[derive(Serialize, Clone, Debug)]
 pub struct BadgeStanding {
     pub login: Option<String>,
@@ -128,6 +136,9 @@ pub struct BadgeStanding {
     /// `set_id/version`. Built in every collection state, signed out included,
     /// and empty only if the task that builds it failed.
     pub added: HashMap<String, AddedDate>,
+    /// The sharp art of every catalogue badge the index carries one for, keyed
+    /// `set_id/version`. Built with `added`; empty without an index copy.
+    pub art: HashMap<String, BadgeArt>,
     pub missing_now: Vec<MissingBadge>,
     /// The next instant any window opens or closes; ask again then.
     pub next_change_ms: Option<i64>,
@@ -790,6 +801,7 @@ fn build_standing_with(
         windows,
         // Built in its own task by `get_standing`, from the index copy.
         added: HashMap::new(),
+        art: HashMap::new(),
         next_change_ms,
         earn_icons: earn_icons(catalogue),
         catch_up: catch_up(&missing_now),
@@ -869,27 +881,43 @@ fn load_positions(catalogue: &[CatalogueBadge]) -> HashMap<String, u32> {
         .collect()
 }
 
+/// Every catalogue badge's sharp art the index copy carries, keyed
+/// `set_id/version`. Pure; empty while no index copy is held.
+pub(crate) fn build_art(
+    catalogue: &[CatalogueBadge],
+    index: &badge_index::Snapshot,
+) -> HashMap<String, BadgeArt> {
+    catalogue
+        .iter()
+        .filter_map(|b| {
+            let art = index.art(&badge_index::index_key(&b.set_id, &b.version))?;
+            Some((b.key(), BadgeArt { i: art.i.to_string(), a: art.a.to_string() }))
+        })
+        .collect()
+}
+
+/// What the `added` task builds from one index snapshot: the dates and the art.
+type AddedAndArt = (HashMap<String, AddedDate>, HashMap<String, BadgeArt>);
+
 /// The `added` task: reads the index copy (disk IO, so on the blocking pool)
 /// and, only while no index copy is held, one batch of positions for the
-/// fallback order.
-fn added_dates(catalogue: &[CatalogueBadge]) -> HashMap<String, AddedDate> {
+/// fallback order. The art comes from the same snapshot.
+fn added_dates(catalogue: &[CatalogueBadge]) -> AddedAndArt {
     let index = badge_index::snapshot();
     let positions = if index.index_loaded() {
         HashMap::new()
     } else {
         load_positions(catalogue)
     };
-    build_added(catalogue, &index, &positions)
+    (build_added(catalogue, &index, &positions), build_art(catalogue, &index))
 }
 
-/// A failed `added` task (a panic, a cancelled runtime) leaves an empty map; the
-/// rest of the standing is built apart from it and is unaffected.
-fn added_or_empty(
-    joined: Result<HashMap<String, AddedDate>, tokio::task::JoinError>,
-) -> HashMap<String, AddedDate> {
+/// A failed `added` task (a panic, a cancelled runtime) leaves both maps empty;
+/// the rest of the standing is built apart from it and is unaffected.
+fn added_or_empty(joined: Result<AddedAndArt, tokio::task::JoinError>) -> AddedAndArt {
     joined.unwrap_or_else(|e| {
         warn!("[BadgeStanding] Building the added dates failed: {}", e);
-        HashMap::new()
+        (HashMap::new(), HashMap::new())
     })
 }
 
@@ -1073,25 +1101,28 @@ pub async fn get_standing(app: &crate::rt::AppHandle, force: bool) -> BadgeStand
     })
     .await;
 
-    let added = added_or_empty(added_task.await);
+    let (added, art) = added_or_empty(added_task.await);
 
     match standing {
         Ok(mut s) => {
             debug!(
-                "[BadgeStanding] {} windows, {} badges ordered, {} missing now, built in {} ms",
+                "[BadgeStanding] {} windows, {} badges ordered, {} with sharp art, {} missing now, built in {} ms",
                 s.windows.len(),
                 added.len(),
+                art.len(),
                 s.missing_now.len(),
                 started.elapsed().as_millis()
             );
             s.added = added;
+            s.art = art;
             s
         }
         Err(e) => {
             warn!("[BadgeStanding] Building the standing failed: {}", e);
-            // The dates were built apart and are still good.
+            // The dates and the art were built apart and are still good.
             let mut s = build_standing(fallback_login, None, refreshing, &[], &HashMap::new(), now);
             s.added = added;
+            s.art = art;
             s
         }
     }
@@ -1677,9 +1708,15 @@ mod tests {
         // The dates are built in their own blocking task, never inside the
         // standing's own closure.
         assert!(get.contains("let added_task = tokio::task::spawn_blocking("));
-        // Both the success and the fallback standing carry the dates built apart.
-        assert!(get.contains("let added = added_or_empty(added_task.await);"));
+        // Both the success and the fallback standing carry the dates and the art
+        // built apart.
+        assert!(get.contains("let (added, art) = added_or_empty(added_task.await);"));
         assert_eq!(get.matches("s.added = added;").count(), 2);
+        assert_eq!(get.matches("s.art = art;").count(), 2);
+        // The art comes from the dates' own snapshot, in the same task.
+        let task = body_of("fn added_dates(");
+        assert_eq!(task.matches("badge_index::snapshot()").count(), 1);
+        assert!(task.contains("build_art(catalogue, &index)"));
     }
 
     #[test]
@@ -1697,13 +1734,14 @@ mod tests {
 
     #[tokio::test]
     async fn a_failed_added_task_leaves_an_empty_map_and_the_rest_of_the_standing_whole() {
-        let joined = tokio::task::spawn_blocking(|| -> HashMap<String, AddedDate> {
+        let joined = tokio::task::spawn_blocking(|| -> AddedAndArt {
             panic!("injected for the test")
         })
         .await;
         assert!(joined.is_err());
-        let added = added_or_empty(joined);
+        let (added, art) = added_or_empty(joined);
         assert!(added.is_empty());
+        assert!(art.is_empty());
         let (catalogue, meta) = fixture();
         let c = collection(&["wolf/1"], CollectionState::Complete);
         let mut s = build_standing(None, Some(&c), false, &catalogue, &meta, NOW);
@@ -1727,5 +1765,40 @@ mod tests {
         assert_eq!(wolf["label"], "13 November 2026");
         assert_eq!(wolf["order"], 2);
         assert!(wire["added"]["permanent/1"]["label"].is_null());
+    }
+
+    // ---- the sharp art ----
+
+    const SHARP_A: &str = "34d2d3cad154dbffb1ce314ce9cbbaf767dccbfdce7c9acc739edb19eac42401.9801d687fca7d8744e77290e289a35535eeea91bac87bf28e3039d580ea7d605";
+
+    #[test]
+    fn the_standing_carries_each_badges_sharp_art_from_the_index() {
+        let catalogue = vec![badge("H1Z1_1", "1", "H1Z1"), badge("wolf", "1", "Wolf"), badge("plain", "1", "Plain")];
+        let index = index_of(json!({
+            "h1z1_1-v1": { "i": "https://static-cdn.jtvnw.net/badges/v1/h/3", "a": SHARP_A },
+            "wolf-v1": { "t": T_DAY, "p": "minute", "i": "https://static-cdn.jtvnw.net/badges/v1/w/3", "a": SHARP_A },
+            "plain-v1": { "t": T_DAY, "p": "day", "i": "https://static-cdn.jtvnw.net/badges/v1/p/3", "a": "not-a-base" },
+            "absent-v1": { "i": "https://static-cdn.jtvnw.net/badges/v1/x/3", "a": SHARP_A }
+        }));
+        let art = build_art(&catalogue, &Snapshot::for_test(Some(&index), &[]));
+        // Keyed like every standing map, in Twitch's own case; only catalogue badges.
+        assert_eq!(art.len(), 2);
+        assert_eq!(
+            art["H1Z1_1/1"],
+            BadgeArt { i: "https://static-cdn.jtvnw.net/badges/v1/h/3".into(), a: SHARP_A.into() }
+        );
+        assert_eq!(art["wolf/1"].i, "https://static-cdn.jtvnw.net/badges/v1/w/3");
+        assert!(!art.contains_key("plain/1"));
+        // No index copy, no art, whatever the feed dates.
+        let none = build_art(&catalogue, &Snapshot::for_test(None, &[("wolf-v1", T_DAY, Precision::Minute)]));
+        assert!(none.is_empty());
+        // On the wire as `{ i, a }`, beside the other maps.
+        let (_, meta) = fixture();
+        let mut s = build_standing(None, None, false, &catalogue, &meta, NOW);
+        assert!(s.art.is_empty(), "the pure builder leaves it to the added task");
+        s.art = art;
+        let wire = serde_json::to_value(&s).unwrap();
+        assert_eq!(wire["art"]["wolf/1"]["i"], "https://static-cdn.jtvnw.net/badges/v1/w/3");
+        assert_eq!(wire["art"]["wolf/1"]["a"], SHARP_A);
     }
 }
