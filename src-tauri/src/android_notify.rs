@@ -90,6 +90,14 @@ async fn collect_badges() -> Vec<OutItem> {
         crate::services::badge_index::notify(None);
     }
 
+    // The same re-stamp as the app's ingest: the classifier below skips an unchanged
+    // re-push, so the gallery's record of the feed's last push moves up first.
+    let batch_pairs: Vec<(String, String)> = drops
+        .iter()
+        .map(|b| (b.badge_set_id.clone(), b.badge_version.clone()))
+        .collect();
+    let _ = crate::commands::badges::restamp_pushed_pairs(&batch_pairs, chrono::Utc::now().timestamp().max(0) as u64).await;
+
     // Same reasoning as the live seed: a fresh install must absorb the relay's
     // whole backlog silently rather than announce every badge ever dropped.
     let seeding = feed::is_empty().await;

@@ -1,8 +1,10 @@
 use crate::services::twitch_service::TwitchService;
-use crate::services::universal_cache_service::{cache_item, get_cached_item, CacheType};
+use crate::services::universal_cache_service::{cache_item, get_cached_item, CacheType, UniversalCacheEntry};
 use log::debug;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex as TokioMutex;
 
@@ -37,6 +39,11 @@ pub struct HelixBadgesResponse {
 pub struct CachedBadgesData {
     pub badges: HelixBadgesResponse,
     pub cached_at: u64,
+    /// The (set, version) pairs the drop feed pushed, with the time of each push in
+    /// seconds. A version only the cache holds survives a refresh only while its push
+    /// is recent. `None` on a cache written before this field existed.
+    #[serde(default)]
+    pub pushed: Option<PushedPairs>,
 }
 
 // --- TAURI COMMANDS ---
@@ -72,6 +79,233 @@ fn get_current_timestamp() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs()
+}
+
+/// "set/version" to the push time in seconds; `CachedBadgesData::pushed` holds one.
+pub type PushedPairs = BTreeMap<String, u64>;
+
+/// A version only the cache holds is kept this long after the drop feed last pushed it.
+const PUSHED_KEEP_SECS: u64 = 14 * 86_400;
+
+/// A pushed pair's time moves up only once it is this old, so a busy feed does not
+/// rewrite the cache on every batch.
+const RESTAMP_AFTER_SECS: u64 = 86_400;
+
+/// How long the cached list is used before a gallery read asks Twitch again.
+const LIST_USE_SECS: u64 = 7 * 86_400;
+
+/// Bumped under the cache lock by each writer of Twitch's list just before it
+/// fetches; the bumped value is that fetch's start number.
+static FETCH_STARTS: AtomicU64 = AtomicU64::new(0);
+
+/// The start number of the newest fetch whose list was fetched and written. A
+/// failed fetch or a failed write leaves it where it was.
+static WRITTEN_START: AtomicU64 = AtomicU64::new(0);
+
+/// The cached gallery from an entry as stored, expired or not. Pure on purpose: the
+/// cache service hides an expired entry from its own readers, and a version the drop
+/// feed pushed lives only in that entry.
+fn previous_from(entry: Option<UniversalCacheEntry>) -> Option<CachedBadgesData> {
+    serde_json::from_value::<CachedBadgesData>(entry?.data).ok()
+}
+
+/// The one cache read of every writer of this list. It answers after expiry and never
+/// downloads the hosted manifest.
+fn previous_cache() -> Option<CachedBadgesData> {
+    previous_from(crate::services::universal_cache_service::peek_cached_entry("global_badges").ok().flatten())
+}
+
+/// The start number a writer stores after its cache write: the newer of the two when
+/// the write worked, the old one when it did not, so a failed write never lets a
+/// queued refresh skip its own fetch.
+fn written_start_after(current: u64, n: u64, wrote: bool) -> u64 {
+    if wrote {
+        n.max(current)
+    } else {
+        current
+    }
+}
+
+/// Whether a refresh that asked when `seen` fetches had started can use the list that
+/// a fetch stored while it waited. Only a fetch that started after the ask counts: an
+/// older one may hold Twitch's older answer.
+fn coalesce(seen: u64, written_start: u64) -> bool {
+    written_start > seen
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum FetchDecision {
+    UseCached,
+    Refresh,
+}
+
+/// The seven-day decision of `fetch_global_badges`. A stamp in the future (a stepped
+/// clock) is stale, and so is no cache at all.
+fn fetch_decision(previous: Option<&CachedBadgesData>, now: u64) -> FetchDecision {
+    match previous {
+        Some(data) if data.cached_at <= now && now - data.cached_at < LIST_USE_SECS => FetchDecision::UseCached,
+        _ => FetchDecision::Refresh,
+    }
+}
+
+fn pair_key(set_id: &str, version: &str) -> String {
+    format!("{set_id}/{version}")
+}
+
+/// Every (set, version) the list holds, each stamped `at`.
+fn pairs_at(badges: &HelixBadgesResponse, at: u64) -> PushedPairs {
+    badges
+        .data
+        .iter()
+        .flat_map(|s| s.versions.iter().map(move |v| (pair_key(&s.set_id, &v.id), at)))
+        .collect()
+}
+
+/// Keeps each version only the previous cache holds, while the drop feed's push of it
+/// is at most 14 days old. A set Twitch no longer lists comes back with only its kept
+/// versions and is left out when none is kept. Returns the pushed pairs to write back:
+/// pairs Twitch now lists or older than 14 days are gone, and every time is
+/// `min(t, now)` so a stamp from a stepped clock never outlives its real age.
+fn merge_cache_only(
+    fetched: &mut HelixBadgesResponse,
+    previous: Option<&CachedBadgesData>,
+    now: u64,
+) -> PushedPairs {
+    let mut kept = PushedPairs::new();
+    let Some(previous) = previous else {
+        return kept;
+    };
+    // A cache written before pushes were recorded counts every version it holds as
+    // pushed now, once, so nothing a person already had vanishes at the first refresh.
+    let seeded;
+    let pushed = match &previous.pushed {
+        Some(pushed) => pushed,
+        None => {
+            seeded = pairs_at(&previous.badges, now);
+            &seeded
+        }
+    };
+    for old in &previous.badges.data {
+        let mut survivors = Vec::new();
+        for version in &old.versions {
+            let listed = fetched
+                .data
+                .iter()
+                .any(|s| s.set_id == old.set_id && s.versions.iter().any(|v| v.id == version.id));
+            if listed {
+                continue;
+            }
+            let key = pair_key(&old.set_id, &version.id);
+            let Some(&at) = pushed.get(&key) else {
+                continue;
+            };
+            if now.saturating_sub(at) > PUSHED_KEEP_SECS {
+                continue;
+            }
+            kept.insert(key, at.min(now));
+            survivors.push(version.clone());
+        }
+        if survivors.is_empty() {
+            continue;
+        }
+        match fetched.data.iter_mut().find(|s| s.set_id == old.set_id) {
+            Some(set) => set.versions.extend(survivors),
+            None => fetched.data.push(HelixBadgeSet {
+                set_id: old.set_id.clone(),
+                versions: survivors,
+            }),
+        }
+    }
+    kept
+}
+
+/// Gives every pair of a feed batch that `pushed` already holds, and whose stamp is a
+/// day old or more, the time `now`. True when one moved.
+fn restamp(pushed: &mut PushedPairs, pairs: &[(String, String)], now: u64) -> bool {
+    let mut moved = false;
+    for (set_id, version) in pairs {
+        if let Some(at) = pushed.get_mut(&pair_key(set_id, version)) {
+            if now.saturating_sub(*at) >= RESTAMP_AFTER_SECS {
+                *at = now;
+                moved = true;
+            }
+        }
+    }
+    moved
+}
+
+/// The cache with a batch's pairs re-stamped, or `None` when nothing needs writing.
+/// The `cached_at` it read goes back untouched: a new one would make a stale gallery
+/// look freshly read. A cache with no record of pushes gets one here too, every
+/// version stamped now.
+fn restamped(previous: CachedBadgesData, pairs: &[(String, String)], now: u64) -> Option<CachedBadgesData> {
+    let map_is_new = previous.pushed.is_none();
+    let mut pushed = previous.pushed.clone().unwrap_or_else(|| pairs_at(&previous.badges, now));
+    let moved = restamp(&mut pushed, pairs, now);
+    if !moved && !map_is_new {
+        return None;
+    }
+    Some(CachedBadgesData {
+        pushed: Some(pushed),
+        ..previous
+    })
+}
+
+/// What a push did to the cache.
+#[derive(Debug, PartialEq, Eq)]
+enum Push {
+    Unchanged,
+    Restamped,
+    Added,
+}
+
+/// Records a pushed version: its pair always gets the time `now`, and the version joins
+/// the list when it is not there. A cache with no record of pushes first stamps every
+/// version it holds, once.
+fn apply_push(cached: &mut CachedBadgesData, set_id: &str, version: HelixBadgeVersion, now: u64) -> Push {
+    let map_is_new = cached.pushed.is_none();
+    let mut pushed = cached.pushed.take().unwrap_or_else(|| pairs_at(&cached.badges, now));
+    let moved = pushed.insert(pair_key(set_id, &version.id), now) != Some(now);
+    cached.pushed = Some(pushed);
+    let present = cached
+        .badges
+        .data
+        .iter()
+        .any(|s| s.set_id == set_id && s.versions.iter().any(|v| v.id == version.id));
+    if present {
+        return if moved || map_is_new {
+            Push::Restamped
+        } else {
+            Push::Unchanged
+        };
+    }
+    match cached.badges.data.iter_mut().find(|s| s.set_id == set_id) {
+        Some(set) => set.versions.push(version),
+        None => cached.badges.data.push(HelixBadgeSet {
+            set_id: set_id.to_string(),
+            versions: vec![version],
+        }),
+    }
+    Push::Added
+}
+
+/// Proves the drop feed still holds the pairs of a batch, before the classifier skips
+/// any unchanged re-push of them. One locked write, and only when a stamp moved.
+/// Returns whether it wrote.
+pub async fn restamp_pushed_pairs(pairs: &[(String, String)], now: u64) -> bool {
+    let _guard = GLOBAL_BADGES_LOCK.lock().await;
+    let Some(previous) = previous_cache() else {
+        return false;
+    };
+    let Some(next) = restamped(previous, pairs, now) else {
+        return false;
+    };
+    let Ok(json_value) = serde_json::to_value(&next) else {
+        return false;
+    };
+    cache_item(CacheType::Badge, "global_badges".to_string(), json_value, "twitch".to_string(), 7)
+        .await
+        .is_ok()
 }
 
 /// Fetch global Twitch badges from API (no cache)
@@ -123,63 +357,43 @@ pub async fn fetch_global_badges() -> Result<HelixBadgesResponse, String> {
     // Serialize against the socket-drop merge so a fetch and a merge can't
     // clobber each other's write of the shared global_badges entry.
     let _guard = GLOBAL_BADGES_LOCK.lock().await;
-    // Try to get from cache first
     let cache_key = "global_badges";
 
-    match get_cached_item(CacheType::Badge, cache_key).await {
-        Ok(Some(cached)) => {
-            match serde_json::from_value::<CachedBadgesData>(cached.data) {
-                Ok(cached_data) => {
-                    // Check if cache is less than 7 days old
-                    let cache_age_days =
-                        (get_current_timestamp() - cached_data.cached_at) / (24 * 60 * 60);
-
-                    if cache_age_days < 7 {
-                        debug!(
-                            "[Badges] Using cached badges (age: {} days)",
-                            cache_age_days
-                        );
-                        note_row_view_badges(None, &cached_data.badges);
-                        return Ok(cached_data.badges);
-                    } else {
-                        debug!(
-                            "[Badges] Cache is {} days old, refreshing...",
-                            cache_age_days
-                        );
-                    }
-                }
-                Err(e) => {
-                    debug!("[Badges] Failed to parse cached badges: {}", e);
-                }
+    // The entry as stored, expired or not: a stale list is still the only holder of
+    // the versions the drop feed pushed.
+    let previous = previous_cache();
+    match fetch_decision(previous.as_ref(), get_current_timestamp()) {
+        FetchDecision::UseCached => {
+            if let Some(cached_data) = previous.as_ref() {
+                debug!("[Badges] Using cached badges (cached_at {})", cached_data.cached_at);
+                note_row_view_badges(None, &cached_data.badges);
+                return Ok(cached_data.badges.clone());
             }
         }
-        Ok(None) => {
-            debug!("[Badges] No cached badges found");
-        }
-        Err(e) => {
-            debug!("[Badges] Error checking cache: {}", e);
+        FetchDecision::Refresh => {
+            debug!("[Badges] No usable cached badges (none, 7 days old or more, or stamped in the future), fetching...");
         }
     }
 
     // Fetch from API
     let before = previous_gallery_pairs();
-    let badges = fetch_badges_from_api(client_id, token).await?;
+    let n = FETCH_STARTS.fetch_add(1, Ordering::SeqCst) + 1;
+    let mut badges = fetch_badges_from_api(client_id, token).await?;
+    let pushed = merge_cache_only(&mut badges, previous.as_ref(), get_current_timestamp());
 
     // Cache the result for 7 days
     let cached_data = CachedBadgesData {
         badges: badges.clone(),
         cached_at: get_current_timestamp(),
+        pushed: Some(pushed),
     };
 
-    if let Ok(json_value) = serde_json::to_value(&cached_data) {
-        let _ = cache_item(
-            CacheType::Badge,
-            cache_key.to_string(),
-            json_value,
-            "twitch".to_string(),
-            7, // Cache for 7 days
-        )
-        .await;
+    let wrote = match serde_json::to_value(&cached_data) {
+        Ok(json_value) => cache_item(CacheType::Badge, cache_key.to_string(), json_value, "twitch".to_string(), 7).await.is_ok(),
+        Err(_) => false,
+    };
+    WRITTEN_START.store(written_start_after(WRITTEN_START.load(Ordering::SeqCst), n, wrote), Ordering::SeqCst);
+    if wrote {
         debug!("[Badges] Cached global badges for 7 days");
     }
 
@@ -191,43 +405,41 @@ pub async fn fetch_global_badges() -> Result<HelixBadgesResponse, String> {
 /// The global badge list read fresh from Twitch whatever the cache's age, for
 /// a deliberate refresh: the cached list is kept up to 7 days, so new drop
 /// badges could stay off a phone's wall for a week. Versions only the cache
-/// has (drops merged from the feed before Twitch lists them) are kept.
+/// has (drops merged from the feed before Twitch lists them) are kept while
+/// the feed's last push of them is recent. A call that waited on the lock while
+/// another writer fetched and stored Twitch's list returns that list.
 pub async fn refresh_global_badges() -> Result<HelixBadgesResponse, String> {
+    // Read before anything waits, so a fetch that starts while this call waits for the
+    // token or the lock counts as one made after the ask.
+    let seen = FETCH_STARTS.load(Ordering::SeqCst);
     let client_id = env!("TWITCH_APP_CLIENT_ID").to_string();
     let token = TwitchService::get_token()
         .await
         .map_err(|e| format!("Failed to get token: {}", e))?;
     let _guard = GLOBAL_BADGES_LOCK.lock().await;
     let cache_key = "global_badges";
-    let previous = match get_cached_item(CacheType::Badge, cache_key).await {
-        Ok(Some(cached)) => serde_json::from_value::<CachedBadgesData>(cached.data).ok(),
-        _ => None,
-    };
-
-    let before = previous_gallery_pairs();
-    let mut badges = fetch_badges_from_api(client_id, token).await?;
-    if let Some(previous) = previous {
-        for old in previous.badges.data {
-            match badges.data.iter_mut().find(|s| s.set_id == old.set_id) {
-                Some(set) => {
-                    for v in old.versions {
-                        if !set.versions.iter().any(|n| n.id == v.id) {
-                            set.versions.push(v);
-                        }
-                    }
-                }
-                None => badges.data.push(old),
-            }
+    let previous = previous_cache();
+    if coalesce(seen, WRITTEN_START.load(Ordering::SeqCst)) {
+        if let Some(stored) = previous.as_ref() {
+            return Ok(stored.badges.clone());
         }
     }
+
+    let before = previous_gallery_pairs();
+    let n = FETCH_STARTS.fetch_add(1, Ordering::SeqCst) + 1;
+    let mut badges = fetch_badges_from_api(client_id, token).await?;
+    let pushed = merge_cache_only(&mut badges, previous.as_ref(), get_current_timestamp());
 
     let cached_data = CachedBadgesData {
         badges: badges.clone(),
         cached_at: get_current_timestamp(),
+        pushed: Some(pushed),
     };
-    if let Ok(json_value) = serde_json::to_value(&cached_data) {
-        let _ = cache_item(CacheType::Badge, cache_key.to_string(), json_value, "twitch".to_string(), 7).await;
-    }
+    let wrote = match serde_json::to_value(&cached_data) {
+        Ok(json_value) => cache_item(CacheType::Badge, cache_key.to_string(), json_value, "twitch".to_string(), 7).await.is_ok(),
+        Err(_) => false,
+    };
+    WRITTEN_START.store(written_start_after(WRITTEN_START.load(Ordering::SeqCst), n, wrote), Ordering::SeqCst);
     note_arrivals(before.as_ref(), &badges);
     note_row_view_badges(None, &badges);
     Ok(badges)
@@ -311,11 +523,21 @@ pub async fn prefetch_global_badges() -> Result<(), String> {
     }
 }
 
-/// Force refresh global badges from Twitch API (bypasses cache)
+/// Force refresh global badges from Twitch API (bypasses cache). A call that waited on
+/// the lock while another writer fetched and stored Twitch's list returns that list.
 #[tauri::command]
 pub async fn force_refresh_global_badges() -> Result<HelixBadgesResponse, String> {
+    // Read before the lock, so a fetch that starts while this call waits counts as one
+    // made after the ask.
+    let seen = FETCH_STARTS.load(Ordering::SeqCst);
     // Serialize against the socket-drop merge (see fetch_global_badges).
     let _guard = GLOBAL_BADGES_LOCK.lock().await;
+    let previous = previous_cache();
+    if coalesce(seen, WRITTEN_START.load(Ordering::SeqCst)) {
+        if let Some(stored) = previous.as_ref() {
+            return Ok(stored.badges.clone());
+        }
+    }
     debug!("[Badges] Force refreshing global badges from Twitch API...");
 
     let client_id = env!("TWITCH_APP_CLIENT_ID").to_string();
@@ -325,28 +547,25 @@ pub async fn force_refresh_global_badges() -> Result<HelixBadgesResponse, String
 
     // Fetch directly from API (bypassing cache check)
     let before = previous_gallery_pairs();
-    let badges = fetch_badges_from_api(client_id.clone(), token.clone()).await?;
+    let n = FETCH_STARTS.fetch_add(1, Ordering::SeqCst) + 1;
+    let mut badges = fetch_badges_from_api(client_id, token).await?;
+    let pushed = merge_cache_only(&mut badges, previous.as_ref(), get_current_timestamp());
 
     // Cache the result for 7 days
     let cached_data = CachedBadgesData {
         badges: badges.clone(),
         cached_at: get_current_timestamp(),
+        pushed: Some(pushed),
     };
 
     let cache_key = "global_badges";
-    if let Ok(json_value) = serde_json::to_value(&cached_data) {
-        let _ = cache_item(
-            CacheType::Badge,
-            cache_key.to_string(),
-            json_value,
-            "twitch".to_string(),
-            7, // Cache for 7 days
-        )
-        .await;
-        debug!(
-            "[Badges] Force refreshed and cached {} badge sets",
-            badges.data.len()
-        );
+    let wrote = match serde_json::to_value(&cached_data) {
+        Ok(json_value) => cache_item(CacheType::Badge, cache_key.to_string(), json_value, "twitch".to_string(), 7).await.is_ok(),
+        Err(_) => false,
+    };
+    WRITTEN_START.store(written_start_after(WRITTEN_START.load(Ordering::SeqCst), n, wrote), Ordering::SeqCst);
+    if wrote {
+        debug!("[Badges] Force refreshed and cached {} badge sets", badges.data.len());
     }
 
     note_arrivals(before.as_ref(), &badges);
@@ -493,8 +712,10 @@ fn is_twitch_badge_image(url: &str) -> bool {
 
 /// Merge a relay-pushed badge drop into the cached `global_badges` set so the
 /// Global Cosmetics gallery shows it without waiting for a Helix refresh.
-/// Idempotent (an existing version is a no-op). Preserves `cached_at` so the
-/// Helix refresh cadence is unchanged. Returns Ok(true) when the cache changed.
+/// Idempotent for the list (an existing version is never added twice); every push
+/// records its time in `pushed`, so a repeat push of a version already there moves
+/// its time up. Preserves `cached_at` so the Helix refresh cadence is unchanged.
+/// Returns Ok(true) when the gallery gained a version.
 /// No-ops (returns Ok(false)) when the gallery cache hasn't been populated yet —
 /// the badge then appears the next time the gallery fetches Helix.
 pub async fn merge_pushed_badge_into_global_cache(
@@ -507,12 +728,10 @@ pub async fn merge_pushed_badge_into_global_cache(
     let _guard = GLOBAL_BADGES_LOCK.lock().await;
     let cache_key = "global_badges";
 
-    let cached = match get_cached_item(CacheType::Badge, cache_key).await {
-        Ok(Some(c)) => c,
-        _ => return Ok(false),
+    // The entry as stored, expired or not, like every other writer of this list.
+    let Some(mut cached_data) = previous_cache() else {
+        return Ok(false);
     };
-    let mut cached_data: CachedBadgesData = serde_json::from_value(cached.data)
-        .map_err(|e| format!("parse cached badges: {e}"))?;
 
     let (u1, u2, u4) = derive_badge_image_urls(&badge.badge_image_url);
     let version = HelixBadgeVersion {
@@ -526,21 +745,9 @@ pub async fn merge_pushed_badge_into_global_cache(
         click_url: None,
     };
 
-    if let Some(set) = cached_data
-        .badges
-        .data
-        .iter_mut()
-        .find(|s| s.set_id == badge.badge_set_id)
-    {
-        if set.versions.iter().any(|v| v.id == version.id) {
-            return Ok(false);
-        }
-        set.versions.push(version);
-    } else {
-        cached_data.badges.data.push(HelixBadgeSet {
-            set_id: badge.badge_set_id.clone(),
-            versions: vec![version],
-        });
+    let outcome = apply_push(&mut cached_data, &badge.badge_set_id, version, get_current_timestamp());
+    if outcome == Push::Unchanged {
+        return Ok(false);
     }
 
     if let Ok(json_value) = serde_json::to_value(&cached_data) {
@@ -553,7 +760,7 @@ pub async fn merge_pushed_badge_into_global_cache(
         )
         .await;
     }
-    Ok(true)
+    Ok(outcome == Push::Added)
 }
 
 /// Drop gallery entries whose art does not come from Twitch's badge CDN, for
@@ -891,6 +1098,7 @@ pub async fn get_user_badges(
 #[cfg(test)]
 mod arrival_tests {
     use super::*;
+    use crate::services::universal_cache_service::CacheMetadata;
 
     fn gallery(sets: &[(&str, &[&str])]) -> HelixBadgesResponse {
         HelixBadgesResponse {
@@ -934,6 +1142,524 @@ mod arrival_tests {
             let read = body.find("previous_gallery_pairs()").unwrap_or_else(|| panic!("{sig} reads the old cache"));
             assert!(read < body.find("fetch_badges_from_api(").unwrap(), "{sig}");
             assert!(body.contains("note_arrivals(before.as_ref(), &badges)"), "{sig}");
+            assert!(body.contains("merge_cache_only("), "{sig} keeps the versions only the cache holds");
         }
+    }
+
+    const NOW: u64 = 2_000_000_000;
+    const DAY: u64 = 86_400;
+
+    const WRITERS: [&str; 3] = [
+        "pub async fn fetch_global_badges()",
+        "pub async fn refresh_global_badges()",
+        "pub async fn force_refresh_global_badges()",
+    ];
+
+    const FOUR_BODIES: [&str; 4] = [
+        "pub async fn fetch_global_badges()",
+        "pub async fn refresh_global_badges()",
+        "pub async fn force_refresh_global_badges()",
+        "pub async fn merge_pushed_badge_into_global_cache(",
+    ];
+
+    fn badges_src() -> String {
+        include_str!("badges.rs").replace("\r\n", "\n")
+    }
+
+    /// The text of one function, from its signature to the closing brace at column 0. A
+    /// signature that sits in the test module is refused, so a pin never reads a test body.
+    fn fn_text(src: &str, sig: &str) -> String {
+        let start = src.find(sig).unwrap_or_else(|| panic!("`{sig}` is missing"));
+        if let Some(tests) = src.find("mod arrival_tests") {
+            assert!(start < tests, "`{sig}` must sit above the test module");
+        }
+        let len = src[start..]
+            .find("\n}\n")
+            .unwrap_or_else(|| panic!("`{sig}` has no closing brace"));
+        src[start..start + len].to_string()
+    }
+
+    /// Every needle appears, each after the one before it.
+    fn in_order(body: &str, needles: &[&str]) {
+        let mut last = 0;
+        for needle in needles {
+            let found = body[last..]
+                .find(needle)
+                .unwrap_or_else(|| panic!("`{needle}` missing or out of order (after byte {last}):\n{body}"));
+            last += found + needle.len();
+        }
+    }
+
+    fn cached(sets: &[(&str, &[&str])], pushed: Option<&[(&str, u64)]>, cached_at: u64) -> CachedBadgesData {
+        CachedBadgesData {
+            badges: gallery(sets),
+            cached_at,
+            pushed: pushed.map(|pairs| pairs.iter().map(|(key, at)| (key.to_string(), *at)).collect()),
+        }
+    }
+
+    /// "set/version" of every version in the list, sorted.
+    fn listed(badges: &HelixBadgesResponse) -> Vec<String> {
+        let mut out: Vec<String> = badges
+            .data
+            .iter()
+            .flat_map(|s| s.versions.iter().map(move |v| format!("{}/{}", s.set_id, v.id)))
+            .collect();
+        out.sort();
+        out
+    }
+
+    fn map(pairs: &[(&str, u64)]) -> PushedPairs {
+        pairs.iter().map(|(key, at)| (key.to_string(), *at)).collect()
+    }
+
+    fn strings(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn batch(items: &[(&str, &str)]) -> Vec<(String, String)> {
+        items.iter().map(|(s, v)| (s.to_string(), v.to_string())).collect()
+    }
+
+    fn badge_version(id: &str) -> HelixBadgeVersion {
+        gallery(&[("x", &[id])]).data.remove(0).versions.remove(0)
+    }
+
+    fn entry(data: serde_json::Value, timestamp: u64) -> UniversalCacheEntry {
+        UniversalCacheEntry {
+            id: "global_badges".to_string(),
+            cache_type: CacheType::Badge,
+            data,
+            metadata: CacheMetadata {
+                timestamp,
+                expiry_days: 7,
+                source: "twitch".to_string(),
+                version: 1,
+            },
+            position: None,
+        }
+    }
+
+    // ---- the pure merge ----
+
+    // Fails without the merge: a version Twitch does not list is gone from the list and the map.
+    #[test]
+    fn a_version_pushed_three_days_ago_survives_a_merge_and_stays_in_the_map() {
+        let previous = cached(&[("a", &["1", "2"])], Some(&[("a/2", NOW - 3 * DAY)]), NOW - DAY);
+        let mut fetched = gallery(&[("a", &["1"])]);
+        let kept = merge_cache_only(&mut fetched, Some(&previous), NOW);
+        assert_eq!(listed(&fetched), strings(&["a/1", "a/2"]));
+        assert_eq!(kept, map(&[("a/2", NOW - 3 * DAY)]));
+    }
+
+    // Fails without the 14-day limit: a push from 15 days ago would be kept forever.
+    #[test]
+    fn a_version_pushed_fifteen_days_ago_is_dropped_from_the_list_and_the_map() {
+        let previous = cached(&[("a", &["1", "2"])], Some(&[("a/2", NOW - 15 * DAY)]), NOW - DAY);
+        let mut fetched = gallery(&[("a", &["1"])]);
+        let kept = merge_cache_only(&mut fetched, Some(&previous), NOW);
+        assert_eq!(listed(&fetched), strings(&["a/1"]));
+        assert!(kept.is_empty());
+    }
+
+    // Fails on an off-by-one: exactly 14 days is kept, one second older is dropped.
+    #[test]
+    fn the_fourteen_day_limit_is_inclusive_to_the_second() {
+        let previous = cached(
+            &[("a", &["1", "2", "3"])],
+            Some(&[("a/2", NOW - 14 * DAY), ("a/3", NOW - 14 * DAY - 1)]),
+            NOW - DAY,
+        );
+        let mut fetched = gallery(&[("a", &["1"])]);
+        let kept = merge_cache_only(&mut fetched, Some(&previous), NOW);
+        assert_eq!(listed(&fetched), strings(&["a/1", "a/2"]));
+        assert_eq!(kept, map(&[("a/2", NOW - 14 * DAY)]));
+    }
+
+    // Fails with a plain subtraction (overflow panic) or without min(t, now) (a future stamp is written back).
+    #[test]
+    fn a_future_stamp_survives_is_written_back_as_now_and_never_overflows() {
+        let previous = cached(
+            &[("a", &["1", "2", "3"])],
+            Some(&[("a/2", NOW + 3_600), ("a/3", u64::MAX)]),
+            NOW,
+        );
+        let mut fetched = gallery(&[("a", &["1"])]);
+        let kept = merge_cache_only(&mut fetched, Some(&previous), NOW);
+        assert_eq!(listed(&fetched), strings(&["a/1", "a/2", "a/3"]));
+        assert_eq!(kept, map(&[("a/2", NOW), ("a/3", NOW)]));
+    }
+
+    // Fails if every cache-only version is kept: one Twitch removed has no push record and must leave.
+    #[test]
+    fn a_cache_only_version_with_no_push_record_is_dropped() {
+        let previous = cached(&[("a", &["1", "2"])], Some(&[]), NOW - DAY);
+        let mut fetched = gallery(&[("a", &["1"])]);
+        let kept = merge_cache_only(&mut fetched, Some(&previous), NOW);
+        assert_eq!(listed(&fetched), strings(&["a/1"]));
+        assert!(kept.is_empty());
+    }
+
+    // Fails if a pair Twitch now lists stays in the map: it would be re-added the day Twitch removes it.
+    #[test]
+    fn a_pushed_pair_twitch_now_lists_leaves_the_map() {
+        let previous = cached(&[("a", &["1", "2"])], Some(&[("a/1", NOW - DAY), ("a/2", NOW - DAY)]), NOW - DAY);
+        let mut fetched = gallery(&[("a", &["1", "2"])]);
+        let kept = merge_cache_only(&mut fetched, Some(&previous), NOW);
+        assert_eq!(listed(&fetched), strings(&["a/1", "a/2"]));
+        assert!(kept.is_empty());
+    }
+
+    // Fails if a dropped set comes back whole (every version) or comes back empty.
+    #[test]
+    fn a_set_twitch_no_longer_lists_returns_with_only_its_kept_versions() {
+        let previous = cached(
+            &[("a", &["1"]), ("b", &["1", "2"])],
+            Some(&[("b/2", NOW - DAY)]),
+            NOW - DAY,
+        );
+        let mut fetched = gallery(&[("a", &["1"])]);
+        let kept = merge_cache_only(&mut fetched, Some(&previous), NOW);
+        assert_eq!(listed(&fetched), strings(&["a/1", "b/2"]));
+        assert_eq!(kept, map(&[("b/2", NOW - DAY)]));
+
+        let none_kept = cached(&[("a", &["1"]), ("b", &["1", "2"])], Some(&[]), NOW - DAY);
+        let mut fetched = gallery(&[("a", &["1"])]);
+        merge_cache_only(&mut fetched, Some(&none_kept), NOW);
+        assert_eq!(fetched.data.len(), 1, "a set with no kept version is left out");
+    }
+
+    // Fails without the first-write rule: a cache from before this change would lose every cache-only version.
+    #[test]
+    fn a_cache_with_no_push_record_keeps_every_cache_only_version_once_and_stamps_them_now() {
+        let previous = cached(&[("a", &["1", "2"]), ("b", &["1"])], None, NOW - 2 * DAY);
+        let mut fetched = gallery(&[("a", &["1"])]);
+        let kept = merge_cache_only(&mut fetched, Some(&previous), NOW);
+        assert_eq!(listed(&fetched), strings(&["a/1", "a/2", "b/1"]));
+        assert_eq!(kept, map(&[("a/2", NOW), ("b/1", NOW)]));
+    }
+
+    #[test]
+    fn with_no_previous_cache_the_fetched_list_is_returned_as_it_came() {
+        let mut fetched = gallery(&[("a", &["1"])]);
+        let kept = merge_cache_only(&mut fetched, None, NOW);
+        assert_eq!(listed(&fetched), strings(&["a/1"]));
+        assert!(kept.is_empty());
+    }
+
+    // Fails if the 7-day path writes Twitch's list as it came: the 3-day push must survive, the 20-day one not.
+    #[test]
+    fn the_seven_day_refresh_keeps_a_recent_push_and_drops_an_old_one() {
+        let previous = cached(
+            &[("a", &["1", "2", "3"])],
+            Some(&[("a/2", NOW - 3 * DAY), ("a/3", NOW - 20 * DAY)]),
+            NOW - 8 * DAY,
+        );
+        assert_eq!(fetch_decision(Some(&previous), NOW), FetchDecision::Refresh);
+        let mut fetched = gallery(&[("a", &["1"])]);
+        let kept = merge_cache_only(&mut fetched, Some(&previous), NOW);
+        assert_eq!(listed(&fetched), strings(&["a/1", "a/2"]));
+        assert_eq!(kept, map(&[("a/2", NOW - 3 * DAY)]));
+    }
+
+    // ---- the seven-day decision and the cache read ----
+
+    // Fails if a future stamp reads as fresh (a stepped clock) or the boundary moves.
+    #[test]
+    fn the_seven_day_decision_treats_a_future_or_missing_cache_as_stale() {
+        let at = |cached_at: u64| cached(&[], Some(&[]), cached_at);
+        assert_eq!(fetch_decision(Some(&at(NOW - DAY)), NOW), FetchDecision::UseCached);
+        assert_eq!(fetch_decision(Some(&at(NOW)), NOW), FetchDecision::UseCached);
+        assert_eq!(fetch_decision(Some(&at(NOW - 7 * DAY + 1)), NOW), FetchDecision::UseCached);
+        assert_eq!(fetch_decision(Some(&at(NOW - 7 * DAY)), NOW), FetchDecision::Refresh);
+        assert_eq!(fetch_decision(Some(&at(NOW - 30 * DAY)), NOW), FetchDecision::Refresh);
+        assert_eq!(fetch_decision(Some(&at(NOW + 1)), NOW), FetchDecision::Refresh);
+        assert_eq!(fetch_decision(None, NOW), FetchDecision::Refresh);
+    }
+
+    // Fails if previous_from filters by expiry: the entry below expired long ago and its data must still come back.
+    #[test]
+    fn the_cache_read_answers_for_an_expired_entry() {
+        let data = serde_json::to_value(cached(&[("a", &["1", "2"])], Some(&[("a/2", NOW - DAY)]), 77)).unwrap();
+        let read = previous_from(Some(entry(data, 1))).expect("an expired entry still answers");
+        assert_eq!(read.cached_at, 77);
+        assert_eq!(listed(&read.badges), strings(&["a/1", "a/2"]));
+        assert_eq!(read.pushed, Some(map(&[("a/2", NOW - DAY)])));
+    }
+
+    // Fails if a cache written before the field existed stops parsing, or an unreadable entry panics.
+    #[test]
+    fn the_cache_read_defaults_pushed_and_refuses_unreadable_data() {
+        let old = serde_json::json!({ "badges": { "data": [] }, "cached_at": 5 });
+        let read = previous_from(Some(entry(old, NOW))).expect("a cache from before the field parses");
+        assert_eq!(read.pushed, None);
+        assert!(previous_from(Some(entry(serde_json::json!("not a cache"), NOW))).is_none());
+        assert!(previous_from(None).is_none());
+    }
+
+    // ---- the counters ----
+
+    // Fails if a failed write moves the start number: a refresh queued behind it would skip its own fetch.
+    #[test]
+    fn a_failed_write_leaves_the_written_start_alone() {
+        assert_eq!(written_start_after(5, 7, true), 7);
+        assert_eq!(written_start_after(9, 7, true), 9, "the newest start number is kept");
+        assert_eq!(written_start_after(5, 7, false), 5);
+        assert!(!coalesce(5, written_start_after(5, 7, false)), "a refresh behind a failed write fetches for itself");
+    }
+
+    // Fails with a "written since I looked" rule: the second case would reuse a list that may be older than the ask.
+    #[test]
+    fn a_refresh_reuses_only_a_list_fetched_after_it_asked() {
+        // Asked when 3 fetches had started; fetch 4 started later and wrote.
+        assert!(coalesce(3, written_start_after(3, 4, true)));
+        // Asked while fetch 4 was already in flight; its write is not newer than the ask.
+        assert!(!coalesce(4, written_start_after(0, 4, true)));
+        // Nothing written since.
+        assert!(!coalesce(4, 0));
+    }
+
+    // ---- the pushed record ----
+
+    // Fails if a first push is not recorded with its time, or a repeat push does not move the time up.
+    #[test]
+    fn a_first_push_records_its_pair_and_a_repeat_push_moves_the_time_up() {
+        let mut data = cached(&[("a", &["1"])], Some(&[]), NOW - 2 * DAY);
+        assert_eq!(apply_push(&mut data, "a", badge_version("2"), NOW), Push::Added);
+        assert_eq!(listed(&data.badges), strings(&["a/1", "a/2"]));
+        assert_eq!(data.pushed, Some(map(&[("a/2", NOW)])));
+        assert_eq!(data.cached_at, NOW - 2 * DAY, "a push never makes the list look freshly read");
+
+        assert_eq!(apply_push(&mut data, "a", badge_version("2"), NOW + 100), Push::Restamped);
+        assert_eq!(listed(&data.badges), strings(&["a/1", "a/2"]), "the repeat adds nothing");
+        assert_eq!(data.pushed, Some(map(&[("a/2", NOW + 100)])));
+
+        assert_eq!(apply_push(&mut data, "a", badge_version("2"), NOW + 100), Push::Unchanged);
+    }
+
+    // Fails if the first push into a cache with no record skips the seeding: its versions would age out at once.
+    #[test]
+    fn the_first_push_into_a_cache_with_no_record_stamps_every_version_it_holds() {
+        let mut data = cached(&[("a", &["1"])], None, NOW - 2 * DAY);
+        assert_eq!(apply_push(&mut data, "b", badge_version("1"), NOW), Push::Added);
+        assert_eq!(listed(&data.badges), strings(&["a/1", "b/1"]));
+        assert_eq!(data.pushed, Some(map(&[("a/1", NOW), ("b/1", NOW)])));
+
+        let mut other = cached(&[("a", &["1"])], None, NOW - 2 * DAY);
+        assert_eq!(apply_push(&mut other, "a", badge_version("1"), NOW), Push::Restamped, "the new record is written");
+        assert_eq!(other.pushed, Some(map(&[("a/1", NOW)])));
+    }
+
+    // Fails if restamp moves a fresh pair, a pair outside the batch, or invents a pair the map lacks.
+    #[test]
+    fn restamp_moves_only_held_pairs_that_are_a_day_old_or_more() {
+        let mut pushed = map(&[("a/1", NOW - DAY), ("a/2", NOW - 3_600), ("a/3", NOW - 10 * DAY)]);
+        let moved = restamp(&mut pushed, &batch(&[("a", "1"), ("a", "2"), ("b", "9")]), NOW);
+        assert!(moved);
+        assert_eq!(pushed, map(&[("a/1", NOW), ("a/2", NOW - 3_600), ("a/3", NOW - 10 * DAY)]));
+        assert!(!restamp(&mut pushed, &batch(&[("a", "1"), ("a", "2")]), NOW), "an hour old or now is left alone");
+        let mut edge = map(&[("a/1", NOW - DAY + 1)]);
+        assert!(!restamp(&mut edge, &batch(&[("a", "1")]), NOW), "one second short of a day is left alone");
+    }
+
+    // Fails if the write-back takes a new cached_at, or writes when nothing moved.
+    #[test]
+    fn a_restamp_keeps_the_cached_at_it_read_and_writes_only_when_something_changed() {
+        let previous = cached(&[("a", &["1", "2"])], Some(&[("a/2", NOW - 2 * DAY)]), 123);
+        let next = restamped(previous, &batch(&[("a", "2")]), NOW).expect("a stamp moved");
+        assert_eq!(next.cached_at, 123);
+        assert_eq!(next.pushed, Some(map(&[("a/2", NOW)])));
+
+        let fresh = cached(&[("a", &["2"])], Some(&[("a/2", NOW - 3_600)]), 123);
+        assert!(restamped(fresh, &batch(&[("a", "2")]), NOW).is_none());
+
+        let old = cached(&[("a", &["1", "2"])], None, 123);
+        let next = restamped(old, &batch(&[]), NOW).expect("a cache with no record gets one");
+        assert_eq!(next.cached_at, 123);
+        assert_eq!(next.pushed, Some(map(&[("a/1", NOW), ("a/2", NOW)])));
+    }
+
+    // Fails without the re-stamp: the pair pushed 20 days ago and re-pushed unchanged yesterday would age out today.
+    #[test]
+    fn an_unchanged_repush_keeps_a_pair_alive_through_the_next_refresh() {
+        let stored = cached(&[("a", &["1", "2"])], Some(&[("a/2", NOW - 20 * DAY)]), NOW - 3 * DAY);
+
+        let mut without = gallery(&[("a", &["1"])]);
+        merge_cache_only(&mut without, Some(&stored), NOW);
+        assert_eq!(listed(&without), strings(&["a/1"]), "control: without the re-stamp the pair is past 14 days");
+
+        let yesterday = NOW - DAY;
+        let restamped_cache = restamped(stored, &batch(&[("a", "2")]), yesterday).expect("the 19-day-old stamp moves");
+        let mut with = gallery(&[("a", &["1"])]);
+        let kept = merge_cache_only(&mut with, Some(&restamped_cache), NOW);
+        assert_eq!(listed(&with), strings(&["a/1", "a/2"]));
+        assert_eq!(kept, map(&[("a/2", NOW - DAY)]));
+    }
+
+    // ---- source pins (bodies are read by signature and must sit above the test module) ----
+
+    #[test]
+    fn a_signature_inside_the_test_module_is_refused() {
+        let refused = std::panic::catch_unwind(|| {
+            fn_text(&badges_src(), "fn a_signature_inside_the_test_module_is_refused()");
+        });
+        assert!(refused.is_err(), "fn_text must never read a test body");
+    }
+
+    // Fails if any of the four bodies gains a Rust bound; the file's two room-read timeouts are unrelated and stay.
+    #[test]
+    fn the_badge_refresh_has_no_rust_bound() {
+        let src = badges_src();
+        // Spelled in pieces so this test's own text never holds the needle.
+        let timeout = concat!("tokio::time::", "timeout");
+        assert!(
+            fn_text(&src, "pub async fn fetch_channel_badges(").contains(timeout),
+            "positive control: the needle matches real code (the room read keeps its own bound)"
+        );
+        let mut scanned = 0;
+        for sig in [
+            "pub async fn fetch_global_badges()",
+            "pub async fn refresh_global_badges()",
+            "pub async fn force_refresh_global_badges()",
+            "fn merge_cache_only(",
+        ] {
+            let body = fn_text(&src, sig);
+            assert!(body.lines().count() > 5, "{sig} was read");
+            assert!(!body.contains(timeout), "{sig} has no Rust bound; the shared client bounds each fetch");
+            scanned += 1;
+        }
+        assert_eq!(scanned, 4);
+        let production = &src[..src.find("mod arrival_tests").unwrap()];
+        assert!(!production.contains(concat!("locked_badge_", "fetch")));
+    }
+
+    // Fails if a writer reads the cache through the expiry-aware read, which hides an expired entry.
+    #[test]
+    fn the_four_cache_writers_read_through_previous_cache_only() {
+        let src = badges_src();
+        let hidden = concat!("get_cached_", "item(");
+        for sig in FOUR_BODIES {
+            let body = fn_text(&src, sig);
+            assert!(body.contains("previous_cache()"), "{sig}");
+            assert!(!body.contains(hidden), "{sig}");
+        }
+        assert!(
+            fn_text(&src, "pub async fn global_badges_age_secs()").contains(hidden),
+            "positive control: the plain readers keep the expiry-aware read"
+        );
+    }
+
+    // Fails if the one cache read becomes anything but the pure read of the single entry.
+    #[test]
+    fn previous_cache_is_the_pure_read_of_the_single_entry() {
+        let body = fn_text(&badges_src(), "fn previous_cache() -> Option<CachedBadgesData> {");
+        let inner = body.split_once("{\n").unwrap().1.trim();
+        assert_eq!(
+            inner,
+            "previous_from(crate::services::universal_cache_service::peek_cached_entry(\"global_badges\").ok().flatten())"
+        );
+    }
+
+    // Fails if a writer skips the merge, bumps late, counts a failed fetch, or stores through anything but the seam.
+    #[test]
+    fn each_writer_counts_its_fetch_and_stores_the_start_only_after_a_good_write() {
+        let src = badges_src();
+        for sig in WRITERS {
+            let body = fn_text(&src, sig);
+            in_order(
+                &body,
+                &[
+                    "GLOBAL_BADGES_LOCK.lock(",
+                    "FETCH_STARTS.fetch_add(",
+                    "fetch_badges_from_api(",
+                    ".await?;",
+                    "merge_cache_only(",
+                    "let wrote =",
+                    "cache_item(",
+                    ".await.is_ok()",
+                    "WRITTEN_START.store(written_start_after(",
+                ],
+            );
+            assert!(body.contains("let n = FETCH_STARTS.fetch_add(1, Ordering::SeqCst) + 1;"), "{sig}");
+            assert!(
+                body.contains("WRITTEN_START.store(written_start_after(WRITTEN_START.load(Ordering::SeqCst), n, wrote), Ordering::SeqCst);"),
+                "{sig}"
+            );
+            assert_eq!(body.matches("WRITTEN_START.store(").count(), 1, "{sig}");
+            assert_eq!(body.matches("FETCH_STARTS.fetch_add(").count(), 1, "{sig}");
+            assert!(!body.contains("let _ = cache_item("), "{sig} keeps the write's result");
+        }
+        assert!(
+            fn_text(&src, "pub async fn prune_invalid_global_badges()").contains("let _ = cache_item("),
+            "positive control: the needle matches real code"
+        );
+        let fetch = fn_text(&src, "pub async fn fetch_global_badges()");
+        in_order(&fetch, &["previous_cache()", "fetch_decision(", "previous_gallery_pairs()", "FETCH_STARTS.fetch_add("]);
+    }
+
+    // Fails if a refresh reads its ask after the lock, or fetches whatever another writer stored meanwhile.
+    #[test]
+    fn the_two_refreshers_return_what_a_later_fetch_wrote_instead_of_fetching() {
+        let src = badges_src();
+        for sig in ["pub async fn refresh_global_badges()", "pub async fn force_refresh_global_badges()"] {
+            let body = fn_text(&src, sig);
+            in_order(
+                &body,
+                &[
+                    "let seen = FETCH_STARTS.load(Ordering::SeqCst);",
+                    "GLOBAL_BADGES_LOCK.lock(",
+                    "previous_cache()",
+                    "coalesce(seen, WRITTEN_START.load(Ordering::SeqCst))",
+                    "fetch_badges_from_api(",
+                ],
+            );
+        }
+        let fetch = fn_text(&src, "pub async fn fetch_global_badges()");
+        assert!(!fetch.contains("coalesce("), "the seven-day read is not a link read and never coalesces");
+    }
+
+    // Fails if the re-stamp write takes a new cached_at, or reads the cache another way.
+    #[test]
+    fn restamp_pushed_pairs_writes_back_the_stamp_it_read() {
+        let body = fn_text(&badges_src(), "pub async fn restamp_pushed_pairs(");
+        in_order(&body, &["GLOBAL_BADGES_LOCK.lock(", "previous_cache()", "restamped(", "cache_item("]);
+        assert!(!body.contains("get_current_timestamp()"), "no clock in the write");
+        assert!(!body.contains("cached_at"), "the cached_at it read goes back through `restamped`");
+        assert!(!body.contains(concat!("get_cached_", "item(")));
+    }
+
+    // Fails if the app's ingest or the Android mirror classifies a batch before the re-stamp.
+    #[test]
+    fn the_app_ingest_and_the_android_mirror_restamp_before_they_classify() {
+        let sources = [
+            ("badge_service.rs", include_str!("badge_service.rs"), "pub(crate) async fn ingest_badges("),
+            ("android_notify.rs", include_str!("../android_notify.rs"), "async fn collect_badges()"),
+        ];
+        for (name, text, sig) in sources {
+            let src = text.replace("\r\n", "\n");
+            let body = fn_text(&src, sig);
+            in_order(&body, &["badge_index::record_feed_dates(", "restamp_pushed_pairs(", "feed::classify("]);
+            assert_eq!(body.matches("restamp_pushed_pairs(").count(), 1, "{name}");
+        }
+    }
+
+    // Fails if a push stops going through the pure seam.
+    #[test]
+    fn a_pushed_badge_is_recorded_through_apply_push() {
+        let body = fn_text(&badges_src(), "pub async fn merge_pushed_badge_into_global_cache(");
+        in_order(&body, &["GLOBAL_BADGES_LOCK.lock(", "previous_cache()", "apply_push(", "cache_item("]);
+    }
+
+    // Fails if a badge test starts to touch the cache store (the pure seams exist so none has to).
+    #[test]
+    fn no_badge_test_touches_the_cache_store() {
+        let src = badges_src();
+        let tests = &src[src.find("mod arrival_tests").unwrap()..];
+        let needle = concat!("MANIFEST_", "MEMORY");
+        assert!(
+            include_str!("../services/universal_cache_service.rs").contains(needle),
+            "positive control: the needle matches real code"
+        );
+        assert!(!tests.contains(needle));
     }
 }

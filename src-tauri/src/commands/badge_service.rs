@@ -776,6 +776,15 @@ pub(crate) async fn ingest_badges(
     .await
     .unwrap_or(false);
 
+    // An unchanged re-push is skipped by the classifier, so the gallery's record of when
+    // the feed last pushed each version moves up here, before any skip happens. One
+    // locked write for the whole batch, and none unless a stamp is a day old or more.
+    let batch_pairs: Vec<(String, String)> = badges
+        .iter()
+        .map(|b| (b.badge_set_id.clone(), b.badge_version.clone()))
+        .collect();
+    let _ = crate::commands::badges::restamp_pushed_pairs(&batch_pairs, chrono::Utc::now().timestamp().max(0) as u64).await;
+
     // Fresh install: record the relay's backlog as already-seen, no toasts.
     let seeding = feed::is_empty().await;
 
