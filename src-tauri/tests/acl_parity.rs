@@ -198,3 +198,22 @@ fn the_link_door_commands_are_registered_allowlisted_and_fenced() {
     assert_eq!(opened, take + 2, "notice_opened follows take_notice_action's entry");
     assert_eq!(lines[opened], "commands::notification_mirror::notice_opened,");
 }
+
+#[test]
+fn the_old_watch_and_badge_commands_are_in_neither_place() {
+    // A guard, not coverage: the generic parity tests above pass while a deleted
+    // name stays in both `generate_handler!` and the permission file. The names
+    // are built with `concat!`, so this file never spells them.
+    let registered = registered_commands();
+    let app = app_commands();
+    let mobile = mobile_commands();
+    assert!(registered.len() > 100, "parser sanity: the generate_handler! parse found {}", registered.len());
+    // Positive control: the same parse finds the command that replaced them.
+    assert!(registered.contains("take_pending_link"));
+    assert!(app.contains("take_pending_link"));
+    for name in [concat!("take_pending_", "watch_link"), concat!("take_pending_", "badge_link")] {
+        assert!(!registered.contains(name), "{name} is still registered");
+        assert!(!app.contains(name), "{name} is still in app-commands.toml");
+        assert!(!mobile.contains(name), "{name} is still in mobile-commands.toml");
+    }
+}

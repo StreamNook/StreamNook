@@ -27,8 +27,6 @@ allow = [
   "get_app_authors",
   "fetch_exchange_rates",
   "get_window_size",
-  "take_pending_watch_link",
-  "take_pending_badge_link",
   "take_pending_link",
   "peek_pending_link_stamp",
   "link_superseded",

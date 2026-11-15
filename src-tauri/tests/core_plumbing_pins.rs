@@ -583,3 +583,131 @@ fn the_link_event_is_listed_and_the_old_ones_are_not() {
         assert!(!names.contains(&dead), "{dead} is no longer emitted");
     }
 }
+
+/// Every file under `dir` whose extension is one of `extensions`, found
+/// recursively.
+fn files_with(dir: &std::path::Path, extensions: &[&str], out: &mut Vec<std::path::PathBuf>) {
+    for entry in std::fs::read_dir(dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display())) {
+        let path = entry.expect("dir entry").path();
+        if path.is_dir() {
+            files_with(&path, extensions, out);
+        } else if path.extension().is_some_and(|e| extensions.iter().any(|x| e == *x)) {
+            out.push(path);
+        }
+    }
+}
+
+/// `path: needle` for every needle that appears in a file's text.
+fn scan(files: &[std::path::PathBuf], needles: &[&str]) -> Vec<String> {
+    let mut hits = Vec::new();
+    for path in files {
+        let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        for needle in needles {
+            if text.contains(*needle) {
+                hits.push(format!("{}: {needle}", path.display()));
+            }
+        }
+    }
+    hits
+}
+
+#[test]
+fn the_old_watch_and_badge_door_is_gone_from_the_core() {
+    // A guard, not coverage: two slots, two take commands and two events became
+    // one slot, one take command and one event. The needles are built with
+    // `concat!`, so this file never spells them, and the scan covers the Rust
+    // sources, the permission files and the event list, never this tests folder.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files = Vec::new();
+    files_with(&root.join("src"), &["rs"], &mut files);
+    files_with(&root.join("permissions"), &["toml"], &mut files);
+    files.push(root.join("tests").join("event_names.txt"));
+    assert!(files.len() > 100, "the walk found the core's sources ({} files)", files.len());
+    let dead = [
+        concat!("Pending", "WatchLink"),
+        concat!("Pending", "BadgeLink"),
+        concat!("take_pending_", "watch_link"),
+        concat!("take_pending_", "badge_link"),
+        concat!("streamnook:", "watch"),
+        concat!("streamnook:", "badge"),
+    ];
+    let hits = scan(&files, &dead);
+    assert!(hits.is_empty(), "the old link door is back:\n{}", hits.join("\n"));
+    // Positive control: the same walk finds what replaced them, so a wrong path
+    // or an empty glob fails here instead of passing.
+    for found in ["PendingLink", "take_pending_link", "streamnook:link"] {
+        assert!(!scan(&files, &[found]).is_empty(), "the scan finds {found}");
+    }
+}
+
+#[test]
+fn the_replaced_notice_and_link_machinery_stays_gone() {
+    // A guard, not coverage. Rust owns the stamp order now, so no page-side
+    // generation counter, notice-clears-link flag or boot gate may come back.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let page = root.join("..").join("src");
+    let mut files = Vec::new();
+    files_with(&root.join("src"), &["rs"], &mut files);
+    files_with(&page, &["ts", "tsx"], &mut files);
+    assert!(files.len() > 500, "the walk found both source trees ({} files)", files.len());
+    let dead = [
+        concat!("notice_clears_", "link"),
+        concat!("forget_page_", "ids"),
+        concat!("bump", "LinkGeneration"),
+        concat!("run", "Activated"),
+        concat!("run", "NoticeAction"),
+        concat!("link", "Generation"),
+        concat!("create", "BootGate"),
+    ];
+    let hits = scan(&files, &dead);
+    assert!(hits.is_empty(), "replaced machinery is back:\n{}", hits.join("\n"));
+    for gone in ["noticeActions.ts", "noticeActions.test.ts"] {
+        assert!(!page.join("utils").join(gone).exists(), "src/utils/{gone} stays deleted");
+    }
+    // Positive controls: one needle in each tree that must be found.
+    assert!(!scan(&files, &["startLinkDrain"]).is_empty(), "the scan reads the page sources");
+    assert!(!scan(&files, &["fn remember_page_id("]).is_empty(), "the scan reads the Rust sources");
+}
+
+#[test]
+fn the_shells_no_longer_name_the_old_link_door() {
+    // A guard, not coverage: the desktop shell, the phone shell and the badge
+    // opener once drained the two old slots by these names.
+    let page = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("src");
+    let shells = [
+        page.join("App.tsx"),
+        page.join("mobile").join("boot").join("useMobileBoot.ts"),
+        page.join("utils").join("badgeLinkOpen.ts"),
+    ];
+    let dead = [
+        concat!("take_pending_", "watch_link"),
+        concat!("take_pending_", "badge_link"),
+        concat!("streamnook:", "watch"),
+        concat!("streamnook:", "badge"),
+    ];
+    let hits = scan(&shells, &dead);
+    assert!(hits.is_empty(), "a shell names the old link door again:\n{}", hits.join("\n"));
+    // Positive controls: each shell reads the one door.
+    assert!(!scan(&shells[..1], &["startLinkDrain"]).is_empty(), "App.tsx drains through startLinkDrain");
+    assert!(!scan(&shells[1..2], &["take_pending_link"]).is_empty(), "the phone shell takes the one slot");
+}
+
+#[test]
+fn the_iphone_sources_never_gain_the_old_link_guard() {
+    // A guard, not coverage. The desktop tree carries no `ios/` folder; the
+    // phone tree runs this check.
+    let ios = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("ios");
+    if !ios.exists() {
+        return;
+    }
+    let mut files = Vec::new();
+    for dir in ["Sources", "Tests"] {
+        if ios.join(dir).exists() {
+            files_with(&ios.join(dir), &["swift"], &mut files);
+        }
+    }
+    assert!(!files.is_empty(), "no Swift sources under ios/");
+    let hits = scan(&files, &[concat!("link", "Gen")]);
+    assert!(hits.is_empty(), "the old link guard is back:\n{}", hits.join("\n"));
+    assert!(!scan(&files, &["import "]).is_empty(), "positive control: the scan reads Swift text");
+}

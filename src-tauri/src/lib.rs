@@ -85,18 +85,6 @@ use tauri::{
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tokio::sync::Mutex as TokioMutex;
 
-/// Superseded by `PendingLink`: nothing writes this slot any more, so it is
-/// always empty. It stays only until the pages stop invoking
-/// `take_pending_watch_link`.
-#[derive(Default)]
-struct PendingWatchLink(Mutex<Option<String>>);
-
-/// Superseded by `PendingLink`: nothing writes this slot any more, so it is
-/// always empty. It stays only until the pages stop invoking
-/// `take_pending_badge_link`.
-#[derive(Default)]
-struct PendingBadgeLink(Mutex<Option<services::badge_link::BadgeLink>>);
-
 /// Read a `streamnook://` (or streamnook.app) share link into the stream key the
 /// frontend's `startStream` takes: a bare login for Twitch, `provider:channel`
 /// otherwise. Building and parsing both live in `services::share_link`, which
@@ -130,22 +118,6 @@ fn share_link(provider: Option<String>, channel: String, stream_id: Option<Strin
     let channel = share::share_channel(&provider, &channel, stream_id.as_deref());
     share::share_url(&provider, &channel, &share::day_tag())
         .ok_or_else(|| format!("Nothing to share for {provider} channel {channel:?}"))
-}
-
-/// Drain a deep link the app was cold-started with, if any. The frontend calls
-/// this once on mount so a link that fired before its listener existed still
-/// opens the channel. Returns None when the app wasn't launched from a link.
-#[tauri::command]
-fn take_pending_watch_link(state: tauri::State<'_, PendingWatchLink>) -> Option<String> {
-    state.0.lock().ok().and_then(|mut guard| guard.take())
-}
-
-/// Drain the badge link the app was opened with, if any (returns and clears it).
-#[tauri::command]
-fn take_pending_badge_link(
-    state: tauri::State<'_, PendingBadgeLink>,
-) -> Option<services::badge_link::BadgeLink> {
-    state.0.lock().ok().and_then(|mut guard| guard.take())
 }
 
 /// Take the link the app was opened with, or the newest one that arrived while
@@ -1626,9 +1598,6 @@ pub fn run() {
             // iOS has no deep-link plugin; the Swift app receives the links and
             // asks `inbound_link` what each one means.
             app.manage(PendingLink::default());
-            // Written by nothing now; they go with their commands.
-            app.manage(PendingWatchLink::default());
-            app.manage(PendingBadgeLink::default());
             #[cfg(not(target_os = "ios"))]
             {
                 use tauri_plugin_deep_link::DeepLinkExt;
@@ -2111,7 +2080,6 @@ pub fn run() {
             get_app_authors,
             fetch_exchange_rates,
             get_window_size,
-            take_pending_watch_link,
             watch_link_key,
             app_link_target,
             share_link,
@@ -2125,7 +2093,6 @@ pub fn run() {
             inbound_link,
             #[cfg(target_os = "android")]
             twitch_login_plugin::open_mobile_login,
-            take_pending_badge_link,
             #[cfg(target_os = "android")]
             twitch_login_plugin::close_mobile_login,
             #[cfg(target_os = "android")]
