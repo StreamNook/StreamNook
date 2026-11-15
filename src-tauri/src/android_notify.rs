@@ -110,7 +110,7 @@ async fn collect_badges() -> Vec<OutItem> {
         let action = if seeding {
             FeedAction::SilentStore
         } else {
-            feed::classify(&feed_id, &hash, available).await
+            feed::classify(&feed_id, &hash, available, badge.news_at(chrono::Utc::now().timestamp_millis())).await
         };
         if !action.stores() {
             crate::commands::badge_service::heal_enrichment(badge).await;

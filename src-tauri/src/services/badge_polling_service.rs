@@ -80,6 +80,36 @@ impl BadgeNotification {
     }
 }
 
+/// How long a badge stays news: a badge Penrose first saw this long ago, or a window that opened this long ago,
+/// is stored quietly. Penrose re-pushes badges whenever it redoes their posts, and a device that never recorded
+/// an older badge (installed after it left the feed's latest list) announced each one as new.
+pub const NEWS_FRESH_MS: i64 = 48 * 60 * 60 * 1000;
+
+/// Whether a drop is still news at `now_ms`: the badge itself (first seen within `NEWS_FRESH_MS`) and its
+/// opening (the run open now started within `NEWS_FRESH_MS`; with no known start, only while the badge is new).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct News {
+    pub new: bool,
+    pub opened: bool,
+}
+
+impl BadgeNotification {
+    /// The drop's `News` at `now_ms` (server time on the app path, so every device judges alike).
+    pub fn news_at(&self, now_ms: i64) -> News {
+        let new = self.first_seen_ms.is_some_and(|seen| now_ms - seen <= NEWS_FRESH_MS);
+        let open_start = crate::services::badge_window::campaign_runs(self.enrichment.as_ref()).and_then(|runs| {
+            runs.into_iter()
+                .find(|r| r.start_ms.map_or(true, |s| s <= now_ms) && r.end_ms.map_or(true, |e| now_ms < e))
+                .map(|r| r.start_ms)
+        });
+        let opened = match open_start {
+            Some(Some(start)) => now_ms - start <= NEWS_FRESH_MS,
+            _ => new,
+        };
+        News { new, opened }
+    }
+}
+
 /// What the feed should do with an incoming drop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FeedAction {
@@ -210,19 +240,25 @@ pub async fn is_empty() -> bool {
 }
 
 /// Decide what to do with a drop, recording nothing. `is_available` comes from
-/// the earn window, not the payload's `status` (a snapshot of when it was sent).
-pub async fn classify(feed_id: &str, content_hash: &str, is_available: bool) -> FeedAction {
+/// the earn window, not the payload's `status` (a snapshot of when it was sent);
+/// `news` from `BadgeNotification::news_at`.
+pub async fn classify(feed_id: &str, content_hash: &str, is_available: bool, news: News) -> FeedAction {
     ensure_loaded().await;
     let guard = FEED_STATE.read().await;
     let Some(state) = guard.as_ref() else {
-        return FeedAction::NotifyNew;
+        return if news.new { FeedAction::NotifyNew } else { FeedAction::SilentStore };
     };
+    decide(state, feed_id, content_hash, is_available, news)
+}
 
+/// The two moments a badge is announced: it is new, or its window just opened. A drop this device never
+/// recorded that is no longer news is stored quietly (and its open window latched by `record`).
+fn decide(state: &BadgeFeedState, feed_id: &str, content_hash: &str, is_available: bool, news: News) -> FeedAction {
     if !state.known_badges.contains(feed_id) {
-        return FeedAction::NotifyNew;
+        return if news.new { FeedAction::NotifyNew } else { FeedAction::SilentStore };
     }
     if is_available && !state.notified_available_badges.contains(feed_id) {
-        return FeedAction::NotifyAvailable;
+        return if news.opened { FeedAction::NotifyAvailable } else { FeedAction::SilentStore };
     }
     if state.content_hashes.get(feed_id).map(String::as_str) != Some(content_hash) {
         return FeedAction::SilentStore;
@@ -370,6 +406,75 @@ mod tests {
         assert_eq!(wire["first_seen_ms"], 1_794_538_089_000i64);
         let back: BadgeNotification = serde_json::from_value(wire).unwrap();
         assert_eq!(back.first_seen_p.as_deref(), Some("minute"));
+    }
+
+    const NOW: i64 = 1_794_700_000_000;
+    const HOUR: i64 = 60 * 60 * 1000;
+
+    fn iso(ms: i64) -> String {
+        chrono::DateTime::from_timestamp_millis(ms).unwrap().to_rfc3339()
+    }
+
+    fn dated(seen: Option<i64>, window: Option<(i64, i64)>) -> BadgeNotification {
+        let mut b = badge("Spider-Man");
+        b.first_seen_ms = seen;
+        b.enrichment = window.map(|(s, e)| serde_json::json!({ "starts_utc": iso(s), "ends_utc": iso(e) }));
+        b
+    }
+
+    const OLD: News = News { new: false, opened: false };
+
+    fn state(known: &[&str], announced_open: &[&str], hashes: &[(&str, &str)]) -> BadgeFeedState {
+        BadgeFeedState {
+            known_badges: known.iter().map(|s| s.to_string()).collect(),
+            notified_available_badges: announced_open.iter().map(|s| s.to_string()).collect(),
+            content_hashes: hashes.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            last_poll_timestamp_ms: 0,
+        }
+    }
+
+    // Fails if "new" falls back to "new to this device": every old badge Penrose re-pushed after redoing
+    // its post toasted on each device that never recorded it.
+    #[test]
+    fn a_badge_is_new_only_within_48_hours_of_penrose_first_seeing_it() {
+        assert!(dated(Some(NOW - 5 * 60 * 1000), None).news_at(NOW).new);
+        assert!(dated(Some(NOW - 48 * HOUR), None).news_at(NOW).new);
+        assert!(!dated(Some(NOW - 48 * HOUR - 1), None).news_at(NOW).new);
+        assert!(!dated(Some(NOW - 40 * 24 * HOUR), None).news_at(NOW).new);
+        assert!(!dated(None, None).news_at(NOW).new, "no first-seen date is not news");
+    }
+
+    #[test]
+    fn a_window_is_news_only_within_48_hours_of_opening() {
+        let opened = |start: i64| dated(Some(NOW - 90 * 24 * HOUR), Some((start, NOW + 10 * 24 * HOUR))).news_at(NOW).opened;
+        assert!(opened(NOW - HOUR));
+        assert!(opened(NOW - 48 * HOUR));
+        assert!(!opened(NOW - 48 * HOUR - 1));
+        assert!(!opened(NOW - 20 * 24 * HOUR), "open for weeks is not news");
+        // No known start: the opening is news only while the badge itself is.
+        assert!(dated(Some(NOW - HOUR), None).news_at(NOW).opened);
+        assert!(!dated(Some(NOW - 20 * 24 * HOUR), None).news_at(NOW).opened);
+        // A window still ahead or already over has no open run to judge.
+        assert!(!dated(Some(NOW - 90 * 24 * HOUR), Some((NOW + HOUR, NOW + 2 * HOUR))).news_at(NOW).opened);
+    }
+
+    #[test]
+    fn a_new_badge_and_an_opening_window_announce_and_nothing_else_does() {
+        let empty = state(&[], &[], &[]);
+        assert_eq!(decide(&empty, "a-v1", "h", false, News { new: true, opened: false }), FeedAction::NotifyNew);
+        assert_eq!(decide(&empty, "a-v1", "h", true, News { new: true, opened: true }), FeedAction::NotifyNew);
+        // An old badge this device never recorded is stored quietly, earnable or not.
+        assert_eq!(decide(&empty, "a-v1", "h", false, OLD), FeedAction::SilentStore);
+        assert_eq!(decide(&empty, "a-v1", "h", true, OLD), FeedAction::SilentStore);
+
+        let known = state(&["a-v1"], &[], &[("a-v1", "h")]);
+        assert_eq!(decide(&known, "a-v1", "h", true, News { new: false, opened: true }), FeedAction::NotifyAvailable);
+        assert_eq!(decide(&known, "a-v1", "h", true, OLD), FeedAction::SilentStore, "a window open for weeks");
+        assert_eq!(decide(&known, "a-v1", "h", false, OLD), FeedAction::Skip);
+        assert_eq!(decide(&known, "a-v1", "h2", false, OLD), FeedAction::SilentStore, "a corrected writeup");
+
+        let announced = state(&["a-v1"], &["a-v1"], &[("a-v1", "h")]);
+        assert_eq!(decide(&announced, "a-v1", "h", true, News { new: true, opened: true }), FeedAction::Skip);
     }
 
     #[test]

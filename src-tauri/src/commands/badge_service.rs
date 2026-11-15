@@ -805,7 +805,7 @@ pub(crate) async fn ingest_badges(
         let action = if seeding {
             FeedAction::SilentStore
         } else {
-            feed::classify(&feed_id, &hash, available).await
+            feed::classify(&feed_id, &hash, available, badge.news_at(server_now_ms)).await
         };
 
         if !action.stores() {
