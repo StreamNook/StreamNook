@@ -140,7 +140,7 @@ function Harness({ onApi, overlay = false }: { onApi: (api: Api) => void; overla
         if (cur?.kind !== 'link' || cur.key !== key || cur.state !== 'failed') return;
         reads.current += 1;
         retried.current.push({ key, read: reads.current });
-        setSelectedBadge({ kind: 'link', key, state: 'loading', read: reads.current });
+        setSelectedBadge({ kind: 'link', key, state: 'loading', read: reads.current, retry: true });
       }}
     />
   );
@@ -248,7 +248,7 @@ describe('BadgeDetailSlot, a badge link on its placeholder', () => {
     expect(button.textContent).toBe('Try again');
     await act0(() => button.click());
     expect(A().retried).toEqual([{ key: 'clover/2', read: 2 }]);
-    expect(A().state().selected).toEqual({ kind: 'link', key: 'clover/2', state: 'loading', read: 2 });
+    expect(A().state().selected).toEqual({ kind: 'link', key: 'clover/2', state: 'loading', read: 2, retry: true });
     await act0(() => A().answer('clover/2', 2, hit));
     await until(() => !!q('h2'));
     expect(q('h2')?.textContent).toBe('Clover 2');
@@ -288,7 +288,7 @@ describe('BadgeDetailSlot, a badge link on its placeholder', () => {
     await act0(() => (host.querySelector('button[type="button"]') as HTMLButtonElement).click());
     await act0(() => A().answer('clover/2', 1, hit));
     expect(q('h2')?.textContent).toBe('Badge link');
-    expect(A().state().selected).toEqual({ kind: 'link', key: 'clover/2', state: 'loading', read: 2 });
+    expect(A().state().selected).toEqual({ kind: 'link', key: 'clover/2', state: 'loading', read: 2, retry: true });
   });
 
   // Fails if a late hit cannot fill a placeholder the 6 s timer already failed.

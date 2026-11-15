@@ -66,11 +66,17 @@ const badge = {
   click_url: null,
 };
 const shown: NonNullable<SelectedBadge> = { kind: 'badge', badge, setId: 'clover' };
-const link = (state: 'loading' | 'missing' | 'failed', read = 1): NonNullable<SelectedBadge> => ({
+const link = (
+  state: 'loading' | 'missing' | 'failed',
+  read = 1,
+  retry = false,
+  key = 'clover/2',
+): NonNullable<SelectedBadge> => ({
   kind: 'link',
-  key: 'clover/2',
+  key,
   state,
   read,
+  ...(retry ? { retry: true as const } : {}),
 });
 
 let host: HTMLElement;
@@ -195,17 +201,40 @@ describe('BadgeDetailOverlay with a link placeholder', () => {
     expect(button.getAttribute('aria-disabled')).toBe('false');
     await act(async () => button.focus());
     await click(button);
-    await show(link('loading', 2));
+    await show(link('loading', 2, true));
     expect(q('.custom-scrollbar button')).toBe(button);
     expect(button.getAttribute('aria-disabled')).toBe('true');
     expect(document.activeElement).toBe(button);
     expect(text()).not.toContain('Loading badge');
     await click(button);
     expect(onRetry).toHaveBeenCalledTimes(1);
-    await show(link('failed', 2));
+    await show(link('failed', 2, true));
     expect(q('.custom-scrollbar button')).toBe(button);
     expect(button.getAttribute('aria-disabled')).toBe('false');
     expect(document.activeElement).toBe(button);
+  });
+
+  // Fails if a Try again press is remembered by the frame instead of the slot: the next link's
+  // placeholder, drawn in the same mounted frame, would show the failed line while it loads.
+  it('a new link after a Try again shows its own loading body', async () => {
+    await show(link('failed', 1));
+    await click(q('.custom-scrollbar button'));
+    await show(link('loading', 2, true));
+    await show(link('failed', 2, true));
+    await show(link('loading', 3, false, 'other/1'));
+    expect(text()).toContain('Loading badge');
+    expect(text()).not.toContain(BADGE_LOAD_FAILED_TEXT);
+    expect(q('.custom-scrollbar button')).toBeNull();
+  });
+
+  // Fails the same way for the same badge linked again: a repeat link is a fresh read, not a retry.
+  it('a repeat link of the same badge after a Try again shows its own loading body', async () => {
+    await show(link('failed', 1));
+    await click(q('.custom-scrollbar button'));
+    await show(link('loading', 2, true));
+    await show(link('loading', 3));
+    expect(text()).toContain('Loading badge');
+    expect(text()).not.toContain(BADGE_LOAD_FAILED_TEXT);
   });
 
   // Fails if the frame is rebuilt when the badge arrives: the card would be a new node and the box would flash.

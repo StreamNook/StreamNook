@@ -180,18 +180,18 @@ function Heading({ children }: { children: ReactNode }) {
 function BadgeLinkBody({
   linkKey,
   state,
-  read,
+  retry,
   onRetry,
 }: {
   linkKey: string;
   state: 'loading' | 'missing' | 'failed';
-  read: number;
+  retry: boolean;
   onRetry: (key: string) => void;
 }) {
-  // The read number the person pressed Try again on. Until the new read answers, the failed line and
-  // its button stay mounted (the button is only aria-disabled), so keyboard focus is not lost.
-  const [retriedAt, setRetriedAt] = useState<number | null>(null);
-  const retrying = state === 'loading' && retriedAt !== null && read !== retriedAt;
+  // A read the person started with Try again keeps the failed line and its button mounted (the
+  // button is only aria-disabled) until it answers, so keyboard focus is not lost. The mark comes
+  // from the slot, so a new link's placeholder shows its own loading body.
+  const retrying = state === 'loading' && retry;
   const showFailed = state === 'failed' || retrying;
   const showLoading = state === 'loading' && !retrying;
 
@@ -227,7 +227,6 @@ function BadgeLinkBody({
               aria-disabled={retrying}
               onClick={() => {
                 if (retrying) return;
-                setRetriedAt(read);
                 onRetry(linkKey);
               }}
               className="rounded-lg bg-glass px-3 py-1.5 text-sm font-medium text-textPrimary transition-colors hover:bg-glass/80 aria-disabled:opacity-60"
@@ -304,7 +303,7 @@ const BadgeDetailOverlay = ({ selected, onClose, onBack, onRetry }: BadgeDetailO
             {selected.kind === 'badge' ? (
               <BadgeDetailBody badge={selected.badge} setId={selected.setId} onClose={onClose} />
             ) : (
-              <BadgeLinkBody linkKey={selected.key} state={selected.state} read={selected.read} onRetry={onRetry} />
+              <BadgeLinkBody linkKey={selected.key} state={selected.state} retry={selected.retry === true} onRetry={onRetry} />
             )}
           </FrameSlotsContext.Provider>
         </div>

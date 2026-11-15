@@ -8,11 +8,13 @@ const BadgeDetailOverlay = lazy(() => import('./BadgeDetailOverlay'));
 
 /**
  * What App's badge slot shows: a badge detail, or the placeholder a badge link opened at once and
- * the lookup will fill (`read` numbers the lookup, so only its own answer applies).
+ * the lookup will fill (`read` numbers the lookup, so only its own answer applies). `retry` marks a
+ * read the person started with Try again; it lives in the slot so a new link, which writes a fresh
+ * placeholder without it, never inherits a press made on the one before.
  */
 export type SelectedBadge =
   | { kind: 'badge'; badge: BadgeVersion; setId: string }
-  | { kind: 'link'; key: string; state: 'loading' | 'missing' | 'failed'; read: number }
+  | { kind: 'link'; key: string; state: 'loading' | 'missing' | 'failed'; read: number; retry?: true }
   | null;
 
 /**

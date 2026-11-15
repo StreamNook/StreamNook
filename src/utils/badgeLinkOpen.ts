@@ -162,13 +162,14 @@ export function resolveBadgeLink(key: string, onAnswer: (next: BadgeLinkAnswer) 
  * The slot after a lookup answered, given the slot as it is now. An answer applies only while the
  * slot still shows the same key and the same read: a loading placeholder takes any answer, one that
  * already said failed (the 6 s timer fired first) takes a late hit, and a link answer keeps the
- * slot's read so the timer's failed still matches the read's own late hit. Anything else, an answer
- * for another key or an older read or a slot that was closed, writes nothing.
+ * slot's read (and its Try again mark) so the timer's failed still matches the read's own late hit.
+ * Anything else, an answer for another key or an older read or a slot that was closed, writes nothing.
  */
 export function applyBadgeAnswer(cur: SelectedBadge, key: string, read: number, next: BadgeLinkAnswer): SelectedBadge {
   if (cur?.kind !== 'link' || cur.key !== key || cur.read !== read) return cur;
   if (cur.state === 'loading' || (cur.state === 'failed' && next.kind === 'badge')) {
-    return next.kind === 'link' ? { ...next, read } : next;
+    if (next.kind !== 'link') return next;
+    return cur.retry ? { ...next, read, retry: true } : { ...next, read };
   }
   return cur;
 }

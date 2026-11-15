@@ -266,6 +266,13 @@ describe('applyBadgeAnswer', () => {
     expect(applyBadgeAnswer(retry, 'clover/2', 3, hit)).toBe(retry);
   });
 
+  // Fails if a retry's link answer drops the Try again mark, or a plain read's answer gains one.
+  it('a link answer keeps the slot\'s Try again mark and adds none', () => {
+    const retrying: SelectedBadge = { kind: 'link', key: 'clover/2', state: 'loading', read: 3, retry: true };
+    expect(applyBadgeAnswer(retrying, 'clover/2', 3, fail)).toStrictEqual({ kind: 'link', key: 'clover/2', state: 'failed', read: 3, retry: true });
+    expect(applyBadgeAnswer(loading, 'clover/2', 3, fail)).toStrictEqual({ kind: 'link', key: 'clover/2', state: 'failed', read: 3 });
+  });
+
   // Fails if a closed or replaced slot is reopened by a late answer.
   it('writes nothing when the slot was closed or already shows a badge', () => {
     const shown: SelectedBadge = { kind: 'badge', badge: version('9'), setId: 'other' };

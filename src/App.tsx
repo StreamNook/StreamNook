@@ -561,7 +561,7 @@ function App() {
       if (cur?.kind !== 'link' || cur.key !== key || cur.state !== 'failed') return;
       badgeReadRef.current += 1;
       const read = badgeReadRef.current;
-      setSelectedBadge({ kind: 'link', key, state: 'loading', read });
+      setSelectedBadge({ kind: 'link', key, state: 'loading', read, retry: true });
       resolveBadgeLink(key, (next) => badgeLinkDeps.answerBadgeLink(key, read, next));
     },
     [badgeLinkDeps, setSelectedBadge],
