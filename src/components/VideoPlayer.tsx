@@ -3668,7 +3668,7 @@ const VideoPlayer = () => {
                 </Tooltip>
               ) : currentMediaType === 'clip' || currentMediaType === 'video' ? (
                 // Clips/VODs: always show back arrow — stop playback and return to category
-                <Tooltip content={streamOriginCategory ? `Back to ${streamOriginCategory.name}` : 'Back'} side="bottom" delay={200}>
+                <Tooltip content={streamOriginCategory ? (streamOriginCategory.name ? `Back to ${streamOriginCategory.name}` : 'Back to category') : 'Back'} side="bottom" delay={200}>
                   <button
                     onClick={async () => {
                       if (streamOriginCategory) {

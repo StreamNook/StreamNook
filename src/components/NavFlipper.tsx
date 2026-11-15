@@ -68,7 +68,8 @@ const NavFlipper = () => {
   if (!canBack && !canForward) return null;
 
   const backLabel = watching ? 'Keep browsing' : 'Back to browse';
-  const forwardLabel = reenter ? `Back to ${reenter.name}` : 'Return to stream';
+  // A category copy that is still waiting for its name (a link before its answer) has no name to say.
+  const forwardLabel = reenter ? (reenter.name ? `Back to ${reenter.name}` : 'Back to category') : 'Return to stream';
 
   return (
     <div className="chrome-glaze nav-flipper">

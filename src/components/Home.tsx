@@ -5,7 +5,7 @@ import { IS_LINUX, IS_MOBILE } from '../utils/platform';
 import { createPortal } from 'react-dom';
 import { glowThumbProps } from '../utils/mediaGlow';
 import { Search, Heart, X, Pickaxe, LayoutGrid, Flame, ArrowUpRight, Undo2, Users, User, Loader2, Clock, Play, Check, Plus, Compass, List, MessageSquare } from 'lucide-react';
-import { Package, UsersThree } from 'phosphor-react';
+import { Package, ShareNetwork, UsersThree } from 'phosphor-react';
 import { MediaCard } from './MediaCard';
 import ContinueWatchingRow from './ContinueWatchingRow';
 import { formatCardDate, mediaKindOfVideo, videoDurationLabel, vodThumbUrl, VOD_FALLBACK_THUMB } from '../utils/vodProgress';
@@ -30,7 +30,15 @@ import { useFollowsStore } from '../stores/followsStore';
 import { favoriteIdOf } from '../utils/favorites';
 import { favoriteKeyOf, favoriteRefOf, isFavoriteNow, setFavoriteChannel } from '../utils/favoriteDoor';
 import { streamProvider, streamKey, followIdentifier, isTwitchStream } from '../utils/streamProvider';
-import { streamCategoryTarget } from '../utils/streamCategory';
+import {
+    categoryFillOnly,
+    categoryNeedsReload,
+    categoryNote,
+    categorySelectionKey,
+    streamCategoryTarget,
+} from '../utils/streamCategory';
+import { copyCategoryShareLink } from '../utils/shareLink';
+import { resolveLinkedCategory, useLinkedCategory } from '../utils/linkedCategory';
 import { lastLiveLabel } from '../utils/lastLive';
 import { streamMiddleClickHandlers } from '../utils/openInMultiNook';
 import { isPortraitGrid, thumbFitFor } from '../utils/thumbFit';
@@ -180,6 +188,10 @@ const QuickAddButton = ({ stream }: { stream: TwitchStream }) => {
 
 
 
+// One token counter per kind of category load, so a clips load never cancels a
+// streams load and each load-more is told apart from its first page.
+type CategoryLoadKind = 'streams' | 'details' | 'clips' | 'videos' | 'moreStreams' | 'moreClips' | 'moreVideos';
+
 const Home = () => {
     // Actions without a subscription (stable for the store's lifetime); state
     // through one shallow-compared selector below, so unrelated store writes
@@ -294,6 +306,9 @@ const Home = () => {
     // Use store state directly
     const activeTab = homeActiveTab;
     const selectedCategory = homeSelectedCategory;
+    // A category opened from a link has its id but no name until Rust answers.
+    // The page treats the empty name as "not loaded yet", never as a name.
+    const categoryNameless = !!selectedCategory && selectedCategory.name === '';
     // The category page's picked tags live in the store, so they survive Home
     // unmounting under the player. They belong to one category and go when you
     // leave it; a search started from the category still counts as inside it.
@@ -512,6 +527,12 @@ const Home = () => {
     const [isLoadingCategoryDetails, setIsLoadingCategoryDetails] = useState(false);
     const [isDescriptionExpanded, setIsDescriptionExpanded] = useState(false);
     const [isDescriptionClamped, setIsDescriptionClamped] = useState(true);
+    // The Share button's brief "Link copied!", and the timer that ends it.
+    const [categoryShareCopied, setCategoryShareCopied] = useState(false);
+    const categoryShareTimerRef = useRef<number | null>(null);
+    // The id whose Try again is in flight, so the failed line keeps its button
+    // (pressed, not swapped for the skeleton) until the new try settles.
+    const [retryingCategoryId, setRetryingCategoryId] = useState<string | null>(null);
     const [animatingHearts, setAnimatingHearts] = useState<Set<string>>(new Set());
     const [isSearchExpanded, setIsSearchExpanded] = useState(false);
     const searchInputRef = useRef<HTMLInputElement>(null);
@@ -534,6 +555,86 @@ const Home = () => {
         isMountedRef.current = true;
         return () => { isMountedRef.current = false; };
     }, []);
+
+    // Category loads. A selection can change with no click on this page (a
+    // link, the command palette and the player's category button all write the
+    // store), so the reload effect further down owns this ref: the key and the
+    // name of the category the page last showed. Every loader captures the key
+    // of the category IT fetches for, plus a token from its own kind's counter,
+    // and writes data or flags only while both still match. A slow answer for A
+    // never lands over B, and the first of two loads for A never clears the
+    // second one's spinner.
+    const loadedCategoryKeyRef = useRef<{ key: string; name: string } | null>(null);
+    const loadTokensRef = useRef<Record<CategoryLoadKind, number>>({
+        streams: 0,
+        details: 0,
+        clips: 0,
+        videos: 0,
+        moreStreams: 0,
+        moreClips: 0,
+        moreVideos: 0,
+    });
+    // Whether the previous pass of the reload effect had the category page up:
+    // a name that arrives while the page was away is a return, not a fill.
+    const categoryShownRef = useRef(false);
+    const startCategoryLoad = useCallback((kind: CategoryLoadKind) => {
+        loadTokensRef.current[kind] += 1;
+        return loadTokensRef.current[kind];
+    }, []);
+    const isCurrentLoad = useCallback(
+        (kind: CategoryLoadKind, key: string, token: number) =>
+            isMountedRef.current && loadedCategoryKeyRef.current?.key === key && loadTokensRef.current[kind] === token,
+        [],
+    );
+    // What a fresh category starts from: nothing loaded, nothing loading, and
+    // every load still on its way told it is out of date.
+    const resetCategoryLoads = useCallback(() => {
+        for (const kind of Object.keys(loadTokensRef.current) as CategoryLoadKind[]) {
+            loadTokensRef.current[kind] += 1;
+        }
+        setCategoryStreams([]);
+        setCategoryStreamsCursor(null);
+        setHasMoreCategoryStreams(true);
+        setCategoryClips([]);
+        setCategoryClipsCursor(null);
+        setHasMoreCategoryClips(true);
+        setCategoryVideos([]);
+        setCategoryVideosCursor(null);
+        setHasMoreCategoryVideos(true);
+        setCategoryDetails(null);
+        setIsDescriptionExpanded(false);
+        setCategoryActiveTab('live');
+        setIsLoadingCategoryStreams(false);
+        setIsLoadingCategoryDetails(false);
+        setIsLoadingClips(false);
+        setIsLoadingVideos(false);
+        setIsLoadingMoreCategoryStreams(false);
+        setIsLoadingMoreClips(false);
+        setIsLoadingMoreVideos(false);
+    }, [setCategoryActiveTab]);
+
+    // The Share button's "Link copied!" timer ends with the page.
+    useEffect(() => {
+        return () => {
+            if (categoryShareTimerRef.current !== null) window.clearTimeout(categoryShareTimerRef.current);
+        };
+    }, []);
+
+    // A nameless id asks Rust for its name, and fills the store's copy when it
+    // is answered. The record's state is part of the key: a dropped failed
+    // record, a retry and a settled answer each run this again, and a found
+    // record fills in the same tick with no network call.
+    const linkedCategory = useLinkedCategory(selectedCategory?.id || null);
+    const linkedCategoryState = linkedCategory?.state ?? 'none';
+    useEffect(() => {
+        if (activeTab !== 'category' || !selectedCategory?.id || selectedCategory.name !== '') return;
+        const id = selectedCategory.id;
+        void resolveLinkedCategory(id).then((record) => {
+            if (record.state === 'found' && record.category) {
+                useAppStore.getState().fillLinkedCategory(id, record.category);
+            }
+        });
+    }, [activeTab, selectedCategory?.id, selectedCategory?.name, linkedCategoryState]);
 
     // A view that needs drop indicators before Rust has filled them asks for
     // a refresh (15 s floor over there); the result lands through the snapshot.
@@ -648,9 +749,9 @@ const Home = () => {
             return;
         }
         if (isAuthenticated && followedStreams.length > 0) {
-            setActiveTab('following');
+            useAppStore.getState().autoSelectHomeTab('following');
         } else if (!isAuthenticated || followedStreams.length === 0) {
-            setActiveTab('recommended');
+            useAppStore.getState().autoSelectHomeTab('recommended');
         }
         // Note: homeActiveTab intentionally not in deps to prevent feedback loop
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -923,118 +1024,141 @@ const Home = () => {
     };
 
     const handleCategoryClick = async (category: TwitchCategory) => {
+        const key = categorySelectionKey(category);
         setSelectedCategory(category);
         setActiveTab('category');
+        // The click owns this selection: the ref moves to its key before any
+        // fetch starts, so the reload effect finds nothing left to reload.
+        loadedCategoryKeyRef.current = { key, name: category.name };
+        resetCategoryLoads();
+        const streamsToken = startCategoryLoad('streams');
+        const detailsToken = startCategoryLoad('details');
         setIsLoadingCategoryStreams(true);
-        setCategoryStreams([]);
         setIsLoadingCategoryDetails(true);
-        setCategoryDetails(null);
-        setIsDescriptionExpanded(false);
-        setCategoryActiveTab('live');
-        setCategoryClips([]);
-        setCategoryClipsCursor(null);
-        setHasMoreCategoryClips(true);
-        setCategoryVideos([]);
-        setCategoryVideosCursor(null);
-        setHasMoreCategoryVideos(true);
 
         invoke('get_streams_by_game', { gameId: category.id, cursor: null, limit: 40 })
             .then(res => {
-                if (!isMountedRef.current) return;
+                if (!isCurrentLoad('streams', key, streamsToken)) return;
                 const [streams, cursor] = res as [TwitchStream[], string | null];
                 setCategoryStreams(streams);
                 setCategoryStreamsCursor(cursor);
                 setHasMoreCategoryStreams(!!cursor && streams.length > 0);
             })
             .catch(e => {
-                if (!isMountedRef.current) return;
+                if (!isCurrentLoad('streams', key, streamsToken)) return;
                 Logger.error('Failed to load category streams:', e);
                 setCategoryStreams([]);
                 setCategoryStreamsCursor(null);
                 setHasMoreCategoryStreams(false);
             })
-            .finally(() => { if (isMountedRef.current) setIsLoadingCategoryStreams(false); });
+            .finally(() => { if (isCurrentLoad('streams', key, streamsToken)) setIsLoadingCategoryStreams(false); });
 
+        // The header is looked up by name, so a click with no name waits for one.
+        if (!category.name) return;
         invoke('get_category_info', { gameName: category.name })
-            .then(details => { if (isMountedRef.current) setCategoryDetails(details as CategoryInfo | null); })
-            .catch(e => { if (isMountedRef.current) Logger.error('Failed to load category details:', e); })
-            .finally(() => { if (isMountedRef.current) setIsLoadingCategoryDetails(false); });
+            .then(details => { if (isCurrentLoad('details', key, detailsToken)) setCategoryDetails(details as CategoryInfo | null); })
+            .catch(e => { if (isCurrentLoad('details', key, detailsToken)) Logger.error('Failed to load category details:', e); })
+            .finally(() => { if (isCurrentLoad('details', key, detailsToken)) setIsLoadingCategoryDetails(false); });
     };
 
     // Load streams by game name when navigating from badge overlay (category has no ID)
     const loadCategoryStreamsByName = async (gameName: string) => {
+        // No id to key on, so the key is the lower-cased name, the same key the
+        // reload effect computes for a selection like this.
+        const key = categorySelectionKey({ id: '', name: gameName });
+        loadedCategoryKeyRef.current = { key, name: gameName };
+        resetCategoryLoads();
+        const streamsToken = startCategoryLoad('streams');
+        const detailsToken = startCategoryLoad('details');
         setIsLoadingCategoryStreams(true);
-        setCategoryStreams([]);
         setIsLoadingCategoryDetails(true);
-        setCategoryDetails(null);
-        setIsDescriptionExpanded(false);
-        setCategoryActiveTab('live');
-        setCategoryClips([]);
-        setCategoryClipsCursor(null);
-        setHasMoreCategoryClips(true);
-        setCategoryVideos([]);
-        setCategoryVideosCursor(null);
-        setHasMoreCategoryVideos(true);
 
         invoke('get_streams_by_game_name', { gameName: gameName, excludeUserLogin: null, cursor: null, limit: 40 })
             .then(res => {
-                if (!isMountedRef.current) return;
+                if (!isCurrentLoad('streams', key, streamsToken)) return;
                 const [streams, cursor] = res as [TwitchStream[], string | null];
                 setCategoryStreams(streams);
                 setCategoryStreamsCursor(cursor);
                 setHasMoreCategoryStreams(!!cursor && streams.length > 0);
             })
             .catch(e => {
-                if (!isMountedRef.current) return;
+                if (!isCurrentLoad('streams', key, streamsToken)) return;
                 Logger.error('Failed to load category streams by name:', e);
                 setCategoryStreams([]);
                 setCategoryStreamsCursor(null);
                 setHasMoreCategoryStreams(false);
             })
-            .finally(() => { if (isMountedRef.current) setIsLoadingCategoryStreams(false); });
+            .finally(() => { if (isCurrentLoad('streams', key, streamsToken)) setIsLoadingCategoryStreams(false); });
 
         invoke('get_category_info', { gameName: gameName })
-            .then(details => { if (isMountedRef.current) setCategoryDetails(details as CategoryInfo | null); })
-            .catch(e => { if (isMountedRef.current) Logger.error('Failed to load category details:', e); })
-            .finally(() => { if (isMountedRef.current) setIsLoadingCategoryDetails(false); });
+            .then(details => { if (isCurrentLoad('details', key, detailsToken)) setCategoryDetails(details as CategoryInfo | null); })
+            .catch(e => { if (isCurrentLoad('details', key, detailsToken)) Logger.error('Failed to load category details:', e); })
+            .finally(() => { if (isCurrentLoad('details', key, detailsToken)) setIsLoadingCategoryDetails(false); });
     };
 
-    // Effect to handle category view re-mount or navigation from badge overlay
+    // The one place a changed category selection reloads the page, and the
+    // re-mount fetch. A selection can change with no click here (a link, the
+    // command palette, the player's category button), and a fresh mount adopts
+    // whatever is selected, so this effect, not the click handler, is the owner.
+    // The order is exact: read the ref as it was, decide, write the ref, and
+    // only then fetch, so every loader of this pass captures the new key.
     useEffect(() => {
-        if (activeTab === 'category' && selectedCategory) {
+        const showing = activeTab === 'category' && !!selectedCategory;
+        const wasShowing = categoryShownRef.current;
+        categoryShownRef.current = showing;
+        if (showing && selectedCategory) {
+            const prev = loadedCategoryKeyRef.current;
+            // A different category than the one on the page: start over and fetch it.
+            const reload = categoryNeedsReload(prev?.key ?? null, selectedCategory);
+            // The same category whose name just arrived: its details, which are
+            // keyed by name, are owed. If the page was up all along its streams
+            // are already loading or landed, so only the details are fetched; if
+            // it was away, its streams were dropped on the way out and come back too.
+            const nameArrived = categoryFillOnly(prev, selectedCategory);
+            const fillOnly = wasShowing && nameArrived;
+            const key = categorySelectionKey(selectedCategory);
+            loadedCategoryKeyRef.current = { key, name: selectedCategory.name };
             if (selectedCategory.id) {
+                if (reload) resetCategoryLoads();
                 // Normal category — re-fetch if streams are empty (e.g., after remount from watching a stream)
-                if (categoryStreams.length === 0 && !isLoadingCategoryStreams) {
+                if (!fillOnly && (reload || (categoryStreams.length === 0 && !isLoadingCategoryStreams))) {
                     // Don't call handleCategoryClick here — it resets categoryActiveTab to 'live'.
                     // When navigating back from a clip/VOD, we need to preserve the sub-tab.
                     // Just reload the stream data without touching tab state.
+                    const streamsToken = startCategoryLoad('streams');
                     setIsLoadingCategoryStreams(true);
                     invoke('get_streams_by_game', { gameId: selectedCategory.id, cursor: null, limit: 40 })
                         .then(res => {
-                            if (!isMountedRef.current) return;
+                            if (!isCurrentLoad('streams', key, streamsToken)) return;
                             const [streams, cursor] = res as [TwitchStream[], string | null];
                             setCategoryStreams(streams);
                             setCategoryStreamsCursor(cursor);
                             setHasMoreCategoryStreams(!!cursor && streams.length > 0);
                         })
                         .catch(e => {
-                            if (!isMountedRef.current) return;
+                            if (!isCurrentLoad('streams', key, streamsToken)) return;
                             Logger.error('Failed to load category streams:', e);
                             setCategoryStreams([]);
                             setCategoryStreamsCursor(null);
                             setHasMoreCategoryStreams(false);
                         })
-                        .finally(() => { if (isMountedRef.current) setIsLoadingCategoryStreams(false); });
+                        .finally(() => { if (isCurrentLoad('streams', key, streamsToken)) setIsLoadingCategoryStreams(false); });
                 }
-                // The header (description, followers, tags) comes back with it:
-                // a remount starts with no details, and only a fresh click used
-                // to fetch them.
-                if (categoryDetails?.id !== selectedCategory.id && !isLoadingCategoryDetails) {
+                if (!selectedCategory.name) {
+                    // The header is looked up by name, so it is owed until the name
+                    // arrives. Held as loading so the skeleton does not blink off
+                    // for the one frame between the name landing and its fetch.
+                    setIsLoadingCategoryDetails(true);
+                } else if (reload || nameArrived || (categoryDetails?.id !== selectedCategory.id && !isLoadingCategoryDetails)) {
+                    // The header (description, followers, tags) comes back with it:
+                    // a remount starts with no details, and only a fresh click used
+                    // to fetch them.
+                    const detailsToken = startCategoryLoad('details');
                     setIsLoadingCategoryDetails(true);
                     invoke('get_category_info', { gameName: selectedCategory.name })
-                        .then(details => { if (isMountedRef.current) setCategoryDetails(details as CategoryInfo | null); })
-                        .catch(e => { if (isMountedRef.current) Logger.error('Failed to load category details:', e); })
-                        .finally(() => { if (isMountedRef.current) setIsLoadingCategoryDetails(false); });
+                        .then(details => { if (isCurrentLoad('details', key, detailsToken)) setCategoryDetails(details as CategoryInfo | null); })
+                        .catch(e => { if (isCurrentLoad('details', key, detailsToken)) Logger.error('Failed to load category details:', e); })
+                        .finally(() => { if (isCurrentLoad('details', key, detailsToken)) setIsLoadingCategoryDetails(false); });
                 }
             } else if (selectedCategory.name) {
                 // Badge overlay navigation — category has no ID, load by name
@@ -1043,7 +1167,7 @@ const Home = () => {
         }
     // categoryStreams.length intentionally excluded to avoid re-fetch loops after legitimate empty results
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [activeTab, selectedCategory]);
+    }, [activeTab, selectedCategory?.id, selectedCategory?.name]);
 
     // Effect to auto-load categories when browse tab is active but topGames were lost (e.g., remount)
     useEffect(() => {
@@ -1073,14 +1197,17 @@ const Home = () => {
 
     const loadMoreCategoryStreams = useCallback(async () => {
         if (!selectedCategory || !hasMoreCategoryStreams || isLoadingMoreCategoryStreams) return;
+        const key = categorySelectionKey(selectedCategory);
+        const token = startCategoryLoad('moreStreams');
         setIsLoadingMoreCategoryStreams(true);
         try {
             if (selectedCategory.id) {
-                const res = await invoke('get_streams_by_game', { 
-                    gameId: selectedCategory.id, 
-                    cursor: categoryStreamsCursor, 
-                    limit: 40 
+                const res = await invoke('get_streams_by_game', {
+                    gameId: selectedCategory.id,
+                    cursor: categoryStreamsCursor,
+                    limit: 40
                 }) as [TwitchStream[], string | null];
+                if (!isCurrentLoad('moreStreams', key, token)) return;
                 const [newStreams, newCursor] = res;
                 if (newStreams.length > 0) {
                     setCategoryStreams(prev => {
@@ -1100,9 +1227,10 @@ const Home = () => {
                 const res = await invoke('get_streams_by_game_name', { 
                     gameName: selectedCategory.name, 
                     excludeUserLogin: null, 
-                    cursor: categoryStreamsCursor, 
-                    limit: 40 
+                    cursor: categoryStreamsCursor,
+                    limit: 40
                 }) as [TwitchStream[], string | null];
+                if (!isCurrentLoad('moreStreams', key, token)) return;
                 const [newStreams, newCursor] = res;
                 if (newStreams.length > 0) {
                     setCategoryStreams(prev => {
@@ -1120,38 +1248,46 @@ const Home = () => {
                 }
             }
         } catch (e) {
+            if (!isCurrentLoad('moreStreams', key, token)) return;
             Logger.error('Failed to load more category streams:', e);
             setHasMoreCategoryStreams(false);
         } finally {
-            setIsLoadingMoreCategoryStreams(false);
+            if (isCurrentLoad('moreStreams', key, token)) setIsLoadingMoreCategoryStreams(false);
         }
-    }, [selectedCategory, hasMoreCategoryStreams, isLoadingMoreCategoryStreams, categoryStreamsCursor]);
+    }, [selectedCategory, hasMoreCategoryStreams, isLoadingMoreCategoryStreams, categoryStreamsCursor, startCategoryLoad, isCurrentLoad]);
 
     const loadCategoryClips = async () => {
         if (!selectedCategory?.id) return;
+        const key = categorySelectionKey(selectedCategory);
+        const token = startCategoryLoad('clips');
         setIsLoadingClips(true);
         setCategoryClips([]);
         setCategoryClipsCursor(null);
         setHasMoreCategoryClips(true);
         try {
             const res = await invoke('get_clips_by_game', { gameId: selectedCategory.id, limit: 40, cursor: null, period: clipsPeriod }) as [TwitchClip[], string | null];
+            if (!isCurrentLoad('clips', key, token)) return;
             setCategoryClips(res[0]);
             setCategoryClipsCursor(res[1]);
             // Clips often don't have cursors if they reach the end in the first page, Twitch pagination is finicky
             setHasMoreCategoryClips(!!res[1] && res[0].length >= 40);
         } catch (e) {
+            if (!isCurrentLoad('clips', key, token)) return;
             Logger.error('Failed to load category clips:', e);
             setHasMoreCategoryClips(false);
         } finally {
-            setIsLoadingClips(false);
+            if (isCurrentLoad('clips', key, token)) setIsLoadingClips(false);
         }
     };
 
     const loadMoreCategoryClips = useCallback(async () => {
         if (!selectedCategory?.id || !hasMoreCategoryClips || isLoadingMoreClips) return;
+        const key = categorySelectionKey(selectedCategory);
+        const token = startCategoryLoad('moreClips');
         setIsLoadingMoreClips(true);
         try {
             const res = await invoke('get_clips_by_game', { gameId: selectedCategory.id, limit: 40, cursor: categoryClipsCursor, period: clipsPeriod }) as [TwitchClip[], string | null];
+            if (!isCurrentLoad('moreClips', key, token)) return;
             if (res[0].length > 0) {
                 setCategoryClips(prev => {
                     const seen = new Set(prev.map(c => c.id));
@@ -1163,37 +1299,45 @@ const Home = () => {
                 setHasMoreCategoryClips(false);
             }
         } catch (e) {
+            if (!isCurrentLoad('moreClips', key, token)) return;
             Logger.error('Failed to load more category clips:', e);
             setHasMoreCategoryClips(false);
         } finally {
-            setIsLoadingMoreClips(false);
+            if (isCurrentLoad('moreClips', key, token)) setIsLoadingMoreClips(false);
         }
-    }, [selectedCategory, hasMoreCategoryClips, isLoadingMoreClips, categoryClipsCursor, clipsPeriod]);
+    }, [selectedCategory, hasMoreCategoryClips, isLoadingMoreClips, categoryClipsCursor, clipsPeriod, startCategoryLoad, isCurrentLoad]);
 
     const loadCategoryVideos = async () => {
         if (!selectedCategory?.id) return;
+        const key = categorySelectionKey(selectedCategory);
+        const token = startCategoryLoad('videos');
         setIsLoadingVideos(true);
         setCategoryVideos([]);
         setCategoryVideosCursor(null);
         setHasMoreCategoryVideos(true);
         try {
             const res = await invoke('get_videos_by_game', { gameId: selectedCategory.id, sort: videosSort, period: videosPeriod, limit: 40, cursor: null }) as [TwitchVideo[], string | null];
+            if (!isCurrentLoad('videos', key, token)) return;
             setCategoryVideos(res[0]);
             setCategoryVideosCursor(res[1]);
             setHasMoreCategoryVideos(!!res[1] && res[0].length >= 40);
         } catch (e) {
+            if (!isCurrentLoad('videos', key, token)) return;
             Logger.error('Failed to load category videos:', e);
             setHasMoreCategoryVideos(false);
         } finally {
-            setIsLoadingVideos(false);
+            if (isCurrentLoad('videos', key, token)) setIsLoadingVideos(false);
         }
     };
 
     const loadMoreCategoryVideos = useCallback(async () => {
         if (!selectedCategory?.id || !hasMoreCategoryVideos || isLoadingMoreVideos) return;
+        const key = categorySelectionKey(selectedCategory);
+        const token = startCategoryLoad('moreVideos');
         setIsLoadingMoreVideos(true);
         try {
             const res = await invoke('get_videos_by_game', { gameId: selectedCategory.id, sort: videosSort, period: videosPeriod, limit: 40, cursor: categoryVideosCursor }) as [TwitchVideo[], string | null];
+            if (!isCurrentLoad('moreVideos', key, token)) return;
             if (res[0].length > 0) {
                 setCategoryVideos(prev => {
                     const seen = new Set(prev.map(v => v.id));
@@ -1205,14 +1349,17 @@ const Home = () => {
                 setHasMoreCategoryVideos(false);
             }
         } catch (e) {
+            if (!isCurrentLoad('moreVideos', key, token)) return;
             Logger.error('Failed to load more category videos:', e);
             setHasMoreCategoryVideos(false);
         } finally {
-            setIsLoadingMoreVideos(false);
+            if (isCurrentLoad('moreVideos', key, token)) setIsLoadingMoreVideos(false);
         }
-    }, [selectedCategory, hasMoreCategoryVideos, isLoadingMoreVideos, categoryVideosCursor, videosSort, videosPeriod]);
+    }, [selectedCategory, hasMoreCategoryVideos, isLoadingMoreVideos, categoryVideosCursor, videosSort, videosPeriod, startCategoryLoad, isCurrentLoad]);
 
-    // Effect to trigger fetching clips/videos on tab change
+    // Effect to trigger fetching clips/videos on tab change. Keyed on the id, not
+    // the object: the name filling in makes a new object, and an object-keyed
+    // effect would fetch an empty clips or videos list a second time.
     useEffect(() => {
         if (activeTab === 'category' && selectedCategory?.id) {
             if (categoryActiveTab === 'clips' && categoryClips.length === 0 && !isLoadingClips) {
@@ -1222,13 +1369,16 @@ const Home = () => {
             }
         }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [activeTab, categoryActiveTab, selectedCategory]);
+    }, [activeTab, categoryActiveTab, selectedCategory?.id]);
 
     // Clear the search box text when moving to a different category (the picks
-    // follow categoryTagsFor above).
+    // follow categoryTagsFor above). Keyed on the selection, not the name: the
+    // name arriving for the same id is the same category, and the box is hidden
+    // until then, so nothing typed is lost.
+    const categoryScreenKey = selectedCategory ? categorySelectionKey(selectedCategory) : '';
     useEffect(() => {
         setCategoryLiveDraft('');
-    }, [selectedCategoryKey]);
+    }, [categoryScreenKey]);
 
     // Fetch tag-filtered streams server-side whenever the selected tags change.
     const selectedTagsKey = selectedCategoryTags.map(t => t.toLowerCase()).sort().join('');
@@ -2535,8 +2685,10 @@ const Home = () => {
 
     // The category page's own favorite: the same star the tiles set. A page
     // opened by name alone (the badge overlay) has its id once the details load.
+    // A page with no name yet (a link before its answer) has no favorite and no
+    // share: both name the category, and there is nothing to name.
     const categoryPageFavorite: TwitchCategory | null =
-        activeTab === 'category' && selectedCategory && (selectedCategory.id || categoryDetails?.id)
+        activeTab === 'category' && selectedCategory && (selectedCategory.id || categoryDetails?.id) && (selectedCategory.name || categoryDetails?.name)
             ? {
                 id: selectedCategory.id || categoryDetails?.id || '',
                 name: selectedCategory.name || categoryDetails?.name || '',
@@ -2544,6 +2696,54 @@ const Home = () => {
             }
             : null;
     const isCategoryPageFavorite = !!categoryPageFavorite && favoriteCategoryIds.has(categoryPageFavorite.id);
+
+    // A nameless category whose answer failed or never existed: one line in the
+    // title slot, never a blank page. While Try again is in flight the failed
+    // line stays up, so the button keeps its place instead of swapping to the
+    // skeleton under the pointer.
+    const categoryRetrying = !!selectedCategory && retryingCategoryId === selectedCategory.id;
+    const categoryProblem: 'failed' | 'missing' | null =
+        activeTab === 'category' && categoryNameless
+            ? linkedCategory?.state === 'missing'
+                ? 'missing'
+                : linkedCategory?.state === 'failed' || categoryRetrying
+                    ? 'failed'
+                    : null
+            : null;
+    // The header's art, tags and description show their skeletons while the
+    // details load, and also while the name that the details wait for is on its
+    // way; a problem line replaces them all.
+    const detailsPending = (isLoadingCategoryDetails || categoryNameless) && !categoryProblem;
+    const handleRetryCategory = () => {
+        if (!selectedCategory?.id || categoryRetrying) return;
+        const id = selectedCategory.id;
+        setRetryingCategoryId(id);
+        void resolveLinkedCategory(id, { retry: true })
+            .then((record) => {
+                if (record.state === 'found' && record.category) {
+                    useAppStore.getState().fillLinkedCategory(id, record.category);
+                }
+            })
+            .finally(() => setRetryingCategoryId((current) => (current === id ? null : current)));
+    };
+
+    // Copies the category's streamnook.app link. copyCategoryShareLink catches
+    // a failed share in one place and never rejects, so this has nothing to
+    // catch; the label shows only when both the link and the copy succeeded.
+    const handleShareCategory = async () => {
+        if (!categoryPageFavorite) return;
+        const copied = await copyCategoryShareLink(
+            { id: categoryPageFavorite.id, name: categoryPageFavorite.name },
+            (text) => navigator.clipboard.writeText(text),
+        );
+        if (!copied || !isMountedRef.current) return;
+        setCategoryShareCopied(true);
+        if (categoryShareTimerRef.current !== null) window.clearTimeout(categoryShareTimerRef.current);
+        categoryShareTimerRef.current = window.setTimeout(() => {
+            categoryShareTimerRef.current = null;
+            setCategoryShareCopied(false);
+        }, 1100);
+    };
 
     const renderClipCard = (clip: TwitchClip) => (
         <MediaCard
@@ -3023,8 +3223,8 @@ const Home = () => {
                             {/* Tiny Category Pill - Dropping in playfully */}
                             <div
                                 style={{
-                                    opacity: isScrolledPastHero ? 1 : 0,
-                                    transform: `translateY(${isScrolledPastHero ? 0 : 10}px)`,
+                                    opacity: isScrolledPastHero && !categoryNameless ? 1 : 0,
+                                    transform: `translateY(${isScrolledPastHero && !categoryNameless ? 0 : 10}px)`,
                                     transition: 'opacity 0.2s ease, transform 0.2s ease',
                                 }}
                                 className="h-[44px] glass-panel rounded-xl px-4 flex items-center shadow-lg pointer-events-auto bg-background/80 backdrop-blur-md border border-white/5"
@@ -3048,7 +3248,7 @@ const Home = () => {
                     >
                         {/* Hero Box Art */}
                         <div className="flex-shrink-0">
-                            <div className={`w-[108px] h-[144px] sm:w-[144px] sm:h-[192px] bg-white/5 rounded-xl overflow-hidden shadow-[0_8px_30px_rgba(0,0,0,0.6)] border border-white/10 flex items-center justify-center ${isLoadingCategoryDetails && !categoryDetails?.boxArtUrl && !selectedCategory?.box_art_url ? 'animate-pulse' : ''}`}>
+                            <div className={`w-[108px] h-[144px] sm:w-[144px] sm:h-[192px] bg-white/5 rounded-xl overflow-hidden shadow-[0_8px_30px_rgba(0,0,0,0.6)] border border-white/10 flex items-center justify-center ${detailsPending && !categoryDetails?.boxArtUrl && !selectedCategory?.box_art_url ? 'animate-pulse' : ''}`}>
                                 {(categoryDetails?.boxArtUrl || selectedCategory?.box_art_url) ? (
                                     <img 
                                         src={getGameBoxArt(categoryDetails?.boxArtUrl || selectedCategory.box_art_url)} 
@@ -3065,10 +3265,39 @@ const Home = () => {
                         {/* Category Metadata Column */}
                         <div className="flex flex-col flex-1 min-w-0 pr-16 mt-1 sm:mt-2 max-w-[600px]">
                             {/* Title & Followers */}
-                            <div className="flex items-center gap-3 mb-2 flex-wrap">
-                                <h1 className="text-2xl sm:text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-textPrimary to-textSecondary truncate leading-tight">
-                                    {categoryDetails?.displayName || selectedCategory.name}
-                                </h1>
+                            {/* One row that never wraps: a long name truncates (the full
+                                name is in its tooltip) instead of sending the chips to a
+                                second line and pushing everything below down. */}
+                            <div className="flex items-center gap-3 mb-2 flex-nowrap">
+                                {categoryProblem ? (
+                                    <div className="flex items-center gap-3 min-w-0 flex-1">
+                                        <p role="status" className="text-lg font-semibold text-textSecondary">
+                                            {categoryProblem === 'missing' ? "There's no Twitch category with this id." : "Couldn't load this category"}
+                                        </p>
+                                        {categoryProblem === 'failed' && (
+                                            <button
+                                                type="button"
+                                                onClick={handleRetryCategory}
+                                                aria-disabled={categoryRetrying || undefined}
+                                                className="glass-button px-2.5 py-1 shrink-0 text-[11px] font-bold tracking-wide text-textSecondary hover:text-textPrimary active:scale-95"
+                                            >
+                                                Try again
+                                            </button>
+                                        )}
+                                    </div>
+                                ) : categoryNameless ? (
+                                    <h1 className="min-w-0 flex-1">
+                                        {/* The height of the finished title's line, so nothing moves when the name lands. */}
+                                        <span className="block h-8 sm:h-9 w-56 rounded-md bg-white/10 animate-pulse" aria-hidden="true" />
+                                        <span className="sr-only">Loading category</span>
+                                    </h1>
+                                ) : (
+                                    <Tooltip content={categoryDetails?.displayName || selectedCategory.name} side="bottom">
+                                        <h1 className="min-w-0 flex-1 text-2xl sm:text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-textPrimary to-textSecondary truncate leading-tight">
+                                            {categoryDetails?.displayName || selectedCategory.name}
+                                        </h1>
+                                    </Tooltip>
+                                )}
                                 {/* Beside the title, ahead of the Followers chip, so
                                     the chip arriving with the details never moves it. */}
                                 {categoryPageFavorite && (
@@ -3090,6 +3319,26 @@ const Home = () => {
                                         />
                                         <span>Favorite</span>
                                     </button>
+                                )}
+                                {/* Beside the heart, so the Followers chip arriving later
+                                    never moves it. The words "Link copied!" ride in the
+                                    tooltip and a hidden status line, so the button keeps
+                                    its width and nothing in the row shifts. */}
+                                {categoryPageFavorite && (
+                                    <>
+                                        <Tooltip content={categoryShareCopied ? 'Link copied!' : 'Copy a link to this category'} side="bottom">
+                                            <button
+                                                type="button"
+                                                onClick={() => { void handleShareCategory(); }}
+                                                aria-label="Share category"
+                                                className={`glass-button flex items-center gap-1.5 whitespace-nowrap px-2.5 py-1 shrink-0 text-[11px] font-bold tracking-wide hover:text-textPrimary active:scale-95 ${categoryShareCopied ? 'text-success' : 'text-textSecondary'}`}
+                                            >
+                                                {categoryShareCopied ? <Check size={12} /> : <ShareNetwork size={12} weight="bold" />}
+                                                <span>Share</span>
+                                            </button>
+                                        </Tooltip>
+                                        <span role="status" className="sr-only">{categoryShareCopied ? 'Link copied!' : ''}</span>
+                                    </>
                                 )}
                                {categoryDetails?.followersCount != null && (
                                     <div className="glass-badge flex items-center gap-1.5 whitespace-nowrap !bg-white/5 backdrop-blur-md px-2.5 py-1 shrink-0">
@@ -3119,7 +3368,7 @@ const Home = () => {
                                         </CardChip>
                                     </button>
                                 )}
-                                {isLoadingCategoryDetails ? (
+                                {detailsPending ? (
                                     <>
                                         <div className="h-5 w-16 bg-white/5 rounded-full animate-pulse px-2"></div>
                                         <div className="h-5 w-20 bg-white/5 rounded-full animate-pulse px-2"></div>
@@ -3136,7 +3385,7 @@ const Home = () => {
                             
                             {/* Description Accordion */}
                             <div className="relative group">
-                                {isLoadingCategoryDetails ? (
+                                {detailsPending ? (
                                      <div className="space-y-2 mt-1 w-full max-w-[400px]">
                                          <div className="h-3 bg-white/10 rounded w-full animate-pulse"></div>
                                          <div className="h-3 bg-white/10 rounded w-5/6 animate-pulse"></div>
@@ -3375,7 +3624,7 @@ const Home = () => {
                             {/* Filter/Search Toolbar for Live streams: one all-in-one box that
                                 filters streams by tag/title/streamer and drops down matching
                                 tag suggestions as you type. */}
-                            {categoryActiveTab === 'live' && (
+                            {categoryActiveTab === 'live' && !categoryNameless && (
                                 <div className="flex-1 flex justify-center">
                                     <CategorySearchBox
                                         value={categoryLiveDraft}
@@ -3491,8 +3740,8 @@ const Home = () => {
                                             <h3 className="text-base font-bold text-textPrimary mb-1">No Live Streams</h3>
                                             <p className="text-textSecondary text-sm">
                                                 {tagMode
-                                                    ? `No live streams in ${selectedCategory?.name} match ${selectedCategoryTags.length === 1 ? 'that tag' : 'those tags'}.`
-                                                    : `No one is streaming ${selectedCategory?.name}.`}
+                                                    ? categoryNote('tags', selectedCategory?.name ?? '', selectedCategoryTags.length)
+                                                    : categoryNote('live', selectedCategory?.name ?? '')}
                                             </p>
                                         </div>
                                     </div>
@@ -3709,7 +3958,7 @@ const Home = () => {
                                         <div className="text-center glass-panel p-6 max-w-sm">
                                             <h3 className="text-base font-bold text-textPrimary mb-1">No Clips Found</h3>
                                             <p className="text-textSecondary text-sm">
-                                                No clips have been generated for {selectedCategory?.name} yet.
+                                                {categoryNote('clips', selectedCategory?.name ?? '')}
                                             </p>
                                         </div>
                                     </div>
@@ -3768,7 +4017,7 @@ const Home = () => {
                                         <div className="text-center glass-panel p-6 max-w-sm">
                                             <h3 className="text-base font-bold text-textPrimary mb-1">No Videos Found</h3>
                                             <p className="text-textSecondary text-sm">
-                                                No videos exist for {selectedCategory?.name}.
+                                                {categoryNote('videos', selectedCategory?.name ?? '')}
                                             </p>
                                         </div>
                                     </div>
