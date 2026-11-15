@@ -68,14 +68,15 @@ import { getLogicalInnerSize, clampToWorkArea } from './utils/windowSizing';
 import {
   applyBadgeAnswer,
   openBadgeLink,
-  readBadgeLink,
   resolveBadgeLink,
   splitBadgeKey,
   type BadgeLinkDeps,
-  type BadgeLinkTarget,
 } from './utils/badgeLinkOpen';
 import BadgeDetailSlot, { makeCloseLinkSheet, type SelectedBadge } from './components/BadgeDetailSlot';
 import { exitPlayerFullscreen } from './utils/windowFullscreen';
+import { openInboundLink, startLinkDrain, type InboundLinkDeps } from './utils/inboundLinkOpen';
+import { makeCloseAppLayers } from './utils/closeAppLayers';
+import { noteLinkStamp, noticeWorkSettled, trackLinkPeek, watchBootActions } from './utils/noticeReport';
 import { isTitlebarDragActive } from './utils/titleBarDrag';
 import { getSelectedCompactViewPreset } from './constants/compactViewPresets';
 import { compactChatSlot } from './utils/compactView';
@@ -496,11 +497,9 @@ function App() {
     : undefined;
   const [chatRevealed, setChatRevealed] = useState(false);
   const chatRevealTimer = useRef<number | null>(null);
-  // A streamnook:// deep link that landed while the app was still booting. Played
-  // once boot finishes (see the deep-link effects below).
-  const pendingWatchChannelRef = useRef<string | null>(null);
-  // The same for a streamnook:///badge/... link (flushed after boot).
-  const pendingBadgeLinkRef = useRef<BadgeLinkTarget | null>(null);
+  // The one link drain. The `[]` effect near the top of the effects below owns
+  // it; the `[isBooting]` effect asks it to take once boot ends.
+  const drainRef = useRef<{ drain: () => void; stop: () => void } | null>(null);
   const revealChat = () => {
     if (chatRevealTimer.current) { window.clearTimeout(chatRevealTimer.current); chatRevealTimer.current = null; }
     setChatRevealed(true);
@@ -878,86 +877,60 @@ function App() {
     };
   }, []);
 
-  // streamnook:// deep links (the share links resolve here). The Rust handler
-  // emits `streamnook:watch` for links opened while we're running; the
-  // take_pending_watch_link command drains one the app was cold-started with.
-  // Either carries a startStream key Rust already cleaned: a bare Twitch login,
-  // or `provider:channel` (a YouTube video id in it is case-sensitive, so it is
-  // passed on as given). Playback defers until boot finishes so startStream has
-  // settings/auth loaded.
+  // The one door for streamnook:// links of every kind (watch, badge, category).
+  // Rust stores the link in one slot and emits `streamnook:link` with its stamp (a
+  // number); `take_pending_link` hands the slot's link over once, for the event
+  // and for a link the app was launched with. `startLinkDrain` owns the order:
+  // the listener first, then one take, so a link stored while the listener was
+  // registering is not lost. A link carries what Rust already cleaned: a watch
+  // key is a bare Twitch login or `provider:channel` (a YouTube video id in it
+  // is case-sensitive, so it is passed on as given).
   useEffect(() => {
-    const openChannel = (channel: string) => {
-      const login = channel.trim();
-      if (!login) return;
-      if (useAppStore.getState().isBooting) {
-        pendingWatchChannelRef.current = login;
-      } else {
-        closeLinkSheet();
+    const deps: InboundLinkDeps = {
+      startStream: (key) => {
+        const login = key.trim();
+        if (!login) return;
         void useAppStore.getState().startStream(login);
-      }
+      },
+      closeLinkSheet,
+      openBadge: (setId, version) => openBadgeLink({ setId, version }, badgeLinkDeps),
+      // Closes the layers only App holds (the changelog popup and the badge
+      // detail) before a category link opens. Built here, once, from a ref and
+      // setters; this effect runs once, so no memo is needed.
+      closeAppLayers: makeCloseAppLayers({ changelogRecordsSeenRef, setShowChangelog, setSelectedBadge }),
+      openCategory: (id) => useAppStore.getState().openCategoryFromLink(id),
     };
-
-    const unlistenPromise = listen<string>('streamnook:watch', (event) => {
-      if (event.payload) openChannel(event.payload);
+    drainRef.current = startLinkDrain({
+      // Tauri hands a listener an event object; the drain wants the bare payload (the stamp).
+      listen: (event, handler) => listen<unknown>(event, (e) => handler(e.payload)),
+      take: () => invoke<unknown>('take_pending_link'),
+      open: (link) => openInboundLink(link, deps),
+      // While the app boots a link is not taken: it stays in Rust's slot, where a
+      // notification click that opens something drops an older link, and the
+      // effect below takes once boot ends. Playback needs settings and auth loaded.
+      ready: () => !useAppStore.getState().isBooting,
+      // A notification click's report to Rust settles before a take.
+      beforeTake: noticeWorkSettled,
+      onStamp: noteLinkStamp,
+      peek: () => trackLinkPeek(invoke<unknown>('peek_pending_link_stamp')),
     });
-
-    // Cold start: the app was launched by the link before this listener existed.
-    invoke<string | null>('take_pending_watch_link')
-      .then((channel) => { if (channel) openChannel(channel); })
-      .catch(() => { /* older backend without the command; safe to ignore */ });
-
     return () => {
-      unlistenPromise.then((unlisten) => unlisten());
+      drainRef.current?.stop();
     };
-  }, [closeLinkSheet]);
+    // The three deps above are memoized once; a restart would only re-take an empty slot.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  // Flush a deep link that arrived mid-boot, once the app is ready.
+  // Boot ended: take the link that waited in Rust's slot (none, usually). While
+  // booting, watch the person's own actions, so an older link does not open over
+  // what they just chose.
   useEffect(() => {
-    if (!isBooting && pendingWatchChannelRef.current) {
-      const channel = pendingWatchChannelRef.current;
-      pendingWatchChannelRef.current = null;
-      closeLinkSheet();
-      void useAppStore.getState().startStream(channel);
+    if (!isBooting) {
+      drainRef.current?.drain();
+      return undefined;
     }
-  }, [isBooting, closeLinkSheet]);
-
-  // streamnook:///badge/<set>[/<version>] links open that badge's detail. Rust
-  // emits `streamnook:badge` (no payload) for a link opened while we run and
-  // keeps the link for take_pending_badge_link, which also serves a cold start.
-  // A link that lands mid-boot is held and opened once boot finishes.
-  useEffect(() => {
-    const openLink = (link: BadgeLinkTarget) => {
-      if (useAppStore.getState().isBooting) {
-        pendingBadgeLinkRef.current = link;
-        return;
-      }
-      openBadgeLink(link, badgeLinkDeps);
-    };
-    const drain = () => {
-      invoke<unknown>('take_pending_badge_link')
-        .then((raw) => {
-          const link = readBadgeLink(raw);
-          if (link) openLink(link);
-        })
-        .catch(() => { /* older backend without the command; safe to ignore */ });
-    };
-
-    const unlistenPromise = listen('streamnook:badge', drain);
-    drain();
-
-    return () => {
-      unlistenPromise.then((unlisten) => unlisten());
-    };
-  }, [badgeLinkDeps]);
-
-  // Open a badge link that arrived mid-boot, once the app is ready.
-  useEffect(() => {
-    if (!isBooting && pendingBadgeLinkRef.current) {
-      const link = pendingBadgeLinkRef.current;
-      pendingBadgeLinkRef.current = null;
-      openBadgeLink(link, badgeLinkDeps);
-    }
-  }, [isBooting, badgeLinkDeps]);
+    return watchBootActions(useAppStore, invoke);
+  }, [isBooting]);
 
   // The context-menu blocker lives in InputContextMenuHost (rendered below), so
   // MultiChat popouts get the same menu — they render MultiChatWindow, not App.
@@ -1276,12 +1249,13 @@ function App() {
         addToast('Reserved stream went offline - token returned to rotation', 'info');
       });
 
-      // streamnook:// links are owned by Rust: its deep-link handler emits
-      // `streamnook:watch` (see the effect near the top of this component),
-      // and cold starts drain `take_pending_watch_link`. A second
-      // subscription here through the plugin's onOpenUrl started every warm
-      // link twice (two relay starts 20 to 40 ms apart, the outgoing hls.js
-      // instance erroring against a swapped upstream) until 2026-09-06.
+      // streamnook:// links are owned by Rust: its deep-link handler stores each
+      // link and emits `streamnook:link` (see the drain effect near the top of
+      // this component), and a cold start takes the stored link with
+      // `take_pending_link`. A second subscription here through the plugin's
+      // onOpenUrl started every warm link twice (two relay starts 20 to 40 ms
+      // apart, the outgoing hls.js instance erroring against a swapped upstream)
+      // until 2026-09-06.
     };
 
     initializeApp();

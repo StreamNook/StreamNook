@@ -43,7 +43,7 @@ import {
 import { consumePendingChannel, consumePendingMention, consumePendingWhisper } from '../nativeBridge';
 import { openWhisperByKey } from '../whispers/whisperInbox';
 import { useMobileNavStore } from '../navStore';
-import { readBadgeLink } from '../../utils/badgeLinkOpen';
+import { openInboundLink, startPhoneLinkBridge, type InboundLinkDeps } from '../../utils/inboundLinkOpen';
 import { alertOn, loadAlertTypes } from '../alertTypes';
 import { noticeHidden } from '../../utils/notices';
 import { openMentionById } from '../mentions/mentionInbox';
@@ -53,6 +53,11 @@ import type { ProviderId } from '../../types/providers';
 import { streamProvider } from '../../utils/streamProvider';
 import { Logger } from '../../utils/logger';
 import { SENDER_ID, SETTINGS_UPDATED_EVENT, type SettingsUpdatedPayload } from '../../utils/settingsBroadcast';
+
+// The phone's link bridge is a stopgap: Android builds refuse while this marker
+// exists (scripts/phone-bridge-guard.sh, which scripts/android-build.sh runs
+// before anything else), until the phone's own link doors replace the bridge.
+export const PHONE_LINK_BRIDGE = true;
 
 export function useMobileBoot(): void {
   // "Achievement unlocked" for a reward Rust's claims just granted, the same
@@ -340,41 +345,13 @@ export function useMobileBoot(): void {
       // A deep link carries a startStream key (bare Twitch login or
       // `provider:channel`); its YouTube video id is case-sensitive, so the
       // key is passed on as given and startStream folds Twitch case itself.
-      // Rust stashes every phone link before it emits `streamnook:watch`, so
-      // the event and the mount both drain `take_pending_watch_link`: whichever
-      // takes it opens it, once. The listener goes up before the mount drain so
-      // a link landing in between is not missed.
       const openChannel = (login: string) => {
         const clean = login.trim();
         if (!clean) return;
         void useAppStore.getState().startStream(clean);
       };
-      const drainWatchLink = () =>
-        invoke<string | null>('take_pending_watch_link')
-          .then((link) => {
-            if (link) openChannel(link);
-          })
-          .catch(() => {});
       (window as Window & { __SN_OPEN_CHANNEL__?: (login: string) => void }).__SN_OPEN_CHANNEL__ =
         openChannel;
-      await addListener<string>('streamnook:watch', () => {
-        void drainWatchLink();
-      });
-      // A streamnook:///badge/... link opens that badge's sheet in Rewards.
-      // Rust stashes it and emits `streamnook:badge` (no payload); the event
-      // and the mount both drain `take_pending_badge_link`, and whichever
-      // takes it opens it, once.
-      const drainBadgeLink = () =>
-        invoke<unknown>('take_pending_badge_link')
-          .then((raw) => {
-            const link = readBadgeLink(raw);
-            if (link) useMobileNavStore.getState().openBadgeLink(`${link.setId}/${link.version}`);
-          })
-          .catch(() => {});
-      await addListener<null>('streamnook:badge', () => {
-        void drainBadgeLink();
-      });
-      void drainBadgeLink();
       // A tapped mention notification (posted from Rust, android_notify.rs)
       // opens that mention: its chat, then the jump to the message. A warm tap
       // is pushed in; it clears the native copy too, so a later remount does
@@ -392,14 +369,36 @@ export function useMobileBoot(): void {
       const tappedWhisper = consumePendingWhisper();
       const tappedMention = tappedWhisper ? null : consumePendingMention();
       const tapped = tappedWhisper || tappedMention ? null : consumePendingChannel();
+      // Every streamnook:// link (watch, badge, category) is stored by Rust in one
+      // slot and announced with `streamnook:link`; `take_pending_link` hands it
+      // over once, for the event and for a link the app was launched with. The
+      // bridge registers its listener before its first take, so a link that
+      // lands in between is not missed. A tapped notification is the newer
+      // action: when this mount consumed one, a watch link taken by the mount's
+      // own take is dropped (a badge link still opens).
+      const linkDeps: InboundLinkDeps = {
+        startStream: openChannel,
+        closeLinkSheet: () => {},
+        openBadge: (setId, version) => useMobileNavStore.getState().openBadgeLink(`${setId}/${version}`),
+        closeAppLayers: () => {},
+        openCategory: (id) => {
+          Logger.debug('[MobileBoot] category link ignored, the phone has no category screen yet:', id);
+        },
+      };
+      const bridge = startPhoneLinkBridge({
+        // Tauri hands a listener an event object; the bridge wants the bare payload.
+        listen: (event, handler) => listen<unknown>(event, (e) => handler(e.payload)),
+        take: () => invoke<unknown>('take_pending_link'),
+        tapped: !!(tappedWhisper || tappedMention || tapped),
+        open: (link) => openInboundLink(link, linkDeps),
+      });
+      addCleanup(bridge.stop);
       if (tappedWhisper) {
         void openWhisperByKey(tappedWhisper);
       } else if (tappedMention) {
         void openMentionById(tappedMention);
       } else if (tapped) {
         openChannel(tapped);
-      } else {
-        void drainWatchLink();
       }
 
       // No `streamer-went-live` listener here anymore, on purpose. The

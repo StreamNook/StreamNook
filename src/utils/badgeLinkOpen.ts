@@ -54,14 +54,6 @@ export interface BadgeLinkDeps {
   answerBadgeLink: (key: string, read: number, next: BadgeLinkAnswer) => void;
 }
 
-/** Read what `take_pending_badge_link` returned; null when it is not a link. */
-export function readBadgeLink(raw: unknown): BadgeLinkTarget | null {
-  if (!raw || typeof raw !== 'object') return null;
-  const { setId, version } = raw as { setId?: unknown; version?: unknown };
-  if (typeof setId !== 'string' || !setId) return null;
-  return { setId, version: typeof version === 'string' && version ? version : '1' };
-}
-
 interface VersionLike {
   id: string;
 }

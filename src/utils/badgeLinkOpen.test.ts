@@ -18,7 +18,6 @@ import {
   applyBadgeAnswer,
   findTwitchBadge,
   openBadgeLink,
-  readBadgeLink,
   resolveBadgeLink,
   splitBadgeKey,
   type BadgeLinkAnswer,
@@ -275,19 +274,6 @@ describe('applyBadgeAnswer', () => {
   });
 });
 
-describe('readBadgeLink', () => {
-  it('reads what Rust returns', () => {
-    expect(readBadgeLink({ setId: 'clover', version: '3' })).toEqual({ setId: 'clover', version: '3' });
-  });
-
-  it('defaults a missing version and rejects non-links', () => {
-    expect(readBadgeLink({ setId: 'clover' })).toEqual({ setId: 'clover', version: '1' });
-    expect(readBadgeLink(null)).toBeNull();
-    expect(readBadgeLink({ setId: '' })).toBeNull();
-    expect(readBadgeLink('clover')).toBeNull();
-  });
-});
-
 describe('findTwitchBadge', () => {
   const sets = [
     { set_id: 'clover', versions: [{ id: '1', title: 'one' }, { id: '2', title: 'two' }] },
@@ -327,22 +313,68 @@ describe('the sheet words', () => {
 // Source pins: behavior that lives in components and needs a DOM to mount.
 const src = (p: string) => readFileSync(resolve(__dirname, '..', '..', p), 'utf8').replace(/\r\n/g, '\n');
 
-describe('shells listen and drain', () => {
-  it.each(['src/App.tsx', 'src/mobile/boot/useMobileBoot.ts'])('%s', (file) => {
-    const text = src(file);
-    expect(text).toMatch(/streamnook:badge'/);
-    expect(text).toMatch(/invoke<unknown>\('take_pending_badge_link'\)/);
-  });
-
-  it('desktop opens through openBadgeLink with the slot deps and holds a link while booting', () => {
+describe('shells use the one link door', () => {
+  it('desktop takes links through one drain on take_pending_link', () => {
     const text = src('src/App.tsx');
-    expect(text).toContain('openBadgeLink(link, badgeLinkDeps)');
-    expect(text).toContain('pendingBadgeLinkRef.current = link');
-    expect(text).toContain('const badgeLinkDeps = useMemo<BadgeLinkDeps>(');
+    expect(text.match(/startLinkDrain\(/g)).toHaveLength(1);
+    expect(text).toContain("take: () => invoke<unknown>('take_pending_link')");
+    expect(text).toContain('ready: () => !useAppStore.getState().isBooting');
+    expect(new Set(text.match(/take_pending_\w+/g))).toEqual(new Set(['take_pending_link']));
+    expect(text).toContain('drainRef.current?.stop();');
   });
 
-  it('phone opens through navStore.openBadgeLink', () => {
-    expect(src('src/mobile/boot/useMobileBoot.ts')).toContain('openBadgeLink(`${link.setId}/${link.version}`)');
+  it('desktop feeds the boot watch and waits for notice work before a take', () => {
+    const text = src('src/App.tsx');
+    expect(text).toContain('beforeTake: noticeWorkSettled');
+    expect(text).toContain('onStamp: noteLinkStamp');
+    expect(text).toContain("peek: () => trackLinkPeek(invoke<unknown>('peek_pending_link_stamp'))");
+  });
+
+  it('desktop takes again once boot ends and watches the person\'s actions while it boots', () => {
+    const text = src('src/App.tsx');
+    const at = text.indexOf('drainRef.current?.drain()');
+    expect(at).toBeGreaterThan(-1);
+    const start = text.lastIndexOf('useEffect(', at);
+    const end = text.indexOf('}, [isBooting]);', at);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(at);
+    const effect = text.slice(start, end);
+    expect(effect).toMatch(/if \(!isBooting\) \{\s*drainRef\.current\?\.drain\(\);/);
+    expect(effect).toContain('return watchBootActions(useAppStore, invoke);');
+    expect(effect.indexOf('drainRef.current?.drain()')).toBeLessThan(effect.indexOf('watchBootActions('));
+  });
+
+  it('desktop holds no link in the webview and closes its own layers through one function', () => {
+    const text = src('src/App.tsx');
+    expect(text).not.toMatch(/holdLink|takeHeld/);
+    expect(text).not.toContain('handleChangelogCloseRef');
+    expect(text).toContain('makeCloseAppLayers({ changelogRecordsSeenRef, setShowChangelog, setSelectedBadge })');
+  });
+
+  it('phone starts one bridge on take_pending_link, after it consumed the taps', () => {
+    const text = src('src/mobile/boot/useMobileBoot.ts');
+    expect(text.match(/startPhoneLinkBridge\(/g)).toHaveLength(1);
+    expect(text).toContain("take: () => invoke<unknown>('take_pending_link')");
+    expect(new Set(text.match(/take_pending_\w+/g))).toEqual(new Set(['take_pending_link']));
+    expect(text).toContain("import { listen } from '@tauri-apps/api/event';");
+    expect(text).not.toMatch(/listen:\s*addListener/);
+    expect(text).toContain('tapped: !!(tappedWhisper || tappedMention || tapped),');
+    expect(text).toContain('addCleanup(bridge.stop);');
+    expect(text).toContain('export const PHONE_LINK_BRIDGE = true;');
+    expect(text).toContain(
+      "openBadge: (setId, version) => useMobileNavStore.getState().openBadgeLink(`${setId}/${version}`),",
+    );
+    const bridge = text.indexOf('startPhoneLinkBridge({');
+    expect(bridge).toBeGreaterThan(-1);
+    for (const consume of [
+      'const tappedWhisper = consumePendingWhisper();',
+      'const tappedMention = tappedWhisper ? null : consumePendingMention();',
+      'const tapped = tappedWhisper || tappedMention ? null : consumePendingChannel();',
+    ]) {
+      const consumed = text.indexOf(consume);
+      expect(consumed).toBeGreaterThan(-1);
+      expect(consumed).toBeLessThan(bridge);
+    }
   });
 });
 

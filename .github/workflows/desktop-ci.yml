@@ -59,6 +59,10 @@ jobs:
       - name: Build frontend
         run: npm run build
 
+      # The phone bridge guard's test runs rg through Git Bash.
+      - name: Install ripgrep
+        run: choco install ripgrep -y
+
       - name: Frontend tests
         run: npm test
 
@@ -104,6 +108,10 @@ jobs:
       # Same reason as on Windows: dist/ must exist before any cargo step.
       - name: Build frontend
         run: npm run build
+
+      # The phone bridge guard's test runs rg through Git Bash.
+      - name: Install ripgrep
+        run: brew install ripgrep
 
       - name: Frontend tests
         run: npm test
