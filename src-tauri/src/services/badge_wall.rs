@@ -1045,7 +1045,10 @@ mod tests {
     fn tiles_and_missing_rows_carry_the_art_of_the_version_they_show() {
         let art = HashMap::from([
             ("glhf/2".to_string(), art_for("4x-GLHF-2")),
-            ("other/1".to_string(), art_for("4x-GLHF-1")),
+            // glhf/1 is merged into the GLHF tile but not the version it shows, so its
+            // art must never reach that tile. (other/1 is also the Mouse tile's own key
+            // in this catalogue, so it cannot stand in for a merged-in version.)
+            ("glhf/1".to_string(), art_for("4x-GLHF-1")),
         ]);
         let built = tiles(&catalogue(), &HashMap::new(), &HashMap::new(), &HashMap::new(), &art, &HashSet::new(), 0);
         let glhf = &built[0].0;
