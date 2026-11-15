@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, lazy, Suspense } from 'react';
+import { useCallback, useEffect, useMemo, useState, useRef, lazy, Suspense } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useShallow } from 'zustand/react/shallow';
@@ -65,7 +65,16 @@ import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow, LogicalSize } from '@tauri-apps/api/window';
 import { useThemeBoot } from './boot/useThemeBoot';
 import { getLogicalInnerSize, clampToWorkArea } from './utils/windowSizing';
-import { openBadgeLink, readBadgeLink, type BadgeLinkTarget } from './utils/badgeLinkOpen';
+import {
+  applyBadgeAnswer,
+  openBadgeLink,
+  readBadgeLink,
+  resolveBadgeLink,
+  splitBadgeKey,
+  type BadgeLinkDeps,
+  type BadgeLinkTarget,
+} from './utils/badgeLinkOpen';
+import BadgeDetailSlot, { makeCloseLinkSheet, type SelectedBadge } from './components/BadgeDetailSlot';
 import { exitPlayerFullscreen } from './utils/windowFullscreen';
 import { isTitlebarDragActive } from './utils/titleBarDrag';
 import { getSelectedCompactViewPreset } from './constants/compactViewPresets';
@@ -98,24 +107,11 @@ const SearchProfileModal = lazy(() =>
 );
 const DropsOverlay = lazy(() => import('./components/DropsOverlay'));
 const MarketplaceOverlay = lazy(() => import('./components/MarketplaceOverlay'));
-const BadgesOverlay = lazy(() => import('./components/BadgesOverlay'));
 const EmoteSetsOverlay = lazy(() => import('./components/EmoteSetsOverlay'));
-const BadgeDetailOverlay = lazy(() => import('./components/BadgeDetailOverlay'));
 const ChangelogOverlay = lazy(() => import('./components/ChangelogOverlay'));
 const SetupWizard = lazy(() => import('./components/SetupWizard'));
 const ClipModal = lazy(() => import('./components/ClipModal'));
 const ClipEditor = lazy(() => import('./components/ClipEditor'));
-interface BadgeVersion {
-  id: string;
-  image_url_1x: string;
-  image_url_2x: string;
-  image_url_4x: string;
-  title: string;
-  description: string;
-  click_action: string | null;
-  click_url: string | null;
-  set_id?: string;
-}
 
 // One-time migration flag for v4.9.1 webview features
 // This key is set after the force re-login to ensure it only happens once
@@ -533,7 +529,50 @@ function App() {
   const [isResizing, setIsResizing] = useState(false);
   const [isResizingModLogs, setIsResizingModLogs] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
-  const [selectedBadge, setSelectedBadge] = useState<{ badge: BadgeVersion; setId: string } | null>(null);
+  const [selectedBadge, setSelectedBadge] = useState<SelectedBadge>(null);
+  // Numbers every badge link lookup (a link's first read and each Try again), so an older lookup's
+  // answer can never land on a newer placeholder.
+  const badgeReadRef = useRef(0);
+  const badgeLinkDeps = useMemo<BadgeLinkDeps>(
+    () => ({
+      isPlayerFullscreen: () => useAppStore.getState().isPlayerFullscreen,
+      exitPlayerFullscreen,
+      // Badges opens on the Twitch tab behind the detail, so Back lands on that list.
+      showBadgeLink: (key) => {
+        const { setId, version } = splitBadgeKey(key);
+        useAppStore.getState().openTwitchBadge(setId, version);
+        badgeReadRef.current += 1;
+        const read = badgeReadRef.current;
+        setSelectedBadge({ kind: 'link', key, state: 'loading', read });
+        return read;
+      },
+      answerBadgeLink: (key, read, next) =>
+        setSelectedBadge((cur) => applyBadgeAnswer(cur, key, read, next)),
+    }),
+    [setSelectedBadge],
+  );
+  // Try again on a failed placeholder: a new read number, the placeholder back to loading, one more lookup.
+  const selectedBadgeRef = useRef(selectedBadge);
+  useEffect(() => {
+    selectedBadgeRef.current = selectedBadge;
+  }, [selectedBadge]);
+  const retryBadgeLink = useCallback(
+    (key: string) => {
+      const cur = selectedBadgeRef.current;
+      if (cur?.kind !== 'link' || cur.key !== key || cur.state !== 'failed') return;
+      badgeReadRef.current += 1;
+      const read = badgeReadRef.current;
+      setSelectedBadge({ kind: 'link', key, state: 'loading', read });
+      resolveBadgeLink(key, (next) => badgeLinkDeps.answerBadgeLink(key, read, next));
+    },
+    [badgeLinkDeps, setSelectedBadge],
+  );
+  // What a link to another screen closes first: the detail or its placeholder, the Badges list behind
+  // it and a badge spotlight card.
+  const closeLinkSheet = useMemo(
+    () => makeCloseLinkSheet({ setSelectedBadge, setShowBadgesOverlay }),
+    [setSelectedBadge, setShowBadgesOverlay],
+  );
   
   // Persist savedWindowSize to localStorage so it survives app restarts. The
   // optional `maximized` flag is additive, so a stored value written before it
@@ -780,7 +819,7 @@ function App() {
   useEffect(() => {
     const handleBadgeDetail = (event: CustomEvent) => {
       const { badge, setId } = event.detail;
-      setSelectedBadge({ badge, setId });
+      setSelectedBadge({ kind: 'badge', badge, setId });
     };
 
     window.addEventListener('show-badge-detail', handleBadgeDetail as EventListener);
@@ -853,6 +892,7 @@ function App() {
       if (useAppStore.getState().isBooting) {
         pendingWatchChannelRef.current = login;
       } else {
+        closeLinkSheet();
         void useAppStore.getState().startStream(login);
       }
     };
@@ -869,16 +909,17 @@ function App() {
     return () => {
       unlistenPromise.then((unlisten) => unlisten());
     };
-  }, []);
+  }, [closeLinkSheet]);
 
   // Flush a deep link that arrived mid-boot, once the app is ready.
   useEffect(() => {
     if (!isBooting && pendingWatchChannelRef.current) {
       const channel = pendingWatchChannelRef.current;
       pendingWatchChannelRef.current = null;
+      closeLinkSheet();
       void useAppStore.getState().startStream(channel);
     }
-  }, [isBooting]);
+  }, [isBooting, closeLinkSheet]);
 
   // streamnook:///badge/<set>[/<version>] links open that badge's detail. Rust
   // emits `streamnook:badge` (no payload) for a link opened while we run and
@@ -890,12 +931,7 @@ function App() {
         pendingBadgeLinkRef.current = link;
         return;
       }
-      openBadgeLink(link, {
-        isPlayerFullscreen: () => useAppStore.getState().isPlayerFullscreen,
-        exitPlayerFullscreen,
-        closeBadgeDetail: () => setSelectedBadge(null),
-        openTwitchBadge: (setId, version) => useAppStore.getState().openTwitchBadge(setId, version),
-      });
+      openBadgeLink(link, badgeLinkDeps);
     };
     const drain = () => {
       invoke<unknown>('take_pending_badge_link')
@@ -912,21 +948,16 @@ function App() {
     return () => {
       unlistenPromise.then((unlisten) => unlisten());
     };
-  }, []);
+  }, [badgeLinkDeps]);
 
   // Open a badge link that arrived mid-boot, once the app is ready.
   useEffect(() => {
     if (!isBooting && pendingBadgeLinkRef.current) {
       const link = pendingBadgeLinkRef.current;
       pendingBadgeLinkRef.current = null;
-      openBadgeLink(link, {
-        isPlayerFullscreen: () => useAppStore.getState().isPlayerFullscreen,
-        exitPlayerFullscreen,
-        closeBadgeDetail: () => setSelectedBadge(null),
-        openTwitchBadge: (setId, version) => useAppStore.getState().openTwitchBadge(setId, version),
-      });
+      openBadgeLink(link, badgeLinkDeps);
     }
-  }, [isBooting]);
+  }, [isBooting, badgeLinkDeps]);
 
   // The context-menu blocker lives in InputContextMenuHost (rendered below), so
   // MultiChat popouts get the same menu — they render MultiChatWindow, not App.
@@ -2518,35 +2549,19 @@ function App() {
           />
         </Suspense>
       )}
-      <AnimatePresence>
-        {showBadgesOverlay && !selectedBadge && (
-          <Suspense fallback={null}>
-            <BadgesOverlay
-              onClose={() => setShowBadgesOverlay(false)}
-              onBadgeClick={(badge, setId) => setSelectedBadge({ badge, setId })}
-              initialPaintId={badgesOverlayInitialPaintId}
-              initialBadgeId={badgesOverlayInitialBadgeId}
-              initialStreamNook={badgesOverlayInitialStreamNook}
-              initialTarget={badgesOverlayInitialTarget}
-            />
-          </Suspense>
-        )}
-      </AnimatePresence>
-      <AnimatePresence>
-        {selectedBadge && (
-        <Suspense fallback={null}>
-          <BadgeDetailOverlay
-            badge={selectedBadge.badge}
-            setId={selectedBadge.setId}
-            onClose={() => {
-              setSelectedBadge(null);
-              setShowBadgesOverlay(false);
-            }}
-            onBack={() => setSelectedBadge(null)}
-          />
-        </Suspense>
-        )}
-      </AnimatePresence>
+      <BadgeDetailSlot
+        selectedBadge={selectedBadge}
+        setSelectedBadge={setSelectedBadge}
+        showBadgesOverlay={showBadgesOverlay}
+        setShowBadgesOverlay={setShowBadgesOverlay}
+        overlayInitial={{
+          paintId: badgesOverlayInitialPaintId,
+          badgeId: badgesOverlayInitialBadgeId,
+          streamNook: badgesOverlayInitialStreamNook,
+          target: badgesOverlayInitialTarget,
+        }}
+        onRetryBadgeLink={retryBadgeLink}
+      />
       <AnimatePresence>
         {showChangelog && changelogVersion && (
           <Suspense fallback={null}>

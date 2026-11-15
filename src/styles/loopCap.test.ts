@@ -234,6 +234,7 @@ const OFF_EXEMPT = ['.animate-spin', '.animate-penrose-rotate', '.sn-loader', '.
 const PULSE_LOADER_FILES = new Set([
   'components/badge/EvolutionPicker.tsx',
   'components/badge/MissingNowStrip.tsx',
+  'components/BadgeDetailOverlay.tsx',
   'components/ChannelPointsMenu.tsx',
   'components/Home.tsx',
   'components/modroom/ModRoomPane.tsx',

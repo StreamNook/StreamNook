@@ -1,6 +1,7 @@
 import { X, Gift, ChevronLeft, AlertTriangle, Calendar, ChevronRight, Users, Clock, ArrowUpRight, Radio } from 'lucide-react';
 import { ExternalAnchor } from './ui/ExternalAnchor';
-import { useEffect, useState, useMemo, useCallback, type JSX } from 'react';
+import { createContext, useContext, useEffect, useState, useMemo, useCallback, type JSX, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useAppStore } from '../stores/AppStore';
@@ -33,6 +34,8 @@ import {
 import { extractChannelLogins, splitChannelMentions } from '../utils/badgeChannels';
 import { dedupeResolvedLinks } from '../utils/badgeLinks';
 import { resolveWatchPlaces, type PlaceCategory, type PlaceChannel } from '../services/watchPlaces';
+import { BADGE_LOAD_FAILED_TEXT, BADGE_NOT_FOUND_TEXT } from '../utils/badgeLinkOpen';
+import type { SelectedBadge } from './BadgeDetailSlot';
 
 // The sibling-list heading, from our enrichment or from badgebase. Everything
 // after it (up to the next blank line) is the list of related event badges.
@@ -150,13 +153,175 @@ type LinkCandidate = ParsedBadgeLink & { authoritative?: boolean };
 type DisplayLink = ParsedBadgeLink & { boxArtUrl?: string; categoryId?: string; viewersLine?: string };
 
 interface BadgeDetailOverlayProps {
+  /** The badge to show, or the link placeholder standing in for it. */
+  selected: NonNullable<SelectedBadge>;
+  onClose: () => void;
+  onBack: () => void;
+  /** Try again on a failed link placeholder; the owner reads the list again. */
+  onRetry: (key: string) => void;
+}
+
+// Two places in the frame belong to whatever fills it: the title row in the header (between Back and
+// Close) and the root, where a modal has to sit beside the card, not inside its transform. The frame
+// holds the elements; the body that mounts with a badge, and the link placeholder, draw into them.
+interface FrameSlots {
+  heading: HTMLElement | null;
+  root: HTMLElement | null;
+}
+const FrameSlotsContext = createContext<FrameSlots>({ heading: null, root: null });
+
+/** Draws `children` as the header's title row. Nothing until the frame has mounted its slot. */
+function Heading({ children }: { children: ReactNode }) {
+  const { heading } = useContext(FrameSlotsContext);
+  return heading ? createPortal(children, heading) : null;
+}
+
+/** The body for a badge link that has no badge yet: loading, not found, or failed. */
+function BadgeLinkBody({
+  linkKey,
+  state,
+  read,
+  onRetry,
+}: {
+  linkKey: string;
+  state: 'loading' | 'missing' | 'failed';
+  read: number;
+  onRetry: (key: string) => void;
+}) {
+  // The read number the person pressed Try again on. Until the new read answers, the failed line and
+  // its button stay mounted (the button is only aria-disabled), so keyboard focus is not lost.
+  const [retriedAt, setRetriedAt] = useState<number | null>(null);
+  const retrying = state === 'loading' && retriedAt !== null && read !== retriedAt;
+  const showFailed = state === 'failed' || retrying;
+  const showLoading = state === 'loading' && !retrying;
+
+  return (
+    <>
+      <Heading>
+        <div>
+          {showLoading ? (
+            <>
+              <div aria-hidden="true" className="h-7 w-48 animate-pulse rounded-md bg-white/10" />
+              <span className="sr-only">Loading badge</span>
+            </>
+          ) : (
+            <h2 className="text-xl font-bold text-textPrimary">Badge link</h2>
+          )}
+          <p className="text-sm text-accent">Twitch Chat Badge</p>
+        </div>
+      </Heading>
+      <div className="max-w-3xl mx-auto space-y-8">
+        {showLoading && (
+          <div aria-hidden="true" className="flex items-end gap-4">
+            <div className="h-[104px] w-[104px] animate-pulse rounded-lg bg-white/10" />
+            <div className="h-[60px] w-[60px] animate-pulse rounded-lg bg-white/10" />
+            <div className="h-[34px] w-[34px] animate-pulse rounded-lg bg-white/10" />
+          </div>
+        )}
+        {state === 'missing' && <p className="text-sm text-textSecondary">{BADGE_NOT_FOUND_TEXT}</p>}
+        {showFailed && (
+          <div className="flex flex-col items-start gap-3">
+            <p className="text-sm text-textSecondary">{BADGE_LOAD_FAILED_TEXT}</p>
+            <button
+              type="button"
+              aria-disabled={retrying}
+              onClick={() => {
+                if (retrying) return;
+                setRetriedAt(read);
+                onRetry(linkKey);
+              }}
+              className="rounded-lg bg-glass px-3 py-1.5 text-sm font-medium text-textPrimary transition-colors hover:bg-glass/80 aria-disabled:opacity-60"
+            >
+              Try again
+            </button>
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+/**
+ * The frame every state of the badge detail shares: the backdrop, the card, and the Back and Close
+ * buttons. It stays mounted when a link placeholder fills with its badge, so the card does not move.
+ * What reads the badge (the title row, the art, every section) lives in the body.
+ */
+const BadgeDetailOverlay = ({ selected, onClose, onBack, onRetry }: BadgeDetailOverlayProps) => {
+  const [heading, setHeading] = useState<HTMLElement | null>(null);
+  const [root, setRoot] = useState<HTMLElement | null>(null);
+  const slots = useMemo(() => ({ heading, root }), [heading, root]);
+
+  return (
+    <motion.div
+      ref={setRoot}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.18 }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-2xl"
+    >
+      {/* Hover-sensitive background overlay */}
+      <div
+        className="absolute inset-0 group-hover:pointer-events-none"
+        onClick={onClose}
+      />
+
+      <motion.div
+        initial={{ opacity: 0, scale: 0.96, y: 12 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.96, y: 12 }}
+        transition={{ type: 'spring', stiffness: 380, damping: 30 }}
+        className="sn-light-off liquid-glass-panel w-[90vw] max-h-[85vh] min-h-[min(32rem,85vh)] max-w-5xl flex flex-col relative z-10 overflow-hidden"
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between p-4 border-b border-borderSubtle">
+          <div className="flex items-center gap-3">
+            <Tooltip content="Back to badges" side="bottom">
+              <button
+                onClick={onBack}
+                className="chrome-glaze nav-flipper-btn"
+                aria-label="Back to badges"
+              >
+                <ChevronLeft size={20} />
+              </button>
+            </Tooltip>
+            <div ref={setHeading} />
+          </div>
+          <Tooltip content="Close" side="bottom">
+            <button
+              onClick={onClose}
+              className="p-2 hover:bg-glass rounded-lg transition-colors"
+              aria-label="Close"
+            >
+              <X size={20} className="text-textSecondary" />
+            </button>
+          </Tooltip>
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto p-6 custom-scrollbar">
+          <FrameSlotsContext.Provider value={slots}>
+            {selected.kind === 'badge' ? (
+              <BadgeDetailBody badge={selected.badge} setId={selected.setId} onClose={onClose} />
+            ) : (
+              <BadgeLinkBody linkKey={selected.key} state={selected.state} read={selected.read} onRetry={onRetry} />
+            )}
+          </FrameSlotsContext.Provider>
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+};
+
+interface BadgeDetailBodyProps {
   badge: BadgeVersion;
   setId: string;
   onClose: () => void;
-  onBack: () => void;
 }
 
-const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverlayProps) => {
+// Everything that reads the badge. It mounts only with a badge, so none of it needs a placeholder branch.
+const BadgeDetailBody = ({ badge, setId, onClose }: BadgeDetailBodyProps) => {
+  const { root } = useContext(FrameSlotsContext);
   const [badgeBaseInfo, setBadgeBaseInfo] = useState<BadgeMetadata | null>(null);
   const [windowRuns, setWindowRuns] = useState<WindowRun[] | null>(null);
   const [loadingBadgeBase, setLoadingBadgeBase] = useState(true);
@@ -847,69 +1012,27 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
   };
 
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      transition={{ duration: 0.18 }}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-2xl"
-    >
-      {/* Hover-sensitive background overlay */}
-      <div
-        className="absolute inset-0 group-hover:pointer-events-none"
-        onClick={onClose}
-      />
-
-      <motion.div
-        initial={{ opacity: 0, scale: 0.96, y: 12 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.96, y: 12 }}
-        transition={{ type: 'spring', stiffness: 380, damping: 30 }}
-        className="sn-light-off liquid-glass-panel w-[90vw] max-h-[85vh] max-w-5xl flex flex-col relative z-10 overflow-hidden"
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-borderSubtle">
-          <div className="flex items-center gap-3">
-            <Tooltip content="Back to badges" side="bottom">
-              <button
-                onClick={onBack}
-                className="chrome-glaze nav-flipper-btn"
-                aria-label="Back to badges"
-              >
-                <ChevronLeft size={20} />
-              </button>
-            </Tooltip>
-            <div>
-              <div className="flex items-center gap-2">
-                <h2 className="text-xl font-bold text-textPrimary">{badge.title}</h2>
-                {isAvailable && (
-                  <div className="flex items-center gap-1.5 px-2 py-1 bg-success/20 border border-success/50 rounded-full">
-                    <span className="w-2 h-2 bg-success rounded-full animate-pulse sn-decor"></span>
-                    <span className="text-xs font-medium text-success">Available Now</span>
-                  </div>
-                )}
-                {isComingSoon && (
-                  <div className="flex items-center gap-1.5 px-2 py-1 bg-info/20 border border-info/50 rounded-full">
-                    <span className="w-2 h-2 bg-info rounded-full animate-pulse sn-decor"></span>
-                    <span className="text-xs font-medium text-info">Coming Soon</span>
-                  </div>
-                )}
+    <>
+      <Heading>
+        <div>
+          <div className="flex items-center gap-2">
+            <h2 className="text-xl font-bold text-textPrimary">{badge.title}</h2>
+            {isAvailable && (
+              <div className="flex items-center gap-1.5 px-2 py-1 bg-success/20 border border-success/50 rounded-full">
+                <span className="w-2 h-2 bg-success rounded-full animate-pulse sn-decor"></span>
+                <span className="text-xs font-medium text-success">Available Now</span>
               </div>
-              <p className="text-sm text-accent">Twitch Chat Badge</p>
-            </div>
+            )}
+            {isComingSoon && (
+              <div className="flex items-center gap-1.5 px-2 py-1 bg-info/20 border border-info/50 rounded-full">
+                <span className="w-2 h-2 bg-info rounded-full animate-pulse sn-decor"></span>
+                <span className="text-xs font-medium text-info">Coming Soon</span>
+              </div>
+            )}
           </div>
-          <Tooltip content="Close" side="bottom">
-            <button
-              onClick={onClose}
-              className="p-2 hover:bg-glass rounded-lg transition-colors"
-            >
-              <X size={20} className="text-textSecondary" />
-            </button>
-          </Tooltip>
+          <p className="text-sm text-accent">Twitch Chat Badge</p>
         </div>
-
-        {/* Content */}
-        <div className="flex-1 overflow-y-auto p-6 custom-scrollbar">
+      </Heading>
           <div className="max-w-3xl mx-auto space-y-8">
             {/* Badge Variations */}
             <div className="flex items-end gap-4">
@@ -1186,10 +1309,8 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
             )}
 
           </div>
-        </div>
-      </motion.div>
 
-      {aclCampaign && showChannelPicker && (
+      {root && aclCampaign && showChannelPicker && createPortal(
         <ChannelPickerModal
           isOpen
           onClose={() => setShowChannelPicker(false)}
@@ -1209,9 +1330,10 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
             setShowChannelPicker(false);
             handleWatchChannel(c.login, c.stream);
           }}
-        />
+        />,
+        root,
       )}
-    </motion.div>
+    </>
   );
 };
 
