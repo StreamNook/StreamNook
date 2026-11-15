@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-// The badge-link target in the store: openTwitchBadge opens the Twitch tab with
-// it, every other writer of the overlay's initial fields clears it, and
-// consuming returns it once.
+// A badge link opens Badges on the Twitch tab so Back from the detail lands on
+// its list, and nothing in the store waits to open the badge itself: the detail
+// is App's slot and the link's answer reaches it directly.
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
 vi.mock('@tauri-apps/api/event', () => ({
@@ -22,16 +22,21 @@ beforeEach(() => {
     badgesOverlayInitialBadgeId: null,
     badgesOverlayInitialStreamNook: false,
     badgesOverlayInitialTarget: null,
-    badgesOverlayInitialTwitchBadge: null,
   });
 });
 
 describe('openTwitchBadge', () => {
-  it('opens Badges on the Twitch tab with the badge pending', () => {
+  it('opens Badges on the Twitch tab', () => {
     get().openTwitchBadge('clover', '2');
     expect(get().showBadgesOverlay).toBe(true);
     expect(get().badgesOverlayInitialTarget).toEqual({ tab: 'twitch-badges' });
-    expect(get().badgesOverlayInitialTwitchBadge).toEqual({ setId: 'clover', version: '2' });
+  });
+
+  it('sets no pending badge: the store holds no badge target and no way to take one', () => {
+    // Fails against the old store, which held the badge in a field and handed it out once.
+    get().openTwitchBadge('clover', '2');
+    expect(Object.keys(get())).not.toContain('badgesOverlayInitial' + 'TwitchBadge');
+    expect(Object.keys(get())).not.toContain('consumeInitial' + 'TwitchBadge');
   });
 
   it('clears the other initial targets', () => {
@@ -47,33 +52,25 @@ describe('openTwitchBadge', () => {
   });
 });
 
-describe('every other writer clears the pending badge', () => {
+describe('every other writer of the overlay targets', () => {
   const writers: Array<[string, () => void]> = [
     ['openBadgesWithPaint', () => get().openBadgesWithPaint('p')],
     ['openBadgesWithBadge', () => get().openBadgesWithBadge('b')],
     ['openBadgesOnStreamNook', () => get().openBadgesOnStreamNook('slug')],
     ['openBadgesWithTarget', () => get().openBadgesWithTarget({ tab: 'bttv' })],
-    ['setShowBadgesOverlay(false)', () => get().setShowBadgesOverlay(false)],
   ];
-  it.each(writers)('%s', (_name, write) => {
+
+  it.each(writers)('%s leaves the Twitch tab target behind', (_name, write) => {
     get().openTwitchBadge('clover', '1');
     write();
-    expect(get().badgesOverlayInitialTwitchBadge).toBeNull();
-  });
-});
-
-describe('consumeInitialTwitchBadge', () => {
-  it('returns the target once, then null', () => {
-    get().openTwitchBadge('clover', '3');
-    expect(get().consumeInitialTwitchBadge()).toEqual({ setId: 'clover', version: '3' });
-    expect(get().badgesOverlayInitialTwitchBadge).toBeNull();
-    expect(get().consumeInitialTwitchBadge()).toBeNull();
-  });
-
-  it('keeps the overlay open and on the Twitch tab', () => {
-    get().openTwitchBadge('clover', '1');
-    get().consumeInitialTwitchBadge();
     expect(get().showBadgesOverlay).toBe(true);
-    expect(get().badgesOverlayInitialTarget).toEqual({ tab: 'twitch-badges' });
+    expect(get().badgesOverlayInitialTarget).not.toEqual({ tab: 'twitch-badges' });
+  });
+
+  it('setShowBadgesOverlay(false) closes the overlay and drops its targets', () => {
+    get().openTwitchBadge('clover', '1');
+    get().setShowBadgesOverlay(false);
+    expect(get().showBadgesOverlay).toBe(false);
+    expect(get().badgesOverlayInitialTarget).toBeNull();
   });
 });

@@ -9,6 +9,8 @@ import { canGridProvider, gridRefusal } from '../types/providers';
 import { buildProviderUrl } from '../utils/streamProvider';
 import { Logger } from '../utils/logger';
 import { clearTileOnEnd } from '../utils/pausePark';
+import { isMainWindow } from '../utils/platform';
+import { noteBootAction } from '../utils/noticeReport';
 import type { PlaybackAdapt } from '../utils/linkAdapt';
 
 /** Slot ids whose proxy start is currently in flight. The loader effect re-fires
@@ -728,6 +730,8 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
     
     if (newState) {
       // Entering multi-nook mode
+      // While booting, a person opening the grid drops the link that is still waiting.
+      if (useAppStore.getState().isBooting && isMainWindow()) noteBootAction(invoke);
       if (get().slots.length === 0) {
         get().loadStoredSlots();
       }

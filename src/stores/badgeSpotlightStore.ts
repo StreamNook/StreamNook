@@ -5,9 +5,12 @@
 // Third-party and Kick / YouTube / TikTok badges have no such page, so the card
 // is where their details live.
 import { create } from 'zustand';
+import { invoke } from '@tauri-apps/api/core';
+import { useAppStore } from './AppStore';
 import { useTooltipStore } from './TooltipStore';
 import { directBadgeRoute, openBadgeDetailsRoute, type BadgeRef } from '../utils/badgeSpotlight';
-import { IS_MOBILE } from '../utils/platform';
+import { noteBootAction } from '../utils/noticeReport';
+import { IS_MOBILE, isMainWindow } from '../utils/platform';
 
 interface BadgeSpotlightState {
   badge: BadgeRef | null;
@@ -29,6 +32,8 @@ export const useBadgeSpotlightStore = create<BadgeSpotlightState>((set) => ({
  *  pointer goes first: the modal covers its trigger, so no mouseleave would
  *  ever close it. */
 export function openBadgeSpotlight(badge: BadgeRef, opts?: { fromBadges?: boolean }): void {
+  // While booting, a person opening a badge card drops the link that is still waiting.
+  if (useAppStore.getState().isBooting && isMainWindow()) noteBootAction(invoke);
   useTooltipStore.getState().hideTooltip();
   useBadgeSpotlightStore.getState().open(badge, opts);
 }
