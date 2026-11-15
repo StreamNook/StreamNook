@@ -69,6 +69,7 @@ use models::settings::{AppState, CloseToTrayMode, Settings};
 use services::background_service::BackgroundService;
 use services::cache_service;
 use services::drops_service::DropsService;
+use services::inbound_link::{self as inbound, PendingLink};
 use services::live_notification_service::LiveNotificationService;
 use services::whisper_service::WhisperService;
 use std::sync::{Arc, Mutex};
@@ -84,15 +85,15 @@ use tauri::{
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tokio::sync::Mutex as TokioMutex;
 
-/// A `streamnook://` deep link that arrived before the frontend was listening
-/// (cold start). The webview drains it via `take_pending_watch_link` on mount.
-/// On mobile every link passes through here, warm ones included.
+/// Superseded by `PendingLink`: nothing writes this slot any more, so it is
+/// always empty. It stays only until the pages stop invoking
+/// `take_pending_watch_link`.
 #[derive(Default)]
 struct PendingWatchLink(Mutex<Option<String>>);
 
-/// A `streamnook:///badge/<set>[/<version>]` link waiting for the frontend to
-/// take it (`take_pending_badge_link`). Both platforms store it, last link wins;
-/// the `streamnook:badge` event only tells a mounted shell to drain it.
+/// Superseded by `PendingLink`: nothing writes this slot any more, so it is
+/// always empty. It stays only until the pages stop invoking
+/// `take_pending_badge_link`.
 #[derive(Default)]
 struct PendingBadgeLink(Mutex<Option<services::badge_link::BadgeLink>>);
 
@@ -145,6 +146,62 @@ fn take_pending_badge_link(
     state: tauri::State<'_, PendingBadgeLink>,
 ) -> Option<services::badge_link::BadgeLink> {
     state.0.lock().ok().and_then(|mut guard| guard.take())
+}
+
+/// Take the link the app was opened with, or the newest one that arrived while
+/// no page was listening (returns and clears it). One slot holds every kind of
+/// link on every platform, so a link opened while the window was closed still
+/// reaches the window created for it.
+#[tauri::command]
+fn take_pending_link(app: crate::rt::AppHandle) -> Option<inbound::TakenLink> {
+    let slot = app.try_state::<PendingLink>()?;
+    slot.take()
+}
+
+/// The stamp of the link waiting in the slot, without taking it. A page that
+/// mounts after a link arrived has no event it could have heard, so it asks here
+/// what it missed (see `link_superseded`).
+#[cfg(desktop)]
+#[tauri::command]
+fn peek_pending_link_stamp(app: crate::rt::AppHandle) -> Option<u64> {
+    let slot = app.try_state::<PendingLink>()?;
+    slot.peek_stamp()
+}
+
+/// The person acted while a link was waiting (the app is still starting): drop
+/// the waiting link when the page had already heard of it (`stamp <= seen`), so
+/// it does not open over what they just chose. A link stored after the action,
+/// one the page has not heard of, stays.
+#[cfg(desktop)]
+#[tauri::command]
+fn link_superseded(app: crate::rt::AppHandle, seen: u64) {
+    if let Some(slot) = app.try_state::<PendingLink>() {
+        slot.drop_if_older(seen.saturating_add(1));
+    }
+}
+
+/// What a Twitch category link names, asked once per id by the page that shows
+/// it. An id that is not a Twitch category id answers `unreachable` with no
+/// request.
+#[tauri::command]
+async fn resolve_category_link(id: String) -> services::category_link::CategoryAnswer {
+    services::category_link::resolve(&id).await
+}
+
+/// The link a Share button copies for a category. Refuses an id the share page
+/// would answer with a 404.
+#[tauri::command]
+fn category_share_link(id: String, name: String) -> Result<String, String> {
+    services::category_link::share_link_for(&id, &name, &services::share_link::day_tag())
+}
+
+/// What a `streamnook://` or streamnook.app link opens, read as the one door
+/// reads it: a channel, a badge or a category; None for any other link. The
+/// iPhone hands the links it is opened with here, since it has no deep-link
+/// plugin and so no slot and no event.
+#[tauri::command]
+fn inbound_link(url: String) -> Option<inbound::InboundLink> {
+    tauri::Url::parse(&url).ok().as_ref().and_then(inbound::route)
 }
 
 /// First-paint signal from the webview. The main window is created hidden
@@ -1545,24 +1602,31 @@ pub fn run() {
             #[cfg(target_os = "linux")]
             std::thread::spawn(|| info!("{}", linux_desktop_entry::install()));
 
-            // Resolve streamnook:// share links to a channel and hand it to the UI.
+            // Every streamnook:// link goes through one slot, whatever it opens (a
+            // channel, a badge or a category). It is stored before anything is
+            // shown or emitted, so a window that is created for the link, or a
+            // page that is not listening yet, takes it on mount; the
+            // `streamnook:link` event carries the stamp the store returned and
+            // only tells a mounted page that a link is waiting.
             //
             // Two arrival paths, both covered here:
             //  - Warm (app running): the single-instance plugin re-feeds the URL, the
-            //    deep-link plugin emits, on_open_url fires, we emit to the (mounted)
-            //    frontend.
+            //    deep-link plugin emits, on_open_url fires: store, show the main
+            //    window (desktop), emit.
             //  - Cold (app launched by the link): the plugin already emitted before this
-            //    listener (and the webview) existed, so we also drain get_current()
-            //    into PendingWatchLink, which the frontend pulls on mount.
+            //    listener (and the webview) existed, so we drain get_current() into
+            //    the slot; the window is still being created, so only the emit.
             //
             // Android delivers both through on_open_url, from the activity rather
             // than from argv: the cold link fires when the plugin loads into the
             // new webview, before any page script is listening, and a link that
-            // recreates the activity lands in a fresh page the same way. So on
-            // mobile every link is stashed first, and the event only tells a
-            // mounted shell to drain it; the one take decides who opens it.
+            // recreates the activity lands in a fresh page the same way. The one
+            // take decides who opens it.
             //
-            // iOS has no deep-link plugin; the Swift app receives the links.
+            // iOS has no deep-link plugin; the Swift app receives the links and
+            // asks `inbound_link` what each one means.
+            app.manage(PendingLink::default());
+            // Written by nothing now; they go with their commands.
             app.manage(PendingWatchLink::default());
             app.manage(PendingBadgeLink::default());
             #[cfg(not(target_os = "ios"))]
@@ -1578,27 +1642,16 @@ pub fn run() {
                             commands::notification_mirror::on_notice_url(&watch_handle, &url);
                             continue;
                         }
-                        if let Some(badge) = services::badge_link::parse(&url) {
+                        if let Some(link) = inbound::route(&url) {
+                            let Some(slot) = watch_handle.try_state::<PendingLink>() else {
+                                warn!("[DeepLink] no link slot; a link was dropped");
+                                continue;
+                            };
+                            let stamp = slot.store(link, inbound::boot_ms());
                             #[cfg(desktop)]
                             show_main_window(&watch_handle);
-                            if let Some(pending) = watch_handle.try_state::<PendingBadgeLink>() {
-                                if let Ok(mut guard) = pending.0.lock() {
-                                    *guard = Some(badge);
-                                }
-                            }
-                            let _ = watch_handle.emit("streamnook:badge", ());
+                            let _ = watch_handle.emit("streamnook:link", stamp);
                             continue;
-                        }
-                        if let Some(channel) = parse_watch_link(&url) {
-                            #[cfg(desktop)]
-                            show_main_window(&watch_handle);
-                            #[cfg(mobile)]
-                            if let Some(pending) = watch_handle.try_state::<PendingWatchLink>() {
-                                if let Ok(mut guard) = pending.0.lock() {
-                                    *guard = Some(channel.clone());
-                                }
-                            }
-                            let _ = watch_handle.emit("streamnook:watch", channel);
                         }
                     }
                 });
@@ -1612,22 +1665,14 @@ pub fn run() {
                             commands::notification_mirror::on_notice_url(&app_handle, &url);
                             continue;
                         }
-                        if let Some(badge) = services::badge_link::parse(&url) {
-                            if let Some(pending) = app.try_state::<PendingBadgeLink>() {
-                                if let Ok(mut guard) = pending.0.lock() {
-                                    *guard = Some(badge);
-                                }
-                            }
-                            let _ = app_handle.emit("streamnook:badge", ());
+                        if let Some(link) = inbound::route(&url) {
+                            let Some(slot) = app.try_state::<PendingLink>() else {
+                                warn!("[DeepLink] no link slot; a link was dropped");
+                                continue;
+                            };
+                            let stamp = slot.store(link, inbound::boot_ms());
+                            let _ = app_handle.emit("streamnook:link", stamp);
                             continue;
-                        }
-                        if let Some(channel) = parse_watch_link(&url) {
-                            if let Some(pending) = app.try_state::<PendingWatchLink>() {
-                                if let Ok(mut guard) = pending.0.lock() {
-                                    *guard = Some(channel.clone());
-                                }
-                            }
-                            let _ = app_handle.emit("streamnook:watch", channel);
                         }
                     }
                 }
@@ -2070,6 +2115,14 @@ pub fn run() {
             watch_link_key,
             app_link_target,
             share_link,
+            take_pending_link,
+            #[cfg(desktop)]
+            peek_pending_link_stamp,
+            #[cfg(desktop)]
+            link_superseded,
+            resolve_category_link,
+            category_share_link,
+            inbound_link,
             #[cfg(target_os = "android")]
             twitch_login_plugin::open_mobile_login,
             take_pending_badge_link,
@@ -2154,6 +2207,8 @@ pub fn run() {
             services::points_notify::test_points_notification,
             #[cfg(desktop)]
             commands::notification_mirror::take_notice_action,
+            #[cfg(desktop)]
+            commands::notification_mirror::notice_opened,
             #[cfg(desktop)]
             grow_popout_width,
             #[cfg(desktop)]

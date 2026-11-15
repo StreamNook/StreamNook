@@ -2,7 +2,8 @@
 //! settings import and its lock, the main teardown, the lock-free inner bodies
 //! and the locked commands, the registry's temp-file save, and the host-side
 //! calls into `background_mode`. Pinned by source because the order and the
-//! locks are the whole rule.
+//! locks are the whole rule. It also pins the one deep-link door: the two
+//! deep-link loops, the link slot and its commands, and the notice stamps.
 
 const DROPS: &str = include_str!("../src/commands/drops.rs");
 const SETTINGS: &str = include_str!("../src/commands/settings.rs");
@@ -16,6 +17,9 @@ const REGISTRY: &str = include_str!("../src/plugin_host/registry.rs");
 const HOST_MOD: &str = include_str!("../src/plugin_host/mod.rs");
 const PROCESS: &str = include_str!("../src/plugin_host/process.rs");
 const BROKER: &str = include_str!("../src/plugin_host/broker.rs");
+const LIB: &str = include_str!("../src/lib.rs");
+const NOTICES: &str = include_str!("../src/commands/notification_mirror.rs");
+const EVENT_NAMES: &str = include_str!("event_names.txt");
 
 fn norm(src: &str) -> String {
     src.replace("\r\n", "\n")
@@ -64,6 +68,16 @@ fn first_statement(b: &str) -> String {
         .find(|l| !l.is_empty() && !l.starts_with("//"))
         .expect("a statement")
         .to_string()
+}
+
+/// The text from the first `from` up to the first `to` after it.
+fn between<'a>(src: &'a str, from: &str, to: &str) -> &'a str {
+    let start = src.find(from).unwrap_or_else(|| panic!("`{from}` not found"));
+    let rest = &src[start..];
+    let end = rest[from.len()..]
+        .find(to)
+        .unwrap_or_else(|| panic!("`{to}` not found after `{from}`"));
+    &rest[..from.len() + end]
 }
 
 #[test]
@@ -411,4 +425,161 @@ fn the_visible_kick_window_is_a_user_window() {
     let src = norm(KICK_ACCOUNT);
     assert!(src.contains("format!(\"kick-sync-shown-{}\", SEQ.fetch_add(1, Ordering::Relaxed))"));
     assert!(src.contains("format!(\"kick-sync-{}\", SEQ.fetch_add(1, Ordering::Relaxed))"));
+}
+
+#[test]
+fn both_deep_link_loops_route_store_and_emit_the_stamp() {
+    // Fails without the change: the loops matched a badge, then a channel, kept
+    // them in two slots (a desktop channel link not at all) and emitted two events.
+    let lib = norm(LIB);
+    let warm = between(
+        &lib,
+        "app.deep_link().on_open_url(move |event| {",
+        "if let Ok(Some(urls)) = app.deep_link().get_current() {",
+    );
+    let cold = between(
+        &lib,
+        "if let Ok(Some(urls)) = app.deep_link().get_current() {",
+        "// Create and manage the background service",
+    );
+    // The notice check stays first; then the one routed arm: store, show (warm
+    // only), emit the stamp the store returned.
+    in_order(
+        warm,
+        &[
+            "commands::notification_mirror::is_notice_url(&url)",
+            "continue;",
+            "inbound::route(&url)",
+            ".store(link, inbound::boot_ms())",
+            "show_main_window(&watch_handle);",
+            "\"streamnook:link\", stamp",
+            "continue;",
+        ],
+    );
+    assert!(warm.contains("#[cfg(desktop)]\n                            show_main_window(&watch_handle);"));
+    in_order(
+        cold,
+        &[
+            "commands::notification_mirror::is_notice_url(&url)",
+            "continue;",
+            "inbound::route(&url)",
+            ".store(link, inbound::boot_ms())",
+            "\"streamnook:link\", stamp",
+            "continue;",
+        ],
+    );
+    assert!(!cold.contains("show_main_window"), "the window is still being created on a cold start");
+    for (name, text) in [("warm", warm), ("cold", cold)] {
+        assert_eq!(text.matches("inbound::route(&url)").count(), 1, "{name}: one routed arm");
+        assert_eq!(text.matches(".emit(").count(), 1, "{name}: one emit, whatever the kind");
+        assert!(
+            !text.contains("parse_watch_link(") && !text.contains("badge_link::parse("),
+            "{name}: the loops never parse a kind themselves"
+        );
+    }
+}
+
+#[test]
+fn the_link_slot_is_imported_at_module_scope_and_managed_outside_the_ios_fence() {
+    // Fails without the change: there was no `PendingLink`; the two old slots
+    // were the only ones managed.
+    let lib = norm(LIB);
+    let import = "\nuse services::inbound_link::{self as inbound, PendingLink};\n";
+    assert_eq!(lib.matches(import).count(), 1, "one module-scope import, never inside a function");
+    assert!(
+        lib.find(import).unwrap() < lib.find("pub fn run() {").expect("run()"),
+        "the import sits above `run`, with the file's other top-level imports"
+    );
+    in_order(
+        &lib,
+        &[
+            "app.manage(PendingLink::default());",
+            "#[cfg(not(target_os = \"ios\"))]\n            {\n                use tauri_plugin_deep_link::DeepLinkExt;\n\n                let watch_handle",
+        ],
+    );
+}
+
+#[test]
+fn the_link_commands_read_the_slot_through_try_state() {
+    // Fails without the change: none of these commands existed. `try_state`
+    // makes an unmanaged slot a no-op instead of a panic.
+    let lib = norm(LIB);
+    for sig in ["fn take_pending_link(", "fn peek_pending_link_stamp(", "fn link_superseded("] {
+        assert!(body(&lib, sig).contains("try_state::<PendingLink>()"), "{sig} reads the slot with try_state");
+    }
+    assert!(body(&lib, "fn take_pending_link(").contains("slot.take()"));
+    let peek = body(&lib, "fn peek_pending_link_stamp(");
+    assert!(peek.contains("slot.peek_stamp()"));
+    assert!(!peek.contains("take("), "a peek never clears the slot");
+    assert!(body(&lib, "fn link_superseded(").contains("slot.drop_if_older(seen.saturating_add(1))"));
+    assert!(lib.contains("#[cfg(desktop)]\n#[tauri::command]\nfn peek_pending_link_stamp("));
+    assert!(lib.contains("#[cfg(desktop)]\n#[tauri::command]\nfn link_superseded("));
+    assert!(
+        body(&lib, "fn category_share_link(")
+            .contains("share_link_for(&id, &name, &services::share_link::day_tag())")
+    );
+    assert!(body(&lib, "fn resolve_category_link(").contains("services::category_link::resolve(&id).await"));
+    assert!(body(&lib, "fn inbound_link(").contains("and_then(inbound::route)"));
+}
+
+#[test]
+fn a_notice_click_takes_its_stamp_on_arrival_and_the_page_reports_it() {
+    // Fails without the change: no click took a stamp and `notice_opened` did
+    // not exist, so a link stored before a click opened over it.
+    let nm = norm(NOTICES);
+    let on_activated = body(&nm, "pub fn on_activated(");
+    in_order(
+        &on_activated,
+        &[
+            "Use::PageAction(id) => {",
+            "next_arrival()",
+            "activate(app, &id, seq)",
+            "Use::Data(action) => {",
+            "next_arrival()",
+            "run_action(app, action, seq)",
+        ],
+    );
+    assert_eq!(on_activated.matches("next_arrival()").count(), 2, "a reply and an ignored click take no stamp");
+    let open = body(&nm, "pub fn open_mirrored_notification(");
+    assert_eq!(first_statement(&open), "let seq = next_arrival();");
+    in_order(&open, &["activate(&app, &id, seq)", "run_action(&app, action, Some(seq))"]);
+    let opened = body(&nm, "pub fn notice_opened(");
+    assert!(opened.contains("try_state::<PendingLink>()"));
+    assert!(opened.contains("slot.drop_if_older(seq)"));
+    assert!(nm.contains("static PENDING: Lazy<Mutex<Option<(NoticeAction, u64)>>>"));
+    assert!(nm.contains("emit_to(\"main\", ACTIVATE_EVENT, payload)"));
+}
+
+#[test]
+fn the_notice_machinery_keeps_its_shape() {
+    // A guard, not coverage: the page-knows set and the one-field `PageAction`
+    // stay exactly as they were, so a click is never cleared on a guess.
+    let nm = norm(NOTICES);
+    assert!(nm.contains("    PageAction(String),\n"));
+    assert!(nm.contains("fn remember_page_id(id: &str) {"));
+    let mut uses = 0;
+    for line in nm.lines() {
+        if let Some(at) = line.find("PageAction(") {
+            uses += 1;
+            let inside = line[at + "PageAction(".len()..].split(')').next().unwrap_or("");
+            assert!(!inside.contains(','), "PageAction stays one field: {line}");
+        }
+    }
+    assert!(uses >= 4, "the scan found the declaration and its uses ({uses})");
+}
+
+#[test]
+fn the_link_event_is_listed_and_the_old_ones_are_not() {
+    // Fails without the change: `streamnook:link` was not in the list and the two
+    // old events were.
+    let names: Vec<&str> = EVENT_NAMES
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .collect();
+    assert!(names.len() > 90, "the list was read");
+    assert!(names.contains(&"streamnook:link"));
+    for dead in [concat!("streamnook:", "watch"), concat!("streamnook:", "badge")] {
+        assert!(!names.contains(&dead), "{dead} is no longer emitted");
+    }
 }

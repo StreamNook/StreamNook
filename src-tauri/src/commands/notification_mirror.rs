@@ -34,6 +34,11 @@
 //! app already owns. A click the main window no longer knows the id of runs the
 //! data instead, through a pending slot the page takes exactly once.
 //!
+//! Every click that carries something to run takes a stamp from the same counter
+//! as a stored link, the moment it reaches Rust, and the page reports that stamp
+//! back (`notice_opened`) once the click opened something. A link stored before
+//! the click is then dropped; one stored after it stays.
+//!
 //! A reply typed into the notification arrives through the toast's own event
 //! while this process runs (a link cannot carry typed text), and is sent from
 //! here without opening anything.
@@ -42,6 +47,7 @@ use std::collections::VecDeque;
 use std::sync::Mutex;
 
 use crate::rt::AppHandle;
+use crate::services::inbound_link::{next_arrival, PendingLink};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
@@ -187,7 +193,27 @@ pub fn on_notice_url(app: &AppHandle, url: &url::Url) {
 }
 
 static PAGE_IDS: Lazy<Mutex<VecDeque<String>>> = Lazy::new(|| Mutex::new(VecDeque::new()));
-static PENDING: Lazy<Mutex<Option<NoticeAction>>> = Lazy::new(|| Mutex::new(None));
+/// The action a click left for the page, with the stamp the click took when it
+/// reached Rust (`take_notice_action` hands both over once).
+static PENDING: Lazy<Mutex<Option<(NoticeAction, u64)>>> = Lazy::new(|| Mutex::new(None));
+
+/// What the main window hears when a notification is clicked: which one, and the
+/// stamp the click took on arrival. The page reports that stamp back through
+/// `notice_opened` once the click opened something.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivatePayload {
+    pub id: String,
+    pub seq: u64,
+}
+
+/// The action a click left for the page, with that click's stamp.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TakenNotice {
+    pub action: NoticeAction,
+    pub seq: u64,
+}
 
 fn remember_page_id(id: &str) {
     let mut ids = PAGE_IDS.lock().unwrap_or_else(|e| e.into_inner());
@@ -390,22 +416,27 @@ pub fn open_system_notification_settings(app: AppHandle) -> Result<(), String> {
 }
 
 /// Bring the main window forward and let it run notification `id`'s action.
-/// Shared by the MultiChat card and the Windows notification's click.
-pub fn activate(app: &AppHandle, id: &str) {
+/// Shared by the MultiChat card and the Windows notification's click. `seq` is
+/// the click's stamp: the page reports it back through `notice_opened` once the
+/// click opened something.
+pub fn activate(app: &AppHandle, id: &str, seq: u64) {
     crate::show_main_window(app);
-    if let Err(e) = app.emit_to("main", ACTIVATE_EVENT, id) {
+    let payload = ActivatePayload { id: id.to_string(), seq };
+    if let Err(e) = app.emit_to("main", ACTIVATE_EVENT, payload) {
         log::debug!("[NotificationMirror] activate emit failed: {e}");
     }
 }
 
 /// A MultiChat card was clicked. A card raised by Rust (a mention) has no
-/// action in the page, so its data runs instead.
+/// action in the page, so its data runs instead. The click takes its stamp as it
+/// arrives, before either path can open anything.
 #[tauri::command]
 pub fn open_mirrored_notification(app: AppHandle, id: String, action: Option<NoticeAction>) {
+    let seq = next_arrival();
     if page_knows(&id) || action.is_none() {
-        activate(&app, &id);
+        activate(&app, &id, seq);
     } else {
-        run_action(&app, action);
+        run_action(&app, action, Some(seq));
     }
 }
 
@@ -462,26 +493,57 @@ pub fn on_activated(app: &AppHandle, args: &str, text: Option<String>) {
             let app = app.clone();
             tauri::async_runtime::spawn(async move { send_reply(app, target, text).await });
         }
-        Use::PageAction(id) => activate(app, &id),
-        Use::Data(action) => run_action(app, action),
+        Use::PageAction(id) => {
+            let seq = next_arrival();
+            activate(app, &id, seq);
+        }
+        Use::Data(action) => {
+            // A click that carries an action takes a stamp; a bare open (no
+            // action) has nothing to report and takes none.
+            let seq = action.as_ref().map(|_| next_arrival());
+            run_action(app, action, seq);
+        }
         Use::Ignore => {}
     }
 }
 
-/// Open the main window and leave `action` for it. The page takes it once,
-/// on this event or on mount (a click that started the app), never twice.
-fn run_action(app: &AppHandle, action: Option<NoticeAction>) {
+/// Open the main window and leave `action` for it, with the click's stamp. The
+/// page takes it once, on this event or on mount (a click that started the
+/// app), never twice. A bare open has no action and no stamp.
+fn run_action(app: &AppHandle, action: Option<NoticeAction>, seq: Option<u64>) {
     crate::show_main_window(app);
     if let Some(action) = action {
-        *PENDING.lock().unwrap_or_else(|e| e.into_inner()) = Some(action);
+        stash_action(action, seq.unwrap_or_else(next_arrival));
         let _ = app.emit_to("main", ACTION_PENDING_EVENT, ());
     }
 }
 
-/// The notification action waiting for the main window, if any.
+/// Leave `action` and its click's stamp for the page; a newer click replaces an
+/// older one.
+fn stash_action(action: NoticeAction, seq: u64) {
+    *PENDING.lock().unwrap_or_else(|e| e.into_inner()) = Some((action, seq));
+}
+
+/// The notification action waiting for the main window, if any, with the stamp
+/// its click took.
 #[tauri::command]
-pub fn take_notice_action() -> Option<NoticeAction> {
-    PENDING.lock().unwrap_or_else(|e| e.into_inner()).take()
+pub fn take_notice_action() -> Option<TakenNotice> {
+    PENDING
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take()
+        .map(|(action, seq)| TakenNotice { action, seq })
+}
+
+/// The page ran a notification's action and it opened something: a link stored
+/// before that click must not open over it. Clears the waiting link only when its
+/// stamp is older than `seq`, so a link that arrived after the click stays. A
+/// click that opened nothing never reports, so nothing is cleared on a guess.
+#[tauri::command]
+pub fn notice_opened(app: AppHandle, seq: u64) {
+    if let Some(slot) = app.try_state::<PendingLink>() {
+        slot.drop_if_older(seq);
+    }
 }
 
 /// Send a reply typed into a notification. A failure is said in a
@@ -718,5 +780,58 @@ mod tests {
         let mut short = String::from("ok");
         clamp(&mut short, 5);
         assert_eq!(short, "ok");
+    }
+
+    #[test]
+    fn the_activate_event_carries_the_id_and_the_stamp() {
+        // Fails without the change: the event's payload was the bare id string, so
+        // the page had no stamp to report back and `ActivatePayload` did not exist.
+        let payload = ActivatePayload { id: "mirror-1".into(), seq: 6 };
+        assert_eq!(serde_json::to_string(&payload).unwrap(), r#"{"id":"mirror-1","seq":6}"#);
+        let back: ActivatePayload = serde_json::from_str(r#"{"id":"mirror-1","seq":6}"#).unwrap();
+        assert_eq!(back, payload);
+    }
+
+    #[test]
+    fn a_taken_action_carries_its_clicks_stamp_and_is_taken_once() {
+        // Fails without the change: `take_notice_action` returned the bare action,
+        // so the page could not report which click opened it. This is the only
+        // test that touches `PENDING`, so it needs no lock.
+        assert!(take_notice_action().is_none(), "nothing waits before a click leaves one");
+        stash_action(NoticeAction::Drops, 6);
+        let taken = take_notice_action().expect("the click's action is waiting");
+        assert_eq!(serde_json::to_string(&taken).unwrap(), r#"{"action":{"type":"drops"},"seq":6}"#);
+        assert!(take_notice_action().is_none(), "the page takes it once");
+
+        // A newer click replaces an older one and brings its own stamp.
+        stash_action(NoticeAction::Badges, 7);
+        let whisper = NoticeAction::Whisper {
+            user_id: "9".into(),
+            login: "a".into(),
+            name: "A".into(),
+            avatar: None,
+        };
+        stash_action(whisper, 8);
+        let newest = take_notice_action().expect("the newer click's action is waiting");
+        assert_eq!(newest.seq, 8);
+        assert_eq!(
+            serde_json::to_string(&newest).unwrap(),
+            r#"{"action":{"type":"whisper","userId":"9","login":"a","name":"A","avatar":null},"seq":8}"#
+        );
+        assert!(take_notice_action().is_none());
+    }
+
+    #[test]
+    fn the_notice_wire_shapes_match_the_shared_fixture() {
+        // Fails without the change: neither struct existed, and the fixture's `notice` case is
+        // the one file the page-side readers and these structs both answer to.
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/inbound_link.json")).unwrap();
+        let activate = &fixture["notice"]["activate"];
+        let payload: ActivatePayload = serde_json::from_value(activate.clone()).unwrap();
+        assert_eq!(&serde_json::to_value(&payload).unwrap(), activate);
+        let taken = &fixture["notice"]["taken"];
+        let notice: TakenNotice = serde_json::from_value(taken.clone()).unwrap();
+        assert_eq!(&serde_json::to_value(&notice).unwrap(), taken);
     }
 }

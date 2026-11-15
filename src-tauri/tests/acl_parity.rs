@@ -135,3 +135,66 @@ fn every_registered_command_is_allowlisted() {
          in the same change that registers the command.\n"
     );
 }
+
+/// The `generate_handler!` block as trimmed lines with comments and blanks
+/// dropped, so an entry's attribute is the line right above it.
+fn handler_lines() -> Vec<String> {
+    let start = LIB_RS
+        .find("generate_handler![")
+        .expect("generate_handler! block not found in lib.rs")
+        + "generate_handler![".len();
+    let end = LIB_RS[start..]
+        .find("])")
+        .expect("generate_handler! block never closes");
+    LIB_RS[start..start + end]
+        .lines()
+        .map(|line| line.split("//").next().unwrap_or("").trim().to_string())
+        .filter(|line| !line.is_empty())
+        .collect()
+}
+
+/// Where the entry for command `name` sits in `handler_lines`, found once.
+fn entry_at(lines: &[String], name: &str) -> usize {
+    let bare = format!("{name},");
+    let pathed = format!("::{name},");
+    let found: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| **l == bare || l.ends_with(&pathed))
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(found.len(), 1, "{name} is registered exactly once in generate_handler!");
+    found[0]
+}
+
+const LINK_COMMANDS_EVERY_TARGET: [&str; 4] =
+    ["take_pending_link", "resolve_category_link", "category_share_link", "inbound_link"];
+const LINK_COMMANDS_DESKTOP_ONLY: [&str; 3] = ["peek_pending_link_stamp", "link_superseded", "notice_opened"];
+
+#[test]
+fn the_link_door_commands_are_registered_allowlisted_and_fenced() {
+    // Fails without the change: none of these seven commands existed. The generic
+    // parity tests above would also pass if a new name were missing everywhere.
+    let lines = handler_lines();
+    let registered = registered_commands();
+    let app = app_commands();
+    let mobile = mobile_commands();
+    for name in LINK_COMMANDS_EVERY_TARGET.iter().chain(LINK_COMMANDS_DESKTOP_ONLY.iter()) {
+        assert!(registered.contains(*name), "{name} is not in generate_handler!");
+        assert!(app.contains(*name), "{name} is not in app-commands.toml");
+        assert!(!mobile.contains(*name), "{name} must be in exactly one permission file");
+    }
+    for name in LINK_COMMANDS_EVERY_TARGET {
+        let at = entry_at(&lines, name);
+        assert!(!lines[at - 1].starts_with("#["), "{name} is registered on every target, no cfg above it");
+    }
+    for name in LINK_COMMANDS_DESKTOP_ONLY {
+        let at = entry_at(&lines, name);
+        assert_eq!(lines[at - 1], "#[cfg(desktop)]", "{name} exists on desktop only");
+    }
+    // The notice report sits right beside the take it answers, under its own fence.
+    let take = entry_at(&lines, "take_notice_action");
+    let opened = entry_at(&lines, "notice_opened");
+    assert_eq!(opened, take + 2, "notice_opened follows take_notice_action's entry");
+    assert_eq!(lines[opened], "commands::notification_mirror::notice_opened,");
+}
