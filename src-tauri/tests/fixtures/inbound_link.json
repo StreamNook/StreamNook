@@ -1,0 +1,74 @@
+{
+  "inboundLink": {
+    "watch": { "kind": "watch", "key": "xqc" },
+    "watchKick": { "kind": "watch", "key": "kick:xqc" },
+    "badge": { "kind": "badge", "setId": "clover", "version": "3" },
+    "category": { "kind": "category", "provider": "twitch", "id": "509658" }
+  },
+  "categoryAnswer": {
+    "found": {
+      "state": "found",
+      "id": "509658",
+      "name": "Just Chatting",
+      "box_art_url": "https://static-cdn.jtvnw.net/ttv-boxart/509658-285x380.jpg",
+      "viewer_count": 243261
+    },
+    "foundNoViewers": {
+      "state": "found",
+      "id": "509658",
+      "name": "Just Chatting",
+      "box_art_url": "https://static-cdn.jtvnw.net/ttv-boxart/509658-{width}x{height}.jpg",
+      "viewer_count": null
+    },
+    "missing": { "state": "missing" },
+    "unreachable": { "state": "unreachable" }
+  },
+  "resolveCategoryLink": {
+    "509658": {
+      "state": "found",
+      "id": "509658",
+      "name": "Just Chatting",
+      "box_art_url": "https://static-cdn.jtvnw.net/ttv-boxart/509658-285x380.jpg",
+      "viewer_count": 243261
+    },
+    "999999999999999": { "state": "missing" },
+    "2": { "state": "unreachable" }
+  },
+  "shareLink": {
+    "id": "509658",
+    "name": "Just Chatting",
+    "day": "1114",
+    "url": "https://streamnook.app/c/509658/just-chatting?d=1114"
+  },
+  "taken": {
+    "link": { "kind": "watch", "key": "xqc" },
+    "at": 86400000
+  },
+  "notice": {
+    "activate": { "id": "n1", "seq": 6 },
+    "taken": { "action": { "type": "drops" }, "seq": 6 }
+  },
+  "routes": [
+    { "url": "streamnook://xqc", "link": { "kind": "watch", "key": "xqc" } },
+    { "url": "streamnook://watch/xqc", "link": { "kind": "watch", "key": "xqc" } },
+    { "url": "streamnook://watch/kick/xqc", "link": { "kind": "watch", "key": "kick:xqc" } },
+    { "url": "https://streamnook.app/w/xqc?d=1114", "link": { "kind": "watch", "key": "xqc" } },
+    { "url": "streamnook://category", "link": { "kind": "watch", "key": "category" } },
+    { "url": "streamnook://badge", "link": { "kind": "watch", "key": "badge" } },
+    { "url": "streamnook:///badge/clover/3", "link": { "kind": "badge", "setId": "clover", "version": "3" } },
+    { "url": "streamnook://badge/clover", "link": { "kind": "badge", "setId": "clover", "version": "1" } },
+    { "url": "streamnook:///category/509658", "link": { "kind": "category", "provider": "twitch", "id": "509658" } },
+    { "url": "streamnook:/category/1", "link": { "kind": "category", "provider": "twitch", "id": "1" } },
+    { "url": "streamnook://category/509658", "link": { "kind": "category", "provider": "twitch", "id": "509658" } },
+    {
+      "url": "https://streamnook.app/c/509658/just-chatting?d=1114",
+      "link": { "kind": "category", "provider": "twitch", "id": "509658" }
+    },
+    { "url": "streamnook://category/abc", "link": null },
+    { "url": "streamnook://category/kick/1", "link": null },
+    { "url": "streamnook://category/1234567890123456", "link": null },
+    { "url": "streamnook:///category/abc", "link": null },
+    { "url": "streamnook://badge/!!!", "link": null },
+    { "url": "https://example.com/c/509658", "link": null }
+  ]
+}

@@ -320,6 +320,10 @@ pub mod custom_font;
 pub mod share_link;
 // streamnook:///badge/<set>[/<version>] deep links to a badge's detail.
 pub mod badge_link;
+// streamnook:///category/<id> links: parse, build, and what Twitch says the id is.
+pub mod category_link;
+// The one inbound-link type, its route, and the slot that holds one for the page.
+pub mod inbound_link;
 pub mod slash_commands;
 pub mod chat_top_stack;
 pub mod poll_view;

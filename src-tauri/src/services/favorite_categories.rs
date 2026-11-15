@@ -71,9 +71,15 @@ pub fn apply(list: &mut Vec<FavoriteCategory>, category: FavoriteCategory, favor
     }
 }
 
-/// A Twitch game id is digits; anything else never reaches a query.
+/// A Twitch game id: 1 to 15 ASCII digits. Anything else never reaches a query
+/// or a link.
+pub fn valid_category_id(id: &str) -> bool {
+    (1..=15).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// The batch reader's name for the same rule.
 fn valid_id(id: &str) -> bool {
-    !id.is_empty() && id.len() <= 20 && id.bytes().all(|b| b.is_ascii_digit())
+    valid_category_id(id)
 }
 
 /// One request reading `ids`, aliased `g0`, `g1`, ... in order.
@@ -102,6 +108,15 @@ pub fn parse_live(body: &Value, ids: &[&str]) -> HashMap<String, Live> {
         );
     }
     out
+}
+
+/// One category by id, from the same anonymous read the favorites row uses.
+/// An id that is not a Twitch game id is refused before anything is sent.
+pub async fn read_one(id: &str) -> anyhow::Result<Value> {
+    if !valid_category_id(id) {
+        return Err(anyhow::anyhow!("not a Twitch category id"));
+    }
+    TwitchService::gql_public_read(json!({ "query": live_query(&[id]) })).await
 }
 
 /// Live numbers for every starred category, in batched anonymous requests. A
@@ -184,6 +199,70 @@ mod tests {
             live_query(&["1", "2"]),
             r#"{ g0: game(id: "1") { id name boxArtURL(width: 285, height: 380) viewersCount } g1: game(id: "2") { id name boxArtURL(width: 285, height: 380) viewersCount } }"#
         );
+    }
+
+    /// The source above the test module, with LF line ends on any checkout.
+    fn live_source() -> String {
+        let all = include_str!("favorite_categories.rs").replace("\r\n", "\n");
+        all.split("#[cfg(test)]").next().expect("the file has a live part").to_string()
+    }
+
+    fn body_of(src: &str, signature: &str) -> String {
+        let start = src.find(signature).unwrap_or_else(|| panic!("`{signature}` is in the source"));
+        let rest = &src[start..];
+        let end = rest.find("\n}\n").unwrap_or_else(|| panic!("`{signature}` ends"));
+        rest[..end].to_string()
+    }
+
+    #[test]
+    fn a_category_id_is_one_to_fifteen_digits() {
+        // Fails if the rule is lost, or the length limit stays at the old 20.
+        for ok in ["1", "509658", "999999999999999"] {
+            assert!(valid_category_id(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "abc",
+            "kick",
+            "1 2",
+            "-1",
+            "1.5",
+            "1234567890123456",
+            "12345678901234567890",
+            "\u{661}\u{662}",
+            "\u{ff11}\u{ff12}",
+            "1\") { x }",
+        ] {
+            assert!(!valid_category_id(bad), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn the_batch_reader_uses_the_same_rule() {
+        // Fails if `valid_id` keeps its own, wider rule (it allowed 20 digits).
+        assert!(valid_id("999999999999999"));
+        assert!(!valid_id("1234567890123456"));
+        let live = live_source();
+        assert!(body_of(&live, "fn valid_id(").contains("valid_category_id("));
+    }
+
+    #[tokio::test]
+    async fn reading_one_game_refuses_a_bad_id_with_no_network() {
+        // Fails if a bad id reaches the query: this exact text is what the resolve and the share command rely on.
+        for bad in ["abc", "", "1234567890123456"] {
+            let err = read_one(bad).await.expect_err("a bad id is refused");
+            assert_eq!(err.to_string(), "not a Twitch category id", "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn read_one_checks_the_id_before_it_sends() {
+        // Fails if the read is sent before the check.
+        let live = live_source();
+        let body = body_of(&live, "pub async fn read_one(");
+        let check = body.find("valid_category_id(").expect("the check is in read_one");
+        let send = body.find("gql_public_read(").expect("the read is in read_one");
+        assert!(check < send);
     }
 
     #[test]

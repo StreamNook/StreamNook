@@ -377,4 +377,15 @@ mod tests {
         assert_eq!(share_url("rumble", "someone", "1014"), None);
         assert_eq!(deep_link("x", "someone"), None);
     }
+
+    #[test]
+    fn category_links_stay_as_a_released_app_reads_them() {
+        // The host-less category link names no channel, the host form is a channel called
+        // "category", and a /c/ web link is not a stream link. `inbound_link::route` checks
+        // for a category first; this is what an app without it does.
+        assert_eq!(parse_str("streamnook:///category/509658"), None);
+        assert_eq!(parse_str("streamnook://category"), link("twitch", "category"));
+        assert_eq!(parse_str("streamnook://category/509658"), link("twitch", "category"));
+        assert_eq!(parse_str("https://streamnook.app/c/509658/just-chatting?d=1114"), None);
+    }
 }

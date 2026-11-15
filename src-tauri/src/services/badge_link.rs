@@ -140,4 +140,11 @@ mod tests {
         assert_eq!(parsed.set_id.len(), 80);
         assert_eq!(parsed.version.len(), 20);
     }
+
+    #[test]
+    fn a_category_link_is_not_a_badge_link() {
+        assert_eq!(read("streamnook:///category/1"), None);
+        assert_eq!(read("streamnook://category/1"), None);
+        assert_eq!(read("https://streamnook.app/c/1"), None);
+    }
 }
