@@ -72,4 +72,34 @@ describe('mobile ACL parity', () => {
     const stale = [...mobile].filter((n) => !reg.has(n)).sort();
     expect(stale, 'allowed in mobile-commands.toml but not registered').toEqual([]);
   });
+
+  // Fails if a link door command is registered but left out of app-commands.toml
+  // (silently DENIED at invoke time), or put in the phone-only file by mistake.
+  it('registers the link door commands and allows each in app-commands.toml only', () => {
+    const names = [
+      'take_pending_link',
+      'peek_pending_link_stamp',
+      'link_superseded',
+      'resolve_category_link',
+      'category_share_link',
+      'inbound_link',
+      'notice_opened',
+    ];
+    for (const name of names) {
+      expect(reg.has(name), `${name} is registered`).toBe(true);
+      expect(app.has(name), `${name} is allowed in app-commands.toml`).toBe(true);
+      expect(mobile.has(name), `${name} is not in mobile-commands.toml`).toBe(false);
+    }
+  });
+
+  // Fails if one of the two retired take commands comes back in the registry or a
+  // permission file. The names are built from halves so source scans for them do
+  // not find this test.
+  it('keeps the two old watch and badge commands out of the registry and both files', () => {
+    for (const name of ['take_pending_' + 'watch_link', 'take_pending_' + 'badge_link']) {
+      expect(reg.has(name), `${name} is registered`).toBe(false);
+      expect(app.has(name), `${name} is in app-commands.toml`).toBe(false);
+      expect(mobile.has(name), `${name} is in mobile-commands.toml`).toBe(false);
+    }
+  });
 });
