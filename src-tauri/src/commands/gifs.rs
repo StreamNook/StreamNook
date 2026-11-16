@@ -321,47 +321,82 @@ pub async fn send_gif_message(
     if let Some(term) = search_term.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         input["searchTerm"] = serde_json::Value::String(term.to_string());
     }
+    let body = serde_json::json!({
+        "operationName": "sendGifMessage",
+        "query": SEND_MUTATION,
+        "variables": { "input": input },
+    });
 
-    let json = gql(
-        &token,
-        serde_json::json!({
-            "operationName": "sendGifMessage",
-            "query": SEND_MUTATION,
-            "variables": { "input": input },
-        }),
-    )
-    .await?;
+    // A chat send, like a cheer: Twitch's own client sends it with a
+    // Client-Integrity token, and a send without one can be refused with
+    // IntegrityCheckFailed (nothing posted). Mint one; if Twitch refuses a
+    // cached token, mint again and send once more, as the cheer does.
+    crate::services::twitch_integrity::user_asked();
+    let integrity = match crate::services::twitch_integrity::get().await {
+        Ok(i) => Some(i),
+        Err(e) => {
+            log::warn!("[GIFs] no integrity token: {e}");
+            None
+        }
+    };
+    let send = |integrity: Option<crate::services::twitch_integrity::Integrity>| {
+        let body = body.clone();
+        let token = token.clone();
+        async move { crate::services::twitch_web_gql::post_with(Some(&token), body, "GIFs", integrity.as_ref()).await }
+    };
+    let mut outcome = read_send(&send(integrity.clone()).await?);
+    if outcome.error.as_deref() == Some(INTEGRITY_REFUSED) && integrity.is_some() {
+        crate::services::twitch_integrity::invalidate();
+        match crate::services::twitch_integrity::get().await {
+            Ok(fresh) => outcome = read_send(&send(Some(fresh)).await?),
+            Err(e) => log::warn!("[GIFs] fresh integrity token failed: {e}"),
+        }
+    }
 
-    let node = json.pointer("/data/sendGifMessage");
-    let error = node
-        .and_then(|n| n.get("error"))
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
-    let seconds_until_can_send = node
-        .and_then(|n| n.get("secondsUntilCanSend"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0) as u32;
-    let sent = error.is_none()
-        && node
-            .and_then(|n| n.pointer("/message/id"))
-            .and_then(|v| v.as_str())
-            .is_some();
-
-    if let Some(code) = &error {
+    if let Some(code) = &outcome.error {
         log::warn!(
             "[GIFs] send rejected for channel {}: {} (retry in {}s)",
             channel_id,
             code,
-            seconds_until_can_send
+            outcome.seconds_until_can_send
         );
     }
+    Ok(outcome)
+}
 
-    Ok(SendGifOutcome {
-        sent,
-        error,
-        seconds_until_can_send,
-    })
+/// Twitch's code for a mutation refused for want of a Client-Integrity token.
+const INTEGRITY_REFUSED: &str = "IntegrityCheckFailed";
+
+/// Reads a `sendGifMessage` answer. A GraphQL error (a refused integrity check,
+/// a refused session) carries no `sendGifMessage` node at all, so its code
+/// becomes the outcome's `error` rather than a send that "just failed".
+fn read_send(json: &serde_json::Value) -> SendGifOutcome {
+    let node = json.pointer("/data/sendGifMessage").filter(|n| !n.is_null());
+    let Some(node) = node else {
+        let code = json
+            .pointer("/errors/0/extensions/code")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty());
+        let message = json.pointer("/errors/0/message").and_then(|v| v.as_str()).unwrap_or("no answer");
+        log::warn!("[GIFs] send failed: {message}");
+        let error = match code {
+            Some(c) => c.to_string(),
+            None if message.contains("integrity") => INTEGRITY_REFUSED.to_string(),
+            None => "GRAPHQL_ERROR".to_string(),
+        };
+        return SendGifOutcome { sent: false, error: Some(error), seconds_until_can_send: 0 };
+    };
+    let error = node
+        .get("error")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let seconds_until_can_send = node
+        .get("secondsUntilCanSend")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as u32;
+    let sent = error.is_none() && node.pointer("/message/id").and_then(|v| v.as_str()).is_some();
+    SendGifOutcome { sent, error, seconds_until_can_send }
 }
 
 #[cfg(test)]
@@ -407,5 +442,34 @@ mod tests {
         assert!(!GifConfig { is_enabled: false, ..base.clone() }.usable());
         assert!(!GifConfig { is_allowlisted: false, ..base.clone() }.usable());
         assert!(!GifConfig { api_key: None, ..base }.usable());
+    }
+
+    #[test]
+    fn a_refused_integrity_check_names_itself_instead_of_a_bare_failure() {
+        // The shape Twitch answers a chat-send mutation sent without a token.
+        let refused = serde_json::json!({
+            "errors": [{ "extensions": { "code": "IntegrityCheckFailed" }, "message": "failed integrity check", "path": ["sendGifMessage"] }],
+            "data": { "sendGifMessage": null }
+        });
+        let o = read_send(&refused);
+        assert!(!o.sent);
+        assert_eq!(o.error.as_deref(), Some(INTEGRITY_REFUSED));
+        // Only the words, no code: still read as the integrity refusal.
+        let words_only = serde_json::json!({ "errors": [{ "message": "failed integrity check" }], "data": null });
+        assert_eq!(read_send(&words_only).error.as_deref(), Some(INTEGRITY_REFUSED));
+        // Any other GraphQL error is a named failure, never a silent one.
+        let other = serde_json::json!({ "errors": [{ "message": "service timeout" }] });
+        assert_eq!(read_send(&other).error.as_deref(), Some("GRAPHQL_ERROR"));
+    }
+
+    #[test]
+    fn a_send_reads_twitchs_own_answer() {
+        let ok = serde_json::json!({ "data": { "sendGifMessage": { "error": null, "secondsUntilCanSend": 0, "message": { "id": "m1" } } } });
+        let o = read_send(&ok);
+        assert!(o.sent && o.error.is_none());
+        let slow = serde_json::json!({ "data": { "sendGifMessage": { "error": "RATE_LIMITED", "secondsUntilCanSend": 12, "message": null } } });
+        let o = read_send(&slow);
+        assert!(!o.sent);
+        assert_eq!((o.error.as_deref(), o.seconds_until_can_send), (Some("RATE_LIMITED"), 12));
     }
 }
