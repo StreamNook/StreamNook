@@ -1,10 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
+
+const logs = vi.hoisted(() => ({ info: vi.fn() }));
+vi.mock('./logger', () => ({ Logger: { debug: vi.fn(), info: logs.info, warn: vi.fn(), error: vi.fn() } }));
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
   INBOUND_LINK_EVENT,
   clearHeldLink,
+  createPhoneLinkDoors,
+  heldAt,
   holdLink,
+  isOlder,
   openInboundLink,
   readCategoryAnswer,
   readInboundLink,
@@ -767,5 +773,210 @@ describe('inboundLinkOpen source', () => {
   it('calls no command and names no resolve', () => {
     expect(source).not.toMatch(/\binvoke\b/);
     expect(source).not.toContain('resolve_' + 'category');
+  });
+});
+
+describe('createPhoneLinkDoors', () => {
+  const label = (link: InboundLinkTarget) =>
+    link.kind === 'watch' ? `watch:${link.key}` : link.kind === 'badge' ? `badge:${link.setId}` : `category:${link.id}`;
+
+  function doorsWith(opts: { hold?: boolean; now?: number } = {}) {
+    const state = { hold: opts.hold ?? false, now: opts.now ?? 0 };
+    const opened: string[] = [];
+    const deps = {
+      shouldHold: vi.fn(() => state.hold),
+      openMention: vi.fn((id: string) => void opened.push(`mention:${id}`)),
+      openWhisper: vi.fn((key: string) => void opened.push(`whisper:${key}`)),
+      openChannel: vi.fn((login: string) => void opened.push(`channel:${login}`)),
+      onLink: vi.fn((link: InboundLinkTarget) => void opened.push(label(link))),
+      bootNow: vi.fn(() => state.now),
+    };
+    clearHeldLink();
+    logs.info.mockClear();
+    return { doors: createPhoneLinkDoors(deps), deps, opened, state };
+  }
+
+  it('orders by known times only', () => {
+    expect(isOlder(100, 150)).toBe(true);
+    expect(isOlder(150, 100)).toBe(false);
+    expect(isOlder(150, 150)).toBe(false);
+    expect(isOlder(0, 150)).toBe(false);
+    expect(isOlder(100, 0)).toBe(false);
+  });
+
+  // Fails if an older link that the page hears late opens over a newer tap.
+  it('a link at 100, a tap at 150: the tap opens, and a later take of a link from 100 is dropped', () => {
+    const d = doorsWith();
+    d.doors.onLink(category('1'), 100);
+    d.doors.channelTap('xqc', 150);
+    d.doors.onLink(category('2'), 100);
+    expect(d.opened).toEqual(['category:1', 'channel:xqc']);
+    expect(logs.info).toHaveBeenCalledWith('[link] dropped, a tap is newer');
+  });
+
+  it('a tap at 100, a link at 150: both open, the link last', () => {
+    const d = doorsWith();
+    d.doors.channelTap('xqc', 100);
+    d.doors.onLink(category('1'), 150);
+    expect(d.opened).toEqual(['channel:xqc', 'category:1']);
+  });
+
+  // Fails if a tap the page hears late opens over a newer link.
+  it('a tap older than the newest link opens nothing and keeps a held link', () => {
+    const d = doorsWith({ hold: true });
+    d.doors.onLink(category('1'), 200);
+    d.doors.channelTap('xqc', 150);
+    expect(d.opened).toEqual([]);
+    expect(heldAt()).toBe(200);
+    expect(logs.info).toHaveBeenCalledWith('[link] tap skipped, a link is newer');
+  });
+
+  it('a newer tap clears an older held link and opens; release then opens nothing', () => {
+    const d = doorsWith({ hold: true });
+    d.doors.onLink(category('1'), 100);
+    d.doors.mentionTap('m1', 150);
+    expect(d.opened).toEqual(['mention:m1']);
+    expect(heldAt()).toBeNull();
+    d.state.hold = false;
+    d.doors.release();
+    expect(d.opened).toEqual(['mention:m1']);
+  });
+
+  it('a tap or a link with no time opens and orders nothing', () => {
+    const d = doorsWith({ hold: true });
+    d.doors.onLink(category('1'), 200);
+    d.doors.whisperTap('w1', 0);
+    expect(d.opened).toEqual(['whisper:w1']);
+    expect(heldAt()).toBeNull();
+    const e = doorsWith();
+    e.doors.channelTap('xqc', 150);
+    e.doors.onLink(category('2'), 0);
+    expect(e.opened).toEqual(['channel:xqc', 'category:2']);
+  });
+
+  it('an empty tap does nothing and keeps the held link', () => {
+    const d = doorsWith({ hold: true });
+    d.doors.onLink(badge('clover', '3'), 100);
+    d.doors.channelTap('', 150);
+    d.doors.mentionTap('', 150);
+    d.doors.whisperTap('', 150);
+    expect(d.opened).toEqual([]);
+    expect(heldAt()).toBe(100);
+  });
+
+  // Fails if a watch link waits behind picture in picture, or asks whether to.
+  it('a watch link never waits', () => {
+    const d = doorsWith({ hold: true });
+    d.doors.onLink(watch('xqc'), 100);
+    expect(d.opened).toEqual(['watch:xqc']);
+    expect(d.deps.shouldHold).not.toHaveBeenCalled();
+  });
+
+  // Fails if a badge or category link opens behind a window the person is not looking at.
+  it('a badge or category link waits while held; the newer replaces the older; release opens it once', () => {
+    const d = doorsWith({ hold: true });
+    d.doors.onLink(badge('clover', '3'), 100);
+    d.doors.onLink(category('1'), 120);
+    expect(d.opened).toEqual([]);
+    d.doors.release();
+    expect(d.opened).toEqual([]);
+    expect(heldAt()).toBe(120);
+    d.state.hold = false;
+    d.doors.release();
+    d.doors.release();
+    expect(d.opened).toEqual(['category:1']);
+  });
+
+  // Fails without the minute limit, or if a 0 time ever drops a held link.
+  it('a link held more than a minute is dropped; a 0 on either side never drops', () => {
+    const late = doorsWith({ hold: true });
+    late.doors.onLink(category('1'), 1000);
+    late.state.hold = false;
+    late.state.now = 61_001;
+    late.doors.release();
+    expect(late.opened).toEqual([]);
+    const inTime = doorsWith({ hold: true });
+    inTime.doors.onLink(category('1'), 1000);
+    inTime.state.hold = false;
+    inTime.state.now = 60_999;
+    inTime.doors.release();
+    expect(inTime.opened).toEqual(['category:1']);
+    const noClock = doorsWith({ hold: true });
+    noClock.doors.onLink(category('1'), 1000);
+    noClock.state.hold = false;
+    noClock.doors.release();
+    expect(noClock.opened).toEqual(['category:1']);
+    const noTime = doorsWith({ hold: true, now: 999_999 });
+    noTime.doors.onLink(category('1'), 0);
+    noTime.state.hold = false;
+    noTime.doors.release();
+    expect(noTime.opened).toEqual(['category:1']);
+  });
+
+  it('a mount tap runs through its own door', () => {
+    const d = doorsWith();
+    d.doors.mountTap({ kind: 'whisper', value: 'w1', at: 5 });
+    d.doors.mountTap({ kind: 'mention', value: 'm1', at: 6 });
+    d.doors.mountTap({ kind: 'channel', value: 'xqc', at: 7 });
+    d.doors.mountTap(null);
+    expect(d.opened).toEqual(['whisper:w1', 'mention:m1', 'channel:xqc']);
+    expect(d.deps.openWhisper).toHaveBeenCalledWith('w1');
+    expect(d.deps.openMention).toHaveBeenCalledWith('m1');
+    expect(d.deps.openChannel).toHaveBeenCalledWith('xqc');
+  });
+
+  // Fails if the mount's own take opens a link older than the tap the mount ran.
+  it('a mount with a tap at 150 drops a slot link from 100 and opens one from 200 after the tap', async () => {
+    for (const [at, expected] of [
+      [100, ['channel:xqc']],
+      [200, ['channel:xqc', 'watch:new']],
+    ] as const) {
+      const d = doorsWith();
+      const stop = d.doors.mountDrain({
+        tap: { kind: 'channel', value: 'xqc', at: 150 },
+        listen: async () => () => {},
+        take: async () => taken(watch('new'), at),
+      });
+      await flush();
+      expect(d.opened).toEqual(expected);
+      stop();
+    }
+  });
+
+  // Fails if an event take that lands while another take is in flight reorders the end state.
+  it('an event take of a link older than a tap heard first is dropped', async () => {
+    const d = doorsWith();
+    let fire: (payload: unknown) => void = () => {};
+    const slot: { value: unknown } = { value: null };
+    const stop = d.doors.mountDrain({
+      tap: null,
+      listen: async (_event, handler) => {
+        fire = handler;
+        return () => {};
+      },
+      take: async () => {
+        const value = slot.value;
+        slot.value = null;
+        return value;
+      },
+    });
+    await flush();
+    d.doors.channelTap('xqc', 2000);
+    slot.value = taken(watch('stale'), 1500);
+    fire(1);
+    await flush();
+    slot.value = taken(watch('fresh'), 2500);
+    fire(2);
+    await flush();
+    expect(d.opened).toEqual(['channel:xqc', 'watch:fresh']);
+    stop();
+  });
+
+  it('with no tap the mount opens the stored link once', async () => {
+    const d = doorsWith();
+    const stop = d.doors.mountDrain({ tap: null, listen: async () => () => {}, take: async () => taken(badge('clover', '3'), 9) });
+    await flush();
+    expect(d.opened).toEqual(['badge:clover']);
+    stop();
   });
 });

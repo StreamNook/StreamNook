@@ -358,30 +358,42 @@ describe('shells use the one link door', () => {
     expect(text).toContain('makeCloseAppLayers({ changelogRecordsSeenRef, setShowChangelog, setSelectedBadge })');
   });
 
-  it('phone starts one bridge on take_pending_link, after it consumed the taps', () => {
+  it('phone takes links through the doors on take_pending_link, after the playback listeners', () => {
     const text = src('src/mobile/boot/useMobileBoot.ts');
-    expect(text.match(/startPhoneLinkBridge\(/g)).toHaveLength(1);
+    expect(text.match(/doors\.mountDrain\(/g)).toHaveLength(1);
+    expect(text).toMatch(/addCleanup\(\s*doors\.mountDrain\(/);
     expect(text).toContain("take: () => invoke<unknown>('take_pending_link')");
     expect(new Set(text.match(/take_pending_\w+/g))).toEqual(new Set(['take_pending_link']));
     expect(text).toContain("import { listen } from '@tauri-apps/api/event';");
     expect(text).not.toMatch(/listen:\s*addListener/);
-    expect(text).toContain('tapped: !!(tappedWhisper || tappedMention || tapped),');
-    expect(text).toContain('addCleanup(bridge.stop);');
-    expect(text).toContain('export const PHONE_LINK_BRIDGE = true;');
-    expect(text).toContain(
-      "openBadge: (setId, version) => useMobileNavStore.getState().openBadgeLink(`${setId}/${version}`),",
-    );
-    const bridge = text.indexOf('startPhoneLinkBridge({');
-    expect(bridge).toBeGreaterThan(-1);
-    for (const consume of [
-      'const tappedWhisper = consumePendingWhisper();',
-      'const tappedMention = tappedWhisper ? null : consumePendingMention();',
-      'const tapped = tappedWhisper || tappedMention ? null : consumePendingChannel();',
-    ]) {
-      const consumed = text.indexOf(consume);
-      expect(consumed).toBeGreaterThan(-1);
-      expect(consumed).toBeLessThan(bridge);
+    expect(text).toContain('tap: consumePendingTap(),');
+    // Built from halves: the absence scan over src/ must never find the old bridge's name in this file.
+    expect(text).not.toContain('startPhoneLink' + 'Bridge(');
+    // Fails if the shell spells deps of its own instead of the ones the tests drive.
+    expect(text).toContain('const linkDeps = makePhoneLinkDeps({ openChannel });');
+    expect(text).not.toMatch(/:\s*InboundLinkDeps\s*=/);
+    expect(text).toContain('onLink: (link) => openInboundLink(link, linkDeps),');
+    // Fails if the shell holds by a rule the tests do not drive.
+    expect(text).toContain('shouldHold: phoneShouldHold,');
+    expect(text).toContain('bootNow: bootNowMs,');
+    // Fails if a link can start a stream before the playback listeners exist, or a torn-down boot still drains.
+    const order = [
+      "'provider-stream-offline'",
+      'if (!isMounted) return;',
+      'const doors = createPhoneLinkDoors({',
+      'addCleanup(installHeldLinkRelease(doors.release));',
+      'doors.mountDrain(',
+      'addCleanup(installWarmTaps(doors));',
+    ];
+    let at = -1;
+    for (const needle of order) {
+      const found = text.indexOf(needle, at + 1);
+      expect(found, needle).toBeGreaterThan(at);
+      at = found;
     }
+    // The block between the guard and the warm taps has no await: no gap for a warm tap with no handler.
+    const block = text.slice(text.indexOf('if (!isMounted) return;'), text.indexOf('addCleanup(installWarmTaps(doors));'));
+    expect(block).not.toMatch(/\bawait\b/);
   });
 });
 

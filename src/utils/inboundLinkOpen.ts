@@ -3,6 +3,8 @@
 // (`services::inbound_link`); this file reads what Rust hands over and routes
 // it, the same way for every shell.
 
+import { Logger } from './logger';
+
 /** What a link names, as Rust serializes it (`InboundLink`). */
 export type InboundLinkTarget =
   | { kind: 'watch'; key: string }
@@ -94,6 +96,11 @@ export function takeHeld(): { link: InboundLinkTarget; at: number } | null {
   const out = held;
   held = null;
   return out;
+}
+
+/** When the held link was stored (ms on the boot clock), or null when none is held. */
+export function heldAt(): number | null {
+  return held ? held.at : null;
 }
 
 /** Forget the held link. */
@@ -230,4 +237,119 @@ export function startPhoneLinkBridge(opts: {
     },
   });
   return { stop: drain.stop };
+}
+
+/** A tapped notification the phone hands the doors: what it opens, and when Android stashed it (ms on the boot
+ *  clock; 0 when unknown). */
+export type PhoneTap = { kind: 'whisper' | 'mention' | 'channel'; value: string; at: number };
+
+/** What the phone's doors need from the shell; stubbed in tests. */
+export interface PhoneLinkDoorDeps {
+  /** True while a badge or category link must wait: the app is in picture in picture or not visible. */
+  shouldHold: () => boolean;
+  openMention: (id: string) => void;
+  openWhisper: (key: string) => void;
+  openChannel: (login: string) => void;
+  /** Opens a link now; the phone passes `(link) => openInboundLink(link, deps)`. */
+  onLink: (link: InboundLinkTarget) => void;
+  /** Now on the boot clock, in ms; 0 when unknown. */
+  bootNow: () => number;
+}
+
+export interface PhoneLinkDoors {
+  /** A link taken from the slot, with the moment it arrived. */
+  onLink: (link: InboundLinkTarget, at?: number) => void;
+  channelTap: (login: string, at?: number) => void;
+  mentionTap: (id: string, at?: number) => void;
+  whisperTap: (key: string, at?: number) => void;
+  /** The tap this mount took from the activity, if any. */
+  mountTap: (tap: PhoneTap | null) => void;
+  /** Runs the mount's tap, then the one link drain; returns its cleanup. */
+  mountDrain: (opts: { tap: PhoneTap | null; listen: LinkListen; take: () => Promise<unknown> }) => () => void;
+  /** Opens the held link once the app is back (visible and out of picture in picture). */
+  release: () => void;
+}
+
+/** True when both times are known and `at` came first. A 0 time orders nothing. */
+export function isOlder(at: number, than: number): boolean {
+  return at > 0 && than > 0 && at < than;
+}
+
+/** How long a held link may wait for the app to come back before it is dropped. */
+export const HELD_LINK_LIMIT_MS = 60_000;
+
+/**
+ * The phone's doors for links and notification taps. Every link and tap carries
+ * the moment Android delivered it, on the device boot clock, and each one is
+ * compared, when the page processes it, with the newest processed item of the
+ * other kind: an item older than that is dropped. The last one processed is the
+ * newest, so the screen ends on the person's newest action whatever order the
+ * page hears them in. A badge or category link that lands while the app is in
+ * picture in picture or hidden waits in the one held slot; a watch link never
+ * waits (a stream starting behind the window is how the app has always worked).
+ */
+export function createPhoneLinkDoors(deps: PhoneLinkDoorDeps): PhoneLinkDoors {
+  let newestTapAt = 0;
+  let newestLinkAt = 0;
+
+  const onLink = (link: InboundLinkTarget, at = 0) => {
+    Logger.info('[link] taken at', at);
+    if (isOlder(at, newestTapAt)) {
+      Logger.info('[link] dropped, a tap is newer');
+      return;
+    }
+    if (at > newestLinkAt) newestLinkAt = at;
+    if (link.kind !== 'watch' && deps.shouldHold()) {
+      holdLink(link, at);
+      return;
+    }
+    deps.onLink(link);
+  };
+
+  const tap = (value: string, at: number, open: (value: string) => void) => {
+    if (!value) return;
+    if (isOlder(at, newestLinkAt)) {
+      Logger.info('[link] tap skipped, a link is newer');
+      return;
+    }
+    if (at > newestTapAt) newestTapAt = at;
+    // A held link stored after this tap stays held; an older one goes.
+    const heldTime = heldAt();
+    if (heldTime !== null && !isOlder(at, heldTime)) clearHeldLink();
+    open(value);
+  };
+  const channelTap = (login: string, at = 0) => tap(login, at, deps.openChannel);
+  const mentionTap = (id: string, at = 0) => tap(id, at, deps.openMention);
+  const whisperTap = (key: string, at = 0) => tap(key, at, deps.openWhisper);
+
+  const mountTap = (taken: PhoneTap | null) => {
+    if (!taken) return;
+    if (taken.kind === 'whisper') whisperTap(taken.value, taken.at);
+    else if (taken.kind === 'mention') mentionTap(taken.value, taken.at);
+    else channelTap(taken.value, taken.at);
+  };
+
+  const mountDrain = (opts: { tap: PhoneTap | null; listen: LinkListen; take: () => Promise<unknown> }) => {
+    mountTap(opts.tap);
+    const drain = startLinkDrain({
+      listen: opts.listen,
+      take: opts.take,
+      open: (link, { at }) => onLink(link, at),
+    });
+    return drain.stop;
+  };
+
+  const release = () => {
+    if (deps.shouldHold()) return;
+    const h = takeHeld();
+    if (!h) return;
+    const now = deps.bootNow();
+    if (h.at > 0 && now > 0 && now - h.at > HELD_LINK_LIMIT_MS) {
+      Logger.info('[link] held link dropped, it waited too long');
+      return;
+    }
+    deps.onLink(h.link);
+  };
+
+  return { onLink, channelTap, mentionTap, whisperTap, mountTap, mountDrain, release };
 }

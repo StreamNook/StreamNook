@@ -40,10 +40,10 @@ import {
   stableNotifyId,
   syncBackgroundChecks,
 } from '../notifications';
-import { consumePendingChannel, consumePendingMention, consumePendingWhisper } from '../nativeBridge';
+import { bootNowMs, consumePendingTap } from '../nativeBridge';
 import { openWhisperByKey } from '../whispers/whisperInbox';
-import { useMobileNavStore } from '../navStore';
-import { openInboundLink, startPhoneLinkBridge, type InboundLinkDeps } from '../../utils/inboundLinkOpen';
+import { createPhoneLinkDoors, openInboundLink } from '../../utils/inboundLinkOpen';
+import { installHeldLinkRelease, installWarmTaps, makePhoneLinkDeps, phoneShouldHold } from './phoneLinkDeps';
 import { alertOn, loadAlertTypes } from '../alertTypes';
 import { noticeHidden } from '../../utils/notices';
 import { openMentionById } from '../mentions/mentionInbox';
@@ -339,6 +339,11 @@ export function useMobileBoot(): void {
         }
       }
 
+      // A boot torn down during the awaits above opens nothing: no link, no tap.
+      // Everything a stream start needs is listening by now (the playback
+      // listeners above), so a link that starts one lands on a ready shell.
+      if (!isMounted) return;
+
       // Open a channel handed over from outside the app: a tapped notification,
       // or a streamnook:// link.
       //
@@ -350,56 +355,39 @@ export function useMobileBoot(): void {
         if (!clean) return;
         void useAppStore.getState().startStream(clean);
       };
-      (window as Window & { __SN_OPEN_CHANNEL__?: (login: string) => void }).__SN_OPEN_CHANNEL__ =
-        openChannel;
-      // A tapped mention notification (posted from Rust, android_notify.rs)
-      // opens that mention: its chat, then the jump to the message. A warm tap
-      // is pushed in; it clears the native copy too, so a later remount does
-      // not open it a second time.
-      (window as Window & { __SN_OPEN_MENTION__?: (id: string) => void }).__SN_OPEN_MENTION__ = (id) => {
-        consumePendingMention();
-        if (id) void openMentionById(id);
-      };
-      // A tapped whisper notification (also posted from Rust) opens its
-      // conversation, the same two ways.
-      (window as Window & { __SN_OPEN_WHISPER__?: (key: string) => void }).__SN_OPEN_WHISPER__ = (key) => {
-        consumePendingWhisper();
-        if (key) void openWhisperByKey(key);
-      };
-      const tappedWhisper = consumePendingWhisper();
-      const tappedMention = tappedWhisper ? null : consumePendingMention();
-      const tapped = tappedWhisper || tappedMention ? null : consumePendingChannel();
-      // Every streamnook:// link (watch, badge, category) is stored by Rust in one
-      // slot and announced with `streamnook:link`; `take_pending_link` hands it
-      // over once, for the event and for a link the app was launched with. The
-      // bridge registers its listener before its first take, so a link that
-      // lands in between is not missed. A tapped notification is the newer
-      // action: when this mount consumed one, a watch link taken by the mount's
-      // own take is dropped (a badge link still opens).
-      const linkDeps: InboundLinkDeps = {
-        startStream: openChannel,
-        closeLinkSheet: () => {},
-        openBadge: (setId, version) => useMobileNavStore.getState().openBadgeLink(`${setId}/${version}`),
-        closeAppLayers: () => {},
-        openCategory: (id) => {
-          Logger.debug('[MobileBoot] category link ignored, the phone has no category screen yet:', id);
-        },
-      };
-      const bridge = startPhoneLinkBridge({
-        // Tauri hands a listener an event object; the bridge wants the bare payload.
-        listen: (event, handler) => listen<unknown>(event, (e) => handler(e.payload)),
-        take: () => invoke<unknown>('take_pending_link'),
-        tapped: !!(tappedWhisper || tappedMention || tapped),
-        open: (link) => openInboundLink(link, linkDeps),
+      // Every streamnook:// link (watch, badge, category) and every tapped
+      // notification goes through the phone's doors. Rust keeps the newest link
+      // in one slot and announces it with `streamnook:link`; `take_pending_link`
+      // hands it over once, for the event and for a link the app was launched
+      // with, and the drain registers its listener before its first take, so a
+      // link that lands in between is not missed. Each link and tap carries the
+      // moment Android delivered it, so whichever is newer wins. A badge or
+      // category link that lands while the app is in picture in picture or
+      // hidden waits until it is back (at most a minute). The release
+      // listeners exist before the first take, and the warm tap handlers are
+      // installed in the same synchronous block, so a warm tap never finds the
+      // page without a handler.
+      const linkDeps = makePhoneLinkDeps({ openChannel });
+      const doors = createPhoneLinkDoors({
+        shouldHold: phoneShouldHold,
+        // A mention opens its chat, then the jump to the message; a whisper its
+        // conversation. Both are posted from Rust (android_notify.rs).
+        openMention: (id) => void openMentionById(id),
+        openWhisper: (key) => void openWhisperByKey(key),
+        openChannel,
+        onLink: (link) => openInboundLink(link, linkDeps),
+        bootNow: bootNowMs,
       });
-      addCleanup(bridge.stop);
-      if (tappedWhisper) {
-        void openWhisperByKey(tappedWhisper);
-      } else if (tappedMention) {
-        void openMentionById(tappedMention);
-      } else if (tapped) {
-        openChannel(tapped);
-      }
+      addCleanup(installHeldLinkRelease(doors.release));
+      addCleanup(
+        doors.mountDrain({
+          tap: consumePendingTap(),
+          // Tauri hands a listener an event object; the drain wants the bare payload.
+          listen: (event, handler) => listen<unknown>(event, (e) => handler(e.payload)),
+          take: () => invoke<unknown>('take_pending_link'),
+        }),
+      );
+      addCleanup(installWarmTaps(doors));
 
       // No `streamer-went-live` listener here anymore, on purpose. The
       // WorkManager poll (android_notify.rs) is the ONLY live-alert lane, app
