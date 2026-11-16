@@ -61,6 +61,10 @@ jobs:
         with:
           ref: main
 
+      # The shell steps below match text with ripgrep.
+      - name: Install ripgrep
+        run: command -v rg >/dev/null || brew install ripgrep
+
       # Release-exists guard, the macOS twin of the Windows job's check. This
       # workflow fires on ANY `dev` push that touches Cargo.toml, release or
       # not, and every upload below is `--clobber`. Without this guard a
@@ -76,7 +80,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          version=$(grep '^version' src-tauri/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          version=$(rg -m1 '^version' src-tauri/Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
           echo "VERSION=$version" >> "$GITHUB_OUTPUT"
           if gh release view "v$version" >/dev/null 2>&1; then
             echo "RELEASE_EXISTS=true" >> "$GITHUB_OUTPUT"
@@ -132,7 +136,7 @@ jobs:
         id: pack
         run: |
           set -euo pipefail
-          version=$(grep '^version' src-tauri/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          version=$(rg -m1 '^version' src-tauri/Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
           app_dir="src-tauri/target/universal-apple-darwin/release/bundle/macos"
           test -d "$app_dir/StreamNook.app" || { echo "no .app at $app_dir"; exit 1; }
           bundle="StreamNook.app.tar.gz"
@@ -251,6 +255,10 @@ jobs:
         with:
           ref: main
 
+      # The shell steps below match text with ripgrep.
+      - name: Install ripgrep
+        run: command -v rg >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq ripgrep; }
+
       # Release-exists guard, the Linux twin of the macOS and Windows checks.
       # Same reasoning: every upload below is --clobber, and this workflow fires
       # on ANY dev push touching Cargo.toml, so without the guard a dependency
@@ -263,7 +271,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          version=$(grep '^version' src-tauri/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          version=$(rg -m1 '^version' src-tauri/Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
           echo "VERSION=$version" >> "$GITHUB_OUTPUT"
           if gh release view "v$version" >/dev/null 2>&1; then
             echo "RELEASE_EXISTS=true" >> "$GITHUB_OUTPUT"
@@ -430,7 +438,7 @@ jobs:
           # The decoders must survive; without them the player dies with
           # "HLS is not supported in this browser".
           for keep in libgstlibav.so libgstopenh264.so; do
-            find "$appdir" -name "$keep" | grep -q . || { echo "$keep went missing"; exit 1; }
+            find "$appdir" -name "$keep" | rg -q . || { echo "$keep went missing"; exit 1; }
           done
 
           # The GTK plugin's AppRun hook forces X11 on every Wayland desktop and
@@ -468,7 +476,7 @@ jobs:
         id: pack
         run: |
           set -euo pipefail
-          version=$(grep '^version' src-tauri/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          version=$(rg -m1 '^version' src-tauri/Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
           src_dir="src-tauri/target/release/bundle/appimage"
           # The bundler names it StreamNook_<version>_amd64.AppImage. The client
           # asks for the STABLE name (default_bundle_name() returns

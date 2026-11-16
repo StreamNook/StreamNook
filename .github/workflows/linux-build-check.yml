@@ -91,6 +91,7 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
+            ripgrep \
             libwebkit2gtk-4.1-dev \
             libjavascriptcoregtk-4.1-dev \
             libgtk-3-dev \
@@ -183,7 +184,7 @@ jobs:
             while IFS= read -r f; do rm -f "$f"; echo "unbundled $lib"; done < <(find "$appdir" -name "$lib")
           done
           for keep in libgstlibav.so libgstopenh264.so; do
-            find "$appdir" -name "$keep" | grep -q . || { echo "$keep went missing"; exit 1; }
+            find "$appdir" -name "$keep" | rg -q . || { echo "$keep went missing"; exit 1; }
           done
 
           # Same AppRun hook patch as the release job (native Wayland first,
@@ -226,7 +227,7 @@ jobs:
           # The glibc floor decides which distros can run this at all, and it is
           # set by the runner image. Printing it makes a runner bump visible
           # instead of silently raising the floor under users.
-          floor=$(objdump -T src-tauri/target/release/StreamNook 2>/dev/null | grep -o 'GLIBC_[0-9.]*' | sort -Vu | tail -1)
+          floor=$(objdump -T src-tauri/target/release/StreamNook 2>/dev/null | rg -o 'GLIBC_[0-9.]*' | sort -Vu | tail -1)
           echo "| glibc floor | $floor |" >> "$GITHUB_STEP_SUMMARY"
 
           # The decoders are what stand between a working player and
@@ -249,7 +250,7 @@ jobs:
 
           # A hook that still forces X11 puts every Wayland user on XWayland.
           hook="$appdir/apprun-hooks/linuxdeploy-plugin-gtk.sh"
-          if grep -q '^export GDK_BACKEND=x11' "$hook" || ! grep -q '^export GIO_MODULE_DIR=' "$hook"; then
+          if rg -q '^export GDK_BACKEND=x11' "$hook" || ! rg -q '^export GIO_MODULE_DIR=' "$hook"; then
             echo "| AppRun hook | NOT PATCHED (forces X11 or loads host GIO modules) |" >> "$GITHUB_STEP_SUMMARY"; exit 1
           fi
           echo "| AppRun hook | Wayland first, bundled GIO modules only |" >> "$GITHUB_STEP_SUMMARY"
