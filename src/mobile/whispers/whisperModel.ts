@@ -268,3 +268,71 @@ export function threadItems(messages: StoredWhisperMessage[], nowMs: number): Th
   });
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// Unsent drafts
+// ---------------------------------------------------------------------------
+
+// Composer text typed and not sent, by account and conversation, so a thread
+// closed by a link (or by Back) brings its words back when it opens again.
+// Kept for the page's life; an account change clears it (whisperInbox).
+const drafts = new Map<string, string>();
+// Where a re-keyed conversation's draft went: Rust files a new conversation's
+// first send under Twitch's own key and reports the old one as `replaced_key`.
+const forwards = new Map<string, string>();
+const MAX_FORWARDS = 8;
+
+/** The drafts key for one account's conversation. Twitch user ids are digits,
+ *  so the first colon always ends the owner. */
+export function whisperDraftKey(ownerId: string, conversationKey: string): string {
+  return `${ownerId}:${conversationKey}`;
+}
+
+/** The key a conversation's draft lives under now, following re-keys (at most
+ *  eight, and never round a loop). */
+export function latestDraftKey(key: string): string {
+  const seen = new Set([key]);
+  let at = key;
+  for (let hop = 0; hop < MAX_FORWARDS; hop++) {
+    const next = forwards.get(at);
+    if (next === undefined || seen.has(next)) break;
+    seen.add(next);
+    at = next;
+  }
+  return at;
+}
+
+/** The unsent text for a conversation, or ''. */
+export function getWhisperDraft(key: string): string {
+  return drafts.get(latestDraftKey(key)) ?? '';
+}
+
+/** Keep the composer's text; an empty text forgets it. */
+export function setWhisperDraft(key: string, text: string): void {
+  const home = latestDraftKey(key);
+  if (text) drafts.set(home, text);
+  else drafts.delete(home);
+}
+
+export function clearWhisperDraft(key: string): void {
+  drafts.delete(latestDraftKey(key));
+}
+
+/** Rust re-keyed a conversation: later reads and writes of the old key follow
+ *  it, and text already under the old key moves (it is the newer text). An
+ *  empty value is never written. */
+export function forwardWhisperDraft(from: string, to: string): void {
+  if (from === to) return;
+  forwards.set(from, to);
+  const text = drafts.get(from);
+  if (text) {
+    drafts.set(to, text);
+    drafts.delete(from);
+  }
+}
+
+/** Forget every draft and re-key: an account change, and tests. */
+export function resetWhisperDrafts(): void {
+  drafts.clear();
+  forwards.clear();
+}

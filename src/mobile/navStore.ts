@@ -6,6 +6,7 @@
 import { create } from 'zustand';
 import { useAppStore } from '../stores/AppStore';
 import { useBadgeSpotlightStore } from '../stores/badgeSpotlightStore';
+import { categoryAnswerOutcome, forgetFailedLinkedCategory, getLinkedCategory } from '../utils/linkedCategory';
 import { startTab } from './phonePrefs';
 import { nextChat, type VerticalChatState } from './watch/verticalView';
 import type { TwitchCategory } from '../types';
@@ -84,6 +85,17 @@ interface MobileNavState {
   openBadgeLink: (key: string) => void;
   /** Nulls the link key, only while it still equals `key` (a newer link keeps its own). */
   clearBadgeLink: (key: string) => void;
+  /** Bumped by every link that closes a badge sheet (`closeLinkSheet`, `openCategoryLink`): RewardsScreen closes a
+   *  sheet it took from a link but MobileSheet has not pushed onto `sheetStack` yet, which the walk cannot see. */
+  linkSheetSeq: number;
+  /** A watch link: close every sheet and layer that would sit over the stream, a badge sheet a link opened
+   *  included. The player and the tab stay, and so does an open category: the stream plays over it. */
+  closeLinkSheet: () => void;
+  /** A category link: close every sheet and layer, shrink the player and land on Browse on that category, named
+   *  at once when the name is known, else nameless (the screen asks for its own name). */
+  openCategoryLink: (id: string) => void;
+  /** The name and art a lookup found, written only while the shown category is still the nameless copy of `id`. */
+  fillBrowseCategory: (id: string, found: TwitchCategory) => void;
   pushSheet: (id: string) => void;
   popSheet: (id?: string) => void;
   openSettings: (tab: string, target?: SettingsTarget) => void;
@@ -124,6 +136,38 @@ export function backTakenBeforePlayer(s: {
   return s.sheetStack.length > 0 || s.songsOpen || s.mentionsOpen || !!s.settingsView || s.cosmeticsOpen;
 }
 
+/** Every layer a link closes: the values `openBadgeLink` has always written. */
+const LAYERS_CLOSED = {
+  settingsView: null,
+  settingsTarget: null,
+  settingsReturn: null,
+  cosmeticsOpen: false,
+  mentionsOpen: false,
+  whisperKey: null,
+  songsOpen: false,
+  songsFocus: null,
+} as const;
+
+// Pushed sheets close the way they close themselves: each id in a snapshot gets
+// `sn:dismiss-sheet` (each pops itself in its effect cleanup, so the live stack
+// is never iterated). `sheetStack: []` would leave them on screen. A chat badge
+// sheet still waiting on Rust is not on the stack yet; its request is closed so
+// it never pops up over what the link opens.
+function dismissEverySheet(stack: readonly string[]): void {
+  for (const id of [...stack].reverse()) {
+    window.dispatchEvent(new CustomEvent('sn:dismiss-sheet', { detail: id }));
+  }
+  useBadgeSpotlightStore.getState().close();
+}
+
+/** The name and art a lookup already found for `id`, or null. */
+function foundCopy(id: string): TwitchCategory | null {
+  const record = getLinkedCategory(id);
+  return record?.state === 'found' && record.category
+    ? { id, name: record.category.name, box_art_url: record.category.box_art_url }
+    : null;
+}
+
 export const useMobileNavStore = create<MobileNavState>((set, get) => ({
   // The chosen start tab, read synchronously so the very first frame is the
   // right tab rather than Following flashing before an effect corrects it.
@@ -145,6 +189,7 @@ export const useMobileNavStore = create<MobileNavState>((set, get) => ({
   setVerticalChat: (state) => set((s) => (s.verticalChat === state ? s : { verticalChat: state })),
   focusDropCampaignId: null,
   badgeLinkKey: null,
+  linkSheetSeq: 0,
   chatsReturnTab: startTab() === 'chats' ? 'following' : startTab(),
   chatsFloor: null,
   setChatsFloor: (px) => set((s) => (s.chatsFloor === px ? s : { chatsFloor: px })),
@@ -164,33 +209,51 @@ export const useMobileNavStore = create<MobileNavState>((set, get) => ({
       playerMode: 'mini',
       activeTab: 'rewards',
       focusDropCampaignId: campaignId,
+      // The category screen is a layer over every tab; left open it would hide Rewards.
+      browseCategory: null,
     }),
   clearDropFocus: () => set({ focusDropCampaignId: null }),
 
   openBadgeLink: (key) => {
-    // Pushed sheets close the way they close themselves: each id in a snapshot
-    // gets `sn:dismiss-sheet` (each pops itself in its effect cleanup, so the
-    // live stack is never iterated). `sheetStack: []` would leave them on screen.
-    for (const id of [...get().sheetStack].reverse()) {
-      window.dispatchEvent(new CustomEvent('sn:dismiss-sheet', { detail: id }));
-    }
-    // A chat badge sheet still waiting on Rust is not on the stack yet; close
-    // its request so it never pops up over the linked badge later.
-    useBadgeSpotlightStore.getState().close();
+    dismissEverySheet(get().sheetStack);
     set({
       playerMode: 'mini',
-      settingsView: null,
-      settingsTarget: null,
-      settingsReturn: null,
-      cosmeticsOpen: false,
-      mentionsOpen: false,
-      whisperKey: null,
-      songsOpen: false,
-      songsFocus: null,
+      ...LAYERS_CLOSED,
+      // The category screen is a layer over every tab; left open it would stand
+      // between the badge sheet and Rewards once the sheet closes.
+      browseCategory: null,
       activeTab: 'rewards',
       badgeLinkKey: key,
     });
   },
+  closeLinkSheet: () => {
+    dismissEverySheet(get().sheetStack);
+    set((s) => ({ ...LAYERS_CLOSED, badgeLinkKey: null, linkSheetSeq: s.linkSheetSeq + 1 }));
+  },
+  openCategoryLink: (id) => {
+    // A new link is a fresh attempt: a failed or missing record for the id goes,
+    // so the screen asks again.
+    forgetFailedLinkedCategory(id);
+    dismissEverySheet(get().sheetStack);
+    set((s) => ({
+      playerMode: 'mini',
+      ...LAYERS_CLOSED,
+      activeTab: 'browse',
+      badgeLinkKey: null,
+      linkSheetSeq: s.linkSheetSeq + 1,
+      // The category already shown keeps its name; a found record names a new
+      // copy at once; anything else opens nameless and names itself.
+      browseCategory:
+        s.browseCategory?.id === id && s.browseCategory.name !== ''
+          ? s.browseCategory
+          : (foundCopy(id) ?? { id, name: '', box_art_url: '' }),
+    }));
+  },
+  fillBrowseCategory: (id, found) =>
+    set((s) => {
+      const filled = categoryAnswerOutcome(s.browseCategory, id, { state: 'found', category: found });
+      return filled ? { browseCategory: filled } : s;
+    }),
   clearBadgeLink: (key) =>
     set((s) => (s.badgeLinkKey === key ? { badgeLinkKey: null } : s)),
 

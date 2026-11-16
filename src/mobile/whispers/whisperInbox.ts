@@ -21,7 +21,7 @@ import type {
   WhisperStatusPayload,
   WhisperUpdatePayload,
 } from '../../types';
-import { PAGE, failureReason } from './whisperModel';
+import { PAGE, failureReason, forwardWhisperDraft, resetWhisperDrafts, whisperDraftKey } from './whisperModel';
 
 export type WhisperStatus = WhisperStatusPayload;
 
@@ -135,6 +135,11 @@ export async function openWhisperByKey(key: string, surface?: InboxSurface): Pro
   else nav.setMentionsOpen(true);
 }
 
+/** The account whose whisper drafts the composer reads and writes. */
+export function whisperDraftOwner(): string {
+  return useAppStore.getState().currentUser?.user_id ?? '';
+}
+
 function ownerMatches(ownerId: string | undefined): boolean {
   const mine = useAppStore.getState().currentUser?.user_id;
   return !mine || !ownerId || ownerId === mine;
@@ -160,6 +165,12 @@ export function installWhisperInbox(): () => void {
   hold(
     listen<WhisperUpdatePayload>('whisper-conversation-updated', (e) => {
       if (!e.payload || !ownerMatches(e.payload.owner_id)) return;
+      // A re-keyed conversation's unsent text follows it, open thread or not.
+      const replaced = e.payload.replaced_key;
+      if (replaced && replaced !== e.payload.key) {
+        const owner = whisperDraftOwner();
+        forwardWhisperDraft(whisperDraftKey(owner, replaced), whisperDraftKey(owner, e.payload.key));
+      }
       useWhispersStore.setState({ lastUpdate: e.payload });
       bumpInbox();
     }),
@@ -182,6 +193,8 @@ export function installWhisperInbox(): () => void {
   const unsubUser = useAppStore.subscribe((s, prev) => {
     if (s.currentUser?.user_id !== prev.currentUser?.user_id) {
       useWhispersStore.setState((st) => ({ status: null, lastUpdate: null, revision: st.revision + 1 }));
+      // Drafts are per account; a sign-out or a switch leaves none behind.
+      resetWhisperDrafts();
       void refreshWhisperStatus();
     }
   });

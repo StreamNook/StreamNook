@@ -28,16 +28,21 @@ import {
   sendWhisper,
   setOpenWhisper,
   useWhispersStore,
+  whisperDraftOwner,
 } from './whisperInbox';
 import {
   PAGE,
   REREAD_MAX,
   WHISPER_WORDS,
   canSend,
+  clearWhisperDraft,
   composerPlaceholder,
   counterText,
   fromPage,
+  getWhisperDraft,
   scalarLength,
+  setWhisperDraft,
+  whisperDraftKey,
   shownName,
   threadItems,
   updateNeedsReread,
@@ -165,7 +170,11 @@ export const WhisperThread: React.FC<{ conversationKey: string; onBack: () => vo
   const [thread, setThread] = useState<ThreadState | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [older, setOlder] = useState<'idle' | 'loading' | 'failed'>('idle');
-  const [draft, setDraft] = useState('');
+  // Unsent text survives a close: the composer starts from the stored draft and
+  // keeps every change there. The key is fixed at mount, account included; the
+  // drafts store follows a re-keyed conversation by itself.
+  const [draftKey] = useState(() => whisperDraftKey(whisperDraftOwner(), conversationKey));
+  const [draft, setDraft] = useState(() => getWhisperDraft(draftKey));
   const [sendError, setSendError] = useState<string | null>(null);
   const [reread, setReread] = useState(0);
   const [now, setNow] = useState(() => Date.now());
@@ -288,13 +297,19 @@ export const WhisperThread: React.FC<{ conversationKey: string; onBack: () => vo
   const send = async () => {
     const text = draft.trim();
     if (!meta || !canSend(text)) return;
+    // The stored draft goes as the send starts, so a close mid-send and a
+    // reopen never bring back words that went out.
+    clearWhisperDraft(draftKey);
     stickToBottom.current = true;
     setDraft('');
     setSendError(null);
     pendingText.current = text;
     const err = await sendWhisper(meta, text);
-    // Refused before Rust filed anything: the words come back to the composer.
+    // Refused before Rust filed anything: the words come back, to the stored
+    // draft (this thread may be closed by now) and to the composer, unless
+    // something newer was typed meanwhile.
     if (err && pendingText.current === text) {
+      if (!getWhisperDraft(draftKey)) setWhisperDraft(draftKey, text);
       setDraft((d) => d || text);
       setSendError(err);
     }
@@ -450,6 +465,7 @@ export const WhisperThread: React.FC<{ conversationKey: string; onBack: () => vo
               value={draft}
               onChange={(e) => {
                 setDraft(e.target.value);
+                setWhisperDraft(draftKey, e.target.value);
                 if (sendError) setSendError(null);
               }}
               onKeyDown={(e) => {
