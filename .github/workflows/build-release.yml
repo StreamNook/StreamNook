@@ -678,10 +678,27 @@ jobs:
       #   src-tauri/target/release/bundle/nsis/StreamNook_<ver>_x64-setup.exe
       # Its updater signature is made by "Sign the installer" below, not by
       # tauri build.
+      #
+      # Releases link with MSVC link.exe, as every release always has.
+      # src-tauri/.cargo/config.toml sets rust-lld for Windows to speed up local
+      # test builds; for a release that saves seconds of a two-hour run, so it
+      # is not worth a different linker in the .exe everyone installs. An env
+      # var outranks the config file. The path is the toolset rustc itself
+      # would pick (the Build Tools' default version file), never a bare
+      # link.exe that Git's coreutils link.exe on PATH could shadow.
       - name: Build Tauri app
         if: steps.check_release.outputs.RELEASE_EXISTS == 'false'
         shell: pwsh
-        run: npm run tauri build
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw "No Visual Studio with the MSVC x64 tools on this runner" }
+          $toolset = (Get-Content "$vs\VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt" -Raw).Trim()
+          $link = "$vs\VC\Tools\MSVC\$toolset\bin\Hostx64\x64\link.exe"
+          if (-not (Test-Path -LiteralPath $link)) { throw "MSVC link.exe not found at $link" }
+          $env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER = $link
+          "Windows release linker: $link" >> $env:GITHUB_STEP_SUMMARY
+          npm run tauri build
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
