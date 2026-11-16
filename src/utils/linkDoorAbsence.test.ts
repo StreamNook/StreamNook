@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 
 const SRC = resolve(__dirname, '..');
@@ -37,6 +37,14 @@ const NEEDLES: string[] = [
   'take_pending_' + 'badge_link',
   'streamnook:' + 'watch',
   'streamnook:' + 'badge',
+  // The phone's stopgap bridge and what only it needed, gone with the doors.
+  'link' + 'Gen',
+  'startPhoneLink' + 'Bridge',
+  'PHONE_LINK' + '_BRIDGE',
+  'BADGE_NOT_FOUND' + '_TOAST',
+  'consumePending' + 'Channel',
+  'consumePending' + 'Mention',
+  'consumePending' + 'Whisper',
 ];
 
 describe('the old link doors are gone from src', () => {
@@ -56,5 +64,17 @@ describe('the old link doors are gone from src', () => {
   it.each(NEEDLES.map((needle, index) => [index, needle] as const))('old name %i appears in no file', (_index, needle) => {
     const whole = new RegExp('\\b' + needle + '\\b');
     expect(files.filter((file) => whole.test(file.text)).map((file) => file.name)).toEqual([]);
+  });
+
+  // The guard refused every Android build while the bridge existed; with the doors in, it and its CI step go.
+  it('the bridge guard, its build line and its CI step are gone', () => {
+    const root = resolve(SRC, '..');
+    expect(existsSync(resolve(root, 'scripts', 'phone-bridge' + '-guard.sh'))).toBe(false);
+    const build = readFileSync(resolve(root, 'scripts', 'android-build.sh'), 'utf8');
+    expect(build).toContain('cd "$(dirname "$0")/.."');
+    expect(build.split(/\r?\n/).some((line) => line.includes('phone-bridge' + '-guard'))).toBe(false);
+    const ci = readFileSync(resolve(root, '.github', 'workflows', 'desktop-ci.yml'), 'utf8');
+    expect(ci).toContain('name: Frontend tests');
+    expect(ci).not.toContain('Install ripgrep');
   });
 });

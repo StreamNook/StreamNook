@@ -26,7 +26,6 @@
 # passed for both so there is one code path and no second thing to remember.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-bash scripts/phone-bridge-guard.sh src/mobile/boot/useMobileBoot.ts
 
 MODE_ARGS=()
 LABEL=release

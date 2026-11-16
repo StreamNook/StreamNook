@@ -26,9 +26,6 @@ interface SNBridge {
   scheduleBackgroundChecks?(intervalMinutes: number): void;
   cancelBackgroundChecks?(): void;
   runNotifyCheckNow?(): void;
-  consumePendingChannel?(): string;
-  consumePendingMention?(): string;
-  consumePendingWhisper?(): string;
   consumePendingTap?(): string;
   consumePendingChannelIf?(at: number): boolean;
   consumePendingMentionIf?(at: number): boolean;
@@ -393,22 +390,6 @@ export function runNotifyCheckNow(): void {
 }
 
 /**
- * Channel login from a tapped notification, or null.
- *
- * Reading it clears it natively, same contract as consumePipClosed. Drained on
- * mount because a tap that cold-starts the app has no WebView to be pushed to;
- * the warm case arrives through `window.__SN_OPEN_CHANNEL__` instead.
- */
-export function consumePendingChannel(): string | null {
-  try {
-    const channel = bridge()?.consumePendingChannel?.();
-    return channel && channel.length > 0 ? channel : null;
-  } catch {
-    return null;
-  }
-}
-
-/**
  * Start or update the lock-screen media session.
  *
  * Also the thing that KEEPS AUDIO ALIVE with the screen off: the foreground
@@ -464,34 +445,6 @@ export function isPowerSaveMode(): boolean | null {
     /* bridge absent */
   }
   return null;
-}
-
-/**
- * Message id from a tapped mention notification, or null. Same contract as
- * consumePendingChannel: reading clears it, drained on mount for the cold
- * case, while a warm tap arrives through `window.__SN_OPEN_MENTION__`.
- */
-export function consumePendingMention(): string | null {
-  try {
-    const id = bridge()?.consumePendingMention?.();
-    return id && id.length > 0 ? id : null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Conversation key from a tapped whisper notification, or null. Same contract
- * as consumePendingMention; a warm tap arrives through
- * `window.__SN_OPEN_WHISPER__`.
- */
-export function consumePendingWhisper(): string | null {
-  try {
-    const key = bridge()?.consumePendingWhisper?.();
-    return key && key.length > 0 ? key : null;
-  } catch {
-    return null;
-  }
 }
 
 /** A tapped notification the activity stashed: what it opens, and when it was

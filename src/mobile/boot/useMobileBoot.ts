@@ -54,11 +54,6 @@ import { streamProvider } from '../../utils/streamProvider';
 import { Logger } from '../../utils/logger';
 import { SENDER_ID, SETTINGS_UPDATED_EVENT, type SettingsUpdatedPayload } from '../../utils/settingsBroadcast';
 
-// The phone's link bridge is a stopgap: Android builds refuse while this marker
-// exists (scripts/phone-bridge-guard.sh, which scripts/android-build.sh runs
-// before anything else), until the phone's own link doors replace the bridge.
-export const PHONE_LINK_BRIDGE = true;
-
 export function useMobileBoot(): void {
   // "Achievement unlocked" for a reward Rust's claims just granted, the same
   // hook desktop mounts in App.tsx. The lifetime stats themselves are counted

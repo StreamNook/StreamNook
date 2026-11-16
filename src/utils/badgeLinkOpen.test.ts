@@ -14,7 +14,6 @@ import {
   BADGE_LINK_LIMIT_MS,
   BADGE_LOAD_FAILED_TEXT,
   BADGE_NOT_FOUND_TEXT,
-  BADGE_NOT_FOUND_TOAST,
   applyBadgeAnswer,
   findTwitchBadge,
   openBadgeLink,
@@ -309,11 +308,6 @@ describe('the sheet words', () => {
   it('stay neutral about who is at fault', () => {
     expect(BADGE_NOT_FOUND_TEXT).toBe("Couldn't find this badge yet");
     expect(BADGE_LOAD_FAILED_TEXT).toBe("Couldn't load this badge");
-  });
-
-  // Android's RewardsScreen still imports the old name until its own slice deletes the alias.
-  it('keeps the old toast name for Android', () => {
-    expect(BADGE_NOT_FOUND_TOAST).toBe(BADGE_NOT_FOUND_TEXT);
   });
 });
 

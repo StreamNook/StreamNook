@@ -31,9 +31,6 @@ export const BADGE_NOT_FOUND_TEXT = "Couldn't find this badge yet";
 /** What the sheet says when the list could not be read at all (offline, a rejected read, too slow). */
 export const BADGE_LOAD_FAILED_TEXT = "Couldn't load this badge";
 
-/** Android's RewardsScreen still imports the old toast name; its slice deletes this alias. */
-export const BADGE_NOT_FOUND_TOAST = BADGE_NOT_FOUND_TEXT;
-
 /** How long a badge link waits for the list before the sheet says it failed. */
 export const BADGE_LINK_LIMIT_MS = 6000;
 

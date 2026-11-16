@@ -16,7 +16,6 @@ import {
   readInboundLink,
   readTakenLink,
   startLinkDrain,
-  startPhoneLinkBridge,
   takeHeld,
   type InboundLinkDeps,
   type InboundLinkTarget,
@@ -652,120 +651,10 @@ describe('startLinkDrain', () => {
   });
 });
 
-describe('startPhoneLinkBridge', () => {
-  function bridge(tapped: boolean) {
-    let handler: (payload: unknown) => void = () => {};
-    let settle: (unlisten: () => void) => void = () => {};
-    const slot: { value: unknown } = { value: null };
-    const opened: InboundLinkTarget[] = [];
-    const take = vi.fn(async () => {
-      const value = slot.value;
-      slot.value = null;
-      return value;
-    });
-    const unlisten = vi.fn();
-    const handle = startPhoneLinkBridge({
-      listen: (_event, h) => {
-        handler = h;
-        return new Promise<() => void>((res) => (settle = res));
-      },
-      take,
-      tapped,
-      open: (link) => void opened.push(link),
-    });
-    return { handle, take, slot, opened, unlisten, fire: (n: unknown) => handler(n), settle: () => settle(unlisten) };
-  }
-
-  // Catches a bridge that opens the stored watch link on a mount that consumed
-  // a tap: the tap is the newer action.
-  it('a tapped mount drops the watch link its own take returns', async () => {
-    const b = bridge(true);
-    b.slot.value = taken(watch('stale'));
-    b.settle();
-    await flush();
-    expect(b.take).toHaveBeenCalledTimes(1);
-    expect(b.opened).toEqual([]);
-  });
-
-  // Catches a bridge that drops every kind on a tapped mount.
-  it('a tapped mount still opens a badge link and a category link', async () => {
-    const badgeBridge = bridge(true);
-    badgeBridge.slot.value = taken(badge('clover', '3'));
-    badgeBridge.settle();
-    await flush();
-    expect(badgeBridge.opened).toEqual([badge('clover', '3')]);
-
-    const categoryBridge = bridge(true);
-    categoryBridge.slot.value = taken(category('509658'));
-    categoryBridge.settle();
-    await flush();
-    expect(categoryBridge.opened).toEqual([category('509658')]);
-  });
-
-  // Catches a bridge that drops a watch link from a later event: only the
-  // mount's own take is told apart.
-  it('a tapped mount opens a watch link that arrives by event later', async () => {
-    const b = bridge(true);
-    b.settle();
-    await flush();
-    b.slot.value = taken(watch('later'));
-    b.fire(2);
-    await flush();
-    expect(b.opened).toEqual([watch('later')]);
-  });
-
-  // Catches "the first take" standing in for the mount take: an event can take
-  // before listen settles, and its link is newer than the tap.
-  it('an event take before listen settles opens, the listen-settle take after it drops', async () => {
-    const b = bridge(true);
-    b.slot.value = taken(watch('event'));
-    b.fire(1);
-    await flush();
-    expect(b.opened).toEqual([watch('event')]);
-    b.slot.value = taken(watch('stored'));
-    b.settle();
-    await flush();
-    expect(b.opened).toEqual([watch('event')]);
-  });
-
-  // Catches a bridge that drops the mount's watch link on an untapped mount.
-  it('an untapped mount opens the first take watch link', async () => {
-    const b = bridge(false);
-    b.slot.value = taken(watch('stored'));
-    b.settle();
-    await flush();
-    expect(b.opened).toEqual([watch('stored')]);
-  });
-
-  // Catches a bridge that waits for boot or peeks: the phone has no boot rule.
-  it('takes right after listen settles with no ready rule', async () => {
-    const b = bridge(false);
-    b.settle();
-    await flush();
-    expect(b.take).toHaveBeenCalledTimes(1);
-  });
-
-  // Catches a stop that leaves the listener registered.
-  it('stop unlistens', async () => {
-    const b = bridge(false);
-    b.settle();
-    await flush();
-    b.handle.stop();
-    await flush();
-    expect(b.unlisten).toHaveBeenCalledTimes(1);
-  });
-});
-
 describe('inboundLinkOpen source', () => {
   // Catches a second spelling of the event name: the module owns the one.
   it('spells the event name once', () => {
     expect(source.split("'streamnook:link'")).toHaveLength(2);
-  });
-
-  // Catches the bridge's options type loosening `tapped` to a string: the phone
-  // shell folds its three consumed taps to one boolean at the call.
-  it('declares the bridge option tapped as a boolean', () => {
-    expect(source).toContain('  tapped: boolean;');
   });
 
   // Catches a resolve step coming back into the opener: the screen resolves its

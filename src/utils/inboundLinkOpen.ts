@@ -216,29 +216,6 @@ export function startLinkDrain(deps: {
   };
 }
 
-/**
- * The phone shell's link drain.
- * When this mount consumed a notification tap, the tap is the newer action, so
- * a watch link taken by the mount's own take is dropped; badge links still
- * open, and every later event opens whatever it carries.
- */
-export function startPhoneLinkBridge(opts: {
-  listen: LinkListen;
-  take: () => Promise<unknown>;
-  tapped: boolean;
-  open: (link: InboundLinkTarget) => void;
-}): { stop: () => void } {
-  const drain = startLinkDrain({
-    listen: opts.listen,
-    take: opts.take,
-    open: (link, { mount }) => {
-      if (link.kind === 'watch' && opts.tapped && mount) return;
-      opts.open(link);
-    },
-  });
-  return { stop: drain.stop };
-}
-
 /** A tapped notification the phone hands the doors: what it opens, and when Android stashed it (ms on the boot
  *  clock; 0 when unknown). */
 export type PhoneTap = { kind: 'whisper' | 'mention' | 'channel'; value: string; at: number };
