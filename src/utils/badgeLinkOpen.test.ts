@@ -468,8 +468,13 @@ describe('phone sheets all listen for sn:dismiss-sheet', () => {
 describe('RewardsScreen link read', () => {
   const text = src('src/mobile/screens/RewardsScreen.tsx');
 
-  it('reads Rust directly and forced, never through the store', () => {
-    expect(text).toContain('getBadgeWall(badgeSortRef.current, true)');
+  // Fails if the link forces a network read before trying the cache, or reads through the gallery store.
+  it('reads the cached wall first and forces one refresh only on a miss, never through the store', () => {
+    const cached = text.indexOf('cached = await getBadgeWall(sort(), false)');
+    const refresh = text.indexOf("await invoke('force_refresh_global_badges')");
+    expect(cached).toBeGreaterThan(-1);
+    expect(refresh).toBeGreaterThan(cached);
+    expect(text).not.toContain('getBadgeWall(badgeSortRef.current, true)');
     expect(text).not.toContain('loadBadgeGallery(badgeSortRef.current, true)');
   });
 
@@ -482,11 +487,17 @@ describe('RewardsScreen link read', () => {
     expect(text).toContain('const key = badgeLinkKey;');
   });
 
-  it('cancels on unmount in its own empty-deps effect and the link effect has no cleanup', () => {
-    expect(text).toMatch(/useEffect\(\(\) => \(\) => \{\n\s+linkGen\.current \+= 1;\n\s+\}, \[\]\);/);
+  // Fails if the link effect gains a cleanup (it would cancel its own read) or shows a toast again.
+  it('the link effect has no cleanup and no toast', () => {
     const start = text.indexOf('if (!badgeLinkKey) return;');
-    const end = text.indexOf('}, [badgeLinkKey, addToast]);');
+    const end = text.indexOf('}, [badgeLinkKey, startLinkRead]);');
+    expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     expect(text.slice(start, end)).not.toMatch(/return \(\) =>/);
+    expect(text).not.toContain('addToast(BADGE_NOT_FOUND');
+  });
+
+  it('answers through the pure rule', () => {
+    expect(text).toContain('applyBadgeAnswer(cur, key, read, next)');
   });
 });

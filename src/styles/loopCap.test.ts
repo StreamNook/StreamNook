@@ -245,6 +245,7 @@ const PULSE_LOADER_FILES = new Set([
   'mobile/rewards/MobileMissingNow.tsx',
   'mobile/screens/CategoryStreamsScreen.tsx',
   'mobile/screens/MobileWhatsNew.tsx',
+  'mobile/screens/RewardsScreen.tsx',
   'mobile/ui/SkeletonCards.tsx',
 ]);
 

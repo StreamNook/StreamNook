@@ -29,7 +29,8 @@ import { TitleSegments } from '../ui/TitleControls';
 import { ProviderMark } from '../../components/ProviderLogo';
 import { SharpBadgeImg } from '../../components/badge/SharpBadgeImg';
 import { badgeLinkOutcome } from '../rewards/badgeLinkTile';
-import { BADGE_NOT_FOUND_TOAST } from '../../utils/badgeLinkOpen';
+import { BADGE_LINK_LIMIT_MS, BADGE_LOAD_FAILED_TEXT, BADGE_NOT_FOUND_TEXT, applyBadgeAnswer } from '../../utils/badgeLinkOpen';
+import type { SelectedBadge } from '../../components/BadgeDetailSlot';
 import {
   blurbText,
   getBadgeWall,
@@ -120,6 +121,111 @@ const GameGroupSection: React.FC<{
 /** The Drops approval was asked for on open this run (RewardsScreen). */
 let approvalAskedThisRun = false;
 
+/** The placeholder a badge link opens at once, in desktop's slot shape: the key, where its read stands, the read's
+ *  number, and the Try again mark of a read the person started. */
+type LinkedBadgeSheet = Extract<SelectedBadge, { kind: 'link' }>;
+/** What the badge sheet shows: a tile, or a link's placeholder until its read fills it. */
+type BadgeDetail = BadgeTile | LinkedBadgeSheet;
+type LinkReadAnswer = { kind: 'tile'; tile: BadgeTile } | { kind: 'link'; key: string; state: 'missing' | 'failed' };
+
+const isLinkSheet = (detail: BadgeDetail | null): detail is LinkedBadgeSheet => !!detail && 'kind' in detail;
+
+/**
+ * The sheet after a link read answered. Only the placeholder still showing `key` and `read` changes: a hit swaps
+ * it for the tile while it is loading or failed (a slow read still fills a sheet that said it failed), and a miss
+ * or a failure applies by desktop's rule, which keeps the read and the Try again mark. A closed sheet, another
+ * badge or a newer read takes nothing.
+ */
+function answerLinkSheet(cur: BadgeDetail | null, key: string, read: number, next: LinkReadAnswer): BadgeDetail | null {
+  if (!isLinkSheet(cur)) return cur;
+  if (next.kind === 'tile') {
+    return cur.key === key && cur.read === read && cur.state !== 'missing' ? next.tile : cur;
+  }
+  const after = applyBadgeAnswer(cur, key, read, next);
+  return after?.kind === 'link' ? after : cur;
+}
+
+/**
+ * A badge link's read, by desktop's rule: the cached wall first (a hit opens with no network), else one forced
+ * refresh and the wall again. A refresh that fails answers from the cached wall: a loaded wall without the key is
+ * missing, and no wall at all (offline) is failed, never missing.
+ */
+async function readLinkedTile(key: string, sort: () => BadgeSort): Promise<LinkReadAnswer> {
+  const missing: LinkReadAnswer = { kind: 'link', key, state: 'missing' };
+  const failed: LinkReadAnswer = { kind: 'link', key, state: 'failed' };
+  const fromWall = (wall: BadgeWall): LinkReadAnswer => {
+    const outcome = badgeLinkOutcome(wall, key);
+    if (outcome.kind === 'open') return { kind: 'tile', tile: outcome.tile };
+    return outcome.kind === 'miss' ? missing : failed;
+  };
+  let cached: BadgeWall;
+  try {
+    cached = await getBadgeWall(sort(), false);
+  } catch (err) {
+    Logger.warn('[Rewards] badge link read failed:', err);
+    return failed;
+  }
+  const hit = badgeLinkOutcome(cached, key);
+  if (hit.kind === 'open') return { kind: 'tile', tile: hit.tile };
+  try {
+    await invoke('force_refresh_global_badges');
+  } catch (err) {
+    Logger.warn('[Rewards] badge list refresh failed:', err);
+    return fromWall(cached);
+  }
+  try {
+    return fromWall(await getBadgeWall(sort(), false));
+  } catch (err) {
+    Logger.warn('[Rewards] badge link read failed:', err);
+    return failed;
+  }
+}
+
+/**
+ * A badge link's sheet before its tile is known, in the tile body's own frame: the art box, the title line and the
+ * word row keep their places, so nothing moves when the tile fills it. A failed read offers Try again; while that
+ * retry reads, the line and its button stay (the button inert), so focus stays where it was.
+ */
+const LinkedBadgeBody: React.FC<{ sheet: LinkedBadgeSheet; onRetry: () => void }> = ({ sheet, onRetry }) => {
+  const retrying = sheet.state === 'loading' && sheet.retry === true;
+  const loading = sheet.state === 'loading' && !retrying;
+  return (
+    <div className="flex flex-col items-center text-center pb-1">
+      <div
+        data-testid="badge-art-box"
+        aria-hidden
+        className={`w-20 h-20 mb-2.5 rounded-lg bg-surface ${loading ? 'animate-pulse' : ''}`}
+      />
+      {loading ? (
+        <>
+          <div data-testid="badge-title-slot" aria-hidden className="h-6 w-36 max-w-full rounded-md bg-surface animate-pulse" />
+          <span className="sr-only">Loading badge</span>
+        </>
+      ) : sheet.state === 'missing' ? (
+        <div data-testid="badge-title-slot" className="text-[16px] font-semibold text-textPrimary">
+          {BADGE_NOT_FOUND_TEXT}
+        </div>
+      ) : (
+        <>
+          <div data-testid="badge-title-slot" className="text-[16px] font-semibold text-textPrimary">
+            {BADGE_LOAD_FAILED_TEXT}
+          </div>
+          <button
+            type="button"
+            onClick={retrying ? undefined : onRetry}
+            aria-disabled={retrying || undefined}
+            className={`sn-touch mt-1 text-[13.5px] font-semibold text-accent ${retrying ? 'opacity-60' : ''}`}
+          >
+            Try again
+          </button>
+        </>
+      )}
+      {/* The word row's height, held so the sheet does not grow when the tile lands. */}
+      <div className="mt-1 mb-2.5 h-[18px]" aria-hidden />
+    </div>
+  );
+};
+
 const wordColor = (tile: BadgeTile) =>
   tile.owned
     ? 'text-accent'
@@ -160,7 +266,7 @@ export const RewardsScreen: React.FC = () => {
   // wall snaps in rather than replaying the settle over every tile.
   const [warmOnMount] = useState(() => badgeGalleryIsWarm());
   const [badgeSort, setBadgeSort] = useState<BadgeSort>('newest');
-  const [badgeDetail, setBadgeDetail] = useState<BadgeTile | null>(null);
+  const [badgeDetail, setBadgeDetail] = useState<BadgeDetail | null>(null);
   // How the open badge is earned and where, from Rust (badge_earn.rs).
   const [badgeGuide, setBadgeGuide] = useState<{ key: string; guide: EarnGuide } | null>(null);
   const [drops, setDrops] = useState<RewardsDrops | null>(null);
@@ -176,7 +282,7 @@ export const RewardsScreen: React.FC = () => {
   };
 
   useEffect(() => {
-    if (!badgeDetail) return;
+    if (!badgeDetail || isLinkSheet(badgeDetail)) return;
     const [setId, versionId] = (badgeDetail.keys[0] ?? '').split('/');
     if (!setId || !versionId) return;
     let live = true;
@@ -186,13 +292,13 @@ export const RewardsScreen: React.FC = () => {
       .catch(() => {});
     return () => { live = false; };
   }, [badgeDetail]);
-  const openGuide = badgeDetail && badgeGuide?.key === badgeDetail.key ? badgeGuide.guide : null;
+  const openGuide = badgeDetail && !isLinkSheet(badgeDetail) && badgeGuide?.key === badgeDetail.key ? badgeGuide.guide : null;
 
   // The guide's category and channels as cards, resolved by Rust: what
   // desktop's badge page shows.
   const [badgePlaces, setBadgePlaces] = useState<{ key: string; places: WatchPlaces } | null>(null);
   useEffect(() => {
-    if (!badgeDetail || !openGuide) return;
+    if (!badgeDetail || isLinkSheet(badgeDetail) || !openGuide) return;
     let live = true;
     const key = badgeDetail.key;
     resolveWatchPlaces(openGuide.category ? [openGuide.category] : [], openGuide.earn.channels ?? [], 10)
@@ -200,7 +306,7 @@ export const RewardsScreen: React.FC = () => {
       .catch((e) => Logger.debug('[Rewards] badge places failed:', e));
     return () => { live = false; };
   }, [badgeDetail, openGuide]);
-  const openPlaces = badgeDetail && badgePlaces?.key === badgeDetail.key ? badgePlaces.places : null;
+  const openPlaces = badgeDetail && !isLinkSheet(badgeDetail) && badgePlaces?.key === badgeDetail.key ? badgePlaces.places : null;
 
   // A channel, opened the way the desktop badge page opens it: with the live
   // stream when there is one, so the player starts with its metadata.
@@ -346,47 +452,63 @@ export const RewardsScreen: React.FC = () => {
   }, [badgeSort]);
 
   // A streamnook:///badge/... link (navStore.openBadgeLink) sets `badgeLinkKey`.
-  // The link reads Rust directly with a fresh Twitch list (never through the
-  // gallery store, whose newest-request-wins rule it must not disturb), then
-  // opens the tile's sheet. `linkGen` makes only the newest link open: it is
-  // bumped when a link starts and when this screen unmounts. The link effect
-  // has NO cleanup (its own clearBadgeLink changes its dependency, so a
-  // cleanup would cancel its own read) and uses the key from this render, not
-  // the store: StrictMode's second setup would find the store already cleared.
+  // The sheet opens at once on a placeholder for the key, and the read only
+  // fills it while that same placeholder (same key, same read number) is still
+  // the sheet shown: a close, another badge or a later link makes its answer
+  // write nothing. The read is Rust's own, never through the gallery store,
+  // whose newest-request-wins rule it must not disturb. The link effect has NO
+  // cleanup (its own clearBadgeLink changes its dependency, so a cleanup would
+  // cancel its own read) and uses the key from this render, not the store:
+  // StrictMode's second setup would find the store already cleared.
   const badgeLinkKey = useMobileNavStore((s) => s.badgeLinkKey);
-  const linkGen = useRef(0);
+  const linkReads = useRef(0);
   const badgeSortRef = useRef(badgeSort);
   // Mirrored after every commit, so an answer reads the sort current NOW.
   useEffect(() => {
     badgeSortRef.current = badgeSort;
   });
-  useEffect(() => () => {
-    linkGen.current += 1;
+  // Every placeholder read has the same 6 s limit: the sheet then says it
+  // failed and offers Try again, while the read goes on, and a late hit still
+  // fills it. The read's own completion (never the timer) refreshes the shown
+  // wall, with the sort current then.
+  const startLinkRead = useCallback((key: string, read: number) => {
+    const answer = (next: LinkReadAnswer) => setBadgeDetail((cur) => answerLinkSheet(cur, key, read, next));
+    const timer = setTimeout(() => answer({ kind: 'link', key, state: 'failed' }), BADGE_LINK_LIMIT_MS);
+    void readLinkedTile(key, () => badgeSortRef.current).then((next) => {
+      clearTimeout(timer);
+      answer(next);
+      void loadBadgeGallery(badgeSortRef.current, false);
+    });
   }, []);
+  // closeLinkSheet and openCategoryLink bump this. A badge sheet this screen
+  // took from a link but MobileSheet has not pushed yet is not on the stack
+  // their walk closes, so it closes here. Compared with the value seen, so the
+  // first run and StrictMode's second setup do nothing, and declared before the
+  // link effect, so a link taken in the same commit as a bump keeps its sheet.
+  const linkSheetSeq = useMobileNavStore((s) => s.linkSheetSeq);
+  const seenLinkSheetSeq = useRef(linkSheetSeq);
+  useEffect(() => {
+    if (linkSheetSeq === seenLinkSheetSeq.current) return;
+    seenLinkSheetSeq.current = linkSheetSeq;
+    setBadgeDetail(null);
+  }, [linkSheetSeq]);
   useEffect(() => {
     if (!badgeLinkKey) return;
     const key = badgeLinkKey;
-    const gen = ++linkGen.current;
+    const read = ++linkReads.current;
     useMobileNavStore.getState().clearBadgeLink(key);
     setTab('badges');
-    void (async () => {
-      let linked: BadgeWall;
-      try {
-        linked = await getBadgeWall(badgeSortRef.current, true);
-      } catch (err) {
-        Logger.warn('[Rewards] badge link read failed:', err);
-        return;
-      }
-      if (linkGen.current !== gen) return;
-      const outcome = badgeLinkOutcome(linked, key);
-      if (outcome.kind === 'none') return;
-      if (outcome.kind === 'open') setBadgeDetail(outcome.tile);
-      else addToast(BADGE_NOT_FOUND_TOAST, 'info');
-      // The forced read filled Rust's cache; the shown wall picks it up with
-      // the sort current now, not the one the link started with.
-      void loadBadgeGallery(badgeSortRef.current, false);
-    })();
-  }, [badgeLinkKey, addToast]);
+    // A new link starts without the Try again mark: a press belongs to the
+    // placeholder it was made on.
+    setBadgeDetail({ kind: 'link', key, state: 'loading', read });
+    startLinkRead(key, read);
+  }, [badgeLinkKey, startLinkRead]);
+  // Try again on a failed sheet: the same key, a new read, marked as the person's.
+  const retryBadgeLink = (key: string) => {
+    const read = ++linkReads.current;
+    setBadgeDetail({ kind: 'link', key, state: 'loading', read, retry: true });
+    startLinkRead(key, read);
+  };
 
   // Twitch's approval in the in-app login sheet, driven from Rust
   // (connect_twitch_approval): the sheet opens on the authorize page, Rust
@@ -700,7 +822,10 @@ export const RewardsScreen: React.FC = () => {
 
       {/* Badge detail: art, status, how it is earned and when. */}
       <MobileSheet open={!!badgeDetail} onClose={() => setBadgeDetail(null)} maxHeightFraction={0.8}>
-        {badgeDetail && (
+        {isLinkSheet(badgeDetail) && (
+          <LinkedBadgeBody sheet={badgeDetail} onRetry={() => retryBadgeLink(badgeDetail.key)} />
+        )}
+        {badgeDetail && !isLinkSheet(badgeDetail) && (
           <div className="flex flex-col items-center text-center pb-1">
             <SharpBadgeImg
               src={badgeDetail.image}
