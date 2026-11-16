@@ -81,9 +81,12 @@ function shared(sourceMsgId: string, extraTags: Record<string, string> = {}) {
   };
 }
 
+function html(message: unknown): string {
+  return renderToStaticMarkup(createElement(ChatMessage, { message: message as never }));
+}
+
 function render(message: unknown): string {
-  const html = renderToStaticMarkup(createElement(ChatMessage, { message: message as never }));
-  return html.replace(/<svg.*?<\/svg>/g, '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+  return html(message).replace(/<svg.*?<\/svg>/g, '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
 }
 
 describe('a notice shared from a partner channel (sharedchatnotice)', () => {
@@ -104,5 +107,17 @@ describe('a notice shared from a partner channel (sharedchatnotice)', () => {
     );
     expect(text).toMatch(/subscribed/i);
     expect(text).not.toContain('Announcement');
+  });
+
+  // One shared-chat look: event cards wear the partner edge like ordinary
+  // rows, never the old "From Shared Chat" header above the card.
+  it.each([
+    ['a sub card', shared('resub', { 'msg-param-sub-plan': '1000', 'system-msg': 'leeo_h subscribed at Tier 1.' })],
+    ['a donation card', shared('charitydonation', { 'msg-param-charity-name': 'Wishes', 'system-msg': 'leeo_h donated.' })],
+    ['an ordinary message', { ...shared('x'), tags: { ...shared('x').tags, 'msg-id': '', 'source-msg-id': '' } }],
+  ])('%s from a partner channel carries the partner edge and no header', (_label, message) => {
+    const markup = html(message);
+    expect(markup).toContain('sn-shared-row');
+    expect(markup).not.toContain('From Shared Chat');
   });
 });

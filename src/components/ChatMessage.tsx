@@ -560,7 +560,7 @@ import { isThemeDark } from '../themes';
 
 import { Logger } from '../utils/logger';
 import { moderateWithToast, type ModRequest } from '../services/moderation';
-import { ArrowBendUpLeft, ChatDots, Copy, PushPin, PushPinSlash } from 'phosphor-react';
+import { ArrowBendUpLeft, Copy, PushPin, PushPinSlash } from 'phosphor-react';
 import { ModSlider } from './chat/ModSlider';
 import { HoverModButtons } from './chat/HoverModButtons';
 import { ModLineButtons } from './chat/ModLineButtons';
@@ -2578,6 +2578,46 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   const fetchedChannelName = sharedSource?.login ?? null;
   const channelProfileImage = sharedSource?.avatar_url ?? null;
 
+  // One look for everything a partner channel shares, on ordinary rows and
+  // event cards alike: its face leads the row (round, ringed in its color;
+  // click to watch that channel), and the row carries its color on the left
+  // edge (sn-shared-row). Event cards used to add a "From Shared Chat" header
+  // instead, so a shared sub and a shared message looked unrelated.
+  const sharedFromName = sharedSource?.display_name || fetchedChannelName || 'a shared chat';
+  const sharedFaceEl =
+    isFromSharedChat && channelProfileImage ? (
+      <Tooltip content={`From ${sharedFromName}`} side="top">
+        <SevenTvAvatar
+          cosmeticsId={sourceRoomId}
+          animation={stillEmotes ? 'never' : undefined}
+          px={Math.round((chatDesign?.font_size ?? 14) * 1.3)}
+          src={channelProfileImage}
+          alt={`From ${sharedFromName}`}
+          className="sn-chat-badge sn-shared-face block cursor-pointer hover:scale-110 transition-transform object-cover"
+          onClick={async () => {
+            if (!fetchedChannelName) return;
+            try {
+              await useAppStore.getState().startStream(fetchedChannelName);
+            } catch (err) {
+              Logger.error('[ChatMessage] Failed to switch to shared channel:', err);
+              useAppStore.getState().addToast(`Failed to switch to ${fetchedChannelName}'s stream`, 'error');
+            }
+          }}
+          onError={(e) => {
+            Logger.warn('[Badge] Failed to load channel profile image');
+            e.currentTarget.style.display = 'none';
+          }}
+        />
+      </Tooltip>
+    ) : null;
+  // An event card's lead: the face in its own badge strip, so it sits on the
+  // text's centre line the way it does beside an ordinary row's name.
+  const sharedCardFaceEl = sharedFaceEl ? <span className="sn-badge-strip mr-1.5">{sharedFaceEl}</span> : null;
+  // An event card's partner edge (the card is already `relative`).
+  const sharedCardClass = isFromSharedChat ? ' isolate sn-shared-row' : '';
+  const sharedCardVars: React.CSSProperties | undefined =
+    isFromSharedChat && sharedSource ? ({ '--sn-src': sharedSource.color } as React.CSSProperties) : undefined;
+
   // Handle bits cheers
   if (isBitsCheer) {
     const cheerTemplate = eventTemplateFor('cheer');
@@ -2665,7 +2705,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     const eventPadding = calculateHalfPadding(chatDesign?.message_spacing ?? 8);
 
     return (
-      <div key={messageId} className={`px-3 border-t border-borderSubtle ${eventCardClass('bits-gradient')}`} style={{ ...eventCardStyle, paddingTop: `${eventPadding}px`, paddingBottom: `${eventPadding}px` }}>
+      <div key={messageId} className={`px-3 border-t border-borderSubtle ${eventCardClass('bits-gradient')}${sharedCardClass}`} style={{ ...eventCardStyle, ...sharedCardVars, paddingTop: `${eventPadding}px`, paddingBottom: `${eventPadding}px` }}>
         <div className="flex items-center gap-2.5">
           <div className="flex-shrink-0">
             {leadCheermote?.cheermoteUrl ? (
@@ -2698,6 +2738,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
           >
             <p className="text-white font-semibold leading-relaxed">
               {sourceMarkEl}
+              {sharedCardFaceEl}
               {renderBadges()}
               {cheerTemplate ? (
                 <span style={{ color: bitsTierColor }} className="font-bold">{cheerTemplate}</span>
@@ -2778,10 +2819,6 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     // the RAW comment instead or the amount appears twice.
     const superChatComment = parsed.tags.get('sc-message') ?? '';
 
-    // Check if this is a shared chat notice (from another channel)
-    const isSharedChat = msgId === 'sharedchatnotice';
-    const isFromDifferentChannel = isSharedChat && isFromSharedChat;
-
     // Helper function to render username as clickable. Render path uses the
     // effective display name (so nicknames apply); the click payload keeps
     // the real display name so the profile card opens to the true identity.
@@ -2838,35 +2875,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     const eventPadding = calculateHalfPadding(chatDesign?.message_spacing ?? 8);
 
     return (
-      <div key={messageId} className={`px-3 border-t border-borderSubtle ${eventCardClass('donation-gradient')}`} style={{ ...eventCardStyle, paddingTop: `${eventPadding}px`, paddingBottom: `${eventPadding}px` }}>
-        {/* Shared chat indicator */}
-        {isFromDifferentChannel && (
-          <div className="flex items-center gap-1.5 mb-2 pb-2 border-b border-borderSubtle">
-            <ChatDots size={14} weight="bold" aria-hidden className="text-accent flex-shrink-0" />
-            <span className="text-xs text-accent font-semibold">From Shared Chat</span>
-            {fetchedChannelName && (
-              <>
-                <span className="text-xs text-textSecondary">-</span>
-                <Tooltip content={`Switch to ${fetchedChannelName}'s stream`} side="top">
-                  <button
-                    onClick={async () => {
-                      try {
-                        await useAppStore.getState().startStream(fetchedChannelName);
-                      } catch (err) {
-                        Logger.error('[ChatMessage] Failed to switch to shared channel:', err);
-                        useAppStore.getState().addToast(`Failed to switch to ${fetchedChannelName}'s stream`, 'error');
-                      }
-                    }}
-                    className="text-xs text-info font-semibold hover:underline cursor-pointer"
-                  >
-                    {fetchedChannelName}
-                  </button>
-                </Tooltip>
-              </>
-            )}
-          </div>
-        )}
-
+      <div key={messageId} className={`px-3 border-t border-borderSubtle ${eventCardClass('donation-gradient')}${sharedCardClass}`} style={{ ...eventCardStyle, ...sharedCardVars, paddingTop: `${eventPadding}px`, paddingBottom: `${eventPadding}px` }}>
         <div className="flex items-center gap-2.5">
           <div className="flex-shrink-0">
             {isSuperChat ? (
@@ -2887,6 +2896,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
           >
             <p className="text-white font-semibold leading-relaxed">
               {sourceMarkEl}
+              {sharedCardFaceEl}
               {renderBadges()}
               {renderClickableUsername(parsed.username, parsed.displayName || parsed.tags.get('display-name') || parsed.username)}
               {isSuperChat ? (
@@ -2983,7 +2993,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     const eventPadding = calculateHalfPadding(chatDesign?.message_spacing ?? 8);
 
     return (
-      <div key={messageId} className={`px-3 border-t border-borderSubtle ${eventCardClass('watchstreak-gradient')}`} style={{ ...eventCardStyle, paddingTop: `${eventPadding}px`, paddingBottom: `${eventPadding}px` }}>
+      <div key={messageId} className={`px-3 border-t border-borderSubtle ${eventCardClass('watchstreak-gradient')}${sharedCardClass}`} style={{ ...eventCardStyle, ...sharedCardVars, paddingTop: `${eventPadding}px`, paddingBottom: `${eventPadding}px` }}>
         <div className="flex items-center gap-2.5">
           <div className="flex-shrink-0">
             <WatchStreakFlame size={20} className="text-highlight-orange" />
@@ -2994,6 +3004,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
           >
             <p className="text-white font-semibold leading-relaxed flex items-center flex-wrap gap-1">
               {sourceMarkEl}
+              {sharedCardFaceEl}
               {renderBadges()}
               {renderClickableUsername(parsed.username, displayName)}
               {channelPointsReward && (
@@ -3038,10 +3049,6 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     const msgParamSubPlan = parsed.tags.get('msg-param-sub-plan');
     const msgParamMonths = parsed.tags.get('msg-param-cumulative-months') || parsed.tags.get('msg-param-months');
     const msgParamMassGiftCount = parsed.tags.get('msg-param-mass-gift-count');
-
-    // Check if this is a shared chat notice (from another channel)
-    const isSharedChat = subMsgId === 'sharedchatnotice';
-    const isFromDifferentChannel = isSharedChat && isFromSharedChat;
 
     // Helper function to render badges
     const renderBadges = () => {
@@ -3193,37 +3200,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     const eventPadding = calculateHalfPadding(chatDesign?.message_spacing ?? 8);
 
     return (
-      <div key={messageId} className={`px-3 border-t border-borderSubtle ${eventCardClass('subscription-gradient')}`} style={{ ...eventCardStyle, paddingTop: `${eventPadding}px`, paddingBottom: `${eventPadding}px` }}>
-        {/* Shared chat indicator */}
-        {isFromDifferentChannel && (
-          <div className="flex items-center gap-1.5 mb-2 pb-2 border-b border-borderSubtle">
-            <ChatDots size={14} weight="bold" aria-hidden className="text-accent flex-shrink-0" />
-            <span className="text-xs text-accent font-semibold">From Shared Chat</span>
-            {fetchedChannelName && (
-              <>
-                <span className="text-xs text-textSecondary">-</span>
-                <Tooltip content={`Switch to ${fetchedChannelName}'s stream`}>
-                <button
-                  onClick={async () => {
-                    try {
-
-                      // Use the startStream method to switch to the shared channel
-                      await useAppStore.getState().startStream(fetchedChannelName);
-                    } catch (err) {
-                      Logger.error('[ChatMessage] Failed to switch to shared channel:', err);
-                      useAppStore.getState().addToast(`Failed to switch to ${fetchedChannelName}'s stream`, 'error');
-                    }
-                  }}
-                  className="text-xs text-info font-semibold hover:underline cursor-pointer"
-                >
-                  {fetchedChannelName}
-                </button>
-                </Tooltip>
-              </>
-            )}
-          </div>
-        )}
-
+      <div key={messageId} className={`px-3 border-t border-borderSubtle ${eventCardClass('subscription-gradient')}${sharedCardClass}`} style={{ ...eventCardStyle, ...sharedCardVars, paddingTop: `${eventPadding}px`, paddingBottom: `${eventPadding}px` }}>
         <div className="flex items-center gap-2.5">
           <div className="flex-shrink-0">
             {/* Prime logo for Prime subs, Twitch's gift for other subs */}
@@ -3241,6 +3218,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
           >
             <p className="text-white font-semibold leading-relaxed">
               {sourceMarkEl}
+              {sharedCardFaceEl}
               {parseSystemMessageWithClickableNames(displayMessage)}
             </p>
             {(subMsgId === 'submysterygift' || subMsgId === 'anonsubmysterygift') && giftRecipients.length > 0 && (
@@ -3310,7 +3288,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     const eventPadding = calculateHalfPadding(chatDesign?.message_spacing ?? 8);
 
     return (
-      <div key={messageId} className={`px-3 border-t border-borderSubtle ${eventCardClass('raid-gradient')}`} style={{ ...eventCardStyle, paddingTop: `${eventPadding}px`, paddingBottom: `${eventPadding}px` }}>
+      <div key={messageId} className={`px-3 border-t border-borderSubtle ${eventCardClass('raid-gradient')}${sharedCardClass}`} style={{ ...eventCardStyle, ...sharedCardVars, paddingTop: `${eventPadding}px`, paddingBottom: `${eventPadding}px` }}>
         <div className="flex items-center gap-2.5">
           <div className="flex-shrink-0">
             <svg className="w-5 h-5 text-highlight-red" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
@@ -3323,6 +3301,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
           >
             <p className="text-white font-semibold leading-relaxed">
               {sourceMarkEl}
+              {sharedCardFaceEl}
               {raidTemplate ? (
                 <span className="text-highlight-red font-bold">{raidTemplate}</span>
               ) : (
@@ -3493,6 +3472,12 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
           .toString(16)
           .padStart(2, '0')}, transparent)`
       : undefined;
+  // The row draws its own left border (a mention, a reply to the viewer, a
+  // highlight phrase, an announcement or another built-in event). The partner
+  // edge then stands down, or the two would sit side by side as a double
+  // stripe; the partner's face still marks the row.
+  const ownLeftBorder =
+    isMentioned || isReplyToMe || ((!!phraseMatch || (!!builtInEventColor && !ftRing)) && showHighlightBorder);
 
   // The left edge (slider or line buttons) acts on a chatter this viewer can
   // act on: not the viewer, not the channel's owner and, unless the viewer
@@ -3549,7 +3534,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     <div
       className={`group relative isolate px-3 hover:bg-glass transition-colors ${borderClass} ${animationClass
         }${ftClass} ${isRedemption ? 'highlight-message-gradient' : ''
-        } ${isFromSharedChat && !(isMentioned || isReplyToMe) ? 'sn-shared-row' : ''
+        } ${isFromSharedChat && !ownLeftBorder ? 'sn-shared-row' : ''
         } ${moderationContext && deletedRowDimmed(deletedStyle) ? 'opacity-50' : ''}`}
       style={{
         ...messageStyle,
@@ -3568,10 +3553,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             : builtInEventColor && showHighlightBorder && !ftRing
               ? builtInEventColor
               : undefined,
-        borderLeftWidth:
-          isMentioned || isReplyToMe || ((phraseMatch || (builtInEventColor && !ftRing)) && showHighlightBorder)
-            ? '4px'
-            : undefined,
+        borderLeftWidth: ownLeftBorder ? '4px' : undefined,
         borderLeftStyle:
           ((builtInEventColor && !ftRing) || phraseMatch) && showHighlightBorder && !(isMentioned || isReplyToMe)
             ? 'solid'
@@ -3779,7 +3761,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             />
           )}
           {/* Badges */}
-          {isSN || (isFromSharedChat && channelProfileImage) || visibleBadges.length > 0 || seventvBadge || thirdPartyBadges.length > 0 ? (
+          {isSN || sharedFaceEl || visibleBadges.length > 0 || seventvBadge || thirdPartyBadges.length > 0 ? (
             <span
               className="sn-badge-strip mr-1.5"
               // .sn-chat-badge is sized in em: this row must carry the chat
@@ -3788,31 +3770,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             >
               {/* The partner channel's face leads the row: round, ringed in
                   its own color (sn-shared-face), never one more badge square. */}
-              {isFromSharedChat && channelProfileImage && (
-                <Tooltip content={`From ${sharedSource?.display_name || fetchedChannelName || 'a shared chat'}`} side="top">
-                  <SevenTvAvatar
-                    cosmeticsId={sourceRoomId}
-                    animation={stillEmotes ? 'never' : undefined}
-                    px={Math.round((chatDesign?.font_size ?? 14) * 1.3)}
-                    src={channelProfileImage}
-                    alt={`From ${sharedSource?.display_name || fetchedChannelName || 'a shared chat'}`}
-                    className="sn-chat-badge sn-shared-face block cursor-pointer hover:scale-110 transition-transform object-cover"
-                    onClick={async () => {
-                      if (fetchedChannelName) {
-                        try {
-                          await useAppStore.getState().startStream(fetchedChannelName);
-                        } catch (err) {
-                          Logger.error('[ChatMessage] Failed to switch to shared channel:', err);
-                        }
-                      }
-                    }}
-                    onError={(e) => {
-                      Logger.warn('[Badge] Failed to load channel profile image');
-                      e.currentTarget.style.display = 'none';
-                    }}
-                  />
-                </Tooltip>
-              )}
+              {sharedFaceEl}
               <ChatBadgeIcons
                 twitchBadges={visibleBadges}
                 seventvBadge={seventvBadge}
