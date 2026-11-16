@@ -17,7 +17,8 @@ use chrono::{DateTime, FixedOffset};
 /// original bytes untouched.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FilterOutcome {
-    /// Ad segments removed from this playlist.
+    /// Segments left out of this playlist: the ads, plus any content that sat
+    /// before them once content resumed (see `filter_ad_segments`).
     pub dropped: u32,
     /// Real (non-ad) segments still in the served playlist.
     pub real: u32,
@@ -71,9 +72,19 @@ fn tag_attr(line: &str, key: &str) -> Option<String> {
 /// falls inside an ad daterange. Those segments (and their buffered
 /// discontinuity/PDT/EXTINF prefix tags) plus the ad daterange tags come out.
 ///
-/// Both sequence headers are then re-based on one invariant: **the first
-/// surviving segment keeps its true upstream media sequence and its true
-/// upstream discontinuity sequence.** `#EXT-X-MEDIA-SEQUENCE` is bumped by the
+/// Only the NEWEST unbroken run of real segments is served. A media sequence
+/// number is a segment's identity (hls.js and `hls_projection` key by it), so
+/// an ad dropped from the middle of the window would slide every later segment
+/// down onto the ad's numbers, and a few polls later, with the ads leading the
+/// window, the same segment came back under its true number: one number naming
+/// two segments on every midroll, played as a jump, replay or stall (SN-276).
+/// So while a break runs, the content before it is served and the ads after it
+/// are cut; once content resumes, the window moves straight to it.
+///
+/// Both sequence headers are then re-based on one invariant: **every served
+/// segment keeps its true upstream media sequence and its true upstream
+/// discontinuity sequence** (the served run is unbroken, so the first one
+/// decides the rest). `#EXT-X-MEDIA-SEQUENCE` is bumped by the
 /// segments dropped ahead of it and `#EXT-X-DISCONTINUITY-SEQUENCE` by the
 /// `#EXT-X-DISCONTINUITY` tags dropped ahead of it, so the two accountings move
 /// in lockstep. `hls_projection::stabilize` (which runs after this and only
@@ -111,17 +122,42 @@ pub fn filter_ad_segments(playlist: &str) -> (String, FilterOutcome) {
     let in_ad_window =
         |pdt: &DateTime<FixedOffset>| windows.iter().any(|(s, e)| pdt >= s && pdt < e);
 
-    // Pass 2: walk lines, dropping ad dateranges + ad segments.
+    // Pass 2: which segments are ads, in order.
+    let mut is_ad: Vec<bool> = Vec::new();
+    {
+        let mut cur_pdt: Option<DateTime<FixedOffset>> = None;
+        let mut cur_title: Option<String> = None;
+        for raw in playlist.lines() {
+            let t = raw.trim();
+            if let Some(v) = t.strip_prefix("#EXT-X-PROGRAM-DATE-TIME:") {
+                cur_pdt = DateTime::parse_from_rfc3339(v.trim()).ok();
+            } else if t.starts_with("#EXTINF:") {
+                cur_title = t.split_once(',').map(|(_, title)| title.to_string());
+            } else if !t.is_empty() && !t.starts_with('#') {
+                is_ad.push(
+                    cur_title.as_deref().is_some_and(|title| title.contains("Amazon"))
+                        || cur_pdt.as_ref().is_some_and(in_ad_window),
+                );
+                cur_pdt = None;
+                cur_title = None;
+            }
+        }
+    }
+    // The newest unbroken run of real segments: [keep_from, keep_to].
+    let (keep_from, keep_to) = match is_ad.iter().rposition(|ad| !*ad) {
+        Some(last) => (is_ad[..last].iter().rposition(|ad| *ad).map_or(0, |i| i + 1), last),
+        None => (is_ad.len(), 0), // nothing real: serve no segment
+    };
+
+    // Pass 3: walk lines, serving only that run.
     let mut out: Vec<String> = Vec::new();
     let mut pending: Vec<String> = Vec::new(); // buffered prefix tags for the next segment
-    let mut cur_pdt: Option<DateTime<FixedOffset>> = None;
-    let mut cur_title: Option<String> = None;
+    let mut seg_idx = 0usize;
     let mut pending_discontinuities = 0u32;
     let mut dropped = 0u32;
     let mut real = 0u32;
     let mut leading_dropped = 0u32;
     let mut leading_disc_dropped = 0u32;
-    let mut seen_real = false;
     let mut mediaseq_idx: Option<usize> = None;
     let mut mediaseq_val: Option<u64> = None;
     let mut discseq_idx: Option<usize> = None;
@@ -151,13 +187,7 @@ pub fn filter_ad_segments(playlist: &str) -> (String, FilterOutcome) {
             out.push(raw.to_string()); // patched the same way, for the cc accounting
             continue;
         }
-        if let Some(v) = t.strip_prefix("#EXT-X-PROGRAM-DATE-TIME:") {
-            cur_pdt = DateTime::parse_from_rfc3339(v.trim()).ok();
-            pending.push(raw.to_string());
-            continue;
-        }
-        if t.starts_with("#EXTINF:") {
-            cur_title = t.split_once(',').map(|(_, title)| title.to_string());
+        if t.starts_with("#EXT-X-PROGRAM-DATE-TIME:") || t.starts_with("#EXTINF:") {
             pending.push(raw.to_string());
             continue;
         }
@@ -188,26 +218,23 @@ pub fn filter_ad_segments(playlist: &str) -> (String, FilterOutcome) {
         }
 
         // Non-comment line = the segment URI; this closes a segment.
-        let is_ad = cur_title
-            .as_deref()
-            .is_some_and(|title| title.contains("Amazon"))
-            || cur_pdt.as_ref().is_some_and(in_ad_window);
-        if is_ad {
-            dropped += 1;
-            if !seen_real {
-                leading_dropped += 1;
-                leading_disc_dropped += pending_discontinuities;
-            }
-        } else {
+        if seg_idx >= keep_from && seg_idx <= keep_to {
             out.append(&mut pending);
             out.push(raw.to_string());
             real += 1;
-            seen_real = true;
+        } else {
+            dropped += 1;
+            // Ahead of the served run, its numbers and discontinuities move into
+            // the headers. After it (a break still running), nothing served
+            // follows, so nothing needs accounting for.
+            if seg_idx < keep_from {
+                leading_dropped += 1;
+                leading_disc_dropped += pending_discontinuities;
+            }
         }
         pending.clear();
         pending_discontinuities = 0;
-        cur_pdt = None;
-        cur_title = None;
+        seg_idx += 1;
     }
 
     if leading_dropped > 0 {
@@ -359,16 +386,86 @@ mod tests {
     }
 
     #[test]
-    fn mid_playlist_ad_discontinuity_leaves_the_header_alone() {
-        // Nothing rolled off the front, so the first segment's cc is unchanged
-        // and the header must not move.
+    fn content_resuming_after_a_midroll_keeps_its_true_numbers() {
+        // real0 (sn 100, cc 5), the pod (sn 101, cc 6), real1 (sn 102, cc 7).
+        // Content resumed, so the window moves to real1 under its own numbers;
+        // serving real0 too would have slid real1 onto the ad's sn 101 (SN-276).
         let pl = "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:100\n#EXT-X-DISCONTINUITY-SEQUENCE:5\n\
 #EXTINF:2.0,live\nhttps://cdn/real0.ts\n\
 #EXT-X-DISCONTINUITY\n#EXTINF:2.0,Amazon|1\nhttps://cdn/ad0.ts\n\
 #EXT-X-DISCONTINUITY\n#EXTINF:2.0,live\nhttps://cdn/real1.ts\n";
         let (out, o) = filter_ad_segments(pl);
+        assert_eq!((o.dropped, o.real), (2, 1));
+        assert_eq!(frags(&out), vec![(102, "https://cdn/real1.ts".to_string(), 7)], "{out}");
+    }
+
+    #[test]
+    fn a_running_break_serves_the_content_before_it() {
+        let pl = "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:100\n#EXT-X-DISCONTINUITY-SEQUENCE:5\n\
+#EXTINF:2.0,live\nhttps://cdn/real0.ts\n#EXTINF:2.0,live\nhttps://cdn/real1.ts\n\
+#EXT-X-DISCONTINUITY\n#EXTINF:2.0,Amazon|1\nhttps://cdn/ad0.ts\n";
+        let (out, o) = filter_ad_segments(pl);
         assert_eq!((o.dropped, o.real), (1, 2));
-        assert!(out.contains("#EXT-X-DISCONTINUITY-SEQUENCE:5"), "{out}");
+        assert!(!o.all_ads());
+        assert_eq!(
+            frags(&out),
+            vec![(100, "https://cdn/real0.ts".to_string(), 5), (101, "https://cdn/real1.ts".to_string(), 5)],
+            "{out}"
+        );
+    }
+
+    /// (sn, url, cc) for each served segment, assigned the way hls.js does.
+    fn frags(playlist: &str) -> Vec<(u64, String, u64)> {
+        let (mut sn, mut cc) = (0u64, 0u64);
+        let mut out = Vec::new();
+        for line in playlist.lines().map(str::trim) {
+            if let Some(v) = line.strip_prefix("#EXT-X-MEDIA-SEQUENCE:") {
+                sn = v.parse().unwrap_or(0);
+            } else if let Some(v) = line.strip_prefix("#EXT-X-DISCONTINUITY-SEQUENCE:") {
+                cc = v.parse().unwrap_or(0);
+            } else if line == "#EXT-X-DISCONTINUITY" {
+                cc += 1;
+            } else if !line.is_empty() && !line.starts_with('#') {
+                out.push((sn, line.to_string(), cc));
+                sn += 1;
+            }
+        }
+        out
+    }
+
+    /// A whole midroll sliding through Twitch's window (no discontinuity header,
+    /// as Twitch serves it), one poll per segment: every served segment keeps
+    /// the sequence number and discontinuity count it has upstream, so no number
+    /// ever names two segments across polls and no ad is ever served.
+    #[test]
+    fn across_a_whole_midroll_every_segment_keeps_its_numbers() {
+        let ad = |n: u64| (110..=117).contains(&n);
+        // Upstream truth: discontinuities open (110) and close (118) the pod.
+        let true_cc = |n: u64| (n >= 110) as u64 + (n >= 118) as u64;
+        let mut seen: std::collections::HashMap<u64, String> = std::collections::HashMap::new();
+        for head in 100u64..=124 {
+            let mut pl = format!("#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:{head}\n");
+            // A tag rolled off the front is gone from the window, as on Twitch;
+            // the window's own count starts again at 0 without a header.
+            let base = true_cc(head);
+            for n in head..head + 6 {
+                if (n == 110 || n == 118) && n != head {
+                    pl.push_str("#EXT-X-DISCONTINUITY\n");
+                }
+                let title = if ad(n) { "Amazon|1" } else { "live" };
+                pl.push_str(&format!("#EXTINF:2.0,{title}\nhttps://cdn/s{n}.ts\n"));
+            }
+            let (out, _) = filter_ad_segments(&pl);
+            for (sn, url, cc) in frags(&out) {
+                let n: u64 = url.trim_start_matches("https://cdn/s").trim_end_matches(".ts").parse().unwrap();
+                assert!(!ad(n), "ad served at head {head}: {out}");
+                assert_eq!(sn, n, "head {head}: {url} served as {sn}\n{out}");
+                assert_eq!(cc + base, true_cc(n), "head {head}: {url} cc {cc}\n{out}");
+                if let Some(prev) = seen.insert(sn, url.clone()) {
+                    assert_eq!(prev, url, "sequence {sn} named two segments");
+                }
+            }
+        }
     }
 
     #[test]
