@@ -12,13 +12,21 @@ export const CategoryTagRail: React.FC<{
   selected: readonly string[];
   onToggle: (tag: string) => void;
   onSearch: () => void;
-}> = ({ labels, selected, onToggle, onSearch }) => (
+  /** No category name yet (a link still asking): the Tags chip shows, dimmed, and opens nothing. */
+  searchDisabled?: boolean;
+  /** No such category: the Tags chip keeps its place but is not shown. */
+  searchHidden?: boolean;
+}> = ({ labels, selected, onToggle, onSearch, searchDisabled = false, searchHidden = false }) => (
   <div className="shrink-0 flex items-center gap-2 overflow-x-auto scrollbar-none mask-edges px-4 pt-0.5 pb-2.5">
     <button
       type="button"
-      onClick={onSearch}
+      onClick={searchDisabled ? undefined : onSearch}
+      disabled={searchDisabled}
+      aria-disabled={searchDisabled || undefined}
       aria-label="Search tags"
-      className="shrink-0 flex h-8 items-center gap-1.5 rounded-full bg-surface px-3 text-[13px] font-semibold text-textPrimary active:opacity-70"
+      className={`shrink-0 flex h-8 items-center gap-1.5 rounded-full bg-surface px-3 text-[13px] font-semibold text-textPrimary ${
+        searchDisabled ? 'opacity-50' : 'active:opacity-70'
+      } ${searchHidden ? 'invisible' : ''}`}
     >
       <MagnifyingGlass size={15} weight="bold" />
       Tags

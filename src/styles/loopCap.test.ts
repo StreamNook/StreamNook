@@ -243,6 +243,7 @@ const PULSE_LOADER_FILES = new Set([
   'components/UserProfileCard.tsx',
   'mobile/rewards/MobileEvolution.tsx',
   'mobile/rewards/MobileMissingNow.tsx',
+  'mobile/screens/CategoryStreamsScreen.tsx',
   'mobile/screens/MobileWhatsNew.tsx',
   'mobile/ui/SkeletonCards.tsx',
 ]);

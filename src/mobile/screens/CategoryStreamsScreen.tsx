@@ -6,7 +6,7 @@
 // screen's state: it stays mounted under the watch layer, so watching a stream
 // and coming back keeps them, and leaving the category unmounts it, so they go.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { CaretLeft } from 'phosphor-react';
+import { CaretLeft, ShareNetwork } from 'phosphor-react';
 import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../../stores/AppStore';
 import { useMobileNavStore } from '../navStore';
@@ -34,6 +34,10 @@ import {
 } from '../../utils/tagFilter';
 import type { TwitchStream } from '../../types';
 import { bumpPreviewStamp } from '../followRefresh';
+import { Tooltip } from '../../components/ui/Tooltip';
+import { copyCategoryShareLink } from '../../utils/shareLink';
+import { getLinkedCategory, resolveLinkedCategory, useLinkedCategory } from '../../utils/linkedCategory';
+import { shareText } from '../nativeBridge';
 
 type Category = NonNullable<ReturnType<typeof useMobileNavStore.getState>['browseCategory']>;
 
@@ -74,12 +78,39 @@ const CategoryStreamsList: React.FC<{ category: Category }> = ({ category }) => 
   const startStream = useAppStore((s) => s.startStream);
   const activeHypeTrainChannels = useAppStore((s) => s.activeHypeTrainChannels);
   const watchStreaks = useAppStore((s) => s.watchStreaks);
+  const fillBrowseCategory = useMobileNavStore((s) => s.fillBrowseCategory);
 
   const [streams, setStreams] = useState<TwitchStream[]>([]);
   const [loading, setLoading] = useState(true);
   const [cursor, setCursor] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+  // The last plain load failed (offline, Twitch refused): the empty state says
+  // so instead of claiming nobody is live.
+  const [loadFailed, setLoadFailed] = useState(false);
+  // Bumped by the header's Try again, so the streams load runs once more.
+  const [reloadKey, setReloadKey] = useState(0);
+  // Every plain load takes a number and only the newest writes, so a late
+  // answer from an older load (a failure landing after a Try again worked)
+  // never replaces the newer list.
+  const loadSeq = useRef(0);
+  // The cursor the next page continues from, the load it belongs to, and
+  // whether there is more. loadMore checks it right before it asks, so a page
+  // from before a refresh is never asked for or appended.
+  const pageRef = useRef<{ seq: number; cursor: string | null; hasMore: boolean }>({
+    seq: 0,
+    cursor: null,
+    hasMore: true,
+  });
+  // The list and the name as last rendered, for the callbacks below.
+  const streamsRef = useRef<TwitchStream[]>([]);
+  const nameRef = useRef(category.name);
+  useEffect(() => {
+    streamsRef.current = streams;
+  }, [streams]);
+  useEffect(() => {
+    nameRef.current = category.name;
+  }, [category.name]);
   const moreSentinel = useRef<HTMLDivElement | null>(null);
   const scroller = useRef<HTMLDivElement | null>(null);
 
@@ -102,25 +133,37 @@ const CategoryStreamsList: React.FC<{ category: Category }> = ({ category }) => 
   // different one remounts and settles again on its own.
   const settled = useSettleIn(!loading && streams.length > 0);
 
+  // Reads only the id, so filling a link's nameless copy with its name does not
+  // fetch the streams again.
   const load = useCallback(async () => {
+    const seq = ++loadSeq.current;
+    const newest = () => loadSeq.current === seq;
+    setLoadFailed(false);
+    // A retry on an empty list shows the skeleton again, not the old empty note.
+    if (streamsRef.current.length === 0) setLoading(true);
     try {
       const res = await invoke<[TwitchStream[], string | null]>('get_streams_by_game', {
         gameId: category.id,
         cursor: null,
         limit: PAGE,
       });
+      if (!newest()) return;
       setStreams(res[0] ?? []);
       setCursor(res[1]);
       setHasMore(!!res[1]);
+      pageRef.current = { seq, cursor: res[1], hasMore: !!res[1] };
       setPages((n) => n + 1);
     } catch (err) {
+      if (!newest()) return;
       Logger.warn('[CategoryStreams] load failed:', err);
       setStreams([]);
       setHasMore(false);
+      pageRef.current = { seq, cursor: null, hasMore: false };
+      setLoadFailed(true);
     } finally {
-      setLoading(false);
+      if (newest()) setLoading(false);
     }
-  }, [category]);
+  }, [category.id]);
 
   // One tag-filtered page for generation `gen`; a page for older picks is
   // dropped by the reducer.
@@ -147,6 +190,9 @@ const CategoryStreamsList: React.FC<{ category: Category }> = ({ category }) => 
   // from an effect, so opening the screen neither scrolls nor refetches.
   const toggle = useCallback(
     (tag: string) => {
+      // Nameless (a link still asking for its name), Twitch's tag filter has no
+      // category to search. The chips stay on the cards, so nothing shifts.
+      if (!nameRef.current) return;
       const next = toggleTag(selectedRef.current, tag);
       selectedRef.current = next;
       setSelected(next);
@@ -177,26 +223,36 @@ const CategoryStreamsList: React.FC<{ category: Category }> = ({ category }) => 
     }
     if (streams.length >= MAX_LOADED_STREAMS) return;
     if (loadingMore || !hasMore || !cursor) return;
+    // The page must continue the newest load: a refresh that started since
+    // makes this cursor stale, and its answer would append an old page.
+    const page = pageRef.current;
+    if (page.seq !== loadSeq.current || !page.hasMore || !page.cursor) return;
+    const seq = page.seq;
     setLoadingMore(true);
     try {
       const res = await invoke<[TwitchStream[], string | null]>('get_streams_by_game', {
         gameId: category.id,
-        cursor,
+        cursor: page.cursor,
         limit: PAGE,
       });
-      const page = res[0] ?? [];
+      if (loadSeq.current !== seq) return;
+      const rows = res[0] ?? [];
       setStreams((prev) => {
         // Live viewer counts reorder underneath a cursor, so the same channel
         // can arrive on two pages and a duplicate key would break the grid.
         const seen = new Set(prev.map((s) => s.id));
-        return [...prev, ...page.filter((s) => !seen.has(s.id))].slice(0, MAX_LOADED_STREAMS);
+        return [...prev, ...rows.filter((s) => !seen.has(s.id))].slice(0, MAX_LOADED_STREAMS);
       });
+      const more = !!res[1] && rows.length > 0;
       setCursor(res[1]);
-      setHasMore(!!res[1] && page.length > 0);
+      setHasMore(more);
+      pageRef.current = { seq, cursor: res[1], hasMore: more };
       setPages((n) => n + 1);
     } catch (err) {
+      if (loadSeq.current !== seq) return;
       Logger.warn('[CategoryStreams] page failed:', err);
       setHasMore(false);
+      pageRef.current = { seq, cursor: page.cursor, hasMore: false };
     } finally {
       setLoadingMore(false);
     }
@@ -207,15 +263,46 @@ const CategoryStreamsList: React.FC<{ category: Category }> = ({ category }) => 
   const refresh = useCallback(() => {
     bumpPreviewStamp();
     setPages((n) => n + 1);
+    // A pull is a fresh try at a name that failed to load, too.
+    if (category.name === '' && getLinkedCategory(category.id)?.state === 'failed') {
+      void resolveLinkedCategory(category.id, { retry: true });
+    }
     if (selectedRef.current.length === 0) return load();
     const gen = ++tagGen.current;
     setTagList((list) => refreshTagList(list, gen));
     return fetchTagPage(gen, selectedRef.current, null, false);
-  }, [load, fetchTagPage]);
+  }, [load, fetchTagPage, category.id, category.name]);
 
   useEffect(() => {
     void load();
-  }, [load]);
+  }, [load, reloadKey]);
+
+  // A link opens this screen with the id alone; the screen asks for its name
+  // (one ask per id, shared with any other screen showing it) and fills it in
+  // place. A found record fills with no call. Keyed on the record's state, so a
+  // new link that dropped a failed record asks again, and a late answer fills.
+  const record = useLinkedCategory(category.id);
+  const recordState = record?.state ?? 'none';
+  useEffect(() => {
+    if (category.name !== '') return;
+    void resolveLinkedCategory(category.id).then((rec) => {
+      if (rec.state === 'found' && rec.category) fillBrowseCategory(category.id, rec.category);
+    });
+  }, [category.id, category.name, recordState, fillBrowseCategory]);
+
+  const nameless = category.name === '';
+  // Asks for the name again and runs the streams load once more.
+  const retryName = () => {
+    void resolveLinkedCategory(category.id, { retry: true });
+    setReloadKey((n) => n + 1);
+  };
+  // The system share sheet is the feedback; a refused link or no share sheet
+  // ends quietly in copyCategoryShareLink's one catch.
+  const share = () => {
+    void copyCategoryShareLink(category, (link) =>
+      shareText(`${category.name} on StreamNook: ${link}`, category.name) ? Promise.resolve() : Promise.reject(new Error('no share')),
+    );
+  };
 
   // Observer rather than a scroll handler: PullToRefresh owns native
   // non-passive touch listeners on this same scroller, and keeping the two
@@ -238,7 +325,9 @@ const CategoryStreamsList: React.FC<{ category: Category }> = ({ category }) => 
     ? selected.length === 1
       ? 'No live streams match that tag.'
       : 'No live streams match those tags.'
-    : 'No live streams in this category.';
+    : loadFailed
+      ? "Couldn't load streams"
+      : 'No live streams in this category.';
 
   // The full-screen frame (position, z, background, top inset) belongs to the
   // DrillInScreen wrapper now, so this is just the contents.
@@ -252,14 +341,56 @@ const CategoryStreamsList: React.FC<{ category: Category }> = ({ category }) => 
         >
           <CaretLeft size={22} />
         </button>
-        <h1 className="text-lg font-bold text-textPrimary truncate">{category.name}</h1>
+        {!nameless ? (
+          <h1 className="min-w-0 flex-1 truncate text-lg font-bold text-textPrimary">{category.name}</h1>
+        ) : recordState === 'missing' ? (
+          <p className="min-w-0 flex-1 truncate text-sm text-textSecondary">There's no Twitch category with this id.</p>
+        ) : recordState === 'failed' ? (
+          <>
+            <p className="min-w-0 flex-1 truncate text-sm text-textSecondary">Couldn't load this category</p>
+            <button
+              type="button"
+              onClick={retryName}
+              className="sn-touch ml-auto shrink-0 px-2 text-sm font-semibold text-accent"
+            >
+              Try again
+            </button>
+          </>
+        ) : (
+          // The title's height, so nothing moves when the name lands.
+          <div className="min-w-0 flex-1">
+            <div className="h-5 w-40 max-w-full rounded-md bg-surface animate-pulse" aria-hidden />
+            <span className="sr-only">Loading category</span>
+          </div>
+        )}
+        {!nameless && (
+          <Tooltip content="Share category">
+            <button
+              type="button"
+              onClick={share}
+              aria-label="Share category"
+              className="sn-touch ml-auto shrink-0 flex items-center justify-center text-textSecondary"
+            >
+              <ShareNetwork size={20} />
+            </button>
+          </Tooltip>
+        )}
       </div>
-      <CategoryTagControls name={category.name} selected={selected} onToggle={toggle} pages={pages} />
+      {/* Always rendered, so a name that lands later never pushes the list down. */}
+      <CategoryTagControls
+        name={category.name}
+        selected={selected}
+        onToggle={toggle}
+        pages={pages}
+        searchDisabled={nameless}
+        searchHidden={nameless && recordState === 'missing'}
+      />
       <PullToRefresh onRefresh={refresh} scrollerRef={scroller}>
         {firstLoading ? (
           <SkeletonCards />
         ) : listed.length === 0 ? (
-          <EmptyNote text={empty} hint={null} />
+          // No such category: the header already says so, once.
+          nameless && recordState === 'missing' && !tagMode ? null : <EmptyNote text={empty} hint={null} />
         ) : (
           // Was `grid-cols-1 md:grid-cols-2 xl:grid-cols-3`, which is the exact
           // anti-pattern AdaptiveGrid was written for: Tailwind's breakpoints
@@ -309,7 +440,9 @@ const CategoryTagControls: React.FC<{
   selected: string[];
   onToggle: (tag: string) => void;
   pages: number;
-}> = ({ name, selected, onToggle, pages }) => {
+  searchDisabled: boolean;
+  searchHidden: boolean;
+}> = ({ name, selected, onToggle, pages, searchDisabled, searchHidden }) => {
   const [sheetOpen, setSheetOpen] = useState(false);
   const row = useCategoryTagSuggestions({
     gameName: name,
@@ -329,6 +462,8 @@ const CategoryTagControls: React.FC<{
         selected={selected}
         onToggle={onToggle}
         onSearch={() => setSheetOpen(true)}
+        searchDisabled={searchDisabled}
+        searchHidden={searchHidden}
       />
       <CategoryTagSheet
         open={sheetOpen}
