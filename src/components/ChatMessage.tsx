@@ -2355,7 +2355,10 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   };
 
   // Check if this is a subscription message
-  // Note: 'sharedchatnotice' is used for shared subscription events across channels
+  // Note: 'sharedchatnotice' wraps every notice a partner channel's chat
+  // shares; `source-msg-id` says what it really is. Only a shared sub reads as
+  // a sub here (SN-274: a shared announcement drew as "subscribed!"); one with
+  // no source-msg-id keeps the old sub card.
   const msgId = parsed.tags.get('msg-id');
   const sourceMsgId = parsed.tags.get('source-msg-id');
   const isSubscription = msgId === 'sub' ||
@@ -2364,7 +2367,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     msgId === 'submysterygift' ||
     msgId === 'anonsubmysterygift' ||
     msgId === 'anonsubgift' ||
-    msgId === 'sharedchatnotice' ||
+    (msgId === 'sharedchatnotice' && (!sourceMsgId || categoryOf(sourceMsgId) === 'subscription')) ||
     // YouTube channel memberships: a new/continuing member ('membership') and gifted
     // memberships ('membergift') reuse the same sub-card decoration via the system-msg
     // the adapter stamps. (Kick subs already speak 'sub'/'resub'.)
