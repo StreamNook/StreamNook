@@ -1,3 +1,42 @@
+## [8.9.2] - 2026-11-16
+
+## New: Automations
+> Rules that act through your own account while you watch. Each one says when it runs (something in chat, something on your own channel, or a timer), what has to be true, and what to do: reply, whisper, send a message, time someone out, read it aloud or highlight it. Your reminders now live there as rules, and limits cap how often anything posts.
+
+![Automations](https://raw.githubusercontent.com/StreamNook/StreamNook/main/.github/assets/release-8.9.2-automations.webp)
+
+---
+
+### Windows and macOS
+
+#### Features
+- [Automations](streamnook://settings/Automations/Status) has its own settings page with a rule editor, an activity log and a dot in chat while a rule is working.
+- The emote button wears the emote chat is using most right now and fans out GIF and command cards when you point at it. An empty message box cycles through what its menu can do.
+- Pick your Twitch [Smiley style](streamnook://settings/Chat/Smiley%20style) (Robots, Purple or Monkeys) from StreamNook, and every open chat, Tab, the emote menu and Favorites follow it. Reported by zoox (SN-272).
+- A /me message's text takes the chatter's name color, and only the name keeps its 7TV paint. [Paint /me messages](streamnook://settings/Chat/Paint%20%2Fme%20messages) paints the text too. Reported by zoox (SN-272).
+- Share a category from Home with a link, and a badge link opens that badge.
+- The badge gallery sorts by the date each badge was added, shows it on the detail line, and draws sharper badge art.
+- The [Drops page](streamnook://open/drops) opens at once with what it last knew, then refreshes. Setup and the account menu no longer ask for a separate Drops sign-in.
+- A link in the update notes opens that place in the app.
+
+#### Bug Fixes
+- Shared Chat has one look: a partner channel's messages, subs, gifts, raids and announcements lead with its face and carry its color, and a shared announcement no longer shows as a sub. Reported by leo (SN-274).
+- Announcements, subs and raids are still there when you come back to a chat. Reported by leo (SN-274).
+- Offline channels lists everyone you follow, not just your 100 newest follows. Reported by Kczysiu (SN-18).
+- Text smilies like :) ;) <3 draw as emotes in messages you send. Reported by zoox (SN-272).
+- A finished drop waiting on a claim or a game link no longer sits on top of chat. Reported by zoox (SN-272).
+- A new drop for the streamer you're watching shows within minutes instead of after a restart.
+- Mine on a drop limited to certain channels offers every one of them that is live in the drop's category.
+- A 7TV paint you pick shows on your name right away and keeps its glow in Customize.
+- Channel point redemptions show in every open chat, not only the stream you're watching.
+- Notify me about and Small notices fill in even right after an update.
+- Brand-new badges lead Newest First, and a badge notification only fires for a badge that is actually new.
+- A sub Twitch doesn't post in chat still registers on the subscribe page.
+- Settings groups, dialogs and muted text read clearly on light themes.
+
+### Android and iPhone
+- Backing out of a settings search result keeps the keyboard down and your search where it was. Reported by zoox (SN-256).
+
 ## [8.9.1] - 2026-11-11
 
 ## New: Vertical streams on your phone
