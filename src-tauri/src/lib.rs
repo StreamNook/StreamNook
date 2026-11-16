@@ -1614,12 +1614,16 @@ pub fn run() {
                             commands::notification_mirror::on_notice_url(&watch_handle, &url);
                             continue;
                         }
+                        // Android adds the moment it delivered the link as a
+                        // `#sn-at=` fragment; it is read off before routing.
+                        let at = inbound::arrival_ms(&url).unwrap_or_else(inbound::boot_ms);
+                        let url = inbound::without_stamp(&url);
                         if let Some(link) = inbound::route(&url) {
                             let Some(slot) = watch_handle.try_state::<PendingLink>() else {
                                 warn!("[DeepLink] no link slot; a link was dropped");
                                 continue;
                             };
-                            let stamp = slot.store(link, inbound::boot_ms());
+                            let stamp = slot.store(link, at);
                             #[cfg(desktop)]
                             show_main_window(&watch_handle);
                             let _ = watch_handle.emit("streamnook:link", stamp);
@@ -1637,12 +1641,16 @@ pub fn run() {
                             commands::notification_mirror::on_notice_url(&app_handle, &url);
                             continue;
                         }
+                        // Android adds the moment it delivered the link as a
+                        // `#sn-at=` fragment; it is read off before routing.
+                        let at = inbound::arrival_ms(&url).unwrap_or_else(inbound::boot_ms);
+                        let url = inbound::without_stamp(&url);
                         if let Some(link) = inbound::route(&url) {
                             let Some(slot) = app.try_state::<PendingLink>() else {
                                 warn!("[DeepLink] no link slot; a link was dropped");
                                 continue;
                             };
-                            let stamp = slot.store(link, inbound::boot_ms());
+                            let stamp = slot.store(link, at);
                             let _ = app_handle.emit("streamnook:link", stamp);
                             continue;
                         }

@@ -269,6 +269,9 @@ reqwest = { version = "0.12.24", features = ["json", "gzip", "cookies", "multipa
 # 0.21 line tauri and wry already resolve to, so the tree carries one copy.
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21"
+# boot_ms() (services/inbound_link.rs) reads CLOCK_BOOTTIME through it, its
+# only user. Already in the tree under tauri, so the lock gains no new copy.
+libc = "0.2"
 tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots"] }
 # Chat's second route, raw IRC over TLS (services/irc_transport.rs), on the
 # same rustls + bundled roots the WebSocket uses. Both already in the tree

@@ -72,9 +72,24 @@ pub fn next_arrival() -> u64 {
     next_from(&ARRIVAL)
 }
 
-/// Milliseconds on the device's boot clock. Hosts without that clock, which
-/// is every build for now, answer 0: the desktop ignores the time, and the
+/// Milliseconds on Android's boot clock (`CLOCK_BOOTTIME`, the clock
+/// `SystemClock.elapsedRealtime()` reads: it counts deep sleep and never
+/// steps). The activity stamps links and taps on the same clock, so the page
+/// can order them. A failed read answers 0, which orders nothing.
+#[cfg(target_os = "android")]
+pub fn boot_ms() -> u64 {
+    // SAFETY: an all-zero `timespec` is a valid value, and `clock_gettime`
+    // only writes into the struct it is handed.
+    let mut ts: libc::timespec = unsafe { std::mem::zeroed() };
+    if unsafe { libc::clock_gettime(libc::CLOCK_BOOTTIME, &mut ts) } != 0 {
+        return 0;
+    }
+    ms_from_timespec(ts.tv_sec as i64, ts.tv_nsec as i64)
+}
+
+/// Hosts without that clock answer 0: the desktop ignores the time, and the
 /// iPhone never stores a link.
+#[cfg(not(target_os = "android"))]
 pub fn boot_ms() -> u64 {
     0
 }
@@ -84,6 +99,31 @@ pub fn boot_ms() -> u64 {
 pub fn ms_from_timespec(sec: i64, nsec: i64) -> u64 {
     let ms = sec.saturating_mul(1000).saturating_add(nsec / 1_000_000);
     u64::try_from(ms).unwrap_or(0)
+}
+
+/// The fragment the Android activity adds to every link it hands over: the
+/// moment Android delivered it, in ms on the boot clock.
+const STAMP_PREFIX: &str = "sn-at=";
+
+/// When Android delivered a link, read from the `#sn-at=<ms>` fragment the
+/// activity adds; None for a link without one (every desktop and iPhone link)
+/// or with anything but plain digits after the prefix.
+pub fn arrival_ms(url: &url::Url) -> Option<u64> {
+    let digits = url.fragment()?.strip_prefix(STAMP_PREFIX)?;
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok()
+}
+
+/// The link without the activity's stamp, so it routes exactly as the link
+/// that was opened. Any other fragment is left as it is.
+pub fn without_stamp(url: &url::Url) -> url::Url {
+    let mut clean = url.clone();
+    if url.fragment().is_some_and(|f| f.starts_with(STAMP_PREFIX)) {
+        clean.set_fragment(None);
+    }
+    clean
 }
 
 /// The one link waiting for the page, if any.
@@ -603,6 +643,88 @@ mod tests {
     fn a_host_without_the_boot_clock_answers_zero() {
         // Fails if a host build starts reporting a time nothing there can compare.
         assert_eq!(boot_ms(), 0);
+    }
+
+    // the arrival stamp
+
+    #[test]
+    fn the_arrival_stamp_is_read_from_the_fragment() {
+        // Fails if a link without the stamp, or a stamp that is not plain digits, yields a time.
+        assert_eq!(arrival_ms(&url("streamnook://xqc#sn-at=123")), Some(123));
+        assert_eq!(arrival_ms(&url("streamnook://xqc")), None);
+        assert_eq!(arrival_ms(&url("streamnook://xqc#sn-at=x")), None);
+        assert_eq!(arrival_ms(&url("streamnook://xqc#sn-at=")), None);
+        assert_eq!(arrival_ms(&url("streamnook://xqc#sn-at=+5")), None);
+        assert_eq!(arrival_ms(&url("streamnook://xqc#other")), None);
+        assert_eq!(
+            arrival_ms(&url("https://streamnook.app/w/xqc?d=1114#sn-at=86400000")),
+            Some(86_400_000)
+        );
+    }
+
+    #[test]
+    fn only_the_stamp_is_stripped() {
+        // Fails if another fragment is dropped, or the stamp survives into the routed link.
+        assert_eq!(
+            without_stamp(&url("streamnook://xqc#sn-at=123")).as_str(),
+            "streamnook://xqc"
+        );
+        assert_eq!(
+            without_stamp(&url("streamnook://xqc#other")).as_str(),
+            "streamnook://xqc#other"
+        );
+        assert_eq!(without_stamp(&url("streamnook://xqc")).as_str(), "streamnook://xqc");
+    }
+
+    #[test]
+    fn a_stamped_link_routes_as_the_link_that_was_opened() {
+        // Fails if a stamp changes what any listed link opens (none of the fixture's urls has a fragment).
+        let fixture = fixture();
+        let routes = fixture["routes"].as_array().expect("routes is a list");
+        assert!(routes.len() >= 10, "the fixture lists routes");
+        for entry in routes {
+            let text = entry["url"].as_str().expect("a route has a url");
+            let stamped = url(&format!("{text}#sn-at=4242"));
+            assert_eq!(arrival_ms(&stamped), Some(4242), "{text}");
+            assert_eq!(route(&without_stamp(&stamped)), route(&url(text)), "{text}");
+        }
+    }
+
+    #[test]
+    fn android_reads_the_boot_clock_and_every_other_host_answers_zero() {
+        // Fails while Android's boot_ms is the unfenced 0 every host had before.
+        let live = live_source();
+        let android = "#[cfg(target_os = \"android\")]\npub fn boot_ms() -> u64 {";
+        let other = "#[cfg(not(target_os = \"android\"))]\npub fn boot_ms() -> u64 {\n    0\n}";
+        assert_eq!(live.matches(android).count(), 1, "one Android version");
+        assert_eq!(live.matches(other).count(), 1, "one version for every other host");
+        assert_eq!(live.matches("pub fn boot_ms() -> u64 {").count(), 2);
+        let start = live.find(android).expect("the Android version");
+        let end = live[start..].find("\n}\n").expect("it ends") + start;
+        in_order(
+            &live[start..end],
+            &[
+                "std::mem::zeroed()",
+                "libc::clock_gettime(libc::CLOCK_BOOTTIME, &mut ts)",
+                "!= 0 {\n        return 0;\n    }",
+                "ms_from_timespec(ts.tv_sec as i64, ts.tv_nsec as i64)",
+            ],
+        );
+    }
+
+    #[test]
+    fn libc_is_an_android_only_dependency() {
+        // Fails if `libc` is missing from the Android table or listed for every target.
+        let toml = include_str!("../../Cargo.toml").replace("\r\n", "\n");
+        let header = "[target.'cfg(target_os = \"android\")'.dependencies]\n";
+        assert_eq!(toml.matches(header).count(), 1, "one Android table");
+        let start = toml.find(header).expect("the Android table") + header.len();
+        let table = toml[start..].split("\n[").next().expect("the table body");
+        assert!(
+            table.lines().any(|line| line.trim() == "libc = \"0.2\""),
+            "libc sits in the Android table"
+        );
+        assert_eq!(toml.matches("\nlibc = ").count(), 1, "and in no other table");
     }
 
     // sender text

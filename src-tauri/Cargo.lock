@@ -35,6 +35,7 @@ dependencies = [
  "jni 0.21.1",
  "keyring-core",
  "lazy_static",
+ "libc",
  "log",
  "lru",
  "minisign-verify",

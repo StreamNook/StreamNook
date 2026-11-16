@@ -449,8 +449,10 @@ fn both_deep_link_loops_route_store_and_emit_the_stamp() {
         &[
             "commands::notification_mirror::is_notice_url(&url)",
             "continue;",
+            "inbound::arrival_ms(&url)",
+            "inbound::without_stamp(&url)",
             "inbound::route(&url)",
-            ".store(link, inbound::boot_ms())",
+            ".store(link, at)",
             "show_main_window(&watch_handle);",
             "\"streamnook:link\", stamp",
             "continue;",
@@ -462,8 +464,10 @@ fn both_deep_link_loops_route_store_and_emit_the_stamp() {
         &[
             "commands::notification_mirror::is_notice_url(&url)",
             "continue;",
+            "inbound::arrival_ms(&url)",
+            "inbound::without_stamp(&url)",
             "inbound::route(&url)",
-            ".store(link, inbound::boot_ms())",
+            ".store(link, at)",
             "\"streamnook:link\", stamp",
             "continue;",
         ],
