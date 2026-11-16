@@ -114,8 +114,10 @@ const MIN_MANUAL_GAP: Duration = Duration::from_secs(15);
 const RESUME_STALE: Duration = Duration::from_secs(60);
 /// Recommended page size Home shows before "load more".
 const RECOMMENDED_LIMIT: u32 = 20;
-/// Follow list page size for the offline roster (Home showed 100 before).
+/// Follow list page size for the offline roster (Helix's largest page).
 const OFFLINE_LIMIT: u32 = 100;
+/// Pages read for the offline roster: every follow up to 2,000 channels.
+const OFFLINE_PAGES: usize = 20;
 /// Cards the Continue Watching row carries, and the hydrate batch size.
 const CONTINUE_LIMIT: usize = 24;
 /// How often the row is reconciled against Twitch.
@@ -1781,13 +1783,29 @@ async fn refresh_offline(inner: &Inner) {
         .iter()
         .map(|s| s.user_id.clone())
         .collect();
-    let channels = match TwitchService::get_all_followed_channels(OFFLINE_LIMIT, None).await {
-        Ok((channels, _cursor)) => channels,
-        Err(e) => {
-            debug!("[HomeSnapshot] followed channels: {e}");
-            return;
+    // Helix answers 100 follows a page, newest follow first, so one page left
+    // out every channel followed before the latest 100. Read them all; a
+    // failed page keeps the last full roster rather than showing part of it.
+    let mut channels: Vec<TwitchStream> = Vec::new();
+    let mut cursor: Option<String> = None;
+    for page in 1..=OFFLINE_PAGES {
+        let (batch, next) = match TwitchService::get_all_followed_channels(OFFLINE_LIMIT, cursor.take()).await {
+            Ok(answer) => answer,
+            Err(e) => {
+                debug!("[HomeSnapshot] followed channels (page {page}): {e}");
+                return;
+            }
+        };
+        let empty = batch.is_empty();
+        channels.extend(batch);
+        match next {
+            Some(next) if !empty => cursor = Some(next),
+            _ => break,
         }
-    };
+    }
+    // A cursor that repeats an id must not list the channel twice.
+    let mut seen = HashSet::new();
+    channels.retain(|c| seen.insert(c.user_id.clone()));
     let offline: Vec<TwitchStream> = channels
         .into_iter()
         .filter(|c| !live_ids.contains(&c.user_id))

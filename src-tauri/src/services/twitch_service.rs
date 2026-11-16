@@ -3477,7 +3477,42 @@ impl TwitchService {
         }
     }
 
+    /// Last-broadcast end times for any number of channels. GQL `users(ids:)`
+    /// answers at most 100 ids, so a longer list goes out in batches of 100.
     pub async fn get_offline_last_broadcasts(
+        user_ids: Vec<String>,
+    ) -> Result<std::collections::HashMap<String, Option<String>>> {
+        use futures::StreamExt;
+        const GQL_USERS_MAX: usize = 100;
+        /// Batches in flight at once, so a long follow list is not a burst.
+        const IN_FLIGHT: usize = 4;
+        let answers: Vec<_> = futures::stream::iter(
+            user_ids
+                .chunks(GQL_USERS_MAX)
+                .map(|ids| Self::last_broadcasts_batch(ids.to_vec()))
+                .collect::<Vec<_>>(),
+        )
+        .buffer_unordered(IN_FLIGHT)
+        .collect()
+        .await;
+        let mut result_map = std::collections::HashMap::new();
+        let mut first_err = None;
+        for answer in answers {
+            match answer {
+                Ok(map) => result_map.extend(map),
+                Err(e) => {
+                    warn!("[TWITCH] last broadcasts batch failed: {e}");
+                    first_err.get_or_insert(e);
+                }
+            }
+        }
+        match first_err {
+            Some(e) if result_map.is_empty() => Err(e),
+            _ => Ok(result_map),
+        }
+    }
+
+    async fn last_broadcasts_batch(
         user_ids: Vec<String>,
     ) -> Result<std::collections::HashMap<String, Option<String>>> {
         let client = crate::services::http::client().clone();
