@@ -18,6 +18,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
+import android.os.SystemClock
 import android.provider.Settings
 import android.util.Rational
 import android.view.HapticFeedbackConstants
@@ -107,18 +108,9 @@ class MainActivity : TauriActivity() {
    *  attributes off the UI thread. */
   @Volatile private var brightnessOverride: Float = -1f
 
-  // Channel login from a tapped notification, waiting for the web shell to pick
-  // it up. Needed for the cold case: the tap starts the activity, and there is
-  // no WebView to hand it to for some time afterwards.
-  @Volatile private var pendingChannel: String? = null
-
-  // Message id from a tapped mention notification (MentionNotifier), waiting
-  // for the shell the same way, for the same cold-start reason.
-  @Volatile private var pendingMention: String? = null
-
-  // Conversation key from a tapped whisper notification (WhisperNotifier),
-  // waiting for the shell the same way.
-  @Volatile private var pendingWhisper: String? = null
+  // Tapped notifications waiting for the web shell (a channel login, a mention's
+  // message id, a whisper's conversation key) live in the companion object with
+  // the time each was stashed, under one lock: see `tapLock`.
 
   // Fired by the PiP window's mute action. Private to the app; the receiver is
   // registered in code and explicitly NOT exported.
@@ -816,54 +808,177 @@ class MainActivity : TauriActivity() {
     /**
      * Channel login from a tapped notification, or "" if there is none.
      *
-     * Reading it clears it, the same contract as consumePipClosed. The web shell
-     * drains this on mount, which is what covers the cold case: the tap launches
-     * the activity and the WebView only exists a good while later, so pushing
-     * would have nothing to push to.
+     * Reading it clears it and its time, the same contract as consumePipClosed.
+     * The page itself now takes taps through consumePendingTap and the
+     * consumePending*If calls below; this one stays for any older caller.
      */
     @JavascriptInterface
-    fun consumePendingChannel(): String {
+    fun consumePendingChannel(): String = synchronized(tapLock) {
       val channel = pendingChannel
       pendingChannel = null
-      return channel ?: ""
+      pendingChannelAt = 0L
+      channel ?: ""
     }
 
     /** Message id from a tapped mention notification, or "". Reading clears
-     *  it, like consumePendingChannel. */
+     *  it and its time, like consumePendingChannel. */
     @JavascriptInterface
-    fun consumePendingMention(): String {
+    fun consumePendingMention(): String = synchronized(tapLock) {
       val id = pendingMention
       pendingMention = null
-      return id ?: ""
+      pendingMentionAt = 0L
+      id ?: ""
     }
 
     /** Conversation key from a tapped whisper notification, or "". Reading
-     *  clears it, like consumePendingChannel. */
+     *  clears it and its time, like consumePendingChannel. */
     @JavascriptInterface
-    fun consumePendingWhisper(): String {
+    fun consumePendingWhisper(): String = synchronized(tapLock) {
       val key = pendingWhisper
       pendingWhisper = null
-      return key ?: ""
+      pendingWhisperAt = 0L
+      key ?: ""
+    }
+
+    /**
+     * The newest stashed notification tap, as
+     * `{"kind":"whisper"|"mention"|"channel","value":...,"at":<ms on the boot clock>}`,
+     * or "" when there is none. Every stash is cleared: the shell opens one tap
+     * on mount, the newest, and an older one must not open over it later. The
+     * shell drains this on mount, which covers the cold case: the tap launches
+     * the activity and the WebView only exists a good while later.
+     */
+    @JavascriptInterface
+    fun consumePendingTap(): String = synchronized(tapLock) {
+      val taps = listOf(
+        Triple("whisper", pendingWhisper, pendingWhisperAt),
+        Triple("mention", pendingMention, pendingMentionAt),
+        Triple("channel", pendingChannel, pendingChannelAt),
+      ).filter { !it.second.isNullOrEmpty() }
+      // Equal times keep the first in this order: a whisper, a mention, then a
+      // channel, the order the shell always preferred.
+      val newest = taps.maxByOrNull { it.third }
+      clearTapsLocked()
+      if (newest == null) {
+        ""
+      } else {
+        JSONObject()
+          .put("kind", newest.first)
+          .put("value", newest.second)
+          .put("at", newest.third)
+          .toString()
+      }
+    }
+
+    /**
+     * Clears the channel tap only while it is still the one stashed at `at` (the
+     * time the warm hand-over carried) and says whether it did. A tap the mount
+     * already took, or a newer one stashed since, is left alone, so a late
+     * hand-over opens nothing twice. `at` arrives as a JavaScript number.
+     */
+    @JavascriptInterface
+    fun consumePendingChannelIf(at: Double): Boolean = synchronized(tapLock) {
+      if (pendingChannel != null && pendingChannelAt.toDouble() == at) {
+        pendingChannel = null
+        pendingChannelAt = 0L
+        true
+      } else {
+        false
+      }
+    }
+
+    /** consumePendingChannelIf for the mention tap. */
+    @JavascriptInterface
+    fun consumePendingMentionIf(at: Double): Boolean = synchronized(tapLock) {
+      if (pendingMention != null && pendingMentionAt.toDouble() == at) {
+        pendingMention = null
+        pendingMentionAt = 0L
+        true
+      } else {
+        false
+      }
+    }
+
+    /** consumePendingChannelIf for the whisper tap. */
+    @JavascriptInterface
+    fun consumePendingWhisperIf(at: Double): Boolean = synchronized(tapLock) {
+      if (pendingWhisper != null && pendingWhisperAt.toDouble() == at) {
+        pendingWhisper = null
+        pendingWhisperAt = 0L
+        true
+      } else {
+        false
+      }
+    }
+
+    /** Now on the boot clock, in ms: the clock links and taps are stamped on. */
+    @JavascriptInterface
+    fun bootNowMs(): Long = SystemClock.elapsedRealtime()
+
+    /** Whether the PiP window was just dismissed and the shell has not handled
+     *  it yet. Unlike consumePipClosed it clears nothing. */
+    @JavascriptInterface
+    fun isPipClosing(): Boolean = pipClosedPending
+  }
+
+  /**
+   * Whether Android handed this intent over as a link: a VIEW (or ChromeOS's
+   * VIEW) with data, the intents the deep-link plugin forwards. Every one is
+   * stamped; a stamp on an intent nobody forwards is never read.
+   */
+  private fun isForwardedLink(intent: Intent?): Boolean =
+    intent != null &&
+      (intent.action == Intent.ACTION_VIEW || intent.action == "org.chromium.arc.intent.action.VIEW") &&
+      intent.data != null
+
+  /**
+   * A copy of a link intent whose URL carries the moment Android delivered it,
+   * as a `#sn-at=<ms on the boot clock>` fragment. The deep-link plugin forwards
+   * the URL it is handed, and Rust reads the time off and strips it before
+   * routing (services/inbound_link.rs), so the page can order the link against
+   * a notification tap by when each really happened. setDataAndType keeps the
+   * intent's type, which setData alone would clear.
+   */
+  private fun stampedLink(link: Intent): Intent {
+    val data = link.data ?: return link
+    val at = SystemClock.elapsedRealtime()
+    android.util.Log.i("SNLink", "link at $at")
+    return Intent(link).apply {
+      setDataAndType(data.buildUpon().encodedFragment("sn-at=$at").build(), link.type)
     }
   }
 
   /**
-   * A notification tap on a warm app arrives here rather than through onCreate.
+   * A link or a notification tap on a warm app arrives here rather than through
+   * onCreate.
    *
-   * `super` first, and it is not optional: WryActivity forwards to
-   * `Rust.onNewIntent` and TauriActivity forwards to `PluginManager`, which is
-   * how the deep-link plugin sees `streamnook://` links. Skipping it would
-   * silently break those.
+   * `super` is not optional: WryActivity forwards to `Rust.onNewIntent` and
+   * TauriActivity forwards to `PluginManager`, which is how the deep-link plugin
+   * sees `streamnook://` links. A link is stamped and handed to setIntent BEFORE
+   * `super`, so the plugin forwards the stamped URL, and getIntent() is the
+   * newest link, which the plugin reads again when it loads after a relaunch.
    */
   override fun onNewIntent(intent: Intent) {
+    if (isForwardedLink(intent)) {
+      val stamped = stampedLink(intent)
+      setIntent(stamped)
+      super.onNewIntent(stamped)
+      return
+    }
     super.onNewIntent(intent)
+    // Each tap is stashed with its own time, so the page can tell it from an
+    // older or newer link, and the hand-over below carries that time.
     // A mention opens that mention (its chat and the message), not a stream.
     val mention = intent.getStringExtra(MentionNotifier.EXTRA_MENTION)
     if (!mention.isNullOrEmpty()) {
-      pendingMention = mention
+      val at = SystemClock.elapsedRealtime()
+      synchronized(tapLock) {
+        pendingMention = mention
+        pendingMentionAt = at
+      }
       runOnUiThread {
         webView?.evaluateJavascript(
-          "window.__SN_OPEN_MENTION__ && window.__SN_OPEN_MENTION__(${JSONObject.quote(mention)})",
+          "window.__SN_OPEN_MENTION__ && window.__SN_OPEN_MENTION__(${JSONObject.quote(mention)}, $at)",
           null,
         )
       }
@@ -872,10 +987,14 @@ class MainActivity : TauriActivity() {
     // A whisper opens its conversation.
     val whisper = intent.getStringExtra(WhisperNotifier.EXTRA_WHISPER)
     if (!whisper.isNullOrEmpty()) {
-      pendingWhisper = whisper
+      val at = SystemClock.elapsedRealtime()
+      synchronized(tapLock) {
+        pendingWhisper = whisper
+        pendingWhisperAt = at
+      }
       runOnUiThread {
         webView?.evaluateJavascript(
-          "window.__SN_OPEN_WHISPER__ && window.__SN_OPEN_WHISPER__(${JSONObject.quote(whisper)})",
+          "window.__SN_OPEN_WHISPER__ && window.__SN_OPEN_WHISPER__(${JSONObject.quote(whisper)}, $at)",
           null,
         )
       }
@@ -883,13 +1002,17 @@ class MainActivity : TauriActivity() {
     }
     val channel = intent.getStringExtra(NotifyWorker.EXTRA_CHANNEL) ?: return
     if (channel.isEmpty()) return
-    pendingChannel = channel
+    val at = SystemClock.elapsedRealtime()
+    synchronized(tapLock) {
+      pendingChannel = channel
+      pendingChannelAt = at
+    }
     // The shell is already up in this path, so hand it over rather than waiting
-    // for something to drain it. The bridge stays the fallback if no handler is
-    // registered yet.
+    // for something to drain it. The stash stays the fallback if no handler is
+    // registered yet; the handler clears it only while it is still this tap.
     runOnUiThread {
       webView?.evaluateJavascript(
-        "window.__SN_OPEN_CHANNEL__ && window.__SN_OPEN_CHANNEL__(${JSONObject.quote(channel)})",
+        "window.__SN_OPEN_CHANNEL__ && window.__SN_OPEN_CHANNEL__(${JSONObject.quote(channel)}, $at)",
         null,
       )
     }
@@ -913,6 +1036,19 @@ class MainActivity : TauriActivity() {
       statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
       navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
     )
+    // Recreated from recents, or with saved state after the process died:
+    // Android hands back the ORIGINAL intent, a link or a notification tap the
+    // person already saw. Blank it before `super` (the deep-link plugin reads
+    // getIntent() when it loads) and stash no tap below. Otherwise a link is
+    // stamped with the moment it arrived, before the plugin can see it.
+    val restored = savedInstanceState != null ||
+      ((intent?.flags ?: 0) and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0
+    if (restored) {
+      setIntent(Intent(intent).apply { data = null; removeExtra(NotifyWorker.EXTRA_CHANNEL); removeExtra(MentionNotifier.EXTRA_MENTION); removeExtra(WhisperNotifier.EXTRA_WHISPER) })
+    } else if (isForwardedLink(intent)) {
+      val stamped = stampedLink(intent)
+      setIntent(stamped)
+    }
     super.onCreate(savedInstanceState)
 
     // Google Cast. Brings the SDK up (or reports it unavailable: no Play
@@ -921,16 +1057,27 @@ class MainActivity : TauriActivity() {
     // TV screen mode: watch for a mirrored display that takes a presentation.
     TvScreen.init(this)
 
-    // Cold start from a notification tap. Stashed for the shell to drain once
-    // it mounts; there is no WebView to talk to at this point.
-    intent?.getStringExtra(NotifyWorker.EXTRA_CHANNEL)?.takeIf { it.isNotEmpty() }?.let {
-      pendingChannel = it
-    }
-    intent?.getStringExtra(MentionNotifier.EXTRA_MENTION)?.takeIf { it.isNotEmpty() }?.let {
-      pendingMention = it
-    }
-    intent?.getStringExtra(WhisperNotifier.EXTRA_WHISPER)?.takeIf { it.isNotEmpty() }?.let {
-      pendingWhisper = it
+    // Cold start from a notification tap. Stashed, with its time, for the shell
+    // to take once it mounts; there is no WebView to talk to at this point. A
+    // restored activity stashes nothing: that tap was already handled. This
+    // activity now owns the stashes (see onDestroy).
+    val coldAt = SystemClock.elapsedRealtime()
+    synchronized(tapLock) {
+      owner = this
+      if (!restored) {
+        intent?.getStringExtra(NotifyWorker.EXTRA_CHANNEL)?.takeIf { it.isNotEmpty() }?.let {
+          pendingChannel = it
+          pendingChannelAt = coldAt
+        }
+        intent?.getStringExtra(MentionNotifier.EXTRA_MENTION)?.takeIf { it.isNotEmpty() }?.let {
+          pendingMention = it
+          pendingMentionAt = coldAt
+        }
+        intent?.getStringExtra(WhisperNotifier.EXTRA_WHISPER)?.takeIf { it.isNotEmpty() }?.let {
+          pendingWhisper = it
+          pendingWhisperAt = coldAt
+        }
+      }
     }
 
     // Push token, fetched once per launch so `push_register` always has the
@@ -1028,14 +1175,6 @@ class MainActivity : TauriActivity() {
     // A PiP window has no system bars, so coming back out re-lays them out
     // without carrying the appearance flags over. Nothing else restores them.
     if (!isInPictureInPictureMode) applyBarAppearance()
-    // Tell the web shell so it strips down to the bare player while pipped.
-    val flag = if (isInPictureInPictureMode) "true" else "false"
-    webView?.evaluateJavascript(
-      "(function(){document.documentElement.dataset.snPip='" + flag +
-        "';window.dispatchEvent(new CustomEvent('sn:pip',{detail:" + flag + "}));})()",
-      null,
-    )
-
     // Leaving PiP happens two ways and they mean opposite things:
     //   expand  -> the activity comes to the foreground (STARTED / RESUMED)
     //   close X -> the window is dismissed and the activity is on its way to
@@ -1045,15 +1184,27 @@ class MainActivity : TauriActivity() {
     // keepsAudioAfterPip). Closing PiP does NOT finish the activity on this
     // device (verified: the process and the ActivityRecord both survive), so
     // without this the stream stays loaded and reappears on the next open.
-    if (!isInPictureInPictureMode && lifecycle.currentState == Lifecycle.State.CREATED) {
+    val closing = !isInPictureInPictureMode && lifecycle.currentState == Lifecycle.State.CREATED
+    // Braces: the activity is stopping, so the scripts below may not get to
+    // run. This flag is read synchronously on the way back in and cannot be
+    // lost. It is set before sn:pip goes out, so the page can already tell a
+    // dismissal from an expand when it hears sn:pip (isPipClosing).
+    if (closing) pipClosedPending = true
+
+    // Tell the web shell so it strips down to the bare player while pipped.
+    val flag = if (isInPictureInPictureMode) "true" else "false"
+    webView?.evaluateJavascript(
+      "(function(){document.documentElement.dataset.snPip='" + flag +
+        "';window.dispatchEvent(new CustomEvent('sn:pip',{detail:" + flag + "}));})()",
+      null,
+    )
+
+    if (closing) {
       // Belt: tell the shell now, so it can stop or carry on at once.
       webView?.evaluateJavascript(
         "window.dispatchEvent(new CustomEvent('sn:pip-closed'))",
         null,
       )
-      // Braces: the activity is stopping, so that script may not get to run.
-      // This flag is read synchronously on the way back in and cannot be lost.
-      pipClosedPending = true
     }
   }
 
@@ -1340,6 +1491,12 @@ class MainActivity : TauriActivity() {
   }
 
   override fun onDestroy() {
+    // A finished activity's taps go with it; a configuration recreate keeps
+    // them for the new instance, which takes ownership in onCreate.
+    synchronized(tapLock) {
+      if (isFinishing && owner === this) clearTapsLocked()
+      if (owner === this) owner = null
+    }
     try {
       unregisterReceiver(muteReceiver)
     } catch (_: IllegalArgumentException) {
@@ -1445,5 +1602,34 @@ class MainActivity : TauriActivity() {
 
   companion object {
     private const val ACTION_PIP_MUTE = "app.streamnook.PIP_MUTE"
+
+    // Tapped notifications waiting for the web shell, each with the moment it
+    // was stashed on the boot clock (SystemClock.elapsedRealtime(), the clock
+    // link stamps and Rust's boot_ms() share), so the page can order a tap
+    // against a link. They live as long as the process, like Rust's link slot,
+    // so an activity recreated for a configuration change keeps them. One lock
+    // covers every stash write and every read-and-clear.
+    private val tapLock = Any()
+    private var pendingChannel: String? = null
+    private var pendingChannelAt: Long = 0L
+    private var pendingMention: String? = null
+    private var pendingMentionAt: Long = 0L
+    private var pendingWhisper: String? = null
+    private var pendingWhisperAt: Long = 0L
+
+    // The activity that last took over the stashes. Only it clears them when it
+    // finishes, so an older instance finishing late cannot wipe a newer one's
+    // taps.
+    private var owner: MainActivity? = null
+
+    /** Forget every stashed tap. The caller holds the tap lock. */
+    private fun clearTapsLocked() {
+      pendingChannel = null
+      pendingChannelAt = 0L
+      pendingMention = null
+      pendingMentionAt = 0L
+      pendingWhisper = null
+      pendingWhisperAt = 0L
+    }
   }
 }

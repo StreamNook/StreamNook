@@ -29,6 +29,12 @@ interface SNBridge {
   consumePendingChannel?(): string;
   consumePendingMention?(): string;
   consumePendingWhisper?(): string;
+  consumePendingTap?(): string;
+  consumePendingChannelIf?(at: number): boolean;
+  consumePendingMentionIf?(at: number): boolean;
+  consumePendingWhisperIf?(at: number): boolean;
+  bootNowMs?(): number;
+  isPipClosing?(): boolean;
   mediaSessionStart?(title: string, artist: string, artUrl: string, playing: boolean): void;
   mediaSessionStop?(): void;
   mediaSessionPark?(): void;
@@ -485,5 +491,82 @@ export function consumePendingWhisper(): string | null {
     return key && key.length > 0 ? key : null;
   } catch {
     return null;
+  }
+}
+
+/** A tapped notification the activity stashed: what it opens, and when it was
+ *  stashed, in ms on the boot clock (0 when unknown). */
+export type PendingTap = { kind: 'whisper' | 'mention' | 'channel'; value: string; at: number };
+
+/** Read one tap from the activity's JSON; null when it is not one. */
+export function readPendingTap(raw: unknown): PendingTap | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const { kind, value, at } = raw as Record<string, unknown>;
+  if (kind !== 'whisper' && kind !== 'mention' && kind !== 'channel') return null;
+  if (typeof value !== 'string' || !value) return null;
+  return { kind, value, at: typeof at === 'number' && Number.isFinite(at) && at > 0 ? at : 0 };
+}
+
+/**
+ * The newest tapped notification waiting for the shell, or null. Reading it
+ * clears every stashed tap natively. Taken on mount, because a tap that
+ * cold-starts the app has no page to be handed to; a warm tap arrives through
+ * the `window.__SN_OPEN_*__` handlers instead.
+ */
+export function consumePendingTap(): PendingTap | null {
+  try {
+    const json = bridge()?.consumePendingTap?.();
+    return json ? readPendingTap(JSON.parse(json)) : null;
+  } catch {
+    return null;
+  }
+}
+
+type ConsumeIf = 'consumePendingChannelIf' | 'consumePendingMentionIf' | 'consumePendingWhisperIf';
+
+// A warm hand-over clears its own stash only while it is still the tap stashed
+// at `at`. Without a bridge there is no stash to guard (the call is allowed); a
+// bridge without the method, or one that throws, refuses.
+function consumeIf(method: ConsumeIf, at: number): boolean {
+  const b = typeof window === 'undefined' ? undefined : bridge();
+  if (!b) return true;
+  try {
+    return b[method]?.(at) === true;
+  } catch {
+    return false;
+  }
+}
+
+/** Clears the stashed channel tap if it is the one stashed at `at`; true when it was. */
+export function consumePendingChannelIf(at: number): boolean {
+  return consumeIf('consumePendingChannelIf', at);
+}
+
+/** Clears the stashed mention tap if it is the one stashed at `at`; true when it was. */
+export function consumePendingMentionIf(at: number): boolean {
+  return consumeIf('consumePendingMentionIf', at);
+}
+
+/** Clears the stashed whisper tap if it is the one stashed at `at`; true when it was. */
+export function consumePendingWhisperIf(at: number): boolean {
+  return consumeIf('consumePendingWhisperIf', at);
+}
+
+/** Now on the device boot clock, in ms; 0 without a bridge. Links and taps carry times on the same clock. */
+export function bootNowMs(): number {
+  try {
+    const v = bridge()?.bootNowMs?.();
+    return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** True while a dismissed PiP window has not been handled yet (it does not clear the mark); false without a bridge. */
+export function isPipClosing(): boolean {
+  try {
+    return bridge()?.isPipClosing?.() === true;
+  } catch {
+    return false;
   }
 }

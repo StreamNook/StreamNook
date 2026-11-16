@@ -236,3 +236,170 @@ fn the_android_plugin_never_asks_for_audio_focus() {
     }
     assert!(kotlin.contains("QUEUE_ADD") && kotlin.contains("TextToSpeech"));
 }
+
+const MAIN_ACTIVITY: &str = "gen/android/app/src/main/java/app/streamnook/MainActivity.kt";
+
+/// The text from `from` up to the first `to` after it.
+fn cut<'a>(src: &'a str, from: &str, to: &str) -> &'a str {
+    let start = src.find(from).unwrap_or_else(|| panic!("no {from}"));
+    let rest = &src[start..];
+    let end = rest[from.len()..]
+        .find(to)
+        .unwrap_or_else(|| panic!("no {to:?} after {from}"));
+    &rest[..from.len() + end]
+}
+
+/// Every needle appears, each after the one before it.
+fn in_order(text: &str, needles: &[&str]) {
+    let mut at = 0;
+    for needle in needles {
+        let found = text[at..]
+            .find(needle)
+            .unwrap_or_else(|| panic!("`{needle}` missing or out of order"));
+        at += found + needle.len();
+    }
+}
+
+#[test]
+fn a_link_intent_is_stamped_before_the_plugins_see_it() {
+    // Fails if a link reaches `super` (and so the deep-link plugin) without its arrival time.
+    let kotlin = read(MAIN_ACTIVITY);
+    let rule = cut(&kotlin, "private fun isForwardedLink(", "\n\n");
+    for needle in [
+        "Intent.ACTION_VIEW",
+        "\"org.chromium.arc.intent.action.VIEW\"",
+        "intent.data != null",
+    ] {
+        assert!(rule.contains(needle), "isForwardedLink spells {needle}");
+    }
+    let stamp = cut(&kotlin, "private fun stampedLink(", "\n  }\n");
+    in_order(
+        stamp,
+        &["SystemClock.elapsedRealtime()", "setDataAndType(", "encodedFragment(\"sn-at=$at\")"],
+    );
+    let warm = cut(&kotlin, "override fun onNewIntent(", "\n  }\n");
+    in_order(
+        warm,
+        &[
+            "if (isForwardedLink(intent)) {",
+            "val stamped = stampedLink(intent)",
+            "setIntent(stamped)",
+            "super.onNewIntent(stamped)",
+            "return",
+            "super.onNewIntent(intent)",
+        ],
+    );
+    let create = cut(&kotlin, "override fun onCreate(", "super.onCreate(savedInstanceState)");
+    in_order(
+        create,
+        &[
+            "FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY",
+            "setIntent(Intent(intent).apply { data = null",
+            "isForwardedLink(intent)",
+            "setIntent(stamped)",
+        ],
+    );
+}
+
+#[test]
+fn every_tap_stash_is_written_with_its_time_under_the_tap_lock() {
+    // Fails if a stash goes back to a per-activity field, or is written without its time or outside the lock.
+    let kotlin = read(MAIN_ACTIVITY);
+    assert_eq!(kotlin.matches("private val tapLock = Any()").count(), 1);
+    let companion = cut(&kotlin, "  companion object {", "\n  }\n");
+    assert!(companion.contains("private val tapLock = Any()"), "one lock for the process");
+    for name in ["pendingChannel", "pendingMention", "pendingWhisper"] {
+        assert!(companion.contains(&format!("private var {name}: String? = null")), "{name}");
+        assert!(companion.contains(&format!("private var {name}At: Long = 0L")), "{name}At");
+        assert!(!kotlin.contains(&format!("@Volatile private var {name}")), "no per-activity {name}");
+    }
+    let lines: Vec<&str> = kotlin.lines().collect();
+    let mut writes = 0;
+    for (i, line) in lines.iter().enumerate() {
+        let t = line.trim();
+        for name in ["pendingChannel", "pendingMention", "pendingWhisper"] {
+            if !t.starts_with(&format!("{name} = ")) || t.ends_with("= null") {
+                continue;
+            }
+            writes += 1;
+            assert!(
+                lines[i + 1].trim().starts_with(&format!("{name}At = ")),
+                "line {}: {name} is written with its time",
+                i + 1
+            );
+            let opener = lines[..i].iter().rev().find(|l| {
+                let l = l.trim_start();
+                l.contains("synchronized(tapLock)") || l.starts_with("fun ") || l.contains(" fun ")
+            });
+            assert!(
+                opener.is_some_and(|l| l.contains("synchronized(tapLock)")),
+                "line {}: {name} is written under tapLock",
+                i + 1
+            );
+        }
+    }
+    assert_eq!(writes, 6, "three warm stashes and three cold ones");
+}
+
+#[test]
+fn the_bridge_answers_the_page_from_the_shared_stashes() {
+    // Fails if a name the page calls is missing from InsetsBridge, or a tap is read and cleared outside the lock.
+    let kotlin = read(MAIN_ACTIVITY);
+    let bridge = cut(&kotlin, "inner class InsetsBridge {", "\n  }\n");
+    for name in [
+        "consumePendingTap",
+        "consumePendingChannelIf",
+        "consumePendingMentionIf",
+        "consumePendingWhisperIf",
+        "bootNowMs",
+        "isPipClosing",
+    ] {
+        assert!(
+            bridge.contains(&format!("@JavascriptInterface\n    fun {name}(")),
+            "{name} is a bridge method"
+        );
+    }
+    assert!(bridge.contains("fun bootNowMs(): Long = SystemClock.elapsedRealtime()"));
+    assert!(bridge.contains("fun isPipClosing(): Boolean = pipClosedPending"));
+    for name in [
+        "consumePendingChannel",
+        "consumePendingMention",
+        "consumePendingWhisper",
+        "consumePendingTap",
+        "consumePendingChannelIf",
+        "consumePendingMentionIf",
+        "consumePendingWhisperIf",
+    ] {
+        let body = cut(bridge, &format!("fun {name}("), "\n    }\n");
+        assert!(body.contains("synchronized(tapLock)"), "{name} reads under tapLock");
+    }
+}
+
+#[test]
+fn a_dismissed_pip_window_is_marked_before_sn_pip_and_a_finished_owner_clears_the_taps() {
+    // Fails if sn:pip goes out before the dismissal mark, or a finishing activity leaves taps behind.
+    let kotlin = read(MAIN_ACTIVITY);
+    let pip = cut(&kotlin, "override fun onPictureInPictureModeChanged(", "\n  }\n");
+    in_order(
+        pip,
+        &[
+            "val closing = !isInPictureInPictureMode && lifecycle.currentState == Lifecycle.State.CREATED",
+            "if (closing) pipClosedPending = true",
+            "new CustomEvent('sn:pip'",
+            "if (closing) {",
+            "sn:pip-closed",
+        ],
+    );
+    assert_eq!(pip.matches("pipClosedPending = true").count(), 1);
+    let stash = cut(&kotlin, "val coldAt = SystemClock.elapsedRealtime()", "\n    }\n");
+    in_order(stash, &["synchronized(tapLock) {", "owner = this", "if (!restored) {"]);
+    let destroy = cut(&kotlin, "override fun onDestroy() {", "unregisterReceiver(muteReceiver)");
+    in_order(
+        destroy,
+        &[
+            "synchronized(tapLock) {",
+            "if (isFinishing && owner === this) clearTapsLocked()",
+            "if (owner === this) owner = null",
+        ],
+    );
+}
