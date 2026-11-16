@@ -22,3 +22,10 @@ rustflags = ["-C", "strip=debuginfo"]
 
 [target.x86_64-linux-android]
 rustflags = ["-C", "strip=debuginfo"]
+
+# Windows links with rust-lld (ships with Rust) instead of MSVC link.exe: the lib test
+# binary links in ~7.8 s instead of ~11 s, and its time stays steady (link.exe swung
+# 9.7 to 18.8 s). It still uses the MSVC libraries, so the Build Tools stay required.
+# Read only when cargo runs from src-tauri (tauri dev/build and the gates do).
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld.exe"
