@@ -369,7 +369,12 @@ export function useMobileBoot(): void {
         // conversation. Both are posted from Rust (android_notify.rs).
         openMention: (id) => void openMentionById(id),
         openWhisper: (key) => void openWhisperByKey(key),
-        openChannel,
+        // A tapped channel starts a stream like a watch link does, so whatever
+        // would sit over the player closes first.
+        openChannel: (login) => {
+          linkDeps.closeLinkSheet();
+          openChannel(login);
+        },
         onLink: (link) => openInboundLink(link, linkDeps),
         bootNow: bootNowMs,
       });

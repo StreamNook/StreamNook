@@ -335,11 +335,59 @@ describe('the header when the name did not load', () => {
   });
 });
 
+describe('a failed load still has a way out', () => {
+  // Fails if the screen waits for the name lookup alone, leaving the card chips dead when it fails.
+  it('names itself from its own streams when the name lookup failed, and a chip then filters', async () => {
+    records.put('509658', { state: 'failed' });
+    await mount(NAMELESS);
+    await answer('get_streams_by_game', 0, ['a'], null);
+    expect(document.querySelector('h1')?.textContent).toBe('Just Chatting');
+    await click(document.querySelector<HTMLElement>('[data-testid="card-tag"]'));
+    expect(calls('get_streams_by_game_with_tags')).toHaveLength(1);
+  });
+
+  // Fails if a failed streams load under a known name hides the pull hint.
+  it('keeps the pull hint under a failed streams load', async () => {
+    await mount(NAMED);
+    await fail('get_streams_by_game', 0);
+    expect(text()).toContain("Couldn't load streams");
+    expect(text()).toContain('Pull down to refresh.');
+  });
+
+  // Fails if another link to the category retries only the name and leaves the failed list.
+  it('another link to this category loads the failed streams again', async () => {
+    await mount(NAMED);
+    await fail('get_streams_by_game', 0);
+    await act(async () => {
+      useMobileNavStore.getState().openCategoryLink('509658');
+    });
+    await flush();
+    expect(calls()).toHaveLength(2);
+    await answer('get_streams_by_game', 1, ['a'], null);
+    expect(shown()).toEqual(['a']);
+  });
+
+  // Fails if any link bump reloads a list that loaded fine.
+  it('another link leaves a list that loaded fine alone', async () => {
+    await mount(NAMED);
+    await answer('get_streams_by_game', 0, ['a'], null);
+    await act(async () => {
+      useMobileNavStore.getState().openCategoryLink('509658');
+    });
+    await flush();
+    expect(calls()).toHaveLength(1);
+  });
+});
+
 describe('tags wait for the name', () => {
   // Fails if a chip on a card filters by tag while the screen has no name to filter in.
   it('a card chip does nothing while nameless and filters once named', async () => {
     await mount(NAMELESS);
-    await answer('get_streams_by_game', 0, ['a'], null);
+    // Streams of another category name nothing, so the screen stays nameless.
+    await act(async () => {
+      calls()[0].resolve([[{ ...stream('a'), game_id: '1', game_name: 'Other' }], null]);
+    });
+    await flush();
     await click(document.querySelector<HTMLElement>('[data-testid="card-tag"]'));
     expect(calls('get_streams_by_game_with_tags')).toHaveLength(0);
     await act(async () => {

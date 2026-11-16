@@ -160,7 +160,8 @@ describe('links clear what other links set', () => {
 
   // Fails if the category layer stays over Rewards after a badge link.
   it('a badge link after a category link closes the category', () => {
-    nav().openCategoryLink('509658');
+    // Set directly, so the case fails on its own assertion even where openCategoryLink is missing.
+    useMobileNavStore.setState({ browseCategory: { id: '509658', name: '', box_art_url: '' } });
     nav().openBadgeLink('a/1');
     expect(nav().browseCategory).toBeNull();
     expect(nav().activeTab).toBe('rewards');

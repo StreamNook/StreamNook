@@ -370,6 +370,8 @@ describe('shells use the one link door', () => {
     // Fails if the shell holds by a rule the tests do not drive.
     expect(text).toContain('shouldHold: phoneShouldHold,');
     expect(text).toContain('bootNow: bootNowMs,');
+    // Fails if a tapped channel starts its stream under an open sheet.
+    expect(text).toMatch(/openChannel: \(login\) => \{\s*linkDeps\.closeLinkSheet\(\);\s*openChannel\(login\);\s*\}/);
     // Fails if a link can start a stream before the playback listeners exist, or a torn-down boot still drains.
     const order = [
       "'provider-stream-offline'",

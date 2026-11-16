@@ -149,6 +149,12 @@ const CategoryStreamsList: React.FC<{ category: Category }> = ({ category }) => 
       });
       if (!newest()) return;
       setStreams(res[0] ?? []);
+      // A link whose name has not come back still names itself from its own
+      // streams, so the tag chips on the cards work without waiting for it.
+      if (!nameRef.current) {
+        const named = (res[0] ?? []).find((s) => s.game_id === category.id && s.game_name);
+        if (named) fillBrowseCategory(category.id, { id: category.id, name: named.game_name, box_art_url: '' });
+      }
       setCursor(res[1]);
       setHasMore(!!res[1]);
       pageRef.current = { seq, cursor: res[1], hasMore: !!res[1] };
@@ -163,7 +169,7 @@ const CategoryStreamsList: React.FC<{ category: Category }> = ({ category }) => 
     } finally {
       if (newest()) setLoading(false);
     }
-  }, [category.id]);
+  }, [category.id, fillBrowseCategory]);
 
   // One tag-filtered page for generation `gen`; a page for older picks is
   // dropped by the reducer.
@@ -276,6 +282,21 @@ const CategoryStreamsList: React.FC<{ category: Category }> = ({ category }) => 
   useEffect(() => {
     void load();
   }, [load, reloadKey]);
+
+  // Another link to this category is a fresh try at every part that failed,
+  // the streams included, not only the name. Compared with the value seen, so
+  // the first run and a StrictMode second setup do nothing.
+  const linkSheetSeq = useMobileNavStore((s) => s.linkSheetSeq);
+  const seenLinkSeq = useRef(linkSheetSeq);
+  const loadFailedRef = useRef(loadFailed);
+  useEffect(() => {
+    loadFailedRef.current = loadFailed;
+  }, [loadFailed]);
+  useEffect(() => {
+    if (linkSheetSeq === seenLinkSeq.current) return;
+    seenLinkSeq.current = linkSheetSeq;
+    if (loadFailedRef.current) setReloadKey((n) => n + 1);
+  }, [linkSheetSeq]);
 
   // A link opens this screen with the id alone; the screen asks for its name
   // (one ask per id, shared with any other screen showing it) and fills it in
@@ -390,7 +411,10 @@ const CategoryStreamsList: React.FC<{ category: Category }> = ({ category }) => 
           <SkeletonCards />
         ) : listed.length === 0 ? (
           // No such category: the header already says so, once.
-          nameless && recordState === 'missing' && !tagMode ? null : <EmptyNote text={empty} hint={null} />
+          nameless && recordState === 'missing' && !tagMode ? null : (
+            // A failed load keeps its way out: the pull retries it.
+            <EmptyNote text={empty} hint={loadFailed && !tagMode ? undefined : null} />
+          )
         ) : (
           // Was `grid-cols-1 md:grid-cols-2 xl:grid-cols-3`, which is the exact
           // anti-pattern AdaptiveGrid was written for: Tailwind's breakpoints
