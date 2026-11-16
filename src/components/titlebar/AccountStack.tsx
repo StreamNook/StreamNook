@@ -3,25 +3,22 @@
 // The Profile button grew into this: your Twitch picture stays the face, and
 // when more than one platform account is connected their marks fan out beside
 // it, so "Twitch and YouTube" is visible without opening Settings. Only the
-// platform accounts you watch and chat as get a mark. The credentials that
-// serve a feature (drops and channel points, 7TV) live in the flyout alone.
+// platform accounts you watch and chat as get a mark. 7TV, a credential that
+// serves a feature, lives in the flyout alone. The Drops approval is not shown
+// at all: Twitch sign-in asks for it, and whatever needs it asks in place.
 //
 // Everything shown comes from the roster Rust builds (services/account_roster.rs)
 // and pushes on change; nothing here decides who is connected.
 //
 // Hovering opens the flyout; clicking goes straight to Settings > Profile, as
 // the Profile button always did. Connect flows are never run from here except
-// the drops sign-in, which was already a one-click action in this bar, and the
-// Twitch sign-in StreamNook itself asked for: while Rust holds a reason for it,
-// the button says "Sign in again" and a click starts the normal Twitch sign-in.
+// the Twitch sign-in StreamNook itself asked for: while Rust holds a reason for
+// it, the button says "Sign in again" and a click starts the normal sign-in.
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import { User } from 'lucide-react';
-import { Package } from 'phosphor-react';
-import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
 import { useAppStore } from '../../stores/AppStore';
 import { useAccountRosterStore, type RosterAccount } from '../../stores/accountRosterStore';
 import { ProviderMark } from '../ProviderLogo';
@@ -29,7 +26,6 @@ import { SevenTVLogo } from '../emotesets/SevenTVLogo';
 import { providerLabel } from '../../types/providers';
 import { deckGeometry } from '../../utils/markDeck';
 import { signInReasonText, twitchSignInReason } from '../../utils/twitchSignIn';
-import { Logger } from '../../utils/logger';
 import { SevenTvAvatar } from '../SevenTvAvatar';
 import { sevenTvIdForStream } from '../../services/sevenTvPictures';
 
@@ -85,7 +81,6 @@ function RowAction({ label, onClick, disabled }: { label: string; onClick: () =>
 export default function AccountStack() {
   const roster = useAccountRosterStore((s) => s.roster);
   const openSettings = useAppStore((s) => s.openSettings);
-  const addToast = useAppStore((s) => s.addToast);
   const loginToTwitch = useAppStore((s) => s.loginToTwitch);
   // The picture already on screen before the roster's first read lands, so the
   // face never blinks to a placeholder at boot.
@@ -94,7 +89,6 @@ export default function AccountStack() {
 
   const [open, setOpen] = useState(false);
   const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
-  const [dropsSigningIn, setDropsSigningIn] = useState(false);
   const anchorRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -126,43 +120,6 @@ export default function AccountStack() {
     return () => window.removeEventListener('resize', reposition);
   }, [open]);
 
-  // The drops sign-in reports its outcome as an event, not as the call's result.
-  useEffect(() => {
-    const uns: Array<() => void> = [];
-    let disposed = false;
-    const keep = (u: () => void) => (disposed ? u() : uns.push(u));
-    void listen('drops-login-complete', () => {
-      setDropsSigningIn(false);
-      addToast('Signed in. Drops and channel points are on', 'success');
-    }).then(keep);
-    void listen<string>('drops-login-error', (e) => {
-      setDropsSigningIn(false);
-      Logger.error('[AccountStack] Drops login failed:', e.payload);
-      addToast(`Drops sign-in failed: ${e.payload}`, 'error');
-    }).then(keep);
-    return () => {
-      disposed = true;
-      uns.forEach((u) => u());
-    };
-  }, [addToast]);
-
-  const startDropsLogin = useCallback(async () => {
-    if (dropsSigningIn) return;
-    setDropsSigningIn(true);
-    try {
-      // Rust opens Twitch's approval in the overlay, bound to the active
-      // account's web profile, so it reuses the main login's twitch.tv session.
-      // The outcome toast comes from the events above; a closed overlay only
-      // hands the button back.
-      await invoke<boolean>('connect_twitch_approval');
-      setDropsSigningIn(false);
-    } catch (e) {
-      Logger.error('[AccountStack] Drops login failed:', e);
-      addToast(`Drops sign-in failed: ${e instanceof Error ? e.message : String(e)}`, 'error');
-      setDropsSigningIn(false);
-    }
-  }, [dropsSigningIn, addToast]);
-
   const goToAccounts = () => {
     cancelClose();
     setOpen(false);
@@ -181,10 +138,11 @@ export default function AccountStack() {
   };
 
   const main = roster?.main ?? [];
-  const extras = roster?.extras ?? [];
+  // The Drops approval rides Twitch sign-in and is asked for in place, so it
+  // is never a row of its own.
+  const extras = (roster?.extras ?? []).filter((a) => a.id !== 'twitch_drops');
   const twitch = main.find((a) => a.id === 'twitch');
   const connectedMain = main.filter((a) => a.status === 'connected');
-  const twitchConnected = twitch ? twitch.status === 'connected' : !!fallbackAvatar;
   const avatar = twitch?.status === 'connected' ? twitch.avatar_url : fallbackAvatar;
   // StreamNook signed you out of Twitch itself and Rust says why.
   const signInReason = twitchSignInReason(roster);
@@ -201,10 +159,7 @@ export default function AccountStack() {
         : fallbackId
       : accountSevenTvId(connectedMain[0]);
 
-  const drops = extras.find((a) => a.id === 'twitch_drops');
-  const anyExpired = main.some((a) => a.status === 'expired');
-  const dropsMissing = twitchConnected && drops?.status === 'not_connected';
-  const needsAttention = anyExpired || dropsMissing;
+  const needsAttention = main.some((a) => a.status === 'expired');
 
   const tooltip = signInReason
     ? signInReasonText(signInReason)
@@ -375,36 +330,20 @@ export default function AccountStack() {
                 >
                   {extras.map((a) => {
                     const connected = a.status === 'connected';
-                    const isDrops = a.id === 'twitch_drops';
                     return (
                       <div key={a.id} role="menuitem" className="flex items-center gap-2.5 px-2.5 py-[6px]">
                         <span className="flex h-3 w-3 flex-shrink-0 items-center justify-center text-textSecondary">
-                          {isDrops ? <Package size={12} /> : <SevenTVLogo className="h-[9px] w-auto text-[#29b6f6]" />}
+                          <SevenTVLogo className="h-[9px] w-auto text-[#29b6f6]" />
                         </span>
                         <span className="w-[18px] flex-shrink-0" aria-hidden />
                         <span className="min-w-0 flex-1 truncate text-[11.5px] leading-[15px] text-textSecondary">
-                          {isDrops ? 'Drops & points' : '7TV'}
+                          7TV
                         </span>
                         {connected ? (
                           <span className="flex flex-shrink-0 items-center gap-1.5 text-[10.5px] leading-none text-textMuted">
                             <StatusDot tone="ok" />
                             On
                           </span>
-                        ) : isDrops ? (
-                          // Drops ride the main Twitch login; without one there
-                          // is nothing to authorize yet.
-                          twitchConnected ? (
-                            <>
-                              <StatusDot tone="warn" />
-                              <RowAction
-                                label={dropsSigningIn ? 'Signing in…' : 'Sign in'}
-                                onClick={() => void startDropsLogin()}
-                                disabled={dropsSigningIn}
-                              />
-                            </>
-                          ) : (
-                            <span className="flex-shrink-0 text-[10.5px] leading-none text-textMuted">Off</span>
-                          )
                         ) : (
                           <RowAction label="Connect" onClick={goToProfile} />
                         )}

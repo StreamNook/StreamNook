@@ -669,6 +669,7 @@ allow = [
   "external_cosmetics_state",
   "get_client_config",
   "get_drops_overview",
+  "get_cached_drops_overview",
   "get_rewards_drops",
   "get_watch_drop",
   "get_watch_drops",

@@ -34,6 +34,7 @@ import { setActiveCosmetic, setProfileTheme, setChatAtmosphere } from '../../ser
 import { getAtmosphere } from '../../services/atmospheres';
 import { CosmeticArt } from '../../components/CosmeticArt';
 import { Logger } from '../../utils/logger';
+import { isApprovalClosed } from '../../utils/twitchApproval';
 import type {
   ChatIdentityBadge,
   ExternalPickerView,
@@ -162,6 +163,22 @@ export const CosmeticsScreen: React.FC = () => {
   const [localPicture, setLocalPicture] = useState<string | null>(null);
   const [draftName, setDraftName] = useState<string | null>(null);
   const [openSections, setOpenSections] = useState<Set<string>>(new Set());
+  const [approvingBadge, setApprovingBadge] = useState(false);
+  // The Twitch badge list needs the Drops approval; ask for it, then read the
+  // picker again so the badges you can wear replace the read-only row.
+  const approveTwitchBadge = async () => {
+    if (approvingBadge || !userId) return;
+    setApprovingBadge(true);
+    try {
+      if (await invoke<boolean>('connect_twitch_approval')) {
+        await usePicksStore.getState().loadPicks({ userId, login, displayName });
+      }
+    } catch (err) {
+      Logger.warn('[EditProfile] Twitch approval failed:', err);
+    } finally {
+      setApprovingBadge(false);
+    }
+  };
   const [wasOpen, setWasOpen] = useState(open);
   if (wasOpen !== open) {
     setWasOpen(open);
@@ -321,14 +338,11 @@ export const CosmeticsScreen: React.FC = () => {
     try {
       await invoke('update_chat_identity_gql', { badgeId: badge.id, badgeVersion: badge.version });
     } catch (err) {
-      Logger.error('[EditProfile] Twitch badge write failed:', err);
       setExt(before);
-      addToast(
-        errorText(err).includes('NEEDS_DROPS_AUTH')
-          ? 'Sign in to Drops to change your Twitch badge.'
-          : 'Could not equip that badge.',
-        'error',
-      );
+      // Rust asks Twitch for the approval itself; a closed sheet is a quiet cancel.
+      if (isApprovalClosed(err)) return;
+      Logger.error('[EditProfile] Twitch badge write failed:', err);
+      addToast('Could not equip that badge.', 'error');
     }
   };
 
@@ -653,10 +667,18 @@ export const CosmeticsScreen: React.FC = () => {
                       />
                     ))}
                   </div>
+                  {/* Choosing needs Twitch's Drops approval, which rides the
+                      Twitch sign-in: asked here, in place, then the list
+                      reads again with the badges you can wear. */}
                   {!ext.drops_signed_in && (
-                    <div className="text-[12.5px] text-textSecondary mt-2.5">
-                      Sign in to Drops to choose which badge you wear.
-                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void approveTwitchBadge()}
+                      disabled={approvingBadge}
+                      className="sn-touch mt-2.5 text-[12.5px] font-semibold text-accent disabled:opacity-60"
+                    >
+                      {approvingBadge ? 'Waiting for Twitch…' : 'Choose which badge you wear'}
+                    </button>
                   )}
                 </div>
               </>

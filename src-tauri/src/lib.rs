@@ -434,6 +434,9 @@ mod platform;
 mod plugin_host;
 pub mod rt;
 mod services;
+// The source-text checks in tests/, run in this crate's own test binary (see the file).
+#[cfg(test)]
+mod source_pins;
 #[cfg(target_os = "android")]
 mod speech_plugin;
 #[cfg(target_os = "android")]
@@ -1731,6 +1734,11 @@ pub fn run() {
             // Drops progress for the channel being earned on: one model for
             // every surface, and the app's one inventory reader.
             services::watch_drops::start(app_handle.clone());
+            // The Drops page's model, built once a little after start-up so
+            // the page's first open draws at once instead of on a spinner.
+            // Desktop only: the phones' Drops segment has its own model.
+            #[cfg(desktop)]
+            commands::drops::warm_drops_overview(app_handle.clone());
 
             // Discord Rich Presence reads the switch and the style from AppState.
             #[cfg(desktop)]
@@ -2897,6 +2905,7 @@ pub fn run() {
             get_client_config,
             // Drops page model
             get_drops_overview,
+            get_cached_drops_overview,
             // The phones' Rewards tab, Drops segment
             get_rewards_drops,
             // The phones' in-player drop bar

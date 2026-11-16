@@ -418,17 +418,24 @@ pub async fn fetch_chat_identity_badges_gql(
 }
 
 /// Wear a global badge. `badge_version` comes back with the badge from the fetch.
+/// Without the Drops approval it asks for it in the sign-in sheet and tries
+/// once more (`twitch_approval::run`); a closed sheet answers `APPROVAL_CLOSED`.
 #[cfg(mobile)]
 #[tauri::command]
 pub async fn update_chat_identity_gql(
     badge_id: String,
     badge_version: String,
 ) -> Result<(), String> {
-    if try_gql_badge_update(&badge_id, &badge_version).await? {
-        Ok(())
-    } else {
-        Err("NEEDS_DROPS_AUTH".to_string())
-    }
+    use crate::services::twitch_approval::{run, NEEDS_DROPS_AUTH};
+    let (id, version) = (badge_id.as_str(), badge_version.as_str());
+    run(|| async move {
+        match try_gql_badge_update(id, version).await {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(anyhow::anyhow!(NEEDS_DROPS_AUTH)),
+            Err(e) => Err(anyhow::anyhow!(e)),
+        }
+    })
+    .await
 }
 
 /// Result of setting a badge

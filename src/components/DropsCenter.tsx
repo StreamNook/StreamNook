@@ -18,7 +18,6 @@ import GameCard from './drops/GameCard';
 import GameDetailPanel from './drops/GameDetailPanel';
 import DropsStatsTab from './drops/DropsStatsTab';
 import DropsInventoryTab from './drops/DropsInventoryTab';
-import { Tooltip } from './ui/Tooltip';
 
 import { Logger } from '../utils/logger';
 import { stopArgs, stopToast } from '../utils/dropsStop';
@@ -31,6 +30,14 @@ const TwitchIcon = ({ size = 20 }: { size?: number }) => (
 );
 
 type Tab = 'games' | 'inventory' | 'stats' | 'settings';
+
+/** The Drops approval was asked for on open this run. */
+let approvalAskedThisRun = false;
+
+/** Overview reads numbered as they start, and the newest one drawn. Module
+ *  scope: one Drops page at a time, and the numbers only ever grow, so a new
+ *  open's reads always outrank an old one's. */
+const overviewReads = { started: 0, drawn: 0 };
 
 interface DropsSettings {
     auto_claim_drops: boolean;
@@ -114,7 +121,8 @@ export default function DropsCenter() {
     const [showCompletedGames, setShowCompletedGames] = useState(false);
     const [selectedGame, setSelectedGame] = useState<UnifiedGame | null>(null);
     const [, setIsLoadingGameDetail] = useState(false);
-    const { addToast, setShowDropsOverlay, dropsSearchTerm, setDropsSearchTerm } = useAppStore();
+    const { addToast, setShowDropsOverlay, dropsSearchTerm, setDropsSearchTerm, loginToTwitch } = useAppStore();
+    const twitchSignedIn = useAppStore((s) => s.isAuthenticated);
     
 
 
@@ -122,6 +130,7 @@ export default function DropsCenter() {
 
     // Settings State
     const [dropsSettings, setDropsSettings] = useState<DropsSettings | null>(null);
+    const [modelFavorites, setModelFavorites] = useState<string[]>([]);
 
     // Ref for the games container to scroll to top when automation starts
     const gamesContainerRef = useRef<HTMLDivElement>(null);
@@ -131,7 +140,9 @@ export default function DropsCenter() {
 
     // Derived state for filtering AND sorting (favorites first)
     const filteredGames = useMemo(() => {
-        const favoriteGames = dropsSettings?.favorite_games || [];
+        // Until the settings read lands, the model's own copy keeps
+        // favourites first, so the grid never reshuffles after it draws.
+        const favoriteGames = dropsSettings?.favorite_games || modelFavorites;
         // The actively-automation game pins above everything, even favorites: it's
         // the one thing happening right now. Derived straight from live
         // dropProgress so a reopened overlay restores the pin immediately,
@@ -207,7 +218,19 @@ export default function DropsCenter() {
             }
             return a.name.localeCompare(b.name);
         });
-    }, [unifiedGames, searchTerm, dropsSettings?.favorite_games, sortMode, dropProgress, showAllDrops]);
+    }, [unifiedGames, searchTerm, dropsSettings?.favorite_games, modelFavorites, sortMode, dropProgress, showAllDrops]);
+
+    // Overview reads in flight can answer out of order (a slow background
+    // refresh landing after a claim's rebuild would put the claimed reward
+    // back), so each is numbered as it starts and an answer older than one
+    // already drawn is dropped (counters in `overviewReads`, module scope).
+    const fetchOverview = async (reuseCampaigns: boolean): Promise<DropsOverview | null> => {
+        const seq = ++overviewReads.started;
+        const overview = await invoke<DropsOverview>('get_drops_overview', { reuseCampaigns });
+        if (seq < overviewReads.drawn) return null;
+        overviewReads.drawn = seq;
+        return overview;
+    };
 
     // Take the Drops model Rust built (services/drops_overview.rs). The open
     // detail panel holds a snapshot of one game, so it is re-picked by id.
@@ -221,6 +244,7 @@ export default function DropsCenter() {
         setEarnedBadgeTitles(new Set(overview.earned_badge_titles));
         setKnownBadgeTitles(new Set(overview.known_badge_titles));
         setLockedDrops(overview.locked_drops ?? {});
+        if (overview.favorite_games) setModelFavorites(overview.favorite_games);
         setUnifiedGames(overview.games);
         setSelectedGame(prev => (prev ? overview.games.find(g => g.id === prev.id) ?? prev : prev));
     };
@@ -257,19 +281,6 @@ export default function DropsCenter() {
         }
     };
 
-    const handleDropsLogout = async () => {
-        try {
-            await invoke('drops_logout');
-            setIsAuthenticated(false);
-            setUnifiedGames([]);
-            setProgress([]);
-            setStatistics(null);
-            setSelectedGame(null);
-        } catch (err) {
-            Logger.error('Failed to logout from drops:', err);
-        }
-    };
-
     // ---- Action Handlers ----
     const handleClaimDrop = async (dropId: string, dropInstanceId?: string) => {
         try {
@@ -283,7 +294,8 @@ export default function DropsCenter() {
             // A claim only moves a reward into your inventory, so the model is
             // rebuilt from the CACHED campaigns: re-fetching them would reset the
             // backend's live progress map and snap the title-bar progress back.
-            applyOverview(await invoke<DropsOverview>('get_drops_overview', { reuseCampaigns: true }));
+            const overview = await fetchOverview(true);
+            if (overview) applyOverview(overview);
         } catch (err) {
             Logger.error('Failed to claim drop:', err);
             addToast('Failed to claim drop', 'error');
@@ -421,7 +433,8 @@ export default function DropsCenter() {
 
         try {
             // Fresh inventory, rebuilt into the model without re-fetching campaigns.
-            applyOverview(await invoke<DropsOverview>('get_drops_overview', { reuseCampaigns: true }));
+            const overview = await fetchOverview(true);
+            if (overview) applyOverview(overview);
         } catch (err) {
             Logger.error('[DropsCenter] Failed to fetch inventory for game:', err);
             // Don't show error toast - we still show the panel with cached data
@@ -517,22 +530,26 @@ export default function DropsCenter() {
 
 
     // ---- Data Loading & Merging Logic ----
-    const loadDropsData = async () => {
+    // `quiet` refreshes behind what is already drawn (the last model Rust
+    // kept), so an open never sits on the spinner while Twitch is read.
+    const loadDropsData = async (quiet = false) => {
         try {
-            setIsLoading(true);
+            if (!quiet) setIsLoading(true);
             setError(null);
 
             // Rust loads campaigns first (that load refreshes its live progress
             // map), then statistics, inventory and progress, and joins them. It
             // also announces new campaigns in favourite games.
-            const overview = await invoke<DropsOverview>('get_drops_overview', { reuseCampaigns: false });
+            const overview = await fetchOverview(false);
+            if (!overview) return;
 
             // Seed automation status from the bridge-cached live status: a plugin
             // powering automation reports through the bridge into the store and keeps
             // it there even while this overlay is closed, so a reopened overlay
-            // immediately shows what is being collected.
+            // immediately shows what is being collected. A quiet refresh skips it:
+            // the page seeded it on open and live pushes have moved it on since.
             const liveStatus = useAppStore.getState().liveDropProgress;
-            if (liveStatus) {
+            if (liveStatus && !quiet) {
                 setDropProgress(liveStatus);
             }
             applyOverview(overview);
@@ -552,7 +569,6 @@ export default function DropsCenter() {
             setIsAuthenticating(false);
             setIsAuthenticated(true);
             setError(null);
-            addToast('Drops login successful!', 'success');
             void loadDropsData();
         }).then((u) => uns.push(u));
         listen<string>('drops-login-error', (e) => {
@@ -567,21 +583,40 @@ export default function DropsCenter() {
     // ---- Effects ----
     useEffect(() => {
         const init = async () => {
+            // Seed from the bridge-cached live status (a plugin automation),
+            // so reopening mid-automation shows it.
+            const liveStatus = useAppStore.getState().liveDropProgress;
+            if (liveStatus) setDropProgress(liveStatus);
+            // Settings only order the grid (favourites), so they never hold
+            // the page up.
+            invoke<DropsSettings>('get_drops_settings')
+                .then(setDropsSettings)
+                .catch((e) => Logger.error(e));
+
+            // The last model Rust built for this Drops sign-in draws at once;
+            // the fresh read replaces it when it lands.
+            const cached = await invoke<DropsOverview | null>('get_cached_drops_overview').catch(() => null);
+            if (cached) {
+                setIsAuthenticated(true);
+                applyOverview(cached);
+                setIsLoading(false);
+                void loadDropsData(true);
+                return;
+            }
+
             const auth = await checkAuthentication();
             if (auth) {
-                try {
-                    // Seed from the bridge-cached live status (a plugin automation),
-                    // so reopening mid-automation shows it.
-                    const liveStatus = useAppStore.getState().liveDropProgress;
-                    if (liveStatus) setDropProgress(liveStatus);
-                    const settings = await invoke<DropsSettings>('get_drops_settings');
-                    setDropsSettings(settings);
-                } catch (e) {
-                    Logger.error(e);
-                }
                 await loadDropsData();
             } else {
                 setIsLoading(false);
+                // Twitch's Drops approval rides the Twitch sign-in, so it is
+                // asked for right here rather than behind a sign-in screen. An
+                // account that approved before passes straight through. Once a
+                // run, so closing it is never answered by reopening it.
+                if (useAppStore.getState().isAuthenticated && !approvalAskedThisRun) {
+                    approvalAskedThisRun = true;
+                    void startDropsLogin();
+                }
             }
         };
         init();
@@ -735,58 +770,36 @@ export default function DropsCenter() {
                             </div>
                         </div>
 
-                        {/* Title & Description */}
+                        {/* Title & Description. Drops ride the Twitch sign-in:
+                            signed out, the one action is that sign-in (which
+                            asks for the Drops approval itself); signed in, the
+                            approval was already asked for on open, so this
+                            only shows while it is up or after it was closed. */}
                         <div className="space-y-3 mb-8">
                             <h2 className="text-3xl font-bold text-textPrimary">Drops Center</h2>
                             <p className="text-textSecondary text-base leading-relaxed">
-                                Connect your Twitch account to unlock automatic drop automation, campaign tracking, and reward collection.
+                                {!twitchSignedIn
+                                    ? 'Sign in with Twitch to track drops and collect rewards while you watch.'
+                                    : isAuthenticating
+                                        ? 'Approve StreamNook on Twitch and your drops show up here.'
+                                        : 'Twitch asks once before StreamNook can track your drops.'}
                             </p>
                         </div>
 
-                        {/* Features preview - what users get */}
-                        <div className="grid grid-cols-3 gap-4 mb-8 py-4 border-y border-borderLight/50">
-                            <div className="text-center">
-                                <div className="text-accent font-semibold text-lg">Auto</div>
-                                <div className="text-textSecondary text-xs">Earning</div>
+                        {isAuthenticating ? (
+                            <div className="flex items-center justify-center gap-2 text-textSecondary text-sm">
+                                <div className="w-2 h-2 bg-accent rounded-full animate-pulse sn-decor" />
+                                <span>Waiting for Twitch</span>
                             </div>
-                            <div className="text-center border-x border-borderLight/50">
-                                <div className="text-accent font-semibold text-lg">Track</div>
-                                <div className="text-textSecondary text-xs">Progress</div>
-                            </div>
-                            <div className="text-center">
-                                <div className="text-accent font-semibold text-lg">Claim</div>
-                                <div className="text-textSecondary text-xs">Rewards</div>
-                            </div>
-                        </div>
-
-                        {/* Authorization in progress */}
-                        {isAuthenticating && (
-                            <div className="mb-6 p-6 bg-accent/5 rounded-xl border border-accent/30 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                                <p className="text-sm text-textSecondary">
-                                    Approve the request on Twitch to turn on drops and channel points.
-                                </p>
-                                <div className="flex items-center justify-center gap-2 mt-4 text-textSecondary text-sm">
-                                    <div className="w-2 h-2 bg-accent rounded-full animate-pulse sn-decor" />
-                                    <span>Waiting for authorization...</span>
-                                </div>
-                            </div>
-                        )}
-
-                        {/* Login Button */}
-                        {!isAuthenticating && (
+                        ) : (
                             <button
-                                onClick={startDropsLogin}
+                                onClick={twitchSignedIn ? startDropsLogin : () => void loginToTwitch()}
                                 className="w-full px-8 py-4 bg-[#9146FF] hover:bg-[#7c3aed] text-white rounded-xl transition-all duration-200 font-semibold flex items-center justify-center gap-3 shadow-lg shadow-[#9146FF]/25 hover:shadow-[#9146FF]/40 hover:scale-[1.02] active:scale-[0.98]"
                             >
                                 <TwitchIcon size={22} />
-                                <span className="text-base">Connect with Twitch</span>
+                                <span className="text-base">{twitchSignedIn ? 'Approve on Twitch' : 'Sign in with Twitch'}</span>
                             </button>
                         )}
-
-                        {/* Info note */}
-                        <p className="mt-6 text-xs text-textSecondary/70">
-                            Uses Twitch's Android app authentication for drop compatibility
-                        </p>
                     </div>
                 </div>
             </div>
@@ -897,19 +910,10 @@ export default function DropsCenter() {
                 </div>
                 </LayoutGroup>
 
-                {/* Account-level logout stays in the tab header (tab-independent);
-                    the games browsing controls live in their own toolbar row below,
-                    so a descriptive filter label never crowds the centered tabs. */}
-                <div className="absolute right-4 flex items-center gap-3">
-                    <Tooltip content="Logout from Drops (Android Client)" side="bottom">
-                        <button
-                            className="px-3 py-1.5 text-xs font-medium rounded-lg glass-panel text-textSecondary hover:text-red-400 hover:bg-red-500/10 hover:border-red-500/30 border border-transparent transition-all"
-                            onClick={handleDropsLogout}
-                        >
-                            Logout
-                        </button>
-                    </Tooltip>
-                </div>
+                {/* No sign-out here: the Drops approval rides the Twitch
+                    sign-in, and signing out of Twitch removes it. The games
+                    browsing controls live in their own toolbar row below, so a
+                    descriptive filter label never crowds the centered tabs. */}
             </div>
 
             {/* Games browsing toolbar: filter + sort on the left, search on the

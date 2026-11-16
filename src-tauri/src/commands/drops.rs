@@ -23,8 +23,45 @@ pub async fn get_drops_overview(
     state: State<'_, AppState>,
     reuse_campaigns: bool,
 ) -> Result<crate::services::drops_overview::DropsOverview, String> {
+    Ok(build_drops_overview(&app, &state, reuse_campaigns, !reuse_campaigns).await)
+}
+
+/// The last Drops page model built for this Drops sign-in, at any age, or None
+/// before the first. Answers at once (no drops lock, no network): the page
+/// draws it on open and calls `get_drops_overview` behind it for fresh numbers.
+#[tauri::command]
+pub fn get_cached_drops_overview() -> Option<crate::services::drops_overview::DropsOverview> {
+    crate::services::drops_overview::last()
+}
+
+/// Build the Drops page model a little after start-up, so even the first open
+/// of the Drops page draws at once. Quiet: no new-campaign announcements (the
+/// page's own read makes those), and nothing at all without a Drops sign-in.
+#[cfg(desktop)]
+pub fn warm_drops_overview(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        // Off the start-up path: chat, the player and Home come first.
+        tokio::time::sleep(std::time::Duration::from_secs(45)).await;
+        if crate::services::drops_overview::last().is_some() || !DropsAuthService::is_authenticated().await {
+            return;
+        }
+        let Some(state) = app.try_state::<AppState>() else { return };
+        let _ = build_drops_overview(&app, &state, false, false).await;
+    });
+}
+
+/// The Drops page model, kept as the one the page opens on next time.
+/// `announce` posts new campaigns in favourite games (the page's own reads).
+pub(crate) async fn build_drops_overview(
+    app: &AppHandle,
+    state: &AppState,
+    reuse_campaigns: bool,
+    announce: bool,
+) -> crate::services::drops_overview::DropsOverview {
     use crate::services::drops_overview;
 
+    let epoch = DropsAuthService::token_epoch();
+    let seq = drops_overview::next_build();
     let started = std::time::Instant::now();
     let gather = async {
         let drops_service = state.drops_service.lock().await;
@@ -37,15 +74,20 @@ pub async fn get_drops_overview(
         // Campaigns and inventory are independent reads; fetch them together.
         let campaigns = async {
             match cached {
-                Some(campaigns) => campaigns,
-                None => drops_service
-                    .get_all_active_campaigns_cached()
-                    .await
-                    .unwrap_or_default(),
+                Some(campaigns) => Some(campaigns),
+                None => match drops_service.get_all_active_campaigns_cached().await {
+                    Ok(campaigns) => Some(campaigns),
+                    Err(e) => {
+                        log::warn!("[Drops] overview: campaign list failed: {}", e);
+                        None
+                    }
+                },
             }
         };
         let (campaigns, inventory) = tokio::join!(campaigns, drops_service.fetch_inventory());
-        let inventory = inventory.ok();
+        let inventory = inventory
+            .map_err(|e| log::warn!("[Drops] overview: inventory failed: {}", e))
+            .ok();
         let statistics = Some(drops_service.get_statistics().await);
         let progress = drops_service.get_drop_progress().await;
         let favorites = drops_service.get_settings().await.favorite_games;
@@ -56,7 +98,7 @@ pub async fn get_drops_overview(
     let ((campaigns, statistics, inventory, progress, favorites, locked_ms), known, locked) = tokio::join!(
         gather,
         drops_overview::badge_titles(),
-        crate::services::evolution::locked_stages(&app)
+        crate::services::evolution::locked_stages(app)
     );
     log::debug!(
         "[Drops] overview in {} ms (waited {} ms for the drops lock)",
@@ -64,16 +106,32 @@ pub async fn get_drops_overview(
         locked_ms
     );
 
-    let overview = drops_overview::overview(&campaigns, progress, inventory, statistics, known, &locked);
-    if !reuse_campaigns {
-        let announce = state
+    // A read that failed (Twitch hiccup, offline) is not the page's new truth:
+    // the last whole model stays, so a refresh never blanks the page, is never
+    // kept for the next open, and never resets the favourites' seen list (an
+    // empty list there made the next good read announce every campaign).
+    let complete = campaigns.is_some() && inventory.is_some();
+    if !complete {
+        if let Some(last) = drops_overview::last() {
+            return last;
+        }
+    }
+    let campaigns = campaigns.unwrap_or_default();
+    let mut overview = drops_overview::overview(&campaigns, progress, inventory, statistics, known, &locked);
+    overview.favorite_games = favorites.clone();
+    if !complete {
+        return overview;
+    }
+    if announce {
+        let show = state
             .settings
             .lock()
             .map(|s| s.live_notifications.show_favorite_drops_notifications)
             .unwrap_or(false);
-        drops_overview::announce_new_favorite_campaigns(&app, &overview.games, &favorites, announce);
+        drops_overview::announce_new_favorite_campaigns(app, &overview.games, &favorites, show);
     }
-    Ok(overview)
+    drops_overview::remember(epoch, seq, &overview);
+    overview
 }
 
 /// The phones' Drops segment (services/rewards_drops.rs): in progress,

@@ -117,6 +117,9 @@ const GameGroupSection: React.FC<{
   </div>
 );
 
+/** The Drops approval was asked for on open this run (RewardsScreen). */
+let approvalAskedThisRun = false;
+
 const wordColor = (tile: BadgeTile) =>
   tile.owned
     ? 'text-accent'
@@ -342,9 +345,6 @@ export const RewardsScreen: React.FC = () => {
     };
   }, [badgeSort]);
 
-  // Twitch's approval in the in-app login sheet, driven from Rust
-  // (connect_twitch_approval): the sheet opens on the authorize page, Rust
-  // collects and stores the grant, and closes the sheet. The page never sees
   // A streamnook:///badge/... link (navStore.openBadgeLink) sets `badgeLinkKey`.
   // The link reads Rust directly with a fresh Twitch list (never through the
   // gallery store, whose newest-request-wins rule it must not disturb), then
@@ -388,17 +388,17 @@ export const RewardsScreen: React.FC = () => {
     })();
   }, [badgeLinkKey, addToast]);
 
+  // Twitch's approval in the in-app login sheet, driven from Rust
+  // (connect_twitch_approval): the sheet opens on the authorize page, Rust
+  // collects and stores the grant, and closes the sheet. The page never sees
   // the token. Follow asks for the same approval, so it may already be done.
+  // Closing the sheet is a quiet cancel; the card offers it again.
   const connect = async () => {
     setConnecting(true);
     setConnectError(null);
     try {
-      if (!(await invoke<boolean>('connect_twitch_approval'))) {
-        setConnectError('Sign-in was closed before Twitch approved drops.');
-        return;
-      }
       // The reload rides on drops-login-complete (the listener below).
-      addToast('Drops connected!', 'success');
+      await invoke<boolean>('connect_twitch_approval');
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       Logger.error('[Rewards] drops connect failed:', err);
@@ -408,6 +408,18 @@ export const RewardsScreen: React.FC = () => {
       setConnecting(false);
     }
   };
+
+  // Opening Drops without the approval asks for it right there, once a run:
+  // the card stays for anyone who closed the sheet, and it never reopens on
+  // every visit.
+  useEffect(() => {
+    if (tab !== 'drops' || drops?.connected !== false || approvalAskedThisRun) return;
+    // Signed out of Twitch, Twitch's page would ask for a whole sign-in.
+    if (!useAppStore.getState().isAuthenticated) return;
+    approvalAskedThisRun = true;
+    queueMicrotask(() => void connect());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, drops?.connected]);
 
   const openMissing = (key: string) => {
     const tile = wall?.tiles.find((t) => t.keys.includes(key));
@@ -523,14 +535,14 @@ export const RewardsScreen: React.FC = () => {
                 <span className="text-[15px] font-semibold text-textPrimary">Twitch Drops</span>
               </div>
               <p className="text-[13px] text-textSecondary mb-3 leading-relaxed">
-                Connect drops to track campaign progress and earn while you watch.
+                Twitch asks once before StreamNook can track your drops.
               </p>
               <button
                 onClick={() => void connect()}
                 disabled={connecting}
                 className="glass-button sn-touch w-full text-[14px] font-semibold text-textPrimary disabled:opacity-60 flex items-center justify-center gap-1.5"
               >
-                {connecting ? 'Approve on Twitch…' : 'Connect drops'}
+                {connecting ? 'Waiting for Twitch…' : 'Approve on Twitch'}
                 {!connecting && <ArrowSquareOut size={15} />}
               </button>
               {connectError && (

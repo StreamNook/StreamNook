@@ -2752,6 +2752,9 @@ export interface DropsOverview {
   /** Rewards this account cannot earn yet (an evolution stage whose earlier
    *  form is not held), by drop id: "Needs the Gastly badge first". */
   locked_drops: Record<string, string>;
+  /** The favourite games when it was built: the grid's favourites-first sort
+   *  before the page's own settings read lands. */
+  favorite_games?: string[];
 }
 
 // Drops inventory types

@@ -5,7 +5,6 @@ import {
     ChevronLeft,
     Loader2,
     User,
-    Package,
     AlertCircle,
     CheckCircle2,
     Palette,
@@ -49,7 +48,13 @@ const STEP_EASE: [number, number, number, number] = [0.16, 1, 0.3, 1];
 const STEP_DURATION = 0.4;
 const STEP_COUNT = 8;
 
-// Steps that configure or use something a phone does not have.
+// Steps no platform shows any more:
+//
+//  3 - the separate Drops sign-in. Twitch sign-in asks for the Drops approval
+//      itself (AppStore.loginToTwitch -> connect_twitch_approval), and anything
+//      that needs it later asks in place, so a step of its own only repeated it.
+//
+// Steps that configure or use something a phone does not have:
 //
 //  5 - sidebar mode. The Sidebar is gated off mobile entirely, so the step asks
 //      about a surface that never renders.
@@ -64,21 +69,21 @@ const STEP_COUNT = 8;
 // Rust offers none, and desktop also asks there where they show (Dynamic
 // Island, toasts or both).
 //
-// MODULE SCOPE ON PURPOSE. These were declared inside the component, below
-// handleDropsLogin, which meant a caller earlier in the body could not use them
-// without relying on closure timing - and the one place that needed it hardcoded
-// a literal step number instead, routing around the skip entirely and landing
-// Android on a skipped step. Any new step transition must go through these.
-const MOBILE_SKIPPED_STEPS = new Set([5]);
+// MODULE SCOPE ON PURPOSE. These were declared inside the component, which
+// meant a caller earlier in the body could not use them without relying on
+// closure timing - and the one place that needed it hardcoded a literal step
+// number instead, routing around the skip entirely and landing Android on a
+// skipped step. Any new step transition must go through these.
+const SKIPPED_STEPS = new Set(IS_MOBILE ? [3, 5] : [3]);
 const NOTIFICATION_STEP = 6;
-const stepAfter = (s: number, skipped: Set<number> = MOBILE_SKIPPED_STEPS): number => {
+const stepAfter = (s: number, skipped: Set<number> = SKIPPED_STEPS): number => {
     let n = s + 1;
-    if (IS_MOBILE) while (skipped.has(n)) n += 1;
+    while (skipped.has(n)) n += 1;
     return n;
 };
-const stepBefore = (s: number, skipped: Set<number> = MOBILE_SKIPPED_STEPS): number => {
+const stepBefore = (s: number, skipped: Set<number> = SKIPPED_STEPS): number => {
     let n = s - 1;
-    if (IS_MOBILE) while (skipped.has(n)) n -= 1;
+    while (skipped.has(n)) n -= 1;
     return n;
 };
 
@@ -195,7 +200,6 @@ const SwipeHint = () => {
 interface StepStatus {
     componentsInstalled: boolean | null;
     extractionError: string | null;
-    dropsAuthenticated: boolean;
     mainAuthenticated: boolean;
 }
 
@@ -206,7 +210,6 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
     const [status, setStatus] = useState<StepStatus>({
         componentsInstalled: null,
         extractionError: null,
-        dropsAuthenticated: false,
         mainAuthenticated: false,
     });
     const [error, setError] = useState<string | null>(null);
@@ -246,19 +249,6 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
         }
     }, []);
 
-    const checkDropsAuthStatus = useCallback(async () => {
-        try {
-            const isDropsAuth = await invoke('is_drops_authenticated') as boolean;
-            Logger.debug('[SetupWizard] Drops auth status:', isDropsAuth);
-            setStatus(prev => ({ ...prev, dropsAuthenticated: isDropsAuth }));
-            return isDropsAuth;
-        } catch (e) {
-            Logger.error('Failed to check drops auth status:', e);
-            setStatus(prev => ({ ...prev, dropsAuthenticated: false }));
-            return false;
-        }
-    }, []);
-
     const extractComponents = useCallback(async () => {
         setIsExtracting(true);
         setStatus(prev => ({ ...prev, extractionError: null }));
@@ -277,7 +267,7 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
         }
     }, [settings, updateSettings, addToast]);
 
-    // Initial bundled-component and drops-auth checks fire once per wizard open.
+    // The initial bundled-component check fires once per wizard open.
     // Kept off the isAuthenticated dep on purpose: re-running checkComponentsInstalled
     // mid-wizard overwrites a user-picked custom streamlink path (which the bundled
     // check doesn't satisfy), making the Ready step show "skipped" for streamlink even
@@ -285,9 +275,8 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
     useEffect(() => {
         if (isOpen) {
             checkComponentsInstalled();
-            checkDropsAuthStatus();
         }
-    }, [isOpen, checkComponentsInstalled, checkDropsAuthStatus]);
+    }, [isOpen, checkComponentsInstalled]);
 
     // Mirror auth state into wizard status separately, so signing in doesn't trigger
     // the initial-checks effect above.
@@ -302,40 +291,6 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
             setCurrentStep(2);
         }
     }, [currentStep, status.componentsInstalled, isExtracting, status.extractionError, extractComponents]);
-
-    // Sign-in asks for the Drops approval itself (AppStore.loginToTwitch), and a
-    // Follow tap can too, so the step also learns of one it did not start.
-    useEffect(() => {
-        const unlisten = listen('drops-login-complete', () =>
-            setStatus(prev => ({ ...prev, dropsAuthenticated: true })),
-        );
-        return () => {
-            void unlisten.then((fn) => fn());
-        };
-    }, []);
-
-    // Twitch's approval in the platform's sign-in sheet, driven from Rust
-    // (connect_twitch_approval): it opens the sheet, waits for the grant or for
-    // the sheet to be closed, stores it and closes the sheet. False means the
-    // person closed it, which hands the step straight back.
-    const handleDropsLogin = useCallback(async () => {
-        setIsAuthenticating(true);
-        setError(null);
-        try {
-            if (!(await invoke<boolean>('connect_twitch_approval'))) return;
-            setStatus(prev => ({ ...prev, dropsAuthenticated: true }));
-            addToast('Drops login successful!', 'success');
-            // stepAfter, NOT a literal 4. Drops is step 3, and hardcoding
-            // its successor routes around MOBILE_SKIPPED_STEPS entirely,
-            // because the skip only ever applies to normal navigation.
-            setTimeout(() => setCurrentStep(stepAfter(3)), 500);
-        } catch (e) {
-            Logger.error('Failed to complete drops login:', e);
-            setError(`Login failed: ${e}`);
-        } finally {
-            setIsAuthenticating(false);
-        }
-    }, [addToast]);
 
     const handleMainLogin = useCallback(async () => {
         setIsAuthenticating(true);
@@ -357,7 +312,9 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
                     Logger.error('Failed to focus window:', focusError);
                 }
 
-                setTimeout(() => setCurrentStep(3), 500);
+                // Sign-in asks for the Drops approval on its own, so the
+                // wizard moves straight on to the next step it shows.
+                setTimeout(() => setCurrentStep(stepAfter(2)), 500);
 
                 unlistenRefs.current.forEach(fn => fn());
                 unlistenRefs.current = [];
@@ -493,8 +450,8 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
     const anyAlertChosen = Object.values(alertChoices).some(Boolean);
     // Steps this phone skips: the fixed ones, and Notifications when Rust offers no type.
     const skippedSteps = IS_MOBILE && setupAlerts?.length === 0
-        ? new Set([...MOBILE_SKIPPED_STEPS, NOTIFICATION_STEP])
-        : MOBILE_SKIPPED_STEPS;
+        ? new Set([...SKIPPED_STEPS, NOTIFICATION_STEP])
+        : SKIPPED_STEPS;
     const nextStep = (s: number) => stepAfter(s, skippedSteps);
     const prevStep = (s: number) => stepBefore(s, skippedSteps);
 
@@ -532,9 +489,6 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
                 // later. Making this the sign-in, and holding the forward swipe
                 // until it lands, means the wizard cannot promise something it
                 // has not got.
-                //
-                // Drops (step 3) is deliberately NOT gated this way: the app is
-                // fully usable without it, so it stays skippable.
                 if (IS_MOBILE && !status.mainAuthenticated) {
                     return {
                         label: isAuthenticating ? 'Waiting for sign-in' : 'Sign in with Twitch',
@@ -544,7 +498,6 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
                     };
                 }
                 return { label: 'Continue', onClick: () => setCurrentStep(nextStep(currentStep)) };
-            case 3:
             case 4:
             case 5:
                 return { label: 'Continue', onClick: () => setCurrentStep(nextStep(currentStep)) };
@@ -574,7 +527,7 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
     // Dots must reflect the steps this platform actually shows, otherwise mobile
     // renders an indicator for a page it can never land on.
     const visibleSteps = Array.from({ length: STEP_COUNT }, (_, i) => i).filter(
-        (i) => !(IS_MOBILE && skippedSteps.has(i)),
+        (i) => !skippedSteps.has(i),
     );
 
     const canGoBack = currentStep > 1 && currentStep < 7;
@@ -673,54 +626,6 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
                     </>
                 );
             }
-
-            case 3:
-                return (
-                    <>
-                        {status.dropsAuthenticated ? (
-                            <CheckCircle2 size={64} strokeWidth={1.4} className="text-success mb-10" />
-                        ) : (
-                            <Package size={56} strokeWidth={1.4} className="text-accent mb-10" />
-                        )}
-                        <h1 className="text-4xl font-medium text-textPrimary tracking-tight mb-4">
-                            {status.dropsAuthenticated ? "You're in for Drops" : 'Drops and inventory'}
-                        </h1>
-                        <p className="text-textSecondary text-base max-w-md mb-8">
-                            {status.dropsAuthenticated
-                                ? 'Drops will claim themselves while you watch.'
-                                : 'Sign in to track Twitch Drops, watch your inventory, and auto-claim rewards.'}
-                        </p>
-
-                        {isAuthenticating && (
-                            <div className="glass-panel rounded-xl p-6 mb-6 w-full max-w-sm">
-                                <p className="text-sm text-textSecondary">
-                                    Approve the request on Twitch to turn on drops and channel points.
-                                </p>
-                                <div className="pt-3 border-t border-borderSubtle mt-3 flex items-center justify-center gap-2 text-xs text-textMuted">
-                                    <Loader2 size={13} className="animate-spin" />
-                                    <span>Waiting for authorization</span>
-                                </div>
-                            </div>
-                        )}
-
-                        {error && (
-                            <div className="flex items-center gap-2 text-error text-sm mb-5 px-3 py-2 rounded-lg bg-error/10">
-                                <AlertCircle size={15} />
-                                <span>{error}</span>
-                            </div>
-                        )}
-
-                        {!status.dropsAuthenticated && !isAuthenticating && (
-                            <button
-                                onClick={handleDropsLogin}
-                                className="glass-button flex items-center justify-center gap-2 px-6 py-3 text-textPrimary rounded-xl font-medium"
-                            >
-                                <Package size={17} />
-                                Sign in for Drops
-                            </button>
-                        )}
-                    </>
-                );
 
             case 2:
                 return (
@@ -916,7 +821,6 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
                     ({ ok, label: PROVIDERS[provider].label, provider });
                 const rows: Array<{ ok: boolean; pending?: boolean; label: string; provider?: ProviderId }> = [
                     platformRow('twitch', status.mainAuthenticated),
-                    { ok: status.dropsAuthenticated, label: 'Drops sign-in' },
                     ...(kickOffered || kickConnected ? [platformRow('kick', kickConnected)] : []),
                     ...(youtubeOffered || youtubeConnected ? [platformRow('youtube', youtubeConnected)] : []),
                     ...(tiktokOffered || tiktokConnected ? [platformRow('tiktok', tiktokConnected)] : []),
