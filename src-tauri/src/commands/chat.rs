@@ -929,6 +929,9 @@ const HISTORY_DEFAULT_LIMIT: u32 = 100;
 /// parsing. The seed is a cached broadcaster lookup plus a disk read.
 const HISTORY_EMOTE_SEED_WAIT: Duration = Duration::from_secs(3);
 const HISTORY_MAX_LIMIT: u32 = 800;
+/// How much longer a join Twitch's history already answered waits for the
+/// mirror's notices (it started at the same time, so usually it is in).
+const MIRROR_NOTICE_WAIT: Duration = Duration::from_millis(1500);
 const RECENT_MESSAGES_BASE: &str = "https://recent-messages.robotty.de/api/v2/recent-messages";
 
 static HISTORY_CACHE: OnceLock<Mutex<HashMap<String, (Instant, Vec<String>)>>> = OnceLock::new();
@@ -1018,7 +1021,9 @@ async fn fetch_recent_messages(
 /// recent chat when the viewer is signed in to twitch.tv
 /// (`twitch_chat_history`), else the recent messages mirror
 /// (recent-messages.robotty.de), as lines tagged `historical=1`, then the same
-/// parse the live path uses. A reconnect's windowed backfill always uses the
+/// parse the live path uses. Twitch's answer holds chat messages only, so the
+/// mirror's notices (announcements, subs, raids) are folded into it
+/// (`twitch_chat_history::with_notices`). A reconnect's windowed backfill always uses the
 /// mirror, since Twitch's answer has no time window. Until 2026-09-07 the page fetched the
 /// mirror itself, serially after the badge cache init, so history landed one
 /// to two seconds after the first live rows and visibly prepended; now the
@@ -1046,18 +1051,30 @@ pub async fn load_channel_history(
     let raw = match if windowed { None } else { cached_history(&key) } {
         Some(lines) => lines,
         None => {
-            let from_twitch = if windowed {
-                None
+            let lines = if windowed {
+                fetch_recent_messages(&key, limit.unwrap_or(HISTORY_DEFAULT_LIMIT), after_ms, before_ms).await
             } else {
-                crate::services::twitch_chat_history::fetch(&key, &state.twitch_auth)
+                // The mirror runs alongside Twitch's history: it is the
+                // fallback, and it holds the notices (announcements, subs,
+                // raids) Twitch's answer leaves out. A slow mirror delays a
+                // join that Twitch answered by at most MIRROR_NOTICE_WAIT.
+                let mirror = tokio::spawn({
+                    let key = key.clone();
+                    async move { fetch_recent_messages(&key, HISTORY_DEFAULT_LIMIT, None, None).await }
+                });
+                let from_twitch = crate::services::twitch_chat_history::fetch(&key, &state.twitch_auth)
                     .await
-                    .filter(|lines| !lines.is_empty())
-            };
-            let lines = match from_twitch {
-                Some(lines) => lines,
-                None => {
-                    fetch_recent_messages(&key, limit.unwrap_or(HISTORY_DEFAULT_LIMIT), after_ms, before_ms)
-                        .await
+                    .filter(|lines| !lines.is_empty());
+                match from_twitch {
+                    Some(lines) => {
+                        let notices = tokio::time::timeout(MIRROR_NOTICE_WAIT, mirror)
+                            .await
+                            .ok()
+                            .and_then(Result::ok)
+                            .unwrap_or_default();
+                        crate::services::twitch_chat_history::with_notices(lines, notices)
+                    }
+                    None => mirror.await.unwrap_or_default(),
                 }
             };
             if !windowed {

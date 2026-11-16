@@ -198,9 +198,67 @@ pub fn lines_from(answer: &Value, channel: &str) -> Option<Vec<String>> {
     Some(lines.into_iter().map(|(_, l)| l).collect())
 }
 
+/// A tag's raw value on an IRC line, or `None`.
+fn tag_value<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+    let tags = line.strip_prefix('@')?.split(' ').next()?;
+    tags.split(';').find_map(|kv| kv.strip_prefix(key)?.strip_prefix('='))
+}
+
+fn sent_ms(line: &str) -> i64 {
+    tag_value(line, "tmi-sent-ts").and_then(|v| v.parse().ok()).unwrap_or(0)
+}
+
+/// Twitch's history with the mirror's notices folded in, oldest first.
+/// `MessageBufferChatHistory` answers chat messages only, so a signed-in
+/// backlog lost every announcement, sub and raid the chat had shown (SN-274:
+/// an announcement gone after switching chats and back). The mirror keeps
+/// them as USERNOTICE lines: those inside Twitch's window (from its oldest
+/// message on) that it does not already hold join it by send time.
+pub fn with_notices(twitch: Vec<String>, mirror: Vec<String>) -> Vec<String> {
+    let oldest = twitch.iter().map(|l| sent_ms(l)).filter(|&t| t > 0).min().unwrap_or(0);
+    let known: std::collections::HashSet<String> =
+        twitch.iter().filter_map(|l| tag_value(l, "id")).map(str::to_string).collect();
+    let mut lines: Vec<(i64, String)> = twitch.into_iter().map(|l| (sent_ms(&l), l)).collect();
+    lines.extend(
+        mirror
+            .into_iter()
+            .filter(|l| l.contains(" USERNOTICE #"))
+            .filter(|l| tag_value(l, "id").is_none_or(|id| !known.contains(id)))
+            .map(|l| (sent_ms(&l), l))
+            .filter(|(at, _)| *at > 0 && *at >= oldest),
+    );
+    lines.sort_by_key(|(at, _)| *at);
+    lines.into_iter().map(|(_, l)| l).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mirror_notices_inside_the_window_join_by_send_time() {
+        let twitch = vec![
+            "@historical=1;id=a;tmi-sent-ts=1000;user-id=1 :x!x@x.tmi.twitch.tv PRIVMSG #c :one".to_string(),
+            "@historical=1;id=b;tmi-sent-ts=3000;user-id=1 :x!x@x.tmi.twitch.tv PRIVMSG #c :three".to_string(),
+        ];
+        let mirror = vec![
+            // Older than Twitch's window: left out, or it would sit above it.
+            "@historical=1;id=old;msg-id=announcement;tmi-sent-ts=500 :tmi.twitch.tv USERNOTICE #c :before".to_string(),
+            // A message Twitch already answered: not doubled.
+            "@historical=1;id=b;tmi-sent-ts=3000 :x!x@x.tmi.twitch.tv PRIVMSG #c :three".to_string(),
+            "@historical=1;id=ann;msg-id=announcement;tmi-sent-ts=2000 :tmi.twitch.tv USERNOTICE #c :two".to_string(),
+            "@historical=1;id=sub;msg-id=resub;tmi-sent-ts=4000 :tmi.twitch.tv USERNOTICE #c".to_string(),
+        ];
+        let merged = with_notices(twitch, mirror);
+        let ids: Vec<&str> = merged.iter().map(|l| tag_value(l, "id").unwrap_or("?")).collect();
+        assert_eq!(ids, ["a", "ann", "b", "sub"]);
+    }
+
+    #[test]
+    fn no_mirror_answer_keeps_twitch_history_as_is() {
+        let twitch = vec!["@historical=1;id=a;tmi-sent-ts=1000 :x!x@x.tmi.twitch.tv PRIVMSG #c :one".to_string()];
+        assert_eq!(with_notices(twitch.clone(), Vec::new()), twitch);
+    }
 
     /// The shape twitch.tv got back for kathi's chat.
     fn answer() -> Value {
