@@ -2468,7 +2468,10 @@ const VideoPlayer = () => {
           // Nothing to rewind into: keep the live position and say why, once
           // per scrub, instead of silently snapping back to the edge.
           video.currentTime = from;
-          store.addToast(`${store.currentStream?.user_name || 'This channel'} has VODs turned off, so the broadcast can't be rewound`, 'info');
+          store.addToast(
+            store.liveRewindReason ?? `${store.currentStream?.user_name || 'This channel'} has VODs turned off, so the broadcast can't be rewound`,
+            'info',
+          );
           return;
         }
         Logger.debug(`[player] live scrub back ${behind.toFixed(0)}s past the live window; rewinding into the recording`);

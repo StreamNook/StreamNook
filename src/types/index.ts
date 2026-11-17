@@ -2631,6 +2631,9 @@ export interface LiveRewindInfo {
    *  timeline's "you left here" mark. Absent when there is nothing to go
    *  back to. */
   left_off_secs?: number;
+  /** Why rewind is off when it is not "no recording": a channel that limits
+   *  its recordings and a viewer it leaves out. Rust's words. */
+  reason?: string;
 }
 
 export interface TwitchUser {

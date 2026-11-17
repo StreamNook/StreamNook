@@ -1221,6 +1221,23 @@ pub struct LiveRewindInfo {
     /// timeline's "you left here" mark. Never cached: it changes as they watch.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub left_off_secs: Option<f64>,
+    /// The recording is restricted (`Video.restriction`, a subscriber-only
+    /// recording, say). Cached with the rest; whether it locks THIS viewer out
+    /// is decided per answer, since a subscription can start mid-broadcast.
+    #[serde(skip)]
+    pub restricted: bool,
+    /// Why rewind is unavailable, when `available` is false for a reason other
+    /// than "no recording" (the page's VODs-off words cover that one).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// A restricted recording locks rewind for a viewer the channel state knows is
+/// not subscribed. Not yet known (the relationship has not loaded, or signed
+/// out and so unanswerable) never locks: a press still gets the plain-words
+/// refusal from `rewind_refusal`.
+pub fn rewind_locked(restricted: bool, subscribed: Option<bool>) -> bool {
+    restricted && subscribed == Some(false)
 }
 
 /// Per-channel answer cache so the player can ask at every live start
@@ -1244,6 +1261,17 @@ pub async fn get_live_rewind_info(channel: String) -> Result<LiveRewindInfo, Str
         return Err("No channel".to_string());
     }
     let mut info = live_rewind_lookup(&channel).await;
+    if info.available && info.restricted {
+        let subscribed = crate::services::channel_state::get(&channel)
+            .await
+            .and_then(|s| s.relationship)
+            .map(|r| r.subscribed);
+        if rewind_locked(true, subscribed) {
+            info.available = false;
+            info.reason = Some(format!("{channel} limits who can watch its recordings, so the broadcast can't be rewound"));
+            return Ok(info);
+        }
+    }
     if let (true, Some(id)) = (info.available, info.video_id.clone()) {
         crate::services::live_bookmark::note_archive(&channel, &id, info.recorded_at.as_deref());
         info.left_off_secs = left_off_secs(&channel, &id, info.recorded_at.as_deref()).await;
@@ -1289,12 +1317,16 @@ async fn live_rewind_lookup(channel: &str) -> LiveRewindInfo {
             video_id: Some(archive.video_id),
             recorded_at: archive.recorded_at,
             left_off_secs: None,
+            restricted: archive.restriction.is_some(),
+            reason: None,
         },
         Ok(None) => LiveRewindInfo {
             available: false,
             video_id: None,
             recorded_at: None,
             left_off_secs: None,
+            restricted: false,
+            reason: None,
         },
         Err(e) => {
             debug!("[Streaming] live rewind lookup for {} failed: {}", channel, e);
@@ -1303,6 +1335,8 @@ async fn live_rewind_lookup(channel: &str) -> LiveRewindInfo {
                 video_id: None,
                 recorded_at: None,
                 left_off_secs: None,
+                restricted: false,
+                reason: None,
             };
         }
     };
@@ -1973,6 +2007,19 @@ mod liveness_tests {
     #[test]
     fn slug_match_is_case_insensitive() {
         assert_eq!(verdict_for(&[row("bigaust", true)], "BigAust"), Liveness::Live);
+    }
+}
+
+#[cfg(test)]
+mod rewind_lock_tests {
+    use super::rewind_locked;
+
+    #[test]
+    fn only_a_restricted_recording_and_a_known_non_subscriber_lock_rewind() {
+        assert!(rewind_locked(true, Some(false)));
+        assert!(!rewind_locked(true, Some(true)), "a subscriber may rewind");
+        assert!(!rewind_locked(true, None), "not known yet never locks");
+        assert!(!rewind_locked(false, Some(false)), "a public recording never locks");
     }
 }
 

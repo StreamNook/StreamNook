@@ -355,6 +355,9 @@ export interface AppState {
   /** Where the viewer left this broadcast before this playback (recording
    *  seconds), for the timeline's "you left here" mark. Rust decides it. */
   liveLeftOffSecs: number | null;
+  /** Why rewind is off when it is not "VODs turned off" (Rust's words), e.g.
+   *  a channel that limits its recordings to a viewer it leaves out. */
+  liveRewindReason: string | null;
   /** Rewind the live broadcast into its recording VOD at an absolute
    *  broadcast position, or `behindSecs` behind now (null = from the start).
    *  No-op unless a Twitch live stream is playing. */
@@ -1898,6 +1901,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   liveRewindAvailable: null,
   liveRewindAnchor: null,
   liveLeftOffSecs: null,
+  liveRewindReason: null,
   streamView: null,
   verticalAvailable: false,
   streamPortrait: null,
@@ -2709,7 +2713,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     } catch (e: unknown) {
       Logger.error(`Failed to start ${type}:`, e);
       get().addToast(`Failed to load ${type}: ${String(e)}`, 'error');
-      set({ isHomeActive: true, currentMediaType: null, currentStream: null, streamUrl: null, activeQuality: null, vodPlayback: null, liveRewind: null, liveRewindAvailable: null, liveRewindAnchor: null, liveLeftOffSecs: null, offlineRoom: null, offlineRoomLive: null, offlineRoomJoining: false });
+      set({ isHomeActive: true, currentMediaType: null, currentStream: null, streamUrl: null, activeQuality: null, vodPlayback: null, liveRewind: null, liveRewindAvailable: null, liveRewindAnchor: null, liveLeftOffSecs: null, liveRewindReason: null, offlineRoom: null, offlineRoomLive: null, offlineRoomJoining: false });
     } finally {
       set({ isLoading: false });
     }
@@ -2903,7 +2907,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     } finally {
       // Whatever failed above: a half-closed stream (no URL, its row still set)
       // would keep its chat tab pinned for good.
-      set({ streamUrl: null, activeQuality: null, availableQualities: [], adSource: null, playbackKind: null, currentStream: null, currentMediaType: null, currentHypeTrain: null, streamOriginCategory: null, vodPlayback: null, liveRewind: null, liveRewindAvailable: null, liveRewindAnchor: null, liveLeftOffSecs: null, offlineRoom: null, offlineRoomLive: null, offlineRoomJoining: false });
+      set({ streamUrl: null, activeQuality: null, availableQualities: [], adSource: null, playbackKind: null, currentStream: null, currentMediaType: null, currentHypeTrain: null, streamOriginCategory: null, vodPlayback: null, liveRewind: null, liveRewindAvailable: null, liveRewindAnchor: null, liveLeftOffSecs: null, liveRewindReason: null, offlineRoom: null, offlineRoomLive: null, offlineRoomJoining: false });
       resetViewSession(set);
       finishStop();
       if (stopInFlight === stopping) stopInFlight = null;
@@ -3554,14 +3558,14 @@ export const useAppStore = create<AppState>((set, get) => ({
         forgetOwnChannel();
       }
 
-      set({ streamUrl: result.url, activeQuality: result.quality, adSource: adSourceFrom(result), availableQualities: result.available ?? [], playbackKind: 'hls', currentStream: info, currentMediaType: 'live', originalMediaUrl: null, vodPlayback: null, liveRewind: null, liveRewindAvailable: null, liveRewindAnchor: null, liveLeftOffSecs: null, offlineRoom: null, offlineRoomLive: null, offlineRoomJoining: false, isHomeActive: false });
+      set({ streamUrl: result.url, activeQuality: result.quality, adSource: adSourceFrom(result), availableQualities: result.available ?? [], playbackKind: 'hls', currentStream: info, currentMediaType: 'live', originalMediaUrl: null, vodPlayback: null, liveRewind: null, liveRewindAvailable: null, liveRewindAnchor: null, liveLeftOffSecs: null, liveRewindReason: null, offlineRoom: null, offlineRoomLive: null, offlineRoomJoining: false, isHomeActive: false });
 
       // Can this broadcast be rewound? One cached Rust lookup per live start;
       // the player disables Rewind (with the reason) on a channel that keeps
       // no VODs instead of letting the viewer find out from a failure.
       void invoke<LiveRewindInfo>('get_live_rewind_info', { channel })
         .then((r) => {
-          if (!superseded()) set({ liveRewindAvailable: r.available, liveRewindAnchor: r.recorded_at ?? null, liveLeftOffSecs: r.left_off_secs ?? null });
+          if (!superseded()) set({ liveRewindAvailable: r.available, liveRewindAnchor: r.recorded_at ?? null, liveLeftOffSecs: r.left_off_secs ?? null, liveRewindReason: r.reason ?? null });
         })
         .catch(() => {});
     } catch (e) {
