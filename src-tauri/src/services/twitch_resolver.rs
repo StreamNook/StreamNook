@@ -2825,6 +2825,10 @@ pub struct LiveArchive {
     /// ~4 s after `stream.createdAt`.
     pub recorded_at: Option<String>,
     pub stream_created_at: Option<String>,
+    /// Twitch's `Video.restriction.type` when the channel limits who may
+    /// watch its recordings (null for a public one). Usher then answers 403
+    /// for a viewer the restriction leaves out.
+    pub restriction: Option<String>,
 }
 
 impl LiveArchive {
@@ -3016,7 +3020,7 @@ pub async fn fetch_live_archive(login: &str) -> Result<Option<LiveArchive>> {
         user(login: $login) {
             stream {
                 createdAt
-                archiveVideo { id status lengthSeconds recordedAt }
+                archiveVideo { id status lengthSeconds recordedAt restriction { type } }
             }
         }
     }"#;
@@ -3039,7 +3043,27 @@ pub async fn fetch_live_archive(login: &str) -> Result<Option<LiveArchive>> {
             .unwrap_or(0),
         recorded_at: str_field(archive, "recordedAt"),
         stream_created_at: str_field(stream, "createdAt"),
+        restriction: archive
+            .get("restriction")
+            .filter(|r| !r.is_null())
+            .map(|r| str_field(r, "type").unwrap_or_else(|| "RESTRICTED".to_string())),
     }))
+}
+
+/// Plain words for a live rewind usher refused. A 403 on a recording the
+/// channel restricts means Twitch will not play it for this account (a
+/// subscriber-only recording, say), which the raw "VOD usher returned 403
+/// Forbidden" never said. Any other failure keeps its own words.
+pub fn rewind_refusal(channel: &str, archive: &LiveArchive, err: &str) -> String {
+    if err.contains("usher returned 403") {
+        if archive.restriction.is_some() {
+            return format!(
+                "{channel} limits who can watch its recordings, and Twitch won't play this one for your account, so it can't be rewound here."
+            );
+        }
+        return format!("Twitch refused {channel}'s recording for your account, so it can't be rewound here.");
+    }
+    err.to_string()
 }
 
 #[cfg(test)]
@@ -3052,7 +3076,22 @@ mod live_archive_tests {
             length_seconds: 24511,
             recorded_at: Some("2026-09-06T00:14:59Z".into()),
             stream_created_at: Some("2026-09-06T00:14:55Z".into()),
+            restriction: None,
         }
+    }
+
+    #[test]
+    fn a_refused_rewind_says_why_in_plain_words() {
+        let open = archive();
+        let limited = LiveArchive { restriction: Some("SUB_ONLY_LIVE".into()), ..archive() };
+        let refused = "VOD usher returned 403 Forbidden";
+        let words = rewind_refusal("swagg", &limited, refused);
+        assert!(words.contains("limits who can watch its recordings"), "{words}");
+        assert!(!words.contains("usher"), "{words}");
+        let words = rewind_refusal("swagg", &open, refused);
+        assert!(words.contains("refused swagg's recording") && !words.contains("usher"), "{words}");
+        // Anything else keeps its own words.
+        assert_eq!(rewind_refusal("swagg", &open, "VOD GQL request failed"), "VOD GQL request failed");
     }
 
     fn at(s: &str) -> chrono::DateTime<chrono::Utc> {

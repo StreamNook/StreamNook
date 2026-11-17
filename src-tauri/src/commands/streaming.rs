@@ -1358,7 +1358,18 @@ pub async fn rewind_live_stream(
         Some(position),
         want,
     )
-    .await?;
+    .await
+    .map_err(|e| {
+        log::warn!(
+            "[Streaming] rewind {} → vod {} refused: {} (restriction={:?}, signed_in={})",
+            channel,
+            archive.video_id,
+            e,
+            archive.restriction,
+            oauth.is_some()
+        );
+        tr::rewind_refusal(&channel, &archive, &e)
+    })?;
     result.ticket = Some(ticket);
     if let Some(v) = result.vod.as_mut() {
         v.rewound_from_live = true;
