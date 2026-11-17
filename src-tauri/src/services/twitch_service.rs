@@ -540,7 +540,13 @@ pub(crate) fn twitch_pending_web_profile_dir() -> Result<PathBuf> {
 /// it is the staging profile the login window writes to.
 pub(crate) fn active_twitch_web_profile_dir() -> Result<PathBuf> {
     if let Some(primary) = crate::services::account_store::AccountStore::primary() {
-        adopt_pending_web_profile(&primary.user_id);
+        if !adopt_pending_web_profile(&primary.user_id) {
+            // The staged session could not move yet (the sign-in window still
+            // holds it, right after a switch): it is still the only place this
+            // account's session lives, so this window uses it. The next window
+            // tries the move again.
+            return twitch_pending_web_profile_dir();
+        }
         twitch_web_profile_dir(&primary.user_id)
     } else {
         twitch_pending_web_profile_dir()
@@ -571,24 +577,28 @@ fn web_profile_has_session(dir: &PathBuf) -> bool {
 /// the subscribe window stop disagreeing about which profile holds the session.
 ///
 /// No-ops unless there's a staged session to adopt and the target doesn't
-/// already have its own. Best-effort: a failure just leaves the user to
-/// re-login, it never breaks the window.
-pub(crate) fn adopt_pending_web_profile(account_id: &str) {
+/// already have its own. Returns false only when a staged session could NOT
+/// be moved (still locked by the sign-in window, right after an account
+/// switch): the caller then keeps using the stage, which still holds the
+/// session. A half-made copy is removed, because WebView2 cannot open a
+/// profile copied while in use ("Cannot create a file when that file already
+/// exists", os error 183), and that left the overlay blank with no way out.
+pub(crate) fn adopt_pending_web_profile(account_id: &str) -> bool {
     let base = match twitch_web_profiles_root() {
         Ok(b) => b,
-        Err(_) => return,
+        Err(_) => return true,
     };
     let pending = base.join("_pending");
     let target = base.join(account_id);
 
     // Nothing staged -> nothing to adopt.
     if !web_profile_has_session(&pending) {
-        return;
+        return true;
     }
     // Target already owns a session -> keep it, discard the stale stage.
     if web_profile_has_session(&target) {
         let _ = fs::remove_dir_all(&pending);
-        return;
+        return true;
     }
     // Move the staged session into place. Clear the empty placeholder first so
     // the rename has a clean destination (Windows rename fails if it exists).
@@ -601,11 +611,13 @@ pub(crate) fn adopt_pending_web_profile(account_id: &str) {
         // stranded, then drop the stage.
         debug!("[twitch-web] adopt rename failed ({e}); copying instead");
         if let Err(e) = copy_dir_recursive(&pending, &target) {
-            warn!("[twitch-web] could not adopt staged login session: {e}");
-            return;
+            warn!("[twitch-web] could not adopt staged login session yet: {e}; using the stage for now");
+            let _ = fs::remove_dir_all(&target);
+            return false;
         }
         let _ = fs::remove_dir_all(&pending);
     }
+    true
 }
 
 /// Minimal recursive directory copy (std has no equivalent). Only used as the

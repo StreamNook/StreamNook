@@ -225,7 +225,10 @@ export default function TwitchOverlay() {
         lastKeyRef.current = key;
         invoke('mount_twitch_overlay', { label: overlay.label, url: overlay.url, profile: overlay.profile ?? null, ...args }).catch((e) => {
           Logger.warn('[TwitchOverlay] open failed:', e);
-          useAppStore.getState().addToast(`Login window failed to open: ${String(e)}`, 'error');
+          useAppStore.getState().addToast(`The Twitch window couldn't open (${String(e)}). Try again.`, 'error');
+          // No page means no way to close it from inside: drop the frame too, or
+          // it sits over the app empty (the address bar and nothing else).
+          setOverlay((cur) => (cur?.label === overlay.label ? null : cur));
         });
       } else if (key !== lastKeyRef.current) {
         lastKeyRef.current = key;
