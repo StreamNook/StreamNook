@@ -63,6 +63,10 @@ import {
 } from '../utils/audioBoost';
 import type { AudioBoostSettings, MutedRange, VodChapter } from '../types';
 import { AudioBoostControls } from './AudioBoostFaders';
+import { missingCodecsWords, missingTwitchCodecs } from '../utils/codecPreference';
+
+/** Whether this run already checked the video engine for Twitch's decoders. */
+let codecsWarned = false;
 
 /** A backward scrub on a live stream smaller than this is treated as a
  *  nudge, not a rewind request. */
@@ -1162,6 +1166,16 @@ const VideoPlayer = () => {
       // could go stale. Same pattern as the provider check above.
       const playbackProvider = streamProvider(useAppStore.getState().currentStream);
       const isTwitchPlayback = playbackProvider === 'twitch';
+      // A video engine with no H.264 or AAC (a Linux build against the prebuilt
+      // CEF) plays every stream black and silent; say why once per run instead.
+      if (!codecsWarned) {
+        codecsWarned = true;
+        const missing = missingTwitchCodecs();
+        if (missing.length) {
+          Logger.error(`[Player] video engine lacks ${missing.join(', ')}`);
+          useAppStore.getState().addToast(missingCodecsWords(missing), 'error', undefined, { sticky: true });
+        }
+      }
       // Provider cushions are learned per channel exactly like Twitch's. Tracked
       // here so the LEVEL_LOADED correction and the stall ramp share one base.
       let providerCushionBase = PROVIDER_LIVE_SYNC_FALLBACK;

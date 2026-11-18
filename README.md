@@ -225,6 +225,10 @@ Rust, TypeScript, React, and Tailwind. Packaged as a native desktop app with Tau
 
 Everything's built in. Nothing else to install.
 
+### Building for Linux yourself
+
+The Linux app runs on CEF, and `CEF_PATH` must point at the CEF distribution matching the `tauri-runtime-cef` pin in `src-tauri/Cargo.toml`. The prebuilt CEF downloads (cef-builds.spotifycdn.com) leave out the H.264 and AAC decoders that every Twitch stream and VOD uses, so a build made against them signs in and runs chat, but video stays black and silent. Build CEF from source with `proprietary_codecs=true ffmpeg_branding=Chrome` in `GN_DEFINES`, then point `CEF_PATH` at that build. The app says so when its video engine is missing these decoders.
+
 ## Credits
 
 - [Tauri](https://tauri.app/), native desktop framework.

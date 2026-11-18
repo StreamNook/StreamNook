@@ -22,6 +22,32 @@ function canDecode(codec: string): boolean {
   }
 }
 
+/// The decoders every Twitch stream and VOD needs that this video engine lacks,
+/// by name ("H.264", "AAC"). A Linux build made against the prebuilt CEF has
+/// neither, so its player stays black and silent; empty everywhere else.
+export function missingTwitchCodecs(
+  supported: (type: string) => boolean = (type) =>
+    typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported(type),
+): string[] {
+  const can = (type: string) => {
+    try {
+      return supported(type);
+    } catch {
+      return false;
+    }
+  };
+  const missing: string[] = [];
+  if (!can('video/mp4; codecs="avc1.4d401f"') && !can('video/mp4; codecs="avc1.42e01e"')) missing.push('H.264');
+  if (!can('audio/mp4; codecs="mp4a.40.2"')) missing.push('AAC');
+  return missing;
+}
+
+/// The words the player shows once when `missingTwitchCodecs` is not empty.
+export function missingCodecsWords(missing: string[]): string {
+  const names = missing.join(' and ');
+  return `This build's video engine can't decode ${names}, which Twitch video uses, so streams stay black. A build made from source needs a CEF built with proprietary codecs (see the README).`;
+}
+
 export function reportCodecPreference(enhancedCodecs: boolean): void {
   const prefs: string[] = [];
   if (enhancedCodecs) {
