@@ -19,6 +19,7 @@ import {
   StatusCard,
   KitButton,
   Disclosure,
+  ModeSwitch,
   DropsSettingsTab,
 } from './settingsPageKit';
 import { GamePicker } from './GamePicker';
@@ -281,9 +282,12 @@ export const SettingsBlock = ({
 // SettingsSection/Row/Block trio is the compact panel layout; SettingsPage and
 // the Page* parts are the Settings window's own look, for a plugin that ships
 // a full page (see settingsPageKit.tsx), with StatusCard, KitButton and
-// Disclosure for its status header and folds. A plugin that runs on an older
-// app finds these three missing and falls back. DropsSettingsTab only answers
-// Autopilot 0.4.x, which drew the app's page by that name.
+// Disclosure for its status header and folds, and ModeSwitch for a plugin whose
+// work runs in modes (StatusCard takes it, a picture, a queue and the modes'
+// choices since the same release, so ModeSwitch's presence says the card does
+// too). A plugin that runs on an older app finds these missing and falls back.
+// DropsSettingsTab only answers Autopilot 0.4.x, which drew the app's page by
+// that name.
 export const UI_KIT = {
   Toggle,
   ChipList,
@@ -306,6 +310,7 @@ export const UI_KIT = {
   StatusCard,
   KitButton,
   Disclosure,
+  ModeSwitch,
   DropsSettingsTab,
 };
 

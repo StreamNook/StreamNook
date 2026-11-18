@@ -2869,6 +2869,31 @@ html[data-theme-tone='light'] .settings-card {
 .settings-card .settings-row + .settings-row {
   border-top: 1px solid var(--settings-hairline, color-mix(in srgb, var(--color-border-subtle) 55%, transparent));
 }
+/* A settings card in the glaze: the chrome's own material (blur, the
+   accent-lit rim, the Glassiness floor) at a card's corner, with the same
+   hairlines between rows. A page opts in per section (SettingsSection
+   `glaze`); the Settings window's tabs still draw .settings-card. No
+   overflow clip, which would cut the rim's outer contour: the first and last
+   rows round their own hover to the card's corner instead. */
+.chrome-glaze.settings-glaze {
+  border-radius: 16px;
+  --glaze-frost: 22%;
+}
+.settings-glaze .settings-row + .settings-row {
+  border-top: 1px solid var(--settings-hairline, color-mix(in srgb, var(--color-border-subtle) 55%, transparent));
+}
+.settings-glaze > .settings-row:first-child {
+  border-top-left-radius: 16px;
+  border-top-right-radius: 16px;
+}
+.settings-glaze > .settings-row:last-child {
+  border-bottom-left-radius: 16px;
+  border-bottom-right-radius: 16px;
+}
+html[data-theme-tone='light'] .settings-glaze {
+  --settings-hairline: color-mix(in srgb, var(--color-text-primary) 10%, transparent);
+}
+
 /* The subtle border fades into a light theme's card fill: draw the hairline
    in the theme's ink there. A variable, so the two-column builder's rule that
    hides the line below still wins. */

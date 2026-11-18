@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import { invoke } from '@tauri-apps/api/core';
-import { Users, Plus, X, Loader2 } from 'lucide-react';
+import { Users, Plus, X, Loader2, Search } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
 import { PanelChannel } from '../../types/plugins';
 import { Logger } from '../../utils/logger';
@@ -148,18 +148,16 @@ const PanelChannelList = ({
 
   return (
     <div className="mt-2">
-      <div className="mb-2 space-y-1.5">
-        {value.length > 0 ? (
-          value.map((c, i) => (
+      {/* An empty list draws nothing: the row's own sentence says what none means. */}
+      {value.length > 0 && (
+        <div className="mb-2 space-y-1.5">
+          {value.map((c, i) => (
             <Row key={c.channel_id} channel={c} index={i} followedStreams={followedStreams} onRemove={() => remove(c.channel_id)} />
-          ))
-        ) : (
-          <div className="rounded-lg border border-dashed border-white/10 bg-white/[0.02] px-3 py-2.5 text-center text-[12px] italic text-textSecondary">
-            None added.
-          </div>
-        )}
-      </div>
+          ))}
+        </div>
+      )}
       <div className="relative" ref={boxRef}>
+        <Search size={14} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-textMuted" />
         <input
           type="text"
           value={input}
@@ -169,7 +167,7 @@ const PanelChannelList = ({
             setOpen(true);
           }}
           onFocus={() => input.trim() && setOpen(true)}
-          className="glass-input w-full rounded-md px-3 py-1.5 text-[13px] text-textPrimary"
+          className="glass-input w-full rounded-full py-2 pl-9 pr-9 text-[13px] text-textPrimary"
         />
         {searching && (
           <div className="absolute right-3 top-0 bottom-0 flex items-center">
@@ -255,7 +253,7 @@ const Row = ({
     };
   }, [channel.channel_id, avatar]);
   return (
-    <div className="group flex items-center gap-3 rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-2">
+    <div className="glaze-inset group flex items-center gap-3 rounded-xl bg-[color-mix(in_srgb,var(--color-text-primary)_5%,transparent)] px-3 py-2">
       <span className="flex h-5 min-w-5 flex-shrink-0 items-center justify-center rounded bg-white/5 px-1 font-mono text-[11px] text-textSecondary">
         {index + 1}
       </span>

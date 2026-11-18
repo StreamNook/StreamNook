@@ -40,6 +40,12 @@ interface SettingsSectionProps {
   /** Buttons on the heading's line, at its right edge, on every platform (the
    *  phone draws them where `accessory` goes). */
   actions?: ReactNode;
+  /** Set the rows on the glaze (the chrome's lit glass) instead of the flat
+   *  settings card. Desktop; the phone keeps its grouped card. */
+  glaze?: boolean;
+  /** A small icon before the heading, in the accent, for a page whose sections
+   *  each carry one. */
+  icon?: ReactNode;
 }
 
 /** The count chip after a section's name. */
@@ -106,14 +112,21 @@ const DesktopSettingsSection = ({
   className,
   count,
   actions,
+  glaze = false,
+  icon,
 }: SettingsSectionProps) => (
   <section id={id ?? sectionIdFromLabel(label)} data-settings-section={label} className={className}>
     <div className="px-1 pb-2.5">
       <div className={actions ? 'flex min-h-8 items-center justify-between gap-3' : undefined}>
         <h3
-          className={`text-[12px] font-semibold uppercase tracking-[0.14em] text-textPrimary ${logo || count !== undefined ? 'flex items-center gap-1.5' : ''}`}
+          className={`text-[12px] font-semibold uppercase tracking-[0.14em] text-textPrimary ${logo || icon || count !== undefined ? 'flex items-center gap-1.5' : ''}`}
           aria-label={shownLabel ? label : undefined}
         >
+          {icon && (
+            <span className="-ml-px mr-0.5 inline-flex text-accent-on-surface" aria-hidden>
+              {icon}
+            </span>
+          )}
           {logo}
           {shownLabel ?? label}
           {count !== undefined && <SectionCount count={count} />}
@@ -129,7 +142,7 @@ const DesktopSettingsSection = ({
     {bare ? (
       <div className="space-y-3">{children}</div>
     ) : (
-      <div className="settings-card px-4">{children}</div>
+      <div className={glaze ? 'chrome-glaze settings-glaze px-4' : 'settings-card px-4'}>{children}</div>
     )}
   </section>
 );

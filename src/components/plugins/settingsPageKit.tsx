@@ -18,9 +18,12 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type ReactNode,
 } from 'react';
-import { ChevronDown, Plus, TriangleAlert, X } from 'lucide-react';
+import { motion } from 'framer-motion';
+import { Award, ChevronDown, Play, Plus, TriangleAlert, X } from 'lucide-react';
+import { ACCENT_BUTTON, ACCENT_FILL, GLAZE_PILL } from '../ui/glazeButtons';
 import SectionNav from '../settings/SectionNav';
 import { ResetArrow, SegmentedSelect } from '../settings/_primitives';
 import { IS_MOBILE } from '../../utils/platform';
@@ -359,23 +362,133 @@ function PhoneSubControl({
   );
 }
 
-// A visible step above the page on every theme: the page color nudged toward
-// the text color (lighter on a dark theme), a soft edge on its top-left, and a
-// shadow under it. Opaque, so Glassiness 0% leaves it solid; on a light theme
-// the card's class swaps in a color lifted toward white.
-const CARD_STYLE = {
-  background: 'color-mix(in oklab, var(--color-background) 86%, var(--color-text-primary) 14%)',
-  boxShadow:
-    'inset 1px 1px 0 color-mix(in srgb, var(--color-text-primary) 10%, transparent), 0 6px 20px rgba(0, 0, 0, 0.18)',
-} as const;
+// The status card wears the glaze (the chrome's lit glass) at a card's corner,
+// with a little more frost than the chrome, since a page's words sit on it.
+// The glaze's own rule rounds to a pill, so the corner is set inline.
+const STATUS_GLAZE = { borderRadius: 20, '--glaze-frost': '30%' } as CSSProperties;
 
 const TAG_STYLE = { background: 'color-mix(in srgb, var(--color-accent) 12%, transparent)' } as const;
 
-/** What the plugin is doing right now, on a raised card at the top of its
+/** The hairline between a glazed card's parts, in the theme's ink. */
+const CARD_RULE = 'border-t border-[color-mix(in_srgb,var(--color-text-primary)_9%,transparent)]';
+
+/** A picture on a card: a badge, drawn whole on a dark tile, or a game's box
+ *  art, filling its tile. */
+export interface CardArtSpec {
+  src?: string;
+  /** `'badge'` (the default) fits the image inside the tile; `'cover'` fills it. */
+  shape?: 'badge' | 'cover';
+}
+
+function CardArt({ art, size }: { art: CardArtSpec; size: number }) {
+  const [failed, setFailed] = useState(false);
+  const cover = art.shape === 'cover';
+  return (
+    <span
+      className="glaze-inset glaze-chip flex shrink-0 items-center justify-center overflow-hidden bg-black/30 [html[data-theme-tone=light]_&]:bg-black/[0.08]"
+      style={{ width: size, height: size }}
+      aria-hidden
+    >
+      {art.src && !failed ? (
+        <img
+          src={art.src}
+          alt=""
+          draggable={false}
+          onError={() => setFailed(true)}
+          className={cover ? 'h-full w-full object-cover' : 'h-[76%] w-[76%] object-contain'}
+        />
+      ) : (
+        <Award size={Math.round(size * 0.42)} className="text-textMuted" />
+      )}
+    </span>
+  );
+}
+
+/** One choice on a ModeSwitch. `live` marks a choice that starts work, which
+ *  the chosen pill shows in the accent; the rest (Off) show neutral. */
+export interface ModeOption<T extends string> {
+  value: T;
+  label: string;
+  icon?: ReactNode;
+  live?: boolean;
+}
+
+/** A few modes of one thing, one of which runs: a recessed track with the
+ *  chosen mode a lit pill that glides between them. Picking a live mode
+ *  starts it, so the chosen live pill is the accent; Off stays neutral. */
+export function ModeSwitch<T extends string>({
+  value,
+  options,
+  onChange,
+  label,
+  disabled = false,
+}: {
+  value: T;
+  options: ModeOption<T>[];
+  onChange: (next: T) => void;
+  /** What the group chooses, for screen readers. */
+  label: string;
+  disabled?: boolean;
+}) {
+  // One pill per switch: two switches on a page must never trade pills.
+  const pillId = useId();
+  return (
+    <div
+      role="radiogroup"
+      aria-label={label}
+      className={`flex w-full gap-0.5 rounded-full bg-black/25 p-1 shadow-[inset_0_1px_2px_rgba(0,0,0,0.35)] sm:inline-flex sm:w-auto [html[data-theme-tone=light]_&]:bg-black/[0.07] [html[data-theme-tone=light]_&]:shadow-[inset_0_1px_1.5px_rgba(0,0,0,0.14)] ${disabled ? 'pointer-events-none opacity-60' : ''}`}
+    >
+      {options.map((opt) => {
+        const on = opt.value === value;
+        const lit = on && opt.live;
+        return (
+          <button
+            key={opt.value}
+            type="button"
+            role="radio"
+            aria-checked={on}
+            onClick={() => {
+              if (!on) onChange(opt.value);
+            }}
+            // In a narrow window each choice keeps its label's width plus an
+            // equal share of what is left, so a long label is never cut.
+            className={`relative flex min-w-0 flex-auto items-center justify-center gap-1.5 whitespace-nowrap rounded-full px-3.5 py-1.5 text-[13px] font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--color-text-primary)] sm:flex-none ${
+              lit ? 'text-white' : on ? 'text-textPrimary' : 'text-textSecondary hover:text-textPrimary'
+            }`}
+          >
+            {on && (
+              <motion.span
+                layoutId={`mode-pill-${pillId}`}
+                className="absolute inset-0"
+                transition={{ type: 'spring', stiffness: 380, damping: 32 }}
+              >
+                <span
+                  className="glaze-inset block h-full w-full rounded-full transition-[background-color] duration-200"
+                  style={lit ? ACCENT_FILL : NEUTRAL_PILL}
+                />
+              </motion.span>
+            )}
+            {opt.icon && <span className={`relative z-[1] inline-flex ${lit ? 'text-white' : ''}`}>{opt.icon}</span>}
+            <span className="relative z-[1] truncate">{opt.label}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+const NEUTRAL_PILL = { background: 'color-mix(in srgb, var(--color-text-primary) 14%, transparent)' } as const;
+
+/** What the plugin is doing right now, on a glazed card at the top of its
  *  page: a small label (and an optional tag), a title, a line under it, an
  *  optional progress bar, and an action on the label row. One height in every
  *  state: a long title ends in an ellipsis (the full text in a tooltip) and
- *  the subtitle takes at most two lines. */
+ *  the subtitle takes at most two lines.
+ *
+ *  Optional parts, for a plugin whose work runs in modes: `modes` puts a
+ *  ModeSwitch on top, `art` a picture beside the title, `queue` the next
+ *  things in line under the bar, and `choices` explains each mode while it is
+ *  off, as tiles that pick it. */
 export function StatusCard({
   label,
   tag,
@@ -383,6 +496,10 @@ export function StatusCard({
   subtitle,
   progress,
   action,
+  art,
+  modes,
+  queue,
+  choices,
 }: {
   /** The small caps line ("Right now"). */
   label: string;
@@ -394,6 +511,21 @@ export function StatusCard({
   progress?: { value: number; max: number; left: string; right?: string };
   /** A KitButton, or any control, on the right. */
   action?: ReactNode;
+  art?: CardArtSpec;
+  modes?: {
+    value: string;
+    options: ModeOption<string>[];
+    onChange: (next: string) => void;
+    label: string;
+    disabled?: boolean;
+  };
+  queue?: {
+    heading: string;
+    /** Quiet words on the heading's line, at its right ("5 in all"). */
+    note?: string;
+    items: { key: string; art?: CardArtSpec; title: string; subtitle?: string; trailing?: string }[];
+  };
+  choices?: { key: string; icon?: ReactNode; title: string; text: string; onPick: () => void }[];
 }) {
   // The card keeps one height in every state, so nothing below it ever moves:
   // a hidden sizer lays out the tallest shape (label row, one title line, two
@@ -406,6 +538,7 @@ export function StatusCard({
   // The content layer remounts between its bar and idle forms, so the check
   // follows the title node that is mounted now.
   const hasBar = !!progress;
+  const hasArt = !!art;
   useLayoutEffect(() => {
     const el = titleRef.current;
     if (!el) return;
@@ -414,13 +547,36 @@ export function StatusCard({
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [title, hasBar]);
+  }, [title, hasBar, hasArt]);
+  const titleBlock = (
+    <>
+      <Tooltip content={title} describe disabled={!titleClipped}>
+        <div ref={titleRef} className="truncate text-[19px] font-semibold leading-snug text-textPrimary">
+          {title}
+        </div>
+      </Tooltip>
+      {subtitle && (
+        <div className="mt-1 line-clamp-2 break-words text-[13.5px] leading-snug text-textSecondary">{subtitle}</div>
+      )}
+    </>
+  );
   return (
-    <div
-      className="grid rounded-2xl px-5 pb-5 pt-6 [html[data-theme-tone=light]_&]:!bg-[color-mix(in_oklab,var(--color-background)_40%,white)]"
-      style={CARD_STYLE}
-      data-status-card
-    >
+    <div className="chrome-glaze flex flex-col" style={STATUS_GLAZE} data-status-card>
+      {modes && (
+        <div className="px-5 pb-4 pt-5">
+          <ModeSwitch
+            value={modes.value}
+            options={modes.options}
+            onChange={modes.onChange}
+            label={modes.label}
+            disabled={modes.disabled}
+          />
+        </div>
+      )}
+      <div className={`grid px-5 pb-5 ${modes ? `${CARD_RULE} pt-5` : 'pt-6'}`}>
+      {/* The off state's choices follow it, and it never shows a bar, so it
+          keeps no room for one. */}
+      {!choices?.length && (
       <div className="invisible [grid-area:1/1]" aria-hidden>
         <div className="min-h-[22px]" />
         <div className="mt-2 text-[19px] font-semibold leading-snug">{nbsp}</div>
@@ -430,6 +586,7 @@ export function StatusCard({
           <div className="mt-2 text-[12.5px]">{nbsp}</div>
         </div>
       </div>
+      )}
       <div
         key={hasBar ? 'bar' : 'idle'}
         className="min-w-0 -translate-y-1 self-center [grid-area:1/1]"
@@ -448,13 +605,13 @@ export function StatusCard({
           )}
           {action && <div className="-my-[7px] ml-auto shrink-0 pl-4">{action}</div>}
         </div>
-        <Tooltip content={title} describe disabled={!titleClipped}>
-          <div ref={titleRef} className="mt-2 truncate text-[19px] font-semibold leading-snug text-textPrimary">
-            {title}
+        {art ? (
+          <div className="mt-2.5 flex items-center gap-3.5">
+            <CardArt key={art.src ?? ''} art={art} size={54} />
+            <div className="min-w-0 flex-1">{titleBlock}</div>
           </div>
-        </Tooltip>
-        {subtitle && (
-          <div className="mt-1 line-clamp-2 break-words text-[13.5px] leading-snug text-textSecondary">{subtitle}</div>
+        ) : (
+          <div className="mt-2">{titleBlock}</div>
         )}
         {progress && (
           <div className="mt-4">
@@ -479,12 +636,57 @@ export function StatusCard({
         )}
         </div>
       </div>
+      </div>
+      {queue && queue.items.length > 0 && (
+        <div className={`${CARD_RULE} px-5 pb-4 pt-3.5`}>
+          <div className="mb-1.5 flex items-baseline justify-between gap-4">
+            <span className="text-[11.5px] font-semibold uppercase tracking-[0.12em] text-textMuted">{queue.heading}</span>
+            {queue.note && <span className="text-[12px] tabular-nums text-textMuted">{queue.note}</span>}
+          </div>
+          <ul>
+            {queue.items.map((item) => (
+              <li key={item.key} className="flex items-center gap-3 py-1.5">
+                {item.art && <CardArt key={item.art.src ?? ''} art={item.art} size={34} />}
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[13px] font-medium text-textPrimary">{item.title}</div>
+                  {item.subtitle && <div className="truncate text-[12px] text-textSecondary">{item.subtitle}</div>}
+                </div>
+                {item.trailing && (
+                  <span className="shrink-0 text-right text-[12px] tabular-nums text-textMuted">{item.trailing}</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {choices && choices.length > 0 && (
+        <div className={`${CARD_RULE} grid gap-2.5 px-5 pb-5 pt-4 sm:grid-cols-2`}>
+          {choices.map((choice) => (
+            <button
+              key={choice.key}
+              type="button"
+              onClick={choice.onPick}
+              className="glaze-inset glaze-chip group flex items-start gap-3 bg-[color-mix(in_srgb,var(--color-text-primary)_5%,transparent)] p-3.5 text-left transition-colors hover:bg-[color-mix(in_srgb,var(--color-text-primary)_9%,transparent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--color-text-primary)]"
+            >
+              {choice.icon && <span className="mt-px inline-flex shrink-0 text-accent-on-surface">{choice.icon}</span>}
+              <span className="min-w-0 flex-1">
+                <span className="block text-[13.5px] font-semibold text-textPrimary">{choice.title}</span>
+                <span className="mt-0.5 block text-[12px] leading-snug text-textSecondary">{choice.text}</span>
+              </span>
+              <span className="mt-px inline-flex shrink-0 items-center gap-1 text-[12px] font-semibold text-accent-on-surface opacity-80 transition-opacity group-hover:opacity-100">
+                <Play size={11} className="fill-current" />
+                Start
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
 
-/** A button in the page's own look: filled with the accent for the one thing
- *  the page wants you to do, or a quiet raised one for the rest. */
+/** A capsule in the glaze's own look: the dark accent fill for the one thing
+ *  the page wants you to do, or the quieter glazed pill for the rest. */
 export function KitButton({
   children,
   onClick,
@@ -498,16 +700,14 @@ export function KitButton({
   variant?: 'primary' | 'quiet';
   disabled?: boolean;
 }) {
-  const look =
-    variant === 'primary'
-      ? 'bg-accent text-background hover:bg-accent-hover [html[data-theme-tone=light]_&]:text-white'
-      : 'bg-[color-mix(in_srgb,var(--color-text-primary)_9%,transparent)] text-textPrimary ring-1 ring-inset ring-[color-mix(in_srgb,var(--color-text-primary)_12%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-text-primary)_15%,transparent)]';
+  const look = variant === 'primary' ? ACCENT_BUTTON : GLAZE_PILL;
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className={`inline-flex min-h-9 items-center gap-2 rounded-[10px] px-3.5 py-2 text-[13px] font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--color-text-primary)] active:translate-y-px disabled:pointer-events-none disabled:opacity-50 ${look}`}
+      style={variant === 'primary' ? ACCENT_FILL : undefined}
+      className={`${look} inline-flex min-h-9 items-center gap-2 px-4 py-2 !text-[13px] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--color-text-primary)] disabled:pointer-events-none`}
     >
       {icon}
       {children}
@@ -516,6 +716,9 @@ export function KitButton({
 }
 
 const DISCLOSURE_MS = 220;
+
+/** The fold's bar: a settings glaze card's corner and frost. */
+const FOLD_GLAZE = { borderRadius: 16, '--glaze-frost': '22%' } as CSSProperties;
 
 /** A fold on a page: its title and a one-line summary stay visible, and it
  *  opens in place with a height animation. Whether it is open is remembered
@@ -576,7 +779,9 @@ export function Disclosure({
         aria-expanded={open}
         aria-controls={bodyId}
         onClick={toggle}
-        className="flex w-full items-center justify-between gap-4 rounded-xl bg-[color-mix(in_srgb,var(--color-text-primary)_4%,transparent)] px-4 py-3.5 text-left ring-1 ring-inset ring-[color-mix(in_srgb,var(--color-text-primary)_8%,transparent)] transition-colors hover:bg-[color-mix(in_srgb,var(--color-text-primary)_7%,transparent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--color-text-primary)]"
+        // The glaze, lit a little brighter under the pointer, like the chrome's own controls.
+        className="chrome-glaze chrome-glaze--control flex w-full items-center justify-between gap-4 px-4 py-3.5 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--color-text-primary)]"
+        style={FOLD_GLAZE}
       >
         <span className="min-w-0">
           <span className="block text-[14px] font-semibold text-textPrimary">{title}</span>
@@ -603,7 +808,7 @@ export function Disclosure({
               className="transition-opacity duration-[220ms] ease-out motion-reduce:transition-none"
               style={{ paddingTop: 8, opacity: shown ? 1 : 0 }}
             >
-              <div className="settings-card px-4">{children}</div>
+              <div className="chrome-glaze settings-glaze px-4">{children}</div>
             </div>
           )}
         </div>
