@@ -91,7 +91,46 @@ pub struct PendingInstall {
     pub prepared: install::PreparedInstall,
 }
 
+/// The evolution locks the last drops-settings push carried, so a lock check
+/// pushes again only when they changed.
+static SENT_LOCKED: std::sync::Mutex<Option<HashMap<String, String>>> = std::sync::Mutex::new(None);
+
+/// How old Twitch's second drops list may be when a drops plugin is told which
+/// evolution lines it can't work; also how often that is re-checked.
+pub(crate) const LOCKS_LIST_MAX_AGE_SECS: u64 = 300;
+
 impl HostInner {
+    /// Reads Twitch's second drops list again when it is older than
+    /// `LOCKS_LIST_MAX_AGE_SECS`. Which evolution lines are locked is worked out
+    /// from it, and nothing else reads it while Autopilot mines with nothing
+    /// playing in the app; before the first read the locks are empty and every
+    /// line looks workable. No Drops sign-in: nothing to read, and no plugin
+    /// mining either.
+    async fn freshen_second_list(&self) {
+        use tauri::Manager;
+        if crate::services::reward_drops::cached_within(LOCKS_LIST_MAX_AGE_SECS).is_some() {
+            return;
+        }
+        let Some(state) = self.app.try_state::<crate::models::settings::AppState>() else {
+            return;
+        };
+        let read = state.drops_service.lock().await.reward_campaigns(LOCKS_LIST_MAX_AGE_SECS).await;
+        if let Err(e) = read {
+            debug!("[PluginHost] second drops list for the evolution locks: {e}");
+        }
+    }
+
+    /// Pushes the drops settings again when the evolution lines this account
+    /// can't start changed since the last push (a fresh list, a badge earned).
+    pub async fn refresh_evolution_locks(&self) {
+        self.freshen_second_list().await;
+        let locked = crate::services::evolution::locked_stages(&self.app).await;
+        let changed = SENT_LOCKED.lock().map(|s| s.as_ref() != Some(&locked)).unwrap_or(true);
+        if changed {
+            self.push_drops_settings().await;
+        }
+    }
+
     /// True when at least one running plugin subscribed to the event.
     pub async fn any_hook(&self, event: &str) -> bool {
         self.running
@@ -134,8 +173,14 @@ impl HostInner {
         };
         // Looked up before the settings are read, so the copy sent is the
         // newest one at the moment of sending, not at the start of the lookups.
+        // The locks come from the second drops list, read first when stale:
+        // on a plugin's start it usually has not been read yet.
+        self.freshen_second_list().await;
         let evolution_bases = crate::services::evolution::evolution_bases().await;
         let evolution_locked = crate::services::evolution::locked_stages(&self.app).await;
+        if let Ok(mut sent) = SENT_LOCKED.lock() {
+            *sent = Some(evolution_locked.clone());
+        }
         let settings = state.drops_service.lock().await.get_settings().await;
         let Ok(mut values) = serde_json::to_value(&settings) else {
             return;
