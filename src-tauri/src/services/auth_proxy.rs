@@ -641,10 +641,10 @@ https://r/1080.m3u8\n";
         assert_eq!(url("worst").as_deref(), Some("worst=https://v/720.m3u8"));
         assert_eq!(url("1080p60").as_deref(), Some("1080p60=https://v/1080.m3u8"));
         assert_eq!(url("1440p60"), Some(format!("1440p60={graft}")));
-        let mut menu = vec!["1440p60", "1080p60", "720p60", "best", "audio_only", "worst"];
-        if !cfg!(mobile) {
-            menu.insert(0, "auto");
-        }
-        assert_eq!(tr::quality_names(&v), menu);
+        let phone = vec!["1440p60", "1080p60", "720p60", "best", "audio_only", "worst"];
+        let desktop = vec!["auto", "best", "1080p60", "720p60", "audio_only"];
+        assert_eq!(tr::quality_names_on(true, &v), phone);
+        assert_eq!(tr::quality_names_on(false, &v), desktop);
+        assert_eq!(tr::quality_names(&v), if cfg!(mobile) { phone } else { desktop });
     }
 }

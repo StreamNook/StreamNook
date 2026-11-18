@@ -39,6 +39,8 @@ describe('quality labels', () => {
   it('leaves a named quality as it is, capitalized', () => {
     expect(qualityLabel('1080p60')).toBe('1080p60');
     expect(qualityLabel('worst')).toBe('Worst');
+    // SN-277: the menu read "Audio_only".
+    expect(qualityLabel('audio_only')).toBe('Audio only');
     expect(qualityLabel('1080p60', '720p60')).toBe('1080p60');
   });
 });

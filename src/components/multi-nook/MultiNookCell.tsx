@@ -9,6 +9,7 @@ import { useContextMenuStore } from '../../stores/contextMenuStore';
 import { useAppStore } from '../../stores/AppStore';
 import { buildProviderUrl } from '../../utils/streamProvider';
 import { qualityLabel } from '../../utils/quality';
+import { prepareSettingsMenu } from '../../utils/plyrSettingsMenu';
 import { useMediaGlow } from '../../utils/mediaGlow';
 import { useFlat } from '../../utils/lowPower';
 import { useChannelSocial } from '../../hooks/useChannelSocial';
@@ -337,7 +338,7 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
     const capNote = slot.startedCap ? ` · ${slot.startedCap}p while small` : '';
 
     const qualityMenuItem = document.createElement('button');
-    qualityMenuItem.className = 'plyr__control';
+    qualityMenuItem.className = 'plyr__control plyr__control--forward';
     qualityMenuItem.setAttribute('data-plyr', 'quality');
     qualityMenuItem.setAttribute('type', 'button');
     qualityMenuItem.setAttribute('role', 'menuitem');
@@ -459,6 +460,23 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
     });
     // isPlaying/streamUrl re-trigger after the player (re)initialises
   }, [audioBoostOn, isPlaying, streamUrl, playerRef]);
+
+  // The gear opens on its main list on the glaze every time, as in the solo
+  // player (SN-277). Capture runs before Plyr's own click handler opens it.
+  useEffect(() => {
+    const container = (playerRef.current as unknown as { elements?: { container?: HTMLElement } } | null)?.elements
+      ?.container;
+    if (!container) return;
+    const onClick = (e: MouseEvent) => {
+      const gear = (e.target as Element | null)?.closest?.('[data-plyr="settings"]');
+      if (!gear || gear.getAttribute('aria-expanded') === 'true') return;
+      const menu = gear.parentElement?.querySelector('.plyr__menu__container');
+      if (menu) prepareSettingsMenu(menu);
+    };
+    container.addEventListener('click', onClick, true);
+    return () => container.removeEventListener('click', onClick, true);
+    // isPlaying/streamUrl re-trigger after the player (re)initialises
+  }, [isPlaying, streamUrl, playerRef]);
 
   // The chat button, the same one the solo player has: shown only while this
   // tile is full screen, it brings the grid's chat up over the video.

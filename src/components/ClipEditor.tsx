@@ -256,8 +256,8 @@ function ClipEditorInner({
             />
           ) : loadError ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
-              <p className="text-sm text-textSecondary">Couldn&apos;t load the footage to trim.</p>
-              <p className="max-w-md break-words text-xs text-textSecondary opacity-70">{loadError}</p>
+              <p className="text-sm font-medium text-textPrimary">Couldn&apos;t start a clip</p>
+              <p className="max-w-md break-words text-sm text-textSecondary">{loadError}</p>
               <button
                 type="button"
                 onClick={onClose}

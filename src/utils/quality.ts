@@ -60,5 +60,6 @@ export function qualityLabel(quality: string, autoPlaying?: string | null, mobil
   const q = quality.trim().toLowerCase();
   if (q === 'auto' || (q === 'best' && mobile)) return autoPlaying ? `Auto (${autoPlaying})` : 'Auto';
   if (q === 'best' || q === 'source') return 'Source';
+  if (q === 'audio_only' || q === 'audio-only' || q === 'audio') return 'Audio only';
   return quality.charAt(0).toUpperCase() + quality.slice(1);
 }

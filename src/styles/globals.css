@@ -5815,23 +5815,31 @@ html[data-sn-still-chat] [class*="sn-bttv-anim-"] {
   font-size: 13px;
 }
 
-/* Menu styling */
+/* The settings menu (gear) wears the glaze flyout like every other menu in the
+   app (SN-277: its Quality and Speed lists were checkbox forms that looked
+   like a different program). VideoPlayer puts `glass-flyout` on Plyr's menu
+   container, which brings the material, the 12px shell and the 6px gutter;
+   this block only places it and draws the rows: 6px rows with no dividers, a
+   quiet hover, the chosen quality or speed as a check on a lightly tinted row.
+   The shell rules beat plyr.css by order (same specificity, later file). */
 .video-player-container .plyr__menu__container {
-  background: color-mix(in srgb, #000 calc(85% + (1 - var(--glass-strength, 1)) * 15%), transparent);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  border: 1px solid var(--color-border-light);
-  border-radius: 4px;
   position: absolute;
   bottom: 100%;
   right: 0;
   margin-bottom: 10px;
   z-index: 10;
+  min-width: 200px;
+  color: var(--color-text-primary);
 }
 
-/* Quality submenu styling - matches Plyr's native submenu behavior */
-.video-player-container .plyr__menu__container [data-quality-menu] {
-  padding: 7px;
+/* Plyr's speech-bubble arrow: the glaze flyouts have none. */
+.video-player-container .plyr__menu__container::after {
+  display: none;
+}
+
+/* The shell's gutter is the only padding. */
+.video-player-container .plyr__menu__container [role="menu"] {
+  padding: 0;
 }
 
 .video-player-container .plyr__menu__container [data-quality-menu][hidden] {
@@ -5846,69 +5854,89 @@ html[data-sn-still-chat] [class*="sn-bttv-anim-"] {
 }
 
 .video-player-container .plyr__menu__container .plyr__control {
+  position: relative;
+  width: 100%;
+  margin-top: 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  text-align: left;
+  color: var(--color-text-primary);
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+/* Theme ink, not white, so the hover and the hairline below read on light
+   themes too. */
+.video-player-container .plyr__menu__container .plyr__control:hover,
+.video-player-container .plyr__menu__container .plyr__control:focus-visible {
+  background: color-mix(in srgb, var(--color-text-primary) 7%, transparent);
   color: var(--color-text-primary);
 }
 
-.video-player-container .plyr__menu__container .plyr__control:hover {
-  background: var(--color-surface);
-  color: var(--color-accent);
+/* A row that opens a list: its current value, quieter, then a chevron. */
+.video-player-container .plyr__menu__container .plyr__control--forward {
+  padding-right: 26px;
 }
 
-.video-player-container
-  .plyr__menu__container
-  .plyr__control[role="menuitemradio"]::before {
-  content: "";
-  display: inline-block;
-  width: 16px;
-  height: 16px;
-  margin-right: 8px;
-  border-radius: 2px;
-  border: 1.5px solid var(--color-border);
-  background: transparent;
-  flex-shrink: 0;
-  transition: all 0.2s ease;
+.video-player-container .plyr__menu__container .plyr__control--forward::after {
+  right: 8px;
+  border-left-color: var(--color-text-muted);
 }
 
-.video-player-container
-  .plyr__menu__container
-  .plyr__control[role="menuitemradio"][aria-checked="true"]::before {
-  background: var(--color-info);
-  border-color: var(--color-info);
-  /* Checkmark using Unicode */
-  content: "✓";
-  color: white;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 12px;
-  font-weight: bold;
-  line-height: 1;
-}
-
-/* Hide Plyr's default radio button indicator */
-.video-player-container
-  .plyr__menu__container
-  .plyr__control[role="menuitemradio"]::after {
-  display: none !important;
-}
-
-.video-player-container .plyr__menu__container .plyr__control--back {
-  border-bottom: 1px solid var(--color-border-subtle);
-}
-
-.video-player-container .plyr__menu__container .plyr__control--back:hover {
-  background: var(--color-surface);
-}
-
-.video-player-container .plyr__menu__container .plyr__control--back > span {
-  margin-left: 4px;
-  text-align: center;
-  width: 100%;
-}
-
-/* Menu items */
 .video-player-container .plyr__menu__container .plyr__menu__value {
+  margin-right: 0;
+  padding-left: 20px;
   color: var(--color-text-muted);
+}
+
+/* A list's title row: back chevron and the list's name, then one hairline. */
+.video-player-container .plyr__menu__container .plyr__control--back {
+  width: 100%;
+  margin: 0 0 7px;
+  padding-left: 26px;
+  font-weight: 600;
+}
+
+.video-player-container .plyr__menu__container .plyr__control--back::after {
+  left: 8px;
+  border-right-color: var(--color-text-muted);
+}
+
+.video-player-container .plyr__menu__container .plyr__control--back::before {
+  left: 4px;
+  right: 4px;
+  margin-top: 3px;
+  background: color-mix(in srgb, var(--color-text-primary) 10%, transparent);
+  box-shadow: none;
+}
+
+/* The choices: no boxes or dots. The rest read a step quieter; the chosen
+   one is full strength on a lightly tinted row with a check at its end. */
+.video-player-container .plyr__menu__container .plyr__control[role="menuitemradio"] {
+  padding-left: 10px;
+  padding-right: 32px;
+  color: var(--color-text-secondary);
+}
+
+.video-player-container .plyr__menu__container .plyr__control[role="menuitemradio"]::before {
+  display: none;
+}
+
+.video-player-container .plyr__menu__container .plyr__control[role="menuitemradio"][aria-checked="true"] {
+  color: var(--color-text-primary);
+  background: color-mix(in srgb, var(--color-accent) 14%, transparent);
+}
+
+.video-player-container .plyr__menu__container .plyr__control[role="menuitemradio"]::after {
+  left: auto;
+  right: 10px;
+  width: 14px;
+  height: 14px;
+  border: 0;
+  border-radius: 0;
+  background: var(--color-accent);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3 8.5l3.2 3.2L13 4.8' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3 8.5l3.2 3.2L13 4.8' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat;
 }
 
 /* Loading spinner */
@@ -6056,18 +6084,6 @@ html[data-sn-still-chat] [class*="sn-bttv-anim-"] {
 .video-player-container .plyr__poster {
   background-color: #000;
   pointer-events: none;
-}
-
-/* Quality badge in menu */
-.video-player-container .plyr__menu__container [role="menu"] button {
-  padding: 8px 16px;
-  width: 100%;
-  text-align: left;
-  border-bottom: 1px solid var(--color-border-subtle);
-}
-
-.video-player-container .plyr__menu__container [role="menu"] button:last-child {
-  border-bottom: none;
 }
 
 /* Settings icon animation */

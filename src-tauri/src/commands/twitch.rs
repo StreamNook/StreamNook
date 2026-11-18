@@ -605,6 +605,49 @@ mod quick_clip_tests {
 // finalizes. `begin_clip_edit` does CreateRawMedia + polls GetRawMedia for the
 // SIGNED footage URL + length; `finalize_clip` does CreateClipFromRawMedia.
 
+/// What the clip editor says when Twitch will not capture footage: one plain
+/// sentence by the error's `code`, never the raw GQL object (SN-277: a channel
+/// with clips turned off put `{"__typename":"CreateRawMediaError",...}` on
+/// screen). An unknown code keeps the code so a report can name it.
+fn raw_media_refusal(code: Option<&str>, detail: &str) -> String {
+    match code {
+        Some("CHANNEL_NOT_CLIPPABLE") => "This channel has clips turned off.".to_string(),
+        Some("REQUEST_THROTTLED") => {
+            "Twitch is limiting clips right now. Wait a minute and try again.".to_string()
+        }
+        Some(other) => format!("Twitch won't make a clip here right now ({other})."),
+        None if detail.contains("THROTTLED") => {
+            "Twitch is limiting clips right now. Wait a minute and try again.".to_string()
+        }
+        None => "Twitch didn't answer with any footage. Try again in a moment.".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod raw_media_refusal_tests {
+    use super::raw_media_refusal;
+
+    #[test]
+    fn a_refusal_reads_as_one_plain_sentence() {
+        assert_eq!(
+            raw_media_refusal(Some("CHANNEL_NOT_CLIPPABLE"), "{\"__typename\":\"CreateRawMediaError\"}"),
+            "This channel has clips turned off."
+        );
+        assert!(raw_media_refusal(Some("REQUEST_THROTTLED"), "").starts_with("Twitch is limiting clips"));
+        assert!(raw_media_refusal(None, "REQUEST_THROTTLED").starts_with("Twitch is limiting clips"));
+        assert_eq!(
+            raw_media_refusal(Some("SOMETHING_NEW"), ""),
+            "Twitch won't make a clip here right now (SOMETHING_NEW)."
+        );
+        for s in [
+            raw_media_refusal(Some("CHANNEL_NOT_CLIPPABLE"), ""),
+            raw_media_refusal(None, "{\"data\":{}}"),
+        ] {
+            assert!(!s.contains("__typename") && !s.contains("CreateRawMedia"), "{s}");
+        }
+    }
+}
+
 #[derive(serde::Serialize)]
 pub struct ClipEditSession {
     pub raw_media_id: String,
@@ -630,9 +673,10 @@ async fn begin_clip_edit_inner(
     broadcast_id: Option<&str>,
     offset_seconds: f64,
 ) -> Result<ClipEditSession> {
+    // The editor shows this text as it is, so it is a sentence, not REAUTH.
     let token = DropsAuthService::get_token()
         .await
-        .map_err(|_| anyhow::anyhow!("REAUTH"))?;
+        .map_err(|_| anyhow::anyhow!("Sign in to Twitch again to make clips."))?;
     let client = crate::services::http::client().clone();
     let offset = offset_seconds.max(0.0).round() as i64;
 
@@ -649,6 +693,7 @@ async fn begin_clip_edit_inner(
     let vars = serde_json::json!({ "input": input });
     let mut raw_media_id: Option<String> = None;
     let mut last_err = String::from("(no rawMedia, no error field)");
+    let mut last_code: Option<String> = None;
     for attempt in 0..4u32 {
         if attempt > 0 {
             tokio::time::sleep(std::time::Duration::from_secs(4)).await;
@@ -668,9 +713,14 @@ async fn begin_clip_edit_inner(
             raw_media_id = Some(id.to_string());
             break;
         }
-        last_err = raw
+        let error = raw
             .pointer("/data/createRawMedia/error")
-            .filter(|e| !e.is_null())
+            .filter(|e| !e.is_null());
+        last_code = error
+            .and_then(|e| e.get("code"))
+            .and_then(|c| c.as_str())
+            .map(str::to_string);
+        last_err = error
             .map(|e| e.to_string())
             .unwrap_or_else(|| raw.to_string().chars().take(300).collect());
         // Only a throttle is worth retrying; any other error is terminal.
@@ -679,13 +729,8 @@ async fn begin_clip_edit_inner(
         }
     }
     let raw_media_id = raw_media_id.ok_or_else(|| {
-        if last_err.contains("THROTTLED") {
-            anyhow::anyhow!(
-                "Twitch is rate-limiting clip creation right now — wait a minute and try again"
-            )
-        } else {
-            anyhow::anyhow!("CreateRawMedia: {}", last_err)
-        }
+        warn!("[clip] CreateRawMedia refused: {}", last_err);
+        anyhow::anyhow!(raw_media_refusal(last_code.as_deref(), &last_err))
     })?;
 
     // 2. Poll GetRawMedia until the footage has processed (status CREATED), then
@@ -732,7 +777,8 @@ async fn begin_clip_edit_inner(
             });
         }
     }
-    Err(anyhow::anyhow!("raw media never finished processing"))
+    warn!("[clip] raw media {} never finished processing", raw_media_id);
+    Err(anyhow::anyhow!("The footage took too long to get ready. Try again in a moment."))
 }
 
 #[tauri::command]

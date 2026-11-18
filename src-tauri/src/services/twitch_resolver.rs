@@ -702,23 +702,49 @@ fn parse_resolution(inf_line: &str) -> (Option<u32>, Option<u32>) {
     }
 }
 
-/// The quality menu the player should show: every variant name plus the
-/// `best`/`worst` aliases Streamlink synthesizes, sorted highest-first using the
+/// The quality menu the player should show, sorted highest-first using the
 /// existing ordering logic.
 pub fn quality_names(variants: &[Variant]) -> Vec<String> {
-    let mut names: Vec<String> = variants.iter().map(|v| v.name.clone()).collect();
+    quality_names_on(cfg!(mobile), variants)
+}
+
+/// `quality_names` for a build that is (`phone`) or is not a phone.
+///
+/// The phones list every variant name plus the `best`/`worst` aliases
+/// Streamlink synthesizes; their "best" is their Auto. The desktop lists each
+/// picture once (SN-277: the menu showed "1080p60 (source)" and "Source", and
+/// "Worst" beside "160p"): Auto, then Source ("best") standing for the source
+/// rendition, whose own name is left out, then the other renditions. "worst"
+/// is never offered there; a saved "worst" still resolves.
+pub(crate) fn quality_names_on(phone: bool, variants: &[Variant]) -> Vec<String> {
+    let source = if phone { None } else { source_index(variants) };
+    let mut names: Vec<String> = variants
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| Some(*i) != source)
+        .map(|(_, v)| v.name.clone())
+        .collect();
     if !names.iter().any(|n| n.eq_ignore_ascii_case("best")) {
         names.push("best".to_string());
     }
-    if !names.iter().any(|n| n.eq_ignore_ascii_case("worst")) {
+    if phone && !names.iter().any(|n| n.eq_ignore_ascii_case("worst")) {
         names.push("worst".to_string());
     }
     // The desktop offers Auto as its own choice beside the fixed source
     // ("best"); on the phones "best" is their Auto.
-    if !cfg!(mobile) && !names.iter().any(|n| n.eq_ignore_ascii_case("auto")) {
+    if !phone && !names.iter().any(|n| n.eq_ignore_ascii_case("auto")) {
         names.push("auto".to_string());
     }
     sort_qualities_descending(&mut names);
+    // On the desktop Source sits right under Auto, where the source
+    // rendition's own row was, instead of below the lowest tier.
+    if !phone {
+        if let Some(i) = names.iter().position(|n| n.eq_ignore_ascii_case("best")) {
+            let best = names.remove(i);
+            let at = names.iter().position(|n| n.eq_ignore_ascii_case("auto")).map_or(0, |a| a + 1);
+            names.insert(at, best);
+        }
+    }
     names
 }
 
@@ -1772,15 +1798,20 @@ https://euc11.playlist.ttvnw.net/160.m3u8\n";
     #[test]
     fn quality_menu_includes_aliases_sorted() {
         let v = parse();
-        let names = quality_names(&v);
-        // The desktop's Auto leads the menu; the phones' "best" is their Auto.
-        let first = if cfg!(mobile) { "1080p60" } else { "auto" };
-        assert_eq!(names.first().map(String::as_str), Some(first));
-        let first_tier = names.iter().find(|n| n.as_str() != "auto").map(String::as_str);
-        assert_eq!(first_tier, Some("1080p60"));
-        assert!(names.iter().any(|n| n == "best"));
-        assert!(names.iter().any(|n| n == "worst"));
-        assert!(names.iter().any(|n| n == "audio_only"));
+        // The phones list every rendition plus both aliases; their "best" is their Auto.
+        let phone = quality_names_on(true, &v);
+        assert_eq!(phone.first().map(String::as_str), Some("1080p60"));
+        assert!(phone.iter().any(|n| n == "best"));
+        assert!(phone.iter().any(|n| n == "worst"));
+        assert!(phone.iter().any(|n| n == "audio_only"));
+        // SN-277: the desktop lists each picture once. Auto, then Source standing
+        // for the source rendition (whose own name is left out), no Worst.
+        let desktop = quality_names_on(false, &v);
+        assert_eq!(&desktop[..2], &["auto".to_string(), "best".to_string()]);
+        assert!(!desktop.iter().any(|n| n == "1080p60"), "{desktop:?}");
+        assert!(!desktop.iter().any(|n| n == "worst"), "{desktop:?}");
+        assert!(desktop.iter().any(|n| n == "audio_only"));
+        assert_eq!(quality_names(&v), if cfg!(mobile) { phone } else { desktop });
     }
 
     #[test]
@@ -2061,7 +2092,11 @@ https://relay.example/quality-media?region=weur&u=1440\n";
         let v = retain_playable(parse_master(MASTER_REGION_UNLOCKED), &pref);
         let i = best_index_with(&v, &pref).unwrap();
         assert_eq!(v[i].name, "1440p60");
-        assert!(quality_names(&v).iter().any(|q| q == "1440p60"));
+        assert!(quality_names_on(true, &v).iter().any(|q| q == "1440p60"));
+        // The desktop offers it as Source.
+        let desktop = quality_names_on(false, &v);
+        assert_eq!(desktop.get(1).map(String::as_str), Some("best"), "{desktop:?}");
+        assert!(!desktop.iter().any(|q| q == "1440p60"), "{desktop:?}");
     }
 
     #[test]
@@ -2248,14 +2283,17 @@ https://x/1080.m3u8\n";
         out
     }
 
-    /// The menu, with the desktop's Auto in front where it applies.
+    /// A menu as written.
     fn menu(names: &[&str]) -> Vec<String> {
-        let mut out: Vec<String> = Vec::new();
-        if !cfg!(mobile) {
-            out.push("auto".into());
-        }
-        out.extend(names.iter().map(|n| n.to_string()));
-        out
+        names.iter().map(|n| n.to_string()).collect()
+    }
+
+    /// The phone menu and the desktop menu of one ladder, and that `quality_names`
+    /// answers the one this build is.
+    fn assert_menus(v: &[Variant], phone: &[&str], desktop: &[&str]) {
+        assert_eq!(quality_names_on(true, v), menu(phone), "phone");
+        assert_eq!(quality_names_on(false, v), menu(desktop), "desktop");
+        assert_eq!(quality_names(v), menu(if cfg!(mobile) { phone } else { desktop }));
     }
 
     #[test]
@@ -2278,9 +2316,10 @@ https://x/1080.m3u8\n";
                 format!("cap144:{w}/160p30.m3u8"),
             ]
         );
-        assert_eq!(
-            quality_names(&v),
-            menu(&["1080p60", "720p60", "480p30", "160p30", "best", "audio_only", "worst"])
+        assert_menus(
+            &v,
+            &["1080p60", "720p60", "480p30", "160p30", "best", "audio_only", "worst"],
+            &["auto", "best", "720p60", "480p30", "160p30", "audio_only"],
         );
     }
 
@@ -2304,9 +2343,10 @@ https://x/1080.m3u8\n";
                 format!("cap144:{w}/160.m3u8"),
             ]
         );
-        assert_eq!(
-            quality_names(&v),
-            menu(&["1080p60", "720p60", "480p", "360p", "160p", "best", "audio_only", "worst"])
+        assert_menus(
+            &v,
+            &["1080p60", "720p60", "480p", "360p", "160p", "best", "audio_only", "worst"],
+            &["auto", "best", "720p60", "480p", "360p", "160p", "audio_only"],
         );
     }
 
@@ -2331,7 +2371,11 @@ https://x/1080.m3u8\n";
                 "cap144:https://x/720.m3u8".to_string(),
             ]
         );
-        assert_eq!(quality_names(&v), menu(&["1440p60", "1080p60", "720p60", "best", "audio_only", "worst"]));
+        assert_menus(
+            &v,
+            &["1440p60", "1080p60", "720p60", "best", "audio_only", "worst"],
+            &["auto", "best", "1080p60", "720p60", "audio_only"],
+        );
 
         let h264 = s(&["h264"]);
         let v = retain_playable(parse_master(MASTER_REGION_UNLOCKED), &h264);
@@ -2398,7 +2442,11 @@ https://x/audio.m3u8\n",
                 "cap144:https://x/hevc-720.m3u8",
             ]
         );
-        assert_eq!(quality_names(&v), menu(&["1080p60", "1080p60-av1", "720p60-hevc", "best", "worst"]));
+        assert_menus(
+            &v,
+            &["1080p60", "1080p60-av1", "720p60-hevc", "best", "worst"],
+            &["auto", "best", "1080p60-av1", "720p60-hevc"],
+        );
     }
 
     // --- Portrait ladders (SN-40) -------------------------------------------

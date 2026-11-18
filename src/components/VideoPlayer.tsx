@@ -43,6 +43,7 @@ import { LiveAlertBell } from './LiveAlertBell';
 import { TwitchVerifiedMark } from './ui/TwitchGlyph';
 import { registerPlayerControls, type PlayerControls } from '../keybindings';
 import { qualitiesEquivalent, qualityLabel } from '../utils/quality';
+import { prepareSettingsMenu } from '../utils/plyrSettingsMenu';
 import { createStallReporter, reportSegment } from '../utils/linkAdapt';
 import { SEAM_MAX_SECS, learnedLLCushion, rememberLLCushion } from '../utils/llCushion';
 
@@ -743,7 +744,8 @@ const VideoPlayer = () => {
       const settingsHome = settingsMenu.querySelector('[role="menu"]');
       if (settingsHome) {
         const qualityMenuItem = document.createElement('button');
-        qualityMenuItem.className = 'plyr__control';
+        // --forward: the same chevron Speed's row has, since both open a list.
+        qualityMenuItem.className = 'plyr__control plyr__control--forward';
         qualityMenuItem.setAttribute('data-plyr', 'quality');
         qualityMenuItem.setAttribute('type', 'button');
         qualityMenuItem.setAttribute('role', 'menuitem');
@@ -3423,14 +3425,25 @@ const VideoPlayer = () => {
       setShowOverlay(false);
     };
 
+    // The gear opens on its main list on the glaze every time (SN-277). Capture
+    // runs before Plyr's own click handler opens the menu.
+    const handleSettingsOpen = (e: MouseEvent) => {
+      const gear = (e.target as Element | null)?.closest?.('[data-plyr="settings"]');
+      if (!gear || gear.getAttribute('aria-expanded') === 'true') return;
+      const menu = gear.parentElement?.querySelector('.plyr__menu__container');
+      if (menu) prepareSettingsMenu(menu);
+    };
+
     container.addEventListener('mousemove', handleMouseMove);
     container.addEventListener('mouseenter', handleMouseEnter);
     container.addEventListener('mouseleave', handleMouseLeave);
+    container.addEventListener('click', handleSettingsOpen, true);
 
     return () => {
       container.removeEventListener('mousemove', handleMouseMove);
       container.removeEventListener('mouseenter', handleMouseEnter);
       container.removeEventListener('mouseleave', handleMouseLeave);
+      container.removeEventListener('click', handleSettingsOpen, true);
       if (overlayTimerRef.current) {
         clearTimeout(overlayTimerRef.current);
         overlayTimerRef.current = null;
