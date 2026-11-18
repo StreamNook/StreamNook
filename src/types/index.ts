@@ -2660,11 +2660,15 @@ export interface SevenTVBadge {
   name: string;
   tooltip: string;
   urls: Array<[string, string]>;
+  /** False when 7TV keeps it for the account but won't let it be worn now. */
+  accessible?: boolean;
 }
 
 export interface SevenTVPaint {
   id: string;
   name: string;
+  /** False when 7TV keeps it for the account but won't let it be worn now. */
+  accessible?: boolean;
   function: 'LINEAR_GRADIENT' | 'RADIAL_GRADIENT' | 'URL';
   color?: number;
   stops?: Array<{ at: number; color: number }>;

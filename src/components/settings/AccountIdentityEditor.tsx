@@ -4,7 +4,7 @@ import { listen } from '@tauri-apps/api/event';
 import { X, Loader2, Link2, Unlink, Check, User } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
 import { getFullProfileWithFallback, forceRefreshCosmetics, type CachedProfile } from '../../services/cosmeticsCache';
-import { computePaintStyle, getBadgeImageUrl } from '../../services/seventvService';
+import { canWear, computePaintStyle, getBadgeImageUrl, wearLater } from '../../services/seventvService';
 import { getIdentityWithCache, setIdentity } from '../../services/identityService';
 import { Tooltip } from '../ui/Tooltip';
 import {
@@ -277,18 +277,32 @@ export default function AccountIdentityEditor({
                   <div className="flex flex-wrap gap-1.5">
                     {paints.map((paint: any) => {
                       const active = paint.id === selectedPaintId;
-                      return (
+                      const wearable = canWear(paint);
+                      const button = (
                         <button
                           key={paint.id}
                           onClick={() => pickPaint(paint.id)}
-                          disabled={busy}
-                          className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-all disabled:opacity-60 ${
-                            active ? 'glass-input ring-1 ring-accent/50' : 'bg-white/[0.04] hover:bg-white/[0.08]'
+                          disabled={busy || !wearable}
+                          className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-all ${
+                            wearable ? 'disabled:opacity-60' : 'opacity-40 cursor-default'
+                          } ${
+                            active
+                              ? 'glass-input ring-1 ring-accent/50'
+                              : wearable
+                                ? 'bg-white/[0.04] hover:bg-white/[0.08]'
+                                : 'bg-white/[0.04]'
                           }`}
                           style={computePaintStyle(paint)}
                         >
                           {paint.name || 'Paint'}
                         </button>
+                      );
+                      return wearable ? (
+                        button
+                      ) : (
+                        <Tooltip key={paint.id} content={wearLater(paint.name)}>
+                          <span>{button}</span>
+                        </Tooltip>
                       );
                     })}
                   </div>
@@ -304,15 +318,20 @@ export default function AccountIdentityEditor({
                   <div className="flex flex-wrap gap-2">
                     {badges.map((badge: any) => {
                       const active = badge.id === selectedBadgeId;
+                      const wearable = canWear(badge);
                       return (
-                        <Tooltip key={badge.id} content={badge.name}>
+                        <Tooltip key={badge.id} content={wearable ? badge.name : wearLater(badge.name)}>
                         <button
                           onClick={() => pickBadge(badge.id)}
-                          disabled={busy}
-                          className={`relative p-1.5 rounded-lg transition-all disabled:opacity-60 ${
+                          disabled={busy || !wearable}
+                          className={`relative p-1.5 rounded-lg transition-all ${
+                            wearable ? 'disabled:opacity-60' : 'cursor-default'
+                          } ${
                             active
                               ? 'glass-input ring-1 ring-accent/40'
-                              : 'border border-transparent opacity-60 hover:opacity-90 hover:bg-glass'
+                              : wearable
+                                ? 'border border-transparent opacity-60 hover:opacity-90 hover:bg-glass'
+                                : 'border border-transparent opacity-30'
                           }`}
                         >
                           <img src={getBadgeImageUrl(badge)} alt={badge.name} className="w-7 h-7" />

@@ -405,21 +405,33 @@ fn worn_cosmetics(user: &Value) -> UserCosmetics {
 }
 
 /// Everything a user owns, from the full inventory selection, with the worn
-/// ones marked selected.
+/// ones marked selected. One 7TV keeps but will not let the account wear right
+/// now (most often a subscriber cosmetic after the subscription ended) carries
+/// `"accessible": false` and comes after every wearable one.
 fn owned_cosmetics(user: &Value) -> UserCosmetics {
     let active_paint = user.pointer("/style/activePaint/id").and_then(Value::as_str);
     let active_badge = user.pointer("/style/activeBadge/id").and_then(Value::as_str);
     let collect = |list: &str, field: &str, active: Option<&str>| -> Vec<Value> {
-        user.pointer(list)
+        let (mut wearable, kept): (Vec<Value>, Vec<Value>) = user
+            .pointer(list)
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
-            .filter_map(|entry| entry.pointer(&format!("/to/{field}")).filter(|v| !v.is_null()).cloned())
-            .map(|def| {
+            .filter_map(|entry| {
+                let def = entry.pointer(&format!("/to/{field}")).filter(|v| !v.is_null())?.clone();
                 let is_active = def.get("id").and_then(Value::as_str) == active && active.is_some();
-                if is_active { selected(def) } else { def }
+                let def = if is_active { selected(def) } else { def };
+                Some(match (entry.get("accessible").and_then(Value::as_bool), def) {
+                    (Some(false), Value::Object(mut map)) => {
+                        map.insert("accessible".into(), Value::Bool(false));
+                        Value::Object(map)
+                    }
+                    (_, def) => def,
+                })
             })
-            .collect()
+            .partition(|def| def.get("accessible").and_then(Value::as_bool) != Some(false));
+        wearable.extend(kept);
+        wearable
     };
     let picture = user.pointer("/style/activeProfilePicture").and_then(profile_picture_from);
     UserCosmetics {
@@ -1234,7 +1246,7 @@ static INVENTORIES: Mutex<Option<HashMap<String, (Instant, InventoryFlight)>>> =
 
 async fn fetch_inventory(id: String) -> Option<Inventory> {
     let selection = format!(
-        "{{ id style {{ activePaint {{ id }} activeBadge {{ id description }} activeProfilePicture {{ id images {{ url mime scale frameCount }} }} }} inventory {{ paints {{ to {{ paint {PAINT_FIELDS} }} }} badges {{ to {{ badge {BADGE_FIELDS} }} }} }} }}"
+        "{{ id style {{ activePaint {{ id }} activeBadge {{ id description }} activeProfilePicture {{ id images {{ url mime scale frameCount }} }} }} inventory(includeInaccessible: true) {{ paints {{ accessible to {{ paint {PAINT_FIELDS} }} }} badges {{ accessible to {{ badge {BADGE_FIELDS} }} }} }} }}"
     );
     let data = request_gql(&user_query(std::slice::from_ref(&id), &selection)).await?;
     inventory_from_answer(&data, &id)
@@ -1817,6 +1829,23 @@ mod tests {
         assert_eq!(owned.paints[1]["selected"], true);
         assert_eq!(owned.badges.len(), 1);
         assert!(owned.badges[0].get("selected").is_none());
+    }
+
+    #[test]
+    fn a_cosmetic_7tv_will_not_let_you_wear_is_kept_last_and_marked() {
+        let user = json!({ "id": "u", "style": { "activePaint": null, "activeBadge": { "id": "b2" } },
+            "inventory": {
+                "paints": [],
+                "badges": [
+                    { "accessible": false, "to": { "badge": { "id": "b1" } } },
+                    { "accessible": true, "to": { "badge": { "id": "b2" } } },
+                    { "to": { "badge": { "id": "b3" } } } ] } });
+        let owned = owned_cosmetics(&user);
+        let ids: Vec<&str> = owned.badges.iter().map(|b| b["id"].as_str().unwrap()).collect();
+        assert_eq!(ids, ["b2", "b3", "b1"]);
+        assert_eq!(owned.badges[0]["selected"], true);
+        assert!(owned.badges[1].get("accessible").is_none());
+        assert_eq!(owned.badges[2]["accessible"], false);
     }
 
     #[test]

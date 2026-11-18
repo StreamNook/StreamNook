@@ -1595,12 +1595,24 @@ pub struct PickerPaint {
     /// The paint as 7TV defines it, for renderers that paint with CSS.
     pub def: Value,
     pub worn: bool,
+    /// Owned, but 7TV won't let the account wear it now (a subscriber paint
+    /// after the subscription ended); listed after the wearable ones.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cannot_wear: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct PickerSevenTvBadge {
     pub badge: ProfileBadge,
     pub worn: bool,
+    /// As `PickerPaint::cannot_wear`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cannot_wear: bool,
+}
+
+/// An owned 7TV cosmetic the account can't wear now (`"accessible": false`).
+fn kept_only(def: &Value) -> bool {
+    def.get("accessible").and_then(Value::as_bool) == Some(false)
 }
 
 /// The 7TV and Twitch half of the Cosmetics screen.
@@ -1693,6 +1705,7 @@ pub async fn external_picker(user_id: &str, login: &str) -> ExternalPicker {
                 id: view.id.clone(),
                 name: p.get("name").and_then(Value::as_str).unwrap_or_default().to_string(),
                 worn: p.get("selected").and_then(Value::as_bool).unwrap_or(false),
+                cannot_wear: kept_only(p),
                 paint: view,
                 def: p.clone(),
             })
@@ -1706,6 +1719,7 @@ pub async fn external_picker(user_id: &str, login: &str) -> ExternalPicker {
             let badge = seventv_badge(b)?;
             seen.insert(badge.id.clone()).then(|| PickerSevenTvBadge {
                 worn: b.get("selected").and_then(Value::as_bool).unwrap_or(false),
+                cannot_wear: kept_only(b),
                 badge,
             })
         })

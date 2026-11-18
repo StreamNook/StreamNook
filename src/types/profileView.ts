@@ -243,8 +243,9 @@ export interface ChatIdentityBadge {
 export interface ExternalPickerView {
   seventv_signed_in: boolean;
   seventv_user_id?: string;
-  paints: { id: string; name: string; def: PaintV4; worn: boolean }[];
-  seventv_badges: { badge: ProfileBadge; worn: boolean }[];
+  /** `cannot_wear`: owned, but 7TV won't let the account wear it now; listed last. */
+  paints: { id: string; name: string; def: PaintV4; worn: boolean; cannot_wear?: boolean }[];
+  seventv_badges: { badge: ProfileBadge; worn: boolean; cannot_wear?: boolean }[];
   drops_signed_in: boolean;
   twitch_selectable: ChatIdentityBadge[];
   twitch_earned: ProfileBadge[];

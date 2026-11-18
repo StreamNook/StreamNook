@@ -167,6 +167,17 @@ export function invalidateUserCosmeticsCache(twitchId: string): Promise<void> {
 }
 
 /**
+ * Whether 7TV lets the account wear an owned cosmetic now. The inventory also
+ * lists ones it keeps but won't let be worn (most often a subscriber cosmetic
+ * after the subscription ended), marked `accessible: false` and listed last.
+ */
+export const canWear = (c: { accessible?: boolean } | null | undefined): boolean => c?.accessible !== false;
+
+/** The hover line on an owned cosmetic `canWear` refuses. */
+export const wearLater = (name: string | undefined): string =>
+  `${name || 'This one'} needs a 7TV subscription to wear`;
+
+/**
  * Everything a user OWNS, not just what they are wearing.
  *
  * The chat path deliberately resolves only active ids, so it cannot answer

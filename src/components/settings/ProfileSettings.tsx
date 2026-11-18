@@ -17,6 +17,8 @@ import {
   pickPaintLayerImage,
   queueCosmeticForCaching,
   clearUserCache as clear7TVCache,
+  canWear,
+  wearLater,
 } from '../../services/seventvService';
 import { paintSwapStyle } from '../../services/paintStyle';
 import { FallbackImage } from '../FallbackImage';
@@ -1850,16 +1852,22 @@ const ProfileSettings = () => {
                 {paintHits.map((paint) => {
                   const isSelected = seventvPaint?.id === paint.id;
                   const isUpdating = updatingSeventvPaintId === paint.id;
+                  const wearable = canWear(paint);
                   return (
-                    <Tooltip key={paint.id} content={seventvAuthConnected ? paint.name : `${paint.name} - Connect to edit`} side="top">
+                    <Tooltip
+                      key={paint.id}
+                      content={!wearable ? wearLater(paint.name) : seventvAuthConnected ? paint.name : `${paint.name} - Connect to edit`}
+                      side="top"
+                    >
                       <div
                         className={`
                           relative min-w-0 px-3 py-1.5 rounded-lg cursor-pointer transition-all text-sm font-bold
-                          ${isSelected ? 'glass-input border-[#29b6f6]/50 ring-1 ring-[#29b6f6]/30' : 'border border-transparent hover:bg-glass hover:border-borderLight'}
+                          ${isSelected ? 'glass-input border-[#29b6f6]/50 ring-1 ring-[#29b6f6]/30' : wearable ? 'border border-transparent hover:bg-glass hover:border-borderLight' : 'border border-transparent'}
                           ${isUpdating ? 'opacity-50' : ''}
-                          ${!seventvAuthConnected ? 'cursor-default' : ''}
+                          ${!wearable ? 'opacity-40' : ''}
+                          ${!seventvAuthConnected || !wearable ? 'cursor-default' : ''}
                         `}
-                        onClick={() => seventvAuthConnected && !isUpdating && handleSelectSeventvPaint(isSelected ? null : paint)}
+                        onClick={() => seventvAuthConnected && wearable && !isUpdating && handleSelectSeventvPaint(isSelected ? null : paint)}
                       >
                         <span className="block truncate" style={computePaintStyle(paint as any, '#29b6f6')}>{paint.name}</span>
                         {isSelected && <CheckChip tone="seventv" />}
@@ -1886,16 +1894,22 @@ const ProfileSettings = () => {
                   const urls = getBadgeImageUrls(badge as any);
                   const isSelected = (badge as any).selected;
                   const isUpdating = updatingSeventvBadgeId === badge.id;
+                  const wearable = canWear(badge);
                   return urls.url4x ? (
-                    <Tooltip key={`${badge.id}-${idx}`} content={badge.tooltip || badge.name} side="top">
+                    <Tooltip
+                      key={`${badge.id}-${idx}`}
+                      content={wearable ? badge.tooltip || badge.name : wearLater(badge.tooltip || badge.name)}
+                      side="top"
+                    >
                       <div
                         className={`
                           relative p-2 rounded-lg cursor-pointer transition-all
-                          ${isSelected ? 'glass-input border-[#29b6f6]/50 ring-1 ring-[#29b6f6]/30' : 'border border-transparent hover:bg-glass hover:border-borderLight'}
+                          ${isSelected ? 'glass-input border-[#29b6f6]/50 ring-1 ring-[#29b6f6]/30' : wearable ? 'border border-transparent hover:bg-glass hover:border-borderLight' : 'border border-transparent'}
                           ${isUpdating ? 'opacity-50' : ''}
-                          ${!seventvAuthConnected ? 'cursor-default' : ''}
+                          ${!wearable ? 'opacity-40' : ''}
+                          ${!seventvAuthConnected || !wearable ? 'cursor-default' : ''}
                         `}
-                        onClick={() => seventvAuthConnected && !isUpdating && handleSelectSeventvBadge(isSelected ? null : badge)}
+                        onClick={() => seventvAuthConnected && wearable && !isUpdating && handleSelectSeventvBadge(isSelected ? null : badge)}
                       >
                         <FallbackImage
                           src={urls.url4x}

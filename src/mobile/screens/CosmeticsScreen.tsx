@@ -28,7 +28,7 @@ import { useMobileNavStore } from '../navStore';
 import { DrillInScreen } from '../ui/DrillInScreen';
 import { Button } from '../ui/Button';
 import { FallbackImage } from '../../components/FallbackImage';
-import { clearUserCache as clear7TVCache } from '../../services/seventvService';
+import { clearUserCache as clear7TVCache, wearLater } from '../../services/seventvService';
 import { applyLocalCosmeticSelection } from '../../services/cosmeticsCache';
 import { setActiveCosmetic, setProfileTheme, setChatAtmosphere } from '../../services/supabaseService';
 import { getAtmosphere } from '../../services/atmospheres';
@@ -94,12 +94,14 @@ const BadgeTile: React.FC<{
   worn: boolean;
   label: string;
   onClick: () => void;
-}> = ({ url, fallbacks, cosmetic, worn, label, onClick }) => (
+  /** Owned but not wearable now: drawn faint, listed last. */
+  dim?: boolean;
+}> = ({ url, fallbacks, cosmetic, worn, label, onClick, dim }) => (
   <button
     onClick={onClick}
     aria-label={label}
     aria-pressed={worn}
-    className="relative w-full aspect-square rounded-xl bg-tertiary border border-borderSubtle flex items-center justify-center active:scale-90 transition-transform"
+    className={`relative w-full aspect-square rounded-xl bg-tertiary border border-borderSubtle flex items-center justify-center active:scale-90 transition-transform${dim ? ' opacity-40' : ''}`}
   >
     {cosmetic ? (
       <CosmeticArt cosmetic={cosmetic} className="w-9 h-9 object-contain" />
@@ -581,9 +583,9 @@ export const CosmeticsScreen: React.FC = () => {
                   ).map((paint) => (
                     <button
                       key={paint.id}
-                      onClick={() => void equipPaint(paint)}
+                      onClick={() => (paint.cannot_wear ? addToast(wearLater(paint.name), 'info') : void equipPaint(paint))}
                       aria-pressed={paint.worn}
-                      className="relative glass-panel h-[46px] px-3 flex items-center text-left active:scale-95 transition-transform"
+                      className={`relative glass-panel h-[46px] px-3 flex items-center text-left active:scale-95 transition-transform${paint.cannot_wear ? ' opacity-40' : ''}`}
                     >
                       {/* The paint IS the preview: its own name drawn in it. */}
                       <PaintedName
@@ -614,7 +616,12 @@ export const CosmeticsScreen: React.FC = () => {
                       fallbacks={entry.badge.fallbacks}
                       worn={entry.worn}
                       label={entry.badge.name || entry.badge.title || 'Badge'}
-                      onClick={() => void equipSevenTvBadge(entry)}
+                      dim={entry.cannot_wear}
+                      onClick={() =>
+                        entry.cannot_wear
+                          ? addToast(wearLater(entry.badge.name || entry.badge.title), 'info')
+                          : void equipSevenTvBadge(entry)
+                      }
                     />
                   )}
                 </TileGrid>
