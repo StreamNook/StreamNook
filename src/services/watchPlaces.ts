@@ -37,8 +37,15 @@ export interface WatchPlaces {
 
 const EMPTY: WatchPlaces = { categories: [], channels: [] };
 
-/** `limit` caps the channels Rust resolves (16 by default, at most 100). */
-export function resolveWatchPlaces(categories: string[], channels: string[], limit?: number): Promise<WatchPlaces> {
-  if (categories.length === 0 && channels.length === 0) return Promise.resolve(EMPTY);
-  return invoke<WatchPlaces>('resolve_watch_places', { categories, channels, limit });
+/** `limit` caps the channels Rust resolves (16 by default, at most 100).
+ *  `categoryIds`: a reward campaign's categories by Twitch id, drawn as cards
+ *  too, with who is live across them when no channels are named. */
+export function resolveWatchPlaces(
+  categories: string[],
+  channels: string[],
+  limit?: number,
+  categoryIds: string[] = [],
+): Promise<WatchPlaces> {
+  if (categories.length === 0 && channels.length === 0 && categoryIds.length === 0) return Promise.resolve(EMPTY);
+  return invoke<WatchPlaces>('resolve_watch_places', { categories, channels, categoryIds, limit });
 }

@@ -51,6 +51,15 @@ pub fn requirement_text(drop: &TimeBasedDrop) -> Option<String> {
     None
 }
 
+/// What it takes, always said: `requirement_text`, else "Watch 1 hr" for a
+/// plain watch-time drop. None for a drop with neither (an event reward).
+pub fn requirement_line(drop: &TimeBasedDrop) -> Option<String> {
+    requirement_text(drop).or_else(|| {
+        (drop.required_minutes_watched > 0)
+            .then(|| format!("Watch {}", minutes_label(drop.required_minutes_watched as f64)))
+    })
+}
+
 /// Watch time still needed: "36m to watch", "8h 36m to watch", "2h to watch".
 pub fn to_watch(minutes: i32) -> String {
     let m = minutes.max(0);

@@ -24,6 +24,8 @@ export interface DropRow {
   bar: number | null;
   /** Not earnable yet (needs an earlier reward first): dimmed, after the rest, `detail` says what it needs. */
   locked?: boolean;
+  /** What it takes: "1 hr a day · 6 days", "Subscribe or gift a sub", "Watch 2 hr"; null for an event reward. */
+  requirement?: string | null;
 }
 
 export interface CampaignCard {
@@ -43,6 +45,8 @@ export interface CampaignCard {
   channels: CampaignChannel[];
   channels_label: string;
   find_stream: { id: string; name: string; box_art_url: string } | null;
+  /** A reward campaign's categories by Twitch id, for `resolveWatchPlaces`; empty for a standard one. */
+  category_ids?: string[];
   drops: DropRow[];
   /** Every reward the campaign gives, named, one tile each (a draw's whole pool). Empty when the rows already name them all. */
   rewards?: RewardTile[];
@@ -61,6 +65,8 @@ export interface RewardTile {
   held: boolean;
   /** Out of reach for now: dimmed and last. */
   locked: boolean;
+  /** "One of 6 from GTA DVD Drops" for a draw's reward; empty for one that is its drop. */
+  from?: string;
 }
 
 export interface DropsGroup {

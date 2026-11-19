@@ -457,16 +457,20 @@ pub async fn get_badge_drop_campaign(
 /// The categories and channels a badge or a Drops campaign names, ready to
 /// draw as tappable cards: each category as Twitch knows it, each channel
 /// with its face and live state (see `services::watch_places`). `limit` caps
-/// the channels (16 by default, at most 100).
+/// the channels (16 by default, at most 100). `category_ids`: a reward
+/// campaign's categories by Twitch id, drawn as cards too, with who is live
+/// across them when no channels are named (the phones' reward sheet).
 #[tauri::command]
 pub async fn resolve_watch_places(
     categories: Option<Vec<String>>,
     channels: Option<Vec<String>>,
+    category_ids: Option<Vec<String>>,
     limit: Option<u32>,
 ) -> crate::services::watch_places::WatchPlaces {
-    crate::services::watch_places::resolve(
+    crate::services::watch_places::resolve_with_ids(
         categories.unwrap_or_default(),
         channels.unwrap_or_default(),
+        category_ids.unwrap_or_default(),
         limit.map(|l| l as usize),
     )
     .await

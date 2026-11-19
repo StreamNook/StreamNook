@@ -78,6 +78,71 @@ pub async fn resolve(
     }
 }
 
+/// Live streams asked for across a reward campaign's categories, when it
+/// names no channels: a few to pick from, most-watched first.
+const LIVE_IN_CATEGORIES: u32 = 8;
+
+/// `resolve`, plus a reward campaign's categories by Twitch id (GTAVI, the
+/// Pokémon balls: Twitch gives them no names): each as a card after the named
+/// ones, and, when no channels are named, who is live across them.
+pub async fn resolve_with_ids(
+    categories: Vec<String>,
+    channels: Vec<String>,
+    category_ids: Vec<String>,
+    limit: Option<usize>,
+) -> WatchPlaces {
+    let ids: Vec<String> = category_ids.into_iter().filter(|i| !i.trim().is_empty()).collect();
+    if ids.is_empty() {
+        return resolve(categories, channels, limit).await;
+    }
+    let channels = if channels.is_empty() {
+        TwitchService::live_in_categories(&ids, LIVE_IN_CATEGORIES)
+            .await
+            .map_err(|e| log::debug!("[WatchPlaces] live in categories failed: {e}"))
+            .map(|streams| streams.into_iter().map(|s| s.user_login).collect())
+            .unwrap_or_default()
+    } else {
+        channels
+    };
+    let (mut places, by_id) = tokio::join!(resolve(categories, channels, limit), categories_by_ids(&ids));
+    for place in by_id {
+        if places.categories.len() >= MAX_CATEGORIES {
+            break;
+        }
+        if !places.categories.iter().any(|p| p.id.is_some() && p.id == place.id) {
+            places.categories.push(place);
+        }
+    }
+    places
+}
+
+/// Categories by Twitch id, in the order asked, as cards (no viewer count:
+/// one Helix call for every card).
+async fn categories_by_ids(ids: &[String]) -> Vec<PlaceCategory> {
+    let first: Vec<String> = ids.iter().take(MAX_CATEGORIES).cloned().collect();
+    let rows = match TwitchService::get_games_by_ids(&first).await {
+        Ok(rows) => rows,
+        Err(e) => {
+            log::debug!("[WatchPlaces] categories by id failed: {e}");
+            return Vec::new();
+        }
+    };
+    first
+        .iter()
+        .filter_map(|id| {
+            let row = rows.iter().find(|r| r["id"].as_str() == Some(id.as_str()))?;
+            let name = row["name"].as_str().filter(|n| !n.is_empty())?;
+            Some(PlaceCategory {
+                query: id.clone(),
+                id: Some(id.clone()),
+                name: name.to_string(),
+                box_art_url: row["box_art_url"].as_str().and_then(sized_box_art),
+                viewers_line: None,
+            })
+        })
+        .collect()
+}
+
 async fn resolve_categories(names: Vec<String>) -> Vec<PlaceCategory> {
     let mut out: Vec<PlaceCategory> = Vec::new();
     let mut asked = HashSet::new();

@@ -41,6 +41,7 @@ import {
   type CampaignCard,
   type RewardsDrops,
 } from '../rewards/rewardsModel';
+import { RewardDetailBody } from '../rewards/RewardDetailBody';
 import { getBadgeEarnGuide, type EarnGuide } from '../../services/badgeStanding';
 import { openExternal } from '../../utils/openExternal';
 import { Logger } from '../../utils/logger';
@@ -338,6 +339,39 @@ export const RewardsScreen: React.FC = () => {
     return () => { live = false; };
   }, [campaignDetail]);
   const liveInCampaign = campaignDetail && campaignLive?.id === campaignDetail.id ? campaignLive.channels : [];
+
+  // A reward opened inside the campaign sheet: a grid tile (by its id) or a
+  // drop row. It belongs to the campaign it was opened in.
+  const [rewardPick, setRewardPick] = useState<{ campaign: string; tile: string | null; drop: string } | null>(null);
+  const pick = rewardPick && campaignDetail && rewardPick.campaign === campaignDetail.id ? rewardPick : null;
+  const closeCampaign = () => {
+    setCampaignDetail(null);
+    setRewardPick(null);
+  };
+  // Where the opened reward can be earned, each a tap away: the campaign's
+  // game or its categories by id (GTAVI, the Pokémon balls), then its
+  // channels, or who is live across those categories. Rust resolves them.
+  const [rewardPlaces, setRewardPlaces] = useState<{ id: string; places: WatchPlaces } | null>(null);
+  const pickCampaign = pick ? campaignDetail : null;
+  useEffect(() => {
+    if (!pickCampaign) return;
+    let live = true;
+    const id = pickCampaign.id;
+    resolveWatchPlaces(
+      pickCampaign.find_stream ? [pickCampaign.find_stream.name] : [],
+      pickCampaign.channels.map((c) => c.name),
+      10,
+      pickCampaign.category_ids ?? [],
+    )
+      .then((places) => {
+        if (live) setRewardPlaces({ id, places });
+      })
+      .catch((e) => Logger.debug('[Rewards] reward places failed:', e));
+    return () => {
+      live = false;
+    };
+  }, [pickCampaign]);
+  const pickPlaces = pickCampaign && rewardPlaces?.id === pickCampaign.id ? rewardPlaces.places : null;
 
   // A read on mount and on pull-to-refresh asks Twitch again; a new search
   // re-filters Rust's last read.
@@ -921,8 +955,24 @@ export const RewardsScreen: React.FC = () => {
 
       {/* Every reward in one campaign, in the order you earn them. Sized to
           its content up to 80 percent; "Find a stream" stays at the bottom. */}
-      <MobileSheet open={!!campaignDetail} onClose={() => setCampaignDetail(null)} maxHeightFraction={0.8}>
-        {campaignDetail && (
+      <MobileSheet open={!!campaignDetail} onClose={closeCampaign} maxHeightFraction={0.8}>
+        {campaignDetail && pick && (
+          <RewardDetailBody
+            card={campaignDetail}
+            pick={pick}
+            places={pickPlaces}
+            onBack={() => setRewardPick(null)}
+            onBrowse={(c) => {
+              setRewardPick(null);
+              browsePlace(c);
+            }}
+            onWatch={(c) => {
+              setRewardPick(null);
+              watchPlace(c);
+            }}
+          />
+        )}
+        {campaignDetail && !pick && (
           <div className="flex flex-col gap-2">
             {/* Title and its one line of context, centered as one block. The
                 sheet's own title slot is a 14 px label in the drag handle, too
@@ -1062,7 +1112,12 @@ export const RewardsScreen: React.FC = () => {
                 </div>
                 <div className="grid grid-cols-4 gap-x-2.5 gap-y-3">
                   {campaignDetail.rewards!.map((r) => (
-                    <div key={r.id} className="min-w-0 flex flex-col items-center">
+                    <button
+                      key={r.id}
+                      onClick={() => setRewardPick({ campaign: campaignDetail.id, tile: r.id, drop: r.drop_id })}
+                      aria-label={`${r.name}, more about this reward`}
+                      className="min-w-0 flex flex-col items-center active:opacity-70"
+                    >
                       <div className="w-full aspect-square rounded-lg bg-surface ring-1 ring-white/10 overflow-hidden flex items-center justify-center">
                         {r.image ? (
                           <img
@@ -1085,14 +1140,19 @@ export const RewardsScreen: React.FC = () => {
                       <div className={`mt-0.5 text-[10.5px] ${r.held ? 'text-success' : 'text-textMuted'}`}>
                         {r.held ? 'Earned' : r.kind}
                       </div>
-                    </div>
+                    </button>
                   ))}
                 </div>
               </div>
             )}
 
             {campaignDetail.drops.map((drop) => (
-              <div key={drop.id} className="flex items-center gap-2.5 py-1">
+              <button
+                key={drop.id}
+                onClick={() => setRewardPick({ campaign: campaignDetail.id, tile: null, drop: drop.id })}
+                aria-label={`${drop.name}, more about this reward`}
+                className="w-full flex items-center gap-2.5 py-1 text-left active:opacity-70"
+              >
                 {drop.image ? (
                   <img
                     src={drop.image}
@@ -1135,7 +1195,7 @@ export const RewardsScreen: React.FC = () => {
                     </div>
                   )}
                 </div>
-              </div>
+              </button>
             ))}
 
             {/* Last, and sticky: a long campaign scrolls its rewards under the
@@ -1152,7 +1212,7 @@ export const RewardsScreen: React.FC = () => {
                 <button
                   onClick={() => {
                     const category = campaignDetail.find_stream!;
-                    setCampaignDetail(null);
+                    closeCampaign();
                     openBrowseCategory(category);
                     setNavTab('browse');
                   }}

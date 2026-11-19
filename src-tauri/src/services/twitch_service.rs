@@ -2695,10 +2695,16 @@ impl TwitchService {
     /// Helix request (it takes up to 100 `game_id` values). A drop that counts
     /// in many categories (the Pokémon balls count in 21) is watched from here.
     pub async fn get_streams_in_categories(
-        state: &AppState,
+        _state: &AppState,
         category_ids: &[String],
         limit: u32,
     ) -> Result<Vec<TwitchStream>> {
+        Self::live_in_categories(category_ids, limit).await
+    }
+
+    /// `get_streams_in_categories` for callers with no app state at hand (the
+    /// phones' reward sheet, through `watch_places`).
+    pub async fn live_in_categories(category_ids: &[String], limit: u32) -> Result<Vec<TwitchStream>> {
         let ids: Vec<&str> = category_ids
             .iter()
             .map(String::as_str)
@@ -2708,13 +2714,20 @@ impl TwitchService {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
-        let (streams, _) =
-            Self::get_streams_by_game(state, &ids.join("&game_id="), None, limit).await?;
+        let (streams, _) = Self::streams_by_game(&ids.join("&game_id="), None, limit).await?;
         Ok(streams)
     }
 
     pub async fn get_streams_by_game(
         _state: &AppState,
+        game_id: &str,
+        cursor: Option<String>,
+        limit: u32,
+    ) -> Result<(Vec<TwitchStream>, Option<String>)> {
+        Self::streams_by_game(game_id, cursor, limit).await
+    }
+
+    async fn streams_by_game(
         game_id: &str,
         cursor: Option<String>,
         limit: u32,

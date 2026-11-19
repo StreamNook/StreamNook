@@ -79,6 +79,10 @@ pub struct CampaignCard {
     pub channels_label: String,
     /// The category to find a stream in, when the campaign's game is a real one.
     pub find_stream: Option<CategoryRef>,
+    /// Every category a reward campaign counts in, by Twitch id (GTAVI, the
+    /// Pokémon balls), for `resolve_watch_places`; empty for a standard one,
+    /// whose game is `find_stream`.
+    pub category_ids: Vec<String>,
     /// Every time-based drop, fewest minutes first.
     pub drops: Vec<DropRow>,
     /// Every reward the campaign gives, one tile each, named: a draw's whole
@@ -105,6 +109,9 @@ pub struct RewardTile {
     /// Out of reach for now (the drop needs an earlier reward first): dimmed
     /// and after the rest.
     pub locked: bool,
+    /// "One of 6 from GTA DVD Drops" for a draw's reward; empty for a reward
+    /// that is its drop.
+    pub from: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -132,6 +139,9 @@ pub struct DropRow {
     /// Not earnable yet (it needs an earlier reward first): drawn out of
     /// reach, dimmed and after the rest, with `detail` saying what it needs.
     pub locked: bool,
+    /// What it takes: "1 hr a day · 6 days", "Subscribe or gift a sub",
+    /// "Watch 2 hr"; None for an event reward.
+    pub requirement: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -361,6 +371,7 @@ fn drop_row(drop: &TimeBasedDrop, now_ms: i64) -> DropRow {
         detail,
         bar,
         locked: false,
+        requirement: drop_words::requirement_line(drop),
     }
 }
 
@@ -415,6 +426,7 @@ fn card(campaign: &DropCampaign, item: Option<&InventoryItem>, now_ms: i64) -> C
         channels: campaign.allowed_channels.clone(),
         channels_label,
         find_stream,
+        category_ids: if campaign.has_category { Vec::new() } else { campaign.category_ids.clone() },
         rewards: reward_tiles(&drops),
         rewards_label: String::new(),
         drops: drops.into_iter().map(|d| drop_row(d, now_ms)).collect(),
@@ -479,6 +491,7 @@ fn reward_tiles(drops: &[&TimeBasedDrop]) -> Vec<RewardTile> {
                     kind: kind.to_string(),
                     held: m.held,
                     locked: false,
+                    from: format!("One of {} from {}", d.pool_rewards.len(), d.name),
                 }));
             }
             continue;
@@ -498,6 +511,7 @@ fn reward_tiles(drops: &[&TimeBasedDrop]) -> Vec<RewardTile> {
             kind: benefit_kind(b).to_string(),
             held: claimed,
             locked: false,
+            from: String::new(),
         }));
     }
     tiles.sort_by_key(|(order, _)| *order);
@@ -738,14 +752,25 @@ mod tests {
         let mut sub2 = sub.clone();
         sub2.id = "sub2".into();
         let iguana = drop("iguana", 60, Some(60), false);
-        let started = campaign("g", "GTAVI", 20, vec![iguana, dvd, sub, sub2]);
+        let mut started = campaign("g", "GTAVI", 20, vec![iguana, dvd, sub, sub2]);
+        // A reward campaign: no game of its own, counted in categories by id.
+        started.has_category = false;
+        started.category_ids = vec!["1546958513".to_string()];
         let inventory = inv(vec![item(started.clone(), CampaignStatus::Active, 1)], 0);
         let mut view = build(Some(&inventory), &[started], "", now());
         let card = &view.in_progress[0].campaigns[0];
+        // Tapping a reward shows where to watch and what each tier takes.
+        assert_eq!(card.category_ids, ["1546958513"]);
+        let requirement = |id: &str| card.drops.iter().find(|d| d.id == id).and_then(|d| d.requirement.clone());
+        assert_eq!(requirement("dvd").as_deref(), Some("Watch 6 hr"));
+        assert_eq!(requirement("sub1").as_deref(), Some("Subscribe or gift a sub"));
+        assert_eq!(requirement("iguana").as_deref(), Some("Watch 1 hr"));
         let names: Vec<&str> = card.rewards.iter().map(|r| r.name.as_str()).collect();
         assert_eq!(names, ["reward iguana", "Purple Chain", "Bronze Chain", "Scored Big", "Bleed Miami"]);
         assert_eq!(card.rewards_label, "2/5 earned");
         assert_eq!(card.rewards[1].kind, "Badge");
+        assert_eq!(card.rewards[1].from, "One of 2 from drop dvd");
+        assert_eq!(card.rewards[0].from, "");
         assert!(card.rewards[1].held && !card.rewards[2].held);
         // The Ultimate Reward out of reach: its tile dims and goes last.
         let locked = std::collections::HashMap::from([("iguana".to_string(), "Needs the other rewards first".to_string())]);
