@@ -278,8 +278,35 @@ pub async fn locked_stages(app: &crate::rt::AppHandle) -> HashMap<String, String
     locked_from(&campaigns, &groups, &badges)
 }
 
-/// The words a locked stage shows: "Needs the Gastly badge first".
+/// What a reward Twitch holds until its campaign's other rewards are earned
+/// needs first, as a locked map value (`locked_words` reads it).
+pub const OTHER_REWARDS: &str = "other rewards";
+
+/// `locked` with every second-list tier Twitch holds behind its campaign's
+/// other rewards (`reward_drops::held_back`, the Golden Iguana) added; an
+/// evolution stage keeps the badge it names. Pure.
+pub(crate) fn with_held_back(mut locked: HashMap<String, String>, campaigns: &[DropCampaign]) -> HashMap<String, String> {
+    for id in crate::services::reward_drops::held_back(campaigns) {
+        locked.entry(id).or_insert_with(|| OTHER_REWARDS.to_string());
+    }
+    locked
+}
+
+/// Every reward watching cannot earn yet, by drop id, with what it needs
+/// first: the evolution stages (`locked_stages`) and the tiers Twitch holds
+/// behind their campaign's other rewards. Autopilot hears only the stages
+/// (it skips held-back tiers itself, from the same Twitch flag).
+pub async fn locked_rewards(app: &crate::rt::AppHandle) -> HashMap<String, String> {
+    let stages = locked_stages(app).await;
+    with_held_back(stages, &crate::services::reward_drops::cached())
+}
+
+/// The words a locked reward shows: "Needs the Gastly badge first", or
+/// "Needs the other rewards first" for one held behind the rest.
 pub fn locked_words(needs: &str) -> String {
+    if needs == OTHER_REWARDS {
+        return "Needs the other rewards first".to_string();
+    }
     format!("Needs the {needs} badge first")
 }
 

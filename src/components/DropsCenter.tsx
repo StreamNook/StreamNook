@@ -1176,6 +1176,7 @@ export default function DropsCenter() {
                         onClaimDrop={handleClaimDrop}
                         autoClaim={dropsSettings?.auto_claim_drops ?? true}
                         onAutoClaimChange={(enabled) => void updateDropsSettings({ auto_claim_drops: enabled })}
+                        lockedDrops={lockedDrops}
                     />
                 )}
 

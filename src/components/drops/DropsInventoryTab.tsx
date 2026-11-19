@@ -72,6 +72,8 @@ interface DropsInventoryTabProps {
     /** The saved auto-claim setting, which the app's own claim loop follows. */
     autoClaim: boolean;
     onAutoClaimChange: (enabled: boolean) => void;
+    /** Rust's rewards out of reach for now (`DropsOverview.locked_drops`), by drop id, with what each needs first. */
+    lockedDrops: Record<string, string>;
 }
 
 type FilterStatus = 'all' | 'claimable' | 'in_progress' | 'claimed' | 'expired';
@@ -83,6 +85,7 @@ export default function DropsInventoryTab({
     onClaimDrop,
     autoClaim,
     onAutoClaimChange,
+    lockedDrops,
 }: DropsInventoryTabProps) {
     const [expandedGames, setExpandedGames] = useState<Set<string>>(new Set());
     const [showCompletedDrops, setShowCompletedDrops] = useState(false);
@@ -620,6 +623,7 @@ export default function DropsInventoryTab({
                                                 progress={progress}
                                                 onClaimDrop={onClaimDrop}
                                                 getStatusBadge={getStatusBadge}
+                                                lockedDrops={lockedDrops}
                                             />
                                         ))}
                                     </div>
@@ -638,10 +642,15 @@ interface CampaignSectionProps {
     progress: DropProgress[];
     onClaimDrop: (dropId: string, dropInstanceId?: string) => void;
     getStatusBadge: (status: CampaignStatus) => JSX.Element;
+    lockedDrops: Record<string, string>;
 }
 
-function CampaignSection({ item, progress, onClaimDrop, getStatusBadge }: CampaignSectionProps) {
+function CampaignSection({ item, progress, onClaimDrop, getStatusBadge, lockedDrops }: CampaignSectionProps) {
     const campaign = item.campaign;
+    // Out-of-reach rewards sit after everything still earnable.
+    const drops = [...campaign.time_based_drops].sort(
+        (a, b) => Number(a.id in lockedDrops) - Number(b.id in lockedDrops),
+    );
     const isExpired = item.status === 'Expired';
     const link = connectLink(item);
 
@@ -686,7 +695,7 @@ function CampaignSection({ item, progress, onClaimDrop, getStatusBadge }: Campai
 
             {/* Drops Grid */}
             <div className="space-y-2">
-                {campaign.time_based_drops.map(drop => {
+                {drops.map(drop => {
                     const dropProgress = drop.progress || progress.find(p => p.drop_id === drop.id);
                     const currentMinutes = dropProgress?.current_minutes_watched || 0;
                     const requiredMinutes = dropProgress?.required_minutes_watched || drop.required_minutes_watched;
@@ -698,7 +707,10 @@ function CampaignSection({ item, progress, onClaimDrop, getStatusBadge }: Campai
                     // For non-time-based drops: never consider them "complete" via watching
                     const isComplete = collectible && requiredMinutes > 0 && currentMinutes >= requiredMinutes;
                     const isClaimed = dropProgress?.is_claimed || false;
-                    
+                    // Out of reach (an earlier form not held, or Twitch holding it
+                    // behind the other rewards): dimmed, what it needs, no bar.
+                    const lockedWords = isClaimed ? undefined : lockedDrops[drop.id];
+
                     // Twitch's own detail for multi-day and subscription drops.
                     const twitch = dropProgress?.twitch_progress;
                     const twitchLine = twitchProgressLine(dropProgress, drop);
@@ -706,7 +718,7 @@ function CampaignSection({ item, progress, onClaimDrop, getStatusBadge }: Campai
 
                     // Only claimable if: collectible, complete, and not already claimed
                     // (or, for drops Twitch reports in detail, when it says so).
-                    const isClaimable = twitch ? twitch.ready_to_claim && !isClaimed : isComplete && !isClaimed && collectible;
+                    const isClaimable = !lockedWords && (twitch ? twitch.ready_to_claim && !isClaimed : isComplete && !isClaimed && collectible);
                     const progressPercent = requiredMinutes > 0 ? (currentMinutes / requiredMinutes) * 100 : 0;
 
                     // What it turned into once Twitch says; an unopened draw's
@@ -731,7 +743,7 @@ function CampaignSection({ item, progress, onClaimDrop, getStatusBadge }: Campai
                                     <img
                                         src={benefit.image_url}
                                         alt={benefit.name}
-                                        className={`w-full h-full object-contain ${isClaimed ? 'opacity-60' : ''}`}
+                                        className={`w-full h-full object-contain ${isClaimed ? 'opacity-60' : lockedWords ? 'opacity-40 grayscale' : ''}`}
                                         loading="lazy"
                                     />
                                 ) : (
@@ -750,7 +762,7 @@ function CampaignSection({ item, progress, onClaimDrop, getStatusBadge }: Campai
                                     </div>
                                 )}
                                 {/* Special indicator for non-collectible drops */}
-                                {!collectible && !isClaimed && (
+                                {!collectible && !isClaimed && !lockedWords && (
                                     <div className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-highlight-purple flex items-center justify-center shadow-lg">
                                         <Star size={8} className="text-white" />
                                     </div>
@@ -760,12 +772,14 @@ function CampaignSection({ item, progress, onClaimDrop, getStatusBadge }: Campai
                             {/* Drop Info */}
                             <div className="flex-1 min-w-0">
                                 <Tooltip content={benefit?.name || drop.name} delay={300} side="top">
-                                    <span className="text-xs font-medium text-textPrimary truncate block">
+                                    <span className={`text-xs font-medium truncate block ${lockedWords ? 'text-textSecondary' : 'text-textPrimary'}`}>
                                         {benefit?.name || drop.name}
                                     </span>
                                 </Tooltip>
                                 <div className="flex items-center gap-2 mt-0.5">
-                                    {twitchLine ? (
+                                    {lockedWords ? (
+                                        <span className="text-[10px] text-textMuted truncate">{lockedWords}</span>
+                                    ) : twitchLine ? (
                                         <span className={`text-[10px] truncate ${isClaimed ? 'text-success font-medium' : isClaimable ? 'text-warning font-semibold' : 'text-textMuted'}`}>
                                             {twitchLine}
                                         </span>
@@ -823,7 +837,7 @@ function CampaignSection({ item, progress, onClaimDrop, getStatusBadge }: Campai
                             ) : null}
 
                             {/* Event/Special Badge for non-collectible drops */}
-                            {!collectible && !isClaimed && !isClaimable && (
+                            {!collectible && !isClaimed && !isClaimable && !lockedWords && (
                                 <span className="px-2 py-1 text-[9px] font-semibold rounded bg-highlight-purple/20 text-highlight-purple border border-highlight-purple/30 shrink-0 whitespace-nowrap">
                                     {(drop.required_subs ?? 0) > 0 ? 'Subscribe' : 'Event Only'}
                                 </span>

@@ -1270,9 +1270,14 @@ pub fn set_lip_hidden(hidden: bool) {
 }
 
 /// Rewards watching cannot earn yet, as of the last look, for reads made
-/// outside the model (the phones' own bar read).
+/// outside the model (the phones' own bar read, the phones' Rewards rows).
+/// The tiers Twitch holds behind their campaign's other rewards come from
+/// the second list as last read, so they hold while nothing is watched too.
 pub fn locked() -> HashMap<String, String> {
-    with_state(|s| s.locked.clone())
+    crate::services::evolution::with_held_back(
+        with_state(|s| s.locked.clone()),
+        &crate::services::reward_drops::cached(),
+    )
 }
 
 /// The model now.
@@ -1773,7 +1778,10 @@ async fn step(app: &AppHandle, h: &Handles) -> Option<Duration> {
     let second = crate::services::reward_drops::cached();
     let list = campaigns(h, &place, &second).await;
     let gate = gate_open(&place, &list, &second);
-    let locked = crate::services::evolution::locked_stages(app).await;
+    let locked = crate::services::evolution::with_held_back(
+        crate::services::evolution::locked_stages(app).await,
+        &second,
+    );
     let (out, due, locked_changed) = with_state(|s| {
         if playing && !s.playing {
             s.stall.play_edge(Instant::now());
@@ -2366,6 +2374,32 @@ mod tests {
         // Out of reach, not labeled: only what it needs first.
         assert_eq!(row.status, "");
         assert_eq!(row.detail.as_deref(), Some("Needs the Gastly badge first"));
+        assert_eq!(row.bar, None);
+    }
+
+    #[test]
+    fn a_reward_held_behind_the_other_rewards_is_never_ready() {
+        // Brandon (2026-11-18): the Golden Iguana read as ready to claim, but
+        // Twitch gives it only once every other reward is earned. Its minutes
+        // are in; Twitch says the tier's preconditions are not met.
+        let place = golden::place();
+        let (list, mut inv) = one_tier(0);
+        let tier = &mut inv.items[0].campaign.time_based_drops[0];
+        let need = tier.required_minutes_watched;
+        tier.progress.as_mut().unwrap().current_minutes_watched = need;
+        let i = Inputs::bare(&place, &list, Some(&inv), now_ms());
+        assert!(build(&i).campaigns[0].drops[0].ready, "fully watched reads ready when nothing holds it");
+
+        inv.items[0].campaign.time_based_drops[0].needs_earlier = true;
+        let campaigns: Vec<DropCampaign> = inv.items.iter().map(|it| it.campaign.clone()).collect();
+        let locked = crate::services::evolution::with_held_back(HashMap::new(), &campaigns);
+        let view = build(&Inputs { locked: &locked, ..Inputs::bare(&place, &list, Some(&inv), now_ms()) });
+        let row = &view.campaigns[0].drops[0];
+        assert!(row.locked && !row.ready && !row.lead && !row.claimed);
+        assert!(view.lead.is_none());
+        assert_eq!((view.more, view.complete), (0, false));
+        assert_eq!(row.status, "");
+        assert_eq!(row.detail.as_deref(), Some("Needs the other rewards first"));
         assert_eq!(row.bar, None);
     }
 

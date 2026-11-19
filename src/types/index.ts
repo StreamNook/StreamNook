@@ -2819,6 +2819,8 @@ export interface TimeBasedDrop {
   random_of?: number | null;
   /** A draw with one reward left unheld: what it will give (Twitch never repeats one). */
   next_reward?: DropBenefit | null;
+  /** Twitch holds it until the campaign's other rewards are earned (the Golden Iguana): never ready or claimed. Rust lists it in `locked_drops`. */
+  needs_earlier?: boolean;
 }
 
 export interface AllowedChannel {

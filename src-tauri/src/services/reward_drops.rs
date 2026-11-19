@@ -44,7 +44,7 @@ pub const NO_CATEGORY_PREFIX: &str = "twitch-rewards-";
 
 const LIST_QUERY: &str = "query { rewardCampaignsAvailableToUser { id name brand summary startsAt endsAt aboutURL game { id displayName boxArtURL } } }";
 
-const SELF_FIELDS: &str = "self { status currentMinutesWatched currentSubs grantCount currentWindow { startedAt expiresAt } earnedReward { id name thumbnailURL } }";
+const SELF_FIELDS: &str = "self { status currentMinutesWatched currentSubs grantCount currentWindow { startedAt expiresAt } hasPreconditionsMet earnedReward { id name thumbnailURL } }";
 
 static CACHE: Lazy<Mutex<Option<(Instant, Vec<DropCampaign>)>>> = Lazy::new(|| Mutex::new(None));
 static TRACKER: Lazy<Mutex<HashMap<String, Rise>>> = Lazy::new(|| Mutex::new(HashMap::new()));
@@ -199,6 +199,11 @@ fn group_drop(
     let own = inventory_self
         .filter(|s| s.is_object())
         .or_else(|| Some(&group["self"]).filter(|s| s.is_object()));
+    // Twitch holds this tier until the campaign's other rewards are earned
+    // (the GTAVI Golden Iguana, a Great Ball's watch tier before a ball is
+    // held). It can still say CLAIMABLE once the minutes are in, and a claim
+    // then gives nothing, so it is never ready and never claimed.
+    let held_back = own.is_some_and(|s| s["hasPreconditionsMet"].as_bool() == Some(false));
     let progress = own.and_then(|s| {
         let status = s["status"].as_str().unwrap_or_default();
         let minutes = uint(&s["currentMinutesWatched"]);
@@ -208,7 +213,7 @@ fn group_drop(
         // Ball). Twitch marks it CLAIMABLE once the subs are in, but the ball
         // is opened through its watch tier: here it simply means "you have it".
         let claimed = matches!(status, "CLAIMED" | "FULFILLED") || (is_sub && status == "CLAIMABLE");
-        let ready = status == "CLAIMABLE" && !is_sub;
+        let ready = status == "CLAIMABLE" && !is_sub && !held_back;
         if minutes == 0 && subs_done == 0 && days_done == 0 && !claimed && !ready {
             return None; // not started: the requirement says it all
         }
@@ -306,6 +311,8 @@ fn group_drop(
         }),
         other => other,
     };
+    // One already held is simply claimed, whatever Twitch says it needs.
+    let needs_earlier = held_back && !progress.as_ref().is_some_and(|p| p.is_claimed);
 
     TimeBasedDrop {
         id,
@@ -325,7 +332,19 @@ fn group_drop(
             image_url: unheld[0]["thumbnailURL"].as_str().unwrap_or_default().to_string(),
             distribution_type: None,
         }),
+        needs_earlier,
     }
+}
+
+/// The tiers Twitch holds until their campaign's other rewards are earned
+/// (`TimeBasedDrop::needs_earlier`), by drop id. Pure.
+pub fn held_back(campaigns: &[DropCampaign]) -> Vec<String> {
+    campaigns
+        .iter()
+        .flat_map(|c| &c.time_based_drops)
+        .filter(|d| d.needs_earlier)
+        .map(|d| d.id.clone())
+        .collect()
 }
 
 /// Translates the campaign list and its details into ordinary drops. Pure:
@@ -641,14 +660,16 @@ pub fn inventory_items(campaigns: &[DropCampaign]) -> Vec<crate::models::drops::
             let in_progress = c
                 .time_based_drops
                 .iter()
-                .filter(|d| d.progress.as_ref().is_some_and(|p| !p.is_claimed))
+                .filter(|d| !d.needs_earlier && d.progress.as_ref().is_some_and(|p| !p.is_claimed))
                 .count() as i32;
             // A tier counts in full when claimed or held for claiming, else by
-            // its share of minutes; a subscription tier has no minutes to share.
+            // its share of minutes; a subscription tier has no minutes to share,
+            // and one Twitch holds behind the other rewards has none that count.
             let done: f32 = c
                 .time_based_drops
                 .iter()
                 .map(|d| match &d.progress {
+                    _ if d.needs_earlier => 0.0,
                     Some(p) if p.is_claimed => 1.0,
                     Some(p) if p.twitch_progress.as_ref().is_some_and(|t| t.ready_to_claim) => 1.0,
                     Some(p) if p.required_minutes_watched > 0 => {
@@ -950,6 +971,86 @@ mod tests {
         let own = json!({ "status": "IN_PROGRESS", "currentMinutesWatched": 12, "grantCount": 1 });
         let c = built(Value::Null, inv("g-poke", own));
         assert!(c[0].time_based_drops[0].progress.clone().unwrap().drop_instance_id.is_none());
+    }
+
+    /// A GTAVI-shaped campaign: a daily watch tier, and the Golden Iguana,
+    /// a WATCH 60 tier Twitch gives only once every other reward is earned.
+    fn iguana(own: Value) -> Vec<DropCampaign> {
+        let list = vec![json!({ "id": "gtavi", "name": "GTAVI Launch Celebration", "brand": "Rockstar Games",
+                                "startsAt": "2026-09-20T11:00:00Z", "endsAt": "2026-10-01T07:59:59Z",
+                                "game": { "id": "gta6", "displayName": "Grand Theft Auto VI", "boxArtURL": "https://box/gta6.jpg" } })];
+        let watch = |id: &str, name: &str, own: Value| {
+            json!({ "id": id, "name": name,
+                    "progressCriteria": { "requirementType": "WATCH", "requirements": { "minutesWatched": 60, "subs": null },
+                                          "repeatableConfig": null },
+                    "self": own,
+                    "rewards": [ { "id": format!("r-{id}"), "name": name, "thumbnailURL": format!("https://art/{id}.png"), "pool": null } ] })
+        };
+        let details = json!({
+            "c0": { "id": "gtavi", "imageURL": "https://art/gtavi.png", "rewardGroups": [
+                watch("g-dvd", "GTA DVD Drops", json!({ "status": "IN_PROGRESS", "currentMinutesWatched": 40, "grantCount": 0, "hasPreconditionsMet": true })),
+                watch("g-iguana", "Golden Iguana", own),
+            ] },
+            "currentUser": { "id": "u1", "inventory": { "viewerRewardDropCampaignsInProgress": [] } }
+        });
+        build(&list, &details, &mut HashMap::new(), now())
+    }
+
+    fn the_iguana(c: &[DropCampaign]) -> TimeBasedDrop {
+        c[0].time_based_drops.iter().find(|d| d.id == "g-iguana").cloned().unwrap()
+    }
+
+    #[test]
+    fn a_tier_held_behind_the_other_rewards_is_never_ready_or_claimed() {
+        // Brandon (2026-11-18): the Golden Iguana read as ready to claim with an
+        // hour in, though Twitch gives it only after every other reward.
+        let held = json!({ "status": "CLAIMABLE", "currentMinutesWatched": 60, "grantCount": 0, "hasPreconditionsMet": false });
+        let c = iguana(held);
+        let d = the_iguana(&c);
+        assert!(d.needs_earlier);
+        let p = d.progress.clone().unwrap();
+        assert!(!p.is_claimed);
+        // No instance: the auto-claim never sends it, no surface offers Claim.
+        assert!(p.drop_instance_id.is_none());
+        assert!(!p.twitch_progress.unwrap().ready_to_claim);
+        assert_eq!(held_back(&c), ["g-iguana"]);
+        // Counted in no progress: only the daily tier is in progress.
+        let item = &inventory_items(&c)[0];
+        assert_eq!(item.drops_in_progress, 1);
+        assert!((item.progress_percentage - 40.0 / 60.0 / 2.0 * 100.0).abs() < 0.01);
+        // Every surface reads it out of reach, with what it needs first.
+        let locked = crate::services::evolution::with_held_back(HashMap::new(), &c);
+        let words = locked.get("g-iguana").map(|n| crate::services::evolution::locked_words(n));
+        assert_eq!(words.as_deref(), Some("Needs the other rewards first"));
+        // An evolution stage keeps the badge it names.
+        let stage = HashMap::from([("g-iguana".to_string(), "Gastly".to_string())]);
+        assert_eq!(crate::services::evolution::with_held_back(stage, &c)["g-iguana"], "Gastly");
+    }
+
+    #[test]
+    fn a_held_tier_opens_once_twitch_says_the_others_are_in() {
+        let open = json!({ "status": "CLAIMABLE", "currentMinutesWatched": 60, "grantCount": 0, "hasPreconditionsMet": true });
+        let d = the_iguana(&iguana(open));
+        assert!(!d.needs_earlier);
+        let p = d.progress.unwrap();
+        assert_eq!(p.drop_instance_id.as_deref(), Some("u1#gtavi#g-iguana"));
+        assert!(p.twitch_progress.unwrap().ready_to_claim);
+        // Already held: claimed, whatever Twitch says it needs.
+        let got = json!({ "status": "CLAIMED", "currentMinutesWatched": 60, "grantCount": 1, "hasPreconditionsMet": false });
+        let d = the_iguana(&iguana(got));
+        assert!(!d.needs_earlier && d.progress.unwrap().is_claimed);
+        // An answer without the flag holds nothing back.
+        let older = json!({ "status": "CLAIMABLE", "currentMinutesWatched": 60, "grantCount": 0 });
+        assert!(!the_iguana(&iguana(older)).needs_earlier);
+        // Not started and held back: still out of reach.
+        let fresh = json!({ "status": "IN_PROGRESS", "currentMinutesWatched": 0, "grantCount": 0, "hasPreconditionsMet": false });
+        let d = the_iguana(&iguana(fresh));
+        assert!(d.needs_earlier && d.progress.is_none());
+    }
+
+    #[test]
+    fn the_details_query_asks_whether_a_tier_is_held_back() {
+        assert!(details_query(1).contains("hasPreconditionsMet"));
     }
 
     #[test]

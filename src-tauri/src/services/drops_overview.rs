@@ -681,6 +681,7 @@ mod tests {
             required_days: 0,
             random_of: None,
             next_reward: None,
+            needs_earlier: false,
         }
     }
 

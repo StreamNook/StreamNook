@@ -150,6 +150,7 @@ mod tests {
             required_days: days,
             random_of: None,
             next_reward: None,
+            needs_earlier: false,
         }
     }
 

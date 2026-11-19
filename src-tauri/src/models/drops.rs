@@ -118,6 +118,11 @@ pub struct TimeBasedDrop {
     /// will give. Twitch never repeats a reward, so it is certain.
     #[serde(default)]
     pub next_reward: Option<DropBenefit>,
+    /// Twitch holds this reward until the campaign's earlier rewards are
+    /// earned (`hasPreconditionsMet: false` on a second-list reward tier, the
+    /// GTAVI Golden Iguana): never ready, never claimed, out of reach.
+    #[serde(default)]
+    pub needs_earlier: bool,
 }
 
 fn default_collectible() -> bool {

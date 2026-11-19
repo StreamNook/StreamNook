@@ -93,12 +93,13 @@ pub(crate) async fn build_drops_overview(
         let favorites = drops_service.get_settings().await.favorite_games;
         (campaigns, statistics, inventory, progress, favorites, locked_ms)
     };
-    // Evolution stages this account cannot earn yet: Twitch reports them in
-    // progress, so the page would otherwise show Gengar filling up without Gastly.
+    // Rewards this account cannot earn yet: evolution stages Twitch reports in
+    // progress (Gengar filling up without Gastly), and tiers Twitch holds
+    // behind their campaign's other rewards (the Golden Iguana read as Ready).
     let ((campaigns, statistics, inventory, progress, favorites, locked_ms), known, locked) = tokio::join!(
         gather,
         drops_overview::badge_titles(),
-        crate::services::evolution::locked_stages(app)
+        crate::services::evolution::locked_rewards(app)
     );
     log::debug!(
         "[Drops] overview in {} ms (waited {} ms for the drops lock)",
