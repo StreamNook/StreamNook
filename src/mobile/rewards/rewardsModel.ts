@@ -44,6 +44,23 @@ export interface CampaignCard {
   channels_label: string;
   find_stream: { id: string; name: string; box_art_url: string } | null;
   drops: DropRow[];
+  /** Every reward the campaign gives, named, one tile each (a draw's whole pool). Empty when the rows already name them all. */
+  rewards?: RewardTile[];
+  /** "4/13 earned"; empty with no tiles. */
+  rewards_label?: string;
+}
+
+/** One reward in the campaign sheet's reward grid (Rust `RewardTile`). */
+export interface RewardTile {
+  id: string;
+  drop_id: string;
+  name: string;
+  image: string;
+  /** "Badge", "Emote" or "Item". */
+  kind: string;
+  held: boolean;
+  /** Out of reach for now: dimmed and last. */
+  locked: boolean;
 }
 
 export interface DropsGroup {

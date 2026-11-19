@@ -81,6 +81,30 @@ pub struct CampaignCard {
     pub find_stream: Option<CategoryRef>,
     /// Every time-based drop, fewest minutes first.
     pub drops: Vec<DropRow>,
+    /// Every reward the campaign gives, one tile each, named: a draw's whole
+    /// pool (the six GTAVI Chains) instead of its one row. Empty when the rows
+    /// already name every reward (no draw in the campaign).
+    pub rewards: Vec<RewardTile>,
+    /// "4/13 earned" over `rewards`; empty with no tiles.
+    pub rewards_label: String,
+}
+
+/// One reward in the campaign sheet's reward grid.
+#[derive(Debug, Clone, Serialize)]
+pub struct RewardTile {
+    /// The reward's id (a pool member's, or the drop's for a lone reward).
+    pub id: String,
+    /// The drop it comes from.
+    pub drop_id: String,
+    pub name: String,
+    pub image: String,
+    /// "Badge", "Emote" or "Item".
+    pub kind: String,
+    /// The account holds it.
+    pub held: bool,
+    /// Out of reach for now (the drop needs an earlier reward first): dimmed
+    /// and after the rest.
+    pub locked: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -229,6 +253,11 @@ fn apply_locked(view: &mut RewardsDrops, locked: &std::collections::HashMap<Stri
             }
         }
         card.drops.sort_by_key(|r| r.locked);
+        // A reward tile from a drop out of reach is out of reach too, unless held.
+        for tile in card.rewards.iter_mut().filter(|t| !t.held) {
+            tile.locked = locked.contains_key(&tile.drop_id);
+        }
+        card.rewards.sort_by_key(|t| t.locked);
     }
 }
 
@@ -386,8 +415,93 @@ fn card(campaign: &DropCampaign, item: Option<&InventoryItem>, now_ms: i64) -> C
         channels: campaign.allowed_channels.clone(),
         channels_label,
         find_stream,
+        rewards: reward_tiles(&drops),
+        rewards_label: String::new(),
         drops: drops.into_iter().map(|d| drop_row(d, now_ms)).collect(),
     }
+    .with_rewards_label()
+}
+
+impl CampaignCard {
+    /// "4/13 earned" over the reward tiles; empty with none.
+    fn with_rewards_label(mut self) -> Self {
+        self.rewards_label = if self.rewards.is_empty() {
+            String::new()
+        } else {
+            format!("{}/{} earned", self.rewards.iter().filter(|r| r.held).count(), self.rewards.len())
+        };
+        self
+    }
+}
+
+/// A lone reward's kind label, from Twitch's type, then its art and name.
+fn benefit_kind(b: &crate::models::drops::DropBenefit) -> &'static str {
+    let name = b.name.to_lowercase();
+    let image = b.image_url.to_lowercase();
+    if image.contains("/emoticons/") || name.contains("emote") {
+        "Emote"
+    } else if b.distribution_type.as_deref() == Some("BADGE") || image.contains("/badges/") || name.contains("badge") {
+        "Badge"
+    } else {
+        "Item"
+    }
+}
+
+/// Every reward a campaign gives, one tile each, from its drops in sheet
+/// order: a draw's whole pool (each member named, held ones marked), a lone
+/// reward as itself. A tier that only gets a container (a Special Great Ball)
+/// is not a reward. Empty when no drop is a draw: the rows name them all.
+/// Watch-time rewards first, then subscription ones. Pure.
+fn reward_tiles(drops: &[&TimeBasedDrop]) -> Vec<RewardTile> {
+    let rewards: Vec<&&TimeBasedDrop> = drops.iter().filter(|d| !d.obtains_container).collect();
+    if !rewards.iter().any(|d| d.pool_rewards.len() > 1) {
+        return Vec::new();
+    }
+    let mut tiles: Vec<(i32, RewardTile)> = Vec::new();
+    for d in rewards {
+        let order = if d.required_minutes_watched > 0 { d.required_minutes_watched } else { i32::MAX };
+        let claimed = d.progress.as_ref().is_some_and(|p| p.is_claimed);
+        if d.pool_rewards.len() > 1 {
+            for m in &d.pool_rewards {
+                if tiles.iter().any(|(_, t)| t.id == m.id) {
+                    continue;
+                }
+                let kind = match m.kind.as_str() {
+                    "badge" => "Badge",
+                    "emote" => "Emote",
+                    _ => "Item",
+                };
+                tiles.push((order, RewardTile {
+                    id: m.id.clone(),
+                    drop_id: d.id.clone(),
+                    name: m.name.clone(),
+                    image: m.image_url.clone(),
+                    kind: kind.to_string(),
+                    held: m.held,
+                    locked: false,
+                }));
+            }
+            continue;
+        }
+        let twitch = d.progress.as_ref().and_then(|p| p.twitch_progress.as_ref());
+        let Some(b) = twitch.and_then(|t| t.earned.as_ref()).or(d.next_reward.as_ref()).or(d.benefit_edges.first()) else {
+            continue;
+        };
+        if tiles.iter().any(|(_, t)| t.id == d.id) {
+            continue;
+        }
+        tiles.push((order, RewardTile {
+            id: d.id.clone(),
+            drop_id: d.id.clone(),
+            name: if b.name.is_empty() { d.name.clone() } else { b.name.clone() },
+            image: b.image_url.clone(),
+            kind: benefit_kind(b).to_string(),
+            held: claimed,
+            locked: false,
+        }));
+    }
+    tiles.sort_by_key(|(order, _)| *order);
+    tiles.into_iter().map(|(_, t)| t).collect()
 }
 
 /// The segment from an inventory and the running campaigns.
@@ -598,6 +712,54 @@ mod tests {
         assert_eq!(gengar.detail.as_deref(), Some("Needs the Haunter badge first"));
         assert_eq!(gengar.bar, None);
         assert!(!rows[0].locked && !rows[0].status.is_empty());
+    }
+
+    #[test]
+    fn a_draw_lists_every_reward_by_name_on_the_phones() {
+        // Brandon (2026-11-19): the phones get the named reward list too. A
+        // GTAVI-shaped campaign: a daily draw of Chains, a sub tier that draws
+        // its own badge, and the Ultimate Reward held behind the others.
+        use crate::models::drops::PoolReward;
+        let member = |n: &str, kind: &str, held: bool| PoolReward {
+            id: format!("id-{n}"),
+            name: n.to_string(),
+            image_url: format!("art-{n}"),
+            kind: kind.to_string(),
+            held,
+        };
+        let mut dvd = drop("dvd", 360, Some(60), false);
+        dvd.random_of = Some(2);
+        dvd.pool_rewards = vec![member("Purple Chain", "badge", true), member("Bronze Chain", "badge", false)];
+        let mut sub = drop("sub1", 0, Some(0), true);
+        sub.required_subs = 1;
+        sub.random_of = Some(2);
+        sub.pool_rewards = vec![member("Scored Big", "badge", true), member("Bleed Miami", "badge", false)];
+        // The second sub tier draws from the same pool: each reward once.
+        let mut sub2 = sub.clone();
+        sub2.id = "sub2".into();
+        let iguana = drop("iguana", 60, Some(60), false);
+        let started = campaign("g", "GTAVI", 20, vec![iguana, dvd, sub, sub2]);
+        let inventory = inv(vec![item(started.clone(), CampaignStatus::Active, 1)], 0);
+        let mut view = build(Some(&inventory), &[started], "", now());
+        let card = &view.in_progress[0].campaigns[0];
+        let names: Vec<&str> = card.rewards.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, ["reward iguana", "Purple Chain", "Bronze Chain", "Scored Big", "Bleed Miami"]);
+        assert_eq!(card.rewards_label, "2/5 earned");
+        assert_eq!(card.rewards[1].kind, "Badge");
+        assert!(card.rewards[1].held && !card.rewards[2].held);
+        // The Ultimate Reward out of reach: its tile dims and goes last.
+        let locked = std::collections::HashMap::from([("iguana".to_string(), "Needs the other rewards first".to_string())]);
+        apply_locked(&mut view, &locked);
+        let card = &view.in_progress[0].campaigns[0];
+        let last = card.rewards.last().unwrap();
+        assert_eq!((last.name.as_str(), last.locked), ("reward iguana", true));
+        assert!(card.rewards.iter().filter(|r| r.name != "reward iguana").all(|r| !r.locked));
+
+        // No draw: the rows already name every reward, so no grid.
+        let plain = campaign("p", "Rust", 20, vec![drop("a", 60, None, false), drop("b", 120, None, false)]);
+        let view = build(None, &[plain], "", now());
+        assert!(view.available[0].campaigns[0].rewards.is_empty());
+        assert_eq!(view.available[0].campaigns[0].rewards_label, "");
     }
 
     #[test]

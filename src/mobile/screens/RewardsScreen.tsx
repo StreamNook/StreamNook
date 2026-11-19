@@ -1050,6 +1050,47 @@ export const RewardsScreen: React.FC = () => {
                 );
               })()}
 
+            {/* Every reward by name: a draw's whole pool (the six GTAVI
+                Chains), which its one row below cannot show. Rust sends it
+                only when a draw hides rewards behind a row. Held ones say
+                so in words under the name, never as a mark on the art. */}
+            {(campaignDetail.rewards?.length ?? 0) > 0 && (
+              <div className="glass-panel px-3 pt-2.5 pb-3 mb-1.5">
+                <div className="flex items-baseline mb-2.5">
+                  <span className="text-[11px] font-semibold uppercase tracking-wide text-textMuted">Rewards</span>
+                  <span className="ml-auto text-[11px] text-textMuted tabular-nums">{campaignDetail.rewards_label}</span>
+                </div>
+                <div className="grid grid-cols-4 gap-x-2.5 gap-y-3">
+                  {campaignDetail.rewards!.map((r) => (
+                    <div key={r.id} className="min-w-0 flex flex-col items-center">
+                      <div className="w-full aspect-square rounded-lg bg-surface ring-1 ring-white/10 overflow-hidden flex items-center justify-center">
+                        {r.image ? (
+                          <img
+                            src={r.image}
+                            alt=""
+                            draggable={false}
+                            className={`w-full h-full object-contain p-1.5 ${r.locked ? 'opacity-40 grayscale' : ''}`}
+                          />
+                        ) : (
+                          <Gift size={18} className={`text-textMuted ${r.locked ? 'opacity-40' : ''}`} />
+                        )}
+                      </div>
+                      <div
+                        className={`mt-1.5 w-full text-center text-[11.5px] leading-tight line-clamp-2 break-words ${
+                          r.locked ? 'text-textSecondary' : 'text-textPrimary'
+                        }`}
+                      >
+                        {r.name}
+                      </div>
+                      <div className={`mt-0.5 text-[10.5px] ${r.held ? 'text-success' : 'text-textMuted'}`}>
+                        {r.held ? 'Earned' : r.kind}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {campaignDetail.drops.map((drop) => (
               <div key={drop.id} className="flex items-center gap-2.5 py-1">
                 {drop.image ? (
