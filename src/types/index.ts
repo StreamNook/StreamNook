@@ -2825,6 +2825,8 @@ export interface TimeBasedDrop {
   pool_rewards?: PoolReward[];
   /** A subscription tier that only gets a container another tier opens (a Special Great Ball): not a reward of its own. */
   obtains_container?: boolean;
+  /** Drops of the same campaign that must be claimed first (Twitch's `preconditionDrops`); Rust lists an unmet chain in `locked_drops`. */
+  precondition_drops?: string[];
 }
 
 /** One reward a draw can give: a pool member. */

@@ -612,17 +612,16 @@ pub fn overview(
     if let Some(inv) = inventory.as_mut() {
         crate::services::drops_service::fill_account_links(&mut inv.items);
     }
+    // Chained drops whose earlier drops are not claimed yet are out of reach too.
+    let claimed: HashSet<String> = progress.iter().filter(|p| p.is_claimed).map(|p| p.drop_id.clone()).collect();
+    let locked = &crate::services::evolution::with_chains(locked.clone(), campaigns, &claimed);
     let games = build_with_locked(campaigns, &progress, inventory.as_ref(), &titles.known, locked);
     // Only rewards the page lists, each with the words it shows.
     let locked_drops = games
         .iter()
         .flat_map(|g| &g.active_campaigns)
         .flat_map(|c| &c.time_based_drops)
-        .filter_map(|d| {
-            locked
-                .get(&d.id)
-                .map(|needs| (d.id.clone(), crate::services::evolution::locked_words(needs)))
-        })
+        .filter_map(|d| locked.get(&d.id).map(|words| (d.id.clone(), words.clone())))
         .collect();
     let (inventory_items, completed_drops) = inventory
         .map(|inv| (inv.items, inv.completed_drops))
@@ -684,6 +683,7 @@ mod tests {
             needs_earlier: false,
             pool_rewards: Vec::new(),
             obtains_container: false,
+            precondition_drops: Vec::new(),
         }
     }
 
@@ -814,13 +814,46 @@ mod tests {
     }
 
     #[test]
+    fn a_chained_drop_is_out_of_reach_until_the_one_before_is_claimed() {
+        // Twitch's preconditionDrops: the second reward counts only once the
+        // first is claimed, so its minutes in the campaign clock mean nothing.
+        let mut second = drop("b", 60, "Gold Chain");
+        second.precondition_drops = vec!["a".to_string()];
+        let campaigns = vec![campaign("1", "Game", 1, vec![drop("a", 60, "Silver Chain"), second])];
+        let live = vec![progress("a", 60, 60, false), progress("b", 60, 60, false)];
+        let o = overview(&campaigns, live, None, None, BadgeTitles::default(), &HashMap::new());
+        assert_eq!(
+            o.locked_drops,
+            HashMap::from([("b".to_string(), "Needs Silver Chain first".to_string())])
+        );
+        // The first one claimed: the second is earnable like any drop.
+        let live = vec![progress("a", 60, 60, true), progress("b", 0, 60, false)];
+        let o = overview(&campaigns, live, None, None, BadgeTitles::default(), &HashMap::new());
+        assert!(o.locked_drops.is_empty());
+        // A precondition the campaign does not list is left to Twitch.
+        let mut orphan = drop("c", 60, "Bronze Chain");
+        orphan.precondition_drops = vec!["elsewhere".to_string()];
+        let lone = vec![campaign("2", "Game", 1, vec![orphan])];
+        let o = overview(&lone, vec![], None, None, BadgeTitles::default(), &HashMap::new());
+        assert!(o.locked_drops.is_empty());
+    }
+
+    #[test]
+    fn two_unclaimed_preconditions_read_as_the_earlier_rewards() {
+        assert_eq!(
+            crate::services::evolution::needs_first_words(&["A".to_string(), "B".to_string()]),
+            "Needs the earlier rewards first"
+        );
+    }
+
+    #[test]
     fn the_overview_carries_locked_stages_and_counts_them_nowhere() {
         // Twitch reports Gengar in progress and fully watched, but Gastly is not held.
         let campaigns = vec![campaign("1", "Pokemon", 1, vec![drop("ball", 60, "Poke Ball"), drop("gengar", 60, "Gengar")])];
         let live = vec![progress("ball", 10, 60, false), progress("gengar", 60, 60, false)];
         let locked = HashMap::from([
-            ("gengar".to_string(), "Gastly".to_string()),
-            ("elsewhere".to_string(), "Ralts".to_string()),
+            ("gengar".to_string(), "Needs the Gastly badge first".to_string()),
+            ("elsewhere".to_string(), "Needs the Ralts badge first".to_string()),
         ]);
         let o = overview(&campaigns, live, None, None, BadgeTitles::default(), &locked);
         assert_eq!(

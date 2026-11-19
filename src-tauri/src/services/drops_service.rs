@@ -84,6 +84,16 @@ fn claim_outcome_from_status(status: Option<&str>) -> Option<ClaimOutcome> {
     }
 }
 
+/// The drops a standard drop needs claimed first (`preconditionDrops`), by id.
+fn precondition_ids(drop_json: &serde_json::Value) -> Vec<String> {
+    drop_json["preconditionDrops"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|d| d["id"].as_str().map(str::to_string))
+        .collect()
+}
+
 /// Whether a drop is earned and waiting to be claimed: Twitch says so outright
 /// for multi-day and subscription rewards (no minutes to compare), otherwise
 /// the watched minutes reached a non-zero requirement.
@@ -941,6 +951,7 @@ impl DropsService {
                         needs_earlier: false,
                         pool_rewards: Vec::new(),
                         obtains_container: false,
+                        precondition_drops: precondition_ids(drop_json),
                     });
                 }
             }
@@ -1244,6 +1255,9 @@ impl DropsService {
                         name
                         requiredMinutesWatched
                         requiredSubs
+                        preconditionDrops {
+                            id
+                        }
                         benefitEdges {
                             benefit {
                                 id
@@ -1485,6 +1499,7 @@ impl DropsService {
                             needs_earlier: false,
                             pool_rewards: Vec::new(),
                             obtains_container: false,
+                            precondition_drops: precondition_ids(drop_json),
                         });
                     }
                 }
@@ -2707,6 +2722,7 @@ impl DropsService {
                         needs_earlier: false,
                         pool_rewards: Vec::new(),
                         obtains_container: false,
+                        precondition_drops: Vec::new(),
                     }
                 })
                 .collect();

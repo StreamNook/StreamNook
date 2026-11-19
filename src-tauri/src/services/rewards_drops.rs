@@ -175,14 +175,32 @@ pub async fn get(
         }
     }
     let now = chrono::Utc::now().timestamp_millis();
-    let mut view = {
+    let (mut view, locked) = {
         let last = LAST.lock().ok();
+        let locked = crate::services::watch_drops::locked();
         match last.as_ref().and_then(|l| l.as_ref()) {
-            Some(source) => build(source.inventory.as_ref(), &source.campaigns, query, now),
-            None => build(None, &[], query, now),
+            Some(source) => {
+                // Chained drops whose earlier drops are unclaimed, read from
+                // the inventory copy first (fresher claims), then the list.
+                let started: Vec<DropCampaign> = source
+                    .inventory
+                    .iter()
+                    .flat_map(|inv| inv.items.iter().map(|it| it.campaign.clone()))
+                    .collect();
+                let claimed: std::collections::HashSet<String> = started
+                    .iter()
+                    .flat_map(|c| &c.time_based_drops)
+                    .filter(|d| d.progress.as_ref().is_some_and(|p| p.is_claimed))
+                    .map(|d| d.id.clone())
+                    .collect();
+                let locked = crate::services::evolution::with_chains(locked, &started, &claimed);
+                let locked = crate::services::evolution::with_chains(locked, &source.campaigns, &claimed);
+                (build(source.inventory.as_ref(), &source.campaigns, query, now), locked)
+            }
+            None => (build(None, &[], query, now), locked),
         }
     };
-    apply_locked(&mut view, &crate::services::watch_drops::locked());
+    apply_locked(&mut view, &locked);
     view
 }
 
@@ -206,7 +224,7 @@ fn apply_locked(view: &mut RewardsDrops, locked: &std::collections::HashMap<Stri
             if let Some(needs) = locked.get(&row.id) {
                 row.locked = true;
                 row.status = String::new();
-                row.detail = Some(crate::services::evolution::locked_words(needs));
+                row.detail = Some(needs.clone());
                 row.bar = None;
             }
         }
@@ -467,6 +485,7 @@ mod tests {
             needs_earlier: false,
             pool_rewards: Vec::new(),
             obtains_container: false,
+            precondition_drops: Vec::new(),
         }
     }
 
@@ -568,7 +587,7 @@ mod tests {
         let started = campaign("1", "Pokemon", 20, vec![drop("gengar", 60, Some(30), false), drop("x", 60, Some(30), false)]);
         let inventory = inv(vec![item(started.clone(), CampaignStatus::Active, 1)], 0);
         let mut view = build(Some(&inventory), &[started], "", now());
-        let locked = std::collections::HashMap::from([("gengar".to_string(), "Haunter".to_string())]);
+        let locked = std::collections::HashMap::from([("gengar".to_string(), "Needs the Haunter badge first".to_string())]);
         apply_locked(&mut view, &locked);
         let rows = &view.in_progress[0].campaigns[0].drops;
         let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();

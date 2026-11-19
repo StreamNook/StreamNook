@@ -134,6 +134,11 @@ pub struct TimeBasedDrop {
     /// emotes and badges) is not one.
     #[serde(default)]
     pub obtains_container: bool,
+    /// Drops of the same campaign that must be claimed before this one
+    /// counts (Twitch's `preconditionDrops` on a standard campaign). Twitch
+    /// starts its minutes only after they are claimed.
+    #[serde(default)]
+    pub precondition_drops: Vec<String>,
 }
 
 /// One reward a draw can give: a pool member.

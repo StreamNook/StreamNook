@@ -153,6 +153,7 @@ mod tests {
             needs_earlier: false,
             pool_rewards: Vec::new(),
             obtains_container: false,
+            precondition_drops: Vec::new(),
         }
     }
 

@@ -594,14 +594,48 @@ fn rows<'a>(
         })
         .max()
         .unwrap_or(0);
+    // A reward Twitch counts only once earlier drops are claimed
+    // (`preconditionDrops`). The inventory copy may lack the list, so the
+    // campaign list's copy fills it in by id.
+    let listed = i.list.iter().find(|l| l.id == c.id);
+    let preconditions = |d: &TimeBasedDrop| -> Vec<String> {
+        if !d.precondition_drops.is_empty() {
+            return d.precondition_drops.clone();
+        }
+        listed
+            .and_then(|l| l.time_based_drops.iter().find(|x| x.id == d.id))
+            .map(|x| x.precondition_drops.clone())
+            .unwrap_or_default()
+    };
+    let claimed_here = |x: &TimeBasedDrop| {
+        tiers
+            .iter()
+            .zip(&base)
+            .find(|(t, _)| t.id == x.id)
+            .map_or(false, |(_, (_, own))| *own)
+            || x.progress.as_ref().is_some_and(|p| p.is_claimed)
+            || i.claims.get(&x.id) == Some(&ClaimState::Claimed)
+    };
+    // Per reward: whether it is chained, and the earlier rewards still unclaimed.
+    let chains: Vec<(bool, Vec<String>)> = tiers
+        .iter()
+        .map(|d| {
+            let pre = preconditions(d);
+            let unclaimed = crate::services::evolution::unclaimed_preconditions(c, &pre, &claimed_here);
+            (!pre.is_empty(), unclaimed)
+        })
+        .collect();
     let mut rows = tiers
         .iter()
         .zip(base)
-        .map(|(d, (have, own))| {
+        .zip(chains)
+        .map(|((d, (have, own)), (chained, unclaimed))| {
             let need = d.required_minutes_watched;
+            // A chained reward counts its own minutes from the moment the
+            // earlier one is claimed, never the campaign's running count.
             let shown = if own {
                 need
-            } else if per_drop {
+            } else if per_drop || chained {
                 have
             } else {
                 clock.min(need)
@@ -616,8 +650,9 @@ fn rows<'a>(
             let locked = i
                 .locked
                 .get(&d.id)
-                .filter(|_| !own && !pending && !twitch_ready)
-                .cloned();
+                .cloned()
+                .or_else(|| (!unclaimed.is_empty()).then(|| crate::services::evolution::needs_first_words(&unclaimed)))
+                .filter(|_| !own && !pending && !twitch_ready);
             let earned = locked.is_none() && started && (shown >= need || twitch_ready);
             let ungranted = i.ungranted.contains(&d.id);
             // Twitch will not grant it until the game account is linked: one
@@ -728,8 +763,8 @@ fn here_drop(r: &Row, i: &Inputs, started: bool, lead: bool) -> HereDrop {
         status,
         detail: if r.owned {
             None
-        } else if let Some(needs) = &r.locked {
-            Some(crate::services::evolution::locked_words(needs))
+        } else if let Some(words) = &r.locked {
+            Some(words.clone())
         } else {
             drop_words::progress_line(d, i.now_ms).or_else(|| drop_words::requirement_text(d))
         },
@@ -1779,7 +1814,7 @@ async fn step(app: &AppHandle, h: &Handles) -> Option<Duration> {
     let list = campaigns(h, &place, &second).await;
     let gate = gate_open(&place, &list, &second);
     let locked = crate::services::evolution::with_held_back(
-        crate::services::evolution::locked_stages(app).await,
+        crate::services::evolution::stage_words(crate::services::evolution::locked_stages(app).await),
         &second,
     );
     let (out, due, locked_changed) = with_state(|s| {
@@ -2364,7 +2399,7 @@ mod tests {
         let (list, inv) = one_tier(20);
         let mut i = Inputs::bare(&place, &list, Some(&inv), now_ms());
         assert!(build(&i).lead.is_some());
-        let locked = HashMap::from([("t1".to_string(), "Gastly".to_string())]);
+        let locked = HashMap::from([("t1".to_string(), "Needs the Gastly badge first".to_string())]);
         i.locked = &locked;
         let view = build(&i);
         assert!(view.lead.is_none());
@@ -2401,6 +2436,44 @@ mod tests {
         assert_eq!(row.status, "");
         assert_eq!(row.detail.as_deref(), Some("Needs the other rewards first"));
         assert_eq!(row.bar, None);
+    }
+
+    #[test]
+    fn a_chained_drop_waits_for_the_one_before_and_counts_its_own_minutes() {
+        // Twitch's preconditionDrops: t2 counts only once t1 is claimed, and
+        // then from zero. The campaign's running count read it Ready at once.
+        fn row<'a>(v: &'a WatchDrops, id: &str) -> &'a HereDrop {
+            v.campaigns[0].drops.iter().find(|d| d.id == id).unwrap()
+        }
+        let place = golden::place();
+        let (list, mut inv) = one_tier(60);
+        let mut t2 = inv.items[0].campaign.time_based_drops[0].clone();
+        t2.id = "t2".to_string();
+        t2.benefit_edges[0].id = "bt2".to_string();
+        t2.benefit_edges[0].name = "Reward t2".to_string();
+        let p = t2.progress.as_mut().unwrap();
+        p.drop_id = "t2".to_string();
+        p.current_minutes_watched = 0;
+        p.drop_instance_id = None;
+        inv.items[0].campaign.time_based_drops.push(t2);
+        let before = build(&Inputs::bare(&place, &list, Some(&inv), now_ms()));
+        assert!(row(&before, "t2").ready, "unchained, the running count calls it ready");
+
+        inv.items[0].campaign.time_based_drops[1].precondition_drops = vec!["t1".to_string()];
+        let view = build(&Inputs::bare(&place, &list, Some(&inv), now_ms()));
+        let t2 = row(&view, "t2");
+        assert!(t2.locked && !t2.ready && !t2.lead);
+        assert_eq!(t2.status, "");
+        assert_eq!(t2.detail.as_deref(), Some("Needs Reward t1 first"));
+        assert_eq!(t2.bar, None);
+        assert_eq!(view.campaigns[0].drops.last().map(|d| d.id.as_str()), Some("t2"));
+
+        // t1 claimed: t2 opens and counts its own minutes from zero.
+        inv.items[0].campaign.time_based_drops[0].progress.as_mut().unwrap().is_claimed = true;
+        let view = build(&Inputs::bare(&place, &list, Some(&inv), now_ms()));
+        let t2 = row(&view, "t2");
+        assert!(!t2.locked && !t2.ready);
+        assert_eq!(t2.current_minutes, 0);
     }
 
     #[test]

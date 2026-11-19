@@ -359,6 +359,7 @@ fn group_drop(
         pool_rewards,
         // Decided once every campaign is read (`mark_containers`).
         obtains_container: false,
+        precondition_drops: Vec::new(),
     }
 }
 
@@ -1149,11 +1150,13 @@ mod tests {
         assert!((item.progress_percentage - 40.0 / 60.0 / 2.0 * 100.0).abs() < 0.01);
         // Every surface reads it out of reach, with what it needs first.
         let locked = crate::services::evolution::with_held_back(HashMap::new(), &c);
-        let words = locked.get("g-iguana").map(|n| crate::services::evolution::locked_words(n));
-        assert_eq!(words.as_deref(), Some("Needs the other rewards first"));
-        // An evolution stage keeps the badge it names.
-        let stage = HashMap::from([("g-iguana".to_string(), "Gastly".to_string())]);
-        assert_eq!(crate::services::evolution::with_held_back(stage, &c)["g-iguana"], "Gastly");
+        assert_eq!(locked.get("g-iguana").map(String::as_str), Some("Needs the other rewards first"));
+        // An evolution stage keeps its own words.
+        let stage = HashMap::from([("g-iguana".to_string(), "Needs the Gastly badge first".to_string())]);
+        assert_eq!(
+            crate::services::evolution::with_held_back(stage, &c)["g-iguana"],
+            "Needs the Gastly badge first"
+        );
     }
 
     #[test]

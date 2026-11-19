@@ -279,34 +279,84 @@ pub async fn locked_stages(app: &crate::rt::AppHandle) -> HashMap<String, String
 }
 
 /// What a reward Twitch holds until its campaign's other rewards are earned
-/// needs first, as a locked map value (`locked_words` reads it).
-pub const OTHER_REWARDS: &str = "other rewards";
+/// says it needs.
+pub const OTHER_REWARDS_WORDS: &str = "Needs the other rewards first";
+
+/// The out-of-reach map every surface reads holds the words each reward
+/// shows; the evolution stages, by badge (`locked_stages`), turned into them.
+pub(crate) fn stage_words(stages: HashMap<String, String>) -> HashMap<String, String> {
+    stages.into_iter().map(|(id, needs)| (id, locked_words(&needs))).collect()
+}
 
 /// `locked` with every second-list tier Twitch holds behind its campaign's
 /// other rewards (`reward_drops::held_back`, the Golden Iguana) added; an
-/// evolution stage keeps the badge it names. Pure.
+/// evolution stage keeps its own words. Pure.
 pub(crate) fn with_held_back(mut locked: HashMap<String, String>, campaigns: &[DropCampaign]) -> HashMap<String, String> {
     for id in crate::services::reward_drops::held_back(campaigns) {
-        locked.entry(id).or_insert_with(|| OTHER_REWARDS.to_string());
+        locked.entry(id).or_insert_with(|| OTHER_REWARDS_WORDS.to_string());
     }
     locked
 }
 
-/// Every reward watching cannot earn yet, by drop id, with what it needs
-/// first: the evolution stages (`locked_stages`) and the tiers Twitch holds
-/// behind their campaign's other rewards. Autopilot hears only the stages
-/// (it skips held-back tiers itself, from the same Twitch flag).
+/// What a chained reward says it needs: the one earlier reward by name, or
+/// the earlier rewards when more than one is unclaimed.
+pub fn needs_first_words(unclaimed: &[String]) -> String {
+    match unclaimed {
+        [one] => format!("Needs {one} first"),
+        _ => "Needs the earlier rewards first".to_string(),
+    }
+}
+
+/// The unclaimed drops of `c` that `d` needs claimed first
+/// (`preconditionDrops`), by reward name. A precondition the campaign does not
+/// list is left to Twitch. Pure.
+pub(crate) fn unclaimed_preconditions(c: &DropCampaign, pre: &[String], claimed: impl Fn(&TimeBasedDrop) -> bool) -> Vec<String> {
+    pre.iter()
+        .filter_map(|p| c.time_based_drops.iter().find(|x| &x.id == p))
+        .filter(|x| !claimed(x))
+        .map(|x| {
+            x.benefit_edges
+                .first()
+                .map(|b| b.name.clone())
+                .filter(|n| !n.is_empty())
+                .unwrap_or_else(|| x.name.clone())
+        })
+        .collect()
+}
+
+/// `locked` with every standard-campaign drop whose earlier drops
+/// (`preconditionDrops`) are not all claimed added: Twitch counts it only
+/// after they are, so until then it is out of reach. `also_claimed`: drop ids
+/// known claimed from a fresher read than the campaigns' own progress. Pure.
+pub(crate) fn with_chains(
+    mut locked: HashMap<String, String>,
+    campaigns: &[DropCampaign],
+    also_claimed: &HashSet<String>,
+) -> HashMap<String, String> {
+    let claimed = |d: &TimeBasedDrop| also_claimed.contains(&d.id) || d.progress.as_ref().is_some_and(|p| p.is_claimed);
+    for c in campaigns {
+        for d in c.time_based_drops.iter().filter(|d| !d.precondition_drops.is_empty() && !claimed(d)) {
+            let unclaimed = unclaimed_preconditions(c, &d.precondition_drops, claimed);
+            if !unclaimed.is_empty() {
+                locked.entry(d.id.clone()).or_insert_with(|| needs_first_words(&unclaimed));
+            }
+        }
+    }
+    locked
+}
+
+/// Every reward watching cannot earn yet, by drop id, with the words it
+/// shows: the evolution stages (`locked_stages`) and the tiers Twitch holds
+/// behind their campaign's other rewards. Chained standard drops are added
+/// by the caller from its campaign list (`with_chains`). Autopilot hears only
+/// the stages (it skips held-back tiers itself, from the same Twitch flag).
 pub async fn locked_rewards(app: &crate::rt::AppHandle) -> HashMap<String, String> {
-    let stages = locked_stages(app).await;
+    let stages = stage_words(locked_stages(app).await);
     with_held_back(stages, &crate::services::reward_drops::cached())
 }
 
-/// The words a locked reward shows: "Needs the Gastly badge first", or
-/// "Needs the other rewards first" for one held behind the rest.
+/// The words a locked evolution stage shows: "Needs the Gastly badge first".
 pub fn locked_words(needs: &str) -> String {
-    if needs == OTHER_REWARDS {
-        return "Needs the other rewards first".to_string();
-    }
     format!("Needs the {needs} badge first")
 }
 
