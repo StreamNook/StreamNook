@@ -1,9 +1,9 @@
 // The composer's deck and teaching placeholder as small leaves of the message
-// box, so the hint clock, the GIF-link probe and the chat's emote of the
-// moment re-render these and nothing else (chat's composer is a very large
+// box, so the hint, the GIF-link probe and the chat's emote of the moment
+// re-render these and nothing else (chat's composer is a very large
 // component). The composer says when the box may teach (`HintGate`); these
-// keep the clock, pick the face and draw the hint layer over the empty field.
-import { useState, type CSSProperties, type Ref } from 'react';
+// pick the hint and the face and draw the hint layer over the empty field.
+import type { CSSProperties, Ref } from 'react';
 import { useEmoteMoment } from '../../hooks/useEmoteMoment';
 import type { ProviderId } from '../../types/providers';
 import { ComposerHintLayer } from './ComposerHintLayer';
@@ -16,7 +16,6 @@ import {
   useGifLinkInBox,
   type DeckCard,
   type HintGate,
-  type HintKind,
 } from './composerHints';
 import { DeckFace, EmoteDeckButton } from './EmoteDeckButton';
 
@@ -44,8 +43,6 @@ function DeckButton({
   buttonRef?: Ref<HTMLButtonElement>;
   onClick?: () => void;
   onMouseLeave?: () => void;
-  onPointerOver?: () => void;
-  onFocusChange?: (focused: boolean) => void;
 }) {
   const moment = useEmoteMoment(room?.provider ?? null, room?.channel ?? null);
   return <EmoteDeckButton face={face} cards={cards} moment={moment} {...rest} />;
@@ -85,23 +82,13 @@ export function ComposerDeck({
   onClick?: () => void;
   onMouseLeave?: () => void;
 }) {
-  // The hints hold still while the pointer or focus is on the deck: the hint
-  // showing when it arrived stays, so neither the face nor its cards change
-  // under the pointer. The clock runs on underneath.
-  const [hovered, setHovered] = useState(false);
-  const [focused, setFocused] = useState(false);
   // The GIF hint points at the button's menu: without the button it is only
   // the prompt and commands.
   const cycle = hintCycle({ slash, gifs: gifs && showButton });
-  const running = useComposerHint(gate.active, cycle, roomKeyOf(room));
-  const [held, setHeld] = useState<HintKind | null>(null);
-  const holding = hovered || focused;
-  if (holding && held === null) setHeld(running);
-  if (!holding && held !== null) setHeld(null);
-  const hint: HintKind = !gate.active ? 'message' : holding ? (held ?? running) : running;
+  const hint = useComposerHint(gate.active, cycle, roomKeyOf(room), text);
   // Only a shown button can show a GIF chip.
   const gifLink = useGifLinkInBox(text, gifs && showButton);
-  const face = deckFace({ text, gifLink, hint, slash, gifs });
+  const face = deckFace({ text, gifLink, slash, gifs });
   return (
     <>
       {showButton && (
@@ -114,12 +101,7 @@ export function ComposerDeck({
           label={label}
           buttonRef={buttonRef}
           onClick={onClick}
-          onMouseLeave={() => {
-            setHovered(false);
-            onMouseLeave?.();
-          }}
-          onPointerOver={() => setHovered(true)}
-          onFocusChange={setFocused}
+          onMouseLeave={onMouseLeave}
         />
       )}
       {gate.layer && (
@@ -136,42 +118,40 @@ export function ComposerDeck({
 }
 
 /** The phone's face: the chat's emote of the moment, or the GIF chip while
- *  the box holds a GIF link or teaches GIFs. No hover there, so no fan. */
+ *  the box holds a GIF link. No hover there, so no fan. */
 export function RoomDeckFace({
   room,
   text,
   gifs,
-  gate,
   smiley,
 }: {
   room: DeckRoom | null;
   text: string;
   gifs: boolean;
-  gate: HintGate;
   smiley: string;
 }) {
   const moment = useEmoteMoment(room?.provider ?? null, room?.channel ?? null);
-  const hint = useComposerHint(gate.active, hintCycle({ slash: false, gifs }), roomKeyOf(room));
   const gifLink = useGifLinkInBox(text, gifs);
-  return <DeckFace face={deckFace({ text, gifLink, hint, slash: false, gifs })} moment={moment} smiley={smiley} size="phone" />;
+  return <DeckFace face={deckFace({ text, gifLink, slash: false, gifs })} moment={moment} smiley={smiley} size="phone" />;
 }
 
-/** The phone's hint layer, on the same clock as its face; `pick` chooses the
- *  wording that fits the field. */
+/** The phone's hint layer; `pick` chooses the wording that fits the field. */
 export function PhoneHintLayer({
   room,
+  text,
   gifs,
   gate,
   pick,
   className,
 }: {
   room: DeckRoom | null;
+  text: string;
   gifs: boolean;
   gate: HintGate;
   pick: (wordings: string[]) => string;
   className?: string;
 }) {
-  const hint = useComposerHint(gate.active, hintCycle({ slash: false, gifs }), roomKeyOf(room));
+  const hint = useComposerHint(gate.active, hintCycle({ slash: false, gifs }), roomKeyOf(room), text);
   if (!gate.layer) return null;
   return <ComposerHintLayer hintKey={hint} wide={pick([HINT_WORDS[hint].wide, HINT_WORDS[hint].narrow])} className={className} />;
 }

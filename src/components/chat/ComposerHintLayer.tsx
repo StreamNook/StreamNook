@@ -1,13 +1,14 @@
-// The teaching placeholder's words over an empty message box: each hint
-// cross-fades in with a small rise and out with a small rise, transform and
-// opacity only. The field under it keeps its own placeholder (transparent via
-// `textarea[data-hint-layer]`), so screen readers still hear the prompt.
-// Shown only while the hints cycle (`useComposerHint`), never under reduced
-// motion, so the transform here always runs at full motion.
+// The teaching placeholder's words over an empty message box. A new hint
+// (a new chat, or the next one after a message, `useComposerHint`) arrives as
+// a slow, soft cross-fade, opacity only, both words in the same spot so
+// nothing jumps. The field under it keeps its own placeholder (transparent
+// via `textarea[data-hint-layer]`), so screen readers still hear the prompt.
+// Shown only at full motion, so the fade always runs.
 import { AnimatePresence, motion } from 'framer-motion';
 import type { CSSProperties } from 'react';
 
-const EASE = [0.2, 0.8, 0.2, 1] as const;
+// A dissolve, even at both ends (the deck's face uses the same).
+const FADE = { duration: 0.5, ease: 'easeInOut' } as const;
 
 export function ComposerHintLayer({
   hintKey,
@@ -33,10 +34,10 @@ export function ComposerHintLayer({
           <motion.span
             key={hintKey}
             className="absolute inset-x-0 top-0 truncate whitespace-nowrap"
-            initial={{ opacity: 0, y: 6 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -6 }}
-            transition={{ duration: 0.3, ease: EASE }}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={FADE}
           >
             {narrow === undefined ? (
               wide

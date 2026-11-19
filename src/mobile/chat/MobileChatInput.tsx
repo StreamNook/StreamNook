@@ -697,8 +697,9 @@ const MobileChatInputImpl: React.FC<Props> = ({
           : ['Send a message'];
   const placeholder = pickFittingText(placeholderWordings, fieldBox.width - 2, (t) => measureText(t, fieldBox.font));
   // The teaching placeholder, desktop's (chat/ComposerDeck): while the plain
-  // prompt shows and the box is empty, it says "Search a GIF" in turn with
-  // the prompt, where the channel offers GIFs (Twitch). The phone teaches no
+  // prompt shows and the box is empty, some chats say "Search a GIF" instead
+  // of the prompt (one pick per chat, the next after each message, never on
+  // a timer), where the channel offers GIFs (Twitch). The phone teaches no
   // "/": typing it brings no command list here; commands have their own
   // button in the field.
   const motionMode = useAppStore((s) => s.settings.motion_mode);
@@ -711,7 +712,6 @@ const MobileChatInputImpl: React.FC<Props> = ({
       !gating.warning && !shareArmed && !gating.blocked && slowWait <= 0 && !hidePlaceholder && !roomModes?.prompt && !needsKickSignIn,
     empty: text === '',
     typing,
-    panelOpen: emotesOpen || pointsOpen,
     motionMode,
     lowPower,
   });
@@ -976,7 +976,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
                   bar's right end while the panel is open). Its face is the
                   chat's emote of the moment, else the smiley; the slash card
                   or the GIF chip while the box is about those. */}
-              <RoomDeckFace room={deckRoom} text={text} gifs={deckGifs} gate={hintGate} smiley={currentSmiley} />
+              <RoomDeckFace room={deckRoom} text={text} gifs={deckGifs} smiley={currentSmiley} />
             </button>
           )}
           {needsKickSignIn ? (
@@ -1026,6 +1026,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
             />
             <PhoneHintLayer
               room={deckRoom}
+              text={text}
               gifs={deckGifs}
               gate={hintGate}
               pick={(wordings) => pickFittingText(wordings, fieldBox.width - 2, (t) => measureText(t, fieldBox.font))}

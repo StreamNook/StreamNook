@@ -11,20 +11,21 @@ import { resolve } from 'node:path';
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(() => Promise.resolve(null)) }));
 
 import {
+  chatSeed,
   deckFace,
   desktopHints,
   fanCards,
   gifLinkInBox,
-  hintAt,
   hintCycle,
-  hintOfRun,
+  hintOfVisit,
   hintsMayMove,
   LINKISH,
   mayHoldGifLink,
   nextHintEngaged,
-  nextHintRun,
+  nextHintVisit,
   phoneHints,
-  type HintRun,
+  type HintKind,
+  type HintVisit,
 } from './composerHints';
 import { composerLook, type ComposerSituation } from './composerParts';
 
@@ -38,35 +39,56 @@ describe('hint cycle', () => {
     expect(hintCycle({ slash: false, gifs: false })).toEqual(['message']);
   });
 
-  it('moves one hint per step and wraps', () => {
+  it('a chat keeps its hint, and moves to the next one per finished message, wrapping', () => {
     const c = hintCycle({ slash: true, gifs: true });
-    expect([0, 1, 2, 3, 4].map((s) => hintAt(c, s))).toEqual(['message', 'slash', 'gif', 'message', 'slash']);
-    expect(hintAt(c, -3)).toBe('message');
+    const order: HintKind[] = ['message', 'slash', 'gif'];
+    const first = hintOfVisit(c, 'twitch:a', 0);
+    // The same chat opens on the same hint every visit.
+    expect(hintOfVisit(c, 'twitch:a', 0)).toBe(first);
+    const at = order.indexOf(first);
+    expect([1, 2, 3].map((n) => hintOfVisit(c, 'twitch:a', n))).toEqual([1, 2, 3].map((n) => order[(at + n) % 3]));
+    // Chats open on their own hints, not all on the same one.
+    const opens = new Set(['twitch:a', 'twitch:b', 'twitch:c', 'twitch:d', 'twitch:e', 'kick:a'].map((k) => hintOfVisit(c, k, 0)));
+    expect(opens.size).toBeGreaterThan(1);
+    expect(chatSeed('twitch:a')).toBe(chatSeed('twitch:a'));
   });
 
-  it('a run starts from the prompt and holds it past the first tick (which may come at once)', () => {
-    const c = hintCycle({ slash: true, gifs: true });
-    let run: HintRun = { key: null, start: 0 };
-    expect(hintOfRun(run, c, 41)).toBe('message');
-    run = nextHintRun(run, 'twitch:a|message,slash,gif', 41);
-    expect(hintOfRun(run, c, 41)).toBe('message');
-    expect(hintOfRun(run, c, 42)).toBe('message');
-    expect(hintOfRun(run, c, 43)).toBe('slash');
-    expect(hintOfRun(run, c, 44)).toBe('gif');
-    expect(hintOfRun(run, c, 45)).toBe('message');
-    // Same key: the run goes on.
-    expect(nextHintRun(run, 'twitch:a|message,slash,gif', 44)).toBe(run);
-    // A Kick chat in the same composer starts over: no GIF hint carried in.
+  it('never shows a hint the menu does not hold, and a lone prompt never changes', () => {
     const kick = hintCycle({ slash: true, gifs: false });
-    run = nextHintRun(run, 'kick:a|message,slash', 44);
-    expect(hintOfRun(run, kick, 44)).toBe('message');
-    expect(hintOfRun(run, kick, 45)).toBe('message');
-    // Resting (no key) shows the prompt, and the next run starts fresh.
-    run = nextHintRun(run, null, 46);
-    expect(hintOfRun(run, kick, 46)).toBe('message');
-    run = nextHintRun(run, 'kick:a|message,slash', 50);
-    expect(hintOfRun(run, kick, 51)).toBe('message');
-    expect(hintOfRun(run, kick, 52)).toBe('slash');
+    for (let n = 0; n < 6; n++) expect(hintOfVisit(kick, 'kick:a', n)).not.toBe('gif');
+    const bare = hintCycle({ slash: false, gifs: false });
+    for (let n = 0; n < 6; n++) expect(hintOfVisit(bare, 'twitch:a', n)).toBe('message');
+  });
+
+  it('a pick does not move when GIFs turn out to be offered a moment later', () => {
+    const before = hintCycle({ slash: true, gifs: false });
+    const after = hintCycle({ slash: true, gifs: true });
+    for (const k of ['twitch:a', 'twitch:b', 'twitch:c', 'twitch:d']) {
+      const was = hintOfVisit(before, k, 0);
+      if (was !== 'message') expect(hintOfVisit(after, k, 0)).toBe(was);
+    }
+  });
+
+  it('only a new chat or a finished message starts the next hint; typing does not', () => {
+    let v: HintVisit = { key: 'twitch:a', filled: false, finished: 0 };
+    expect(nextHintVisit(v, 'twitch:a', '')).toBe(v);
+    v = nextHintVisit(v, 'twitch:a', 'h');
+    expect(v.finished).toBe(0);
+    // Further keystrokes keep the same visit object (no render churn).
+    expect(nextHintVisit(v, 'twitch:a', 'hello')).toBe(v);
+    v = nextHintVisit(v, 'twitch:a', '');
+    expect(v.finished).toBe(1);
+    // A new chat starts over at its own hint.
+    v = nextHintVisit(v, 'kick:b', '');
+    expect(v).toEqual({ key: 'kick:b', filled: false, finished: 0 });
+  });
+
+  it('nothing in the hints runs on a timer', () => {
+    const h = src('components/chat/composerHints.ts');
+    expect(h).not.toMatch(/setInterval|setTimeout\([^)]*HINT/);
+    expect(h).not.toContain('HINT_MS');
+    const d = src('components/chat/ComposerDeck.tsx');
+    expect(d).not.toMatch(/setInterval|useSyncExternalStore/);
   });
 
   it('the box counts as written in from anything in it until the composer is left', () => {
@@ -78,56 +100,6 @@ describe('hint cycle', () => {
     expect(nextHintEngaged(true, '', true)).toBe(false);
     // Left with text in the box: still written in.
     expect(nextHintEngaged(true, 'draft', true)).toBe(true);
-  });
-});
-
-describe('the window clock', () => {
-  it('ticks every hint-length while a box listens and the window shows, and stops after', async () => {
-    vi.resetModules();
-    vi.useFakeTimers();
-    const vis = { hidden: false, cb: null as null | (() => void) };
-    vi.doMock('../../utils/windowVisibility', () => ({
-      isWindowHidden: () => vis.hidden,
-      onWindowVisibility: (cb: () => void) => {
-        vis.cb = cb;
-        return () => {
-          vis.cb = null;
-        };
-      },
-    }));
-    const g = globalThis as unknown as { window?: unknown };
-    const hadWindow = 'window' in g;
-    if (!hadWindow) g.window = globalThis;
-    try {
-      const clock = await import('./composerHints');
-      const ticks: number[] = [];
-      const off = clock.subscribeHintClock(() => ticks.push(clock.hintClockStep()));
-      const start = clock.hintClockStep();
-      vi.advanceTimersByTime(clock.HINT_MS - 1);
-      expect(ticks).toEqual([]);
-      vi.advanceTimersByTime(1);
-      expect(ticks).toEqual([start + 1]);
-      // Hidden: no ticks.
-      vis.hidden = true;
-      vis.cb?.();
-      vi.advanceTimersByTime(clock.HINT_MS * 3);
-      expect(ticks).toEqual([start + 1]);
-      // Shown again: ticking again.
-      vis.hidden = false;
-      vis.cb?.();
-      vi.advanceTimersByTime(clock.HINT_MS);
-      expect(ticks).toEqual([start + 1, start + 2]);
-      // The last listener gone: the interval is cleared.
-      off();
-      expect(vis.cb).toBeNull();
-      vi.advanceTimersByTime(clock.HINT_MS * 3);
-      expect(ticks).toEqual([start + 1, start + 2]);
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      if (!hadWindow) delete g.window;
-      vi.doUnmock('../../utils/windowVisibility');
-      vi.useRealTimers();
-    }
   });
 });
 
@@ -148,7 +120,6 @@ describe('desktop gate', () => {
     engaged: false,
     slowWait: 0,
     replying: false,
-    menuOpen: false,
     remindOverlay: false,
     motionMode: 'full',
     lowPower: false,
@@ -171,8 +142,8 @@ describe('desktop gate', () => {
     }
   });
 
-  it('rests on the prompt while you write, wait out slow mode, reply or browse the menu', () => {
-    for (const s of [{ engaged: true }, { slowWait: 3 }, { replying: true }, { menuOpen: true }]) {
+  it('rests on the prompt while you write, wait out slow mode or reply', () => {
+    for (const s of [{ engaged: true }, { slowWait: 3 }, { replying: true }]) {
       expect(desktopHints({ ...idle, ...s })).toEqual({ layer: true, active: false });
     }
   });
@@ -184,7 +155,6 @@ describe('phone gate', () => {
     plainPrompt: true,
     empty: true,
     typing: false,
-    panelOpen: false,
     motionMode: 'full',
     lowPower: false,
   };
@@ -199,28 +169,35 @@ describe('phone gate', () => {
     }
   });
 
-  it('rests while the keyboard is up or a panel is open', () => {
+  it('rests while the keyboard is up', () => {
     expect(phoneHints({ ...idle, typing: true })).toEqual({ layer: true, active: false });
-    expect(phoneHints({ ...idle, panelOpen: true })).toEqual({ layer: true, active: false });
   });
 });
 
 describe('face and fan', () => {
-  const base = { text: '', gifLink: false, hint: 'message' as const, slash: true, gifs: true };
+  const base = { text: '', gifLink: false, slash: true, gifs: true };
 
-  it('what the box holds wins, then the hint, else the moment', () => {
+  it('what the box holds wins, else the moment; an empty box never turns the face', () => {
     expect(deckFace({ ...base, text: '/ban' })).toBe('slash');
     expect(deckFace({ ...base, text: 'look https://giphy.com/x', gifLink: true })).toBe('gif');
-    expect(deckFace({ ...base, hint: 'slash' })).toBe('slash');
-    expect(deckFace({ ...base, hint: 'gif' })).toBe('gif');
     expect(deckFace(base)).toBe('moment');
-    expect(deckFace({ ...base, text: 'hello', hint: 'gif' })).toBe('moment');
+    expect(deckFace({ ...base, text: 'hello' })).toBe('moment');
   });
 
   it('never shows what the menu does not hold', () => {
     expect(deckFace({ ...base, slash: false, text: '/ban' })).toBe('moment');
     expect(deckFace({ ...base, gifs: false, gifLink: true, text: 'x' })).toBe('moment');
-    expect(deckFace({ ...base, gifs: false, hint: 'gif' })).toBe('moment');
+  });
+
+  it('every face change is a soft cross-fade: opacity only, no pop or rise', () => {
+    const b = src('components/chat/EmoteDeckButton.tsx');
+    const face = b.slice(b.indexOf('export function DeckFace('), b.indexOf('const FAN'));
+    expect(face).toContain('initial={{ opacity: 0 }}');
+    expect(face).toContain('exit={{ opacity: 0 }}');
+    expect(face).not.toMatch(/scale:|\by:/);
+    const l = src('components/chat/ComposerHintLayer.tsx');
+    expect(l).toContain('initial={{ opacity: 0 }}');
+    expect(l).not.toMatch(/scale:|\by:/);
   });
 
   it('fans the deck\'s other members, keeping each on its side', () => {
@@ -344,8 +321,8 @@ describe('call sites', () => {
     const b = src('components/chat/EmoteDeckButton.tsx');
     expect(b).toContain("return still || animate !== 'always' || motion !== 'full';");
     const d = src('components/chat/ComposerDeck.tsx');
-    // Hovering or focusing the deck holds the hint it arrived on.
-    expect(d).toContain("const hint: HintKind = !gate.active ? 'message' : holding ? (held ?? running) : running;");
+    // The hint reads the box, so a finished message moves it on.
+    expect(d).toContain('useComposerHint(gate.active, cycle, roomKeyOf(room), text)');
   });
 
   it('hides the field\'s own placeholder under the layer, beating the placeholder ink classes', () => {

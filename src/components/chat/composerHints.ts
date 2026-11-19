@@ -1,26 +1,27 @@
 // The emote button's deck and the teaching placeholder (Brandon's "Deck plus
 // placeholder", 2026-11-13): which face the button wears, which cards fan out
 // from behind it, when the empty message box may teach, and which hint it
-// shows this moment.
+// shows.
 //
-// Why TypeScript: this is presentation timing and a pick between a few looks
-// from what the box shows right now. The facts it reads come from Rust (the
-// chat's emote of the moment, `services/emote_moment.rs`; whether the box
-// holds a GIF link, `link_detect::find_gif_link`; whether the channel allows
-// GIFs, `get_gif_picker_status`); nothing here fetches, parses or ranks.
-import { useEffect, useState, useSyncExternalStore } from 'react';
+// Calm by design (Brandon 2026-11-19, "it flips way too much and is just too
+// in your face"): nothing here runs on a timer. The hint changes only when
+// you open a chat or finish a message, and the face only for what the box
+// holds or a new emote of the moment (which Rust holds still for a while).
+//
+// Why TypeScript: this is presentation, a pick between a few looks from what
+// the box shows right now. The facts it reads come from Rust (the chat's
+// emote of the moment, `services/emote_moment.rs`; whether the box holds a
+// GIF link, `link_detect::find_gif_link`; whether the channel allows GIFs,
+// `get_gif_picker_status`); nothing here fetches, parses or ranks.
+import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { getGifPickerStatus } from '../../services/gifService';
-import { isWindowHidden, onWindowVisibility } from '../../utils/windowVisibility';
 
 /** What the empty box is teaching: the plain prompt, commands, or GIFs. */
 export type HintKind = 'message' | 'slash' | 'gif';
 /** The deck's members: the chat's emote of the moment (or the smiley), the
  *  slash card and the GIF chip. The one in front is the button's face. */
 export type DeckCard = 'moment' | 'slash' | 'gif';
-
-/** How long each hint stays. */
-export const HINT_MS = 2200;
 
 /** Each hint's words, full and for a narrow composer row. */
 export const HINT_WORDS: Record<HintKind, { wide: string; narrow: string }> = {
@@ -29,7 +30,7 @@ export const HINT_WORDS: Record<HintKind, { wide: string; narrow: string }> = {
   gif: { wide: 'Search a GIF', narrow: 'Find a GIF' },
 };
 
-/** The hints a box cycles through: the prompt, then what its menu holds. */
+/** The hints a box may show: the prompt, then what its menu holds. */
 export function hintCycle(o: { slash: boolean; gifs: boolean }): HintKind[] {
   const out: HintKind[] = ['message'];
   if (o.slash) out.push('slash');
@@ -37,15 +38,15 @@ export function hintCycle(o: { slash: boolean; gifs: boolean }): HintKind[] {
   return out;
 }
 
-/** Whether motion lets the hints move: Motion at Full, and neither Battery
+/** Whether motion lets the hints change: Motion at Full, and neither Battery
  *  Saver nor Performance mode quieting the window (`useLowPower`). */
 export function hintsMayMove(motionMode: string | undefined, lowPower: boolean): boolean {
   return (motionMode ?? 'full') === 'full' && !lowPower;
 }
 
 /** `layer`: the hint layer stands over the empty box (the box may teach, so
- *  the field's own placeholder is hidden under it). `active`: the hints move;
- *  a layer that is not active rests on the plain prompt. */
+ *  the field's own placeholder is hidden under it). `active`: the box may
+ *  show a tip; a layer that is not active rests on the plain prompt. */
 export interface HintGate {
   layer: boolean;
   active: boolean;
@@ -54,9 +55,10 @@ export interface HintGate {
 /**
  * Chat's composer. The box teaches only while it shows the idle prompt
  * (`composerLook().teaches`: nothing you can act on is being said), is empty
- * and motion allows it; the hints move only while you are not writing (no
+ * and motion allows it; a tip shows only while you are not writing (no
  * keystroke since the field was last left), no slow-mode wait runs, no reply
- * is being started, the menu is closed and no /remind is being typed.
+ * is being started and no /remind is being typed. Opening the menu keeps the
+ * tip: it is still words, and turning it away and back would be two changes.
  */
 export function desktopHints(s: {
   teaches: boolean;
@@ -64,99 +66,74 @@ export function desktopHints(s: {
   engaged: boolean;
   slowWait: number;
   replying: boolean;
-  menuOpen: boolean;
   remindOverlay: boolean;
   motionMode: string | undefined;
   lowPower: boolean;
 }): HintGate {
   const layer = s.teaches && s.empty && !s.remindOverlay && hintsMayMove(s.motionMode, s.lowPower);
-  return { layer, active: layer && !s.engaged && s.slowWait <= 0 && !s.replying && !s.menuOpen };
+  return { layer, active: layer && !s.engaged && s.slowWait <= 0 && !s.replying };
 }
 
 /**
  * The phone's composer. It teaches GIFs only (its commands sit behind their
  * own button, and typing / brings no command list), so only where GIFs are
- * offered; only while the plain prompt shows and the box is empty; the hints
- * move while the keyboard is down and no panel is open.
+ * offered; only while the plain prompt shows and the box is empty; a tip
+ * shows while the keyboard is down (a panel opening keeps it, as on desktop).
  */
 export function phoneHints(s: {
   gifs: boolean;
   plainPrompt: boolean;
   empty: boolean;
   typing: boolean;
-  panelOpen: boolean;
   motionMode: string | undefined;
   lowPower: boolean;
 }): HintGate {
   const layer = s.gifs && s.plainPrompt && s.empty && hintsMayMove(s.motionMode, s.lowPower);
-  return { layer, active: layer && !s.typing && !s.panelOpen };
+  return { layer, active: layer && !s.typing };
 }
 
-/** The hint shown `step` hint-lengths after a run started. */
-export function hintAt(cycle: readonly HintKind[], step: number): HintKind {
-  if (cycle.length === 0 || step <= 0) return 'message';
-  return cycle[step % cycle.length];
+// ── which hint, and when it changes ──────────────────────────────────────────
+// No clock. A chat opens on its own hint and keeps it; finishing a message
+// (sent or cleared) moves that chat to the next one. While you write, the box
+// rests on the plain prompt (the gate), so the next hint arrives only after
+// you have left the composer, never while you look at it.
+
+/** Every hint in one fixed order, so a chat's pick does not move when its
+ *  menu learns a moment later that GIFs are offered here. */
+const ALL_HINTS: readonly HintKind[] = ['message', 'slash', 'gif'];
+
+/** A steady number for a chat, so each chat opens on its own hint and opens
+ *  on the same one every visit. */
+export function chatSeed(runKey: string): number {
+  let h = 0;
+  for (let i = 0; i < runKey.length; i++) h = (h * 31 + runKey.charCodeAt(i)) >>> 0;
+  return h;
 }
 
-// ── the window's hint clock ──────────────────────────────────────────────────
-// One clock per window, so every composer in it (MultiChat panes, popouts'
-// own windows aside) moves in step. It ticks only while some box is teaching
-// and the window is on screen; only the leaves that draw a hint read it.
-
-let clockStep = 0;
-let clockId: number | undefined;
-let offVisibility: (() => void) | undefined;
-const clockListeners = new Set<() => void>();
-
-function syncClock(): void {
-  const want = clockListeners.size > 0 && !isWindowHidden();
-  if (want && clockId === undefined) {
-    clockId = window.setInterval(() => {
-      clockStep += 1;
-      clockListeners.forEach((l) => l());
-    }, HINT_MS);
-  } else if (!want && clockId !== undefined) {
-    window.clearInterval(clockId);
-    clockId = undefined;
-  }
+/** The hint a chat's box shows after `finished` messages there: the chat's
+ *  own pick, then the next one per message. A pick the box's menu does not
+ *  hold is the plain prompt. */
+export function hintOfVisit(cycle: readonly HintKind[], runKey: string, finished: number): HintKind {
+  if (cycle.length <= 1) return 'message';
+  const kind = ALL_HINTS[(chatSeed(runKey) + Math.max(0, finished)) % ALL_HINTS.length];
+  return cycle.includes(kind) ? kind : 'message';
 }
 
-export function subscribeHintClock(listener: () => void): () => void {
-  clockListeners.add(listener);
-  if (clockListeners.size === 1) offVisibility = onWindowVisibility(syncClock);
-  syncClock();
-  return () => {
-    clockListeners.delete(listener);
-    if (clockListeners.size === 0) {
-      offVisibility?.();
-      offVisibility = undefined;
-    }
-    syncClock();
-  };
+/** One visit to a chat: whether the box held text at the last look, and how
+ *  many messages were finished (the box went from text to empty). */
+export interface HintVisit {
+  key: string;
+  filled: boolean;
+  finished: number;
 }
 
-export const hintClockStep = (): number => clockStep;
-const subscribeNothing = (): (() => void) => () => {};
-
-/** One teaching run: which box and cycle it belongs to, and the clock step it
- *  began at. */
-export interface HintRun {
-  key: string | null;
-  start: number;
-}
-
-/** The run after this render: a new key (started, a new chat, a new cycle)
- *  starts again from the prompt at the current step. */
-export function nextHintRun(run: HintRun, key: string | null, step: number): HintRun {
-  return run.key === key ? run : { key, start: step };
-}
-
-/** The hint a run shows at `step`; the prompt when no run is going. The
- *  window's clock may tick a moment after a run starts (another composer
- *  keeps it going), so the run's first tick is skipped: the prompt stays at
- *  least one full hint-length before the first hint, never a flash. */
-export function hintOfRun(run: HintRun, cycle: readonly HintKind[], step: number): HintKind {
-  return run.key === null ? 'message' : hintAt(cycle, step - run.start - 1);
+/** The visit after this render: a new chat starts a new visit; the box going
+ *  from text to empty finishes a message. Typing alone changes nothing. */
+export function nextHintVisit(visit: HintVisit, key: string, text: string): HintVisit {
+  const filled = text !== '';
+  if (visit.key !== key) return { key, filled, finished: 0 };
+  if (visit.filled === filled) return visit;
+  return { key, filled, finished: filled ? visit.finished : visit.finished + 1 };
 }
 
 /** Whether the box has been written in since the composer was last left:
@@ -168,36 +145,30 @@ export function nextHintEngaged(prev: boolean, text: string, left = false): bool
 }
 
 /**
- * The hint the empty box shows now: the prompt, then the cycle's next hint
- * every {@link HINT_MS} while `active`. `runKey` names the box's chat: a new
- * chat, a new cycle or a new activation starts again from the prompt.
+ * The hint the empty box shows: the chat's hint while `active`, else the
+ * plain prompt. `runKey` names the box's chat; `text` is the box, read only
+ * to notice a message being finished.
  */
-export function useComposerHint(active: boolean, cycle: readonly HintKind[], runKey: string): HintKind {
-  const moving = active && cycle.length > 1;
-  const step = useSyncExternalStore(moving ? subscribeHintClock : subscribeNothing, hintClockStep, hintClockStep);
-  const key = moving ? `${runKey}|${cycle.join(',')}` : null;
-  const [run, setRun] = useState<HintRun>({ key: null, start: 0 });
-  const next = nextHintRun(run, key, step);
+export function useComposerHint(active: boolean, cycle: readonly HintKind[], runKey: string, text: string): HintKind {
+  const [visit, setVisit] = useState<HintVisit>(() => ({ key: runKey, filled: text !== '', finished: 0 }));
+  const next = nextHintVisit(visit, runKey, text);
   // Derived from this render's inputs (React's "adjust state while
-  // rendering"), so a new run never shows the old run's hint for a frame.
-  if (next !== run) setRun(next);
-  return hintOfRun(next, cycle, step);
+  // rendering"); it updates only when the box fills or empties, not per key.
+  if (next !== visit) setVisit(next);
+  return active ? hintOfVisit(cycle, runKey, next.finished) : 'message';
 }
 
 // ── the face ─────────────────────────────────────────────────────────────────
 
 /**
- * The button's face. What the box holds wins (a command being typed shows the
- * slash card, a GIF link the GIF chip), then the hint the empty box is
- * showing, else the chat's emote of the moment.
+ * The button's face: what the box holds (a command being typed shows the
+ * slash card, a GIF link the GIF chip), else the chat's emote of the moment.
+ * The hint never turns the face: the cards show on hover instead, so the
+ * face changes only for something you did or a new moment in the chat.
  */
-export function deckFace(o: { text: string; gifLink: boolean; hint: HintKind; slash: boolean; gifs: boolean }): DeckCard {
+export function deckFace(o: { text: string; gifLink: boolean; slash: boolean; gifs: boolean }): DeckCard {
   if (o.slash && o.text.startsWith('/')) return 'slash';
   if (o.gifs && o.gifLink) return 'gif';
-  if (o.text === '') {
-    if (o.hint === 'slash' && o.slash) return 'slash';
-    if (o.hint === 'gif' && o.gifs) return 'gif';
-  }
   return 'moment';
 }
 

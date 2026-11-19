@@ -18,8 +18,12 @@
 //!
 //! A chatter counts once per emote and a row counts each emote once, so one
 //! person spamming never makes the moment; it takes [`MIN_CHATTERS`] people.
-//! A new emote takes over only with [`TAKEOVER_MARGIN`] more chatters than
-//! the one shown, so two close emotes never swap the face back and forth.
+//! The face is meant to be calm (Brandon 2026-11-19: "it flips way too much
+//! and is just too in your face"): an emote keeps the face at least
+//! [`MIN_HOLD_MS`] once it takes it, whatever the room does meanwhile, and a
+//! new emote takes over only with a clear lead ([`takeover_needs`]: at least
+//! [`TAKEOVER_MARGIN`] more chatters, and half again as many in a busy room),
+//! so two close emotes never swap the face back and forth.
 //! The face is a picture of the room, not an insert shortcut (pressing the
 //! button opens the menu), so an emote the viewer cannot send still counts.
 
@@ -42,8 +46,11 @@ pub const EVENT: &str = "emote-moment";
 pub const WINDOW_MS: i64 = 60_000;
 /// Distinct chatters an emote needs before it is the moment.
 pub const MIN_CHATTERS: usize = 3;
-/// How many more chatters a challenger needs than the emote shown.
+/// The fewest more chatters a challenger needs than the emote shown.
 pub const TAKEOVER_MARGIN: usize = 2;
+/// How long an emote keeps the face once it takes it, before another emote
+/// (or a quiet room's smiley) may replace it.
+pub const MIN_HOLD_MS: i64 = 30_000;
 /// A room ranks its uses at most this often while rows arrive.
 pub const RANK_EVERY_MS: i64 = 1_500;
 /// (emote, chatter) pairs a room keeps after a rank; past it the emotes with
@@ -79,8 +86,17 @@ struct Room {
     seen: HashMap<Arc<str>, HashMap<u64, i64>>,
     info: HashMap<Arc<str>, MomentEmote>,
     leader: Option<Arc<str>>,
+    /// When the shown emote took the face.
+    leader_since: i64,
     last_rank_ms: i64,
     seq: u64,
+}
+
+/// Chatters a challenger needs to take the face from an emote `held` chatters
+/// use: [`TAKEOVER_MARGIN`] more, or half again as many when that is more, so
+/// a busy room's leader is not unseated by a couple of chatters.
+pub fn takeover_needs(held: usize) -> usize {
+    held + TAKEOVER_MARGIN.max(held / 2)
 }
 
 static SEQ: AtomicU64 = AtomicU64::new(0);
@@ -230,7 +246,14 @@ fn rank(key: &str, room: &mut Room, now: i64) -> Option<MomentAnswer> {
         }
     }
     let seen = &room.seen;
-    room.info.retain(|k, _| seen.contains_key(k));
+    // The emote shown keeps its picture while it holds the face, even if its
+    // uses have aged out meanwhile.
+    let shown = room.leader.as_ref();
+    room.info.retain(|k, _| seen.contains_key(k) || shown == Some(k));
+    // Within its hold the shown emote stays, whatever the room does.
+    if room.leader.is_some() && now - room.leader_since < MIN_HOLD_MS {
+        return None;
+    }
     let last_use = |who: &HashMap<u64, i64>| who.values().copied().max().unwrap_or(0);
     let best = room
         .seen
@@ -241,12 +264,18 @@ fn rank(key: &str, room: &mut Room, now: i64) -> Option<MomentAnswer> {
     let held = room.leader.as_ref().and_then(|l| room.seen.get(l)).map(HashMap::len).filter(|n| *n >= MIN_CHATTERS);
     let next = match (held, best) {
         // The emote shown keeps its place until another clearly leads.
-        (Some(n), Some((_, m))) if m < n + TAKEOVER_MARGIN => room.leader.clone(),
+        (Some(n), Some((_, m))) if m < takeover_needs(n) => room.leader.clone(),
         (Some(_), None) => room.leader.clone(),
         (_, best) => best.map(|(name, _)| name),
     };
     if next == room.leader {
         return None;
+    }
+    if next.is_some() {
+        room.leader_since = now;
+    }
+    if let Some(old) = room.leader.as_ref().filter(|old| !room.seen.contains_key(*old)) {
+        room.info.remove(old);
     }
     room.leader = next;
     room.seq = SEQ.fetch_add(1, Ordering::AcqRel) + 1;
@@ -459,10 +488,58 @@ mod tests {
         reset(k);
         let now = 4_000_000;
         feed(k, &[("a", &["LUL"]), ("b", &["LUL"]), ("c", &["LUL"])], now);
-        feed(k, &[("d", &["Kappa"]), ("e", &["Kappa"]), ("f", &["Kappa"]), ("g", &["Kappa"])], now + 10);
-        assert_eq!(leader(k, now + 10).as_deref(), Some("LUL"), "one more chatter does not take over");
-        feed(k, &[("h", &["Kappa"])], now + 20);
-        assert_eq!(leader(k, now + 20).as_deref(), Some("Kappa"), "two more chatters do");
+        // Past the hold, so only the lead decides.
+        let later = now + MIN_HOLD_MS;
+        feed(k, &[("d", &["Kappa"]), ("e", &["Kappa"]), ("f", &["Kappa"]), ("g", &["Kappa"])], later);
+        assert_eq!(leader(k, later).as_deref(), Some("LUL"), "one more chatter does not take over");
+        feed(k, &[("h", &["Kappa"])], later + 10);
+        assert_eq!(leader(k, later + 10).as_deref(), Some("Kappa"), "two more chatters do");
+    }
+
+    #[test]
+    fn a_new_face_holds_a_while_whatever_the_room_does() {
+        let k = "test-hold";
+        reset(k);
+        let now = 4_500_000;
+        feed(k, &[("a", &["LUL"]), ("b", &["LUL"]), ("c", &["LUL"])], now);
+        let crowd: Vec<String> = (0..20).map(|i| format!("p{i}")).collect();
+        let kappa: Vec<(&str, &[&str])> = crowd.iter().map(|u| (u.as_str(), &["Kappa"][..])).collect();
+        assert!(feed(k, &kappa, now + 1_000).is_none(), "no change inside the hold, however clear the lead");
+        assert_eq!(leader(k, now + MIN_HOLD_MS - 1).as_deref(), Some("LUL"));
+        let (next, changed) = get_at(k, now + MIN_HOLD_MS);
+        assert!(changed, "the change comes as the hold ends");
+        assert_eq!(next.emote.map(|e| e.name).as_deref(), Some("Kappa"));
+        // The new face holds as long in turn.
+        let flood: Vec<String> = (0..40).map(|i| format!("q{i}")).collect();
+        let omega: Vec<(&str, &[&str])> = flood.iter().map(|u| (u.as_str(), &["OMEGALUL"][..])).collect();
+        feed(k, &omega, now + MIN_HOLD_MS + 1_000);
+        assert_eq!(leader(k, now + 2 * MIN_HOLD_MS - 1).as_deref(), Some("Kappa"));
+        assert_eq!(leader(k, now + 2 * MIN_HOLD_MS).as_deref(), Some("OMEGALUL"));
+    }
+
+    #[test]
+    fn a_busy_room_needs_a_bigger_lead() {
+        assert_eq!(takeover_needs(3), 5, "a small room: two more chatters");
+        assert_eq!(takeover_needs(4), 6);
+        assert_eq!(takeover_needs(20), 30, "a busy room: half again as many");
+        assert_eq!(takeover_needs(200), 300);
+    }
+
+    #[test]
+    fn a_held_face_keeps_its_picture_after_its_uses_age_out() {
+        let k = "test-hold-picture";
+        reset(k);
+        let now = 4_800_000;
+        feed(k, &[("a", &["Clap"]), ("b", &["Clap"])], now);
+        // The third chatter late in the window makes it, with the first two
+        // about to age out.
+        feed(k, &[("c", &["Clap"])], now + WINDOW_MS - 1_000);
+        let taken = now + WINDOW_MS - 1_000;
+        let (held, _) = get_at(k, now + WINDOW_MS + 1);
+        assert_eq!(held.emote.map(|e| e.url).as_deref(), Some("https://cdn/Clap.webp"), "still drawn while it holds");
+        let (gone, changed) = get_at(k, taken + MIN_HOLD_MS);
+        assert!(changed);
+        assert_eq!(gone.emote, None, "the quiet room's smiley comes after the hold");
     }
 
     #[test]

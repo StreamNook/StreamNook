@@ -2,14 +2,15 @@
 // chat's emote of the moment (else the swapping smiley), and on hover or
 // keyboard focus the deck's other cards (the GIF chip, the slash card) fan out
 // from behind it, so the button says what its menu holds without adding a
-// control. The face turns to the slash card or the GIF chip while the box is
-// about commands or a GIF. Chat's composer and Settings > Chat's preview draw
-// it; the phone draws `DeckFace` in its own button (no hover there).
+// control. The face turns to the slash card or the GIF chip while the box
+// holds a command or a GIF link. Chat's composer and Settings > Chat's preview
+// draw it; the phone draws `DeckFace` in its own button (no hover there).
 //
 // Motion is transform and opacity only. The fan is CSS (`.sn-deck-card` in
-// globals.css, with its Motion and Performance rules); the face swap is
-// framer-motion, instant under Motion Off and quiet modes. An animated emote
-// draws its first frame wherever chat's emotes do.
+// globals.css, with its Motion and Performance rules); the face swap is a
+// soft framer-motion cross-fade (opacity alone, the two faces stacked in one
+// cell so nothing shifts), instant under Motion Off and quiet modes. An
+// animated emote draws its first frame wherever chat's emotes do.
 import { AnimatePresence, motion } from 'framer-motion';
 import { X } from 'phosphor-react';
 import { useState, type CSSProperties, type Ref } from 'react';
@@ -21,7 +22,9 @@ import type { MomentEmote } from '../../hooks/useEmoteMoment';
 import { Tooltip } from '../ui/Tooltip';
 import type { DeckCard } from './composerHints';
 
-const EASE = [0.2, 0.8, 0.2, 1] as const;
+// A dissolve: even at both ends, so the old face and the new one share the
+// middle instead of the new one snapping in up front.
+const FADE = { duration: 0.5, ease: 'easeInOut' } as const;
 
 type ArtSize = 'inset' | 'phone' | 'card';
 
@@ -86,8 +89,8 @@ export function DeckArt({
   return <Smiley smiley={smiley} size={size} />;
 }
 
-/** The face in front: a soft cross-fade between faces, instant where motion
- *  is off or the window is quieted. */
+/** The face in front: a slow, soft cross-fade between faces (no pop, no
+ *  scale), instant where motion is off or the window is quieted. */
 export function DeckFace({
   face,
   moment,
@@ -111,10 +114,10 @@ export function DeckFace({
         <motion.span
           key={key}
           className="col-start-1 row-start-1 grid place-items-center"
-          initial={{ opacity: 0, scale: 0.6 }}
-          animate={{ opacity: 1, scale: 1 }}
-          exit={{ opacity: 0, scale: 0.6 }}
-          transition={motionOff || quiet ? { duration: 0 } : { duration: 0.18, ease: EASE }}
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={motionOff || quiet ? { duration: 0 } : FADE}
         >
           <DeckArt card={face} moment={moment} smiley={smiley} size={size} still={still} />
         </motion.span>
@@ -142,8 +145,6 @@ export function EmoteDeckButton({
   buttonRef,
   onClick,
   onMouseLeave,
-  onPointerOver,
-  onFocusChange,
   // Hovered or focused, it rises over the send-as picker beside it, so the
   // fanned cards are never painted under it.
   className = 'absolute left-1 top-1/2 -translate-y-1/2 z-10 hover:z-20 focus-visible:z-20 w-7 h-7',
@@ -158,9 +159,6 @@ export function EmoteDeckButton({
   buttonRef?: Ref<HTMLButtonElement>;
   onClick?: () => void;
   onMouseLeave?: () => void;
-  /** The pointer came over the button (the hints hold still while it is). */
-  onPointerOver?: () => void;
-  onFocusChange?: (focused: boolean) => void;
   /** Placement and size; the default is the inset at the field's left. */
   className?: string;
 }) {
@@ -176,9 +174,6 @@ export function EmoteDeckButton({
         type="button"
         onClick={onClick}
         onMouseLeave={onMouseLeave}
-        onPointerEnter={onPointerOver}
-        onFocus={() => onFocusChange?.(true)}
-        onBlur={() => onFocusChange?.(false)}
         aria-label={open ? 'Close' : label}
         className={`sn-deck group flex items-center justify-center text-textSecondary hover:text-textPrimary transition-colors duration-200 ${className}`}
       >

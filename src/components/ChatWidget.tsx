@@ -2136,7 +2136,6 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     engaged: hintEngaged,
     slowWait: slowRemaining,
     replying: !!replyingTo,
-    menuOpen: showEmotePicker,
     remindOverlay: remindOverlayActive,
     motionMode: settings.motion_mode,
     lowPower,
