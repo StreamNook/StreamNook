@@ -1402,7 +1402,11 @@ pub fn init(app: &AppHandle) {
     if ENGINE.get().is_some() {
         return;
     }
+    // The iPhone core's headless tauri already hands back tokio's handle.
+    #[cfg(not(target_os = "ios"))]
     let runtime = tauri::async_runtime::handle().inner().clone();
+    #[cfg(target_os = "ios")]
+    let runtime = tauri::async_runtime::handle();
     let files = Files::open();
     let device = files.as_ref().map(Files::load_or_create_device).unwrap_or_else(Device::fresh);
     let spawn = tauri_spawner();
