@@ -87,6 +87,11 @@ pub async fn whisper_send(
 #[tauri::command]
 pub async fn inbox_opened() -> Result<(), String> {
     twitch_integrity::user_asked();
+    // No account followed: follow the signed-in one again (an open inbox
+    // reads again once it is, through the follow's change event).
+    if whisper_sync::current_scope().is_none() {
+        crate::services::account_roster::refollow_twitch().await;
+    }
     whisper_sync::trigger(whisper_sync::Reason::InboxOpened);
     Ok(())
 }

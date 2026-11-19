@@ -1675,8 +1675,13 @@ fn engine() -> &'static Arc<Engine> {
 pub fn follow_account(user_id: Option<String>) {
     #[cfg(feature = "whisper-probe")]
     let probe_for = user_id.clone();
+    let before = current_scope().map(|s| s.owner);
     if let Some(closing) = engine().follow(user_id) {
         tauri::async_runtime::spawn(teardown(closing));
+    }
+    let after = current_scope().map(|s| s.owner);
+    if before != after {
+        follow_changed(after.is_some());
     }
     #[cfg(feature = "whisper-probe")]
     if probe_for.is_some() && !PROBED.swap(true, std::sync::atomic::Ordering::SeqCst) {
@@ -1685,6 +1690,22 @@ pub fn follow_account(user_id: Option<String>) {
             probe().await;
         });
     }
+}
+
+/// The followed account changed: say so in the log (the only trace of why a
+/// phone's inbox lost its Whispers chip), and an open inbox reads again, since
+/// its chips and rows depend on it.
+fn follow_changed(following: bool) {
+    use tauri::Emitter;
+    if following {
+        log::info!("[WhisperSync] whispers follow the signed-in Twitch account");
+    } else {
+        log::warn!("[WhisperSync] whispers follow nobody now (Twitch signed out or not confirmed)");
+    }
+    if let Some(app) = crate::services::providers::app_handle() {
+        let _ = app.emit(crate::services::mention_inbox::CHANGED_EVENT, ());
+    }
+    crate::services::inbox_counts::wake();
 }
 
 #[cfg(feature = "whisper-probe")]

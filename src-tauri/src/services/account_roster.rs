@@ -371,7 +371,13 @@ pub fn notify() {
         // The whisper socket follows the Twitch account on every platform:
         // listening while it is connected, closed on sign-out or once Twitch
         // needs the sign-in again.
-        crate::services::whisper_service::follow_account(&app, whisper_account(&roster));
+        let whisper_to = whisper_account(&roster);
+        if whisper_to.is_none() && crate::services::whisper_sync::current_scope().is_some() {
+            if let Some(row) = roster.main_account("twitch") {
+                log::warn!("[Roster] Twitch row is {:?} (reason {:?}): whispers stop", row.status, row.reason);
+            }
+        }
+        crate::services::whisper_service::follow_account(&app, whisper_to);
         if last.as_ref() == Some(&roster) {
             return;
         }
@@ -381,6 +387,26 @@ pub fn notify() {
         let _ = app.emit("account-roster-changed", &roster);
         *last = Some(roster);
     });
+}
+
+/// The inbox opened with no Twitch account followed for whispers. A phone
+/// process that lives for days can end up there with Twitch still signed in
+/// (its Whispers chip gone until a restart): confirm who the account is when
+/// Rust does not know, then rebuild the roster, which follows it again.
+/// Nothing happens while Twitch waits on a new sign-in.
+pub async fn refollow_twitch() {
+    use crate::services::twitch_service::TwitchService;
+    if twitch_signin::current().is_some() || !TwitchService::has_stored_credentials().await {
+        return;
+    }
+    log::warn!("[Roster] inbox opened with no whisper account while Twitch is signed in; following again");
+    if twitch_user_id().is_none() {
+        // A good read records the identity, which rebuilds the roster itself.
+        if let Err(e) = TwitchService::get_user_info().await {
+            log::warn!("[Roster] could not confirm the Twitch account: {e}");
+        }
+    }
+    notify();
 }
 
 /// Build the roster and follow its chat identities. Builds run side by
@@ -686,5 +712,31 @@ mod identity_hook_tests {
         let hook = body.find("crate::services::account_automations::on_accounts_changed()").unwrap();
         assert!(lock_end < hook);
         assert!(body[..hook].trim_end().ends_with("if id_changed {"));
+    }
+
+    /// A phone process alive for days lost its Whispers chip with Twitch still
+    /// signed in (Brandon, 2026-11-18): opening the inbox follows the account
+    /// again, only while Twitch is not waiting on a new sign-in, and a change
+    /// of the followed account makes an open inbox read again.
+    #[test]
+    fn an_inbox_with_no_whisper_account_follows_twitch_again() {
+        let body = |src: &str, sig: &str| {
+            let src = src.replace("\r\n", "\n");
+            let start = src.find(sig).unwrap_or_else(|| panic!("{sig}"));
+            src[start..start + src[start..].find("\n}\n").unwrap()].to_string()
+        };
+        let opened = body(include_str!("../commands/whispers.rs"), "pub async fn inbox_opened()");
+        let heal = opened.find("refollow_twitch().await").expect("inbox_opened heals");
+        assert!(opened[..heal].contains("if whisper_sync::current_scope().is_none() {"));
+        assert!(heal < opened.find("Reason::InboxOpened").unwrap(), "the sync runs for the followed account");
+
+        let refollow = body(include_str!("account_roster.rs"), "pub async fn refollow_twitch()");
+        let gate = refollow.find("twitch_signin::current().is_some()").unwrap();
+        assert!(gate < refollow.find("get_user_info()").unwrap() && gate < refollow.find("notify();").unwrap());
+
+        let follow = body(include_str!("whisper_sync.rs"), "pub fn follow_account(user_id: Option<String>)");
+        assert!(follow.contains("if before != after {\n        follow_changed(after.is_some());"));
+        let changed = body(include_str!("whisper_sync.rs"), "fn follow_changed(following: bool)");
+        assert!(changed.contains("mention_inbox::CHANGED_EVENT, ()"));
     }
 }
