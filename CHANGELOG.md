@@ -1,3 +1,30 @@
+## [8.9.3] - 2026-11-19
+
+### Windows and macOS
+
+#### Features
+- A channel that limits its recordings to subscribers turns rewind off for viewers who aren't subscribed, and dragging back says why.
+- 7TV paints and badges you own but can't wear without a 7TV subscription now show in the picker, last and faint, with what they need.
+
+#### Bug Fixes
+- Sending a GIF in chat works where Twitch was refusing it, and a send Twitch turns down says Twitch's reason. Reported by Vervaticus (SN-278).
+- The player's gear menu matches the other menus and always opens on its main list. Quality and Speed show a check on your pick, Quality lists each option once, and trying to clip a channel with clips off says so plainly. Reported by zoox (SN-277).
+- The [Drops page](streamnook://open/drops) names every reward under its art and lists everything a campaign can give, including chain rewards like the GTAVI Chains and its sub emotes and badges.
+- The emote button and the empty message box stop flipping. The hint changes only after you send a message, the button changes only for what you type or a new emote of the moment, and both change with a slow fade.
+- A live rewind Twitch refuses says why instead of showing an error code.
+- Switching accounts no longer leaves the Twitch window blank.
+
+### Everywhere
+
+#### Bug Fixes
+- A drop that unlocks only after a campaign's other rewards (like the GTAVI Golden Iguana), or after an earlier drop is claimed, no longer shows as ready to claim. It stays dimmed at the end of the list with what it needs first, and auto-claim leaves it alone.
+
+### Android and iPhone
+
+#### Bug Fixes
+- Opening the inbox brings the Whispers chip back if the app lost it after running a long time.
+- Badge and category links open at once and fill in as they load, and tapping a channel closes any sheet that's open.
+
 ## [8.9.2] - 2026-11-16
 
 ## New: Automations
