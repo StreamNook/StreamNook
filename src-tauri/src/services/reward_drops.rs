@@ -19,7 +19,7 @@
 //! - The viewer's fullest progress is under
 //!   `currentUser.inventory.viewerRewardDropCampaignsInProgress`.
 
-use crate::models::drops::{DropBenefit, DropCampaign, DropProgress, TimeBasedDrop, TwitchProgress};
+use crate::models::drops::{DropBenefit, DropCampaign, DropProgress, PoolReward, TimeBasedDrop, TwitchProgress};
 use crate::services::drops_service::DropsService;
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Duration, Utc};
@@ -168,6 +168,7 @@ fn group_drop(
     let mut random_of = None;
     let mut pool_ids: Vec<String> = Vec::new();
     let mut unheld: Vec<&Value> = Vec::new();
+    let mut pool_rewards: Vec<PoolReward> = Vec::new();
     for reward in group["rewards"].as_array().into_iter().flatten() {
         let pool: Vec<&Value> = reward["pool"]["rewards"].as_array().into_iter().flatten().collect();
         if pool.len() > 1 {
@@ -175,6 +176,19 @@ fn group_drop(
             unheld.extend(pool.iter().copied().filter(|p| {
                 p["id"].as_str().is_some_and(|id| !viewer.claimed_items.contains(id))
             }));
+            for p in &pool {
+                let Some(pid) = p["id"].as_str() else { continue };
+                if pool_rewards.iter().any(|r| r.id == pid) {
+                    continue;
+                }
+                pool_rewards.push(PoolReward {
+                    id: pid.to_string(),
+                    name: p["name"].as_str().unwrap_or_default().to_string(),
+                    image_url: p["thumbnailURL"].as_str().unwrap_or_default().to_string(),
+                    kind: reward_kind(p["distributionType"].as_str()).to_string(),
+                    held: viewer.claimed_items.contains(pid),
+                });
+            }
         }
         pool_ids.extend(pool.iter().filter_map(|p| p["id"].as_str().map(str::to_string)));
         let benefit = |item: &Value, distribution_type: Option<&str>| DropBenefit {
@@ -313,6 +327,15 @@ fn group_drop(
     };
     // One already held is simply claimed, whatever Twitch says it needs.
     let needs_earlier = held_back && !progress.as_ref().is_some_and(|p| p.is_claimed);
+    // A claimed draw holds what came out of it, whether or not the account's
+    // earned list (first 100) reached it yet.
+    if let Some(p) = progress.as_ref().filter(|p| p.is_claimed) {
+        if let Some(e) = p.twitch_progress.as_ref().and_then(|t| t.earned.as_ref()) {
+            if let Some(r) = pool_rewards.iter_mut().find(|r| r.id == e.id) {
+                r.held = true;
+            }
+        }
+    }
 
     TimeBasedDrop {
         id,
@@ -333,6 +356,43 @@ fn group_drop(
             distribution_type: None,
         }),
         needs_earlier,
+        pool_rewards,
+        // Decided once every campaign is read (`mark_containers`).
+        obtains_container: false,
+    }
+}
+
+/// A pool reward's kind, from Twitch's distribution type.
+fn reward_kind(distribution_type: Option<&str>) -> &'static str {
+    match distribution_type {
+        Some("BADGE") => "badge",
+        Some("EMOTE") => "emote",
+        _ => "item",
+    }
+}
+
+/// Marks the subscription tiers that only get a container: another tier
+/// draws from the same pool (the Special Great Ball, opened by its watch
+/// tier), or Twitch says the tier earned the container itself. A tier that
+/// draws its own reward (GTAVI's sub emotes and badges) stays a reward. Pure.
+fn mark_containers(campaigns: &mut [DropCampaign]) {
+    let drawn_elsewhere: HashSet<String> = campaigns
+        .iter()
+        .flat_map(|c| &c.time_based_drops)
+        .filter(|d| d.required_subs == 0)
+        .flat_map(|d| d.pool_rewards.iter().map(|r| r.id.clone()))
+        .collect();
+    for d in campaigns.iter_mut().flat_map(|c| c.time_based_drops.iter_mut()) {
+        if d.required_subs == 0 || d.random_of.unwrap_or(0) <= 1 {
+            continue;
+        }
+        let earned_container = d
+            .progress
+            .as_ref()
+            .and_then(|p| p.twitch_progress.as_ref())
+            .and_then(|t| t.earned.as_ref())
+            .is_some_and(|e| e.distribution_type.as_deref() == Some("POOL"));
+        d.obtains_container = earned_container || d.pool_rewards.iter().any(|r| drawn_elsewhere.contains(&r.id));
     }
 }
 
@@ -459,6 +519,7 @@ pub fn build(
         });
     }
     disambiguate_names(&mut out, &firsts);
+    mark_containers(&mut out);
     out
 }
 
@@ -557,7 +618,7 @@ pub(crate) fn detail_chunks(count: usize) -> Vec<std::ops::Range<usize>> {
 /// (unaliased, so free under the cap; `merge_details` keeps the first).
 pub(crate) fn details_query(count: usize) -> String {
     let group = format!(
-        "rewardGroups {{ id name track lane progressCriteria {{ requirementType requirements {{ minutesWatched subs }} repeatableConfig {{ repeatableTimes }} categories {{ id }} }} {SELF_FIELDS} rewards {{ id name thumbnailURL pool {{ rewards {{ id name thumbnailURL }} }} }} }}"
+        "rewardGroups {{ id name track lane progressCriteria {{ requirementType requirements {{ minutesWatched subs }} repeatableConfig {{ repeatableTimes }} categories {{ id }} }} {SELF_FIELDS} rewards {{ id name thumbnailURL pool {{ rewards {{ id name thumbnailURL distributionType }} }} }} }}"
     );
     let vars: Vec<String> = (0..count).map(|i| format!("$id{i}: ID!")).collect();
     let fields: Vec<String> = (0..count)
@@ -836,6 +897,74 @@ mod tests {
         assert_eq!(names, vec!["Great Ball", "Charmander", "Bulbasaur", "Squirtle"]);
         assert_eq!(d.benefit_edges[0].distribution_type.as_deref(), Some("POOL"));
         assert_eq!(d.benefit_edges[0].image_url, "https://art/great.png");
+    }
+
+    #[test]
+    fn a_draw_names_every_reward_and_marks_the_held_ones() {
+        // GTAVI-shaped (Brandon, 2026-11-19: "how come i cant see what these
+        // rewards are? and shouldnt it have the chain badges in there too?"):
+        // the DVD tier draws a Chain, a sub tier draws an emote itself.
+        let list = vec![json!({ "id": "gtavi", "name": "GTAVI Launch Celebration", "brand": "Rockstar Games",
+                                "startsAt": "2026-09-20T11:00:00Z", "endsAt": "2026-10-01T07:59:59Z", "game": null })];
+        let member = |n: &str, kind: &str| json!({ "id": format!("id-{n}"), "name": n, "thumbnailURL": format!("https://art/{n}.png"), "distributionType": kind });
+        let details = json!({
+            "c0": { "id": "gtavi", "rewardGroups": [
+                { "id": "g-dvd", "name": "GTA DVD Drops",
+                  "progressCriteria": { "requirementType": "WATCH", "requirements": { "minutesWatched": 60, "subs": null },
+                                        "repeatableConfig": { "repeatableTimes": 2 } },
+                  "self": null,
+                  "rewards": [ { "id": "dvd", "name": "GTA DVD", "thumbnailURL": "https://art/dvd.png",
+                                 "pool": { "rewards": [ member("Purple Chain", "BADGE"), member("Bronze Chain", "BADGE") ] } } ] },
+                { "id": "g-sub1e", "name": "GTA Sub 1 Emote",
+                  "progressCriteria": { "requirementType": "SUB", "requirements": { "minutesWatched": null, "subs": 1 }, "repeatableConfig": null },
+                  "self": { "status": "CLAIMED", "currentSubs": 1, "grantCount": 1,
+                            "earnedReward": { "id": "id-BustedPlz", "name": "BustedPlz", "thumbnailURL": "https://art/BustedPlz.png" } },
+                  "rewards": [ { "id": "emotes", "name": "Emote chest", "thumbnailURL": "https://art/chest.png",
+                                 "pool": { "rewards": [ member("BustedPlz", "EMOTE"), member("DinoBusted", "EMOTE"), member("SabaBusted", "EMOTE") ] } } ] }
+            ] },
+            "currentUser": { "id": "u1", "inventory": { "viewerRewardDropCampaignsInProgress": [],
+                "earnedDropRewards": { "edges": [ { "node": { "status": "CLAIMED", "item": { "id": "id-Purple Chain" } } } ] } } }
+        });
+        let c = build(&list, &details, &mut HashMap::new(), now());
+        let tier = |id: &str| c[0].time_based_drops.iter().find(|d| d.id == id).unwrap();
+        fn shown(d: &TimeBasedDrop) -> Vec<(&str, &str, bool)> {
+            d.pool_rewards.iter().map(|r| (r.name.as_str(), r.kind.as_str(), r.held)).collect()
+        }
+        assert_eq!(shown(tier("g-dvd")), [("Purple Chain", "badge", true), ("Bronze Chain", "badge", false)]);
+        assert_eq!(tier("g-dvd").pool_rewards[0].image_url, "https://art/Purple Chain.png");
+        // A sub tier that draws its own reward is a reward, not a container,
+        // and holds what came out even before the earned list shows it.
+        let sub = tier("g-sub1e");
+        assert!(!sub.obtains_container);
+        assert_eq!(
+            shown(sub),
+            [("BustedPlz", "emote", true), ("DinoBusted", "emote", false), ("SabaBusted", "emote", false)]
+        );
+        // A tier with one reward lists none: its reward is the drop itself.
+        assert!(built(Value::Null, json!([]))[0].time_based_drops[0].pool_rewards.is_empty());
+    }
+
+    #[test]
+    fn a_sub_tier_whose_pool_another_tier_draws_only_gets_the_container() {
+        // Nothing else draws from the Special Great Ball's pool here.
+        let c = built(Value::Null, json!([]));
+        assert!(!c[1].time_based_drops[0].obtains_container);
+        // Its watch tier draws from the same pool: the sub tier only gets the ball.
+        let mut d = details(Value::Null, json!([]));
+        let mut watch = d["c1"]["rewardGroups"][0].clone();
+        watch["id"] = json!("g-great-watch");
+        watch["progressCriteria"] = json!({ "requirementType": "WATCH", "requirements": { "minutesWatched": 20, "subs": null },
+                                            "repeatableConfig": { "repeatableTimes": 3 } });
+        d["c1"]["rewardGroups"].as_array_mut().unwrap().push(watch);
+        let c = build(&list(), &d, &mut HashMap::new(), now());
+        let tier = |id: &str| c[1].time_based_drops.iter().find(|t| t.id == id).unwrap().clone();
+        assert!(tier("g-sub2").obtains_container);
+        assert!(!tier("g-great-watch").obtains_container);
+        // Twitch saying the tier earned the container settles it too.
+        let ball = json!({ "status": "CLAIMABLE", "currentSubs": 2, "grantCount": 0,
+                           "earnedReward": { "id": "great", "name": "Great Ball", "thumbnailURL": "https://art/great.png" } });
+        let c = built(Value::Null, inv("g-sub2", ball));
+        assert!(c[1].time_based_drops[0].obtains_container);
     }
 
     #[test]

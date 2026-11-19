@@ -4,7 +4,7 @@
 // surface (Drops center, phone, title bar) to share.
 import type { DropProgress, TimeBasedDrop } from '../types';
 
-type RequirementFields = Pick<TimeBasedDrop, 'required_minutes_watched' | 'required_subs' | 'required_days' | 'random_of'>;
+type RequirementFields = Pick<TimeBasedDrop, 'required_minutes_watched' | 'required_subs' | 'required_days' | 'random_of' | 'obtains_container'>;
 
 /** A container that gives one reward from a pool (a Great Ball) is opened, not claimed. */
 function isDraw(drop: RequirementFields, progress?: DropProgress | null): boolean {
@@ -14,10 +14,12 @@ function isDraw(drop: RequirementFields, progress?: DropProgress | null): boolea
 /**
  * A tier that only gets you a container (subscribe for a Special Great Ball).
  * The ball itself is shown by its unlock tier, so this is how you get it, not
- * a reward of its own: reward and collection lists leave it out.
+ * a reward of its own: reward and collection lists leave it out. Rust decides
+ * (`obtains_container`): a sub tier that draws its own reward (GTAVI's sub
+ * emotes and badges) is a reward.
  */
 export function obtainsContainer(drop: RequirementFields): boolean {
-    return (drop.required_subs ?? 0) > 0 && (drop.random_of ?? 0) > 1;
+    return drop.obtains_container === true;
 }
 
 /** What the claim button says: "Open" for a ball, "Claim" for anything else. */

@@ -123,6 +123,32 @@ pub struct TimeBasedDrop {
     /// GTAVI Golden Iguana): never ready, never claimed, out of reach.
     #[serde(default)]
     pub needs_earlier: bool,
+    /// Every reward a second-list draw can give (`random_of` > 1), each named
+    /// and marked when the account holds it, so a reward list shows the six
+    /// Chains instead of one mystery box. Empty for anything else.
+    #[serde(default)]
+    pub pool_rewards: Vec<PoolReward>,
+    /// A subscription tier that only gets a container (a Special Great Ball):
+    /// another tier draws from the same pool and opens it. Not a reward of its
+    /// own. A subscription tier that draws its reward itself (GTAVI's sub
+    /// emotes and badges) is not one.
+    #[serde(default)]
+    pub obtains_container: bool,
+}
+
+/// One reward a draw can give: a pool member.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PoolReward {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub image_url: String,
+    /// "badge", "emote" or "item", from Twitch's distribution type.
+    #[serde(default)]
+    pub kind: String,
+    /// The account already holds it; Twitch never gives it again.
+    #[serde(default)]
+    pub held: bool,
 }
 
 fn default_collectible() -> bool {

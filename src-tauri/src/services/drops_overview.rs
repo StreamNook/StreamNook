@@ -682,6 +682,8 @@ mod tests {
             random_of: None,
             next_reward: None,
             needs_earlier: false,
+            pool_rewards: Vec::new(),
+            obtains_container: false,
         }
     }
 

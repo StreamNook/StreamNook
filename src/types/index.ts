@@ -2821,6 +2821,21 @@ export interface TimeBasedDrop {
   next_reward?: DropBenefit | null;
   /** Twitch holds it until the campaign's other rewards are earned (the Golden Iguana): never ready or claimed. Rust lists it in `locked_drops`. */
   needs_earlier?: boolean;
+  /** Every reward a draw can give, named, with whether the account holds it (Rust, second list only). */
+  pool_rewards?: PoolReward[];
+  /** A subscription tier that only gets a container another tier opens (a Special Great Ball): not a reward of its own. */
+  obtains_container?: boolean;
+}
+
+/** One reward a draw can give: a pool member. */
+export interface PoolReward {
+  id: string;
+  name: string;
+  image_url: string;
+  /** "badge", "emote" or "item". */
+  kind: string;
+  /** The account already holds it; Twitch never gives it again. */
+  held: boolean;
 }
 
 export interface AllowedChannel {

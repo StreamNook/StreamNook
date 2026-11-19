@@ -160,6 +160,11 @@ function getRewardKind(benefit: DropBenefit | undefined, knownBadgeTitles: Set<s
     return 'item';
 }
 
+/** A pool reward's kind as Rust names it ("badge", "emote", "item"). */
+function poolRewardKind(kind: string): RewardKind {
+    return kind === 'badge' || kind === 'emote' ? kind : 'item';
+}
+
 function rewardKindLabel(kind: RewardKind): string {
     return kind === 'badge' ? 'Badge' : kind === 'emote' ? 'Emote' : kind === 'draw' ? 'Mystery' : 'Item';
 }
@@ -550,13 +555,9 @@ export default function GameDetailPanel({
                             // Keep each drop paired with its campaign description so a locked
                             // reward's tooltip can explain how it's actually earned.
                             .flatMap(c => c.time_based_drops.map(drop => ({ drop, campaignDescription: c.description })))
-                            .filter(({ drop }) => {
-                                if (seen.has(drop.id)) return false;
-                                seen.add(drop.id);
-                                // Getting a ball is not a reward; its unlock tier shows it.
-                                return !obtainsContainer(drop);
-                            })
-                            .map(({ drop, campaignDescription }) => {
+                            // Getting a ball is not a reward; its unlock tier shows it.
+                            .filter(({ drop }) => !obtainsContainer(drop))
+                            .flatMap(({ drop, campaignDescription }) => {
                                 const dp = drop.progress || progress.find(p => p.drop_id === drop.id);
                                 // Once Twitch says what a reward turned into (a draw
                                 // opened, a container earned), show that; an unopened
@@ -577,10 +578,41 @@ export default function GameDetailPanel({
                                     : required > 0 ? Math.min((current / required) * 100, 100) : 0;
                                 const isReady = !isClaimed && !locked && (twitch ? twitch.ready_to_claim : percent >= 100);
                                 const isCollectible = isDropCollectible(drop, game.inventory_items);
-                                return {
+                                // A draw lists every reward it can give (Rust's pool_rewards),
+                                // each named and marked when held: the six Chains, not one
+                                // mystery box. Its progress stays on the campaign row below.
+                                const members = drop.pool_rewards ?? [];
+                                if (members.length > 1) {
+                                    return members.map(m => {
+                                        const kind = poolRewardKind(m.kind);
+                                        const held = m.held || (kind === 'badge' && matchesEarnedBadge(m.name, earnedBadgeTitles));
+                                        const memberLocked = held ? null : locked;
+                                        return {
+                                            key: m.id,
+                                            dropId: drop.id,
+                                            image: m.image_url,
+                                            name: m.name,
+                                            from: drop.name,
+                                            requiredMinutes: required,
+                                            percent: 0,
+                                            isClaimed: held,
+                                            isReady: false,
+                                            isInProgress: false,
+                                            locked: memberLocked,
+                                            isCollectible,
+                                            kind,
+                                            requirement: !isCollectible && !held && !memberLocked
+                                                ? dropRequirementText(drop) ?? unlockRequirementText(m.name, campaignDescription)
+                                                : null,
+                                        };
+                                    });
+                                }
+                                return [{
+                                    key: drop.id,
                                     dropId: drop.id,
                                     image: benefit?.image_url || '',
                                     name: benefit?.name || drop.name,
+                                    from: null as string | null,
                                     requiredMinutes: required,
                                     percent,
                                     isClaimed,
@@ -595,7 +627,14 @@ export default function GameDetailPanel({
                                     requirement: !isCollectible && !isClaimed && !isReady && !locked
                                         ? dropRequirementText(drop) ?? unlockRequirementText(benefit?.name || drop.name, campaignDescription)
                                         : null,
-                                };
+                                }];
+                            })
+                            // One tile per reward: tiers that draw from the same pool
+                            // (the three sub badge tiers) list each reward once.
+                            .filter(r => {
+                                if (seen.has(r.key)) return false;
+                                seen.add(r.key);
+                                return true;
                             })
                             .sort((a, b) => {
                                 // Out-of-reach stages sit after everything still earnable.
@@ -620,7 +659,7 @@ export default function GameDetailPanel({
                                 <div className="grid grid-cols-4 sm:grid-cols-5 gap-x-2.5 gap-y-5">
                                     {rewards.map(r => (
                                         <Tooltip
-                                            key={r.dropId}
+                                            key={r.key}
                                             content={
                                                 r.requirement
                                                     ? (
@@ -639,58 +678,66 @@ export default function GameDetailPanel({
                                                                 <div className="mt-0.5 font-normal text-textSecondary leading-snug">{r.locked}</div>
                                                             </div>
                                                         )
-                                                        : `${r.name} · ${rewardKindLabel(r.kind)}${r.requiredMinutes > 0 ? ` · ${r.requiredMinutes}m` : ''}`
+                                                        : r.from
+                                                            ? `${r.name} · ${rewardKindLabel(r.kind)} · from ${r.from}`
+                                                            : `${r.name} · ${rewardKindLabel(r.kind)}${r.requiredMinutes > 0 ? ` · ${r.requiredMinutes}m` : ''}`
                                             }
                                             delay={200}
                                             side="top"
                                         >
-                                            <div className="relative aspect-square">
-                                                {/* Clipped art box. overflow-hidden lives here so the kind
-                                                    plate below can hang off the bottom border unclipped. */}
-                                                <div className="absolute inset-0 rounded-lg border border-borderLight bg-background overflow-hidden">
-                                                    {r.image ? (
-                                                        <img
-                                                            src={r.image}
-                                                            alt={r.name}
-                                                            loading="lazy"
-                                                            className={`w-full h-full object-contain p-1.5 ${r.isClaimed ? 'opacity-40' : r.locked ? 'opacity-40 grayscale' : ''}`}
-                                                        />
-                                                    ) : (
-                                                        <div className="w-full h-full flex items-center justify-center">
-                                                            <Gift size={20} className="text-textMuted" />
-                                                        </div>
-                                                    )}
+                                            <div className="min-w-0">
+                                                <div className="relative aspect-square">
+                                                    {/* Clipped art box. overflow-hidden lives here so the kind
+                                                        plate below can hang off the bottom border unclipped. */}
+                                                    <div className="absolute inset-0 rounded-lg border border-borderLight bg-background overflow-hidden">
+                                                        {r.image ? (
+                                                            <img
+                                                                src={r.image}
+                                                                alt={r.name}
+                                                                loading="lazy"
+                                                                className={`w-full h-full object-contain p-1.5 ${r.isClaimed ? 'opacity-40' : r.locked ? 'opacity-40 grayscale' : ''}`}
+                                                            />
+                                                        ) : (
+                                                            <div className="w-full h-full flex items-center justify-center">
+                                                                <Gift size={20} className="text-textMuted" />
+                                                            </div>
+                                                        )}
 
-                                                    {r.isClaimed && (
-                                                        <div className="absolute top-1 right-1 w-4 h-4 rounded-full bg-success flex items-center justify-center border border-background">
-                                                            <Check size={9} className="text-white" />
-                                                        </div>
-                                                    )}
+                                                        {r.isClaimed && (
+                                                            <div className="absolute top-1 right-1 w-4 h-4 rounded-full bg-success flex items-center justify-center border border-background">
+                                                                <Check size={9} className="text-white" />
+                                                            </div>
+                                                        )}
 
-                                                    {r.isReady && (
-                                                        <div className="absolute top-1 right-1 w-4 h-4 rounded-full bg-warning flex items-center justify-center border border-background">
-                                                            <span className="text-[8px] font-bold text-black">!</span>
-                                                        </div>
-                                                    )}
+                                                        {r.isReady && (
+                                                            <div className="absolute top-1 right-1 w-4 h-4 rounded-full bg-warning flex items-center justify-center border border-background">
+                                                                <span className="text-[8px] font-bold text-black">!</span>
+                                                            </div>
+                                                        )}
 
-                                                    {!r.isCollectible && !r.isClaimed && !r.isReady && (
-                                                        <div className="absolute top-1 left-1 text-warning">
-                                                            <Ban size={11} />
-                                                        </div>
-                                                    )}
+                                                        {!r.isCollectible && !r.isClaimed && !r.isReady && !r.locked && (
+                                                            <div className="absolute top-1 left-1 text-warning">
+                                                                <Ban size={11} />
+                                                            </div>
+                                                        )}
 
-                                                    {(r.isInProgress || r.isReady) && (
-                                                        <div className="absolute inset-x-0 bottom-0 h-1 bg-background/70">
-                                                            <div className="h-full bg-accent" style={{ width: `${r.percent}%` }} />
-                                                        </div>
-                                                    )}
+                                                        {(r.isInProgress || r.isReady) && (
+                                                            <div className="absolute inset-x-0 bottom-0 h-1 bg-background/70">
+                                                                <div className="h-full bg-accent" style={{ width: `${r.percent}%` }} />
+                                                            </div>
+                                                        )}
+                                                    </div>
+
+                                                    {/* Reward kind plate, straddling the bottom border like a name tag */}
+                                                    <div className="absolute bottom-0 left-1/2 -translate-x-1/2 translate-y-1/2 z-10">
+                                                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide bg-background border border-borderLight shadow-sm ${r.locked ? 'text-textMuted' : r.kind === 'badge' ? 'text-accent' : r.kind === 'emote' ? 'text-textSecondary' : 'text-textMuted'}`}>
+                                                            {rewardKindLabel(r.kind)}
+                                                        </span>
+                                                    </div>
                                                 </div>
-
-                                                {/* Reward kind plate, straddling the bottom border like a name tag */}
-                                                <div className="absolute bottom-0 left-1/2 -translate-x-1/2 translate-y-1/2 z-10">
-                                                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide bg-background border border-borderLight shadow-sm ${r.locked ? 'text-textMuted' : r.kind === 'badge' ? 'text-accent' : r.kind === 'emote' ? 'text-textSecondary' : 'text-textMuted'}`}>
-                                                        {rewardKindLabel(r.kind)}
-                                                    </span>
+                                                {/* What the reward is, under its plate. */}
+                                                <div className={`mt-3.5 px-0.5 text-center text-[11px] leading-tight line-clamp-2 break-words ${r.isClaimed || r.locked ? 'text-textMuted' : 'text-textSecondary'}`}>
+                                                    {r.name}
                                                 </div>
                                             </div>
                                         </Tooltip>
@@ -1275,7 +1322,12 @@ export default function GameDetailPanel({
                         );
 
                         // Sort: unclaimed first, then claimed
-                        const sortedDrops = localCompletedDrops.filter(d => !containerSources.has(d.dropId)).sort((a, b) => {
+                        // A reward out of reach (an earlier form not held, or one
+                        // Twitch holds behind the other rewards) is not collected,
+                        // whatever minutes Twitch shows on it.
+                        const sortedDrops = localCompletedDrops.filter(d =>
+                            !containerSources.has(d.dropId) && (d.isClaimed || !lockedDrops[d.dropId])
+                        ).sort((a, b) => {
                             if (a.isClaimed === b.isClaimed) return 0;
                             return a.isClaimed ? 1 : -1; // Unclaimed first
                         });
