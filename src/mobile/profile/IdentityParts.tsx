@@ -1,8 +1,7 @@
 // The pieces every identity surface shares (your You card, the Edit profile
 // preview, a chatter's profile sheet), so the three keep one shape: the
 // Atmosphere as a glow behind the picture and name, the picture alone on a
-// black disc (another person's StreamNook badge on it as a medal), and the
-// name beside or below it. The iPhone draws the same shape from
+// black disc with no marks on it, and the name beside or below it. The iPhone draws the same shape from
 // You/IdentityViews.swift.
 import React, { useRef, useState } from 'react';
 import { motion } from 'framer-motion';
@@ -114,21 +113,19 @@ export const AtmosphereGlow: React.FC<{
  * A person's picture, standing alone on a black disc (Brandon: black behind a
  * clear picture, not gray), with a hairline edge and a soft shadow. It shows
  * the one picture others see in chat (the 7TV one when there is one, else the
- * platform's), never one over the other. No marks on your own: which accounts
- * you hold and what you wear show in the card's rows. On another person's,
- * their StreamNook badge sits on it as a medal (`medal`), because their card
- * shows it nowhere else. With `explains`, a tap says which picture shows where.
+ * platform's), never one over the other. No marks on it, yours or anyone's:
+ * which accounts someone holds and the badges they wear (their StreamNook
+ * badge last, as chat sets it) show in the rows beside it, at their own shape.
+ * With `explains`, a tap says which picture shows where.
  */
 export const CutoutAvatar: React.FC<{
   platformUrl?: string | null;
   picture?: AvatarPick | null;
   size: number;
-  medal?: string | null;
-  medalLabel?: string;
   /** A picture just picked, shown before Twitch serves it. */
   localUrl?: string | null;
   explains?: boolean;
-}> = ({ platformUrl, picture, size, medal, medalLabel = '', localUrl, explains = false }) => {
+}> = ({ platformUrl, picture, size, localUrl, explains = false }) => {
   // The 7TV picture that failed every rendition; the platform one takes over.
   const [failedFor, setFailedFor] = useState<string | null>(null);
   const [explaining, setExplaining] = useState(false);
@@ -178,26 +175,6 @@ export const CutoutAvatar: React.FC<{
       >
         {face}
       </button>
-      {medal && (
-        // Another person's StreamNook badge, on a black disc like the
-        // picture's own, so it reads as a medal and not a mark scratched on
-        // the photo.
-        <span
-          className="absolute flex items-center justify-center rounded-full pointer-events-none"
-          style={{
-            width: size * 0.32,
-            height: size * 0.32,
-            right: -size * 0.02,
-            bottom: -size * 0.02,
-            background: '#000',
-            boxShadow: 'inset 0 0 0 0.5px rgba(255,255,255,0.1)',
-          }}
-          role="img"
-          aria-label={medalLabel}
-        >
-          <img src={medal} alt="" draggable={false} className="object-contain" style={{ width: size * 0.24, height: size * 0.24 }} />
-        </span>
-      )}
       {explaining && <PictureNote sevenTv={showsSevenTv} />}
     </div>
   );

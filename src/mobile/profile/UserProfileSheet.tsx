@@ -1,7 +1,7 @@
 // Tap a name in chat, see who they are, in the same shape as your own card:
 // their Atmosphere behind the whole sheet (their rank's aura when they wear
-// none), their picture with their StreamNook badge on it as a medal (never on
-// your own), their name in their paint, the badges they wear, their paint and
+// none), their picture with no marks on it, their name in their paint, the
+// badges they wear (their StreamNook badge last, as chat sets it), their paint and
 // Atmosphere as chips, a plate linking to their StreamNook page, their sub in
 // this room, every badge they have under its platform's mark, and what they
 // said this session. Under their sub, the viewer's own note and name color, and
@@ -14,7 +14,6 @@
 // out.
 import React, { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { useAppStore } from '../../stores/AppStore';
 import { listen } from '@tauri-apps/api/event';
 import { historyKey } from '../../utils/chatterIdentity';
 import type { ProfileBadge, ProfileSheetView } from '../../types/profileView';
@@ -34,7 +33,7 @@ import { SubStandingRow } from '../../components/profile/SubStandingRow';
 import { wornSubBadgeArt, type WornBadge } from '../../utils/wornSubBadge';
 import type { SubStanding } from '../../types';
 import { BrandMark, CutoutAvatar, MemberRankMark, PaintedName, SectionHeader, TapPanelHost } from './IdentityParts';
-import { badgeArt, brandFor, glowAtmosphere, identityNameSize, medalUrl } from './identity';
+import { badgeArt, brandFor, glowAtmosphere, identityNameSize } from './identity';
 import { MemberSections } from './MemberSections';
 import { ChatterTools } from './ChatterTools';
 import { ProfileNameplate } from '../../components/profile/ProfileNameplate';
@@ -431,9 +430,6 @@ const ProfileBody: React.FC<{
       {picked?.group === title && <PickedPanel badge={picked.badge} />}
     </BadgeGrid>
   );
-  // Your own picture carries no marks, here as on your card.
-  const ownId = useAppStore((s) => s.currentUser?.user_id);
-  const medal = !!sheet?.streamnook && !(ownId && ownId === (sheet?.user_id || user.userId));
   const name = sheet?.display_name || user.displayName;
   // Before Rust answers, the login line comes from what the row carried.
   const login =
@@ -454,8 +450,8 @@ const ProfileBody: React.FC<{
   const slot = plateSlot(isStreamNookRegistryLoaded(), getStreamNookUserNumber(userId) !== null, pageLink, freshAnswered);
   const member = sheet?.member_profile ?? null;
   // Every badge they have, by platform (StreamNook first), two rows each until
-  // opened. A member always has a StreamNook badge (it is the medal on their
-  // picture, and their StreamNook group), so the empty line is for others.
+  // opened. A member always has a StreamNook badge (the last one they wear, and
+  // their StreamNook group), so the empty line is for others.
   const badges = (
     <>
       {!sheet && <BadgeGridPlaceholder />}
@@ -497,8 +493,6 @@ const ProfileBody: React.FC<{
                 platformUrl={sheet?.avatar_url}
                 picture={sheet?.picture}
                 size={AVATAR}
-                medal={medal ? medalUrl(sheet?.streamnook) : null}
-                medalLabel={sheet?.streamnook?.label}
               />
               <div className="flex-1" />
               {sheet?.member && (

@@ -1,7 +1,6 @@
 // Small rules the identity surfaces share (IdentityParts.tsx draws them).
 import {
   COSMETIC_ASSET_BY_SLUG,
-  DEFAULT_COSMETIC_SLUG,
   resolveCosmeticAsset,
 } from '../../components/cosmeticAssets';
 import { getAtmosphere, type Atmosphere } from '../../services/atmospheres';
@@ -9,7 +8,6 @@ import { houseSlug } from './memberIcons';
 import { streamnookArtSrc } from '../../services/streamnookArt';
 import type {
   ExternalPickerView,
-  SnMemberBadge,
   StreamNookPickerView,
 } from '../../types/profileView';
 
@@ -51,17 +49,6 @@ export function brandFor(name: string | null | undefined): Brand | null {
     default:
       return null;
   }
-}
-
-/** The StreamNook badge a member wears, as an image: bundled house art first,
- *  then the catalog's own URL, then the plain mark. */
-export function medalUrl(sn: SnMemberBadge | null | undefined): string | null {
-  if (!sn) return null;
-  return (
-    resolveCosmeticAsset({ slug: sn.slug ?? DEFAULT_COSMETIC_SLUG, asset_path: sn.image_url }) ??
-    COSMETIC_ASSET_BY_SLUG[DEFAULT_COSMETIC_SLUG] ??
-    null
-  );
 }
 
 /** A badge image a renderer can load: bundled house art for a
