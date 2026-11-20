@@ -170,13 +170,33 @@ private const val UA_CLIENT_HINTS_SPOOF = """
 
 // Opens Kick's login form on its mobile site (see onPageFinished). The button
 // is Kick's own `data-testid="login"`, present in the header on every page.
+//
+// Kick's login form is a modal dialog that sets `pointer-events: none` on the
+// page body, and the OneTrust cookie banner (EU visitors) sits outside it, so a
+// banner up while the form is open ignores every tap and sign-in is stuck. The
+// banner's layer always takes taps, the press waits while the banner or its
+// "Show Purposes" panel is up, and the form opens again if answering a late
+// banner closed it. Pressed at most 20 times; the watch ends after 5 minutes.
+// The iPhone's KickLogin.script is the same text.
 private const val KICK_OPEN_LOGIN = """
-(function(){
-  var n = 0;
-  var t = setInterval(function(){
-    if (document.querySelector('input[type=password]') || ++n > 20) { clearInterval(t); return; }
-    var b = document.querySelector('button[data-testid="login"]');
-    if (b) b.click();
+(function () {
+  var style = document.createElement('style');
+  style.textContent = '#onetrust-consent-sdk{pointer-events:auto !important}';
+  (document.head || document.documentElement).appendChild(style);
+  function shown(id) {
+    var el = document.getElementById(id);
+    return !!el && el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
+  }
+  var ticks = 0, presses = 0, formSeen = false, consentSince = false;
+  var timer = setInterval(function () {
+    ticks += 1;
+    if (ticks > 600 || presses >= 20) { clearInterval(timer); return; }
+    if (shown('onetrust-banner-sdk') || shown('onetrust-pc-sdk')) { consentSince = true; return; }
+    if (!window.OneTrust && ticks < 4) return;
+    if (document.querySelector('input[type="password"]')) { formSeen = true; consentSince = false; return; }
+    if (formSeen && !consentSince) return;
+    var button = document.querySelector('button[data-testid="login"]');
+    if (button) { presses += 1; consentSince = false; button.click(); }
   }, 500);
 })();
 """
@@ -294,8 +314,8 @@ class TwitchLoginPlugin(private val activity: Activity) : Plugin(activity) {
                  * Kick's mobile site ignores /login and shows its home page with
                  * the form closed, so a person asked to sign in has to hunt for
                  * the account icon. Press Kick's own Log In button for them.
-                 * Retried briefly because the site hydrates after load, and it
-                 * stops the moment a password field exists.
+                 * Retried briefly because the site hydrates after load; it
+                 * waits while the cookie banner is up (see KICK_OPEN_LOGIN).
                  */
                 override fun onPageFinished(view: WebView, url: String?) {
                     super.onPageFinished(view, url)
