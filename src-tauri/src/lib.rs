@@ -2603,6 +2603,7 @@ pub fn run() {
             set_suggest_platforms,
             set_favorite_channel,
             set_channel_hidden,
+            set_evolution_closed,
             set_hidden_channel_blocked,
             set_hidden_channel_realms,
             set_chat_user_override,

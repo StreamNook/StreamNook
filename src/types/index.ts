@@ -1774,6 +1774,9 @@ export interface Settings {
   // What a newly hidden channel is hidden from besides browsing. Typed in Rust
   // (HiddenRealms), which owns the default: everything.
   hidden_channel_defaults?: HiddenRealms;
+  // Pokémon evolution campaigns whose strip the viewer closed, by campaign id.
+  // The board (Rust) leaves them out; edited only through set_evolution_closed.
+  evolution_closed?: string[];
   chat_design?: ChatDesignSettings;
   chat_highlights?: ChatHighlightSettings;
   chat_customization?: ChatCustomizationSettings;

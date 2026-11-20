@@ -608,6 +608,34 @@ pub async fn set_favorite_channel(
     Ok(Some(FavoriteAnswer { favorite: stored, id, rev }))
 }
 
+/// Close (`closed`) or bring back the Pokémon evolution strip for one
+/// campaign, everywhere it shows. Edited in place like `set_channel_hidden`;
+/// the board leaves a closed campaign out (`services::evolution`).
+#[tauri::command]
+pub async fn set_evolution_closed(
+    app: AppHandle,
+    campaign_id: String,
+    closed: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let settings = {
+        let mut state_settings = state.settings.lock().map_err(|e| e.to_string())?;
+        if !crate::services::evolution::set_closed(&mut state_settings.evolution_closed, &campaign_id, closed) {
+            return Ok(());
+        }
+        state_settings.clone()
+    };
+    after_settings_change(&settings, false, None);
+    write_settings_to_disk(&settings)?;
+    let _ = app.emit(
+        SETTINGS_UPDATED_EVENT,
+        SettingsUpdated { source: None, keys: vec!["evolution_closed".to_string()] },
+    );
+    // Every evolution strip reads the board again, so each one hides or returns.
+    let _ = app.emit("badge-standing-changed", ());
+    Ok(())
+}
+
 /// Hide (`hidden`) or show again one channel in every browse list, edited in
 /// place so a window with an older copy of the list cannot drop another's.
 ///

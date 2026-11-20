@@ -63,6 +63,15 @@ export function equipEvolutionLane(track: string, lane: string): Promise<void> {
   return invoke<void>('equip_evolution_lane', { track, lane });
 }
 
+/** Close (or, for Undo, bring back) one campaign's strip on every surface.
+ *  Rust stores it and leaves the campaign off the board; the next event shows. */
+export function setEvolutionClosed(campaignId: string, closed: boolean): Promise<void> {
+  return invoke<void>('set_evolution_closed', { campaignId, closed });
+}
+
+/** Words for the toast after a close; its Undo brings the strip back. */
+export const EVOLUTION_CLOSED_TOAST = 'Evolution hidden until the next Pokémon event';
+
 /** The stage a lane is on, or its last once the line is done. */
 export function laneTarget(lane: EvolutionLane): EvolutionStage | null {
   if (lane.stages.length === 0) return null;

@@ -6,15 +6,17 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { Check } from 'lucide-react';
+import { Check, X } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
 import { Logger } from '../../utils/logger';
 import {
+  EVOLUTION_CLOSED_TOAST,
   endsLabel,
   equipEvolutionLane,
   getEvolutionBoard,
   laneDetail,
   laneTarget,
+  setEvolutionClosed,
   shownLane,
   type EvolutionBoard,
   type EvolutionLane,
@@ -214,6 +216,21 @@ export function MobileEvolution() {
     }
   };
 
+  // Gone at once; Rust remembers it and leaves the campaign off every board.
+  const close = async (track: EvolutionTrack) => {
+    setBoard((b) => (b ? (lastBoard = { ...b, tracks: b.tracks.filter((t) => t.track_id !== track.track_id) }) : b));
+    try {
+      await setEvolutionClosed(track.campaign_id, true);
+      useAppStore.getState().addToast(EVOLUTION_CLOSED_TOAST, 'info', {
+        label: 'Undo',
+        onClick: () => void setEvolutionClosed(track.campaign_id, false),
+      });
+    } catch (err) {
+      Logger.warn('[MobileEvolution] Close failed:', err);
+      void load(false);
+    }
+  };
+
   if (!board) {
     return placeholderPx > 0 ? (
       <section className="pb-3" aria-hidden style={{ height: placeholderPx }}>
@@ -235,7 +252,18 @@ export function MobileEvolution() {
         return (
           <section key={track.track_id} className="pb-3">
             <header className="pb-2.5">
-              <span className="missing-now-title">Evolution</span>
+              <div className="flex items-center justify-between gap-2">
+                <span className="missing-now-title">Evolution</span>
+                {/* A 36 px reach around a quiet 16 px mark, kept off the line height. */}
+                <button
+                  type="button"
+                  onClick={() => void close(track)}
+                  aria-label="Hide Evolution until the next Pokémon event"
+                  className="shrink-0 -my-2 -mr-2 p-2.5 text-textMuted active:opacity-60 transition-opacity"
+                >
+                  <X size={16} />
+                </button>
+              </div>
               <p className="text-[11.5px] text-textMuted truncate">
                 {progress ?? (active ? 'Evolving' : 'Pick a Pokémon to evolve · one at a time')}
                 {' · ends '}

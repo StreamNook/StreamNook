@@ -1300,6 +1300,11 @@ pub struct Settings {
     /// hidden channel keeps its own copy, adjustable in Settings.
     #[serde(default)]
     pub hidden_channel_defaults: HiddenRealms,
+    /// Pokémon evolution campaigns whose strip the viewer closed, by campaign
+    /// id. The board leaves them out; the next evolution event shows again.
+    /// Edited only through `set_evolution_closed`.
+    #[serde(default)]
+    pub evolution_closed: Vec<String>,
     #[serde(default)]
     pub chat_design: ChatDesignSettings,
     #[serde(default)]
@@ -1981,6 +1986,7 @@ impl Default for Settings {
             favorite_categories: vec![],
             hidden_channels: vec![],
             hidden_channel_defaults: HiddenRealms::default(),
+            evolution_closed: vec![],
             provider_follows: vec![],
             youtube_chat_view: YouTubeChatView::default(),
             channel_links: vec![],

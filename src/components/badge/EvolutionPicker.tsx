@@ -1,15 +1,17 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { Check } from 'lucide-react';
+import { Check, X } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
 import { Logger } from '../../utils/logger';
 import {
+  EVOLUTION_CLOSED_TOAST,
   endsLabel,
   equipEvolutionLane,
   getEvolutionBoard,
   laneDetail,
   laneTarget,
+  setEvolutionClosed,
   shownLane,
   type EvolutionBoard,
   type EvolutionLane,
@@ -107,6 +109,21 @@ export const EvolutionPicker = () => {
     }
   };
 
+  // Gone at once; Rust remembers it and leaves the campaign off every board.
+  const close = async (track: EvolutionTrack) => {
+    setBoard((b) => (b ? (lastBoard = { ...b, tracks: b.tracks.filter((t) => t.track_id !== track.track_id) }) : b));
+    try {
+      await setEvolutionClosed(track.campaign_id, true);
+      useAppStore.getState().addToast(EVOLUTION_CLOSED_TOAST, 'info', {
+        label: 'Undo',
+        onClick: () => void setEvolutionClosed(track.campaign_id, false),
+      });
+    } catch (err) {
+      Logger.warn('[EvolutionPicker] Close failed:', err);
+      void load(false);
+    }
+  };
+
   if (!board) {
     return placeholderPx > 0 ? (
       <section className="mb-6" aria-hidden style={{ height: placeholderPx }}>
@@ -131,7 +148,19 @@ export const EvolutionPicker = () => {
         const progress = active && active.current !== null ? active.line : null;
         return (
           <section key={track.track_id} className="mb-6">
-            <h3 className="missing-now-title">Evolution</h3>
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="missing-now-title">Evolution</h3>
+              <Tooltip content="Hide until the next Pokémon event" delay={400}>
+                <button
+                  type="button"
+                  onClick={() => void close(track)}
+                  aria-label="Hide Evolution"
+                  className="shrink-0 -my-1 -mr-1 p-1 rounded-md text-textMuted hover:text-textSecondary hover:bg-white/[0.06] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+                >
+                  <X size={14} />
+                </button>
+              </Tooltip>
+            </div>
             <p className="mt-0.5 text-[11.5px] text-textMuted truncate">
               {progress ?? (active ? 'Evolving' : 'Pick a Pokémon to evolve · one at a time')}
               {' · ends '}

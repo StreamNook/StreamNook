@@ -546,7 +546,34 @@ pub async fn board(app: &crate::rt::AppHandle, force: bool) -> EvolutionBoard {
         (campaigns, groups, selected)
     };
     let badges = badge_index(app).await;
-    build_board(&campaigns, &groups, &selected, &badges, chrono::Utc::now().timestamp_millis())
+    let closed = state.settings.lock().map(|s| s.evolution_closed.clone()).unwrap_or_default();
+    without_closed(
+        build_board(&campaigns, &groups, &selected, &badges, chrono::Utc::now().timestamp_millis()),
+        &closed,
+    )
+}
+
+/// The board less the campaigns the viewer closed (`Settings::evolution_closed`).
+/// Keyed by campaign, so the next evolution event shows again. Pure.
+pub(crate) fn without_closed(mut board: EvolutionBoard, closed: &[String]) -> EvolutionBoard {
+    board.tracks.retain(|t| !closed.contains(&t.campaign_id));
+    board
+}
+
+/// Close or bring back one campaign in the closed list. False when nothing changed.
+pub(crate) fn set_closed(list: &mut Vec<String>, campaign_id: &str, closed: bool) -> bool {
+    let has = list.iter().any(|c| c == campaign_id);
+    match (closed, has) {
+        (true, false) if !campaign_id.is_empty() => {
+            list.push(campaign_id.to_string());
+            true
+        }
+        (false, true) => {
+            list.retain(|c| c != campaign_id);
+            true
+        }
+        _ => false,
+    }
 }
 
 /// Equip `lane` on `track`, as twitch.tv's Drops panel does. Errors are in words.
@@ -805,5 +832,36 @@ mod tests {
     fn nothing_to_evolve_is_an_empty_board() {
         let b = build_board(&[], &[group("g-ball", None)], &HashMap::new(), &BadgeIndex::default(), 0);
         assert!(b.tracks.is_empty());
+    }
+
+    fn track_of(campaign: &str) -> EvolutionTrack {
+        EvolutionTrack {
+            track_id: format!("t-{campaign}"),
+            campaign_id: campaign.to_string(),
+            campaign_name: "Pokémon Evolution".to_string(),
+            ends_ms: 0,
+            equipped_lane: None,
+            lanes: vec![],
+        }
+    }
+
+    #[test]
+    fn a_closed_campaign_leaves_the_board_and_the_next_one_shows() {
+        let board = EvolutionBoard { tracks: vec![track_of("c-old"), track_of("c-new")] };
+        let shown = without_closed(board, &["c-old".to_string()]);
+        assert_eq!(shown.tracks.len(), 1);
+        assert_eq!(shown.tracks[0].campaign_id, "c-new");
+    }
+
+    #[test]
+    fn closing_and_bringing_back_edits_the_list_once() {
+        let mut list = Vec::new();
+        assert!(set_closed(&mut list, "c1", true));
+        assert!(!set_closed(&mut list, "c1", true), "closing twice changes nothing");
+        assert_eq!(list, vec!["c1".to_string()]);
+        assert!(!set_closed(&mut list, "", true), "no campaign id, nothing stored");
+        assert!(set_closed(&mut list, "c1", false));
+        assert!(list.is_empty());
+        assert!(!set_closed(&mut list, "c1", false));
     }
 }
